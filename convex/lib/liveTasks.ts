@@ -15,7 +15,9 @@
  * leaf, which the restore's steps clear (regroup.ts).
  *
  * The readers that need the organization's live tasks read them per active
- * project (liveTasksOf), so tasks in archived projects are never read. */
+ * project (liveTasksOf), so tasks in archived projects are never read, until
+ * an organization has more active projects than one read can take ranges
+ * for. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
@@ -101,21 +103,40 @@ export function groupTest(
   }
 }
 
+/** How many active projects liveTasksOf reads one index range each before
+ * it reads the organization's active tasks in one range instead, so an
+ * organization with thousands of projects stays far below Convex's 4,096
+ * ranges. Tests lower `reads`. */
+export const LIVE_PROJECT_READS = { reads: 1000 }
+
 /**
- * The active tasks of the active projects among `projects` that `include`
- * accepts, oldest first by creation, the order the organization's
+ * The active tasks of the active projects among `projects`, which belong to
+ * one organization, oldest first by creation, the order the organization's
  * by_org_archived range gives. One by_project_archived range per project
- * read. Tasks live in sub-projects, and top-level projects are read too, so
- * a row older code stored under one is not lost. A project missing from
+ * read, or past LIVE_PROJECT_READS such projects one by_org_archived range,
+ * which also holds the active tasks of archived projects, left out here.
+ * Tasks live in sub-projects, and top-level projects are read too, so a row
+ * older code stored under one is not lost. A project missing from
  * `projects` is never read, so tasks whose project no longer exists drop
  * out.
  */
 export async function liveTasksOf(
   ctx: QueryCtx,
   projects: readonly Doc<'projects'>[],
-  include: (project: Doc<'projects'>) => boolean = () => true,
 ): Promise<Doc<'issues'>[]> {
-  const live = projects.filter((p) => p.archived_at === undefined && include(p))
+  const live = projects.filter((p) => p.archived_at === undefined)
+  const first = live[0]
+  if (first === undefined) return []
+  if (live.length > LIVE_PROJECT_READS.reads) {
+    const ids = new Set(live.map((p) => p.id))
+    const active = await ctx.db
+      .query('issues')
+      .withIndex('by_org_archived', (q) =>
+        q.eq('org_id', first.org_id).eq('archived_at', undefined),
+      )
+      .collect()
+    return active.filter((task) => ids.has(task.project_id))
+  }
   const reads = await Promise.all(
     live.map((p) =>
       ctx.db

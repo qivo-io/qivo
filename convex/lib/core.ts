@@ -477,11 +477,7 @@ async function listRow(
 const byCreation = (a: Doc<'issues'>, b: Doc<'issues'>): number =>
   a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : a.num - b.num
 
-/** How many active projects an active list reads one index range each
- * (listedActiveTasks) before it reads the organization's active tasks in
- * one range instead, so an organization with thousands of projects stays
- * far below Convex's 4,096 ranges. Tests lower `reads`. */
-export const LIVE_PROJECT_READS = { reads: 1000 }
+export { LIVE_PROJECT_READS } from './liveTasks'
 
 /* The active tasks an active list reads (listActiveIssuesCore,
  * projectCompletion), oldest first by creation. Those of the active
@@ -490,8 +486,7 @@ export const LIVE_PROJECT_READS = { reads: 1000 }
  * the active tasks that archived projects keep forever are never read. A
  * list that names an archived project reads all the organization's active
  * tasks (by_org_archived), because a task there counts every active
- * subtask, in any project (countsAsSubtask), and so does a list in an
- * organization with more active projects than LIVE_PROJECT_READS. */
+ * subtask, in any project (countsAsSubtask). */
 async function listedActiveTasks(
   ctx: QueryCtx,
   me: Caller,
@@ -499,8 +494,7 @@ async function listedActiveTasks(
   scope: readonly string[] | null,
 ): Promise<Doc<'issues'>[]> {
   const archived = scope?.some((id) => cat.byUuid.get(id)?.archived_at !== undefined) ?? false
-  const live = cat.projects.filter((p) => p.archived_at === undefined)
-  if (!archived && live.length <= LIVE_PROJECT_READS.reads) return await liveTasksOf(ctx, live)
+  if (!archived) return await liveTasksOf(ctx, cat.projects)
   return await ctx.db
     .query('issues')
     .withIndex('by_org_archived', (q) => q.eq('org_id', me.org_id).eq('archived_at', undefined))
@@ -1325,8 +1319,7 @@ async function subtreeIndex(
  * would enter, as an active list reads them (listedActiveTasks), and `kids`
  * keep the root's subtasks in archived projects for its subtask list. A
  * root in an archived project counts every active subtask, so it reads the
- * organization's active tasks, as does an organization with more active
- * projects than LIVE_PROJECT_READS. */
+ * organization's active tasks. */
 async function activeTasksUnder(
   ctx: QueryCtx,
   root: Doc<'issues'>,
@@ -1336,9 +1329,8 @@ async function activeTasksUnder(
     .query('projects')
     .withIndex('by_org', (q) => q.eq('org_id', root.org_id))
     .collect()
-  const live = projects.filter((p) => p.archived_at === undefined)
-  if (live.some((p) => p.id === root.project_id) && live.length <= LIVE_PROJECT_READS.reads) {
-    const index = new Map(childIndexOf(await liveTasksOf(ctx, live)))
+  if (projects.some((p) => p.id === root.project_id && p.archived_at === undefined)) {
+    const index = new Map(childIndexOf(await liveTasksOf(ctx, projects)))
     index.set(root.id, kids)
     return index
   }

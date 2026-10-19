@@ -11,9 +11,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { LIVE_PROJECT_READS } from '../lib/core'
 import { byId } from '../lib/db'
-import { countsAsSubtask, groupTest } from '../lib/liveTasks'
+import { countsAsSubtask, groupTest, LIVE_PROJECT_READS } from '../lib/liveTasks'
 import { OWNER_LOAD_CHECKS, ownerLoadSpans } from '../lib/machineDelay'
 import { orgProjectView } from '../lib/visibility'
 import { weekGrid } from '../lib/workload'
@@ -504,6 +503,72 @@ describe('reading only live tasks', () => {
     const scoped = await workload(fx.meta)
     expect(scoped.hours).toEqual([3])
     for (const read of [all, scoped]) expect(read.documents).toBeLessThan(400)
+  })
+
+  it('the load, workload and snapshot reads past LIVE_PROJECT_READS read the active tasks in one range', async () => {
+    const fx = await setup()
+    const plan = { assignee_id: fx.user.id, start_week: '2026-09-07', end_week: '2026-09-07' }
+    const leaf = await task(fx, { ...plan, remaining_hours: 3, remaining_set_at: NOW })
+    const group = await task(fx, { ...plan, remaining_hours: 5 })
+    await task(fx, { project_id: fx.away.id, parent_id: group.id })
+    const shelvedOnly = await task(fx, { ...plan, remaining_hours: 2 })
+    await task(fx, { project_id: fx.shelf.id, parent_id: shelvedOnly.id })
+    await task(fx, { ...plan, project_id: fx.shelf.id, remaining_hours: 11 })
+    // forty more active projects, each one more range per project read
+    for (let i = 0; i < 40; i++) {
+      await plantProject(fx.t, { org_id: fx.org.id, type: 'project', parent_id: fx.meta.id })
+    }
+    const read = () =>
+      as(fx.t, fx.admin).query(async (ctx) => {
+        const me = (await byId(ctx, 'profiles', fx.admin.id)) as Doc<'profiles'>
+        const owner = (await byId(ctx, 'profiles', fx.user.id)) as Doc<'profiles'>
+        const ranges = async <R>(run: () => Promise<R>) => {
+          const before = (await ctx.meta.getTransactionMetrics()).databaseQueries.used
+          const out = await run()
+          return {
+            out,
+            ranges: (await ctx.meta.getTransactionMetrics()).databaseQueries.used - before,
+          }
+        }
+        const view = await orgProjectView(ctx, me)
+        return {
+          workload: await ranges(() =>
+            workloadCore(ctx, me, { fromDay: '2026-09-07', weeks: 1, project: null }),
+          ),
+          assignee: await ranges(() =>
+            handlerOf<{ assignee_id: string }, unknown[]>(assigneeLoad)(ctx, {
+              assignee_id: fx.user.id,
+            }),
+          ),
+          owner: await ranges(() =>
+            ownerLoadSpans(ctx, me, owner, weekGrid(fx.org.week_start), view),
+          ),
+          // the same answer at another moment
+          snapshot: await ranges(async () => ({
+            ...(await invokeSnapshot(ctx)),
+            delivered_at: '',
+          })),
+        }
+      })
+    const reads = LIVE_PROJECT_READS.reads
+    const checks = { owner: OWNER_LOAD_CHECKS.reads, assignee: ASSIGNEE_LOAD_CHECKS.reads }
+    // past the checks, the two load reads take the organization's live tasks
+    OWNER_LOAD_CHECKS.reads = 0
+    ASSIGNEE_LOAD_CHECKS.reads = 0
+    try {
+      const perProject = await read()
+      LIVE_PROJECT_READS.reads = 1
+      const oneRange = await read()
+      for (const key of ['workload', 'assignee', 'owner', 'snapshot'] as const) {
+        expect(oneRange[key].out, key).toEqual(perProject[key].out)
+        expect(oneRange[key].ranges, key).toBeLessThan(perProject[key].ranges - 40)
+      }
+      expect(oneRange.owner.out.map((span) => span.issueUuid)).toEqual([leaf.id, shelvedOnly.id])
+    } finally {
+      LIVE_PROJECT_READS.reads = reads
+      OWNER_LOAD_CHECKS.reads = checks.owner
+      ASSIGNEE_LOAD_CHECKS.reads = checks.assignee
+    }
   })
 })
 
