@@ -420,10 +420,6 @@ export const forMe = authedQuery({
         milestones,
         orgLoad,
       }),
-      // Always empty. App builds from earlier releases still open in a browser
-      // map it on every delivery, so it stays until no such build can be open or
-      // be rolled back to. Team Sync reads task stamps instead.
-      activity: [] as never[],
       messages,
       readMessageCount,
       // A seat's bounded read can stop before it reaches every row, also when

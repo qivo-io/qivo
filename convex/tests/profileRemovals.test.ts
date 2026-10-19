@@ -831,8 +831,7 @@ describe('the reserved id and its end states', () => {
     expect(await shown()).toMatchObject({ assignee_id: f.user.id })
     const later = START + 2000
     vi.setSystemTime(later)
-    // Only the due steps run. The unarchive's activity trim, minutes ahead,
-    // would move the clock on.
+    // Only the due steps run.
     await t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0))
     const cleared = await shown()
     expect(cleared?.assignee_id).toBeUndefined()

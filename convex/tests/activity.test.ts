@@ -143,7 +143,7 @@ describe('issueChanges — machine narration, verbatim', () => {
 })
 
 describe('per-subject retention, each subject numbered and capped at 500', () => {
-  // Fake time keeps scheduled work (main's organization trim) deterministic.
+  // Fake time keeps the clock and any scheduled work deterministic.
   const START = Date.parse('2026-05-04T10:00:00.000Z')
   const at = (ms: number) => new Date(ms).toISOString()
   beforeEach(() => {
@@ -201,13 +201,6 @@ describe('per-subject retention, each subject numbered and capped at 500', () =>
         })
     })
 
-  const trims = (t: T) =>
-    t.run(async (ctx) =>
-      (await ctx.db.system.query('_scheduled_functions').collect()).filter(
-        (job) => job.name === 'activityRetention:trim',
-      ),
-    )
-
   it('numbers a subject’s rows in commit order, within a mutation and across mutations', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -234,18 +227,17 @@ describe('per-subject retention, each subject numbered and capped at 500', () =>
     expect(await seqs(t, f.org.id, 'task-b')).toEqual([1, 2])
   })
 
-  it('writes to other tasks never remove a task’s rows, and no trim runs', async () => {
+  it('writes to other tasks never remove a task’s rows', async () => {
     const t = newT()
     const f = await withOrg(t)
     await write(t, f.org.id, 'task-a', 3, START - 3_600_000)
     // 2,000 newer rows over 50 other tasks, 1,000 to a mutation, four times
-    // the 500 the organization trim kept
+    // the 500 the former organization trim kept
     for (let m = 0; m < 2; m++)
       await t.run(async (ctx) => {
         for (let i = 0; i < 1_000; i++)
           await logActivity(ctx, entry(f.org.id, `other-${i % 50}`, at(START - 60_000 + m)))
       })
-    expect(await trims(t)).toEqual([])
     await t.finishAllScheduledFunctions(() => vi.runAllTimers())
     expect(await seqs(t, f.org.id, 'task-a')).toEqual([1, 2, 3])
     expect(await activityFor(t, f.org.id)).toHaveLength(2_003)
@@ -313,29 +305,8 @@ describe('per-subject retention, each subject numbered and capped at 500', () =>
     const past = await write(t, f.org.id, 'task-a')
     expect(past.documentsWritten.used).toBe(2)
     expect(past.functionsScheduled.used).toBe(0)
-    expect(await t.run((ctx) => ctx.db.query('activity_retention').collect())).toEqual([])
     // the organization row is only read
     expect(await t.run((ctx) => ctx.db.get(f.org._id))).toEqual(f.org)
-  })
-
-  it('a trim the previous release scheduled deletes nothing and schedules nothing', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    await plantLegacy(t, f.org.id, 'task-a', 600, START - 3_600_000)
-    const retention = await t.run(async (ctx) => {
-      const id = await ctx.db.insert('activity_retention', {
-        org_id: f.org.id,
-        trim_due_at: START + 60_000,
-      })
-      await ctx.scheduler.runAt(START + 60_000, internal.activityRetention.trim, {
-        org_id: f.org.id,
-      })
-      return await ctx.db.get(id)
-    })
-    await t.finishAllScheduledFunctions(() => vi.runAllTimers())
-    expect(await activityFor(t, f.org.id)).toHaveLength(600)
-    expect((await trims(t)).map((job) => job.state.kind)).toEqual(['success'])
-    expect(await t.run((ctx) => ctx.db.query('activity_retention').collect())).toEqual([retention])
   })
 
   it('a project purge and profile removal clear every row, within limits', async () => {

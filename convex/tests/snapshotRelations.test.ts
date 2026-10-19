@@ -488,7 +488,6 @@ describe('the snapshot of an organization with a long archive', () => {
     expect(snapshot!.links).toHaveLength(ACTIVE - 1)
     expect(snapshot!.attachments).toHaveLength(ACTIVE)
     expect(snapshot!.issueSubs).toHaveLength(ACTIVE)
-    expect(snapshot!.activity).toEqual([])
     expect(snapshot!.messages).toHaveLength(200)
     // The task-by-task read this replaced took four ranges per visible task,
     // over 6,000 here. The read takes 230 now; the activity feed it no

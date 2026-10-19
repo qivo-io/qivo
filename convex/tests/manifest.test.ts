@@ -91,7 +91,6 @@ const actual = rows.map((r) => `${r.module}:${r.name} ${r.kind} ${r.vis} ${r.arg
 /* ------------------------------------------------- the committed baseline */
 
 const MANIFEST = `
-activityRetention:trim mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 admin:addOperator mutation internal {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false},"note":{"fieldType":{"type":"string"},"optional":true}}}
 admin:auditLog query public {"type":"object","value":{"limit":{"fieldType":{"type":"number"},"optional":true}}}
 admin:isOperator query public {"type":"object","value":{}}

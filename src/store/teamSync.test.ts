@@ -133,7 +133,6 @@ function fixture(myRole: Role) {
     teamAccess: [],
     links: [],
     milestones: [],
-    activity: [],
     labels: [],
     issueLabels: [],
     issueSubs: [],

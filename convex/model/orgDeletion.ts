@@ -427,8 +427,8 @@ const billingRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   ])
 
 /** The last step checks that every parent range is empty, Deleted items
- * included, then deletes the organization with its counters and retention
- * rows, and its removal row. */
+ * included, then deletes the organization with its counters row and its
+ * removal row. */
 async function finish(ctx: MutationCtx, removal: Doc<'org_removals'>): Promise<void> {
   const orgId = removal.org_id
   for (const table of ['issues', 'projects', 'teams', 'profiles', 'labels'] as const)

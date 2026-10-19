@@ -30,19 +30,20 @@ type Baseline = {
 )
 
 /** `result` without what may differ between two deliveries of the same data:
-    the delivery time, the activity list an older baseline filled and the
-    snapshot now sends empty, fields an older baseline returned that the
-    snapshot no longer does, and the parts long lists now arrive in
-    (lib/arrayLimit.ts), joined back. Applied to both sides of a comparison. */
+    the delivery time, the activity list an older baseline sends, fields an
+    older baseline returned that the snapshot no longer does, and the parts
+    long lists now arrive in (lib/arrayLimit.ts), joined back. Applied to both
+    sides of a comparison. */
 function comparable(delivered: Snapshot) {
   if (delivered === null) return delivered
-  const result = joinLists(delivered)
+  const joined = joinLists(delivered)
+  const { activity: _activity, ...result } = joined as typeof joined & { activity?: unknown }
   const legacy = result as typeof result & { orgs: { activity_count?: number }[] }
   for (const row of legacy.orgs) delete row.activity_count
   for (const rows of [result.links, result.issueLabels, result.attachments]) {
     for (const row of rows) delete (row as { org_id?: string }).org_id
   }
-  return { ...result, activity: [], delivered_at: '' }
+  return { ...result, delivered_at: '' }
 }
 
 export async function benchmarkBackend(baseline: Baseline) {

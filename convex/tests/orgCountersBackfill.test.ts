@@ -22,17 +22,6 @@ const runSteps = (t: T) => t.finishAllScheduledFunctions(() => vi.runAllTimers()
 const orgRow = (t: T, org: Doc<'organizations'>) =>
   t.run(async (ctx) => (await ctx.db.get(org._id)) as Doc<'organizations'>)
 
-/* The organization's activity_retention rows without system fields. */
-const retention = (t: T, orgId: string) =>
-  t.run(async (ctx) =>
-    (
-      await ctx.db
-        .query('activity_retention')
-        .withIndex('by_org', (q) => q.eq('org_id', orgId))
-        .collect()
-    ).map(({ _id, _creationTime, ...row }) => row),
-  )
-
 /* Every remaining page, summed. */
 async function remaining(t: T): Promise<number> {
   let total = 0
@@ -90,19 +79,13 @@ describe('orgCountersBackfill', () => {
       expect(row.next_issue_num, org.slug).toBeUndefined()
       expect(row.next_project_num, org.slug).toBeUndefined()
       expect(row.activity_count, org.slug).toBeUndefined()
-      // and creates no activity retention row any more
-      expect(await retention(t, org.id)).toEqual([])
     }
-    expect(await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())).toEqual(
-      expect.not.arrayContaining([expect.objectContaining({ name: 'activityRetention:trim' })]),
-    )
     expect(log).toHaveBeenCalledWith('Org counters backfill done', { orgs: 3, changed: 3 })
     expect(await remaining(t)).toBe(0)
 
     const before = await t.run(async (ctx) => ({
       orgs: await ctx.db.query('organizations').collect(),
       counters: await ctx.db.query('org_counters').collect(),
-      retention: await ctx.db.query('activity_retention').collect(),
     }))
     log.mockClear()
     await t.mutation(backfill.start, {})
@@ -112,7 +95,6 @@ describe('orgCountersBackfill', () => {
       await t.run(async (ctx) => ({
         orgs: await ctx.db.query('organizations').collect(),
         counters: await ctx.db.query('org_counters').collect(),
-        retention: await ctx.db.query('activity_retention').collect(),
       })),
     ).toEqual(before)
   })

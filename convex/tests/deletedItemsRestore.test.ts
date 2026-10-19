@@ -1365,15 +1365,9 @@ describe('notices, activity and events', () => {
       issue_id: root.id,
     })
     expect(thread.events.map((e) => [e.verb, e.seq])).toEqual(verbs.map((v, i) => [v, i + 1]))
-    // no row of the organization is gone, and no trim was ever scheduled
+    // no row of the organization is gone
     expect(await activityFor(t, org_id)).toHaveLength(3 + 1 + 600 + 1)
     for (const other of others) expect(await historyOf(t, other.id)).toHaveLength(300)
-    const trims = await t.run(async (ctx) =>
-      (await ctx.db.system.query('_scheduled_functions').collect()).filter((job) =>
-        job.name.includes('activityRetention:trim'),
-      ),
-    )
-    expect(trims).toEqual([])
   })
 
   it('sends the Restored notice only for a task item restored alone, and one activity row per call', async () => {

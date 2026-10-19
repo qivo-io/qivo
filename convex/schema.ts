@@ -745,15 +745,6 @@ export default defineSchema({
     next_project_num: v.number(),
   }).index('by_org', ['org_id']),
 
-  // The former organization activity trim's state. Nothing reads or creates
-  // these rows any more (each subject keeps its own rows, model/activity.ts);
-  // organization deletion still removes them. The table goes in a later
-  // release.
-  activity_retention: defineTable({
-    org_id: v.string(),
-    trim_due_at: v.optional(v.number()), // epoch ms; absent = no trim pending
-  }).index('by_org', ['org_id']),
-
   teams: defineTable({
     id: v.string(),
     org_id: v.string(),

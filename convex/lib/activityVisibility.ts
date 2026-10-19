@@ -2,10 +2,7 @@
  * window (snapshot.ts commentThread), REST and MCP apply it to one task's
  * history (taskActivity below). Organization admins receive every task row;
  * memberSeesActivity decides for everyone else. Rows about anything but a
- * task reach no client; admins read them in the organization export.
- * memberSeesActivity and withoutLegacySubtaskCount stay exported because
- * scripts/benchmark-backend.mjs loads an earlier snapshot.ts against this
- * module. */
+ * task reach no client; admins read them in the organization export. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
@@ -25,7 +22,7 @@ const isUnrecordedProjectMove = (ev: Doc<'activity_events'>): boolean =>
  * projects a reader may not access (model/issues.ts archiveIssueCore no
  * longer writes it). Members other than admins get such rows without it. */
 const LEGACY_SUBTASK_COUNT = /^with \d+ subtasks?$/
-export function withoutLegacySubtaskCount(ev: Doc<'activity_events'>): Doc<'activity_events'> {
+function withoutLegacySubtaskCount(ev: Doc<'activity_events'>): Doc<'activity_events'> {
   if (ev.target_type !== 'issue' || ev.verb !== 'archived') return ev
   if (!LEGACY_SUBTASK_COUNT.test(ev.detail ?? '')) return ev
   const { detail: _count, ...rest } = ev
@@ -46,7 +43,7 @@ export function withoutLegacySubtaskCount(ev: Doc<'activity_events'>): Doc<'acti
  * with a seq but no list fails closed, and older rows are parsed
  * (model/activity.ts namedTaskNums). Rows about anything but a task never
  * reach a member. */
-export async function memberSeesActivity(
+async function memberSeesActivity(
   ev: Doc<'activity_events'>,
   a: {
     view: OrgProjectView

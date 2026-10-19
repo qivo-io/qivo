@@ -2136,8 +2136,8 @@ describe('the status stamp in the snapshot', () => {
   })
 })
 
-describe('the activity list', () => {
-  it('is always empty, while the task window still holds the history', async () => {
+describe('the task window history', () => {
+  it('holds the task’s own rows and no other subject’s or organization’s', async () => {
     const created = uuid()
     await as(t, f.user).mutation(api.issues.create, {
       org_id: f.org.id,
@@ -2177,7 +2177,6 @@ describe('the activity list', () => {
       org_role: 'admin',
     })
     for (const p of [f.admin, f.user, f.guest, f.viewer]) {
-      expect((await snapFor(p)).activity).toEqual([])
       const thread = await as(t, p).query(api.snapshot.commentThread, {
         org_id: f.org.id,
         issue_id: created,

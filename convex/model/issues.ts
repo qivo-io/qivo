@@ -1972,7 +1972,8 @@ export async function moveIssueCore(
       await clearParentRemaining(ctx, { parentId: parent.id, actor: me, now })
     }
   }
-  // snapshot.ts isUnrecordedProjectMove recognizes older rows by this wording
+  // lib/activityVisibility.ts isUnrecordedProjectMove recognizes older rows by
+  // this wording
   const moved = `to the ${target.name} sub-project${source ? ` (from ${source.name})` : ''}${
     carried.length > 0 ? ' with its subtasks' : ''
   }`
