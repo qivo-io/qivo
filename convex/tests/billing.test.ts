@@ -2,7 +2,7 @@ import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Id } from '../_generated/dataModel'
-import { STORAGE_ATTEMPTS, STORAGE_STALL_MS } from '../billingSync'
+import { STORAGE_ATTEMPTS, STORAGE_RETRY_MS, STORAGE_STALL_MS } from '../billingSync'
 import { addCalendarMonths } from '../lib/billingAccess'
 import type { BillingPlan, BillingSummary, BillingUsage } from '../lib/billingTypes'
 import { enrollOrganization, STORAGE_PAGE, storageUsage, UNSCOPED_READ } from '../model/billing'
@@ -12,7 +12,9 @@ type PlanInput = Omit<BillingPlan, 'id' | 'archived' | 'created_at'>
 const summary = makeFunctionReference<'query', { org_id: string }, BillingSummary>(
   'billing:summary',
 )
-const usage = makeFunctionReference<'query', { org_id: string }, BillingUsage>('billing:usage')
+const usageReport = makeFunctionReference<'action', { org_id: string }, BillingUsage>(
+  'billing:usageReport',
+)
 const status = makeFunctionReference<'query', { org_id: string }, { writable: boolean }>(
   'billing:status',
 )
@@ -189,7 +191,11 @@ describe('billing authority and plan versions', () => {
     for (const profile of [f.user, f.viewer, f.guest]) {
       const caller = as(t, profile)
       await expectRefusal(caller.query(summary, { org_id: f.org.id }), 'forbidden', /admin only/)
-      await expectRefusal(caller.query(usage, { org_id: f.org.id }), 'forbidden', /admin only/)
+      await expectRefusal(
+        caller.action(usageReport, { org_id: f.org.id }),
+        'forbidden',
+        /admin only/,
+      )
       await expectRefusal(caller.action(checkout, { org_id: f.org.id }), 'forbidden', /admin only/)
       await expectRefusal(caller.action(portal, { org_id: f.org.id }), 'forbidden', /admin only/)
       expect(await caller.query(status, { org_id: f.org.id })).toMatchObject({ writable: false })
@@ -430,7 +436,10 @@ describe('complimentary access and paid expiry', () => {
     const { t, f } = await fixture()
     await t.mutation(apply, { payload: remote(f.org.id, { status: 'canceled', ended_at: NOW }) })
     await expectRefusal(createTask(t, f), 'forbidden', /read-only/)
-    expect(await as(t, f.admin).query(usage, { org_id: f.org.id })).toHaveProperty('calls', 0)
+    expect(await as(t, f.admin).action(usageReport, { org_id: f.org.id })).toHaveProperty(
+      'calls',
+      0,
+    )
   })
 
   it('an explicit provider end overrides a previous period-end cancellation flag', async () => {
@@ -625,7 +634,7 @@ describe('provider state, retries and billing snapshots', () => {
     )
 
     // the admin Billing page
-    const report = await as(t, f.admin).query(usage, { org_id: f.org.id })
+    const report = await as(t, f.admin).action(usageReport, { org_id: f.org.id })
     expect(report.storage_bytes).toBe(9_000_000_000)
     expect(report.projects).toEqual([
       { project_id: f.sub.id, name: 'Firmware', storage_bytes: 6_000_000_000 },
@@ -922,7 +931,8 @@ describe('provider state, retries and billing snapshots', () => {
         detail: { period: stopped?._id, period_start: START, attempts: STORAGE_ATTEMPTS },
       },
     ])
-    // a stopped sample stays stopped, and the earlier runs' steps do nothing
+    // a stopped sample stays stopped until STORAGE_RETRY_MS has passed, and
+    // the earlier runs' steps do nothing
     await stall(STORAGE_ATTEMPTS + 1)
     await sample(t)
     expect(await periodAt(t, START)).toMatchObject({
@@ -947,6 +957,70 @@ describe('provider state, retries and billing snapshots', () => {
       expect(period).not.toHaveProperty(field)
     // a finished sample is left alone
     expect(await t.mutation(restartStorage, { period: stopped!._id })).toBe(false)
+  })
+
+  it('starts a stopped sample again on its own STORAGE_RETRY_MS after it stopped', async () => {
+    const { t, f } = await fixture()
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await t.run(async (ctx) => {
+      const storage_id = await ctx.storage.store(new Blob())
+      await ctx.db.insert('issue_attachments', {
+        org_id: f.org.id,
+        project_id: f.sub.id,
+        id: uuid(),
+        issue_id: task.id,
+        storage_id,
+        name: 'fixture.bin',
+        size_bytes: 6_000_000_000,
+        inline: false,
+        created_at: NOW,
+      })
+    })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await t.mutation(apply, { payload: remote(f.org.id) })
+    // no step runs while the outage lasts, so every run stalls
+    for (let n = 1; n <= STORAGE_ATTEMPTS; n++) {
+      vi.setSystemTime(Date.parse(NOW) + n * (STORAGE_STALL_MS + 1000))
+      await t.mutation(apply, { payload: remote(f.org.id, { modified_at: iso(n) }) })
+    }
+    const stopped = await periodAt(t, START)
+    const stoppedAt = Date.parse(stopped?.storage_failed_at ?? '')
+    expect(stopped).not.toHaveProperty('storage_run')
+
+    vi.setSystemTime(stoppedAt + STORAGE_RETRY_MS - 1000)
+    await t.mutation(apply, { payload: remote(f.org.id, { modified_at: iso(100) }) })
+    expect(await periodAt(t, START)).not.toHaveProperty('storage_run')
+
+    vi.setSystemTime(stoppedAt + STORAGE_RETRY_MS + 1000)
+    await t.mutation(apply, { payload: remote(f.org.id, { modified_at: iso(101) }) })
+    // the stop stays on the period and in the audit log while the retry runs
+    expect(await periodAt(t, START)).toMatchObject({
+      storage_run: expect.any(String),
+      storage_attempts: 1,
+      storage_failed_at: stopped?.storage_failed_at,
+    })
+    const audits = await t.run(async (ctx) =>
+      (await ctx.db.query('platform_audit_log').collect()).filter((row) =>
+        row.action.startsWith('billing.storage_sample_'),
+      ),
+    )
+    expect(audits).toMatchObject([
+      { action: 'billing.storage_sample_failed', detail: { period: stopped?._id } },
+      {
+        action: 'billing.storage_sample_restarted',
+        actor_email: 'system',
+        detail: { period: stopped?._id, period_start: START },
+      },
+    ])
+
+    // the outage is over: the sample finishes and the period is charged
+    await sample(t)
+    const period = await periodAt(t, START)
+    expect(period).toMatchObject({ storage_bytes: 6_000_000_000, storage_blocks: 1 })
+    for (const field of ['storage_run', 'storage_attempts', 'storage_failed_at'])
+      expect(period).not.toHaveProperty(field)
+    expect(await storageEvents(t)).toHaveLength(1)
   })
 
   it('records the storage of a complimentary period without charging it', async () => {

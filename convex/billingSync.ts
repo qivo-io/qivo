@@ -83,11 +83,17 @@ const storageStepRef = makeFunctionReference<'mutation', StorageStep, null>(
  * failed waits this long. */
 export const STORAGE_STALL_MS = 15 * 60_000
 
-/** How many times a period's storage sample starts before apply gives up
- * on it. A sample that stalls this often has a step that fails every time,
- * so apply stops it, logs an error and writes a
- * billing.storage_sample_failed audit row instead of starting it again. */
+/** How many times a period's storage sample starts before apply stops
+ * it. A sample that stalls this often has a step that keeps failing, so
+ * apply stops it, logs an error and writes a billing.storage_sample_failed
+ * audit row instead of starting it again at once. */
 export const STORAGE_ATTEMPTS = 5
+
+/** How long a stopped storage sample waits before apply starts it again on
+ * its own, for another STORAGE_ATTEMPTS starts. A step that failed for a
+ * while, as in an outage, then still records the period's storage before
+ * the period ends, without an operator. */
+export const STORAGE_RETRY_MS = 6 * 60 * 60_000
 
 // API responses are normalized by the adapter; serialize their raw-equivalent
 // fields for one shared validator on the write boundary and webhook path.
@@ -151,9 +157,9 @@ export const release = internalMutation({
  * organization's billing row. Stale or out-of-order events are ignored. It
  * opens the paid period's record when a new period starts and starts the
  * period's storage sample (storageStep), or starts a sample again that has
- * gone STORAGE_STALL_MS without a step, up to STORAGE_ATTEMPTS starts. Then
- * it starts or stops the read-only period before deletion
- * (model/orgRetention.ts). */
+ * gone STORAGE_STALL_MS without a step, up to STORAGE_ATTEMPTS starts, and a
+ * stopped one again STORAGE_RETRY_MS after it stopped. Then it starts or
+ * stops the read-only period before deletion (model/orgRetention.ts). */
 export const apply = internalMutation({
   args: { payload: v.string(), event_id: v.optional(v.string()) },
   handler: async (ctx, { payload, event_id }) => {
@@ -242,13 +248,16 @@ export const apply = internalMutation({
         created_at: now,
       })
       await startStorageSample(ctx, periodId)
-    } else if (
-      period &&
-      period.storage_bytes === undefined &&
-      period.storage_failed_at === undefined &&
-      (period.storage_run_at ?? '') < new Date(Date.now() - STORAGE_STALL_MS).toISOString()
-    ) {
-      await restartStorageSample(ctx, period)
+    } else if (period && period.storage_bytes === undefined) {
+      const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
+      // A stopped sample has no run until its retry starts one.
+      const stopped = period.storage_failed_at !== undefined && period.storage_run === undefined
+      if (stopped) {
+        if ((period.storage_failed_at ?? '') < ago(STORAGE_RETRY_MS))
+          await retryStoppedSample(ctx, period)
+      } else if ((period.storage_run_at ?? '') < ago(STORAGE_STALL_MS)) {
+        await restartStorageSample(ctx, period)
+      }
     }
     if (event_id)
       await ctx.db.insert('billing_webhooks', {
@@ -287,9 +296,11 @@ async function startStorageSample(
 }
 
 /* Starts a stalled sample again, or stops it once it has started
- * STORAGE_ATTEMPTS times. A stopped sample records no storage, so the
- * period charges none. The error log and the audit row tell an operator,
- * who can start it again with restartStorage once the cause is fixed. */
+ * STORAGE_ATTEMPTS times. A stopped sample records no storage until apply
+ * starts it again after STORAGE_RETRY_MS (retryStoppedSample), so a period
+ * whose sample never finishes charges none. The error log and the audit row
+ * tell an operator, who can start it again at once with restartStorage once
+ * the cause is fixed. */
 async function restartStorageSample(
   ctx: MutationCtx,
   period: Doc<'billing_periods'>,
@@ -319,6 +330,27 @@ async function restartStorageSample(
       subscription_id: period.subscription_id,
       period_start: period.period_start,
       attempts,
+    },
+  })
+}
+
+/* Starts a stopped sample again, STORAGE_RETRY_MS after it stopped, with
+ * its starts counted from one, and writes a billing.storage_sample_restarted
+ * audit row signed 'system'. The period keeps storage_failed_at, the time of
+ * its last stop, until the sample finishes. */
+async function retryStoppedSample(ctx: MutationCtx, period: Doc<'billing_periods'>): Promise<void> {
+  console.warn(
+    `billing: storage sample of period ${period._id} stopped at ${period.storage_failed_at}; starting it again`,
+  )
+  await startStorageSample(ctx, period._id)
+  await audit(ctx, {
+    actor_email: 'system',
+    action: 'billing.storage_sample_restarted',
+    target_org_id: period.org_id,
+    detail: {
+      period: period._id,
+      subscription_id: period.subscription_id,
+      period_start: period.period_start,
     },
   })
 }
@@ -413,6 +445,7 @@ async function finishStorageSample(
     storage_run: undefined,
     storage_run_at: undefined,
     storage_attempts: undefined,
+    storage_failed_at: undefined,
   })
   const sub = await subscriptionFor(ctx, period.org_id)
   const id = `${period.subscription_id}:${period.period_start}:storage`
