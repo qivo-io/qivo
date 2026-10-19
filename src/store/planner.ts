@@ -5979,7 +5979,8 @@ export const PLANNER = {
     return null
   }),
 
-  /** Drop the uploaded picture. The person falls back to their initials. */
+  /** Drop the uploaded picture. The person falls back to their initials, or to
+      their sample portrait in the demo. */
   clearAvatar: async (profileId: string) => {
     const row = rows.profiles.get(profileId)
     if (!row?.avatar_storage_id) return null

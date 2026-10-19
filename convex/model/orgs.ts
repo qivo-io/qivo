@@ -296,6 +296,10 @@ export const newOrgDefaults = (now: string) => ({
   week_one_rule: 'first4day',
   default_plannable_hours: 32,
   max_attachment_mb: 20,
+  // Retired and unread (schema.ts). Earlier releases' schemas require it, so
+  // new organizations store false until no earlier release can be rolled
+  // back to.
+  gravatar_avatars: false,
 })
 
 /* The organization's upload cap in MiB. Older org rows without one default

@@ -192,6 +192,17 @@ describe('organization export', () => {
     await expectRefusal(caller.query(page, args), 'forbidden', /no profile/)
   })
 
+  it('leaves the retired Gravatar setting out of the organization row', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await t.run((ctx) => ctx.db.patch(f.org._id, { gravatar_avatars: true }))
+    const [row] = (
+      await as(t, f.admin).query(page, { org_id: f.org.id, section: 'organizations', cursor: null })
+    ).rows
+    expect(row).toMatchObject({ id: f.org.id })
+    expect(row).not.toHaveProperty('gravatar_avatars')
+  })
+
   it('exports the counters wherever they are stored, never activity_count', async () => {
     const t = newT()
     const f = await withOrg(t)

@@ -99,11 +99,12 @@ describe('orgs.update — settings, silently', () => {
   it('refuses the retired Gravatar setting instead of storing it', async () => {
     const t = newT()
     const f = await withOrg(t)
+    const before = (await orgRow(t, f.org.id))?.gravatar_avatars
     const retired = { gravatar_avatars: true } as unknown as { name?: string }
     await expect(
       as(t, f.admin).mutation(api.orgs.update, { org_id: f.org.id, patch: retired }),
     ).rejects.toThrowError(/Validator error/)
-    expect((await orgRow(t, f.org.id))?.gravatar_avatars).toBeUndefined()
+    expect((await orgRow(t, f.org.id))?.gravatar_avatars).toBe(before)
   })
 
   it('refuses the retired team leads policy instead of storing it', async () => {

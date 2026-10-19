@@ -87,9 +87,12 @@ function attachmentRow(doc: Doc<'issue_attachments'>) {
 // legacy fields an older organization row may still hold.
 //
 // gravatar_avatars is always false. Qivo no longer reads the retired setting,
-// but app builds from earlier releases still open in a browser treat a
-// missing value as on and would keep asking Gravatar for pictures. Remove it
-// once no earlier release can still be open or be rolled back to.
+// but app builds from earlier releases still open in a browser read it from
+// the viewer's home organization and treat a missing value as on. This stops
+// their Gravatar requests. Such a build signed in with only guest seats has
+// no home organization and treats it as on regardless, until the tab
+// reloads. Remove it once no earlier release can still be open or be rolled
+// back to.
 type OrgRow = Omit<
   AppRow<'organizations'>,
   'billing' | 'activity_count' | 'next_issue_num' | 'next_project_num' | 'gravatar_avatars'

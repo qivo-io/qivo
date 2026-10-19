@@ -22,7 +22,7 @@ Your profile picture is a picture you upload, or your initials when there
 is none. Click **Picture** under **Settings → Your preferences → Profile**,
 then **Upload a picture…** or **Change picture…**. Organization admins can
 also change pictures in the Users list. **Remove picture** shows your initials
-again.
+again, or your sample portrait in the demo.
 
 Uploaded pictures are visible to members and invited guests in that
 organization. Qivo uses temporary download links, which you should treat as
