@@ -356,18 +356,24 @@ const LOGIN_TOKEN_MODELS = ['session', 'oauthAccessToken', 'oauthRefreshToken'] 
 
 /** Size of one token purge step. Tests lower it. */
 export const LOGIN_PURGE = {
-  /** Rows one step deletes at most, far below Convex's write limits. */
+  /** Session and token rows one step deletes at most, far below Convex's
+   * write limits. */
   rows: 2000,
+  /** Roadmap undo receipts one step deletes at most. A receipt's changes
+   * have no cap below Convex's 1 MiB document limit, so 8 keep a step's
+   * reads under half of the 16 MiB a transaction may read. */
+  receipts: 8,
 }
 
 const purgeLoginTokensRef = makeFunctionReference<'mutation', { auth_user_id: string }, null>(
   'adminAuth:purgeLoginTokens',
 )
 
-/* Deletes up to LOGIN_PURGE.rows of a deleted login's sessions, tokens and
- * roadmap undo receipts, and schedules the next step while any remain. They
- * grant nothing once the user row is gone: Better Auth answers no session for
- * a missing user, and oauthConnections.lookupAccess requires the user. */
+/* Deletes up to LOGIN_PURGE.rows of a deleted login's sessions and tokens,
+ * then up to LOGIN_PURGE.receipts of its roadmap undo receipts, and schedules
+ * the next step while any remain. They grant nothing once the user row is
+ * gone: Better Auth answers no session for a missing user, and
+ * oauthConnections.lookupAccess requires the user. */
 async function purgeTokenRows(ctx: MutationCtx, userId: string): Promise<void> {
   let left = LOGIN_PURGE.rows
   const more = () => ctx.scheduler.runAfter(0, purgeLoginTokensRef, { auth_user_id: userId })
@@ -396,9 +402,9 @@ async function purgeTokenRows(ctx: MutationCtx, userId: string): Promise<void> {
   const receipts = await ctx.db
     .query('roadmap_history')
     .withIndex('by_owner_session', (q) => q.eq('auth_user_id', userId))
-    .take(left + 1)
-  for (const row of receipts.slice(0, left)) await ctx.db.delete(row._id)
-  if (receipts.length > left) await more()
+    .take(LOGIN_PURGE.receipts + 1)
+  for (const row of receipts.slice(0, LOGIN_PURGE.receipts)) await ctx.db.delete(row._id)
+  if (receipts.length > LOGIN_PURGE.receipts) await more()
 }
 
 /** One step of a deleted login's token purge (removeAuthUserRows). Safe to

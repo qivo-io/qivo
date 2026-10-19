@@ -381,8 +381,8 @@ describe('deleteOrphanLogin', () => {
 
   it('removes the login at once and a token backlog in bounded steps', async () => {
     const t = newAuthT()
-    const rows = LOGIN_PURGE.rows
-    LOGIN_PURGE.rows = 3
+    const limits = { ...LOGIN_PURGE }
+    Object.assign(LOGIN_PURGE, { rows: 3, receipts: 2 })
     vi.useFakeTimers()
     try {
       const orphan = await plantLogin(t, 'leftover@test.local', { session: true, account: true })
@@ -439,7 +439,7 @@ describe('deleteOrphanLogin', () => {
       await t.finishAllScheduledFunctions(() => vi.runAllTimers())
       expect(await tokensLeft()).toBe(0)
     } finally {
-      LOGIN_PURGE.rows = rows
+      Object.assign(LOGIN_PURGE, limits)
       vi.useRealTimers()
     }
   })
