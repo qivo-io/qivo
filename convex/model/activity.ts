@@ -4,6 +4,7 @@ import { byId } from '../lib/db'
 import type { ActivityTarget, IssuePriority, IssueStatus } from '../lib/enums'
 import { notFound } from '../lib/functions'
 import { ISSUE_PREFIX, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
+import { plainText } from '../lib/textLimits'
 import { newUuid } from './orgs'
 
 /* ----------------------------------------------------------------- retention
@@ -186,7 +187,7 @@ export function narratedChange(before: Doc<'issues'>, after: Doc<'issues'>): boo
 
 // Strip diff delimiters to prevent forged clauses; truncate by codepoint.
 const clean = (s: string): string => {
-  const t = s.replace(/\s+/g, ' ').replace(/[“”]/g, "'").replace(/→/g, '-').trim()
+  const t = plainText(s)
   const cp = [...t]
   return cp.length > 80 ? `${cp.slice(0, 79).join('')}…` : t
 }

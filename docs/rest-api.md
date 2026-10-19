@@ -2011,7 +2011,10 @@ curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application
 Organization API writes leave the same trail the app leaves, and they are **signed**: an
 `activity_events` feed row whose actor is **the caller's user**. For an agent
 key the detail is `via the REST API (<key name>)`, with a key name longer than
-80 characters cut to its first 80 followed by `…`. The org-level `qv_` keys
+80 characters cut to its first 80 followed by `…`. The name is written as
+plain text: it is trimmed, each run of whitespace, line breaks included,
+becomes one space, `→` becomes `-`, and curly double quotes (`“` `”`) become
+`'`, so a name cannot read as a change in the row. The org-level `qv_` keys
 this replaced left a null actor and that footnote, which read as "someone,
 somehow" in a feed whose whole job is saying who did what; an agent is a user,
 so it signs its own work. The key is still named beside it, because an agent

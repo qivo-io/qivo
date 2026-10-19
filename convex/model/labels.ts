@@ -11,7 +11,7 @@ import { makeFunctionReference } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { canManageOrgLabels, canWriteOrgLabels } from '../lib/access'
-import { byId, insertUnique } from '../lib/db'
+import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import { badRequest, forbidden, rule } from '../lib/functions'
 import { LABEL_NAME_MAX } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
@@ -103,9 +103,10 @@ export async function findLabel(
 /**
  * Adds a label to `me`'s organization and writes its 'created label'
  * activity row, signed with `provenance` for a machine caller. `id` is the
- * app's client-made id; machine callers pass a new one. Refuses a caller who
- * may not add labels, a blank or long name, a color that is not #rrggbb, a
- * used id and a name the organization already has in any case.
+ * app's client-made id; machine callers pass a new one. Refuses an id that
+ * is not a lowercase UUID (lib/db.ts assertNewRowId), a caller who may not
+ * add labels, a blank or long name, a color that is not #rrggbb, a used id
+ * and a name the organization already has in any case.
  */
 export async function createLabelCore(
   ctx: MutationCtx,
@@ -119,6 +120,7 @@ export async function createLabelCore(
   },
 ): Promise<Doc<'labels'>> {
   const { me, id, now } = a
+  assertNewRowId(id)
   await assertLabelCreator(ctx, me)
   const name = labelName(a.name)
   const color = labelColor(a.color)

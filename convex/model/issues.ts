@@ -67,13 +67,13 @@ import {
   profileCanBeAssigned,
   profileCanSeeProject,
 } from '../lib/access'
-import { byId, insertUnique, usedMoreThan } from '../lib/db'
+import { assertNewRowId, byId, insertUnique, usedMoreThan } from '../lib/db'
 import type { IssuePriority, IssueStatus } from '../lib/enums'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { countsAsSubtask, type Liveness, projectLiveness } from '../lib/liveTasks'
 import { reviewStamp } from '../lib/review'
 import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
-import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
+import { plainText, TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
 import { issueChanges, logActivity, machineDetail, narratedChange } from './activity'
 import { scheduleMarkClears } from './archiveMarks'
 import {
@@ -806,7 +806,7 @@ export async function clearParentRemaining(
  * items (model/deletedItems.ts) or is archived alone (archiveIssueCore with
  * keepSubtasks). The child becomes a top-level task with the SET NULL's
  * touch, and its followers read 'Detached from its parent' with
- * task.updated, as model/cascade.ts deleteIssueDeep does. The child's
+ * task.updated, as the SQL schema's SET NULL did. The child's
  * project needs no Edit: only the link to the parent goes, as a delete has
  * always detached such children. */
 export async function detachChild(
@@ -872,7 +872,7 @@ export function fmtRangeWith(format: string, aIso: string, bIso: string): string
 }
 
 const excerpt = (s: string): string => {
-  const t = s.replace(/\s+/g, ' ').replace(/[“”]/g, "'").replace(/→/g, '-').trim()
+  const t = plainText(s)
   const cp = [...t]
   return cp.length > 80 ? `${cp.slice(0, 79).join('')}…` : t
 }
@@ -1123,6 +1123,7 @@ export async function createIssueCore(
   a: { me: Doc<'profiles'>; args: CreateIssueArgs; now: string; machine?: MachineNarration },
 ): Promise<Doc<'issues'>> {
   const { me, args, now } = a
+  assertNewRowId(args.id)
   await assertCanEdit(ctx, me, args.project_id)
   // resolve → meta guard → arrival guard (0050's issues_assign_num fires
   // before 0106's archived guard: the meta sentence wins on an archived meta)

@@ -1,19 +1,9 @@
 /* Deep deletes: every FK edge the Postgres schema resolved with ON DELETE,
- * spelled out. This file is phase 5's home for deleteProjectDeep /
- * deleteTeamDeep / removeProfile; deleteIssueDeep is pulled forward because
- * phase 4's issues.deleteDeep must not ship without the message/subscription/
- * link edges. Every task and project delete, in the app and over REST and
- * MCP, now moves the work to Deleted items instead (model/deletedItems.ts),
- * and the Northstar wipe deletes in bounded batches (model/orgDeletion.ts
- * wipeWorkStep). Only tests still call deleteIssueDeep and deleteProjectDeep.
- *
- * deleteIssueDeep deletes ONE issue. It does NOT delete the subtree:
- * issues.parent_id is `on delete set null` (0001:95) — deleting a parent
- * DETACHES its direct children, grandchildren keep their parents. In SQL the
- * SET NULL was an ordinary UPDATE OF parent_id, so it fired issues_touch
- * (planner mirror at old planner.ts:2103) AND notify_issue_update — each
- * detached child's subscribers read 'Detached from its parent'. Both are
- * reproduced here: side-effect writes notify and touch.
+ * spelled out, for teams (deleteTeamDeep), profiles (removeProfile) and
+ * whole organizations (deleteOrgDeep). Every task and project delete, in the
+ * app and over REST and MCP, moves the work to Deleted items instead
+ * (model/deletedItems.ts), and the Northstar wipe deletes in bounded batches
+ * (model/orgDeletion.ts wipeWorkStep).
  *
  * Activity rows STAY here, "History survives its subjects" (0001:144);
  * activity_events carries no issue FK, target_id is plain text (0026).
@@ -30,7 +20,6 @@ import { hasPendingCheckout } from './billing'
 import { dropCommentCount } from './commentCounts'
 import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
-import { notifyIssueUpdate } from './messages'
 import { deleteOrgBookkeeping } from './orgs'
 import { emitTaskEvent } from './taskEvents'
 
@@ -39,123 +28,6 @@ async function deleteProfileRateLimit(ctx: MutationCtx, profileId: string): Prom
     .query('machine_rate_limits')
     .withIndex('by_key', (q) => q.eq('key', `profile:${profileId}`))
   for await (const row of rows) await ctx.db.delete(row._id)
-}
-
-export async function deleteIssueDeep(
-  ctx: MutationCtx,
-  a: {
-    issue: Doc<'issues'>
-    actor: Doc<'profiles'>
-    now: string
-    deletingProjectIds?: ReadonlySet<string>
-  },
-): Promise<void> {
-  const { issue, actor, now, deletingProjectIds } = a
-  // children: FK SET NULL + touch + notify (the detach is real news)
-  const kids = await ctx.db
-    .query('issues')
-    .withIndex('by_parent', (q) => q.eq('parent_id', issue.id))
-    .collect()
-  for (const c of kids) {
-    const before = { ...c }
-    await ctx.db.patch(c._id, { parent_id: undefined, updated_at: now })
-    const after = (await ctx.db.get(c._id)) as Doc<'issues'>
-    await notifyIssueUpdate(ctx, {
-      before,
-      after,
-      actor,
-      now,
-      skipTaskEvent: deletingProjectIds?.has(c.project_id),
-    })
-  }
-  // links, both directions (pair rows are these same rows — pair_key is a
-  // field, reached through by_source/by_target here)
-  const outgoing = ctx.db
-    .query('issue_links')
-    .withIndex('by_source', (q) => q.eq('source_id', issue.id))
-  for await (const l of outgoing) await ctx.db.delete(l._id)
-  const incoming = ctx.db
-    .query('issue_links')
-    .withIndex('by_target', (q) => q.eq('target_id', issue.id))
-  for await (const l of incoming) await ctx.db.delete(l._id)
-  const labels = ctx.db
-    .query('issue_labels')
-    .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
-  for await (const il of labels) await ctx.db.delete(il._id)
-  const subs = ctx.db
-    .query('issue_subscriptions')
-    .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issue.id))
-  for await (const s of subs) await ctx.db.delete(s._id)
-  const comments = ctx.db.query('comments').withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
-  for await (const c of comments) await ctx.db.delete(c._id)
-  await dropCommentCount(ctx, issue.id)
-  const messages = ctx.db
-    .query('messages')
-    .withIndex('by_issue_read', (q) => q.eq('issue_id', issue.id))
-  for await (const m of messages) await ctx.db.delete(m._id)
-  // attachment rows AND their bytes — ctx.storage.delete is transactional,
-  // so a rolled-back mutation reaps nothing (the SQL client's bytes-first
-  // reap inversion dies here)
-  const atts = await ctx.db
-    .query('issue_attachments')
-    .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
-    .collect()
-  for (const att of atts) {
-    await ctx.storage.delete(att.storage_id)
-    await ctx.db.delete(att._id)
-  }
-  if (!deletingProjectIds?.has(issue.project_id))
-    await emitTaskEvent(ctx, { name: 'task.deleted', issue, actor, now })
-  await ctx.db.delete(issue._id)
-}
-
-/* delete_project's cascade (0081:473-488 authorizes; the FK graph destroys):
- * a meta takes its subs (projects.parent_id CASCADE, 0001:61 — subs never
- * have children, 0048, so one level down is the whole tree); per doomed
- * project: milestones (0078:152 CASCADE), project_access (0001:80 CASCADE —
- * grants are swept per project defensively), and issues (0001:88
- * CASCADE) each through deleteIssueDeep, which detaches cross-project
- * children WITH the issues_touch stamp + notify and reaps attachment bytes.
- * Activity rows are left as they are, project_id included; callers delete
- * them or clear project_id (model/deletedItems.ts purgeActivity does it
- * through by_project). A row filed under a deleted project reaches org
- * admins only (lib/activityVisibility.ts). Only tests call it. The app's
- * project delete moves the project to Deleted items (model/deletedItems.ts),
- * and the Northstar wipe deletes in bounded batches
- * (model/orgDeletion.ts wipeWorkStep). */
-export async function deleteProjectDeep(
-  ctx: MutationCtx,
-  a: { project: Doc<'projects'>; actor: Doc<'profiles'>; now: string },
-): Promise<void> {
-  const { project, actor, now } = a
-  const subs = await ctx.db
-    .query('projects')
-    .withIndex('by_parent', (q) => q.eq('parent_id', project.id))
-    .collect()
-  const doomed = [...subs, project] // children first, the row itself last
-  const doomedIds = new Set(doomed.map((p) => p.id))
-  for (const p of doomed) {
-    const milestones = ctx.db
-      .query('milestones')
-      .withIndex('by_project', (q) => q.eq('project_id', p.id))
-    for await (const m of milestones) await ctx.db.delete(m._id)
-    const grants = ctx.db
-      .query('project_access')
-      .withIndex('by_project', (q) => q.eq('project_id', p.id))
-    for await (const g of grants) await ctx.db.delete(g._id)
-    const teamGrants = ctx.db
-      .query('project_team_access')
-      .withIndex('by_project', (q) => q.eq('project_id', p.id))
-    for await (const g of teamGrants) await ctx.db.delete(g._id)
-    const issues = await ctx.db
-      .query('issues')
-      .withIndex('by_project', (q) => q.eq('project_id', p.id))
-      .collect()
-    // Only detached children in surviving projects can produce deliverable events.
-    for (const i of issues)
-      await deleteIssueDeep(ctx, { issue: i, actor, now, deletingProjectIds: doomedIds })
-  }
-  for (const p of doomed) await ctx.db.delete(p._id)
 }
 
 /* delete_team's cascade (0081:458-471 authorizes). Projects are independent
@@ -343,8 +215,8 @@ const ACTED_ROWS_FIRST_PASS = 500
  *
  * Storage: the avatar bytes die HERE (phase 5 on); phase 7 owns only avatar
  * upload/serving (setAvatar/clearAvatar and their replace-time deletes) and
- * the attachment upload path. Attachment bytes die with their issue in
- * deleteIssueDeep, never with a profile. */
+ * the attachment upload path. Attachment bytes die with their task, in
+ * Deleted items or deleteOrgDeep, never with a profile. */
 export async function removeProfile(
   ctx: MutationCtx,
   a: { profile: Doc<'profiles'>; now: string },

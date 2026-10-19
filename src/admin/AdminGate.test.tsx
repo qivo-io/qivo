@@ -9,6 +9,8 @@ import { TooltipProvider } from '@/components/ui/tooltip'
    shows the sign-in form without the password typed earlier. */
 
 const auth = vi.hoisted(() => ({
+  // armConvexAuth's first answer: whether Convex got a token
+  armed: true,
   lost: [] as (() => void)[],
   session: { data: null as { session: object } | null },
   signIn: vi.fn(async () => ({ error: null })),
@@ -16,7 +18,7 @@ const auth = vi.hoisted(() => ({
 vi.mock('./auth', () => ({
   armConvexAuth: async (onLost?: () => void) => {
     if (onLost) auth.lost.push(onLost)
-    return true
+    return auth.armed
   },
   authClient: {
     getSession: async () => auth.session,
@@ -32,6 +34,7 @@ let root: Root
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  auth.armed = true
   auth.lost = []
   auth.session = { data: null }
   container = document.createElement('div')
@@ -57,8 +60,8 @@ async function type(input: HTMLInputElement | null, value: string) {
   })
 }
 
-/* Signs in through the form and returns once the console shows. */
-async function signIn() {
+/* Opens the gate. */
+async function render() {
   const { AdminGate } = await import('./AdminGate')
   await act(async () =>
     root.render(
@@ -67,11 +70,23 @@ async function signIn() {
       </TooltipProvider>,
     ),
   )
+}
+
+/* Submits the sign-in form. */
+async function submit() {
   await type(field('admin-email'), 'ops@example.com')
   await type(field('admin-password'), 'correct horse')
   await act(async () => field('admin-password')?.form?.requestSubmit())
+}
+
+/* Signs in through the form and returns once the console shows. */
+async function signIn() {
+  await render()
+  await submit()
   expect(container.textContent).toContain('Operator console')
 }
+
+const NOT_ARMED = "Couldn't confirm your sign-in. Check your connection and sign in again."
 
 describe('the operator gate after Convex drops the sign-in', () => {
   it('returns to the sign-in form without the password once the session ended', async () => {
@@ -91,5 +106,26 @@ describe('the operator gate after Convex drops the sign-in', () => {
     await act(async () => auth.lost.at(-1)?.())
     expect(auth.lost.length).toBe(armed + 1)
     expect(container.textContent).toContain('Operator console')
+  })
+})
+
+describe('the operator gate when Convex gets no token for the session', () => {
+  it('asks a stored session to sign in again instead of saying No access', async () => {
+    auth.session = { data: { session: {} } }
+    auth.armed = false
+    await render()
+    expect(container.textContent).not.toContain('No access')
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(NOT_ARMED)
+    expect(field('admin-email')).not.toBeNull()
+  })
+
+  it('keeps the form after a sign-in whose token fetch fails, without the password', async () => {
+    auth.armed = false
+    await render()
+    await submit()
+    expect(container.textContent).not.toContain('No access')
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(NOT_ARMED)
+    expect(field('admin-email')?.value).toBe('ops@example.com')
+    expect(field('admin-password')?.value).toBe('')
   })
 })

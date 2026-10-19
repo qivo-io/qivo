@@ -2,9 +2,9 @@
  * its task's organization and project (schema.ts issue_attachments). The
  * oldest rows may lack org_id, and every row stored before this backfill
  * existed lacks project_id. No reader depends on it for correctness.
- * model/billing.ts storageUsage and storagePage, behind the Billing page
- * (billing.ts usage and usageReport) and each billing period's storage
- * sample (billingSync.ts storageStep), resolve a row without its project or
+ * model/billing.ts storagePage, behind the Billing page (billing.ts
+ * usageReport) and each billing period's storage sample (billingSync.ts
+ * storageStep), and storageUsage resolve a row without its project or
  * its organization through its task. They read the deployment's rows
  * without an organization on every call while there are at most
  * UNSCOPED_READ.lookups of them, and the organization's own tasks one by one
@@ -28,9 +28,10 @@
  * stuck waits for an admin's Delete now, because the task is out of issues
  * until then (model/deletedItems.ts). The backfill reads no deleted_rows,
  * so a stored row keeps what it held, and a restore gives it its task's
- * project (writeRowBack). While one without org_id remains,
- * storageUsage and storagePage read it on every call and the snapshot reads
- * it as one of the rows above.
+ * project (writeRowBack). While rows without org_id remain, storageUsage and
+ * storagePage read them on every call as long as there are at most
+ * UNSCOPED_READ.lookups of them, and the snapshot reads them as described
+ * above.
  *
  * Tasks are the larger documents, as their descriptions hold up to about
  * 60 KB and older ones up to the 1 MiB document limit. A step stops before

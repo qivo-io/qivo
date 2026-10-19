@@ -13,7 +13,7 @@
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { canSeeProject, hasProjectLevel, rootMetaOf } from '../lib/access'
-import { byId, insertUnique } from '../lib/db'
+import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { NAME_MAX, nameOverCap } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
@@ -126,6 +126,7 @@ export async function addMilestoneCore(
   },
 ): Promise<Doc<'milestones'>> {
   const { me, id, now } = a
+  assertNewRowId(id)
   const home = await milestoneTarget(ctx, me, a.projectId)
   const week = cleanMilestoneWeek(a.week)
   const name = cleanMilestoneName(a.name)

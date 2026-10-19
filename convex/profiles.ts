@@ -44,7 +44,7 @@ import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import { markBillingMembershipChanged } from './lib/billableUsers'
-import { byId, insertUnique } from './lib/db'
+import { assertNewRowId, byId, insertUnique } from './lib/db'
 import { isDemoDeployment, refuseDemoFeature, requireActiveDemo } from './lib/demo'
 import { vOrgRole, vProfileKind } from './lib/enums'
 import {
@@ -117,6 +117,7 @@ export const create = adminMutation({
   },
   handler: async (ctx, args) => {
     refuseDemoFeature()
+    assertNewRowId(args.id)
     const now = new Date().toISOString()
     const org = await byId(ctx, 'organizations', ctx.me.org_id)
     require(org !== null, notFound('organization not found'))

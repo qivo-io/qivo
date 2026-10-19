@@ -13,7 +13,7 @@
 import { literals } from 'convex-helpers/validators'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { insertUnique } from '../lib/db'
+import { assertNewRowId, insertUnique } from '../lib/db'
 import type { LinkType } from '../lib/enums'
 import { badRequest, forbidden, notFound, rule } from '../lib/functions'
 import { issueKey } from '../lib/taskRefs'
@@ -74,9 +74,11 @@ export async function linksOf(ctx: QueryCtx, taskId: string): Promise<Doc<'issue
 
 /**
  * Links two tasks as stored (source, target, type), stamped `now`. `id` is
- * the app's client-made id; machine callers omit it. The same link again is
- * a no-op that writes nothing and answers `added: false`; a different link
- * between the same tasks, or an `id` another link already has, is refused.
+ * the app's client-made id; machine callers omit it. An id that is not a
+ * lowercase UUID is refused first (lib/db.ts assertNewRowId). The same link
+ * again is a no-op that writes nothing and answers `added: false`; a
+ * different link between the same tasks, or an `id` another link already
+ * has, is refused.
  * `provenance` signs a machine write's activity row. Refuses a self link, a
  * task the actor cannot see (in the organization sentence, so no answer
  * describes it) and an actor without Edit on either task.
@@ -94,6 +96,7 @@ export async function addLinkCore(
   },
 ): Promise<{ link: Doc<'issue_links'>; added: boolean }> {
   const { me, source_id, target_id, type, now } = a
+  if (a.id !== undefined) assertNewRowId(a.id)
   if (source_id === target_id) throw badRequest('a task cannot be linked to itself')
   const { source, target } = await assertLinkableIssues(ctx, source_id, target_id)
   // a pair in someone else's organization, or an end the actor cannot see,

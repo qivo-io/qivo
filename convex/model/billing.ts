@@ -289,6 +289,11 @@ async function* filesByTask(ctx: QueryCtx, orgId: string): AsyncGenerator<Counte
  * organizations' rows and tasks cannot take the read past Convex's limits.
  * internal/attachmentScopeBackfill fills both fields, after which only rows
  * whose task is gone lack them, and those count nowhere.
+ *
+ * It reads every attachment row of the organization in one transaction, so
+ * no function serves it. The Billing page and the storage samples count the
+ * same bytes page by page (storagePage), and the tests check those pages
+ * against it.
  */
 export async function storageUsage(ctx: QueryCtx, orgId: string) {
   const projects = await ctx.db
@@ -638,15 +643,6 @@ export async function billingUsageHead(
     delivery_unconfirmed: events.some((event) => !!event.abandoned_at && event.attempts > 0),
     users: [...users.values()].sort((a, b) => b.calls - a.calls),
   }
-}
-
-/** The usage report with its storage read in one transaction
- * (storageUsage). Billing pages before billing.ts usageReport call it
- * through billing.usage. */
-export async function billingUsage(ctx: QueryCtx, orgId: string): Promise<BillingUsage> {
-  const head = await billingUsageHead(ctx, orgId)
-  const storage = await storageUsage(ctx, orgId)
-  return { ...head, storage_bytes: storage.bytes, projects: storage.projects }
 }
 
 export function validatePlan(plan: Omit<BillingPlan, 'id' | 'archived' | 'created_at'>) {

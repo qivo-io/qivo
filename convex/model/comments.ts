@@ -14,7 +14,7 @@ import { getDocumentSize } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { hasProjectLevel } from '../lib/access'
-import { byId, insertUnique } from '../lib/db'
+import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import { badRequest, forbidden, rule } from '../lib/functions'
 import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
 import { assertRoomForComment, noteCommentAdded, noteCommentRemoved } from './commentCounts'
@@ -39,10 +39,11 @@ type NewComment = {
 /**
  * Posts `body` on `issue` as `author`, stamped `now`, which the comment and
  * every message its fan-out posts share. `id` is the app's client-made id;
- * machine callers omit it and get a new one. Refuses an author without Edit
- * on the task's project, a blank body, a body longer than TEXT_MAX, a task
- * that holds COMMENT_MAX comments (model/commentCounts.ts
- * TOO_MANY_COMMENTS) and an id already in use. Every caller trims `body`
+ * machine callers omit it and get a new one. Refuses an id that is not a
+ * lowercase UUID (lib/db.ts assertNewRowId), an author without Edit on the
+ * task's project, a blank body, a body longer than TEXT_MAX, a task that
+ * holds COMMENT_MAX comments (model/commentCounts.ts TOO_MANY_COMMENTS) and
+ * an id already in use. Every caller trims `body`
  * first, so the cap measures the stored text.
  */
 export async function postComment(ctx: MutationCtx, a: NewComment): Promise<Doc<'comments'>> {
@@ -57,6 +58,7 @@ async function insertComment(
   o: { capped: boolean },
 ): Promise<Doc<'comments'>> {
   const { issue, author, now } = a
+  if (a.id !== undefined) assertNewRowId(a.id)
   await assertCanEdit(ctx, author, issue.project_id)
   if (a.body.trim() === '') throw badRequest('a comment cannot be empty')
   if (a.body.length > TEXT_MAX) throw rule(COMMENT_TOO_LONG)

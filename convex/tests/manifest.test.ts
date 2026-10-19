@@ -130,7 +130,6 @@ adminOrgs:suggestAddress query public {"type":"object","value":{"name":{"fieldTy
 adminOrgs:updateInvite mutation internal {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"actor":{"fieldType":{"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false}}},"optional":false}}}
 adminPeople:detailHead query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 adminPeople:invitePage query internal {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
-adminPeople:listUsers action public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":false}}}
 adminPeople:loginPage query internal {"type":"object","value":{"auth_user_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
 adminPeople:memberPage query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
 adminPeople:orgDetail action public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -175,7 +174,6 @@ billing:status query public {"type":"object","value":{"org_id":{"fieldType":{"ty
 billing:storageLegacyPhase query internal {"type":"object","value":{}}
 billing:storageNowPage query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"phase":{"fieldType":{"type":"union","value":[{"type":"literal","value":"own"},{"type":"literal","value":"unscoped"},{"type":"literal","value":"tasks"}]},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"size":{"fieldType":{"type":"number"},"optional":true}}}
 billing:summary query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-billing:usage query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billing:usageHead query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billing:usageReport action public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billingActions:cancelSubscription action public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -583,7 +581,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // Billing details/usage require an org admin; status reveals only the
   // caller's org entitlement. Checkout and portal re-check admin identity in
   // orgAction and remain available during billing recovery/read-only access.
-  billing: { summary: 'orgQuery', usage: 'orgQuery', usageReport: 'orgAction', status: 'orgQuery' },
+  billing: { summary: 'orgQuery', usageReport: 'orgAction', status: 'orgQuery' },
   // API access lists every member's credentials for an org admin (checked in
   // the handler) and revokes any of them; revoking only takes access away, so
   // it stays open to admins during a billing pause.
@@ -657,7 +655,6 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // way (adminPeople.ts).
   adminPeople: {
     userPage: 'platformAction',
-    listUsers: 'platformAction',
     orgDetail: 'platformAction',
   },
   adminAuth: {
@@ -861,7 +858,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 167
+const PUBLIC_COUNT = 165
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

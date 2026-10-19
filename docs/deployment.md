@@ -270,8 +270,10 @@ break.
 
 Instant Rollback can also return a frontend that calls Convex functions a
 later release removed. The operator console before v0.1.15 calls
-`admin.listUsers` and `admin.orgDetail`, which later releases removed, so
-after such a rollback its Users and organization pages fail.
+`admin.listUsers` and `admin.orgDetail`, so after such a rollback its Users
+and organization pages fail. The v0.1.15 console calls `adminPeople.listUsers`,
+so its Users page fails. The app before v0.1.16 calls `billing.usage`, so its
+Billing page cannot load usage. Later releases removed all four.
 
 ## Environment configuration
 

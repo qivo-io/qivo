@@ -12,7 +12,7 @@
 import { v } from 'convex/values'
 import type { ProfileKind } from '../lib/enums'
 import { badRequest } from '../lib/functions'
-import { cutName } from '../lib/textLimits'
+import { cutName, plainText } from '../lib/textLimits'
 import { REST_AUTH_401, REST_PERSON_AUTH_401 } from './auth'
 
 /** MCP's refusal for a readable project the caller cannot write, which
@@ -90,9 +90,12 @@ export const MCP_PROVENANCE = 'via MCP'
  * activity row reaches other members too. A delete records its credential
  * in Deleted items as well, where a personal token's name shows only to
  * organization admins and to the person who deleted
- * (model/deletedItemsList.ts). */
+ * (model/deletedItemsList.ts). The name is written as plain text
+ * (lib/textLimits.ts plainText), as an activity diff's free text is, so it
+ * can neither add a status or reviewer clause that the app's feed reader
+ * finds (src/lib/teamSync.ts) nor break the signature namedTaskNums reads. */
 export const restProvenance = (keyName: string | null): string =>
-  keyName === null ? 'via the REST API' : `via the REST API (${cutName(keyName)})`
+  keyName === null ? 'via the REST API' : `via the REST API (${cutName(plainText(keyName))})`
 
 /** The agent key's name for its writes' provenance, or null for a personal
  * token. */

@@ -16,11 +16,11 @@
  *
  * Each row carries its task's organization and project. The app snapshot
  * reads the organization's rows by index, and the storage totals group
- * them by project without reading tasks (model/billing.ts storageUsage).
+ * them by project without reading tasks (model/billing.ts storagePage).
  * moveIssueCore moves the project with the task, and with each subtask a
  * move to another top-level project carries. A file name has 1 to 255
- * characters and a media type at most 255. That keeps every row small, and
- * storageUsage reads all of an organization's rows in one transaction.
+ * characters and a media type at most 255. That keeps every row small, so a
+ * page of rows stays small too.
  *
  * REST and MCP upload in two steps. startAttachmentUpload checks the write
  * gate and the declared size, records a ticket naming the caller, the task
@@ -40,7 +40,7 @@
 
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { byId, insertUnique } from '../lib/db'
+import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import {
   attachmentFileUrl,
   attachmentUploadUrl,
@@ -181,6 +181,7 @@ export async function attachFileCore(
   },
 ): Promise<AttachResult> {
   const { me, issue } = a
+  assertNewRowId(a.id)
   await assertCanEdit(ctx, me, issue.project_id)
   const name = cleanAttachmentName(a.name)
   if (await storageIdInUse(ctx, a.storage_id)) {

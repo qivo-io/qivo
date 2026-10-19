@@ -31,7 +31,7 @@ import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import { cleanTokenExpiry } from './lib/access'
-import { byId, insertUnique } from './lib/db'
+import { assertNewRowId, byId, insertUnique } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
 import { vCredentialAccess } from './lib/enums'
 import {
@@ -154,6 +154,7 @@ export const createAgentKey = orgMutation({
   },
   handler: async (ctx, { id, agent_id, name, key_prefix, key_hash }) => {
     refuseDemoFeature()
+    assertNewRowId(id)
     const now = new Date().toISOString()
     const agent = await byId(ctx, 'profiles', agent_id)
     if (agent === null || agent.org_id !== ctx.me.org_id || agent.kind !== 'agent') {
@@ -270,6 +271,7 @@ export const createMcpToken = authedMutation({
   },
   handler: async (ctx, { id, profile_id, name, token_prefix, token_hash, access, expires_at }) => {
     refuseDemoFeature()
+    assertNewRowId(id)
     const now = new Date().toISOString()
     if (!isMine(ctx.myProfiles, profile_id)) throw notFound('profile not found')
     const tokenName = credentialName(name, 'token')

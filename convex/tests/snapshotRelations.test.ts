@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Doc } from '../_generated/dataModel'
-import { RELATION_READ } from '../lib/snapshotRelations'
+import { RELATION_READ, snapshotRelations } from '../lib/snapshotRelations'
 import { invokeSnapshot } from './backendPerformance.setup'
 import { as, NOW, newT, type T, withOrg } from './helpers.setup'
 
@@ -559,38 +559,45 @@ async function plantDense(
   return f
 }
 
-describe('the snapshot of a restricted view in a dense organization', () => {
-  it('reads 300 of 6,000 active tasks with five labels each task by task, within limits', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await plantDense(t, { total: 6000, visible: 300, labels: 5, links: 0 })
-    const { snapshot, metrics } = await read(t, f.guest)
-    expect(snapshot!.issues).toHaveLength(300)
-    expect(snapshot!.issueLabels).toHaveLength(1500)
-    // four ranges per visible task, not the 30,000 labels of the whole org
-    expect(metrics.databaseQueries.used).toBeGreaterThanOrEqual(1200)
-    expect(metrics.databaseQueries.used).toBeLessThan(1300)
-    expect(metrics.documentsRead.used).toBeLessThan(10_000)
-  }, 120_000)
+/* These organizations are a tenth of the size the rules are for, with
+ * Convex's document limit and RELATION_READ.tasks (512) lowered to match, so
+ * the reads take the same paths in a tenth of the time. */
+const TENTH = { transactionLimits: { documentsRead: 3200 } }
 
-  it('reads a dense table task by task and the others in bulk for 600 of 2,000 tasks, within limits', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await plantDense(t, { total: 2000, visible: 600, labels: 15, links: 1 })
+describe('the snapshot of a restricted view in a dense organization', () => {
+  it('reads 30 of 600 active tasks with five labels each task by task, within limits', async () => {
+    const t = newT(TENTH)
+    const f = await plantDense(t, { total: 600, visible: 30, labels: 5, links: 0 })
     const { snapshot, metrics } = await read(t, f.guest)
-    expect(snapshot!.issues).toHaveLength(600)
-    expect(snapshot!.issueLabels).toHaveLength(9000)
-    expect(snapshot!.links).toHaveLength(599)
-    // the labels, over their cap, are read task by task, 600 ranges, and the
-    // links stay in bulk
-    expect(metrics.databaseQueries.used).toBeGreaterThanOrEqual(600)
-    expect(metrics.databaseQueries.used).toBeLessThan(700)
-    expect(metrics.documentsRead.used).toBeLessThan(20_000)
-  }, 120_000)
+    expect(snapshot!.issues).toHaveLength(30)
+    expect(snapshot!.issueLabels).toHaveLength(150)
+    // four ranges per visible task, not the 3,000 labels of the whole org
+    expect(metrics.databaseQueries.used).toBeGreaterThanOrEqual(120)
+    expect(metrics.databaseQueries.used).toBeLessThan(220)
+    expect(metrics.documentsRead.used).toBeLessThan(1000)
+  })
+
+  it('reads a dense table task by task and the others in bulk for 60 of 200 tasks, within limits', async () => {
+    Object.assign(RELATION_READ, { tasks: 51 })
+    const t = newT(TENTH)
+    const f = await plantDense(t, { total: 200, visible: 60, labels: 15, links: 1 })
+    const { snapshot, metrics } = await read(t, f.guest)
+    expect(snapshot!.issues).toHaveLength(60)
+    expect(snapshot!.issueLabels).toHaveLength(900)
+    expect(snapshot!.links).toHaveLength(59)
+    // the labels, over their cap, are read task by task, 60 ranges, and the
+    // links stay in bulk, where task by task would add 120
+    expect(metrics.databaseQueries.used).toBeGreaterThanOrEqual(60)
+    expect(metrics.databaseQueries.used).toBeLessThan(160)
+    expect(metrics.documentsRead.used).toBeLessThan(2000)
+  })
 
   it('reads all three tables task by task when each is over its cap, at most 3 ranges above main', async () => {
-    const t = newT({ transactionLimits: true })
+    Object.assign(RELATION_READ, { tasks: 51 })
+    const t = newT(TENTH)
     const f = await plantDense(t, {
-      total: 2000,
-      visible: 600,
+      total: 200,
+      visible: 60,
       labels: 2,
       attachments: 2,
       links: 3,
@@ -599,12 +606,12 @@ describe('the snapshot of a restricted view in a dense organization', () => {
     // main read this view task by task, as the forced read does
     const main = await readWith(t, f.guest, ALL_SELECTIVE)
     expect(sameDelivery(usual.snapshot)).toEqual(sameDelivery(main.snapshot))
-    expect(usual.snapshot!.issueLabels).toHaveLength(1200)
-    expect(usual.snapshot!.attachments).toHaveLength(1200)
+    expect(usual.snapshot!.issueLabels).toHaveLength(120)
+    expect(usual.snapshot!.attachments).toHaveLength(120)
     // each table first tried its capped bulk read, then read like main
     expect(usual.metrics.databaseQueries.used).toBe(main.metrics.databaseQueries.used + 3)
-    expect(usual.metrics.documentsRead.used).toBeLessThan(20_000)
-  }, 120_000)
+    expect(usual.metrics.documentsRead.used).toBeLessThan(2000)
+  })
 
   it('reads a dense table task by task for a view of more than 1,024 tasks while those reads fit the range limit', async () => {
     const t = newT({ transactionLimits: true })
@@ -618,4 +625,47 @@ describe('the snapshot of a restricted view in a dense organization', () => {
     const full = await readWith(t, f.guest, { ...DEFAULT_READ, ranges: 0 })
     expect(full.metrics.databaseQueries.used).toBeLessThan(100)
   }, 120_000)
+})
+
+describe('the relation reads of a snapshot that has used most of its ranges', () => {
+  /* The labels of 40 visible tasks, all live so the tables decide, read
+   * with `left` ranges left, and the ranges the relation reads used. The
+   * labels are over their cap, so task by task they cost 40 ranges, and the
+   * table reads take up to 6 more. */
+  async function readLeaving(left: number) {
+    const t = newT({ transactionLimits: true })
+    const f = await plantDense(t, { total: 40, visible: 40, labels: 5, links: 0 })
+    return await t.run(async (ctx) => {
+      const tasks = await ctx.db
+        .query('issues')
+        .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+        .collect()
+      // earlier reads, as of another organization
+      const before = await ctx.meta.getTransactionMetrics()
+      for (let i = 0; i < before.databaseQueries.remaining - left; i++)
+        await ctx.db
+          .query('issues')
+          .withIndex('by_uuid', (q) => q.eq('id', `none-${i}`))
+          .first()
+      const start = (await ctx.meta.getTransactionMetrics()).databaseQueries.used
+      const rows = await snapshotRelations(ctx, { orgId: f.org.id, tasks, active: tasks.length })
+      let labels = 0
+      for (const task of tasks) labels += (await rows(task.id))[2].length
+      const used = (await ctx.meta.getTransactionMetrics()).databaseQueries.used - start
+      return { labels, used }
+    })
+  }
+
+  it('reads a dense table task by task while those reads and the table reads fit', async () => {
+    const { labels, used } = await readLeaving(46)
+    expect(labels).toBe(200)
+    expect(used).toBeGreaterThanOrEqual(40)
+    expect(used).toBeLessThanOrEqual(46)
+  })
+
+  it('reads a dense table in full when task by task would pass the ranges left', async () => {
+    const { labels, used } = await readLeaving(45)
+    expect(labels).toBe(200)
+    expect(used).toBeLessThanOrEqual(6)
+  })
 })
