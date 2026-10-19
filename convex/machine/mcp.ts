@@ -152,7 +152,6 @@ import {
   pretty,
   readBody,
   WRITE_CONFLICT,
-  WRITE_CONFLICT_MESSAGE,
   WRITE_CONFLICT_RETRY_AFTER,
 } from './shared'
 import { TEAM_TOOLS } from './teams'
@@ -2180,11 +2179,12 @@ const rateLimited = (): Response =>
   })
 
 /* The 503 for a write before dispatch, such as the per-call stamp, that kept
- * conflicting with other writes (WRITE_CONFLICT). No tool ran, so the
- * request changed nothing and can be sent again. A tool's own write that
- * kept conflicting answers WRITE_CONFLICT_MESSAGE as its error result. */
-const writeConflict = (): Response =>
-  new Response(JSON.stringify({ error: WRITE_CONFLICT_MESSAGE }), {
+ * conflicting with other writes or running out of time (WRITE_CONFLICT),
+ * with the refusal's sentence `message`. No tool ran, so the request changed
+ * nothing and can be sent again. A tool's own write that kept failing so
+ * answers that sentence as its error result. */
+const writeConflict = (message: string): Response =>
+  new Response(JSON.stringify({ error: message }), {
     status: 503,
     headers: withCors({
       'Content-Type': 'application/json',
@@ -2267,7 +2267,7 @@ const mcpPost = httpAction(async (ctx, request) => {
     return await mcpResponse(ctx, request)
   } catch (e) {
     if (e instanceof ConvexError && (e.data as Refusal).reason === WRITE_CONFLICT)
-      return writeConflict()
+      return writeConflict((e.data as Refusal).message)
     return jsonRes(500, { error: internalError(e) })
   }
 })

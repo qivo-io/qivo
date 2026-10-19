@@ -1027,10 +1027,11 @@ const rateLimited = (): Response =>
     headers: { ...CORS, 'Content-Type': 'application/json', 'Retry-After': '60' },
   })
 
-/* The 503 for a write that kept conflicting with other writes and changed
- * nothing (WRITE_CONFLICT), which the caller can send again. */
-const writeConflict = (): Response =>
-  new Response(JSON.stringify({ error: WRITE_CONFLICT_MESSAGE }), {
+/* The 503 for a write that kept conflicting with other writes, or kept
+ * running out of time, and changed nothing (WRITE_CONFLICT), which the
+ * caller can send again. `message` is the refusal's sentence. */
+const writeConflict = (message: string): Response =>
+  new Response(JSON.stringify({ error: message }), {
     status: 503,
     headers: {
       ...CORS,
@@ -1367,7 +1368,7 @@ function refusalResponse(e: unknown, kind: ProfileKind): Response {
     // dispatch, so answer the caller's own 401 sentence BEFORE the code map
     if (data.reason === CALLER_GONE) return err(CALLER[kind].gone, 401)
     if (data.reason === CALLER_DEACTIVATED) return err(CALLER[kind].deactivated, 401)
-    if (data.reason === WRITE_CONFLICT) return writeConflict()
+    if (data.reason === WRITE_CONFLICT) return writeConflict(data.message ?? WRITE_CONFLICT_MESSAGE)
     const status = data.code !== undefined ? STATUS_OF[data.code] : undefined
     if (status !== undefined && data.message !== undefined) return err(data.message, status)
   }

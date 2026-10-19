@@ -865,10 +865,13 @@ calls make to the same data at that moment, such as many comments posted to
 one task at once, answers `the request conflicted with other changes made at
 the same time and changed nothing; send it again` there. Qivo first retries
 the change itself, twice at most, and answers this only when none of it was
-saved, so wait a second and make the same call again. A conflict before the
-tool runs, while Qivo counts or authenticates the request, is an HTTP `503`
-with `Retry-After: 1` and that sentence as `error`, and the request is safe
-to send again in the same way. A failure that is not a refusal, such as a
+saved, so wait a second and make the same call again. A change that keeps
+running out of time, which a busy server and such conflicts can cause, is
+retried the same way and answers `the request took too long and changed
+nothing; send it again`, which you handle the same way. A conflict or time
+out before the tool runs, while Qivo counts or authenticates the request, is
+an HTTP `503` with `Retry-After: 1` and that sentence as `error`, and the
+request is safe to send again in the same way. A failure that is not a refusal, such as a
 server limit, answers `internal error` there instead, and outside a tool call
 it is an HTTP `500` with the same error. Qivo keeps its details in its own
 logs. `internal error` does not say whether a change was saved, so read the

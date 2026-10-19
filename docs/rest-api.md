@@ -108,9 +108,12 @@ A request that keeps conflicting with changes other requests make to the
 same data at that moment, such as many comments posted to one task at once,
 is a `503` with `Retry-After: 1` and `{"error": "the request conflicted with
 other changes made at the same time and changed nothing; send it again"}`.
-Qivo first retries such a conflict itself, twice at most. The `503` means
-the request saved nothing, so wait the `Retry-After` seconds and send the
-same request again. Creating a webhook subscription is the exception, as
+Qivo first retries such a conflict itself, twice at most. A change that
+keeps running out of time, which a busy server and such conflicts can cause,
+is retried the same way and is the same `503` with `{"error": "the request
+took too long and changed nothing; send it again"}`. The `503` means the
+request saved nothing, so wait the `Retry-After` seconds and send the same
+request again. Creating a webhook subscription is the exception, as
 [Generic webhooks](#generic-webhooks) describes. A failure that is not a
 refusal, such as a server limit, is a `500` with `{"error": "internal
 error"}`, and Qivo keeps its details in its own logs. A `500` does not say

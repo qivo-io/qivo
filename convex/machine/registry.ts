@@ -25,10 +25,10 @@
  * write runner, and anything but an exact 'read' flag needs write access from
  * the credential (needsWrite).
  *
- * The write runner's runMutation retries write conflicts (retryConflicts).
- * Every write entry makes exactly one write call, one mutation or one
- * action, and registry.test.ts holds every entry to that. So a conflict
- * that outlasts the retries means the request changed nothing, and its
+ * The write runner's runMutation retries write conflicts and mutation time
+ * outs (retryConflicts). Every write entry makes exactly one write call, one
+ * mutation or one action, and registry.test.ts holds every entry to that. So
+ * a failure that outlasts the retries means the request changed nothing, and its
  * WRITE_CONFLICT refusal tells the caller so. The surfaces run the mutations
  * they make before dispatch, such as the per-call stamp, through
  * conflictRetrying for the same reason. */
@@ -37,7 +37,7 @@ import { ConvexError } from 'convex/values'
 import type { ActionCtx } from '../_generated/server'
 import type { CredentialAccess } from '../lib/enums'
 import { conflict } from '../lib/functions'
-import { WRITE_CONFLICT, WRITE_CONFLICT_MESSAGE } from './shared'
+import { WRITE_CONFLICT, WRITE_CONFLICT_MESSAGE, WRITE_TIMEOUT_MESSAGE } from './shared'
 
 /* convex/tsconfig's lib is ESNext only; the Convex runtime has it. */
 declare function setTimeout(callback: () => void, delay: number): unknown
@@ -116,26 +116,41 @@ export function isWriteConflict(e: unknown): boolean {
   )
 }
 
+/* What ctx.runMutation rejects with once a mutation ran past Convex's 1 s
+ * execution time, the limit of queries and mutations only. A mutation that
+ * Convex retries on conflicts while the deployment is busy can reach it
+ * before it gives up on the conflict, and the local backend answered two
+ * comment posts racing on one task with it. Such a transaction never
+ * committed either. Anchored at the start like CONFLICT_FAILURES. */
+const TIMEOUT_FAILURE = /^Function execution timed out \(maximum duration: 1s\)/
+
+/** Whether `e` is Convex's report of a mutation that ran out of execution
+ * time, which committed nothing. */
+export function isMutationTimeout(e: unknown): boolean {
+  return e instanceof Error && !(e instanceof ConvexError) && TIMEOUT_FAILURE.test(e.message)
+}
+
 /** How many more times retryConflicts runs a write that conflicted. */
 export const CONFLICT_RETRIES = 2
 
 /**
  * Runs `write`, one mutation call, and runs it again up to CONFLICT_RETRIES
- * times, after a random wait, while it fails with a write conflict. A
- * conflicted mutation committed nothing, so a retry cannot apply it twice.
- * Any other failure is rethrown at once, because it may have come after a
- * commit. A conflict that outlasts the retries is logged and becomes the
- * WRITE_CONFLICT refusal.
+ * times, after a random wait, while it fails with a write conflict or runs
+ * out of time. Such a mutation committed nothing, so a retry cannot apply it
+ * twice. Any other failure is rethrown at once, because it may have come
+ * after a commit. A failure that outlasts the retries is logged and becomes
+ * the WRITE_CONFLICT refusal, whose sentence says which of the two it was.
  */
 export async function retryConflicts<T>(write: () => Promise<T>): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
       return await write()
     } catch (e) {
-      if (!isWriteConflict(e)) throw e
+      const timeout = isMutationTimeout(e)
+      if (!timeout && !isWriteConflict(e)) throw e
       if (attempt === CONFLICT_RETRIES) {
         console.error(e)
-        throw conflict(WRITE_CONFLICT_MESSAGE, WRITE_CONFLICT)
+        throw conflict(timeout ? WRITE_TIMEOUT_MESSAGE : WRITE_CONFLICT_MESSAGE, WRITE_CONFLICT)
       }
     }
     // 100 to 300 ms before the first retry and 200 to 600 ms before the
