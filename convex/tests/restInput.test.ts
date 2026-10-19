@@ -20,6 +20,9 @@ import { NOW, newT, type T, uuid, withOrg } from './helpers.setup'
 declare class TextEncoder {
   encode(input: string): Uint8Array
 }
+declare class Blob {
+  constructor(parts: unknown[], options?: { type?: string })
+}
 
 /* fileTokens reads these lazily (attachments.test.ts plants the same). */
 const g = globalThis as unknown as { process?: { env: Record<string, string | undefined> } }
