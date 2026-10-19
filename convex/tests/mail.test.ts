@@ -78,6 +78,8 @@ describe('authentication mail configuration', () => {
       expect(fetch.mock.calls[0][1].headers['x-lettermint-token']).toBe('test-only-provider-token')
       expect(fetch.mock.calls[0][1].headers.Authorization).toBeUndefined()
       expect(fetch.mock.calls[0][1].headers['Idempotency-Key']).toMatch(/^[a-f0-9]{64}$/)
+      // a redirect would carry the token header to another origin
+      expect(fetch.mock.calls[0][1].redirect).toBe('error')
       expect(JSON.parse(fetch.mock.calls[0][1].body)).toMatchObject({
         from: 'Qivo <no-reply@qivo.io>',
         to: [letter.to],
@@ -121,7 +123,7 @@ describe('invitation mail', () => {
     const fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 429,
-      headers: { get: () => '120' },
+      headers: { get: () => '20' },
       json: async () => ({}),
     })
     vi.stubGlobal('fetch', fetch)
@@ -147,7 +149,7 @@ describe('invitation mail', () => {
     )
   })
 
-  it('is unsent after a final refusal, and uncertain after a network error', async () => {
+  it('is unsent after a final refusal, and uncertain when a network error was the last answer', async () => {
     const refusal = vi.fn().mockResolvedValue({
       ok: false,
       status: 403,
@@ -171,9 +173,14 @@ describe('invitation mail', () => {
         json: async () => ({}),
       })
     vi.stubGlobal('fetch', unreachable)
-    // the retry after the network error waits half a second
-    expect(await invite(Date.now() + 60_000)).toBe('uncertain')
+    // a refusal of the repeat means the first attempt was not accepted either
+    expect(await invite(Date.now() + 60_000)).toBe('unsent')
     expect(unreachable).toHaveBeenCalledTimes(2)
+    const lost = vi.fn().mockRejectedValue(new TypeError('fetch failed'))
+    vi.stubGlobal('fetch', lost)
+    // the deadline passes before the retry, so the first attempt may have delivered it
+    expect(await invite(Date.now() + 300)).toBe('uncertain')
+    expect(lost).toHaveBeenCalledOnce()
   })
 
   it('retries a server error under the same key and counts the replayed acceptance as sent', async () => {
@@ -202,6 +209,24 @@ describe('invitation mail', () => {
     expect(JSON.stringify(vi.mocked(console.error).mock.calls)).toContain('sandbox mode')
   })
 
+  it('repeats a conflict that follows its own timeout, and counts the first acceptance as sent', async () => {
+    const answers = [
+      () => Promise.reject(new DOMException('The operation timed out.', 'TimeoutError')),
+      () =>
+        Promise.resolve({
+          ok: false,
+          status: 409,
+          headers: { get: () => null },
+          json: async () => ({ message: 'still being processed' }),
+        }),
+      () => Promise.resolve({ ok: true, status: 202, json: async () => ({ message_id: 'm' }) }),
+    ]
+    const fetch = vi.fn().mockImplementation(() => answers.shift()?.())
+    vi.stubGlobal('fetch', fetch)
+    expect(await invite(Date.now() + 60_000)).toBe('sent')
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
   it('repeats a conflict once, then reports it uncertain', async () => {
     const fetch = vi.fn().mockResolvedValue({
       ok: false,
@@ -219,10 +244,15 @@ describe('invitation mail', () => {
     const fetch = vi.fn()
     vi.stubGlobal('fetch', fetch)
     expect(await invite(Date.now() + 60_000)).toBe('unsent')
+    expect(console.error).not.toHaveBeenCalled()
     vi.stubEnv('LETTERMINT_API_KEY', 'test-only-provider-token')
-    vi.stubEnv('MAIL_FROM', '')
+    vi.stubEnv('MAIL_FROM', 'Qivo <no-reply@qivo.io>')
     expect(await invite(Date.now() + 60_000)).toBe('unsent')
     expect(fetch).not.toHaveBeenCalled()
+    // a token beside an unusable sender is logged, without the value
+    const errors = JSON.stringify(vi.mocked(console.error).mock.calls)
+    expect(errors).toContain('MAIL_FROM is not one address')
+    expect(errors).not.toContain('no-reply@qivo.io')
   })
 })
 
@@ -232,11 +262,22 @@ describe('shared transactional transport', () => {
     url: 'https://app.example.test/app/test/settings/org-billing',
     until: '2099-01-01T00:00:00.000Z',
     notice_key: 'test-only-billing-notice',
+    attempt: 0,
+  }
+  const deletion = {
+    to: letter.to,
+    org_name: 'Brightwater\nStudio',
+    delete_after: '2099-02-01T00:00:00.000Z',
+    reason: 'requested',
+    url: 'https://app.example.test/app/brightwater/settings/org-general',
+    notice_key: 'test-only-deletion-notice',
+    attempt: 0,
   }
 
   it('uses the same sender and support reply address for billing', async () => {
     vi.stubEnv('LETTERMINT_API_KEY', 'test-only-provider-token')
-    vi.stubEnv('MAIL_FROM', 'no-reply@qivo.io')
+    // a pasted trailing newline is not part of the address
+    vi.stubEnv('MAIL_FROM', 'no-reply@qivo.io\n')
     const fetch = vi
       .fn()
       .mockResolvedValue({ ok: true, json: async () => ({ message_id: 'billing' }) })
@@ -251,23 +292,18 @@ describe('shared transactional transport', () => {
     })
   })
 
-  it('sends a deletion notice under its notice key, so a repeat is the same letter', async () => {
+  it('sends a deletion notice under one key per hourly attempt', async () => {
     vi.stubEnv('LETTERMINT_API_KEY', 'test-only-provider-token')
     vi.stubEnv('MAIL_FROM', 'no-reply@qivo.io')
     const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ message_id: 'd' }) })
     vi.stubGlobal('fetch', fetch)
-    const notice = {
-      to: letter.to,
-      org_name: 'Brightwater\nStudio',
-      delete_after: '2099-02-01T00:00:00.000Z',
-      reason: 'requested',
-      url: 'https://app.example.test/app/brightwater/settings/org-general',
-      notice_key: 'test-only-deletion-notice',
-    }
-    expect(await sendDeletionNotice(notice)).toBe(true)
-    expect(await sendDeletionNotice(notice)).toBe(true)
-    const [first, second] = fetch.mock.calls.map(([, init]) => init)
+    expect(await sendDeletionNotice(deletion)).toBe(true)
+    expect(await sendDeletionNotice(deletion)).toBe(true)
+    expect(await sendDeletionNotice({ ...deletion, attempt: 1 })).toBe(true)
+    const [first, second, next] = fetch.mock.calls.map(([, init]) => init)
     expect(second.headers['Idempotency-Key']).toBe(first.headers['Idempotency-Key'])
+    expect(next.headers['Idempotency-Key']).toMatch(/^[a-f0-9]{64}$/)
+    expect(next.headers['Idempotency-Key']).not.toBe(first.headers['Idempotency-Key'])
     expect(JSON.parse(first.body)).toMatchObject({
       from: 'Qivo <no-reply@qivo.io>',
       to: [letter.to],
@@ -277,7 +313,39 @@ describe('shared transactional transport', () => {
         'Brightwater Studio is read-only and will be deleted on 2099-02-01',
       ),
     })
-    expect(JSON.parse(first.body).text).toContain(notice.url)
+    expect(JSON.parse(first.body).text).toContain(deletion.url)
+  })
+
+  it('counts a sandbox acceptance as not sent on every path', async () => {
+    vi.stubEnv('LETTERMINT_API_KEY', 'test-only-provider-token')
+    vi.stubEnv('MAIL_FROM', 'no-reply@qivo.io')
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({ message_id: 'm', status: 'pending', sandbox: true }),
+    })
+    vi.stubGlobal('fetch', fetch)
+    expect(await sendBillingReminder(billing)).toBe(false)
+    expect(await sendDeletionNotice(deletion)).toBe(false)
+    await expect(newT().action(internal.mail.send, letter)).rejects.toThrow(
+      'Authentication email delivery failed',
+    )
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('leaves a Retry-After longer than a send allows to the hourly retry', async () => {
+    vi.stubEnv('LETTERMINT_API_KEY', 'test-only-provider-token')
+    vi.stubEnv('MAIL_FROM', 'no-reply@qivo.io')
+    const fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: { get: () => '120' },
+      json: async () => ({}),
+    })
+    vi.stubGlobal('fetch', fetch)
+    expect(await sendBillingReminder(billing)).toBe(false)
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).toContain('longer wait')
   })
 
   it('never sends demo mail even with a complete provider configuration', async () => {
@@ -311,6 +379,8 @@ describe('shared transactional transport', () => {
       'Authentication email delivery failed',
     )
     expect(fetch).toHaveBeenCalledOnce()
-    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(letter.url)
+    const errors = JSON.stringify(vi.mocked(console.error).mock.calls)
+    expect(errors).not.toContain(letter.url)
+    expect(errors).not.toContain(letter.to)
   })
 })

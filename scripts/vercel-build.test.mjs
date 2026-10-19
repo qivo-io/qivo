@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   deploymentName,
   ignoredTheTarget,
   isPreviewDeployKey,
   previewSiteUrl,
+  requireProductionBackendEnv,
   websiteOrigin,
 } from './vercel-build.mjs'
 
@@ -124,5 +125,33 @@ describe('websiteOrigin — where the website build points canonical links', () 
         QIVO_APP_ORIGIN: 'https://qivo.io',
       }),
     ).toBe('https://qivo.io')
+  })
+})
+
+describe('requireProductionBackendEnv — production mail before functions push', () => {
+  const backend = (values) => vi.fn((name) => values[name] ?? '')
+
+  it('refuses a production backend without the Lettermint token or MAIL_FROM, naming only the missing', () => {
+    const production = { QIVO_ENVIRONMENT: 'production' }
+    expect(() =>
+      requireProductionBackendEnv(production, backend({ LETTERMINT_API_KEY: 'test-only-token' })),
+    ).toThrow('Set backend MAIL_FROM before releasing to production.')
+    expect(() => requireProductionBackendEnv(production, backend({}))).toThrow(
+      'Set backend LETTERMINT_API_KEY and MAIL_FROM before releasing to production.',
+    )
+  })
+
+  it('passes a configured production backend and never reads mail settings elsewhere', () => {
+    const configured = backend({
+      LETTERMINT_API_KEY: 'test-only-token',
+      MAIL_FROM: 'no-reply@qivo.io',
+    })
+    expect(() =>
+      requireProductionBackendEnv({ QIVO_ENVIRONMENT: 'production' }, configured),
+    ).not.toThrow()
+    const read = backend({})
+    for (const environment of ['staging', 'preview', 'demo'])
+      requireProductionBackendEnv({ QIVO_ENVIRONMENT: environment }, read)
+    expect(read).not.toHaveBeenCalled()
   })
 })

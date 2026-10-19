@@ -311,6 +311,12 @@ Stable builds check them against their intended destination before pushing
 backend code. Preview builds set their newly claimed branch backend's origin
 and environment. No deployment infers safety from a hostname alone.
 
+Production sends sign-up, password reset, invitation, billing and deletion
+mail through Lettermint, so its Convex deployment also needs
+`LETTERMINT_API_KEY` and `MAIL_FROM` (one address, such as
+`no-reply@qivo.io`). A production build refuses to push backend code until
+both are set. Set them before you publish the release.
+
 The website build takes its origin from `SITE_ORIGIN`, which
 `scripts/vercel-build.mjs` sets to `QIVO_APP_ORIGIN` for stable builds and to
 the branch URL for previews. Production must be built for `https://qivo.io`

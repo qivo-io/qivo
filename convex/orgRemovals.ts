@@ -591,13 +591,20 @@ export const noticeSent = internalMutation({
 })
 
 /** Delivers one admin's deletion email, retrying hourly for a day while
- * mail is unavailable. A stable notice key deduplicates provider retries. */
+ * mail is unavailable. Each hourly attempt sends under its own idempotency
+ * key (mail.ts noticeKey). */
 export const sendNotice = internalAction({
   args: { notice_key: v.string(), attempt: v.optional(v.number()) },
   handler: async (ctx, args): Promise<null> => {
     const delivery = await ctx.runQuery(noticeReadyRef, { key: args.notice_key })
     if (!delivery) return null
-    if (await sendDeletionNotice({ ...delivery, notice_key: args.notice_key }))
+    if (
+      await sendDeletionNotice({
+        ...delivery,
+        notice_key: args.notice_key,
+        attempt: args.attempt ?? 0,
+      })
+    )
       await ctx.runMutation(noticeSentRef, { key: args.notice_key })
     else if ((args.attempt ?? 0) < 24)
       await ctx.scheduler.runAfter(60 * 60_000, sendNoticeRef, {

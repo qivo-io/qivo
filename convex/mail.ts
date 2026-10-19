@@ -9,7 +9,7 @@
 
 import { v } from 'convex/values'
 import { internalAction } from './_generated/server'
-import { localAuthEmailLogging, requireAuthMailDelivery } from './lib/mailConfig'
+import { address, localAuthEmailLogging, mailFrom, requireAuthMailDelivery } from './lib/mailConfig'
 import { cutName } from './lib/textLimits'
 
 /* Web-platform globals the Convex isolate provides; convex/tsconfig's lib is
@@ -33,7 +33,13 @@ type SendResponse = {
 }
 declare function fetch(
   url: string,
-  init: { method: string; headers: Record<string, string>; body: string; signal: AbortSignal },
+  init: {
+    method: string
+    headers: Record<string, string>
+    body: string
+    signal: AbortSignal
+    redirect: 'error'
+  },
 ): Promise<SendResponse>
 
 const SEND_URL = 'https://api.lettermint.co/v1/send'
@@ -41,14 +47,8 @@ const REPLY_TO = 'support@qivo.io'
 
 const SEND_TIMEOUT_MS = 10_000
 const SEND_ATTEMPTS = 3
-
-/* ONE address, and nothing that could be read as two — the recipient is
- * user-typed at sign-up, and whether a comma fans out or a `<` rewrites the
- * From is the provider's business, which is precisely why it must not be
- * decided there. 254 is the RFC 5321 ceiling on a path. */
-const ADDR =
-  /^[^\s@,;:<>"'\\]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i
-const address = (s: string): string | null => (s.length <= 254 && ADDR.test(s) ? s : null)
+// the longest Retry-After a send waits out before it gives up
+const MAX_RETRY_WAIT_MS = 30_000
 
 // ---------------------------------------------------------------- templates
 // Server-side constants, `text` AND `html` for every one of them: an
@@ -109,11 +109,16 @@ If it was not you, you can ignore this message. Your password is unchanged.`,
 // ------------------------------------------------------------------- sender
 
 /** The configured sender, or null when mail is off: no token, a MAIL_FROM
- * that is not one bare address, or the demo. */
+ * that is not one bare address, or the demo. A token beside an unusable
+ * MAIL_FROM is logged, without either value. */
 function sender(): { token: string; from: string } | null {
   const token = process.env.LETTERMINT_API_KEY
-  const from = address(process.env.MAIL_FROM ?? '')
-  if (!token || from === null || process.env.APP_MODE === 'demo') return null
+  if (!token || process.env.APP_MODE === 'demo') return null
+  const from = mailFrom()
+  if (from === null) {
+    console.error('[mail] MAIL_FROM is not one address, so nothing was sent')
+    return null
+  }
   return { token, from }
 }
 
@@ -128,20 +133,35 @@ const toHex = (bytes: Uint8Array) =>
 const sha256Hex = async (s: string): Promise<string> =>
   toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))))
 
+/* The idempotency key of a billing or deletion notice: its notice key and
+ * the hourly attempt that billingMail.ts and orgRemovals.ts count. postLetter's
+ * quick retries share it, and each hourly attempt gets a new one. Lettermint
+ * blocks a key for 24 hours after a server error whose outcome is unknown,
+ * and replays a sandbox acceptance for as long, so a key kept across hours
+ * could run out a notice's whole day of attempts unsent. A server error that
+ * did deliver the letter can instead lead to a second copy an hour later. */
+const noticeKey = (input: { notice_key: string; attempt: number }) =>
+  sha256Hex(`${input.notice_key}:${input.attempt}`)
+
 /* One letter, up to three attempts, nothing thrown — send-mail's postLetter.
  * A batch caller may pass a deadline (epoch ms) shared by its letters. Each
  * attempt's timeout and each wait then stop at it, and a letter that cannot
  * finish in time counts as not sent.
  *
- * Retry covers 408 / 429 / 5xx and a network or timeout failure. The
- * provider keeps an idempotency key for 24 hours, and a repeat of the same
- * request returns the first answer. 409 gets exactly ONE extra attempt: under
- * the same key a 409 means EITHER "the original send is still in flight",
- * which a repeat can outlast, OR "a different body" or "an earlier attempt
- * failed after the letter may have been accepted", which no number of
- * repeats will fix. One repeat covers the first without spending three calls
- * on the others. Everything else (401 token, 403 plan feature, 413 size, 422
- * validation, a rejected recipient) is final.
+ * Retry covers 408 / 429 / 5xx and a network or timeout failure, under the
+ * same idempotency key. Lettermint keeps a key for 24 hours per project and
+ * answers a repeat of an accepted request with the first 202. A 409 gets ONE
+ * extra attempt per call, on whichever attempt it arrives: under the same key
+ * it means EITHER "the original send is still being processed", typically
+ * after our own attempt timed out, which a repeat can outlast, OR "a
+ * different body" or "an earlier attempt failed after the letter may have
+ * been sent", which no number of repeats will fix. Lettermint gives the
+ * first and the last the same error code. Everything else (401 token, 403
+ * plan feature, 413 size, 422 validation, a rejected recipient) is final. A
+ * Retry-After beyond MAX_RETRY_WAIT_MS ends the call instead, so the action
+ * stays far inside its time limit and the caller's own retry takes over.
+ * Redirects are refused, because fetch would forward the token header to
+ * another origin.
  *
  * The provider's reply body is {error: {code, message, details}} on most
  * errors, but a bare {message} or {message, errors} on others, and a message
@@ -154,10 +174,11 @@ async function postLetter(
     sender: { token: string; from: string }
     idempotencyKey: string
     deadline?: number
-    /* Called for each failed request. 'refused' is a final provider answer
-     * (a 4xx other than 408, 409 and 429), so nothing was sent. 'ambiguous'
-     * is a timeout, network error, conflict, rate limit or server error,
-     * after which the letter may still have been delivered. */
+    /* Called for each failed request. 'refused' means nothing was sent: a
+     * final provider answer (a 4xx other than 408, 409 and 429) or a sandbox
+     * acceptance. 'ambiguous' is a timeout, network error, conflict, rate
+     * limit or server error, after which the letter may still have been
+     * delivered. */
     onFailure?: (kind: 'refused' | 'ambiguous') => void
   },
 ): Promise<boolean> {
@@ -180,6 +201,7 @@ async function postLetter(
     text: letter.text,
     html: letter.html,
   })
+  let conflictRepeated = false
   for (let attempt = 1; attempt <= SEND_ATTEMPTS; attempt++) {
     let retryAfterMs = 0
     const left = cfg.deadline === undefined ? SEND_TIMEOUT_MS : cfg.deadline - Date.now()
@@ -197,6 +219,7 @@ async function postLetter(
         },
         body,
         signal: AbortSignal.timeout(Math.min(SEND_TIMEOUT_MS, left)),
+        redirect: 'error',
       })
       if (res.ok) {
         const ok = (await res.json().catch(() => null)) as {
@@ -206,9 +229,9 @@ async function postLetter(
         const message_id = ok?.message_id ?? null
         if (ok?.sandbox === true) {
           /* A sandbox project accepts a letter and delivers nothing. Counting
-           * it as not sent keeps billing and deletion notices retrying and
-           * invitations offering their link until a live project's key is
-           * configured. Repeats return the same cached answer. */
+           * it as not sent keeps billing and deletion notices retrying hourly,
+           * each attempt under a new key, and keeps invitations offering
+           * their link until the project is live. */
           console.error('[mail] provider is in sandbox mode, nothing was delivered', {
             intent,
             message_id,
@@ -224,7 +247,8 @@ async function postLetter(
       const code = typeof detail?.error?.code === 'string' ? detail.error.code : null
       const ambiguous =
         res.status === 408 || res.status === 409 || res.status === 429 || res.status >= 500
-      const retryable = ambiguous && (res.status !== 409 || attempt === 1)
+      const retryable = ambiguous && (res.status !== 409 || !conflictRepeated)
+      if (res.status === 409) conflictRepeated = true
       cfg.onFailure?.(ambiguous ? 'ambiguous' : 'refused')
       console.error('[mail] provider refused', { intent, status: res.status, code, attempt })
       if (!retryable || attempt === SEND_ATTEMPTS) return false
@@ -243,6 +267,13 @@ async function postLetter(
       if (attempt === SEND_ATTEMPTS) return false
     }
     const wait = retryAfterMs > 0 ? retryAfterMs : attempt * 500
+    if (wait > MAX_RETRY_WAIT_MS) {
+      console.error('[mail] provider asked for a longer wait than a send allows', {
+        intent,
+        attempt,
+      })
+      return false
+    }
     if (cfg.deadline !== undefined && Date.now() + wait >= cfg.deadline) {
       console.error('[mail] send deadline passed', { intent, attempt })
       return false
@@ -253,12 +284,14 @@ async function postLetter(
 }
 
 /** Billing reminders use the same transport, but never log recipients/URLs
- * when unconfigured. A stable notice key deduplicates provider retries. */
+ * when unconfigured. `attempt` is billingMail.ts's hourly attempt, which
+ * picks the idempotency key (noticeKey). */
 export async function sendBillingReminder(input: {
   to: string
   url: string
   until: string
   notice_key: string
+  attempt: number
 }): Promise<boolean> {
   const configured = sender()
   if (configured === null) return false
@@ -277,7 +310,7 @@ export async function sendBillingReminder(input: {
   }
   return await postLetter(letter, 'billing', {
     sender: configured,
-    idempotencyKey: await sha256Hex(input.notice_key),
+    idempotencyKey: await noticeKey(input),
   })
 }
 
@@ -288,11 +321,11 @@ export type InviteOutcome = 'sent' | 'unsent' | 'uncertain'
  * text, so it appears only in the body, folded to one line, capped and escaped
  * in HTML, never in the subject. A guest invitation ends its sentence with
  * "as a guest". The outcome is 'sent' when the provider accepted the letter,
- * 'uncertain' when a request failed in a way that may still have delivered it
+ * 'uncertain' when the last answer leaves open whether a request delivered it
  * (timeout, network error, conflict, rate limit or server error), and
- * 'unsent' otherwise, that is, when the provider gave a final refusal or no
- * request reached it (mail not configured, demo, or the batch deadline passed
- * first).
+ * 'unsent' otherwise, that is, when the provider gave a final refusal or a
+ * sandbox acceptance, or no request reached it (mail not configured, demo, or
+ * the batch deadline passed first).
  * For anything but 'sent' the console offers the sign-up link, and the app's
  * sends are only recorded. A fresh key per send lets a resend produce a new
  * letter while keeping postLetter's retries idempotent. */
@@ -325,13 +358,16 @@ ${input.url}`,
       { href: input.url, label: 'Accept invitation' },
     ),
   }
+  /* The last answer decides. A final refusal or a sandbox acceptance means no
+   * attempt delivered the letter: Lettermint answers a repeat of an accepted
+   * request with its 202, and refuses the same body the same way each time. */
   let ambiguous = false
   const ok = await postLetter(letter, 'invite', {
     sender: configured,
     idempotencyKey: await sha256Hex(input.send_key),
     deadline: input.deadline,
     onFailure: (kind) => {
-      if (kind === 'ambiguous') ambiguous = true
+      ambiguous = kind === 'ambiguous'
     },
   })
   return ok ? 'sent' : ambiguous ? 'uncertain' : 'unsent'
@@ -340,8 +376,8 @@ ${input.url}`,
 /** Tells one admin that the organization is read-only and will be deleted.
  * orgRemovals.ts sends it when the read-only period starts and nobody has
  * exported in the week before. The organization name stays in the body,
- * folded and capped as in an invitation. A stable notice key deduplicates
- * provider retries. */
+ * folded and capped as in an invitation. `attempt` is orgRemovals.ts's
+ * hourly attempt, which picks the idempotency key (noticeKey). */
 export async function sendDeletionNotice(input: {
   to: string
   org_name: string
@@ -349,6 +385,7 @@ export async function sendDeletionNotice(input: {
   reason: string
   url: string
   notice_key: string
+  attempt: number
 }): Promise<boolean> {
   const configured = sender()
   if (configured === null) return false
@@ -377,7 +414,7 @@ ${input.url}`,
   }
   return await postLetter(letter, 'deletion', {
     sender: configured,
-    idempotencyKey: await sha256Hex(input.notice_key),
+    idempotencyKey: await noticeKey(input),
   })
 }
 
@@ -397,11 +434,9 @@ export const send = internalAction({
       console.log(`[mail] local-development intent=${intent} url=${url}`)
       return
     }
-    // requireAuthMailDelivery checked both, so only a malformed MAIL_FROM is left
+    // requireAuthMailDelivery checked the token and MAIL_FROM
     const configured = sender()
-    if (configured === null) {
-      throw new Error('Authentication email is unavailable. Set MAIL_FROM to one address.')
-    }
+    if (configured === null) throw new Error('Authentication email is unavailable.')
     const letter = intent === 'verify' ? verifyLetter(to, url) : resetLetter(to, url)
     if (
       !(await postLetter(letter, intent, {
