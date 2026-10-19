@@ -10,6 +10,7 @@ import {
   as,
   expectRefusal,
   flushWebhookEvents,
+  NOW,
   newT,
   plantIssue,
   plantProject,
@@ -175,6 +176,24 @@ describe('durable task events', () => {
     expect(carried.find(([id]) => id === f.issue.id)?.[1]).toContain('project_id')
     expect((await f.t.run((ctx) => byId(ctx, 'issues', f.issue.id)))?.status_at).toBeUndefined()
     expect(carried.flatMap(([, fields]) => fields)).not.toContain('status_at')
+    // a review hand-off or Done time the move restarts is news, as any
+    // other change to it
+    const done = await plantIssue(f.t, {
+      org_id,
+      project_id: f.fx.sub.id,
+      status: 'done',
+      done_at: NOW,
+      review_at: NOW,
+    })
+    expect(
+      await write(() =>
+        as(f.t, f.fx.user).mutation(api.issues.move, {
+          org_id,
+          id: done.id,
+          project_id: f.fx.sub2.id,
+        }),
+      ),
+    ).toEqual([[done.id, ['done_at', 'project_id', 'review_at']]])
   })
 
   it('emits create, comment, delete and restore through the shared model hooks', async () => {

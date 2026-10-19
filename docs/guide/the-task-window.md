@@ -170,8 +170,9 @@ calculations without deleting them or changing their workflow status.
 
 **Automatic archiving** runs nightly. A task archives once it has been Done
 for 30 days. An older project that kept a team archive setting uses that
-setting's number of days instead. It sends no inbox update. The task's
-messages are marked read as with any archive.
+setting's number of days instead. Moving a Done task to another sub-project
+starts its 30 days again. It sends no inbox update. The task's messages are
+marked read as with any archive.
 
 The sweep archives subtasks before their parents. Once a group's active
 subtasks are gone, its saved status applies again. A saved Done task can

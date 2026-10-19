@@ -4205,7 +4205,11 @@ export const PLANNER = {
       if (!moved) continue
       moved.project_id = projectId
       moved.updated_at = now
-      moved.status_at = undefined // the server's move clears the status stamp
+      // the server's move clears the status stamp and restarts a review
+      // hand-off or Done time at the move (model/issues.ts movedStamps)
+      moved.status_at = undefined
+      if (moved.review_at != null) moved.review_at = now
+      if (moved.done_at != null) moved.done_at = now
     }
     if (leavesParent) {
       row.parent_id = undefined

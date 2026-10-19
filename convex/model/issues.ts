@@ -777,7 +777,8 @@ export async function linkAccess(
 }
 
 /* --------------------------------------------------------- done stamp (0071)
- * done_at is fully derived, immune to direct writes; no public arg carries it. */
+ * done_at is fully derived, immune to direct writes; no public arg carries it.
+ * A move to another sub-project restarts it (movedStamps). */
 
 export function doneStampInsert(status: IssueStatus, now: string): string | undefined {
   return status === 'done' ? now : undefined
@@ -1808,6 +1809,20 @@ async function subtreeToCarry(
   return carried
 }
 
+/** The stamps a task writes as it moves to another sub-project. A time
+ * from the source project may predate the reader's access there, so the
+ * status stamp clears (ctx.db.patch unsets it), and a review hand-off
+ * (review_at) or a Done time (done_at) the task carries restarts at the
+ * move. A moved Done task therefore waits the full auto-archive threshold
+ * again (jobs.ts). */
+function movedStamps(task: Doc<'issues'>, now: string) {
+  return {
+    status_at: undefined,
+    ...(task.review_at !== undefined ? { review_at: now } : {}),
+    ...(task.done_at !== undefined ? { done_at: now } : {}),
+  }
+}
+
 export async function moveIssueCore(
   ctx: MutationCtx,
   a: {
@@ -1865,12 +1880,10 @@ export async function moveIssueCore(
   if (issue.assignee_id !== undefined && !replacedLater(issue, later, 'assignee_id')) {
     await assertAssigneeRule(ctx, target, issue.assignee_id)
   }
-  // a status set in the source project may predate the reader's access, so a
-  // move clears the status stamp (ctx.db.patch unsets it)
   const w: Partial<WithoutSystemFields<Doc<'issues'>>> = {
     project_id,
     updated_at: now,
-    status_at: undefined,
+    ...movedStamps(issue, now),
   }
   if (detach) w.parent_id = undefined // ctx.db.patch unsets it
   const live = projectLiveness(ctx)
@@ -1923,11 +1936,11 @@ export async function moveIssueCore(
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
   for (const { row, clearReviewer } of carried) {
     await assertRoom(ctx)
-    // a carried subtask's status stamp goes too, as the task's above
+    // a carried subtask's stamps change as the task's above
     const patch: Partial<WithoutSystemFields<Doc<'issues'>>> = {
       project_id,
       updated_at: now,
-      status_at: undefined,
+      ...movedStamps(row, now),
     }
     if (clearReviewer) patch.reviewer_id = undefined
     await ctx.db.patch(row._id, patch)

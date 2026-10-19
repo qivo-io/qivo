@@ -21,7 +21,7 @@
 
 import type { FunctionArgs, WithoutSystemFields } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { components, internal } from '../_generated/api'
+import { api, components, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import { REAP_PAGES } from '../files'
 import { ARCHIVE_LIMITS, SWEEP_LIMITS } from '../jobs'
@@ -29,6 +29,7 @@ import { ITEM_UNREAD_CAP, wakeSnoozedItem } from '../model/messages'
 import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
 import { DEFAULT_MESSAGE_RETENTION_DAYS, messageRetentionDays } from '../model/people'
 import {
+  as,
   messagesFor,
   NOW,
   newT,
@@ -271,6 +272,24 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
     expect((await issueRow(t, rootDue.id))?.archived_at).toBeDefined()
     expect((await issueRow(t, ownKept.id))?.archived_at).toBeUndefined()
     expect((await issueRow(t, ownDue.id))?.archived_at).toBeDefined()
+  })
+
+  it('a Done task moved to another sub-project waits the full threshold from the move', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const done = () =>
+      plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, status: 'done', done_at: ago(40) })
+    const stayed = await done()
+    const moved = await done()
+    await as(t, f.user).mutation(api.issues.move, {
+      org_id: f.org.id,
+      id: moved.id,
+      project_id: f.sub2.id,
+    })
+
+    expect(await runArchive(t)).toBe(1)
+    expect((await issueRow(t, stayed.id))?.archived_at).toBeDefined()
+    expect((await issueRow(t, moved.id))?.archived_at).toBeUndefined()
   })
 
   it('single snapshot: a done parent whose done child is archived this run waits until the next', async () => {

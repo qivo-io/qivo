@@ -330,6 +330,39 @@ describe('the Team sync store', () => {
     expect(task('To do').reviewAt).toBeNull()
   })
 
+  it('paints a move to another sub-project restarting the hand-off and Done time', () => {
+    // a sibling sub-project, and a second top-level project to carry a subtask into
+    const [sibling, meta2, sub2] = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()]
+    const project = f.snap.projects[1]
+    deliver({
+      ...f.snap,
+      projects: [
+        ...f.snap.projects,
+        { ...project, id: sibling, key: 'P3', num: 3, name: 'Sibling' },
+        { ...f.snap.projects[0], id: meta2, key: 'P4', num: 4, name: 'Other' },
+        { ...project, id: sub2, key: 'P5', num: 5, name: 'Other sub', parent_id: meta2 },
+      ],
+    })
+    const [handed, done] = [task('In review').reviewAt, task('Done one').doneAt]
+    // naming the current sub-project changes nothing
+    expect(P.moveIssue(task('Done one').id, project.id)).toBeNull()
+    expect(task('Done one').doneAt).toBe(done)
+    const before = Date.now()
+    P.moveIssue(task('In review').id, sibling)
+    expect(task('In review').reviewAt).toBeGreaterThanOrEqual(before)
+    expect(task('In review').reviewAt).not.toBe(handed)
+    // a task that carries neither gains neither
+    P.moveIssue(task('To do').id, sibling)
+    expect([task('To do').reviewAt, task('To do').doneAt]).toEqual([null, null])
+    // a subtask the move carries restarts too
+    P.updateIssue(task('Done one').id, { parent: task('To do').id })
+    expect(P.moveFamily(task('To do'), sub2).carried.map((c) => c.title)).toEqual(['Done one'])
+    P.moveIssue(task('To do').id, sub2)
+    expect(task('Done one').project).toBe(sub2)
+    expect(task('Done one').doneAt).toBeGreaterThanOrEqual(before)
+    expect(task('Done one').doneAt).not.toBe(done)
+  })
+
   it('paints Done now on a move into Done and clears it on a move out', () => {
     const before = Date.now()
     P.updateIssue(task('To do').id, { status: 'done' })

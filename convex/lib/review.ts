@@ -36,8 +36,9 @@ export function taskOwnerId(
  * In Review → Done keeps it, so a Done task carries it exactly when it was
  * reviewed to Done; any other move out of In Review, and any move out of Done
  * except back into Review, clears it. Server-owned like done_at (no public
- * argument carries it): createIssueCore and updateIssueCore write it, and the
- * browser paints the same rule. A group never enters Review (its status is
+ * argument carries it): createIssueCore and updateIssueCore write it,
+ * moveIssueCore restarts it at a move to another sub-project, and the
+ * browser paints the same rules. A group never enters Review (its status is
  * refused), and gaining subtasks drops a leaf's (clearParentRemaining). */
 export function reviewStamp(
   before: Pick<Doc<'issues'>, 'status' | 'reviewer_id' | 'review_at'> | null,
