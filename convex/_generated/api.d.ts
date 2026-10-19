@@ -19,6 +19,7 @@ import type * as adminStats from "../adminStats.js";
 import type * as apiAccess from "../apiAccess.js";
 import type * as appearance from "../appearance.js";
 import type * as archiveMarks from "../archiveMarks.js";
+import type * as auditRetention from "../auditRetention.js";
 import type * as auth from "../auth.js";
 import type * as backgroundPreviewProcessor from "../backgroundPreviewProcessor.js";
 import type * as backgroundPreviews from "../backgroundPreviews.js";
@@ -197,6 +198,7 @@ declare const fullApi: ApiFromModules<{
   apiAccess: typeof apiAccess;
   appearance: typeof appearance;
   archiveMarks: typeof archiveMarks;
+  auditRetention: typeof auditRetention;
   auth: typeof auth;
   backgroundPreviewProcessor: typeof backgroundPreviewProcessor;
   backgroundPreviews: typeof backgroundPreviews;

@@ -162,7 +162,7 @@ describe('invitations from the app', () => {
     expect(detail.map((r) => r.detail.email)).toEqual(['right@example.se'])
   })
 
-  it('skips a seat claimed before its send, and emails a reactivated seat only if never emailed', async () => {
+  it('skips a seat claimed before its send, and emails a reactivated seat only if no delivered invitation is on record', async () => {
     const t = newAuthT()
     const f = await withOrg(t)
     const claimed = person(f.org.id, 'quick@example.se')

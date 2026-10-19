@@ -1,4 +1,5 @@
-/* Audit log: the immutable trail of everything platform operators have done. */
+/* Audit log: what platform operators have done in the last 90 days. Older
+ * entries are deleted nightly (convex/auditRetention.ts). */
 import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
