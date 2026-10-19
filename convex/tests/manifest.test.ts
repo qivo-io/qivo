@@ -106,6 +106,7 @@ adminAuth:insertBreakGlass mutation internal {"type":"object","value":{"org_id":
 adminAuth:logAction mutation internal {"type":"object","value":{"actor_auth_id":{"fieldType":{"type":"string"},"optional":true},"actor_email":{"fieldType":{"type":"string"},"optional":false},"action":{"fieldType":{"type":"string"},"optional":false},"target_org_id":{"fieldType":{"type":"string"},"optional":true},"target_profile_id":{"fieldType":{"type":"string"},"optional":true},"detail":{"fieldType":{"type":"any"},"optional":false}}}
 adminAuth:operatorCheck query internal {"type":"object","value":{}}
 adminAuth:profilesByEmail query internal {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false}}}
+adminAuth:purgeLoginTokens mutation internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false}}}
 adminAuth:recoveryLink action public {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false}}}
 adminAuth:removeAuthUser mutation internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false}}}
 adminAuth:unbanUser action public {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false}}}

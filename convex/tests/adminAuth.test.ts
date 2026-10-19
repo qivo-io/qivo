@@ -14,6 +14,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { LOGIN_PURGE } from '../adminAuth'
 import authSchema from '../betterAuth/schema'
 import { expectRefusal, newT, runInAuth, type T, uuid, withOrg } from './helpers.setup'
 
@@ -376,6 +377,49 @@ describe('deleteOrphanLogin', () => {
     expect(await grantsOf(t, orphan._id)).toBe(0)
     expect(await grantsOf(t, other._id)).toBe(4)
     expect(await componentRow(t, 'session', 'userId', other._id)).not.toBeNull()
+  })
+
+  it('removes the login at once and a token backlog in bounded steps', async () => {
+    const t = newAuthT()
+    const rows = LOGIN_PURGE.rows
+    LOGIN_PURGE.rows = 3
+    vi.useFakeTimers()
+    try {
+      const orphan = await plantLogin(t, 'leftover@test.local', { session: true, account: true })
+      // a long-lived assistant's refreshes: four access and four refresh tokens
+      await runInAuth(t, async (ctx) => {
+        const grant = { clientId: 'mcp-client', userId: orphan._id, scopes: ['qivo:read'] }
+        for (let n = 0; n < 4; n++) {
+          const at = Date.now() + n
+          await ctx.db.insert('oauthAccessToken', { ...grant, createdAt: at, token: `a${n}` })
+          await ctx.db.insert('oauthRefreshToken', { ...grant, createdAt: at, token: `r${n}` })
+        }
+      })
+      const tokensLeft = () =>
+        runInAuth(t, async (ctx) => {
+          let n = 0
+          for (const table of ['session', 'oauthAccessToken', 'oauthRefreshToken'] as const)
+            n += (
+              await ctx.db
+                .query(table)
+                .withIndex('userId', (q) => q.eq('userId', orphan._id))
+                .collect()
+            ).length
+          return n
+        })
+      expect(await tokensLeft()).toBe(9)
+      await t.mutation(internal.adminAuth.deleteOrphanLogin, { email: 'leftover@test.local' })
+      // the login, its account and the audit row go in the first transaction
+      expect(await componentRow(t, 'user', '_id', orphan._id)).toBeNull()
+      expect(await componentRow(t, 'account', 'userId', orphan._id)).toBeNull()
+      expect((await auditRows(t)).map((r) => r.action)).toEqual(['delete_orphan'])
+      expect(await tokensLeft()).toBe(6)
+      await t.finishAllScheduledFunctions(() => vi.runAllTimers())
+      expect(await tokensLeft()).toBe(0)
+    } finally {
+      LOGIN_PURGE.rows = rows
+      vi.useRealTimers()
+    }
   })
 
   it("refuses a platform operator's login and removes nothing", async () => {
