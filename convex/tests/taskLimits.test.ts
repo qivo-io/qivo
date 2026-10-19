@@ -25,7 +25,7 @@ import {
   SUBTASK_MAX,
   SUBTASK_WITH_SUBTASKS,
 } from '../lib/taskLimits'
-import { INLINE_TRIMS, ITEM_UNREAD_CAP, notifyCommentInsert } from '../model/messages'
+import { INLINE_TRIMS, ITEM_UNREAD_CAP, MENTION_MAX, notifyCommentInsert } from '../model/messages'
 import {
   as,
   expectRefusal,
@@ -177,6 +177,31 @@ describe('one level of subtasks', () => {
       as(fx.t, fx.admin).query(api.issues.takesParent, { org_id: fx.org.id, id: issue.id })
     expect(await takes(lone)).toBe(true)
     expect(await takes(former)).toBe(false)
+    // a task the caller cannot see is not found, with or without subtasks
+    const hidden = await task(fx, { project_id: fx.hidden.id })
+    await expectRefusal(
+      as(fx.t, fx.guest).query(api.issues.takesParent, { org_id: fx.org.id, id: hidden.id }),
+      'not_found',
+    )
+  })
+
+  it("refuses a create whose id names a task before it looks at that task's subtasks", async () => {
+    const fx = await setup()
+    const top = await task(fx)
+    // another organization's task with a subtask, whose uuid the caller holds
+    const other = await task(fx, { org_id: uuid(), project_id: uuid() })
+    await task(fx, { org_id: other.org_id, project_id: other.project_id, parent_id: other.id })
+    await refused(
+      as(fx.t, fx.admin).mutation(api.issues.create, {
+        org_id: fx.org.id,
+        id: other.id,
+        project_id: fx.sub.id,
+        title: 'Probe',
+        parent_id: top.id,
+      }),
+      'bad_request',
+      'a task with this id already exists',
+    )
   })
 
   it('keeps a legacy chain readable and editable, and lets it be taken apart', async () => {
@@ -378,10 +403,29 @@ describe('the follower limit', () => {
     const fx = await setup(newT({ transactionLimits: true }))
     const issue = await task(fx)
     const crowd = await plantFollowers(fx, issue, FOLLOWER_MAX)
-    await fx.t.run(async (ctx) => {
-      for (let i = 0; i < 3000; i++)
+    // 4,500 more people, 1,200 of them in a team that shares TBED, more
+    // than a bulk sight check reads in full (lib/access.ts SIGHT_READ)
+    const team = await fx.t.run(async (ctx) => {
+      const team = uuid()
+      await ctx.db.insert('teams', {
+        id: team,
+        org_id: fx.org.id,
+        name: 'Everyone',
+        stale_days: 14,
+        archive_days: 30,
+        track_delay_default: false,
+        created_at: NOW,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: fx.meta.id,
+        team_id: team,
+        level: 'viewer',
+      })
+      const members: string[] = []
+      for (let i = 0; i < 4500; i++) {
+        const id = uuid()
         await ctx.db.insert('profiles', {
-          id: uuid(),
+          id,
           org_id: fx.org.id,
           name: `Elsewhere ${i}`,
           initials: 'EL',
@@ -391,6 +435,12 @@ describe('the follower limit', () => {
           kind: 'person',
           created_at: NOW,
         })
+        if (i < 1200) {
+          await ctx.db.insert('team_members', { team_id: team, profile_id: id, is_leader: false })
+          members.push(id)
+        }
+      }
+      return members
     })
     const roster = await as(fx.t, fx.admin).query(api.issues.subscribers, {
       org_id: fx.org.id,
@@ -399,9 +449,10 @@ describe('the follower limit', () => {
     expect(roster.canManage).toBe(true)
     expect(roster.subscribers).toHaveLength(FOLLOWER_MAX)
     expect(roster.subscribers).toEqual(expect.arrayContaining(crowd.map((p) => p.id)))
-    // people who see TBED, and none of the 3,000 who do not
-    expect(roster.candidates).toEqual(expect.arrayContaining([fx.user.id, fx.agent.id]))
-    expect(roster.candidates.length).toBeLessThan(10)
+    // people who see TBED, the team's 1,200 included, and none of the 3,300
+    // who do not
+    expect(roster.candidates).toEqual(expect.arrayContaining([fx.user.id, fx.agent.id, ...team]))
+    expect(roster.candidates.length).toBeLessThan(team.length + 10)
   })
 
   it('lets a new assignee and a new reviewer pass the limit', async () => {
@@ -485,5 +536,115 @@ describe('a comment on a task with many followers', () => {
     // the newest row of every item is the comment
     const last = await messagesFor(t, crowd[119].id, issue.id)
     expect(last.at(-1)?.detail).toBe('New comment')
+  })
+})
+
+/* ------------------------------------------------------------- 4. mentions */
+
+describe('mentions', () => {
+  it(`reach at most ${MENTION_MAX} people, and an edit re-notifies no one who stayed mentioned`, async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const people = await plantFollowers(fx, await task(fx), MENTION_MAX + 2)
+    const at = (p: Doc<'profiles'>) => `@[${p.name}](user:${p.id})`
+    const body = people.map(at).join(' ')
+    await as(fx.t, fx.user).mutation(api.comments.create, {
+      org_id: fx.org.id,
+      id: uuid(),
+      issue_id: issue.id,
+      body,
+    })
+    const mentioned = async (p: Doc<'profiles'>) =>
+      (await messagesFor(fx.t, p.id, issue.id)).filter((m) => m.kind === 'mention').length
+    expect(await mentioned(people[MENTION_MAX - 1])).toBe(1)
+    expect(await mentioned(people[MENTION_MAX])).toBe(0)
+    // a description that names them all; dropping the first mention moves
+    // the 101st into the first 100, and they hear nothing new
+    const described = await task(fx, { description: body })
+    await as(fx.t, fx.admin).mutation(api.issues.update, {
+      org_id: fx.org.id,
+      id: described.id,
+      patch: { description: people.slice(1).map(at).join(' ') },
+    })
+    expect(
+      (await messagesFor(fx.t, people[MENTION_MAX].id, described.id)).filter(
+        (m) => m.kind === 'mention',
+      ),
+    ).toEqual([])
+  })
+})
+
+/* -------------------------------------------- 5. an arrival's item, edge cases */
+
+describe("an arrival on an item's edges", () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  /* Plants `unread` unread rows for `p` about `issue`, then one read row
+   * newer than them, and answers the read row. */
+  const plantItem = async (fx: Fx, p: Doc<'profiles'>, issue: Doc<'issues'>, unread: number) => {
+    await fx.t.run(async (ctx) => {
+      for (let i = 0; i < unread; i++)
+        await ctx.db.insert('messages', {
+          id: uuid(),
+          org_id: fx.org.id,
+          recipient_id: p.id,
+          issue_id: issue.id,
+          issue_title: issue.title,
+          kind: 'change',
+          detail: `Old news ${i}`,
+          created_at: `2025-12-01T00:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}.000Z`,
+        })
+    })
+    return await plantMessage(fx.t, {
+      org_id: fx.org.id,
+      recipient_id: p.id,
+      issue_id: issue.id,
+      created_at: '2025-12-02T00:00:00.000Z',
+      read_at: '2025-12-02T00:00:00.000Z',
+    })
+  }
+
+  it('prunes the read row of an item past the cap from before it', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const [p] = await plantFollowers(fx, issue, 1)
+    const readRow = await plantItem(fx, p, issue, 110)
+    await as(fx.t, fx.user).mutation(api.comments.create, {
+      org_id: fx.org.id,
+      id: uuid(),
+      issue_id: issue.id,
+      body: 'Any news?',
+    })
+    const item = await messagesFor(fx.t, p.id, issue.id)
+    expect(item.some((m) => m.id === readRow.id)).toBe(false)
+    expect(item.filter((m) => m.read_at === undefined)).toHaveLength(110 + 1 - ITEM_UNREAD_CAP)
+  })
+
+  it('wakes a snoozed item and prunes its read row past the inline trims', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const crowd = await plantFollowers(fx, issue, INLINE_TRIMS + 8)
+    const last = crowd.at(-1) as Doc<'profiles'>
+    const readRow = await plantItem(fx, last, issue, 3)
+    await fx.t.run(async (ctx) => {
+      for (const m of await ctx.db
+        .query('messages')
+        .withIndex('by_recipient_issue', (q) =>
+          q.eq('recipient_id', last.id).eq('issue_id', issue.id),
+        )
+        .collect())
+        await ctx.db.patch(m._id, { snoozed_until: '2027-01-01T00:00:00.000Z' })
+    })
+    await as(fx.t, fx.user).mutation(api.comments.create, {
+      org_id: fx.org.id,
+      id: uuid(),
+      issue_id: issue.id,
+      body: 'Any news?',
+    })
+    const item = await messagesFor(fx.t, last.id, issue.id)
+    expect(item.some((m) => m.id === readRow.id)).toBe(false)
+    expect(item.filter((m) => m.snoozed_until !== undefined)).toEqual([])
+    expect(item.at(-1)?.detail).toBe('New comment')
   })
 })

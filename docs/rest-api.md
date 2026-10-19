@@ -1593,7 +1593,9 @@ The caller's own inbox, with the same items the app's **Inbox** shows. Each
 item is one active task the caller can read and holds the messages about
 that task the caller has not removed. An item keeps at most 50 unread
 messages. When more arrive, Qivo drops the oldest unread ones but keeps the
-item's first unread message and the newest message of each `kind`.
+item's first unread message and the newest message of each `kind`. On a task
+with many followers it does so moments after the arrival, so an item can
+briefly hold one more.
 
 ```
 GET  /v1/inbox                 items, latest activity first (read)

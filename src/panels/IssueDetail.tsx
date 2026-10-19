@@ -2967,12 +2967,26 @@ function IssueDetail({
                               disabled: !canLabel,
                             }}
                           />
-                        ) : (
-                          <div className="text-sm text-text-2 italic">
-                            {it.hasHiddenParent
-                              ? 'The parent task is outside this view.'
-                              : 'No parent task.'}
+                        ) : it.hasHiddenParent ? (
+                          // the parent cannot be shown, but it can be removed,
+                          // the one change left to a task with subtasks there
+                          <div className="flex items-center gap-2 text-sm text-text-2 italic">
+                            <span className="flex-1">The parent task is outside this view.</span>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="task-related-remove h-control-sm w-control-sm shrink-0"
+                              aria-label="Remove parent"
+                              title={roTip || 'Remove parent'}
+                              disabled={!canLabel}
+                              onClick={() => upd({ parent: null })}
+                            >
+                              <Icon name="close" size={16} />
+                            </Button>
                           </div>
+                        ) : (
+                          <div className="text-sm text-text-2 italic">No parent task.</div>
                         )}
                       </section>
 

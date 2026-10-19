@@ -1703,7 +1703,8 @@ bring them back. `messages` run oldest first, `kind` is
 is later. Snoozed items are left out unless `include_snoozed` is `true`. An
 item keeps at most 50 unread messages. When more arrive, Qivo drops the
 oldest unread ones but keeps the item's first unread message and the newest
-message of each `kind`.
+message of each `kind`. On a task with many followers it does so moments
+after the arrival, so an item can briefly hold one more.
 
 One call lists up to 500 of your unread messages (newest first) and up to
 500 read ones (most recently read first). It looks at no more than 1,000 of

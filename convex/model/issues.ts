@@ -84,6 +84,7 @@ import { issueChanges, logActivity, machineDetail, narratedChange } from './acti
 import { scheduleMarkClears } from './archiveMarks'
 import {
   type NotifyPreload,
+  newNotifyPreload,
   notifyIssueInsert,
   notifyIssueUpdate,
   orgProfile,
@@ -257,8 +258,9 @@ export async function assertAssigneeRule(
   }
 }
 
-/* The tasks from `parentId` up, nearest first. assertParentChain bounds a
- * chain at 20 tasks, and the seen set stops a corrupt cycle. */
+/* The tasks from `parentId` up, nearest first. A chain stored before the
+ * one level of subtasks is read up to 20 tasks, and the seen set stops a
+ * corrupt cycle. */
 async function ancestorsFrom(
   ctx: QueryCtx,
   parentId: string | undefined,
@@ -327,8 +329,8 @@ export const SUBTREE_TOO_LARGE =
   'this task and its subtasks are too large to change in one request; detach some subtasks first'
 
 /** The refusal of an archive whose task and active subtasks are too large
- * for one transaction (SUBTREE_ROOM). Only a task stored before the one
- * level of subtasks can be that large. */
+ * for one transaction (SUBTREE_ROOM), such as a task stored before the one
+ * level of subtasks with thousands of them. */
 export const ARCHIVE_TOO_LARGE =
   'this task and its subtasks are too large to archive in one request; archive some subtasks first'
 
@@ -1127,6 +1129,9 @@ export type CreateIssueArgs = {
   paused?: boolean | null
 }
 
+/* The refusal of a create whose client-chosen id names a task already. */
+const DUPLICATE_TASK_ID = 'a task with this id already exists'
+
 /** Creates the task `args` describes as `me`, who needs Edit on its
  * sub-project, and answers the stored row. The app, REST and MCP all create
  * through it, so every shared field rule runs here, including the title cap
@@ -1156,6 +1161,11 @@ export async function createIssueCore(
   const description = cleanDescription(args.description)
   const parent_id = args.parent_id ?? undefined
   if (parent_id !== undefined) {
+    // a used id is refused first, so the subtask check below, which reads
+    // the subtasks of the id it is given, tells nothing about another task
+    if ((await byId(ctx, 'issues', args.id)) !== null) {
+      throw badRequest(DUPLICATE_TASK_ID)
+    }
     const child = { id: args.id, org_id, project_id: project.id }
     const parent = await assertParentChain(ctx, child, parent_id, me)
     assertParentActive(parent, undefined) // a fresh row is active
@@ -1220,7 +1230,7 @@ export async function createIssueCore(
       created_at: now,
       updated_at: now,
     },
-    badRequest('a task with this id already exists'),
+    badRequest(DUPLICATE_TASK_ID),
   )
   const issue = (await byId(ctx, 'issues', args.id)) as Doc<'issues'>
   // the attach clears the parent's hours; its dates are calculated, never
@@ -2066,9 +2076,11 @@ export async function archiveIssueCore(
       await room(subtaskBytes(kid))
       if (kid.archived_at === undefined) kids.push(kid)
     }
+    // the detaches change only tasks, so one preload serves them all
+    const preload = newNotifyPreload()
     for (const kid of kids) {
       await assertRoom(ctx, ARCHIVE_TOO_LARGE)
-      await detachChild(ctx, kid, me, now)
+      await detachChild(ctx, kid, me, now, preload)
     }
   }
   const before = { ...issue }

@@ -107,11 +107,14 @@ The **×** button removes a relationship without deleting the task.
 A task has one level of subtasks: a subtask cannot have subtasks of its own,
 and a task has at most 100 subtasks, archived ones included. On a subtask,
 the **Subtasks** button is disabled with **A subtask cannot have subtasks**,
-and on a task with 100 subtasks with **This task has 100 subtasks, the most a
-task can have**. A task with subtasks cannot become a subtask, so its
-**Parent** button is disabled with **A task with subtasks cannot become a
-subtask**. Tasks nested deeper, or with more subtasks, before these limits
-keep their shape, and you can still detach them.
+and when the window lists 100 subtasks with **This task has 100 subtasks,
+the most a task can have**. A task with subtasks cannot become a subtask, so
+when the window lists any, its **Parent** button is disabled with **A task
+with subtasks cannot become a subtask**. The window does not list archived
+subtasks, so Qivo refuses those choices when you make them, with the same
+sentence. Tasks nested deeper, or with more subtasks, before these limits
+keep their shape, and you can still detach them: **Remove parent** also
+appears when the parent is outside this view.
 
 A subtask stays in its parent's project, in any of that project's
 sub-projects. Setting a parent changes both tasks, so it needs edit access to

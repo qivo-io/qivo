@@ -46,10 +46,14 @@ export function subtaskBlock(it: RelationTask): string | undefined {
   return undefined
 }
 
-/** Why `it` cannot get a parent, as a control's tooltip, or undefined when it
- * can. */
+/** Why `it` cannot get a parent, or another one, as a control's tooltip, or
+ * undefined when it can. A subtask with subtasks, stored before the one
+ * level of subtasks, can only leave its parent. */
 export function parentBlock(it: RelationTask): string | undefined {
-  return hasSubtasks(it) ? 'A task with subtasks cannot become a subtask' : undefined
+  if (!hasSubtasks(it)) return undefined
+  return isSubtask(it)
+    ? 'A task with subtasks can only leave its parent'
+    : 'A task with subtasks cannot become a subtask'
 }
 
 /* Whether `x` is in `it`'s organization and top-level project. A project

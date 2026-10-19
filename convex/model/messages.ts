@@ -462,7 +462,20 @@ export async function postMessage(
   const rows = inline
     ? await itemStart(ctx, pair).take(TRIM_READ + 2)
     : await itemStart(ctx, pair).order('desc').take(3)
-  const read = rows.filter((r) => r.read_at !== undefined)
+  // An item past the cap from before it (ITEM_UNREAD_CAP) can fill the
+  // start with unread rows, so its read rows are read on their own.
+  const read =
+    inline && rows.length === TRIM_READ + 2 && rows.at(-1)?.read_at === undefined
+      ? await ctx.db
+          .query('messages')
+          .withIndex('by_recipient_issue_read_order', (q) =>
+            q
+              .eq('recipient_id', pair.recipient_id)
+              .eq('issue_id', pair.issue_id)
+              .gt('read_at', undefined),
+          )
+          .take(2)
+      : rows.filter((r) => r.read_at !== undefined)
   const row = {
     id: newUuid(),
     org_id: m.org_id,
@@ -1222,13 +1235,14 @@ const MENTION_RE =
  * its mentions. */
 export const MENTION_MAX = 100
 
-/** The distinct uuids `text` mentions, lowercase, in order, at most
- * MENTION_MAX of them. */
-export function mentionIds(text: string): string[] {
+/** The distinct uuids `text` mentions, lowercase, in order, at most `max`
+ * of them (MENTION_MAX unless the caller reads no profiles for them, as for
+ * the text before an edit). */
+export function mentionIds(text: string, max = MENTION_MAX): string[] {
   const stripped = (text ?? '').replace(FENCE_RE, ' ').replace(SPAN_RE, ' ')
   const seen = new Set<string>()
   for (const match of stripped.matchAll(MENTION_RE)) {
-    if (seen.size >= MENTION_MAX) break
+    if (seen.size >= max) break
     seen.add(match[1].toLowerCase())
   }
   return [...seen]
@@ -1445,7 +1459,8 @@ export async function notifyIssueUpdate(
   // @mentions newly added to the description notify regardless of
   // subscribers, and subscribe the person to what they were pulled into. An
   // unchanged description adds none, so a bulk write of dates skips the scan
-  const oldMentions = after.description === before.description ? [] : mentionIds(before.description)
+  const oldMentions =
+    after.description === before.description ? [] : mentionIds(before.description, Infinity)
   const newMentions =
     after.description === before.description
       ? []
@@ -1780,7 +1795,7 @@ export async function notifyCommentUpdate(
   const { before, after, issue, actor, now } = a
   if (after.body === before.body) return
   const project = await byId(ctx, 'projects', issue.project_id)
-  const oldMentions = mentionIds(before.body)
+  const oldMentions = mentionIds(before.body, Infinity)
   const added = (await mentionedIn(ctx, after.body, new Map(), issue.org_id)).filter(
     (p) => !oldMentions.includes(p.id),
   )

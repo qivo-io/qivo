@@ -216,8 +216,9 @@ gone, and so are links to work deleted for good. A subtask deleted on its own
 returns under its parent when the parent still exists, is not a subtask
 itself and has fewer than 100 subtasks, the restored task has no subtasks,
 you can edit the parent, and everyone assigned to or reviewing the subtask
-can still see the parent's project. Otherwise it returns as a top-level task
-and keeps its people and its subtasks. Work that was archived when it was
+can still see the parent's project. Otherwise, or when the parent's
+subtasks are too large to count during the restore, it returns as a
+top-level task and keeps its people and its subtasks. Work that was archived when it was
 deleted returns archived. A restored Done task restarts its auto-archive
 clock. A task restored on its own sends its followers a **Restored** update.
 Restoring several items at once, or a project, sends none, and inbox

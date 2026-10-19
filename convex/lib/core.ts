@@ -1389,7 +1389,8 @@ type Walk = { children: ChildIndex; whole: boolean }
  * only the root's subtasks, and the totals' walks enter only tasks that
  * count and need each one's subtasks to tell a leaf from a group, so a
  * branch that cannot count is never read below its top. It reads one level
- * at a time and stops at the depth assertParentChain allows. Each task a
+ * at a time and stops at 20 levels, which only a chain stored before the one
+ * level of subtasks reaches. Each task a
  * level enters takes one by_parent read. An active root's walk that would
  * pass SUBTREE_WALK reads reads the organization's active tasks once
  * instead, as soon as a level shows it. It enters only active tasks, and
@@ -1568,8 +1569,8 @@ function groupCounter(
  * groupSpan) and how many of its leaves are done (the app's groupProgress).
  * `partial` is the app's "Completion unknown". It is set when a subtask that
  * makes a task a group does not count for the reader (hidden from it), when
- * the walk meets a task twice (a cycle), or when it stops at the depth
- * assertParentChain allows. A subtask in an archived project under a task in
+ * the walk meets a task twice (a cycle), or when it stops at 20 levels in a
+ * chain stored before the one level of subtasks. A subtask in an archived project under a task in
  * an active one makes it no group, so it leaves nothing unknown. */
 export type GroupFacts = {
   start_week: string | null
@@ -1613,7 +1614,7 @@ async function groupFacts(
   let partial = false
   const seen = new Set<string>([group.id])
   let frontier: Doc<'issues'>[] = [group]
-  // assertParentChain bounds chains at 20 tasks, so the walk stops there
+  // a chain stored before the one level of subtasks is read to 20 levels
   for (let depth = 0; frontier.length > 0 && depth <= 20; depth++) {
     const next: Doc<'issues'>[] = []
     for (const task of frontier) {

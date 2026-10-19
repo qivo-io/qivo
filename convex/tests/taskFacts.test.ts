@@ -236,9 +236,9 @@ describe('a group’s progress is the app task window’s Progress', () => {
     expect(page.tasks.find((r) => r.id === ga.id)?.progress).toEqual(p(1, 1, 100, true))
   })
 
-  /* Valid writes keep a chain to 20 tasks without a cycle
-   * (assertParentChain). The walk still stops on data that breaks that, and
-   * says the progress is partial. */
+  /* Valid writes keep one level of subtasks (assertParentChain). The walk
+   * still stops on stored data that breaks that, a cycle or a chain past 20
+   * tasks, and says the progress is partial. */
   it('is partial on a parent cycle and past the depth a chain can have', async () => {
     const fx = await setup()
     // two tasks parented to each other, so each is the other's group

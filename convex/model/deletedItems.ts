@@ -2683,8 +2683,9 @@ type Kept = { id: string; grouped: boolean } | undefined | 'later'
  * Where an edit refuses, the task comes back without the parent and keeps
  * its people, as for the table's other refusals. The chain above the parent
  * (chainOver) and the subtree under `task` (workersBelow) are read only for
- * a parent that passes the rest, and for each task, because an attach
- * earlier in the step can deepen a chain. Who sees the chain (allSee) is
+ * a parent that passes the rest. With one level of subtasks the chain is
+ * the parent alone and the walk under `task` stops at its first level; the
+ * longer reads remain for data stored before that rule. Who sees the chain (allSee) is
  * read last. The chain and who sees it answer 'later' when the step's reads
  * run out before they read what the step has not read yet. */
 async function keptParent(
@@ -2723,11 +2724,13 @@ async function keptParent(
 }
 
 /** The most bytes one count of a parent's subtasks (liveSubtasks) reads.
- * Subtasks stored before TEXT_MAX can each hold almost 1 MiB, so a count
- * past it stops, counts the parent as full, with a warning, and its task
- * comes back without it. Someone with Edit can still give the task that
- * parent by hand. A mutable object, so tests can lower it. */
-export const COUNT_READ = { bytes: 4 * 1024 * 1024 }
+ * A subtask within TEXT_MAX stores up to about 120 KB, and one stored
+ * before that cap almost 1 MiB, so a parent's 100 subtasks can pass what a
+ * step can read. A count past it stops, counts the parent as full, with a
+ * warning, and its task comes back without it. Someone with Edit can still
+ * give the task that parent by hand. A mutable object, so tests can lower
+ * it. */
+export const COUNT_READ = { bytes: 8 * 1024 * 1024 }
 
 /** How many subtasks live task `parentId` has, archived ones included,
  * counted up to SUBTASK_MAX, with the ones the step gave it, or SUBTASK_MAX
@@ -2769,8 +2772,8 @@ type Chain = { levels: number; projects: Set<string> }
  * included. Its tasks count from the start, whether the step read them for
  * an earlier task or not, so the answer depends only on the data. A chain
  * past it does not fit, so its task keeps no parent from outside, with a
- * warning, as for HEIGHT_READ, and a retry answers the same. Someone with
- * Edit can still give the task that parent by hand. Twenty tasks of 200 KB
+ * warning, as for HEIGHT_READ, and a retry answers the same. With one level
+ * of subtasks only the parent itself is read now. Twenty tasks of 200 KB
  * fit, while a description within TEXT_MAX holds at most 120 KB. Tasks
  * stored before that cap can hold almost 1 MiB, and twenty of them would
  * pass what one transaction can read. A mutable object, so tests can lower
@@ -2881,9 +2884,9 @@ async function allSee(
 /** The most one walk under a task (workersBelow) reads: tasks and their
  * bytes. A subtree past it counts as too deep, so its task keeps no parent
  * from outside, and the walk stays within what one step can read next to
- * its own budget. Someone with Edit can still give the task that parent by
- * hand, which reads the whole subtree (model/issues.ts assertParentChain).
- * A mutable object, so tests can lower it. */
+ * its own budget. With one level of subtasks any subtask already keeps the
+ * task from its parent, so only the first level is read. A mutable object,
+ * so tests can lower it. */
 export const HEIGHT_READ = { tasks: 500, bytes: 4 * 1024 * 1024 }
 
 /**

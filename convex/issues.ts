@@ -45,7 +45,7 @@ import {
   canSeeProject,
   hasProjectLevel,
   keepsInbox,
-  projectSightForProfiles,
+  projectLevelsForProfiles,
 } from './lib/access'
 import {
   ARCHIVED_PAGE_ROWS,
@@ -356,10 +356,14 @@ export const moveCarriesSubtasks = orgQuery({
 /* Whether task `id` can get a parent: it has no subtask, archived ones
  * included (model/issues.ts parentChainCheck). The app's view holds no
  * archived subtasks, so its Parent picker asks before it creates a new
- * parent for the task. */
+ * parent for the task. A task the caller cannot see is not found, so the
+ * answer tells nothing about it. */
 export const takesParent = orgQuery({
   args: { id: v.string() },
-  handler: async (ctx, { id }) => !(await hasAnySubtask(ctx, (await myIssue(ctx, id)).id)),
+  handler: async (ctx, { id }) => {
+    const { issue } = await subscriptionTarget(ctx, id)
+    return !(await hasAnySubtask(ctx, issue.id))
+  },
 })
 
 /* ---------------------------------------------------------------- archive
@@ -548,9 +552,9 @@ async function subscriptionTarget(ctx: MeCtx, issueId: string) {
  * so a manager can remove them. Add candidates require CURRENT access, an
  * active seat and an inbox (lib/access.ts keepsInbox, which leaves out
  * Viewer agents); a subscription itself never grants project access. Their
- * access is worked out for everyone at once (projectSightForProfiles),
- * because one check per person passed Convex's 4,096 index ranges in an
- * organization of some thousands. */
+ * levels on the task's sub-project are read for everyone at once
+ * (projectLevelsForProfiles), in a few index ranges, because one check per
+ * person passed Convex's 4,096 in an organization of some thousands. */
 export const subscribers = orgQuery({
   args: { issue_id: v.string() },
   handler: async (ctx, { issue_id }) => {
@@ -567,14 +571,14 @@ export const subscribers = orgQuery({
       .collect()
     const subscribers: string[] = []
     const candidates: string[] = []
-    const sees = canManage ? await projectSightForProfiles(ctx, project) : undefined
+    const levelOf = canManage ? await projectLevelsForProfiles(ctx, project) : undefined
     for (const profile of profiles) {
       if (subscribed.has(profile.id)) subscribers.push(profile.id)
       else if (
-        sees !== undefined &&
+        levelOf !== undefined &&
         profile.active &&
         keepsInbox(profile) &&
-        (await sees(profile))
+        levelOf(profile) !== null
       ) {
         candidates.push(profile.id)
       }
