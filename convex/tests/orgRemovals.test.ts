@@ -348,6 +348,23 @@ describe('cancelling a subscription', () => {
     expect(await summary(t, f)).toMatchObject({ cancel_at_period_end: true, writable: true })
   })
 
+  it('refuses an overdue payment Qivo has not heard of yet, before cancelling', async () => {
+    const { t, f } = await billed()
+    await applied(t, remote(f.org.id))
+    // Polar marked it past due, and its webhook has not arrived
+    const fetchMock = polar({
+      list: () => [remote(f.org.id, { status: 'past_due' })],
+      cancel: () => remote(f.org.id, { status: 'past_due', cancel_at_period_end: true }),
+    })
+    await expectRefusal(
+      as(t, f.admin).action(api.billingActions.cancelSubscription, { org_id: f.org.id }),
+      'rule',
+      /payment is overdue/,
+    )
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method ?? 'GET')).toEqual(['GET'])
+    expect(await summary(t, f)).toMatchObject({ writable: true, cancel_at_period_end: false })
+  })
+
   it('refuses non-admins, a Polar failure and organizations without a subscription', async () => {
     const { t, f } = await billed()
     await applied(t, remote(f.org.id))

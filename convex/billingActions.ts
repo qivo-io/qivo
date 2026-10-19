@@ -303,15 +303,24 @@ const applyRef = makeFunctionReference<'mutation', { payload: string }, null>('b
  * cancellation does. The organization keeps full access until the paid
  * period ends, without a refund. Polar then ends the subscription, and
  * billingSync starts the read-only period before deletion. A subscription
- * that already ends counts as cancelled. Answers when access ends. */
+ * that already ends counts as cancelled. One whose payment Polar reports
+ * overdue is refused before anything changes, even when Qivo has not heard
+ * yet, because billing pauses editing at once for a past-due subscription
+ * set to end (subscriptionWritable); Polar's portal can still cancel it.
+ * Answers when access ends. */
 export const cancelSubscription = orgAction({
   args: {},
   handler: async (ctx): Promise<{ ends_at: string }> => {
     require(billingEnabled() && polarConfigured(), rule('Billing is not available yet.'))
     let endsAt = 0
     try {
-      for (const live of await listPolarSubscriptions(ctx.orgId)) {
-        if (!CANCELABLE_POLAR_STATUSES.includes(live.status) || live.endedAt !== undefined) continue
+      const subscriptions = (await listPolarSubscriptions(ctx.orgId)).filter(
+        (s) => CANCELABLE_POLAR_STATUSES.includes(s.status) && s.endedAt === undefined,
+      )
+      require(!subscriptions.some((s) => s.status === 'past_due' && !s.cancelAtPeriodEnd), rule(
+        'A payment is overdue. Update the payment method or cancel in Manage billing.',
+      ))
+      for (const live of subscriptions) {
         const canceled = live.cancelAtPeriodEnd ? live : await cancelPolarSubscription(live.id)
         await ctx.runMutation(applyRef, { payload: subscriptionPayload(canceled) })
         endsAt = Math.max(endsAt, canceled.currentPeriodEnd)
