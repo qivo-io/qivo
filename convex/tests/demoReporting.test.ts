@@ -8,6 +8,14 @@ import { as, expectRefusal, newT, type T, withOrg } from './helpers.setup'
 const SECRET = 'reporting-test-secret-0123456789abcdef'
 const NOW = Date.parse('2026-09-15T10:00:00Z')
 const emptyAudience = { browsers: [], operatingSystems: [], countries: [] }
+/** The shape demo releases with country attribution sent and cached. */
+function reportWithCountries() {
+  const audience = { ...emptyAudience, countries: [{ name: 'NO', count: 1 }] }
+  return {
+    ...report(),
+    audience: { last7Days: audience, last30Days: audience, last12Months: audience },
+  }
+}
 function report(): DemoMetricsReport {
   return {
     version: 1,
@@ -154,6 +162,39 @@ describe('aggregate demo report transport', () => {
     expect(rows[0].received_at).toBe(NOW)
   })
 
+  it('accepts a report from an earlier demo release and stores it without countries', async () => {
+    const t = newT()
+    expect((await post(t, reportWithCountries())).status).toBe(204)
+    const saved = await t.run((ctx) => ctx.db.query('demo_metric_reports').unique())
+    expect(saved!.payload).not.toMatch(/"NO"/)
+    expect(JSON.parse(saved!.payload)).toEqual(report())
+  })
+
+  it('reads a cached report from an earlier release until the next report replaces it', async () => {
+    const t = newT(),
+      fixture = await withOrg(t)
+    await t.run(async (ctx) => {
+      await ctx.db.insert('platform_admins', {
+        auth_user_id: fixture.admin.auth_user_id!,
+        note: 'analytics test',
+        created_at: new Date(NOW).toISOString(),
+      })
+      await ctx.db.insert('demo_metric_reports', {
+        key: 'demo',
+        generated_at: NOW - 1000,
+        received_at: NOW - 1000,
+        payload: JSON.stringify({ ...reportWithCountries(), generatedAt: NOW - 1000 }),
+      })
+    })
+    const op = as(t, fixture.admin)
+    const cached = await op.query(api.adminDemo.metrics, {})
+    expect(cached).toEqual({ status: 'ready', report: { ...report(), generatedAt: NOW - 1000 } })
+    expect(JSON.stringify(cached)).not.toMatch(/"NO"/)
+    expect((await post(t, report())).status).toBe(204)
+    const saved = await t.run((ctx) => ctx.db.query('demo_metric_reports').unique())
+    expect(JSON.parse(saved!.payload)).toEqual(report())
+  })
+
   it('allows only platform operators to read cached analytics', async () => {
     const t = newT(),
       fixture = await withOrg(t)
@@ -236,13 +277,22 @@ describe('report parsing and destination validation', () => {
         storageDaily: [{ ...report().storageDaily[0], samples: 0 }],
       }),
     ).toThrow()
-    const audience = { ...emptyAudience, countries: [{ name: 'Norway', count: 1 }] }
-    expect(() =>
-      parseDemoMetricsReport({
-        ...report(),
-        audience: { last7Days: audience, last30Days: emptyAudience, last12Months: emptyAudience },
-      }),
-    ).toThrow()
+    for (const browsers of [
+      [{ name: 'x'.repeat(65), count: 1 }],
+      Array.from({ length: 33 }, (_, i) => ({ name: `Browser ${i}`, count: 1 })),
+      [
+        { name: 'Firefox', count: 1 },
+        { name: 'Firefox', count: 2 },
+      ],
+    ]) {
+      const audience = { ...emptyAudience, browsers }
+      expect(() =>
+        parseDemoMetricsReport({
+          ...report(),
+          audience: { last7Days: audience, last30Days: emptyAudience, last12Months: emptyAudience },
+        }),
+      ).toThrow()
+    }
   })
 
   it('permits local development transfer, and refuses insecure or unrelated production destinations', () => {

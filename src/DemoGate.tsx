@@ -18,7 +18,6 @@ import {
   saveDemoMarker,
   startDemo,
 } from './lib/demoSession'
-import { demoVisitorContext } from './lib/demoVisitor'
 import { lazyFromModule } from './lib/lazyModule'
 import { loadWorkspace, preloadWorkspacePage } from './lib/workspacePreload'
 import { disposeDemoStore, initStore } from './store/planner'
@@ -113,14 +112,7 @@ export function DemoGate() {
             return !!session.data?.session
           },
           signIn: async () => {
-            const context = await demoVisitorContext(signal)
-            signal.throwIfAborted()
-            const result = await authClient.signIn.anonymous({
-              fetchOptions: {
-                signal,
-                ...(context ? { headers: { 'X-Qivo-Demo-Visitor': context } } : {}),
-              },
-            })
+            const result = await authClient.signIn.anonymous({ fetchOptions: { signal } })
             if (result.error) throw new Error(result.error.message || 'Could not start your demo.')
           },
           authenticate: armConvexAuth,

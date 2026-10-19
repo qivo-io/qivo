@@ -234,8 +234,8 @@ async function expectDemoMetrics(page) {
     'operator: Demos chart has an equivalent data table with previous-period comparison',
   )
   ok(
-    (await panel.getByRole('heading', { name: /^(Browser|Operating system|Country)$/ }).count()) ===
-      3 &&
+    (await panel.getByRole('heading', { name: /^(Browser|Operating system)$/ }).count()) === 2 &&
+      (await panel.getByRole('heading', { name: 'Country', exact: true }).count()) === 0 &&
       (await panel
         .getByRole('group', { name: 'Daily average demo storage', exact: true })
         .count()) === 1,

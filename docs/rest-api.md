@@ -2211,9 +2211,11 @@ grants no browser CORS permission and sends `Cache-Control: no-store`.
 
 The version-1 report contains generation/tracking/coverage timestamps,
 lifetime/current workspace counts, at most 800 UTC daily creation/storage
-buckets, the latest storage sample and aggregate browser/OS/country counts
-for seven days, 30 days and 12 calendar months. Workspace records, identities,
-IP addresses, raw User-Agent strings and credentials are excluded. The receiver
+buckets, the latest storage sample and aggregate browser/OS counts
+for seven days, 30 days and 12 calendar months. Each period also carries an
+empty `countries` list, kept so earlier releases can still read the report.
+Workspace records, identities, IP addresses, locations, raw User-Agent strings
+and credentials are excluded. The receiver
 projects only these fields, validates values and timeline ordering, and caches
 only a report newer than its current copy. Repeated or delayed valid reports
 leave a newer copy intact.
@@ -2223,14 +2225,8 @@ for missing/wrong authorization, `404` when disabled or sent to the demo
 backend, `415` for a non-JSON content type, `413` for an oversized body, `408`
 for a stalled upload and `400` for invalid report data. `adminDemo:metrics`
 exposes the cached aggregate only through the normal app's platform-operator
-gate; it adds no public REST reporting read endpoint.
-
-The demo Vercel runtime also serves `GET /api/demo-visitor` on the **demo app
-origin**, returning a short-lived signed coarse-country context or `null`.
-The anonymous sign-in flow uses that context for aggregate attribution; it
-does not authorize REST access. Direct Convex geolocation headers are ignored.
-Setup, runtime-secret scopes and measurement limitations are documented in
-the private operational notes.
+gate; it adds no public REST reporting read endpoint. Setup and measurement
+limitations are documented in the private operational notes.
 
 ## Conformance
 

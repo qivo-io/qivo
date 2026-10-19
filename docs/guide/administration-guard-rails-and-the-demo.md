@@ -272,11 +272,10 @@ preceding period. Dates use UTC; current days and months are incomplete. Daily
 history lasts 800 days and the lifetime total remains. The page identifies
 when recording began. Earlier deleted demos cannot be recovered.
 
-**Demo visitors** groups created workspaces by browser, operating system and
-country. One person creating two workspaces counts twice. Browser details may
-be inaccurate and VPNs can affect country estimates. Missing details appear
-as **Unknown**. Reporting retains broad categories, without IP addresses or
-precise locations.
+**Demo visitors** groups created workspaces by browser and operating system.
+One person creating two workspaces counts twice. Browser details may be
+inaccurate. Missing details appear as **Unknown**. Reporting retains only these
+broad categories, without IP addresses or locations.
 
 **Demo storage** shows approximate database and uploaded-file sizes and daily
 averages. Storage samples arrive hourly and usage reports every 15 minutes.

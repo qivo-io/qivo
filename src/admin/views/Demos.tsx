@@ -285,8 +285,6 @@ function Audience({ report, period }: { report: DemoMetricsReport; period: DemoC
     ]
   const label =
     period === '7d' ? 'Last 7 days' : period === '30d' ? 'Last 30 days' : 'Last 12 months'
-  const countryNames = new Intl.DisplayNames(undefined, { type: 'region' })
-  const countryLabel = (name: string) => (name === 'ZZ' ? 'Unknown' : countryNames.of(name) || name)
   return (
     <Card className="gap-5 p-5 shadow-card sm:p-6">
       <div>
@@ -296,15 +294,10 @@ function Audience({ report, period }: { report: DemoMetricsReport; period: DemoC
           count unique people or all website visits.
         </p>
       </div>
-      <div className="grid gap-3 lg:grid-cols-3">
+      <div className="grid gap-3 lg:grid-cols-2">
         {[
-          { title: 'Browser', rows: audience.browsers, name: (name: string) => name },
-          {
-            title: 'Operating system',
-            rows: audience.operatingSystems,
-            name: (name: string) => name,
-          },
-          { title: 'Country', rows: audience.countries, name: countryLabel },
+          { title: 'Browser', rows: audience.browsers },
+          { title: 'Operating system', rows: audience.operatingSystems },
         ].map((group) => {
           const total = group.rows.reduce((sum, row) => sum + row.count, 0)
           const rows = [...group.rows].sort(
@@ -336,7 +329,7 @@ function Audience({ report, period }: { report: DemoMetricsReport; period: DemoC
                       {rows.map((row) => (
                         <tr key={row.name}>
                           <th scope="row" className="w-full py-2 pr-3 text-left font-normal">
-                            <span>{group.name(row.name)}</span>
+                            <span>{row.name}</span>
                             <svg
                               viewBox="0 0 100 4"
                               className="mt-1 block h-1 w-full"
@@ -370,7 +363,7 @@ function Audience({ report, period }: { report: DemoMetricsReport; period: DemoC
       </div>
       <p className="text-xs text-text-2">
         Percentages use recorded demos, including Unknown. Earlier demos may lack these details.
-        Country is approximate; browsers, privacy settings and VPNs can affect these reports.
+        Browsers and privacy settings can affect these reports.
       </p>
     </Card>
   )

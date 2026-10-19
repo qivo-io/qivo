@@ -18,7 +18,7 @@ Convex hosts the database, functions and storage; Better Auth provides sign-in
 and browser-approved MCP connections. Polar supports optional billing.
 
 `src/` contains the frontend, `convex/` the backend and hermetic backend tests,
-`api/` Vercel server functions, `website/` the qivo.io homepage, pricing page
+`website/` the qivo.io homepage, pricing page
 and docs renderer, `desktop/` the Electron shell, and `scripts/` build and
 verification tools. User-facing guides are Markdown in
 [docs/guide/](docs/guide/) ([publishing rules](docs/documentation.md)); machine

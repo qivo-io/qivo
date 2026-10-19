@@ -5,17 +5,20 @@ import { components } from '../_generated/api'
 import { createAuthOptions } from '../auth'
 import authSchema from '../betterAuth/schema'
 import { DEMO_TTL_MS } from '../lib/demo'
-import { DEMO_VISITOR_HEADER, demoVisitorPlatform, verifiedDemoCountry } from '../lib/demoVisitor'
+import { demoVisitorPlatform } from '../lib/demoVisitor'
 import { expectRefusal, newT, type T, uuid } from './helpers.setup'
 
 const secret = 'demo-metrics-visitor-hermetic-test-314159'
 const now = Date.parse('2026-09-14T12:00:00Z')
-// Independently minted with Node createHmac; the Convex verifier uses Web Crypto.
+// Demo pages built before country attribution was removed still send this
+// header, here with a fresh Norway context signed by `secret`. Convex must
+// ignore it.
+const LEGACY_VISITOR_HEADER = 'X-Qivo-Demo-Visitor'
 const countryContext =
   'v1.1789387200.NO.29e6e36c18d37067831a5ee817b71f312568efaf2c6d0b01479d04813a931ca7'
 const record = makeFunctionReference<
   'mutation',
-  { auth_user_id: string; browser: string; os: string; country: string }
+  { auth_user_id: string; browser: string; os: string }
 >('demoVisitor:record')
 const componentModules = import.meta.glob('../betterAuth/**/*.ts')
 let t: T
@@ -37,7 +40,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-describe('demo visitor categories and country attestation', () => {
+describe('demo visitor categories', () => {
   it.each([
     ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/140.0 Safari/537.36', 'Chrome', 'Windows'],
     ['Mozilla/5.0 (Windows NT 10.0) Chrome/140.0 Safari/537.36 Edg/140.0', 'Edge', 'Windows'],
@@ -79,25 +82,6 @@ describe('demo visitor categories and country attestation', () => {
   ])('categorizes %s without browser versions or device identifiers', (ua, browser, os) => {
     expect(demoVisitorPlatform(ua)).toEqual({ browser, os })
   })
-
-  it('accepts only fresh, correctly signed, domain-separated country context', async () => {
-    expect(await verifiedDemoCountry(countryContext)).toBe('NO')
-    for (const context of [
-      null,
-      '',
-      'NO',
-      countryContext.replace('.NO.', '.US.'),
-      countryContext.replace('v1.', 'v2.'),
-      countryContext.replace(/.$/, '8'),
-      `${countryContext}extra`,
-    ])
-      expect(await verifiedDemoCountry(context)).toBe('ZZ')
-    expect(await verifiedDemoCountry(countryContext, { secret: `${secret}wrong` })).toBe('ZZ')
-    expect(await verifiedDemoCountry(countryContext, { now: now + 300_000 })).toBe('ZZ')
-    expect(await verifiedDemoCountry(countryContext, { now: now - 31_000 })).toBe('ZZ')
-    vi.stubEnv('DEMO_METRICS_SECRET', '')
-    expect(await verifiedDemoCountry(countryContext)).toBe('ZZ')
-  })
 })
 
 describe('demo creator attribution lifecycle', () => {
@@ -117,23 +101,11 @@ describe('demo creator attribution lifecycle', () => {
   it('records one fixed category set only on its owned unprovisioned receipt', async () => {
     const a = await receipt()
     const b = await receipt()
-    await t.mutation(record, {
-      auth_user_id: a.auth_user_id,
-      browser: 'Chrome',
-      os: 'Windows',
-      country: 'NO',
-    })
-    await t.mutation(record, {
-      auth_user_id: a.auth_user_id,
-      browser: 'Safari',
-      os: 'iOS',
-      country: 'US',
-    })
-    expect(await t.run((ctx) => ctx.db.get(a._id))).toMatchObject({
-      visitor_browser: 'Chrome',
-      visitor_os: 'Windows',
-      visitor_country: 'NO',
-    })
+    await t.mutation(record, { auth_user_id: a.auth_user_id, browser: 'Chrome', os: 'Windows' })
+    await t.mutation(record, { auth_user_id: a.auth_user_id, browser: 'Safari', os: 'iOS' })
+    const recorded = await t.run((ctx) => ctx.db.get(a._id))
+    expect(recorded).toMatchObject({ visitor_browser: 'Chrome', visitor_os: 'Windows' })
+    expect(recorded?.visitor_country).toBeUndefined()
     expect((await t.run((ctx) => ctx.db.get(b._id)))?.visitor_browser).toBeUndefined()
   })
 
@@ -151,18 +123,12 @@ describe('demo creator attribution lifecycle', () => {
         auth_user_id: value.auth_user_id,
         browser: 'Chrome',
         os: 'Windows',
-        country: 'NO',
       })
       expect((await t.run((ctx) => ctx.db.get(value._id)))?.visitor_browser).toBeUndefined()
     }
     vi.stubEnv('APP_MODE', 'normal')
     await expectRefusal(
-      t.mutation(record, {
-        auth_user_id: ready.auth_user_id,
-        browser: 'Chrome',
-        os: 'Windows',
-        country: 'NO',
-      }),
+      t.mutation(record, { auth_user_id: ready.auth_user_id, browser: 'Chrome', os: 'Windows' }),
       'forbidden',
       /unavailable/,
     )
@@ -174,12 +140,10 @@ describe('demo creator attribution lifecycle', () => {
       auth_user_id: a.auth_user_id,
       browser: 'Chrome/140.0 user-id',
       os: 'Linux; device123',
-      country: 'city, NO',
     })
     expect(await t.run((ctx) => ctx.db.get(a._id))).toMatchObject({
       visitor_browser: 'Unknown',
       visitor_os: 'Unknown',
-      visitor_country: 'ZZ',
     })
   })
 
@@ -197,7 +161,6 @@ describe('demo creator attribution lifecycle', () => {
         'Better-Auth-Cookie': '',
         'User-Agent': 'Mozilla/5.0 (Linux; Android 14) Chrome/140.0 Mobile Safari/537.36',
         'X-Forwarded-For': '192.0.2.123',
-        [DEMO_VISITOR_HEADER]: countryContext,
       },
       body: '{}',
     })
@@ -211,9 +174,8 @@ describe('demo creator attribution lifecycle', () => {
       auth_user_id: body.user.id,
       visitor_browser: 'Chrome',
       visitor_os: 'Android',
-      visitor_country: 'NO',
     })
-    expect(JSON.stringify(receipts[0])).not.toMatch(/Mozilla|Android 14|Chrome\/140|v1\.1789387200/)
+    expect(JSON.stringify(receipts[0])).not.toMatch(/Mozilla|Android 14|Chrome\/140|192\.0\.2/)
     const sessions = await t.query(components.betterAuth.adapter.findMany, {
       model: 'session',
       paginationOpts: { cursor: null, numItems: 100 },
@@ -226,26 +188,26 @@ describe('demo creator attribution lifecycle', () => {
     expect(createAuthOptions({} as never).databaseHooks.session).toBeUndefined()
   })
 
-  it('ignores direct geolocation headers without blocking anonymous login', async () => {
+  it('ignores country headers, including a signed legacy context, without blocking login', async () => {
     const login = await http('/api/auth/sign-in/anonymous', {
       method: 'POST',
       headers: {
         Origin: 'https://demo.qivo.io',
         'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/140.0 Safari/537.36',
         'x-vercel-ip-country': 'NO',
-        [DEMO_VISITOR_HEADER]: 'NO',
+        [LEGACY_VISITOR_HEADER]: countryContext,
       },
       body: '{}',
     })
     expect(login.status).toBe(200)
-    expect((await t.run((ctx) => ctx.db.query('demo_sessions').collect()))[0]).toMatchObject({
-      visitor_browser: 'Unknown',
-      visitor_os: 'Unknown',
-      visitor_country: 'ZZ',
-    })
+    const [stored] = await t.run((ctx) => ctx.db.query('demo_sessions').collect())
+    expect(stored).toMatchObject({ visitor_browser: 'Chrome', visitor_os: 'Windows' })
+    expect(stored.visitor_country).toBeUndefined()
+    expect(JSON.stringify(stored)).not.toMatch(/"NO"|v1\.1789387200/)
   })
 
-  it('allows the optional country context on the demo origin preflight', async () => {
+  it('still lets earlier demo pages send the legacy header through the preflight', async () => {
     const response = await http('/api/auth/sign-in/anonymous', {
       method: 'OPTIONS',
       headers: {
