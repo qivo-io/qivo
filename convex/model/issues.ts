@@ -316,10 +316,17 @@ export const SUBTREE_ROOM = { room: 0.9, every: 64, bytes: 512 * 1024 }
 export const SUBTREE_TOO_LARGE =
   'this task and its subtasks are too large to change in one request; detach some subtasks first'
 
+/* Refuses with SUBTREE_TOO_LARGE once the transaction passed SUBTREE_ROOM's
+ * `room`. Run before each step of a change whose cost has no fixed bound,
+ * such as one holder's sight check, and through roomCheck for walks. */
+async function assertRoom(ctx: QueryCtx): Promise<void> {
+  if (await usedMoreThan(ctx, SUBTREE_ROOM.room)) throw rule(SUBTREE_TOO_LARGE)
+}
+
 /* A check to run before each query and after each row of a walk under
  * SUBTREE_ROOM, given the row's size when it may be large (subtaskBytes). It
  * asks the transaction's use every `every` calls, or once the sizes since
- * it last asked reach `bytes`, and refuses once it passes `room`. */
+ * it last asked reach `bytes` (assertRoom). */
 function roomCheck(ctx: QueryCtx): (bytes?: number) => Promise<void> {
   let calls = 0
   let pending = 0
@@ -328,7 +335,7 @@ function roomCheck(ctx: QueryCtx): (bytes?: number) => Promise<void> {
     pending += bytes
     if (calls % SUBTREE_ROOM.every !== 0 && pending < SUBTREE_ROOM.bytes) return
     pending = 0
-    if (await usedMoreThan(ctx, SUBTREE_ROOM.room)) throw rule(SUBTREE_TOO_LARGE)
+    await assertRoom(ctx)
   }
 }
 
@@ -595,8 +602,10 @@ export type ParentProblem =
   | 'deep_or_cyclic'
   | 'too_deep'
 
-/** Checks a proposed parent link without throwing, for writers that adapt
- * instead of refusing; assertParentChain throws from it. `child.project_id`
+/** Checks a proposed parent link, answering a problem rather than throwing
+ * one, for writers that adapt instead of refusing; assertParentChain throws
+ * from it. It still throws SUBTREE_TOO_LARGE when the subtree under `child`
+ * is too large to measure in one transaction (SUBTREE_ROOM). `child.project_id`
  * is the project the child will be in after the write. Checks the cheapest
  * facts first, and a parent the actor cannot see is `not_found` before
  * anything else describes it. */
@@ -1369,6 +1378,7 @@ export async function updateIssueCore(
         group: await isGroup(),
       })
       for (const holder of holders) {
+        await assertRoom(ctx)
         // a switched-off person holds no new work, so their sight is not checked
         if (!(await byId(ctx, 'profiles', holder))?.active) continue
         if (!(await sees(holder))) throw rule(HOLDER_SIGHT_RULE)
@@ -1806,6 +1816,7 @@ export async function moveIssueCore(
   // every active assignee or reviewer below it needs access to the
   // destination (the sentence names no one: some subtasks may be hidden)
   for (const holder of await holdersUnder(ctx, issue.id, { group: true }, liveAfter)) {
+    await assertRoom(ctx)
     const profile = await byId(ctx, 'profiles', holder)
     if (!profile?.active) continue
     if (!(await canSeeProject(ctx, profile, target))) throw rule(MOVE_HOLDER_RULE)
@@ -1816,6 +1827,7 @@ export async function moveIssueCore(
   await moveAttachmentRows(ctx, issue.id, project_id, room)
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
   for (const { row, clearReviewer } of carried) {
+    await assertRoom(ctx)
     const patch: Partial<WithoutSystemFields<Doc<'issues'>>> = { project_id, updated_at: now }
     if (clearReviewer) patch.reviewer_id = undefined
     await ctx.db.patch(row._id, patch)

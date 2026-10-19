@@ -524,6 +524,40 @@ describe('a move or a parent change too large for one transaction', () => {
     expect(moved.map((file) => file.project_id)).toEqual(Array(4).fill(backend.id))
   })
 
+  it('refuses a walk that would pass a real limit, as it stands', async () => {
+    // a limit of 1,000 index ranges, and 1,200 subtasks under one task, each
+    // a range of the walk
+    const t = newT({ transactionLimits: { databaseQueries: 1000 } })
+    const { f } = await scene(t)
+    const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 1200; i++)
+        await ctx.db.insert('issues', {
+          id: uuid(),
+          org_id: f.org.id,
+          project_id: f.sub.id,
+          parent_id: root.id,
+          num: 900_000 + i,
+          title: `Step ${i}`,
+          description: '',
+          status: 'todo',
+          priority: 'medium',
+          paused: false,
+          created_at: root.created_at,
+          updated_at: root.updated_at,
+        })
+    })
+    for (const change of [
+      () => appMove(t, f, root.id, f.sub2.id),
+      () => appUpdate(t, f, root.id, { parent_id: other.id }),
+    ]) {
+      const r = await expectRefusal(change(), 'rule')
+      expect(r.data.message).toBe(SUBTREE_TOO_LARGE)
+    }
+    expect(await row(t, root.id)).toEqual(root)
+  })
+
   it('checks sooner after a subtask with a long description', async () => {
     const t = newT({ transactionLimits: true })
     const { f } = await scene(t)
