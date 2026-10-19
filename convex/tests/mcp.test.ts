@@ -1431,20 +1431,21 @@ describe('read tools', () => {
       project_id: fx.sub.id,
       title: 'Discussed',
     })
+    // posted in this order; the thread's order is the posting order
     await fx.t.run(async (ctx) => {
-      await ctx.db.insert('comments', {
-        id: uuid(),
-        issue_id: i1.id,
-        author: fx.user.id,
-        body: 'second',
-        created_at: '2026-01-02T00:00:00.000Z',
-      })
       await ctx.db.insert('comments', {
         id: uuid(),
         issue_id: i1.id,
         author: fx.admin.id,
         body: 'first',
         created_at: '2026-01-01T00:00:00.000Z',
+      })
+      await ctx.db.insert('comments', {
+        id: uuid(),
+        issue_id: i1.id,
+        author: fx.user.id,
+        body: 'second',
+        created_at: '2026-01-02T00:00:00.000Z',
       })
     })
     const rows = JSON.parse(
