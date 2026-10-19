@@ -43,7 +43,10 @@ export function eventParamsJson(params: unknown): string | null {
   while (stack.length > 0) {
     const item = stack.pop()
     if (typeof item === 'number' && !Number.isFinite(item)) return null
-    if (typeof item === 'object' && item !== null) stack.push(...Object.values(item))
+    if (typeof item === 'object' && item !== null) {
+      // one push each, so a wide array cannot pass too many arguments
+      for (const value of Object.values(item)) stack.push(value)
+    }
   }
   return JSON.stringify(params)
 }

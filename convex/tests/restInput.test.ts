@@ -292,6 +292,10 @@ describe('request bodies', () => {
   it('refuses MCP event params that hold a number JSON cannot write', () => {
     expect(eventParamsJson({ ttlMs: -Infinity })).toBeNull()
     expect(eventParamsJson({ arguments: { task_id: [Number.NaN] } })).toBeNull()
+    // a wide array, as a 1 MiB body can hold, walks without overflowing
+    expect(eventParamsJson({ arguments: new Array(500_000).fill(0) })).toMatch(
+      /^\{"arguments":\[0,/,
+    )
     expect(eventParamsJson({ arguments: { task_id: null }, ttlMs: 60_000 })).toBe(
       '{"arguments":{"task_id":null},"ttlMs":60000}',
     )
