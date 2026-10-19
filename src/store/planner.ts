@@ -19,6 +19,7 @@ import {
 import { ConvexError } from 'convex/values'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
+import { joinLists } from '../../convex/lib/arrayLimit'
 import { AVATAR_COLORS } from '../../convex/lib/avatarColors'
 import { BILLING_READ_ONLY, deletionReadOnly } from '../../convex/lib/billingAccess'
 import {
@@ -6618,8 +6619,10 @@ function subscribeSnapshot(
   return convex.onUpdate(
     api.snapshot.forMe,
     {},
-    (snap) => {
+    (delivered) => {
       if (!stillCurrent() || bootFailed) return
+      // a large organization's long lists arrive in parts (lib/arrayLimit.ts)
+      const snap = delivered && joinLists(delivered)
       if (!settled) {
         settled = true
         serverSnap = snap

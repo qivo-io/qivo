@@ -18,6 +18,7 @@ import {
   MOVE_SUBTREE_HOLDER_RULE,
   MOVE_SUBTREE_MAX,
   MOVE_SUBTREE_TOO_LARGE,
+  PARENT_TOO_LARGE,
   parentChainCheck,
   SUBTASK_PROJECT_RULE,
   SUBTREE_ROOM,
@@ -507,14 +508,14 @@ describe('a move or a parent change too large for one transaction', () => {
       // a move within TBED walks the four tasks under the root's three
       // children for their holders, and a new subtask counts the root's
       // three children
-      for (const change of [
-        () => appMove(t, f, root.id, f.sub2.id),
-        () => appUpdate(t, f, newKid.id, { parent_id: root.id }),
+      for (const [change, sentence] of [
+        [() => appMove(t, f, root.id, f.sub2.id), SUBTREE_TOO_LARGE],
+        [() => appUpdate(t, f, newKid.id, { parent_id: root.id }), PARENT_TOO_LARGE],
         // the task's four attachment rows
-        () => appMove(t, f, lone.id, backend.id),
-      ]) {
+        [() => appMove(t, f, lone.id, backend.id), SUBTREE_TOO_LARGE],
+      ] as const) {
         const r = await expectRefusal(change(), 'rule')
-        expect(r.data.message).toBe(SUBTREE_TOO_LARGE)
+        expect(r.data.message).toBe(sentence)
       }
     })
     expect(await allIssues(t, f.org.id)).toEqual(before)
@@ -596,12 +597,12 @@ describe('a move or a parent change too large for one transaction', () => {
       async () => {
         // a move walks the subtasks for their holders, and a new subtask
         // counts the parent's subtasks
-        for (const change of [
-          () => appMove(t, f, long.id, f.sub2.id),
-          () => appUpdate(t, f, other.id, { parent_id: long.id }),
-        ]) {
+        for (const [change, sentence] of [
+          [() => appMove(t, f, long.id, f.sub2.id), SUBTREE_TOO_LARGE],
+          [() => appUpdate(t, f, other.id, { parent_id: long.id }), PARENT_TOO_LARGE],
+        ] as const) {
           const r = await expectRefusal(change(), 'rule')
-          expect(r.data.message).toBe(SUBTREE_TOO_LARGE)
+          expect(r.data.message).toBe(sentence)
         }
         await appMove(t, f, short.id, f.sub2.id)
         await appUpdate(t, f, another.id, { parent_id: short.id })

@@ -17,7 +17,8 @@
  *   bulk takes six ranges; a restricted or dense one is read task by task, up
  *   to 4 ranges per visible task, never more than 3 ranges above the rule
  *   this replaced and only while those reads fit the ranges the transaction
- *   has left, a dense table past that read in full;
+ *   has left, a dense table past that read in full. They are the seat's last
+ *   reads, so the ranges left count everything else the seat reads;
  * - five per visible task restored so recently that its relation rows still
  *   carry archive marks (model/archiveMarks.ts), its own relation reads and
  *   follow. Background steps clear the marks moments after the restore.
@@ -40,6 +41,7 @@ import type { Doc, TableNames } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
 import { canSeeProject } from './lib/access'
 import { taskActivity } from './lib/activityVisibility'
+import { chunkLists } from './lib/arrayLimit'
 import { byId } from './lib/db'
 import { authedQuery, notFound, orgQuery } from './lib/functions'
 import { INBOX_LIMIT, loadInbox } from './lib/inbox'
@@ -272,31 +274,6 @@ export const forMe = authedQuery({
         }
       }
 
-      const relatedRows = await snapshotRelations(ctx, {
-        orgId,
-        tasks: fenceIssues,
-        active: liveOrgIssues.length,
-      })
-      for (const issue of fenceIssues) {
-        const [asSource, asTarget, ils, atts] = await relatedRows(issue.id)
-        // Both ends must be in this working set. The other end may be
-        // archived, deleted or in a project this member cannot access, and
-        // its id must not leave this query.
-        for (const link of [...asSource, ...asTarget]) {
-          if (seenLinkIds.has(link.id)) continue
-          if (!linkShown(link, workingSet.shown)) continue
-          seenLinkIds.add(link.id)
-          links.push(relationRow(link))
-        }
-        // issueLabels of active tasks only. Archived tasks are read outside
-        // this snapshot (P.fetchArchivedPage, issues.archivedPage), so it
-        // needs no archived rows here.
-        for (const il of ils) issueLabels.push(relationRow(il))
-        // attachments — active tasks only. This is the expensive storage row
-        // that previously made every archive part of the initial boot.
-        for (const a of atts) attachments.push(attachmentRow(a))
-      }
-
       // Guests also see the host org's label vocabulary. Clients paint the
       // color as a CSS background, so an older non-hex value goes out as gray.
       const orgLabels = await ctx.db
@@ -348,6 +325,34 @@ export const forMe = authedQuery({
       unreadTruncated ||= inbox.unreadTruncated
       readTruncated ||= inbox.readTruncated
 
+      // The relation reads come last, after every other read of this seat,
+      // so they plan with the ranges the transaction really has left
+      // (lib/snapshotRelations.ts).
+      const relatedRows = await snapshotRelations(ctx, {
+        orgId,
+        tasks: fenceIssues,
+        active: liveOrgIssues.length,
+      })
+      for (const issue of fenceIssues) {
+        const [asSource, asTarget, ils, atts] = await relatedRows(issue.id)
+        // Both ends must be in this working set. The other end may be
+        // archived, deleted or in a project this member cannot access, and
+        // its id must not leave this query.
+        for (const link of [...asSource, ...asTarget]) {
+          if (seenLinkIds.has(link.id)) continue
+          if (!linkShown(link, workingSet.shown)) continue
+          seenLinkIds.add(link.id)
+          links.push(relationRow(link))
+        }
+        // issueLabels of active tasks only. Archived tasks are read outside
+        // this snapshot (P.fetchArchivedPage, issues.archivedPage), so it
+        // needs no archived rows here.
+        for (const il of ils) issueLabels.push(relationRow(il))
+        // attachments — active tasks only. This is the expensive storage row
+        // that previously made every archive part of the initial boot.
+        for (const a of atts) attachments.push(attachmentRow(a))
+      }
+
       // Hidden workload remains anonymized by orgLoadRows.
       orgLoad.push(...orgLoadRows(me, view, orgProfileIds, liveOrgIssues))
     }
@@ -396,19 +401,25 @@ export const forMe = authedQuery({
       auth_user_id: ctx.authUserId,
       myProfileIds: [...ctx.myProfiles.values()].map((p) => p.id),
       orgs,
-      teams,
-      teamMembers,
-      profiles,
-      projects,
-      access,
-      teamAccess,
-      issues,
-      links,
-      labels,
-      issueLabels,
-      issueSubs,
-      attachments,
-      milestones,
+      // Lists that grow with the organization. Past ARRAY_LIMIT values each
+      // goes in parts, the first under its own name and the rest in `more`,
+      // which the app joins back (lib/arrayLimit.ts).
+      ...chunkLists({
+        teams,
+        teamMembers,
+        profiles,
+        projects,
+        access,
+        teamAccess,
+        issues,
+        links,
+        labels,
+        issueLabels,
+        issueSubs,
+        attachments,
+        milestones,
+        orgLoad,
+      }),
       // Always empty. App builds from earlier releases still open in a browser
       // map it on every delivery, so it stays until no such build can be open or
       // be rolled back to. Team Sync reads task stamps instead.
@@ -425,7 +436,6 @@ export const forMe = authedQuery({
       // (lib/inbox.ts loadInbox `peek`).
       unreadTruncated,
       readTruncated,
-      orgLoad,
       // the server time of this delivery, so the client can tell messages
       // created before it from newer ones without trusting its own clock
       delivered_at: new Date().toISOString(),

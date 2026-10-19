@@ -31,7 +31,7 @@ to one person who keeps User or Lead access to those tasks, or to
 or a member from a team, saves the removal and the choice together. If a task
 cannot be reassigned or a Viewer grant cannot be given, nothing changes and
 the window lists the tasks again. Such a removal reassigns at most 120 tasks,
-and fewer when the tasks have many followers. With more, keep the people as
+and their followers hear of it a few seconds later. With more, keep the people as
 Viewers and hand the tasks over later, or reassign some of the tasks first.
 The message says which of these you can choose, and the window says so
 before you save when it lists more than 120 tasks. Deleting a team saves each

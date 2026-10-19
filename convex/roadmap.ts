@@ -101,7 +101,9 @@ function writer(ctx: Context, projectId: string): ReturnType<typeof checkWriter>
 
 /** The share of each of Convex's limits for one transaction that a roadmap
  * save or undo may have used before it changes, journals or notifies about
- * another task. A task costs more the more followers it has, so no count of
+ * another task. The tasks' followers hear from background steps
+ * (model/messages.ts NotifyPreload.deferFollowers), but each task write
+ * still checks the organization's webhook subscriptions, so no count of
  * operations bounds a save (LIMIT counts them). The rest of each limit is
  * room for one task's own reads and writes and the journal entry. */
 export const ROADMAP_ROOM = 0.95
@@ -120,7 +122,8 @@ export const ROADMAP_STEP_TOO_LARGE = 'this roadmap change is too large to undo 
  * mutation changes only tasks, milestones and activity, so the preload stays
  * valid for the whole mutation (model/messages.ts NotifyPreload). Its guard
  * runs the room check before each webhook subscription a task write checks
- * and each follower it notifies. */
+ * and each mention it notifies. Followers hear from background steps
+ * moments later (NotifyPreload.deferFollowers). */
 type Batch = { bulkOf: (orgId: string) => Promise<BulkUpdate>; room: () => Promise<void> }
 
 function batchOf(ctx: Context, tooLarge: string): Batch {
@@ -132,7 +135,7 @@ function batchOf(ctx: Context, tooLarge: string): Batch {
     let bulk = bulks.get(orgId)
     if (bulk === undefined) {
       bulk = Promise.resolve({
-        preload: { ...newNotifyPreload(), guard: room },
+        preload: { ...newNotifyPreload(), guard: room, deferFollowers: true },
         checked: new Set<string>(),
       })
       bulks.set(orgId, bulk)

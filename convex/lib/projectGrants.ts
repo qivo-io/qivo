@@ -9,12 +9,13 @@ import type { GrantLevel } from './enums'
 
 /** The most tasks one access removal reassigns (model/projectAccess.ts
  * removeAndSettle). Each task's reassignment runs every rule of a task
- * update and notifies its followers inside the removal's one transaction, so
- * a larger handover would pass Convex's limits for one transaction. Set at
- * about 60% of the largest count that passed the measurement behind
- * tests/bulkReassign.test.ts (196 tasks with four followers each, in an
- * organization of 100 people), taken when each follower's sight was still
- * checked on its own. The removal window shows it. */
+ * update inside the removal's one transaction, so a larger handover would
+ * pass Convex's limits for one transaction. Set at about 60% of the largest
+ * count that passed the measurement behind tests/bulkReassign.test.ts (196
+ * tasks with four followers each, in an organization of 100 people), taken
+ * when the removal still told each follower itself. Background steps tell
+ * them now (model/messages.ts NotifyPreload.deferFollowers). The removal
+ * window shows it. */
 export const REASSIGN_MAX = 120
 
 /** Individual grants on one project, by profile id. */

@@ -29,7 +29,7 @@
  * reach REASSIGN_ROOM, which refuses them. */
 /// <reference types="vite/client" />
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { Refusal } from '../lib/functions'
@@ -199,6 +199,14 @@ const holders = (fx: Crowd) =>
   })
 
 describe('reassigning the tasks of an access removal', () => {
+  // followers hear from background steps (model/messages.ts FOLLOWER_FANOUT)
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it(`hands over ${REASSIGN_MAX} tasks inside one transaction's limits`, async () => {
     const fx = await crowded(REASSIGN_MAX)
     await removeEmil(fx, fx.leo.id)
@@ -271,30 +279,31 @@ describe('reassigning the tasks of an access removal', () => {
     )
   })
 
-  it('refuses fewer tasks whose followers would fill the transaction, and changes nothing', async () => {
-    // 40 tasks with 21 followers each need about 1,330 index ranges here,
-    // past a limit of 1,000
+  it('hands over tasks whose followers once filled the transaction, and tells them in steps', async () => {
+    // 40 tasks with 21 followers each needed about 1,330 index ranges here
+    // when the removal told every follower itself, past a limit of 1,000
     const fx = await crowded(40, {
       followers: 20,
       t: newT({ transactionLimits: { databaseQueries: 1000 } }),
     })
-    const before = await holders(fx)
-    const e = await expectRefusal(removeEmil(fx, fx.leo.id), 'rule')
-    expect((e.data as Refusal).message).toBe(reassignTooLarge(true))
-    expect((e.data as Refusal).reason).toBeUndefined()
-    // the tasks reassigned before the check refused are rolled back too
-    expect(await membership(fx)).not.toBeNull()
-    expect(await holders(fx)).toEqual(before)
+    await removeEmil(fx, fx.leo.id)
+    expect(await membership(fx)).toBeNull()
+    // no follower has heard yet; background steps tell them
     expect(await fx.t.run((ctx) => ctx.db.query('messages').collect())).toEqual([])
+    await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
+    const follower = fx.crowd[1]
+    expect((await messagesFor(fx.t, follower.id, fx.tasks[0].id)).map((m) => m.detail)).toEqual([
+      'Assigned to Leo',
+    ])
   })
 
-  it('refuses during a task whose followers would pass the limits', async () => {
+  it('hands over a task with 1,000 followers, whom steps within the limits tell', async () => {
     const fx = await crowded(20, { t: newT({ transactionLimits: { databaseQueries: 1000 } }) })
-    // 1,000 more people of Hardware follow only the last task, which the
-    // removal reaches last. Checked only before each task, their messages
-    // pass a limit of 1,000 index ranges during that task.
+    // 1,000 more people of Hardware follow only the last task. Told in the
+    // removal, their messages passed a limit of 1,000 index ranges.
     const last = fx.tasks[fx.tasks.length - 1]
-    await fx.t.run(async (ctx) => {
+    const extra = await fx.t.run(async (ctx) => {
+      const ids: string[] = []
       for (let i = 0; i < 1000; i++) {
         const id = uuid()
         await ctx.db.insert('profiles', {
@@ -320,13 +329,24 @@ describe('reassigning the tasks of an access removal', () => {
           profile_id: id,
           created_at: NOW,
         })
+        ids.push(id)
       }
+      return ids
     })
-    const before = await holders(fx)
-    const e = await expectRefusal(removeEmil(fx, fx.leo.id), 'rule')
-    expect((e.data as Refusal).message).toBe(reassignTooLarge(true))
-    expect(await membership(fx)).not.toBeNull()
-    expect(await holders(fx)).toEqual(before)
+    await removeEmil(fx, fx.leo.id)
+    expect(await membership(fx)).toBeNull()
+    await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
+    const told = await fx.t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query('messages')
+          .withIndex('by_issue_read', (q) => q.eq('issue_id', last.id))
+          .collect()
+      ).map((m) => m.recipient_id),
+    )
+    // each of them once, with the task's other followers and Leo
+    expect(told.filter((id) => extra.includes(id)).sort()).toEqual([...extra].sort())
+    expect(new Set(told).size).toBe(told.length)
   })
 
   it('hands over a task whose followers see it through one of many teams', async () => {
@@ -354,6 +374,7 @@ describe('reassigning the tasks of an access removal', () => {
       }
     })
     await removeEmil(fx, fx.leo.id)
+    await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
     expect(await membership(fx)).toBeNull()
     expect(await holders(fx)).toEqual([[fx.leo.id, null]])
     expect((await messagesFor(fx.t, fx.crowd[1].id, fx.tasks[0].id)).map((m) => m.detail)).toEqual([
@@ -374,6 +395,7 @@ describe('reassigning the tasks of an access removal', () => {
   it('tells each follower what they would read without the preload, and no one who lost sight', async () => {
     const fx = await crowded(3)
     await removeEmil(fx, fx.leo.id)
+    await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
     // Emil was assigned task 0, a subtask, and task 2, and reviewed task 1
     const [first, second, third] = fx.tasks
     for (const task of [first, third]) {

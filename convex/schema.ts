@@ -1018,6 +1018,9 @@ export default defineSchema({
     // a restore whose call held this task item alone and was not part of a
     // bulk restore: its reveal sends the Restored notice (model/deletedItems.ts)
     alone: v.optional(v.boolean()),
+    // the tasks a task item's move deleted for good because they were too
+    // large to store, whose history its steps still delete (move_drain)
+    purge_history: v.optional(v.array(v.string())),
   })
     .index('by_item', ['item_id'])
     .index('by_progress', ['progress_at']),

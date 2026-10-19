@@ -136,7 +136,11 @@ and a comment or a mention no longer subscribes anyone, though mentioned
 people still receive their message. A new assignee or reviewer is still
 subscribed, so the people working on a task always hear about it. A comment
 or description reaches at most 100 mentioned people. Tasks that had more
-subscribers before this limit keep them.
+subscribers before this limit keep them. On such a task, a comment or a
+change reaches the first subscribers at once and the rest a few seconds
+later. Changes saved for many tasks at once, from the Roadmap or by
+reassigning tasks when someone loses access, reach every subscriber a few
+seconds after the save.
 
 A hand-off happens when a task enters **In Review** with you as reviewer, you
 become the reviewer during review, or work returns to you as assignee when it

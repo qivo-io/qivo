@@ -397,7 +397,7 @@ Useful field rules:
   (default) lists the open tasks the member loses sight of,
   `keep_as_viewer` keeps them as a Viewer of the project the team shared,
   and `{"reassign_to": user id or null}` hands those tasks over, at most 120
-  in one removal and fewer when they have many followers. Confirm the choice
+  in one removal; their followers hear moments later. Confirm the choice
   with the user when it is not clear. A misspelled `on_held_tasks` is
   refused, on MCP and on these REST routes.
 - Teams are named by uuid; two teams may share a name.
