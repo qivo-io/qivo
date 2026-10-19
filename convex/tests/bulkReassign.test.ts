@@ -271,9 +271,12 @@ describe('reassigning the tasks of an access removal', () => {
   })
 
   it('refuses fewer tasks whose followers would fill the transaction, and changes nothing', async () => {
-    // 100 tasks with 61 followers each need about 7,000 index ranges here,
-    // past the limit of 4,096
-    const fx = await crowded(100, { followers: 60 })
+    // 40 tasks with 21 followers each need about 1,200 index ranges here,
+    // past a limit of 1,000
+    const fx = await crowded(40, {
+      followers: 20,
+      t: newT({ transactionLimits: { databaseQueries: 1000 } }),
+    })
     const before = await holders(fx)
     const e = await expectRefusal(removeEmil(fx, fx.leo.id), 'rule')
     expect((e.data as Refusal).message).toBe(reassignTooLarge(true))
@@ -285,12 +288,12 @@ describe('reassigning the tasks of an access removal', () => {
   })
 
   it('refuses during a task whose followers would pass the limits', async () => {
-    const fx = await crowded(100)
-    // 3,000 more people of Hardware follow only the last task, which the
+    const fx = await crowded(20, { t: newT({ transactionLimits: { databaseQueries: 1000 } }) })
+    // 1,000 more people of Hardware follow only the last task, which the
     // removal reaches last. Checked only before each task, their messages
-    // pass the limit of 4,096 index ranges during that task.
+    // pass a limit of 1,000 index ranges during that task.
     const last = fx.tasks[fx.tasks.length - 1]
-    for (let from = 0; from < 3000; from += 1000)
+    for (let from = 0; from < 1000; from += 1000)
       await fx.t.run(async (ctx) => {
         for (let i = from; i < from + 1000; i++) {
           const id = uuid()
