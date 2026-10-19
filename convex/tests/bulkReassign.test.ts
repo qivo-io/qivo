@@ -22,13 +22,11 @@
  * each follower. Index ranges ran out first. Without the preload it managed
  * 44 tasks, at about 93 ranges each. A local Convex backend reassigned 400
  * tasks of the same shape, with 92 more people in Northstar, using 3,422 of
- * its 4,096 reads. A follower's sight now reads the project's team shares
- * once and then only the follower's own grants and memberships, and is kept
- * for the whole removal (model/messages.ts RecipientSight), so a follower
- * costs about one range on each further task: REASSIGN_MAX tasks used 1,878
- * ranges here with 4 followers each and 3,078 with 14, 100 tasks used 3,324
- * with 21, and REASSIGN_MAX tasks with 21 followers each reach REASSIGN_ROOM,
- * which refuses them. */
+ * its 4,096 reads. Followers' sight is now worked out once per project
+ * (model/messages.ts RecipientSight), so each follower costs about one range:
+ * REASSIGN_MAX tasks used 1,597 ranges here with 4 followers each and 3,637
+ * with 21, and 100 tasks with 61 followers each reach REASSIGN_ROOM, which
+ * refuses them. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
@@ -273,7 +271,7 @@ describe('reassigning the tasks of an access removal', () => {
   })
 
   it('refuses fewer tasks whose followers would fill the transaction, and changes nothing', async () => {
-    // 40 tasks with 21 followers each need about 1,540 index ranges here,
+    // 40 tasks with 21 followers each need about 1,260 index ranges here,
     // past a limit of 1,000
     const fx = await crowded(40, {
       followers: 20,

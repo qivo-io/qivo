@@ -19,6 +19,7 @@ import {
   profileCanSeeProject,
   projectSightForProfiles,
   rootMetaOf,
+  SIGHT_READ,
 } from '../lib/access'
 import { ACCESS_LEVELS, type AccessLevel, type OrgRole } from '../lib/enums'
 import { orgProjectView } from '../lib/visibility'
@@ -307,16 +308,26 @@ describe('projectSightForProfiles', () => {
         level: 'viewer',
       })
       const people = [f.admin, f.user, f.agent, f.viewer, f.guest, f.otherAdmin]
-      for (const project of [f.meta, f.sub, f.sub2, f.hidden, f.otherProject]) {
-        const sees = await projectSightForProfiles(ctx, project)
-        for (const person of people) {
-          const expected = await canSeeProject(ctx, person, project)
-          expect([project.name, person.name, await sees(person)]).toEqual([
-            project.name,
-            person.name,
-            expected,
-          ])
+      // read in full, each profile asked alone, and a mix of the two
+      const saved = SIGHT_READ.max
+      try {
+        for (const max of [saved, 0, 2]) {
+          SIGHT_READ.max = max
+          for (const project of [f.meta, f.sub, f.sub2, f.hidden, f.otherProject]) {
+            const sees = await projectSightForProfiles(ctx, project)
+            for (const person of people) {
+              const expected = await canSeeProject(ctx, person, project)
+              expect([max, project.name, person.name, await sees(person)]).toEqual([
+                max,
+                project.name,
+                person.name,
+                expected,
+              ])
+            }
+          }
         }
+      } finally {
+        SIGHT_READ.max = saved
       }
       expect(await (await projectSightForProfiles(ctx, f.meta))(f.agent)).toBe(true)
       expect(await (await projectSightForProfiles(ctx, f.sub))(f.agent)).toBe(false)

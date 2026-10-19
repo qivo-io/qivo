@@ -16,7 +16,7 @@ import type { FunctionArgs } from 'convex/server'
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { projectSightForProfiles } from '../lib/access'
+import { projectSightForProfiles, SIGHT_READ } from '../lib/access'
 import { byId } from '../lib/db'
 import type { MessageKind } from '../lib/enums'
 import {
@@ -1151,7 +1151,7 @@ describe('notifyCommentInsert (model — composed by phase 5 comments.create)', 
     expect(ranges).toBeLessThan(241 * 6)
   })
 
-  it("a follower's sight reads nothing that grows with a sharing team's size", async () => {
+  it("a follower's sight reads at most SIGHT_READ rows, however large a sharing team is", async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -1205,8 +1205,10 @@ describe('notifyCommentInsert (model — composed by phase 5 comments.create)', 
       expect(await sees(profile)).toBe(true)
       return (await used()) - before
     })
-    // reading the team's members would read 1,500 rows
-    expect(read).toBeLessThan(20)
+    // the team's first 1,001 members, then the follower's own memberships;
+    // reading them all would read 1,500
+    expect(read).toBeGreaterThan(SIGHT_READ.max)
+    expect(read).toBeLessThan(SIGHT_READ.max + 20)
   })
 
   it("a seed's visibility memo answers repeat checks; without a preload each check is live", async () => {

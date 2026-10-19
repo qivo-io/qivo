@@ -245,8 +245,8 @@ export const REASSIGN_MAX = 120
 /** The share of each of Convex's limits for one transaction that a removal
  * may have used before it reassigns another task or notifies another
  * follower. A task costs more the more followers it has, and the first
- * follower in a project costs a read of every team share there
- * (model/messages.ts RecipientSight). So a handover under REASSIGN_MAX can
+ * follower in a project costs a read of its grants and team shares, up to
+ * a bound (model/messages.ts RecipientSight). So a handover under REASSIGN_MAX can
  * still be too large, and no fixed cost per task or follower bounds it. The
  * removal checks what the transaction used, as the deployment reports it
  * (ctx.meta.getTransactionMetrics), before each task
@@ -254,7 +254,7 @@ export const REASSIGN_MAX = 120
  * each follower it notifies. The rest of each limit is room for one
  * follower or one task's own reads and writes and the removal's narration.
  * In tests/bulkReassign.test.ts, REASSIGN_MAX tasks with four followers each
- * use about 46% of the index ranges, and with 14 followers each about 75%. */
+ * use about 40% of the index ranges, and with 21 followers each about 90%. */
 export const REASSIGN_ROOM = 0.95
 
 /** The refusal of a handover too large for one removal: more than
