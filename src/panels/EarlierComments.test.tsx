@@ -10,7 +10,8 @@ import type { Row } from '../store/rows'
 /* "Show earlier comments" in the task window, on the real store. The thread
    arrives through the commentThread subscription and earlier pages through
    commentsBefore, both answered by hand. Comment #n is posted n minutes
-   after START; the task's status changed at minute 10. */
+   after START. The thread's deliveries also carry the task's changes, and
+   change(n) moves the task n minutes after START. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', () => ({ convex: network }))
@@ -23,6 +24,8 @@ vi.mock('../lib/auth', () => ({
 }))
 
 type Page = { comments: Row<'comments'>[]; earlier: boolean }
+// A commentThread delivery. Unlike a commentsBefore page, it carries the task's changes.
+type Delivery = Page & { events: Row<'activity_events'>[] }
 type Planner = typeof import('../store/planner')['P']
 type Detail = typeof import('./IssueDetail')
 
@@ -34,7 +37,8 @@ let detail: Detail
 let container: HTMLDivElement
 let root: Root
 let me: string
-let publish: (page: Page) => void
+let org: string
+let publish: (page: Delivery) => void
 let pages: { before: string; resolve: (page: Page) => void; reject: (e: unknown) => void }[]
 
 const comment = (n: number): Row<'comments'> => ({
@@ -46,11 +50,26 @@ const comment = (n: number): Row<'comments'> => ({
 })
 const range = (from: number, to: number) =>
   Array.from({ length: to - from }, (_, n) => comment(from + n))
+const change = (n: number): Row<'activity_events'> => ({
+  id: `event-${n}`,
+  org_id: org,
+  ts: at(n),
+  actor_id: me,
+  verb: 'moved',
+  target_type: 'issue',
+  target_id: 'task-a',
+  label: 'QN-27',
+  detail: 'To Do → In Progress',
+})
 
-async function load(unread?: number) {
+/* Loads the store with task-a. `unread` is the minute of an unread comment
+   message about it, and `snapshotChange` the minute of a change to it that
+   only the snapshot's activity holds. */
+async function load({ unread, snapshotChange }: { unread?: number; snapshotChange?: number } = {}) {
   vi.resetModules()
   const snap: Snapshot = plannerFixture()
   me = snap.profiles[0].id
+  org = snap.orgs[0].id
   snap.issues.push({
     id: 'task-a',
     org_id: snap.orgs[0].id,
@@ -66,17 +85,7 @@ async function load(unread?: number) {
     has_hidden_subtasks: false,
     has_hidden_parent: false,
   })
-  snap.activity.push({
-    id: 'event-a',
-    org_id: snap.orgs[0].id,
-    ts: at(10),
-    actor_id: me,
-    verb: 'moved',
-    target_type: 'issue',
-    target_id: 'task-a',
-    label: 'QN-27',
-    detail: 'To Do → In Progress',
-  })
+  if (snapshotChange !== undefined) snap.activity.push(change(snapshotChange))
   if (unread !== undefined) {
     snap.messages.push({
       id: 'message-a',
@@ -158,6 +167,14 @@ function thread(): string[] {
     return html.textContent ?? ''
   })
 }
+/* Switches the thread to the All filter, which shows changes beside the
+   comments. */
+async function showAll() {
+  const all = [...document.querySelectorAll('button')].find((b) => b.textContent === 'All')
+  if (!all) throw new Error('missing the All filter')
+  await act(async () => all.click())
+}
+const tailNote = () => document.querySelector('[data-unread-divider="tail"]')?.textContent
 const control = () => document.querySelector<HTMLElement>('[data-earlier-comments]')
 /* Focuses the control, once the window has taken its own first focus, as it
    does right after it opens. */
@@ -166,8 +183,10 @@ async function focusControl() {
   control()?.querySelector('button')?.focus()
 }
 
-async function deliver(page: Page) {
-  await act(async () => publish(page))
+/* Delivers the thread's live window, with no changes unless the page
+   names some. */
+async function deliver(page: Page & { events?: Row<'activity_events'>[] }) {
+  await act(async () => publish({ events: [], ...page }))
 }
 async function press(name: string) {
   const button = [...document.querySelectorAll('[data-earlier-comments] button')].find(
@@ -310,10 +329,8 @@ describe('earlier comments in the task window', { timeout: 20_000 }, () => {
   it('with All, hides changes older than the oldest loaded comment until the start is loaded', async () => {
     await load()
     await open()
-    await deliver({ comments: range(20, 70), earlier: true })
-    const all = [...document.querySelectorAll('button')].find((b) => b.textContent === 'All')
-    if (!all) throw new Error('missing the All filter')
-    await act(async () => all.click())
+    await deliver({ comments: range(20, 70), earlier: true, events: [change(10)] })
+    await showAll()
     expect(thread()).not.toContain('event')
     await press('Show earlier comments')
     await answer({ comments: range(1, 20), earlier: false })
@@ -321,8 +338,31 @@ describe('earlier comments in the task window', { timeout: 20_000 }, () => {
     expect(rows.indexOf('event')).toBe(rows.findIndex((r) => r.includes('Check 10')) + 1)
   })
 
+  it('with All, leaves out a change only the snapshot holds', async () => {
+    await load({ snapshotChange: 10 })
+    await open()
+    await deliver({ comments: range(1, 30), earlier: false })
+    await showAll()
+    expect(thread()).not.toContain('event')
+    expect(thread()).toHaveLength(29)
+  })
+
+  it('points at All for a new change the thread delivered', async () => {
+    await load({ unread: 20 })
+    await open()
+    await deliver({ comments: range(1, 10), earlier: false, events: [change(25)] })
+    expect(tailNote()).toBe('New activity on this task. See All.')
+  })
+
+  it('does not point at All for a new change only the snapshot holds', async () => {
+    await load({ unread: 20, snapshotChange: 25 })
+    await open()
+    await deliver({ comments: range(1, 10), earlier: false })
+    expect(tailNote()).toBe('New activity on this task.')
+  })
+
   it('puts the New line under the button when the first unread comment is not loaded', async () => {
-    await load(30)
+    await load({ unread: 30 })
     await open()
     await deliver({ comments: range(60, 110), earlier: true })
     expect(thread().slice(0, 3)).toEqual([

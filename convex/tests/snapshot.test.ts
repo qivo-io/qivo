@@ -15,9 +15,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { INBOX_LIMIT, loadInbox } from '../lib/inbox'
+import { insertActivity } from '../model/activity'
 import { startPurge } from '../model/deletedItems'
 import { invokeSnapshot } from './backendPerformance.setup'
 import {
+  activityFor,
   as,
   expectRefusal,
   NOW,
@@ -1117,6 +1119,21 @@ describe('activity', () => {
 
   const seen = async (p: Doc<'profiles'>) => (await snapFor(p)).activity.map((a) => a.id).sort()
 
+  /* The snapshot's rows about `taskId` for `p`, after checking that the task
+   * window's thread holds the same rows whenever `p` is shown the task. */
+  const historyOf = async (p: Doc<'profiles'>, taskId: string) => {
+    const snap = await snapFor(p)
+    const rows = snap.activity.filter((a) => a.target_id === taskId)
+    if (snap.issues.some((i) => i.id === taskId)) {
+      const page = await as(t, p).query(api.snapshot.commentThread, {
+        org_id: f.org.id,
+        issue_id: taskId,
+      })
+      expect(page.events.map((e) => e.id).sort()).toEqual(rows.map((a) => a.id).sort())
+    }
+    return rows
+  }
+
   /* A person granted only one sub-project; for f.sub or f.sub2 that shows
    * f.meta for navigation alone. */
   const seatOn = async (projectId: string, org_role: 'user' | 'guest' = 'user') => {
@@ -1140,7 +1157,7 @@ describe('activity', () => {
       ctx.db.insert('team_members', { team_id: f.team.id, profile_id: profileId, is_leader }),
     )
 
-  it('each row reaches only the people who can access its subject', async () => {
+  it('only task rows reach anyone, each only the people who can access its task', async () => {
     const subOnly = await seatOn(f.sub.id)
     // A guest seat that kept a leader membership from an earlier staff role.
     const guestLeader = await seatOn(f.sub.id, 'guest')
@@ -1212,20 +1229,20 @@ describe('activity', () => {
       return Object.fromEntries(Object.entries(rows).map(([key, row]) => [key, row.id]))
     })
     const only = (...keys: string[]) => keys.map((key) => ids[key]).sort()
-    const shared = ['people', 'label', 'sub', 'task', 'statusMove', 'survivingTask', 'renamed']
+    const shared = ['task', 'statusMove', 'survivingTask']
 
-    expect(await seen(f.admin)).toEqual(Object.values(ids).sort())
-    // user: leads f.meta, f.hidden and the team
-    expect(await seen(f.user)).toEqual(only(...shared, 'team', 'parent', 'hidden', 'taskToHidden'))
-    // guest and viewer: granted on f.meta, so its sub-projects too
-    for (const p of [f.guest, f.viewer]) expect(await seen(p)).toEqual(only(...shared, 'parent'))
-    // Navigation-only access to f.meta reveals none of its own history. Team
-    // history needs a leader on the organization staff.
-    for (const p of [subOnly, guestLeader, teamMember])
+    // rows about people, labels, teams, projects and milestones reach no
+    // one, admins included; admins read them in the export
+    expect(await seen(f.admin)).toEqual(
+      only(...shared, 'taskToHidden', 'unrecordedMove', 'deletedTask', 'orphanTask'),
+    )
+    // user: leads f.meta and f.hidden
+    expect(await seen(f.user)).toEqual(only(...shared, 'taskToHidden'))
+    for (const p of [f.guest, f.viewer, subOnly, guestLeader, teamMember])
       expect(await seen(p)).toEqual(only(...shared))
   })
 
-  it("a deleted team's membership history reaches only organization admins", async () => {
+  it('membership history reaches no snapshot, before or after its team is deleted', async () => {
     const subOnly = await seatOn(f.sub.id)
     const teamMember = await seatOn(f.sub.id)
     await joinTeam(teamMember.id, false)
@@ -1241,18 +1258,22 @@ describe('activity', () => {
         .filter((a) => a.target_type === 'user')
         .map((a) => `${a.verb} ${a.detail}`)
         .sort()
+    const stored = async () =>
+      (await activityFor(t, f.org.id))
+        .filter((a) => a.team_id === f.team.id)
+        .map((a) => `${a.verb} ${a.detail}`)
+        .sort()
     const history = ['added to Hardware', 'made a leader of Hardware', 'removed from Hardware']
-    for (const p of [f.admin, f.user]) expect(await teamRows(p)).toEqual(history)
-    for (const p of [f.viewer, f.guest, subOnly, teamMember]) expect(await teamRows(p)).toEqual([])
+    const everyone = [f.admin, f.user, f.viewer, f.guest, subOnly, teamMember]
+    expect(await stored()).toEqual(history)
+    for (const p of everyone) expect(await teamRows(p)).toEqual([])
 
     await as(t, f.admin).mutation(api.teams.deleteDeep, { org_id: f.org.id, id: f.team.id })
-    expect(await teamRows(f.admin)).toEqual(history)
-    for (const p of [f.user, f.viewer, f.guest, subOnly, teamMember]) {
-      expect(await teamRows(p)).toEqual([])
-    }
+    expect(await stored()).toEqual(history)
+    for (const p of everyone) expect(await teamRows(p)).toEqual([])
   })
 
-  it('sub-project-only members receive no history of the parent, its other sub-projects or deleted projects', async () => {
+  it('project history reaches no snapshot, and a deleted project task reaches admins only', async () => {
     const subOnly = await seatOn(f.sub.id)
     const subGuest = await seatOn(f.sub.id, 'guest')
     const writer = as(t, f.user)
@@ -1271,17 +1292,9 @@ describe('activity', () => {
       (await snapFor(p)).activity
         .map((a) => `${a.verb} ${a.label}${a.detail ? ` ${a.detail}` : ''}`)
         .sort()
-    const parentHistory = [
-      'archived Testbed platform with 1 sub-project',
-      'deleted Board rev',
-      'restored Testbed platform from the archive',
-    ]
-    for (const p of [subOnly, subGuest]) expect(await rows(p)).toEqual([])
-    // f.guest holds a grant on f.meta, so it could see every sub-project
-    expect(await rows(f.guest)).toEqual(parentHistory)
-    expect(await rows(f.admin)).toEqual(
-      [...parentHistory, 'created Sibling task', 'deleted Skunkworks'].sort(),
-    )
+    // f.guest holds a grant on f.meta, so it sees every sub-project
+    for (const p of [subOnly, subGuest, f.guest]) expect(await rows(p)).toEqual([])
+    expect(await rows(f.admin)).toEqual(['created Sibling task'])
   })
 
   it("a moved task's history reaches only people who can access both ends of each move", async () => {
@@ -1297,10 +1310,7 @@ describe('activity', () => {
       title: 'Travelling task',
     })
     const taskRows = async (p: Doc<'profiles'>) =>
-      (await snapFor(p)).activity
-        .filter((a) => a.target_id === taskId)
-        .map((a) => `${a.verb}${a.detail ? ` ${a.detail}` : ''}`)
-        .sort()
+      (await historyOf(p, taskId)).map((a) => `${a.verb}${a.detail ? ` ${a.detail}` : ''}`).sort()
     const created = 'created'
     const there = 'moved to the Board rev sub-project (from Firmware)'
     const back = 'moved to the Firmware sub-project (from Board rev)'
@@ -1338,10 +1348,7 @@ describe('activity', () => {
       project_id: f.sub.id,
     })
     const taskRows = async (p: Doc<'profiles'>) =>
-      (await snapFor(p)).activity
-        .filter((a) => a.target_id === taskId)
-        .map((a) => a.verb)
-        .sort()
+      (await historyOf(p, taskId)).map((a) => a.verb).sort()
     expect(await taskRows(destinationOnly)).toEqual([])
 
     await as(t, f.user).mutation(api.projects.deleteDeep, { org_id: f.org.id, id: f.sub2.id })
@@ -1417,11 +1424,7 @@ describe('activity', () => {
       H: `moved under ${key(sameParent)} (from ${key(hiddenParent)})`,
     }
     const seenRows = async (p: Doc<'profiles'>) => {
-      const mine = new Set(
-        (await snapFor(p)).activity
-          .filter((a) => a.target_id === child.id)
-          .map((a) => `${a.verb} ${a.detail}`),
-      )
+      const mine = new Set((await historyOf(p, child.id)).map((a) => `${a.verb} ${a.detail}`))
       return Object.entries(rowsAbout)
         .filter(([, row]) => mine.has(row))
         .map(([name]) => name)
@@ -1443,7 +1446,7 @@ describe('activity', () => {
     expect(await seenRows(f.admin)).toEqual(all)
   })
 
-  it('task rows with unknown relation wording and agent key rows reach admins only', async () => {
+  it('task rows with unknown relation wording reach admins only, and agent key rows no one', async () => {
     const ids = await t.run(async (ctx) => {
       const rows = {
         unknownLink: ev({
@@ -1471,7 +1474,7 @@ describe('activity', () => {
       for (const row of Object.values(rows)) await ctx.db.insert('activity_events', row)
       return Object.fromEntries(Object.entries(rows).map(([k, row]) => [k, row.id]))
     })
-    expect(await seen(f.admin)).toEqual(Object.values(ids).sort())
+    expect(await seen(f.admin)).toEqual([ids.unknownLink, ids.missingTask, ids.renamed].sort())
     for (const p of [f.user, f.guest]) expect(await seen(p)).toEqual([ids.renamed])
   })
 
@@ -1509,6 +1512,8 @@ describe('activity', () => {
     expect(await seen(member)).toEqual(
       [ids.oldLink, ids.newLink, ids.oldDetach, ids.newDetach].map((r) => r.id).sort(),
     )
+    // the task window agrees
+    for (const p of [f.admin, member]) await historyOf(p, issueVis.id)
   })
 
   it('older task archive rows lose their subtask count for members, not admins', async () => {
@@ -1545,16 +1550,12 @@ describe('activity', () => {
     })
     const details = async (p: Doc<'profiles'>) =>
       (await snapFor(p)).activity.map((a) => `${a.verb}|${a.detail ?? ''}`).sort()
+    // the project archive row reaches no snapshot
     expect(await details(f.admin)).toEqual(
-      [
-        'archived|with 1 sub-project',
-        'archived|with 1 subtask',
-        'archived|with 3 subtasks',
-        'moved|with 3 subtasks',
-      ].sort(),
+      ['archived|with 1 subtask', 'archived|with 3 subtasks', 'moved|with 3 subtasks'].sort(),
     )
     expect(await details(f.guest)).toEqual(
-      ['archived|', 'archived|', 'archived|with 1 sub-project', 'moved|with 3 subtasks'].sort(),
+      ['archived|', 'archived|', 'moved|with 3 subtasks'].sort(),
     )
   })
 
@@ -1932,4 +1933,405 @@ describe('commentsForIssue', () => {
       'forbidden',
     )
   })
+})
+
+/* The task window's history arrives with its comments (commentThread
+ * events), by the rule the snapshot's activity and REST and MCP follow. */
+describe('commentThread events', () => {
+  /* A seat with User on each of `projectIds`. */
+  const seatOn = async (...projectIds: string[]) => {
+    const seat = await plantSeat(t, {
+      org_id: f.org.id,
+      auth_user_id: `seat_${uuid()}`,
+      email: `${uuid()}@testbed.test`,
+    })
+    await t.run(async (ctx) => {
+      for (const project_id of projectIds)
+        await ctx.db.insert('project_access', { project_id, profile_id: seat.id, level: 'user' })
+    })
+    return seat
+  }
+  const thread = (p: Doc<'profiles'>, issue_id: string) =>
+    as(t, p).query(api.snapshot.commentThread, { org_id: f.org.id, issue_id })
+  const events = async (p: Doc<'profiles'>, issue_id: string) =>
+    (await thread(p, issue_id)).events.map((e) => e.id)
+  const rest = async (p: Doc<'profiles'>, issue_id: string) =>
+    (
+      await t.query(internal.machine.records.restTaskActivity, {
+        callerId: p.id,
+        access: 'read',
+        ref: issue_id,
+      })
+    ).map((row) => row.id)
+  const mcp = async (p: Doc<'profiles'>, issue_id: string) =>
+    (
+      JSON.parse(
+        await t.query(internal.machine.records.mcpTaskActivity, {
+          callerId: p.id,
+          access: 'read',
+          ref: issue_id,
+        }),
+      ) as { id: string }[]
+    ).map((row) => row.id)
+  const ev = (extra: Partial<WithoutSystemFields<Doc<'activity_events'>>>) => ({
+    id: uuid(),
+    org_id: f.org.id,
+    ts: NOW,
+    actor_id: f.admin.id,
+    verb: 'changed',
+    target_type: 'issue' as const,
+    target_id: issueVis.id,
+    label: 'x',
+    project_id: f.sub.id,
+    ...extra,
+  })
+  /* Raw rows, one second apart in this order, standing for rows stored
+   * before numbering. */
+  const plantRows = (rows: ReturnType<typeof ev>[]) =>
+    t.run(async (ctx) => {
+      const base = Date.parse(NOW)
+      for (const [i, row] of rows.entries())
+        await ctx.db.insert('activity_events', {
+          ...row,
+          ts: new Date(base + i * 1000).toISOString(),
+        })
+      return rows.map((row) => row.id)
+    })
+
+  it('gives every seat the rows its snapshot holds for the task', async () => {
+    const writer = as(t, f.admin)
+    const create = async (project_id: string, title: string) => {
+      const id = uuid()
+      await writer.mutation(api.issues.create, { org_id: f.org.id, id, project_id, title })
+      return id
+    }
+    const update = (id: string, patch: Record<string, unknown>) =>
+      writer.mutation(api.issues.update, { org_id: f.org.id, id, patch })
+    const move = (id: string, project_id: string) =>
+      writer.mutation(api.issues.move, { org_id: f.org.id, id, project_id })
+    const link = (source_id: string, target_id: string) =>
+      writer.mutation(api.issues.addLink, {
+        org_id: f.org.id,
+        id: uuid(),
+        source_id,
+        target_id,
+        type: 'blocks',
+      })
+    const inSkunk = await create(hiddenSub.id, 'Skunk task')
+    const inBoard = await create(f.sub2.id, 'Board task')
+    const parent = await create(f.sub.id, 'Parent')
+    // stays in Firmware: links to tasks some seats cannot read, and a parent
+    const t1 = await create(f.sub.id, 'Stays')
+    await update(t1, { status: 'progress' })
+    await link(t1, inSkunk)
+    await link(t1, inBoard)
+    await update(t1, { parent_id: parent })
+    // from Board rev to Firmware, and from Firmware to Board rev
+    const t2 = await create(f.sub2.id, 'Comes over')
+    await move(t2, f.sub.id)
+    await update(t2, { priority: 'high' })
+    const t3 = await create(f.sub.id, 'Goes over')
+    await move(t3, f.sub2.id)
+    await update(t3, { priority: 'high' })
+    // from a project only admins see
+    const t4 = await create(hidden2Sub.id, 'Surfaces')
+    await move(t4, f.sub.id)
+    await update(t4, { priority: 'high' })
+    const tasks = [t1, t2, t3, t4]
+    const seats = [
+      f.admin,
+      f.user,
+      f.guest,
+      f.viewer,
+      await seatOn(f.sub.id),
+      await seatOn(f.sub2.id),
+      await seatOn(f.sub.id, f.sub2.id),
+    ]
+    const everyRow = new Set(
+      (await snapFor(f.admin)).activity.filter((a) => tasks.includes(a.target_id)).map((a) => a.id),
+    )
+    for (const seat of seats) {
+      const snap = await snapFor(seat)
+      const shown = new Set(snap.issues.map((i) => i.id))
+      const received: string[] = []
+      for (const task of tasks.filter((id) => shown.has(id))) {
+        const expected = snap.activity
+          .filter((a) => a.target_id === task)
+          .map((a) => a.id)
+          .sort()
+        expect((await events(seat, task)).sort()).toEqual(expected)
+        received.push(...expected)
+      }
+      expect(received.length).toBeGreaterThan(0)
+      if (seat !== f.admin) expect(received.length).toBeLessThan(everyRow.size)
+    }
+  })
+
+  it('sends no history for an archived task or a task in an archived project, which REST and MCP still answer', async () => {
+    const archived = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      archived_at: NOW,
+    })
+    const archivedProject = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.meta.id,
+      archived_at: NOW,
+    })
+    const inArchived = await plantIssue(t, { org_id: f.org.id, project_id: archivedProject.id })
+    for (const task of [archived, inArchived]) {
+      await plantRows([ev({ target_id: task.id, project_id: task.project_id })])
+      await t.run((ctx) =>
+        ctx.db.insert('comments', {
+          id: uuid(),
+          issue_id: task.id,
+          author: f.user.id,
+          body: 'still here',
+          created_at: NOW,
+        }),
+      )
+      for (const p of [f.admin, f.guest]) {
+        const page = await thread(p, task.id)
+        expect(page.comments.map((c) => c.body)).toEqual(['still here'])
+        expect(page.events).toEqual([])
+        expect(await rest(p, task.id)).toHaveLength(1)
+        expect(await mcp(p, task.id)).toHaveLength(1)
+      }
+    }
+  })
+
+  it('gives admins every row and members the rows the rule allows, without legacy counts', async () => {
+    const ids = await plantRows([
+      ev({ verb: 'created' }),
+      ev({ verb: 'moved', detail: 'to the Firmware sub-project (from Secret)' }),
+      ev({ verb: 'archived', detail: 'with 3 subtasks' }),
+      // filed under the parent, which the sub-only seat sees for navigation only
+      ev({ verb: 'changed', project_id: f.meta.id }),
+      // filed under a project deleted later, which cleared project_id
+      ev({ verb: 'changed', project_id: undefined }),
+      // a move whose other end is a project the guest cannot access
+      ev({
+        verb: 'moved',
+        related_project_id: hiddenSub.id,
+        detail: 'to the Firmware sub-project',
+      }),
+    ])
+    const admin = (await thread(f.admin, issueVis.id)).events
+    expect(admin.map((e) => e.id)).toEqual(ids)
+    expect(admin[2].detail).toBe('with 3 subtasks')
+    const guest = (await thread(f.guest, issueVis.id)).events
+    expect(guest.map((e) => e.id)).toEqual([ids[0], ids[2], ids[3], ids[4]])
+    expect(guest[1]).not.toHaveProperty('detail')
+    const subOnly = await seatOn(f.sub.id)
+    const page = await thread(subOnly, issueVis.id)
+    expect(page.events.map((e) => e.id)).toEqual([ids[0], ids[2], ids[4]])
+    expect(await rest(subOnly, issueVis.id)).toEqual([ids[0], ids[2], ids[4]])
+  })
+
+  it('shows a move row only to seats that can access both ends', async () => {
+    const taskId = uuid()
+    const writer = as(t, f.user)
+    await writer.mutation(api.issues.create, {
+      org_id: f.org.id,
+      id: taskId,
+      project_id: f.sub2.id,
+      title: 'Travelling task',
+    })
+    await writer.mutation(api.issues.move, { org_id: f.org.id, id: taskId, project_id: f.sub.id })
+    const verbs = async (p: Doc<'profiles'>) => (await thread(p, taskId)).events.map((e) => e.verb)
+    expect(await verbs(f.guest)).toEqual(['created', 'moved'])
+    expect(await verbs(await seatOn(f.sub.id, f.sub2.id))).toEqual(['created', 'moved'])
+    // the destination alone: the move names Board rev, and created was filed there
+    expect(await verbs(await seatOn(f.sub.id))).toEqual([])
+    // revoking the source drops the move row on the next read
+    const both = await seatOn(f.sub.id, f.sub2.id)
+    expect(await verbs(both)).toEqual(['created', 'moved'])
+    await t.run(async (ctx) => {
+      const grant = await ctx.db
+        .query('project_access')
+        .withIndex('by_project_profile', (q) =>
+          q.eq('project_id', f.sub2.id).eq('profile_id', both.id),
+        )
+        .unique()
+      if (grant !== null) await ctx.db.delete(grant._id)
+    })
+    expect(await verbs(both)).toEqual([])
+    // the task's own project: the thread answers as for an unknown task
+    await t.run(async (ctx) => {
+      const grant = await ctx.db
+        .query('project_access')
+        .withIndex('by_project_profile', (q) =>
+          q.eq('project_id', f.sub.id).eq('profile_id', both.id),
+        )
+        .unique()
+      if (grant !== null) await ctx.db.delete(grant._id)
+    })
+    const refusal = await expectRefusal(thread(both, taskId), 'not_found')
+    expect((refusal.data as { message: string }).message).toBe('task not found')
+  })
+
+  it('holds only rows about this task in this organization', async () => {
+    const ids = await plantRows([
+      ev({ verb: 'created' }),
+      // the same target id in another organization, and a non-task row with it
+      ev({ org_id: f.otherOrg.id, project_id: f.otherProject.id }),
+      ev({ target_type: 'project', project_id: f.sub.id }),
+      ev({ target_type: 'user', project_id: undefined }),
+    ])
+    for (const p of [f.admin, f.guest]) expect(await events(p, issueVis.id)).toEqual([ids[0]])
+    // no snapshot carries a non-task row, an admin's included
+    for (const p of [f.admin, f.guest])
+      expect((await snapFor(p)).activity.map((a) => a.id)).toEqual([ids[0]])
+  })
+
+  it("keeps a task's newest 500 rows whatever other tasks and organizations write", async () => {
+    const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // the admin's seat in the other organization
+    await plantSeat(t, {
+      org_id: f.otherOrg.id,
+      auth_user_id: f.admin.auth_user_id,
+      email: f.admin.email,
+      org_role: 'admin',
+    })
+    const base = Date.parse(NOW)
+    const entry = (target: string, org_id: string, i: number) => ({
+      org_id,
+      actor_id: f.admin.id,
+      verb: 'changed',
+      target_type: 'issue' as const,
+      target_id: target,
+      label: 'x',
+      ts: new Date(base + i * 1000).toISOString(),
+      project_id: org_id === f.org.id ? f.sub.id : f.otherProject.id,
+      named_task_nums: [],
+    })
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 600; i++) await insertActivity(ctx, entry(issueVis.id, f.org.id, i))
+      // newer rows about another task and in the other organization
+      for (let i = 0; i < 300; i++) {
+        await insertActivity(ctx, entry(other.id, f.org.id, 1_000 + i))
+        await insertActivity(ctx, entry(uuid(), f.otherOrg.id, 1_000 + i))
+      }
+    })
+    const page = await thread(f.admin, issueVis.id)
+    expect(page.events).toHaveLength(500)
+    expect(page.events.map((e) => e.seq)).toEqual(Array.from({ length: 500 }, (_, i) => i + 101))
+    expect(await rest(f.admin, issueVis.id)).toEqual(page.events.map((e) => e.id))
+  })
+})
+
+describe('commentThread events near the read limits', () => {
+  it("stops looking up named tasks before Convex's limits and leaves their rows out", async () => {
+    const big = newT({ transactionLimits: true })
+    const g = await withOrg(big)
+    const task = await plantIssue(big, { org_id: g.org.id, project_id: g.sub.id })
+    // 40 tasks of about 500 KB each, more than one read may hold, 20 to a write
+    const named: Doc<'issues'>[] = []
+    for (let from = 0; from < 40; from += 20)
+      named.push(
+        ...(await big.run(async (ctx) => {
+          const out: Doc<'issues'>[] = []
+          for (let i = from; i < from + 20; i++) {
+            const _id = await ctx.db.insert('issues', {
+              id: uuid(),
+              org_id: g.org.id,
+              project_id: g.sub2.id,
+              num: 5_000 + i,
+              title: `Long ${i}`,
+              description: 'd'.repeat(500_000),
+              status: 'todo',
+              priority: 'medium',
+              paused: false,
+              created_at: NOW,
+              updated_at: NOW,
+            })
+            out.push((await ctx.db.get(_id)) as Doc<'issues'>)
+          }
+          return out
+        })),
+      )
+    // the task's rows, numbered: a link to each long task, and after every
+    // tenth a row that names none
+    const rows = await big.run(async (ctx) => {
+      const base = Date.parse(NOW)
+      const out: { id: string; names: boolean }[] = []
+      let seq = 0
+      const add = async (names?: Doc<'issues'>) => {
+        const id = uuid()
+        seq++
+        await ctx.db.insert('activity_events', {
+          id,
+          org_id: g.org.id,
+          ts: new Date(base + seq * 1000).toISOString(),
+          actor_id: g.user.id,
+          verb: names === undefined ? 'changed' : 'linked',
+          target_type: 'issue',
+          target_id: task.id,
+          label: task.title,
+          detail: names === undefined ? undefined : `(blocks QN-${names.num})`,
+          project_id: g.sub.id,
+          seq,
+          named_task_nums: names === undefined ? [] : [names.num],
+        })
+        out.push({ id, names: names !== undefined })
+      }
+      for (const [i, other] of named.entries()) {
+        await add(other)
+        if (i % 10 === 9) await add()
+      }
+      return out
+    })
+    // a comment page near COMMENT_PAGE_BYTES, about 1 MB a comment
+    await big.run(async (ctx) => {
+      for (let i = 0; i < 8; i++)
+        await ctx.db.insert('comments', {
+          id: uuid(),
+          issue_id: task.id,
+          author: g.user.id,
+          body: 'c'.repeat(1_000_000),
+          created_at: new Date(Date.parse(NOW) + i).toISOString(),
+        })
+    })
+    const plain = rows.filter((row) => !row.names).map((row) => row.id)
+    /* The ids `got` holds: some leading link rows and every plain row. */
+    const fits = (got: string[]) => {
+      const links = got.filter((id) => !plain.includes(id))
+      const allLinks = rows.filter((row) => row.names).map((row) => row.id)
+      expect(links).toEqual(allLinks.slice(0, links.length))
+      expect(links.length).toBeGreaterThan(0)
+      expect(links.length).toBeLessThan(allLinks.length)
+      expect(got.filter((id) => plain.includes(id))).toEqual(plain)
+      return links.length
+    }
+    const page = await as(big, g.guest).query(api.snapshot.commentThread, {
+      org_id: g.org.id,
+      issue_id: task.id,
+    })
+    expect(page.comments).toHaveLength(8)
+    const inThread = fits(page.events.map((e) => e.id))
+    const overRest = await big.query(internal.machine.records.restTaskActivity, {
+      callerId: g.guest.id,
+      access: 'read',
+      ref: task.id,
+    })
+    const inRest = fits(overRest.map((row) => row.id))
+    // without the comments, REST has room for more lookups
+    expect(inRest).toBeGreaterThan(inThread)
+    const overMcp = JSON.parse(
+      await big.query(internal.machine.records.mcpTaskActivity, {
+        callerId: g.guest.id,
+        access: 'read',
+        ref: task.id,
+      }),
+    ) as { id: string }[]
+    expect(overMcp.map((row) => row.id)).toEqual(overRest.map((row) => row.id))
+    // admins look up no named task, so they receive every row
+    const admin = await big.query(internal.machine.records.restTaskActivity, {
+      callerId: g.admin.id,
+      access: 'read',
+      ref: task.id,
+    })
+    expect(admin.map((row) => row.id)).toEqual(rows.map((row) => row.id))
+  }, 120_000)
 })

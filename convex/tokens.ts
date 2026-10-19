@@ -12,9 +12,10 @@
  * MCP tokens are created, listed and deleted by their owner here. An
  * organization admin can also list every member's tokens and revoke them on
  * API access (apiAccess.ts), which marks the row revoked_by_admin and
- * narrates to admins only. Narration is equally split (T8): agent key
- * create/revoke narrate against the AGENT profile ("what happened to this
- * user"); the owner's own token churn here never narrates.
+ * narrates for admins only, who read it in the organization export.
+ * Narration is equally split (T8): agent key create/revoke narrate against
+ * the AGENT profile ("what happened to this user"); the owner's own token
+ * churn here never narrates.
  *
  * A personal token also carries its access ('read' or 'write', chosen at
  * creation; a row without one can only read) and an optional expiry, after

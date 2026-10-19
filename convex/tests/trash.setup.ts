@@ -24,7 +24,7 @@ import {
   SIGHT_READ,
   TRASH_BUDGET,
 } from '../model/deletedItems'
-import { as, NOW, type OrgFixture, type T, uuid } from './helpers.setup'
+import { as, NOW, type OrgFixture, plantActivity, type T, uuid } from './helpers.setup'
 
 declare class Blob {
   constructor(parts: string[])
@@ -115,6 +115,66 @@ export const storedIssue = async (t: T, id: string) => {
   return row?.row.table === 'issues' ? row.row.doc : undefined
 }
 export const liveTask = (t: T, id: string) => t.run((ctx) => byId(ctx, 'issues', id))
+
+/** `numbered` activity rows about `task` written as the app writes them
+ * (plantActivity), then `legacy` rows inserted raw, filed under the task's
+ * project at NOW. */
+export async function plantHistory(
+  t: T,
+  task: Doc<'issues'>,
+  { numbered, legacy = 0 }: { numbered: number; legacy?: number },
+): Promise<void> {
+  const row = {
+    org_id: task.org_id,
+    actor_id: undefined,
+    verb: 'updated',
+    target_id: task.id,
+    label: task.title,
+    ts: NOW,
+    project_id: task.project_id,
+  }
+  await plantActivity(
+    t,
+    ...Array.from({ length: numbered }, (_, i) => ({
+      ...row,
+      target_type: 'issue' as const,
+      detail: `(remaining unset → ${i + 1} h)`,
+      named_task_nums: [],
+    })),
+  )
+  await t.run(async (ctx) => {
+    for (let i = 0; i < legacy; i++)
+      // a row stored before numbering, so it has no seq
+      await ctx.db.insert('activity_events', { ...row, id: uuid(), target_type: 'issue' })
+  })
+}
+
+/** The activity rows about task `taskId`, legacy rows included, in the
+ * order they were written. */
+export const historyOf = (t: T, taskId: string) =>
+  t.run(async (ctx) =>
+    (await ctx.db.query('activity_events').collect()).filter(
+      (e) => e.target_type === 'issue' && e.target_id === taskId,
+    ),
+  )
+
+/** Throws unless every task activity row names a live task or a task that
+ * Deleted items stores (deleted_tasks), so no purge left history behind.
+ * For purge tests only: deleteIssueDeep keeps a task's rows by design. */
+export async function assertNoOrphanHistory(t: T, label: string): Promise<void> {
+  await t.run(async (ctx) => {
+    const tasks = new Set((await ctx.db.query('issues').collect()).map((i) => i.id))
+    for (const stored of await ctx.db.query('deleted_tasks').collect()) tasks.add(stored.task_id)
+    const orphans = (await ctx.db.query('activity_events').collect()).filter(
+      (e) => e.target_type === 'issue' && !tasks.has(e.target_id),
+    )
+    if (orphans.length > 0)
+      throw new Error(
+        `${label}: activity rows name tasks that are gone (${[...new Set(orphans.map((e) => e.target_id))].join(', ')})`,
+      )
+  })
+}
+
 /** A whole comment count of `count` for `task`, as posts leave one
  * (model/commentCounts.ts). */
 export const plantCount = (t: T, task: Doc<'issues'>, count = 1) =>

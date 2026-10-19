@@ -54,6 +54,7 @@ import {
 } from './helpers.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 import {
+  assertNoOrphanHistory,
   attach,
   blobExists,
   comment,
@@ -64,12 +65,14 @@ import {
   deleteTask,
   expectedRow,
   HOUR,
+  historyOf,
   installTrashTimers,
   itemById,
   itemFor,
   jobFor,
   liveTask,
   plantCount,
+  plantHistory,
   plantRows,
   runSteps,
   START,
@@ -1010,7 +1013,7 @@ describe('bytes in Deleted items', () => {
 })
 
 describe('purging', () => {
-  it('deletes every stored row with its bytes in bounded steps, then the item', async () => {
+  it('deletes every stored row with its bytes and the history in bounded steps, then the item', async () => {
     const t = newT()
     const f = await withOrg(t)
     const org_id = f.org.id
@@ -1019,9 +1022,14 @@ describe('purging', () => {
     const from = await plantIssue(t, { org_id, project_id: f.sub2.id })
     const planted = await plantRows(t, f, task, { to, from })
     for (let i = 0; i < 5; i++) await comment(t, task)
+    await plantHistory(t, task, { numbered: 5, legacy: 2 })
+    await plantHistory(t, to, { numbered: 2 })
     await deleteTask(t, f, task.id)
     const item = await itemFor(t, task.id)
     const rows = (await storedRows(t, item.id)).length
+    // the planted rows and the delete's own
+    const history = (await historyOf(t, task.id)).length
+    expect(history).toBe(8)
 
     TRASH_BUDGET.rows = 2
     await t.run(async (ctx) => startPurge(ctx, (await byId(ctx, 'deleted_items', item.id))!))
@@ -1032,7 +1040,9 @@ describe('purging', () => {
       steps++
       expect(steps).toBeLessThan(50)
     }
-    expect(steps).toBeGreaterThanOrEqual(Math.ceil(rows / 2))
+    expect(await historyOf(t, task.id)).toEqual([])
+    // each history row costs the budget a row
+    expect(steps).toBeGreaterThanOrEqual(Math.ceil((rows + history) / 2))
     expect(await itemById(t, item.id)).toBeNull()
     expect(await storedRows(t, item.id)).toEqual([])
     expect(await storedTasks(t, item.id)).toEqual([])
@@ -1041,7 +1051,51 @@ describe('purging', () => {
       expect(await byId(ctx, 'labels', planted.labelId)).not.toBeNull()
       expect(await byId(ctx, 'issues', to.id)).not.toBeNull()
     })
+    // another task keeps its history
+    expect(await historyOf(t, to.id)).toHaveLength(2)
     await assertNoDanglingRefs(t, 'after a purge')
+    await assertNoOrphanHistory(t, 'after a purge')
+  })
+
+  it("keeps a purged task's uuid taken until its history is gone", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await plantHistory(t, task, { numbered: 2, legacy: 1 })
+    await deleteTask(t, f, task.id)
+    const item = await itemFor(t, task.id)
+    const history = (await historyOf(t, task.id)).length
+    const create = () =>
+      as(t, f.user).mutation(api.issues.create, {
+        org_id: f.org.id,
+        id: task.id,
+        project_id: f.sub.id,
+        title: 'Squatter',
+      })
+
+    TRASH_BUDGET.rows = 1
+    await t.run(async (ctx) => startPurge(ctx, (await byId(ctx, 'deleted_items', item.id))!))
+    // up to the first step that deletes a history row
+    for (let steps = 0; (await historyOf(t, task.id)).length === history; steps++) {
+      expect(await jobFor(t, item.id)).not.toBeNull()
+      expect(steps).toBeLessThan(10)
+      await step(t, item.id)
+    }
+    expect(await historyOf(t, task.id)).toHaveLength(history - 1)
+    // the stored task row still holds the id, so a new task cannot take it
+    // and lose its own rows to the rest of the drain
+    expect(await storedIssue(t, task.id)).toBeDefined()
+    await expectRefusal(create(), 'bad_request', /^a task with this id already exists$/)
+
+    for (let steps = 0; (await jobFor(t, item.id)) !== null; steps++) {
+      expect(steps).toBeLessThan(20)
+      await step(t, item.id)
+    }
+    expect(await itemById(t, item.id)).toBeNull()
+    expect(await historyOf(t, task.id)).toEqual([])
+    await assertNoOrphanHistory(t, 'after a purge one row at a time')
+    // then the id is free
+    await create()
   })
 
   it('purges a project item with the items that need it to come back, and clears its activity', async () => {
@@ -1056,6 +1110,12 @@ describe('purging', () => {
     await deleteTask(t, f, elsewhere.id)
     const kept = await plantIssue(t, { org_id, project_id: f.sub2.id })
     const keptFile = await attach(t, kept)
+    const own = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await plantHistory(t, own, { numbered: 2, legacy: 1 })
+    // a task with rows filed under Firmware that moved to Skunkworks since
+    const movedOut = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await plantHistory(t, movedOut, { numbered: 1, legacy: 1 })
+    await t.run((ctx) => ctx.db.patch(movedOut._id, { project_id: f.hidden.id }))
     // a sub-project deleted before its parent is an item of its own
     await deleteProject(t, f, f.sub2.id)
     const subItem = await itemFor(t, f.sub2.id)
@@ -1066,8 +1126,9 @@ describe('purging', () => {
       t.run(async (ctx) =>
         (await ctx.db.query('activity_events').collect()).filter((e) => e.project_id === f.sub.id),
       )
-    // the activity keeps the trashed project's id until the purge
-    expect(await filedUnder()).toHaveLength(1)
+    // the activity keeps the trashed project's id until the purge: the
+    // early task's delete, the item's own task and the task that moved out
+    expect(await filedUnder()).toHaveLength(1 + 3 + 2)
     await assertNoDanglingRefs(t, 'while a project is in Deleted items')
 
     await t.run(async (ctx) => startPurge(ctx, (await byId(ctx, 'deleted_items', item.id))!))
@@ -1081,9 +1142,59 @@ describe('purging', () => {
     expect(await blobExists(t, keptFile.storage_id)).toBe(false)
     // a task item from another project stays
     expect((await itemFor(t, elsewhere.id)).state).toBe('ready')
+    // the history of the tasks purged with it goes; the task that moved out
+    // keeps its rows without the project
+    expect(await historyOf(t, own.id)).toEqual([])
+    expect(await historyOf(t, early.id)).toEqual([])
+    expect((await historyOf(t, movedOut.id)).map((e) => e.project_id)).toEqual([
+      undefined,
+      undefined,
+    ])
     expect(await filedUnder()).toEqual([])
     expect(await t.run((ctx) => ctx.db.query('deleted_rows').collect())).toHaveLength(1)
     await assertNoDanglingRefs(t, 'after a project purge')
+    await assertNoOrphanHistory(t, 'after a project purge')
+  })
+
+  it('clears the project from every row filed under it, past 500, over several steps', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    // three tasks with 400 rows each from before numbering, filed under
+    // Firmware, that moved to Skunkworks since
+    const movedOut: Doc<'issues'>[] = []
+    for (let i = 0; i < 3; i++) {
+      const task = await plantIssue(t, { org_id, project_id: f.sub.id })
+      await plantHistory(t, task, { numbered: 0, legacy: 400 })
+      await t.run((ctx) => ctx.db.patch(task._id, { project_id: f.hidden.id }))
+      movedOut.push(task)
+    }
+    const elsewhere = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    await plantHistory(t, elsewhere, { numbered: 2 })
+    await deleteProject(t, f, f.sub.id)
+    const item = await itemFor(t, f.sub.id)
+    expect(item.state).toBe('ready')
+
+    await t.run(async (ctx) => startPurge(ctx, (await byId(ctx, 'deleted_items', item.id))!))
+    let steps = 0
+    while ((await jobFor(t, item.id)) !== null) {
+      await step(t, item.id)
+      steps++
+      expect(steps).toBeLessThan(20)
+    }
+    expect(await itemById(t, item.id)).toBeNull()
+    const kept = (await Promise.all(movedOut.map((task) => historyOf(t, task.id)))).flat()
+    expect(kept).toHaveLength(1200)
+    expect(kept.filter((e) => e.project_id !== undefined)).toHaveLength(0)
+    // 300 rows a step
+    expect(steps).toBeGreaterThanOrEqual(4)
+    // a row filed under a project the item does not hold keeps it
+    expect((await historyOf(t, elsewhere.id)).map((e) => e.project_id)).toEqual([
+      f.sub2.id,
+      f.sub2.id,
+    ])
+    await assertNoDanglingRefs(t, 'after a purge cleared 1,200 rows')
+    await assertNoOrphanHistory(t, 'after a purge cleared 1,200 rows')
   })
 
   it('purges a project item that 20,000 items in other states name, in bounded steps within the real limits', async () => {
@@ -1166,7 +1277,9 @@ describe('purging', () => {
     const stranded = await plantIssue(t, { org_id, project_id: f.sub2.id })
     const strandedFile = await attach(t, stranded)
     await comment(t, stranded)
+    await plantHistory(t, stranded, { numbered: 2, legacy: 1 })
     const child = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: stranded.id })
+    await plantHistory(t, child, { numbered: 1 })
     for (let i = 0; i < 3; i++) await plantIssue(t, { org_id, project_id: f.sub2.id })
     Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
     await deleteProject(t, f, f.sub2.id)
@@ -1201,8 +1314,123 @@ describe('purging', () => {
       expect(await ctx.db.query('deleted_rows').collect()).toEqual([])
     })
     expect(await blobExists(t, strandedFile.storage_id)).toBe(false)
+    expect(await historyOf(t, stranded.id)).toEqual([])
     expect((await liveTask(t, child.id))?.parent_id).toBeUndefined()
+    // the detached child keeps its own history
+    expect(await historyOf(t, child.id)).toHaveLength(1)
     await assertNoDanglingRefs(t, 'after a stuck item was purged')
+    await assertNoOrphanHistory(t, 'after a stuck item was purged')
+  })
+
+  it('drains the history of a purge that the release before left at purge_rows', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const task = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await plantHistory(t, task, { numbered: 3, legacy: 2 })
+    const other = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await plantHistory(t, other, { numbered: 1 })
+    await deleteTask(t, f, task.id)
+    const item = await itemFor(t, task.id)
+    await t.run(async (ctx) => {
+      await startPurge(ctx, item)
+      // a job saved by the release before, past purge_live
+      const job = await ctx.db
+        .query('deleted_item_jobs')
+        .withIndex('by_item', (q) => q.eq('item_id', item.id))
+        .unique()
+      if (job === null) throw new Error('the purge saved no job')
+      await ctx.db.patch(job._id, { phase: 'purge_rows' })
+    })
+    expect(await storedTasks(t, item.id)).toHaveLength(1)
+
+    await step(t, item.id)
+    expect(await historyOf(t, task.id)).toEqual([])
+    expect(await itemById(t, item.id)).toBeNull()
+    expect(await historyOf(t, other.id)).toHaveLength(1)
+    await assertNoOrphanHistory(t, 'after a purge resumed at purge_rows')
+  })
+
+  it("keeps a new task's history when the release before already freed its id", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const task = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await plantHistory(t, task, { numbered: 2 })
+    await deleteTask(t, f, task.id)
+    const item = await itemFor(t, task.id)
+    await t.run(async (ctx) => {
+      await startPurge(ctx, item)
+      const job = await ctx.db
+        .query('deleted_item_jobs')
+        .withIndex('by_item', (q) => q.eq('item_id', item.id))
+        .unique()
+      if (job === null) throw new Error('the purge saved no job')
+      await ctx.db.patch(job._id, { phase: 'purge_rows' })
+      // the release before deleted the stored task row before its marker
+      const stored = await ctx.db
+        .query('deleted_rows')
+        .withIndex('by_row', (q) => q.eq('table', 'issues').eq('row_id', task.id))
+        .unique()
+      if (stored === null) throw new Error('the task was not stored')
+      await ctx.db.delete(stored._id)
+    })
+    // so a client can take the id again, later
+    vi.setSystemTime(Date.now() + HOUR)
+    await as(t, f.user).mutation(api.issues.create, {
+      org_id,
+      id: task.id,
+      project_id: f.sub.id,
+      title: 'Same id, new task',
+    })
+    const before = await historyOf(t, task.id)
+    expect(before.map((e) => e.verb)).toEqual(['updated', 'updated', 'deleted', 'created'])
+
+    while ((await jobFor(t, item.id)) !== null) await step(t, item.id)
+    expect(await itemById(t, item.id)).toBeNull()
+    // the deleted task's rows go, written up to its deletion; the new task's stay
+    expect(await historyOf(t, task.id)).toEqual(before.slice(3))
+    expect(await liveTask(t, task.id)).not.toBeNull()
+  })
+
+  it('keeps the history of a new task with a freed id that sits in Deleted items itself', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const task = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await plantHistory(t, task, { numbered: 2 })
+    await deleteTask(t, f, task.id)
+    const item = await itemFor(t, task.id)
+    await t.run(async (ctx) => {
+      await startPurge(ctx, item)
+      const job = await ctx.db
+        .query('deleted_item_jobs')
+        .withIndex('by_item', (q) => q.eq('item_id', item.id))
+        .unique()
+      if (job === null) throw new Error('the purge saved no job')
+      await ctx.db.patch(job._id, { phase: 'purge_rows' })
+      const stored = await ctx.db
+        .query('deleted_rows')
+        .withIndex('by_row', (q) => q.eq('table', 'issues').eq('row_id', task.id))
+        .unique()
+      if (stored === null) throw new Error('the task was not stored')
+      await ctx.db.delete(stored._id)
+    })
+    vi.setSystemTime(Date.now() + HOUR)
+    await as(t, f.user).mutation(api.issues.create, {
+      org_id,
+      id: task.id,
+      project_id: f.sub.id,
+      title: 'Same id, deleted too',
+    })
+    // the new task goes to Deleted items as an item of its own
+    await deleteTask(t, f, task.id)
+    const kept = (await historyOf(t, task.id)).slice(3)
+    expect(kept.map((e) => e.verb)).toEqual(['created', 'deleted'])
+
+    while ((await jobFor(t, item.id)) !== null) await step(t, item.id)
+    expect(await itemById(t, item.id)).toBeNull()
+    expect(await historyOf(t, task.id)).toEqual(kept)
   })
 })
 

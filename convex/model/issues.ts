@@ -27,8 +27,9 @@
  *   clear       clearParentRemaining on attach (0066/0067) — also notifies
  *               and touches the parent
  *   notify      notifyIssueInsert/Update fan-out for the row itself
- *   activity    logActivity (a background trim keeps the newest 500,
- *               model/activity.ts)
+ *   activity    logActivity (each task keeps its newest 500 rows,
+ *               model/activity.ts); a save that changes nothing it
+ *               narrates writes none (narratedChange)
  *
  * The archive cascade's descendant/ancestor echoes are the ONE suppressed
  * notification (0114:308-313, pg_trigger_depth's successor): only the
@@ -71,9 +72,9 @@ import type { IssuePriority, IssueStatus } from '../lib/enums'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { countsAsSubtask, type Liveness, projectLiveness } from '../lib/liveTasks'
 import { reviewStamp } from '../lib/review'
-import { ISSUE_PREFIX, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
+import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
-import { issueChanges, logActivity, machineDetail } from './activity'
+import { issueChanges, logActivity, machineDetail, narratedChange } from './activity'
 import { scheduleMarkClears } from './archiveMarks'
 import {
   type NotifyPreload,
@@ -876,19 +877,22 @@ const excerpt = (s: string): string => {
   return cp.length > 80 ? `${cp.slice(0, 79).join('')}…` : t
 }
 
+/** The app's verb and detail for an update of `before` to `after`, chosen
+ * by the highest-ranked key `patch` holds (status first), and `named`, the numbers of
+ * the tasks the detail names in text order ([] when none), which the row
+ * stores for the visibility rule. */
 export async function browserVerbDetail(
   ctx: QueryCtx,
   a: { before: Doc<'issues'>; after: Doc<'issues'>; patch: IssuePatch },
-): Promise<{ verb: string; detail: string | undefined }> {
+): Promise<{ verb: string; detail: string | undefined; named: number[] }> {
   const { before, after, patch } = a
   const fmt = async () =>
     (await byId(ctx, 'organizations', before.org_id))?.date_format ?? 'YYYY-MM-DD'
   const name = async (id: string | undefined) =>
     id === undefined ? null : ((await byId(ctx, 'profiles', id))?.name ?? null)
-  const keyOf = async (id: string | undefined) => {
+  const numOf = async (id: string | undefined) => {
     if (id === undefined) return null
-    const r = await byId(ctx, 'issues', id)
-    return r === null ? null : `${ISSUE_PREFIX}-${r.num}`
+    return (await byId(ctx, 'issues', id))?.num ?? null
   }
   // 1 decimal, matching numeric(6,1) — the feed states what is stored
   const hours = (n: number) => `${roundTenths(n)} h`
@@ -896,26 +900,33 @@ export async function browserVerbDetail(
     return {
       verb: 'moved',
       detail: `from ${STATUS_NAMES[before.status]} to ${STATUS_NAMES[after.status]}`,
+      named: [],
     }
   }
   if ('assignee_id' in patch) {
     const from = await name(before.assignee_id)
     if (after.assignee_id === undefined) {
-      return { verb: 'unassigned', detail: from ? `(was ${from})` : undefined }
+      return { verb: 'unassigned', detail: from ? `(was ${from})` : undefined, named: [] }
     }
     return {
       verb: 'assigned',
       detail: `to ${(await name(after.assignee_id)) ?? 'no one'}${from ? ` (was ${from})` : ''}`,
+      named: [],
     }
   }
   if ('reviewer_id' in patch) {
     const from = await name(before.reviewer_id)
     if (after.reviewer_id === undefined) {
-      return { verb: 'removed the reviewer from', detail: from ? `(was ${from})` : undefined }
+      return {
+        verb: 'removed the reviewer from',
+        detail: from ? `(was ${from})` : undefined,
+        named: [],
+      }
     }
     return {
       verb: 'set the reviewer of',
       detail: `to ${(await name(after.reviewer_id)) ?? 'no one'}${from ? ` (was ${from})` : ''}`,
+      named: [],
     }
   }
   if ('due_date' in patch) {
@@ -925,15 +936,17 @@ export async function browserVerbDetail(
         verb: 'cleared the due date on',
         detail:
           before.due_date !== undefined ? `(was ${fmtFullWith(f, before.due_date)})` : undefined,
+        named: [],
       }
     }
     if (before.due_date !== undefined) {
       return {
         verb: 'moved the due date on',
         detail: `from ${fmtFullWith(f, before.due_date)} to ${fmtFullWith(f, after.due_date)}`,
+        named: [],
       }
     }
-    return { verb: 'set a due date on', detail: `to ${fmtFullWith(f, after.due_date)}` }
+    return { verb: 'set a due date on', detail: `to ${fmtFullWith(f, after.due_date)}`, named: [] }
   }
   if ('start_week' in patch || 'end_week' in patch) {
     const f = await fmt()
@@ -942,30 +955,41 @@ export async function browserVerbDetail(
         ? fmtRangeWith(f, before.start_week, before.end_week ?? before.start_week)
         : null
     if (after.start_week === undefined) {
-      return { verb: 'removed from the roadmap', detail: was ? `(was ${was})` : undefined }
+      return {
+        verb: 'removed from the roadmap',
+        detail: was ? `(was ${was})` : undefined,
+        named: [],
+      }
     }
     const to = fmtRangeWith(f, after.start_week, after.end_week ?? after.start_week)
-    if (was) return { verb: 'rescheduled', detail: `from ${was} to ${to}` }
-    return { verb: 'scheduled', detail: `for ${to}` }
+    if (was) return { verb: 'rescheduled', detail: `from ${was} to ${to}`, named: [] }
+    return { verb: 'scheduled', detail: `for ${to}`, named: [] }
   }
-  if ('title' in patch) return { verb: 'renamed', detail: `from “${before.title}”` }
-  if ('paused' in patch) return { verb: after.paused ? 'paused' : 'resumed', detail: undefined }
+  if ('title' in patch) return { verb: 'renamed', detail: `from “${before.title}”`, named: [] }
+  if ('paused' in patch)
+    return { verb: after.paused ? 'paused' : 'resumed', detail: undefined, named: [] }
   if ('priority' in patch) {
     return {
       verb: 'reprioritized',
       detail: `from ${PRIORITY_NAMES[before.priority]} to ${PRIORITY_NAMES[after.priority]}`,
+      named: [],
     }
   }
   if ('parent_id' in patch) {
-    const from = await keyOf(before.parent_id)
+    const from = await numOf(before.parent_id)
     if (after.parent_id !== undefined) {
-      const to = await keyOf(after.parent_id)
+      const to = await numOf(after.parent_id)
       return {
         verb: 'moved',
-        detail: `under ${to ?? 'its parent'}${from ? ` (from ${from})` : ''}`,
+        detail: `under ${to === null ? 'its parent' : issueKey(to)}${from === null ? '' : ` (from ${issueKey(from)})`}`,
+        named: [to, from].filter((num) => num !== null),
       }
     }
-    return { verb: 'detached', detail: from ? `from ${from}` : 'from its parent' }
+    return {
+      verb: 'detached',
+      detail: from === null ? 'from its parent' : `from ${issueKey(from)}`,
+      named: from === null ? [] : [from],
+    }
   }
   if ('remaining_hours' in patch) {
     const prev = before.remaining_hours
@@ -973,15 +997,21 @@ export async function browserVerbDetail(
       return {
         verb: 'cleared the remaining time on',
         detail: prev !== undefined ? `(was ${hours(prev)})` : undefined,
+        named: [],
       }
     }
     if (prev !== undefined) {
       return {
         verb: 'changed the remaining time on',
         detail: `from ${hours(prev)} to ${hours(after.remaining_hours)}`,
+        named: [],
       }
     }
-    return { verb: 'set the remaining time on', detail: `to ${hours(after.remaining_hours)}` }
+    return {
+      verb: 'set the remaining time on',
+      detail: `to ${hours(after.remaining_hours)}`,
+      named: [],
+    }
   }
   if ('description' in patch) {
     const to = after.description
@@ -989,17 +1019,19 @@ export async function browserVerbDetail(
       return {
         verb: 'removed the description from',
         detail: before.description !== '' ? `(was “${excerpt(before.description)}”)` : undefined,
+        named: [],
       }
     }
     if (before.description !== '') {
       return {
         verb: 'updated the description of',
         detail: `from “${excerpt(before.description)}” to “${excerpt(to)}”`,
+        named: [],
       }
     }
-    return { verb: 'added a description to', detail: `“${excerpt(to)}”` }
+    return { verb: 'added a description to', detail: `“${excerpt(to)}”`, named: [] }
   }
-  return { verb: 'updated', detail: undefined }
+  return { verb: 'updated', detail: undefined, named: [] }
 }
 
 /* ------------------------------------------ machine-narration override
@@ -1023,9 +1055,9 @@ export async function browserVerbDetail(
  *           current state is a no-op slot, not a toggle.
  *   update's `appGrammar` keeps the browser verb and detail and appends the
  *           provenance instead. A parent change uses it, because the
- *           machine diff cannot name tasks: the activity reader checks the
- *           tasks a row names through namedTaskNums, which knows only the
- *           browser wording
+ *           machine diff cannot name tasks; the row stores the numbers of
+ *           the tasks the browser detail names (named_task_nums), which the
+ *           activity reader checks
  *   move    detail = the browser's destination sentence plus the provenance
  *   delete  model/deletedItems.ts moveTasksToTrash's `provenance` is the
  *           'deleted' row's detail
@@ -1197,6 +1229,7 @@ export async function createIssueCore(
     detail: a.machine?.provenance,
     project_id: issue.project_id,
     ts: now,
+    named_task_nums: [],
   }
   await logActivity(ctx, event)
   return issue
@@ -1480,15 +1513,21 @@ export async function updateIssueCore(
     isGroup: group === true,
     preload: bulk?.preload,
   })
-  // -- activity: ONE row — machine grammar when the trusted override is
-  //    present (verb archived/restored wins, else 'changed'; multi-field diff
-  //    + provenance), else the browser verb/detail strings, ported verbatim
+  // -- activity: ONE row, or none when the save changed nothing the history
+  //    narrates (narratedChange). Machine grammar when the trusted override
+  //    is present (verb archived/restored wins, else 'changed'; multi-field
+  //    diff + provenance), else the browser verb/detail strings, ported
+  //    verbatim
+  if (!narratedChange(issue, after)) return after
   let verb: string
   let detail: string | undefined
+  // the diff names no task (DIFF_FIELDS has no parent_id)
+  let named: number[] = []
   if (a.machine?.appGrammar === true) {
     const browser = await browserVerbDetail(ctx, { before: issue, after, patch })
     verb = browser.verb
     detail = machineDetail(browser.detail, a.machine.provenance)
+    named = browser.named
   } else if (a.machine !== undefined) {
     // The diff's user labels — built from the before/after profile ids; a
     // missing profile leaves the uuid standing (issueChanges' own fallback).
@@ -1509,6 +1548,7 @@ export async function updateIssueCore(
     const browser = await browserVerbDetail(ctx, { before: issue, after, patch })
     verb = browser.verb
     detail = browser.detail
+    named = browser.named
   }
   const event = {
     org_id: issue.org_id,
@@ -1520,6 +1560,7 @@ export async function updateIssueCore(
     detail,
     project_id: after.project_id,
     ts: now,
+    named_task_nums: named,
   }
   await logActivity(ctx, event)
   return after
@@ -1873,6 +1914,7 @@ export async function moveIssueCore(
     project_id: issue.project_id, // the SOURCE project (old planner.ts:2063-2066)
     related_project_id: target.id, // the detail names it, so readers need it too
     ts: now,
+    named_task_nums: [],
   }
   await logActivity(ctx, event)
   // leaving the parent gets the row a detach writes, as a machine update's
@@ -1889,6 +1931,7 @@ export async function moveIssueCore(
       detail: detached.detail,
       project_id: after.project_id,
       ts: now,
+      named_task_nums: detached.named,
     })
   }
   return after
@@ -2016,6 +2059,7 @@ export async function archiveIssueCore(
     label: issue.title,
     project_id: issue.project_id,
     ts: now,
+    named_task_nums: [],
   }
   await logActivity(ctx, event)
   return after
@@ -2122,6 +2166,7 @@ export async function unarchiveIssueCore(
     detail: 'from the archive',
     project_id: issue.project_id,
     ts: now,
+    named_task_nums: [],
   }
   await logActivity(ctx, event)
   return rootAfter

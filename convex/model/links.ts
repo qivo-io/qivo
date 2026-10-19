@@ -121,7 +121,8 @@ export async function addLinkCore(
     { id, org_id: source.org_id, source_id, target_id, type, pair_key: key, created_at: now },
     badRequest('a link with this id already exists'),
   )
-  // model/activity.ts namedTaskNums reads this wording back; keep in step
+  // the stored number decides visibility for this row; namedTaskNums reads
+  // this wording only on rows stored before named_task_nums existed
   const named = `(${type === 'blocks' ? 'blocks' : 'relates to'} ${issueKey(target.num)})`
   await logActivity(ctx, {
     org_id: source.org_id,
@@ -133,6 +134,7 @@ export async function addLinkCore(
     detail: signedDetail(named, a.provenance),
     project_id: source.project_id,
     ts: now,
+    named_task_nums: [target.num],
   })
   return { link: (await ctx.db.get(docId)) as Doc<'issue_links'>, added: true }
 }

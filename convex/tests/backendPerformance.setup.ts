@@ -85,6 +85,7 @@ export async function benchmarkBackend(baseline: Baseline) {
           })
         }
       }
+      // raw rows stand for activity stored before numbering
       for (let i = 0; i < 500; i++) {
         await ctx.db.insert('activity_events', {
           id: `benchmark-event-${i}`,
@@ -142,6 +143,7 @@ export async function benchmarkBackend(baseline: Baseline) {
           target_type: 'issue',
           target_id: 'benchmark-task-0',
           label: 'Task',
+          named_task_nums: [],
         })
         return ctx.meta.getTransactionMetrics()
       })

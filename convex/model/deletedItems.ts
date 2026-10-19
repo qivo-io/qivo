@@ -121,7 +121,7 @@ import {
 import { notFound, rule } from '../lib/functions'
 import { countsAsSubtask } from '../lib/liveTasks'
 import { DELETE_REASON_MAX } from '../lib/textLimits'
-import { ACTIVITY_CAP, insertActivity, logActivity, requestActivityTrim } from './activity'
+import { insertActivity, logActivity } from './activity'
 import { storageIdInUse } from './attachments'
 import { dropCommentCount } from './commentCounts'
 import { estimateDocumentBytes } from './demoMetrics'
@@ -803,10 +803,42 @@ function childrenOutside(ctx: QueryCtx, parentId: string, ids: string[]) {
   })
 }
 
+/** Deletes task `taskId`'s activity rows, legacy rows included, within the
+ * step's budget, or with `upTo` only the rows written at or before it. True
+ * once none is left. */
+const purgeHistory = (run: Run, taskId: string, upTo?: string): Promise<boolean> =>
+  drain(
+    run.budget,
+    (n) => {
+      const rows = run.ctx.db
+        .query('activity_events')
+        .withIndex('by_target', (q) =>
+          q.eq('org_id', run.item.org_id).eq('target_type', 'issue').eq('target_id', taskId),
+        )
+      return (upTo === undefined ? rows : rows.filter((q) => q.lte(q.field('ts'), upTo))).take(n)
+    },
+    (row) => run.ctx.db.delete(row._id),
+    LARGE_ROWS_PER_READ,
+  )
+
+/** Whether another task now holds the id of task `taskId` of this item: a
+ * live task, or one another item stores. Only a purge the release before
+ * left part done can free such an id, by deleting the stored task row
+ * before the rest (purgeRows, splitOff). */
+async function idTaken(run: Run, taskId: string): Promise<boolean> {
+  if ((await byId(run.ctx, 'issues', taskId)) !== null) return true
+  const stored = await run.ctx.db
+    .query('deleted_rows')
+    .withIndex('by_row', (q) => q.eq('table', 'issues').eq('row_id', taskId))
+    .first()
+  return stored !== null && stored.item_id !== run.item.id
+}
+
 /** Moves (keep) or deletes (purge) task `task` of a project item with what
  * travels with it, in order: its comment count, which is deleted, its rows,
  * its messages, its children outside the item's projects (childrenOutside),
- * then the task row. True once the task row is gone.
+ * on a purge its history (purgeHistory), then the task row. True once the
+ * task row is gone.
  * A task left half done stays hidden, because its project is absent, and
  * the next step picks it up. A task too large to store is purged instead.
  * A task that a restore wrote back without its parent, and that still waits
@@ -846,6 +878,9 @@ async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boo
     )
     if (!detached) return false
   }
+  // a task deleted for good loses its history; before takeParent, which
+  // deletes the deleted_item_parents row a later step would need
+  if (how === 'purge' && !(await purgeHistory(run, task.id))) return false
   const parent_id = await takeParent(run.ctx, task, run.item)
   if (how === 'keep') await storeTask(run.ctx, run.item, tallyOf(run), { ...task, parent_id })
   else {
@@ -1208,39 +1243,57 @@ const purgeStored = (run: Run, table: StoredTable): Promise<boolean> =>
       : ALL,
   )
 
-/* Every stored row but the project rows, then the deleted_tasks rows. */
+/* Each deleted_tasks row once its task's history is gone (purgeHistory),
+ * then every stored row but the project rows. A task's stored issues row
+ * reserves its uuid (lib/db.ts) until its history is deleted, so a new task
+ * with that id cannot lose rows to the drain. A purge the release before
+ * left in this phase may already have deleted the stored row, and another
+ * task may hold the id since (idTaken). Then only the rows written up to
+ * the item's deletion go, which are the deleted task's: the new task was
+ * created after it. */
 async function purgeRows(run: Run): Promise<boolean> {
-  for (const table of STORED_TABLES)
-    if (table !== 'projects' && !(await purgeStored(run, table))) return false
-  return await drain(
+  const tasksDone = await drain(
     run.budget,
     (n) =>
       run.ctx.db
         .query('deleted_tasks')
         .withIndex('by_item', (q) => q.eq('item_id', run.item.id))
         .take(n),
-    (task) => run.ctx.db.delete(task._id),
-    ALL,
+    async (task) => {
+      const upTo = (await idTaken(run, task.task_id)) ? run.item.deleted_at : undefined
+      if (!(await purgeHistory(run, task.task_id, upTo))) return false
+      await run.ctx.db.delete(task._id)
+      return true
+    },
+    LARGE_ROWS_PER_READ,
   )
+  if (!tasksDone) return false
+  for (const table of STORED_TABLES)
+    if (table !== 'projects' && !(await purgeStored(run, table))) return false
+  return true
 }
 
 /* Clears project_id on the organization's activity rows filed under the
- * item's projects, as deleteProjectDeep does, while the stored project rows
- * still reserve their uuids. It reads only the newest ACTIVITY_CAP rows,
- * the ones readers show (model/activity.ts), so one pass fits. Storage can
- * hold thousands of older rows until the background trim deletes them, and
- * readers never show those again. */
+ * item's projects while the stored project rows still reserve their uuids.
+ * The item's own task rows are gone by now (purgeRows); what remains are
+ * the rows of tasks that moved out earlier and the project and milestone
+ * rows. Each patch takes its row out of the by_project range, so the drain
+ * needs no cursor. */
 async function purgeActivity(run: Run): Promise<boolean> {
   if (run.item.kind !== 'project') return true
-  const ids = new Set(itemProjectIds(run.item))
-  const events = await run.ctx.db
-    .query('activity_events')
-    .withIndex('by_org_ts', (q) => q.eq('org_id', run.item.org_id))
-    .order('desc')
-    .take(ACTIVITY_CAP)
-  for (const event of events)
-    if (event.project_id !== undefined && ids.has(event.project_id))
-      await run.ctx.db.patch(event._id, { project_id: undefined })
+  for (const id of itemProjectIds(run.item)) {
+    const done = await drain(
+      run.budget,
+      (n) =>
+        run.ctx.db
+          .query('activity_events')
+          .withIndex('by_project', (q) => q.eq('org_id', run.item.org_id).eq('project_id', id))
+          .take(n),
+      (row) => run.ctx.db.patch(row._id, { project_id: undefined }),
+      LARGE_ROWS_PER_READ,
+    )
+    if (!done) return false
+  }
   return true
 }
 
@@ -1857,7 +1910,7 @@ const restoreSplit = (run: Run): Promise<boolean> =>
 
 /** Moves subtask `task` with every row it owns to the item that holds its
  * project, keeping its parent; when no item that is not purging holds the
- * project, deletes them for good with their bytes. Its rows the restore
+ * project, deletes them for good with their bytes and its history. Its rows the restore
  * already wrote back to the live tables go first, the same way: a split the
  * reveal sends back here (its project left after restore_rows) finds the
  * subtask's comments, labels, follows, attachments and links live, naming a
@@ -1884,6 +1937,12 @@ async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> 
       relation.perRead,
     )
     if (!taken) return false
+  }
+  // deleted for good: its history goes while its stored row still reserves
+  // its uuid. A step that ran out of budget after the stored task row went
+  // has done this already, and the id may be another task's by now.
+  if (into === null && !(await idTaken(run, task.task_id))) {
+    if (!(await purgeHistory(run, task.task_id))) return false
   }
   const done = await drain(
     run.budget,
@@ -2905,9 +2964,9 @@ const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`
  * a single task item's row on its root task, a single project item's row on
  * its project, or for several one row that counts them ("restored 3 tasks
  * from Deleted items"). That row is filed under the project the items
- * share; otherwise it is a project row without project_id, which only
- * organization admins receive (lib/activityVisibility.ts), so its count
- * names no project to anyone else. */
+ * share; otherwise it is a project row without project_id. Project rows
+ * reach no client; organization admins read them in the export
+ * (lib/activityVisibility.ts). */
 async function narrate(
   ctx: MutationCtx,
   revealed: Revealed[],
@@ -2920,14 +2979,19 @@ async function narrate(
   const detail = 'from Deleted items'
   if (revealed.length === 1) {
     const { item } = first
-    await logActivity(ctx, {
+    const common = {
       ...row,
-      target_type: item.kind === 'task' ? 'issue' : 'project',
       target_id: item.target_id,
       label: item.name,
       detail,
       project_id: item.project_id,
-    })
+    }
+    await logActivity(
+      ctx,
+      item.kind === 'task'
+        ? { ...common, target_type: 'issue', named_task_nums: [] }
+        : { ...common, target_type: 'project' },
+    )
     return
   }
   const projects = revealed.filter((r) => r.item.kind === 'project').length
@@ -3612,8 +3676,9 @@ async function clearLiveRows(ctx: MutationCtx, taskId: string, budget: Teardown)
  * in the live tables, and each stored row, a project after the tasks still
  * live under it. An attachment's bytes go with its row unless another row,
  * live or stored, still names them (releaseFile).
- * Nothing is narrated or detached, because the caller deletes the rest of
- * the organization's work too. Spends at most what `budget` holds, give or
+ * Nothing is narrated or detached, and the stored tasks' history stays,
+ * because the caller deletes the rest of the organization's work, its
+ * activity included. Spends at most what `budget` holds, give or
  * take the last row, and returns true once nothing is left. Each call reads
  * every range from its start, so a caller that stops on the budget calls
  * again and loses nothing.
@@ -3775,8 +3840,7 @@ async function liveProject(ctx: QueryCtx, id: string): Promise<Doc<'projects'>> 
  * deleted, its live children outside the item are detached (the SET NULL's
  * touch, 'Detached from its parent' and task.updated), task.deleted is
  * emitted, the task row is stored and the 'deleted' activity row written as
- * before, its detail the machine `provenance`. One request for the
- * background trim (model/activity.ts) covers all of those rows. A child
+ * before, its detail the machine `provenance`. A child
  * inside the item keeps its parent, and a task that still waits for its
  * parent after a project item's restore is stored with it (takeParent).
  * The tasks are then hidden; their other rows follow within the same
@@ -3880,10 +3944,9 @@ export async function moveTasksToTrash(
       detail: a.provenance,
       project_id: task.project_id,
       ts: now,
+      named_task_nums: [],
     })
   }
-  // one retention read for the item's rows, not one per task
-  await requestActivityTrim(counted, actor.org_id)
   await startJob(ctx, item, { phase: 'move_drain', tally }, budget)
   return item
 }

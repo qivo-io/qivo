@@ -1678,6 +1678,25 @@ describe('PATCH /v1/tasks/{ref}', () => {
     expect(await messagesFor(t, f.user.id, child.id)).toHaveLength(0)
   })
 
+  it('a PATCH that resends current values answers as before and writes no row', async () => {
+    const t = newT()
+    const f = await machineOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title: 'Steady' })
+    const patch = (body: Record<string, unknown>) =>
+      t.mutation(internal.machine.rest.updateIssue, {
+        callerId: f.agent.id,
+        access: 'write',
+        keyName: KEY,
+        ref: `QN-${issue.num}`,
+        body: JSON.stringify(body),
+      })
+    const out = await patch({ title: 'Steady', priority: issue.priority, archived: false })
+    expect(out).toMatchObject({ title: 'Steady', priority: issue.priority, archived: false })
+    expect(await activityFor(t, f.org.id)).toEqual([])
+    await patch({ title: 'Steadier' })
+    expect((await activityFor(t, f.org.id)).map((row) => row.verb)).toEqual(['changed'])
+  })
+
   it('restore via archived:false surfaces the ancestor chain; a pure toggle narrates provenance alone', async () => {
     const t = newT()
     const f = await machineOrg(t)

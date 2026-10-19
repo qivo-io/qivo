@@ -1,6 +1,5 @@
 /* internal/orgCountersBackfill, the one-time pass that moves organizations
- * created before org_counters and activity_retention off their legacy
- * fields. The fixtures insert that older state directly. The steps run when
+ * created before org_counters off their legacy fields. The fixtures insert that older state directly. The steps run when
  * the test fires the fake timers. */
 /// <reference types="vite/client" />
 
@@ -91,8 +90,8 @@ describe('orgCountersBackfill', () => {
       expect(row.next_issue_num, org.slug).toBeUndefined()
       expect(row.next_project_num, org.slug).toBeUndefined()
       expect(row.activity_count, org.slug).toBeUndefined()
-      // created without a pending trim
-      expect(await retention(t, org.id)).toEqual([{ org_id: org.id }])
+      // and creates no activity retention row any more
+      expect(await retention(t, org.id)).toEqual([])
     }
     expect(await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())).toEqual(
       expect.not.arrayContaining([expect.objectContaining({ name: 'activityRetention:trim' })]),

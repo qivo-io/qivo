@@ -1031,6 +1031,41 @@ describe('marketing demo rebuild ownership', () => {
     await assertNoDanglingRefs(t, 'marketing demo repeat reset')
   }, 30_000)
 
+  it("numbers each seeded task's history, so the next change to a task is its second row", async () => {
+    const t = newAuthT()
+    const result = await seeded(t)
+    const rows = await t.run((ctx) =>
+      ctx.db
+        .query('activity_events')
+        .withIndex('by_org_ts', (q) => q.eq('org_id', result.org_id))
+        .collect(),
+    )
+    expect(rows.length).toBe(MARKETING_DEMO.issues.length)
+    expect(rows.every((row) => row.seq === 1 && row.named_task_nums?.length === 0)).toBe(true)
+    const first = rows[0]
+    await t.run((ctx) =>
+      logActivity(ctx, {
+        org_id: result.org_id,
+        actor_id: undefined,
+        verb: 'renamed',
+        target_type: 'issue',
+        target_id: first.target_id,
+        label: first.label,
+        ts: NOW,
+        named_task_nums: [],
+      }),
+    )
+    const history = await t.run((ctx) =>
+      ctx.db
+        .query('activity_events')
+        .withIndex('by_target', (q) =>
+          q.eq('org_id', result.org_id).eq('target_type', 'issue').eq('target_id', first.target_id),
+        )
+        .collect(),
+    )
+    expect(history.map((row) => row.seq)).toEqual([1, 2])
+  }, 30_000)
+
   it('wipe removes work but preserves the roster and allows reseeding with stable issue UUIDs', async () => {
     const t = newAuthT()
     const result = await seeded(t)

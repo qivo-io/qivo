@@ -493,7 +493,7 @@ const stored = (t: T, f: Fixture) =>
   }))
 
 describe('apiAccess.revoke', () => {
-  it('revokes each kind, narrates to admins only, and the owner sees that an admin revoked it', async () => {
+  it('revokes each kind, narrates for the export only, and the owner sees that an admin revoked it', async () => {
     const t = newT()
     const f = await fixture(t)
     const org = f.org.id
@@ -531,9 +531,10 @@ describe('apiAccess.revoke', () => {
       const snap = await as(t, profile).query(api.snapshot.forMe, {})
       return (snap?.activity ?? []).map((row) => row.id).sort()
     }
-    expect(await feed(f.admin)).toEqual(events.map((e) => e.id).sort())
-    // not even the token's owner receives the row; their token list says it
-    for (const member of [f.user, f.viewer, f.guest]) expect(await feed(member)).toEqual([])
+    // the rows stay for the organization export and reach no snapshot, an
+    // admin's included; the owner's token list says it
+    for (const member of [f.admin, f.user, f.viewer, f.guest])
+      expect(await feed(member)).toEqual([])
   })
 
   it('stops a revoked token and key on REST and MCP', async () => {

@@ -13,7 +13,6 @@ import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
 import type { EventOwner } from '../lib/taskEvents'
-import { ACTIVITY_CAP } from '../model/activity'
 import { storageUsage } from '../model/billing'
 import { deleteOrgDeep } from '../model/cascade'
 import {
@@ -46,6 +45,7 @@ import {
 } from './helpers.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 import {
+  assertNoOrphanHistory,
   attach,
   blobExists,
   comment,
@@ -55,11 +55,13 @@ import {
   deleteProject,
   deleteTask,
   HOUR,
+  historyOf,
   installTrashTimers,
   itemById,
   itemFor,
   jobFor,
   liveTask,
+  plantHistory,
   plantRows,
   runSteps,
   START,
@@ -1005,10 +1007,13 @@ describe('restoring a task item', () => {
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
     const sub = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
     await comment(t, sub)
+    await plantHistory(t, sub, { numbered: 2, legacy: 1 })
     // stored before attachment rows carried their project
     const file = await attach(t, sub, 5, null)
     const neighbour = await plantIssue(t, { org_id, project_id: f.sub2.id })
     await deleteTask(t, f, root.id, { subtask_ids: [sub.id] })
+    const subHistory = (await historyOf(t, sub.id)).map((e) => e.id)
+    expect(subHistory).toHaveLength(4)
     const item = await itemFor(t, root.id)
     expect(item.projects.map((p) => p.id)).toEqual([f.sub.id, f.sub2.id])
     await deleteProject(t, f, f.sub2.id)
@@ -1029,6 +1034,8 @@ describe('restoring a task item', () => {
     expect(counted.counts.tasks).toBe(2)
     expect(counted.projects.find((p) => p.id === f.sub2.id)?.tasks).toBe(2)
     expect(await itemById(t, item.id)).toBeNull()
+    // and its history with it
+    expect((await historyOf(t, sub.id)).map((e) => e.id)).toEqual(subHistory)
 
     // the project brings it back under its parent, its file in its project
     await restore(t, f.user, [projectItem.id])
@@ -1044,6 +1051,7 @@ describe('restoring a task item', () => {
     const root2 = await plantIssue(t, { org_id, project_id: f.sub.id })
     const lost = await plantIssue(t, { org_id, project_id: third.id, parent_id: root2.id })
     const lostFile = await attach(t, lost)
+    await plantHistory(t, lost, { numbered: 2, legacy: 1 })
     await deleteTask(t, f, root2.id, { subtask_ids: [lost.id] })
     await deleteProject(t, f, third.id)
     const thirdItem = await itemFor(t, third.id)
@@ -1054,7 +1062,11 @@ describe('restoring a task item', () => {
     expect(await liveTask(t, lost.id)).toBeNull()
     expect(await storedIssue(t, lost.id)).toBeUndefined()
     expect(await blobExists(t, lostFile.storage_id)).toBe(false)
+    // deleted for good, it has no history left
+    expect(await historyOf(t, lost.id)).toEqual([])
+    expect((await historyOf(t, root2.id)).map((e) => e.verb)).toEqual(['deleted', 'restored'])
     await assertNoDanglingRefs(t, 'after a subtask went with its purged project')
+    await assertNoOrphanHistory(t, 'after a subtask went with its purged project')
   })
 
   it('drops the archive marks, schedules them once, and restarts the done clock', async () => {
@@ -1171,54 +1183,39 @@ describe('notices, activity and events', () => {
       (await ctx.db.query('webhook_events').collect()).map((e) => [e.name, e.task_id]),
     )
 
-  it('leaves the activity a delete and a restore write to one background trim each', async () => {
+  it("keeps a task's whole history while other tasks write past 500 rows, and trims nothing", async () => {
     const t = newT()
     const f = await withOrg(t)
     const org_id = f.org.id
-    // an organization at the cap, with no trim pending
-    await t.run(async (ctx) => {
-      for (let i = 0; i < ACTIVITY_CAP; i++)
-        await ctx.db.insert('activity_events', {
-          id: uuid(),
-          org_id,
-          ts: iso(START - HOUR + i),
-          actor_id: f.admin.id,
-          verb: 'updated',
-          target_type: 'project',
-          target_id: f.sub.id,
-          label: 'Earlier',
-          project_id: f.sub.id,
-        })
-    })
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
-    const subtasks: string[] = []
-    for (let i = 0; i < 2; i++)
-      subtasks.push((await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: root.id })).id)
-    const trims = () =>
-      t.run(
-        async (ctx) =>
-          (await ctx.db.system.query('_scheduled_functions').collect()).filter(
-            (job) => job.name.includes('activityRetention:trim') && job.state.kind === 'pending',
-          ).length,
-      )
-    const newest = async (n: number) =>
-      (await activityFor(t, org_id))
-        .slice(-n)
-        .map((e) => `${e.verb} ${e.target_id}`)
-        .toSorted()
-
-    // a 'deleted' row for each of the three tasks, and one trim for them
-    await deleteTask(t, f, root.id, { subtask_ids: subtasks })
-    expect(await trims()).toBe(1)
-    await runSteps(t)
-    expect(await activityFor(t, org_id)).toHaveLength(ACTIVITY_CAP)
-    expect(await newest(3)).toEqual([...subtasks, root.id].map((id) => `deleted ${id}`).toSorted())
-
+    await plantHistory(t, root, { numbered: 3 })
+    await deleteTask(t, f, root.id)
+    // 600 rows about two other tasks while the task sits in Deleted items
+    const others = [
+      await plantIssue(t, { org_id, project_id: f.sub.id }),
+      await plantIssue(t, { org_id, project_id: f.sub2.id }),
+    ]
+    for (const other of others) await plantHistory(t, other, { numbered: 300 })
     await restore(t, f.user, [(await itemFor(t, root.id)).id])
-    expect(await trims()).toBe(1)
     await runSteps(t)
-    expect(await activityFor(t, org_id)).toHaveLength(ACTIVITY_CAP)
-    expect(await newest(1)).toEqual([`restored ${root.id}`])
+
+    const verbs = ['updated', 'updated', 'updated', 'deleted', 'restored']
+    expect((await historyOf(t, root.id)).map((e) => e.verb)).toEqual(verbs)
+    // the task window reads all of it, in order
+    const thread = await as(t, f.admin).query(api.snapshot.commentThread, {
+      org_id,
+      issue_id: root.id,
+    })
+    expect(thread.events.map((e) => [e.verb, e.seq])).toEqual(verbs.map((v, i) => [v, i + 1]))
+    // no row of the organization is gone, and no trim was ever scheduled
+    expect(await activityFor(t, org_id)).toHaveLength(3 + 1 + 600 + 1)
+    for (const other of others) expect(await historyOf(t, other.id)).toHaveLength(300)
+    const trims = await t.run(async (ctx) =>
+      (await ctx.db.system.query('_scheduled_functions').collect()).filter((job) =>
+        job.name.includes('activityRetention:trim'),
+      ),
+    )
+    expect(trims).toEqual([])
   })
 
   it('sends the Restored notice only for a task item restored alone, and one activity row per call', async () => {
@@ -2587,8 +2584,7 @@ describe('parents outside a restored project', () => {
       (await parentsOf(t, tasks)).filter((parent) => parent === epic.id).length
     expect(await attached()).toBe(1)
     // a failed step leaves the job at its last committed progress; the
-    // clock starts where the steps above left it, after the activity trim
-    // the delete scheduled a few minutes ahead
+    // clock starts where the steps above left it
     let now = Date.now()
     const fail = async () => {
       const job = await jobFor(t, item.id)
@@ -2844,6 +2840,7 @@ describe('restore calls', () => {
     const sub = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
     await comment(t, sub)
     const file = await attach(t, sub)
+    await plantHistory(t, sub, { numbered: 2, legacy: 1 })
     const other = await plantIssue(t, { org_id, project_id: f.sub.id })
     await t.run((ctx) =>
       ctx.db.insert('issue_links', {
@@ -2896,6 +2893,8 @@ describe('restore calls', () => {
       'issue_links',
       'issues',
     ])
+    // with its history: the planted rows and its delete
+    expect(await historyOf(t, sub.id)).toHaveLength(4)
     await assertNoDanglingRefs(t, 'after a late split moved the rows back')
     // and the project item's purge takes all of it, the bytes included
     await t.run(async (ctx) => startPurge(ctx, (await byId(ctx, 'deleted_items', projectItem.id))!))
@@ -2923,7 +2922,9 @@ describe('restore calls', () => {
       issue_links: [],
     })
     expect(await blobExists(t, file.storage_id)).toBe(false)
+    expect(await historyOf(t, sub.id)).toEqual([])
     await assertNoDanglingRefs(t, 'after a late split deleted the subtask for good')
+    await assertNoOrphanHistory(t, 'after a late split deleted the subtask for good')
   })
 
   it('defers what waits for a project item of the same call, whatever the order of the ids', async () => {

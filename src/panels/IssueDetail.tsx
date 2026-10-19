@@ -1649,7 +1649,7 @@ function IssueDetail({
   const events =
     it && actFilter === 'all'
       ? eventsBeside(
-          P.activity.filter((e) => e.targetType === 'issue' && e.targetId === it.id),
+          P.threadEvents.filter((e) => e.targetType === 'issue' && e.targetId === it.id),
           comments,
           P.commentsLoaded && P.commentsEarlier === 'none',
         )
@@ -1711,7 +1711,7 @@ function IssueDetail({
   const tailNote =
     it &&
     actFilter === 'comments' &&
-    P.activity.some(
+    P.threadEvents.some(
       (e) =>
         e.targetType === 'issue' && e.targetId === it.id && unreadTs !== null && e.ts >= unreadTs,
     )

@@ -90,7 +90,9 @@ describe('earlier comments in the store', () => {
     )
     network.onUpdate.mockImplementation((ref, _args, receive) => {
       if (getFunctionName(ref) === 'snapshot:forMe') receive(structuredClone(snap))
-      else if (getFunctionName(ref) === 'snapshot:commentThread') publish = receive
+      // the live window also carries the task's changes, which these tests leave out
+      else if (getFunctionName(ref) === 'snapshot:commentThread')
+        publish = (page) => receive({ ...page, events: [] })
       return () => {}
     })
     store = await import('./planner')

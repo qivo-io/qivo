@@ -496,6 +496,7 @@ async function restoreStep(ctx: Context, changes: Change[], now: string, batch: 
       detail: 'undid roadmap changes',
       project_id: after.project_id,
       ts: now,
+      named_task_nums: [],
     })
   }
 }

@@ -22,7 +22,7 @@
  *   follow. Background steps clear the marks moments after the restore;
  * - one per task an activity row is about, or names by number, that is not
  *   among the live tasks. The snapshot reads the organization's newest 500
- *   rows (model/activity.ts ACTIVITY_CAP), so that is at most 500 for an
+ *   rows (CAP) and keeps the task rows, so that is at most 500 for an
  *   admin, who reads the task each row is about, and at most 1,000 for a
  *   member, who reads up to two numbered tasks a row names.
  * A seat whose relation tables stay in bulk therefore reads at most about
@@ -43,15 +43,24 @@ import { v } from 'convex/values'
 import type { Doc, TableNames } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
 import { canSeeProject } from './lib/access'
-import { memberSeesActivity, withoutLegacySubtaskCount } from './lib/activityVisibility'
+import {
+  memberSeesActivity,
+  taskActivity,
+  withoutLegacySubtaskCount,
+} from './lib/activityVisibility'
 import { byId } from './lib/db'
 import { authedQuery, notFound, orgQuery } from './lib/functions'
 import { INBOX_LIMIT, loadInbox } from './lib/inbox'
 import { liveTasksOf } from './lib/liveTasks'
 import { snapshotRelations } from './lib/snapshotRelations'
 import { orgProjectView } from './lib/visibility'
-import { aboutShownTasks, linkShown, parentLink, workingSetOf } from './lib/workingSet'
-import { ACTIVITY_CAP } from './model/activity'
+import {
+  aboutShownTasks,
+  inWorkingSet,
+  linkShown,
+  parentLink,
+  workingSetOf,
+} from './lib/workingSet'
 import { COMMENT_PAGE_MAX, commentAnchor, newestComments, threadPage } from './model/comments'
 import { shownLabelColor } from './model/labels'
 import { countersOf, type OrgCounters } from './model/orgs'
@@ -221,9 +230,6 @@ export const forMe = authedQuery({
         .query('teams')
         .withIndex('by_org', (q) => q.eq('org_id', orgId))
         .collect()
-      /* per-team "me leads it" — is_team_leader amortized over the membership
-       * rows already in hand; memberSeesActivity restates canLeadTeams */
-      const leaderOf = new Map<string, boolean>()
       for (const team of orgTeams) {
         teams.push(iconFree(team))
         const members = await ctx.db
@@ -231,10 +237,6 @@ export const forMe = authedQuery({
           .withIndex('by_team', (q) => q.eq('team_id', team.id))
           .collect()
         for (const m of members) teamMembers.push(rowOf(m))
-        leaderOf.set(
-          team.id,
-          members.some((m) => m.profile_id === me.id && m.is_leader),
-        )
       }
 
       // Include inactive, agent and unclaimed profiles in the org roster.
@@ -370,17 +372,18 @@ export const forMe = authedQuery({
       mySubs.sort((x, y) => x._creationTime - y._creationTime)
       for (const s of aboutShownTasks(mySubs, workingSet.shown)) issueSubs.push(relationRow(s))
 
-      // Activity: org admins receive every row except those about archived
-      // tasks or tasks in archived projects; other members receive only the
-      // rows memberSeesActivity allows. Only the newest ACTIVITY_CAP rows
-      // count; older ones wait for the background trim (model/activity.ts).
-      // Walked ts-desc; the global cap makes >CAP kept rows here
-      // unreachable, so stop early.
+      // Activity, for Team Sync: the task rows among the organization's
+      // newest CAP rows. Org admins receive every one except those about
+      // archived tasks or tasks in archived projects; other members receive
+      // only the rows memberSeesActivity allows. Rows about anything but a
+      // task reach no client. The task window reads one task's history in
+      // commentThread instead. Walked ts-desc; the blend below keeps at most
+      // CAP rows, so stop early.
       const orgActivity = await ctx.db
         .query('activity_events')
         .withIndex('by_org_ts', (q) => q.eq('org_id', orgId))
         .order('desc')
-        .take(ACTIVITY_CAP)
+        .take(CAP)
       // Task numbers resolve to projects from the live set, else one cached
       // indexed read (archived or deleted tasks, and tasks in archived
       // projects).
@@ -401,18 +404,14 @@ export const forMe = authedQuery({
       }
       let kept = 0
       for (const ev of orgActivity) {
+        // admins skip the rule below, so this keeps non-task rows from them too
+        if (ev.target_type !== 'issue') continue
         if (
           !isAdmin &&
-          !(await memberSeesActivity(ev, {
-            me,
-            view,
-            inWorkingSet: workingSet.shown,
-            leaderOf,
-            taskProject,
-          }))
+          !(await memberSeesActivity(ev, { view, inWorkingSet: workingSet.shown, taskProject }))
         )
           continue
-        if (ev.target_type === 'issue' && (await isArchivedIssue(ev.target_id))) continue
+        if (await isArchivedIssue(ev.target_id)) continue
         activityDocs.push(isAdmin ? ev : withoutLegacySubtaskCount(ev))
         if (++kept >= CAP) break
       }
@@ -526,39 +525,47 @@ export const forMe = authedQuery({
 async function threadTask(
   ctx: QueryCtx & { me: Doc<'profiles'> },
   issueId: string,
-): Promise<Doc<'issues'>> {
+): Promise<{ issue: Doc<'issues'>; project: Doc<'projects'> }> {
   const issue = await byId(ctx, 'issues', issueId)
   if (issue === null || issue.org_id !== ctx.me.org_id) throw notFound('task not found')
   const project = await byId(ctx, 'projects', issue.project_id)
   if (project === null || !(await canSeeProject(ctx, ctx.me, project))) {
     throw notFound('task not found')
   }
-  return issue
+  return { issue, project }
 }
 
 /* The task window's live thread. It holds the thread's newest
  * COMMENT_PAGE_MAX comments, and fewer when they are long, oldest first in
  * thread order, and says whether the thread holds earlier ones
  * (model/comments.ts threadPage). The window reads further back with
- * commentsBefore. */
+ * commentsBefore. `events` holds the task's history the caller receives
+ * (lib/activityVisibility.ts taskActivity), oldest first, and is empty for
+ * an archived task or a task in an archived project, which the app does not
+ * show. */
 export const commentThread = orgQuery({
   args: { issue_id: v.string() },
   handler: async (ctx, { issue_id }) => {
-    const issue = await threadTask(ctx, issue_id)
+    const { issue, project } = await threadTask(ctx, issue_id)
+    // comments first: the page counts only its own bytes (model/comments.ts
+    // newestComments), so taskActivity's room check must see what it spent
     const page = await threadPage(ctx, issue.id)
-    return { comments: page.comments.map(rowOf), earlier: page.earlier }
+    // the app shows history only for a task in the working set (lib/workingSet.ts);
+    // threadTask already refused a project the caller cannot see
+    const events = inWorkingSet(issue, project, true) ? await taskActivity(ctx, ctx.me, issue) : []
+    return { comments: page.comments.map(rowOf), earlier: page.earlier, events: events.map(rowOf) }
   },
 })
 
 /* The page "Show earlier comments" loads. It holds the newest
  * COMMENT_PAGE_MAX comments the thread holds before the comment `before`, in
- * commentThread's shape. The app reads it once rather than subscribing. A
+ * commentThread's shape without events. The app reads it once rather than subscribing. A
  * `before` that is not a comment on this task, deleted ones included,
  * refuses with BEFORE_NOT_A_COMMENT as a bad_request. */
 export const commentsBefore = orgQuery({
   args: { issue_id: v.string(), before: v.string() },
   handler: async (ctx, { issue_id, before }) => {
-    const issue = await threadTask(ctx, issue_id)
+    const { issue } = await threadTask(ctx, issue_id)
     const anchor = await commentAnchor(ctx, issue.id, before)
     const page = await threadPage(ctx, issue.id, anchor)
     return { comments: page.comments.map(rowOf), earlier: page.earlier }
@@ -571,7 +578,7 @@ export const commentsBefore = orgQuery({
 export const commentsForIssue = orgQuery({
   args: { issue_id: v.string() },
   handler: async (ctx, { issue_id }) => {
-    const issue = await threadTask(ctx, issue_id)
+    const { issue } = await threadTask(ctx, issue_id)
     const thread = await newestComments(ctx, issue.id, { limit: COMMENT_PAGE_MAX })
     // created_at asc, id tiebreak — the order spine.ts depends on
     thread.sort((a, b) =>

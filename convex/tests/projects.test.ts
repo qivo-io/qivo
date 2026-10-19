@@ -3,7 +3,7 @@
  * the SQL trigger/RPC prose the client toasts byte-for-byte. */
 
 import { describe, expect, it } from 'vitest'
-import { api } from '../_generated/api'
+import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { PROJECT_DESCRIPTION_MAX } from '../lib/projectLimits'
 import { weekLabel } from '../model/orgs'
@@ -1339,14 +1339,41 @@ describe('milestones', () => {
     })
     e = await lastEvent(t, f.org.id)
     expect(e).toMatchObject({ verb: 'renamed milestone', label: 'Beta 3', detail: 'from “Beta 2”' })
+    // a submit that changes nothing writes no row, in the app, REST and MCP
+    const rows = async () => (await activityFor(t, f.org.id)).length
+    const before = await rows()
     await as(t, f.user).mutation(api.projects.updateMilestone, {
       org_id: f.org.id,
       id,
       patch: { name: 'Beta 3', week: '2026-05-18' },
     })
-    e = await lastEvent(t, f.org.id)
-    expect(e.verb).toBe('updated milestone')
-    expect(e.detail).toBeUndefined()
+    await t.mutation(internal.machine.projects.restUpdateMilestone, {
+      callerId: f.user.id,
+      access: 'write',
+      keyName: null,
+      ref: f.meta.key,
+      milestone: id,
+      body: JSON.stringify({ name: 'Beta 3', date: '2026-05-18' }),
+    })
+    await t.mutation(internal.machine.projects.mcpSetMilestone, {
+      callerId: f.user.id,
+      access: 'write',
+      project: f.meta.key,
+      milestone: id,
+      name: ' Beta 3 ',
+    })
+    expect(await rows()).toBe(before)
+    // it is still validated first
+    await expectRefusal(
+      as(t, f.user).mutation(api.projects.updateMilestone, {
+        org_id: f.org.id,
+        id,
+        patch: { name: ' ', week: '2026-05-18' },
+      }),
+      'bad_request',
+      /^a milestone name cannot be blank$/,
+    )
+    expect(await rows()).toBe(before)
   })
 
   it('remove deletes the row and narrates; foreign milestones read not-found', async () => {

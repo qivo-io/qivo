@@ -280,9 +280,8 @@ export const unarchive = orgMutation({
  * DELETE_REASON_MAX (lib/textLimits.ts, 500 characters). The 'deleted'
  * event is written AFTER the move and hangs on the parent (for a
  * sub) or the team (for a meta) — the project it names is gone, which is
- * exactly why (bc022c2:2952-2958). Members receive a sub's event only with
- * access to the parent beyond navigation, and a meta's reaches org admins
- * only (snapshot.ts memberSeesActivity). */
+ * exactly why (bc022c2:2952-2958). Project rows reach no client;
+ * organization admins read them in the export (lib/activityVisibility.ts). */
 export const deleteDeep = orgMutation({
   args: { id: v.string(), reason: v.optional(v.string()) },
   handler: async (ctx, { id, reason }) => {

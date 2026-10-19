@@ -2003,6 +2003,28 @@ describe('write tools', () => {
     ) as { updated: string[] }
     expect(noop.updated).toEqual([])
     expect(await activityFor(fx.t, fx.org.id)).toHaveLength(0)
+    // resent current values: the same answer, still no row
+    const resent = JSON.parse(
+      await fx.t.mutation(internal.machine.mcp.updateIssue, {
+        callerId: fx.agent.id,
+        access: 'write',
+        ref: `QN-${i1.num}`,
+        title: 'Steady',
+        priority: i1.priority,
+        archived: false,
+      }),
+    ) as { updated: string[] }
+    expect(resent.updated).toEqual(['title', 'priority'])
+    expect(await activityFor(fx.t, fx.org.id)).toHaveLength(0)
+    // a real change writes its row
+    await fx.t.mutation(internal.machine.mcp.updateIssue, {
+      callerId: fx.agent.id,
+      access: 'write',
+      ref: `QN-${i1.num}`,
+      title: 'Steady again',
+    })
+    expect((await activityFor(fx.t, fx.org.id)).map((row) => row.verb)).toEqual(['changed'])
+    await drainActivity(fx.t)
     // nothing at all → the MCP sentence (differs from REST's wording)
     await expectRefusal(
       fx.t.mutation(internal.machine.mcp.updateIssue, {

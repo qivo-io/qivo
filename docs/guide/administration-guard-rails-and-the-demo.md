@@ -98,8 +98,9 @@ the period still count. **Refresh** reads current figures.
 **Revoke** asks for confirmation and stops the credential at once, including
 its task event subscriptions. The person sees a token or connected app
 revoked this way as revoked by an admin and can create a new token or connect
-the app again. Create a new agent key in **Users**. A revocation appears in
-the change history for organization admins only. The demo does not offer API
+the app again. Create a new agent key in **Users**. A revocation is kept in
+the organization's change history, which organization admins read in the
+[organization export](./organization-and-team-settings.md#export-data). The demo does not offer API
 access.
 
 ## Managing projects and accounts

@@ -27,6 +27,7 @@ import type { ReapCounts } from '../files'
 import type { RestIssueJson } from '../lib/core'
 import type { OrgRole } from '../lib/enums'
 import type { Refusal, RefusalCode } from '../lib/functions'
+import { type ActivityEntry, insertActivity } from '../model/activity'
 import { countersOf, type OrgCounters } from '../model/orgs'
 import schema from '../schema'
 
@@ -763,6 +764,15 @@ export async function drainActivity(t: T): Promise<void> {
     for (const e of await ctx.db.query('activity_events').collect()) await ctx.db.delete(e._id)
   })
 }
+
+/** Plants activity rows the way the app writes them (model/activity.ts
+ * insertActivity), so each gets its subject's next seq and, on a task row,
+ * named_task_nums. Rows in one call are written one after another. A test
+ * that stands for rows stored before numbering inserts them raw instead. */
+export const plantActivity = (t: T, ...entries: ActivityEntry[]): Promise<void> =>
+  t.run(async (ctx) => {
+    for (const entry of entries) await insertActivity(ctx, entry)
+  })
 
 /** The organization's task and project counters from its org_counters row,
  * else from the legacy fields fixtures plant on the organization row

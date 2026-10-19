@@ -248,7 +248,7 @@ describe('identity.createOrganization — the whole door', () => {
     expect(org).not.toBeNull()
     expect(org!.name).toBe('Nimbus Labs')
     expect(org!.slug).toBe('nimbus-labs')
-    // the counters and activity retention start in their own rows
+    // the counters start in their own row; no activity retention row
     expect(org!.next_issue_num).toBeUndefined()
     expect(org!.next_project_num).toBeUndefined()
     expect(org!.activity_count).toBeUndefined()
@@ -259,7 +259,7 @@ describe('identity.createOrganization — the whole door', () => {
         .withIndex('by_org', (q) => q.eq('org_id', orgId))
         .collect(),
     )
-    expect(retention.map(({ _id, _creationTime, ...row }) => row)).toEqual([{ org_id: orgId }])
+    expect(retention).toEqual([])
     expect(org!.date_format).toBe('YYYY-MM-DD')
     expect(org!.week_start).toBe(1)
     expect(org!.week_one_rule).toBe('first4day')

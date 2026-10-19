@@ -690,7 +690,11 @@ describe('PATCH /v1/tasks/{ref} moves, parents, labels and archive reasons', () 
     expect((await row(fx.t, parent.id)).remaining_hours).toBeUndefined()
     const events = await activityFor(fx.t, fx.org.id)
     const attach = events.find((e) => e.target_id === child.id)
-    expect(attach).toMatchObject({ verb: 'moved', detail: `under QN-${parent.num}, ${VIA}` })
+    expect(attach).toMatchObject({
+      verb: 'moved',
+      detail: `under QN-${parent.num}, ${VIA}`,
+      named_task_nums: [parent.num],
+    })
     expect(namedTaskNums(attach as Doc<'activity_events'>)).toEqual([parent.num])
     // a cycle, a hidden parent and a read-only parent are refused
     await expectRefusal(restPatch(fx, parent.id, { parent: child.id }), 'rule')
@@ -716,6 +720,7 @@ describe('PATCH /v1/tasks/{ref} moves, parents, labels and archive reasons', () 
     expect((await activityFor(fx.t, fx.org.id)).at(-1)).toMatchObject({
       verb: 'detached',
       detail: `from QN-${parent.num}, ${VIA}`,
+      named_task_nums: [parent.num],
     })
     // POST creates a subtask
     const created = await fx.t.mutation(internal.machine.rest.createIssue, {
@@ -855,6 +860,7 @@ describe('REST links', () => {
       verb: 'linked',
       target_id: b.id,
       detail: `(blocks QN-${a.num}), ${VIA}`,
+      named_task_nums: [a.num],
     })
     expect(namedTaskNums(events[0])).toEqual([a.num])
     expect((await restGet(fx, b.id)).links).toEqual([
@@ -1038,12 +1044,19 @@ describe('MCP task parity', () => {
       archived_at: expect.any(String),
     })
     expect(await labelNames(fx.t, t1.id)).toEqual(['Bug'])
-    const verbs = (await activityFor(fx.t, fx.org.id)).map((e) => [e.verb, e.detail])
-    expect(verbs).toEqual([
+    const rows = await activityFor(fx.t, fx.org.id)
+    expect(rows.map((e) => [e.verb, e.detail])).toEqual([
       ['moved', 'to the Board rev sub-project (from Firmware), via MCP'],
       ['moved', `under QN-${parent.num}, via MCP`],
       ['archived', '(start week unset → 2026-09-21, end week unset → 2026-09-21), via MCP'],
       ['labeled', '“Bug”, via MCP'],
+    ])
+    // one task's rows, numbered in write order, each listing the tasks it names
+    expect(rows.map((e) => [e.seq, e.named_task_nums])).toEqual([
+      [1, []],
+      [2, [parent.num]],
+      [3, []],
+      [4, []],
     ])
     const reason = await fx.t.run(async (ctx) =>
       ctx.db
@@ -1306,6 +1319,11 @@ describe('MCP task parity', () => {
       linked: true,
       changed: true,
     })
+    // the row names the other end of the stored link, as its text does
+    const linked = await activityFor(fx.t, fx.org.id)
+    expect(linked).toHaveLength(1)
+    expect(linked[0].named_task_nums).toEqual(namedTaskNums(linked[0]))
+    expect([[a.num], [b.num]]).toContainEqual(linked[0].named_task_nums)
     expect((await link({ ref: b.id, other: a.id, kind: 'relates', linked: true })).changed).toBe(
       false,
     )
