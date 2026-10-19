@@ -313,6 +313,55 @@ export async function readsUnder(ctx: QueryCtx, ceiling: ReadCeiling): Promise<b
   )
 }
 
+/** A walk's check of the request's reads against a ceiling (readsUnder)
+ * that reads the metrics only when the reads since its last look could
+ * have reached the ceiling. It counts each index range as one and each
+ * document at Convex's size limit, so it answers no later than readsUnder
+ * would, as long as the walk reads nothing between its calls. */
+export type CeilingGuard = {
+  /** Whether the walk may start one more index range. */
+  range(): Promise<boolean>
+  /** Whether the walk may go on after the document it just read. */
+  document(): Promise<boolean>
+}
+
+/** A CeilingGuard for `ceiling`. Each look at the metrics costs about as
+ * much as an index range, which a walk of thousands of tasks felt when it
+ * looked before each range and after each document. */
+export function ceilingGuard(ctx: QueryCtx, ceiling: ReadCeiling): CeilingGuard {
+  let ranges = 0
+  let documents = 0
+  const look = async (): Promise<boolean> => {
+    const m = await ctx.meta.getTransactionMetrics()
+    const left = {
+      ranges: ceiling.ranges - m.databaseQueries.used,
+      documents: ceiling.documents - m.documentsRead.used,
+      bytes: ceiling.bytes - m.bytesRead.used,
+    }
+    if (left.ranges <= 0 || left.documents <= 0 || left.bytes <= 0) return false
+    ranges = left.ranges
+    documents = Math.min(left.documents - 1, Math.floor((left.bytes - 1) / DOCUMENT_MAX_BYTES))
+    return true
+  }
+  return {
+    range: async () => {
+      if (ranges <= 0 && !(await look())) return false
+      ranges--
+      return true
+    },
+    document: async () => {
+      if (documents <= 0) return await look()
+      documents--
+      return true
+    },
+  }
+}
+
+/** How many index ranges the request has left under `ceiling`. */
+export async function rangesLeft(ctx: QueryCtx, ceiling: ReadCeiling): Promise<number> {
+  return ceiling.ranges - (await ctx.meta.getTransactionMetrics()).databaseQueries.used
+}
+
 /* -------------------------------------------------------------- the facts */
 
 /** What a page reads about one archived task besides its own row, each at

@@ -70,10 +70,12 @@ import {
   type ArchiveCursor,
   archivedTaskMatcher,
   archivedTasksPage,
+  ceilingGuard,
   matchingLabels,
   namesOf,
   parseArchiveCursor,
   type ReadCeiling,
+  rangesLeft,
   readsUnder,
   roomOf,
   rosterNames,
@@ -1307,18 +1309,21 @@ type Walk = { children: ChildIndex; whole: boolean }
  * only the root's subtasks, and the totals' walks enter only tasks that
  * count and need each one's subtasks to tell a leaf from a group, so a
  * branch that cannot count is never read below its top. It reads one level
- * at a time and stops at the depth assertParentChain allows. An active
- * root's walk past SUBTREE_WALK reads reads the organization's active tasks
- * once instead. It enters only active tasks, and each decision about one
- * needs only its active subtasks (isGroupIn), so the organization's active
- * tasks are all it needs.
+ * at a time and stops at the depth assertParentChain allows. Each task a
+ * level enters takes one by_parent read. An active root's walk that would
+ * pass SUBTREE_WALK reads reads the organization's active tasks once
+ * instead, as soon as a level shows it. It enters only active tasks, and
+ * each decision about one needs only its active subtasks (isGroupIn), so
+ * the organization's active tasks are all it needs.
  *
  * An archived root's walk needs a `ceiling`, because it can enter the
  * task's whole history, and it never reads the organization's tasks. It
- * checks the request's reads before each by_parent read, and it checks
- * them after each task, since one read can hold many large tasks. Once they
- * reach the ceiling it stops, with the subtasks of each task whose read it
- * finished. */
+ * keeps the request's reads under the ceiling before each by_parent read
+ * and after each task, since one read can hold many large tasks
+ * (lib/archivedTasks.ts ceilingGuard, which needs a `counts` that reads
+ * nothing, as the readable flags give it). Once they reach the ceiling, or
+ * a level holds more tasks than the ceiling leaves ranges for, it stops,
+ * with the subtasks of each task whose read it finished. */
 async function subtreeIndex(
   ctx: QueryCtx,
   root: Doc<'issues'>,
@@ -1330,26 +1335,29 @@ async function subtreeIndex(
   }
   const index = new Map<string, Doc<'issues'>[]>()
   const stopped: Walk = { children: index, whole: false }
+  const guard = ceiling === undefined ? null : ceilingGuard(ctx, ceiling)
   const seen = new Set<string>([root.id])
   let frontier = [root.id]
   let reads = 0
   for (let depth = 0; frontier.length > 0 && depth <= 20; depth++) {
+    // a level that cannot be read whole ends the walk before its first read
+    if (ceiling !== undefined) {
+      if (frontier.length > (await rangesLeft(ctx, ceiling))) return stopped
+    } else if ((reads += frontier.length) > SUBTREE_WALK.reads) {
+      // the root's own subtasks are read first, so they are in the index
+      return {
+        children: await activeTasksUnder(ctx, root, index.get(root.id) ?? []),
+        whole: true,
+      }
+    }
     const next: string[] = []
     for (const id of frontier) {
-      if (ceiling !== undefined) {
-        if (!(await readsUnder(ctx, ceiling))) return stopped
-      } else if (++reads > SUBTREE_WALK.reads) {
-        // the root's own subtasks are read first, so they are in the index
-        return {
-          children: await activeTasksUnder(ctx, root, index.get(root.id) ?? []),
-          whole: true,
-        }
-      }
+      if (guard !== null && !(await guard.range())) return stopped
       const kids: Doc<'issues'>[] = []
       const read = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', id))
       for await (const kid of read) {
         kids.push(kid)
-        if (ceiling !== undefined && !(await readsUnder(ctx, ceiling))) return stopped
+        if (guard !== null && !(await guard.document())) return stopped
       }
       index.set(id, kids)
       for (const kid of kids) {

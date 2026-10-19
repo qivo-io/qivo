@@ -258,4 +258,53 @@ describe('roadmap saves and undo of many tasks', () => {
       ),
     ).rejects.toThrow('full')
   })
+
+  it('tells each follower apart by access when it answers many at once', async () => {
+    const fx = await planted(1, 0)
+    const [task] = fx.tasks
+    // sixteen followers, every other one without access to the project, so
+    // both the first answers, one by one, and the batched rest meet some
+    const followers = await fx.t.run(async (ctx) => {
+      const out: { id: string; sees: boolean }[] = []
+      for (let n = 0; n < 16; n++) {
+        const id = uuid()
+        await ctx.db.insert('profiles', {
+          id,
+          org_id: fx.org.id,
+          name: `Follower ${n}`,
+          initials: 'FF',
+          color: '#7a7ad0',
+          org_role: 'user',
+          active: true,
+          kind: 'person',
+          accepted_at: NOW,
+          created_at: NOW,
+        })
+        const sees = n % 2 === 0
+        if (sees)
+          await ctx.db.insert('team_members', {
+            team_id: fx.team.id,
+            profile_id: id,
+            is_leader: false,
+          })
+        await ctx.db.insert('issue_subscriptions', {
+          issue_id: task.id,
+          profile_id: id,
+          created_at: NOW,
+        })
+        out.push({ id, sees })
+      }
+      return out
+    })
+    await scheduleAll(fx, uuid(), '2026-01-05')
+    const told = await fx.t.run(async (ctx) =>
+      (await ctx.db.query('messages').collect()).map((m) => m.recipient_id),
+    )
+    expect(told.sort()).toEqual(
+      followers
+        .filter((f) => f.sees)
+        .map((f) => f.id)
+        .sort(),
+    )
+  })
 })
