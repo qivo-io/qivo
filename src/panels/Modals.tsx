@@ -1084,7 +1084,7 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
               </span>
               <span className="text-sm text-text-2">
                 Reviewer roles move to the same person.
-                {/* the server's fixed cap; its follower-based room cannot be
+                {/* the server's fixed cap; its room for one request cannot be
                     known here, so only the count is checked */}
                 {/* deleting a team saves each task on its own, so no cap */}
                 {!deleting &&

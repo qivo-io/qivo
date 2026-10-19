@@ -130,8 +130,7 @@ import { assertCanEdit, clearParentRemaining, detachChild, sameTopLevel } from '
 import {
   type NotifyPreload,
   newNotifyPreload,
-  postMessage,
-  type RecipientSight,
+  notifyFollowersOfChange,
   scheduleArchivedReads,
 } from './messages'
 import { newUuid } from './orgs'
@@ -2869,7 +2868,8 @@ async function announce(
 
 /* The Restored notice to the followers of `root`, the one a restore from
  * the archive sends (model/issues.ts unarchiveIssueCore). The rows are back
- * by now, so the followers' sight is worked out once (RecipientSight). */
+ * by now. Past its first followers, background steps tell the rest
+ * (model/messages.ts notifyFollowersOfChange). */
 async function noticeRestored(
   run: Run,
   root: Doc<'issues'>,
@@ -2877,23 +2877,13 @@ async function noticeRestored(
 ): Promise<void> {
   const project = await byId(run.ctx, 'projects', root.project_id)
   if (project === null) return
-  const visibility: RecipientSight = new Map()
-  const follows = run.ctx.db
-    .query('issue_subscriptions')
-    .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', root.id))
-  for await (const follow of follows)
-    await postMessage(run.ctx, {
-      org_id: root.org_id,
-      recipient_id: follow.profile_id,
-      issue_id: root.id,
-      kind: 'change',
-      body: 'Restored',
-      actor_id: restorer.id,
-      now: run.now,
-      issue: root,
-      project,
-      visibility,
-    })
+  await notifyFollowersOfChange(run.ctx, {
+    issue: root,
+    project,
+    actor: restorer,
+    now: run.now,
+    parts: ['Restored'],
+  })
 }
 
 const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`

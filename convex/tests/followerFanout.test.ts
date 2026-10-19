@@ -20,6 +20,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { deleteTask, itemFor } from './trash.setup'
 
 const DEFAULT_FANOUT = { ...FOLLOWER_FANOUT }
 
@@ -108,6 +109,26 @@ describe('the follower notices of a task followed before the cap', () => {
     await t.finishAllScheduledFunctions(vi.runAllTimers)
     // the delete removed the first two notices, and the steps posted none
     expect(await told(t, task)).toEqual([])
+  })
+})
+
+describe('a restore from Deleted items', () => {
+  it("tells the task's followers past the first in steps", async () => {
+    Object.assign(FOLLOWER_FANOUT, { inline: 2, step: 2 })
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const followers = await plantFollowers(t, f, task, 7)
+    await deleteTask(t, f, task.id)
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    const item = await itemFor(t, task.id)
+    await as(t, f.user).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: [item.id] })
+    // the restore's own transaction tells the first two
+    expect(await told(t, task)).toHaveLength(2)
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    const all = await told(t, task)
+    expect(all.map(([id]) => id).sort()).toEqual([...followers].sort())
+    expect(new Set(all.map(([, detail]) => detail))).toEqual(new Set(['Restored']))
   })
 })
 
@@ -223,6 +244,24 @@ describe('a change told in steps after the task changed', () => {
       'Attached under a task in another sub-project',
     )
   })
+
+  it('keeps the new parent anonymous when it moved into sight meanwhile', async () => {
+    const { t, f, task, insider } = await scene()
+    // the parent sits in a sub-project the insider cannot see when the
+    // change is written, and moves into Firmware before the step
+    const hidden = await plantHiddenSibling(t, f, insider)
+    const parent = await plantIssue(t, { org_id: f.org.id, project_id: hidden.id })
+    await as(t, f.admin).mutation(api.issues.update, {
+      org_id: f.org.id,
+      id: task.id,
+      patch: { parent_id: parent.id },
+    })
+    await t.run(async (ctx) => ctx.db.patch(parent._id, { project_id: f.sub.id }))
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    expect(new Map(await told(t, task)).get(insider.id)).toBe(
+      'Attached under a task in another sub-project',
+    )
+  })
 })
 
 describe('a notice that arrives after newer ones', () => {
@@ -264,5 +303,8 @@ describe('a notice that arrives after newer ones', () => {
     expect(details).toHaveLength(50)
     expect(details).toContain('change 2')
     expect(details).toContain('comment 0')
+    // the arrival woke the item, so it stays, and the oldest other comment goes
+    expect(details).toContain('change 1')
+    expect(details).not.toContain('comment 3')
   })
 })

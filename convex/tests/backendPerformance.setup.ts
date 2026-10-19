@@ -2,6 +2,7 @@
 import type { FunctionReturnType } from 'convex/server'
 import type { api } from '../_generated/api'
 import type { QueryCtx } from '../_generated/server'
+import { joinLists } from '../lib/arrayLimit'
 import { logActivity } from '../model/activity'
 import { forMe } from '../snapshot'
 import { NOW, newT, withOrg } from './helpers.setup'
@@ -30,11 +31,13 @@ type Baseline = {
 
 /** `result` without what may differ between two deliveries of the same data:
     the delivery time, the activity list an older baseline filled and the
-    snapshot now sends empty, and fields an older baseline returned that the
-    snapshot no longer does. Applied to both sides of a comparison. */
-function comparable(result: Snapshot) {
-  if (result === null) return result
-  const legacy = result as Snapshot & { orgs: { activity_count?: number }[] }
+    snapshot now sends empty, fields an older baseline returned that the
+    snapshot no longer does, and the parts long lists now arrive in
+    (lib/arrayLimit.ts), joined back. Applied to both sides of a comparison. */
+function comparable(delivered: Snapshot) {
+  if (delivered === null) return delivered
+  const result = joinLists(delivered)
+  const legacy = result as typeof result & { orgs: { activity_count?: number }[] }
   for (const row of legacy.orgs) delete row.activity_count
   for (const rows of [result.links, result.issueLabels, result.attachments]) {
     for (const row of rows) delete (row as { org_id?: string }).org_id

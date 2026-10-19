@@ -1143,8 +1143,9 @@ without subtasks) and can no longer see afterwards are settled by
   on each task once the access is gone.
 
 The removal and its choice land together or not at all. One removal reassigns
-at most 120 tasks, and their followers' inbox messages arrive moments after
-the removal. A larger handover is refused and nothing changes. The result adds `stranded`,
+at most 120 tasks, and fewer when the change is too large for one call. Their
+followers' inbox messages arrive moments after the removal. A larger handover
+is refused and nothing changes. The result adds `stranded`,
 `kept_as_viewer` and `reassigned`; `stranded` and `reassigned` list `{id, key,
 title, user_id, role}`. `changed` is `false` when there was no grant to
 remove. `on_held_tasks` with a level is refused, and so is a misspelled
@@ -1209,9 +1210,9 @@ person who is an organization admin or a leader of the team; an agent gets
   manage that project's users, so a team leader without it is refused with
   `no permission to manage users on this project` and can still leave the
   tasks. The removal and its choice land together or not at all. One removal
-  reassigns at most 120 tasks, and their followers' inbox messages arrive
-  moments after the removal. A larger handover is refused and nothing
-  changes. The result is `{team,
+  reassigns at most 120 tasks, and fewer when the change is too large for one
+  call. Their followers' inbox messages arrive moments after the removal. A
+  larger handover is refused and nothing changes. The result is `{team,
   user, member: false, leader: false, changed}` plus `stranded`,
   `kept_as_viewer` and `reassigned`; `changed` is `false` when the user was
   not a member.
@@ -1709,8 +1710,8 @@ item keeps at most 50 unread messages. When more arrive, Qivo drops the
 oldest unread ones but keeps the item's first unread message and the newest
 message of each `kind`. On a task with many followers it does so moments
 after the arrival, so an item can briefly hold one more. A comment or a
-change on a task with more than 128 followers, which only tasks from before
-the follower limit have, reaches the first 128 at once and the rest moments
+change on a task with more than 128 followers, such as a task from before
+the follower limit, reaches the first 128 at once and the rest moments
 later. The followers of the tasks a roadmap save or an access removal
 changes get their messages moments after it saves.
 

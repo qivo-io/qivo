@@ -252,7 +252,7 @@ export const REASSIGN_ROOM = 0.95
  * the people as Viewers only when the removal would accept that choice
  * (`canKeep`). */
 export const reassignTooLarge = (canKeep: boolean): string =>
-  `a removal can reassign at most ${REASSIGN_MAX} tasks at once, so ${canKeep ? 'keep the people as Viewers or ' : ''}reassign some of the tasks first`
+  `a removal can reassign at most ${REASSIGN_MAX} tasks at once, fewer when the change is too large for one request, so ${canKeep ? 'keep the people as Viewers or ' : ''}reassign some of the tasks first`
 
 /* Thrown by a reassignment's guard once the transaction has used more than
  * REASSIGN_ROOM of a limit (lib/db.ts usedMoreThan), and turned into

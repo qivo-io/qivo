@@ -25,7 +25,7 @@
 
 import { makeFunctionReference } from 'convex/server'
 import { type Infer, v } from 'convex/values'
-import type { Doc } from '../_generated/dataModel'
+import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
   canSeeProject,
@@ -214,17 +214,20 @@ const itemStart = (ctx: MutationCtx, a: { recipient_id: string; issue_id: string
  * (src/lib/spine.ts firstUnreadTs puts the New divider there), nor the
  * newest unread row of each kind, so the Inbox kind filter still finds the
  * item. A kind whose newest row lies past the first TRIM_READ keeps one more
- * row than it needs to. This is separate from retention, and the nightly
- * sweep still never deletes an unread row. */
+ * row than it needs to. It never deletes `arrival` either, the row the
+ * caller just posted, which woke the item from any snooze. This is separate
+ * from retention, and the nightly sweep still never deletes an unread row. */
 async function trimRows(
   ctx: MutationCtx,
   unread: readonly Pick<Doc<'messages'>, '_id' | 'kind'>[],
+  arrival?: Id<'messages'>,
 ): Promise<void> {
   let excess = Math.min(unread.length - ITEM_UNREAD_CAP, ITEM_TRIM_STEP)
   if (excess <= 0) return
   const newestOfKind = new Map<MessageKind, Pick<Doc<'messages'>, '_id' | 'kind'>>()
   for (const r of unread) newestOfKind.set(r.kind, r)
   const kept = new Set([unread[0]._id, ...[...newestOfKind.values()].map((r) => r._id)])
+  if (arrival !== undefined) kept.add(arrival)
   for (const r of unread) {
     if (excess === 0) break
     if (kept.has(r._id)) continue
@@ -508,8 +511,12 @@ export async function postMessage(
     }
   }
   // The prune (pruneReadMessages): the item keeps its newest row, read or
-  // not, and no other read row. Only a row of this same instant can be newer
-  // than the arrival, and only such a row survives it.
+  // not, and no other read row. A read row newer than the arrival survives
+  // it: one of this same instant, or any row newer than a background step's
+  // notice, which keeps its write's time. Such a notice stored read about an
+  // archived task can outlive newer unread rows of its item until the
+  // archive's background step marks them read and prunes the item
+  // (readArchivedTaskMessages).
   let newest: Pick<Doc<'messages'>, 'created_at' | 'id'> = row
   for (const r of read) if (oldestFirst(newest, r) < 0) newest = r
   for (const r of read) if (r !== newest) await ctx.db.delete(r._id)
@@ -525,6 +532,7 @@ export async function postMessage(
   await trimRows(
     ctx,
     row.read_at === undefined ? [...unread, { ...row, _id: inserted }].sort(oldestFirst) : unread,
+    inserted,
   )
   return true
 }
@@ -1502,6 +1510,42 @@ export async function notifyFollowersStep(ctx: MutationCtx, a: FollowerStep): Pr
     visibility: new Map(),
     trims,
   })
+  await scheduleItemTrims(ctx, issue.id, trims)
+}
+
+/** Tells the followers of `issue`, in `project`, one change line, `parts`
+ * joined: the first FOLLOWER_FANOUT.inline in this transaction and the rest
+ * in background steps. A restore from Deleted items says 'Restored' this
+ * way (model/deletedItems.ts). */
+export async function notifyFollowersOfChange(
+  ctx: MutationCtx,
+  a: {
+    issue: Doc<'issues'>
+    project: Doc<'projects'>
+    actor: Doc<'profiles'>
+    now: string
+    parts: string[]
+  },
+): Promise<void> {
+  const { issue, project } = a
+  const trims = newItemTrims()
+  const subs = await followersFrom(ctx, issue.id, undefined, FOLLOWER_FANOUT.inline + 1)
+  await fanOut(
+    ctx,
+    {
+      org_id: issue.org_id,
+      issue_id: issue.id,
+      task: issue._id,
+      project_id: issue.project_id,
+      actor_id: a.actor.id,
+      now: a.now,
+      note: { kind: 'change', parts: a.parts, handed: false },
+      mentioned: [],
+    },
+    subs,
+    FOLLOWER_FANOUT.inline,
+    { issue, project, also: [], parent: [], profiles: new Map(), visibility: new Map(), trims },
+  )
   await scheduleItemTrims(ctx, issue.id, trims)
 }
 

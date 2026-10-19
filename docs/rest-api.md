@@ -599,11 +599,12 @@ project, user or team is unknown.
 
 The removal and its choice land together or not at all. If any task cannot
 be reassigned, the access stays and nothing changes. One removal reassigns at
-most 120 tasks, and their followers' inbox messages arrive moments after the
-removal. A larger handover is a `400` with `a removal can reassign at most
-120 tasks at once, so keep the people as Viewers or reassign some of the
-tasks first` (without the Viewer choice when you cannot give it) and nothing
-changes. The answer is
+most 120 tasks, and fewer when the change is too large for one request.
+Their followers' inbox messages arrive moments after the removal. A larger
+handover is a `400` with `a removal can reassign at most 120 tasks at once,
+fewer when the change is too large for one request, so keep the people as
+Viewers or reassign some of the tasks first` (without the Viewer choice when
+you cannot give it) and nothing changes. The answer is
 `{"project_id", "user" | "team", "removed", "stranded", "kept_as_viewer",
 "reassigned"}`, where `stranded` and `reassigned` list `{"id", "key",
 "title", "user_id", "role"}`, and `kept_as_viewer` the user uuids given a
@@ -712,8 +713,9 @@ access. Any other field is refused with `400`, such as `unknown field
 project access, the body is checked before the team and user.
 
 The removal and its choice land together or not at all. One removal
-reassigns at most 120 tasks, and their followers' inbox messages arrive
-moments after the removal. A larger handover is a `400` and nothing changes.
+reassigns at most 120 tasks, and fewer when the change is too large for one
+request. Their followers' inbox messages arrive moments after the removal. A
+larger handover is a `400` and nothing changes.
 The answer is
 `{"team_id", "user", "removed", "stranded", "kept_as_viewer",
 "reassigned"}`, shaped as for project access; removing someone who is not a
@@ -1555,7 +1557,10 @@ and the caller reads and clears what arrives through [the inbox
 routes](#inbox).
 
 All of it happens server-side, inside the same transaction as the write, so
-it needs nothing from the caller; unknown or out-of-org uuids in mention
+it needs nothing from the caller. The exceptions are follower messages on a
+task with more than 128 followers, past the first 128, and every follower
+message of a roadmap save or an access removal, which arrive moments later
+(see [Inbox](#inbox)). Unknown or out-of-org uuids in mention
 position are silently ignored, as are users without visibility into the
 project and agents that receive no inbox messages (see [Inbox](#inbox)), so a
 subscription never outlives the project access that justified it.
@@ -1604,7 +1609,7 @@ messages. When more arrive, Qivo drops the oldest unread ones but keeps the
 item's first unread message and the newest message of each `kind`. On a task
 with many followers it does so moments after the arrival, so an item can
 briefly hold one more. A comment or a change on a task with more than 128
-followers, which only tasks from before the follower limit have, reaches the
+followers, such as a task from before the follower limit, reaches the
 first 128 at once and the rest moments later. The followers of the tasks a
 roadmap save or an access removal changes get their messages moments after
 it saves.

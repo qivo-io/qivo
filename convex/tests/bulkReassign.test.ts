@@ -3,8 +3,9 @@
  *
  *   1. An access removal that reassigns its held tasks
  *      (model/projectAccess.ts removeAndSettle) stays inside Convex's limits
- *      for one transaction up to REASSIGN_MAX tasks with a few followers
- *      each. It refuses more tasks, or fewer whose followers fill the
+ *      for one transaction up to REASSIGN_MAX tasks. Its followers hear from
+ *      background steps (NotifyPreload.deferFollowers), so their number costs
+ *      the removal nothing. It refuses more tasks, or fewer that fill the
  *      transaction (REASSIGN_ROOM), without blaming the tasks, and suggests
  *      keeping the people as Viewers only to a remover who could.
  *   2. The preload and the passed checks (model/issues.ts BulkUpdate) change
@@ -19,14 +20,9 @@
  * REASSIGN_MAX comes from the `crowded` fixture below. When it was set, the
  * largest count that fixture reassigned inside the limits was 196 tasks, at
  * about 16 index ranges per task after about 900 for the first sight check of
- * each follower. Index ranges ran out first. Without the preload it managed
- * 44 tasks, at about 93 ranges each. A local Convex backend reassigned 400
- * tasks of the same shape, with 92 more people in Northstar, using 3,422 of
- * its 4,096 reads. Followers' sight is now worked out once per project
- * after the first few (model/messages.ts RecipientSight), so each follower
- * costs about one range: REASSIGN_MAX tasks used 1,669 ranges here with 4
- * followers each and 3,709 with 21, and 100 tasks with 61 followers each
- * reach REASSIGN_ROOM, which refuses them. */
+ * each follower, back when the removal told every follower itself. Index
+ * ranges ran out first. A local Convex backend now reassigns 120 tasks with
+ * 100 followers each, which once was refused. */
 /// <reference types="vite/client" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -295,6 +291,21 @@ describe('reassigning the tasks of an access removal', () => {
     expect((await messagesFor(fx.t, follower.id, fx.tasks[0].id)).map((m) => m.detail)).toEqual([
       'Assigned to Leo',
     ])
+  })
+
+  it('refuses a smaller handover that fills the transaction partway, and changes nothing', async () => {
+    // under a limit of 350 index ranges, the room check stops 40 tasks
+    // partway, after some were reassigned
+    const fx = await crowded(40, { t: newT({ transactionLimits: { databaseQueries: 350 } }) })
+    const before = await holders(fx)
+    const e = await expectRefusal(removeEmil(fx, fx.leo.id), 'rule')
+    expect((e.data as Refusal).message).toBe(reassignTooLarge(true))
+    expect((e.data as Refusal).reason).toBeUndefined()
+    // the tasks reassigned before the check refused are rolled back too
+    expect(await membership(fx)).not.toBeNull()
+    expect(await holders(fx)).toEqual(before)
+    await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
+    expect(await fx.t.run((ctx) => ctx.db.query('messages').collect())).toEqual([])
   })
 
   it('hands over a task with 1,000 followers, whom steps within the limits tell', async () => {

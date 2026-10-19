@@ -13,7 +13,7 @@
 /// <reference types="vite/client" />
 
 import type { FunctionArgs } from 'convex/server'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { projectSightForProfiles, SIGHT_READ } from '../lib/access'
@@ -21,6 +21,7 @@ import { byId } from '../lib/db'
 import type { MessageKind } from '../lib/enums'
 import {
   extractMentions,
+  FOLLOWER_FANOUT,
   ITEM_TRIM_STEP,
   ITEM_UNREAD_CAP,
   type NotifyPreload,
@@ -49,6 +50,11 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+
+const DEFAULT_FANOUT = { ...FOLLOWER_FANOUT }
+afterEach(() => {
+  Object.assign(FOLLOWER_FANOUT, DEFAULT_FANOUT)
+})
 
 type Patch = FunctionArgs<typeof api.issues.update>['patch']
 type CreateArgs = FunctionArgs<typeof api.issues.create>
@@ -1079,7 +1085,9 @@ describe('notifyCommentInsert (model — composed by phase 5 comments.create)', 
   })
 
   it("a fan-out works out its followers' sight once per project, however many follow", async () => {
-    vi.useFakeTimers()
+    // every follower in this transaction, as a background step tells them
+    // with the same code (FOLLOWER_FANOUT)
+    Object.assign(FOLLOWER_FANOUT, { inline: 1000 })
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -1143,10 +1151,6 @@ describe('notifyCommentInsert (model — composed by phase 5 comments.create)', 
       })
       return (await ctx.meta.getTransactionMetrics()).databaseQueries.used
     })
-    // past the first FOLLOWER_FANOUT.inline followers, a background step
-    // tells the rest
-    await t.finishAllScheduledFunctions(vi.runAllTimers)
-    vi.useRealTimers()
     expect(await messagesFor(t, followers[0], issue.id)).toHaveLength(1)
     expect(await messagesFor(t, followers[239], issue.id)).toHaveLength(1)
     expect(await messagesFor(t, followers[240], issue.id)).toHaveLength(0)
