@@ -88,19 +88,27 @@ function setPreviewSiteUrl(env) {
   }
 }
 
-/* Backend settings production cannot run without: it sends sign-up,
- * password reset, invitation, billing and deletion mail. Staging, previews
- * and the demo send none. */
-const PRODUCTION_BACKEND_ENV = ['LETTERMINT_API_KEY', 'MAIL_FROM']
+/* One bare address, the rule of ADDR in convex/lib/mailConfig.ts, which
+ * the mail code applies to MAIL_FROM. vercel-build.test.mjs keeps the two in
+ * step, since this script cannot import TypeScript. */
+const ONE_ADDRESS =
+  /^[^\s@,;:<>"'\\]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i
+export const isOneAddress = (s) => s.length <= 254 && ONE_ADDRESS.test(s)
 
-/* Refuses a production build whose backend lacks one of them, before any
- * function is pushed. `read` returns one backend value, which is only tested
- * for being set and never printed. mail.ts checks MAIL_FROM's form. */
+/* Production sends sign-up, password reset, invitation, billing and deletion
+ * mail, so this refuses a production build, before any function is pushed,
+ * unless its backend has the Lettermint token and a MAIL_FROM of one address.
+ * Staging, previews and the demo send none. `read` returns one trimmed
+ * backend value, which is only tested and never printed. */
 export function requireProductionBackendEnv(env, read) {
   if (env.QIVO_ENVIRONMENT !== 'production') return
-  const missing = PRODUCTION_BACKEND_ENV.filter((name) => !read(name))
+  const token = read('LETTERMINT_API_KEY')
+  const from = read('MAIL_FROM')
+  const missing = [!token && 'LETTERMINT_API_KEY', !from && 'MAIL_FROM'].filter(Boolean)
   if (missing.length > 0)
     throw new Error(`Set backend ${missing.join(' and ')} before releasing to production.`)
+  if (!isOneAddress(from))
+    throw new Error('Set backend MAIL_FROM to one bare address before releasing to production.')
 }
 
 /* The origin the website build writes into canonical links and the sitemap:

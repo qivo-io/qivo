@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
+import { address } from '../convex/lib/mailConfig'
 import {
   deploymentName,
   ignoredTheTarget,
+  isOneAddress,
   isPreviewDeployKey,
   previewSiteUrl,
   requireProductionBackendEnv,
@@ -139,6 +141,32 @@ describe('requireProductionBackendEnv — production mail before functions push'
     expect(() => requireProductionBackendEnv(production, backend({}))).toThrow(
       'Set backend LETTERMINT_API_KEY and MAIL_FROM before releasing to production.',
     )
+  })
+
+  it('refuses a MAIL_FROM that the mail code would not send from', () => {
+    for (const from of ['Qivo <no-reply@qivo.io>', 'a@qivo.io, b@qivo.io', 'no-reply'])
+      expect(() =>
+        requireProductionBackendEnv(
+          { QIVO_ENVIRONMENT: 'production' },
+          backend({ LETTERMINT_API_KEY: 'test-only-token', MAIL_FROM: from }),
+        ),
+      ).toThrow('Set backend MAIL_FROM to one bare address before releasing to production.')
+  })
+
+  it('applies the same address rule as convex/lib/mailConfig.ts', () => {
+    const samples = [
+      'no-reply@qivo.io',
+      'No-Reply@Mail.Qivo.IO',
+      'Qivo <no-reply@qivo.io>',
+      'a@qivo.io,b@qivo.io',
+      'a b@qivo.io',
+      'no-reply@localhost',
+      'no-reply@-qivo.io',
+      "o'brien@qivo.io",
+      `${'a'.repeat(250)}@q.io`,
+      `${'a'.repeat(249)}@q.io`,
+    ]
+    for (const s of samples) expect(isOneAddress(s), s).toBe(address(s) !== null)
   })
 
   it('passes a configured production backend and never reads mail settings elsewhere', () => {
