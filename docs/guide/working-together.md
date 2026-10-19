@@ -129,6 +129,14 @@ Qivo subscribes you when you are assigned or handed a task, mentioned on it,
 or comment on it. Creating a task alone does not subscribe you. Removing you
 as assignee does not unsubscribe you.
 
+A task has at most 100 subscribers. Once it has 100, **Me** and **+ Add**
+are disabled with **This task has 100 followers, the most a task can have**,
+and a comment or a mention no longer subscribes anyone, though mentioned
+people still receive their message. A new assignee or reviewer is still
+subscribed, so the people working on a task always hear about it. A comment
+or description reaches at most 100 mentioned people. Tasks that had more
+subscribers before this limit keep them.
+
 A hand-off happens when a task enters **In Review** with you as reviewer, you
 become the reviewer during review, or work returns to you as assignee when it
 leaves review or loses its reviewer. Hand-offs subscribe you again even after

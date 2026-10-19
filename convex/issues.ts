@@ -40,7 +40,13 @@
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
-import { canManageOwnProjectAccess, canSeeProject, hasProjectLevel, keepsInbox } from './lib/access'
+import {
+  canManageOwnProjectAccess,
+  canSeeProject,
+  hasProjectLevel,
+  keepsInbox,
+  projectSightForProfiles,
+} from './lib/access'
 import {
   ARCHIVED_PAGE_ROWS,
   type ArchivedPageRow,
@@ -531,7 +537,10 @@ async function subscriptionTarget(ctx: MeCtx, issueId: string) {
  * snapshot. Existing subscriptions remain visible after access/deactivation
  * so a manager can remove them. Add candidates require CURRENT access, an
  * active seat and an inbox (lib/access.ts keepsInbox, which leaves out
- * Viewer agents); a subscription itself never grants project access. */
+ * Viewer agents); a subscription itself never grants project access. Their
+ * access is worked out for everyone at once (projectSightForProfiles),
+ * because one check per person passed Convex's 4,096 index ranges in an
+ * organization of some thousands. */
 export const subscribers = orgQuery({
   args: { issue_id: v.string() },
   handler: async (ctx, { issue_id }) => {
@@ -548,13 +557,14 @@ export const subscribers = orgQuery({
       .collect()
     const subscribers: string[] = []
     const candidates: string[] = []
+    const sees = canManage ? await projectSightForProfiles(ctx, project) : undefined
     for (const profile of profiles) {
       if (subscribed.has(profile.id)) subscribers.push(profile.id)
       else if (
-        canManage &&
+        sees !== undefined &&
         profile.active &&
         keepsInbox(profile) &&
-        (await canSeeProject(ctx, profile, project))
+        (await sees(profile))
       ) {
         candidates.push(profile.id)
       }
@@ -589,6 +599,7 @@ export const setSubscriber = orgMutation({
         org_id: issue.org_id,
         project,
         now: new Date().toISOString(),
+        cap: 'refuse',
       })
     } else {
       const row = await ctx.db

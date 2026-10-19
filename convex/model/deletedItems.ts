@@ -120,6 +120,7 @@ import {
 } from '../lib/enums'
 import { notFound, rule } from '../lib/functions'
 import { countsAsSubtask } from '../lib/liveTasks'
+import { SUBTASK_MAX } from '../lib/taskLimits'
 import { DELETE_REASON_MAX } from '../lib/textLimits'
 import { insertActivity, logActivity } from './activity'
 import { storageIdInUse } from './attachments'
@@ -127,8 +128,8 @@ import { dropCommentCount } from './commentCounts'
 import { estimateDocumentBytes } from './demoMetrics'
 import { assertCanEdit, clearParentRemaining, detachChild, sameTopLevel } from './issues'
 import {
-  loadNotifyPreload,
   type NotifyPreload,
+  newNotifyPreload,
   postMessage,
   type RecipientSight,
   scheduleArchivedReads,
@@ -774,7 +775,7 @@ async function storeTask(
 /** The step's NotifyPreload. A step changes no profile, grant, team or
  * project after it starts, so one read serves every detach. */
 async function preloadOf(run: Run): Promise<NotifyPreload> {
-  run.preload ??= await loadNotifyPreload(run.ctx, run.item.org_id)
+  run.preload ??= newNotifyPreload()
   return run.preload
 }
 
@@ -2517,6 +2518,8 @@ type LiveTasks = Map<string, Doc<'issues'> | null>
  * (liveProjects) and what each person sees of them (seenBy). */
 type ParentReads = {
   tasks: LiveTasks
+  /* each parent's subtasks as the step leaves them (liveSubtasks) */
+  subtasks: Map<string, number>
   weights: WeakMap<Doc<'issues'>, number>
   parents: Map<string, Promise<OutsideParent | null>>
   projects: Promise<Doc<'projects'>[]> | undefined
@@ -2525,6 +2528,7 @@ type ParentReads = {
 
 const newParentReads = (): ParentReads => ({
   tasks: new Map(),
+  subtasks: new Map(),
   weights: new WeakMap(),
   parents: new Map(),
   projects: undefined,
@@ -2653,8 +2657,11 @@ type Kept = { id: string; grouped: boolean } | undefined | 'later'
  * `home`, the live project the task comes back in, by the subtask rule
  * (model/issues.ts sameTopLevel). A parent that moved to another top-level
  * project since the delete fails it, as can a subtask stored before the
- * rule. An active parent stays when the restorer may change it, within 20
- * levels; an archived one only for an archived task, within the same depth.
+ * rule. The one level of subtasks (lib/taskLimits.ts) also clears a
+ * parent that is a subtask itself, the parent of a task that comes back
+ * with subtasks, and a parent that already has SUBTASK_MAX subtasks. An
+ * active parent stays when the restorer may change it; an archived one only
+ * for an archived task.
  * `grouped`: the attach makes the parent a group (lib/liveTasks.ts
  * countsAsSubtask). Any task under an archived parent does, and so does an
  * active task under an active parent unless the task's project is archived
@@ -2689,6 +2696,8 @@ async function keptParent(
   reads: ParentReads,
 ): Promise<Kept> {
   if (outside === null || !sameTopLevel(home, outside.project)) return undefined
+  // one level of subtasks (lib/taskLimits.ts): no parent that is a subtask
+  if (outside.parent.parent_id !== undefined) return undefined
   const active = outside.parent.archived_at === undefined
   const taskActive = task.archived_at === undefined
   if (!active && taskActive) return undefined
@@ -2696,16 +2705,42 @@ async function keptParent(
   const chain = await chainOver(run, outside.parent, task.id, reads)
   if (chain === 'later') return 'later'
   if (chain === null) return undefined
-  const workers = await workersBelow(run, task, 20 - chain.levels - 1, children)
+  // nor a task with subtasks under one, so the walk allows no level below
+  const workers = await workersBelow(run, task, 0, children)
   if (workers === null) return undefined
+  const subtasks = await liveSubtasks(run, reads, outside.parent.id)
+  if (subtasks === 'later') return 'later'
+  if (subtasks >= SUBTASK_MAX) return undefined
   const sees = await allSee(run, reads, task, workers, chain.projects)
   if (sees === 'later') return 'later'
+  if (sees) reads.subtasks.set(outside.parent.id, subtasks + 1)
   // the attach makes the parent a group only when the task counts for it
   const grouped = countsAsSubtask(
     { archived: !active, projectLive: outside.project.archived_at === undefined },
     { archived: !taskActive, projectLive: home.archived_at === undefined },
   )
   return sees ? { id: outside.parent.id, grouped } : undefined
+}
+
+/** How many subtasks live task `parentId` has, archived ones included,
+ * counted up to SUBTASK_MAX, with the ones the step gave it. Read once per
+ * step and charged to its budget; 'later' when the step's reads are spent
+ * before it is read. */
+async function liveSubtasks(
+  run: Run,
+  reads: ParentReads,
+  parentId: string,
+): Promise<number | 'later'> {
+  const known = reads.subtasks.get(parentId)
+  if (known !== undefined) return known
+  if (readsSpent(run.budget)) return 'later'
+  const kids = await run.ctx.db
+    .query('issues')
+    .withIndex('by_parent', (q) => q.eq('parent_id', parentId))
+    .take(SUBTASK_MAX)
+  for (const kid of kids) chargeRead(run.budget, kid)
+  reads.subtasks.set(parentId, kids.length)
+  return kids.length
 }
 
 /** The chain from a live task to the top: how many levels it holds and the
@@ -3915,7 +3950,7 @@ export async function moveTasksToTrash(
       .collect()
     for (const kid of kids) {
       if (doomed.has(kid.id)) continue
-      preload ??= await loadNotifyPreload(counted, actor.org_id)
+      preload ??= newNotifyPreload()
       await detachChild(counted, kid, actor, now, preload)
     }
     await emitTaskEvent(counted, { name: 'task.deleted', issue: task, actor, now })

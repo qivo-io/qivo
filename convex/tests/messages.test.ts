@@ -1265,9 +1265,10 @@ describe('notifyCommentInsert (model — composed by phase 5 comments.create)', 
       })
       return (await ctx.meta.getTransactionMetrics()).documentsRead.used
     })
-    // the organization's profiles for mentions, and a few rows for each
-    // follower; the team's members would be 600 more
-    expect(read).toBeLessThan(people + 200)
+    // a few rows for each follower and only their profiles; the team's
+    // members would be 600 more, and so would the organization's profiles
+    expect(people).toBe(600)
+    expect(read).toBeLessThan(100)
   })
 
   it("a seed's visibility memo answers repeat checks; without a preload each check is live", async () => {
@@ -1279,10 +1280,7 @@ describe('notifyCommentInsert (model — composed by phase 5 comments.create)', 
     const comment = (withPreload: boolean) =>
       t.run(async (ctx) => {
         const preload: NotifyPreload = {
-          orgProfiles: await ctx.db
-            .query('profiles')
-            .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
-            .collect(),
+          profiles: new Map(),
           projects: new Map([[f.sub.id, f.sub]]),
           visibility,
         }

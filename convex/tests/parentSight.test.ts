@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { canSeeProject } from '../lib/access'
+import { PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from '../lib/taskLimits'
 import {
   ASSIGNEE_SIGHT_RULE,
   HOLDER_SIGHT_RULE,
@@ -43,7 +44,8 @@ async function scene(t: T) {
   const f = await withOrg(t)
   const hiddenSub = await plantHiddenSibling(t, f, f.guest)
   const base = { org_id: f.org.id, project_id: f.sub.id }
-  // an epic the guest cannot see, a visible feature under it, a task below
+  // an epic the guest cannot see, a visible feature under it, a task below,
+  // a chain from before the one level of subtasks
   const epic = await plantIssue(t, { ...base, project_id: hiddenSub.id, title: 'Epic' })
   const feature = await plantIssue(t, { ...base, parent_id: epic.id, title: 'Feature' })
   const task = await plantIssue(t, { ...base, parent_id: feature.id, title: 'Task' })
@@ -86,27 +88,25 @@ describe('a subtask is held only by people who can see every task above it', () 
         parent_id,
         assignee_id,
       })
-    for (const parent of [epic.id, feature.id]) {
-      const r = await expectRefusal(create(parent, f.guest.id), 'rule')
-      expect(r.data.message).toBe(ASSIGNEE_SIGHT_RULE)
-    }
-    const made = await create(feature.id, f.user.id)
+    const r = await expectRefusal(create(epic.id, f.guest.id), 'rule')
+    expect(r.data.message).toBe(ASSIGNEE_SIGHT_RULE)
+    // the feature is a subtask, so it takes no subtask of its own at all
+    const nested = await expectRefusal(create(feature.id, f.user.id), 'rule')
+    expect(nested.data.message).toBe(PARENT_IS_SUBTASK)
+    const made = await create(epic.id, f.user.id)
     expect(made).toMatchObject({ assignee_id: f.user.id })
   })
 
-  it('refuses a parent that someone holding the task or its subtasks cannot see', async () => {
+  it('refuses a parent that someone holding the task cannot see', async () => {
     const t = newT()
     const { f, base, epic } = await scene(t)
-    // a family the guest works on, with no parent yet
-    const top = await plantIssue(t, { ...base, title: 'Top' })
-    const deep = await plantIssue(t, { ...base, parent_id: top.id, assignee_id: f.guest.id })
-    for (const row of [top, deep]) {
-      const r = await expectRefusal(update(t, f, top.id, { parent_id: epic.id }), 'rule')
-      expect(r.data.message).toBe(HOLDER_SIGHT_RULE)
-      expect(await issueRow(t, row.id)).toEqual(row)
-    }
-    // the same move passes once nobody holding it is blind to the epic
-    await update(t, f, deep.id, { assignee_id: f.user.id })
+    // a task the guest works on, with no parent yet
+    const top = await plantIssue(t, { ...base, title: 'Top', reviewer_id: f.guest.id })
+    const r = await expectRefusal(update(t, f, top.id, { parent_id: epic.id }), 'rule')
+    expect(r.data.message).toBe(HOLDER_SIGHT_RULE)
+    expect(await issueRow(t, top.id)).toEqual(top)
+    // the same change passes once nobody holding it is blind to the epic
+    await update(t, f, top.id, { reviewer_id: f.user.id })
     await update(t, f, top.id, { parent_id: epic.id })
     expect((await issueRow(t, top.id)).parent_id).toBe(epic.id)
   })
@@ -144,21 +144,15 @@ describe('a subtask is held only by people who can see every task above it', () 
     expect((await issueRow(t, top.id)).parent_id).toBe(epic.id)
   })
 
-  it("ignores a group's dormant reviewer and archived subtasks", async () => {
+  it('refuses a parent for a task whose only subtask is archived', async () => {
     const t = newT()
     const { f, base, epic } = await scene(t)
-    // a reviewer kept from the task's leaf days, and an archived subtask held
-    // by the guest, hold nothing
-    const group = await plantIssue(t, { ...base, reviewer_id: f.guest.id })
-    await plantIssue(t, { ...base, parent_id: group.id })
-    await plantIssue(t, {
-      ...base,
-      parent_id: group.id,
-      assignee_id: f.guest.id,
-      archived_at: '2026-01-02T00:00:00.000Z',
-    })
-    await update(t, f, group.id, { parent_id: epic.id })
-    expect((await issueRow(t, group.id)).parent_id).toBe(epic.id)
+    // a restore from the archive would bring the subtask back below a subtask
+    const former = await plantIssue(t, base)
+    await plantIssue(t, { ...base, parent_id: former.id, archived_at: '2026-01-02T00:00:00.000Z' })
+    const r = await expectRefusal(update(t, f, former.id, { parent_id: epic.id }), 'rule')
+    expect(r.data.message).toBe(SUBTASK_WITH_SUBTASKS)
+    expect(await issueRow(t, former.id)).toEqual(former)
   })
 
   it('leaves an existing holder alone on other edits', async () => {

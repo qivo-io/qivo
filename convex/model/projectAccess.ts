@@ -42,7 +42,7 @@ import { liveIn } from '../lib/liveTasks'
 import { REASSIGN_MAX } from '../lib/projectGrants'
 import { logActivity, signedDetail } from './activity'
 import { assertAssigneeRule, hasSubtasks, holderKey, updateIssueCore } from './issues'
-import { loadNotifyPreload } from './messages'
+import { newNotifyPreload } from './messages'
 import { assertGrantee, assertTeamGrantee } from './projects'
 
 /** The one person or team whose access a write changes, already resolved in
@@ -504,7 +504,7 @@ export async function removeAndSettle(
     }
     // The access is gone and the loop below writes only tasks, follows,
     // messages and activity, so one preload serves every task update.
-    const preload = await loadNotifyPreload(ctx, me.org_id, orgProjects)
+    const preload = newNotifyPreload(orgProjects)
     const bulk = { preload: { ...preload, guard: full }, checked: new Set<string>() }
     if (to !== null) await settling(() => assertCanTakeOver(ctx, lost, to, bulk.checked))
     try {

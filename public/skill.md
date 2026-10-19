@@ -235,7 +235,11 @@ Useful field rules:
 - **Subtask:** create the task with `parent` set to the parent's task
   reference. You need User or Lead access on the parent's project, because the
   parent becomes a group and loses its own remaining hours. A subtask stays in
-  its parent's top-level project, in any of its sub-projects. Change the parent
+  its parent's top-level project, in any of its sub-projects. A task has one
+  level of subtasks, at most 100 of them, archived ones included: a subtask
+  cannot be a parent, a task with subtasks cannot get a parent, and a parent
+  with 100 subtasks takes no more. Each is a `400` naming the rule. Tasks
+  nested deeper before these limits keep their shape. Change the parent
   later with `parent` on `update_task` or PATCH, or detach it with
   `parent: null`. `get_task` and `GET /v1/tasks/{ref}` list `subtasks`; a
   `parent_id` of `null` with `has_hidden_parent: true` means the parent
@@ -312,7 +316,10 @@ Useful field rules:
   (follow) and `DELETE` (stop) on `/v1/tasks/{ref}/following`. Followers get
   the task's updates in their inbox. `get_task` shows `following` and
   `followers`. You are also made a follower when you are assigned, mentioned
-  or comment.
+  or comment. A task has at most 100 followers: following one that has 100 is
+  a `400` with `this task already has 100 followers, the most a task can
+  have`, and comments and mentions add no follower there, though a mention
+  still notifies. A new assignee or reviewer still becomes a follower.
 - **Read your inbox:** `list_inbox` or `GET /v1/inbox` answers `items`, one
   per active task you can read, latest activity first, with its unread count
   and messages. Use `unread_only` to see what is new. The task title shown is

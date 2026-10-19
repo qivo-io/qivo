@@ -78,7 +78,9 @@ Tasks have these fields:
   MCP use the same `paused` flag.
 - **Labels**, a rich-text **description**, **attachments**, **comments**, a
   **parent**, **subtasks** and task **links**. A subtask stays in its
-  parent's project, in any of its sub-projects. Links can mean “blocks”, “is
+  parent's project, in any of its sub-projects. A task has one level of
+  subtasks, at most 100 of them
+  ([The details column](./the-task-window.md#the-details-column)). Links can mean “blocks”, “is
   blocked by” or “relates to” and may span projects and teams. You see a link
   only if you can access both tasks. Description
   edits appear in the activity feed with before/after excerpts.
@@ -211,10 +213,11 @@ they go before anything changes. Restored work keeps its keys, such as
 `QN-142`, because Qivo never reuses a number
 ([Permanent task IDs](#permanent-task-ids)). Labels deleted since then are
 gone, and so are links to work deleted for good. A subtask deleted on its own
-returns under its parent when the parent still exists, you can edit it, and
-everyone assigned to or reviewing the subtask and its open subtasks can still
-see the parent's project. Otherwise it returns as a top-level task and keeps
-its people. Work that was archived when it was
+returns under its parent when the parent still exists, is not a subtask
+itself and has fewer than 100 subtasks, the restored task has no subtasks,
+you can edit the parent, and everyone assigned to or reviewing the subtask
+can still see the parent's project. Otherwise it returns as a top-level task
+and keeps its people and its subtasks. Work that was archived when it was
 deleted returns archived. A restored Done task restarts its auto-archive
 clock. A task restored on its own sends its followers a **Restored** update.
 Restoring several items at once, or a project, sends none, and inbox

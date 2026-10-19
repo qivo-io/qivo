@@ -13,6 +13,12 @@ import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
 import type { EventOwner } from '../lib/taskEvents'
+import {
+  PARENT_FULL,
+  PARENT_IS_SUBTASK,
+  SUBTASK_MAX,
+  SUBTASK_WITH_SUBTASKS,
+} from '../lib/taskLimits'
 import { storageUsage } from '../model/billing'
 import { deleteOrgDeep } from '../model/cascade'
 import {
@@ -165,21 +171,43 @@ const plantTeams = (t: T, f: OrgFixture, n: number) =>
     return ids
   })
 
-/** A chain of `n` tasks, each in a sub-project of its own under Testbed
- * platform, top first. Answers its lowest task. */
-async function chainAcross(t: T, f: OrgFixture, n: number): Promise<Doc<'issues'>> {
-  let low: Doc<'issues'> | undefined
+/** `n` top-level tasks, each in a sub-project of its own under Testbed
+ * platform. */
+async function oneInEach(t: T, f: OrgFixture, n: number): Promise<Doc<'issues'>[]> {
+  const tasks: Doc<'issues'>[] = []
   for (let i = 0; i < n; i++) {
     const project = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
       parent_id: f.meta.id,
     })
-    low = await plantIssue(t, { org_id: f.org.id, project_id: project.id, parent_id: low?.id })
+    tasks.push(await plantIssue(t, { org_id: f.org.id, project_id: project.id }))
   }
-  if (low === undefined) throw new Error('a chain holds at least one task')
-  return low
+  return tasks
 }
+
+let subtaskNum = 70_000
+/** `n` subtasks of Firmware under `parentId` in one transaction, the first
+ * `archived` of them archived. */
+const plantSubtasks = (t: T, f: OrgFixture, parentId: string, n: number, archived = 0) =>
+  t.run(async (ctx) => {
+    for (let i = 0; i < n; i++)
+      await ctx.db.insert('issues', {
+        id: uuid(),
+        org_id: f.org.id,
+        num: subtaskNum++,
+        project_id: f.sub.id,
+        parent_id: parentId,
+        title: 'Planted subtask',
+        description: '',
+        status: 'todo',
+        priority: 'medium',
+        paused: false,
+        ...(i < archived ? { archived_at: NOW } : {}),
+        created_at: NOW,
+        updated_at: NOW,
+      })
+  })
 
 let assignedNum = 60_000
 /** One subtask of Board rev under `parentId` for each of `people`, assigned
@@ -228,6 +256,18 @@ const assignedUnder = (t: T, parentId: string) =>
     )
       .map((task): [string, string | undefined] => [task.id, task.assignee_id])
       .sort(([a], [b]) => (a < b ? -1 : 1)),
+  )
+
+/** How many live subtasks `parentId` has, archived ones included. */
+const subtaskCount = (t: T, parentId: string) =>
+  t.run(
+    async (ctx) =>
+      (
+        await ctx.db
+          .query('issues')
+          .withIndex('by_parent', (q) => q.eq('parent_id', parentId))
+          .collect()
+      ).length,
   )
 
 /** `ids` paired with `people`, as assignedUnder answers them. */
@@ -565,24 +605,89 @@ describe('restoring a task item', () => {
     await assertNoDanglingRefs(t, 'after subtasks from before the rule came back')
   })
 
-  it('keeps a parent only while the chain stays within 20 levels', async () => {
+  it('keeps a parent only while it is a top-level task, as a reparent requires', async () => {
     const t = newT()
     const f = await withOrg(t)
     const org_id = f.org.id
-    const chain: Doc<'issues'>[] = []
-    for (let i = 0; i < 19; i++)
-      chain.push(await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: chain.at(-1)?.id }))
-    const deepest = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: chain[18].id })
-    // twenty levels: the parent comes back
-    await deleteTask(t, f, deepest.id)
-    await restore(t, f.user, [(await itemFor(t, deepest.id)).id])
-    expect((await liveTask(t, deepest.id))?.parent_id).toBe(chain[18].id)
-    // the chain grew while the task was in Deleted items: 21 levels
-    await deleteTask(t, f, deepest.id)
+    const parent = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const task = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
+    // a top-level parent: the task comes back under it
+    await deleteTask(t, f, task.id)
+    await restore(t, f.user, [(await itemFor(t, task.id)).id])
+    expect((await liveTask(t, task.id))?.parent_id).toBe(parent.id)
+    // the parent became a subtask while the task was in Deleted items, a
+    // legacy chain planted as data from before the one level of subtasks,
+    // so the task comes back top-level and the chain stays as it is
+    await deleteTask(t, f, task.id)
     const top = await plantIssue(t, { org_id, project_id: f.sub.id })
-    await patch(t, 'issues', chain[0].id, { parent_id: top.id })
-    await restore(t, f.user, [(await itemFor(t, deepest.id)).id])
-    expect((await liveTask(t, deepest.id))?.parent_id).toBeUndefined()
+    await patch(t, 'issues', parent.id, { parent_id: top.id })
+    await restore(t, f.user, [(await itemFor(t, task.id)).id])
+    expect((await liveTask(t, task.id))?.parent_id).toBeUndefined()
+    expect((await liveTask(t, parent.id))?.parent_id).toBe(top.id)
+    // a reparent refuses that parent for the same reason
+    const refused = await expectRefusal(
+      as(t, f.user).mutation(api.issues.update, {
+        org_id,
+        id: task.id,
+        patch: { parent_id: parent.id },
+      }),
+      'rule',
+    )
+    expect(refused.data.message).toBe(PARENT_IS_SUBTASK)
+  })
+
+  it(`keeps a parent with ${SUBTASK_MAX - 1} subtasks and none with ${SUBTASK_MAX}, archived ones included`, async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const parent = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const [first, second] = [
+      await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id }),
+      await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id }),
+    ]
+    for (const task of [first, second]) await deleteTask(t, f, task.id)
+    // the parent gets 99 subtasks while they are in Deleted items, 10 of
+    // them archived
+    await plantSubtasks(t, f, parent.id, SUBTASK_MAX - 1, 10)
+    // the first comes back as the hundredth
+    await restore(t, f.user, [(await itemFor(t, first.id)).id])
+    expect((await liveTask(t, first.id))?.parent_id).toBe(parent.id)
+    // the second finds the parent full and comes back top-level
+    await restore(t, f.user, [(await itemFor(t, second.id)).id])
+    expect((await liveTask(t, second.id))?.parent_id).toBeUndefined()
+    const refused = await expectRefusal(
+      as(t, f.user).mutation(api.issues.update, {
+        org_id,
+        id: second.id,
+        patch: { parent_id: parent.id },
+      }),
+      'rule',
+    )
+    expect(refused.data.message).toBe(PARENT_FULL)
+
+    // two items restored in one call count the reveal before them: only one
+    // of them becomes the hundredth subtask of a parent with 99
+    const other = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const pair = [
+      await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: other.id }),
+      await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: other.id }),
+    ]
+    for (const task of pair) await deleteTask(t, f, task.id)
+    await plantSubtasks(t, f, other.id, SUBTASK_MAX - 1)
+    const items = [await itemFor(t, pair[0].id), await itemFor(t, pair[1].id)]
+    expect(
+      (
+        await restore(
+          t,
+          f.user,
+          items.map((item) => item.id),
+        )
+      ).restored,
+    ).toHaveLength(2)
+    const parents = await Promise.all(
+      pair.map(async (task) => (await liveTask(t, task.id))?.parent_id),
+    )
+    expect(parents.toSorted()).toEqual([other.id, undefined])
   })
 
   it('keeps a parent only while its assignee can still see it, as a reparent requires', async () => {
@@ -665,14 +770,15 @@ describe('restoring a task item', () => {
     })
   })
 
-  it('keeps a parent above 10 projects that each of 150 people on its subtasks can see, within the real limits', async () => {
-    // checked for each person and project, who sees the chain read more
-    // than the 4,096 index ranges of one transaction
+  it('brings a task back with its 150 subtasks and their people, without its parent outside, within the real limits', async () => {
+    // a subtask with 150 subtasks of its own, a legacy shape from before
+    // the one level of subtasks and SUBTASK_MAX. A subtask cannot have
+    // subtasks, so the task comes back top-level with all of them
     const t = newT({ transactionLimits: true })
     chargeFilteredReads()
     const f = await withOrg(t)
     const org_id = f.org.id
-    const epic = await chainAcross(t, f, 10)
+    const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
     const root = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: epic.id })
     const people = await plantPeople(t, f, 150)
     const subtasks = await plantAssigned(t, f, root.id, people)
@@ -688,36 +794,61 @@ describe('restoring a task item', () => {
     expect(result.restored).toEqual([item.id])
     await runSteps(t)
     expect(await itemById(t, item.id)).toBeNull()
-    expect((await liveTask(t, root.id))?.parent_id).toBe(epic.id)
+    expect((await liveTask(t, root.id))?.parent_id).toBeUndefined()
     expect(await assignedUnder(t, root.id)).toEqual(pairs(subtasks, people))
+    // a reparent refuses that parent for the same reason
+    const refused = await expectRefusal(
+      as(t, f.user).mutation(api.issues.update, {
+        org_id,
+        id: root.id,
+        patch: { parent_id: epic.id },
+      }),
+      'rule',
+    )
+    expect(refused.data.message).toBe(SUBTASK_WITH_SUBTASKS)
   }, 300_000)
 
   it('reveals in a step of its own when checking who sees its parent runs out of what the restore call has left', async () => {
-    // each person is in 20 teams, so reading what they see costs more than
-    // the reveal's estimate per task (REVEAL_RANGES_PER_TASK)
+    // the assignee and the reviewer are each in 60 teams, so reading what
+    // they see costs more than the reveal's estimate for one task
+    // (REVEAL_RANGES_PER_TASK), about 120 ranges each
     const t = newT()
     const f = await withOrg(t)
     const org_id = f.org.id
     const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
-    const root = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: epic.id })
-    // restoring the comment moves a row before the reveal, so the call asks
-    // whether the reveal fits in what it has left (revealFits)
-    await comment(t, root)
-    const people = await plantPeople(t, f, 20, await plantTeams(t, f, 20))
-    const subtasks = await plantAssigned(t, f, root.id, people)
-    await deleteTask(t, f, root.id, { subtask_ids: subtasks })
-    const item = await itemFor(t, root.id)
+    const [assignee, reviewer] = await plantPeople(t, f, 2, await plantTeams(t, f, 60))
+    const plantRoot = async () => {
+      const root = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: epic.id })
+      // restoring the comment moves a row before the reveal, so the call
+      // asks whether the reveal fits in what it has left (revealFits)
+      await comment(t, root)
+      return root
+    }
+    const alone = await plantRoot()
+    const root = await plantRoot()
+    await patch(t, 'issues', root.id, { assignee_id: assignee, reviewer_id: reviewer })
+    for (const task of [alone, root]) await deleteTask(t, f, task.id)
     // what the call has left after the fill holds the reveal's estimate for
-    // 21 tasks, 420 ranges, and not the check of everyone under the root
-    TRASH_BUDGET.ranges = 600
+    // one task, 20 ranges, and not the check of both people
+    TRASH_BUDGET.ranges = 100
 
+    // without people to check, the reveal fits in the call
+    const aloneItem = await itemFor(t, alone.id)
+    expect((await restore(t, f.user, [aloneItem.id])).restored).toEqual([aloneItem.id])
+    expect(await itemById(t, aloneItem.id)).toBeNull()
+    expect((await liveTask(t, alone.id))?.parent_id).toBe(epic.id)
+
+    const item = await itemFor(t, root.id)
     expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
     expect(await jobFor(t, item.id)).toMatchObject({ phase: 'restore_reveal' })
     expect(await liveTask(t, root.id)).toBeNull()
     await step(t, item.id)
     expect(await itemById(t, item.id)).toBeNull()
-    expect((await liveTask(t, root.id))?.parent_id).toBe(epic.id)
-    expect(await assignedUnder(t, root.id)).toEqual(pairs(subtasks, people))
+    expect(await liveTask(t, root.id)).toMatchObject({
+      parent_id: epic.id,
+      assignee_id: assignee,
+      reviewer_id: reviewer,
+    })
   })
 
   it('drops references whose uuid now names something created after the delete', async () => {
@@ -1776,34 +1907,42 @@ describe('parents outside a restored project', () => {
     return low
   }
 
-  it('brings back 500 tasks of 16 KB under one parent outside the project within the real limits', async () => {
-    // 8 MiB of tasks under a parent outside, which no single transaction
+  it(`brings back 500 tasks of 16 KB under five parents outside the project, ${SUBTASK_MAX} each, within the real limits`, async () => {
+    // 8 MiB of tasks under parents outside, which no single transaction
     // can read and write back with their parent
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const org_id = f.org.id
-    const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
-    await plantSubscription(t, { issue_id: epic.id, profile_id: f.admin.id })
+    const epics: Doc<'issues'>[] = []
+    for (let i = 0; i < 5; i++) {
+      const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
+      await plantSubscription(t, { issue_id: epic.id, profile_id: f.admin.id })
+      epics.push(epic)
+    }
     const description = 'Spec line. '.repeat(1490)
+    // the ids planted under each epic, in the order of `epics`
     const ids = await t.run(async (ctx) => {
-      const planted: string[] = []
-      for (let i = 0; i < 500; i++) {
-        const id = uuid()
-        await ctx.db.insert('issues', {
-          id,
-          org_id,
-          num: 50_000 + i,
-          project_id: f.sub2.id,
-          parent_id: epic.id,
-          title: 'Planted task',
-          description,
-          status: 'todo',
-          priority: 'medium',
-          paused: false,
-          created_at: NOW,
-          updated_at: NOW,
-        })
-        planted.push(id)
+      const planted: string[][] = []
+      for (const [e, epic] of epics.entries()) {
+        planted.push([])
+        for (let i = 0; i < SUBTASK_MAX; i++) {
+          const id = uuid()
+          await ctx.db.insert('issues', {
+            id,
+            org_id,
+            num: 50_000 + e * SUBTASK_MAX + i,
+            project_id: f.sub2.id,
+            parent_id: epic.id,
+            title: 'Planted task',
+            description,
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+          })
+          planted[e].push(id)
+        }
       }
       return planted
     })
@@ -1811,7 +1950,8 @@ describe('parents outside a restored project', () => {
     await runSteps(t)
     const item = await itemFor(t, f.sub2.id)
     expect(item).toMatchObject({ state: 'ready', counts: { tasks: 500 } })
-    await patch(t, 'issues', epic.id, { remaining_hours: 8, remaining_set_at: NOW })
+    for (const epic of epics)
+      await patch(t, 'issues', epic.id, { remaining_hours: 8, remaining_set_at: NOW })
 
     const result = await as(t, f.user).mutation(api.deletedItems.restore, {
       org_id,
@@ -1820,95 +1960,85 @@ describe('parents outside a restored project', () => {
     expect(result.restored).toEqual([item.id])
     await stepThrough(t, item.id)
     expect(await itemById(t, item.id)).toBeNull()
-    const children = await t.run((ctx) =>
-      ctx.db
-        .query('issues')
-        .withIndex('by_parent', (q) => q.eq('parent_id', epic.id))
-        .collect(),
-    )
-    expect(children.map((c) => c.id).sort()).toEqual([...ids].sort())
-    expect(children.every((c) => c.description === description)).toBe(true)
-    expect((await liveTask(t, epic.id))?.remaining_hours).toBeUndefined()
-    expect((await messagesFor(t, f.admin.id, epic.id)).map((m) => m.detail)).toEqual([
-      'Remaining cleared (was 8 h)',
-    ])
+    for (const [e, epic] of epics.entries()) {
+      const children = await t.run((ctx) =>
+        ctx.db
+          .query('issues')
+          .withIndex('by_parent', (q) => q.eq('parent_id', epic.id))
+          .collect(),
+      )
+      expect(children.map((c) => c.id).sort()).toEqual([...ids[e]].sort())
+      expect(children.every((c) => c.description === description)).toBe(true)
+      expect((await liveTask(t, epic.id))?.remaining_hours).toBeUndefined()
+      expect((await messagesFor(t, f.admin.id, epic.id)).map((m) => m.detail)).toEqual([
+        'Remaining cleared (was 8 h)',
+      ])
+    }
     expect(await waitingParents(t)).toEqual([])
   }, 300_000)
 
   it('brings a project back whole when a task that waits has more under it than a step can check', async () => {
-    // 320 subtasks of 57 KB under the middle task, more than one
-    // transaction can read
+    // 100 subtasks of 57 KB right under the middle task, 5.6 MB, more than
+    // HEIGHT_READ lets a step read for its check
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const org_id = f.org.id
     const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
     const tasks = await plantUnder(t, f, [epic, epic, epic])
-    const [, heavy] = tasks
+    const [light, heavy] = tasks
     const under = (parent_id: string, description = '') =>
       plantIssue(t, { org_id, project_id: f.sub2.id, parent_id, description })
-    for (let a = 0; a < 8; a++) {
-      const mid = await under(heavy.id)
-      for (let b = 0; b < 4; b++) {
-        const low = await under(mid.id)
-        for (let c = 0; c < 10; c++) await under(low.id, HEAVY)
-      }
-    }
+    await under(light.id)
+    for (let i = 0; i < SUBTASK_MAX; i++) await under(heavy.id, HEAVY)
     await deleteProject(t, f, f.sub2.id)
     await runSteps(t)
     const item = await itemFor(t, f.sub2.id)
-    expect(item).toMatchObject({ state: 'ready', counts: { tasks: 3 + 8 + 32 + 320 } })
+    expect(item).toMatchObject({ state: 'ready', counts: { tasks: 3 + 1 + SUBTASK_MAX } })
 
     await as(t, f.user).mutation(api.deletedItems.restore, { org_id, ids: [item.id] })
     await stepThrough(t, item.id)
     expect(await itemById(t, item.id)).toBeNull()
     expect(await liveProject(t, f.sub2.id)).not.toBeNull()
-    // only that task stays without its parent, with its subtree under it
-    expect(await parentsOf(t, tasks)).toEqual([epic.id, undefined, epic.id])
-    expect(warn).toHaveBeenCalledWith(
-      'A deleted item restore cannot check the depth under a task',
-      {
-        item_id: item.id,
-        task_id: heavy.id,
-      },
-    )
-    const mids = await t.run((ctx) =>
-      ctx.db
-        .query('issues')
-        .withIndex('by_parent', (q) => q.eq('parent_id', heavy.id))
-        .collect(),
-    )
-    expect(mids).toHaveLength(8)
+    // the tasks with subtasks stay without their parent, with their
+    // subtasks under them; only the walk under the heavy one stops short
+    expect(await parentsOf(t, tasks)).toEqual([undefined, undefined, epic.id])
+    expect(warn.mock.calls).toEqual([
+      [
+        'A deleted item restore cannot check the depth under a task',
+        { item_id: item.id, task_id: heavy.id },
+      ],
+    ])
+    expect(await subtaskCount(t, light.id)).toBe(1)
+    expect(await subtaskCount(t, heavy.id)).toBe(SUBTASK_MAX)
     expect(await waitingParents(t)).toEqual([])
   }, 300_000)
 
-  it('reads a chain that parents share once, so their tasks come back whole in the restore call', async () => {
-    // 50 tasks under 50 stories in Firmware, all under one chain of 7 epics
-    // of 57 KB. Read once per story, the chain would pass what one
-    // transaction can read
+  it('reads a parent that tasks share once, so they come back whole in the restore call', async () => {
+    // 50 tasks under one epic of 900 KiB in Firmware, a description from
+    // before the 20,000-character cap. Read once per task, the epic would
+    // pass what one transaction can read
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const org_id = f.org.id
-    let above: string | undefined
-    for (let i = 0; i < 7; i++)
-      above = (
-        await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: above, description: HEAVY })
-      ).id
+    const epic = await plantIssue(t, {
+      org_id,
+      project_id: f.sub.id,
+      description: 'Field note. '.repeat(76_800),
+    })
     const tasks: Doc<'issues'>[] = []
-    for (let i = 0; i < 50; i++) {
-      const story = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: above })
-      tasks.push(await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: story.id }))
-    }
+    for (let i = 0; i < 50; i++)
+      tasks.push(await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: epic.id }))
     await deleteProject(t, f, f.sub2.id)
     await runSteps(t)
     const item = await itemFor(t, f.sub2.id)
     expect(item).toMatchObject({ state: 'ready', counts: { tasks: 50 } })
 
     await as(t, f.user).mutation(api.deletedItems.restore, { org_id, ids: [item.id] })
-    expect(await parentsOf(t, tasks)).toEqual(tasks.map((task) => task.parent_id))
+    expect(await parentsOf(t, tasks)).toEqual(tasks.map(() => epic.id))
+    expect(await waitingParents(t)).toEqual([])
     await stepThrough(t, item.id)
     expect(await itemById(t, item.id)).toBeNull()
-    expect(await waitingParents(t)).toEqual([])
   }, 300_000)
 
   it('comes back whole in one transaction when its attaches fit there', async () => {
@@ -1999,7 +2129,7 @@ describe('parents outside a restored project', () => {
       await plantIssue(t, { org_id, project_id: f.sub.id }),
       await plantIssue(t, { org_id, project_id: f.sub.id }),
     ]
-    const [first, unreadable, deep, loop, away] = parents
+    const [first, unreadable, nested, loop, away] = parents
     const {
       tasks: [kept, ...lost],
       item,
@@ -2011,19 +2141,17 @@ describe('parents outside a restored project', () => {
     await untilAttach(t, f, item.id)
     expect(await parentsOf(t, [kept, ...lost])).toEqual([first.id, ...lost.map(() => undefined)])
     // the user no longer leads Testbed platform and keeps Edit on Firmware
-    // and Board rev only, so they cannot see the sibling; 19 tasks above the
-    // next parent leave no level for the task; the next parent now hangs
-    // under the very task that waits for it; the last moves to a sub-project
-    // of Skunkworks, another top-level project the user leads
+    // and Board rev only, so they cannot see the sibling; the next parent
+    // becomes a subtask, so it can have none of its own; the next parent now
+    // hangs under the very task that waits for it; the last moves to a
+    // sub-project of Skunkworks, another top-level project the user leads
     await patch(t, 'projects', f.meta.id, { lead_id: f.admin.id })
     await t.run(async (ctx) => {
       for (const project_id of [f.sub.id, f.sub2.id])
         await ctx.db.insert('project_access', { project_id, profile_id: f.user.id, level: 'user' })
     })
-    let above: string | undefined
-    for (let i = 0; i < 19; i++)
-      above = (await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: above })).id
-    await patch(t, 'issues', deep.id, { parent_id: above })
+    const above = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await patch(t, 'issues', nested.id, { parent_id: above.id })
     await patch(t, 'issues', loop.id, { parent_id: lost[2].id })
     const elsewhere = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
     await as(t, f.admin).mutation(api.issues.move, {
@@ -2177,19 +2305,18 @@ describe('parents outside a restored project', () => {
     })
     const plant = (extra: Partial<Doc<'issues'>>) =>
       plantIssue(t, { org_id, project_id: f.sub2.id, ...extra })
-    // the guest works on this one only where a reparent does not look, as
-    // the dormant reviewer of a group and on an archived subtask
-    const kept = await plant({
+    // the admin, who sees every project, works on this one
+    const kept = await plant({ parent_id: epic.id, assignee_id: f.admin.id })
+    // the guest reviews this one
+    const lost = await plant({
       parent_id: epic.id,
       assignee_id: f.admin.id,
       reviewer_id: f.guest.id,
     })
-    await plant({ parent_id: kept.id, reviewer_id: f.admin.id })
-    await plant({ parent_id: kept.id, assignee_id: f.guest.id, archived_at: NOW })
-    // the guest reviews an open subtask two levels under this one
-    const lost = await plant({ parent_id: epic.id })
-    const middle = await plant({ parent_id: lost.id })
-    const leaf = await plant({ parent_id: middle.id, reviewer_id: f.guest.id })
+    // only the admin works on this one and its subtask, but a task with
+    // subtasks cannot become a subtask
+    const group = await plant({ parent_id: epic.id, assignee_id: f.admin.id })
+    const below = await plant({ parent_id: group.id, assignee_id: f.admin.id })
     await deleteProject(t, f, f.sub2.id)
     await runSteps(t)
     const item = await itemFor(t, f.sub2.id)
@@ -2198,11 +2325,11 @@ describe('parents outside a restored project', () => {
     await runSteps(t)
     expect(await itemById(t, item.id)).toBeNull()
     expect((await liveTask(t, kept.id))?.parent_id).toBe(epic.id)
+    // each comes back top-level and keeps its people and its subtasks
+    expect(await liveTask(t, lost.id)).toMatchObject({ reviewer_id: f.guest.id })
     expect((await liveTask(t, lost.id))?.parent_id).toBeUndefined()
-    expect(await liveTask(t, leaf.id)).toMatchObject({
-      parent_id: middle.id,
-      reviewer_id: f.guest.id,
-    })
+    expect((await liveTask(t, group.id))?.parent_id).toBeUndefined()
+    expect((await liveTask(t, below.id))?.parent_id).toBe(group.id)
     expect(await waitingParents(t)).toEqual([])
   })
 
@@ -2228,79 +2355,69 @@ describe('parents outside a restored project', () => {
     })
     await deleteProject(t, f, f.sub2.id)
     const item = await itemFor(t, f.sub2.id)
-    // the three subtasks of 16 KB under the first task spend the step
+    // the check reads the three subtasks of 16 KB under the first task,
+    // which then comes back without its parent, and they spend the step
     TRASH_BUDGET.bytes = 40_000
     await untilAttach(t, f, item.id)
-    expect(await parentsOf(t, [heavy, light])).toEqual([epic.id, undefined])
+    expect(await parentsOf(t, [heavy, light])).toEqual([undefined, undefined])
+    expect((await waitingParents(t)).map((row) => row.task_id)).toEqual([light.id])
     await stepThrough(t, item.id)
-    expect(await parentsOf(t, [heavy, light])).toEqual([epic.id, epic.id])
+    expect(await parentsOf(t, [heavy, light])).toEqual([undefined, epic.id])
   })
 
-  it("counts what the parents' chains hold against the step budget", async () => {
-    // six stories in Firmware, each under its own chain of three tasks of
-    // 57 KB, so a step that read every chain would pass the read limit
+  it('counts what the parents hold against the step budget', async () => {
+    // six stories in Firmware that grow to 171 KB each while Board rev is
+    // in Deleted items, descriptions from before the 20,000-character cap,
+    // so a step that read every story would pass the read limit
     const t = newT({ transactionLimits: { bytesRead: 600_000 } })
     const f = await withOrg(t)
     const org_id = f.org.id
     const stories: Doc<'issues'>[] = []
-    for (let i = 0; i < 6; i++) {
-      let above: string | undefined
-      for (let j = 0; j < 3; j++)
-        above = (
-          await plantIssue(t, {
-            org_id,
-            project_id: f.sub.id,
-            parent_id: above,
-            description: HEAVY,
-          })
-        ).id
-      stories.push(await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: above }))
-    }
+    for (let i = 0; i < 6; i++) stories.push(await plantIssue(t, { org_id, project_id: f.sub.id }))
     const { tasks, item } = await oneUnderEach(t, f, stories)
+    for (const story of stories)
+      await patch(t, 'issues', story.id, { description: HEAVY.repeat(3) })
     TRASH_BUDGET.bytes = 100_000
-    // the restore call runs out of bytes partway up the first chain, so its
-    // task waits for a step
-    await restore(t, f.user, [item.id])
-    expect(await parentsOf(t, tasks)).toEqual(stories.map(() => undefined))
-    // a step reads its first chain whole and stops on the bytes it held
-    await step(t, item.id)
+    // the fill reads each story once, a step each, and the reveal's step
+    // checks the first task whole and stops on the bytes it held
+    await untilAttach(t, f, item.id)
     expect(await parentsOf(t, tasks)).toEqual([
       stories[0].id,
       ...stories.slice(1).map(() => undefined),
+    ])
+    // so does each attach step
+    await step(t, item.id)
+    expect(await parentsOf(t, tasks)).toEqual([
+      ...stories.slice(0, 2).map((story) => story.id),
+      ...stories.slice(2).map(() => undefined),
     ])
     await stepThrough(t, item.id)
     expect(await parentsOf(t, tasks)).toEqual(stories.map((story) => story.id))
   })
 
-  it('checks the depth for each task after the attaches before it in its step', async () => {
+  it(`counts the subtasks of each parent after the attaches before it in its step, up to ${SUBTASK_MAX}`, async () => {
     const t = newT()
     const f = await withOrg(t)
     const org_id = f.org.id
-    // E1 sits 17 levels deep in Firmware; E0 and E2 are top-level there
-    let above: string | undefined
-    for (let i = 0; i < 16; i++)
-      above = (await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: above })).id
-    const e1 = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: above })
-    const e0 = await plantIssue(t, { org_id, project_id: f.sub.id })
-    const e2 = await plantIssue(t, { org_id, project_id: f.sub.id })
-    const [, t3, t1, t2] = await plantUnder(t, f, [e0, e2, e1, e2])
-    const c2 = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: t2.id })
+    // the epic has 97 subtasks in Firmware, and a fifth task waits for it
+    const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await plantSubtasks(t, f, epic.id, SUBTASK_MAX - 3)
+    const tasks = await plantUnder(t, f, [epic, epic, epic, epic])
     await deleteProject(t, f, f.sub2.id)
     const item = await itemFor(t, f.sub2.id)
-    // the reveal's step attaches the first task only
+    // the reveal's step attaches the first task only, the 98th
     TRASH_BUDGET.tasks = 1
     await untilAttach(t, f, item.id)
-    // someone hangs E2 under T1, which still waits for E1
-    await patch(t, 'issues', e2.id, { parent_id: t1.id })
+    expect(await parentsOf(t, tasks)).toEqual([epic.id, undefined, undefined, undefined])
 
-    // one step attaches T3 under E2 and T1 under E1, which puts E2 19
-    // levels deep, so T2, with C2 under it, no longer fits under E2
+    // one step reads the epic's 98 subtasks once and counts each attach,
+    // so the 99th and the 100th fit and the last does not
     TRASH_BUDGET.tasks = 100
     await step(t, item.id)
     expect(await jobFor(t, item.id)).toBeNull()
-    expect(await parentsOf(t, [t3, t1, t2])).toEqual([e2.id, e1.id, undefined])
-    expect(await depthOf(t, t3.id)).toBe(20)
-    expect(await depthOf(t, c2.id)).toBe(2)
+    expect(await parentsOf(t, tasks)).toEqual([epic.id, epic.id, epic.id, undefined])
+    expect(await subtaskCount(t, epic.id)).toBe(SUBTASK_MAX)
+    expect(await waitingParents(t)).toEqual([])
   })
 
   it('reads no more under a task than HEIGHT_READ allows for its depth check', async () => {
@@ -2309,12 +2426,12 @@ describe('parents outside a restored project', () => {
     const f = await withOrg(t)
     const org_id = f.org.id
     const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
-    const tasks = await plantUnder(t, f, [epic, epic, epic])
+    const tasks = await plantUnder(t, f, [epic, epic, epic, epic])
     const [fits, wide, large] = tasks
     const under = (parent_id: string, description = '') =>
       plantIssue(t, { org_id, project_id: f.sub2.id, parent_id, description })
-    // three tasks under the first, four under the second, and one large
-    // task under the third
+    // a legacy chain of three tasks under the first, four subtasks under
+    // the second, one large subtask under the third and none under the last
     const child = await under(fits.id)
     for (let i = 0; i < 2; i++) await under(child.id)
     for (let i = 0; i < 4; i++) await under(wide.id)
@@ -2326,30 +2443,37 @@ describe('parents outside a restored project', () => {
 
     await restore(t, f.user, [item.id])
     await stepThrough(t, item.id)
-    expect(await parentsOf(t, tasks)).toEqual([epic.id, undefined, undefined])
+    // a task with subtasks comes back without its parent; the walk reads
+    // no level past the first, and warns only where that level does not fit
+    expect(await parentsOf(t, tasks)).toEqual([undefined, undefined, undefined, epic.id])
     const warning = 'A deleted item restore cannot check the depth under a task'
     expect(warn.mock.calls).toEqual([
       [warning, { item_id: item.id, task_id: wide.id }],
       [warning, { item_id: item.id, task_id: large.id }],
     ])
+    expect(await depthOf(t, child.id)).toBe(2)
   })
 
-  it('attaches a task under a chain across 10 projects that each of 150 people under it can see, within the real limits', async () => {
-    // checked for each person and project, who sees the chain read more
+  it('attaches 150 tasks under parents in 10 projects that each of 150 people on them can see, within the real limits', async () => {
+    // checked for each person and project, who sees the parents read more
     // than the 4,096 index ranges of one transaction, so every retry failed
-    // and the attach gave up on the parent
+    // and the attach gave up on the parents
     const t = newT({ transactionLimits: true })
     chargeFilteredReads()
     const f = await withOrg(t)
     const org_id = f.org.id
-    const epic = await chainAcross(t, f, 10)
-    const task = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: epic.id })
+    const epics = await oneInEach(t, f, 10)
+    const tasks: Doc<'issues'>[] = []
+    for (const epic of epics)
+      for (let i = 0; i < 15; i++)
+        tasks.push(await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: epic.id }))
     const people = await plantPeople(t, f, 150)
-    const subtasks = await plantAssigned(t, f, task.id, people)
+    for (const [i, task] of tasks.entries())
+      await patch(t, 'issues', task.id, { assignee_id: people[i] })
     await deleteProject(t, f, f.sub2.id)
     await runSteps(t)
     const item = await itemFor(t, f.sub2.id)
-    expect(item).toMatchObject({ state: 'ready', counts: { tasks: 151 } })
+    expect(item).toMatchObject({ state: 'ready', counts: { tasks: 150 } })
 
     const result = await as(t, f.user).mutation(api.deletedItems.restore, {
       org_id,
@@ -2358,8 +2482,15 @@ describe('parents outside a restored project', () => {
     expect(result.restored).toEqual([item.id])
     await stepThrough(t, item.id)
     expect(await itemById(t, item.id)).toBeNull()
-    expect((await liveTask(t, task.id))?.parent_id).toBe(epic.id)
-    expect(await assignedUnder(t, task.id)).toEqual(pairs(subtasks, people))
+    for (const epic of epics) {
+      const ours = tasks.filter((task) => task.parent_id === epic.id)
+      expect(await assignedUnder(t, epic.id)).toEqual(
+        pairs(
+          ours.map((task) => task.id),
+          ours.map((task) => people[tasks.indexOf(task)]),
+        ),
+      )
+    }
     expect(await waitingParents(t)).toEqual([])
   }, 300_000)
 
@@ -2367,19 +2498,16 @@ describe('parents outside a restored project', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT()
     const f = await withOrg(t)
-    const org_id = f.org.id
-    const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const epic = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const tasks = await plantUnder(t, f, [epic, epic])
-    const [one, three] = tasks
-    // one person works on the first task, three on the second and its
-    // subtasks
-    const people = await plantPeople(t, f, 4)
+    const [one, two] = tasks
+    // one person works on the first task, two on the second
+    const people = await plantPeople(t, f, 3)
     await patch(t, 'issues', one.id, { assignee_id: people[0] })
-    await patch(t, 'issues', three.id, { assignee_id: people[1] })
-    const subtasks = await plantAssigned(t, f, three.id, people.slice(2))
+    await patch(t, 'issues', two.id, { assignee_id: people[1], reviewer_id: people[2] })
     await deleteProject(t, f, f.sub2.id)
     const item = await itemFor(t, f.sub2.id)
-    // what one person costs fits, what three cost does not
+    // what one person costs fits, what two cost does not
     SIGHT_READ.ranges = 5
 
     await restore(t, f.user, [item.id])
@@ -2389,18 +2517,22 @@ describe('parents outside a restored project', () => {
     expect(warn.mock.calls).toEqual([
       [
         'A deleted item restore cannot check who sees the parent of a task',
-        { item_id: item.id, task_id: three.id },
+        { item_id: item.id, task_id: two.id },
       ],
     ])
     expect(await waitingParents(t)).toEqual([])
-    // the task comes back with its people and its subtasks
-    expect((await liveTask(t, three.id))?.assignee_id).toBe(people[1])
-    expect(await assignedUnder(t, three.id)).toEqual(pairs(subtasks, people.slice(2)))
+    // the task comes back with its people
+    expect(await liveTask(t, two.id)).toMatchObject({
+      assignee_id: people[1],
+      reviewer_id: people[2],
+    })
   })
 
-  it('restores a task and a project under nineteen tasks of 900 KiB within the real limits, without that parent', async () => {
+  it('restores a task and a project under a legacy chain of nineteen tasks of 900 KiB within the real limits, without that parent', async () => {
     // the chain holds 17 MiB, more than one transaction can read, so a
-    // restore that read it whole failed, and so did every retry
+    // restore that read it whole failed, and so did every retry. Its lowest
+    // task is a subtask, so it is no parent for a restored task, and the
+    // restore reads nothing above it
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT({ transactionLimits: true })
     chargeFilteredReads()
@@ -2427,28 +2559,28 @@ describe('parents outside a restored project', () => {
       expect(await itemById(t, item.id)).toBeNull()
     }
     expect(await parentsOf(t, [root, task])).toEqual([undefined, undefined])
-    const warning = 'A deleted item restore cannot check the chain above the parent of a task'
-    expect(warn.mock.calls).toEqual([
-      [warning, { item_id: taskItem.id, task_id: root.id }],
-      [warning, { item_id: projectItem.id, task_id: task.id }],
-    ])
+    expect(warn.mock.calls).toEqual([])
     expect(await waitingParents(t)).toEqual([])
   }, 300_000)
 
-  it('reads no more above a parent than CHAIN_READ allows, and leaves that task without it', async () => {
+  it('reads no more for a parent than CHAIN_READ allows, and leaves that task without it', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT()
     const f = await withOrg(t)
-    // two chains of three tasks, the second of tasks of 57 KB
-    const light = await chainOf(t, f, 3)
-    const heavy = await chainOf(t, f, 3, HEAVY)
-    const { tasks, item } = await oneUnderEach(t, f, [light, heavy])
-    CHAIN_READ.bytes = 100_000
+    // a top-level task, one of 57 KB, and the lowest of a legacy chain of
+    // three tasks, which is a subtask
+    const light = await chainOf(t, f, 1)
+    const heavy = await chainOf(t, f, 1, HEAVY)
+    const legacy = await chainOf(t, f, 3)
+    const { tasks, item } = await oneUnderEach(t, f, [light, heavy, legacy])
+    CHAIN_READ.bytes = 50_000
 
     await restore(t, f.user, [item.id])
     await stepThrough(t, item.id)
     expect(await itemById(t, item.id)).toBeNull()
-    expect(await parentsOf(t, tasks)).toEqual([light.id, undefined])
+    expect(await parentsOf(t, tasks)).toEqual([light.id, undefined, undefined])
+    // the subtask fails the table before its chain is read, so only the
+    // heavy parent warns
     expect(warn.mock.calls).toEqual([
       [
         'A deleted item restore cannot check the chain above the parent of a task',
@@ -2461,13 +2593,13 @@ describe('parents outside a restored project', () => {
   it('checks a task again in the next step when its step runs out of reads during the check', async () => {
     const t = newT()
     const f = await withOrg(t)
-    const org_id = f.org.id
-    const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const epic = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const tasks = await plantUnder(t, f, [epic, epic, epic])
-    const [, , wide] = tasks
-    // 60 people work on the 30 subtasks of the last task
-    const people = await plantPeople(t, f, 60)
-    await plantAssigned(t, f, wide.id, people.slice(0, 30), people.slice(30))
+    const [, , busy] = tasks
+    // the assignee and the reviewer of the last task are each in 50 teams,
+    // so reading what one of them sees costs more than 100 ranges
+    const [assignee, reviewer] = await plantPeople(t, f, 2, await plantTeams(t, f, 50))
+    await patch(t, 'issues', busy.id, { assignee_id: assignee, reviewer_id: reviewer })
     await deleteProject(t, f, f.sub2.id)
     const item = await itemFor(t, f.sub2.id)
     // the reveal's step attaches the first task only
@@ -2476,13 +2608,13 @@ describe('parents outside a restored project', () => {
     expect(await parentsOf(t, tasks)).toEqual([epic.id, undefined, undefined])
 
     // the step attaches the second task, and its reads run out while it
-    // checks what the 60 people see
+    // checks what the two people see
     TRASH_BUDGET.tasks = 100
     TRASH_BUDGET.ranges = 100
     await step(t, item.id)
     expect(await jobFor(t, item.id)).toMatchObject({ phase: 'restore_attach' })
     expect(await parentsOf(t, tasks)).toEqual([epic.id, epic.id, undefined])
-    expect((await waitingParents(t)).map((row) => row.task_id)).toEqual([wide.id])
+    expect((await waitingParents(t)).map((row) => row.task_id)).toEqual([busy.id])
     // the next step checks it first, whole, though that passes its budget,
     // and attaches it
     await step(t, item.id)
@@ -2490,15 +2622,18 @@ describe('parents outside a restored project', () => {
     expect(await waitingParents(t)).toEqual([])
     await stepThrough(t, item.id)
     expect(await itemById(t, item.id)).toBeNull()
-    expect(await assignedUnder(t, wide.id)).toHaveLength(30)
+    expect(await liveTask(t, busy.id)).toMatchObject({
+      assignee_id: assignee,
+      reviewer_id: reviewer,
+    })
   })
 
-  it('checks a task again in the next step when its step runs out of reads before the chain above its parent', async () => {
+  it('checks a task again in the next step when its step runs out of reads before it counts the subtasks of its parent', async () => {
     const t = newT()
     const f = await withOrg(t)
     const epic = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    // a story of 57 KB under three epics of 57 KB
-    const story = await chainOf(t, f, 4, HEAVY)
+    // a story of 57 KB
+    const story = await chainOf(t, f, 1, HEAVY)
     const tasks = await plantUnder(t, f, [epic, epic, story])
     await deleteProject(t, f, f.sub2.id)
     const item = await itemFor(t, f.sub2.id)
@@ -2508,7 +2643,7 @@ describe('parents outside a restored project', () => {
     expect(await parentsOf(t, tasks)).toEqual([epic.id, undefined, undefined])
 
     // the step attaches the second task, then reads the story and has no
-    // bytes left for the epics above it
+    // bytes left to count its subtasks
     TRASH_BUDGET.tasks = 100
     TRASH_BUDGET.bytes = 50_000
     await step(t, item.id)

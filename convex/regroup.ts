@@ -30,7 +30,7 @@ import { internalMutation } from './_generated/server'
 import { byId, usedMoreThan } from './lib/db'
 import { projectLiveness } from './lib/liveTasks'
 import { clearParentRemaining, hasSubtasks } from './model/issues'
-import { loadNotifyPreload, type NotifyPreload } from './model/messages'
+import { type NotifyPreload, newNotifyPreload } from './model/messages'
 
 /** Sizes of one regroup step. It reads at most `tasks` tasks and `bytes`
  * bytes of them, and clears about `clears` tasks at most. A page task's
@@ -134,7 +134,7 @@ export const restoredStep = internalMutation({
     let preload: NotifyPreload | undefined
     let cleared = 0
     const clear = async (task: Doc<'issues'>): Promise<void> => {
-      preload ??= await loadNotifyPreload(ctx, project.org_id)
+      preload ??= newNotifyPreload()
       await clearParentRemaining(ctx, { parentId: task.id, actor: restorer, now, preload })
       cleared += 1
     }

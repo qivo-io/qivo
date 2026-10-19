@@ -46,7 +46,12 @@ import {
 import { copyText } from '../lib/clipboard'
 import { DELAY_MARK } from '../lib/delay'
 import { lastInputWasPointer, restoreFocus } from '../lib/focusVisibility'
-import { parentCandidatesFor, subtaskCandidatesFor } from '../lib/relationCandidates'
+import {
+  parentBlock,
+  parentCandidatesFor,
+  subtaskBlock,
+  subtaskCandidatesFor,
+} from '../lib/relationCandidates'
 import { remainingPatchFromInput, remainingValue } from '../lib/remaining'
 import { buildPath, issueLink } from '../lib/router'
 import { matchesAllWords } from '../lib/search'
@@ -1630,6 +1635,10 @@ function IssueDetail({
   }
   const subCandidates = it && subAnchor ? subtaskCandidatesFor(it, P.issues, relationView) : []
   const parentCandidates = it && parentAnchor ? parentCandidatesFor(it, P.issues, relationView) : []
+  // one level of subtasks, at most SUBTASK_MAX of them: why this task can
+  // take no subtask, or no parent, if it cannot
+  const noSubtask = it ? subtaskBlock(it) : undefined
+  const noParent = it ? parentBlock(it) : undefined
   // Adding or removing a link needs edit access to either task, so a
   // read-only task can still be linked to one the person can edit.
   const canLink = (otherId: string) => canLabel || P.canWrite(P.issueById[otherId]?.project)
@@ -2936,9 +2945,10 @@ function IssueDetail({
                             }
                             title={
                               roTip ||
+                              (it.parent ? undefined : noParent) ||
                               (it.parent || it.hasHiddenParent ? 'Change parent' : 'Set parent')
                             }
-                            disabled={!canLabel}
+                            disabled={!canLabel || (!it.parent && !!noParent)}
                             onClick={() => openPickerUnder(parentSecRef, setParentAnchor, 340)}
                           >
                             <Icon
@@ -2981,8 +2991,8 @@ function IssueDetail({
                             size="icon"
                             className="task-heading-action"
                             aria-label="Add subtask"
-                            title={roTip || 'Add subtask'}
-                            disabled={!canLabel}
+                            title={roTip || noSubtask || 'Add subtask'}
+                            disabled={!canLabel || !!noSubtask}
                             onClick={() => openPickerUnder(subSecRef, setSubAnchor, 340)}
                           >
                             <Icon name="plus" size={16} />
@@ -3110,9 +3120,13 @@ function IssueDetail({
           isOn={(x) => x.parent === it.id}
           onPick={(x) => P.updateIssue(x.id, { parent: x.parent === it.id ? null : it.id })}
           createLabel="Create new subtask:"
-          onCreate={(title) => {
-            P.addIssue({ project: it.project, title, parent: it.id })
-          }}
+          onCreate={
+            noSubtask
+              ? undefined
+              : (title) => {
+                  P.addIssue({ project: it.project, title, parent: it.id })
+                }
+          }
         />
       )}
       {it && linkAnchor && (
@@ -3159,10 +3173,14 @@ function IssueDetail({
           isOn={(x) => it.parent === x.id}
           onPick={(x) => upd({ parent: it.parent === x.id ? null : x.id })}
           createLabel="Create new parent task:"
-          onCreate={(title) => {
-            const key = P.addIssue({ project: it.project, title })
-            if (key) upd({ parent: key })
-          }}
+          onCreate={
+            noParent
+              ? undefined
+              : (title) => {
+                  const key = P.addIssue({ project: it.project, title })
+                  if (key) upd({ parent: key })
+                }
+          }
         />
       )}
       {/* stacked ModalShell (like the sub-issue modal): nothing moves until

@@ -18,7 +18,12 @@ import { insertActivity } from './activity'
 import { markArchivedTask } from './archiveMarks'
 import { storeCommentCount } from './commentCounts'
 import { cleanDescription } from './issues'
-import { type NotifyPreload, notifyCommentInsert, notifyIssueInsert } from './messages'
+import {
+  type NotifyPreload,
+  notifyCommentInsert,
+  notifyIssueInsert,
+  profileCacheOf,
+} from './messages'
 import { cleanMilestoneName } from './milestones'
 import {
   assertSlugAvailable,
@@ -162,7 +167,7 @@ export async function writeNorthstarWork(
   // Nothing below writes teams, grants, roles or projects, so one visibility
   // memo can serve every notification this seed writes.
   const preload: NotifyPreload = {
-    orgProfiles,
+    profiles: profileCacheOf(orgProfiles),
     projects: new Map(
       (
         await ctx.db

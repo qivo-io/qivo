@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from '../lib/taskLimits'
 import {
   type CreateIssueArgs,
   GROUP_DATES_RULE,
@@ -163,7 +164,8 @@ describe('issue scheduling and hierarchy', () => {
     })
     expect(moved.start_week).toBe('2026-01-05')
     expect(moved.end_week).toBe('2026-03-29')
-    await createAs(t, f, { parent_id: parent.id, start_week: '2026-05-04', end_week: '2026-05-10' })
+    // one level of subtasks: a new subtask goes under the legacy chain's top
+    await createAs(t, f, { parent_id: top.id, start_week: '2026-05-04', end_week: '2026-05-10' })
     for (const a of ancestors) {
       expect(await issueRow(t, a.id)).toEqual(a) // dates and updated_at alike
       expect(await inbox(t, f.user.id, a.id)).toEqual([])
@@ -195,23 +197,29 @@ describe('issue scheduling and hierarchy', () => {
     expect(await inbox(t, f.admin.id, hiddenParent.id)).toEqual([])
   })
 
-  it('depth caps: the up-walk refuses past 20, and a reparent may not merge two legal chains past the budget', async () => {
+  it('one level of subtasks: a legacy chain takes no new level, and can still be taken apart', async () => {
     const t = newT()
     const f = await withOrg(t)
+    // a chain of 21 tasks from before the one level of subtasks
     const deep = await plantChain(t, f, 21)
-    const up = await expectRefusal(createAs(t, f, { parent_id: deep[20].id }), 'rule')
-    expect(up.data.message).toBe('task hierarchy too deep or cyclic')
-
-    const a = await plantChain(t, f, 10)
-    const b = await plantChain(t, f, 11)
-    const merged = await expectRefusal(updateAs(t, f, b[0].id, { parent_id: a[9].id }), 'rule')
-    expect(merged.data.message).toBe('task hierarchy too deep')
-
-    // the boundary itself is legal: 10 above + the row + 9 below = 20
-    const c = await plantChain(t, f, 10)
-    const d = await plantChain(t, f, 10)
-    const moved = await updateAs(t, f, d[0].id, { parent_id: c[9].id })
-    expect(moved.parent_id).toBe(c[9].id)
+    const under = await expectRefusal(createAs(t, f, { parent_id: deep[20].id }), 'rule')
+    expect(under.data.message).toBe(PARENT_IS_SUBTASK)
+    const head = await expectRefusal(createAs(t, f, { parent_id: deep[1].id }), 'rule')
+    expect(head.data.message).toBe(PARENT_IS_SUBTASK)
+    // a task with subtasks takes no parent, and its own subtask, which
+    // would close a cycle, is a subtask
+    const lone = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const lifted = await expectRefusal(updateAs(t, f, deep[0].id, { parent_id: lone.id }), 'rule')
+    expect(lifted.data.message).toBe(SUBTASK_WITH_SUBTASKS)
+    const cycle = await expectRefusal(updateAs(t, f, deep[0].id, { parent_id: deep[1].id }), 'rule')
+    expect(cycle.data.message).toBe(PARENT_IS_SUBTASK)
+    // the chain still reads and detaches, and a top-level task takes its tail
+    const tail = await updateAs(t, f, deep[20].id, { parent_id: null })
+    expect(tail.parent_id).toBeUndefined()
+    expect((await updateAs(t, f, deep[20].id, { parent_id: deep[0].id })).parent_id).toBe(
+      deep[0].id,
+    )
+    expect((await issueRow(t, deep[10].id)).parent_id).toBe(deep[9].id)
   })
 
   it('the parent fence: foreign-org and missing parents both answer not_found, self is refused', async () => {
