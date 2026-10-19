@@ -89,7 +89,6 @@ export async function writeNorthstarWork(
   await ctx.db.patch(org._id, {
     name: data.organization.name,
     ...orgDefaults,
-    gravatar_avatars: false,
     // Not a default (missing means 'users'), so clear it by hand: a reset
     // must not keep the setting from interactive use.
     project_creators: undefined,
@@ -348,7 +347,6 @@ export async function provisionPublicDemo(
     name: cleanOrgName(MARKETING_DEMO.organization.name),
     slug,
     ...newOrgDefaults(now),
-    gravatar_avatars: false,
     max_attachment_mb: 5,
   })
   const org = await ctx.db.get(docId)

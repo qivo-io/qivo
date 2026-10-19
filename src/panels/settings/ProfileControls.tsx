@@ -41,23 +41,12 @@ function useAvatarUpload(user: UserVM) {
   return { input, busy, clear, pick: () => ref.current?.click() }
 }
 
-function avatarSource(user: UserVM) {
-  if (user.sampleAvatar) return 'sample'
-  if (user.avatarPath) return 'uploaded'
-  if (user.isAgent) return 'agent'
-  return P.org.gravatarAvatars ? 'gravatar' : 'off'
-}
-function sourceLine(user: UserVM) {
-  if (user.sampleAvatar) return 'Sample portrait'
-  return avatarSource(user) === 'gravatar' ? `Gravatar, ${user.email}` : null
-}
-
 // Keep the file input outside the closing menu and invoke pick() synchronously
 // before close(): opening a file dialog requires the original user activation.
 export function AvatarPicker({ user, size = 28 }: { user: UserVM; size?: AvatarSize }) {
   const canEdit = P.canSetAvatar(user.id)
   const { input, busy, clear, pick } = useAvatarUpload(user)
-  const source = sourceLine(user)
+  const source = user.sampleAvatar ? 'Sample portrait' : null
   if (!canEdit) return <Avatar id={user.id} size={size} />
   return (
     <>
@@ -106,7 +95,7 @@ export function AvatarPicker({ user, size = 28 }: { user: UserVM; size?: AvatarS
               <Icon name="camera" size={14} />
               {user.avatarPath ? 'Change picture…' : 'Upload a picture…'}
             </MenuItem>
-            {/* Only private uploads can be removed; other sources are fallbacks. */}
+            {/* Only private uploads can be removed; sample portraits are demo data. */}
             {user.avatarPath && !user.sampleAvatar && (
               <MenuItem
                 danger

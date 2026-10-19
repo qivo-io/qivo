@@ -111,7 +111,6 @@ import { restoreFocus } from '@/lib/focusVisibility'
 import { LandscapeContext, type LandscapeViewport } from '@/lib/landscape'
 import { useMenuBackLayer } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
-import { gravatarUrl } from '../../lib/gravatar'
 import { P } from '../../store/planner'
 
 /* ---- Generic chrome icons use lucide; Qivo status/priority glyphs stay below. ---- */
@@ -234,13 +233,9 @@ function PausedMark({ size = 13, className }: { size?: number; className?: strin
 }
 
 /* ---- Avatars ----------------------------------------------------------
-   Three layers, in order of preference, all drawn into the same portrait:
-   an uploaded picture, else Gravatar for the person's email address, else the
-   initials-on-color chip. The chip is not a placeholder that gets replaced —
-   it is always rendered, and the picture is simply painted over it. That is
-   what lets the Gravatar request use `d=blank` (an address with no picture
-   answers 200 with a transparent PNG, so the initials show through) instead of
-   `d=404`, which would log a console error for every person without one. */
+   An uploaded picture painted over the initials-on-color chip. The chip is
+   not a placeholder that gets replaced: it is always rendered, so a person
+   without a picture, or one whose picture fails to load, shows initials. */
 /* 20 is the Team sync row's portrait (beside a chevron in a 32px control). */
 export type AvatarSize = 20 | 28 | 40
 
@@ -269,10 +264,8 @@ function Avatar({
         </UiAvatar>
       </HoverTooltip>
     )
-  // an upload wins — and it wins from the moment we know it EXISTS, not from
-  // the moment its signed URL arrives (0097). Falling through to Gravatar in
-  // that gap would flash somebody's other face and then replace it.
-  const src = u.avatarPath ? u.avatarUrl : P.org.gravatarAvatars ? gravatarUrl(u.email, size) : null
+  // null until an uploaded picture's signed URL arrives (0097)
+  const src = u.avatarPath ? u.avatarUrl : null
   // The two larger portraits share one readable fallback type step; the
   // 20px row portrait steps its initials down so two letters still fit.
   return (

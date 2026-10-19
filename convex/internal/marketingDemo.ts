@@ -262,7 +262,6 @@ export const provision = internalMutation({
       name: MARKETING_DEMO.organization.name,
       slug: KEY,
       ...newOrgDefaults(now),
-      gravatar_avatars: false,
     })
     for (const p of MARKETING_DEMO.people) {
       await ctx.db.insert('profiles', {

@@ -17,7 +17,6 @@
     "src/lib/floatStack.ts",
     "src/lib/imageMetadata.ts",
     "src/lib/images.ts",
-    "src/lib/gravatar.ts",
     "src/lib/initials.ts",
     "src/lib/issueGroups.ts",
     "src/lib/localDay.ts",

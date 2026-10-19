@@ -964,8 +964,7 @@ textarea {
   position: relative;
   overflow: hidden;
 }
-/* the picture is painted OVER the initials, which stay as the fallback layer
-   (a Gravatar-less address answers with a transparent image) */
+/* the picture is painted OVER the initials, which stay as the fallback layer */
 .mentionpop-av img {
   position: absolute;
   inset: 0;

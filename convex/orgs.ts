@@ -39,7 +39,6 @@ export const update = adminMutation({
       week_start: v.optional(v.number()),
       week_one_rule: v.optional(vWeekOneRule),
       default_plannable_hours: v.optional(v.number()),
-      gravatar_avatars: v.optional(v.boolean()),
       max_attachment_mb: v.optional(v.number()),
       project_creators: v.optional(vProjectCreators),
     }),
@@ -55,7 +54,6 @@ export const update = adminMutation({
         | 'week_start'
         | 'week_one_rule'
         | 'default_plannable_hours'
-        | 'gravatar_avatars'
         | 'max_attachment_mb'
         | 'project_creators'
       >
@@ -80,7 +78,6 @@ export const update = adminMutation({
       if (!Number.isFinite(n)) throw badRequest('default_plannable_hours must be a number')
       fields.default_plannable_hours = Math.max(1, Math.min(168, Math.round(n)))
     }
-    if (patch.gravatar_avatars !== undefined) fields.gravatar_avatars = patch.gravatar_avatars
     if (patch.project_creators !== undefined) fields.project_creators = patch.project_creators
     if (patch.max_attachment_mb !== undefined) {
       const n = patch.max_attachment_mb

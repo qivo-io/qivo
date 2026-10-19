@@ -287,7 +287,7 @@ export async function deleteOrgBookkeeping(ctx: MutationCtx, orgId: string): Pro
 }
 
 /* ------------------------------------------------------------------ defaults
- * The organizations column defaults (0020/0039/0050/0095/0096). The counters
+ * The organizations column defaults (0020/0039/0050/0095). The counters
  * start in org_counters (insertOrgRows). */
 export const newOrgDefaults = (now: string) => ({
   created_at: now,
@@ -295,7 +295,6 @@ export const newOrgDefaults = (now: string) => ({
   week_start: 1,
   week_one_rule: 'first4day',
   default_plannable_hours: 32,
-  gravatar_avatars: true,
   max_attachment_mb: 20,
 })
 

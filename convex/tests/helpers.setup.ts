@@ -363,7 +363,6 @@ export async function withOrg(t: T) {
       week_start: 1,
       week_one_rule: 'first4day',
       default_plannable_hours: 40,
-      gravatar_avatars: false,
       max_attachment_mb: 10,
       billing: { plan: 'team', seats: 5, renewal_date: null },
     })
@@ -477,7 +476,6 @@ export async function withOrg(t: T) {
       week_start: 1,
       week_one_rule: 'first4day',
       default_plannable_hours: 40,
-      gravatar_avatars: false,
     })
     const otherAdmin = await load('profiles', person('otherAdmin', 'OA', 'admin', otherOrg.id))
     const otherProject = await load(

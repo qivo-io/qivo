@@ -68,7 +68,6 @@ describe('orgs.update — settings, silently', () => {
         week_start: 0,
         week_one_rule: 'jan1',
         default_plannable_hours: 500,
-        gravatar_avatars: true,
       },
     })
     const org = await orgRow(t, f.org.id)
@@ -77,7 +76,6 @@ describe('orgs.update — settings, silently', () => {
     expect(org?.week_start).toBe(0)
     expect(org?.week_one_rule).toBe('jan1')
     expect(org?.default_plannable_hours).toBe(168) // clamped, like the client
-    expect(org?.gravatar_avatars).toBe(true)
     expect(await activityFor(t, f.org.id)).toEqual([]) // settings + rename never narrate
   })
 
@@ -96,6 +94,16 @@ describe('orgs.update — settings, silently', () => {
       as(t, f.user).mutation(api.orgs.update, { org_id: f.org.id, patch: { name: 'Coup' } }),
       'forbidden',
     )
+  })
+
+  it('refuses the retired Gravatar setting instead of storing it', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const retired = { gravatar_avatars: true } as unknown as { name?: string }
+    await expect(
+      as(t, f.admin).mutation(api.orgs.update, { org_id: f.org.id, patch: retired }),
+    ).rejects.toThrowError(/Validator error/)
+    expect((await orgRow(t, f.org.id))?.gravatar_avatars).toBeUndefined()
   })
 
   it('refuses the retired team leads policy instead of storing it', async () => {

@@ -13,7 +13,7 @@ import type { OrgPatch, OrgVM } from '../../store/planner'
 import { P } from '../../store/planner'
 import { OrganizationDeletion } from '../OrganizationDeletion'
 import { OrganizationExport } from '../OrganizationExport'
-import { TextField, Toggle } from './controls'
+import { TextField } from './controls'
 
 // Address changes need an explicit save and an inline refusal. The store checks
 // the format locally; reserved names remain a server-owned rule.
@@ -320,33 +320,6 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
             />
             <span className="[font-size:var(--fs-base)] [color:var(--text-2)]">
               h per week, for new users
-            </span>
-          </div>
-        </SettingsField>
-        <SettingsField
-          label="Profile pictures from Gravatar"
-          width={470}
-          hint="Sends hashed email addresses to Gravatar for users without an uploaded picture."
-        >
-          <div className="[display:flex] [align-items:center] [gap:8px]">
-            <span data-gravatar-toggle className="[display:inline-flex]">
-              <Toggle
-                on={P.org.gravatarAvatars}
-                title={
-                  P.org.gravatarAvatars ? 'Gravatar lookups are on' : 'Gravatar lookups are off'
-                }
-                onClick={() => {
-                  const v = !P.org.gravatarAvatars
-                  if (P.refusePausedEdit()) return
-                  P.setOrg({ gravatarAvatars: v })
-                  window.showToast?.(
-                    v ? 'Pictures may come from Gravatar' : 'Gravatar lookups are off',
-                  )
-                }}
-              />
-            </span>
-            <span className="[font-size:var(--fs-base)] [color:var(--text-1)]">
-              {P.org.gravatarAvatars ? 'look pictures up by email address' : 'Do not use Gravatar'}
             </span>
           </div>
         </SettingsField>

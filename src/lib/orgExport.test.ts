@@ -327,7 +327,7 @@ describe('organization export archive', () => {
     expect(manifest.exclusions.join(' ')).toMatch(/mcp_tokens/)
     expect(manifest.exclusions.join(' ')).toMatch(/Authentication/)
     expect(manifest.exclusions.join(' ')).toMatch(/Platform/)
-    expect(manifest.exclusions.join(' ')).toMatch(/Gravatar/)
+    expect(manifest.exclusions.join(' ')).toMatch(/External images/)
     expect(JSON.stringify(manifest)).not.toMatch(/secret-token|files\.example/)
     const readme = strFromU8(entries['README.txt'])
     expect(readme).toContain('format version 2')

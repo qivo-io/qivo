@@ -266,6 +266,15 @@ describe('billing redaction', () => {
     expect(org).toMatchObject({ next_issue_num: 7, next_project_num: 9 })
     expect(org).not.toHaveProperty('activity_count')
   })
+
+  it('tells earlier app builds that Gravatar is off, whatever an older row stored', async () => {
+    // Earlier builds read a missing gravatar_avatars as on.
+    expect((await snapFor(f.user)).orgs[0]?.gravatar_avatars).toBe(false)
+    await t.run(async (ctx) => {
+      await ctx.db.patch(f.org._id, { gravatar_avatars: true })
+    })
+    expect((await snapFor(f.user)).orgs[0]?.gravatar_avatars).toBe(false)
+  })
 })
 
 describe('snapshot size log', () => {

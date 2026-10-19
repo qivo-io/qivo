@@ -35,7 +35,6 @@ export async function plantNorthstar(
       name: MARKETING_DEMO.organization.name,
       slug: NORTHSTAR,
       ...newOrgDefaults(NOW),
-      gravatar_avatars: false,
     })
     const org = (await ctx.db.get(orgDoc)) as Doc<'organizations'>
     const profiles: Doc<'profiles'>[] = []
