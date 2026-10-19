@@ -364,7 +364,46 @@ describe('rollback during snapshot trouble', () => {
     expect(message('message-a')?.snoozedUntil).toBe(Date.parse(UNTIL))
   })
 
+  it('paints a write accepted after another write was refused', async () => {
+    live().fail(new Error(QUERY_FAILURE))
+    P().markMessagesRead(['message-a'])
+    // the refusal answers first and its rollback takes the pending paint
+    await refuseFollow()
+    expect(message('message-a')?.read).toBe(false)
+    await accept()
+    expect(message('message-a')?.read).toBe(true)
+  })
+
+  it('paints a write kept after a held delivery once the last write settles', async () => {
+    P().markMessagesRead(['message-a'])
+    // another client's change arrives, then the query fails
+    deliverTruth(() => {})
+    live().fail(new Error(QUERY_FAILURE))
+    await accept()
+    expect(message('message-a')?.read).toBe(true)
+  })
+
+  it('keeps the bulk actions spent after a refused write', async () => {
+    deliverTruth((snap) => {
+      snap.unreadTruncated = true
+      snap.readTruncated = true
+    })
+    live().fail(new Error(QUERY_FAILURE))
+    const read = P().markAllMessagesRead()
+    await accept({ marked: 1, hasMore: false, before: 1 })
+    await read
+    const removed = P().deleteReadMessages()
+    await accept({ removed: 1, hasMore: false })
+    await removed
+    await refuseFollow()
+    expect(P().canMarkAllRead).toBe(false)
+    expect(P().canRemoveRead).toBe(false)
+  })
+
   it('keeps no paint of a write the newest delivery already holds', async () => {
+    live().fail(new Error(QUERY_FAILURE))
+    deliverTruth(() => {})
+    expect(P().snapshotTrouble()).toBeNull()
     const done = P().deleteReadMessages()
     expect(message('message-b')).toBeUndefined()
     // another device reopened the message, so the server kept it
@@ -376,6 +415,39 @@ describe('rollback during snapshot trouble', () => {
     await done
     expect(message('message-b')?.read).toBe(false)
     await refuseFollow()
+    expect(message('message-b')?.read).toBe(false)
+  })
+
+  it('keeps no paint once the trouble has ended', async () => {
+    live().fail(new Error(QUERY_FAILURE))
+    deliverTruth(() => {})
+    P().markMessagesRead(['message-a'])
+    // the delivery that holds the read mark, which another device undid
+    deliverTruth(() => {})
+    await accept()
+    expect(message('message-a')?.read).toBe(false)
+  })
+
+  it('keeps the paint of a write accepted after Try again replaced the subscription', async () => {
+    live().fail(new Error(QUERY_FAILURE))
+    P().markMessagesRead(['message-a'])
+    // a held delivery from before the read mark, then Try again
+    deliverTruth(() => {})
+    P().retrySnapshot()
+    await accept()
+    expect(message('message-a')?.read).toBe(true)
+  })
+
+  it('leaves a message reopened before Remove all read ran on screen', async () => {
+    const done = P().deleteReadMessages()
+    // the server kept the reopened message, then the query failed
+    deliverTruth((snap) => {
+      snap.messages[1].read_at = undefined
+      snap.readMessageCount = 0
+    })
+    live().fail(new Error(QUERY_FAILURE))
+    await accept({ removed: 0, hasMore: false })
+    await done
     expect(message('message-b')?.read).toBe(false)
   })
 

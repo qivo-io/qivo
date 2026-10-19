@@ -5,7 +5,8 @@
    Every non-null snapshot updates serverSnap. A later null (no seat left)
    keeps the last one as the rollback anchor. During optimistic writes, run()
    holds their paint until the last write settles; refusal restores server
-   truth, with the writes accepted since that snapshot painted again.
+   truth, with the personal writes, archives and deletes accepted since that
+   snapshot painted again.
    Comments and Team sync have separate subscriptions and update channels.
    Preferences load once and save through their own debounced lifecycle.
    Uploads remain awaited; signed file URLs are minted with one-shot queries. */
@@ -552,9 +553,11 @@ let snapshotCurrent = false
 
 /** Keeps `paint`, the optimistic paint of a write the server accepted, for
     rollbacks until the next good delivery (acceptedPaints), unless the
-    newest delivery already holds the write. */
-function keepAcceptedPaint(paint: () => void) {
-  if (!snapshotCurrent) acceptedPaints.push(paint)
+    newest delivery already holds the write. Answers whether it was kept. */
+function keepAcceptedPaint(paint: () => void): boolean {
+  if (snapshotCurrent) return false
+  acceptedPaints.push(paint)
+  return true
 }
 /* Draft-only uploads a discarded draft let go of while edits were paused
    (removeAttachment's deferWhilePaused). The pause would refuse their
@@ -959,10 +962,13 @@ export const TEXT_TOO_LONG = {
    held delivery. Convergence is guaranteed — Convex redelivers snapshots
    that include our own completed mutations. A rollback re-adopts the newest
    serverSnap, because a failed write's effects never existed server-side,
-   and then paints again what the server accepted after that delivery
-   (reapplyAcceptedWrites). While the snapshot is in trouble no delivery
-   holds the personal writes that still go out, so without that a refused
-   write would take saved read marks, snoozes and follows off the screen. */
+   and then paints again the personal writes, archives and deletes the
+   server accepted after that delivery (reapplyAcceptedWrites). While the
+   snapshot is in trouble no delivery holds the personal writes that still
+   go out, so without that a refused write would take saved read marks,
+   snoozes and follows off the screen. Shared writes keep no paint: they
+   pause during trouble, and one sent before the trouble began and accepted
+   during it can still vanish until the next good delivery. */
 let inFlight = 0
 let storeEpoch = 0
 let demoDisposed = false
@@ -1516,8 +1522,10 @@ function run<T>(
         console.error('[qivo] write failed:', e)
         onError(e)
         // rollback = re-adopt the newest server truth; a delivery held by the
-        // gate IS that truth, so the flags clear here
-        snapDirty = false
+        // gate IS that truth, so the flags clear here. Writes still in flight
+        // lose their paint with it, so the last settle paints the server
+        // truth again, with the paints they keep once accepted.
+        snapDirty = inFlight > 1
         commentsDirty = false
         if (serverSnap) adopt(serverSnap)
         /* Writes the server accepted after that delivery, such as read marks
@@ -5015,10 +5023,16 @@ export const PLANNER = {
       return false
     })
     const done = await Promise.allSettled(operations)
+    const noUnreadLeft = () => {
+      unexaminedUnread = false
+    }
+    // after the last batch, so a rollback in between may have undone it
     if (done.every((outcome) => outcome.status === 'fulfilled' && outcome.value))
-      keepAcceptedPaint(() => {
-        unexaminedUnread = false
-      })
+      if (keepAcceptedPaint(noUnreadLeft)) {
+        noUnreadLeft()
+        rebuild()
+        emit()
+      }
   },
   /* Back to unread — the same column, the other way. Nothing is pruned by
      it: the rows it re-opens are no longer read, which is exactly what the
@@ -5075,21 +5089,26 @@ export const PLANNER = {
       .filter((message) => message.read && message.snoozedUntil === null)
       .map((message) => message.id)
     const byOrg = messagesByOrg(ids)
-    const remove = (list: string[]) =>
-      list.forEach((id) => {
-        rows.messages.delete(id)
-      })
-    remove(ids)
+    ids.forEach((id) => {
+      rows.messages.delete(id)
+    })
     hiddenReadMessages = 0
     unexaminedRead = false
     rebuild()
     emit()
-    // kept per seat once its last batch is saved, as markAllMessagesRead does
+    /* Kept per seat once its last batch is saved, as markAllMessagesRead
+       does. Like the server's batches, the kept paint leaves rows that are
+       unread or snoozed by then. */
+    const removeSeatRead = (org: string) =>
+      (byOrg.get(org) ?? []).forEach((id) => {
+        const row = rows.messages.get(id)
+        if (row?.read_at && !row.snoozed_until) rows.messages.delete(id)
+      })
     const operations = orgs.map(async (org) => {
       while (epoch === storeEpoch) {
         const operation = write(api.messages.removeRead, { org_id: org })
         run(operation, (result) => {
-          if (!result.hasMore) keepAcceptedPaint(() => remove(byOrg.get(org) ?? []))
+          if (!result.hasMore) keepAcceptedPaint(() => removeSeatRead(org))
         })
         const result = await operation
         if (!result.hasMore) return true
@@ -5097,11 +5116,17 @@ export const PLANNER = {
       return false
     })
     const done = await Promise.allSettled(operations)
+    const noReadLeft = () => {
+      hiddenReadMessages = 0
+      unexaminedRead = false
+    }
+    // as markAllMessagesRead does
     if (done.every((outcome) => outcome.status === 'fulfilled' && outcome.value))
-      keepAcceptedPaint(() => {
-        hiddenReadMessages = 0
-        unexaminedRead = false
-      })
+      if (keepAcceptedPaint(noReadLeft)) {
+        noReadLeft()
+        rebuild()
+        emit()
+      }
   },
   markMessageRead: (id: string) => {
     PLANNER.markMessagesRead([id])
@@ -6801,6 +6826,8 @@ function retrySnapshot() {
   }, RETRY_GAP_MS)
   const epoch = storeEpoch
   snapUnsub?.()
+  // the new subscription has delivered nothing yet
+  snapshotCurrent = false
   snapUnsub = subscribeSnapshot(() => epoch === storeEpoch && !demoDisposed)
 }
 
