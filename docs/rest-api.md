@@ -909,7 +909,9 @@ anywhere inside a word. These are the fields the app's task filter searches.
 `search=upd%20firm` finds “Add signed firmware updates and rollback”, and
 `search=in%20progress%20anna` finds Anna's tasks in progress.
 Explicit `*` wildcards within fragments remain supported; other punctuation is
-literal.
+literal. A search of active tasks whose label names it would have to read for
+too many tasks at once is a `400` with `this search reads too many label
+assignments to answer in one request; name a project or add a filter`.
 
 Active lists come in creation order, oldest first, with tasks created at the
 same moment ordered by number, so `offset` pages through them. MCP's
@@ -924,7 +926,10 @@ active task of the organization when it names an archived project or the
 organization has more than 1,000 active projects. When
 those alone leave no room for a single comment, the request is a `400` with
 `this organization's active tasks are too large to list in one request`, and
-a smaller `limit` does not help.
+a smaller `limit` does not help. When the request instead runs out of index
+reads, which follow the active projects, your team memberships and the labels
+a search matches, the `400` says `this organization has too many projects,
+teams or labels to list its tasks in one request`.
 
 #### Archived tasks
 
@@ -1109,10 +1114,8 @@ another top-level project must leave its parent in the same request, with
 `parent: null` or a new parent in the destination's top-level project;
 otherwise the PATCH is a `400` with `a subtask stays in its parent task's
 project; to move it to another project, detach it from its parent in the
-same change`. A subtask created before this rule in another top-level
-project than its parent can still move within its own top-level project and
-into its parent's. A parent in a project you cannot see counts as being in
-the subtask's own top-level project, so moving such a subtask to another
+same change`. A parent in a project you cannot see counts as being in the
+subtask's own top-level project, so moving such a subtask to another
 top-level project also needs `parent: null` or a new parent there.
 
 **Parent.** `parent` sets the task's parent, named by key, number or uuid,

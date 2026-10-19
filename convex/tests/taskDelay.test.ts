@@ -13,7 +13,7 @@
 /// <reference types="vite/client" />
 
 import fc from 'fast-check'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { isoToWeek, setWeekConfig, TODAY_ISO, tsToWeek, weekToISO } from '../../src/lib/dates'
 import { computeDelayMap, type DelayIssue } from '../../src/lib/delay'
 import {
@@ -26,7 +26,7 @@ import { DEFAULT_PLANNABLE_HOURS, type LoadSpan, plannableHoursOf } from '../../
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
-import { type DelayJson, delayClock, OWNER_LOAD_CHECKS, ownerLoadSpans } from '../lib/machineDelay'
+import { type DelayJson, OWNER_LOAD_CHECKS, ownerLoadSpans, utcToday } from '../lib/machineDelay'
 import { taskOwnerId } from '../lib/review'
 import { orgProjectView } from '../lib/visibility'
 import { weekGrid } from '../lib/workload'
@@ -47,6 +47,8 @@ import {
 
 /* A Wednesday at noon UTC, the same day in every likely time zone. */
 const NOW = '2026-10-14T12:00:00.000Z'
+/* NOW's UTC day, as the HTTP action passes it. */
+const TODAY = NOW.slice(0, 10)
 
 /* The first days of the Monday weeks around NOW. W(0) holds NOW. */
 const W = (offset: number) =>
@@ -241,8 +243,8 @@ type Row = { id: string; title: string; delay: DelayJson | null }
 
 /* Every read of `ids` as `callerId`, REST and MCP list rows and single
  * reads, which must agree. */
-async function everyRead(fx: Fx, callerId: string, ids: readonly string[], now = NOW) {
-  const read = { callerId, access: 'read', now } as const
+async function everyRead(fx: Fx, callerId: string, ids: readonly string[], today = TODAY) {
+  const read = { callerId, access: 'read', today } as const
   const rest = await restTasks(fx.t, { ...read, limit: '200' })
   const mcp = JSON.parse(await fx.t.query(internal.machine.mcp.listIssues, { ...read, limit: 200 }))
   const out = new Map<string, DelayJson | null>()
@@ -269,7 +271,7 @@ describe('delay is the app’s projected delay for each reader', () => {
     })
     for (const person of [fx.admin, fx.guest]) {
       const app = await appDelays(fx, person)
-      const listed = await restTasks(fx.t, { callerId: person.id, access: 'read', now: NOW })
+      const listed = await restTasks(fx.t, { callerId: person.id, access: 'read', today: TODAY })
       expect(listed.map((r) => r.id).sort()).toEqual([...app.keys()].sort())
       const ours = await everyRead(fx, person.id, [...app.keys()])
       for (const [id, expected] of app) {
@@ -305,7 +307,7 @@ describe('delay is the app’s projected delay for each reader', () => {
     const page = await restArchivedPage(fx.t, {
       callerId: fx.admin.id,
       access: 'read',
-      now: NOW,
+      today: TODAY,
       project: 'FW',
     })
     expect(page.tasks.find((r) => r.id === c.archived.id)?.delay).toBeNull()
@@ -377,7 +379,11 @@ describe('a single read’s load is the list’s load', () => {
         for (const reader of [fx.admin, fx.guest, fx.agent]) {
           // the verdicts agree on every read (everyRead), and the load
           // behind them is the same rows
-          const listed = await restTasks(fx.t, { callerId: reader.id, access: 'read', now: NOW })
+          const listed = await restTasks(fx.t, {
+            callerId: reader.id,
+            access: 'read',
+            today: TODAY,
+          })
           await everyRead(
             fx,
             reader.id,
@@ -437,17 +443,19 @@ describe('today is the request’s UTC day', () => {
     const fx = await setup()
     // due on a Sunday, planned for that week
     const due = await task(fx, { due_date: '2026-10-18', start_week: W(0), end_week: W(0) })
-    const at = async (now: string) => (await everyRead(fx, fx.admin.id, [due.id], now)).get(due.id)
-    // 01:30 on Monday in Stockholm, still Sunday in UTC
-    expect(await at('2026-10-18T23:30:00.000Z')).toEqual({
-      status: 'ok',
-      projected_end_week: W(0),
-    })
-    expect(await at('2026-10-19T00:30:00.000Z')).toEqual({
-      status: 'late',
-      projected_end_week: W(1),
-    })
-    expect(delayClock(fx.org, '2026-10-18T23:30:00.000Z').today).toBe('2026-10-18')
+    const at = async (today: string) =>
+      (await everyRead(fx, fx.admin.id, [due.id], today)).get(due.id)
+    expect(await at('2026-10-18')).toEqual({ status: 'ok', projected_end_week: W(0) })
+    expect(await at('2026-10-19')).toEqual({ status: 'late', projected_end_week: W(1) })
+    // 01:30 on Monday in Stockholm is still Sunday in UTC
+    vi.useFakeTimers({ now: new Date('2026-10-18T23:30:00.000Z') })
+    try {
+      expect(utcToday()).toBe('2026-10-18')
+      vi.setSystemTime(new Date('2026-10-19T00:30:00.000Z'))
+      expect(utcToday()).toBe('2026-10-19')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -482,7 +490,7 @@ describe('a verdict reads the owner’s other work only when it can change it', 
     fx.t.query(internal.machine.rest.getIssue, {
       callerId: fx.admin.id,
       access: 'read',
-      now: NOW,
+      today: TODAY,
       ref,
     })
 

@@ -321,7 +321,7 @@ describe('the machine action registry', () => {
         r.runQuery(internal.machine.rest.getIssue, {
           callerId,
           access,
-          now: new Date().toISOString(),
+          today: new Date().toISOString().slice(0, 10),
           // @ts-expect-error the path declares :ref, not :key
           ref: param('key'),
         }),

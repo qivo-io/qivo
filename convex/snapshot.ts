@@ -7,7 +7,8 @@
  * one range for the caller's seats, each seat reads 12 ranges plus:
  * - one per active project of the organization, its active tasks
  *   (lib/liveTasks.ts liveTasksOf), so the tasks of archived projects are
- *   never read;
+ *   never read, or one for all of them past LIVE_PROJECT_READS active
+ *   projects;
  * - one per team (its members), and two per team the seat belongs to
  *   (lib/access.ts projectLevelsForOrg);
  * - up to three per visible project, archived ones included (grants, team
@@ -25,11 +26,13 @@
  *   admin, who reads the task each row is about, and at most 1,000 for a
  *   member, who reads up to two numbered tasks a row names.
  * A seat whose relation tables stay in bulk therefore reads at most about
- * 1,020 ranges plus one per active project and three per team and per
- * visible project, and a person's seats add up. Teams and projects are few
+ * 1,020 ranges plus one per active project (at most 1,000) and three per
+ * team and per visible project, and a person's seats add up. Teams and projects are few
  * beside tasks. A view read task by task adds its 4 ranges per task, as the
  * rule this replaced did, which a view of about 1,000 tasks or more cannot
- * afford. Documents read follow the live tasks and the unmarked relation
+ * afford. Documents read follow the live tasks (past LIVE_PROJECT_READS
+ * active projects, every active task, archived projects' included, as one
+ * range holds them all) and the unmarked relation
  * rows of the active tasks (model/archiveMarks.ts marks the rows of archived
  * tasks, and a project archive marks none), the organization's people,
  * projects, teams and labels, at most 500 activity rows, and at most 3,002

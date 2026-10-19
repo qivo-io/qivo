@@ -86,6 +86,7 @@ import {
   vIssueStatus,
 } from '../lib/enums'
 import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
+import { utcToday } from '../lib/machineDelay'
 import { mcpResource, mcpResourceMetadata, OAUTH_SCOPES } from '../lib/oauth'
 import {
   EVENT_PARAMS_NOT_FINITE,
@@ -420,7 +421,7 @@ export const TOOLS: McpTool[] = [
       r.runQuery(internal.machine.mcp.listIssues, {
         callerId,
         access,
-        now: new Date().toISOString(),
+        today: utcToday(),
         ...(args as {
           project?: string
           status?: Doc<'issues'>['status'] | Doc<'issues'>['status'][]
@@ -457,7 +458,7 @@ export const TOOLS: McpTool[] = [
       r.runQuery(internal.machine.mcp.getIssue, {
         callerId,
         access,
-        now: new Date().toISOString(),
+        today: utcToday(),
         ...(args as { ref: string }),
       }),
   },
@@ -1663,7 +1664,7 @@ export const listIssues = internalQuery({
   args: {
     callerId: v.string(),
     access: vCredentialAccess,
-    now: v.string(),
+    today: v.string(),
     project: v.optional(v.string()),
     status: v.optional(v.union(vIssueStatus, v.array(vIssueStatus))),
     priority: v.optional(vIssuePriority),
@@ -1711,7 +1712,7 @@ export const listIssues = internalQuery({
         await listActiveIssuesCore(
           ctx,
           me,
-          { ...filters, scope: req.scope, offset: req.offset, now: a.now },
+          { ...filters, scope: req.scope, offset: req.offset, today: a.today },
           view,
         ),
       )
@@ -1732,14 +1733,14 @@ export const listIssues = internalQuery({
 
 /* get_task answers the single-task shape, the list row plus labels,
  * subtasks, links, a group's remaining hours, followers and attachments
- * (lib/core.ts taskOut). `now` is the HTTP action's clock, which the task's
- * delay is judged by. */
+ * (lib/core.ts taskOut). `today` is the HTTP action's UTC day, which the
+ * task's delay is judged by. */
 export const getIssue = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess, now: v.string(), ref: v.string() },
-  handler: async (ctx, { callerId, access, now, ref }) => {
+  args: { callerId: v.string(), access: vCredentialAccess, today: v.string(), ref: v.string() },
+  handler: async (ctx, { callerId, access, today, ref }) => {
     const me = await asMachineCaller(ctx, callerId, access)
     const issue = await mustFindIssue(ctx, me, ref)
-    return pretty(await taskOut(ctx, issue, { surface: 'mcp', me, now }))
+    return pretty(await taskOut(ctx, issue, { surface: 'mcp', me, today }))
   },
 })
 

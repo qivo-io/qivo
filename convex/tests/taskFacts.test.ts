@@ -14,7 +14,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { type GroupIssue, groupProgress, isIssueGroup } from '../../src/lib/issueGroups'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { ACTIVE_TASKS_TOO_LARGE, COMMENT_READS_RESERVE, PAGE_TOO_LARGE } from '../lib/core'
+import {
+  ACTIVE_LIST_TOO_WIDE,
+  ACTIVE_TASKS_TOO_LARGE,
+  COMMENT_READS_RESERVE,
+  PAGE_TOO_LARGE,
+  SEARCH_TOO_LARGE,
+} from '../lib/core'
 import type { Refusal } from '../lib/functions'
 import {
   as,
@@ -28,6 +34,7 @@ import {
   restArchivedPage,
   restTasks,
   type T,
+  TODAY,
   uuid,
   withOrg,
 } from './helpers.setup'
@@ -133,7 +140,7 @@ function appCompletion(view: Awaited<ReturnType<typeof appView>>, metaId: string
 }
 
 const restGet = (fx: Fx, ref: string, callerId: string) =>
-  fx.t.query(internal.machine.rest.getIssue, { now: NOW, callerId, access: 'read', ref })
+  fx.t.query(internal.machine.rest.getIssue, { today: TODAY, callerId, access: 'read', ref })
 
 const mcpRead = async <Out>(
   fx: Fx,
@@ -141,7 +148,9 @@ const mcpRead = async <Out>(
   callerId: string,
   args: Record<string, unknown>,
 ): Promise<Out> =>
-  JSON.parse(await fx.t.query(fn, { now: NOW, callerId, access: 'read', ...args } as never)) as Out
+  JSON.parse(
+    await fx.t.query(fn, { today: TODAY, callerId, access: 'read', ...args } as never),
+  ) as Out
 
 type Row = { id: string; progress: unknown; last_comment_at: unknown }
 
@@ -477,7 +486,7 @@ describe('an active page keeps inside the request’s read limits', () => {
     await refusal(restTasks(fx.t, { callerId: fx.agent.id, access: 'read' }))
     await refusal(
       fx.t.query(internal.machine.mcp.listIssues, {
-        now: NOW,
+        today: TODAY,
         callerId: fx.agent.id,
         access: 'read',
       }),
@@ -503,7 +512,7 @@ describe('an active page keeps inside the request’s read limits', () => {
     await refusal(restTasks(fx.t, { callerId: fx.agent.id, access: 'read', limit: '1' }))
     await refusal(
       fx.t.query(internal.machine.mcp.listIssues, {
-        now: NOW,
+        today: TODAY,
         callerId: fx.agent.id,
         access: 'read',
         limit: 1,
@@ -513,5 +522,43 @@ describe('an active page keeps inside the request’s read limits', () => {
     expect(
       await restTasks(fx.t, { callerId: fx.agent.id, access: 'read', offset: '1000' }),
     ).toEqual([])
+  })
+
+  it('names projects, teams and labels when the reads before the comments use up the ranges', async () => {
+    const fx = await setup(newT({ transactionLimits: { databaseQueries: 64 } }))
+    // the reserve stands in for team and label reads that leave less unread
+    COMMENT_READS_RESERVE.ranges = 64
+    await task(fx, { title: 'Never discussed' })
+    const e = await expectRefusal(
+      restTasks(fx.t, { callerId: fx.agent.id, access: 'read', limit: '1' }),
+      'bad_request',
+    )
+    expect((e.data as Refusal).message).toBe(ACTIVE_LIST_TOO_WIDE)
+  })
+})
+
+describe("an active list's refusals", () => {
+  it('are the pinned sentences, which the public docs quote', () => {
+    const sentences = {
+      [PAGE_TOO_LARGE]: 'this page of tasks is too large to read at once; ask for a smaller limit',
+      [ACTIVE_TASKS_TOO_LARGE]:
+        "this organization's active tasks are too large to list in one request",
+      [ACTIVE_LIST_TOO_WIDE]:
+        'this organization has too many projects, teams or labels to list its tasks in one request',
+      [SEARCH_TOO_LARGE]:
+        'this search reads too many label assignments to answer in one request; name a project or add a filter',
+    }
+    for (const [sent, pinned] of Object.entries(sentences)) expect(sent).toBe(pinned)
+    const docs = import.meta.glob(['../../docs/rest-api.md', '../../docs/mcp.md'], {
+      eager: true,
+      query: '?raw',
+      import: 'default',
+    }) as Record<string, string>
+    expect(Object.keys(docs)).toHaveLength(2)
+    for (const [path, text] of Object.entries(docs)) {
+      // a wrapped line reads as one space
+      const prose = text.replace(/\s+/g, ' ')
+      for (const pinned of Object.values(sentences)) expect(prose, path).toContain(pinned)
+    }
   })
 })

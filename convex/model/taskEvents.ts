@@ -181,6 +181,11 @@ export function eventSubscriptions(
   return subscriptions
 }
 
+/* Whether two stored field values are equal as JSON. Two strings, such as
+ * long descriptions, compare without being encoded. */
+const sameValue = (x: unknown, y: unknown): boolean =>
+  typeof x === 'string' && typeof y === 'string' ? x === y : JSON.stringify(x) === JSON.stringify(y)
+
 /** Record one event atomically, without multiplying task writes by
  * subscription count. `guard` runs before each subscription's sight check,
  * so a bulk writer can stop before the transaction passes Convex's limits
@@ -202,8 +207,7 @@ export async function emitTaskEvent(
         (key) =>
           // relations_marked is the archive steps' bookkeeping, never news
           !['_id', '_creationTime', 'updated_at', 'relations_marked'].includes(key) &&
-          JSON.stringify(a.issue[key as keyof Doc<'issues'>]) !==
-            JSON.stringify(a.before?.[key as keyof Doc<'issues'>]),
+          !sameValue(a.issue[key as keyof Doc<'issues'>], a.before?.[key as keyof Doc<'issues'>]),
       )
     : []
   if (a.name === 'task.updated' && changed.length === 0) return

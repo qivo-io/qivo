@@ -6,19 +6,30 @@
  * every label. */
 /// <reference types="vite/client" />
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
-import { issueKey, listActiveIssuesCore, listArchivedIssuesCore, loadCatalogue } from '../lib/core'
+import {
+  issueKey,
+  LABEL_READS_RESERVE,
+  LABEL_TASK_READS,
+  listActiveIssuesCore,
+  listArchivedIssuesCore,
+  loadCatalogue,
+  SEARCH_TOO_LARGE,
+} from '../lib/core'
+import type { Refusal } from '../lib/functions'
 import { allWordsMatcher, searchPieces, taskSearchText } from '../lib/search'
 import {
+  expectRefusal,
   NOW,
   newT,
   type OrgFixture,
   plantIssue,
   restTasks,
   type T,
+  TODAY,
   uuid,
   withOrg,
 } from './helpers.setup'
@@ -61,7 +72,7 @@ const activeList = async (ctx: MutationCtx, fx: Fx, search: string) =>
   await listActiveIssuesCore(
     ctx,
     fx.admin,
-    { now: NOW, scope: null, search, stars: true, limit: 1000, offset: 0 },
+    { today: TODAY, scope: null, search, stars: true, limit: 1000, offset: 0 },
     { surface: 'rest', cat: await loadCatalogue(ctx, fx.admin), readable: () => true },
   )
 
@@ -88,7 +99,7 @@ const found = (fx: Fx, c: SearchCase) =>
       : await listActiveIssuesCore(
           ctx,
           fx.admin,
-          { now: NOW, ...filters, scope: null, offset: 0 },
+          { today: TODAY, ...filters, scope: null, offset: 0 },
           view,
         )
     return rows.map((i) => i.id).sort()
@@ -162,6 +173,13 @@ async function mixed() {
   return { fx, bracket, lid, gasket, sign, paste, stale, thermal }
 }
 
+const DEFAULT_LABEL_READS = { ...LABEL_TASK_READS }
+const DEFAULT_LABEL_RESERVE = { ...LABEL_READS_RESERVE }
+afterEach(() => {
+  Object.assign(LABEL_TASK_READS, DEFAULT_LABEL_READS)
+  Object.assign(LABEL_READS_RESERVE, DEFAULT_LABEL_RESERVE)
+})
+
 describe('task search reads only the labels it can match', () => {
   it('splits a search into its distinct non-empty pieces', () => {
     expect(searchPieces('Therm  brack*ET therm', true)).toEqual(['therm', 'brack', 'et'])
@@ -184,7 +202,7 @@ describe('task search reads only the labels it can match', () => {
       (
         JSON.parse(
           await fx.t.query(internal.machine.mcp.listIssues, {
-            now: NOW,
+            today: TODAY,
             callerId: fx.admin.id,
             access: 'read',
             search,
@@ -203,6 +221,8 @@ describe('task search reads only the labels it can match', () => {
 
   it('reads no assignment of a label that no search piece names', async () => {
     const { fx, thermal } = await mixed()
+    // each matching label's assignments, as a search of many tasks reads them
+    LABEL_TASK_READS.reads = 0
     const tasks: Doc<'issues'>[] = []
     for (let n = 0; n < 20; n++) {
       tasks.push(
@@ -234,52 +254,145 @@ describe('task search reads only the labels it can match', () => {
     expect((await reads('therm')).documents - missBefore.documents).toBe(22)
   })
 
+  it('reads the labels of only the tasks that miss without them, one task at a time', async () => {
+    const { fx, thermal } = await mixed()
+    const spares: Doc<'issues'>[] = []
+    for (let n = 0; n < 20; n++) {
+      spares.push(
+        await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, title: `Spare ${n}` }),
+      )
+    }
+    await label(fx, thermal, spares)
+    const ranges = (search: string) =>
+      fx.t.run(async (ctx) => {
+        const before = (await ctx.meta.getTransactionMetrics()).databaseQueries.used
+        const rows = await activeList(ctx, fx, search)
+        const used = (await ctx.meta.getTransactionMetrics()).databaseQueries.used - before
+        return { rows: rows.length, ranges: used - rows.length }
+      })
+    // 'spare' matches the twenty by title, so no task needs its labels, and
+    // 'spare therm' needs those of every active task its text misses, the
+    // twenty Spares and the fixture's five, one range each
+    const titles = await ranges('spare')
+    expect(titles.rows).toBe(20)
+    expect(await ranges('spare therm')).toEqual({ rows: 20, ranges: titles.ranges + 25 })
+    // a search that names no label reads no assignment
+    expect(await ranges('lid')).toEqual({ rows: 1, ranges: titles.ranges })
+  })
+
+  it('reads one assignment per task and matching label, however many labels a task carries', async () => {
+    const { fx, thermal } = await mixed()
+    const spares: Doc<'issues'>[] = []
+    for (let n = 0; n < 20; n++) {
+      spares.push(
+        await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, title: `Spare ${n}` }),
+      )
+    }
+    await label(fx, thermal, spares)
+    // thirty more labels on every Spare, none of which the search names
+    for (let n = 0; n < 30; n++)
+      await label(fx, await plantLabel(fx.t, fx.org.id, `Other ${n}`), spares)
+    const documents = (search: string) =>
+      fx.t.run(async (ctx) => {
+        const before = (await ctx.meta.getTransactionMetrics()).documentsRead.used
+        await activeList(ctx, fx, search)
+        return (await ctx.meta.getTransactionMetrics()).documentsRead.used - before
+      })
+    // the twenty Spares' Thermal rows and Bracket's, not the 600 others
+    expect((await documents('spare therm')) - (await documents('spare'))).toBe(21)
+  })
+
+  it('refuses a search whose label assignments do not fit, and names a way out', async () => {
+    const { fx, thermal } = await mixed()
+    const spares: Doc<'issues'>[] = []
+    for (let n = 0; n < 600; n++) {
+      spares.push(
+        await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, title: `Spare ${n}` }),
+      )
+    }
+    await label(fx, thermal, spares)
+    LABEL_TASK_READS.reads = 0
+    // the reserve stands in for everything else the request read
+    LABEL_READS_RESERVE.documents = 32_000 - 400
+    const e = await expectRefusal(
+      restTasks(fx.t, { callerId: fx.admin.id, access: 'read', search: 'therm' }),
+      'bad_request',
+    )
+    expect((e.data as Refusal).message).toBe(SEARCH_TOO_LARGE)
+    // a search that the titles answer reads no assignment
+    expect(
+      await restTasks(fx.t, { callerId: fx.admin.id, access: 'read', search: 'spare', limit: '1' }),
+    ).toHaveLength(1)
+  })
+
+  it('checks the request before each matching label, even one without assignments', async () => {
+    const { fx } = await mixed()
+    for (let n = 0; n < 100; n++) await plantLabel(fx.t, fx.org.id, `Therm ${n}`)
+    LABEL_TASK_READS.reads = 0
+    // the reserve leaves the label reads about 40 ranges, fewer than the
+    // labels the search names, none of which holds a row to check after
+    LABEL_READS_RESERVE.ranges = 4096 - 40
+    const e = await expectRefusal(
+      restTasks(fx.t, { callerId: fx.admin.id, access: 'read', search: 'therm' }),
+      'bad_request',
+    )
+    expect((e.data as Refusal).message).toBe(SEARCH_TOO_LARGE)
+  })
+
   it('finds exactly what the matcher found when it read every label', async () => {
     const { fx } = await mixed()
-    const searches = [
-      'therm',
-      'Thermal',
-      'therm brack',
-      'brack therm',
-      'therm lid',
-      'power',
-      'power supply',
-      'supply lid',
-      'legacy',
-      'gask leg',
-      'ring legacy',
-      'οδος',
-      'ΟΔΟΣ sign',
-      'r&d',
-      'd*2',
-      'r&d*2 paste',
-      'brack*therm',
-      'brack*supp',
-      'therm*power',
-      'power*therm',
-      'user*therm',
-      'high*supply',
-      'progress*supply',
-      'qn-*leg',
-      'thermal*paste',
-      'paste*r&d',
-      'sign*d*2',
-      '*',
-      '** therm*',
-      '*supply',
-      'zzz',
-      'therm zzz',
-    ]
-    for (const search of searches) {
-      for (const stars of [true, false]) {
-        for (const archived of [false, true]) {
-          const c = { search, stars, archived }
-          const expected = await fx.t.run((ctx) => oldMatch(ctx, fx, c))
-          expect(await found(fx, c), `${search} stars=${stars} archived=${archived}`).toEqual(
-            expected,
-          )
-        }
-      }
+    for (const reads of [DEFAULT_LABEL_READS.reads, 0]) {
+      LABEL_TASK_READS.reads = reads
+      await sameAsOldMatch(fx)
     }
   })
 })
+
+/* Every search case finds what oldMatch finds. */
+async function sameAsOldMatch(fx: Fx) {
+  const searches = [
+    'therm',
+    'Thermal',
+    'therm brack',
+    'brack therm',
+    'therm lid',
+    'power',
+    'power supply',
+    'supply lid',
+    'legacy',
+    'gask leg',
+    'ring legacy',
+    'οδος',
+    'ΟΔΟΣ sign',
+    'r&d',
+    'd*2',
+    'r&d*2 paste',
+    'brack*therm',
+    'brack*supp',
+    'therm*power',
+    'power*therm',
+    'user*therm',
+    'high*supply',
+    'progress*supply',
+    'qn-*leg',
+    'thermal*paste',
+    'paste*r&d',
+    'sign*d*2',
+    '*',
+    '** therm*',
+    '*supply',
+    'zzz',
+    'therm zzz',
+  ]
+  for (const search of searches) {
+    for (const stars of [true, false]) {
+      for (const archived of [false, true]) {
+        const c = { search, stars, archived }
+        const expected = await fx.t.run((ctx) => oldMatch(ctx, fx, c))
+        expect(await found(fx, c), `${search} stars=${stars} archived=${archived}`).toEqual(
+          expected,
+        )
+      }
+    }
+  }
+}

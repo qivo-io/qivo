@@ -310,6 +310,8 @@ export async function flushWebhookEvents(t: T): Promise<void> {
 }
 
 export const NOW = '2026-01-01T00:00:00.000Z'
+/** NOW's UTC day, as an HTTP action passes it to a machine read. */
+export const TODAY = NOW.slice(0, 10)
 
 /* Web Crypto exists in the edge-runtime VM (and the Convex isolate), but
  * convex/tsconfig's lib is ESNext only, which does not declare the global. */
@@ -856,14 +858,15 @@ export async function expectRefusal(
 
 /* REST GET /v1/tasks answers an array for active tasks and a page for
  * archived ones (machine/rest.ts listIssues). These call it and require the
- * shape they expect. The request's clock is NOW unless `now` says otherwise. */
-type RestTaskListArgs = Omit<FunctionArgs<typeof internal.machine.rest.listIssues>, 'now'> & {
-  now?: string
+ * shape they expect. The request's day is TODAY unless `today` says
+ * otherwise. */
+type RestTaskListArgs = Omit<FunctionArgs<typeof internal.machine.rest.listIssues>, 'today'> & {
+  today?: string
 }
 
 /** The active task list REST answers for `args`. */
 export async function restTasks(t: T, args: RestTaskListArgs): Promise<RestIssueJson[]> {
-  const out = await t.query(internal.machine.rest.listIssues, { now: NOW, ...args })
+  const out = await t.query(internal.machine.rest.listIssues, { today: TODAY, ...args })
   if (!Array.isArray(out)) throw new Error(`expected an array, got ${JSON.stringify(out)}`)
   return out
 }
@@ -874,7 +877,7 @@ export async function restArchivedPage(
   args: Omit<RestTaskListArgs, 'archived'>,
 ): Promise<{ next_cursor: string | null; tasks: RestIssueJson[] }> {
   const out = await t.query(internal.machine.rest.listIssues, {
-    now: NOW,
+    today: TODAY,
     ...args,
     archived: 'true',
   })

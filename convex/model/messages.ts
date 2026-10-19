@@ -1264,11 +1264,16 @@ export async function notifyIssueUpdate(
   const visibility: RecipientSight = preload?.visibility ?? new Map()
 
   // @mentions newly added to the description notify regardless of
-  // subscribers, and subscribe the person to what they were pulled into
-  const oldMentions = extractMentions(before.description, orgProfiles)
-  const newMentions = extractMentions(after.description, orgProfiles).filter(
-    (p) => !oldMentions.some((o) => o.id === p.id),
-  )
+  // subscribers, and subscribe the person to what they were pulled into. An
+  // unchanged description adds none, so a bulk write of dates skips the scan
+  const oldMentions =
+    after.description === before.description ? [] : extractMentions(before.description, orgProfiles)
+  const newMentions =
+    after.description === before.description
+      ? []
+      : extractMentions(after.description, orgProfiles).filter(
+          (p) => !oldMentions.some((o) => o.id === p.id),
+        )
   for (const m of newMentions) {
     await preload?.guard?.()
     await subscribeToIssue(ctx, {

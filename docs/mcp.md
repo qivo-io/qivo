@@ -1307,7 +1307,13 @@ organization when it names an archived project or the organization has more
 than 1,000 active projects. When those alone leave no
 room for a single comment, the call is refused with `this organization's
 active tasks are too large to list in one request`, and a smaller `limit`
-does not help.
+does not help. When the call instead runs out of index reads, which follow
+the active projects, your team memberships and the labels a search matches,
+it is refused with `this organization has too many projects, teams or labels
+to list its tasks in one request`. A `search` whose label names it would have
+to read for too many tasks at once is refused with `this search reads too
+many label assignments to answer in one request; name a project or add a
+filter`.
 
 With `archived: true` it lists archived tasks one project at a time and
 needs `project`. Naming a project lists its archived tasks and those of all
@@ -1389,11 +1395,9 @@ top-level project must leave its parent in the same call, with `parent:
 null` or a new parent in the destination's top-level project; otherwise the
 call is refused with `a subtask stays in its parent task's project; to move
 it to another project, detach it from its parent in the same change`. A
-subtask created before this rule in another top-level project than its
-parent can still move within its own top-level project and into its
-parent's. A parent in a project you cannot see counts as being in the
-subtask's own top-level project, so moving such a subtask to another
-top-level project also needs `parent: null` or a new parent there.
+parent in a project you cannot see counts as being in the subtask's own
+top-level project, so moving such a subtask to another top-level project
+also needs `parent: null` or a new parent there.
 
 `parent` (a task ref) makes the task a subtask of that task, and `null`
 detaches it. You need Edit access on the parent's project, because the

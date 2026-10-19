@@ -221,8 +221,8 @@ const DAY_SHAPE = /^\d{4}-\d{2}-\d{2}$/
  * limits the hours to it and its visible sub-projects, which leaves no
  * hidden hours. Lists every active member of the organization and every
  * inactive one with hours in the window, ordered by name. It reads the live
- * tasks of the organization, one index range per active project
- * (lib/liveTasks.ts liveTasksOf), also with `project`, because a subtask
+ * tasks of the organization (lib/liveTasks.ts liveTasksOf), also with
+ * `project`, because a subtask
  * stored before subtasks had to stay in their parent's top-level project
  * can make a task there a group.
  */

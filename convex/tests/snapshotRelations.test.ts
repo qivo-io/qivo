@@ -14,10 +14,10 @@ afterEach(() => {
 })
 
 /* Every view reads each table in bulk and in full. */
-const ALL_BULK = { tasks: 0, ratio: DEFAULT_READ.ratio, ranges: 0 }
+const ALL_BULK = { ...DEFAULT_READ, tasks: 0, ranges: 0 }
 /* Every view reads task by task, which is main's read for a view it did not
  * read in bulk. */
-const ALL_SELECTIVE = { tasks: Number.POSITIVE_INFINITY, ratio: 0, ranges: 0 }
+const ALL_SELECTIVE = { ...DEFAULT_READ, tasks: Number.POSITIVE_INFINITY, ratio: 0, ranges: 0 }
 
 /* The caller's snapshot with the transaction's read counts. */
 const read = (t: T, profile: Doc<'profiles'>) =>
@@ -204,9 +204,16 @@ describe('snapshot bulk relation reads', () => {
       }
       return ids
     })
+    // the view's own rows without org_id join the bulk reads, and more of
+    // them than RELATION_READ.legacy send a table task by task
     const legacy = await read(t, f.admin)
     expect(sameDelivery(legacy.snapshot)).toEqual(sameDelivery(scoped.snapshot))
-    expect(legacy.metrics.databaseQueries.used).toBeGreaterThan(scoped.metrics.databaseQueries.used)
+    expect(legacy.metrics.databaseQueries.used).toBe(scoped.metrics.databaseQueries.used)
+    const overflow = await readWith(t, f.admin, { ...DEFAULT_READ, legacy: 0 })
+    expect(sameDelivery(overflow.snapshot)).toEqual(sameDelivery(scoped.snapshot))
+    expect(overflow.metrics.databaseQueries.used).toBeGreaterThan(
+      scoped.metrics.databaseQueries.used,
+    )
     await t.run(async (ctx) => {
       for (const id of legacyRows) await ctx.db.patch(id, { org_id: f.org.id })
       // A marked row without org_id belongs to an archived task, which no
@@ -221,7 +228,8 @@ describe('snapshot bulk relation reads', () => {
     expect(sameDelivery(markedLegacy.snapshot)).toEqual(sameDelivery(scoped.snapshot))
     expect(markedLegacy.metrics.databaseQueries.used).toBe(scoped.metrics.databaseQueries.used)
     await t.run(async (ctx) => {
-      // Unscoped data in another org must also safely select the fallback.
+      // Rows without org_id of another organization's tasks, or of tasks
+      // that are gone, stay out of the view and keep the bulk reads.
       await ctx.db.insert('issue_labels', { issue_id: 'foreign', label_id: 'legacy-secret' })
       await ctx.db.insert('issue_links', {
         id: 'foreign-link',
@@ -244,7 +252,7 @@ describe('snapshot bulk relation reads', () => {
     })
     const foreignLegacy = await read(t, f.admin)
     expect(sameDelivery(foreignLegacy.snapshot)).toEqual(sameDelivery(scoped.snapshot))
-    expect(foreignLegacy.metrics.databaseQueries.used).toBe(legacy.metrics.databaseQueries.used)
+    expect(foreignLegacy.metrics.databaseQueries.used).toBe(scoped.metrics.databaseQueries.used)
   })
 
   it('read a small view of a larger organization task by task, and a larger one in bulk', async () => {

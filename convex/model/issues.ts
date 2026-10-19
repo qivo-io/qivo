@@ -1750,10 +1750,9 @@ export async function moveIssueCore(
   // A subtask moving to another top-level project must land in its parent's
   // or leave the parent in the same change. A later parent in the
   // destination's top-level project is checked in full by the write that
-  // sets it. An older subtask already outside its parent's top-level project
-  // stays movable within its own and into its parent's. A parent the mover
-  // cannot see counts as being in the task's own top-level project, as the
-  // app counts it, so the answer tells nothing about where it is.
+  // sets it. A parent the mover cannot see counts as being in the task's own
+  // top-level project, as the app counts it, so the answer tells nothing
+  // about where it is.
   const detach = a.detachParent === true && issue.parent_id !== undefined
   if (crosses && issue.parent_id !== undefined && !detach) {
     const seenTop = async (task: Doc<'issues'>): Promise<string | null> => {

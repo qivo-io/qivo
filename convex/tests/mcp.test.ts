@@ -25,6 +25,7 @@ import {
   plantSeat,
   plantSubscription,
   type T,
+  TODAY,
   uuid,
   withOrg,
 } from './helpers.setup'
@@ -1165,7 +1166,7 @@ describe('read tools', () => {
     ]) {
       const rows = JSON.parse(
         await fx.t.query(internal.machine.mcp.listIssues, {
-          now: NOW,
+          today: TODAY,
           callerId: fx.guest.id,
           access: 'read',
           search,
@@ -1206,7 +1207,7 @@ describe('read tools', () => {
       (
         JSON.parse(
           await fx.t.query(internal.machine.mcp.listIssues, {
-            now: NOW,
+            today: TODAY,
             callerId: fx.guest.id,
             access: 'read',
             search,
@@ -1253,7 +1254,7 @@ describe('read tools', () => {
     const list = async (callerId: string, args: Record<string, unknown> = {}) =>
       JSON.parse(
         await fx.t.query(internal.machine.mcp.listIssues, {
-          now: NOW,
+          today: TODAY,
           callerId,
           access: 'read',
           ...args,
@@ -1276,7 +1277,7 @@ describe('read tools', () => {
     // the archived axis answers one project's archived tasks as a page
     const archived = JSON.parse(
       await fx.t.query(internal.machine.mcp.listIssues, {
-        now: NOW,
+        today: TODAY,
         callerId: fx.guest.id,
         access: 'read',
         project: 'FW',
@@ -1302,7 +1303,7 @@ describe('read tools', () => {
     ] as const) {
       await expectRefusal(
         fx.t.query(internal.machine.mcp.listIssues, {
-          now: NOW,
+          today: TODAY,
           callerId: caller,
           access: 'read',
           project: ref,
@@ -1392,7 +1393,7 @@ describe('read tools', () => {
     const get = async (callerId: string, ref: string) =>
       JSON.parse(
         await fx.t.query(internal.machine.mcp.getIssue, {
-          now: NOW,
+          today: TODAY,
           callerId,
           access: 'read',
           ref,
@@ -1411,7 +1412,7 @@ describe('read tools', () => {
     for (const ref of [`QN-999999`, String(hiddenIssue.num), foreign.id, 'QN-3000000000', 'xyz']) {
       await expectRefusal(
         fx.t.query(internal.machine.mcp.getIssue, {
-          now: NOW,
+          today: TODAY,
           callerId: fx.guest.id,
           access: 'read',
           ref,
@@ -1732,7 +1733,7 @@ describe('write tools', () => {
     const get = async (ref: string) =>
       JSON.parse(
         await fx.t.query(internal.machine.mcp.getIssue, {
-          now: NOW,
+          today: TODAY,
           callerId: fx.agent.id,
           access: 'read',
           ref,
@@ -1835,7 +1836,7 @@ describe('write tools', () => {
     expect(await messagesFor(fx.t, fx.user.id, selected.id)).toEqual([])
     const rows = JSON.parse(
       await fx.t.query(internal.machine.mcp.listIssues, {
-        now: NOW,
+        today: TODAY,
         callerId: fx.agent.id,
         access: 'read',
       }),
@@ -1939,7 +1940,7 @@ describe('write tools', () => {
     const get = async () =>
       JSON.parse(
         await fx.t.query(internal.machine.mcp.getIssue, {
-          now: NOW,
+          today: TODAY,
           callerId: fx.agent.id,
           access: 'read',
           ref: task.id,

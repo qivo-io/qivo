@@ -215,7 +215,7 @@ async function projectOut(
   const flags = await accessFlags(ctx, me, cat, access)
   const readable = (id: string) => flags.get(id)?.read === true
   const completion =
-    o.created === true ? NO_TASKS : await projectCompletion(ctx, me, project, { cat, readable })
+    o.created === true ? NO_TASKS : await projectCompletion(ctx, project, { cat, readable })
   return await projectDetailJson(
     ctx,
     project,

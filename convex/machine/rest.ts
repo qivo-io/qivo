@@ -97,6 +97,7 @@ import {
   vCredentialAccess,
 } from '../lib/enums'
 import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
+import { utcToday } from '../lib/machineDelay'
 import { mcpResource } from '../lib/oauth'
 import { type EventOwner, vEventOwner } from '../lib/taskEvents'
 import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
@@ -454,14 +455,14 @@ export const listProjects = internalQuery({
 export const getProject = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
   handler: async (ctx, a): Promise<RestProjectDetailJson> => {
-    const { me, cat, flags, readable } = await withAccess(ctx, a.callerId, a.access)
+    const { cat, flags, readable } = await withAccess(ctx, a.callerId, a.access)
     const p = findProjectRef(cat, a.ref)
     if (p === undefined || !readable(p.id)) throw notFound('project not found')
     return await projectDetailJson(
       ctx,
       p,
       flags.get(p.id) ?? { read: false, write: false },
-      await projectCompletion(ctx, me, p, { cat, readable }),
+      await projectCompletion(ctx, p, { cat, readable }),
     )
   },
 })
@@ -559,12 +560,13 @@ export const updateUser = internalMutation({
  * answer an array paged with `offset`. Archived tasks need `project` and
  * answer `{next_cursor, tasks}`, paged with `cursor` (lib/core.ts
  * listArchivedIssuesCore), and refuse any `offset` but 0, `abc` and -5 too.
- * `now` is the HTTP action's clock, which active rows' delay is judged by. */
+ * `today` is the HTTP action's UTC day, which active rows' delay is judged
+ * by. */
 export const listIssues = internalQuery({
   args: {
     callerId: v.string(),
     access: vCredentialAccess,
-    now: v.string(),
+    today: v.string(),
     project: v.optional(v.string()),
     status: v.optional(v.string()),
     priority: v.optional(v.string()),
@@ -626,7 +628,7 @@ export const listIssues = internalQuery({
       return await listActiveIssuesCore(
         ctx,
         me,
-        { ...filters, scope: req.scope, offset: req.offset, now: a.now },
+        { ...filters, scope: req.scope, offset: req.offset, today: a.today },
         view,
       )
     }
@@ -645,15 +647,15 @@ export const listIssues = internalQuery({
 
 /* GET /v1/tasks/{ref} — the ref grammar resolves archived issues too. The
  * single-task shape adds labels, subtasks, links, a group's remaining
- * hours, followers and attachments (lib/core.ts taskOut). `now` is the HTTP
- * action's clock, which the task's delay is judged by. */
+ * hours, followers and attachments (lib/core.ts taskOut). `today` is the
+ * HTTP action's UTC day, which the task's delay is judged by. */
 export const getIssue = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess, now: v.string(), ref: v.string() },
+  args: { callerId: v.string(), access: vCredentialAccess, today: v.string(), ref: v.string() },
   handler: async (ctx, a): Promise<RestTaskJson> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
-    return await taskOut(ctx, issue, { surface: 'rest', me, now: a.now })
+    return await taskOut(ctx, issue, { surface: 'rest', me, today: a.today })
   },
 })
 
@@ -736,7 +738,7 @@ export const createIssue = internalMutation({
       me,
       readable,
       project: target,
-      now,
+      today: now.slice(0, 10),
       write: true,
     })
   },
@@ -820,7 +822,9 @@ export const updateIssue = internalMutation({
       destination !== undefined || parent !== undefined || 'add_labels' in b || 'remove_labels' in b
     if (Object.keys(fields).length === 0 && !toggles && !other) {
       // archived matching the current state is a clean no-op, not an error
-      if ('archived' in b) return await taskOut(ctx, issue, { surface: 'rest', me, now })
+      if ('archived' in b) {
+        return await taskOut(ctx, issue, { surface: 'rest', me, today: now.slice(0, 10) })
+      }
       throw badRequest('no recognized fields to update')
     }
     // machine pre-check twin — fires on any non-null value; null clear passes
@@ -837,7 +841,12 @@ export const updateIssue = internalMutation({
       now,
       provenance: provenanceOf(a.keyName),
     })
-    return await taskOut(ctx, task, { surface: 'rest', me, now, write: true })
+    return await taskOut(ctx, task, {
+      surface: 'rest',
+      me,
+      today: now.slice(0, 10),
+      write: true,
+    })
   },
 })
 
@@ -1257,7 +1266,7 @@ export const ROUTES: RestRoute[] = [
       r.runQuery(internal.machine.rest.listIssues, {
         callerId,
         access,
-        now: new Date().toISOString(),
+        today: utcToday(),
         project: query('project'),
         status: query('status'),
         priority: query('priority'),
@@ -1287,7 +1296,7 @@ export const ROUTES: RestRoute[] = [
       r.runQuery(internal.machine.rest.getIssue, {
         callerId,
         access,
-        now: new Date().toISOString(),
+        today: utcToday(),
         ref: param('ref'),
       }),
   }),

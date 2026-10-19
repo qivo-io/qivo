@@ -52,6 +52,7 @@ import { asMachineCaller, type Caller, findIssue, findProject, issueKey, UUID } 
 import { byId } from '../lib/db'
 import { vCredentialAccess } from '../lib/enums'
 import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
+import { utcToday } from '../lib/machineDelay'
 import {
   ATTACHMENT_NAME_MAX,
   ATTACHMENT_TYPE_MAX,
@@ -542,16 +543,16 @@ const WORKLOAD_WEEKS_MAX = 52
 const weeksSentence = `weeks must be a whole number from 1 to ${WORKLOAD_WEEKS_MAX}`
 
 /* The workload window, which starts at `from_week` (any day of the first
- * week) or else the week of `now`, the request's clock, and runs for the
- * number of weeks. */
+ * week) or else the week of `today`, the request's UTC day, and runs for
+ * the number of weeks. */
 function workloadWindow(
-  now: string,
+  today: string,
   from: string | undefined,
   weeks: number | undefined,
 ): { fromDay: string; weeks: number } {
   const fromDay =
     from === undefined
-      ? now.slice(0, 10)
+      ? today
       : calendarDay(from, {
           shape: 'from_week must be YYYY-MM-DD',
           date: 'from_week must be a valid calendar date',
@@ -583,7 +584,7 @@ export const restWorkload = internalQuery({
   args: {
     callerId: v.string(),
     access: vCredentialAccess,
-    now: v.string(),
+    today: v.string(),
     from_week: v.optional(v.string()),
     weeks: v.optional(v.string()),
     project: v.optional(v.string()),
@@ -596,7 +597,7 @@ export const restWorkload = internalQuery({
         : /^\d+$/.test(a.weeks)
           ? Number(a.weeks)
           : Number.NaN
-    const window = workloadWindow(a.now, a.from_week || undefined, weeks)
+    const window = workloadWindow(a.today, a.from_week || undefined, weeks)
     const project = await workloadProject(ctx, me, a.project, () => notFound('project not found'))
     return await workloadCore(ctx, me, { ...window, project })
   },
@@ -607,14 +608,14 @@ export const mcpWorkload = internalQuery({
   args: {
     callerId: v.string(),
     access: vCredentialAccess,
-    now: v.string(),
+    today: v.string(),
     from_week: v.optional(v.string()),
     weeks: v.optional(v.number()),
     project: v.optional(v.string()),
   },
   handler: async (ctx, a): Promise<string> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    const window = workloadWindow(a.now, a.from_week, a.weeks)
+    const window = workloadWindow(a.today, a.from_week, a.weeks)
     const project = await workloadProject(ctx, me, a.project, (ref) =>
       notFound(`project "${ref}" not found (or not visible to you)`),
     )
@@ -818,7 +819,7 @@ export const RECORD_TOOLS: McpTool[] = [
       r.runQuery(internal.machine.records.mcpWorkload, {
         callerId,
         access,
-        now: new Date().toISOString(),
+        today: utcToday(),
         ...(args as { from_week?: string; weeks?: number; project?: string }),
       }),
   },
@@ -906,7 +907,7 @@ export const RECORD_ROUTES: RestRoute[] = [
       r.runQuery(internal.machine.records.restWorkload, {
         callerId,
         access,
-        now: new Date().toISOString(),
+        today: utcToday(),
         from_week: query('from_week'),
         weeks: query('weeks'),
         project: query('project'),

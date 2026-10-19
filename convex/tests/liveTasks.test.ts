@@ -11,12 +11,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { LIVE_PROJECT_READS } from '../lib/core'
+import { ACCESS_POINT_CHECKS, taskOut } from '../lib/core'
 import { byId } from '../lib/db'
-import { countsAsSubtask, groupTest } from '../lib/liveTasks'
+import { countsAsSubtask, groupTest, LIVE_PROJECT_READS } from '../lib/liveTasks'
 import { OWNER_LOAD_CHECKS, ownerLoadSpans } from '../lib/machineDelay'
 import { orgProjectView } from '../lib/visibility'
 import { weekGrid } from '../lib/workload'
+import { getProject } from '../machine/rest'
 import { MOVE_SUBTREE_HOLDER_RULE, REVIEWER_RULE } from '../model/issues'
 import { ASSIGNEE_LOAD_CHECKS, assigneeLoad, workloadCore } from '../planning'
 import { finishedBefore, positionAfter, RESTORE_REGROUP, restoredStep } from '../regroup'
@@ -34,6 +35,7 @@ import {
   plantSubscription,
   restTasks,
   type T,
+  TODAY,
   uuid,
   withOrg,
 } from './helpers.setup'
@@ -79,7 +81,7 @@ const task = (fx: Fx, over: Partial<Doc<'issues'>> = {}) =>
 const row = (fx: Fx, id: string) => fx.t.run((ctx) => byId(ctx, 'issues', id))
 
 const restGet = (fx: Fx, ref: string, callerId = fx.agent.id) =>
-  fx.t.query(internal.machine.rest.getIssue, { callerId, access: 'read', now: NOW, ref })
+  fx.t.query(internal.machine.rest.getIssue, { callerId, access: 'read', today: TODAY, ref })
 
 const restPatch = (fx: Fx, ref: string, body: unknown) =>
   fx.t.mutation(internal.machine.rest.updateIssue, {
@@ -95,7 +97,7 @@ const mcpGet = async (fx: Fx, ref: string): Promise<Record<string, unknown>> =>
     await fx.t.query(internal.machine.mcp.getIssue, {
       callerId: fx.agent.id,
       access: 'read',
-      now: NOW,
+      today: TODAY,
       ref,
     }),
   )
@@ -127,6 +129,12 @@ const plantMany = (fx: Fx, count: number, over: Partial<Doc<'issues'>> & { proje
  * transaction's metrics after it (backendPerformance.setup invokeSnapshot). */
 const handlerOf = <Args, Out>(fn: unknown) =>
   (fn as { _handler: (ctx: QueryCtx, args: Args) => Promise<Out> })._handler
+
+/* REST GET /v1/projects/{ref}'s handler, to read the metrics after it. */
+const getProjectHandler = (
+  ctx: QueryCtx,
+  args: { callerId: string; access: 'read'; ref: string },
+) => handlerOf<typeof args, { completion: unknown }>(getProject)(ctx, args)
 
 /* One regroup step's handler, to run a step inside a test's own mutation. */
 const stepHandler = (
@@ -179,7 +187,7 @@ describe('the group rule', () => {
     const todo = await fx.t.query(internal.machine.rest.listIssues, {
       callerId: fx.agent.id,
       access: 'read',
-      now: NOW,
+      today: TODAY,
       status: 'todo',
     })
     expect(Array.isArray(todo) && todo.map((r) => r.id)).toContain(parent.id)
@@ -333,7 +341,7 @@ describe('reading only live tasks', () => {
       await fx.t.query(internal.machine.mcp.listIssues, {
         callerId: fx.agent.id,
         access: 'read',
-        now: NOW,
+        today: TODAY,
         project: 'TBED',
       }),
     ) as { id: string }[]
@@ -402,7 +410,7 @@ describe('reading only live tasks', () => {
       mcp: await fx.t.query(internal.machine.mcp.listIssues, {
         callerId: fx.agent.id,
         access: 'read',
-        now: NOW,
+        today: TODAY,
         project: 'TBED',
       }),
       completion: (
@@ -504,6 +512,144 @@ describe('reading only live tasks', () => {
     const scoped = await workload(fx.meta)
     expect(scoped.hours).toEqual([3])
     for (const read of [all, scoped]) expect(read.documents).toBeLessThan(400)
+  })
+
+  it('the load, workload and snapshot reads past LIVE_PROJECT_READS read the active tasks in one range', async () => {
+    const fx = await setup()
+    const plan = { assignee_id: fx.user.id, start_week: '2026-09-07', end_week: '2026-09-07' }
+    const leaf = await task(fx, { ...plan, remaining_hours: 3, remaining_set_at: NOW })
+    const group = await task(fx, { ...plan, remaining_hours: 5 })
+    await task(fx, { project_id: fx.away.id, parent_id: group.id })
+    const shelvedOnly = await task(fx, { ...plan, remaining_hours: 2 })
+    await task(fx, { project_id: fx.shelf.id, parent_id: shelvedOnly.id })
+    await task(fx, { ...plan, project_id: fx.shelf.id, remaining_hours: 11 })
+    // forty more active projects, each one more range per project read
+    for (let i = 0; i < 40; i++) {
+      await plantProject(fx.t, { org_id: fx.org.id, type: 'project', parent_id: fx.meta.id })
+    }
+    const read = () =>
+      as(fx.t, fx.admin).query(async (ctx) => {
+        const me = (await byId(ctx, 'profiles', fx.admin.id)) as Doc<'profiles'>
+        const owner = (await byId(ctx, 'profiles', fx.user.id)) as Doc<'profiles'>
+        const ranges = async <R>(run: () => Promise<R>) => {
+          const before = (await ctx.meta.getTransactionMetrics()).databaseQueries.used
+          const out = await run()
+          return {
+            out,
+            ranges: (await ctx.meta.getTransactionMetrics()).databaseQueries.used - before,
+          }
+        }
+        const view = await orgProjectView(ctx, me)
+        return {
+          workload: await ranges(() =>
+            workloadCore(ctx, me, { fromDay: '2026-09-07', weeks: 1, project: null }),
+          ),
+          assignee: await ranges(() =>
+            handlerOf<{ assignee_id: string }, unknown[]>(assigneeLoad)(ctx, {
+              assignee_id: fx.user.id,
+            }),
+          ),
+          owner: await ranges(() =>
+            ownerLoadSpans(ctx, me, owner, weekGrid(fx.org.week_start), view),
+          ),
+          // the same answer at another moment
+          snapshot: await ranges(async () => ({
+            ...(await invokeSnapshot(ctx)),
+            delivered_at: '',
+          })),
+        }
+      })
+    const reads = LIVE_PROJECT_READS.reads
+    const checks = { owner: OWNER_LOAD_CHECKS.reads, assignee: ASSIGNEE_LOAD_CHECKS.reads }
+    // past the checks, the two load reads take the organization's live tasks
+    OWNER_LOAD_CHECKS.reads = 0
+    ASSIGNEE_LOAD_CHECKS.reads = 0
+    try {
+      const perProject = await read()
+      LIVE_PROJECT_READS.reads = 1
+      const oneRange = await read()
+      for (const key of ['workload', 'assignee', 'owner', 'snapshot'] as const) {
+        expect(oneRange[key].out, key).toEqual(perProject[key].out)
+        expect(oneRange[key].ranges, key).toBeLessThan(perProject[key].ranges - 40)
+      }
+      expect(oneRange.owner.out.map((span) => span.issueUuid)).toEqual([leaf.id, shelvedOnly.id])
+    } finally {
+      LIVE_PROJECT_READS.reads = reads
+      OWNER_LOAD_CHECKS.reads = checks.owner
+      ASSIGNEE_LOAD_CHECKS.reads = checks.assignee
+    }
+  })
+})
+
+describe("a project's completion", () => {
+  it("reads only its family's tasks, and a subtask stored in another family changes only the counts", async () => {
+    const fx = await setup()
+    const group = await task(fx, { title: 'Group' })
+    await task(fx, { project_id: fx.sub2.id, parent_id: group.id, status: 'done' })
+    await task(fx, { title: 'Leaf' })
+    // a subtask in another top-level project, as before the family rule
+    const legacy = await task(fx, { title: 'Legacy parent' })
+    await task(fx, { project_id: fx.away.id, parent_id: legacy.id })
+    // another family's tasks, which the completion never needs
+    await plantMany(fx, 300, { project_id: fx.away.id })
+    const read = (ref: string) =>
+      as(fx.t, fx.admin).query(async (ctx) => {
+        const before = (await ctx.meta.getTransactionMetrics()).documentsRead.used
+        const out = await getProjectHandler(ctx, { callerId: fx.admin.id, access: 'read', ref })
+        const documents = (await ctx.meta.getTransactionMetrics()).documentsRead.used - before
+        return { completion: out.completion, documents }
+      })
+    const tbed = await read('TBED')
+    // Group's done subtask, Leaf and Legacy parent counted as a task without
+    // subtasks, since its subtask in SKNK is not read
+    expect(tbed.completion).toEqual({ done: 1, total: 3, percent: 33 })
+    expect(tbed.documents).toBeLessThan(150)
+    expect((await read('FW')).completion).toEqual({ done: 0, total: 2, percent: 0 })
+  })
+})
+
+describe('checking access in a read without the list flags', () => {
+  it('answers a group spread over many projects the same, one project at a time or all at once', async () => {
+    const fx = await setup()
+    const group = await task(fx, { title: 'Wide group' })
+    const kids: string[] = []
+    // twenty sub-projects the agent reads through TBED, and four of SKNK it
+    // cannot read, as a subtask stored before the family rule could be
+    for (let i = 0; i < 24; i++) {
+      const project = await plantProject(fx.t, {
+        org_id: fx.org.id,
+        type: 'project',
+        parent_id: i < 20 ? fx.meta.id : fx.hidden.id,
+      })
+      const kid = await task(fx, {
+        project_id: project.id,
+        parent_id: group.id,
+        status: i % 4 === 0 ? 'done' : 'todo',
+      })
+      kids.push(kid.id)
+    }
+    const read = () =>
+      fx.t.run(async (ctx) => {
+        const before = (await ctx.meta.getTransactionMetrics()).databaseQueries.used
+        const me = (await byId(ctx, 'profiles', fx.agent.id)) as Doc<'profiles'>
+        const issue = (await byId(ctx, 'issues', group.id)) as Doc<'issues'>
+        const out = await taskOut(ctx, issue, { surface: 'rest', me, today: TODAY })
+        const ranges = (await ctx.meta.getTransactionMetrics()).databaseQueries.used - before
+        return { out, ranges }
+      })
+    const checks = ACCESS_POINT_CHECKS.checks
+    try {
+      ACCESS_POINT_CHECKS.checks = 1000
+      const oneByOne = await read()
+      ACCESS_POINT_CHECKS.checks = checks
+      const batched = await read()
+      expect(batched.out).toEqual(oneByOne.out)
+      expect(batched.out.progress).toEqual({ done: 5, total: 20, percent: 25, partial: true })
+      expect(batched.out.subtasks.map((t) => t.id).sort()).toEqual(kids.slice(0, 20).sort())
+      expect(batched.ranges).toBeLessThan(oneByOne.ranges - 8)
+    } finally {
+      ACCESS_POINT_CHECKS.checks = checks
+    }
   })
 })
 

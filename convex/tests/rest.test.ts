@@ -38,6 +38,7 @@ import {
   restArchivedPage,
   restTasks,
   type T,
+  TODAY,
   tick,
   uuid,
   withOrg,
@@ -922,7 +923,7 @@ describe('GET /v1/tasks/{ref}', () => {
     })
     for (const ref of [`qn-${row.num}`, String(row.num), row.id.toUpperCase()]) {
       const out = await t.query(internal.machine.rest.getIssue, {
-        now: NOW,
+        today: TODAY,
         callerId: f.agent.id,
         access: 'read',
         ref,
@@ -937,7 +938,7 @@ describe('GET /v1/tasks/{ref}', () => {
     }
   })
 
-  it('misses are clean 404s: unknown, out-of-int4, invisible, foreign-org', async () => {
+  it('misses are clean 404s: unknown, out-of-int4, invisible, foreign-org, broken project', async () => {
     const t = newT()
     const f = await machineOrg(t)
     const hiddenIssue = await plantIssue(t, {
@@ -945,6 +946,9 @@ describe('GET /v1/tasks/{ref}', () => {
       project_id: f.hidden.id,
       title: 'no see',
     })
+    // a sub-project whose parent is gone reads like a task that does not exist
+    const orphan = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: uuid() })
+    const stranded = await plantIssue(t, { org_id: f.org.id, project_id: orphan.id })
     const foreign = await plantIssue(t, {
       org_id: f.otherOrg.id,
       project_id: f.otherProject.id,
@@ -957,10 +961,12 @@ describe('GET /v1/tasks/{ref}', () => {
       hiddenIssue.id,
       foreign.id,
       String(foreign.num),
+      stranded.id,
+      `QN-${stranded.num}`,
     ]) {
       await refused(
         t.query(internal.machine.rest.getIssue, {
-          now: NOW,
+          today: TODAY,
           callerId: f.agent.id,
           access: 'read',
           ref,
@@ -969,6 +975,44 @@ describe('GET /v1/tasks/{ref}', () => {
         'task not found',
       )
     }
+    await expectRefusal(
+      t.query(internal.machine.mcp.getIssue, {
+        today: TODAY,
+        callerId: f.agent.id,
+        access: 'read',
+        ref: stranded.id,
+      }),
+      'not_found',
+      /^task "[0-9a-f-]+" not found \(or not visible to you\)$/,
+    )
+  })
+
+  it('reads a task linked to one in a broken project, leaving that link out', async () => {
+    const t = newT()
+    const f = await machineOrg(t)
+    const orphan = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: uuid() })
+    const stranded = await plantIssue(t, { org_id: f.org.id, project_id: orphan.id })
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await t.run(async (ctx) => {
+      const [lo, hi] = [task.id, stranded.id].sort()
+      await ctx.db.insert('issue_links', {
+        id: uuid(),
+        org_id: f.org.id,
+        source_id: task.id,
+        target_id: stranded.id,
+        type: 'blocks',
+        pair_key: `${lo}:${hi}`,
+        created_at: NOW,
+      })
+    })
+    const out = await t.query(internal.machine.rest.getIssue, {
+      today: TODAY,
+      callerId: f.agent.id,
+      access: 'read',
+      ref: task.id,
+    })
+    expect(out.id).toBe(task.id)
+    expect(out.links).toEqual([])
   })
 })
 
@@ -1921,7 +1965,7 @@ describe("a group's dates on REST", () => {
     const read = async () => {
       const get = (ref: string) =>
         t.query(internal.machine.rest.getIssue, {
-          now: NOW,
+          today: TODAY,
           callerId: f.agent.id,
           access: 'read',
           ref,
@@ -1968,7 +2012,7 @@ describe("a group's dates on REST", () => {
     const leaf = await plantIssue(t, { ...base, ...span('2026-01-05', '2026-01-11') })
     const get = (ref: string) =>
       t.query(internal.machine.rest.getIssue, {
-        now: NOW,
+        today: TODAY,
         callerId: f.agent.id,
         access: 'read',
         ref,
@@ -2024,7 +2068,7 @@ describe("a group's dates on REST", () => {
     expect(await issueRow(t, group.id)).toEqual(group)
     expect(await messagesFor(t, f.user.id, group.id)).toEqual([])
     const out = await t.query(internal.machine.rest.getIssue, {
-      now: NOW,
+      today: TODAY,
       callerId: f.agent.id,
       access: 'read',
       ref: group.id,
@@ -2084,7 +2128,7 @@ describe("a group's dates on REST", () => {
       expect(listed.filter((i) => i.is_group)).toHaveLength(11)
       expect(listed.find((i) => i.id === epic.id)).toMatchObject(span('2026-01-05', '2026-09-05'))
       const got = await t.query(internal.machine.rest.getIssue, {
-        now: NOW,
+        today: TODAY,
         callerId: f.agent.id,
         access: 'read',
         ref: epic.id,
@@ -2466,7 +2510,7 @@ describe('a navigation-only parent hides its other sub-projects', () => {
       parent_id: visibleParent.id,
     })
     const get = (callerId: string, ref: string) =>
-      t.query(internal.machine.rest.getIssue, { now: NOW, callerId, access: 'read', ref })
+      t.query(internal.machine.rest.getIssue, { today: TODAY, callerId, access: 'read', ref })
     const one = await get(subOnly.id, child.id)
     const listed = (await restTasks(t, { callerId: subOnly.id, access: 'read' })).find(
       (i) => i.id === child.id,

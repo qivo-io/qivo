@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
-import { as, expectRefusal, NOW, newT, plantIssue, uuid, withOrg } from './helpers.setup'
+import { as, expectRefusal, newT, plantIssue, TODAY, uuid, withOrg } from './helpers.setup'
 
 /* The pause follows the status (model/issues.ts isPausable): only a To Do,
  * In Progress or In Review task holds one, a move into Done or Backlog
@@ -18,7 +18,7 @@ describe('paused tasks', () => {
     const read = async () =>
       (
         await t.query(internal.machine.rest.getIssue, {
-          now: NOW,
+          today: TODAY,
           callerId: f.admin.id,
           access: 'read',
           ref: issue.id,

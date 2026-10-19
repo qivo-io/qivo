@@ -49,6 +49,7 @@ import {
   plantSeat,
   reap,
   type T,
+  TODAY,
   uuid,
   withOrg,
 } from './helpers.setup'
@@ -313,7 +314,7 @@ describe('attachments in the single-task read', () => {
     const first = await plantAttachment(fx, issue, { created_at: '2026-01-01T00:00:00.000Z' })
     const before = Math.floor(Date.now() / 1000)
     const got = await fx.t.query(internal.machine.rest.getIssue, {
-      now: NOW,
+      today: TODAY,
       callerId: fx.agent.id,
       access: 'read',
       ref: `QN-${issue.num}`,
@@ -353,7 +354,7 @@ describe('attachments in the single-task read', () => {
     // MCP get_task and the REST list carry the same list
     const viaMcp = JSON.parse(
       await fx.t.query(internal.machine.mcp.getIssue, {
-        now: NOW,
+        today: TODAY,
         callerId: fx.agent.id,
         access: 'read',
         ref: issue.id,
@@ -1549,12 +1550,12 @@ describe('task activity', () => {
 /* --------------------------------------------------------- 5. workload */
 
 describe('workload', () => {
-  const NOW_ISO = '2026-10-14T12:00:00.000Z' // a Wednesday
+  const DAY = '2026-10-14' // a Wednesday
   const restLoad = (fx: Fx, q: Record<string, string> = {}, callerId = fx.agent.id) =>
     fx.t.query(internal.machine.records.restWorkload, {
       callerId,
       access: 'read',
-      now: NOW_ISO,
+      today: DAY,
       ...q,
     })
   const mcpLoad = async (fx: Fx, a: Record<string, unknown> = {}, callerId = fx.agent.id) =>
@@ -1562,7 +1563,7 @@ describe('workload', () => {
       await fx.t.query(internal.machine.records.mcpWorkload, {
         callerId,
         access: 'read',
-        now: NOW_ISO,
+        today: DAY,
         ...a,
       }),
     ) as Awaited<ReturnType<typeof restLoad>>

@@ -226,8 +226,8 @@ Useful field rules:
   `GET /v1/projects/{ref}` add `completion`, the Overview's done and total
   tasks. If a task list asks for a smaller limit, its rows' newest comments
   and parents were too large to read at once; retry with a smaller `limit`. If it says
-  the organization's active tasks are too large to list, a smaller `limit`
-  does not help.
+  the organization's active tasks are too large to list, or that it has too
+  many projects, teams or labels, a smaller `limit` does not help.
 
 ## Subtasks, moves, links and labels
 
