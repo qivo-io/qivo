@@ -2,10 +2,10 @@ import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Id } from '../_generated/dataModel'
-import { STORAGE_STALL_MS } from '../billingSync'
+import { STORAGE_ATTEMPTS, STORAGE_STALL_MS } from '../billingSync'
 import { addCalendarMonths } from '../lib/billingAccess'
 import type { BillingPlan, BillingSummary, BillingUsage } from '../lib/billingTypes'
-import { enrollOrganization, STORAGE_PAGE, storageUsage } from '../model/billing'
+import { enrollOrganization, STORAGE_PAGE, storageUsage, UNSCOPED_READ } from '../model/billing'
 import { as, expectRefusal, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
 
 type PlanInput = Omit<BillingPlan, 'id' | 'archived' | 'created_at'>
@@ -57,6 +57,11 @@ const eventResult = makeFunctionReference<'mutation', { id: string; success: boo
 const eventReady = makeFunctionReference<'mutation', { id: string }, boolean>(
   'billingSync:eventReady',
 )
+const restartStorage = makeFunctionReference<
+  'mutation',
+  { period: Id<'billing_periods'> },
+  boolean
+>('billingSync:restartStorage')
 const NOW = '2026-09-20T12:00:00.000Z'
 const START = '2026-09-01T12:00:00.000Z'
 const END = '2026-10-01T12:00:00.000Z'
@@ -75,6 +80,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   Object.assign(STORAGE_PAGE, DEFAULT_STORAGE_PAGE)
+  Object.assign(UNSCOPED_READ, DEFAULT_UNSCOPED_READ)
   vi.useRealTimers()
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
@@ -138,6 +144,7 @@ const storageEvents = (t: T) =>
 const iso = (n: number) => new Date(Date.parse(NOW) + n * 60_000).toISOString()
 
 const DEFAULT_STORAGE_PAGE = { ...STORAGE_PAGE }
+const DEFAULT_UNSCOPED_READ = { ...UNSCOPED_READ }
 
 async function stored(t: T, orgId: string) {
   return await t.run((ctx) =>
@@ -748,9 +755,17 @@ describe('provider state, retries and billing snapshots', () => {
     const live = await t.run((ctx) => storageUsage(ctx, f.org.id))
     expect(live.bytes).toBe(9_000_000_000)
 
-    const sizes = [{ rows: 1 }, { rows: 1000, taskBytes: 1 }]
-    for (const [i, size] of sizes.entries()) {
-      Object.assign(STORAGE_PAGE, size)
+    // the last two read the rows without org_id through the organization's
+    // tasks, because the deployment holds more of them than UNSCOPED_READ
+    const sizes = [
+      { page: { rows: 1 }, lookups: 3000 },
+      { page: { rows: 1000, taskBytes: 1 }, lookups: 3000 },
+      { page: { rows: 1, tasks: 1 }, lookups: 2 },
+      { page: { rows: 1000, tasks: 500 }, lookups: 2 },
+    ]
+    for (const [i, { page, lookups }] of sizes.entries()) {
+      Object.assign(STORAGE_PAGE, DEFAULT_STORAGE_PAGE, page)
+      UNSCOPED_READ.lookups = lookups
       const start = new Date(Date.parse(START) + i * 31 * 86_400_000).toISOString()
       await t.mutation(apply, {
         payload: remote(f.org.id, {
@@ -765,7 +780,6 @@ describe('provider state, retries and billing snapshots', () => {
         storage_blocks: 4,
       })
     }
-    Object.assign(STORAGE_PAGE, DEFAULT_STORAGE_PAGE)
   })
 
   it('counts each row once when tasks are archived, restored or brought back from Deleted items during the sample', async () => {
@@ -859,6 +873,72 @@ describe('provider state, retries and billing snapshots', () => {
     expect(period).toMatchObject({ storage_bytes: 6_000_000_000, storage_blocks: 1 })
     expect(period).not.toHaveProperty('storage_run')
     expect(await storageEvents(t)).toHaveLength(1)
+  })
+
+  it('stops a sample that stalls STORAGE_ATTEMPTS times, says so, and starts it again on request', async () => {
+    const { t, f } = await fixture()
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await t.run(async (ctx) => {
+      const storage_id = await ctx.storage.store(new Blob())
+      await ctx.db.insert('issue_attachments', {
+        org_id: f.org.id,
+        project_id: f.sub.id,
+        id: uuid(),
+        issue_id: task.id,
+        storage_id,
+        name: 'fixture.bin',
+        size_bytes: 6_000_000_000,
+        inline: false,
+        created_at: NOW,
+      })
+    })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await t.mutation(apply, { payload: remote(f.org.id) })
+    expect(await periodAt(t, START)).toMatchObject({ storage_attempts: 1 })
+    // no step ever runs, so every run stalls
+    const stall = async (n: number) => {
+      vi.setSystemTime(Date.parse(NOW) + n * (STORAGE_STALL_MS + 1000))
+      await t.mutation(apply, { payload: remote(f.org.id, { modified_at: iso(n) }) })
+    }
+    for (let n = 1; n < STORAGE_ATTEMPTS; n++) await stall(n)
+    expect(await periodAt(t, START)).toMatchObject({ storage_attempts: STORAGE_ATTEMPTS })
+    expect(errors).not.toHaveBeenCalled()
+
+    await stall(STORAGE_ATTEMPTS)
+    const stopped = await periodAt(t, START)
+    expect(stopped?.storage_failed_at).toEqual(expect.any(String))
+    expect(stopped).not.toHaveProperty('storage_run')
+    expect(stopped).not.toHaveProperty('storage_bytes')
+    expect(errors).toHaveBeenCalledTimes(1)
+    const failures = await t.run(async (ctx) =>
+      (await ctx.db.query('platform_audit_log').collect()).filter(
+        (row) => row.action === 'billing.storage_sample_failed',
+      ),
+    )
+    expect(failures).toMatchObject([
+      {
+        target_org_id: f.org.id,
+        detail: { period_start: START, attempts: STORAGE_ATTEMPTS },
+      },
+    ])
+    // a stopped sample stays stopped, and the earlier runs' steps do nothing
+    await stall(STORAGE_ATTEMPTS + 1)
+    await sample(t)
+    expect(await periodAt(t, START)).toMatchObject({
+      storage_failed_at: stopped?.storage_failed_at,
+    })
+    expect(await periodAt(t, START)).not.toHaveProperty('storage_bytes')
+    expect(errors).toHaveBeenCalledTimes(1)
+
+    expect(await t.mutation(restartStorage, { period: stopped!._id })).toBe(true)
+    await sample(t)
+    const period = await periodAt(t, START)
+    expect(period).toMatchObject({ storage_bytes: 6_000_000_000, storage_blocks: 1 })
+    for (const field of ['storage_run', 'storage_attempts', 'storage_failed_at'])
+      expect(period).not.toHaveProperty(field)
+    // a finished sample is left alone
+    expect(await t.mutation(restartStorage, { period: stopped!._id })).toBe(false)
   })
 
   it('records the storage of a complimentary period without charging it', async () => {

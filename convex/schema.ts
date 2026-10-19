@@ -582,6 +582,10 @@ export default defineSchema({
     // when its last step ran. Both are cleared when it finishes.
     storage_run: v.optional(v.string()),
     storage_run_at: v.optional(v.string()),
+    // How many times the sample started, cleared when it finishes, and when
+    // apply stopped it after STORAGE_ATTEMPTS starts (billingSync.ts).
+    storage_attempts: v.optional(v.number()),
+    storage_failed_at: v.optional(v.string()),
     created_at: v.string(),
   })
     .index('by_subscription_period', ['subscription_id', 'period_start'])

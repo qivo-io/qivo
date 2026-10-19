@@ -95,7 +95,7 @@ function LiveBillingSettings({
     setRefreshing(true)
     setUsageError('')
     convex
-      .query(api.billing.usage, { org_id: orgId })
+      .action(api.billing.usageReport, { org_id: orgId })
       .then((result) => {
         if (active) {
           setUsage(result)

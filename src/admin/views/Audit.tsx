@@ -19,6 +19,7 @@ import { AdminEmptyState, AdminPageHeader, AdminToolbar, ErrorNote, Loading } fr
 const ACTION_LABEL: Record<string, string> = {
   'billing.subscription': 'Updated billing subscription',
   'billing.usage_delivery_stopped': 'Stopped usage delivery at billing boundary',
+  'billing.storage_sample_failed': 'Stopped a storage sample that kept failing',
   'billing.create_plan': 'Created billing plan',
   'billing.connect_plan': 'Connected billing plan to Polar',
   'billing.set_default_plan': 'Changed default for new customers',

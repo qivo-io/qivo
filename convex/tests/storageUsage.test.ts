@@ -1,7 +1,8 @@
 /* model/billing.ts storageUsage, the attachment bytes an organization
- * stores in total and per project, which the admin Billing page reads. Each
- * new billing period counts the same rows page by page (storagePage,
- * covered in billing.test.ts).
+ * stores in total and per project, which billing.usage reads in one query.
+ * The admin Billing page reads the same figures page by page
+ * (billing.usageReport, through storagePage), as each new billing period's
+ * sample does (covered in billing.test.ts).
  *
  *   1. It reads the organization's attachment rows in one index range and
  *      groups them by the project each row carries, counting only projects
@@ -12,6 +13,8 @@
  *      so other organizations' rows cannot take its read past the limits.
  *   3. Every move of a task (the app, REST and MCP) moves its rows' project,
  *      and so do the subtasks a move to another top-level project carries.
+ *   4. The Billing page's paged report gives the same figures at any page
+ *      size, and past the size one query can read.
  *
  * The fixtures insert rows directly, in the shape attachFileCore stores, or
  * without the fields older rows lack. */
@@ -19,7 +22,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
-import { storageUsage, UNSCOPED_READ } from '../model/billing'
+import type { BillingUsage } from '../lib/billingTypes'
+import { STORAGE_PAGE, storageUsage, UNSCOPED_READ } from '../model/billing'
 import {
   as,
   NOW,
@@ -357,5 +361,78 @@ describe('moving a task', () => {
       bytes: 128,
       projects: [{ project_id: backend.id, name: 'Backend', storage_bytes: 123 }, FW(f, 5)],
     })
+  })
+})
+
+describe("the Billing page's paged report", () => {
+  const defaults = { page: { ...STORAGE_PAGE }, unscoped: { ...UNSCOPED_READ } }
+  afterEach(() => {
+    Object.assign(STORAGE_PAGE, defaults.page)
+    Object.assign(UNSCOPED_READ, defaults.unscoped)
+  })
+
+  const report = (t: T, f: OrgFixture): Promise<BillingUsage> =>
+    as(t, f.admin).action(api.billing.usageReport, { org_id: f.org.id })
+  const oneQuery = (t: T, f: OrgFixture): Promise<BillingUsage> =>
+    as(t, f.admin).query(api.billing.usage, { org_id: f.org.id })
+
+  it('gives what the one query gives at any page size, rows without org_id included', async () => {
+    const { t, f, sid, active, archived, shelved, elsewhere } = await fixture()
+    await plantFile(t, sid, active, 100)
+    await plantFile(t, sid, archived, 1000, { task_archived: true })
+    await plantFile(t, sid, shelved, 5, { legacy: 'project' })
+    await plantFile(t, sid, active, 50, { legacy: 'scope' })
+    await plantFile(t, sid, archived, 20, { legacy: 'scope', task_archived: true })
+    await plantFile(t, sid, elsewhere, 7, { legacy: 'scope' })
+    await plantFile(t, sid, { ...active, id: uuid() }, 40, { legacy: 'scope' })
+    const expected = await oneQuery(t, f)
+    expect(expected).toMatchObject({ storage_bytes: 1175, projects: [FW(f, 1170), PCB(f, 5)] })
+
+    for (const [page, lookups] of [
+      [{}, 3000],
+      [{ rows: 1, tasks: 1 }, 3000],
+      [{ taskBytes: 1 }, 3000],
+      // the rows without org_id are read through the organization's tasks
+      [{}, 2],
+      [{ rows: 1, tasks: 1, bytes: 1 }, 2],
+    ] as const) {
+      Object.assign(STORAGE_PAGE, defaults.page, page)
+      UNSCOPED_READ.lookups = lookups
+      expect(await report(t, f)).toEqual(expected)
+    }
+  })
+
+  it('refuses anyone but an organization admin', async () => {
+    const { t, f } = await fixture()
+    await expect(
+      as(t, f.user).action(api.billing.usageReport, { org_id: f.org.id }),
+    ).rejects.toThrow(/admin only/)
+    await expect(
+      as(t, f.otherAdmin).action(api.billing.usageReport, { org_id: f.org.id }),
+    ).rejects.toThrow(/admin only/)
+  })
+
+  it('reads 1,500 attachment rows under 1,000 documents a read, where the one query fails', async () => {
+    const t = newT({ transactionLimits: { documentsRead: 1000 } })
+    const f = await withOrg(t)
+    const sid = await storedFile(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 1500; i++)
+        await ctx.db.insert('issue_attachments', {
+          org_id: f.org.id,
+          project_id: f.sub.id,
+          id: uuid(),
+          issue_id: task.id,
+          name: 'file.bin',
+          size_bytes: 3,
+          storage_id: sid,
+          inline: false,
+          created_at: NOW,
+        })
+    })
+    STORAGE_PAGE.rows = 400
+    expect(await report(t, f)).toMatchObject({ storage_bytes: 4500, projects: [FW(f, 4500)] })
+    await expect(oneQuery(t, f)).rejects.toThrow(/Scanned too many documents/)
   })
 })

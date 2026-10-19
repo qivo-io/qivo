@@ -2,11 +2,13 @@
  * its task's organization and project (schema.ts issue_attachments). The
  * oldest rows may lack org_id, and every row stored before this backfill
  * existed lacks project_id. No reader depends on it for correctness.
- * model/billing.ts storageUsage, behind the Billing page, and storagePage,
- * behind each billing period's storage sample (billingSync.ts
- * storageStep), resolve a row without its project or its organization
- * through its task, and read the deployment's rows without an organization
- * on every call. While any such row exists anywhere,
+ * model/billing.ts storageUsage and storagePage, behind the Billing page
+ * (billing.ts usage and usageReport) and each billing period's storage
+ * sample (billingSync.ts storageStep), resolve a row without its project or
+ * its organization through its task. They read the deployment's rows
+ * without an organization on every call while there are at most
+ * UNSCOPED_READ.lookups of them, and the organization's own tasks one by one
+ * past that. While any such row exists anywhere,
  * lib/snapshotRelations.ts reads the app snapshot's attachments task by
  * task. The backfill only makes those reads cheaper.
  *
