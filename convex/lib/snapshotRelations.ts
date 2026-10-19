@@ -30,6 +30,11 @@ export const RELATION_READ = { tasks: 512, ratio: 2, ranges: 4096, legacy: 256 }
  * their caps, a view reads at most 16 rows per visible task. */
 const BULK_ROWS_PER_RANGE = 4
 
+/* The ranges the table reads take at once, before any read task by task:
+ * for each of the three tables its capped or full read and its read of rows
+ * without org_id. */
+const OWN_RANGES = 6
+
 /* One task's links as source and as target, label assignments and
  * attachments. */
 type TaskRows = [
@@ -94,7 +99,7 @@ function inCreationOrder<Row extends { _creationTime: number }>(
  * BULK_ROWS_PER_RANGE rows per range the table's read task by task would
  * cost, and a table with more is read task by task while the reads task by
  * task so far fit RELATION_READ.ranges and the ranges the transaction has
- * left, else in full. A table kept in bulk also reads the deployment's
+ * left besides the table reads' own, else in full. A table kept in bulk also reads the deployment's
  * unmarked rows stored without org_id, which the organization's range cannot
  * hold, up to RELATION_READ.legacy of them in one more range, and adds
  * those of the view's tasks (a link when either end is one). Rows of other
@@ -159,9 +164,13 @@ export async function snapshotRelations(
     if (task.relations_marked === true) restored.set(task.id, await readTask(ctx, task.id))
   }
   // The ranges the transaction has left, which earlier reads of the
-  // snapshot, such as another organization's relations, have used up part of.
+  // snapshot, such as another organization's relations, have used up part
+  // of, less what the table reads take themselves.
   const { databaseQueries } = await ctx.meta.getTransactionMetrics()
-  let budget = Math.min(RELATION_READ.ranges - 4 * restored.size, databaseQueries.remaining)
+  let budget = Math.min(
+    RELATION_READ.ranges - 4 * restored.size,
+    databaseQueries.remaining - OWN_RANGES,
+  )
   const others = visible - restored.size
   const viewed = new Set(a.tasks.map((task) => task.id))
   /* One table's unmarked rows in bulk, with its rows stored without org_id

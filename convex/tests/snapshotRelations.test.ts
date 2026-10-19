@@ -638,9 +638,10 @@ describe('the relation reads of a snapshot that has used most of its ranges', ()
         .query('issues')
         .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
         .collect()
-      // earlier reads, as of another organization, leave 30 ranges
+      // earlier reads, as of another organization, leave 42 ranges: room
+      // for the 40 task by task, but not for those and the table reads too
       const { databaseQueries } = await ctx.meta.getTransactionMetrics()
-      for (let i = 0; i < databaseQueries.remaining - 30; i++)
+      for (let i = 0; i < databaseQueries.remaining - 42; i++)
         await ctx.db
           .query('issues')
           .withIndex('by_uuid', (q) => q.eq('id', `none-${i}`))
