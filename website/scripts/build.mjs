@@ -37,7 +37,7 @@ export const ASSETS = {
   'marketing/task.webp': 'public/marketing/task.webp',
   ...Object.fromEntries(Object.values(FONTS).map(({ url, source }) => [url.slice(1), source])),
   'marketing/fonts/manrope-OFL.txt': 'public/marketing/fonts/manrope-OFL.txt',
-  'marketing/fonts/rubik-OFL.txt': '../src/assets/fonts/rubik-OFL.txt',
+  'marketing/fonts/rubik-OFL.txt': '../public/fonts/rubik-OFL.txt',
 }
 
 /** The origin each stable environment must publish its canonical links for. */
