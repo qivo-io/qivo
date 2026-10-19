@@ -413,7 +413,8 @@ export async function request(url, init = {}, timeoutMs = 120_000) {
  *  deployment's own limit is reached. A read that answers a server error
  *  (5xx) or fails on the network is sent once more after two seconds, with a
  *  NOTE, because a read changes nothing. A write answered with the 503 of a
- *  write conflict, which changed nothing, is sent once more after a second.
+ *  write conflict or time out, which changed nothing, is sent once more after
+ *  a second.
  *  Any other server error of a write is reported as it is. */
 async function send(profile, url, init, { read = false } = {}) {
   let retried = false
@@ -452,14 +453,16 @@ async function send(profile, url, init, { read = false } = {}) {
         .json()
         .then((body) => body?.error)
         .catch(() => null)
-      if (error === WRITE_CONFLICT) {
+      if (changedNothing(error)) {
         await response.arrayBuffer().catch(() => {})
         retried = true
         results.retried++
         say(
           'NOTE',
           'write-conflict',
-          'a write conflicted and changed nothing; sending it once more',
+          error === WRITE_TIMEOUT
+            ? 'a write ran out of time and changed nothing; sending it once more'
+            : 'a write conflicted and changed nothing; sending it once more',
         )
         await sleep(1000)
         continue
@@ -1480,10 +1483,14 @@ const AGENT_NO_WRITE = 'this agent has no write access to that project'
 const MCP_NO_WRITE = 'your account has no write access to that project'
 const REST_MISSING = 'missing agent key (Authorization: Bearer qva_…)'
 const OAUTH_GONE = 'OAuth connection is invalid, expired or disconnected'
-/** A write that kept conflicting and changed nothing (convex/machine/shared.ts
- *  WRITE_CONFLICT_MESSAGE): REST's 503 error and MCP's tool error. */
+/** A write that kept conflicting, or kept running out of time, and changed
+ *  nothing (convex/machine/shared.ts WRITE_CONFLICT_MESSAGE and
+ *  WRITE_TIMEOUT_MESSAGE): REST's 503 error and MCP's tool error. */
 const WRITE_CONFLICT =
   'the request conflicted with other changes made at the same time and changed nothing; send it again'
+const WRITE_TIMEOUT =
+  'the request took too long and changed nothing; send it again, or change less at once if it keeps happening'
+const changedNothing = (error) => error === WRITE_CONFLICT || error === WRITE_TIMEOUT
 const TOO_MANY_COMMENTS = `this task has ${COMMENT_MAX} comments, the most a task can have; start a new task to continue`
 const NOT_SAME_FAMILY =
   'a subtask must be in the same project as its parent task, in any of its sub-projects'
@@ -3236,8 +3243,8 @@ async function commentCapChecks() {
       bodyOf(n),
     )
   // One post, over REST for Nora and over MCP for the agent, tried once
-  // more after a transient failure. A write conflict changed nothing, so it
-  // is sent again after a second. An internal error (500), a gateway error
+  // more after a transient failure. A write conflict or time out changed
+  // nothing, so it is sent again after a second. An internal error (500), a gateway error
   // (502 to 504) or a network failure may have come after the comment was
   // stored, so it is sent again only when reads 2 and 10 seconds later do
   // not find it.
@@ -3256,7 +3263,7 @@ async function commentCapChecks() {
       }
       if (cred === w && r.status === 201) return r.json.id
       if (cred !== w && r.status === 200 && r.data?.id) return r.data.id
-      const conflict = r.json?.error === WRITE_CONFLICT || (r.isError && r.text === WRITE_CONFLICT)
+      const conflict = changedNothing(r.json?.error) || (r.isError && changedNothing(r.text))
       const transient =
         conflict ||
         r.status === 0 ||

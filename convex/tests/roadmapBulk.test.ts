@@ -37,8 +37,11 @@ type Roadmap = OrgFixture & { t: T; tasks: Doc<'issues'>[] }
  * Platform, each hold User on TBED, and the crowd is split between them, so
  * every person sees TBED only through a team grant. `n` open tasks in
  * Firmware without dates are each followed by `followers` of the crowd. */
-async function planted(n: number, followers: number): Promise<Roadmap> {
-  const t = newT({ transactionLimits: true })
+async function planted(
+  n: number,
+  followers: number,
+  t: T = newT({ transactionLimits: true }),
+): Promise<Roadmap> {
   const f = await withOrg(t)
   const crowd = await t.run(async (ctx) => {
     const platform = uuid()
@@ -154,9 +157,9 @@ describe('roadmap saves and undo of many tasks', () => {
   }, 120_000)
 
   it('refuses a save whose followers would fill the transaction, and changes nothing', async () => {
-    // Without the room check, this save passes the limit of 4,096 index
-    // ranges with an internal error
-    const fx = await planted(120, 20)
+    // Under a limit of 1,500 index ranges, 60 tasks with 20 followers each
+    // pass it without the room check, with an internal error
+    const fx = await planted(60, 20, newT({ transactionLimits: { databaseQueries: 1500 } }))
     const e = await expectRefusal(scheduleAll(fx, uuid(), '2026-01-05'), 'rule')
     expect((e.data as Refusal).message).toBe(ROADMAP_CHANGE_TOO_LARGE)
     expect(await startWeeks(fx)).toEqual(fx.tasks.map(() => null))
@@ -164,12 +167,12 @@ describe('roadmap saves and undo of many tasks', () => {
   }, 120_000)
 
   it('refuses an undo of the whole visit too large for one transaction, and keeps its history', async () => {
-    // Without the room check, this undo passes the limit of 4,096 index
+    // Without the room check, this undo passes a limit of 1,500 index
     // ranges with an internal error
-    const fx = await planted(130, 20)
+    const fx = await planted(60, 20, newT({ transactionLimits: { databaseQueries: 1500 } }))
     const session_id = uuid()
     // two saves of half the tasks each fit, and undoing both at once does not
-    const halves = [fx.tasks.slice(0, 65), fx.tasks.slice(65)]
+    const halves = [fx.tasks.slice(0, 30), fx.tasks.slice(30)]
     for (const half of halves)
       await as(fx.t, fx.user).mutation(api.roadmap.change, {
         session_id,

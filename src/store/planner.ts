@@ -2557,8 +2557,6 @@ export type ProjectPatch = Partial<{
   key: string
   trackDelay: boolean
   reviewHours: number | null // null inherits; the caller passes a rounded value
-  access: Record<string, AccessLevel>
-  teamAccess: Record<string, TeamAccessLevel>
 }>
 /* dateFormat / weekOneRule derive from the WIRE validator: the stored column
    is a plain string, the update validator is the narrowed union.
@@ -3365,19 +3363,17 @@ export const PLANNER = {
     }
     const people = [...new Set(items.map((i) => i.uid))]
     const keep = 'keep' in choice && people.length > 0
-    // a project's grants with a Viewer grant for each listed person who
-    // would otherwise not see it
+    // a Viewer grant on each project for each listed person who would
+    // otherwise not see it, saved before the team changes
     const level = levelAfter(change)
-    const withViewers = (pid: string) => {
-      const access = grantsOn(pid)
-      for (const uid of people) if (!level(uid, pid)) access[uid] = 'viewer'
-      return access
-    }
-    // the Viewer grants are saved before the team changes
     if (keep) {
       const projects = [...new Set(items.map((i) => keptOn(change, i.task)))]
       const saved = await Promise.all(
-        projects.map((pid) => PLANNER.updateProject(pid, { access: withViewers(pid) })),
+        projects.flatMap((pid) =>
+          people
+            .filter((uid) => !level(uid, pid))
+            .map((uid) => PLANNER.setProjectAccess(pid, uid, 'viewer')),
+        ),
       )
       if (saved.includes(false)) {
         if (!removalRefusal(change))
@@ -5294,37 +5290,16 @@ export const PLANNER = {
 
   /* Paints the change at once and sends it. Resolves true when the server
      accepts it or nothing needed sending, false when it is missing here or
-     refused by the server (toasted). removeAccess waits on it. */
+     refused by the server (toasted). Access changes one grant at a time
+     (setProjectAccess, setProjectTeamAccess, removeAccess). */
   updateProject: (id: string, patch: ProjectPatch): Promise<boolean> => {
     const row = rows.projects.get(id)
     if (!row || refusePausedEdit()) return Promise.resolve(false)
     if ('name' in patch && refuseLongName('project', patch.name ?? '', row.name))
       return Promise.resolve(false)
-    if ('teamAccess' in patch) {
-      rows.teamAccess = rows.teamAccess.filter((a) => a.project_id !== id)
-      Object.entries(patch.teamAccess || {}).forEach(([teamId, level]) => {
-        rows.teamAccess.push({ project_id: id, team_id: teamId, level })
-      })
-    }
-    if ('access' in patch) {
-      // diff the access map into project_access rows; 'lead' entries are
-      // carried by projects.lead_id, never stored as grant rows. Field patch
-      // and grant diff commit in ONE mutation server-side — the old
-      // accessGate write-ordering died with the two-statement dance.
-      const next: Record<string, Row<'project_access'>['level']> = {}
-      Object.entries(patch.access || {}).forEach(([uid, level]) => {
-        if (level !== 'lead') next[uid] = level
-      })
-      rows.access = rows.access.filter((a) => !(a.project_id === id && !(a.profile_id in next)))
-      Object.keys(next).forEach((uid) => {
-        const ex = rows.access.find((a) => a.project_id === id && a.profile_id === uid)
-        if (ex) ex.level = next[uid]
-        else rows.access.push({ project_id: id, profile_id: uid, level: next[uid] })
-      })
-    }
-    // a lead handover without an access map: the server keeps the outgoing
-    // lead as User and drops the incoming lead's own grant
-    if ('lead' in patch && !('access' in patch) && patch.lead && patch.lead !== row.lead_id) {
+    // a lead handover: the server keeps the outgoing lead as User and drops
+    // the incoming lead's own grant
+    if ('lead' in patch && patch.lead && patch.lead !== row.lead_id) {
       const after = grantsAfterHandover(grantsOn(id), row.lead_id, patch.lead)
       rows.access = rows.access.filter((a) => a.project_id !== id)
       Object.entries(after).forEach(([uid, level]) => {
@@ -5348,8 +5323,6 @@ export const PLANNER = {
     if ('key' in patch) wire.key = patch.key
     if ('trackDelay' in patch) wire.track_delay = !!patch.trackDelay
     if ('reviewHours' in patch) wire.review_hours = patch.reviewHours ?? null
-    if ('access' in patch) wire.access = patch.access || {}
-    if ('teamAccess' in patch) wire.team_access = patch.teamAccess || {}
     if (!Object.keys(wire).length) return Promise.resolve(true)
     return runSaved(write(api.projects.update, { org_id: row.org_id, id, patch: wire }))
   },
@@ -6049,41 +6022,61 @@ export const PLANNER = {
 
   /* Roles are viewer / user / lead; exactly one lead per project (the
      Lead field). Promoting someone hands the lead over and steps the old
-     lead down to user. The current lead cannot be removed without a handover. A pure
-     delegate to updateProject — one mutation carries grants and lead. */
-  setProjectAccess: (
-    metaId: string,
-    userId: string,
-    role: AccessLevel | null,
-  ): Promise<boolean> => {
+     lead down to user, through updateProject, one mutation for grants and
+     lead. Any other level is one grant, sent alone (projects.setAccess), so
+     a page loaded before someone else changed access cannot undo that
+     change. Removing access goes through the removal window
+     (PLANNER.removeAccess). */
+  setProjectAccess: (metaId: string, userId: string, role: AccessLevel): Promise<boolean> => {
     const m = PLANNER.projects.find((p) => p.id === metaId)
-    if (!m) return Promise.resolve(false)
-    // row-level grants only — the 'lead' entry in m.access mirrors lead_id
-    const acc = grantsOn(metaId)
+    const row = rows.projects.get(metaId)
+    if (!m || !row) return Promise.resolve(false)
     // a handover: the server keeps the outgoing lead as User
     // (convex/lib/projectGrants.ts grantsAfterHandover)
     if (role === 'lead') {
       if (m.lead === userId) return Promise.resolve(true)
       return PLANNER.updateProject(metaId, { lead: userId })
     }
-    if (role) acc[userId] = role
-    else delete acc[userId]
     // the lead's access is the Lead field: hand it over first
-    if (m.lead === userId) return Promise.resolve(false)
-    return PLANNER.updateProject(metaId, { access: acc })
+    if (m.lead === userId || refusePausedEdit()) return Promise.resolve(false)
+    const held = rows.access.find((a) => a.project_id === metaId && a.profile_id === userId)
+    if (held?.level === role) return Promise.resolve(true)
+    if (held) held.level = role
+    else rows.access.push({ project_id: metaId, profile_id: userId, level: role })
+    rebuild()
+    emit()
+    return runSaved(
+      write(api.projects.setAccess, {
+        org_id: row.org_id,
+        id: metaId,
+        user_id: userId,
+        level: role,
+      }),
+    )
   },
 
+  /* One team's level on a project, sent alone like setProjectAccess. */
   setProjectTeamAccess: (
     metaId: string,
     teamId: string,
-    role: TeamAccessLevel | null,
+    role: TeamAccessLevel,
   ): Promise<boolean> => {
-    const m = PLANNER.projects.find((p) => p.id === metaId)
-    if (!m) return Promise.resolve(false)
-    const teamAccess = { ...m.teamAccess }
-    if (role) teamAccess[teamId] = role
-    else delete teamAccess[teamId]
-    return PLANNER.updateProject(metaId, { teamAccess })
+    const row = rows.projects.get(metaId)
+    if (!row || refusePausedEdit()) return Promise.resolve(false)
+    const held = rows.teamAccess.find((a) => a.project_id === metaId && a.team_id === teamId)
+    if (held?.level === role) return Promise.resolve(true)
+    if (held) held.level = role
+    else rows.teamAccess.push({ project_id: metaId, team_id: teamId, level: role })
+    rebuild()
+    emit()
+    return runSaved(
+      write(api.projects.setAccess, {
+        org_id: row.org_id,
+        id: metaId,
+        team_id: teamId,
+        level: role,
+      }),
+    )
   },
 
   setMilestone: (id: string, week: number) => {

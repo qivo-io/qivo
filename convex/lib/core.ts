@@ -966,14 +966,14 @@ export { BEFORE_NOT_A_COMMENT, COMMENT_PAGE_MAX } from '../model/comments'
 /* A page of a task's discussion thread for REST and MCP. It holds the
  * newest `limit` comments (model/comments.ts newestComments), or with
  * `before`, a comment's id, the newest ones the thread holds before that
- * comment. Answers them oldest first by created_at, and ties keep the
- * thread's order, because Array.prototype.sort is stable. A caller reads
- * further back by passing the first comment's id as `before`, and an empty
- * page means it reached the start. Should created_at and the thread's order
- * ever disagree, a later page can repeat a comment but never skips one.
- * Refuses a `before` that is not a comment on this task, unknown ids
- * included. Visibility rides the issue, because callers reach this only
- * through findIssue. */
+ * comment. Answers them oldest first in the thread's order, the order they
+ * were posted, in which the app's task window pages them. A caller reads
+ * further back by passing the first comment's id as `before`, which is the
+ * page's oldest, so no page repeats or skips a comment, and an empty page
+ * means it reached the start. Comments imported with a created_at out of
+ * that order stay in it. Refuses a `before` that is not a comment on this
+ * task, unknown ids included. Visibility rides the issue, because callers
+ * reach this only through findIssue. */
 export async function listCommentsCore(
   ctx: QueryCtx,
   issueId: string,
@@ -982,9 +982,7 @@ export async function listCommentsCore(
   const before =
     page.before === undefined ? undefined : await commentAnchor(ctx, issueId, page.before)
   const rows = await newestComments(ctx, issueId, { limit: page.limit, before })
-  return rows
-    .reverse()
-    .sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0))
+  return rows.reverse()
 }
 
 /* ------------------------------------------------------------- projections

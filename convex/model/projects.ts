@@ -422,8 +422,9 @@ export async function createProjectCore(
 /* --------------------------------------------------------------- update */
 
 /** A project field patch. A key's presence means "set this field"; null
- * clears. `access` and `team_access` replace the project's whole grant
- * lists, as the app's Project access editor sends them. */
+ * clears. `access` and `team_access` are whole grant lists from clients
+ * from before projects.setAccess, which give or change grants but may not
+ * leave one out (ACCESS_MAP_REMOVES). */
 export type ProjectPatch = {
   name?: string
   lead_id?: string | null
@@ -435,11 +436,21 @@ export type ProjectPatch = {
   team_access?: Record<string, GrantLevel>
 }
 
+/** The refusal of an access or team_access map that leaves out a grant the
+ * project has. A map from a page loaded before someone else gave that grant
+ * would drop it, and a removal must settle the open tasks it hides
+ * (projects.removeAccess, model/projectAccess.ts removeProjectGrantCore). */
+export const ACCESS_MAP_REMOVES =
+  'an access map cannot remove access; remove it one person or team at a time'
+
 /**
- * Applies a field patch and any access-map diff in ONE write, and narrates
+ * Applies a field patch and any access-map change in ONE write, and narrates
  * it once, by priority access > name > lead; same-value name and lead writes
  * are silent no-ops, and description, key, track_delay and
- * review_hours alone narrate nothing. A lead handover without an access map
+ * review_hours alone narrate nothing. An access or team_access map gives or
+ * changes grants and must hold every grant the project has
+ * (ACCESS_MAP_REMOVES), except the own grant of a lead handed over in the
+ * same patch. A lead handover without an access map
  * keeps the outgoing lead as User and drops the incoming lead's own grant
  * (lib/projectGrants.ts grantsAfterHandover). Changing access or the lead
  * takes a person. Returns the project as stored.
@@ -504,6 +515,8 @@ export async function updateProjectCore(
     if (leadChanged && nextLead !== undefined) await assertLeadAllowed(ctx, me, nextLead)
     db.lead_id = nextLead
   }
+  // whether a map leaves out a grant it may not remove (ACCESS_MAP_REMOVES)
+  let removes = false
   if (patch.access !== undefined) {
     const next = new Map(grantEntries(patch.access))
     const held = await grantRows(ctx, id)
@@ -518,12 +531,13 @@ export async function updateProjectCore(
         'only organization admins or project leads can change their own project access',
       )
     }
-    await writeGrants(ctx, project, held, next)
+    // a lead handed over in the same patch gives up their own grant
+    removes = await writeGrants(ctx, project, held, next, (uid) => leadChanged && uid === nextLead)
   } else if (leadChanged && nextLead !== undefined) {
     const held = await grantRows(ctx, id)
     const current: Grants = Object.fromEntries([...held].map(([uid, row]) => [uid, row.level]))
     const after = grantsAfterHandover(current, prevLead, nextLead)
-    await writeGrants(ctx, project, held, new Map(Object.entries(after)))
+    await writeGrants(ctx, project, held, new Map(Object.entries(after)), () => true)
   }
   if (patch.team_access !== undefined) {
     const next = new Map(Object.entries(patch.team_access))
@@ -539,10 +553,11 @@ export async function updateProjectCore(
         await ctx.db.insert('project_team_access', { project_id: id, team_id: teamId, level })
       } else if (row.level !== level) await ctx.db.patch(row._id, { level })
     }
-    for (const row of prev) {
-      if (!next.has(row.team_id)) await ctx.db.delete(row._id)
-    }
+    removes ||= prev.some((row) => !next.has(row.team_id))
   }
+  // refused once every entry of both maps was checked, so their own
+  // refusals come first
+  if (removes) throw rule(ACCESS_MAP_REMOVES)
   if (Object.keys(db).length > 0) await ctx.db.patch(project._id, db)
   const name = db.name ?? project.name
   const nameChanged = db.name !== undefined && db.name !== project.name
@@ -589,13 +604,17 @@ export async function updateProjectCore(
 }
 
 /* Brings a project's individual grant rows to `next`: changed levels are
- * patched, new ones checked and inserted, missing ones deleted. */
+ * patched, new ones checked and inserted, and missing ones deleted when
+ * `mayDrop` allows it. Only a lead handover drops one (updateProjectCore).
+ * Returns whether `next` leaves out a grant `mayDrop` keeps, which the caller
+ * refuses with ACCESS_MAP_REMOVES. */
 async function writeGrants(
   ctx: MutationCtx,
   project: Doc<'projects'>,
   held: Map<string, Doc<'project_access'>>,
   next: Map<string, GrantLevel>,
-): Promise<void> {
+  mayDrop: (uid: string) => boolean,
+): Promise<boolean> {
   for (const [uid, level] of next) {
     const row = held.get(uid)
     if (row !== undefined && row.level === level) continue
@@ -603,9 +622,13 @@ async function writeGrants(
     if (row !== undefined) await ctx.db.patch(row._id, { level })
     else await ctx.db.insert('project_access', { project_id: project.id, profile_id: uid, level })
   }
+  let removes = false
   for (const [uid, row] of held) {
-    if (!next.has(uid)) await ctx.db.delete(row._id)
+    if (next.has(uid)) continue
+    if (mayDrop(uid)) await ctx.db.delete(row._id)
+    else removes = true
   }
+  return removes
 }
 
 /* ------------------------------------------------------ archive / restore */

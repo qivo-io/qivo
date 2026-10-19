@@ -17,7 +17,9 @@ import {
   isTeamLeader,
   levelRank,
   profileCanSeeProject,
+  projectSightForProfiles,
   rootMetaOf,
+  SIGHT_READ,
 } from '../lib/access'
 import { ACCESS_LEVELS, type AccessLevel, type OrgRole } from '../lib/enums'
 import { orgProjectView } from '../lib/visibility'
@@ -259,6 +261,80 @@ describe('profileCanSeeProject', () => {
     await t.run((ctx) => ctx.db.patch(f.guest._id, { active: false }))
     const inactive = await t.run((ctx) => ctx.db.get(f.guest._id))
     expect(await t.run((ctx) => profileCanSeeProject(ctx, inactive!, f.sub))).toBe(true)
+  })
+})
+
+describe('projectSightForProfiles', () => {
+  it('answers canSeeProject for every profile at once, team shares and navigation included', async () => {
+    await t.run(async (ctx) => {
+      // The agent reaches sub2 through a team share alone, so it sees the
+      // meta only for navigation. The viewer loses its own meta grant and
+      // sees the meta through a team share instead.
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: f.agent.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub2.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+      const grant = await ctx.db
+        .query('project_access')
+        .withIndex('by_project_profile', (q) =>
+          q.eq('project_id', f.meta.id).eq('profile_id', f.viewer.id),
+        )
+        .unique()
+      await ctx.db.delete(grant!._id)
+      const viewers = uuid()
+      await ctx.db.insert('teams', {
+        id: viewers,
+        org_id: f.org.id,
+        name: 'Viewers',
+        stale_days: 14,
+        archive_days: 30,
+        track_delay_default: false,
+        created_at: f.team.created_at,
+      })
+      await ctx.db.insert('team_members', {
+        team_id: viewers,
+        profile_id: f.viewer.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.meta.id,
+        team_id: viewers,
+        level: 'viewer',
+      })
+      const people = [f.admin, f.user, f.agent, f.viewer, f.guest, f.otherAdmin]
+      // read in full, each profile asked alone, and a mix of the two
+      const saved = SIGHT_READ.max
+      try {
+        for (const max of [saved, 0, 2]) {
+          SIGHT_READ.max = max
+          for (const project of [f.meta, f.sub, f.sub2, f.hidden, f.otherProject]) {
+            const sees = await projectSightForProfiles(ctx, project)
+            for (const person of people) {
+              const expected = await canSeeProject(ctx, person, project)
+              expect([max, project.name, person.name, await sees(person)]).toEqual([
+                max,
+                project.name,
+                person.name,
+                expected,
+              ])
+            }
+          }
+        }
+      } finally {
+        SIGHT_READ.max = saved
+      }
+      expect(await (await projectSightForProfiles(ctx, f.meta))(f.agent)).toBe(true)
+      expect(await (await projectSightForProfiles(ctx, f.sub))(f.agent)).toBe(false)
+      expect(await (await projectSightForProfiles(ctx, f.sub2))(f.agent)).toBe(true)
+      expect(await (await projectSightForProfiles(ctx, f.sub))(f.viewer)).toBe(true)
+      expect(await (await projectSightForProfiles(ctx, f.hidden))(f.viewer)).toBe(false)
+    })
   })
 })
 

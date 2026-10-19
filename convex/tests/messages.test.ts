@@ -16,6 +16,8 @@ import type { FunctionArgs } from 'convex/server'
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { projectSightForProfiles, SIGHT_READ } from '../lib/access'
+import { byId } from '../lib/db'
 import type { MessageKind } from '../lib/enums'
 import {
   extractMentions,
@@ -26,6 +28,7 @@ import {
   notifyIssueUpdate,
   postMessage,
   pruneReadMessages,
+  type RecipientSight,
 } from '../model/messages'
 import {
   allMessages,
@@ -1076,12 +1079,204 @@ describe('notifyCommentInsert (model — composed by phase 5 comments.create)', 
     )
   })
 
+  it("a fan-out works out its followers' sight once per project, however many follow", async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // 240 followers who see the task through one of 8 teams sharing its
+    // sub-project, and one whose only team shares a project they cannot
+    // reach the task through
+    const followers = await t.run(async (ctx) => {
+      const teams: string[] = []
+      for (let i = 0; i < 8; i++) {
+        const id = uuid()
+        await ctx.db.insert('teams', {
+          id,
+          org_id: f.org.id,
+          name: `Crew ${i}`,
+          stale_days: 14,
+          archive_days: 30,
+          track_delay_default: false,
+          created_at: NOW,
+        })
+        await ctx.db.insert('project_team_access', {
+          project_id: i === 7 ? f.hidden.id : f.sub.id,
+          team_id: id,
+          level: 'user',
+        })
+        teams.push(id)
+      }
+      const ids: string[] = []
+      for (let i = 0; i < 241; i++) {
+        const id = uuid()
+        await ctx.db.insert('profiles', {
+          id,
+          org_id: f.org.id,
+          name: `Follower ${i}`,
+          initials: 'FO',
+          color: '#7a7ad0',
+          org_role: 'user',
+          active: true,
+          kind: 'person',
+          created_at: NOW,
+        })
+        await ctx.db.insert('team_members', {
+          team_id: teams[i === 240 ? 7 : i % 7],
+          profile_id: id,
+          is_leader: false,
+        })
+        await ctx.db.insert('issue_subscriptions', {
+          issue_id: issue.id,
+          profile_id: id,
+          created_at: NOW,
+        })
+        ids.push(id)
+      }
+      return ids
+    })
+    const ranges = await t.run(async (ctx) => {
+      await notifyCommentInsert(ctx, {
+        comment: { body: 'Any news?' },
+        issue,
+        actor: f.admin,
+        now: NOW,
+      })
+      return (await ctx.meta.getTransactionMetrics()).databaseQueries.used
+    })
+    expect(await messagesFor(t, followers[0], issue.id)).toHaveLength(1)
+    expect(await messagesFor(t, followers[239], issue.id)).toHaveLength(1)
+    expect(await messagesFor(t, followers[240], issue.id)).toHaveLength(0)
+    // each follower's message and inbox item, and their own grants and
+    // team memberships; one check per follower read about 20 ranges each
+    expect(ranges).toBeLessThan(241 * 6)
+  })
+
+  it("a follower's sight reads at most SIGHT_READ rows, however large a sharing team is", async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // an all-staff team of 1,500 that shares the task's sub-project, one of
+    // whom follows the task
+    const follower = await t.run(async (ctx) => {
+      const team = uuid()
+      let last = ''
+      await ctx.db.insert('teams', {
+        id: team,
+        org_id: f.org.id,
+        name: 'Everyone',
+        stale_days: 14,
+        archive_days: 30,
+        track_delay_default: false,
+        created_at: NOW,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub.id,
+        team_id: team,
+        level: 'user',
+      })
+      for (let i = 0; i < 1500; i++) {
+        const id = uuid()
+        await ctx.db.insert('profiles', {
+          id,
+          org_id: f.org.id,
+          name: `Member ${i}`,
+          initials: 'ME',
+          color: '#7a7ad0',
+          org_role: 'user',
+          active: true,
+          kind: 'person',
+          created_at: NOW,
+        })
+        await ctx.db.insert('team_members', { team_id: team, profile_id: id, is_leader: false })
+        last = id
+      }
+      await ctx.db.insert('issue_subscriptions', {
+        issue_id: issue.id,
+        profile_id: last,
+        created_at: NOW,
+      })
+      return last
+    })
+    const read = await t.run(async (ctx) => {
+      const used = async () => (await ctx.meta.getTransactionMetrics()).documentsRead.used
+      const profile = (await byId(ctx, 'profiles', follower))!
+      const before = await used()
+      const sees = await projectSightForProfiles(ctx, f.sub)
+      expect(await sees(profile)).toBe(true)
+      return (await used()) - before
+    })
+    // the team's first 1,001 members, then the follower's own memberships;
+    // reading them all would read 1,500
+    expect(read).toBeGreaterThan(SIGHT_READ.max)
+    expect(read).toBeLessThan(SIGHT_READ.max + 20)
+  })
+
+  it('asks about a few followers alone, without reading a sharing team in full', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // a team of 600 shares the task's sub-project; two of them follow it
+    const people = await t.run(async (ctx) => {
+      const team = uuid()
+      await ctx.db.insert('teams', {
+        id: team,
+        org_id: f.org.id,
+        name: 'Everyone',
+        stale_days: 14,
+        archive_days: 30,
+        track_delay_default: false,
+        created_at: NOW,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub.id,
+        team_id: team,
+        level: 'user',
+      })
+      const ids: string[] = []
+      for (let i = 0; i < 600; i++) {
+        const id = uuid()
+        await ctx.db.insert('profiles', {
+          id,
+          org_id: f.org.id,
+          name: `Member ${i}`,
+          initials: 'ME',
+          color: '#7a7ad0',
+          org_role: 'user',
+          active: true,
+          kind: 'person',
+          created_at: NOW,
+        })
+        await ctx.db.insert('team_members', { team_id: team, profile_id: id, is_leader: false })
+        ids.push(id)
+      }
+      for (const id of ids.slice(0, 2))
+        await ctx.db.insert('issue_subscriptions', {
+          issue_id: issue.id,
+          profile_id: id,
+          created_at: NOW,
+        })
+      return ids.length
+    })
+    const read = await t.run(async (ctx) => {
+      await notifyCommentInsert(ctx, {
+        comment: { body: 'Any news?' },
+        issue,
+        actor: f.admin,
+        now: NOW,
+      })
+      return (await ctx.meta.getTransactionMetrics()).documentsRead.used
+    })
+    // the organization's profiles for mentions, and a few rows for each
+    // follower; the team's members would be 600 more
+    expect(read).toBeLessThan(people + 200)
+  })
+
   it("a seed's visibility memo answers repeat checks; without a preload each check is live", async () => {
     const t = newT()
     const f = await withOrg(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await subscribe(t, f.guest, issue.id)
-    const visibility = new Map<string, boolean>()
+    const visibility: RecipientSight = new Map()
     const comment = (withPreload: boolean) =>
       t.run(async (ctx) => {
         const preload: NotifyPreload = {
@@ -1103,8 +1298,9 @@ describe('notifyCommentInsert (model — composed by phase 5 comments.create)', 
 
     await comment(true)
     expect(await messagesFor(t, f.guest.id, issue.id)).toHaveLength(1)
-    // the author's subscribe check and the guest's delivery check
-    expect([...visibility.values()]).toEqual([true, true])
+    // the author's subscribe check and the guest's delivery check share one
+    // answer for the project
+    expect([...visibility.keys()]).toEqual([f.sub.id])
 
     // The guest loses the grant that let them see the project. The memo
     // still says yes, which is why only a seed that changes no access may

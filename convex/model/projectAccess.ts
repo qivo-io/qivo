@@ -1,7 +1,7 @@
 /* Who has access to a project, changed one person or one team at a time.
  * The app's removal window, REST and MCP all remove a grant through
- * removeProjectGrantCore, and REST and MCP give or change one through
- * setProjectGrantCore, so the rule exists once.
+ * removeProjectGrantCore, and give or change one through setProjectGrantCore
+ * (the app through projects.setAccess), so the rule exists once.
  *
  * Only a person who controls the project's access may change it: an
  * organization admin or the project's lead (lib/access.ts
@@ -238,22 +238,23 @@ type Lost = Holding & { project: Doc<'projects'> }
  * removal's one transaction, so a larger handover would pass Convex's limits
  * for one transaction. Set at about 60% of the largest count that passed the
  * measurement behind tests/bulkReassign.test.ts (196 tasks with four
- * followers each, in an organization of 100 people). */
+ * followers each, in an organization of 100 people), taken when each
+ * follower's sight was still checked on its own. */
 export const REASSIGN_MAX = 120
 
 /** The share of each of Convex's limits for one transaction that a removal
  * may have used before it reassigns another task or notifies another
- * follower. A task costs more the more followers it has, most of all
- * followers whose sight the transaction has not checked yet, and a sight
- * check costs more the more teams share the project. So a handover under
- * REASSIGN_MAX can still be too large, and no fixed cost per task or
- * follower bounds it. The removal checks what the transaction used, as the
- * deployment reports it (ctx.meta.getTransactionMetrics), before each task
+ * follower. A task costs more the more followers it has, and a project's
+ * first followers cost a read of its grants and team members, up to a
+ * bound (model/messages.ts RecipientSight). So a handover under REASSIGN_MAX can
+ * still be too large, and no fixed cost per task or follower bounds it. The
+ * removal checks what the transaction used, as the deployment reports it
+ * (ctx.meta.getTransactionMetrics), before each task
  * and, through the preload's guard (model/messages.ts NotifyPreload), before
  * each follower it notifies. The rest of each limit is room for one
  * follower or one task's own reads and writes and the removal's narration.
  * In tests/bulkReassign.test.ts, REASSIGN_MAX tasks with four followers each
- * use about 70% of the index ranges. */
+ * use about 40% of the index ranges, and with 21 followers each about 90%. */
 export const REASSIGN_ROOM = 0.95
 
 /** The refusal of a handover too large for one removal: more than

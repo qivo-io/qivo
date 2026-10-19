@@ -18,6 +18,8 @@ import {
   MOVE_SUBTREE_TOO_LARGE,
   parentChainCheck,
   SUBTASK_PROJECT_RULE,
+  SUBTREE_ROOM,
+  SUBTREE_TOO_LARGE,
 } from '../model/issues'
 import {
   activityFor,
@@ -403,6 +405,187 @@ describe("older subtasks outside their parent's top-level project", () => {
       title: 'Still editable',
       status: 'progress',
     })
+  })
+})
+
+describe('an older subtask whose parent the mover cannot see', () => {
+  it('moves to another top-level project only when it leaves the parent, wherever the parent is', async () => {
+    const t = newT()
+    const { f, backend } = await scene(t)
+    // Vault's Open sub-project is the agent's; its Closed one is not, so the
+    // agent sees Vault only for navigation and cannot see the parent
+    const vault = await plantProject(t, { org_id: f.org.id, key: 'VLT', name: 'Vault' })
+    const under = { org_id: f.org.id, type: 'project' as const, parent_id: vault.id }
+    const open = await plantProject(t, { ...under, key: 'OPN', name: 'Open' })
+    const closed = await plantProject(t, { ...under, key: 'CLS', name: 'Closed' })
+    await grant(t, open.id, f.agent.id)
+    const parent = await plantIssue(t, { org_id: f.org.id, project_id: closed.id })
+    const elsewhere = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const strays = []
+    for (const parent_id of [parent.id, elsewhere.id]) {
+      // the agent cannot see the TBED parent either once its grant goes below
+      strays.push(await plantIssue(t, { org_id: f.org.id, project_id: backend.id, parent_id }))
+    }
+    await t.run(async (ctx) => {
+      const tbed = await ctx.db
+        .query('project_access')
+        .withIndex('by_project_profile', (q) =>
+          q.eq('project_id', f.meta.id).eq('profile_id', f.agent.id),
+        )
+        .unique()
+      await ctx.db.delete(tbed!._id)
+    })
+    // the parent under Vault and the one under TBED answer alike
+    for (const stray of strays) {
+      const r = await expectRefusal(
+        restPatch(t, f, `QN-${stray.num}`, { project: open.id }),
+        'rule',
+      )
+      expect(r.data.message).toBe(MOVE_SUBTASK_RULE)
+      expect(await row(t, stray.id)).toEqual(stray)
+    }
+    // leaving the parent in the same request moves it
+    await restPatch(t, f, `QN-${strays[0].num}`, { project: open.id, parent: null })
+    const moved = await row(t, strays[0].id)
+    expect([moved.project_id, moved.parent_id]).toEqual([open.id, undefined])
+  })
+})
+
+describe('a move or a parent change too large for one transaction', () => {
+  /* Runs `body` with SUBTREE_ROOM lowered so that `every`th read or row of
+   * a walk, or the row that brings the sizes read to `bytes`, finds the
+   * transaction full. */
+  const crowdedRoom = async (
+    every: number,
+    body: () => Promise<void>,
+    bytes = SUBTREE_ROOM.bytes,
+  ) => {
+    const saved = { ...SUBTREE_ROOM }
+    Object.assign(SUBTREE_ROOM, { room: 0, every, bytes })
+    try {
+      await body()
+    } finally {
+      Object.assign(SUBTREE_ROOM, saved)
+    }
+  }
+
+  it('refuses with a plain sentence and changes nothing, where a smaller one passes', async () => {
+    // convex-test reports a transaction's use only under its limits
+    const t = newT({ transactionLimits: true })
+    const { f, backend } = await scene(t)
+    const base = { org_id: f.org.id, project_id: f.sub.id }
+    const root = await plantIssue(t, base)
+    const kids = []
+    for (let i = 0; i < 3; i++) kids.push(await plantIssue(t, { ...base, parent_id: root.id }))
+    for (const kid of kids) await plantIssue(t, { ...base, parent_id: kid.id })
+    const other = await plantIssue(t, { ...base, project_id: f.sub2.id })
+    const lone = await plantIssue(t, base)
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 4; i++)
+        await ctx.db.insert('issue_attachments', {
+          id: uuid(),
+          org_id: f.org.id,
+          project_id: f.sub.id,
+          issue_id: lone.id,
+          name: `notes ${i}.txt`,
+          size_bytes: 1,
+          storage_id: await ctx.storage.store(new Blob() as never),
+          inline: false,
+          created_at: f.org.created_at,
+        })
+    })
+    const before = await allIssues(t, f.org.id)
+    await crowdedRoom(4, async () => {
+      // a move within TBED walks the four tasks under the root's three
+      // children for their holders, and a parent change measures them
+      for (const change of [
+        () => appMove(t, f, root.id, f.sub2.id),
+        () => appUpdate(t, f, root.id, { parent_id: other.id }),
+        // the task's four attachment rows
+        () => appMove(t, f, lone.id, backend.id),
+      ]) {
+        const r = await expectRefusal(change(), 'rule')
+        expect(r.data.message).toBe(SUBTREE_TOO_LARGE)
+      }
+    })
+    expect(await allIssues(t, f.org.id)).toEqual(before)
+    // with room to spare, all three pass
+    await appMove(t, f, root.id, f.sub2.id)
+    await appUpdate(t, f, root.id, { parent_id: other.id })
+    await appMove(t, f, lone.id, backend.id)
+    expect((await row(t, root.id)).parent_id).toBe(other.id)
+    expect((await row(t, lone.id)).project_id).toBe(backend.id)
+    const moved = await t.run((ctx) =>
+      ctx.db
+        .query('issue_attachments')
+        .withIndex('by_issue', (q) => q.eq('issue_id', lone.id))
+        .collect(),
+    )
+    expect(moved.map((file) => file.project_id)).toEqual(Array(4).fill(backend.id))
+  })
+
+  it('refuses a walk that would pass a real limit, as it stands', async () => {
+    // a limit of 1,000 index ranges, and 1,200 subtasks under one task, each
+    // a range of the walk
+    const t = newT({ transactionLimits: { databaseQueries: 1000 } })
+    const { f } = await scene(t)
+    const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 1200; i++)
+        await ctx.db.insert('issues', {
+          id: uuid(),
+          org_id: f.org.id,
+          project_id: f.sub.id,
+          parent_id: root.id,
+          num: 900_000 + i,
+          title: `Step ${i}`,
+          description: '',
+          status: 'todo',
+          priority: 'medium',
+          paused: false,
+          created_at: root.created_at,
+          updated_at: root.updated_at,
+        })
+    })
+    for (const change of [
+      () => appMove(t, f, root.id, f.sub2.id),
+      () => appUpdate(t, f, root.id, { parent_id: other.id }),
+    ]) {
+      const r = await expectRefusal(change(), 'rule')
+      expect(r.data.message).toBe(SUBTREE_TOO_LARGE)
+    }
+    expect(await row(t, root.id)).toEqual(root)
+  })
+
+  it('checks sooner after a subtask with a long description', async () => {
+    const t = newT({ transactionLimits: true })
+    const { f } = await scene(t)
+    const base = { org_id: f.org.id, project_id: f.sub.id }
+    const short = await plantIssue(t, base)
+    await plantIssue(t, { ...base, parent_id: short.id, description: 'Notes.' })
+    const long = await plantIssue(t, base)
+    await plantIssue(t, { ...base, parent_id: long.id, description: 'x'.repeat(2000) })
+    const other = await plantIssue(t, { ...base, project_id: f.sub2.id })
+    // no check by count, only by size: 6 KiB is past the long subtask's
+    // estimate alone, and short of the short one's
+    await crowdedRoom(
+      1e9,
+      async () => {
+        for (const change of [
+          () => appMove(t, f, long.id, f.sub2.id),
+          () => appUpdate(t, f, long.id, { parent_id: other.id }),
+        ]) {
+          const r = await expectRefusal(change(), 'rule')
+          expect(r.data.message).toBe(SUBTREE_TOO_LARGE)
+        }
+        await appMove(t, f, short.id, f.sub2.id)
+        await appUpdate(t, f, short.id, { parent_id: other.id })
+      },
+      6 * 1024,
+    )
+    expect((await row(t, short.id)).parent_id).toBe(other.id)
+    expect((await row(t, long.id)).project_id).toBe(f.sub.id)
   })
 })
 

@@ -1,13 +1,17 @@
 /* Write conflicts on REST and MCP (machine/registry.ts retryConflicts).
  *
  *   1. Only Convex's report of a mutation that gave up on a write conflict
- *      counts as one. Any other failure, a refusal quoting that text
- *      included, is never retried, because it may have come after a commit.
- *   2. A conflicted write runs again, at most twice, after a random wait.
+ *      counts as one, and only its report of a mutation that ran out of
+ *      execution time as a time out. Any other failure, a refusal quoting
+ *      that text included, is never retried, because it may have come after
+ *      a commit.
+ *   2. A conflicted or timed out write runs again, at most twice, after a
+ *      random wait, and a time out that persists says so.
  *   3. Over HTTP a comment whose count write conflicts is posted exactly
  *      once after a retry. A conflict that outlasts the retries changes
  *      nothing and answers REST 503 with Retry-After, and the MCP tool's
- *      error result. A conflict before dispatch answers 503 on both, and
+ *      error result. A time out that persists answers the same way with its
+ *      own sentence. A conflict before dispatch answers 503 on both, and
  *      any other failure there answers MCP's JSON 500 with CORS.
  *   4. attach_text_file, the one write tool that runs an action, retries
  *      its attach the same way and deletes the stored text when the
@@ -28,12 +32,18 @@ import type { Doc } from '../_generated/dataModel'
 import type { Refusal } from '../lib/functions'
 import { badRequest } from '../lib/functions'
 import { sha256hex } from '../machine/auth'
-import { CONFLICT_RETRIES, isWriteConflict, retryConflicts } from '../machine/registry'
+import {
+  CONFLICT_RETRIES,
+  isMutationTimeout,
+  isWriteConflict,
+  retryConflicts,
+} from '../machine/registry'
 import {
   INTERNAL_ERROR,
   WRITE_CONFLICT,
   WRITE_CONFLICT_MESSAGE,
   WRITE_CONFLICT_RETRY_AFTER,
+  WRITE_TIMEOUT_MESSAGE,
 } from '../machine/shared'
 import { NOW, newT, type OrgFixture, plantIssue, type T, uuid, withOrg } from './helpers.setup'
 
@@ -51,9 +61,15 @@ const SYSTEM_CONFLICT =
   'amount of data read by using indexed queries with selective index range expressions ' +
   '(https://docs.convex.dev/database/indexes/).'
 
+/* What ctx.runMutation rejects with when a mutation ran past its 1 s
+ * execution time, as the local backend reported it for a mutation retried
+ * on conflicts while busy. */
+const TIMEOUT = 'Function execution timed out (maximum duration: 1s)\n'
+
 /* How many of the next calls of each faulty write throw, and with what. */
 const faults = vi.hoisted(() => ({
   commentCount: 0,
+  commentError: '',
   ingress: [] as unknown[],
   attach: 0,
 }))
@@ -65,7 +81,7 @@ vi.mock('../model/commentCounts', async (importOriginal) => {
     noteCommentAdded: async (...a: Parameters<typeof real.noteCommentAdded>) => {
       if (faults.commentCount > 0) {
         faults.commentCount--
-        throw new Error(USER_CONFLICT)
+        throw new Error(faults.commentError || USER_CONFLICT)
       }
       return await real.noteCommentAdded(...a)
     },
@@ -102,6 +118,7 @@ const SECRET = `qva_${'conflicts1'.repeat(5)}`
 
 beforeEach(() => {
   faults.commentCount = 0
+  faults.commentError = ''
   faults.ingress = []
   faults.attach = 0
   // the shortest waits, 100 ms and then 200 ms
@@ -129,6 +146,7 @@ describe('isWriteConflict', () => {
 
   it('matches nothing else, so a failure that may have committed is never retried', () => {
     for (const e of [
+      new Error(TIMEOUT),
       // a refusal, even one quoting the text
       new ConvexError(USER_CONFLICT),
       badRequest(USER_CONFLICT),
@@ -142,6 +160,23 @@ describe('isWriteConflict', () => {
       null,
     ]) {
       expect(isWriteConflict(e), String(e)).toBe(false)
+    }
+  })
+})
+
+describe('isMutationTimeout', () => {
+  it("matches Convex's report of a query or mutation that ran out of time, and nothing else", () => {
+    expect(isMutationTimeout(new Error(TIMEOUT))).toBe(true)
+    for (const e of [
+      new Error(USER_CONFLICT),
+      new ConvexError(TIMEOUT),
+      new Error(`Uncaught Error: ${TIMEOUT}`),
+      // an action's own limit is longer, and an action may have committed
+      new Error('Function execution timed out (maximum duration: 600s)'),
+      TIMEOUT,
+      null,
+    ]) {
+      expect(isMutationTimeout(e), String(e)).toBe(false)
     }
   })
 })
@@ -193,6 +228,31 @@ describe('retryConflicts', () => {
       reason: WRITE_CONFLICT,
     })
     expect(log).toHaveBeenCalledWith(new Error(USER_CONFLICT))
+  })
+
+  it('retries a time out the same way, and says so when it persists', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let calls = 0
+    const write = vi.fn(async () => {
+      calls++
+      if (calls <= CONFLICT_RETRIES) throw new Error(TIMEOUT)
+      return 'written'
+    })
+    expect(await retryConflicts(write)).toBe('written')
+    const stuck = vi.fn(async () => {
+      throw new Error(TIMEOUT)
+    })
+    const e = await retryConflicts(stuck).then(
+      () => null,
+      (x: unknown) => x,
+    )
+    expect(stuck).toHaveBeenCalledTimes(CONFLICT_RETRIES + 1)
+    expect((e as ConvexError<Refusal>).data).toEqual({
+      code: 'conflict',
+      message: WRITE_TIMEOUT_MESSAGE,
+      reason: WRITE_CONFLICT,
+    })
+    expect(log).toHaveBeenCalledWith(new Error(TIMEOUT))
   })
 
   it('rethrows any other failure at once', async () => {
@@ -326,6 +386,28 @@ describe('a comment whose write conflicts', () => {
     expect(await stored(fx)).toEqual({ bodies: ['Lost in the crowd'], count: 1 })
   })
 
+  it('changes nothing and answers 503 with its own sentence when the write keeps timing out', async () => {
+    const fx = await setup()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    faults.commentError = TIMEOUT
+    faults.commentCount = CONFLICT_RETRIES + 1
+    const res = await restPost(fx, 'Too slow')
+    expect(res.status).toBe(503)
+    expect(res.headers.get('Retry-After')).toBe(String(WRITE_CONFLICT_RETRY_AFTER))
+    expect(res.json).toEqual({ error: WRITE_TIMEOUT_MESSAGE })
+    faults.commentCount = CONFLICT_RETRIES + 1
+    const mcp = await mcpPost(fx, 'Too slow')
+    expect((mcp.json as { result: unknown }).result).toMatchObject({
+      content: [{ type: 'text', text: WRITE_TIMEOUT_MESSAGE }],
+      isError: true,
+    })
+    expect(await stored(fx)).toEqual({ bodies: [], count: null })
+    // one that clears within the retries posts the comment once
+    faults.commentCount = CONFLICT_RETRIES
+    expect(await restPost(fx, 'Too slow')).toMatchObject({ status: 201 })
+    expect(await stored(fx)).toEqual({ bodies: ['Too slow'], count: 1 })
+  })
+
   it("changes nothing and answers the MCP tool's error result when the conflict persists", async () => {
     const fx = await setup()
     vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -351,6 +433,8 @@ describe('a failure before dispatch', () => {
       expect(res.headers.get('Retry-After')).toBe(String(WRITE_CONFLICT_RETRY_AFTER))
       expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
       expect(res.json).toEqual({ error: WRITE_CONFLICT_MESSAGE })
+      faults.ingress = Array.from({ length: CONFLICT_RETRIES + 1 }, () => new Error(TIMEOUT))
+      expect((await post(fx, 'Never sent')).json).toEqual({ error: WRITE_TIMEOUT_MESSAGE })
     }
     // a conflict that clears within the retries does not show
     faults.ingress = [new Error(SYSTEM_CONFLICT)]
@@ -420,6 +504,9 @@ describe('the write conflict answer', () => {
     expect(WRITE_CONFLICT_MESSAGE).toBe(
       'the request conflicted with other changes made at the same time and changed nothing; send it again',
     )
+    expect(WRITE_TIMEOUT_MESSAGE).toBe(
+      'the request took too long and changed nothing; send it again, or change less at once if it keeps happening',
+    )
     expect(WRITE_CONFLICT_RETRY_AFTER).toBe(1)
     const docs = import.meta.glob(
       ['../../docs/rest-api.md', '../../docs/mcp.md', '../../public/skill.md'],
@@ -434,6 +521,7 @@ describe('the write conflict answer', () => {
       // a wrapped line reads as one space
       const prose = text.replace(/\s+/g, ' ')
       expect(prose, path).toContain(WRITE_CONFLICT_MESSAGE)
+      expect(prose, path).toContain(WRITE_TIMEOUT_MESSAGE)
       expect(prose, path).toContain(`Retry-After: ${WRITE_CONFLICT_RETRY_AFTER}`)
     }
   })

@@ -26,7 +26,12 @@
 import { makeFunctionReference } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { canSeeProject, keepsInbox, profileCanSeeProject } from '../lib/access'
+import {
+  canSeeProject,
+  keepsInbox,
+  profileCanSeeProject,
+  projectSightForProfiles,
+} from '../lib/access'
 import { byId } from '../lib/db'
 import type { MessageKind } from '../lib/enums'
 import { badRequest, forbidden, rule } from '../lib/functions'
@@ -236,9 +241,8 @@ export type NotifyPreload = {
   /* The org's projects by uuid, as stored now. A miss is read by uuid and
    * kept. */
   projects: Map<string, Doc<'projects'>>
-  /* Recipient visibility answers by `${profile}:${project}` uuid, filled as
-   * they are asked. */
-  visibility: Map<string, boolean>
+  /* Recipient sight, filled as it is asked (RecipientSight). */
+  visibility: RecipientSight
   /* Run by notifyIssueUpdate before each webhook subscription it checks
    * (taskEvents.ts emitTaskEvent), each mention and each follower it
    * notifies. A bulk writer throws from it to stop before the transaction
@@ -275,22 +279,54 @@ async function preloadedProject(
   return project
 }
 
-/* profileCanSeeProject, answered from a preload's visibility memo when one
- * is given (see NotifyPreload), else asked live. */
+/** How many people a fan-out asks about one project's sight one at a time
+ * before it works out everyone's at once (RecipientSight). A few followers,
+ * as most comments and updates have, cost less asked alone than the
+ * project's grants and team members read in full. */
+export const SIGHT_ALONE = 8
+
+/** Who can see each project a fan-out asks about, by project uuid. The
+ * first SIGHT_ALONE people are asked one at a time. After that the
+ * project's grants, team shares and sharing teams' members are read once,
+ * up to a bound, and answer everyone (lib/access.ts
+ * projectSightForProfiles). One check per follower costs a few index
+ * ranges, and two more for each team sharing the project, so a task with
+ * some hundreds of followers passed Convex's 4,096 ranges or its 1 s. Like
+ * a preload, it holds only while the transaction changes no profile,
+ * project, grant, team or team membership. */
+export type RecipientSight = Map<
+  string,
+  {
+    /* the answers asked one at a time, by profile uuid */
+    alone: Map<string, boolean>
+    /* everyone's, once more people were asked about */
+    all?: Promise<(profile: Doc<'profiles'>) => Promise<boolean>>
+  }
+>
+
+/* profileCanSeeProject, answered through `visibility` when one is given,
+ * else asked live. */
 async function recipientCanSee(
   ctx: MutationCtx,
   profile: Doc<'profiles'>,
   project: Doc<'projects'>,
-  visibility: NotifyPreload['visibility'] | undefined,
+  visibility: RecipientSight | undefined,
 ): Promise<boolean> {
   if (visibility === undefined) return await profileCanSeeProject(ctx, profile, project)
-  const key = `${profile.id}:${project.id}`
-  let canSee = visibility.get(key)
-  if (canSee === undefined) {
-    canSee = await profileCanSeeProject(ctx, profile, project)
-    visibility.set(key, canSee)
+  let sight = visibility.get(project.id)
+  if (sight === undefined) {
+    sight = { alone: new Map() }
+    visibility.set(project.id, sight)
   }
-  return canSee
+  const known = sight.alone.get(profile.id)
+  if (known !== undefined) return known
+  if (sight.all === undefined && sight.alone.size < SIGHT_ALONE) {
+    const sees = await profileCanSeeProject(ctx, profile, project)
+    sight.alone.set(profile.id, sees)
+    return sees
+  }
+  sight.all ??= projectSightForProfiles(ctx, project)
+  return await (await sight.all)(profile)
 }
 
 /* ------------------------------------------------------------- postMessage
@@ -314,8 +350,8 @@ async function recipientCanSee(
  * restore, so it arrives unread.
  *
  * `issue` / `project` / `recipient` are optional preloads; when absent they
- * are read by uuid. `visibility` is a bulk writer's memo (NotifyPreload),
- * never passed by a write that changes one task. The issue_title snapshot is
+ * are read by uuid. `visibility` is the fan-out's RecipientSight; without
+ * one the recipient's sight is asked alone. The issue_title snapshot is
  * the issue's CURRENT title (the SQL passed new.title). */
 export async function postMessage(
   ctx: MutationCtx,
@@ -330,7 +366,7 @@ export async function postMessage(
     issue?: Doc<'issues'>
     project?: Doc<'projects'>
     recipient?: Doc<'profiles'>
-    visibility?: NotifyPreload['visibility']
+    visibility?: RecipientSight
   },
 ): Promise<boolean> {
   if (m.actor_id !== undefined && m.recipient_id === m.actor_id) return false
@@ -376,8 +412,8 @@ export async function postMessage(
  * inbox and visibility — a subscription row decides who gets messages, so it
  * must not be creatable for someone who could not have received them),
  * idempotent.
- * `visibility` is a bulk writer's memo (NotifyPreload), never passed by a
- * write that changes one task. Returns whether a row was inserted. */
+ * `visibility` is the fan-out's RecipientSight, as for postMessage. Returns
+ * whether a row was inserted. */
 export async function subscribeToIssue(
   ctx: MutationCtx,
   a: {
@@ -386,7 +422,7 @@ export async function subscribeToIssue(
     org_id: string
     project: Doc<'projects'> | null
     now: string
-    visibility?: NotifyPreload['visibility']
+    visibility?: RecipientSight
   },
 ): Promise<boolean> {
   if (a.profile.org_id !== a.org_id || !keepsInbox(a.profile)) return false
@@ -1078,7 +1114,7 @@ export async function notifyIssueInsert(
   if (!a.skipTaskEvent) await emitTaskEvent(ctx, { name: 'task.created', issue, actor, now })
   const project = await preloadedProject(ctx, preload, issue.project_id)
   const orgProfiles = preload?.orgProfiles ?? (await orgProfilesOf(ctx, issue.org_id))
-  const visibility = preload?.visibility
+  const visibility: RecipientSight = preload?.visibility ?? new Map()
   const mentioned = extractMentions(issue.description, orgProfiles)
   for (const m of mentioned) {
     await subscribeToIssue(ctx, {
@@ -1197,7 +1233,8 @@ export async function notifyIssueInsert(
  * `preload` is a bulk writer's NotifyPreload, which answers the
  * organization's profiles, the projects and the recipients' sight from
  * memory, and whose `guard` runs before each mention and follower. Without
- * one every row is read fresh. */
+ * one every row is read fresh, and the recipients' sight is worked out once
+ * per project for the call (RecipientSight). */
 export async function notifyIssueUpdate(
   ctx: MutationCtx,
   a: {
@@ -1224,7 +1261,7 @@ export async function notifyIssueUpdate(
   const isGroup = a.isGroup === true
   const project = await preloadedProject(ctx, preload, after.project_id)
   const orgProfiles = preload?.orgProfiles ?? (await orgProfilesOf(ctx, after.org_id))
-  const visibility = preload?.visibility
+  const visibility: RecipientSight = preload?.visibility ?? new Map()
 
   // @mentions newly added to the description notify regardless of
   // subscribers, and subscribe the person to what they were pulled into
@@ -1461,7 +1498,8 @@ export async function notifyIssueUpdate(
  * the author subscribes (saying something is the clearest statement that you
  * want to hear the reply); every subscriber EXCEPT the mentioned reads
  * 'New comment'. `actor` is the comment's author; of the comment itself
- * only the body is read. */
+ * only the body is read. The recipients' sight is worked out once per
+ * project (RecipientSight). */
 export async function notifyCommentInsert(
   ctx: MutationCtx,
   a: {
@@ -1477,7 +1515,7 @@ export async function notifyCommentInsert(
   if (!a.skipTaskEvent) await emitTaskEvent(ctx, { name: 'comment.created', issue, actor, now })
   const project = await preloadedProject(ctx, preload, issue.project_id)
   const orgProfiles = preload?.orgProfiles ?? (await orgProfilesOf(ctx, issue.org_id))
-  const visibility = preload?.visibility
+  const visibility: RecipientSight = preload?.visibility ?? new Map()
   const mentioned = extractMentions(comment.body, orgProfiles)
   for (const m of mentioned) {
     await subscribeToIssue(ctx, {

@@ -450,6 +450,120 @@ export async function projectLevelsForProfiles(
   }
 }
 
+/** How many grant and team membership rows projectSightForProfiles reads
+ * for one project before it asks each profile about the rest alone. A
+ * fan-out keeps about 5% of each limit for one follower, 1,600 of Convex's
+ * 32,000 documents, and the project's first follower pays this read. Tests
+ * lower it. */
+export const SIGHT_READ = { max: 1000 }
+
+/** canSeeProject for many profiles of `project`'s organization, for a write
+ * that notifies many followers. It reads the grants and team shares on the
+ * project and its root, each sharing team and its members once, so a
+ * profile then costs no index range. Past SIGHT_READ rows, the grants of a
+ * project, or the members of a team, it did not read in full are looked up
+ * for each profile instead: one range for each such project, and one for
+ * the profile's memberships if any such team remains. canSeeProject costs a
+ * few ranges for each profile and two more for each team sharing the
+ * project, and a fan-out of some hundreds of followers each asked alone
+ * passed Convex's 4,096 ranges or its 1 s. A top-level project also shows
+ * to someone who reaches only one of its sub-projects, which this leaves
+ * out, so on one a profile without a level of its own is asked alone
+ * (canSeeProject). Tasks live in sub-projects only. Each profile's answer
+ * is kept. A missing parent or a cycle throws not found, as in rootMetaOf. */
+export async function projectSightForProfiles(
+  ctx: QueryCtx,
+  project: Doc<'projects'>,
+): Promise<(profile: Doc<'profiles'>) => Promise<boolean>> {
+  const root = await rootMetaOf(ctx, project)
+  const tree = project.id === root.id ? [project] : [root, project]
+  let rest = SIGHT_READ.max
+  // up to the rest of the budget, null when that is not all of them
+  const inFull = async <T>(rows: { take: (n: number) => Promise<T[]> }): Promise<T[] | null> => {
+    const read = await rows.take(rest + 1)
+    if (read.length > rest) {
+      rest = 0
+      return null
+    }
+    rest -= read.length
+    return read
+  }
+  type Level = Pick<Doc<'project_access'>, 'project_id' | 'level'>
+  // each project's grants by profile, null for a project read per profile
+  const grantsOn = new Map<string, Map<string, Level> | null>()
+  for (const { id } of tree) {
+    const read = await inFull(
+      ctx.db.query('project_access').withIndex('by_project', (q) => q.eq('project_id', id)),
+    )
+    grantsOn.set(id, read && new Map(read.map((grant) => [grant.profile_id, grant])))
+  }
+  // the shares of the teams teamGrantOn counts, and each such team's
+  // members, null for a team read per profile
+  const sharesOf = new Map<string, Level[]>()
+  const membersOf = new Map<string, Set<string> | null>()
+  const skipped = new Set<string>()
+  for (const { id } of tree) {
+    const shares = await ctx.db
+      .query('project_team_access')
+      .withIndex('by_project', (q) => q.eq('project_id', id))
+      .collect()
+    for (const share of shares) {
+      if (skipped.has(share.team_id)) continue
+      if (!membersOf.has(share.team_id)) {
+        const team = await ctx.db
+          .query('teams')
+          .withIndex('by_uuid', (q) => q.eq('id', share.team_id))
+          .unique()
+        if (team === null || team.org_id !== project.org_id) {
+          skipped.add(share.team_id)
+          continue
+        }
+        const members = await inFull(
+          ctx.db.query('team_members').withIndex('by_team', (q) => q.eq('team_id', team.id)),
+        )
+        membersOf.set(team.id, members && new Set(members.map((m) => m.profile_id)))
+      }
+      const held = sharesOf.get(share.team_id)
+      if (held === undefined) sharesOf.set(share.team_id, [share])
+      else held.push(share)
+    }
+  }
+  const someTeamUnread = [...membersOf.values()].includes(null)
+  const sees = async (profile: Doc<'profiles'>): Promise<boolean> => {
+    if (profile.org_id !== project.org_id || root.org_id !== project.org_id) return false
+    const grants: Level[] = []
+    for (const { id } of tree) {
+      const read = grantsOn.get(id)
+      const grant = read ? read.get(profile.id) : await grantOn(ctx, id, profile.id)
+      if (grant) grants.push(grant)
+    }
+    const joined = new Set<string>()
+    if (someTeamUnread) {
+      const memberships = ctx.db
+        .query('team_members')
+        .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
+      for await (const { team_id } of memberships) joined.add(team_id)
+    }
+    const shares: Level[] = []
+    for (const [teamId, members] of membersOf) {
+      if (members ? members.has(profile.id) : joined.has(teamId))
+        shares.push(...(sharesOf.get(teamId) ?? []))
+    }
+    const { levelOf, navigationOnly } = levelsFrom(profile, tree, grants, shares)
+    if (!navigationOnly(project.id) && levelOf(project) !== null) return true
+    return project.parent_id === undefined && (await canSeeProject(ctx, profile, project))
+  }
+  const known = new Map<string, Promise<boolean>>()
+  return (profile) => {
+    let answer = known.get(profile.id)
+    if (answer === undefined) {
+      answer = sees(profile)
+      known.set(profile.id, answer)
+    }
+    return answer
+  }
+}
+
 /* The profile ids of team `teamId`, or none when the team is gone or belongs
  * to another organization than `orgId`, the teams teamGrantOn skips. */
 async function sameOrgTeamMembers(ctx: QueryCtx, teamId: string, orgId: string): Promise<string[]> {

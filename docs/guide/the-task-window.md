@@ -56,11 +56,14 @@ stay. A task that was deleted or hidden from you shows an empty thread
 instead.
 **Comments** is the default filter; **All** adds changes such as assignments,
 status moves, dates, labels and attachments. Until the first comment is
-loaded, **All** shows only the changes since the oldest loaded comment.
-Field-change entries show before and after values, including short
-description excerpts. A **New** line marks unread activity, and sits at the
-top of the loaded comments when the first unread one is earlier
-([Your inbox](./working-together.md#your-inbox)).
+loaded, **All** shows only the changes since the oldest loaded comment. Qivo
+keeps an organization's newest 500 changes, counting changes to projects,
+teams and people as well as tasks, and the app loads at most the newest 500
+across all your organizations. So an older task's early changes can be
+missing from **All** even once every comment is loaded. Field-change entries show before and after
+values, including short description excerpts. A **New** line marks unread
+activity, and sits at the top of the loaded comments when the first unread one
+is earlier ([Your inbox](./working-together.md#your-inbox)).
 
 You can edit or delete your own comments. Project leads can moderate other
 people's comments. The edit indicator shows when and by whom a comment changed,
@@ -131,7 +134,9 @@ A subtask moved to another project stops being a subtask of its parent,
 because a subtask stays in its parent's project. The dialog says both before
 you move. Qivo refuses the move if a subtask that would move is in a
 sub-project you cannot edit (an organization admin can move it), or if the
-task has more than 200 subtasks at any depth, archived ones included.
+task has more than 200 subtasks at any depth, archived ones included. A
+move or a new parent is also refused when the task and its subtasks are too
+large to change at once, such as with thousands of subtasks or attachments.
 While a subtask that would move is in a project being moved to Deleted
 items, Qivo refuses the move for everyone until that move finishes.
 

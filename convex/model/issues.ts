@@ -66,7 +66,7 @@ import {
   profileCanBeAssigned,
   profileCanSeeProject,
 } from '../lib/access'
-import { byId, insertUnique } from '../lib/db'
+import { byId, insertUnique, usedMoreThan } from '../lib/db'
 import type { IssuePriority, IssueStatus } from '../lib/enums'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { countsAsSubtask, type Liveness, projectLiveness } from '../lib/liveTasks'
@@ -269,19 +269,27 @@ async function ancestorsFrom(
 }
 
 /* Whether a person can see every task in `chain`, through their own access
- * to each task's project. Answers per person, read once per project. */
-function chainSight(ctx: QueryCtx, chain: readonly Doc<'issues'>[]) {
+ * to each task's project. Answers per person, read once per project. A bulk
+ * writer's `bulk` serves the profiles and projects from its preload and
+ * keeps each sight that passed (sightKey), so a handover of many subtasks
+ * asks it once per person and project. */
+function chainSight(ctx: QueryCtx, chain: readonly Doc<'issues'>[], bulk?: BulkUpdate) {
   const projectIds = [...new Set(chain.map((t) => t.project_id))]
   const known = new Map<string, Promise<boolean>>()
   return (profileId: string): Promise<boolean> => {
     let sees = known.get(profileId)
     if (sees === undefined) {
       sees = (async () => {
-        const profile = await byId(ctx, 'profiles', profileId)
+        const profile =
+          bulk?.preload.orgProfiles.find((p) => p.id === profileId) ??
+          (await byId(ctx, 'profiles', profileId))
         if (profile === null) return false
         for (const id of projectIds) {
-          const project = await byId(ctx, 'projects', id)
+          const key = sightKey(profileId, id)
+          if (bulk?.checked.has(key)) continue
+          const project = bulk?.preload.projects.get(id) ?? (await byId(ctx, 'projects', id))
           if (project === null || !(await canSeeProject(ctx, profile, project))) return false
+          bulk?.checked.add(key)
         }
         return true
       })()
@@ -291,12 +299,58 @@ function chainSight(ctx: QueryCtx, chain: readonly Doc<'issues'>[]) {
   }
 }
 
+/** How full a move or a parent change may let its transaction get while it
+ * walks a task's subtasks or moves their attachment rows (lib/db.ts
+ * usedMoreThan). Neither walk has a fixed bound: a move within one
+ * top-level project, or a parent change, reads every subtask, and a task can
+ * hold any number of attachments. The walk asks every `every` queries or
+ * rows, and sooner once the rows since it last asked may hold `bytes`, so
+ * that a few long descriptions cannot fill the rest of the 16 MiB read
+ * limit between two checks. Past `room` the change is refused with
+ * SUBTREE_TOO_LARGE rather than failing on one of Convex's limits for one
+ * transaction. Tests lower these. */
+export const SUBTREE_ROOM = { room: 0.9, every: 64, bytes: 512 * 1024 }
+
+/** The refusal of a move or a parent change whose task and subtasks are too
+ * large for one transaction (SUBTREE_ROOM). */
+export const SUBTREE_TOO_LARGE =
+  'this task and its subtasks are too large to change in one request; detach some subtasks first'
+
+/* Refuses with SUBTREE_TOO_LARGE once the transaction passed SUBTREE_ROOM's
+ * `room`. Run before each step of a change whose cost has no fixed bound,
+ * such as one holder's sight check, and through roomCheck for walks. */
+async function assertRoom(ctx: QueryCtx): Promise<void> {
+  if (await usedMoreThan(ctx, SUBTREE_ROOM.room)) throw rule(SUBTREE_TOO_LARGE)
+}
+
+/* A check to run before each query and after each row of a walk under
+ * SUBTREE_ROOM, given the row's size when it may be large (subtaskBytes). It
+ * asks the transaction's use every `every` calls, or once the sizes since
+ * it last asked reach `bytes` (assertRoom). */
+function roomCheck(ctx: QueryCtx): (bytes?: number) => Promise<void> {
+  let calls = 0
+  let pending = 0
+  return async (bytes = 0) => {
+    calls += 1
+    pending += bytes
+    if (calls % SUBTREE_ROOM.every !== 0 && pending < SUBTREE_ROOM.bytes) return
+    pending = 0
+    await assertRoom(ctx)
+  }
+}
+
+/* An upper estimate of a task row's size for roomCheck: its title and
+ * description, up to 3 bytes a UTF-16 unit, and 1 KiB for the rest. */
+const subtaskBytes = (task: Doc<'issues'>): number =>
+  3 * (task.title.length + (task.description?.length ?? 0)) + 1024
+
 /* The people working on a task and its active subtasks at any depth: each
  * assignee, and each reviewer of a task that is no group (a group's
  * reviewer is dormant). `self` holds the task's own next values. `live`
  * tells which projects are live for the group test, by default as they are
  * now; a move passes them as they are once its subtasks land. Callers skip
- * switched-off people, who hold no new work. */
+ * switched-off people, who hold no new work. The walk reads every active
+ * subtask, under SUBTREE_ROOM. */
 async function holdersUnder(
   ctx: QueryCtx,
   rootId: string,
@@ -307,12 +361,15 @@ async function holdersUnder(
   if (self.assignee_id !== undefined) holders.add(self.assignee_id)
   if (self.reviewer_id !== undefined && !self.group) holders.add(self.reviewer_id)
   const seen = new Set<string>([rootId])
+  const room = roomCheck(ctx)
   let frontier = [rootId]
   for (let depth = 0; frontier.length > 0 && depth < 20; depth++) {
     const next: string[] = []
     for (const id of frontier) {
+      await room()
       const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', id))
       for await (const c of kids) {
+        await room(subtaskBytes(c))
         if (c.archived_at !== undefined || seen.has(c.id)) continue
         seen.add(c.id)
         next.push(c.id)
@@ -545,8 +602,10 @@ export type ParentProblem =
   | 'deep_or_cyclic'
   | 'too_deep'
 
-/** Checks a proposed parent link without throwing, for writers that adapt
- * instead of refusing; assertParentChain throws from it. `child.project_id`
+/** Checks a proposed parent link, answering a problem rather than throwing
+ * one, for writers that adapt instead of refusing; assertParentChain throws
+ * from it. It still throws SUBTREE_TOO_LARGE when the subtree under `child`
+ * is too large to measure in one transaction (SUBTREE_ROOM). `child.project_id`
  * is the project the child will be in after the write. Checks the cheapest
  * facts first, and a parent the actor cannot see is `not_found` before
  * anything else describes it. */
@@ -588,14 +647,20 @@ export async function parentChainCheck(
   // downward measure (0038 fix 1): the height of the subtree hanging under
   // the row, capped at 24 so the walk stays finite over corrupt cycles — a
   // reparent must not merge two legal chains into one deeper than the
-  // cascade budget
+  // cascade budget. It reads every subtask, under SUBTREE_ROOM, which
+  // throws rather than answering a problem.
   let down = 0
   let frontier = [child.id]
+  const room = roomCheck(ctx)
   while (frontier.length > 0 && down < 24) {
     const next: string[] = []
     for (const id of frontier) {
+      await room()
       const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', id))
-      for await (const c of kids) next.push(c.id)
+      for await (const c of kids) {
+        await room(subtaskBytes(c))
+        next.push(c.id)
+      }
     }
     if (next.length === 0) break
     down += 1
@@ -1159,9 +1224,10 @@ export type IssuePatch = {
 /** Reused answers for a bulk writer that runs updateIssueCore for many
  * tasks in one transaction, which changes no profile, project, grant, team or
  * team membership while it runs (model/messages.ts NotifyPreload). `checked`
- * holds the checks already passed, under gateKey and holderKey, so the write
- * gate runs once per project and each assignee or reviewer rule once per
- * person and project. No single task write passes one. */
+ * holds the checks already passed, under gateKey, holderKey and sightKey, so
+ * the write gate runs once per project, and each assignee or reviewer rule
+ * and each sight of a parent chain's project once per person and project.
+ * No single task write passes one. */
 export type BulkUpdate = { preload: NotifyPreload; checked: Set<string> }
 
 /* The BulkUpdate key of `actorId`'s passed write gate on a project. */
@@ -1174,6 +1240,9 @@ export const holderKey = (
   profileId: string,
   projectId: string,
 ): string => `holder:${role}:${profileId}:${projectId}`
+
+/* The BulkUpdate key of a profile's passed sight of a project (chainSight). */
+const sightKey = (profileId: string, projectId: string): string => `sight:${profileId}:${projectId}`
 
 /* Runs `check` unless the bulk writer already passed `key`, and records the
  * key once it passes. Without a bulk writer it always runs. */
@@ -1296,7 +1365,7 @@ export async function updateIssueCore(
   const newParent =
     'parent_id' in patch && nextParent !== undefined && nextParent !== issue.parent_id
   if (nextParent !== undefined && (newAssignee || newReviewer || newParent)) {
-    const sees = chainSight(ctx, await ancestorsFrom(ctx, nextParent))
+    const sees = chainSight(ctx, await ancestorsFrom(ctx, nextParent), bulk)
     if (newAssignee && !(await sees(heldAssignee))) throw rule(ASSIGNEE_SIGHT_RULE)
     if (newReviewer && !(await sees(heldReviewer))) throw rule(REVIEWER_SIGHT_RULE)
     if (newParent) {
@@ -1309,6 +1378,7 @@ export async function updateIssueCore(
         group: await isGroup(),
       })
       for (const holder of holders) {
+        await assertRoom(ctx)
         // a switched-off person holds no new work, so their sight is not checked
         if (!(await byId(ctx, 'profiles', holder))?.active) continue
         if (!(await sees(holder))) throw rule(HOLDER_SIGHT_RULE)
@@ -1497,17 +1567,28 @@ export const MOVE_SUBTREE_TOO_LARGE = `this task has more than ${MOVE_SUBTREE_MA
 
 /* Attachment rows carry their task's project for the storage totals
  * (model/billing.ts storageUsage), so they move with the task and with each
- * subtask a move carries. */
+ * subtask a move carries, under SUBTREE_ROOM through `room`, the move's one
+ * roomCheck. */
 async function moveAttachmentRows(
   ctx: MutationCtx,
   issueId: string,
   projectId: string,
+  room: () => Promise<void>,
 ): Promise<void> {
-  const files = await ctx.db
+  // read in full before the first patch, so the walk never meets a row it
+  // patched, each row under the room check
+  const files: Doc<'issue_attachments'>[] = []
+  const rows = ctx.db
     .query('issue_attachments')
     .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
-    .collect()
-  for (const file of files) await ctx.db.patch(file._id, { project_id: projectId })
+  for await (const file of rows) {
+    await room()
+    files.push(file)
+  }
+  for (const file of files) {
+    await room()
+    await ctx.db.patch(file._id, { project_id: projectId })
+  }
 }
 
 /* Per-call cache from a project id to its top-level project id, null for a
@@ -1668,15 +1749,21 @@ export async function moveIssueCore(
   // or leave the parent in the same change. A later parent in the
   // destination's top-level project is checked in full by the write that
   // sets it. An older subtask already outside its parent's top-level project
-  // stays movable within its own and into its parent's.
+  // stays movable within its own and into its parent's. A parent the mover
+  // cannot see counts as being in the task's own top-level project, as the
+  // app counts it, so the answer tells nothing about where it is.
   const detach = a.detachParent === true && issue.parent_id !== undefined
   if (crosses && issue.parent_id !== undefined && !detach) {
+    const seenTop = async (task: Doc<'issues'>): Promise<string | null> => {
+      const project = await byId(ctx, 'projects', task.project_id)
+      if (project === null) return null
+      return (await canSeeProject(ctx, me, project)) ? topLevelOf(project) : topLevelOf(source)
+    }
     const parent = await byId(ctx, 'issues', issue.parent_id)
-    if (parent !== null && (await topOf(parent.project_id)) !== dst) {
+    if (parent !== null && (await seenTop(parent)) !== dst) {
       const laterParent = a.machine?.laterParent
       const next = laterParent ? await byId(ctx, 'issues', laterParent) : null
-      const leaves =
-        laterParent === null || (next !== null && (await topOf(next.project_id)) === dst)
+      const leaves = laterParent === null || (next !== null && (await seenTop(next)) === dst)
       if (!leaves) throw rule(MOVE_SUBTASK_RULE)
     }
   }
@@ -1729,19 +1816,22 @@ export async function moveIssueCore(
   // every active assignee or reviewer below it needs access to the
   // destination (the sentence names no one: some subtasks may be hidden)
   for (const holder of await holdersUnder(ctx, issue.id, { group: true }, liveAfter)) {
+    await assertRoom(ctx)
     const profile = await byId(ctx, 'profiles', holder)
     if (!profile?.active) continue
     if (!(await canSeeProject(ctx, profile, target))) throw rule(MOVE_HOLDER_RULE)
   }
   const before = { ...issue }
   await ctx.db.patch(issue._id, w)
-  await moveAttachmentRows(ctx, issue.id, project_id)
+  const room = roomCheck(ctx)
+  await moveAttachmentRows(ctx, issue.id, project_id, room)
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
   for (const { row, clearReviewer } of carried) {
+    await assertRoom(ctx)
     const patch: Partial<WithoutSystemFields<Doc<'issues'>>> = { project_id, updated_at: now }
     if (clearReviewer) patch.reviewer_id = undefined
     await ctx.db.patch(row._id, patch)
-    await moveAttachmentRows(ctx, row.id, project_id)
+    await moveAttachmentRows(ctx, row.id, project_id, room)
     const landed = (await ctx.db.get(row._id)) as Doc<'issues'>
     await emitTaskEvent(ctx, { name: 'task.updated', issue: landed, before: row, actor: me, now })
   }

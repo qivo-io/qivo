@@ -1,5 +1,5 @@
 /* The project domain's public surface (phase 5): create / update /
- * removeAccess / archive / unarchive / deleteDeep / removalSummary /
+ * setAccess / removeAccess / archive / unarchive / deleteDeep / removalSummary /
  * inviteGuest, plus the milestones CRUD (there is no milestones.ts). Thin
  * wrappers over the shared cores REST and MCP use too (model/projects.ts,
  * model/projectAccess.ts, model/milestones.ts) and over lib/access,
@@ -62,7 +62,12 @@ import {
   updateMilestoneCore,
 } from './model/milestones'
 import { newUuid } from './model/orgs'
-import { type AccessSubject, removeProjectGrantCore, vHeldTasks } from './model/projectAccess'
+import {
+  type AccessSubject,
+  removeProjectGrantCore,
+  setProjectGrantCore,
+  vHeldTasks,
+} from './model/projectAccess'
 import {
   archiveProjectCore,
   assertGrantee,
@@ -138,10 +143,12 @@ export const create = orgMutation({
 })
 
 /* ----------------------------------------------------------------- update
- * P.updateProject / P.setProjectAccess through model/projects.ts
- * updateProjectCore: field patch + access-map diff in ONE mutation, one
- * narration. KEY CHANGE IS ALLOWED — issue refs are QN-num since 0050 — with
- * shape and uniqueness revalidated. */
+ * P.updateProject through model/projects.ts updateProjectCore: field patch
+ * in ONE mutation, one narration. KEY CHANGE IS ALLOWED — issue refs are
+ * QN-num since 0050 — with shape and uniqueness revalidated. The access and
+ * team_access maps are kept for one release for clients from before
+ * setAccess. They may give or change grants but never remove one
+ * (ACCESS_MAP_REMOVES). */
 export const update = orgMutation({
   args: {
     id: v.string(),
@@ -160,6 +167,33 @@ export const update = orgMutation({
     const project = await myProject(ctx, id)
     await updateProjectCore(ctx, { me: ctx.me, project, patch, now: new Date().toISOString() })
     return null
+  },
+})
+
+/* -------------------------------------------------------------- setAccess
+ * P.setProjectAccess and P.setProjectTeamAccess: gives one person or one
+ * team `level` on the project, or changes the level they have
+ * (model/projectAccess.ts setProjectGrantCore, which REST and MCP use too).
+ * Naming the one grant it changes, it cannot drop a grant someone else
+ * added meanwhile, as a whole access map from a stale page could. A person
+ * or team outside the organization reads as not found. Returns whether
+ * anything changed. */
+export const setAccess = orgMutation({
+  args: {
+    id: v.string(),
+    user_id: v.optional(v.string()),
+    team_id: v.optional(v.string()),
+    level: vGrantLevel,
+  },
+  handler: async (ctx, a) => {
+    const project = await myProject(ctx, a.id)
+    return await setProjectGrantCore(ctx, {
+      me: ctx.me,
+      project,
+      subject: await accessSubject(ctx, a),
+      level: a.level,
+      now: new Date().toISOString(),
+    })
   },
 })
 
