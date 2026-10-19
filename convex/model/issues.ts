@@ -73,7 +73,7 @@ import { badRequest, forbidden, notFound, require, rule } from '../lib/functions
 import { countsAsSubtask, type Liveness, projectLiveness } from '../lib/liveTasks'
 import { reviewStamp } from '../lib/review'
 import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
-import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
+import { plainText, TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
 import { issueChanges, logActivity, machineDetail, narratedChange } from './activity'
 import { scheduleMarkClears } from './archiveMarks'
 import {
@@ -872,7 +872,7 @@ export function fmtRangeWith(format: string, aIso: string, bIso: string): string
 }
 
 const excerpt = (s: string): string => {
-  const t = s.replace(/\s+/g, ' ').replace(/[“”]/g, "'").replace(/→/g, '-').trim()
+  const t = plainText(s)
   const cp = [...t]
   return cp.length > 80 ? `${cp.slice(0, 79).join('')}…` : t
 }

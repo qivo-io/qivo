@@ -15,11 +15,12 @@ function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
 /** When a view's relation reads go task by task. A view of at most `tasks`
  * tasks that holds under 1 / `ratio` of the organization's live tasks is
  * read wholly task by task. In any other view, a table over its bulk cap is
- * read task by task while the reads task by task so far fit `ranges`, which
- * is Convex's limit per transaction, and the ranges the transaction has
- * left. A table kept in bulk reads at most `legacy` of the deployment's rows
- * stored without org_id, and is read task by task when it holds more. Tests
- * change these to force a read. */
+ * read task by task while the reads task by task so far fit the ranges the
+ * transaction has left besides the table reads' own (OWN_RANGES), and at
+ * most `ranges`, Convex's limit per transaction, which binds only when tests
+ * lower it. A table kept in bulk reads at most `legacy` of the deployment's
+ * rows stored without org_id, and is read task by task when it holds more.
+ * Tests change these to force a read. */
 export const RELATION_READ = { tasks: 512, ratio: 2, ranges: 4096, legacy: 256 }
 
 /* The rows a bulk read of one table takes, per range its read task by task
@@ -135,17 +136,20 @@ function inCreationOrder<Row extends { _creationTime: number }>(
  *   deployment stays in bulk here while there are at most
  *   RELATION_READ.legacy such rows.
  * - A table is read in full only when reading it task by task would take the
- *   reads task by task past 4,096 ranges. The old read included those
- *   ranges, so it had passed the limit.
+ *   reads task by task past the ranges the transaction has left. The old read
+ *   included those ranges, so it had passed the limit.
  * In documents, a table under its cap reads at most its cap, and one over it
  * reads its cap plus one before the visible tasks' own rows, which the old
  * rule read too. A table read in full reads every unmarked row of the
  * organization's table.
  *
- * Both rules fail for a restricted view of about 1,000 tasks whose three
- * tables are all dense, where these reads alone take about 4,000 ranges. A
- * larger view fails here only if reading a dense table in full passes 32,000
- * documents, and the old rule could not read such a view at all.
+ * The old rule failed for a restricted view of about 1,000 tasks whose three
+ * tables are all dense, where those reads alone take about 4,000 ranges.
+ * Here the last table that would not fit is read in full instead, so such a
+ * view fails only if a full read passes 32,000 documents. Only the table
+ * reads' own ranges are kept back. The reads the snapshot makes after these
+ * (labels, follows, activity, inbox) are not, so a view whose reads task by
+ * task use nearly all the ranges left can still pass the limit after them.
  */
 export async function snapshotRelations(
   ctx: QueryCtx,

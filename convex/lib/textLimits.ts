@@ -49,6 +49,14 @@ export function cutName(name: string): string {
   return `${points.slice(0, NAME_MAX).join('').trimEnd()}…`
 }
 
+/** `s` as plain activity text: trimmed, each run of whitespace (line
+ * breaks included) one space, the → arrow `-` and curly double quotes `'`.
+ * Activity diffs use those characters as delimiters, and the app reads
+ * status and reviewer clauses out of them (src/lib/teamSync.ts
+ * statusMoveOf), so free text written through this cannot add or hide one. */
+export const plainText = (s: string): string =>
+  s.replace(/\s+/g, ' ').replace(/[“”]/g, "'").replace(/→/g, '-').trim()
+
 /** The longest reason the app's delete window may store on a Deleted items
  * row (deleted_items.reason). It is far below TEXT_MAX because every row of
  * the Deleted items list carries its reason, and one list reads up to 2,000

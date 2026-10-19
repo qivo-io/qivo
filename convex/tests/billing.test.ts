@@ -959,7 +959,10 @@ describe('provider state, retries and billing snapshots', () => {
     expect(await t.mutation(restartStorage, { period: stopped!._id })).toBe(false)
   })
 
-  it('starts a stopped sample again on its own STORAGE_RETRY_MS after it stopped', async () => {
+  /* A period of a 6 GB organization whose sample stalls STORAGE_ATTEMPTS
+   * times and stops, and the time it stopped. */
+  async function stoppedSample() {
+    vi.setSystemTime(NOW)
     const { t, f } = await fixture()
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await t.run(async (ctx) => {
@@ -979,39 +982,40 @@ describe('provider state, retries and billing snapshots', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     await t.mutation(apply, { payload: remote(f.org.id) })
-    // no step runs while the outage lasts, so every run stalls
-    for (let n = 1; n <= STORAGE_ATTEMPTS; n++) {
-      vi.setSystemTime(Date.parse(NOW) + n * (STORAGE_STALL_MS + 1000))
-      await t.mutation(apply, { payload: remote(f.org.id, { modified_at: iso(n) }) })
+    const stall = (at: number, minute: number) => {
+      vi.setSystemTime(at)
+      return t.mutation(apply, { payload: remote(f.org.id, { modified_at: iso(minute) }) })
     }
+    // no step runs while the outage lasts, so every run stalls
+    for (let n = 1; n <= STORAGE_ATTEMPTS; n++)
+      await stall(Date.parse(NOW) + n * (STORAGE_STALL_MS + 1000), n)
     const stopped = await periodAt(t, START)
-    const stoppedAt = Date.parse(stopped?.storage_failed_at ?? '')
     expect(stopped).not.toHaveProperty('storage_run')
+    return { t, f, stall, stoppedAt: Date.parse(stopped?.storage_failed_at ?? '') }
+  }
 
-    vi.setSystemTime(stoppedAt + STORAGE_RETRY_MS - 1000)
-    await t.mutation(apply, { payload: remote(f.org.id, { modified_at: iso(100) }) })
-    expect(await periodAt(t, START)).not.toHaveProperty('storage_run')
-
-    vi.setSystemTime(stoppedAt + STORAGE_RETRY_MS + 1000)
-    await t.mutation(apply, { payload: remote(f.org.id, { modified_at: iso(101) }) })
-    // the stop stays on the period and in the audit log while the retry runs
-    expect(await periodAt(t, START)).toMatchObject({
-      storage_run: expect.any(String),
-      storage_attempts: 1,
-      storage_failed_at: stopped?.storage_failed_at,
-    })
-    const audits = await t.run(async (ctx) =>
+  const sampleAudits = (t: T) =>
+    t.run(async (ctx) =>
       (await ctx.db.query('platform_audit_log').collect()).filter((row) =>
         row.action.startsWith('billing.storage_sample_'),
       ),
     )
-    expect(audits).toMatchObject([
-      { action: 'billing.storage_sample_failed', detail: { period: stopped?._id } },
-      {
-        action: 'billing.storage_sample_restarted',
-        actor_email: 'system',
-        detail: { period: stopped?._id, period_start: START },
-      },
+
+  it('starts a stopped sample again on its own STORAGE_RETRY_MS after it stopped', async () => {
+    const { t, stall, stoppedAt } = await stoppedSample()
+    const stoppedRow = await periodAt(t, START)
+    await stall(stoppedAt + STORAGE_RETRY_MS - 1000, 100)
+    expect(await periodAt(t, START)).not.toHaveProperty('storage_run')
+
+    await stall(stoppedAt + STORAGE_RETRY_MS + 1000, 101)
+    // the stop stays on the period and in the audit log while the retry runs
+    expect(await periodAt(t, START)).toMatchObject({
+      storage_run: expect.any(String),
+      storage_attempts: 1,
+      storage_failed_at: stoppedRow?.storage_failed_at,
+    })
+    expect(await sampleAudits(t)).toMatchObject([
+      { action: 'billing.storage_sample_failed', detail: { period: stoppedRow?._id } },
     ])
 
     // the outage is over: the sample finishes and the period is charged
@@ -1021,6 +1025,32 @@ describe('provider state, retries and billing snapshots', () => {
     for (const field of ['storage_run', 'storage_attempts', 'storage_failed_at'])
       expect(period).not.toHaveProperty(field)
     expect(await storageEvents(t)).toHaveLength(1)
+  })
+
+  it('stops a retry that keeps failing again without another audit row', async () => {
+    const { t, stall, stoppedAt } = await stoppedSample()
+    const retried = stoppedAt + STORAGE_RETRY_MS + 1000
+    await stall(retried, 100)
+    for (let n = 1; n <= STORAGE_ATTEMPTS; n++)
+      await stall(retried + n * (STORAGE_STALL_MS + 1000), 100 + n)
+    const again = await periodAt(t, START)
+    expect(again).not.toHaveProperty('storage_run')
+    expect(Date.parse(again?.storage_failed_at ?? '')).toBeGreaterThan(stoppedAt)
+    expect(await sampleAudits(t)).toHaveLength(1)
+  })
+
+  it('leaves a stopped sample alone once its charge could no longer land', async () => {
+    const { t, f, stoppedAt } = await stoppedSample()
+    vi.setSystemTime(stoppedAt + STORAGE_RETRY_MS + 1000)
+    await t.mutation(apply, {
+      payload: remote(f.org.id, { status: 'canceled', ended_at: NOW, modified_at: iso(100) }),
+    })
+    expect(await periodAt(t, START)).not.toHaveProperty('storage_run')
+    // nor after the period ends, whatever the subscription says
+    const late = await stoppedSample()
+    vi.setSystemTime(Date.parse(END) + 1000)
+    await late.t.mutation(apply, { payload: remote(late.f.org.id, { modified_at: iso(100) }) })
+    expect(await periodAt(late.t, START)).not.toHaveProperty('storage_run')
   })
 
   it('records the storage of a complimentary period without charging it', async () => {

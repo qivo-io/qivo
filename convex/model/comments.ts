@@ -39,10 +39,11 @@ type NewComment = {
 /**
  * Posts `body` on `issue` as `author`, stamped `now`, which the comment and
  * every message its fan-out posts share. `id` is the app's client-made id;
- * machine callers omit it and get a new one. Refuses an author without Edit
- * on the task's project, a blank body, a body longer than TEXT_MAX, a task
- * that holds COMMENT_MAX comments (model/commentCounts.ts
- * TOO_MANY_COMMENTS) and an id already in use. Every caller trims `body`
+ * machine callers omit it and get a new one. Refuses an id that is not a
+ * lowercase UUID (lib/db.ts assertNewRowId), an author without Edit on the
+ * task's project, a blank body, a body longer than TEXT_MAX, a task that
+ * holds COMMENT_MAX comments (model/commentCounts.ts TOO_MANY_COMMENTS) and
+ * an id already in use. Every caller trims `body`
  * first, so the cap measures the stored text.
  */
 export async function postComment(ctx: MutationCtx, a: NewComment): Promise<Doc<'comments'>> {

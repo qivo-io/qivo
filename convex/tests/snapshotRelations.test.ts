@@ -628,29 +628,44 @@ describe('the snapshot of a restricted view in a dense organization', () => {
 })
 
 describe('the relation reads of a snapshot that has used most of its ranges', () => {
-  it('reads a dense table in full when task by task would pass the ranges left', async () => {
+  /* The labels of 40 visible tasks, all live so the tables decide, read
+   * with `left` ranges left, and the ranges the relation reads used. The
+   * labels are over their cap, so task by task they cost 40 ranges, and the
+   * table reads take up to 6 more. */
+  async function readLeaving(left: number) {
     const t = newT({ transactionLimits: true })
-    // 40 tasks in view and all live, so the tables decide; the labels are
-    // over their cap, so they would go task by task at 40 ranges
     const f = await plantDense(t, { total: 40, visible: 40, labels: 5, links: 0 })
-    const labels = await t.run(async (ctx) => {
+    return await t.run(async (ctx) => {
       const tasks = await ctx.db
         .query('issues')
         .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
         .collect()
-      // earlier reads, as of another organization, leave 42 ranges: room
-      // for the 40 task by task, but not for those and the table reads too
-      const { databaseQueries } = await ctx.meta.getTransactionMetrics()
-      for (let i = 0; i < databaseQueries.remaining - 42; i++)
+      // earlier reads, as of another organization
+      const before = await ctx.meta.getTransactionMetrics()
+      for (let i = 0; i < before.databaseQueries.remaining - left; i++)
         await ctx.db
           .query('issues')
           .withIndex('by_uuid', (q) => q.eq('id', `none-${i}`))
           .first()
+      const start = (await ctx.meta.getTransactionMetrics()).databaseQueries.used
       const rows = await snapshotRelations(ctx, { orgId: f.org.id, tasks, active: tasks.length })
-      let count = 0
-      for (const task of tasks) count += (await rows(task.id))[2].length
-      return count
+      let labels = 0
+      for (const task of tasks) labels += (await rows(task.id))[2].length
+      const used = (await ctx.meta.getTransactionMetrics()).databaseQueries.used - start
+      return { labels, used }
     })
+  }
+
+  it('reads a dense table task by task while those reads and the table reads fit', async () => {
+    const { labels, used } = await readLeaving(46)
     expect(labels).toBe(200)
+    expect(used).toBeGreaterThanOrEqual(40)
+    expect(used).toBeLessThanOrEqual(46)
+  })
+
+  it('reads a dense table in full when task by task would pass the ranges left', async () => {
+    const { labels, used } = await readLeaving(45)
+    expect(labels).toBe(200)
+    expect(used).toBeLessThanOrEqual(6)
   })
 })

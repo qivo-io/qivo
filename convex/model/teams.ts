@@ -148,7 +148,8 @@ export async function teamsJson(ctx: QueryCtx, me: Doc<'profiles'>): Promise<Tea
 }
 
 /** Creates a team with the standard settings (newTeamDefaults). Organization
- * admins only. `id` is the caller's uuid for it; a reused one is refused. */
+ * admins only. `id` is the caller's uuid for it; one that is not a
+ * lowercase UUID (lib/db.ts assertNewRowId) or is reused is refused. */
 export async function createTeamCore(
   ctx: MutationCtx,
   a: { me: Doc<'profiles'>; id: string; name: string; now: string },

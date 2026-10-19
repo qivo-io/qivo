@@ -16,7 +16,8 @@
  * - the relation rows (lib/snapshotRelations.ts). A view whose tables stay in
  *   bulk takes six ranges; a restricted or dense one is read task by task, up
  *   to 4 ranges per visible task, never more than 3 ranges above the rule
- *   this replaced and only while those reads fit 4,096 ranges;
+ *   this replaced and only while those reads fit the ranges the transaction
+ *   has left, a dense table past that read in full;
  * - five per visible task restored so recently that its relation rows still
  *   carry archive marks (model/archiveMarks.ts), its own relation reads and
  *   follow. Background steps clear the marks moments after the restore;
@@ -28,9 +29,9 @@
  * A seat whose relation tables stay in bulk therefore reads at most about
  * 1,020 ranges plus one per active project (at most 1,000) and three per
  * team and per visible project, and a person's seats add up. Teams and projects are few
- * beside tasks. A view read task by task adds its 4 ranges per task, as the
- * rule this replaced did, which a view of about 1,000 tasks or more cannot
- * afford. Documents read follow the live tasks (past LIVE_PROJECT_READS
+ * beside tasks. A view read task by task adds up to 4 ranges per task, as
+ * the rule this replaced did, until the ranges left run short and a dense
+ * table is read in full. Documents read follow the live tasks (past LIVE_PROJECT_READS
  * active projects, every active task, archived projects' included, as one
  * range holds them all) and the unmarked relation
  * rows of the active tasks (model/archiveMarks.ts marks the rows of archived
@@ -100,7 +101,7 @@ function relationRow<
 }
 
 /* An attachment as the app receives it. Its project only serves storage
- * totals (model/billing.ts storageUsage). */
+ * totals (model/billing.ts storagePage). */
 function attachmentRow(doc: Doc<'issue_attachments'>) {
   const { project_id: _project, ...row } = relationRow(doc)
   return row
