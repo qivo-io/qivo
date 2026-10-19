@@ -16,9 +16,10 @@ function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
  * tasks that holds under 1 / `ratio` of the organization's live tasks is
  * read wholly task by task. In any other view, a table over its bulk cap is
  * read task by task while the reads task by task so far fit `ranges`, which
- * is Convex's limit per transaction. A table kept in bulk reads at most
- * `legacy` of the deployment's rows stored without org_id, and is read task
- * by task when it holds more. Tests change these to force a read. */
+ * is Convex's limit per transaction, and the ranges the transaction has
+ * left. A table kept in bulk reads at most `legacy` of the deployment's rows
+ * stored without org_id, and is read task by task when it holds more. Tests
+ * change these to force a read. */
 export const RELATION_READ = { tasks: 512, ratio: 2, ranges: 4096, legacy: 256 }
 
 /* The rows a bulk read of one table takes, per range its read task by task
@@ -92,13 +93,14 @@ function inCreationOrder<Row extends { _creationTime: number }>(
  * cheapest first, labels, attachments, then links. A bulk read stops after
  * BULK_ROWS_PER_RANGE rows per range the table's read task by task would
  * cost, and a table with more is read task by task while the reads task by
- * task so far fit RELATION_READ.ranges, else in full. A table kept in bulk
- * also reads the deployment's unmarked rows stored without org_id, which the
- * organization's range cannot hold, up to RELATION_READ.legacy of them in
- * one more range, and adds those of the view's tasks (a link when either end
- * is one). Rows of other organizations, of tasks outside the view and of
- * tasks that are gone are left out unread, so such rows anywhere in the
- * deployment cost one range, not a read task by task. A table with more
+ * task so far fit RELATION_READ.ranges and the ranges the transaction has
+ * left, else in full. A table kept in bulk also reads the deployment's
+ * unmarked rows stored without org_id, which the organization's range cannot
+ * hold, up to RELATION_READ.legacy of them in one more range, and adds
+ * those of the view's tasks (a link when either end is one). Rows of other
+ * organizations, of tasks outside the view and of tasks that are gone are
+ * left out unread, so such rows anywhere in the deployment cost one range,
+ * not a read task by task. A table with more
  * such rows than that is read task by task as before. No writer stores such
  * rows any more, and internal/attachmentScopeBackfill gives older attachment
  * rows their organization. Nothing rewrites older label and link rows, and
@@ -156,7 +158,10 @@ export async function snapshotRelations(
   for (const task of a.tasks) {
     if (task.relations_marked === true) restored.set(task.id, await readTask(ctx, task.id))
   }
-  let budget = RELATION_READ.ranges - 4 * restored.size
+  // The ranges the transaction has left, which earlier reads of the
+  // snapshot, such as another organization's relations, have used up part of.
+  const { databaseQueries } = await ctx.meta.getTransactionMetrics()
+  let budget = Math.min(RELATION_READ.ranges - 4 * restored.size, databaseQueries.remaining)
   const others = visible - restored.size
   const viewed = new Set(a.tasks.map((task) => task.id))
   /* One table's unmarked rows in bulk, with its rows stored without org_id
