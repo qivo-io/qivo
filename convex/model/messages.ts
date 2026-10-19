@@ -520,8 +520,12 @@ export async function postMessage(
   }
   if (m.trims !== undefined) m.trims.inline += 1
   const unread = rows.filter((r) => r.read_at === undefined)
-  // the arrival is the item's newest unread row
-  await trimRows(ctx, row.read_at === undefined ? [...unread, { ...row, _id: inserted }] : unread)
+  // the arrival in its place in the item, which a background step's notice,
+  // stamped with its write's time, may not be at the end of
+  await trimRows(
+    ctx,
+    row.read_at === undefined ? [...unread, { ...row, _id: inserted }].sort(oldestFirst) : unread,
+  )
   return true
 }
 
@@ -1312,16 +1316,21 @@ const vFollowerNote = v.union(
     handed: v.boolean(),
     assignee_id: v.optional(v.string()),
     reviewer_id: v.optional(v.string()),
-    parent: v.optional(v.object({ project_id: v.string(), key: v.string() })),
+    parent: v.optional(v.object({ id: v.string(), project_id: v.string(), key: v.string() })),
   }),
 )
 
 /** The arguments of a fan-out's background step (messages.ts
  * notifyFollowers): the notice, the people the write mentioned, who heard
- * of it already, and the last follower told before it (`after`). */
+ * of it already, and the last follower told before it (`after`). `task` is
+ * the task's document, so a task deleted and restored meanwhile, or another
+ * task with its uuid since, gets none of it, and `project_id` the task's
+ * project when it was written, which a reader must still see. */
 export const vFollowerStep = {
   org_id: v.string(),
   issue_id: v.string(),
+  task: v.id('issues'),
+  project_id: v.string(),
   actor_id: v.optional(v.string()),
   now: v.string(),
   note: vFollowerNote,
@@ -1387,7 +1396,9 @@ async function followerLine(
 /* Tells each of `subs` of `notice` through postMessage, which drops the
  * actor's own copy, anyone who has left the organization and anyone who
  * can no longer see the project. `cx` holds what the caller read already,
- * and a bulk writer's guard, run before each follower. */
+ * and a bulk writer's guard, run before each follower. A reader must also
+ * see each of `cx.also`, and reads the new parent's key only when they see
+ * each of `cx.parent`; an empty `cx.parent` keeps it anonymous. */
 async function tellFollowers(
   ctx: MutationCtx,
   notice: FollowerNotice,
@@ -1395,7 +1406,8 @@ async function tellFollowers(
   cx: {
     issue: Doc<'issues'>
     project: Doc<'projects'> | null
-    parentProject: Doc<'projects'> | null
+    also: readonly Doc<'projects'>[]
+    parent: readonly Doc<'projects'>[]
     profiles: ProfileCache
     visibility: RecipientSight
     trims: ItemTrims
@@ -1405,13 +1417,17 @@ async function tellFollowers(
   for (const s of subs) {
     await cx.guard?.()
     const recipient = await orgProfile(ctx, cx.profiles, notice.org_id, s.profile_id)
+    const seesAll = async (projects: readonly Doc<'projects'>[]) => {
+      if (recipient === undefined) return false
+      for (const p of projects)
+        if (!(await recipientCanSee(ctx, recipient, p, cx.visibility))) return false
+      return true
+    }
+    if (cx.also.length > 0 && !(await seesAll(cx.also))) continue
     const line = await followerLine(
       notice,
       s.profile_id,
-      async () =>
-        recipient !== undefined &&
-        cx.parentProject !== null &&
-        (await recipientCanSee(ctx, recipient, cx.parentProject, cx.visibility)),
+      async () => cx.parent.length > 0 && (await seesAll(cx.parent)),
     )
     if (line === null) continue
     await postMessage(ctx, {
@@ -1453,24 +1469,35 @@ async function fanOut(
 
 /** One background step of a fan-out (FOLLOWER_FANOUT): tells the next
  * FOLLOWER_FANOUT.step followers after profile `after` about the task as it
- * is now, and schedules the next step while more follow. */
+ * is now, and schedules the next step while more follow. A reader must see
+ * both the task's project when it was written and its project now, so a
+ * move meanwhile tells nobody what they could not see, and reads the new
+ * parent's key only when they see its project then and now. Anything gone
+ * that the notice names tells nobody, or keeps the parent anonymous. */
 export async function notifyFollowersStep(ctx: MutationCtx, a: FollowerStep): Promise<void> {
   const { after, ...notice } = a
-  const issue = await byId(ctx, 'issues', notice.issue_id)
-  if (issue === null || issue.org_id !== notice.org_id) return
+  const issue = await ctx.db.get(notice.task)
+  if (issue === null || issue.id !== notice.issue_id || issue.org_id !== notice.org_id) return
   const project = await byId(ctx, 'projects', issue.project_id)
   if (project === null) return
+  const then =
+    notice.project_id === project.id ? project : await byId(ctx, 'projects', notice.project_id)
+  if (then === null) return
+  const parent: Doc<'projects'>[] = []
   const { note } = notice
-  const parentProject =
-    note.kind === 'change' && note.parent !== undefined
-      ? await byId(ctx, 'projects', note.parent.project_id)
-      : null
+  if (note.kind === 'change' && note.parent !== undefined) {
+    const was = await byId(ctx, 'projects', note.parent.project_id)
+    const row = await byId(ctx, 'issues', note.parent.id)
+    const is = row === null ? null : await byId(ctx, 'projects', row.project_id)
+    if (was !== null && is !== null) parent.push(...(was.id === is.id ? [was] : [was, is]))
+  }
   const trims = newItemTrims()
   const subs = await followersFrom(ctx, issue.id, after, FOLLOWER_FANOUT.step + 1)
   await fanOut(ctx, notice, subs, FOLLOWER_FANOUT.step, {
     issue,
     project,
-    parentProject,
+    also: then === project ? [] : [then],
+    parent,
     profiles: new Map(),
     visibility: new Map(),
     trims,
@@ -1800,7 +1827,7 @@ export async function notifyIssueUpdate(
     parts.push(`Moved to ${project?.name ?? 'another project'}`)
   }
   // the new parent, for the attach line each reader reads from their side
-  let parent: { project_id: string; key: string } | undefined
+  let parent: { id: string; project_id: string; key: string } | undefined
   let parentProject: Doc<'projects'> | null = null
   if (after.parent_id !== before.parent_id) {
     if (after.parent_id === undefined) {
@@ -1808,7 +1835,7 @@ export async function notifyIssueUpdate(
     } else {
       const row = await byId(ctx, 'issues', after.parent_id)
       if (row !== null) {
-        parent = { project_id: row.project_id, key: `QN-${row.num}` }
+        parent = { id: row.id, project_id: row.project_id, key: `QN-${row.num}` }
         parentProject = await preloadedProject(ctx, preload, row.project_id)
         parts.push(ATTACH_SLOT)
       }
@@ -1862,6 +1889,8 @@ export async function notifyIssueUpdate(
     {
       org_id: after.org_id,
       issue_id: after.id,
+      task: after._id,
+      project_id: after.project_id,
       ...(actor === undefined ? {} : { actor_id: actor.id }),
       now,
       note,
@@ -1869,7 +1898,16 @@ export async function notifyIssueUpdate(
     },
     subs,
     inline,
-    { issue: after, project, parentProject, profiles, visibility, trims, guard: preload?.guard },
+    {
+      issue: after,
+      project,
+      also: [],
+      parent: parentProject === null ? [] : [parentProject],
+      profiles,
+      visibility,
+      trims,
+      guard: preload?.guard,
+    },
   )
   await scheduleItemTrims(ctx, after.id, trims)
 }
@@ -1940,6 +1978,8 @@ export async function notifyCommentInsert(
     {
       org_id: issue.org_id,
       issue_id: issue.id,
+      task: issue._id,
+      project_id: issue.project_id,
       actor_id: actor.id,
       now,
       note: { kind: 'comment' },
@@ -1947,7 +1987,7 @@ export async function notifyCommentInsert(
     },
     subs,
     FOLLOWER_FANOUT.inline,
-    { issue, project, parentProject: null, profiles, visibility, trims },
+    { issue, project, also: [], parent: [], profiles, visibility, trims },
   )
   await scheduleItemTrims(ctx, issue.id, trims)
 }

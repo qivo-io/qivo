@@ -6,8 +6,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { FOLLOWER_FANOUT } from '../model/messages'
-import { as, NOW, newT, type OrgFixture, plantIssue, type T, uuid, withOrg } from './helpers.setup'
+import { FOLLOWER_FANOUT, postMessage } from '../model/messages'
+import {
+  as,
+  NOW,
+  newT,
+  type OrgFixture,
+  plantHiddenSibling,
+  plantIssue,
+  plantSeat,
+  plantSubscription,
+  type T,
+  uuid,
+  withOrg,
+} from './helpers.setup'
 
 const DEFAULT_FANOUT = { ...FOLLOWER_FANOUT }
 
@@ -134,5 +146,123 @@ describe('a change told in steps', () => {
     expect(inline[5]).toMatch(/^Assigned to Follower 4\. Ready for your review\./)
     expect(inline[3]).not.toMatch(/Description updated/)
     expect(inline[0]).toMatch(/Description updated/)
+  })
+})
+
+describe('a change told in steps after the task changed', () => {
+  /* A follower who sees only Board rev, and one who sees all of TBED, both
+   * following a task in Firmware. */
+  async function scene() {
+    Object.assign(FOLLOWER_FANOUT, { inline: 0, step: 10 })
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title: 'Draft' })
+    const outsider = await plantSeat(t, { org_id: f.org.id, org_role: 'user' })
+    const insider = await plantSeat(t, { org_id: f.org.id, org_role: 'user' })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('project_access', {
+        project_id: f.sub2.id,
+        profile_id: outsider.id,
+        level: 'user',
+      })
+      await ctx.db.insert('project_access', {
+        project_id: f.meta.id,
+        profile_id: insider.id,
+        level: 'user',
+      })
+    })
+    for (const p of [outsider, insider])
+      await plantSubscription(t, { issue_id: task.id, profile_id: p.id })
+    const rename = () =>
+      as(t, f.admin).mutation(api.issues.update, {
+        org_id: f.org.id,
+        id: task.id,
+        patch: { title: 'Acquisition plan' },
+      })
+    return { t, f, task, outsider, insider, rename }
+  }
+
+  it('tells nobody what they could not see when it was written, after a move', async () => {
+    const { t, f, task, outsider, insider, rename } = await scene()
+    await rename()
+    // the task moves to Board rev, which the outsider sees, before the step
+    await t.run(async (ctx) => ctx.db.patch(task._id, { project_id: f.sub2.id }))
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    const byPerson = new Map(await told(t, task))
+    expect(byPerson.get(outsider.id)).toBeUndefined()
+    expect(byPerson.get(insider.id)).toBe('Title: “Draft” → “Acquisition plan”')
+  })
+
+  it('tells nobody about a task deleted and written back with the same id meanwhile', async () => {
+    const { t, task, insider, rename } = await scene()
+    await rename()
+    await t.run(async (ctx) => {
+      const row = await ctx.db.get(task._id)
+      if (row === null) throw new Error('no task')
+      const { _id, _creationTime, ...doc } = row
+      await ctx.db.delete(_id)
+      await ctx.db.insert('issues', doc)
+    })
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    expect(new Map(await told(t, task)).get(insider.id)).toBeUndefined()
+  })
+
+  it('keeps the new parent anonymous once it moved out of sight meanwhile', async () => {
+    const { t, f, task, insider } = await scene()
+    const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await as(t, f.admin).mutation(api.issues.update, {
+      org_id: f.org.id,
+      id: task.id,
+      patch: { parent_id: parent.id },
+    })
+    // the parent moves to a sub-project the insider cannot see
+    const hidden = await plantHiddenSibling(t, f, insider)
+    await t.run(async (ctx) => ctx.db.patch(parent._id, { project_id: hidden.id }))
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    expect(new Map(await told(t, task)).get(insider.id)).toBe(
+      'Attached under a task in another sub-project',
+    )
+  })
+})
+
+describe('a notice that arrives after newer ones', () => {
+  it('keeps the newest message of each kind when it trims the item', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const at = (minute: number) => `2026-10-01T10:${String(minute).padStart(2, '0')}:00.000Z`
+    // 50 unread: a comment, a change at minute 2 and 48 later comments
+    await t.run(async (ctx) => {
+      const row = (kind: 'comment' | 'change', minute: number) =>
+        ctx.db.insert('messages', {
+          id: uuid(),
+          org_id: f.org.id,
+          recipient_id: f.user.id,
+          issue_id: task.id,
+          issue_title: task.title,
+          kind,
+          detail: `${kind} ${minute}`,
+          created_at: at(minute),
+        })
+      await row('comment', 0)
+      await row('change', 2)
+      for (let m = 3; m < 51; m++) await row('comment', m)
+    })
+    // a step's change written at minute 1 arrives last
+    await t.run((ctx) =>
+      postMessage(ctx, {
+        org_id: f.org.id,
+        recipient_id: f.user.id,
+        issue_id: task.id,
+        kind: 'change',
+        body: 'change 1',
+        actor_id: f.admin.id,
+        now: at(1),
+      }),
+    )
+    const details = (await told(t, task)).map(([, detail]) => detail)
+    expect(details).toHaveLength(50)
+    expect(details).toContain('change 2')
+    expect(details).toContain('comment 0')
   })
 })
