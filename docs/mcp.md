@@ -689,7 +689,9 @@ from the previous registration cannot be delivered through its replacement.
 The response includes `id`, `refreshBefore`, `cursor: null` and `truncated: false`.
 On MCP, omitting `ttlMs` requests seven days. A positive integer `ttlMs` is
 clamped to a minimum of 60 seconds and a maximum of seven days. Zero, negative
-and non-integer values are refused. Send `ttlMs: null` for no expiry. Qivo returns
+and non-integer values are refused, and so are params that hold a number too
+large for a double, such as `1e309` (`-32602`, `Invalid params: a number is
+too large to represent`). Send `ttlMs: null` for no expiry. Qivo returns
 `refreshBefore: null` for these subscriptions, which need no renewal.
 REST defaults to no expiry when `ttlMs` is omitted. Existing subscriptions keep
 their stored expiry until registered again.

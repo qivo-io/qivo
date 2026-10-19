@@ -226,7 +226,8 @@ export async function consumeMachineRequest(
  *
  * A calendar-month bucket is never charged, so its call writes only the
  * credential's own usage row, and readers sum those rows. Parallel calls
- * with different credentials of one organization then touch no shared row.
+ * from different profiles of one organization then touch no shared row;
+ * the credentials of one profile still share its rate-limit row.
  * A paid or pending bucket also counts the organization's total in
  * billing_usage_totals in the same transaction, which keeps the API block
  * accounting exact: every call sees the total before it, so each block is

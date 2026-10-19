@@ -98,7 +98,7 @@ import {
 } from '../lib/enums'
 import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
 import { mcpResource } from '../lib/oauth'
-import { type EventOwner, eventParamsJson, vEventOwner } from '../lib/taskEvents'
+import { type EventOwner, vEventOwner } from '../lib/taskEvents'
 import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
 import { ingressShard } from '../model/billingUsage'
 import { postComment } from '../model/comments'
@@ -1525,6 +1525,19 @@ async function webhookResponse(
     }
   }
 
+  const route =
+    seg.length === 3 && seg[2] === 'organization' && req.method === 'GET'
+      ? 'list organization'
+      : seg.length === 4 && seg[2] === 'organization' && req.method === 'DELETE'
+        ? 'remove organization'
+        : seg.length === 2 && req.method === 'GET'
+          ? 'list'
+          : seg.length === 2 && req.method === 'POST'
+            ? 'subscribe'
+            : seg.length === 3 && req.method === 'DELETE'
+              ? 'remove'
+              : null
+  if (route === null) return err('unknown webhook route', 404)
   // no webhook route takes a query parameter, and only POST takes a body
   refuseUnknownParams(new URL(req.url).searchParams.keys(), [])
   if (req.method === 'DELETE') {
@@ -1533,47 +1546,45 @@ async function webhookResponse(
     if (!read.utf8) return err(REST_NOT_UTF8, 400)
     refuseUnknownFields(optionalJson(read.text), [])
   }
-  if (seg.length === 3 && seg[2] === 'organization' && req.method === 'GET')
+  if (route === 'list organization')
     return json(await ctx.runQuery(internal.webhooks.listOrganization, { owner }), 200)
-  if (seg.length === 4 && seg[2] === 'organization' && req.method === 'DELETE') {
+  if (route === 'remove organization') {
     await runMutation(internal.webhooks.removeOrganization, { owner, id: safeDecode(seg[3]) })
     return new Response(null, { status: 204, headers: CORS })
   }
-  if (seg.length === 2 && req.method === 'GET')
-    return json(await ctx.runQuery(internal.webhooks.list, { owner }), 200)
-  if (seg.length === 2 && req.method === 'POST') {
-    const read = await readBody(req)
-    if (read === null) return tooLarge()
-    if (!read.utf8) return err(REST_NOT_UTF8, 400)
-    // the body rules of every other REST route, so a bad body answers with
-    // their sentences rather than the JSON parser's
-    const params = needJson(read.text)
-    refuseUnknownFields(params, WEBHOOK_SUBSCRIBE_FIELDS)
-    const reply = await ctx.runAction(internal.webhookActions.manage, {
-      owner,
-      method: 'events/subscribe',
-      params_json: eventParamsJson(params),
-    })
-    if ('error' in reply) {
-      const status =
-        reply.error.code === -32603
-          ? 500
-          : reply.error.code === -32013
-            ? 429
-            : reply.error.code === -32012
-              ? 403
-              : reply.error.code === -32011
-                ? 404
-                : 400
-      return err(reply.error.message, status)
-    }
-    return json(reply.result, 201)
-  }
-  if (seg.length === 3 && req.method === 'DELETE') {
+  if (route === 'list') return json(await ctx.runQuery(internal.webhooks.list, { owner }), 200)
+  if (route === 'remove') {
     await runMutation(internal.webhooks.remove, { owner, id: safeDecode(seg[2]) })
     return new Response(null, { status: 204, headers: CORS })
   }
-  return err('unknown webhook route', 404)
+  const read = await readBody(req)
+  if (read === null) return tooLarge()
+  if (!read.utf8) return err(REST_NOT_UTF8, 400)
+  // the body rules of every other REST route, so a bad body answers with
+  // their sentences rather than the JSON parser's. manage reads the text as
+  // sent: parsing it again keeps a number too large for a double as
+  // Infinity, which manage refuses, where writing the parsed body back out
+  // would turn it into null ("not set")
+  refuseUnknownFields(needJson(read.text), WEBHOOK_SUBSCRIBE_FIELDS)
+  const reply = await ctx.runAction(internal.webhookActions.manage, {
+    owner,
+    method: 'events/subscribe',
+    params_json: read.text,
+  })
+  if ('error' in reply) {
+    const status =
+      reply.error.code === -32603
+        ? 500
+        : reply.error.code === -32013
+          ? 429
+          : reply.error.code === -32012
+            ? 403
+            : reply.error.code === -32011
+              ? 404
+              : 400
+    return err(reply.error.message, status)
+  }
+  return json(reply.result, 201)
 }
 
 const restHandler = httpAction(async (ctx, req) => {

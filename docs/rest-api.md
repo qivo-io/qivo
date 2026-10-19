@@ -247,18 +247,19 @@ a `400` (`request body is not valid UTF-8`). Such text cannot be stored as
 sent, so the request changes nothing. These rules hold for
 `POST /v1/webhooks` too.
 
-Every route refuses a body field it does not take with `400`, such as
-`unknown field "parnet"; this request takes project, sub_project, parent,
-…`, so a misspelled field never falls back to a default. A route that takes
-no body, such as `DELETE /v1/tasks/{ref}`, accepts an empty body or `{}` and
-refuses any field (`unknown field "x"; this request takes no body`). Every
-route also refuses a query parameter it does not take, such as `unknown
-query parameter "stauts"; this request takes project, status, …`, or `…;
-this request takes no query parameters`, so a misspelled filter never
-answers an unfiltered list. Fields a route refuses with their own sentence,
-such as `project_id` on a task, keep that sentence. Before October 2026 most
-routes ignored unknown fields and query parameters, and a body that was not
-UTF-8 was stored with U+FFFD in place of each bad byte sequence.
+Every route but a `GET` refuses a body field it does not take with `400`,
+such as `unknown field "parnet"; this request takes project, sub_project,
+parent, …`, so a misspelled field never falls back to a default. A route that
+takes no body, such as `DELETE /v1/tasks/{ref}`, accepts an empty body or
+`{}` and refuses any field (`unknown field "x"; this request takes no body`).
+A `GET` request's body is never read. Every route also refuses a query
+parameter it does not take, such as `unknown query parameter "stauts"; this
+request takes project, status, …`, or `…; this request takes no query
+parameters`, so a misspelled filter never answers an unfiltered list. Fields a
+route refuses with their own sentence, such as `project_id` on a task, keep
+that sentence. Before October 2026 most routes ignored unknown fields and
+query parameters, and a body that was not UTF-8 was stored with U+FFFD in
+place of each bad byte sequence.
 
 When organization billing is enabled, unpaid or expired access pauses writes
 with a readable HTTP `403` billing refusal. Reading remains subject to the
@@ -670,8 +671,9 @@ renames it with `PATCH`, and anyone else gets `requires an organization admin
 or a leader of this team`. `name` is trimmed and may not be blank (`a team
 name cannot be blank`) or longer than 80 characters (`a team name must be at
 most 80 characters`), unless it is a longer name the team had before that
-limit, sent back unchanged. `PATCH` changes only `name`, and a body without
-it is a `400` (`no recognized fields to update`). Deleting a team stays in
+limit, sent back unchanged. `PATCH` changes only `name`. Any other field is a
+`400` (`unknown field "nmae"; this request takes name`), and a body without
+`name`, such as `{}`, is a `400` (`no recognized fields to update`). Deleting a team stays in
 the app ([Stays in the app](#stays-in-the-app)). `POST` answers `201` and
 `PATCH` `200` with the team. Neither writes an activity row, as in the app.
 
@@ -830,7 +832,8 @@ subset and the authoritative reporter, assignee and reviewer picker.
 `{ "plannable_hours": 32 }` sets that person's weekly capacity and answers
 their updated row. It is the one user field the API changes; any other field
 is a `400` (`unknown field "name"; this request takes plannable_hours`), and
-an empty body is a `400` (`no recognized fields to update`). The value is a whole number from 1 to 168, otherwise a
+a body without `plannable_hours`, such as `{}`, is a `400` (`no recognized
+fields to update`). The value is a whole number from 1 to 168, otherwise a
 `400` with `plannable hours must be a whole number of hours from 1 to 168`.
 Like the app and MCP's `update_user`, it takes an organization admin or a
 leader of a team the person belongs to (migration 0094), and nobody else,

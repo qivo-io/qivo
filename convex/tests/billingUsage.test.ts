@@ -251,8 +251,8 @@ describe('pooled API usage', () => {
       [OCTOBER, 1],
       ['month:2026-11', 1],
     ])
-    // a calendar month keeps no organization total, so parallel calls with
-    // different credentials share no row
+    // a calendar month keeps no organization total, so parallel calls from
+    // different profiles share no row
     expect(await totals(t)).toEqual([])
     expect(await events(t)).toHaveLength(0)
   })

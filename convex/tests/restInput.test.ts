@@ -6,7 +6,7 @@
  *      new route that skips the check fails here.
  *   2. A body whose bytes are not UTF-8 is refused, not stored as U+FFFD.
  *   3. POST /v1/webhooks reads its body by the same rules as every other
- *      route. */
+ *      route, and an unknown webhook path answers 404 whatever it carries. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
@@ -246,19 +246,54 @@ describe('request bodies', () => {
     // a body the shared rules accept still reaches the subscription rules
     const res = await call(t, token, 'POST', '/v1/webhooks', { name: 'task.nope' })
     expect(res).toEqual({ status: 404, body: { error: 'Unknown event name' } })
-    // a number too large for a double reads as Infinity, which reaches the
-    // subscription rules as a value they refuse, never as null (no filter)
-    const huge = '{"name":"task.updated","arguments":1e309,"delivery":{"mode":"webhook","url":"x"}}'
+    // the subscription rules read the body as sent: a number too large for a
+    // double stays Infinity, which they refuse, never null (no filter), and
+    // deep nesting gets their refusal rather than a stack overflow
+    const tooBig = { name: 'task.updated', arguments: 'HUGE', delivery: { mode: 'webhook' } }
+    const huge = JSON.stringify(tooBig).replace('"HUGE"', '1e309')
     expect(await call(t, token, 'POST', '/v1/webhooks', huge)).toEqual({
+      status: 400,
+      body: { error: 'Expected an object' },
+    })
+    expect(await call(t, token, 'POST', '/v1/webhooks', '{"name":1e309}')).toEqual({
+      status: 400,
+      body: { error: 'Event name must be a string' },
+    })
+    const deep = `{"name":"task.updated","delivery":${'['.repeat(5000)}${']'.repeat(5000)}}`
+    expect(await call(t, token, 'POST', '/v1/webhooks', deep)).toEqual({
       status: 400,
       body: { error: 'Expected an object' },
     })
   })
 
-  it('writes an event request number JSON cannot hold as a string, for MCP and REST', () => {
-    expect(eventParamsJson({ ttlMs: -Infinity, arguments: Infinity, cursor: NaN, n: 2 })).toBe(
-      '{"ttlMs":"-Infinity","arguments":"Infinity","cursor":"NaN","n":2}',
+  it('checks a webhook body and query only on a webhook route', async () => {
+    const { t, token } = await fixture()
+    const latin1 = new Uint8Array([...new TextEncoder().encode('{"name":"caf'), 0xe9, 0x22, 0x7d])
+    for (const [method, path] of [
+      ['POST', '/v1/webhooks'],
+      ['DELETE', `/v1/webhooks/${uuid()}`],
+    ])
+      expect(await call(t, token, method, path, latin1)).toEqual({
+        status: 400,
+        body: { error: 'request body is not valid UTF-8' },
+      })
+    // an unknown webhook path is unknown whatever it carries
+    for (const [method, path, body] of [
+      ['GET', '/v1/webhooks/nope?x=1', undefined],
+      ['PATCH', '/v1/webhooks?x=1', undefined],
+      ['DELETE', '/v1/webhooks', { a: 1 }],
+    ] as const)
+      expect(await call(t, token, method, path, body)).toEqual({
+        status: 404,
+        body: { error: 'unknown webhook route' },
+      })
+  })
+
+  it('refuses MCP event params that hold a number JSON cannot write', () => {
+    expect(eventParamsJson({ ttlMs: -Infinity })).toBeNull()
+    expect(eventParamsJson({ arguments: { task_id: [Number.NaN] } })).toBeNull()
+    expect(eventParamsJson({ arguments: { task_id: null }, ttlMs: 60_000 })).toBe(
+      '{"arguments":{"task_id":null},"ttlMs":60000}',
     )
-    expect(eventParamsJson({ arguments: { task_id: null } })).toBe('{"arguments":{"task_id":null}}')
   })
 })

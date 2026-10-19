@@ -89,6 +89,7 @@ import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
 import { mcpResource, mcpResourceMetadata, OAUTH_SCOPES } from '../lib/oauth'
 import {
   type EventOwner,
+  EVENT_PARAMS_NOT_FINITE,
   type EventReply,
   eventParamsJson,
   vEventOwner,
@@ -2355,10 +2356,12 @@ async function mcpResponse(ctx: ActionCtx, request: Request): Promise<Response> 
                 message: 'OAuth connection is invalid, expired or disconnected',
               },
             }
+          const params_json = eventParamsJson(params)
+          if (params_json === null) return EVENT_PARAMS_NOT_FINITE
           return ctx.runAction(internal.webhookActions.manage, {
             owner: oauthOwner(live),
             method,
-            params_json: eventParamsJson(params),
+            params_json,
           })
         },
         runTool: async (name, args) => {
@@ -2424,12 +2427,11 @@ async function mcpResponse(ctx: ActionCtx, request: Request): Promise<Response> 
       bodyText: body.text,
       runTool: (name, args) =>
         runTool(ctx, { callerId: cred.profileId, access: cred.access }, owner, name, args),
-      runEvent: (method, params) =>
-        ctx.runAction(internal.webhookActions.manage, {
-          owner,
-          method,
-          params_json: eventParamsJson(params),
-        }),
+      runEvent: async (method, params) => {
+        const params_json = eventParamsJson(params)
+        if (params_json === null) return EVENT_PARAMS_NOT_FINITE
+        return ctx.runAction(internal.webhookActions.manage, { owner, method, params_json })
+      },
     })
   } catch (e) {
     // the auth-to-dispatch race: the profile flipped between lookup and

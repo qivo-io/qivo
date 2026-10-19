@@ -32,15 +32,26 @@ export const vEventFilters = v.object({
 })
 export type EventOwner = Infer<typeof vEventOwner>
 
-/** Event request params as webhookActions.manage reads them. JSON.parse reads
- * a number literal too large for a double, such as 1e309, as Infinity, and
- * JSON.stringify would write that as null, which manage reads as "not set"
- * (no expiry, no filter). Writing it as a string keeps it a value manage
- * refuses. */
-export const eventParamsJson = (params: unknown): string =>
-  JSON.stringify(params, (_key, value: unknown) =>
-    typeof value === 'number' && !Number.isFinite(value) ? String(value) : value,
-  )
+/** Event request params as the JSON webhookActions.manage reads, or null
+ * when they hold a number JSON cannot write. JSON.parse reads a number
+ * literal too large for a double, such as 1e309, as Infinity, and
+ * JSON.stringify would write it as null, which manage reads as "not set"
+ * (no expiry, no filter), so the caller refuses such params instead. The
+ * check walks with its own stack, so deep nesting cannot overflow it. */
+export function eventParamsJson(params: unknown): string | null {
+  const stack = [params]
+  while (stack.length > 0) {
+    const item = stack.pop()
+    if (typeof item === 'number' && !Number.isFinite(item)) return null
+    if (typeof item === 'object' && item !== null) stack.push(...Object.values(item))
+  }
+  return JSON.stringify(params)
+}
+
+/** MCP's answer to event params that eventParamsJson cannot write. */
+export const EVENT_PARAMS_NOT_FINITE: EventReply = {
+  error: { code: -32602, message: 'Invalid params: a number is too large to represent' },
+}
 export type EventFilters = Infer<typeof vEventFilters>
 
 export const EVENT_CATALOG = EVENT_NAMES.map((name) => ({
