@@ -1300,7 +1300,7 @@ function IssueDetail({
 
   const it = issueId ? P.issueById[issueId] : null
   useUpdateBlocker(editTitle && !!it && titleDraft !== it.title)
-  useUnsaved(editTitle && !!it && titleDraft !== it.title)
+  useUnsaved(editTitle && !!it && titleDraft !== it.title, 'title')
   // a kept title draft: the rename that refused its save becomes the title
   // the next save sends as seen, once the screen shows it
   const shownTitle = it?.title
@@ -1310,7 +1310,11 @@ function IssueDetail({
     setTitleSeen(shownTitle)
   }, [shownTitle, titleSeen])
   // remaining hours typed and not yet saved (the field saves on blur)
-  const remainingUnsaved = useFieldUnsaved(P.editsPaused, `${it?.id}:${it?.remaining ?? ''}`)
+  const remainingUnsaved = useFieldUnsaved(
+    P.editsPaused,
+    `${it?.id}:${it?.remaining ?? ''}`,
+    'remaining hours',
+  )
   // point the store's one-thread comment cache at this issue; release it when
   // the modal closes (uuid null) or the component unmounts
   const watchUuid = it ? it.uuid : null

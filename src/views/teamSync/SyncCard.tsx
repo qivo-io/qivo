@@ -276,7 +276,7 @@ export function MentionCtl({
   const [kept, setKept] = useState(false)
   const close = useMobileBackLayer(open, () => setOpen(false))
   useUpdateBlocker((open || kept) && text.trim() !== '')
-  useUnsaved((open || kept) && text.trim() !== '')
+  useUnsaved((open || kept) && text.trim() !== '', 'note')
   const canWrite = P.canWrite(it.project)
   // the people who can see the task (a mention of anyone else notifies no
   // one), humans only, never the writer

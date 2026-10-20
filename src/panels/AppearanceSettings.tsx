@@ -207,7 +207,7 @@ export function AppearanceSettings() {
   const [uploading, setUploading] = useState(false)
   useUpdateBlocker(busy || uploading)
   // an image on its way to the server is lost if the page closes
-  useUnsaved(uploading)
+  useUnsaved(uploading, 'background image')
   const [attempt, setAttempt] = useState(0)
   const alive = useRef(false)
   const uploadController = useRef<AbortController | null>(null)

@@ -358,11 +358,12 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   const [headMenu, setHeadMenu] = useState(false)
   const [dirty, setDirty] = useState(false)
   useUpdateBlocker(dirty || linkPop?.mode === 'create')
-  // the description or comment typed here and not sent yet
-  useUnsaved(dirty)
   const dirtyRef = useRef(false)
   // comment mode: a commit the server has not answered yet (see commit)
   const [sending, setSending] = useState(false)
+  // the description or comment typed here and not sent yet. One on its way
+  // is the store's to keep or report, so closing does not ask about it.
+  useUnsaved(dirty && !sending, isComment ? 'comment' : 'description')
   const sendingRef = useRef(false)
   // comment mode: whether this editor has unmounted, which Tiptap's own
   // isDestroyed reports only a tick later

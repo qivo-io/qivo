@@ -27,7 +27,7 @@ function LabelRow({
 }) {
   const [name, setName] = useStateS(label.name)
   useUpdateBlocker(canEdit && name !== label.name)
-  useUnsaved(canEdit && name !== label.name)
+  useUnsaved(canEdit && name !== label.name, 'label name')
   useEffectS(() => {
     setName(label.name)
   }, [label.name])
@@ -160,7 +160,7 @@ export function OrgLabelsPage() {
   // a create in flight: Add waits for the server's answer
   const [adding, setAdding] = useStateS(false)
   useUpdateBlocker(!!newLabel)
-  useUnsaved(!!newLabel.trim())
+  useUnsaved(!!newLabel.trim(), 'label name')
   const confirm = useConfirmArm<string>()
   const dup = labels.some((l) => l.name.toLowerCase() === newLabel.trim().toLowerCase())
   const addLabel = () => {

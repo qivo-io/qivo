@@ -107,6 +107,15 @@ that, your browser keeps a note of each change until the server answers. The not
 holds the task's number and what kind of change it was, never what you typed.
 Signing out clears it.
 
+Closing a window or dialog that holds text you haven't sent, such as a comment,
+a description edit or a new task's title, asks first. So does opening another
+task in the task window, moving elsewhere in Qivo or going back in your browser.
+**Keep editing** returns to the text, and **Discard** closes the window and the
+text is gone. A dialog's **Cancel** closes it without asking. A field that saves
+when you leave it, such as a task's title or remaining hours, saves first, so
+Qivo asks about it only when that save could not happen, for example while
+editing pauses.
+
 ## Desktop app
 
 Windows and Linux desktop apps are in development and not available to

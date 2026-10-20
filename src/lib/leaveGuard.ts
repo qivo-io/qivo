@@ -1,4 +1,4 @@
-import { type FocusEvent, useLayoutEffect, useState } from 'react'
+import { createContext, type FocusEvent, useContext, useLayoutEffect, useState } from 'react'
 import { useUpdateBlocker } from './updateSafety'
 
 /* The warning before the page closes or reloads with work that is not saved.
@@ -10,7 +10,11 @@ import { useUpdateBlocker } from './updateSafety'
    have something unsent (holdUnsaved, useUnsaved). Convex's own warning is
    off (lib/convex.ts), because it misses writes made after the socket
    closed. The desktop app shows its own Leave or Stay dialog for the same
-   warning (desktop/main.ts). */
+   warning (desktop/main.ts).
+
+   A lease taken inside a window also counts in that window's UnsentScope,
+   under a name such as "comment", so closing the window can ask before it
+   throws the text away (components/DiscardPrompt). */
 
 const leases = new Set<symbol>()
 // set once the page leaves on purpose, after the person was told what it loses
@@ -28,12 +32,64 @@ export function holdUnsaved(): () => void {
   }
 }
 
+/** The unsent text one window holds, so a close can ask first. A lease held
+    in a window inside another one counts for both. */
+export type UnsentScope = {
+  /** What the window holds unsent, such as "comment", each name once. */
+  held: () => string[]
+  /** Holds `what` until the answered function is called. */
+  hold: (what: string) => () => void
+  /** Lets a close the person chose to discard go ahead: the window then
+      reports nothing until its leases end or a new one begins. */
+  discard: () => void
+}
+
+/** A window's scope, inside `parent` when the window opens in another. */
+export function createUnsentScope(parent: UnsentScope | null = null): UnsentScope {
+  const own = new Map<symbol, string>()
+  let discarded = false
+  return {
+    held: () => (discarded ? [] : [...new Set(own.values())]),
+    hold: (what) => {
+      const lease = Symbol()
+      own.set(lease, what)
+      discarded = false
+      const outer = parent?.hold(what)
+      return () => {
+        if (own.delete(lease) && !own.size) discarded = false
+        outer?.()
+      }
+    },
+    discard: () => {
+      if (own.size) discarded = true
+    },
+  }
+}
+
+/** The window whose scope the leases below it count in. */
+export const UnsentScopeContext = createContext<UnsentScope | null>(null)
+
+/** A scope for this component's window, inside the window around it. */
+export function useUnsentScope() {
+  const parent = useContext(UnsentScopeContext)
+  const [scope] = useState(() => createUnsentScope(parent))
+  return scope
+}
+
 /** Holds a lease while `unsaved` is true, for an editor with typed text it
-    has not sent. */
-export function useUnsaved(unsaved: boolean) {
+    has not sent. `what` names the text in the window's question; null keeps
+    the lease out of it, for a lease that only the page's close warns about. */
+export function useUnsaved(unsaved: boolean, what: string | null = 'text') {
+  const scope = useContext(UnsentScopeContext)
   useLayoutEffect(() => {
-    if (unsaved) return holdUnsaved()
-  }, [unsaved])
+    if (!unsaved) return
+    const release = holdUnsaved()
+    const leave = what === null ? undefined : scope?.hold(what)
+    return () => {
+      release()
+      leave?.()
+    }
+  }, [unsaved, scope, what])
 }
 
 /** Lets the page leave without the warning, for a reload the person chose
@@ -58,10 +114,11 @@ export function installLeaveGuard(unsaved: () => boolean, win: Window = window) 
 /** Holds a lease from the person's first keystroke in a form until `reset`,
     for fields that keep typed text without a draft state of their own. Put
     `typed` on the form's `onInputCapture`. The text also holds back a
-    version reload, which would otherwise stop at the close warning. */
-export function useTypedUnsaved() {
+    version reload, which would otherwise stop at the close warning. `what`
+    is as for useUnsaved. */
+export function useTypedUnsaved(what: string | null = 'text') {
   const [typed, setTyped] = useState(false)
-  useUnsaved(typed)
+  useUnsaved(typed, what)
   useUpdateBlocker(typed)
   return { typed: () => setTyped(true), reset: () => setTyped(false) }
 }
@@ -72,9 +129,10 @@ export function useTypedUnsaved() {
     handler has run. A blur while `paused()` holds keeps the lease when the
     field still shows another value than the saved one, because the save
     was refused and the draft stays. A new saved value remounts the field
-    and ends the draft, and the lease with it. */
-export function useFieldUnsaved(paused: () => boolean, saved: string) {
-  const { typed, reset } = useTypedUnsaved()
+    and ends the draft, and the lease with it. `what` names the field in a
+    window's question. */
+export function useFieldUnsaved(paused: () => boolean, saved: string, what = 'text') {
+  const { typed, reset } = useTypedUnsaved(what)
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new saved value is the trigger
   useLayoutEffect(reset, [saved])
   return {

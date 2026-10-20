@@ -49,7 +49,9 @@ The composer keeps your comment until Qivo saves it, and the text cannot
 change meanwhile. If Qivo refuses it, for example on a task with 400 comments,
 the text stays for another try. A refused edit stays open with your text too.
 If you close the task while Qivo saves a comment and Qivo then refuses it,
-Qivo says the comment was discarded. If the comments cannot load, for example
+Qivo says the comment was discarded. Closing the task, or opening another task
+in its window, while a comment, a description edit or a title edit is still
+unsent asks first ([App updates](./qivo-in-one-minute.md#app-updates)). If the comments cannot load, for example
 after you are signed out or lose access to the organization, the thread says
 so with **Retry** instead of looking empty, and the comments already on screen
 stay. A task that was deleted or hidden from you shows an empty thread

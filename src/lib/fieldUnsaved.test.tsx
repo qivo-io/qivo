@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Input } from '../components/ui/input'
 import { TooltipProvider } from '../components/ui/tooltip'
-import { hasUnsaved, useFieldUnsaved } from './leaveGuard'
+import { createUnsentScope, hasUnsaved, UnsentScopeContext, useFieldUnsaved } from './leaveGuard'
 
 /* A field that saves on blur keeps the close warning while a refused save
    leaves its typed text in place, and drops it once nothing is unsent. */
@@ -13,8 +13,8 @@ let paused = false
 let container: HTMLDivElement
 let root: Root
 
-function Field({ saved = '16' }: { saved?: string }) {
-  const unsaved = useFieldUnsaved(() => paused, saved)
+function Field({ saved = '16', what }: { saved?: string; what?: string }) {
+  const unsaved = useFieldUnsaved(() => paused, saved, what)
   return (
     <TooltipProvider>
       <Input aria-label="Hours" type="number" key={saved} defaultValue={saved} {...unsaved} />
@@ -75,5 +75,22 @@ describe('useFieldUnsaved', () => {
   it('drops the warning once the save went out', async () => {
     await typeAndLeave('12')
     expect(hasUnsaved()).toBe(false)
+  })
+
+  it('names the field in the window it is in while a paused save keeps it', async () => {
+    const page = createUnsentScope()
+    await act(async () =>
+      root.render(
+        <UnsentScopeContext.Provider value={page}>
+          <Field what="plannable hours" />
+        </UnsentScopeContext.Provider>,
+      ),
+    )
+    paused = true
+    await typeAndLeave('12')
+    expect(page.held()).toEqual(['plannable hours'])
+    paused = false
+    await typeAndLeave('16')
+    expect(page.held()).toEqual([])
   })
 })

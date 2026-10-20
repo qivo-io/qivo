@@ -19,7 +19,7 @@ export function UserName({ user, isSelf }: { user: UserVM; isSelf: boolean }) {
   const canEdit = P.isAdmin()
   const [v, setV] = useStateS(user.name)
   useUpdateBlocker(canEdit && v !== user.name)
-  useUnsaved(canEdit && v !== user.name)
+  useUnsaved(canEdit && v !== user.name, 'name')
   useEffectS(() => {
     setV(user.name)
   }, [user.name])
@@ -128,7 +128,7 @@ export function UserEmail({ user }: { user: UserVM }) {
   const canEdit = !DEMO_MODE && P.isAdmin() && user.pending
   const [v, setV] = useStateS(user.email || '')
   useUpdateBlocker(canEdit && v !== (user.email || ''))
-  useUnsaved(canEdit && v !== (user.email || ''))
+  useUnsaved(canEdit && v !== (user.email || ''), 'email')
   useEffectS(() => {
     setV(user.email || '')
   }, [user.email])
@@ -195,7 +195,11 @@ export function PlannableHoursInput({
   width?: number
 }) {
   // hours typed and not yet saved (the field saves on blur)
-  const hoursUnsaved = useFieldUnsaved(P.editsPaused, `${user.id}:${user.plannableHours ?? ''}`)
+  const hoursUnsaved = useFieldUnsaved(
+    P.editsPaused,
+    `${user.id}:${user.plannableHours ?? ''}`,
+    'plannable hours',
+  )
   // Agents have unlimited capacity and cannot receive a weekly-hour value.
   if (user.isAgent) {
     return (

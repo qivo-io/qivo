@@ -4,6 +4,7 @@ import './styles/app.css'
 import './styles/demo.css'
 import { AuthGate } from './AuthGate'
 import { AppUpdates } from './components/AppUpdates'
+import { DiscardPrompt } from './components/DiscardPrompt'
 import { SnapshotNotice } from './components/SnapshotNotice'
 import { DemoGate } from './DemoGate'
 import { installAnnouncer } from './lib/announce'
@@ -40,5 +41,6 @@ createRoot(document.getElementById('root')!).render(
       </>
     )}
     <SnapshotNotice />
+    <DiscardPrompt />
   </TooltipProvider>,
 )

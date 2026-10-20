@@ -7,6 +7,7 @@ import { DropdownChevron } from '@/components/ui/select'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { BillingNotice } from './components/BillingNotice'
+import { closeOrAsk } from './components/DiscardPrompt'
 import {
   MobileHeader,
   MobileNavigation,
@@ -30,8 +31,10 @@ import { parseSyncScope } from './lib/teamSync'
 import { useMobile } from './lib/useMobile'
 import './styles/mobile.css'
 import { announce } from './lib/announce'
+import { closedBy } from './lib/closingMoves'
 import { floatSlot } from './lib/floatStack'
 import { isLandscapeRoadmapOpen } from './lib/landscape'
+import { createUnsentScope, UnsentScopeContext } from './lib/leaveGuard'
 import { afterProjectSaved } from './lib/newProjectAccess'
 import {
   ARCHIVED_TASKS_PAGE,
@@ -44,6 +47,7 @@ import {
   type Route,
   scopeForIssue,
   syncPlaceOf,
+  type UiState,
 } from './lib/router'
 import { type Toast, toastLook, withToast } from './lib/toasts'
 import {
@@ -842,6 +846,18 @@ function App() {
   useLayoutEffect(() => {
     placeRef.current = place
   }, [place])
+  const here: UiState = { scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync }
+  // for the popstate handler, like scopeRef
+  const hereRef = useRef(here)
+  hereRef.current = here
+  // the text typed in the task window (with the Inbox) and in the page
+  const [unsent] = useState(() => ({ task: createUnsentScope(), page: createUnsentScope() }))
+  /** Runs `go`, a user's move to the place `next` patches in, once the
+      windows it closes hold no unsent text, or after the person chose
+      Discard. Raw setters remain for moves the person did not ask for. */
+  const move = (next: UiState, go: () => void) => {
+    closeOrAsk(closedBy(hereRef.current, { ...hereRef.current, ...next }, unsent), go)
+  }
   // edits made on the sync page are not roadmap edits, whatever the view below
   const roadmapActive = view === 'roadmap' && !settingsPage && !inboxOpen && !projectsOpen && !sync
   useLayoutEffect(() => {
@@ -967,6 +983,29 @@ function App() {
       // legacy entry from earlier in this session's history
       const r = parsePath(location.pathname) || parseHash(location.hash)
       if (!r) return
+      /* Back or Forward that would close a window holding unsent text puts
+         the address it left back on top, so nothing moves, and asks.
+         Discard goes Back to the entry it reached again, which then moves. */
+      const was = hereRef.current
+      const nextSync = r.sync && P.homeOrg ? syncPlaceFor(r.sync, mobileRef.current) : null
+      const closing = closedBy(
+        was,
+        {
+          scope: r.scope ?? was.scope,
+          view: r.view ?? was.view,
+          openIssue: r.issue || null,
+          settingsPage: r.settings || null,
+          inboxOpen: !!r.inbox,
+          projectsOpen: !!r.projects,
+          sync: nextSync,
+        },
+        unsent,
+      )
+      if (closing.some((held) => held.held().length)) {
+        history.pushState({ qivoPrevious: location.pathname }, '', buildPath(was))
+        closeOrAsk(closing, () => history.back())
+        return
+      }
       /* A return belongs to the visit that opened its page. A pop that stays
          on the page keeps it (Back through Settings' pages, a phone layer, a
          task closing over the sync); one that leaves drops it, so a later
@@ -1005,7 +1044,7 @@ function App() {
       setSettingsPage(r.settings || null)
       setInboxOpen(!!r.inbox)
       setProjectsOpen(!!r.projects)
-      setSync(r.sync && P.homeOrg ? syncPlaceFor(r.sync, mobileRef.current) : null)
+      setSync(nextSync)
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
@@ -1043,21 +1082,33 @@ function App() {
     if (inboxOpen) setOpenIssue(null)
     setInboxOpen(false)
   }
-  const navScope = (id) => {
-    leaveInbox()
-    setScope(id)
-  }
-  const navView = (v) => {
-    leaveInbox()
-    setView(v)
-  }
-  const navOpenIssue = (k) => {
-    if (k) {
-      setInboxOpen(false)
-      setProjectsOpen(false)
-    }
-    setOpenIssue(k)
-  }
+  // …the place leaveInbox moves to, for `move`
+  const leftInbox = (): UiState => ({
+    projectsOpen: false,
+    sync: null,
+    inboxOpen: false,
+    openIssue: inboxOpen ? null : openIssue,
+  })
+  const navScope = (id) =>
+    move({ ...leftInbox(), scope: id }, () => {
+      leaveInbox()
+      setScope(id)
+    })
+  const navView = (v) =>
+    move({ ...leftInbox(), view: v }, () => {
+      leaveInbox()
+      setView(v)
+    })
+  const navOpenIssue = (k) =>
+    move(k ? { openIssue: k, inboxOpen: false, projectsOpen: false } : { openIssue: k }, () => {
+      if (k) {
+        setInboxOpen(false)
+        setProjectsOpen(false)
+      }
+      setOpenIssue(k)
+    })
+  // another task in the open window, or none (the Inbox pane, Team sync)
+  const openTask = (id: string | null) => move({ openIssue: id }, () => setOpenIssue(id))
 
   const openNewIssue = (init) => {
     /* Desktop creates normally name a project. The phone's My tasks and
@@ -1130,23 +1181,28 @@ function App() {
     }
     const meta = P.metaOf(it.project)
     if (!meta) return
-    /* All projects already carries this issue's track — planning from there
-       stays there rather than dropping the user into one project. My view
-       carries it only when it IS mine: spotlighting somebody else's task from
-       there would open a planning session over a bar the view doesn't render. */
-    const cur = scopeRef.current
-    if (!(P.isAllScope(cur) || (P.isMineScope(cur) && P.isMine(it)))) setScope(meta.id)
-    // a reveal does not bypass the toolbar filters, so clear them as Team
-    // sync's jump does (Focus stays)
-    if (group) clearFilters()
-    setView('roadmap')
-    setProjectsOpen(false)
-    setInboxOpen(false)
-    setSync(null)
-    setOpenIssue(null)
-    focusN.current += 1
-    if (group) setRevealTask({ id, n: focusN.current })
-    else setFocusPlan({ id, n: focusN.current })
+    move(
+      { view: 'roadmap', projectsOpen: false, inboxOpen: false, sync: null, openIssue: null },
+      () => {
+        /* All projects already carries this issue's track — planning from there
+           stays there rather than dropping the user into one project. My view
+           carries it only when it IS mine: spotlighting somebody else's task from
+           there would open a planning session over a bar the view doesn't render. */
+        const cur = scopeRef.current
+        if (!(P.isAllScope(cur) || (P.isMineScope(cur) && P.isMine(it)))) setScope(meta.id)
+        // a reveal does not bypass the toolbar filters, so clear them as Team
+        // sync's jump does (Focus stays)
+        if (group) clearFilters()
+        setView('roadmap')
+        setProjectsOpen(false)
+        setInboxOpen(false)
+        setSync(null)
+        setOpenIssue(null)
+        focusN.current += 1
+        if (group) setRevealTask({ id, n: focusN.current })
+        else setFocusPlan({ id, n: focusN.current })
+      },
+    )
   }
 
   // Task breadcrumb clicks switch to the Board scoped to the clicked
@@ -1154,12 +1210,25 @@ function App() {
   const showOnBoard = (projectId, issueKey?) => {
     const p = P.project(projectId)
     if (!p) return
-    setScope(projectId)
-    setView('kanban')
-    setProjectsOpen(false)
-    setInboxOpen(false)
-    setSync(null)
-    setOpenIssue(issueKey || null)
+    const target = issueKey || null
+    move(
+      {
+        scope: projectId,
+        view: 'kanban',
+        projectsOpen: false,
+        inboxOpen: false,
+        sync: null,
+        openIssue: target,
+      },
+      () => {
+        setScope(projectId)
+        setView('kanban')
+        setProjectsOpen(false)
+        setInboxOpen(false)
+        setSync(null)
+        setOpenIssue(target)
+      },
+    )
   }
 
   // A phone's Back action consumes the page it opened. Direct links have no
@@ -1183,25 +1252,31 @@ function App() {
       apply()
     }
   }
-  const closeIssue = () => backOrSet({ openIssue: null }, () => setOpenIssue(null))
+  const closeIssue = () =>
+    move({ openIssue: null }, () => backOrSet({ openIssue: null }, () => setOpenIssue(null)))
 
   /* ---- Team sync's hand-offs (the TeamSync props) ---- */
   // a step or a scope from the page; the address follows in place (the
   // router's sync rule), and a new scope is the viewer's saved choice
   const placeSync = (next: SyncPlace) => {
     if (sync && next.scope === sync.scope && next.step === sync.step) return
-    if (next.scope !== sync?.scope) P.saveUINow({ syncScope: next.scope })
-    setSync(next)
+    move({ sync: next }, () => {
+      if (next.scope !== sync?.scope) P.saveUINow({ syncScope: next.scope })
+      setSync(next)
+    })
   }
   // Done on the last step: back to the page it was opened from (the Inbox,
   // the Projects directory), else the scope and view underneath
   const closeSync = () => {
     const back = syncReturn.current
-    syncReturn.current = NO_RETURN
-    backOrSet({ sync: null, inboxOpen: back.inbox, projectsOpen: back.projects }, () => {
-      setSync(null)
-      setInboxOpen(back.inbox)
-      setProjectsOpen(back.projects)
+    const to = { sync: null, inboxOpen: back.inbox, projectsOpen: back.projects }
+    move(to, () => {
+      syncReturn.current = NO_RETURN
+      backOrSet(to, () => {
+        setSync(null)
+        setInboxOpen(back.inbox)
+        setProjectsOpen(back.projects)
+      })
     })
   }
   /* A row's Board or Roadmap jump: leave the page for that view, scoped so
@@ -1214,15 +1289,19 @@ function App() {
   const showTaskOn = (v: 'kanban' | 'roadmap', handle: string) => {
     const it = P.issueById[handle]
     if (!it) return
-    clearFilters()
-    setSync(null)
-    setScope(sync?.scope === 'all' ? P.ALL_SCOPE : it.project)
-    setView(v)
-    setOpenIssue(v === 'kanban' ? handle : null)
-    if (v === 'roadmap') {
-      focusN.current += 1
-      setRevealTask({ id: handle, n: focusN.current })
-    }
+    const to = sync?.scope === 'all' ? P.ALL_SCOPE : it.project
+    const task = v === 'kanban' ? handle : null
+    move({ sync: null, scope: to, view: v, openIssue: task }, () => {
+      clearFilters()
+      setSync(null)
+      setScope(to)
+      setView(v)
+      setOpenIssue(task)
+      if (v === 'roadmap') {
+        focusN.current += 1
+        setRevealTask({ id: handle, n: focusN.current })
+      }
+    })
   }
   /* A person header's Board or Roadmap jump: leave the page for that view
      filtered to the person (the filters match the task's owner, the rule
@@ -1231,28 +1310,32 @@ function App() {
      scope) become All projects, never My view, which drops the filter. */
   const showPersonOn = (v: 'kanban' | 'roadmap', profileId: string) => {
     const place = parseSyncScope(sync?.scope)
-    setFilters((f) => ({
-      search: '',
-      mine: false,
-      assignees: [profileId],
-      priority: null,
-      stale: false,
-      focus: f.focus,
-    }))
-    setSync(null)
-    setScope(place.kind === 'project' && P.project(place.id) ? place.id : P.ALL_SCOPE)
-    setView(v)
-    setOpenIssue(null)
+    const to = place.kind === 'project' && P.project(place.id) ? place.id : P.ALL_SCOPE
+    move({ sync: null, scope: to, view: v, openIssue: null }, () => {
+      setFilters((f) => ({
+        search: '',
+        mine: false,
+        assignees: [profileId],
+        priority: null,
+        stale: false,
+        focus: f.focus,
+      }))
+      setSync(null)
+      setScope(to)
+      setView(v)
+      setOpenIssue(null)
+    })
   }
 
   /* Opens Settings on `page`, remembering the page underneath for its exit.
      `archived` is the project Archived tasks opens on. */
-  const openSettingsOn = (page: string, archived: string | null) => {
-    settingsReturn.current = { inbox: inboxOpen, projects: projectsOpen, sync }
-    leaveInbox()
-    setArchiveProject(archived)
-    setSettingsPage(page)
-  }
+  const openSettingsOn = (page: string, archived: string | null) =>
+    move({ ...leftInbox(), settingsPage: page }, () => {
+      settingsReturn.current = { inbox: inboxOpen, projects: projectsOpen, sync }
+      leaveInbox()
+      setArchiveProject(archived)
+      setSettingsPage(page)
+    })
 
   const actions = {
     openIssue: navOpenIssue,
@@ -1269,53 +1352,76 @@ function App() {
     // at it holding whatever task the last view had open would light a row-less
     // pane before a single message has been read. A deep link straight to
     // /inbox/tasks/<task> is the other direction and still lands on the task.
-    openInbox: () => {
-      setProjectsOpen(false)
-      setSettingsPage(null)
-      setSync(null)
-      setOpenIssue(null)
-      setInboxOpen(true)
-    },
+    openInbox: () =>
+      move(
+        { projectsOpen: false, settingsPage: null, sync: null, openIssue: null, inboxOpen: true },
+        () => {
+          setProjectsOpen(false)
+          setSettingsPage(null)
+          setSync(null)
+          setOpenIssue(null)
+          setInboxOpen(true)
+        },
+      ),
     // both sentinels are scopes, so they also have to leave whichever page owns
     // the screen — the sidebar is visible from the inbox, the palette from all
-    openAll: () => {
-      setSettingsPage(null)
-      leaveInbox()
-      setScope(P.ALL_SCOPE)
-    },
-    openMine: () => {
-      setSettingsPage(null)
-      leaveInbox()
-      setScope(P.MINE_SCOPE)
-      if (mobile) setView('kanban')
-    },
-    openProjects: () => {
-      setSettingsPage(null)
-      setInboxOpen(false)
-      setSync(null)
-      setOpenIssue(null)
-      setProjectsOpen(true)
-    },
+    openAll: () =>
+      move({ ...leftInbox(), settingsPage: null, scope: P.ALL_SCOPE }, () => {
+        setSettingsPage(null)
+        leaveInbox()
+        setScope(P.ALL_SCOPE)
+      }),
+    openMine: () =>
+      move(
+        {
+          ...leftInbox(),
+          settingsPage: null,
+          scope: P.MINE_SCOPE,
+          ...(mobile ? { view: 'kanban' } : {}),
+        },
+        () => {
+          setSettingsPage(null)
+          leaveInbox()
+          setScope(P.MINE_SCOPE)
+          if (mobile) setView('kanban')
+        },
+      ),
+    openProjects: () =>
+      move(
+        { settingsPage: null, inboxOpen: false, sync: null, openIssue: null, projectsOpen: true },
+        () => {
+          setSettingsPage(null)
+          setInboxOpen(false)
+          setSync(null)
+          setOpenIssue(null)
+          setProjectsOpen(true)
+        },
+      ),
     // Team sync (the sidebar row, the phone's Sync tab): opens on the saved
     // scope, remembering the Inbox or Projects page for Done; pressed while
     // open, it stays where the walk is
     openSync: () => {
       if (!P.homeOrg) return
-      if (!sync) {
-        syncReturn.current = { inbox: inboxOpen, projects: projectsOpen, sync: null }
-        setSync(syncPlaceFor({}, mobile))
-      }
-      setSettingsPage(null)
-      setProjectsOpen(false)
-      if (inboxOpen) setOpenIssue(null)
-      setInboxOpen(false)
+      const opening = sync || syncPlaceFor({}, mobile)
+      move({ ...leftInbox(), sync: opening, settingsPage: null }, () => {
+        if (!sync) {
+          syncReturn.current = { inbox: inboxOpen, projects: projectsOpen, sync: null }
+          setSync(opening)
+        }
+        setSettingsPage(null)
+        setProjectsOpen(false)
+        if (inboxOpen) setOpenIssue(null)
+        setInboxOpen(false)
+      })
     },
     clearFilters,
     setScope: navScope,
-    openProject: (id) => {
-      navScope(id)
-      if (mobile) setView('kanban')
-    },
+    openProject: (id) =>
+      move({ ...leftInbox(), scope: id, ...(mobile ? { view: 'kanban' } : {}) }, () => {
+        leaveInbox()
+        setScope(id)
+        if (mobile) setView('kanban')
+      }),
     setView: navView,
     planOnRoadmap,
     openPalette: () => setPaletteOpen(true),
@@ -1466,45 +1572,54 @@ function App() {
       <>
         <ViewBoundary onBack={() => setSettingsPage(null)}>
           <Suspense fallback={<ViewLoading />}>
-            <SettingsScreen
-              page={settingsPage}
-              setPage={setSettingsPage}
-              onBackPage={(page) => backOrSet({ settingsPage: page }, () => setSettingsPage(page))}
-              onExit={() => {
-                const back = settingsReturn.current
-                settingsReturn.current = NO_RETURN
-                backOrSet(
-                  {
+            <UnsentScopeContext.Provider value={unsent.page}>
+              <SettingsScreen
+                page={settingsPage}
+                setPage={(page) => move({ settingsPage: page }, () => setSettingsPage(page))}
+                resetPage={setSettingsPage}
+                onBackPage={(page) =>
+                  move({ settingsPage: page }, () =>
+                    backOrSet({ settingsPage: page }, () => setSettingsPage(page)),
+                  )
+                }
+                onExit={() => {
+                  const back = settingsReturn.current
+                  const to = {
                     settingsPage: null,
                     inboxOpen: back.inbox,
                     projectsOpen: back.projects,
                     sync: back.sync,
-                  },
-                  () => {
-                    setSettingsPage(null)
-                    setInboxOpen(back.inbox)
-                    setProjectsOpen(back.projects)
-                    setSync(back.sync)
-                  },
-                )
-              }}
-              onNewProject={() => openNewProject({ kind: 'program' })}
-              onNewSubProject={(parent) => openNewProject({ parent })}
-              archivedTasksProject={archiveProject || scopeMeta}
-              onOpenArchivedTasks={(projectId) => {
-                setArchiveProject(projectId)
-                setSettingsPage(ARCHIVED_TASKS_PAGE)
-              }}
-              onProjectGone={(parent) => {
-                // deleted or archived — from out here they are the same event: a
-                // project the scope may have been pointing at is no longer one of
-                // the ones this login can open. Both sentinels survive it — each is
-                // defined by what's left, not by the row that went away.
-                if (P.isWideScope(scope)) return
-                const fb = parent && P.project(parent) ? parent : P.visibleProjects()[0]?.id
-                if (fb) setScope(fb)
-              }}
-            />
+                  }
+                  move(to, () => {
+                    settingsReturn.current = NO_RETURN
+                    backOrSet(to, () => {
+                      setSettingsPage(null)
+                      setInboxOpen(back.inbox)
+                      setProjectsOpen(back.projects)
+                      setSync(back.sync)
+                    })
+                  })
+                }}
+                onNewProject={() => openNewProject({ kind: 'program' })}
+                onNewSubProject={(parent) => openNewProject({ parent })}
+                archivedTasksProject={archiveProject || scopeMeta}
+                onOpenArchivedTasks={(projectId) =>
+                  move({ settingsPage: ARCHIVED_TASKS_PAGE }, () => {
+                    setArchiveProject(projectId)
+                    setSettingsPage(ARCHIVED_TASKS_PAGE)
+                  })
+                }
+                onProjectGone={(parent) => {
+                  // deleted or archived — from out here they are the same event: a
+                  // project the scope may have been pointing at is no longer one of
+                  // the ones this login can open. Both sentinels survive it — each is
+                  // defined by what's left, not by the row that went away.
+                  if (P.isWideScope(scope)) return
+                  const fb = parent && P.project(parent) ? parent : P.visibleProjects()[0]?.id
+                  if (fb) setScope(fb)
+                }}
+              />
+            </UnsentScopeContext.Provider>
           </Suspense>
         </ViewBoundary>
         {/* Settings opens both project dialogs: the Projects header's +
@@ -1627,63 +1742,66 @@ function App() {
           }}
         >
           <Suspense fallback={<ViewLoading />}>
-            {projectsOpen ? (
-              <ProjectDirectory actions={actions} />
-            ) : inboxOpen ? (
-              // openTask is the raw setter on purpose: the inbox's right pane IS
-              // the task window, so opening a task must NOT leave the inbox — and
-              // `openIssue` is what that pane shows, which is why the address
-              // (/inbox/tasks/<task>) restores it
-              <Inbox
-                showOnBoard={showOnBoard}
-                onExit={() => setInboxOpen(false)}
-                openTask={(id) => (id ? setOpenIssue(id) : closeIssue())}
-                openIssue={openIssue}
-                onPlanOnRoadmap={planOnRoadmap}
-              />
-            ) : sync ? (
-              /* Team sync, over the scope and view it returns to. Its tasks open
-             in the floating window below (the raw setter: opening one must
+            <UnsentScopeContext.Provider value={unsent.page}>
+              {projectsOpen ? (
+                <ProjectDirectory actions={actions} />
+              ) : inboxOpen ? (
+                // openTask does not use navOpenIssue on purpose: the inbox's right pane IS
+                // the task window, so opening a task must NOT leave the inbox — and
+                // `openIssue` is what that pane shows, which is why the address
+                // (/inbox/tasks/<task>) restores it
+                <UnsentScopeContext.Provider value={unsent.task}>
+                  <Inbox
+                    showOnBoard={showOnBoard}
+                    onExit={() => move({ inboxOpen: false }, () => setInboxOpen(false))}
+                    openTask={(id) => (id ? openTask(id) : closeIssue())}
+                    openIssue={openIssue}
+                    onPlanOnRoadmap={planOnRoadmap}
+                  />
+                </UnsentScopeContext.Provider>
+              ) : sync ? (
+                /* Team sync, over the scope and view it returns to. Its tasks open
+             in the floating window below (openTask, not navOpenIssue: opening one must
              not leave the page), and Escape does not close it: a meeting
              page must not vanish on a stray key. */
-              <div
-                data-workspace-view="sync"
-                className="animate-in fade-in slide-in-from-bottom-1 [flex:1] [display:flex] [flex-direction:column] [overflow:hidden]"
-              >
-                <TeamSync
-                  place={sync}
-                  onPlace={placeSync}
-                  onClose={closeSync}
-                  onOpenTask={setOpenIssue}
-                  onShowTask={showTaskOn}
-                  onShowPerson={showPersonOn}
-                />
-              </div>
-            ) : (
-              scopeInfo && (
                 <div
-                  key={scope + view}
-                  data-workspace-view={view}
+                  data-workspace-view="sync"
                   className="animate-in fade-in slide-in-from-bottom-1 [flex:1] [display:flex] [flex-direction:column] [overflow:hidden]"
                 >
-                  {view === 'overview' && <Overview info={scopeInfo} actions={actions} />}
-                  {view === 'kanban' &&
-                    (mobile ? (
-                      <MobileTaskList
-                        info={scopeInfo}
-                        filters={filters}
-                        setFilters={setFilters}
-                        actions={actions}
-                      />
-                    ) : (
-                      <Kanban
-                        info={scopeInfo}
-                        filters={effFilters}
-                        tweaks={tweaks}
-                        actions={actions}
-                      />
-                    ))}
-                  {/* The roadmap's toolbar row is its own — the window controls, the
+                  <TeamSync
+                    place={sync}
+                    onPlace={placeSync}
+                    onClose={closeSync}
+                    onOpenTask={openTask}
+                    onShowTask={showTaskOn}
+                    onShowPerson={showPersonOn}
+                  />
+                </div>
+              ) : (
+                scopeInfo && (
+                  <div
+                    key={scope + view}
+                    data-workspace-view={view}
+                    className="animate-in fade-in slide-in-from-bottom-1 [flex:1] [display:flex] [flex-direction:column] [overflow:hidden]"
+                  >
+                    {view === 'overview' && <Overview info={scopeInfo} actions={actions} />}
+                    {view === 'kanban' &&
+                      (mobile ? (
+                        <MobileTaskList
+                          info={scopeInfo}
+                          filters={filters}
+                          setFilters={setFilters}
+                          actions={actions}
+                        />
+                      ) : (
+                        <Kanban
+                          info={scopeInfo}
+                          filters={effFilters}
+                          tweaks={tweaks}
+                          actions={actions}
+                        />
+                      ))}
+                    {/* The roadmap's toolbar row is its own — the window controls, the
                 estimate walk and the auto-correct count are all local to it and
                 cannot be handed up to the bar. So the bar hands the FILTERS
                 down instead, ready-made: App holds the state, the roadmap holds
@@ -1699,31 +1817,32 @@ function App() {
                 above ViewFilters.
                 `filters` (not effFilters) on purpose — the controls edit the raw
                 object for the same reason TopBar does. */}
-                  {view === 'roadmap' && (
-                    <Roadmap
-                      info={scopeInfo}
-                      filters={roadmapFilters}
-                      actions={actions}
-                      filterControls={(phone) => (
-                        <ViewFilters
-                          info={scopeInfo}
-                          filters={filters}
-                          setFilters={setFilters}
-                          actions={actions}
-                          searchWidth={180}
-                          hideSearch={phone}
-                          hide={['mine', 'stale', 'focus']}
-                        />
-                      )}
-                      focusPlan={focusPlan}
-                      onFocusConsumed={() => setFocusPlan(null)}
-                      revealTask={revealTask}
-                      onRevealConsumed={() => setRevealTask(null)}
-                    />
-                  )}
-                </div>
-              )
-            )}
+                    {view === 'roadmap' && (
+                      <Roadmap
+                        info={scopeInfo}
+                        filters={roadmapFilters}
+                        actions={actions}
+                        filterControls={(phone) => (
+                          <ViewFilters
+                            info={scopeInfo}
+                            filters={filters}
+                            setFilters={setFilters}
+                            actions={actions}
+                            searchWidth={180}
+                            hideSearch={phone}
+                            hide={['mine', 'stale', 'focus']}
+                          />
+                        )}
+                        focusPlan={focusPlan}
+                        onFocusConsumed={() => setFocusPlan(null)}
+                        revealTask={revealTask}
+                        onRevealConsumed={() => setRevealTask(null)}
+                      />
+                    )}
+                  </div>
+                )
+              )}
+            </UnsentScopeContext.Provider>
           </Suspense>
         </ViewBoundary>
       </main>
@@ -1731,15 +1850,17 @@ function App() {
           component in its right pane instead of stacking one over the other */}
       {!inboxOpen && openIssue && (
         <DeferredOverlay onClose={closeIssue}>
-          <IssueDetail
-            issueId={openIssue}
-            onClose={closeIssue}
-            onOpen={setOpenIssue}
-            onPlanOnRoadmap={planOnRoadmap}
-            unreadTs={undefined}
-            onPopOut={undefined}
-            onShowOnBoard={showOnBoard}
-          />
+          <UnsentScopeContext.Provider value={unsent.task}>
+            <IssueDetail
+              issueId={openIssue}
+              onClose={closeIssue}
+              onOpen={openTask}
+              onPlanOnRoadmap={planOnRoadmap}
+              unreadTs={undefined}
+              onPopOut={undefined}
+              onShowOnBoard={showOnBoard}
+            />
+          </UnsentScopeContext.Provider>
         </DeferredOverlay>
       )}
       {modal && (

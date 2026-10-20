@@ -1,11 +1,10 @@
 /* Weekly remaining-time review across visible open, owned leaf tasks.
    Review tasks belong to their reviewer when set. Edits save on blur/Enter;
-   close flushes the focused input. Reviewed ticks are session-local, and rows
+   a close leaves the focused input first. Reviewed ticks are session-local, and rows
    re-derive from the store so remote changes update owners and counts. */
 import { useState as useStateU } from 'react'
 import { Avatar, IssueKey, ProjectName, StatusDot } from '../components/qivo'
 import {
-  flushWalkInput,
   planHint,
   RemainingInput,
   ReviewTick,
@@ -54,19 +53,17 @@ function UpdateEstimateModal({ onClose }: { onClose: () => void }) {
   const allDone = (uid: string) => (byOwner.get(uid) || []).every((it) => reviewed.has(it.uuid))
 
   /* Escape and the scrim close the shell without the browser ever moving
-     focus, and React fires no blur on unmount — a typed-but-uncommitted
-     number would vanish. Flush the focused input first so "closing mid-walk
+     focus, and React fires no blur on unmount. A typed number holds its
+     field's lease, so the shell's close leaves the field first and the
+     number saves on that blur (components/DiscardPrompt): "closing mid-walk
      never loses anything" holds on every path, not just the ones that
-     happen to blur (the X button, Done, clicking another row). */
-  const close = () => {
-    flushWalkInput('ue')
-    onClose()
-  }
+     happen to blur (the X button, Done, clicking another row). A number a
+     paused save kept is then the shell's question. */
 
   const rows = person ? (byOwner.get(person.id) || []).slice().sort(rowOrder) : []
   const last = idx >= people.length - 1
 
-  const footer = (
+  const footer = (close: () => void) => (
     <WalkFooter
       hook="ue"
       reviewed={reviewed.count(scoped)}
@@ -83,7 +80,7 @@ function UpdateEstimateModal({ onClose }: { onClose: () => void }) {
     <ModalShell
       icon="history"
       title="Update Estimate"
-      onClose={close}
+      onClose={onClose}
       width={640}
       footer={footer}
       savesAsYouGo
