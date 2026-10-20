@@ -211,6 +211,31 @@ describe('task edits', () => {
   })
 })
 
+describe('who changed it, after a write that logs no row', () => {
+  it('names nobody once the task was touched after its newest row', async () => {
+    const fx = await setup()
+    const row = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      title: 'One',
+      remaining_hours: 4,
+    })
+    await edit(fx, fx.user, row.id, { title: 'Two' })
+    const named = await fieldChanged(
+      edit(fx, fx.admin, row.id, { title: 'Three' }, { title: titlePrint('One') }),
+    )
+    expect(named.changes?.[0]?.by).toBe(fx.user.id)
+    // attaching a subtask clears the task's own hours with no row of its own
+    await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, title: 'Kid' }).then((kid) =>
+      edit(fx, fx.user, kid.id, { parent_id: row.id }),
+    )
+    const after = await fieldChanged(
+      edit(fx, fx.admin, row.id, { title: 'Three' }, { title: titlePrint('One') }),
+    )
+    expect(after.changes?.[0]?.by).toBeNull()
+  })
+})
+
 describe('entering Review', () => {
   it('compares cleared hours as the review time the move into Review stores', async () => {
     const fx = await setup()

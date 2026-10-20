@@ -202,10 +202,11 @@ list teams, projects, users, project users and tasks; read and change tasks
 and projects, their sharing and milestones; manage teams and their members;
 read, add, edit and delete comments; follow tasks; read and clear your inbox;
 upload, attach text and delete attachments; read a task's history and the
-planned hours per person; and set plannable weekly hours. Tools that change
-an existing task, comment, project, access grant, milestone, label, team or
-plannable hours take `expected`, the values the assistant last read, and
-save nothing when someone changed one of those fields since
+planned hours per person; and set plannable weekly hours. The tools that
+update a task, comment, project, access level, milestone, label, team or
+plannable hours, and the ones that delete a comment or a milestone, take
+`expected`, the values the assistant last read, and save nothing when
+someone changed one of those fields since
 ([When someone else changed it first](./working-together.md#when-someone-else-changed-it-first)). Request
 `archived: true` to list archived projects. Name an archived project to list
 its tasks, and restore it before creating new ones.

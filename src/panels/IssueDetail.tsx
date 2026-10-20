@@ -1153,8 +1153,16 @@ function IssueDetail({
   const [titleSeen, setTitleSeen] = useStateID('')
   const titleRebase = useRefID(false)
   // counts the title edits begun, so a refusal that answers after another
-  // edit began, or after the window moved to another task, keeps nothing
+  // edit began, after the window moved to another task or closed, or while
+  // the person types elsewhere, keeps nothing
   const titleSession = useRefID(0)
+  const mountedRef = useRefID(true)
+  useEffectID(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
   const [labelAnchor, setLabelAnchor] = useStateID<{ x: number; y: number } | null>(null)
   const [subAnchor, setSubAnchor] = useStateID<{ x: number; y: number } | null>(null)
   const [parentAnchor, setParentAnchor] = useStateID<{ x: number; y: number } | null>(null)
@@ -2137,7 +2145,12 @@ function IssueDetail({
                       seen: { title: titleSeen },
                       keepDraft: (shown) => {
                         const here = shownIssue.current && P.issueById[shownIssue.current]
-                        if (titleSession.current !== session || here?.uuid !== task) return false
+                        if (!mountedRef.current || titleSession.current !== session) return false
+                        if (here?.uuid !== task) return false
+                        // the field takes focus when it opens, so only while
+                        // nothing else holds it
+                        const at = document.activeElement
+                        if (at && at !== document.body) return false
                         // the rename shown now is the title a second save
                         // replaces; until a delivery shows it, wait for it
                         if (typeof shown === 'string' && shown !== titleSeen) setTitleSeen(shown)

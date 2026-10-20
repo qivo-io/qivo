@@ -269,6 +269,21 @@ describe('the field check in the store', () => {
     ])
   })
 
+  it('gives a later edit that kept its draft a line of its own', async () => {
+    void P.updateIssue(key('task-1'), { title: 'First' })
+    const first = latest()
+    void P.updateIssue(key('task-1'), { title: 'Second' }, { keepDraft: () => true })
+    const second = latest()
+    first.reject(changed([{ field: 'title' }]))
+    await settle()
+    second.reject(changed([{ field: 'title' }]))
+    await settle()
+    expect(showToast.mock.calls.at(-1)?.[0]).toBe(
+      'Not saved. Emil Berg changed the title of QN-1. Your change was discarded.\n' +
+        'Not saved. Emil Berg changed the title of QN-1. Your text is still in the editor. Save again to replace their version.',
+    )
+  })
+
   it('says while you were offline for an edit that waited through a drop', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-10-20T09:00:00.000Z'))

@@ -376,6 +376,19 @@ export const inviteGuest = orgMutation({
       .query('profiles')
       .withIndex('by_org_email', (q) => q.eq('org_id', ctx.me.org_id).eq('email', em))
       .first()
+    // A seat the address named when the inviter looked, gone since, holds no
+    // grant now: an expected level other than none is stale, so a removed
+    // member is not invited back unseen. Checked before the new seat.
+    if (existing === null && expected !== undefined) {
+      await assertGrantExpected(ctx, {
+        me: ctx.me,
+        project,
+        of: { id: em, name: em },
+        level: null,
+        expected,
+        next: level,
+      })
+    }
     let pid: string
     if (existing !== null) {
       await assertGrantee(ctx, project, existing.id, level)
@@ -425,7 +438,7 @@ export const inviteGuest = orgMutation({
       await assertGrantExpected(ctx, {
         me: ctx.me,
         project,
-        subject: { profile: existing },
+        of: existing,
         level: grant?.level ?? null,
         expected,
         next: level,

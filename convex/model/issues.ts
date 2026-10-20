@@ -271,18 +271,23 @@ export const TASK_FIELDS: Fields<Doc<'issues'>> = {
       expected.parent_id != null && expected.has_hidden_parent === true
         ? 'expected.has_hidden_parent must be false when expected.parent_id names a task'
         : undefined,
-    // A parent seen by id matches while it is stored, whatever its
-    // visibility now. A parent seen hidden matches any stored parent the
-    // reader is not shown, so a change from one hidden parent to another
-    // goes unseen: telling it would tell of tasks the reader cannot see.
+    // A parent seen by id matches while it is stored. A parent seen hidden
+    // matches any stored parent the reader is not shown, so a change from
+    // one hidden parent to another goes unseen: telling it would tell of
+    // tasks the reader cannot see. For the same reason an id the reader is
+    // not shown now counts as a hidden parent, so the answer never says
+    // whether a task the reader cannot see is the parent.
     compare: async ({ row, read, expected, next }) => {
       const stored = idForm(row.parent_id)
       const seenId = idForm(expected.parent_id)
+      const hidden = async () => stored !== null && !(await parentShown(read, String(stored)))
       const seen =
         seenId !== null
-          ? stored === seenId
+          ? (await parentShown(read, String(seenId)))
+            ? stored === seenId
+            : await hidden()
           : expected.has_hidden_parent === true
-            ? stored !== null && !(await parentShown(read, String(stored)))
+            ? await hidden()
             : stored === null
       return { seen, next: idForm(next.parent_id) === stored }
     },
@@ -327,10 +332,13 @@ const WRITERS_ROOM = 0.5
 /** Who wrote each of a task's `fields` as stored now: the actor of the
  * newest activity row whose field_prints holds the field, when that print is
  * the stored value's (`printed`, the print of the stored compare form) and
- * the caller may see the row (lib/activityVisibility.ts taskActivity). A
- * writer that logs no row changes the value, so its print no longer matches,
- * and a newer row the caller cannot see hides the person rather than naming
- * an older one. Both reads cover the task's newest SUBJECT_ACTIVITY_CAP rows. */
+ * the caller may see the row (lib/activityVisibility.ts taskActivity). The
+ * writers that log no row (a carried subtask, a cleared holder or parent's
+ * hours, a detach) touch the task, so a task touched after its newest row
+ * names nobody: such a writer may have put back a value an older row
+ * printed. A newer row the caller cannot see hides the person rather than
+ * naming an older one. Both reads cover the task's newest
+ * SUBJECT_ACTIVITY_CAP rows. */
 export async function taskWriters(
   read: Read,
   issue: Doc<'issues'>,
@@ -346,6 +354,7 @@ export async function taskWriters(
     )
     .order('desc')
     .take(SUBJECT_ACTIVITY_CAP)
+  if (newest[0] === undefined || issue.updated_at > newest[0].ts) return out
   const visible = new Set((await taskActivity(read.ctx, read.me, issue)).map((row) => row.id))
   for (const field of fields) {
     const row = newest.find((r) => r.field_prints?.[field] !== undefined)

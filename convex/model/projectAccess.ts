@@ -185,20 +185,21 @@ export const GRANT_FIELDS: Fields<Grant> = {
 export const vGrantExpected = v.object({ level: v.union(vGrantLevel, v.null()) })
 
 /** Refuses a grant write over a level someone else changed since `expected`
- * was read (model/expected.ts). `level` is the grant held now, null for
- * none, and `next` the level the write stores. */
+ * was read (model/expected.ts). `of` is the person or team the grant is
+ * for, by id and name, `level` the grant held now, null for none, and
+ * `next` the level the write stores. */
 export async function assertGrantExpected(
   ctx: QueryCtx,
   a: {
     me: Doc<'profiles'>
     project: Doc<'projects'>
-    subject: AccessSubject
+    of: { id: string; name: string }
     level: GrantLevel | null
     expected: Readonly<Record<string, unknown>> | undefined
     next: GrantLevel
   },
 ): Promise<void> {
-  const of = 'team' in a.subject ? a.subject.team : a.subject.profile
+  const { of } = a
   await assertExpected({
     read: { ctx, me: a.me, view: 'app' },
     fields: GRANT_FIELDS,
@@ -240,7 +241,7 @@ export async function setProjectGrantCore(
   await assertGrantExpected(ctx, {
     me: a.me,
     project,
-    subject,
+    of: 'team' in subject ? subject.team : subject.profile,
     level: row?.level ?? null,
     expected: a.expected,
     next: level,

@@ -2029,10 +2029,17 @@ function noticeFieldChanged(e: unknown) {
   const layer = context?.layer
   // an edit made on top of one of mine the server refused fails with it
   const seenFrom = layer?.seenFrom
+  // a line of the same kind only, so it keeps saying what became of each
+  // change: a kept draft, a delete or a discarded change
   const chained = seenFrom
     ? changes
         .map((change) => refusedLines.get(seenFrom.get(change.field) ?? -1))
-        .find((line) => line !== undefined)
+        .find(
+          (line) =>
+            line !== undefined &&
+            !!line.refusal.kept === !!context?.kept &&
+            !!line.refusal.deletes === !!context?.deletes,
+        )
     : undefined
   if (chained) {
     chained.refusal.count++
@@ -6152,6 +6159,13 @@ export const PLANNER = {
         about: { task: rec.issue_id },
         over: overOf('comments', rec, ['body']),
         notice: { deletes: true },
+        onError: (error) => {
+          toastWriteError(error)
+          // as for an edit: an older comment is read again to show the
+          // text that refused this delete
+          if (errData(error).reason === FIELD_CHANGED && olderComments.some((r) => r.id === id))
+            void refreshOlderComment(id)
+        },
         onOk: () => {
           acceptedCommentChanges.set(id, null)
           if (olderComments.some((r) => r.id === id))
@@ -7651,8 +7665,9 @@ export const PLANNER = {
   },
 
   /** Removes the milestone from the screen at once and resolves whether the
-      server deleted it, as updateMilestone does. */
-  removeMilestone: (id: string): Promise<boolean> => {
+      server deleted it, as updateMilestone does. `seen` is the milestone as
+      an editor showed it, the values the delete is checked against. */
+  removeMilestone: (id: string, seen?: { name: string; week: string }): Promise<boolean> => {
     const row = rows.milestones.get(id)
     if (!row || refusePausedEdit()) return Promise.resolve(false)
     const org = orgOfProject(row.project_id)
@@ -7661,7 +7676,8 @@ export const PLANNER = {
         rows.milestones.delete(id)
       },
     }
-    const over = overOf('milestones', row, ['name', 'week'])
+    // what an editor showed, which may be older than the row on screen
+    const over = overOf('milestones', row, ['name', 'week'], seen)
     return (
       recordRoadmapChange({ kind: 'milestone_remove', id }, view, over) ??
       send(api.projects.removeMilestone, { org_id: org, id }, view, {

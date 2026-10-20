@@ -472,12 +472,6 @@ export async function setPlannableHoursCore(
     }
     if (!leads) throw rights
   }
-  await assertProfileExpected(ctx, {
-    me: a.me,
-    seat: target,
-    expected: a.expected,
-    next: { plannable_hours: Math.round(Number(a.hours) || 0) },
-  })
   if (target.kind === 'agent') {
     throw rule('an agent has no plannable week, because its capacity is unbounded')
   }
@@ -485,6 +479,13 @@ export async function setPlannableHoursCore(
   if (h < 1 || h > 168) {
     throw rule('plannable hours must be a whole number of hours from 1 to 168')
   }
+  // after the rules, so a request no check can let through says why
+  await assertProfileExpected(ctx, {
+    me: a.me,
+    seat: target,
+    expected: a.expected,
+    next: { plannable_hours: h },
+  })
   await ctx.db.patch(target._id, { plannable_hours: h })
   return (await ctx.db.get(target._id)) as Doc<'profiles'>
 }

@@ -320,8 +320,8 @@ export const change = authedMutation({
           const end = 'end_week' in patch ? (patch.end_week ?? undefined) : row.end_week
           assertWeekPair(start, end)
         }
-        // before the no-op skip, so a stale operation refuses the batch
-        // even when someone already stored the same value meanwhile
+        // before the no-op skip, so a malformed expected is refused even
+        // on an operation that changes nothing
         await assertTaskExpected(ctx, {
           me,
           issue: row,

@@ -913,7 +913,8 @@ authenticates the request, is an HTTP `503` with `Retry-After: 1` and the
 matching sentence as `error`, and the request is safe to send again in the
 same way. A call that sent `expected` and is refused because someone
 changed one of those fields since answers a sentence that ends `so nothing
-was saved; read <record> again and resend your change` (see [Refusing a
+was saved; read <record> again and resend your change`, or for a delete `so
+nothing was deleted; read <record> again before you delete it` (see [Refusing a
 change when a field changed since you read
 it](#refusing-a-change-when-a-field-changed-since-you-read-it)). Unlike the
 conflict above, never make that call again unchanged, because Qivo refuses
@@ -976,8 +977,9 @@ tools that take no arguments, `get_me`, `list_teams`, `list_users` and
 
 Two callers can read the same task and both change it, and the second call
 then overwrites the first without either of them knowing. To prevent that,
-the tools that change an existing record take an optional `expected`
-argument, an object with the value you last read of each field the call
+`update_task`, `update_comment`, `delete_comment`, `update_project`,
+`set_project_access`, `set_milestone`, `delete_milestone`, `set_label`,
+`set_team` and `update_user` take an optional `expected` argument, an object with the value you last read of each field the call
 changes. Qivo saves the change only when nobody else changed those fields
 since. A call without `expected` saves as before. The rule, for each key:
 
@@ -1056,8 +1058,9 @@ read or, for a comment, its last editor:
 For example, `Aisha Rahman changed status of QN-12 since you read it, so
 nothing was saved; read QN-12 again and resend your change`. `it` becomes
 `them` for several fields, and `<record>` reads as REST describes. A refused
-delete says `so nothing was deleted; read <record> again before you delete
-it` in place of the part after the first comma. Never make the same call
+delete ends `so nothing was deleted; read <record> again before you delete
+it` instead of `so nothing was saved; read <record> again and resend your
+change`. Never make the same call
 again unchanged. Read the record, look at the other change, decide whether yours
 still applies, and send it with the new values in `expected`.
 

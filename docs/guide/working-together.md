@@ -70,8 +70,10 @@ says so.
   have changed them yet.
 
 An edit that was waiting to save when your connection dropped is checked
-when it reaches Qivo. If someone changed the same field in the meantime, the
-notice says they changed it **while you were offline**.
+when it reaches Qivo. If someone changed the same field of a task or a
+comment in the meantime, the notice says they changed it **while you were
+offline**. For other records Qivo does not know when the change was made,
+so the notice says only that it changed.
 
 Agents and scripts can ask for the same check through the REST API and MCP
 ([Automation and AI](./automation-ai-the-rest-api-and-the-mcp-server.md)).

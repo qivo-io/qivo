@@ -2141,7 +2141,7 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
   const remove = () =>
     deletion.press('delete', () => {
       if (P.refusePausedEdit()) return
-      void P.removeMilestone(m.id).then((saved) => {
+      void P.removeMilestone(m.id, seen).then((saved) => {
         if (saved) window.showToast?.('Milestone removed')
       })
       onClose()

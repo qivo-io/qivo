@@ -816,6 +816,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       setLinkPop(null)
       setHeadMenu(false)
       ed.setEditable(false, false)
+      rebaseRef.current = false
       void cm.onCommit(text, draftKeep(ed, rawRef.current)).then((saved) => {
         sendingRef.current = false
         setSending(false)
@@ -872,6 +873,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       if (P.refusePausedEdit()) return
       // the text this draft began from, sent as what the person saw
       const keep = draftKeep(ed, rawRef.current)
+      rebaseRef.current = false
       rawRef.current = text
       canonRef.current = text
       // ids entering committed text are the store's from here on — its
@@ -912,6 +914,8 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       canonRef.current = canonical(latest)
     }
     setDocFromText(ed, rawRef.current)
+    // a discarded draft keeps no claim on the next text the server shows
+    rebaseRef.current = false
     reapSessionUploads()
     refreshDirty()
     ed.commands.blur()

@@ -153,6 +153,68 @@ describe('project access', () => {
   })
 })
 
+describe('an invitation to an address whose seat is gone', () => {
+  it('refuses a stale level instead of inviting a removed member back', async () => {
+    const fx = await setup()
+    const invite = (seen: 'user' | 'viewer' | null) =>
+      as(fx.t, fx.user).mutation(api.projects.inviteGuest, {
+        org_id: fx.org.id,
+        project_id: fx.sub.id,
+        email: 'gone@testbed.test',
+        level: 'user',
+        expected: { level: seen },
+      })
+    // the inviter saw a Viewer seat for the address, which is gone now
+    await fieldChanged(invite('viewer'))
+    expect(
+      await fx.t.run((ctx) =>
+        ctx.db
+          .query('profiles')
+          .withIndex('by_org_email', (q) =>
+            q.eq('org_id', fx.org.id).eq('email', 'gone@testbed.test'),
+          )
+          .first(),
+      ),
+    ).toBeNull()
+    // one who saw no seat invites a new guest
+    expect(typeof (await invite(null))).toBe('string')
+  })
+})
+
+describe('rights before the check', () => {
+  it('refuses a caller without the right as before, whatever expected says', async () => {
+    const fx = await setup()
+    const stale = { name: 'Not the name' }
+    await expectRefusal(
+      as(fx.t, fx.viewer).mutation(api.teams.update, {
+        org_id: fx.org.id,
+        id: fx.team.id,
+        patch: { name: 'Renamed' },
+        expected: stale,
+      }),
+      'forbidden',
+    )
+    await expectRefusal(
+      as(fx.t, fx.viewer).mutation(api.projects.update, {
+        org_id: fx.org.id,
+        id: fx.sub.id,
+        patch: { name: 'Renamed' },
+        expected: stale,
+      }),
+      'forbidden',
+    )
+    await expectRefusal(
+      as(fx.t, fx.viewer).mutation(api.profiles.setPlannableHours, {
+        org_id: fx.org.id,
+        profile_id: fx.user.id,
+        hours: 20,
+        expected: { plannable_hours: 1 },
+      }),
+      'rule',
+    )
+  })
+})
+
 describe('teams', () => {
   it('compares a team edit and a team delete', async () => {
     const fx = await setup()
@@ -264,6 +326,27 @@ describe('people', () => {
         expected: { can_create_projects: false },
       }),
     )
+  })
+
+  it('takes a plannable week read as none, and tells an agent it has none before any check', async () => {
+    const fx = await setup()
+    const founder = await plantSeat(fx.t, {
+      org_id: fx.org.id,
+      name: 'Founder',
+      org_role: 'admin',
+      plannable_hours: undefined,
+    })
+    const overRest = (ref: string, seen: number | null) =>
+      fx.t.mutation(internal.machine.rest.updateUser, {
+        callerId: fx.admin.id,
+        access: 'write',
+        ref,
+        body: JSON.stringify({ plannable_hours: 30, expected: { plannable_hours: seen } }),
+      })
+    await overRest(founder.id, null)
+    expect((await fx.t.run((ctx) => byId(ctx, 'profiles', founder.id)))?.plannable_hours).toBe(30)
+    // the agent rule answers first, so the refusal says what to do
+    await expectRefusal(overRest(fx.agent.id, 30), 'rule')
   })
 
   it('compares the plannable week in the app and over REST', async () => {

@@ -2140,8 +2140,9 @@ Emil Strand to project PCB` or `user "Priya Patel"`. For example:
 { "error": "Aisha Rahman changed status of QN-12 since you read it, so nothing was saved; read QN-12 again and resend your change" }
 ```
 
-A refused delete says `so nothing was deleted; read <record> again before
-you delete it` in place of the part after the first comma. Do not send the
+A refused delete ends `so nothing was deleted; read <record> again before
+you delete it` instead of `so nothing was saved; read <record> again and
+resend your change`. Do not send the
 same request again, because Qivo refuses it again. Read the record, look
 at the other change, decide whether yours still applies, and send it with
 the new values in `expected`.
