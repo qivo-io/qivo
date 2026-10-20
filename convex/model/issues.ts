@@ -1819,9 +1819,11 @@ async function subtreeToCarry(
  * does not restart it first. The remaining-hours measurement
  * (remaining_set_at) stays on purpose: it is the planning anchor
  * (lib/delay.ts, lib/workload.ts), so restarting it would move the task's
- * forecast and load with no change in the work. created_at and archived_at
- * stay too: the archive time is the archive state, whose change the history
- * and inbox narrate. */
+ * forecast and load with no change in the work. The accepted cost is that
+ * the task JSON keeps showing when the hours were last set in the source
+ * project, which can be the time it entered review there. created_at and
+ * archived_at stay too: the archive time is the archive state, whose change
+ * the history and inbox narrate. */
 function movedStamps(task: Doc<'issues'>, now: string, group = false) {
   return {
     status_at: undefined,

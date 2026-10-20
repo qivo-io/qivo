@@ -1914,8 +1914,8 @@ caller cannot see is a `404`.
 `week_starts[i]`, rounded to a tenth. A task counts toward its owner (the
 reviewer while it is In Review with one, else the assignee) when it is
 scheduled, not Done, not paused, has remaining hours and is not archived or
-in an archived project. Its remaining hours spread evenly from the week its
-estimate was saved, or its start week if later, through its end week; an
+in an archived project. Its remaining hours spread evenly from the week of
+its `remaining_set_at`, or its start week if later, through its end week; an
 estimate saved after the end week counts in the week it was saved. Compare
 `hours` with `plannable_hours`, which is `null` for an agent, because agents
 have no weekly limit.
