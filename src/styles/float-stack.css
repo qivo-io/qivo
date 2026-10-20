@@ -17,12 +17,16 @@
    --float-inset-bottom, measured by lib/floatStack). The column sits above
    the task window and dialogs (z-index 60 to 101), and below the menus,
    pickers and tooltips opened from them (110 and up), so a menu that opens
-   near a notice covers the notice rather than the other way round. */
+   near a notice covers the notice rather than the other way round. An open
+   menu or picker takes the first press outside it, on a notice too. */
 :root {
   --float-inset-top: 0px;
   --float-inset-bottom: 0px;
   /* both bands, for a layer as tall as the window */
   --float-inset-y: calc(var(--float-inset-top) + var(--float-inset-bottom));
+  /* the part of the top safe area (a phone's status bar) that the top band
+     does not already hold, for a layer that starts below the band */
+  --float-safe-top: max(0px, env(safe-area-inset-top) - var(--float-inset-top));
 }
 .float-stack {
   position: fixed;
@@ -75,6 +79,7 @@
    toasts above the bottom navigation, at the window's full width. */
 @media (max-width: 760px) {
   .float-stack {
+    padding-top: max(16px, env(safe-area-inset-top));
     padding-bottom: calc(76px + env(safe-area-inset-bottom));
   }
   .float-stack > [data-float-slot="toasts"] {

@@ -211,7 +211,7 @@ html[data-appearance] .inbox-detail-frame [data-issue-layout="embedded"] {
   }
   .inbox-layout[data-inbox-mobile-detail] > .inbox-detail-frame--note {
     flex-direction: column;
-    padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom);
+    padding: var(--float-safe-top) 16px env(safe-area-inset-bottom);
     background: var(--background);
   }
   /* Over a photo the full-screen task supplies its own window glass. Keep

@@ -5,12 +5,32 @@ import { api } from '../../convex/_generated/api'
    client is a double that records what is sent; the status is the real one
    the console's notice reads. */
 
-const client = vi.hoisted(() => ({
-  socket: true,
-  mutation: vi.fn(),
-  action: vi.fn(),
-  connectionState: () => ({ isWebSocketConnected: client.socket }),
-}))
+const client = vi.hoisted(() => {
+  const listeners = new Set<(state: { isWebSocketConnected: boolean }) => void>()
+  const double = {
+    socket: true,
+    connections: 1,
+    mutation: vi.fn(),
+    action: vi.fn(),
+    connectionState: () => ({
+      isWebSocketConnected: double.socket,
+      connectionCount: double.connections,
+    }),
+    subscribeToConnectionState(listener: (state: { isWebSocketConnected: boolean }) => void) {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+    /** Opens or closes the socket and tells the listeners. */
+    setSocket(connected: boolean) {
+      if (connected && !double.socket) double.connections++
+      double.socket = connected
+      for (const listener of [...listeners]) listener(double.connectionState())
+    },
+  }
+  return double
+})
 vi.mock('../lib/convex', () => ({ convex: client }))
 
 let gate: typeof import('./convex')
@@ -20,6 +40,7 @@ beforeEach(async () => {
   vi.resetModules()
   vi.useFakeTimers()
   client.socket = true
+  client.connections = 1
   client.mutation.mockReset().mockResolvedValue(null)
   client.action.mockReset().mockResolvedValue(null)
   sync = await import('../lib/syncStatus')
@@ -31,10 +52,15 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
+/** Opens or closes the socket, for the client and the status alike. */
+function socket(connected: boolean) {
+  client.setSocket(connected)
+  sync.syncStatus.setSocket({ connected, everConnected: true })
+}
+
 /** Drops the socket for long enough that saving pauses. */
 function goOffline() {
-  client.socket = false
-  sync.syncStatus.setSocket({ connected: false, everConnected: true })
+  socket(false)
   vi.advanceTimersByTime(sync.OFFLINE_DELAY_MS)
   expect(sync.syncStatus.pause()?.kind).toBe('offline')
 }
@@ -68,14 +94,31 @@ describe('console changes', () => {
     expect(sync.syncStatus.unconfirmed()).toBe(0)
   })
 
-  it('refuses a changing action on a dropped socket before the pause, so Convex never queues it', async () => {
-    client.socket = false
-    sync.syncStatus.setSocket({ connected: false, everConnected: true })
+  it('sends a changing action only on a connected socket, waiting out a short drop', async () => {
+    socket(false)
     expect(sync.syncStatus.pause()).toBeNull()
-    await expect(gate.runAction(api.adminOrgs.createOrganization, {} as never)).rejects.toThrow(
-      OFFLINE,
-    )
+    const refused = gate.runAction(api.adminOrgs.createOrganization, {} as never)
+    vi.advanceTimersByTime(sync.OFFLINE_DELAY_MS)
+    await expect(refused).rejects.toThrow(OFFLINE)
     expect(client.action).not.toHaveBeenCalled()
+    socket(true)
+    socket(false)
+    const sent = gate.runAction(api.adminAuth.banUser, { email: 'a@example.test' })
+    vi.advanceTimersByTime(sync.OFFLINE_DELAY_MS / 2)
+    expect(client.action).not.toHaveBeenCalled()
+    socket(true)
+    await sent
+    expect(client.action).toHaveBeenCalledOnce()
+  })
+
+  it('does not go ahead with a change that read first once the socket dropped meanwhile', () => {
+    const unchanged = gate.beginChange()
+    expect(() => unchanged()).not.toThrow()
+    socket(false)
+    socket(true)
+    expect(() => unchanged()).toThrow(gate.DROPPED_TEXT)
+    socket(false)
+    expect(() => gate.beginChange()).toThrow(OFFLINE)
   })
 
   it('still runs the actions that only read while offline', async () => {
@@ -129,7 +172,12 @@ describe('console call sites', () => {
     expect(Object.keys(sources).length).toBeGreaterThan(10)
     const direct = Object.entries(sources)
       .filter(([path]) => path !== './convex.ts')
-      .filter(([, text]) => /\bconvex\s*\.\s*(mutation|action)\s*\(/.test(text))
+      .filter(
+        ([, text]) =>
+          // a call, a reference, an optional call or a destructuring
+          /\bconvex\s*\??\.\s*(mutation|action)\b/.test(text) ||
+          /\{[^}]*\b(mutation|action)\b[^}]*\}\s*=\s*convex\b/.test(text),
+      )
       .map(([path]) => path)
     expect(direct).toEqual([])
   })

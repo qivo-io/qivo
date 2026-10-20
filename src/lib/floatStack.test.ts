@@ -79,6 +79,11 @@ describe('the notices’ bands', () => {
       top: 120,
       height: 280,
     })
+    // without a bottom band, a window height the keyboard shrank is ignored
+    expect(stack.roomBeside({ top: 350, height: 450 }, { top: 0, bottom: 0 }, 450)).toEqual({
+      top: 350,
+      height: 450,
+    })
     // a bottom band past the visible part takes nothing either
     expect(stack.roomBeside({ top: 0, height: 500 }, { top: 0, bottom: 100 }, 800)).toEqual({
       top: 0,

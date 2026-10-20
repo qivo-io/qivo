@@ -12,7 +12,7 @@
     display: flex;
     width: 100%;
     height: calc(100dvh - var(--float-inset-y));
-    padding: env(safe-area-inset-top) 0 0;
+    padding: var(--float-safe-top) 0 0;
     overflow: hidden;
     background: var(--background);
     -webkit-backdrop-filter: none;
@@ -280,7 +280,7 @@
   }
 
   [data-focus-window] {
-    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+    padding: var(--float-safe-top) 0 env(safe-area-inset-bottom);
   }
 
   [data-focus-window] > [data-issue-design] {

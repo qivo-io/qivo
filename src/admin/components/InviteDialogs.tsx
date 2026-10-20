@@ -42,6 +42,7 @@ import {
   type PeopleCheck,
   suggestAddress,
 } from '../api'
+import { beginChange } from '../convex'
 import {
   ADDRESS_MAX,
   addressMessage,
@@ -558,6 +559,9 @@ export function NewOrganizationDialog({
     setBusy(true)
     setError('')
     try {
+      // the checks below read first; the creation must not start on its own
+      // after a reconnect the operator did not wait for (../convex.ts)
+      const unchanged = beginChange()
       const slug = address.slug
       if (slug !== '') {
         const result = await checkAddress(slug)
@@ -568,6 +572,7 @@ export function NewOrganizationDialog({
       }
       const review = await people.recheck()
       if (!review.ready) return
+      unchanged()
       const created = await createOrganization({
         name: name.trim(),
         ...(slug !== '' ? { slug } : {}),
@@ -730,8 +735,10 @@ export function InvitePeopleDialog({
     setBusy(true)
     setError('')
     try {
+      const unchanged = beginChange()
       const review = await people.recheck()
       if (!review.ready) return
+      unchanged()
       await invitePeople(orgId, review.people)
       await onInvited()
     } catch (cause) {
@@ -830,11 +837,13 @@ export function EditInviteDialog({
     setBusy(true)
     setError('')
     try {
+      const unchanged = beginChange()
       if (emailChanged) {
         const [result] = await checkPeople([cleanedEmail], orgId)
         if (result) setCheck(result)
         if (conflictMessage(result)) return
       }
+      unchanged()
       await editInvite(member.profile_id, cleanedName, cleanedEmail)
       await onSaved()
     } catch (cause) {

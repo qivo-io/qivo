@@ -2206,7 +2206,7 @@ function IssueDetail({
         className={cn(
           embedded
             ? 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden'
-            : 'fixed inset-x-0 top-[var(--float-inset-top)] bottom-[var(--float-inset-bottom)] z-[60] grid items-start justify-items-center overflow-y-auto px-[3vw] py-[4vh]',
+            : 'fixed inset-0 z-[60] grid items-start justify-items-center overflow-y-auto px-[3vw] pt-[calc(4vh+var(--float-inset-top))] pb-[calc(4vh+var(--float-inset-bottom))]',
           // Override the mobile stylesheet's inset so the measured visual
           // viewport, including its keyboard offset, determines the frame.
           mobile && '!bottom-auto',
@@ -2236,7 +2236,15 @@ function IssueDetail({
         }
         style={{
           ...(!embedded ? { pointerEvents: open ? 'auto' : 'none', ...(mobile ? fade : {}) } : {}),
-          ...(mobile ? { height: mobileFrame.height, top: mobileFrame.top } : {}),
+          ...(mobile
+            ? {
+                height: mobileFrame.height,
+                top: mobileFrame.top,
+                // the status bar's room, less what the notices' band above
+                // the frame already holds
+                paddingTop: `max(0px, env(safe-area-inset-top) - ${mobileFrame.top - mobileViewport.top}px)`,
+              }
+            : {}),
         }}
       >
         {/* The backdrop stands beside the window rather than around it, so the

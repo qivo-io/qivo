@@ -364,7 +364,7 @@
   --landscape-inset-right: env(safe-area-inset-bottom);
   --landscape-inset-bottom: env(safe-area-inset-left);
   padding: env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)
-    env(safe-area-inset-top);
+    var(--float-safe-top);
 }
 .mobile-roadmap-landscape > .appearance-background {
   position: absolute;
@@ -433,7 +433,9 @@
 }
 .mobile-roadmap-landscape [data-plan-card] {
   right: calc(12px + var(--landscape-inset-right));
-  bottom: calc(12px + var(--landscape-inset-bottom));
+  /* turned to landscape, the card is fixed to the window, whose bottom band
+     the floating notices take (lib/floatStack) */
+  bottom: calc(12px + var(--landscape-inset-bottom) + var(--float-inset-bottom));
   max-width: calc(var(--landscape-width) - 24px);
   max-height: calc(var(--landscape-height) - 76px);
 }

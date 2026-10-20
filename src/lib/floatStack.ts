@@ -47,14 +47,17 @@ export function noticeInsets(box: { top: number; bottom: number } | null, height
 /** The part of `view`, a box of the visible viewport in window
     coordinates, that the notices leave free in a window `height` high. The
     notices stay put in the window, so once the visible viewport has panned
-    past a band (a phone's keyboard can do that), the band takes nothing. */
+    past a band (a phone's keyboard can do that), the band takes nothing.
+    Without a bottom band the visible viewport's own bottom holds, whatever
+    `height` a browser reports while its keyboard is open. */
 export function roomBeside(
   view: { top: number; height: number },
   band: FloatInsets,
   height: number,
 ): { top: number; height: number } {
   const top = Math.max(view.top, band.top)
-  const bottom = Math.min(view.top + view.height, height - band.bottom)
+  const end = view.top + view.height
+  const bottom = band.bottom ? Math.min(end, height - band.bottom) : end
   return { top, height: Math.max(0, bottom - top) }
 }
 
@@ -77,6 +80,21 @@ function measure(stack: HTMLElement) {
   for (const listener of listeners) listener()
 }
 
+/* The column this module instance measures. A hot update in development
+   loads a new instance, which measures the column it finds as well; the
+   instance it replaced writes the same bands until the page reloads. */
+let measured: HTMLElement | null = null
+
+/** Measures `column`'s notices from now on. A slot changes size when a
+    notice comes, goes or reflows, and the window decides which edge the
+    column puts the notices on. */
+function watch(column: HTMLElement) {
+  measured = column
+  const observer = new ResizeObserver(() => measure(column))
+  for (const element of column.children) observer.observe(element)
+  window.addEventListener('resize', () => measure(column))
+}
+
 /** The element a floating layer portals into. Creates the column on first
     use, and starts measuring the notices' bands. */
 export function floatSlot(slot: FloatSlot): HTMLElement {
@@ -92,13 +110,9 @@ export function floatSlot(slot: FloatSlot): HTMLElement {
       column.append(element)
     }
     document.body.append(column)
-    // A slot changes size when a notice comes, goes or reflows, and the
-    // window decides which edge the column puts the notices on.
-    const observer = new ResizeObserver(() => measure(column))
-    for (const element of column.children) observer.observe(element)
-    window.addEventListener('resize', () => measure(column))
     stack = column
   }
+  if (measured !== stack) watch(stack)
   const element = stack.querySelector<HTMLElement>(`[data-float-slot="${slot}"]`)
   if (!element) throw new Error(`The floating column has no ${slot} slot`)
   return element

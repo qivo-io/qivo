@@ -1,9 +1,11 @@
+import { CircleAlert } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { Icon } from './qivo'
 
 /** One warning in the floating column (lib/floatStack): its title and line,
     then `details` under them and `actions` at its end when given. `kind`
-    names it in data-snapshot-notice. */
+    names it in data-snapshot-notice. It draws the app's alert icon itself,
+    because the icon set (components/qivo) loads the planner store, which the
+    operator console does not run. */
 export function NoticeCard({
   kind,
   title,
@@ -28,7 +30,12 @@ export function NoticeCard({
     >
       <div className="min-w-0 flex-1 basis-60 text-sm">
         <div className="flex items-center gap-2 font-semibold">
-          <Icon name="alert" size={16} color="var(--warn)" />
+          <CircleAlert
+            size={16}
+            strokeWidth={1.75}
+            aria-hidden="true"
+            className="block shrink-0 text-[var(--warn)]"
+          />
           {title}
         </div>
         <div className="mt-1 text-muted-foreground">{line}</div>
