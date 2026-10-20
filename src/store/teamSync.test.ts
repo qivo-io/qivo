@@ -280,12 +280,14 @@ describe('the Team sync store', () => {
     P.updateIssue(task('To do').id, { status: 'progress' })
     const stamped = task('To do').statusAt
     expect(stamped).toBe(before)
-    // a title edit and a patch that resends the status keep it
+    // a patch that resends the title and the status changes nothing, so
+    // nothing goes out and nothing is stamped
+    const touched = task('To do').updatedAt
     tick()
     P.updateIssue(task('To do').id, { title: 'To do' })
     tick()
     P.updateIssue(task('To do').id, { status: 'progress' })
-    expect(task('To do').updatedAt).toBe(Date.now())
+    expect(task('To do').updatedAt).toBe(touched)
     expect(task('To do').statusAt).toBe(stamped)
     // a move to another project clears it on the task and the subtask it carries
     P.updateIssue(task('Child').id, { status: 'progress' })

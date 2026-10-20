@@ -1056,7 +1056,7 @@ function CommentRow({
                 autoFocus
                 comment={{
                   label: 'Save',
-                  onCommit: (text: string) => P.updateComment(c.id, text),
+                  onCommit: (text, keep) => P.updateComment(c.id, text, keep),
                   onClose: onDoneEdit,
                 }}
               />
@@ -1147,6 +1147,11 @@ function IssueDetail({
   const frameRef = useRefID<HTMLDivElement>(null)
   const [editTitle, setEditTitle] = useStateID(false)
   const [titleDraft, setTitleDraft] = useStateID('')
+  // the title shown when editing began, which the save sends as seen; after
+  // a save refused over someone else's rename, the next title shown that
+  // differs from it becomes the new one (titleRebase)
+  const [titleSeen, setTitleSeen] = useStateID('')
+  const titleRebase = useRefID(false)
   const [labelAnchor, setLabelAnchor] = useStateID<{ x: number; y: number } | null>(null)
   const [subAnchor, setSubAnchor] = useStateID<{ x: number; y: number } | null>(null)
   const [parentAnchor, setParentAnchor] = useStateID<{ x: number; y: number } | null>(null)
@@ -1285,6 +1290,14 @@ function IssueDetail({
   const it = issueId ? P.issueById[issueId] : null
   useUpdateBlocker(editTitle && !!it && titleDraft !== it.title)
   useUnsaved(editTitle && !!it && titleDraft !== it.title)
+  // a kept title draft: the rename that refused its save becomes the title
+  // the next save sends as seen, once the screen shows it
+  const shownTitle = it?.title
+  useEffectID(() => {
+    if (!titleRebase.current || shownTitle === undefined || shownTitle === titleSeen) return
+    titleRebase.current = false
+    setTitleSeen(shownTitle)
+  }, [shownTitle, titleSeen])
   // remaining hours typed and not yet saved (the field saves on blur)
   const remainingUnsaved = useFieldUnsaved(P.editsPaused, `${it?.id}:${it?.remaining ?? ''}`)
   // point the store's one-thread comment cache at this issue; release it when
@@ -1826,10 +1839,12 @@ function IssueDetail({
             </div>
           }
         >
-          {/* keyed: in-modal navigation swaps issues in place, and the
-              editor's committed-text refs are per-issue state */}
+          {/* keyed by the task, not its handle: in-modal navigation swaps
+              issues in place, and the editor's committed-text refs are
+              per-issue state, but a new task's handle may move while the
+              person types (P.watchHandles) */}
           <DescEditor
-            key={it.id}
+            key={it.uuid}
             ref={descRef}
             issueKey={it.id}
             org={it.org}
@@ -1938,7 +1953,7 @@ function IssueDetail({
                 {/* the description field, verbatim — same dialect, same
                     Save/Discard contract; posting clears it (reset) */}
                 <DescEditor
-                  key={it.id}
+                  key={it.uuid}
                   ref={composerRef}
                   issueKey={null}
                   org={it.org}
@@ -2105,10 +2120,23 @@ function IssueDetail({
               onChange={(e) => setTitleDraft(e.target.value)}
               onBlur={() => {
                 const v = titleDraft.trim()
-                if (v && v !== it.title) {
+                if (v && v !== titleSeen) {
                   // a paused save keeps the field open with the draft
                   if (P.refusePausedEdit()) return
-                  upd({ title: v })
+                  // refused over someone else's rename, the field opens again
+                  // with this draft (keepDraft)
+                  void P.updateIssue(
+                    it.id,
+                    { title: v },
+                    {
+                      seen: { title: titleSeen },
+                      keepDraft: () => {
+                        titleRebase.current = true
+                        setTitleDraft(v)
+                        setEditTitle(true)
+                      },
+                    },
+                  )
                 }
                 setEditTitle(false)
               }}
@@ -2132,6 +2160,8 @@ function IssueDetail({
                   live
                     ? () => {
                         setTitleDraft(it.title)
+                        setTitleSeen(it.title)
+                        titleRebase.current = false
                         setEditTitle(true)
                       }
                     : undefined

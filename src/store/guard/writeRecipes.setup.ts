@@ -59,8 +59,6 @@ export type Recipe = {
   /** The write paints only once the server accepts it (a keep), such as
       an upload or a removal the window waits for. */
   paintsOnAccept?: true
-  /** Why the runner cannot drive this write, when it cannot. */
-  unrunnable?: string
 }
 
 const task = (id: string, num: number, over: Partial<Row<'issues'>> = {}): Row<'issues'> => ({
@@ -771,14 +769,16 @@ export const recipes: Recipe[] = [
     what: 'a new organization',
     pause: 'P',
     act: (P) => P.createOrg('New Labs'),
+    // the boot createOrg runs again claims the seats first
+    answers: { 'identity:claimMySeats': () => null },
   },
   {
     mutation: 'identity:claimMySeats',
     mutator: 'initStore',
     what: 'the seat claim at boot',
     pause: 'P',
-    act: () => {},
-    unrunnable: 'it runs once while the store boots, before any edit',
+    // the boot run again, as createOrg does
+    act: async () => (await import('../planner')).initStore(),
   },
   {
     mutation: 'projects:inviteGuest',

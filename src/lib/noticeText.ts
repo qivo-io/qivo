@@ -24,9 +24,9 @@ const PAUSES: Record<SavePause['kind'], { title: string; paused: string }> = {
   },
 }
 
-/** The sentence a change refused during the pause `kind` shows, the same
-    in the app (store/planner.ts OFFLINE_TEXT and SLOW_TEXT) and in the
-    operator console. */
+/** The sentence a change refused during the pause `kind` shows, in the app
+    (store/planner.ts OFFLINE_TEXT and SLOW_TEXT take it) and in the operator
+    console. */
 export function pauseSentence(kind: SavePause['kind']): string {
   return `${PAUSES[kind].title}. ${PAUSES[kind].paused}`
 }

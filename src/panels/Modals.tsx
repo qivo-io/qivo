@@ -2058,6 +2058,9 @@ function MilestoneRowView({
    Delete / Cancel / Save on a second line. Enter saves; Escape cancels the
    edit and leaves the window open (data-escape-owner, see ModalShell). */
 function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }) {
+  // the name and day stored when the editor opened, which the save sends as
+  // what the person saw
+  const [seen] = useStateM(() => P.milestoneRow(m.id) ?? undefined)
   const [name, setName] = useStateM(m.name)
   // a rename typed and not saved yet
   useUnsaved(name.trim() !== m.name)
@@ -2102,7 +2105,7 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
     // a refused save (paused, a name over the cap, or refused by the server)
     // keeps the editor open with the draft
     setSaving(true)
-    void P.updateMilestone(m.id, { name: name.trim(), week: exactWeekForDate(date) }).then(
+    void P.updateMilestone(m.id, { name: name.trim(), week: exactWeekForDate(date) }, seen).then(
       (saved) => {
         setSaving(false)
         if (!saved) return

@@ -22,6 +22,9 @@ import type { Id } from '../../convex/_generated/dataModel'
 import { joinLists } from '../../convex/lib/arrayLimit'
 import { AVATAR_COLORS } from '../../convex/lib/avatarColors'
 import { BILLING_READ_ONLY, deletionReadOnly } from '../../convex/lib/billingAccess'
+import { descriptionForm, FIELD_CHANGED, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
+import type { FieldChange } from '../../convex/lib/functions'
+import { roundTenths } from '../../convex/lib/numbers'
 import {
   canCreateProjects,
   isProjectCreators,
@@ -89,6 +92,7 @@ import { groupProgress, groupSpan, isIssueDone, isIssueGroup } from '../lib/issu
 import { LABEL_COLORS } from '../lib/labelColors'
 import { hasUnsaved, holdUnsaved, leaveDeliberately } from '../lib/leaveGuard'
 import { watchLocalDay } from '../lib/localDay'
+import { pauseSentence } from '../lib/noticeText'
 import { desktopNotify } from '../lib/notify'
 import { matchesAllWords, taskSearchText } from '../lib/search'
 import { type SavePause, syncStatus } from '../lib/syncStatus'
@@ -102,6 +106,7 @@ import {
   plannableHoursOf,
 } from '../lib/workload'
 import { createEntityLookup } from './entityLookup'
+import { type Refusal as FieldRefusal, noticeText, refusalLine, type Writer } from './fieldNotice'
 import {
   createLayers,
   type Layer,
@@ -893,10 +898,13 @@ export type { ToastTone }
 /* The two window hooks the app hangs globally: App mounts showToast for the
    non-React layers (this store, imgActions), and the store re-exposes itself
    as window.PLANNER for the verify drives (scripts/verify-*.mjs). A showToast
-   call without a tone shows a success. */
+   call without a tone shows a success. A sticky toast stays until the person
+   closes it, and one shown again with the same `key` replaces its text. */
 declare global {
   interface Window {
-    showToast?: ((msg: string, tone?: ToastTone) => void) | null
+    showToast?:
+      | ((msg: string, tone?: ToastTone, opts?: { sticky?: boolean; key?: string }) => void)
+      | null
     PLANNER?: unknown
   }
 }
@@ -1138,8 +1146,15 @@ type SendOptions<R> = {
       not ask for. */
   quietPause?: boolean
   about?: WriteAbout
-  /** The values the write paints over (Over). */
+  /** The values the write paints over (Over), which go out as its
+      `expected` (expectedOf). */
   over?: Over
+  /** How the notice of a field_changed refusal reads (store/fieldNotice.ts):
+      a delete, or a Roadmap batch of this many changes. */
+  notice?: { deletes?: boolean; batch?: number }
+  /** Runs on a field_changed refusal before the paint goes, for an editor
+      that keeps the person's draft; the notice then says so. */
+  keepDraft?: () => void
 }
 
 /** What a write shows: a view, an open layer it was collected in (a Roadmap
@@ -1222,6 +1237,9 @@ function start<M extends FunctionReference<'mutation'>, T>(
   }
   const view: View = target === 'none' || 'id' in target ? {} : target
   const layer = batch ?? layers.open(name, view, o.over)
+  // read before the paint, which may drop a hidden parent
+  const sentArgs = o.over ? ({ ...args, expected: expectedOf(o.over) } as FunctionArgs<M>) : args
+  const sentAt = Date.now()
   layers.send(layer, { snapshot: snapshotDeliveries, thread: threadDeliveries })
   if (!batch) {
     try {
@@ -1239,7 +1257,7 @@ function start<M extends FunctionReference<'mutation'>, T>(
   const releaseUpdate = beginUpdateBlock()
   let sent: Promise<FunctionReturnType<M>>
   try {
-    sent = dispatch(m, args, o.about)
+    sent = dispatch(m, sentArgs, o.about)
   } catch (error) {
     sent = Promise.reject(error)
   }
@@ -1263,6 +1281,15 @@ function start<M extends FunctionReference<'mutation'>, T>(
       if (epoch === storeEpoch) {
         console.error('[qivo] write failed:', error)
         const painted = paints(layer.view)
+        if (error instanceof ConvexError && errData(error).reason === FIELD_CHANGED) {
+          fieldRefusals.set(error, {
+            layer,
+            sentAt,
+            kept: !!o.keepDraft,
+            ...o.notice,
+          })
+          guarded(() => o.keepDraft?.())
+        }
         guarded(() =>
           (o.onError ?? (awaited ? undefined : (e) => toastWriteError(e, painted)))?.(error),
         )
@@ -1546,6 +1573,7 @@ function submitRoadmapChanges(
   }
   visit.pending++
   const answer = send(api.roadmap.change, { session_id: visit.id, operations }, target, {
+    notice: { batch: operations.length },
     keep: (result) => (result.count <= visit.count ? null : undefined),
     onOk: (result) => {
       if (roadmapVisit === visit && !visit.disabled)
@@ -1561,11 +1589,19 @@ function submitRoadmapChanges(
 }
 
 /* Records an operation in the open Roadmap visit's journal with `view`, its
-   paint, in the open batch when there is one. Returns null when no visit
-   records it, so the caller sends it directly, or else the server's answer. */
-function recordRoadmapChange(operation: RoadmapOperation, view: View): Promise<boolean> | null {
+   paint, in the open batch when there is one. `over` holds the values on
+   screen it changes, read now, after the paints of the batch's earlier
+   operations, and goes with the operation as its `expected`. Returns null
+   when no visit records it, so the caller sends it directly, or else the
+   server's answer. */
+function recordRoadmapChange(
+  change: RoadmapOperation,
+  view: View,
+  over?: Over,
+): Promise<boolean> | null {
   expireRoadmapHistory()
   if (!roadmapVisit || roadmapVisit.disabled || roadmapDetailOpen) return null
+  const operation = over ? ({ ...change, expected: expectedOf(over) } as RoadmapOperation) : change
   const batch = roadmapBatch
   if (!batch) return submitRoadmapChanges([operation], view)
   batch.operations.push(operation)
@@ -1598,7 +1634,7 @@ function isTaskContentWrite(name: string) {
    place the untyped `data` payload is given that shape, so every refusal
    reader below stays cast-free. A non-ConvexError answers {}: every field
    read stays undefined and the caller lands on its generic fallback. */
-type ErrData = { code?: string; message?: string; reason?: string }
+type ErrData = { code?: string; message?: string; reason?: string; changes?: FieldChange[] }
 const errData = (e: unknown): ErrData => (e instanceof ConvexError ? (e.data as ErrData) || {} : {})
 /** Refusals that mean the whole organization is read-only. Their sentences
    name the reason, and for a pending deletion its date, so they show verbatim. */
@@ -1647,10 +1683,11 @@ export const PAUSED_TEXT = 'Editing is paused until Qivo loads the latest change
 export const NO_ACCESS_TEXT = 'You no longer have access to this workspace.'
 /** The sentence a paused edit shows after the sign-in ended. */
 export const SIGNED_OUT_TEXT = 'You’re signed out. Reload Qivo to sign in again.'
-/** The sentence a paused edit shows while the connection is down. */
-export const OFFLINE_TEXT = 'You’re offline. Editing is paused until the connection is back.'
+/** The sentence a paused edit shows while the connection is down, the
+    pause notice's own words (lib/noticeText.ts). */
+export const OFFLINE_TEXT = pauseSentence('offline')
 /** The sentence a paused edit shows while a write takes too long. */
-export const SLOW_TEXT = 'Saving is taking longer than usual. Editing is paused until it finishes.'
+export const SLOW_TEXT = pauseSentence('slow')
 
 /** Why the live snapshot is not current, while it is not. `no_access` means
     a delivery found no seat left. `asOf` is the last good delivery's server
@@ -1838,6 +1875,10 @@ function toastWriteError(e: unknown, reverted = true) {
     toastPaused(refusalPauseText(e))
     return
   }
+  if (d.reason === FIELD_CHANGED) {
+    noticeFieldChanged(e)
+    return
+  }
   // a write that painted nothing has nothing to revert
   const after = reverted ? ' Change reverted.' : ''
   if ((readOnly(d) || d.code === 'rule') && d.message) {
@@ -1850,6 +1891,158 @@ function toastWriteError(e: unknown, reverted = true) {
   }
   // not_found, bad_request, conflict, transport — all generic
   toast(`Couldn't save.${after}`)
+}
+
+/* --- refusals over a field someone else changed ----------------------------
+   The server refuses an edit whose `expected` no longer matches what it
+   stores (convex/model/expected.ts, reason field_changed). The person must
+   learn of every such refusal, so its notice stays until they close it.
+   Refusals within FIELD_NOTICE_MERGE_MS share one notice, and a refusal of
+   an edit built on one of the person's own refused edits joins that edit's
+   line ("Your 2 changes were discarded"). */
+
+/** What send() knew about a field_changed refusal, for its notice. */
+type FieldRefusalContext = {
+  layer: Layer
+  sentAt: number
+  kept: boolean
+  deletes?: boolean
+  batch?: number
+}
+const fieldRefusals = new WeakMap<object, FieldRefusalContext>()
+
+/** How long after one refusal another still joins its notice. */
+const FIELD_NOTICE_MERGE_MS = 1_000
+/** How far a change may lie outside a time offline and still count as made
+    while the person was offline, for clocks that differ. */
+const OFFLINE_SLACK_MS = 5_000
+/** How many refused layers the store remembers for chained refusals. */
+const REFUSED_LAYERS_KEPT = 200
+
+type FieldNoticeLine = { refusal: FieldRefusal; box: FieldNoticeBox }
+type FieldNoticeBox = { key: string; lines: FieldNoticeLine[]; at: number }
+let fieldNoticeBox: FieldNoticeBox | null = null
+let fieldNoticeSeq = 0
+// layer id of a refused edit to its notice line
+const refusedLines = new Map<number, FieldNoticeLine>()
+
+/* How a notice names the record a change is about, from the rows on
+   screen, and who wrote it. */
+const fieldLookup = {
+  record(change: FieldChange): string {
+    const task = (id: string | undefined) => (id && uuidToKey.get(id)) || 'a task'
+    const named = (name: string | undefined, fallback: string) => name ?? fallback
+    switch (change.record) {
+      case 'task':
+        return task(change.id)
+      case 'comment': {
+        const comment = rows.comments.get(change.id)
+        return comment ? `this comment on ${task(comment.issue_id)}` : 'this comment'
+      }
+      case 'milestone': {
+        const name = rows.milestones.get(change.id)?.name
+        return name ? `milestone “${name}”` : 'a milestone'
+      }
+      case 'project':
+        return named(rows.projects.get(change.id)?.name, 'a project')
+      case 'grant': {
+        const who =
+          rows.profiles.get(change.of ?? '')?.name ?? rows.teams.get(change.of ?? '')?.name
+        const where = rows.projects.get(change.id)?.name
+        return who && where ? `${who}'s access to ${where}` : 'an access level'
+      }
+      case 'team':
+        return named(rows.teams.get(change.id)?.name, 'a team')
+      case 'label': {
+        const name = rows.labels.get(change.id)?.name
+        return name ? `label “${name}”` : 'a label'
+      }
+      case 'profile':
+        return named(rows.profiles.get(change.id)?.name, 'a person')
+      case 'organization':
+        return 'the organization'
+      case 'link':
+        return `the link between ${task(change.id)} and ${task(change.of)}`
+    }
+  },
+  writer(profileId: string): Writer {
+    if ([...myProfiles.values()].includes(profileId)) return 'you'
+    const name = rows.profiles.get(profileId)?.name
+    return name ? { name } : null
+  },
+}
+
+/* Whether a write sent at `sentAt` waited through a lost connection while
+   one of `changes` was made. */
+function changedWhileOffline(sentAt: number, changes: readonly FieldChange[]): boolean {
+  const windows = syncStatus.offlineSince(sentAt)
+  return changes.some((change) => {
+    const at = change.at ? Date.parse(change.at) : Number.NaN
+    return windows.some(
+      (w) => at >= w.from - OFFLINE_SLACK_MS && (w.to === null || at <= w.to + OFFLINE_SLACK_MS),
+    )
+  })
+}
+
+/** Shows the notice of a field_changed refusal `e`, joining a recent
+    notice, or the line of the person's own refused edit this one built on. */
+function noticeFieldChanged(e: unknown) {
+  const changes = errData(e).changes ?? []
+  const context = e instanceof ConvexError ? fieldRefusals.get(e) : undefined
+  const layer = context?.layer
+  // an edit made on top of one of mine the server refused fails with it
+  const seenFrom = layer?.seenFrom
+  const chained = seenFrom
+    ? changes
+        .map((change) => refusedLines.get(seenFrom.get(change.field) ?? -1))
+        .find((line) => line !== undefined)
+    : undefined
+  if (chained) {
+    chained.refusal.count++
+    if (layer) rememberRefused(layer.id, chained)
+    showFieldNotice(chained.box)
+    return
+  }
+  const now = Date.now()
+  const box =
+    fieldNoticeBox && now - fieldNoticeBox.at < FIELD_NOTICE_MERGE_MS
+      ? fieldNoticeBox
+      : { key: `field-changed-${++fieldNoticeSeq}`, lines: [], at: now }
+  box.at = now
+  fieldNoticeBox = box
+  const line: FieldNoticeLine = {
+    refusal: {
+      changes,
+      count: 1,
+      kept: context?.kept,
+      deletes: context?.deletes,
+      batch: context?.batch,
+      offline: context ? changedWhileOffline(context.sentAt, changes) : false,
+    },
+    box,
+  }
+  box.lines.push(line)
+  if (layer) rememberRefused(layer.id, line)
+  showFieldNotice(box)
+}
+
+/** The sentence for field_changed refusal `e` of a field whose input keeps
+    the person's text, shown beside the field rather than as a notice. */
+function keptFieldText(e: unknown): string {
+  return refusalLine({ changes: errData(e).changes ?? [], count: 1, kept: true }, fieldLookup)
+}
+
+function rememberRefused(layerId: number, line: FieldNoticeLine) {
+  refusedLines.set(layerId, line)
+  if (refusedLines.size > REFUSED_LAYERS_KEPT) {
+    const oldest = refusedLines.keys().next().value
+    if (oldest !== undefined) refusedLines.delete(oldest)
+  }
+}
+
+function showFieldNotice(box: FieldNoticeBox) {
+  const text = noticeText(box.lines.map((line) => refusalLine(line.refusal, fieldLookup)))
+  window.showToast?.(text, 'error', { sticky: true, key: box.key })
 }
 
 /* The two awaited restores share one refusal voice: a `rule` (or not_found)
@@ -1978,6 +2171,8 @@ function toastCreateProjectError(e: unknown, label: string) {
    the best sentence there is; anything without one gets the fallback. */
 function avatarErrorText(e: unknown, fallback: string): string {
   const d = errData(e)
+  if (d.reason === FIELD_CHANGED)
+    return refusalLine({ changes: d.changes ?? [], count: 1 }, fieldLookup)
   if (d.message) {
     const m = String(d.message)
     return m.charAt(0).toUpperCase() + m.slice(1)
@@ -1990,6 +2185,7 @@ function avatarErrorText(e: unknown, fallback: string): string {
    constraint-sniffing, now first-class reasons). */
 function slugErrorText(e: unknown): string {
   const d = errData(e)
+  if (d.reason === FIELD_CHANGED) return keptFieldText(e)
   if (d.code === 'conflict') {
     if (d.reason === 'slug_taken') return 'That address is already taken. Choose another.'
     if (d.reason === 'slug_reserved') return 'That address is reserved. Choose another.'
@@ -3282,7 +3478,9 @@ function mapIssuePatch(patch: IssuePatch): IssueWirePatch {
   if ('due' in patch) db.due_date = patch.due || null
   if ('remaining' in patch)
     db.remaining_hours =
-      patch.remaining != null && patch.remaining !== '' ? Number(patch.remaining) : null
+      patch.remaining != null && patch.remaining !== ''
+        ? roundTenths(Number(patch.remaining))
+        : null
   if ('paused' in patch) db.paused = !!patch.paused
   return db
 }
@@ -3419,10 +3617,40 @@ function removeMessagesPaint(ids: string[], onlyRead = false): View {
 }
 
 /** The values of `row`'s `fields` on screen before a write paints over them
-    (Over), for the field check. */
-function overOf(table: string, row: { id: string }, fields: string[]): Over {
-  const values: Record<string, unknown> = { ...row }
+    (Over), for the field check. `seen` replaces some of them with what an
+    editor showed when the person began, such as a title at the click. */
+function overOf(
+  table: string,
+  row: { id: string },
+  fields: string[],
+  seen: Record<string, unknown> = {},
+): Over {
+  const values: Record<string, unknown> = { ...row, ...seen }
   return { table, id: row.id, fields: Object.fromEntries(fields.map((f) => [f, values[f]])) }
+}
+
+/* The fields the app sends as prints rather than values, with their
+   compare forms (convex/lib/fieldPrints.ts), so an edit never carries a long
+   text twice. */
+const PRINTED: Record<string, Record<string, (value: unknown) => unknown>> = {
+  issues: { title: trimmedForm, description: descriptionForm },
+  comments: { body: trimmedForm },
+}
+
+/** A write's `expected` from `over` (convex/model/expected.ts): null for
+    unset, a long text as its print, and a task's parent as the pair a read
+    shows, with has_hidden_parent. Read before the write's paint, which may
+    take the hidden parent away. */
+function expectedOf(over: Over): Record<string, unknown> {
+  const printed = PRINTED[over.table] ?? {}
+  const out: Record<string, unknown> = {}
+  for (const [field, value] of Object.entries(over.fields)) {
+    const form = printed[field]
+    out[field] = form ? printOf(form(value)) : (value ?? null)
+  }
+  if (over.table === 'issues' && 'parent_id' in over.fields)
+    out.has_hidden_parent = over.fields.parent_id == null && rows.hiddenParentTasks.has(over.id)
+  return out
 }
 
 /* --- app-side inputs ---------------------------------------------------------
@@ -4378,13 +4606,29 @@ export const PLANNER = {
   inviteToProject: async (metaId: string, email: string, level = 'user'): Promise<boolean> => {
     const org = orgOfProject(metaId)
     if (!org) return false
+    // a seat the address already names: the level it holds on screen, so a
+    // change made meanwhile is not overwritten unseen
+    const address = email.trim().toLowerCase()
+    const seat = [...rows.profiles.values()].find((p) => p.org_id === org && p.email === address)
+    const held =
+      seat && rows.access.find((a) => a.project_id === metaId && a.profile_id === seat.id)
     try {
       await sendAwaited(
         api.projects.inviteGuest,
-        { org_id: org, project_id: metaId, email: email.trim(), level },
+        {
+          org_id: org,
+          project_id: metaId,
+          email: email.trim(),
+          level,
+          ...(seat ? { expected: { level: held?.level ?? null } } : {}),
+        },
         'none',
       )
     } catch (e) {
+      if (errData(e).reason === FIELD_CHANGED) {
+        noticeFieldChanged(e)
+        return false
+      }
       const msg = errData(e).message || "couldn't send the invitation"
       toast(msg.charAt(0).toUpperCase() + msg.slice(1))
       return false
@@ -4583,6 +4827,10 @@ export const PLANNER = {
       handleWatchers.delete(listener)
     }
   },
+  /** The handle task `uuid` shows now, or null when it is gone. Work that
+      outlasts a moment, such as an image upload, follows a task by uuid,
+      because a new task's handle can move to another task meanwhile. */
+  handleOf: (uuid: string): string | null => uuidToKey.get(uuid) ?? null,
   /** Why the live snapshot is stale, or null while it is current. Observe
       it through the `health` channel. */
   snapshotTrouble: (): SnapshotTrouble | null => snapshotTrouble,
@@ -4739,8 +4987,9 @@ export const PLANNER = {
       start_week: it.start != null ? weekToISO(it.start) : undefined,
       end_week: it.end != null ? weekToISO(it.end) : undefined,
       due_date: it.due || undefined,
+      // to the tenth, as the server stores it
       remaining_hours: hasRemaining
-        ? Number(it.remaining)
+        ? roundTenths(Number(it.remaining))
         : reviewStart
           ? reviewHoursForProject(it.project)
           : undefined,
@@ -4800,8 +5049,17 @@ export const PLANNER = {
   /* Paints the change at once and sends it. Resolves true when the server
      accepts it or nothing needed sending, false when it is refused here or
      by the server (both toast the reason). Callers that only paint can
-     ignore it; removeAccess waits on it before taking a grant away. */
-  updateIssue: (id: string, patch: IssuePatch): Promise<boolean> => {
+     ignore it; removeAccess waits on it before taking a grant away. Only
+     the fields that differ from what the person saw go out, each with that
+     value as its `expected`. `opts.seen` gives what an editor showed when
+     the person began, by wire field, in place of the row on screen, and
+     `opts.keepDraft` runs when the server refuses because someone changed
+     the field first and the editor keeps the draft. */
+  updateIssue: (
+    id: string,
+    patch: IssuePatch,
+    opts: { seen?: Partial<Row<'issues'>>; keepDraft?: () => void } = {},
+  ): Promise<boolean> => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
     if (!row || !uuid || !patch || !Object.keys(patch).length) return Promise.resolve(false)
@@ -4863,10 +5121,28 @@ export const PLANNER = {
     // attaching a sub-issue clears the new parent's own hours (0066 mirror)
     const newParent = 'parent' in patch && patch.parent ? keyToUuid.get(patch.parent) : undefined
     const prevDesc = String(row.description || '') // pre-patch, for the GC below
-    const paintPatch = { ...patch }
-    if (PLANNER.isGroup(id)) delete paintPatch.status
-    const paintDb = mapIssuePatch(paintPatch)
+    const seenRow: Record<string, unknown> = { ...row, ...opts.seen }
     const wire = mapIssuePatch(patch)
+    // A field sent with the value the person saw changes nothing they
+    // chose, such as the start date setEnd sends along, so it stays unsent
+    // and cannot undo a change someone made to it meanwhile. Dates compare
+    // as sent, so an off-grid stored start still goes with a new end.
+    for (const key of Object.keys(wire) as (keyof typeof wire)[]) {
+      const value = wire[key]
+      const shown = seenRow[key]
+      const same =
+        key === 'title'
+          ? String(value ?? '').trim() === String(shown ?? '').trim()
+          : key === 'description'
+            ? (value || null) === (shown || null)
+            : // a detach from a parent the person cannot see is a change
+              (key !== 'parent_id' || !rows.hiddenParentTasks.has(uuid)) &&
+              (value ?? null) === (shown ?? null)
+      if (same) delete wire[key]
+    }
+    if (!Object.keys(wire).length) return Promise.resolve(true)
+    const paintDb = { ...wire }
+    if (PLANNER.isGroup(id)) delete paintDb.status
     const view: View = {
       workspace: () => {
         clearParentHours(newParent, at)
@@ -4875,13 +5151,15 @@ export const PLANNER = {
         if ('parent_id' in paintDb && rows.issues.has(uuid)) rows.hiddenParentTasks.delete(uuid)
       },
     }
-    const planningOnly = Object.keys(patch).every((key) =>
-      ['start', 'end', 'remaining'].includes(key),
+    const planningOnly = Object.keys(wire).every((key) =>
+      ['start_week', 'end_week', 'remaining_hours'].includes(key),
     )
+    const over = overOf('issues', row, Object.keys(wire), opts.seen)
     const saved =
-      (planningOnly && recordRoadmapChange({ kind: 'task', id: uuid, patch: wire }, view)) ||
+      (planningOnly && recordRoadmapChange({ kind: 'task', id: uuid, patch: wire }, view, over)) ||
       send(api.issues.update, { org_id: row.org_id, id: uuid, patch: wire }, view, {
-        over: overOf('issues', row, Object.keys(wire)),
+        over,
+        keepDraft: opts.keepDraft,
       })
     // inline description images are hidden attachments; when neither the new
     // text nor the text it just replaced references one any more, reap the
@@ -5012,6 +5290,7 @@ export const PLANNER = {
         rows.hiddenParentTasks.delete(it.uuid)
       },
     }
+    const row = rows.issues.get(it.uuid)
     void send(
       api.issues.createParent,
       { org_id: it.org, id: it.uuid, parent_id: parentId, title: title.trim() },
@@ -5022,6 +5301,7 @@ export const PLANNER = {
           created.num = answer.parent_num
           return view
         },
+        ...(row ? { over: overOf('issues', row, ['parent_id']) } : {}),
       },
     )
   },
@@ -5080,6 +5360,7 @@ export const PLANNER = {
         ...(leavesParent ? { detach_parent: true } : {}),
       },
       view,
+      { over: overOf('issues', row, leavesParent ? ['project_id', 'parent_id'] : ['project_id']) },
     )
     return id
   },
@@ -5325,7 +5606,24 @@ export const PLANNER = {
         })
       },
     }
-    void send(api.issues.removeLink, { org_id: src.org_id, a, b }, view)
+    // the kind on screen, as seen from task a: a link of another kind put
+    // there since is refused rather than removed unseen
+    const shown = [...rows.links.values()].find(
+      (l) => (l.source_id === a && l.target_id === b) || (l.source_id === b && l.target_id === a),
+    )
+    const kind = !shown
+      ? null
+      : shown.type !== 'blocks'
+        ? 'relates'
+        : shown.source_id === a
+          ? 'blocks'
+          : 'blocked_by'
+    void send(
+      api.issues.removeLink,
+      { org_id: src.org_id, a, b, ...(kind ? { expected: { kind } } : {}) },
+      view,
+      { notice: { deletes: true } },
+    )
   },
 
   /* --- attachments ---------------------------------------------------------- */
@@ -5718,7 +6016,11 @@ export const PLANNER = {
       until it did; the same text resolves true without a write, and a
       missing comment or a blank body false. A body over TEXT_MAX is refused
       here with a toast, before the paint. */
-  updateComment: (id: string, body: string): Promise<boolean> => {
+  updateComment: (
+    id: string,
+    body: string,
+    opts: { seen?: string; keepDraft?: () => void } = {},
+  ): Promise<boolean> => {
     const rec = rows.comments.get(id)
     const text = (body || '').trim()
     if (!rec || !text) return Promise.resolve(false)
@@ -5751,7 +6053,9 @@ export const PLANNER = {
       },
       {
         about: { task: rec.issue_id },
-        over: overOf('comments', rec, ['body']),
+        // the body the editor began from, which a delivery may have passed
+        over: overOf('comments', rec, ['body'], opts.seen === undefined ? {} : { body: opts.seen }),
+        keepDraft: opts.keepDraft,
         // A comment older than the live window gets no delivery, so the saved
         // edit goes into olderComments, the truth the thread is built from.
         onOk: () => {
@@ -5781,6 +6085,8 @@ export const PLANNER = {
       },
       {
         about: { task: rec.issue_id },
+        over: overOf('comments', rec, ['body']),
+        notice: { deletes: true },
         onOk: () => {
           acceptedCommentChanges.set(id, null)
           if (olderComments.some((r) => r.id === id))
@@ -6031,9 +6337,12 @@ export const PLANNER = {
     if (next === me.name) return null
     let sentence: string | null
     try {
-      sentence = await sendAwaited(api.profiles.setDisplayName, { name: next }, 'none')
+      // the name this seat shows: another seat of the person may differ
+      const expected = { profile_id: me.id, name: me.name }
+      sentence = await sendAwaited(api.profiles.setDisplayName, { name: next, expected }, 'none')
     } catch (e) {
       console.error('[qivo] rename failed:', e)
+      if (errData(e).reason === FIELD_CHANGED) return keptFieldText(e)
       return refusedAsPaused(e) ? refusalPauseText(e) : 'That name could not be saved'
     }
     if (sentence) return sentence.charAt(0).toUpperCase() + sentence.slice(1)
@@ -6596,14 +6905,19 @@ export const PLANNER = {
     try {
       // the accepted address paints now, so the address-bar sync moves now
       // rather than a delivery later
-      await sendAwaited(api.orgs.setSlug, { org_id: orgId, slug }, 'none', {
-        keep: () => ({
-          workspace: () => {
-            const live = rows.orgs.get(orgId)
-            if (live) live.slug = slug
-          },
-        }),
-      })
+      await sendAwaited(
+        api.orgs.setSlug,
+        { org_id: orgId, slug, expected: { slug: org.slug } },
+        'none',
+        {
+          keep: () => ({
+            workspace: () => {
+              const live = rows.orgs.get(orgId)
+              if (live) live.slug = slug
+            },
+          }),
+        },
+      )
     } catch (e) {
       console.error('[qivo] slug change failed:', e)
       return slugErrorText(e)
@@ -6716,7 +7030,10 @@ export const PLANNER = {
         rows.teams.delete(id)
       },
     }
-    return send(api.teams.deleteDeep, { org_id: team.org_id, id }, view)
+    return send(api.teams.deleteDeep, { org_id: team.org_id, id }, view, {
+      over: overOf('teams', team, ['name']),
+      notice: { deletes: true },
+    })
   },
   /** Whether a team exists and is not the last one in its organization.
       Other organizations' teams in this client do not count. */
@@ -6936,12 +7253,19 @@ export const PLANNER = {
     // Deactivation alone has its own door, which an admin can still use while
     // billing has paused editing. Every other change, reactivation included,
     // goes through update.
+    // a field sent with the value on screen changes nothing the person
+    // chose, such as the role select's active: true, so it goes unsent and
+    // unchecked, and cannot undo a change someone else made to it
+    for (const key of ['org_role', 'active', 'email', 'can_create_projects'] as const)
+      if (key in wire && (wire[key] ?? null) === (row[key] ?? null)) delete wire[key]
     const deactivateOnly = wire.active === false && Object.keys(wire).length === 1
-    const over = overOf('profiles', row, Object.keys(db))
-    if (deactivateOnly)
-      void send(api.profiles.deactivate, { org_id: row.org_id, id }, view, { over })
-    else if (Object.keys(wire).length)
-      void send(api.profiles.update, { org_id: row.org_id, id, patch: wire }, view, { over })
+    if (deactivateOnly) void send(api.profiles.deactivate, { org_id: row.org_id, id }, view)
+    else if (Object.keys(wire).length) {
+      const checked = Object.keys(wire).filter((key) => key !== 'teams')
+      void send(api.profiles.update, { org_id: row.org_id, id, patch: wire }, view, {
+        over: overOf('profiles', row, checked),
+      })
+    }
     return true
   },
 
@@ -6977,6 +7301,8 @@ export const PLANNER = {
   setAvatar: withUpdateBlock(async (profileId: string, file: File) => {
     const row = rows.profiles.get(profileId)
     if (!row) return 'That person is no longer in the organization'
+    // the picture on screen when the person picked the file
+    const expected = { avatar_storage_id: row.avatar_storage_id ?? null }
     const type = (file.type || '').toLowerCase().split(';')[0].trim()
     if (!(AVATAR_TYPES as readonly string[]).includes(type)) {
       return 'A picture has to be a PNG, JPEG, WebP or GIF'
@@ -7001,7 +7327,7 @@ export const PLANNER = {
       // prunes and revokes the replaced portrait source
       await sendAwaited(
         api.files.setAvatar,
-        { profile_id: profileId, storage_id: stored },
+        { profile_id: profileId, storage_id: stored, expected },
         'none',
         {
           keep: () => ({
@@ -7025,7 +7351,8 @@ export const PLANNER = {
     const row = rows.profiles.get(profileId)
     if (!row?.avatar_storage_id) return null
     try {
-      await sendAwaited(api.files.clearAvatar, { profile_id: profileId }, 'none', {
+      const expected = { avatar_storage_id: row.avatar_storage_id }
+      await sendAwaited(api.files.clearAvatar, { profile_id: profileId, expected }, 'none', {
         keep: () => ({
           workspace: () => {
             const live = rows.profiles.get(profileId)
@@ -7117,9 +7444,16 @@ export const PLANNER = {
         else rows.access.push({ project_id: metaId, profile_id: userId, level: role })
       },
     }
+    // the level on screen, none included, so a change made meanwhile refuses
     return send(
       api.projects.setAccess,
-      { org_id: row.org_id, id: metaId, user_id: userId, level: role },
+      {
+        org_id: row.org_id,
+        id: metaId,
+        user_id: userId,
+        level: role,
+        expected: { level: held?.level ?? null },
+      },
       view,
     )
   },
@@ -7144,9 +7478,22 @@ export const PLANNER = {
     }
     return send(
       api.projects.setAccess,
-      { org_id: row.org_id, id: metaId, team_id: teamId, level: role },
+      {
+        org_id: row.org_id,
+        id: metaId,
+        team_id: teamId,
+        level: role,
+        expected: { level: held?.level ?? null },
+      },
       view,
     )
+  },
+
+  /** Milestone `id` as stored, its day unrounded, for an editor that sends
+      what the person saw (updateMilestone). Null when it is gone. */
+  milestoneRow: (id: string): { name: string; week: string } | null => {
+    const row = rows.milestones.get(id)
+    return row ? { name: row.name, week: row.week } : null
   },
 
   setMilestone: (id: string, week: number) => {
@@ -7193,12 +7540,21 @@ export const PLANNER = {
       Resolves false without sending when it refused the change first
       (toasted) or the milestone is missing here, and false after a refusal,
       which is toasted and taken back. */
-  updateMilestone: (id: string, patch: { name?: string; week?: number }): Promise<boolean> => {
+  updateMilestone: (
+    id: string,
+    patch: { name?: string; week?: number },
+    seen?: { name: string; week: string },
+  ): Promise<boolean> => {
     const row = rows.milestones.get(id)
     if (!row) return Promise.resolve(false)
     const db: FunctionArgs<typeof api.projects.updateMilestone>['patch'] = {}
-    if ('name' in patch) db.name = patch.name
-    if (patch.week != null) db.week = weekToISO(patch.week)
+    // only what differs from what the person saw goes out: a rename alone
+    // leaves the date as stored, and neither undoes a change made meanwhile.
+    // The week compares as the week shown, so a stored day off the week grid
+    // stays unless the person picks another week.
+    const shown = seen ?? row
+    if ('name' in patch && (patch.name ?? '').trim() !== shown.name.trim()) db.name = patch.name
+    if (patch.week != null && patch.week !== isoToWeek(shown.week)) db.week = weekToISO(patch.week)
     if (!Object.keys(db).length) return Promise.resolve(true)
     if (refusePausedEdit()) return Promise.resolve(false)
     if ('name' in patch && refuseLongName('milestone', patch.name ?? '', row.name))
@@ -7210,13 +7566,14 @@ export const PLANNER = {
       },
     }
     // moved/renamed verb logic is server-side now (it diffs against its row)
+    const over = overOf('milestones', row, Object.keys(db), seen)
     return (
-      recordRoadmapChange({ kind: 'milestone_update', id, patch: db }, view) ??
+      recordRoadmapChange({ kind: 'milestone_update', id, patch: db }, view, over) ??
       send(
         api.projects.updateMilestone,
         { org_id: orgOfProject(row.project_id), id, patch: db },
         view,
-        { over: overOf('milestones', row, Object.keys(db)) },
+        { over },
       )
     )
   },
@@ -7232,9 +7589,13 @@ export const PLANNER = {
         rows.milestones.delete(id)
       },
     }
+    const over = overOf('milestones', row, ['name', 'week'])
     return (
-      recordRoadmapChange({ kind: 'milestone_remove', id }, view) ??
-      send(api.projects.removeMilestone, { org_id: org, id }, view)
+      recordRoadmapChange({ kind: 'milestone_remove', id }, view, over) ??
+      send(api.projects.removeMilestone, { org_id: org, id }, view, {
+        over,
+        notice: { deletes: true },
+      })
     )
   },
 
@@ -7332,7 +7693,10 @@ export const PLANNER = {
         rows.labels.delete(id)
       },
     }
-    return send(api.labels.remove, { org_id: row.org_id, id }, view)
+    return send(api.labels.remove, { org_id: row.org_id, id }, view, {
+      over: overOf('labels', row, ['name', 'color']),
+      notice: { deletes: true },
+    })
   },
 
   /** Puts the label on the task or takes it off. `created` is the `saved`
