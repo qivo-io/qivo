@@ -150,9 +150,7 @@ const issuesTable = defineTable({
   end_week: v.optional(v.string()),
   due_date: v.optional(v.string()),
   remaining_hours: v.optional(v.number()), // >= 0; parents with children have none
-  // server-owned; (hours absent) = (stamp absent). A move to another
-  // sub-project restarts it at the move (model/issues.ts moveIssueCore).
-  remaining_set_at: v.optional(v.string()),
+  remaining_set_at: v.optional(v.string()), // server-owned; (hours absent) = (stamp absent)
   paused: v.boolean(), // work on hold; never true on a Done or Backlog task
   created_by: v.optional(v.string()), // internal writer audit; absent after profile removal
   reporter_id: v.optional(v.string()), // immutable; project access checked at creation

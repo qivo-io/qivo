@@ -1239,9 +1239,7 @@ Writing `remaining_hours` also stamps the read-only `remaining_set_at`
 (0072): a remaining time is a measurement, and the planning math anchors on
 when it was taken — the server stamps the moment the value *changes* (an
 unchanged value writes nothing) and clears the stamp with the hours. A move
-to another sub-project restamps it at the move, for the task and each subtask
-that moves with it, so the planning math counts the hours from the move, or
-from the start week if later. A request that sends `remaining_set_at` is
+to another sub-project keeps it. A request that sends `remaining_set_at` is
 refused as an unknown field.
 
 **Review time.** A task that enters `review`, whether created there by POST or
@@ -1916,10 +1914,9 @@ caller cannot see is a `404`.
 `week_starts[i]`, rounded to a tenth. A task counts toward its owner (the
 reviewer while it is In Review with one, else the assignee) when it is
 scheduled, not Done, not paused, has remaining hours and is not archived or
-in an archived project. Its remaining hours spread evenly from the week of
-its `remaining_set_at`, when the estimate was last saved or the task last
-moved to another sub-project, or its start week if later, through its end
-week; an estimate saved after the end week counts in the week it was saved. Compare
+in an archived project. Its remaining hours spread evenly from the week its
+estimate was saved, or its start week if later, through its end week; an
+estimate saved after the end week counts in the week it was saved. Compare
 `hours` with `plannable_hours`, which is `null` for an agent, because agents
 have no weekly limit.
 

@@ -61,8 +61,7 @@ date window or layout clears the week lock.
 
 Qivo spreads each task's remaining hours evenly from its measurement week,
 or planned start if later, through its planned end. An estimate saved after
-the planned end counts in the save week. A move to another sub-project makes
-the move week the measurement week. These figures update while you drag
+the planned end counts in the save week. These figures update while you drag
 bars; there is no separate allocation to enter.
 
 ## Team sync
@@ -152,9 +151,10 @@ reviewer starts a hand-off; changing Remaining does not. Other rows can show
 the latest status change or comment. After a task moves to another
 sub-project, it shows no status change until its status changes again. Its
 hand-off and the time it became Done start again at the move, for the task
-and each subtask that moves with it. In Team sync a moved review shows
-**handed to you** on the move day, although Qivo sends no new **Ready for
-your review** message, and a moved Done task appears in Done since again.
+and each subtask that moves with it, while its Remaining measurement stays.
+In Team sync a moved review shows **handed to you** on the move day, although
+Qivo sends no new **Ready for your review** message, and a moved Done task
+appears in Done since again.
 
 A review has no recorded hand-off if it was handed over before Qivo recorded
 hand-offs, or if it has had subtasks since the hand-off. Such a review shows no

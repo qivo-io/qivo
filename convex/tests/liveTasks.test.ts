@@ -873,7 +873,7 @@ describe('writes that change which subtasks count', () => {
     const after = await row(fx, root.id)
     expect(after).toMatchObject({ project_id: fx.away.id })
     expect(after?.remaining_hours).toBeUndefined()
-    // the move restarts no measurement for hours that go with it
+    // the measurement and hand-off go with the hours
     expect(after && ('review_at' in after || 'remaining_set_at' in after)).toBe(false)
     expect((await restGet(fx, root.id, fx.admin.id)).is_group).toBe(true)
   })
