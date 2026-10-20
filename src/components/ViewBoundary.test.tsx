@@ -3,12 +3,7 @@ import { act, type ReactNode, Suspense } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { lazyFromModule, preloadModule } from '../lib/lazyModule'
-import {
-  syncStatus as appStatus,
-  createSyncStatus,
-  OFFLINE_DELAY_MS,
-  type SyncStatus,
-} from '../lib/syncStatus'
+import { createSyncStatus, OFFLINE_DELAY_MS, type SyncStatus } from '../lib/syncStatus'
 import { TooltipProvider } from './ui/tooltip'
 import { ViewBoundary } from './ViewBoundary'
 
@@ -41,10 +36,12 @@ afterEach(async () => {
 const show = (node: ReactNode) =>
   act(async () => root.render(<TooltipProvider>{node}</TooltipProvider>))
 
-const goOffline = () =>
+/** Drops the socket. With `notice`, long enough that Qivo counts as
+    offline; without, the boundary sees only that the connection is down. */
+const goOffline = ({ notice = true } = {}) =>
   act(async () => {
     status.setSocket({ connected: false, everConnected: true })
-    vi.advanceTimersByTime(OFFLINE_DELAY_MS)
+    if (notice) vi.advanceTimersByTime(OFFLINE_DELAY_MS)
   })
 const reconnect = () =>
   act(async () => {
@@ -58,81 +55,69 @@ function flakyView(failures: number) {
     if (failures-- > 0) throw new Error('Failed to fetch dynamically imported module')
     return { View: () => <p>Board</p> }
   })
-  const View = lazyFromModule(preloadModule(importModule, status), (module) => module.View)
+  const View = lazyFromModule(preloadModule(importModule, status), (module) => module.View, status)
   return { View, importModule }
 }
 
+/** `View` as App shows a page, in its own boundary. */
+const page = (View: ReturnType<typeof flakyView>['View']) => (
+  <ViewBoundary onBack={() => {}} status={status}>
+    <Suspense fallback="Loading">
+      <View />
+    </Suspense>
+  </ViewBoundary>
+)
+
 describe('a view whose code did not load', () => {
-  it('waits while offline without a download and opens when the connection is back', async () => {
-    const { View, importModule } = flakyView(0)
-    await goOffline()
-    await show(
-      <ViewBoundary onBack={() => {}} status={status}>
-        <Suspense fallback="Loading">
-          <View />
-        </Suspense>
-      </ViewBoundary>,
-    )
-    expect(container.textContent).toContain('You’re offline')
-    expect(container.textContent).toContain('This view opens when the connection is back.')
-    expect(container.textContent).not.toContain('Reload')
-    expect(importModule).not.toHaveBeenCalled()
-    await reconnect()
-    expect(container.textContent).toBe('Board')
-    expect(importModule).toHaveBeenCalledTimes(1)
+  it('waits without a download while the connection is down and opens when it is back', async () => {
+    for (const notice of [true, false]) {
+      const { View, importModule } = flakyView(0)
+      await goOffline({ notice })
+      await show(page(View))
+      expect(container.textContent).toContain('You’re offline')
+      expect(container.textContent).toContain('This view opens when the connection is back.')
+      expect(container.textContent).not.toContain('Reload')
+      expect(container.querySelector('[role="alert"]')).not.toBeNull()
+      expect(importModule).not.toHaveBeenCalled()
+      await reconnect()
+      expect(container.textContent).toBe('Board')
+      expect(importModule).toHaveBeenCalledTimes(1)
+      await show(null)
+    }
   })
 
-  it('offers a reload after a failure while Qivo can save, and loads afresh after a pause', async () => {
+  it('offers a reload after a failed download, and promises nothing during a later pause', async () => {
     const { View, importModule } = flakyView(1)
-    await show(
-      <ViewBoundary onBack={() => {}} status={status}>
-        <Suspense fallback="Loading">
-          <View />
-        </Suspense>
-      </ViewBoundary>,
-    )
+    await show(page(View))
     expect(container.textContent).toContain('This view could not be loaded.')
     expect(container.querySelector('button:last-child')?.textContent).toBe('Reload')
-    // the drop is noticed after the download failed
+    // the drop is noticed after the download failed: the failure stays
     await goOffline()
-    expect(container.textContent).toContain('This view opens when the connection is back.')
+    expect(container.textContent).toContain('This view could not be loaded.')
     await reconnect()
-    expect(container.textContent).toBe('Board')
-    expect(importModule).toHaveBeenCalledTimes(2)
+    expect(container.textContent).toContain('This view could not be loaded.')
+    expect(importModule).toHaveBeenCalledTimes(1)
   })
 
-  it('loads afresh when reopened after it was closed during a pause', async () => {
-    // the app's own status, which no mounted boundary watches meanwhile
-    appStatus.setSocket({ connected: true, everConnected: true })
-    const importModule = vi.fn(async () => ({ View: () => <p>Board</p> }))
-    const View = lazyFromModule(preloadModule(importModule), (module) => module.View)
-    const view = (
-      <ViewBoundary onBack={() => {}}>
-        <Suspense fallback="Loading">
-          <View />
-        </Suspense>
-      </ViewBoundary>
-    )
-    await act(async () => {
-      appStatus.setSocket({ connected: false, everConnected: true })
-      vi.advanceTimersByTime(OFFLINE_DELAY_MS)
-    })
-    await show(view)
+  it('loads afresh when reopened after it was closed while waiting', async () => {
+    const { View, importModule } = flakyView(0)
+    await goOffline()
+    await show(page(View))
     expect(container.textContent).toContain('This view opens when the connection is back.')
     await show(null)
-    await act(async () => appStatus.setSocket({ connected: true, everConnected: true }))
-    await show(view)
+    await reconnect()
+    await show(page(View))
     expect(container.textContent).toBe('Board')
     expect(importModule).toHaveBeenCalledTimes(1)
   })
 
-  it('shows its stand-in during a pause and hands a failure while Qivo can save up', async () => {
+  it('shows its stand-in while waiting and hands a failed download up', async () => {
     const { View, importModule } = flakyView(1)
     await goOffline()
     await show(
       <ViewBoundary onBack={() => {}} status={status}>
         <p>Task</p>
-        <ViewBoundary whilePaused={<p>Plain text</p>} status={status}>
+        <ViewBoundary whileWaiting={<p>Plain text</p>} status={status}>
           <Suspense fallback={<p>Plain text</p>}>
             <View />
           </Suspense>
@@ -144,5 +129,26 @@ describe('a view whose code did not load', () => {
     expect(importModule).toHaveBeenCalledTimes(1)
     expect(container.textContent).toContain('This view could not be loaded.')
     expect(container.textContent).not.toContain('Task')
+  })
+
+  it('names why in an overlay for screen readers', async () => {
+    const { View } = flakyView(0)
+    await goOffline()
+    await show(
+      <ViewBoundary onBack={() => {}} overlay status={status}>
+        <Suspense fallback={null}>
+          <View />
+        </Suspense>
+      </ViewBoundary>,
+    )
+    const dialog = document.querySelector('[role="dialog"]')
+    const described = dialog?.getAttribute('aria-describedby')
+    expect(described && document.getElementById(described)?.textContent).toBe(
+      'This view opens when the connection is back.',
+    )
+    expect(dialog?.getAttribute('aria-labelledby')).toBeTruthy()
+    expect(
+      document.getElementById(dialog?.getAttribute('aria-labelledby') ?? '')?.textContent,
+    ).toBe('You’re offline')
   })
 })

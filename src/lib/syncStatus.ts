@@ -51,11 +51,14 @@ export function createSyncStatus(now = () => Date.now()) {
   // reconnect waits SLOW_SAVE_MS from the reconnect, not from its send
   let connectedAt = Number.NEGATIVE_INFINITY
   let downSince: number | null = null
+  // whether the connection counted as down at the last evaluation
+  let isDown = false
   let kind: SavePause['kind'] | null = null
   let waiting = 0
   let timer: ReturnType<typeof setTimeout> | null = null
   const writes = new Map<symbol, { sentAt: number; counted: boolean }>()
   const listeners = new Set<SyncListener>()
+  const downListeners = new Set<() => void>()
 
   const countWaiting = () => [...writes.values()].filter((write) => write.counted).length
 
@@ -81,6 +84,8 @@ export function createSyncStatus(now = () => Date.now()) {
     const down = (!online && !fresh) || (socket.everConnected && !socket.connected)
     if (!down) downSince = null
     else downSince ??= at
+    const downChanged = down !== isDown
+    isDown = down
     const before = kind
     let wake: number | null = null
     if (down) {
@@ -95,6 +100,7 @@ export function createSyncStatus(now = () => Date.now()) {
     if (timer) clearTimeout(timer)
     timer = wake === null ? null : setTimeout(evaluate, Math.max(0, wake - at))
     const count = countWaiting()
+    if (downChanged) for (const listener of downListeners) listener()
     // the count shows only during a pause
     if (kind === before && (count === waiting || !kind)) return
     waiting = count
@@ -105,6 +111,10 @@ export function createSyncStatus(now = () => Date.now()) {
   return {
     /** Why saving pauses now, or null while Qivo can save. */
     pause: (): SavePause | null => (kind ? { kind, waiting } : null),
+    /** Whether the connection is down now, before OFFLINE_DELAY_MS turns
+        that into an `offline` pause: the socket dropped, or the browser
+        reports offline and the server has not answered since. */
+    down: () => isDown,
     /** How many changes are sent and not confirmed yet. */
     unconfirmed: countWaiting,
     /** Records the socket's state. */
@@ -135,6 +145,14 @@ export function createSyncStatus(now = () => Date.now()) {
       evaluate()
       return () => {
         if (writes.delete(id)) evaluate()
+      }
+    },
+    /** Calls `listener` whenever `down()` changes. Answers a function that
+        stops it. */
+    subscribeDown(listener: () => void) {
+      downListeners.add(listener)
+      return () => {
+        downListeners.delete(listener)
       }
     },
     /** Calls `listener` on every change (see SyncListener). */

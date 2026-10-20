@@ -62,11 +62,12 @@ current address. **Hide notice** dismisses the notice while you edit; it
 returns when your work is finished.
 
 Shortly after your workspace opens, Qivo downloads every view and dialog, so
-they still open if the connection drops later. One that has not downloaded
-while you are offline says so and opens once the connection is back. If a view
-or dialog fails to load otherwise, close its recovery message or reload to
-retry. A failed dialog leaves the page and other drafts open. Reload stays
-disabled while a draft or save needs to finish.
+they still open if the connection drops later. One you open while the
+connection is down, before it has downloaded, says you're offline and opens
+once the connection is back. If a view or dialog fails to download, it offers
+**Reload**, the only way to retry it. Closing its message takes you back and
+leaves the page and other drafts open. Reload stays disabled while a draft or
+save needs to finish.
 
 If Qivo can't load the latest changes, a notice says so and shows when your
 view was last current. Editing pauses until the changes load again, and Qivo

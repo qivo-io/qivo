@@ -66,6 +66,23 @@ describe('the notices’ bands', () => {
     expect(notices.contains(stack.floatSlot('toasts'))).toBe(false)
   })
 
+  it('leave out the shadow padding while the notices fit, and count it once they overflow', () => {
+    place('update', 16, 144)
+    const notices = document.querySelector<HTMLElement>('[data-float-notices]')
+    if (!notices) throw new Error('no notices box')
+    // a phone: the box starts at the window's top and pads 16px below
+    notices.style.padding = '16px 16px 16px'
+    notices.getBoundingClientRect = () => ({ top: 0, bottom: 300, height: 300 }) as DOMRect
+    const size = { scroll: 268, client: 268 }
+    Object.defineProperty(notices, 'scrollHeight', { get: () => size.scroll })
+    Object.defineProperty(notices, 'clientHeight', { get: () => size.client })
+    observed()
+    expect(band('top')).toBe('284px')
+    size.scroll = 500
+    observed()
+    expect(band('top')).toBe('300px')
+  })
+
   it('keep their scrolling from a dialog’s scroll lock at the document', () => {
     const notice = document.createElement('div')
     stack.floatSlot('snapshot').append(notice)

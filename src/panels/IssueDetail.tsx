@@ -81,11 +81,11 @@ import { ArchiveOrDeleteTaskModal, fmtSize, MoveIssueModal, useWindowDropGuard }
 // Markdown component
 const DescEditor = lazyFromModule(loadDescEditor, (module) => module.default)
 
-/** Shows `fallback` while the editor loads, and in its place while a pause
- * keeps the editor's code from downloading (editing waits then anyway). */
+/** Shows `fallback` while the editor loads, and in its place while the
+ * editor's code waits for the connection (editing waits then anyway). */
 function EditorSlot({ fallback, children }: { fallback: ReactNode; children: ReactNode }) {
   return (
-    <ViewBoundary whilePaused={fallback}>
+    <ViewBoundary whileWaiting={fallback}>
       <Suspense fallback={fallback}>{children}</Suspense>
     </ViewBoundary>
   )

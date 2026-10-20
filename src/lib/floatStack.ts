@@ -63,22 +63,35 @@ export function roomBeside(
   return { top, height: Math.max(0, bottom - top) }
 }
 
-/** Measures the notices and publishes their bands when they changed. Only
-    the part their shared box shows counts. */
+/** Measures the notices and publishes their bands when they changed. Their
+    shared box counts, which holds the notices with their margins and stays
+    put while they scroll inside. While they fit, its padding only keeps
+    their shadows and is left out. Once they overflow they show through the
+    padding, so it counts too. Without a laid-out box (jsdom) the slots
+    count. */
 function measure(stack: HTMLElement) {
-  const boxes = [
-    ...stack.querySelectorAll<HTMLElement>('[data-float-slot]:not([data-float-slot="toasts"])'),
-  ]
-    .map((slot) => slot.getBoundingClientRect())
-    .filter((rect) => rect.height > 0)
-  const shown = stack.querySelector('[data-float-notices]')?.getBoundingClientRect()
-  const clip = shown?.height ? shown : { top: -Infinity, bottom: Infinity }
-  const box = boxes.length
-    ? {
-        top: Math.max(clip.top, Math.min(...boxes.map((b) => b.top))),
-        bottom: Math.min(clip.bottom, Math.max(...boxes.map((b) => b.bottom))),
+  const notices = stack.querySelector<HTMLElement>('[data-float-notices]')
+  const shown = notices?.getBoundingClientRect()
+  let box: { top: number; bottom: number } | null = null
+  if (notices && shown?.height) {
+    const style = getComputedStyle(notices)
+    const overflows = notices.scrollHeight > notices.clientHeight + 1
+    const pad = (value: string) => (overflows ? 0 : Number.parseFloat(value) || 0)
+    const top = shown.top + pad(style.paddingTop)
+    const bottom = shown.bottom - pad(style.paddingBottom)
+    if (bottom > top) box = { top, bottom }
+  } else {
+    const boxes = [
+      ...stack.querySelectorAll<HTMLElement>('[data-float-slot]:not([data-float-slot="toasts"])'),
+    ]
+      .map((slot) => slot.getBoundingClientRect())
+      .filter((rect) => rect.height > 0)
+    if (boxes.length)
+      box = {
+        top: Math.min(...boxes.map((b) => b.top)),
+        bottom: Math.max(...boxes.map((b) => b.bottom)),
       }
-    : null
+  }
   const next = noticeInsets(box, window.innerHeight)
   if (next.top === insets.top && next.bottom === insets.bottom) return
   insets = next
@@ -99,7 +112,9 @@ let measured: HTMLElement | null = null
 function watch(column: HTMLElement) {
   measured = column
   const observer = new ResizeObserver(() => measure(column))
-  for (const element of column.children) observer.observe(element)
+  // the slots too: the notices' box stops growing once they overflow it
+  for (const element of column.querySelectorAll('[data-float-slot], [data-float-notices]'))
+    observer.observe(element)
   window.addEventListener('resize', () => measure(column))
 }
 

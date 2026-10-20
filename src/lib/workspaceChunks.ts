@@ -15,7 +15,11 @@ export const loadTaskCreation = Object.assign(
     const [modals] = await Promise.all([loadModals(), loadIssueDetail()])
     return modals
   },
-  { peek: () => (loadIssueDetail.peek() ? loadModals.peek() : undefined) },
+  {
+    peek: () => (loadIssueDetail.peek() ? loadModals.peek() : undefined),
+    failed: () => loadModals.failed() || loadIssueDetail.failed(),
+    loading: () => loadModals.loading() || loadIssueDetail.loading(),
+  },
 )
 export const loadPalette = preloadModule(() => import('../panels/Palette'))
 export const loadSettings = preloadModule(() => import('../panels/Settings'))
@@ -26,11 +30,13 @@ export const loadDescEditor = preloadModule(() => import('../components/descEdit
 // Settings › General's organization export.
 export const loadOrgExport = preloadModule(() => import('./orgExport'))
 
-/** Every module above that downloads code, most likely to be opened first.
- * The workspace loads them all after its first paint (App.tsx). A viewer
- * never gets the task editor, so `editor` false leaves it out. */
-export function workspaceModules(editor: boolean): ModuleLoader<object>[] {
-  return [
+/** Every module above that downloads code that `who` can use, most likely
+ * to be opened first. The workspace loads them after its first paint
+ * (App.tsx). The task editor is for people who can write somewhere (others
+ * get it when they open one of their own comments to edit), and the export
+ * for admins. */
+export function workspaceModules(who: { editor: boolean; admin: boolean }) {
+  const modules: ModuleLoader<object>[] = [
     loadIssueDetail,
     loadModals,
     loadPalette,
@@ -39,8 +45,9 @@ export function workspaceModules(editor: boolean): ModuleLoader<object>[] {
     loadInbox,
     loadRoadmap,
     loadTeamSync,
-    ...(editor ? [loadDescEditor] : []),
-    loadSettings,
-    loadOrgExport,
   ]
+  if (who.editor) modules.push(loadDescEditor)
+  modules.push(loadSettings)
+  if (who.admin) modules.push(loadOrgExport)
+  return modules
 }

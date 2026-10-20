@@ -50,6 +50,25 @@ describe('sync status', () => {
     expect(heard).toHaveBeenCalledTimes(1)
   })
 
+  it('tells at once when the connection goes down and comes back, before any pause', async () => {
+    const { status, heard, answer } = await connected()
+    const down = vi.fn(() => status.down())
+    status.subscribeDown(down)
+    expect(status.down()).toBe(false)
+    status.setSocket(DOWN)
+    expect(status.down()).toBe(true)
+    status.setSocket(UP)
+    await answer()
+    expect(status.down()).toBe(false)
+    expect(down.mock.results.map((r) => r.value)).toEqual([true, false])
+    expect(heard).not.toHaveBeenCalled()
+    // a browser that reports offline counts until the server answers
+    status.setOnline(false)
+    expect(status.down()).toBe(true)
+    await answer()
+    expect(status.down()).toBe(false)
+  })
+
   it('ends a browser-offline pause only once the server answers, also when the socket never dropped', async () => {
     const { status, answer } = await connected()
     status.setOnline(false)

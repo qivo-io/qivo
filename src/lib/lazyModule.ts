@@ -4,120 +4,154 @@ import { type SyncStatus, syncStatus } from './syncStatus'
 /* A browser keeps a failed module download for the life of the page, and
    the failure covers every file the import needed, including the ones
    Vite's modulepreload links asked for. A later import of the same code
-   fails at once, with or without a fresh address for the first file. So no
-   import starts while Qivo knows it is offline: the view waits for the
-   connection instead (components/ViewBoundary) and then loads normally. */
+   fails at once, with or without a fresh address for the first file, and
+   Vite never asks again for a stylesheet that failed once. So a failed
+   import is kept, and its view offers a reload. To keep that rare, no import
+   starts while the connection is down: the call is refused instead, and the
+   view waits for the connection (components/ViewBoundary) and then loads
+   normally. The workspace also downloads every view soon after it opens
+   (preloadInBackground), so a later drop finds the code already there. */
 
-/** A module that loads on demand. `peek` answers it once it has loaded. */
-export type ModuleLoader<Module extends object> = (() => Promise<Module>) & {
-  peek: () => Module | undefined
+/** Why a load was refused: the connection is down, so the download would
+ * fail and stay failed. A later call once it is back loads normally. */
+export class CodeWaitsForConnection extends Error {
+  constructor() {
+    super('This code loads when the connection is back.')
+    this.name = 'CodeWaitsForConnection'
+  }
 }
 
-/** Share an import with boot preloading and retain its resolved module. An
- * import that fails, or would start while `status` is offline, is not kept,
- * so the next call tries again. */
+/** Whether a load must wait for the connection: it is down now, or Qivo
+ * still counts as offline. */
+export function codeWaits(status: SyncStatus): boolean {
+  return status.down() || status.pause()?.kind === 'offline'
+}
+
+/** Calls `listener` whenever `codeWaits(status)` may have changed. Answers
+ * a function that stops it. */
+export function watchCodeWaits(status: SyncStatus, listener: () => void): () => void {
+  const stopPause = status.subscribe(() => listener())
+  const stopDown = status.subscribeDown(listener)
+  return () => {
+    stopPause()
+    stopDown()
+  }
+}
+
+/** A module that loads on demand. `peek` answers it once it has loaded, and
+ * `failed` tells whether its download failed for good. */
+export type ModuleLoader<Module extends object> = (() => Promise<Module>) & {
+  peek: () => Module | undefined
+  failed: () => boolean
+  /** Whether a load is under way. */
+  loading: () => boolean
+}
+
+/** Share an import with boot preloading and retain its resolved module. A
+ * call while the code must wait for the connection is refused and not kept,
+ * so a later call tries. A failed import is kept, as the browser keeps it. */
 export function preloadModule<Module extends object>(
   importModule: () => Promise<Module>,
   status: SyncStatus = syncStatus,
 ): ModuleLoader<Module> {
   let loaded: Module | undefined
+  let failed = false
   let pending: Promise<Module> | undefined
   const load = () => {
-    if (!pending && status.pause()?.kind === 'offline')
-      return Promise.reject(new Error('This code loads when the connection is back.'))
+    if (!pending && codeWaits(status)) return Promise.reject(new CodeWaitsForConnection())
     pending ??= importModule().then(
       (module) => {
         loaded = module
         return module
       },
       (error: unknown) => {
-        pending = undefined
+        failed = true
         throw error
       },
     )
     return pending
   }
-  return Object.assign(load, { peek: () => loaded })
-}
-
-// bumps when an error boundary tries its view again, and when a pause ends,
-// so a view closed while its code could not load starts afresh when reopened
-let retries = 0
-const stopCountingPauses = syncStatus.subscribe((ended) => {
-  if (ended && !syncStatus.pause()) retries++
-})
-import.meta.hot?.dispose(stopCountingPauses)
-
-/** Lets each lazily loaded view whose code failed start a new attempt the
- * next time it mounts. An error boundary calls it before it renders its
- * children again (components/ViewBoundary), and the end of every pause of
- * the app's status counts as one too. */
-export function retryFailedLoads() {
-  retries++
+  return Object.assign(load, {
+    peek: () => loaded,
+    failed: () => failed,
+    loading: () => pending !== undefined && !loaded && !failed,
+  })
 }
 
 /** A preloaded view renders without a Suspense fallback. Keep its component
  * type stable for the mounted lifetime so later renders preserve drafts.
- * React.lazy keeps a rejection for good, so after retryFailedLoads a failed
- * attempt is replaced. Until then the failure stays, and React's own renders
- * of the same attempt reach the error boundary instead of downloading again. */
+ * React.lazy keeps a rejection for good, so an attempt that was refused is
+ * replaced on a later mount once the code may load. While it still must
+ * wait, React's renders of the same attempt reach the error boundary instead
+ * of trying again. */
 export function lazyFromModule<Module extends object, Props extends object>(
   load: ModuleLoader<Module>,
   select: (module: Module) => ComponentType<Props>,
+  status: SyncStatus = syncStatus,
 ) {
-  let current = { failed: false, retries }
-  const attempt = (): ComponentType<Props> =>
-    lazy(() =>
+  const attempt = () => {
+    const state = { refused: false }
+    const component: ComponentType<Props> = lazy(() =>
       load().then(
         (module) => ({ default: select(module) }),
         (error: unknown) => {
-          current.failed = true
+          if (error instanceof CodeWaitsForConnection) state.refused = true
           throw error
         },
       ),
     )
-  let Lazy = attempt()
+    return { component, state }
+  }
+  let current = attempt()
   return function Deferred(props: Props) {
     const loaded = load.peek()
-    if (!loaded && current.failed && current.retries !== retries) {
-      current = { failed: false, retries }
-      Lazy = attempt()
-    }
-    const component = useRef(loaded ? select(loaded) : Lazy)
+    if (!loaded && current.state.refused && !codeWaits(status)) current = attempt()
+    const component = useRef(loaded ? select(loaded) : current.component)
     return createElement(component.current, props)
   }
 }
 
-/** Loads each module in `loaders` in turn while the browser is idle, so a
- * view opened later, after the connection drops, needs no download. Waits
- * while `status` is offline and goes on when the pause ends. Answers a
- * function that stops it. */
+/** Loads each module `loaders` lists, one at a time while the browser is
+ * idle, so a view opened later, after the connection drops, needs no
+ * download. First it lets the loads already under way, such as the visible
+ * view's, finish. It waits during any pause or while the connection is down,
+ * and goes on when the status changes back. The first failure stops it, as
+ * the connection may be down before Qivo notices, and a module that failed is
+ * not tried again. `loaders` is asked on every run, so it can follow access
+ * changes. Answers a function that stops it. */
 export function preloadInBackground(
-  loaders: readonly ModuleLoader<object>[],
+  loaders: () => readonly ModuleLoader<object>[],
   status: SyncStatus = syncStatus,
   idle: (next: () => void) => () => void = whenIdle,
 ) {
   let stopped = false
   let running = false
   let cancelIdle = () => {}
+  const waits = () => stopped || status.pause() !== null || codeWaits(status)
   const run = async () => {
-    if (running) return
+    if (running || waits()) return
     running = true
-    for (const load of loaders) {
-      if (stopped || status.pause()?.kind === 'offline') break
-      if (load.peek()) continue
-      await new Promise<void>((next) => {
-        cancelIdle = idle(next)
-      })
-      if (stopped) break
-      // a failure is tried again when the next pause ends
-      await load().catch(() => undefined)
+    try {
+      const list = loaders()
+      await Promise.allSettled(list.filter((load) => load.loading()).map((load) => load()))
+      for (const load of list) {
+        if (waits()) break
+        if (load.peek() || load.failed()) continue
+        await new Promise<void>((next) => {
+          cancelIdle = idle(next)
+        })
+        if (waits()) break
+        try {
+          await load()
+        } catch {
+          break
+        }
+      }
+    } finally {
+      running = false
     }
-    running = false
   }
-  const unsubscribe = status.subscribe((ended) => {
-    if (ended && !status.pause()) void run()
-  })
+  const unsubscribe = watchCodeWaits(status, () => void run())
   void run()
   return () => {
     stopped = true

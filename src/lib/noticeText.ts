@@ -2,7 +2,7 @@ import { fmtDateYear, fmtTime } from './dates'
 import type { SavePause } from './syncStatus'
 
 /* The words of the floating notices (components/SnapshotNotice and
-   components/SavePauseNotice) and of a view waiting out a pause
+   components/SavePauseNotice) and of a view waiting for the connection
    (components/ViewBoundary), kept apart from the components so a change to
    either side keeps Fast Refresh. */
 
@@ -31,14 +31,10 @@ export function pauseSentence(kind: SavePause['kind']): string {
   return `${PAUSES[kind].title}. ${PAUSES[kind].paused}`
 }
 
-/** The title and line of a view whose code could not download during the
-    pause `kind` (components/ViewBoundary). It opens once the pause ends. */
-export function viewPauseWords(kind: SavePause['kind']): { title: string; line: string } {
-  const line =
-    kind === 'offline'
-      ? 'This view opens when the connection is back.'
-      : 'This view opens when it finishes.'
-  return { title: PAUSES[kind].title, line }
+/** The title and line of a view whose code waits for the connection
+    (components/ViewBoundary). It opens once the connection is back. */
+export function viewOfflineWords(): { title: string; line: string } {
+  return { title: PAUSES.offline.title, line: 'This view opens when the connection is back.' }
 }
 
 /** The title and line of the notice while Qivo cannot save. The line

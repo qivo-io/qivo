@@ -1,7 +1,12 @@
 import { createElement, Suspense } from 'react'
 import { renderToString } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { lazyFromModule, preloadInBackground, preloadModule } from './lazyModule'
+import {
+  CodeWaitsForConnection,
+  lazyFromModule,
+  preloadInBackground,
+  preloadModule,
+} from './lazyModule'
 import { createSyncStatus, OFFLINE_DELAY_MS, type SyncStatus } from './syncStatus'
 
 describe('preloaded workspace modules', () => {
@@ -19,14 +24,15 @@ describe('preloaded workspace modules', () => {
     expect(importModule).toHaveBeenCalledTimes(1)
   })
 
-  it('does not retain a failed speculative import as a successful load', async () => {
+  it('keeps a failed import failed, as the browser does, and never as loaded', async () => {
     const importModule = vi.fn(async () => ({ value: 'recovered' }))
     importModule.mockRejectedValueOnce(new Error('Download failed'))
     const load = preloadModule(importModule)
     await expect(load()).rejects.toThrow('Download failed')
     expect(load.peek()).toBeUndefined()
-    await expect(load()).resolves.toEqual({ value: 'recovered' })
-    expect(importModule).toHaveBeenCalledTimes(2)
+    expect(load.failed()).toBe(true)
+    await expect(load()).rejects.toThrow('Download failed')
+    expect(importModule).toHaveBeenCalledTimes(1)
   })
 
   it('renders preloaded code on its first render without a loading fallback', async () => {
@@ -74,33 +80,36 @@ function connected() {
   return status
 }
 
-/** Drops `status`'s connection until it counts as offline. */
-function goOffline(status: SyncStatus) {
+/** Drops `status`'s socket. Qivo counts as offline OFFLINE_DELAY_MS later. */
+function drop(status: SyncStatus, { notice = true } = {}) {
   status.setSocket({ connected: false, everConnected: true })
-  vi.advanceTimersByTime(OFFLINE_DELAY_MS)
+  if (notice) vi.advanceTimersByTime(OFFLINE_DELAY_MS)
 }
 
-describe('loading while offline', () => {
+describe('loading while the connection is down', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
 
-  it('starts no import while offline, so the code loads once the connection is back', async () => {
-    const status = connected()
-    goOffline(status)
-    const importModule = vi.fn(async () => ({ value: 'loaded' }))
-    const load = preloadModule(importModule, status)
-    await expect(load()).rejects.toThrow('connection')
-    expect(importModule).not.toHaveBeenCalled()
-    status.setSocket({ connected: true, everConnected: true })
-    await expect(load()).resolves.toEqual({ value: 'loaded' })
-    expect(importModule).toHaveBeenCalledTimes(1)
+  it('starts no import while the connection is down, before Qivo counts as offline too', async () => {
+    for (const notice of [false, true]) {
+      const status = connected()
+      drop(status, { notice })
+      const importModule = vi.fn(async () => ({ value: 'loaded' }))
+      const load = preloadModule(importModule, status)
+      await expect(load()).rejects.toBeInstanceOf(CodeWaitsForConnection)
+      expect(importModule).not.toHaveBeenCalled()
+      expect(load.failed()).toBe(false)
+      status.setSocket({ connected: true, everConnected: true })
+      await expect(load()).resolves.toEqual({ value: 'loaded' })
+      expect(importModule).toHaveBeenCalledTimes(1)
+    }
   })
 
   it('keeps answering a module that loaded before the connection dropped', async () => {
     const status = connected()
     const load = preloadModule(async () => ({ value: 'loaded' }), status)
     await load()
-    goOffline(status)
+    drop(status)
     await expect(load()).resolves.toEqual({ value: 'loaded' })
   })
 })
@@ -109,76 +118,152 @@ describe('background loading', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
 
-  /** A loader whose import the test finishes, recording the order. */
-  function loader(name: string, order: string[], fail = { next: false }) {
+  let status: SyncStatus
+  /** A loader that records its imports in `order`, and fails while `fail`. */
+  function loader(name: string, order: string[], fail = { on: false }) {
     return preloadModule(async () => {
       order.push(name)
-      if (fail.next) {
-        fail.next = false
-        throw new Error(`${name} failed`)
-      }
+      if (fail.on) throw new Error(`${name} failed`)
       return { name }
     }, status)
   }
-  let status: SyncStatus
   const idleNow = (next: () => void) => {
     queueMicrotask(next)
     return () => {}
   }
   const settle = () => vi.advanceTimersByTimeAsync(0)
 
-  it('loads every module not loaded yet, one at a time', async () => {
+  it('lets loads under way finish, then loads every module not loaded yet, one at a time', async () => {
     status = connected()
     const order: string[] = []
     const loaded = loader('loaded', order)
     await loaded()
+    let finish = () => {}
+    const visible = preloadModule(
+      () =>
+        new Promise<{ name: string }>((resolve) => {
+          order.push('visible')
+          finish = () => resolve({ name: 'visible' })
+        }),
+      status,
+    )
+    void visible()
     order.length = 0
-    const modules = [loader('a', order), loaded, loader('b', order)]
-    preloadInBackground(modules, status, idleNow)
+    order.push('visible')
+    const modules = [loader('a', order), loaded, visible, loader('b', order)]
+    preloadInBackground(() => modules, status, idleNow)
     await settle()
-    expect(order).toEqual(['a', 'b'])
+    expect(order).toEqual(['visible'])
+    finish()
+    await settle()
+    expect(order).toEqual(['visible', 'a', 'b'])
     expect(modules.every((load) => load.peek())).toBe(true)
   })
 
-  it('waits while offline and tries a failed module again when the pause ends', async () => {
+  it('stops at once when the connection drops mid-list and goes on when it is back', async () => {
     status = connected()
     const order: string[] = []
-    const fail = { next: true }
-    const modules = [loader('a', order, fail), loader('b', order)]
-    preloadInBackground(modules, status, idleNow)
+    const modules = [loader('a', order), loader('b', order), loader('c', order)]
+    let release = () => {}
+    const idleHeld = (next: () => void) => {
+      release = next
+      return () => {}
+    }
+    preloadInBackground(() => modules, status, idleHeld)
     await settle()
-    expect(order).toEqual(['a', 'b'])
-    expect(modules[0].peek()).toBeUndefined()
-    goOffline(status)
+    release()
     await settle()
-    expect(order).toEqual(['a', 'b'])
+    expect(order).toEqual(['a'])
+    // the socket goes while the list waits for the browser, before any notice
+    drop(status, { notice: false })
+    release()
+    await settle()
+    // nothing downloads while the socket is down, so nothing stays failed
+    expect(order).toEqual(['a'])
     status.setSocket({ connected: true, everConnected: true })
     await settle()
-    expect(order).toEqual(['a', 'b', 'a'])
+    release()
+    await settle()
+    release()
+    await settle()
+    expect(order).toEqual(['a', 'b', 'c'])
     expect(modules.every((load) => load.peek())).toBe(true)
   })
 
-  it('starts nothing while offline and stops when asked', async () => {
+  it('stops at a failure and skips the failed module afterwards', async () => {
     status = connected()
-    goOffline(status)
     const order: string[] = []
-    const stop = preloadInBackground([loader('a', order)], status, idleNow)
+    const modules = [loader('a', order, { on: true }), loader('b', order)]
+    preloadInBackground(() => modules, status, idleNow)
     await settle()
-    expect(order).toEqual([])
+    expect(order).toEqual(['a'])
+    // a later change of the status lets it go on
+    drop(status, { notice: false })
+    status.setSocket({ connected: true, everConnected: true })
+    await settle()
+    expect(order).toEqual(['a', 'b'])
+    expect(modules[0].failed()).toBe(true)
+  })
+
+  it('waits during a slow save and while offline, and stops when asked', async () => {
+    status = connected()
+    const order: string[] = []
+    const settleWrite = status.track(true)
+    vi.advanceTimersByTime(10_000)
+    expect(status.pause()?.kind).toBe('slow')
+    let idleCalls = 0
+    const idleCounted = (next: () => void) => {
+      idleCalls++
+      const id = setTimeout(next, 10)
+      return () => clearTimeout(id)
+    }
+    const stop = preloadInBackground(() => [loader('a', order)], status, idleCounted)
+    await settle()
+    expect(idleCalls).toBe(0)
+    settleWrite()
+    await settle()
+    expect(idleCalls).toBe(1)
+    // stopped while it waits for the browser to be idle
     stop()
-    status.setSocket({ connected: true, everConnected: true })
-    await settle()
+    await vi.advanceTimersByTimeAsync(50)
     expect(order).toEqual([])
   })
 
-  it('covers every workspace module, and the editor only for an editor', async () => {
+  it('covers every workspace module, the editor only for an editor and the export for an admin', async () => {
     const chunks = await import('./workspaceChunks')
     const loaders = Object.entries(chunks).filter(
       ([name, value]) => 'peek' in value && name !== 'loadTaskCreation',
     )
-    const all = chunks.workspaceModules(true)
+    const all = chunks.workspaceModules({ editor: true, admin: true })
     for (const [name, load] of loaders) expect(all, name).toContain(load)
     expect(all).toHaveLength(loaders.length)
-    expect(chunks.workspaceModules(false)).not.toContain(chunks.loadDescEditor)
+    const member = chunks.workspaceModules({ editor: false, admin: false })
+    expect(member).not.toContain(chunks.loadDescEditor)
+    expect(member).not.toContain(chunks.loadOrgExport)
+  })
+
+  it('leaves no lazily loaded code outside the shared loaders', async () => {
+    const { readdirSync, readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const allowed = new Set([
+      'lib/lazyModule.ts',
+      'lib/workspaceChunks.ts',
+      'lib/workspacePreload.ts',
+      'lib/orgExport.ts',
+    ])
+    const found: string[] = []
+    const walk = (dir: string, rel = '') => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = rel ? `${rel}/${entry.name}` : entry.name
+        if (entry.isDirectory()) walk(join(dir, entry.name), path)
+        else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
+          const text = readFileSync(join(dir, entry.name), 'utf8')
+          if (/\blazy\(\s*\(\)|(?<!typeof )\bimport\(\s*['"]/.test(text) && !allowed.has(path))
+            found.push(path)
+        }
+      }
+    }
+    walk(new URL('..', import.meta.url).pathname)
+    expect(found).toEqual([])
   })
 })

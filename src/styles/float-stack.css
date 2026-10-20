@@ -42,14 +42,22 @@
   scrollbar-width: none;
   pointer-events: none;
 }
-.float-stack > :is([data-float-slot], [data-float-notices]) {
+.float-stack > [data-float-slot] {
   width: 100%;
 }
-/* Half the window less the column's padding on the notices' side, so their
-   band, padding included, stays within the half the page makes free. */
+/* The notices' box takes at most half the window and scrolls inside. It
+   reaches into the column's padding at the sides and on the window edge, and
+   pads that back, so the notices keep their shadows inside its clip. The page
+   makes room for its content box only (lib/floatStack), so the band stays
+   within the half the page makes free. On a desktop the notices sit at the
+   bottom and their shadows fall downwards. */
 .float-stack > [data-float-notices] {
   flex-shrink: 0;
-  max-height: calc(50dvh - 16px);
+  box-sizing: border-box;
+  width: calc(100% + 32px);
+  max-height: 50dvh;
+  margin: 0 -16px -16px;
+  padding: 0 16px 16px;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: none;
@@ -96,8 +104,11 @@
   .float-stack > [data-float-slot="toasts"] {
     order: 1;
   }
+  /* On a phone they sit at the top, and the shadow below the last one keeps
+     the box's bottom padding, which the page does not leave free. */
   .float-stack > [data-float-notices] {
-    max-height: calc(50dvh - max(16px, env(safe-area-inset-top)));
+    margin: calc(-1 * max(16px, env(safe-area-inset-top))) -16px 0;
+    padding: max(16px, env(safe-area-inset-top)) 16px 16px;
   }
   .float-stack .planner-toast-host > * {
     max-width: 100%;

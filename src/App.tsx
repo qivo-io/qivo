@@ -881,12 +881,18 @@ function App() {
   const dismissToast = (id: number) => setToasts((t) => t.filter((x) => x.id !== id))
 
   // After the first paint, download the code of every view not opened yet,
-  // so each still opens if the connection drops. The task editor is only
-  // for people who can edit somewhere; a viewer reads plain text.
-  useEffect(() => {
-    const editor = P.projects.some((project) => P.canWrite(project.id))
-    return preloadInBackground(workspaceModules(editor))
-  }, [])
+  // so each still opens if the connection drops. What this person can use
+  // is asked again whenever the list goes on after a pause.
+  useEffect(
+    () =>
+      preloadInBackground(() =>
+        workspaceModules({
+          editor: P.projects.some((project) => P.canWrite(project.id)),
+          admin: P.isAdmin(),
+        }),
+      ),
+    [],
+  )
 
   // ui persistence
   useEffect(() => {
