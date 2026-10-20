@@ -1308,9 +1308,7 @@ function App() {
     // (0050's shared counter), more than once: the open window follows its
     // task (P.watchHandles above), so it doesn't blank or show the concurrent
     // issue, and a refusal closes it under the handle it showed last.
-    const key = P.addIssue(issue, undefined, (last) =>
-      setOpenIssue((cur) => (cur === last ? null : cur)),
-    )
+    const key = P.addIssue(issue, (last) => setOpenIssue((cur) => (cur === last ? null : cur)))
     if (!key) {
       window.showToast?.('That sub-project is gone, so the task was not created.', 'error')
       return false

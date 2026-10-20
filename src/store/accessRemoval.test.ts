@@ -37,6 +37,7 @@ describe('removing someone who has work in the project', () => {
   let deletion: { delete_after: string } | null
   let status: () => void
   let stopWatch: () => void
+  let deliver: (change: (snap: Snapshot) => void) => void
 
   async function load(change?: (snap: Snapshot, task: Task) => void) {
     const snap: Snapshot = plannerFixture()
@@ -95,7 +96,14 @@ describe('removing someone who has work in the project', () => {
     change?.(snap, task)
     network.onUpdate.mockImplementation((ref, _args, next) => {
       const name = getFunctionName(ref)
-      if (name === 'snapshot:forMe') next(structuredClone(snap))
+      if (name === 'snapshot:forMe') {
+        next(structuredClone(snap))
+        // another person's change, as the server delivers it
+        deliver = (change) => {
+          change(snap)
+          next(structuredClone(snap))
+        }
+      }
       if (name === 'billing:status') {
         status = () => next({ writable, deletion })
         status()
@@ -257,6 +265,32 @@ describe('removing someone who has work in the project', () => {
       team_id: 'crew',
       on_held_tasks: { reassign_to: null },
     })
+  })
+
+  it('leaves a task someone else reassigned meanwhile with them while the removal waits', async () => {
+    await load()
+    const leo = P.accessRemoval(user('leo'))
+    let answer: (value: unknown) => void = () => {}
+    network.mutation.mockImplementationOnce(
+      (ref, args) =>
+        new Promise((resolve) => {
+          requests.push({ name: getFunctionName(ref), args })
+          answer = resolve
+        }),
+    )
+    const removed = P.removeAccess(user('leo'), { to: 'dan' }, leo.items)
+    expect(vm('t1').assignee).toBe('dan')
+    // another admin gives t1 to Ann before the server settles Leo's tasks
+    deliver((snap) => {
+      const t1 = snap.issues.find((task) => task.id === 't1')!
+      t1.assignee_id = 'ann'
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // the server settles only what Leo still holds at commit
+    expect(vm('t1').assignee).toBe('ann')
+    expect(vm('t2').reviewer).toBe('dan')
+    answer(null)
+    expect(await removed).toBe(true)
   })
 
   it('removes a grant nobody loses work through without settling anything', async () => {

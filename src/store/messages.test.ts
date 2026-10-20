@@ -378,6 +378,23 @@ describe('bulk notification actions through the client store', () => {
     expect(showToast).not.toHaveBeenCalled()
   })
 
+  it('shows a message reopened elsewhere while Remove all read waits', async () => {
+    const reopened = snap.messages.find((message) => message.read_at)!
+    const removal = P.deleteReadMessages()
+    expect(ids()).not.toContain(reopened.id)
+    // another device marks it unread before the server's batch reaches it
+    snap.messages = snap.messages.map((m) =>
+      m.id === reopened.id ? { ...m, read_at: undefined } : m,
+    )
+    snap.readMessageCount -= 1
+    publish(structuredClone(snap))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(P.messages.find((m) => m.id === reopened.id)?.read).toBe(false)
+    for (const request of requests) request.resolve({ removed: 0, ids: [], hasMore: false })
+    await removal
+    expect(P.messages.find((m) => m.id === reopened.id)?.read).toBe(false)
+  })
+
   it('removes unseen read notifications in repeated batches across every seat', async () => {
     const unread = snap.messages.find((message) => !message.read_at)!
     snap.messages = Array.from({ length: 500 }, () => ({

@@ -39,8 +39,10 @@ export type View = { workspace?: Paint; thread?: { task: string; paint: Paint } 
 export type Part = 'workspace' | 'thread'
 
 /** The values on screen for the fields one write changes, before its paint:
-    the row's table and id, and each field's value. A field check reads them
-    to tell the server what the person saw. */
+    the row's table and id, and each field's value. Nothing reads them yet:
+    the field check that follows this store change (t3code/field-check) will
+    send them, so the server can refuse an edit over a field someone else
+    changed meanwhile. */
 export type Over = { table: string; id: string; fields: Record<string, unknown> }
 
 /** One write's optimistic change. `open` collects paints before it is sent
@@ -126,6 +128,8 @@ export function createLayers() {
     ordered: (): readonly Layer[] => [...saved, ...live],
     /** Whether an open or pending layer paints `part`, or anything. */
     paintedPending: (part?: Part) => live.some((l) => (part ? !!l.view[part] : paints(l.view))),
+    /** Whether a write was sent and has not answered, painted or not. */
+    waiting: () => live.some((l) => l.state === 'pending'),
     /** Empties the registry. */
     clear() {
       live = []

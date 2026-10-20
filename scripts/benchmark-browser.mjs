@@ -23,7 +23,8 @@ const latency = Number(option('latency', '100'))
 const bandwidth = Number(option('mbps', '8'))
 const output = option('output', '/tmp/qivo-browser-benchmark.json')
 const timeout = Number(option('timeout', '15000'))
-// unread messages in the fixture, for the bulk-read scenario
+// unread messages the bulk-read scenario adds just before it runs, so the
+// earlier scenarios load the same workspace as before it existed
 const messages = Number(option('messages', '500'))
 const temporary = await mkdtemp(join(tmpdir(), 'qivo-browser-perf-'))
 const distribution = join(temporary, 'dist')
@@ -203,7 +204,7 @@ try {
           }
           return elapsed
         }
-        await page.goto(`${origin}/?tasks=${tasks}&latency=${latency}&messages=${messages}`)
+        await page.goto(`${origin}/?tasks=${tasks}&latency=${latency}`)
         await page.locator('[data-view-switch]').waitFor()
         await settle()
         metrics.startup.push(await page.evaluate(() => performance.now()))
@@ -353,7 +354,13 @@ try {
         )
         await page.evaluate(() => window.__perf.releaseAll())
         await page.waitForFunction(() => !window.PLANNER.roadmapUndo.busy)
-        // Mark all as read over the fixture's unread messages.
+        // Mark all as read over `messages` new unread messages.
+        await page.evaluate((count) => window.__perf.seedMessages(count), messages)
+        // one inbox item per task the messages land on
+        await page.waitForFunction(
+          (items) => window.PLANNER.unreadMessages >= items,
+          Math.min(messages, tasks),
+        )
         phase('markAllRead')
         metrics.markAllRead.push(
           await timed(async () => {

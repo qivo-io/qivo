@@ -254,6 +254,22 @@ describe('roadmap undo through the client store', () => {
     expect(P.roadmapUndo.disabled).toBe(false)
   })
 
+  it('keeps Undo busy while a comment from a task opened on Roadmap waits', async () => {
+    await savePlan()
+    expect(P.roadmapUndo).toEqual({ count: 1, busy: false, disabled: false })
+    // a comment paints only the thread of the task, and clears the history
+    // once the server accepts it
+    void P.addComment(task().uuid, 'Posted from Roadmap')
+    expect(latest().name).toBe('comments:create')
+    expect(P.roadmapUndo.busy).toBe(true)
+    const sent = requests.length
+    P.undoRoadmap()
+    expect(requests).toHaveLength(sent)
+    latest().resolve(null)
+    await settled()
+    expect(P.roadmapUndo).toEqual({ count: 0, busy: false, disabled: true })
+  })
+
   it('does not let an ordinary task write from an earlier visit disable the new visit', async () => {
     await savePlan()
     P.roadmapContext(true, true)

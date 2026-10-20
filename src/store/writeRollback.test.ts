@@ -27,6 +27,8 @@ describe('rollback during snapshot trouble', () => {
   let store: typeof import('./planner')
   let snapshot: Snapshot
   let subscriptions: Subscription[]
+  // the boot's delivery, as the object the client handed over
+  let booted: Snapshot
   let sent: Sent[]
   let showToast: ReturnType<typeof vi.fn>
 
@@ -133,7 +135,10 @@ describe('rollback during snapshot trouble', () => {
     network.onUpdate.mockImplementation((ref, _args, deliver, fail) => {
       if (getFunctionName(ref) === 'snapshot:forMe') {
         subscriptions.push({ deliver, fail })
-        if (subscriptions.length === 1) deliver(structuredClone(snapshot))
+        if (subscriptions.length === 1) {
+          booted = structuredClone(snapshot)
+          deliver(booted)
+        }
       }
       return vi.fn()
     })
@@ -579,6 +584,43 @@ describe('rollback during snapshot trouble', () => {
     expect(task('Replace the gasket')).toBeDefined()
     await refuseFollow()
     expect(task('Replace the gasket')).toBeDefined()
+  })
+
+  it('takes a held result Convex hands Try again for a replay, not a delivery', async () => {
+    live().fail(new Error(QUERY_FAILURE))
+    P().markMessagesRead(['message-a'])
+    await accept()
+    P().retrySnapshot()
+    // the new listener gets the object the client still holds, from before
+    // the read mark (lib/convexOrdering.test.ts)
+    live().deliver(booted)
+    vi.advanceTimersByTime(0)
+    await settle()
+    expect(P().snapshotTrouble()).not.toBeNull()
+    expect(message('message-a')?.read).toBe(true)
+    await refuseFollow()
+    expect(message('message-a')?.read).toBe(true)
+    // the server's own answer is a delivery
+    deliverTruth((snap) => {
+      snap.messages[0].read_at = '2026-09-15T08:30:00.000Z'
+    })
+    expect(P().snapshotTrouble()).toBeNull()
+    expect(message('message-a')?.read).toBe(true)
+  })
+
+  it('keeps a write waiting across a re-init whose new listener gets the held result', async () => {
+    P().markMessagesRead(['message-a'])
+    // a delivery since the read mark was sent, which does not hold it yet
+    deliverTruth(() => {})
+    const booting = store.initStore()
+    await vi.waitFor(() => expect(subscriptions).toHaveLength(2))
+    // Convex hands the new listener the object it still holds from the boot
+    live().deliver(booted)
+    await booting
+    await accept()
+    vi.advanceTimersByTime(0)
+    await settle()
+    expect(message('message-a')?.read).toBe(true)
   })
 
   it('reverts only the refused write outside trouble', async () => {

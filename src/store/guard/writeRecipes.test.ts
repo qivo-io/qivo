@@ -183,12 +183,17 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  // a fault the store caught (a throw in a paint or an answer) fails the test
+  if (store?.__layerProbe) expect(store.__layerProbe.faults()).toEqual([])
   vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
 const runnable = recipes.filter((recipe) => !recipe.unrunnable)
+
+/** Whether `recipe`'s write paints when it is sent, not only once accepted. */
+const paintsAtSend = (recipe: Recipe) => !!(recipe.truth || recipe.thread) && !recipe.paintsOnAccept
 
 describe.each(runnable.map((recipe) => [`${recipe.mutation} (${recipe.what})`, recipe] as const))(
   '%s',
@@ -229,10 +234,12 @@ describe.each(runnable.map((recipe) => [`${recipe.mutation} (${recipe.what})`, r
     it('keeps the change accepted during trouble when another write is refused', async () => {
       await boot(recipe)
       let args: Record<string, unknown> = {}
+      let beforeAnswer: Record<string, string> | null = null
       const thread = !!recipe.thread
       const sentNames = await drive(recipe, (name, sent, resolve) => {
         if (name === recipe.mutation) {
           args = sent
+          beforeAnswer = probe().rows(true)
           // the query fails before the answer, so no delivery holds the write
           if (thread) server().fail('snapshot:commentThread', new Error(THREAD_FAILURE))
           else server().fail('snapshot:forMe', new Error(QUERY_FAILURE))
@@ -240,12 +247,19 @@ describe.each(runnable.map((recipe) => [`${recipe.mutation} (${recipe.what})`, r
         resolve(answerOf(recipe, name, sent))
       })
       expect(sentNames).toContain(recipe.mutation)
+      // a change painted when it was sent is still there once accepted
+      if (paintsAtSend(recipe)) expect(probe().rows(true)).toEqual(beforeAnswer)
       const shown = probe().rows()
       // another painted write that still goes out, refused
-      if (thread) void P().updateComment('comment-b', 'Refused edit')
-      else P().setIssueSubscribed('QN-3', true)
+      if (thread) void P().addComment('task-a', 'Refused comment')
+      else {
+        const other = ['QN-1', 'QN-2', 'QN-3'].find((key) => P().issueById[key])!
+        P().setIssueSubscribed(other, !P().issueById[other].subscribed)
+      }
       await settle()
-      for (const request of server().take()) request.reject(REFUSAL())
+      const refused = server().take()
+      expect(refused).toHaveLength(1)
+      for (const request of refused) request.reject(REFUSAL())
       await settle()
       expect(probe().rows()).toEqual(shown)
       // the server's rows end the trouble and hold every accepted write
@@ -279,8 +293,10 @@ describe.each(runnable.map((recipe) => [`${recipe.mutation} (${recipe.what})`, r
       expect(probe().layerCount()).toBe(0)
       const stored = probe().rows(true)
       expect(painted).toEqual(stored)
-      // a paint shown at send already shows what the server stores
-      if (JSON.stringify(early) !== JSON.stringify(before)) expect(early).toEqual(stored)
+      // a paint shown at send already shows what the server stores; a write
+      // that paints only once accepted shows nothing before
+      if (paintsAtSend(recipe)) expect(early).toEqual(stored)
+      else expect(early).toEqual(before)
     })
   },
 )

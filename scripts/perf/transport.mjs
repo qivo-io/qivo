@@ -6,8 +6,6 @@ import { ConvexError } from 'convex/values'
 const parameters = new URLSearchParams(location.search)
 const count = Number(parameters.get('tasks') || 100)
 const latency = Number(parameters.get('latency') || 100)
-// unread inbox messages for the signed-in person, for the bulk-read scenario
-const messageCount = Number(parameters.get('messages') || 0)
 const fixtureTime = new Date()
 const now = fixtureTime.toISOString()
 const day = (offset) => {
@@ -105,16 +103,7 @@ const snapshot = {
   issueSubs: [],
   attachments: [],
   orgLoad: [],
-  messages: Array.from({ length: messageCount }, (_, n) => ({
-    id: id('6', n),
-    org_id: org,
-    recipient_id: profiles[0].id,
-    issue_id: id('4', n % count),
-    issue_title: `Testbed task ${(n % count) + 1}`,
-    kind: 'change',
-    detail: 'Status changed',
-    created_at: now,
-  })),
+  messages: [],
   readMessageCount: 0,
   unreadTruncated: false,
   readTruncated: false,
@@ -160,6 +149,24 @@ function emit(name) {
   if (name === 'snapshot:forMe') snapshot.delivered_at = new Date().toISOString()
   for (const { args, receive } of listeners.get(name) || [])
     receive(structuredClone(read(name, args)))
+}
+/* The server's prune of one inbox item after a read (convex/model/messages.ts
+   pruneStampedItem): it keeps the newest unread row or, with none, the
+   newest read row, and deletes the other read rows. */
+function pruneItem(issueId) {
+  const rows = snapshot.messages.filter((m) => m.issue_id === issueId)
+  const newer = (a, b) =>
+    b.created_at > a.created_at || (b.created_at === a.created_at && b.id > a.id) ? b : a
+  const unread = rows.filter((m) => !m.read_at)
+  const keep = unread.length ? unread.reduce(newer) : rows.reduce(newer)
+  snapshot.messages = snapshot.messages.filter(
+    (m) => m.issue_id !== issueId || !m.read_at || m === keep,
+  )
+}
+/* Counts the read rows and delivers the inbox's new state. */
+function settleInbox() {
+  snapshot.readMessageCount = snapshot.messages.filter((m) => m.read_at).length
+  emit('snapshot:forMe')
 }
 /* Writes the scenarios hold until they release them, in order. */
 const held = []
@@ -207,34 +214,30 @@ export const convex = {
     if (name === 'identity:claimMySeats' || name === 'prefs:save') return null
     if (name === 'messages:markRead') {
       const ids = new Set(args.ids)
-      for (const message of snapshot.messages)
-        if (ids.has(message.id) && !message.read_at) message.read_at = new Date().toISOString()
-      snapshot.readMessageCount = snapshot.messages.filter((m) => m.read_at).length
-      emit('snapshot:forMe')
+      const at = new Date().toISOString()
+      const marked = snapshot.messages.filter((m) => ids.has(m.id) && !m.read_at)
+      for (const message of marked) message.read_at = at
+      for (const issue of new Set(marked.map((m) => m.issue_id))) pruneItem(issue)
+      settleInbox()
       return null
     }
     if (name === 'messages:markAllRead') {
-      // as convex/model/messages.ts does: at most 256 rows a batch, created
-      // no later than the first batch's cutoff, then each task keeps only its
-      // newest read row
-      const before = args.before ?? Date.now()
+      // as convex/model/messages.ts markAllMessagesRead does: at most 256
+      // unsnoozed unread rows a batch, created no later than the first
+      // batch's cutoff, the newest unread row's creation, then the prune
       const unread = snapshot.messages.filter(
-        (m) => !m.read_at && m.org_id === args.org_id && Date.parse(m.created_at) <= before,
+        (m) => !m.read_at && !m.snoozed_until && m.org_id === args.org_id,
       )
-      const batch = unread.slice(0, 256)
+      const before = args.before ?? Math.max(0, ...unread.map((m) => Date.parse(m.created_at)))
+      const due = unread.filter((m) => Date.parse(m.created_at) <= before)
+      const batch = due.slice(0, 256)
       const at = new Date().toISOString()
       for (const message of batch) message.read_at = at
-      for (const issue of new Set(batch.map((m) => m.issue_id))) {
-        const rows = snapshot.messages.filter((m) => m.issue_id === issue)
-        if (rows.some((m) => !m.read_at)) continue
-        const newest = rows.reduce((a, b) => (b.created_at > a.created_at ? b : a))
-        snapshot.messages = snapshot.messages.filter((m) => m.issue_id !== issue || m === newest)
-      }
-      snapshot.readMessageCount = snapshot.messages.filter((m) => m.read_at).length
-      if (batch.length) emit('snapshot:forMe')
+      for (const issue of new Set(batch.map((m) => m.issue_id))) pruneItem(issue)
+      if (batch.length) settleInbox()
       window.__perf.writes++
       const ids = batch.map((m) => m.id)
-      return { marked: ids.length, ids, hasMore: unread.length > batch.length, before }
+      return { marked: ids.length, ids, hasMore: due.length > batch.length, before }
     }
     if (name === 'issues:update') {
       if (patchTask(args.id, args.patch)) emit('snapshot:forMe')
@@ -289,6 +292,23 @@ window.__perf = {
   releaseAll() {
     holding = false
     while (held.length) held.shift()(false)
+  },
+  /* Delivers `n` new unread messages for the signed-in person, one per task,
+     for the bulk-read scenario. */
+  seedMessages(n) {
+    const created = new Date().toISOString()
+    for (let i = 0; i < n; i++)
+      snapshot.messages.push({
+        id: id('6', snapshot.messages.length),
+        org_id: org,
+        recipient_id: profiles[0].id,
+        issue_id: id('4', i % count),
+        issue_title: `Testbed task ${(i % count) + 1}`,
+        kind: 'change',
+        detail: 'Status changed',
+        created_at: created,
+      })
+    emit('snapshot:forMe')
   },
   /* Another person renames task `n`, which every listener receives. */
   deliverRemote(n) {

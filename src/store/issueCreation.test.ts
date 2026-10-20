@@ -62,9 +62,10 @@ describe('task creation through the client store', () => {
 
   const settled = () => vi.waitFor(() => expect(P.roadmapUndo.busy).toBe(false))
 
-  it('keeps the existing two-argument API when creation succeeds', async () => {
-    const onKeyFixed = vi.fn()
-    const key = P.addIssue({ project: snap.projects[0].id, title: 'New task' }, onKeyFixed)!
+  it('keeps the handle when creation succeeds with the previewed number', async () => {
+    const moved = vi.fn()
+    P.watchHandles(moved)
+    const key = P.addIssue({ project: snap.projects[0].id, title: 'New task' })!
     const task = P.issueById[key]
     expect(task.title).toBe('New task')
     expect(requests[0]).toMatchObject({
@@ -75,25 +76,22 @@ describe('task creation through the client store', () => {
     requests[0].resolve({ num: snap.orgs[0].next_issue_num + 1 })
     await settled()
     expect(P.issueById[key].uuid).toBe(task.uuid)
-    expect(onKeyFixed).not.toHaveBeenCalled()
+    expect(moved).not.toHaveBeenCalled()
     expect(showToast).not.toHaveBeenCalled()
   })
 
   it('corrects an open preview after successful renumbering without reporting a refusal', async () => {
-    const onKeyFixed = vi.fn()
+    const moved = vi.fn()
+    P.watchHandles(moved)
     const onRefused = vi.fn()
-    const key = P.addIssue(
-      { project: snap.projects[0].id, title: 'New task' },
-      onKeyFixed,
-      onRefused,
-    )!
+    const key = P.addIssue({ project: snap.projects[0].id, title: 'New task' }, onRefused)!
     const task = P.issueById[key]
     const correctedNum = snap.orgs[0].next_issue_num + 2
     requests[0].resolve({ num: correctedNum })
     await settled()
 
-    expect(onKeyFixed).toHaveBeenCalledExactlyOnceWith(`${P.ISSUE_PREFIX}-${correctedNum}`, key)
-    const correctedKey = onKeyFixed.mock.calls[0][0]
+    const correctedKey = `${P.ISSUE_PREFIX}-${correctedNum}`
+    expect(moved).toHaveBeenCalledExactlyOnceWith(new Map([[key, correctedKey]]))
     expect(P.issueById[correctedKey].uuid).toBe(task.uuid)
     expect(P.issueById[key]).toBeUndefined()
     expect(onRefused).not.toHaveBeenCalled()
@@ -103,7 +101,8 @@ describe('task creation through the client store', () => {
   it('moves an open preview past a competing create while the write waits, never sharing a handle', async () => {
     vi.useFakeTimers()
     const onKeyFixed = vi.fn()
-    const key = P.addIssue({ project: snap.projects[0].id, title: 'Mine' }, onKeyFixed)!
+    P.watchHandles(onKeyFixed)
+    const key = P.addIssue({ project: snap.projects[0].id, title: 'Mine' })!
     const mine = P.issueById[key].uuid
     const next = snap.orgs[0].next_issue_num + 1
     const competing: Snapshot['issues'][number] = {
@@ -126,7 +125,7 @@ describe('task creation through the client store', () => {
     publish(structuredClone(snap))
     vi.advanceTimersByTime(0)
     const moved = `${P.ISSUE_PREFIX}-${next + 1}`
-    expect(onKeyFixed).toHaveBeenCalledExactlyOnceWith(moved, key)
+    expect(onKeyFixed).toHaveBeenCalledExactlyOnceWith(new Map([[key, moved]]))
     expect(P.issueById[moved].uuid).toBe(mine)
     expect(P.issueById[key].uuid).toBe(competing.id)
     expect(new Set(P.issues.map((task) => task.key)).size).toBe(P.issues.length)
@@ -233,15 +232,12 @@ describe('task creation through the client store', () => {
 
   it('notifies the caller once before rollback can reuse the preview number for another task', async () => {
     const onKeyFixed = vi.fn()
+    P.watchHandles(onKeyFixed)
     let taskAtRefusal: string | undefined
     const onRefused = vi.fn(() => {
       taskAtRefusal = P.issueById[key]?.uuid
     })
-    const key = P.addIssue(
-      { project: snap.projects[0].id, title: 'Refused task' },
-      onKeyFixed,
-      onRefused,
-    )!
+    const key = P.addIssue({ project: snap.projects[0].id, title: 'Refused task' }, onRefused)!
     const preview = P.issueById[key]
     const competing: Snapshot['issues'][number] = {
       id: crypto.randomUUID(),

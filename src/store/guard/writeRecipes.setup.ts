@@ -27,8 +27,9 @@ export const ME = 'me'
 export const PAT = 'pat'
 
 /** Which pause holds a write back (store/planner.ts isUnpausedWrite): every
-    snapshot trouble (`P`), every trouble but a lost seat (`U`), or only the
-    pause while Qivo cannot save (`U-all`). Every write pauses then. */
+    snapshot trouble (`P`), a lost seat or sign-in but not a failed query
+    (`U`), or only the pause while Qivo cannot save (`U-all`). Every write
+    pauses then. */
 export type PauseClass = 'P' | 'U' | 'U-all'
 
 export type Recipe = {
@@ -55,6 +56,9 @@ export type Recipe = {
   /** The watched thread after the server applied the write, for a comment
       write. */
   thread?: (page: Thread, args: Record<string, unknown>) => void
+  /** The write paints only once the server accepts it (a keep), such as
+      an upload or a removal the window waits for. */
+  paintsOnAccept?: true
   /** Why the runner cannot drive this write, when it cannot. */
   unrunnable?: string
 }
@@ -360,6 +364,7 @@ export const recipes: Recipe[] = [
     mutation: 'issues:deleteDeep',
     mutator: 'deleteIssue',
     what: 'a task deleted from the window that waits',
+    paintsOnAccept: true,
     pause: 'P',
     act: (P) => P.deleteIssue('QN-3', [], true),
     truth: (snap) => {
@@ -370,6 +375,7 @@ export const recipes: Recipe[] = [
     mutation: 'issues:archive',
     mutator: 'archiveIssue',
     what: 'an archived task',
+    paintsOnAccept: true,
     pause: 'P',
     act: (P) => P.archiveIssue('QN-3'),
     truth: (snap) => {
@@ -449,6 +455,7 @@ export const recipes: Recipe[] = [
     mutation: 'files:attach',
     mutator: 'addAttachment',
     what: 'a new attachment',
+    paintsOnAccept: true,
     pause: 'P',
     act: (P) => P.addAttachment('QN-1', file('notes.txt', 'text/plain')),
     answers: {
@@ -493,6 +500,7 @@ export const recipes: Recipe[] = [
     mutation: 'files:setAvatar',
     mutator: 'setAvatar',
     what: 'a new portrait',
+    paintsOnAccept: true,
     pause: 'P',
     act: (P) => P.setAvatar(PAT, file('pat.png', 'image/png')),
     answers: { 'files:avatarUploadUrl': () => 'https://files.test/avatar' },
@@ -504,6 +512,7 @@ export const recipes: Recipe[] = [
     mutation: 'files:clearAvatar',
     mutator: 'clearAvatar',
     what: 'a removed portrait',
+    paintsOnAccept: true,
     pause: 'P',
     seed: (snap) => {
       profile(snap, PAT).avatar_storage_id = STORED as Row<'profiles'>['avatar_storage_id']
@@ -866,6 +875,7 @@ export const recipes: Recipe[] = [
     mutation: 'projects:deleteDeep',
     mutator: 'removeProject',
     what: 'a deleted sub-project',
+    paintsOnAccept: true,
     pause: 'P',
     act: (P) => P.removeProject('work2'),
     truth: (snap) => {
@@ -997,6 +1007,7 @@ export const recipes: Recipe[] = [
     mutation: 'orgs:setSlug',
     mutator: 'setOrgSlug',
     what: 'a new organization address',
+    paintsOnAccept: true,
     pause: 'P',
     act: (P) => P.setOrgSlug('renamed'),
     truth: (snap) => {

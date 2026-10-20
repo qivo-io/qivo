@@ -56,6 +56,22 @@ const PAINT_HELPERS = new Set([
   // the probe below breaks the rule on purpose
   'writeOutside',
 ])
+/** Whether call `node` is a Convex write: `.mutation(` or `.action(` on an
+    object whose text names `convex`, however it is written (convex?.mutation,
+    (convex as T).mutation, convex['mutation']). */
+function writesThroughConvex(text: string, node: AstNode): boolean {
+  let target = node.callee as AstNode
+  while (target.type === 'ChainExpression' || target.type === 'ParenthesizedExpression')
+    target = target.expression as AstNode
+  if (target.type !== 'MemberExpression') return false
+  const property = target.property as AstNode
+  const verb = property.type === 'Literal' ? String(property.value) : textOf(text, property)
+  return (
+    (verb === 'mutation' || verb === 'action') &&
+    /\bconvex\b/.test(textOf(text, target.object as AstNode))
+  )
+}
+
 const ROW_CHANGES = new Set(['set', 'delete', 'push', 'splice', 'clear', 'add', 'unshift', 'pop'])
 const THROUGH = new Set(['ParenthesizedExpression', 'ConditionalExpression', 'LogicalExpression'])
 
@@ -84,9 +100,26 @@ describe('the store sends every write through one door', () => {
     expect(new Set(owners('convex.mutation'))).toEqual(new Set(['dispatch']))
     expect(new Set(owners('dispatch'))).toEqual(new Set(['start']))
     expect(new Set(owners('start'))).toEqual(new Set(['send', 'sendAwaited']))
-    // and nothing else in the store reaches Convex's write paths
-    const direct = calls.filter((call) => /^convex\.(action|mutation)$/.test(callee(call)))
-    expect(direct).toHaveLength(1)
+    // and nothing else in the store reaches Convex's write paths, however
+    // the call is written
+    const direct = calls.filter((call) => writesThroughConvex(source, call.node))
+    expect(direct.map((call) => ownerName(call.ancestors))).toEqual(['dispatch'])
+  })
+
+  it('has no other store file that writes to Convex', () => {
+    const others = readdirSync('src/store')
+      .filter((name) => /\.tsx?$/.test(name) && !/\.(test|setup)\.tsx?$/.test(name))
+      .map((name) => join('src/store', name))
+      .filter((path) => path !== STORE)
+    const found: string[] = []
+    for (const path of others) {
+      const parsed = parseFile(path)
+      walk(parsed.program, (node) => {
+        if (node.type === 'CallExpression' && writesThroughConvex(parsed.source, node))
+          found.push(`${path}: ${textOf(parsed.source, node).split('\n')[0]}`)
+      })
+    }
+    expect(found).toEqual([])
   })
 
   it('changes row sections only inside a paint or a row builder', () => {
@@ -123,7 +156,7 @@ describe('every write has a recipe', () => {
 
   it('names one or more mutations in every send', () => {
     expect(sends.filter((s) => !s.names.length)).toEqual([])
-    // the inventory found 78 call sites; new ones add recipes
+    // the store's inventory found 78 call sites; there are more now
     expect(sends.length).toBeGreaterThanOrEqual(78)
   })
 
@@ -133,9 +166,10 @@ describe('every write has a recipe', () => {
     expect([...recipeNames].filter((name) => !sent.has(name))).toEqual([])
   })
 
-  it('names in a recipe every function that sends a write', () => {
-    const mutators = new Set(recipes.map((r) => r.mutator))
-    expect([...new Set(sends.map((s) => s.mutator))].filter((m) => !mutators.has(m))).toEqual([])
+  it('has a recipe for every function and mutation it sends', () => {
+    const covered = new Set(recipes.map((r) => `${r.mutator} ${r.mutation}`))
+    const pairs = new Set(sends.flatMap((s) => s.names.map((name) => `${s.mutator} ${name}`)))
+    expect([...pairs].filter((pair) => !covered.has(pair))).toEqual([])
     // and each recipe's mutator sends its mutation
     for (const recipe of recipes)
       expect(
@@ -178,11 +212,7 @@ describe('Convex writes outside the store', () => {
       const parsed = parseFile(path)
       walk(parsed.program, (node) => {
         if (node.type !== 'CallExpression') return
-        const target = node.callee as AstNode
-        if (target.type !== 'MemberExpression') return
-        const verb = textOf(parsed.source, target.property as AstNode)
-        if (verb !== 'mutation' && verb !== 'action') return
-        if (!/\bconvex\b/.test(textOf(parsed.source, target.object as AstNode))) return
+        if (!writesThroughConvex(parsed.source, node)) return
         const first = (node.arguments as AstNode[])[0]
         found[path] = [
           ...(found[path] ?? []),

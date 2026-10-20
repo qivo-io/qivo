@@ -301,6 +301,12 @@ let eventsSnap: Row<'activity_events'>[] = []
    edits and deletes; other people's changes to these comments show when the
    task opens again. */
 let olderComments: Row<'comments'>[] = []
+/* The person's comment edits and deletes in the watched thread that the
+   server accepted (null for a delete), until a live window holds the
+   comment. A comment that slides out of the window moves into olderComments
+   from the window delivered before, which can predate the edit, so the edit
+   applies again there (receiveThread). */
+const acceptedCommentChanges = new Map<string, Partial<Row<'comments'>> | null>()
 /* Whether the watched thread's first comment is loaded, so nothing is
    earlier, and how the last load of an earlier page went. */
 let threadStart = false
@@ -356,7 +362,13 @@ function receiveThread(page: {
     if (at > 0) {
       const known = new Set(olderComments.map((r) => r.id))
       slid = prev.slice(0, at)
-      olderComments = [...olderComments, ...slid.filter((r) => !known.has(r.id))]
+      const moved = slid
+        .filter((r) => !known.has(r.id) && acceptedCommentChanges.get(r.id) !== null)
+        .map((r) => {
+          const change = acceptedCommentChanges.get(r.id)
+          return change ? { ...r, ...change } : r
+        })
+      olderComments = [...olderComments, ...moved]
     } else if (at === -1) {
       // the window reached down into what was loaded before it, or past it
       const kept = olderComments.findIndex((r) => r.id === first.id)
@@ -365,6 +377,8 @@ function receiveThread(page: {
     }
   }
   if (!page.earlier) threadStart = true
+  // a live window holds the comments in it as the server has them now
+  for (const comment of page.comments) acceptedCommentChanges.delete(comment.id)
   commentsSnap = page.comments
   eventsSnap = page.events
   return slid
@@ -479,11 +493,11 @@ function subscribeThread(issueUuid: string, orgId: string) {
     (delivered) => {
       if (!current()) return
       skipped = null
-      PLANNER.commentsFailure = 'none'
       // a result held from an earlier listener, which may predate writes
-      // accepted since (deliveredValues)
+      // accepted since (deliveredValues): it ends no failure
       const replay = deliveredValues.has(delivered)
       deliveredValues.add(delivered)
+      if (!replay) PLANNER.commentsFailure = 'none'
       const page = anchor(delivered)
       const slid = receiveThread(page)
       if (slid.length && page.comments[0])
@@ -665,7 +679,8 @@ function dropDeletedTasks(gone: Set<string>, at: string) {
     }
   })
   // the rows, and everything hung on them: links, labels, attachments,
-  // inbox messages, load and the watched comment thread
+  // inbox messages and load. The task's window releases the watched thread
+  // once the task leaves the rows (IssueDetail).
   purgeIssueRows(gone)
 }
 
@@ -996,9 +1011,30 @@ function paintRows(workspace: boolean, thread: boolean) {
   }
   if (thread) buildThreadRows()
   for (const layer of layers.ordered()) {
-    if (snap) layer.view.workspace?.()
+    // one paint that throws cannot keep every later delivery off the screen
+    if (snap && layer.view.workspace) guarded(layer.view.workspace)
     const part = layer.view.thread
-    if (thread && part && part.task === watchedComments) part.paint()
+    if (thread && part && part.task === watchedComments) guarded(part.paint)
+  }
+}
+
+/* Faults the layer machinery caught (reportFault), kept in tests so the
+   guard tests can show none happened. */
+const faults: unknown[] = []
+
+/** Logs `fault`, a defect the store caught so it cannot stop other work,
+    and in tests keeps it for __layerProbe.faults(). */
+function reportFault(fault: unknown) {
+  console.error('[qivo] store fault:', fault)
+  if (STRICT_LAYERS) faults.push(fault)
+}
+
+/** Runs `step`, reporting a throw (reportFault) instead of passing it on. */
+function guarded(step: () => void) {
+  try {
+    step()
+  } catch (fault) {
+    reportFault(fault)
   }
 }
 
@@ -1159,7 +1195,18 @@ function start<M extends FunctionReference<'mutation'>, T>(
   const view: View = target === 'none' || 'id' in target ? {} : target
   const layer = batch ?? layers.open(name, view, o.over)
   layers.send(layer, { snapshot: snapshotDeliveries, thread: threadDeliveries })
-  if (!batch) showPaint(layer.view)
+  if (!batch) {
+    try {
+      showPaint(layer.view)
+    } catch (fault) {
+      // a paint that throws is a defect: the write goes nowhere, and says so
+      reportFault(fault)
+      settleRefused(layer)
+      ;(o.onError ?? (awaited ? undefined : (e) => toastWriteError(e, false)))?.(fault)
+      o.onSettled?.()
+      return new Promise<T>((resolve) => resolve(refusal(fault)))
+    }
+  }
   const epoch = storeEpoch
   const releaseUpdate = beginUpdateBlock()
   let sent: Promise<FunctionReturnType<M>>
@@ -1172,10 +1219,14 @@ function start<M extends FunctionReference<'mutation'>, T>(
     (result) => {
       releaseUpdate()
       if (epoch === storeEpoch) {
-        const next = o.keep?.(result)
-        o.onOk?.(result)
-        settleAccepted(layer, next)
-        o.onSettled?.()
+        // a callback that throws still leaves the layer settled
+        let next: View | null | undefined
+        guarded(() => {
+          next = o.keep?.(result)
+          o.onOk?.(result)
+        })
+        guarded(() => settleAccepted(layer, next))
+        guarded(() => o.onSettled?.())
       }
       return answer(result)
     },
@@ -1184,9 +1235,11 @@ function start<M extends FunctionReference<'mutation'>, T>(
       if (epoch === storeEpoch) {
         console.error('[qivo] write failed:', error)
         const painted = paints(layer.view)
-        ;(o.onError ?? (awaited ? undefined : (e) => toastWriteError(e, painted)))?.(error)
-        settleRefused(layer)
-        o.onSettled?.()
+        guarded(() =>
+          (o.onError ?? (awaited ? undefined : (e) => toastWriteError(e, painted)))?.(error),
+        )
+        guarded(() => settleRefused(layer))
+        guarded(() => o.onSettled?.())
       }
       return refusal(error)
     },
@@ -1359,6 +1412,8 @@ export const __layerProbe = STRICT_LAYERS
           and how many layers are live. */
       rows: (noStamps = false) => canonicalRows(noStamps),
       layerCount: () => layers.ordered().length,
+      /** The faults the store caught and reported, and forgets them. */
+      faults: () => faults.splice(0),
       /** Changes a task's title outside any layer and emits. */
       writeOutside() {
         const issue = rows.issues.values().next().value
@@ -3024,6 +3079,8 @@ function removeAtOnce(
     typeof held === 'object'
       ? items.map((i) => ({
           uuid: i.task.uuid,
+          uid: i.uid,
+          field: i.role === 'assignee' ? ('assignee_id' as const) : ('reviewer_id' as const),
           db: mapIssuePatch(
             i.role === 'assignee' ? { assignee: held.reassign_to } : { reviewer: held.reassign_to },
           ),
@@ -3040,7 +3097,9 @@ function removeAtOnce(
   }
   const view: View = {
     workspace: () => {
-      for (const { uuid, db } of patches) patchIssueRow(uuid, db, at)
+      // the server settles only the tasks the person still holds at commit
+      for (const { uuid, uid, field, db } of patches)
+        if (rows.issues.get(uuid)?.[field] === uid) patchIssueRow(uuid, db, at)
       if (change.kind === 'userGrant') {
         rows.access = rows.access.filter(
           (a) => !(a.project_id === change.projectId && a.profile_id === change.userId),
@@ -3058,7 +3117,8 @@ function removeAtOnce(
         const has = rows.access.some(
           (a) => a.project_id === grant.project_id && a.profile_id === grant.profile_id,
         )
-        if (!has && rows.projects.has(grant.project_id)) rows.access.push({ ...grant })
+        const there = rows.projects.has(grant.project_id) && rows.profiles.has(grant.profile_id)
+        if (!has && there) rows.access.push({ ...grant })
       }
     },
   }
@@ -3264,7 +3324,8 @@ function newTaskPaint(row: Row<'issues'>, created: { num: number | null }): Pain
 /* Runs a bulk inbox action on every seat. The loaded `messages` it reaches
    show `paint` at once under one umbrella layer per seat, and the `flags`
    it clears under one more. Each seat sends `batch` until an answer has no
-   more, and each batch keeps a layer for the rows its answer names (`keep`).
+   more, and each batch keeps a layer, `named`, for the rows its answer
+   names (`keep`).
    A seat's umbrella goes when its batches end, so a refused or paused batch
    takes back only the rows no accepted batch named. The first refusal is
    toasted once and takes the flags back; with every seat done they stay
@@ -3273,6 +3334,7 @@ async function bulkInbox<R extends { ids: string[]; hasMore: boolean }>(
   name: string,
   messages: MessageVM[],
   paint: (ids: string[]) => View,
+  named: (ids: string[]) => View,
   flags: View,
   batch: (org: string, previous: R | null, keep: (answer: R) => View) => Promise<R>,
 ): Promise<void> {
@@ -3285,7 +3347,7 @@ async function bulkInbox<R extends { ids: string[]; hasMore: boolean }>(
     let previous: R | null = null
     try {
       while (epoch === storeEpoch) {
-        previous = await batch(org, previous, (answer) => paint(answer.ids))
+        previous = await batch(org, previous, (answer) => named(answer.ids))
         if (!previous.hasMore) return true
       }
       return false
@@ -3304,14 +3366,17 @@ async function bulkInbox<R extends { ids: string[]; hasMore: boolean }>(
   if (epoch === storeEpoch) endUmbrella(flag, done.every(Boolean))
 }
 
-/* The paint of removing messages `ids`, leaving the snoozed ones a bulk
-   removal does not touch with `skipSnoozed`. */
-function removeMessagesPaint(ids: string[], skipSnoozed = false): View {
+/* The paint of removing messages `ids`. With `onlyRead` it removes, as the
+   server's Remove all read selects at commit, only those still read and not
+   snoozed, for rows named before the server answered. */
+function removeMessagesPaint(ids: string[], onlyRead = false): View {
   return {
     workspace: () =>
       ids.forEach((id) => {
         const row = rows.messages.get(id)
-        if (row && !(skipSnoozed && row.snoozed_until !== undefined)) rows.messages.delete(id)
+        if (!row) return
+        if (onlyRead && (row.read_at === undefined || row.snoozed_until !== undefined)) return
+        rows.messages.delete(id)
       }),
   }
 }
@@ -3418,7 +3483,9 @@ export const PLANNER = {
   get roadmapUndo() {
     return {
       count: roadmapVisit?.count ?? 0,
-      busy: (roadmapVisit?.pending ?? 0) > 0 || layers.paintedPending('workspace'),
+      // any write in flight: a task content write clears the history when
+      // it is accepted, which an undo sent before it would not know
+      busy: (roadmapVisit?.pending ?? 0) > 0 || layers.waiting(),
       disabled: !roadmapVisit || roadmapVisit.disabled,
     }
   },
@@ -3449,7 +3516,7 @@ export const PLANNER = {
   undoRoadmap: (all = false) => {
     expireRoadmapHistory()
     const visit = roadmapVisit
-    if (!visit || visit.disabled || visit.pending || layers.paintedPending('workspace')) return
+    if (!visit || visit.disabled || visit.pending || layers.waiting()) return
     if (!visit.count || refusePausedEdit()) return
     visit.pending++
     // the undone values arrive with the next delivery
@@ -4599,16 +4666,12 @@ export const PLANNER = {
       concurrently), so callers can reference it right away. The org-wide
       counter (0050) means ANY concurrent create can invalidate the preview:
       the paint takes the next free number as other people's creates arrive,
-      and the server's answer fixes it. `onKeyFixed` hears every change of
-      the handle with the handle it replaces, so callers can re-anchor UI
-      state bound to it. `onRefused` hears the handle last shown just before
-      the refusal takes the task away, so an open preview can close first.
-      Returns null for an invalid target (callers take their no-create path). */
-  addIssue: (
-    it: NewIssueInput,
-    onKeyFixed?: (key: string, previous: string) => void,
-    onRefused?: (key: string) => void,
-  ) => {
+      and the server's answer fixes it. A caller that keeps the handle
+      follows it with P.watchHandles. `onRefused` hears the handle shown just
+      before the refusal takes the task away, so an open preview can close
+      first. Returns null for an invalid target (callers take their
+      no-create path). */
+  addIssue: (it: NewIssueInput, onRefused?: (key: string) => void) => {
     const proj = rows.projects.get(it.project)
     // Numbering, org and reporter all follow the TARGET project's organization
     // (0081): creating in a foreign project is attributed to my guest profile
@@ -4660,17 +4723,6 @@ export const PLANNER = {
     const created = { num: null as number | null }
     const paint = newTaskPaint(row, created)
     const preview = handleFor(uuid, row.org_id, `${ISSUE_PREFIX}-${previewNum}`)
-    // only a home-org handle can change under a renumber — a foreign issue's
-    // handle IS its uuid, which the server never reassigns
-    let shown = preview
-    const follow = (moved: ReadonlyMap<string, string>) => {
-      const next = moved.get(shown)
-      if (!next) return
-      const previous = shown
-      shown = next
-      onKeyFixed?.(next, previous)
-    }
-    if (row.org_id === HOME_ORG) handleWatchers.add(follow)
     void send(
       api.issues.create,
       {
@@ -4700,11 +4752,9 @@ export const PLANNER = {
         },
         onError: (error) => {
           toastWriteError(error)
-          handleWatchers.delete(follow)
-          onRefused?.(shown)
+          // the handle on screen, which a delivery may have moved
+          onRefused?.(uuidToKey.get(uuid) ?? preview)
         },
-        // the repaint that shows the server's number has run by now
-        onSettled: () => handleWatchers.delete(follow),
       },
     )
     return preview
@@ -5414,6 +5464,7 @@ export const PLANNER = {
     commentsSnap = null
     eventsSnap = []
     olderComments = []
+    acceptedCommentChanges.clear()
     threadStart = false
     earlierLoad = 'idle'
     threadCurrent = false
@@ -5667,6 +5718,7 @@ export const PLANNER = {
         // A comment older than the live window gets no delivery, so the saved
         // edit goes into olderComments, the truth the thread is built from.
         onOk: () => {
+          acceptedCommentChanges.set(id, edit)
           if (olderComments.some((r) => r.id === id))
             olderComments = olderComments.map((r) => (r.id === id ? { ...r, ...edit } : r))
         },
@@ -5693,6 +5745,7 @@ export const PLANNER = {
       {
         about: { task: rec.issue_id },
         onOk: () => {
+          acceptedCommentChanges.set(id, null)
           if (olderComments.some((r) => r.id === id))
             olderComments = olderComments.filter((r) => r.id !== id)
         },
@@ -5739,6 +5792,7 @@ export const PLANNER = {
     await bulkInbox<FunctionReturnType<typeof api.messages.markAllRead>>(
       'messages:markAllRead',
       PLANNER.messages.filter((message) => !message.read && message.snoozedUntil === null),
+      (ids) => ({ workspace: () => markLoadedMessagesRead(ids, at, true) }),
       (ids) => ({ workspace: () => markLoadedMessagesRead(ids, at, true) }),
       {
         workspace: () => {
@@ -5790,6 +5844,8 @@ export const PLANNER = {
       'messages:removeRead',
       PLANNER.messages.filter((message) => message.read && message.snoozedUntil === null),
       (ids) => removeMessagesPaint(ids, true),
+      // the rows each batch's answer names, which the server removed
+      (ids) => removeMessagesPaint(ids),
       {
         workspace: () => {
           hiddenReadMessages = 0
@@ -6191,10 +6247,11 @@ export const PLANNER = {
       org.next_project_num = Math.max(org.next_project_num || 0, num)
       rows.projects.set(uuid, { ...row, num, key: saved?.key ?? row.key })
       Object.entries(grants).forEach(([uid, level]) => {
-        rows.access.push({ project_id: uuid, profile_id: uid, level })
+        if (rows.profiles.has(uid)) rows.access.push({ project_id: uuid, profile_id: uid, level })
       })
       Object.entries(teamAccess).forEach(([teamId, level]) => {
-        rows.teamAccess.push({ project_id: uuid, team_id: teamId, level })
+        if (rows.teams.has(teamId))
+          rows.teamAccess.push({ project_id: uuid, team_id: teamId, level })
       })
     }
     // ONE mutation carries row + access map; the follow-up grant upsert died
@@ -6536,7 +6593,7 @@ export const PLANNER = {
     }
     const view: View = {
       workspace: () => {
-        if (!rows.teams.has(uuid)) rows.teams.set(uuid, { ...team })
+        if (!rows.teams.has(uuid) && rows.orgs.has(team.org_id)) rows.teams.set(uuid, { ...team })
       },
     }
     return send(api.teams.create, { org_id: org.id, id: uuid, name }, view)
@@ -6680,9 +6737,10 @@ export const PLANNER = {
     const teams: string[] = [...(rec.teams || [])]
     const view: View = {
       workspace: () => {
-        if (rows.profiles.has(uuid)) return
+        if (rows.profiles.has(uuid) || !rows.orgs.has(row.org_id)) return
         rows.profiles.set(uuid, { ...row })
         teams.forEach((t) => {
+          if (!rows.teams.has(t)) return
           if (!rows.teamMembers.some((m) => m.team_id === t && m.profile_id === uuid))
             rows.teamMembers.push({ team_id: t, profile_id: uuid, is_leader: false })
         })
@@ -7016,7 +7074,7 @@ export const PLANNER = {
     if (held?.level === role) return Promise.resolve(true)
     const view: View = {
       workspace: () => {
-        if (!rows.projects.has(metaId)) return
+        if (!rows.projects.has(metaId) || !rows.profiles.has(userId)) return
         const live = rows.access.find((a) => a.project_id === metaId && a.profile_id === userId)
         if (live) live.level = role
         else rows.access.push({ project_id: metaId, profile_id: userId, level: role })
@@ -7041,7 +7099,7 @@ export const PLANNER = {
     if (held?.level === role) return Promise.resolve(true)
     const view: View = {
       workspace: () => {
-        if (!rows.projects.has(metaId)) return
+        if (!rows.projects.has(metaId) || !rows.teams.has(teamId)) return
         const live = rows.teamAccess.find((a) => a.project_id === metaId && a.team_id === teamId)
         if (live) live.level = role
         else rows.teamAccess.push({ project_id: metaId, team_id: teamId, level: role })
@@ -7507,8 +7565,8 @@ function subscribeSnapshot(
         settled = true
         const prev = serverSnap
         serverSnap = snap
-        snapshotCurrent = snap !== null
-        if (snap) {
+        snapshotCurrent = snap !== null && !replay
+        if (snap && !replay) {
           snapshotDeliveries++
           noteDelivery(prev, snap)
         }
@@ -7606,6 +7664,7 @@ export function disposeDemoStore() {
   commentsSnap = null
   eventsSnap = []
   olderComments = []
+  acceptedCommentChanges.clear()
   threadStart = false
   earlierLoad = 'idle'
   syncUnsub?.()
@@ -7828,6 +7887,8 @@ export async function initStore(
     snapUnsub()
     snapUnsub = null
   }
+  // the new subscription has delivered nothing yet
+  snapshotCurrent = false
   // A new subscription starts from a clean state; its first result settles
   // the boot, so it never reports recovery from an earlier one's trouble.
   if (snapshotTrouble) {

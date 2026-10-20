@@ -11,8 +11,9 @@ import { afterEach, describe, expect, it } from 'vitest'
       delivery that holds it.
    2. A refused write resolves on its own response, with no query change.
    3. A new listener on a query the client already holds gets the very
-      object the earlier listener got, on a 0 ms timer, so the store can tell
-      a replay from a delivery by identity. */
+      object the earlier listener got, on a 0 ms timer, also right after the
+      only listener left, so the store can tell a replay from a delivery by
+      identity. */
 
 type Sent = { type: string; requestId?: number; newVersion?: number; [key: string]: unknown }
 
@@ -72,7 +73,7 @@ describe('Convex client ordering the store relies on', () => {
     })
     const events: string[] = []
     const values: unknown[] = []
-    client.onUpdate(anyApi.tasks.list, {}, (value) => {
+    const stop = client.onUpdate(anyApi.tasks.list, {}, (value) => {
       values.push(value)
       events.push(`listener:${JSON.stringify(value)}`)
     })
@@ -99,7 +100,7 @@ describe('Convex client ordering the store relies on', () => {
       ],
     })
     const nextTs = () => ts + 1
-    return { socket, events, values, deliver, nextTs }
+    return { socket, events, values, deliver, nextTs, stop }
   }
 
   it('runs the listener of a delivery that holds a write before the write resolves', async () => {
@@ -140,6 +141,19 @@ describe('Convex client ordering the store relies on', () => {
     })
     await done
     expect(events).toEqual(['listener:"first"', 'refused'])
+  })
+
+  it('hands the held object again to a listener that resubscribes at once', async () => {
+    const { values, deliver, stop } = await start()
+    deliver({ rows: [3] })
+    // the store's pattern on Try again: drop its one listener, subscribe again
+    stop()
+    const replayed: unknown[] = []
+    client!.onUpdate(anyApi.tasks.list, {}, (value) => replayed.push(value))
+    expect(replayed).toEqual([])
+    await tick()
+    expect(replayed).toHaveLength(1)
+    expect(replayed[0]).toBe(values[values.length - 1])
   })
 
   it('hands a new listener the object the earlier listener got, on a timer', async () => {

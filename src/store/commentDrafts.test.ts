@@ -19,7 +19,14 @@ type Page = { comments: Row<'comments'>[]; earlier: boolean; events?: Row<'activ
 type Deferred = { resolve: (value: null) => void; reject: (reason: unknown) => void }
 /* One commentThread subscription: the server's answers to it and whether
    it was unsubscribed. */
-type Thread = { deliver: (page: Page) => void; fail: (e: unknown) => void; closed: boolean }
+type Thread = {
+  deliver: (page: Page) => void
+  fail: (e: unknown) => void
+  /** Hands over the object last delivered again, as Convex does to a new
+      listener on a result it still holds. */
+  replay: (value: unknown) => void
+  closed: boolean
+}
 
 const START = Date.parse('2026-09-14T08:00:00.000Z')
 // The server's sentence for the 401st comment (convex/model/commentCounts.ts).
@@ -42,6 +49,8 @@ describe('comment drafts and a failed thread in the store', () => {
   // it, and hands it to a new listener on a 0 ms timer unless the server
   // answered that listener first.
   let held: unknown
+  // the thread value the double handed over last
+  let delivered: unknown
 
   const comment = (n: number): Row<'comments'> => ({
     id: `comment-${n}`,
@@ -121,8 +130,10 @@ describe('comment drafts and a failed thread in the store', () => {
           deliver: (page) => {
             held = null
             answered = true
-            receive({ events: [], ...page })
+            delivered = { events: [], ...page }
+            receive(delivered)
           },
+          replay: (value) => receive(value),
           fail: (e) => {
             held = e
             answered = true
@@ -212,6 +223,63 @@ describe('comment drafts and a failed thread in the store', () => {
   })
 
   describe('while the thread fails', () => {
+    it('takes a held thread Convex hands Retry for a replay, which ends no failure', async () => {
+      const { P } = store
+      live().deliver({ comments: range(1, 4), earlier: false })
+      const old = delivered
+      const edited = P.updateComment('comment-2', 'Edited')
+      live().fail(new Error('[CONVEX Q(snapshot:commentThread)] Server Error'))
+      writes[0].answer.resolve(null)
+      expect(await edited).toBe(true)
+      P.retryComments()
+      live().replay(old)
+      await settle()
+      expect(P.commentsFailure).toBe('retrying')
+      expect(bodies()).toEqual(['#1', 'Edited', '#3'])
+      // another write's refusal still leaves the saved edit
+      const refused = P.updateComment('comment-3', 'Refused')
+      writes[1].answer.reject(new ConvexError({ code: 'forbidden', message: 'not yours' }))
+      expect(await refused).toBe(false)
+      expect(bodies()).toEqual(['#1', 'Edited', '#3'])
+    })
+
+    it('keeps a comment waiting for task A off task B, and shows it again on A', async () => {
+      const { P } = store
+      live().deliver({ comments: range(1, 3), earlier: false })
+      const saved = P.addComment('task-a', 'Waiting on A')
+      expect(bodies()).toContain('Waiting on A')
+      P.watchComments('task-b')
+      live().deliver({ comments: [], earlier: false })
+      expect(bodies()).toEqual([])
+      writes[0].answer.resolve(null)
+      expect(await saved).toBe(true)
+      expect(bodies()).toEqual([])
+      // back on A, the thread shows what the server holds
+      P.watchComments('task-a')
+      live().deliver({
+        comments: [...range(1, 3), { ...comment(3), id: 'posted', body: 'Waiting on A' }],
+        earlier: false,
+      })
+      await settle()
+      expect(bodies()).toEqual(['#1', '#2', 'Waiting on A'])
+      expect(store.__layerProbe?.layerCount()).toBe(0)
+    })
+
+    it('takes back a refused comment for task A while task B is open', async () => {
+      const { P } = store
+      live().deliver({ comments: range(1, 3), earlier: false })
+      const saved = P.addComment('task-a', 'Refused on A')
+      P.watchComments('task-b')
+      live().deliver({ comments: range(5, 7), earlier: false })
+      writes[0].answer.reject(new ConvexError({ code: 'rule', message: CAP }))
+      expect(await saved).toBe(false)
+      expect(bodies()).toEqual(['#5', '#6'])
+      P.watchComments('task-a')
+      live().deliver({ comments: range(1, 3), earlier: false })
+      expect(bodies()).toEqual(['#1', '#2'])
+      expect(store.__layerProbe?.layerCount()).toBe(0)
+    })
+
     it('keeps an edit saved meanwhile when another comment write is refused', async () => {
       const { P } = store
       live().deliver({ comments: range(1, 4), earlier: false })
