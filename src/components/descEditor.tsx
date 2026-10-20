@@ -57,6 +57,7 @@ import { Input } from '@/components/ui/input'
 import { DropdownChevron } from '@/components/ui/select'
 import { TEXT_MAX, TEXT_MAX_LABEL } from '../../convex/lib/textLimits'
 import { compressImage } from '../lib/images'
+import { useUnsaved } from '../lib/leaveGuard'
 import type { MdBlock, MdInline } from '../lib/md'
 import { MAX_PARSE, parseMd, sanitizeHref } from '../lib/md'
 import { astToMd } from '../lib/mdSerialize'
@@ -341,6 +342,8 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   const [headMenu, setHeadMenu] = useState(false)
   const [dirty, setDirty] = useState(false)
   useUpdateBlocker(dirty || linkPop?.mode === 'create')
+  // the description or comment typed here and not sent yet
+  useUnsaved(dirty)
   const dirtyRef = useRef(false)
   // comment mode: a commit the server has not answered yet (see commit)
   const [sending, setSending] = useState(false)

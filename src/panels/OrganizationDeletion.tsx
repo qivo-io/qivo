@@ -19,6 +19,7 @@ import { billingDate } from '@/lib/billingDisplay'
 import { convex } from '@/lib/convex'
 import { useUpdateBlocker } from '@/lib/updateSafety'
 import { api } from '../../convex/_generated/api'
+import { P } from '../store/planner'
 
 export type OrgRemovalState = FunctionReturnType<typeof api.orgRemovals.state>
 
@@ -52,6 +53,12 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
   /** Runs one admin action, closing the dialog on success and showing the
    * refusal otherwise. */
   async function run(work: () => Promise<unknown>, fallback: string) {
+    // offline the request would wait without a word
+    const paused = P.cannotSaveText()
+    if (paused) {
+      setError(paused)
+      return
+    }
     setBusy(true)
     setError('')
     try {

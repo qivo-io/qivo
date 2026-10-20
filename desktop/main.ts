@@ -14,6 +14,7 @@ import {
   Tray,
 } from 'electron'
 import electronUpdater from 'electron-updater'
+import { createLeavePrompt } from './leavePrompt.js'
 import { disableStagingUserId, keepSpellcheckOffline } from './privacy.js'
 import { createDesktopSettingsStore, defaultDesktopSettings } from './settings.js'
 import { createLoginStartup, startupArgument } from './startup.js'
@@ -420,6 +421,17 @@ function createWindow(startHidden = false): void {
     event.preventDefault()
     if (/^(https?:\/\/|mailto:|tel:)/i.test(url)) void shell.openExternal(url)
   })
+  const win = mainWindow
+  win.webContents.on(
+    'will-prevent-unload',
+    createLeavePrompt({
+      ask: (options) => dialog.showMessageBoxSync(win, options),
+      // a quit that the page held back is over; closing hides to the tray again
+      onStay: () => {
+        quitting = false
+      },
+    }),
+  )
   mainWindow.on('close', (event) => {
     if (quitting || !desktopSettings.closeToTray) return
     event.preventDefault()

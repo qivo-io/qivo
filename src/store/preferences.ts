@@ -28,12 +28,16 @@ type BootRead = { epoch: number; row: PreferencesRow | null }
 
 /** Local storage warms startup; a guarded one-shot server read wins on boot.
  * Gesture writes debounce for 600ms. Decisions flush before navigation, and
- * both pending and active writes hold the app's update/reload blocker. */
+ * both pending and active writes hold the app's update/reload blocker. A
+ * save that failed, such as one refused while Qivo could not save, is sent
+ * again on retry(). */
 export function createPreferences(deps: Dependencies) {
   let row: PreferencesRow | null = null
   let timer: ReturnType<typeof setTimeout> | undefined
   let releaseUpdate: (() => void) | undefined
   let dirty = false
+  // the last save failed and nothing newer has been sent since
+  let failed = false
   let epoch = 0
   const key = (profileId: string) => `planner.ui.v1:${profileId}`
 
@@ -66,13 +70,19 @@ export function createPreferences(deps: Dependencies) {
       release?.()
       return
     }
+    const sent = epoch
+    failed = false
     try {
       void deps
         .write(profileId, row.prefs)
-        .catch((error) => console.warn('[qivo] prefs save failed:', error))
+        .catch((error) => {
+          console.warn('[qivo] prefs save failed:', error)
+          if (sent === epoch) failed = true
+        })
         .finally(() => release?.())
     } catch (error) {
       console.warn('[qivo] prefs save failed:', error)
+      failed = true
       release?.()
     }
   }
@@ -101,6 +111,12 @@ export function createPreferences(deps: Dependencies) {
       save(patch)
       flush()
     },
+    /** Sends the preferences again when the last save failed. */
+    retry() {
+      if (!failed || dirty) return
+      dirty = true
+      flush()
+    },
     async beginBoot(): Promise<BootRead> {
       const atBoot = epoch
       try {
@@ -120,6 +136,7 @@ export function createPreferences(deps: Dependencies) {
       releaseUpdate?.()
       releaseUpdate = undefined
       dirty = false
+      failed = false
       epoch++
       row = null
       for (const profileId of forgetProfiles) {

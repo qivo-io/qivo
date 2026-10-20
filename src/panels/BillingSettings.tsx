@@ -115,6 +115,12 @@ function LiveBillingSettings({
 
   async function openPayment(kind: 'checkout' | 'portal') {
     if (actionInFlight.current) return
+    // offline the request would wait without a word
+    const paused = P.cannotSaveText()
+    if (paused) {
+      setActionError(paused)
+      return
+    }
     actionInFlight.current = true
     const release = beginUpdateBlock()
     setBusy(true)
@@ -139,6 +145,8 @@ function LiveBillingSettings({
    * once Polar accepted the cancellation. */
   async function cancelSubscription(): Promise<string | null> {
     if (actionInFlight.current) return 'Another billing action is still running.'
+    const paused = P.cannotSaveText()
+    if (paused) return paused
     actionInFlight.current = true
     const release = beginUpdateBlock()
     setBusy(true)

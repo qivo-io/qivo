@@ -12,6 +12,7 @@ import {
   SettingsGroup,
   SettingsSection,
 } from '../../components/settingsPage'
+import { useUnsaved } from '../../lib/leaveGuard'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { useConfirmArm } from '../../lib/useConfirmArm'
 import { type AccessRemoval, P } from '../../store/planner'
@@ -221,6 +222,7 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
   // a create in flight: Add waits for the server's answer
   const [adding, setAdding] = useStateS(false)
   useUpdateBlocker(!!teamName)
+  useUnsaved(!!teamName.trim())
   const confirm = useConfirmArm<string>()
   // deleting a team whose members would lose sight of their tasks asks first
   const [removal, setRemoval] = useStateS<AccessRemoval | null>(null)

@@ -26,6 +26,7 @@ import { Avatar, DateSelect, FieldSelect, Icon } from '../components/qivo'
 import { relativeWeek, weekToISO } from '../lib/dates'
 import { restoreFocus } from '../lib/focusVisibility'
 import { isLandscapeRoadmapOpen } from '../lib/landscape'
+import { useTypedUnsaved } from '../lib/leaveGuard'
 import {
   type AccessDraft,
   afterAccessChange,
@@ -115,6 +116,8 @@ function ModalShell({
   // A create/edit dialog also holds non-text draft choices and staged files.
   // Keep its entire editing session intact until it is submitted or closed.
   useUpdateBlocker(true)
+  // text typed into the dialog is lost if the page closes before it is sent
+  const unsaved = useTypedUnsaved()
   const mobile = useMobile()
   const closeLayer = useMobileBackLayer(true, onClose, mobile || isLandscapeRoadmapOpen())
   const returnFocusRef = useRefM<HTMLElement | null>(
@@ -138,6 +141,7 @@ function ModalShell({
           danger && 'border-[color-mix(in_oklab,var(--danger)_45%,var(--border))]',
         )}
         style={{ width: mobile ? '100%' : width }}
+        onInputCapture={unsaved.typed}
         onOpenAutoFocus={(event) => {
           // Preserve the shell's chosen field instead of Radix's close-button
           // fallback. data-autofocus takes precedence over document order; a

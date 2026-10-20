@@ -2,6 +2,7 @@
 /* Explicit Northstar fixtures for isolated development and staging backends,
  * and for a disposable local backend (--local). Passwords stay outside the
  * checkout. Only password hashes reach Convex. */
+import { spawnSync } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
 import {
   closeSync,
@@ -329,8 +330,18 @@ export function credentialsPath(directory, target) {
   return join(directory, target.deployment, 'credentials.json')
 }
 
-/** A caller must choose an existing private directory outside the application checkout. */
-export function fixtureDirectory(cwd, env) {
+/** Whether git ignores `path` in the checkout at `cwd`, so nothing under it
+ * can be committed. False when git cannot tell. */
+function ignoredByGit(cwd, path) {
+  const result = spawnSync('git', ['check-ignore', '--quiet', path], { cwd, stdio: 'ignore' })
+  return result.status === 0
+}
+
+/** A caller must choose an existing private directory outside the
+ * application checkout. A disposable local backend (`local`) may also keep
+ * its credentials in the checkout's own dev-temp/ directory, which holds a
+ * worktree's disposable files, as long as git ignores the directory. */
+export function fixtureDirectory(cwd, env, { local = false } = {}) {
   const directory = env.QIVO_FIXTURE_CREDENTIALS_DIR
   if (!directory || !isAbsolute(directory) || !privateDirectory(directory, false, true)) {
     throw new DemoCliError(
@@ -338,9 +349,17 @@ export function fixtureDirectory(cwd, env) {
     )
   }
   const canonical = realpathSync(directory)
-  const within = relative(realpathSync(cwd), canonical)
+  const checkout = realpathSync(cwd)
+  const within = relative(checkout, canonical)
   if (within === '' || (!within.startsWith('..') && !isAbsolute(within))) {
-    throw new DemoCliError('Fixture credentials must be stored outside the application checkout.')
+    const [top] = within.split(/[\\/]/)
+    if (local && top === 'dev-temp' && within !== top && ignoredByGit(checkout, canonical))
+      return canonical
+    throw new DemoCliError(
+      local
+        ? 'Fixture credentials must be stored outside the application checkout, or in a directory under its git-ignored dev-temp/.'
+        : 'Fixture credentials must be stored outside the application checkout.',
+    )
   }
   return canonical
 }
@@ -592,7 +611,7 @@ Reset is a wipe followed by a seed; if the seed fails, re-run the same reset.`)
     printPlan(options, target, log)
     return { kind: 'plan', command: options.command, anchor: options.anchor }
   }
-  const credentialsDirectory = fixtureDirectory(cwd, env)
+  const credentialsDirectory = fixtureDirectory(cwd, env, { local: target.target === 'local' })
   const client = clientFactory(target.url)
   client.setAdminAuth(target.key)
   const guard = { expected_site_url: target.siteUrl }

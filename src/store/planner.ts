@@ -88,10 +88,13 @@ import { AVATAR_TYPES, avatarImage, compressImage } from '../lib/images'
 import { nameInitials } from '../lib/initials'
 import { groupProgress, groupSpan, isIssueDone, isIssueGroup } from '../lib/issueGroups'
 import { LABEL_COLORS } from '../lib/labelColors'
+import { hasUnsaved, holdUnsaved } from '../lib/leaveGuard'
 import { watchLocalDay } from '../lib/localDay'
 import { desktopNotify } from '../lib/notify'
 import { matchesAllWords, taskSearchText } from '../lib/search'
+import { type SavePause, syncStatus } from '../lib/syncStatus'
 import type { ToastTone } from '../lib/toasts'
+import { type UnconfirmedChange, unconfirmedNote, unconfirmedText } from '../lib/unconfirmedNote'
 import { beginUpdateBlock } from '../lib/updateSafety'
 import {
   committedByWeek,
@@ -569,6 +572,8 @@ const reapAfterPause = new Set<string>()
 /* Deletes the uploads reapAfterPause holds once edits resume, except one a
    description took meanwhile, which is the description GC's from then on. */
 function reapPausedUploads() {
+  // one pause can end while the other still holds
+  if (snapshotTrouble || savePause()) return
   const ids = [...reapAfterPause]
   reapAfterPause.clear()
   for (const id of ids) {
@@ -1117,7 +1122,14 @@ const asSentence = (m: string) =>
    billing) act on their own live queries, not on the snapshot, so they do
    not pause. Convex reruns a failed query when the data it read changes, so
    a later delivery ends the trouble without a reload, a seat made active
-   again included. */
+   again included.
+
+   While Qivo cannot save at all (lib/syncStatus: offline, or a write that
+   takes too long), every write pauses the same way, personal ones included,
+   because nothing is saved locally and a change queued until the connection
+   returns could overwrite what others changed meanwhile. The writes sent
+   before the pause began still go out once the connection is back. The
+   snapshot notice says which pause holds, trouble first. */
 
 /** The sentence every paused edit shows. */
 export const PAUSED_TEXT = 'Editing is paused until Qivo loads the latest changes.'
@@ -1125,6 +1137,10 @@ export const PAUSED_TEXT = 'Editing is paused until Qivo loads the latest change
 export const NO_ACCESS_TEXT = 'You no longer have access to this workspace.'
 /** The sentence a paused edit shows after the sign-in ended. */
 export const SIGNED_OUT_TEXT = 'You’re signed out. Reload Qivo to sign in again.'
+/** The sentence a paused edit shows while the connection is down. */
+export const OFFLINE_TEXT = 'You’re offline. Editing is paused until the connection is back.'
+/** The sentence a paused edit shows while a write takes too long. */
+export const SLOW_TEXT = 'Saving is taking longer than usual. Editing is paused until it finishes.'
 
 /** Why the live snapshot is not current, while it is not. `no_access` means
     a delivery found no seat left. `asOf` is the last good delivery's server
@@ -1139,6 +1155,8 @@ export type SnapshotTrouble = {
   detail: string
 }
 let snapshotTrouble: SnapshotTrouble | null = null
+/* The crash note's report from this start (P.unconfirmedReport). */
+let unconfirmedReport: string | null = null
 /* A delivery that ends the trouble while run()'s paint gate holds it. The
    trouble ends when that paint lands, not before, so nobody edits the stale
    rows still on screen in the meantime. */
@@ -1187,13 +1205,29 @@ const isUnpausedWrite = (name: string, trouble: SnapshotTrouble) =>
       ? name.startsWith('appearance:') || name === 'oauthConnections:revoke'
       : /^(messages|appearance):/.test(name) || UNPAUSED_WRITES.has(name)
 
-/** The sentence a paused edit shows during the current trouble. */
-const pausedText = () =>
-  snapshotTrouble?.kind === 'no_access'
+/** Why Qivo cannot save now, or null (lib/syncStatus). */
+const savePause = (): SavePause | null => syncStatus.pause()
+
+/** Whether write() refuses `name` now: every write while Qivo cannot save,
+    and during snapshot trouble every write that does not go on. */
+const isPausedWrite = (name: string) =>
+  savePause() !== null || (snapshotTrouble !== null && !isUnpausedWrite(name, snapshotTrouble))
+
+/** The sentence a paused edit shows, or the write `name` when given. Trouble
+    that pauses it says why first, as the notice does, then the connection. */
+function pausedText(name?: string) {
+  const trouble =
+    snapshotTrouble && (name === undefined || !isUnpausedWrite(name, snapshotTrouble))
+      ? snapshotTrouble
+      : null
+  const pause = savePause()
+  if (!trouble && pause) return pause.kind === 'slow' ? SLOW_TEXT : OFFLINE_TEXT
+  return trouble?.kind === 'no_access'
     ? NO_ACCESS_TEXT
-    : snapshotTrouble?.kind === 'signed_out'
+    : trouble?.kind === 'signed_out'
       ? SIGNED_OUT_TEXT
       : PAUSED_TEXT
+}
 
 /* One action can reach several mutators. The pause toast shows once for it. */
 const PAUSED_TOAST_GAP_MS = 1000
@@ -1213,20 +1247,21 @@ function toastPaused(text = pausedText()) {
     text, close a window or announce success call it before they do, so a
     paused save keeps the text in its field and claims nothing. */
 function refusePausedEdit(): boolean {
-  if (!snapshotTrouble) return false
+  if (!snapshotTrouble && !savePause()) return false
   toastPaused()
   return true
 }
 
 /** Toasts the pause and answers true when write() would refuse `mutation`
     now. A mutator whose write goes on while the snapshot is stale calls it
-    before its paint, because signed out or without a seat most of those
-    writes pause too, and a caller that announces success must not announce
-    a paused one. `quiet` skips the toast, for a write the person did not
-    ask for, such as reading the messages of a task they open. */
+    before its paint, because offline, signed out or without a seat most of
+    those writes pause too, and a caller that announces success must not
+    announce a paused one. `quiet` skips the toast, for a write the person
+    did not ask for, such as reading the messages of a task they open. */
 function refusePausedWrite(mutation: FunctionReference<'mutation'>, quiet = false): boolean {
-  if (!snapshotTrouble || isUnpausedWrite(getFunctionName(mutation), snapshotTrouble)) return false
-  if (!quiet) toastPaused()
+  const name = getFunctionName(mutation)
+  if (!isPausedWrite(name)) return false
+  if (!quiet) toastPaused(pausedText(name))
   return true
 }
 
@@ -1269,9 +1304,14 @@ function refusedAsPaused(e: unknown): boolean {
 }
 
 /** The sentence of a refusal that reads as the pause (refusedAsPaused). A
-    lost seat or sign-in says so even before the snapshot reports it. */
-const refusalPauseText = (e: unknown) =>
-  seatGone(e) ? NO_ACCESS_TEXT : notSignedIn(e) ? SIGNED_OUT_TEXT : pausedText()
+    lost seat or sign-in says so even before the snapshot reports it, and a
+    write that write() paused keeps the sentence it was paused with. */
+function refusalPauseText(e: unknown) {
+  if (seatGone(e)) return NO_ACCESS_TEXT
+  if (notSignedIn(e)) return SIGNED_OUT_TEXT
+  const d = errData(e)
+  return d.code === 'paused' && d.message ? String(d.message) : pausedText()
+}
 
 /* 'rule' and read-only sentences are the P0001 successors and keep their
    words, shaped by asSentence. Everything else is deliberately generic. The
@@ -1451,25 +1491,139 @@ function slugErrorText(e: unknown): string {
   return "Couldn't change the address"
 }
 
+/* Writes the person did not make as a change: view preferences, the seat
+   claim at boot, the Team sync stamp an edit leaves, the OAuth consent
+   page's read and the upload addresses an upload asks for before its real
+   write. The notice does not count them, and the crash note leaves them out. */
+const BACKGROUND_WRITES = new Set([
+  'prefs:save',
+  'identity:claimMySeats',
+  'teamSync:stamp',
+  'oauthConnections:getContext',
+  'files:uploadUrl',
+  'files:avatarUploadUrl',
+  'appearance:createUpload',
+  'appearance:cancelUpload',
+])
+
+/* What the crash note says a task write changed, by mutation, or by field
+   for an edit. */
+const TASK_CHANGE: Record<string, string> = {
+  'issues:create': 'new task',
+  'issues:createParent': 'new parent task',
+  'issues:move': 'move',
+  'issues:archive': 'archive',
+  'issues:unarchive': 'restore',
+  'issues:deleteDeep': 'delete',
+  'issues:addLink': 'link',
+  'issues:removeLink': 'link',
+  'issues:subscribe': 'follow',
+  'issues:unsubscribe': 'follow',
+  'issues:setSubscriber': 'follower',
+  'comments:create': 'comment',
+  'comments:update': 'comment edit',
+  'comments:remove': 'comment removal',
+  'files:attach': 'attachment',
+  'files:removeAttachment': 'attachment removal',
+  'labels:toggle': 'label',
+}
+const TASK_FIELD: Record<string, string> = {
+  assignee_id: 'assignee',
+  reviewer_id: 'reviewer',
+  parent_id: 'parent',
+  start_week: 'schedule',
+  end_week: 'schedule',
+  due_date: 'due date',
+  remaining_hours: 'remaining time',
+  paused: 'pause',
+}
+/* …and what any other write changed, by its module. */
+const OTHER_CHANGE: Record<string, string> = {
+  issues: 'a task change',
+  projects: 'a project change',
+  teams: 'a team change',
+  labels: 'a label change',
+  profiles: 'a change to people',
+  orgs: 'an organization setting',
+  identity: 'an organization change',
+  tokens: 'a key or token change',
+  apiAccess: 'a key or token change',
+  oauthConnections: 'a connected app change',
+  files: 'a picture change',
+  appearance: 'an appearance change',
+  messages: 'an inbox change',
+  deletedItems: 'a Deleted items change',
+  roadmap: 'a Roadmap change',
+}
+
+/** What the crash note says about write `name` with `args`: the key of the
+    task it changes, when the store knows it, and what kind of change it is.
+    It never holds the text or any other content of the change. */
+function describeWrite(name: string, args: unknown): UnconfirmedChange {
+  const a = (args && typeof args === 'object' ? args : {}) as Record<string, unknown>
+  const text = (value: unknown) => (typeof value === 'string' ? value : '')
+  const issueId =
+    text(a.issue_id) ||
+    (name.startsWith('issues:') ? text(a.id) : '') ||
+    (name.startsWith('comments:') ? (rows.comments.get(text(a.id))?.issue_id ?? '') : '') ||
+    (name === 'files:removeAttachment' ? (rows.attachments.get(text(a.id))?.issue_id ?? '') : '')
+  const task = uuidToDisplayKey.get(issueId)
+  const fields =
+    name === 'issues:update' && a.patch && typeof a.patch === 'object'
+      ? [...new Set(Object.keys(a.patch).map((key) => TASK_FIELD[key] ?? key))]
+      : []
+  const what = fields.length ? fields.join(', ') : TASK_CHANGE[name]
+  if (task && what) return { task, what }
+  return { task: null, what: OTHER_CHANGE[name.split(':')[0]] ?? 'a change' }
+}
+
+/** The crash note's scope for a write: the organization it names, else the
+    home organization, with the person's profile there. Null without one. */
+function noteScope(args: unknown): string | null {
+  const named =
+    args && typeof args === 'object' && 'org_id' in args && typeof args.org_id === 'string'
+      ? args.org_id
+      : ''
+  const org = named || HOME_ORG || [...myProfiles.keys()][0] || ''
+  const profile = myProfiles.get(org)
+  return org && profile ? `${org}:${profile}` : null
+}
+
+/** Every crash-note scope the signed-in person has now. */
+const noteScopes = () => [...myProfiles].map(([org, profile]) => `${org}:${profile}`)
+
 // Every store mutation passes through write(). Awaited writes (invitations,
 // credentials, restores, account settings) do not use run()'s optimistic
 // paint gate. They still need to finish before a version reload; preserve the
 // Convex client's exact generic wire signature. While the live snapshot is
 // stale, a shared-data write is refused here with code `paused` before it is
-// sent (see snapshot health above).
+// sent, and so is every write while Qivo cannot save (see snapshot health
+// above). A sent write counts as waiting (lib/syncStatus), and a change the
+// person made is noted for the crash note (lib/unconfirmedNote), until the
+// server answers.
 const write: typeof convex.mutation = (mutation, args, options) => {
   const epoch = storeEpoch
   if (DEMO_MODE && demoDisposed)
     return Promise.reject(new ConvexError({ code: 'forbidden', message: 'Your demo has expired.' }))
   const name = getFunctionName(mutation)
-  if (snapshotTrouble && !isUnpausedWrite(name, snapshotTrouble))
-    return Promise.reject(new ConvexError({ code: 'paused', message: pausedText() }))
+  if (isPausedWrite(name))
+    return Promise.reject(new ConvexError({ code: 'paused', message: pausedText(name) }))
   const releaseUpdate = beginUpdateBlock()
   const visit = roadmapVisit
   const clearsHistory = visit && !visit.disabled && isTaskContentWrite(name)
+  const change = BACKGROUND_WRITES.has(name) ? null : describeWrite(name, args)
+  const scope = change && noteScope(args)
+  const settleWaiting = syncStatus.track(change !== null)
+  const clearNote = change && scope ? unconfirmedNote.add(scope, change) : null
+  const answered = () => {
+    settleWaiting()
+    clearNote?.()
+  }
   try {
-    return convex
-      .mutation(mutation, args, options)
+    const sent = convex.mutation(mutation, args, options)
+    // beside the chain below, so the callers' timing stays as it was
+    sent.then(answered, answered)
+    return sent
       .then((result) => {
         // Awaited uploads have their own adoption after this promise. Refuse
         // late results here as well as run() so they cannot restore bytes or
@@ -1489,6 +1643,7 @@ const write: typeof convex.mutation = (mutation, args, options) => {
       })
       .finally(releaseUpdate)
   } catch (error) {
+    answered()
     releaseUpdate()
     throw error
   }
@@ -1505,15 +1660,18 @@ function noteReadOnlyRefusal(orgId: unknown, error: unknown) {
 }
 
 // Compression, credential hashing and byte uploads span more than one
-// mutation. Keep the entire operation protected, including the gaps.
+// mutation. Keep the entire operation protected, including the gaps, from a
+// version reload and from a close without warning.
 function withUpdateBlock<Args extends unknown[], Result>(
   operation: (...args: Args) => Promise<Result>,
 ): (...args: Args) => Promise<Result> {
   return async (...args) => {
     const releaseUpdate = beginUpdateBlock()
+    const releaseUnsaved = holdUnsaved()
     try {
       return await operation(...args)
     } finally {
+      releaseUnsaved()
       releaseUpdate()
     }
   }
@@ -3892,8 +4050,31 @@ export const PLANNER = {
   /** Why the live snapshot is stale, or null while it is current. Observe
       it through the `health` channel. */
   snapshotTrouble: (): SnapshotTrouble | null => snapshotTrouble,
-  /** Whether edits to shared data are paused (the snapshot is stale). */
-  editsPaused: () => snapshotTrouble !== null,
+  /** Why Qivo cannot save now, or null (lib/syncStatus). Observe it through
+      the `health` channel. */
+  savePause,
+  /** Whether edits pause: the snapshot is stale or Qivo cannot save. */
+  editsPaused: () => snapshotTrouble !== null || savePause() !== null,
+  /** The pause's sentence while Qivo cannot save, else null, for a panel that
+      calls Convex directly and so does not pause during snapshot trouble. */
+  cannotSaveText: (): string | null => {
+    const pause = savePause()
+    return pause ? (pause.kind === 'slow' ? SLOW_TEXT : OFFLINE_TEXT) : null
+  },
+  /** Whether a change waits for the server's answer. */
+  hasUnconfirmed: () => syncStatus.unconfirmed() > 0,
+  /** Whether closing the page now would lose work, for the close warning
+      (lib/leaveGuard): a change waiting for the server's answer, an upload
+      under way, or text an editor has not sent. */
+  hasUnsavedWork: () => syncStatus.unconfirmed() > 0 || hasUnsaved(),
+  /** What the crash note found at start: the changes a page that closed
+      could not confirm, as one sentence, until dismissed. Observe it through
+      the `health` channel. */
+  unconfirmedReport: (): string | null => unconfirmedReport,
+  dismissUnconfirmedReport: () => {
+    unconfirmedReport = null
+    emit('health')
+  },
   refusePausedEdit,
   retrySnapshot,
 
@@ -4698,7 +4879,7 @@ export const PLANNER = {
   removeAttachment: (attId: string, opts: { deferWhilePaused?: boolean } = {}) => {
     const rec = rows.attachments.get(attId)
     if (!rec) return
-    if (opts.deferWhilePaused && snapshotTrouble) {
+    if (opts.deferWhilePaused && (snapshotTrouble || savePause())) {
       reapAfterPause.add(attId)
       return
     }
@@ -4897,7 +5078,7 @@ export const PLANNER = {
     const me = actorIn(row.org_id)
     if (!(me?.active && (me.orgRole === 'admin' || me.orgRole === 'user'))) return
     // the stamp follows an edit, which already said that editing is paused
-    if (snapshotTrouble) return
+    if (snapshotTrouble || savePause()) return
     const prev = syncStampOf(row)
     const now = Date.now()
     const first_since =
@@ -5310,7 +5491,7 @@ export const PLANNER = {
       sentence = await write(api.profiles.setDisplayName, { name: next })
     } catch (e) {
       console.error('[qivo] rename failed:', e)
-      return errData(e).code === 'paused' ? pausedText() : 'That name could not be saved'
+      return refusedAsPaused(e) ? refusalPauseText(e) : 'That name could not be saved'
     }
     if (sentence) return sentence.charAt(0).toUpperCase() + sentence.slice(1)
     return null
@@ -6676,7 +6857,19 @@ export const PLANNER = {
     )
   },
 
+  /** Signs out and reloads. A change still waiting for the server is not
+      dropped behind the person's back: the sign-out is refused with a
+      sentence that says so, and a reload can still discard it knowingly
+      (the close warning and the crash note tell about it). */
   signOut: () => {
+    const waiting = syncStatus.unconfirmed()
+    if (waiting) {
+      toast(
+        `${waiting === 1 ? '1 change is' : `${waiting} changes are`} not saved yet. Sign out once ${waiting === 1 ? 'it is' : 'they are'} saved.`,
+      )
+      return
+    }
+    unconfirmedNote.forget(noteScopes())
     clearAvatarSources()
     if (DEMO_MODE) {
       notifyDemoEnded('lost')
@@ -6768,6 +6961,29 @@ function snapshotRecovered() {
   emit('health')
   reapPausedUploads()
 }
+
+/* The pause while Qivo cannot save (lib/syncStatus) and its waiting count
+   show in the snapshot notice. When it ends, the person hears so, and what
+   waited for it goes out: a deferred upload removal and the view
+   preferences a paused save kept. */
+let savePauseKind: SavePause['kind'] | null = null
+syncStatus.subscribe((ended) => {
+  if (!PLANNER.loaded) return
+  const kind = savePause()?.kind ?? null
+  // views read P.editsPaused(), such as the read that opening a task sends
+  // once the pause ends; the count alone concerns only the notice
+  emit(kind === savePauseKind ? 'health' : 'workspace')
+  savePauseKind = kind
+  if (!ended) return
+  toast(
+    ended === 'offline'
+      ? 'Back online. Editing is on again.'
+      : 'Saving caught up. Editing is on again.',
+    'success',
+  )
+  reapPausedUploads()
+  preferences.retry()
+})
 
 /** Subscribes to the live snapshot. With `first`, the subscription's first
     result settles it (boot); without, every result updates the store (a
@@ -6915,6 +7131,9 @@ export function disposeDemoStore() {
   hiddenReadMessages = 0
   unexaminedUnread = false
   unexaminedRead = false
+  // the demo's seats end with it, and its sign-out is this disposal
+  unconfirmedNote.forget(noteScopes())
+  unconfirmedReport = null
   HOME_ORG = ''
   CURRENT_USER = ''
   myProfiles.clear()
@@ -7161,6 +7380,13 @@ export async function initStore(
     if (!stillCurrent()) return
     rebuild()
     emit()
+  })
+  // Changes an earlier page sent and never heard back about, said once.
+  void unconfirmedNote.collect(noteScopes()).then((changes) => {
+    const text = unconfirmedText(changes)
+    if (!text || !stillCurrent()) return
+    unconfirmedReport = text
+    emit('health')
   })
   return { profileId: CURRENT_USER, homeOrg: HOME_ORG }
 }

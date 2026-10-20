@@ -8,5 +8,7 @@ if (!url) {
 }
 
 // Module singleton: the store is a pub-sub singleton (P), not a React tree,
-// so this is the vanilla browser client — no React hooks anywhere.
-export const convex = new ConvexClient(url)
+// so this is the vanilla browser client — no React hooks anywhere. Its own
+// leave warning counts only writes already sent, not ones made after the
+// socket closed, so each page installs its own instead (lib/leaveGuard).
+export const convex = new ConvexClient(url, { unsavedChangesWarning: false })

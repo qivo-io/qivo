@@ -6,6 +6,7 @@ import { NativeSelect } from '@/components/ui/native-select'
 import { Seg } from '../../components/qivo'
 import { PageTitle, SettingsField, SettingsSection } from '../../components/settingsPage'
 import { DEMO_MODE } from '../../lib/demoMode'
+import { useUnsaved } from '../../lib/leaveGuard'
 import { creatorPhrase, projectCreatorsIn } from '../../lib/projectCreators'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { DEFAULT_PLANNABLE_HOURS } from '../../lib/workload'
@@ -33,6 +34,7 @@ function OrgAddressField() {
   const next = v.trim()
   const dirty = next !== current
   useUpdateBlocker(dirty || busy)
+  useUnsaved(dirty)
   const save = async () => {
     if (busy || !dirty) return
     setBusy(true)

@@ -35,6 +35,7 @@ import { Icon } from './components/qivo'
 import { authClient, signOut as authSignOut, handleOAuthReturn } from './lib/auth'
 import { convex } from './lib/convex'
 import { lazyFromModule } from './lib/lazyModule'
+import { useUnsaved } from './lib/leaveGuard'
 import { loadFailureText } from './lib/loadFailure'
 import { oauthConnectRequest, oauthNeedsLogin } from './lib/oauthConnection'
 import { beginUpdateBlock, isUpdateBlocked, useUpdateBlocker } from './lib/updateSafety'
@@ -214,6 +215,8 @@ export function AuthGate() {
       (phase === 'signedOut' && !!(email || password || resetToken)) ||
       (phase === 'noProfile' && !!orgName),
   )
+  // the first organization's name, typed and not created yet
+  useUnsaved(phase === 'noProfile' && !!orgName.trim())
   /* The pressed button, so focus can be handed back to it when the call
      fails: disabling it drops focus to <body>, and the message then renders
      somewhere focus is not. */

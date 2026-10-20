@@ -21,6 +21,7 @@ import { PopoverContent, Popover as PopoverRoot, PopoverTrigger } from '@/compon
 import { Textarea } from '@/components/ui/textarea'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { planHint, RemainingInput, type Reviewed, ReviewTick } from '@/components/walk'
+import { useUnsaved } from '@/lib/leaveGuard'
 import {
   bannerVerdict,
   dayLabel,
@@ -275,6 +276,7 @@ export function MentionCtl({
   const [kept, setKept] = useState(false)
   const close = useMobileBackLayer(open, () => setOpen(false))
   useUpdateBlocker((open || kept) && text.trim() !== '')
+  useUnsaved((open || kept) && text.trim() !== '')
   const canWrite = P.canWrite(it.project)
   // the people who can see the task (a mention of anyone else notifies no
   // one), humans only, never the writer

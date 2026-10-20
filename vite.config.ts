@@ -55,6 +55,9 @@ export default defineConfig(({ mode, command }) => {
     server: {
       allowedHosts: [],
       proxy: demoProxy(env, command),
+      // dev-temp/ holds disposable local files (screenshots, logs, test
+      // credentials). Writing one must not reload the pages under test.
+      watch: { ignored: ['**/dev-temp/**'] },
     },
     preview: { allowedHosts: [] },
     plugins: [
