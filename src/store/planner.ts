@@ -899,11 +899,16 @@ export type { ToastTone }
    non-React layers (this store, imgActions), and the store re-exposes itself
    as window.PLANNER for the verify drives (scripts/verify-*.mjs). A showToast
    call without a tone shows a success. A sticky toast stays until the person
-   closes it, and one shown again with the same `key` replaces its text. */
+   closes it, which calls its `onDismiss`, and one shown again with the same
+   `key` replaces its text. */
 declare global {
   interface Window {
     showToast?:
-      | ((msg: string, tone?: ToastTone, opts?: { sticky?: boolean; key?: string }) => void)
+      | ((
+          msg: string,
+          tone?: ToastTone,
+          opts?: { sticky?: boolean; key?: string; onDismiss?: () => void },
+        ) => void)
       | null
     PLANNER?: unknown
   }
@@ -1934,9 +1939,10 @@ async function refreshOlderComment(id: string) {
    The server refuses an edit whose `expected` no longer matches what it
    stores (convex/model/expected.ts, reason field_changed). The person must
    learn of every such refusal, so its notice stays until they close it.
-   Refusals within FIELD_NOTICE_MERGE_MS share one notice, and a refusal of
-   an edit built on one of the person's own refused edits joins that edit's
-   line ("Your 2 changes were discarded"). */
+   Every refusal joins the notice while it is open, so one notice holds them
+   all however many there are, and a refusal of an edit built on one of the
+   person's own refused edits joins that edit's line ("Your 2 changes were
+   discarded"). */
 
 /** What send() knew about a field_changed refusal, for its notice. */
 type FieldRefusalContext = {
@@ -1948,8 +1954,6 @@ type FieldRefusalContext = {
 }
 const fieldRefusals = new WeakMap<object, FieldRefusalContext>()
 
-/** How long after one refusal another still joins its notice. */
-const FIELD_NOTICE_MERGE_MS = 1_000
 /** How far a change may lie outside a time offline and still count as made
     while the person was offline, for clocks that differ. */
 const OFFLINE_SLACK_MS = 5_000
@@ -1957,7 +1961,7 @@ const OFFLINE_SLACK_MS = 5_000
 const REFUSED_LAYERS_KEPT = 200
 
 type FieldNoticeLine = { refusal: FieldRefusal; box: FieldNoticeBox }
-type FieldNoticeBox = { key: string; lines: FieldNoticeLine[]; at: number }
+type FieldNoticeBox = { key: string; lines: FieldNoticeLine[] }
 let fieldNoticeBox: FieldNoticeBox | null = null
 let fieldNoticeSeq = 0
 // layer id of a refused edit to its notice line
@@ -2047,12 +2051,7 @@ function noticeFieldChanged(e: unknown) {
     showFieldNotice(chained.box)
     return
   }
-  const now = Date.now()
-  const box =
-    fieldNoticeBox && now - fieldNoticeBox.at < FIELD_NOTICE_MERGE_MS
-      ? fieldNoticeBox
-      : { key: `field-changed-${++fieldNoticeSeq}`, lines: [], at: now }
-  box.at = now
+  const box = fieldNoticeBox ?? { key: `field-changed-${++fieldNoticeSeq}`, lines: [] }
   fieldNoticeBox = box
   // the name the person saw, since the screen may still show their own new one
   const over = layer?.over
@@ -2093,7 +2092,11 @@ function rememberRefused(layerId: number, line: FieldNoticeLine) {
 
 function showFieldNotice(box: FieldNoticeBox) {
   const text = noticeText(box.lines.map((line) => refusalLine(line.refusal, fieldLookup)))
-  window.showToast?.(text, 'error', { sticky: true, key: box.key })
+  // a closed notice takes no more lines; a later refusal opens a new one
+  const onDismiss = () => {
+    if (fieldNoticeBox === box) fieldNoticeBox = null
+  }
+  window.showToast?.(text, 'error', { sticky: true, key: box.key, onDismiss })
 }
 
 /* The two awaited restores share one refusal voice: a `rule` (or not_found)

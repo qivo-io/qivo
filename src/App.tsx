@@ -873,15 +873,19 @@ function App() {
     window.showToast = (text, tone, opts = {}) => {
       const id = ++toastSeq
       announce(text, toastLook(tone).politeness)
-      const { sticky, key } = opts
-      setToasts((t) => withToast(t, { id, text, tone, sticky, key }))
+      const { sticky, key, onDismiss } = opts
+      setToasts((t) => withToast(t, { id, text, tone, sticky, key, onDismiss }))
       if (!sticky) setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200)
     }
     return () => {
       window.showToast = null
     }
   }, [])
-  const dismissToast = (id: number) => setToasts((t) => t.filter((x) => x.id !== id))
+  const dismissToast = (id: number) => {
+    // outside the updater, which React may run twice
+    toasts.find((x) => x.id === id)?.onDismiss?.()
+    setToasts((t) => t.filter((x) => x.id !== id))
+  }
 
   // After the first paint, download the code of every view not opened yet,
   // so each still opens if the connection drops. What this person can use

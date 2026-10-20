@@ -782,7 +782,9 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     keepDraft: (shown) => {
       if (ed.isDestroyed) return false
       const text = typeof shown === 'string' ? shown : seen
-      const base = text !== seen && canonical(text) !== serialize(ed) ? text : seen
+      // the server's text becomes the baseline unless it is still `seen`;
+      // when it reads as the draft already, the draft is simply saved
+      const base = text !== seen ? text : seen
       rebaseRef.current = base === seen
       rawRef.current = base
       canonRef.current = canonical(base)

@@ -100,7 +100,10 @@ function boxOf(stack: HTMLElement, selector: string): { top: number; bottom: num
 function measure(stack: HTMLElement) {
   const height = window.innerHeight
   const notices = noticeInsets(noticesBox(stack), height)
-  const sticky = noticeInsets(boxOf(stack, '[data-float-slot="toasts"] [data-float-sticky]'), height)
+  const sticky = noticeInsets(
+    boxOf(stack, '[data-float-slot="toasts"] [data-float-sticky]'),
+    height,
+  )
   const next = {
     top: Math.max(notices.top, sticky.top),
     bottom: Math.max(notices.bottom, sticky.bottom),

@@ -239,9 +239,30 @@ describe('the field check in the store', () => {
     expect(showToast).toHaveBeenCalledWith(
       'Not saved. Emil Berg changed the status of QN-1. Your change was discarded.',
       'error',
-      { sticky: true, key: 'field-changed-1' },
+      expect.objectContaining({ sticky: true, key: 'field-changed-1' }),
     )
     expect(P.issueById[key('task-1')].status).toBe('todo')
+  })
+
+  it('adds later refusals to the open notice, and opens a new one once it is closed', async () => {
+    void P.updateIssue(key('task-1'), { status: 'progress' })
+    latest().reject(changed([{}]))
+    await settle()
+    void P.updateIssue(key('task-3'), { title: 'Other' })
+    latest().reject(changed([{ id: 'task-3', field: 'title' }]))
+    await settle()
+    const [text, , opts] = showToast.mock.calls.at(-1) as [
+      string,
+      string,
+      { key: string; onDismiss: () => void },
+    ]
+    expect(opts.key).toBe('field-changed-1')
+    expect(text.split('\n')).toHaveLength(2)
+    opts.onDismiss()
+    void P.updateIssue(key('task-1'), { priority: 'high' })
+    latest().reject(changed([{ field: 'priority' }]))
+    await settle()
+    expect(showToast.mock.calls.at(-1)?.[2]).toMatchObject({ key: 'field-changed-2' })
   })
 
   it('says You for a change made from another of the person’s seats or tabs', async () => {
@@ -265,7 +286,7 @@ describe('the field check in the store', () => {
     expect(showToast.mock.calls.at(-1)).toEqual([
       'Not saved. Emil Berg changed the status of QN-1. Your 2 changes were discarded.',
       'error',
-      { sticky: true, key: 'field-changed-1' },
+      expect.objectContaining({ sticky: true, key: 'field-changed-1' }),
     ])
   })
 

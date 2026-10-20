@@ -21,7 +21,15 @@ export function toastLook(tone: ToastTone = 'success') {
 /** One toast on screen. A sticky one stays until the person closes it and
     no newer toast pushes it out; `key` names one the store shows again with
     new text. */
-export type Toast = { id: number; text: string; tone?: ToastTone; sticky?: boolean; key?: string }
+export type Toast = {
+  id: number
+  text: string
+  tone?: ToastTone
+  sticky?: boolean
+  key?: string
+  /** Runs when the person closes the toast. */
+  onDismiss?: () => void
+}
 
 /** How many toasts show at once, sticky ones aside once they fill it. */
 export const TOASTS_SHOWN = 3
@@ -33,7 +41,9 @@ export const TOASTS_SHOWN = 3
 export function withToast(list: readonly Toast[], toast: Toast): Toast[] {
   const at = toast.key === undefined ? -1 : list.findIndex((t) => t.key === toast.key)
   if (at >= 0)
-    return list.map((t, i) => (i === at ? { ...t, text: toast.text, tone: toast.tone } : t))
+    return list.map((t, i) =>
+      i === at ? { ...t, text: toast.text, tone: toast.tone, onDismiss: toast.onDismiss } : t,
+    )
   const stuck = list.filter((t) => t.sticky)
   const passing = list.filter((t) => !t.sticky)
   const room = Math.max(0, TOASTS_SHOWN - 1 - stuck.length)
