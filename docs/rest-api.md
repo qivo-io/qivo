@@ -1234,8 +1234,9 @@ subtasks and refuses them on PATCH (see **Group dates** below). Both dates
 denote week starts and the end week is included: on a Monday-based calendar,
 `2026-09-21` through `2026-09-28` is a two-week plan. Use the organization's **Workdays start on**
 setting, `organization.week_start` in `GET /v1/me`, before calculating week
-dates. `remaining_hours` accepts numbers from 0 to 99999.9, rounded to one
-decimal place, or `null` to clear. Any other value, numeric overflow such as
+dates. `remaining_hours` accepts numbers from 0 that round to at most
+99999.9, rounded to one decimal place, or `null` to clear. So `99999.94`
+saves `99999.9`, and `99999.95` is refused. Any other value, numeric overflow such as
 `1e309` included, is a `400` with `remaining_hours must be a number of hours
 from 0 to 99999.9, or null`, the sentence MCP gives too. A task given more
 than 99999.9 hours before the cap was added in October 2026 reads them back
@@ -2092,11 +2093,10 @@ before the cap reads them back. `review_hours` is a number from 0 to 999,
 `plannable_hours` a whole number from 1 to 168, and a label's `color` `#`
 followed by six hex digits. A task's `title`, a name and a comment's `body`
 are not blank once trimmed. A `title` has at most 80 characters and a
-label's `name` at most 40, counted as code points once trimmed, and a
-project's `description` at most 500 characters. Other names, a comment's
-`body` and a task's `description` have no length limit here, because a
-record saved before their caps reads back longer, and a stale read of it
-must compare. Every read answers values that follow these rules.
+label's `name` at most 40, counted as code points once trimmed. Other
+names, a comment's `body` and a task's or project's `description` have no
+length limit here, because a record saved before their caps reads back
+longer, and a stale read of it must compare. Every read answers values that follow these rules.
 
 An id key is checked for its shape only. A well-formed uuid that names no
 person, task or project is compared like any other value and can answer

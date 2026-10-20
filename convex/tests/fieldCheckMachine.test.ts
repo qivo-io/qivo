@@ -493,13 +493,6 @@ describe('text values in expected', () => {
         NAME,
       ],
       [
-        '/v1/projects/TBED',
-        { description: 'New', expected: { description: 'x'.repeat(501) } },
-        'update_project',
-        { project: 'TBED', description: 'New', expected: { description: 'x'.repeat(501) } },
-        'expected.description must be a string of at most 500 characters, or null',
-      ],
-      [
         `/v1/projects/TBED/milestones/${milestone}`,
         { name: 'Pilot', expected: { name: '' } },
         'set_milestone',
@@ -531,7 +524,7 @@ describe('text values in expected', () => {
     }
   })
 
-  it('compares a name longer than its cap, which a name saved before the cap reads as', async () => {
+  it('compares a name or description longer than its cap, which one saved before the cap reads as', async () => {
     const fx = await setup()
     const long = 'Hardware '.repeat(10).trim()
     await fx.t.run(async (ctx) => {
@@ -558,6 +551,29 @@ describe('text values in expected', () => {
     ).toMatchObject({ status: 409 })
     expect(
       await send(fx, 'PATCH', path, { name: 'Firmware', expected: { name: long } }, admin),
+    ).toMatchObject({ status: 200 })
+
+    // a project description saved before its 500-character cap, too
+    const legacy = 'legacy text '.repeat(50)
+    await fx.t.run((ctx) => ctx.db.patch(fx.meta._id, { description: legacy }))
+    const project = '/v1/projects/TBED'
+    expect(
+      await send(
+        fx,
+        'PATCH',
+        project,
+        { description: 'Short', expected: { description: `${legacy}!` } },
+        admin,
+      ),
+    ).toMatchObject({ status: 409 })
+    expect(
+      await send(
+        fx,
+        'PATCH',
+        project,
+        { description: 'Short', expected: { description: legacy } },
+        admin,
+      ),
     ).toMatchObject({ status: 200 })
   })
 

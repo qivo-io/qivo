@@ -47,6 +47,7 @@ import {
   hoursOrNull,
   idForm,
   TEXT,
+  TEXT_OR_NULL,
   uuidOf,
   type View,
 } from './expected'
@@ -464,16 +465,8 @@ export const ACCESS_MAP_REMOVES =
 export const PROJECT_FIELDS: Fields<Doc<'projects'>> = {
   // cleanProjectName's rule; a name saved before the cap reads back longer
   name: { sends: 'name', type: filledText(), form: trimmedForm },
-  // projectDescription's rule
-  description: {
-    sends: 'description',
-    type: {
-      ok: (v) => v === null || (typeof v === 'string' && v.length <= PROJECT_DESCRIPTION_MAX),
-      says: `a string of at most ${PROJECT_DESCRIPTION_MAX} characters, or null`,
-      schema: { anyOf: [{ type: 'string', maxLength: PROJECT_DESCRIPTION_MAX }, { type: 'null' }] },
-    },
-    form: descriptionForm,
-  },
+  // a description saved before PROJECT_DESCRIPTION_MAX reads back longer
+  description: { sends: 'description', type: TEXT_OR_NULL, form: descriptionForm },
   key: { sends: 'key', type: TEXT, form: exact },
   track_delay: { sends: 'track_delay', type: BOOLEAN, form: exact },
   review_hours: {

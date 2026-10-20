@@ -204,8 +204,8 @@ instead of `Unrecognized key: "expected"`.
 
 Later in October 2026 the text keys of `expected` gained their fields'
 rules too. A task's `title`, a name and a comment's `body` must not be
-blank, a `title` has at most 80 characters, a label's `name` at most 40 and a
-project's `description` at most 500. A value that breaks the rule, such as
+blank, a `title` has at most 80 characters and a label's `name` at most 40.
+A value that breaks the rule, such as
 `expected.title: ""`, is refused with its own sentence before Qivo compares
 anything, where before it was answered as a changed field. The schema of
 `expected` carries `minLength` and these `maxLength` values. At the same
@@ -1066,9 +1066,9 @@ A value also follows the rule of its field. `start_week`, `end_week`,
 limit here, because a task given more than 99999.9 hours before the cap
 reads them back. A task's `title`, a name and a comment's `body` are not
 blank once trimmed. A `title` has at most 80 characters and a label's
-`name` at most 40, counted as code points once trimmed, and a project's
-`description` at most 500 characters. Other names, a comment's `body` and a
-task's `description` have no length limit here, because a record saved
+`name` at most 40, counted as code points once trimmed. Other names, a
+comment's `body` and a task's or project's `description` have no length
+limit here, because a record saved
 before their caps reads back longer, and a stale read of it must compare.
 The schema of `expected` in the tool list carries the date shape, the hour
 ranges, the color pattern and the text lengths, and Qivo also checks that a
@@ -2142,8 +2142,9 @@ layer looks like the object not existing, matching the app.
   any authentication or work: an old client probing for the removed GET
   stream costs nothing.
 - **Numbers are numbers.** `remaining_hours` is a finite JSON number from
-  0 through 99999.9, rounded to one decimal place (or `null` to clear), the
-  same limit REST and the app use. Any other value, numeric overflow such as
+  0 that rounds to at most 99999.9, rounded to one decimal place (or `null`
+  to clear), the same limit REST and the app use. So `99999.94` saves
+  `99999.9`. Any other value, numeric overflow such as
   `1e309` included, is refused with `remaining_hours must be a number of
   hours from 0 to 99999.9, or null`. A task given more before the cap reads
   them back, and `update_task` takes them unchanged or lower. Task dates are real calendar days in `YYYY-MM-DD`

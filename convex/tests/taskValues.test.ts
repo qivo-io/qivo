@@ -152,6 +152,9 @@ describe('task value guards', () => {
     for (const [input, stored] of [
       [5.25, 5.3],
       [0, 0],
+      // rounds to the cap, as the app rounds what a person types
+      [99_999.94, 99_999.9],
+      [0, 0],
       [99_999.9, 99_999.9],
     ]) {
       const updated = await caller.mutation(api.issues.update, {
@@ -373,8 +376,12 @@ describe('hours stored above the cap', () => {
     expect((await taskRow(t, row.id))?.remaining_hours).toBe(150_000)
 
     // and each surface lowers them
-    expect(await rest('PATCH', `/v1/tasks/${row.id}`, { remaining_hours: 99_999.9 })).toMatchObject(
-      { status: 200, json: { remaining_hours: 99_999.9 } },
+    // 99999.94 rounds to the cap, so it passes on every surface
+    expect(
+      await rest('PATCH', `/v1/tasks/${row.id}`, { remaining_hours: 99_999.94 }),
+    ).toMatchObject({ status: 200, json: { remaining_hours: 99_999.9 } })
+    expect((await tool('update_task', { ref: row.id, remaining_hours: 99_999.94 })).isError).toBe(
+      undefined,
     )
     expect((await tool('update_task', { ref: row.id, remaining_hours: 40 })).isError).toBe(
       undefined,

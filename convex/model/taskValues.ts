@@ -62,16 +62,18 @@ export const REMAINING_HOURS_MAX = 99_999.9
 /** The refusal of remaining hours outside 0..REMAINING_HOURS_MAX. */
 export const REMAINING_HOURS_RULE = `remaining_hours must be a number of hours from 0 to ${REMAINING_HOURS_MAX}, or null`
 
-/** Estimates are finite hours from 0 to REMAINING_HOURS_MAX, stored to one
- * decimal place; null clears them. More than the cap passes when it rounds
- * to `current`, the task's stored hours, so a task given more before the cap
- * keeps them through writes that send them back unchanged. */
+/** Estimates are finite hours from 0, stored to one decimal place, that
+ * round to at most REMAINING_HOURS_MAX; null clears them. The cap applies to
+ * the rounded hours, because the app rounds what a person types before it
+ * sends it. More than the cap passes when it rounds to `current`, the task's
+ * stored hours, so a task given more before the cap keeps them through
+ * writes that send them back unchanged. */
 export function cleanRemaining(value: unknown, current?: number): number | undefined {
   if (value == null) return undefined
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
     throw badRequest(REMAINING_HOURS_RULE)
   }
   const hours = roundTenths(value)
-  if (value > REMAINING_HOURS_MAX && hours !== current) throw badRequest(REMAINING_HOURS_RULE)
+  if (hours > REMAINING_HOURS_MAX && hours !== current) throw badRequest(REMAINING_HOURS_RULE)
   return hours
 }
