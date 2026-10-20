@@ -37,6 +37,7 @@ afterEach(async () => {
   document.querySelector('[data-float-stack]')?.remove()
   vi.useRealTimers()
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
 })
 
 const shown = () => document.querySelector<HTMLElement>('[data-snapshot-notice]')
@@ -72,6 +73,9 @@ describe('the console notice', () => {
   })
 
   it('loads without the planner store, as the console does', async () => {
+    // the console's sign-in reads the backend's address as it loads
+    vi.stubEnv('VITE_CONVEX_URL', 'http://127.0.0.1:3210')
+    vi.stubEnv('VITE_CONVEX_SITE_URL', 'http://127.0.0.1:3211')
     await expect(import('./SavePauseNotice')).resolves.toBeDefined()
     await expect(import('./AppUpdates')).resolves.toBeDefined()
     await expect(import('../admin/AdminGate')).resolves.toBeDefined()
