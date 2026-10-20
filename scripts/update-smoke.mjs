@@ -230,7 +230,9 @@ async function verifyLazyLoading() {
   await page.getByRole('combobox', { name: 'Search tasks and projects' }).waitFor()
   assertChunkRequested('Palette', true)
   await page.locator('[data-palette-close]').click()
-  log('Cold Board paints with its own chunk, then downloads the other views; task, creation and search open')
+  log(
+    'Cold Board paints with its own chunk, then downloads the other views; task, creation and search open',
+  )
 
   // An embedded Inbox task leaves Search reachable without bypassing a scrim.
   // A reply stays unsaved when focus moves; title edits intentionally save on blur.
