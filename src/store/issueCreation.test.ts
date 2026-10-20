@@ -28,6 +28,7 @@ describe('task creation through the client store', () => {
   let P: Planner
   let snap: Snapshot
   let publish: (value: Snapshot) => void
+  let deliverThread: (value: unknown) => void
   let requests: Pending[]
   let showToast: ReturnType<typeof vi.fn>
 
@@ -41,6 +42,7 @@ describe('task creation through the client store', () => {
     requests = []
     network.query.mockResolvedValue(null)
     network.onUpdate.mockImplementation((ref, _args, next) => {
+      if (getFunctionName(ref) === 'snapshot:commentThread') deliverThread = next
       if (getFunctionName(ref) !== 'snapshot:forMe') return () => {}
       publish = next
       next(structuredClone(snap))
@@ -121,6 +123,17 @@ describe('task creation through the client store', () => {
     // later deliveries keep the one subscription
     publish(structuredClone(snap))
     expect(threads()).toHaveLength(1)
+    // a first page with comments before it offers them
+    const comment = { id: 'comment-51', issue_id: task.uuid, author: snap.profiles[0].id }
+    deliverThread({
+      comments: [{ ...comment, body: '#51', created_at: NOW }],
+      earlier: true,
+      events: [],
+    })
+    // the create still waits, so the thread paints on the next timer
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(P.comments.map((c) => c.id)).toEqual(['comment-51'])
+    expect(P.commentsEarlier).toBe('more')
     P.watchComments(null)
   })
 

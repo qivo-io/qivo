@@ -466,7 +466,11 @@ const serverTask = (uuid: string) => serverSnap?.issues.find((r) => r.id === uui
 function subscribeWaitingThread() {
   if (!watchedComments || commentsUnsub) return
   const row = serverTask(watchedComments)
-  if (row) subscribeThread(watchedComments, row.org_id)
+  if (!row) return
+  // the empty thread shown meanwhile is no start the first page can meet
+  // (receiveThread), so that page decides whether earlier comments exist
+  threadStart = false
+  subscribeThread(watchedComments, row.org_id)
 }
 
 /* Subscribes to the watched thread `issueUuid` in organization `orgId`,
