@@ -78,9 +78,12 @@ export function useUnsentScope() {
 
 /** Holds a lease while `unsaved` is true, for an editor with typed text it
     has not sent. `what` names the text in the window's question; null keeps
-    the lease out of it, for a lease that only the page's close warns about. */
-export function useUnsaved(unsaved: boolean, what: string | null = 'text') {
-  const scope = useContext(UnsentScopeContext)
+    the lease out of it, for a lease that only the page's close warns about.
+    `within` holds it in a scope of the component's own inside the window's
+    (useUnsentScope). */
+export function useUnsaved(unsaved: boolean, what: string | null = 'text', within?: UnsentScope) {
+  const windowScope = useContext(UnsentScopeContext)
+  const scope = within ?? windowScope
   useLayoutEffect(() => {
     if (!unsaved) return
     const release = holdUnsaved()

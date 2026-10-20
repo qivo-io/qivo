@@ -85,7 +85,6 @@ export function DiscardPrompt() {
       }}
     >
       <AlertDialogContent
-        size="sm"
         data-discard-prompt
         overlayClassName="z-[130]"
         className="z-[131]"

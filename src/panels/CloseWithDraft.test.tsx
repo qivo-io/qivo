@@ -213,6 +213,35 @@ describe('closing the task window with unsent text', { timeout: 30_000 }, () => 
     expect(onClose).not.toHaveBeenCalled()
   })
 
+  it('asks before Escape on the composer controls throws its draft away', async () => {
+    await open()
+    const composer = await editorOf('Leave a comment')
+    const toolbar = document
+      .querySelector('[role="textbox"][aria-label="Leave a comment"]')
+      ?.closest('.mdwrap')
+      ?.querySelector<HTMLElement>('[aria-label="Formatting"]')
+    /** Escape inside the composer's controls, past the close's one tick. A
+        focused button would show its tooltip, which passes Escape on to the
+        window instead. */
+    const escapeOn = () =>
+      act(async () => {
+        toolbar?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+    await act(async () => composer.commands.insertContent('Drift is under 2%'))
+    await escapeOn()
+    expect(question()).toBe('Discard your unsent comment?')
+    await press('[data-discard-confirm]')
+    expect(composer.getText()).toBe('')
+    await act(async () => composer.commands.insertContent('Drift is under 3%'))
+    await escapeOn()
+    expect(question()).toBe('Discard your unsent comment?')
+    await press('[data-discard-keep]')
+    expect(composer.getText()).toBe('Drift is under 3%')
+    // the editor's own question never closes the window
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
   it('does not ask about a comment on its way to the server', async () => {
     await open()
     const composer = await editorOf('Leave a comment')

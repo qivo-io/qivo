@@ -6,9 +6,10 @@ import { HoverTooltip, hasOpenTooltip } from '@/components/ui/tooltip'
    Editable users load this component lazily.
 
    Save/Mod-S commits; blur retains drafts and dirty unmount discards with a
-   toast. Escape closes popovers, then reverts dirty content and clears undo
-   history so redo cannot resurrect reaped attachments, then reaches the modal
-   only when clean. Toolbar mousedown preserves selection. Remote edits replace
+   toast. Escape closes popovers, then, once the person confirms the discard
+   (DiscardPrompt), reverts dirty content and clears undo history so redo
+   cannot resurrect reaped attachments, then reaches the modal only when
+   clean. Toolbar mousedown preserves selection. Remote edits replace
    only unfocused clean documents; matching echoes advance committed refs to
    keep finishUpload's text and document patches atomic.
 
@@ -57,12 +58,13 @@ import { Input } from '@/components/ui/input'
 import { DropdownChevron } from '@/components/ui/select'
 import { TEXT_MAX, TEXT_MAX_LABEL } from '../../convex/lib/textLimits'
 import { compressImage } from '../lib/images'
-import { useUnsaved } from '../lib/leaveGuard'
+import { useUnsaved, useUnsentScope } from '../lib/leaveGuard'
 import type { MdBlock, MdInline } from '../lib/md'
 import { MAX_PARSE, parseMd, sanitizeHref } from '../lib/md'
 import { astToMd } from '../lib/mdSerialize'
 import { beginUpdateBlock, useUpdateBlocker } from '../lib/updateSafety'
 import { P, TEXT_TOO_LONG } from '../store/planner'
+import { closeOrAsk } from './DiscardPrompt'
 import type { PMNode } from './descDoc'
 import { astToDoc, docToAst } from './descDoc'
 import { copyImage, downloadImage, openImageFull, toast } from './imgActions'
@@ -362,8 +364,11 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   // comment mode: a commit the server has not answered yet (see commit)
   const [sending, setSending] = useState(false)
   // the description or comment typed here and not sent yet. One on its way
-  // is the store's to keep or report, so closing does not ask about it.
-  useUnsaved(dirty && !sending, isComment ? 'comment' : 'description')
+  // is the store's to keep or report, so closing does not ask about it. It
+  // counts in the window's question and in this editor's own, which Escape
+  // asks before it throws the draft away.
+  const draft = useUnsentScope()
+  useUnsaved(dirty && !sending, isComment ? 'comment' : 'description', draft)
   const sendingRef = useRef(false)
   // comment mode: whether this editor has unmounted, which Tiptap's own
   // isDestroyed reports only a tick later
@@ -1220,7 +1225,9 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     if (ed && dirtyRef.current) {
       e.preventDefault()
       e.stopPropagation()
-      revert()
+      // a stray Escape must not throw a draft away unasked; the Discard
+      // changes button stays the one-press way
+      closeOrAsk([draft], revert)
       return
     }
     const cm = commentRef.current
