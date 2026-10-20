@@ -62,10 +62,12 @@ import { PROJECT_DESCRIPTION_MAX } from '../lib/projectLimits'
 import { REVIEW_HOURS_MAX } from '../lib/review'
 import { NAME_MAX } from '../lib/textLimits'
 import {
+  createExpectedSentence,
   EXPECTED_DELETE_SENTENCE,
   EXPECTED_SENTENCE,
   expectedSchema,
   parseExpected,
+  refuseCreateExpected,
   sentKeys,
   vExpected,
 } from '../model/expected'
@@ -98,6 +100,7 @@ import {
   unarchiveProjectCore,
   updateProjectCore,
 } from '../model/projects'
+import { ACCESS_PUT_FIELDS, HELD_TASKS_FIELDS } from './bodyFields'
 import type { TOOLS } from './mcp'
 import type { ROUTES, route as restRoute } from './rest'
 import {
@@ -556,7 +559,7 @@ export const mcpSetMilestone = internalMutation({
   handler: async (ctx, a): Promise<string> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     if (a.milestone === undefined && a.expected !== undefined) {
-      throw badRequest('expected applies only when changing an existing milestone')
+      throw badRequest(createExpectedSentence('milestone'))
     }
     const project = await mcpProject(ctx, me, a.project)
     const week = a.date === undefined ? undefined : cleanMilestoneDate(a.date)
@@ -699,6 +702,7 @@ export const restCreateProject = internalMutation({
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const b = needJson(a.body)
     refuseProjectFields(b)
+    refuseCreateExpected(b, 'project')
     refuseUnknownFields(b, ['name', 'parent', 'lead_id', 'description'])
     if (!('name' in b)) throw badRequest('name is required')
     if (typeof b.name !== 'string') throw badRequest('name must be a string')
@@ -811,7 +815,7 @@ type RestAccessArgs = ObjectType<typeof vRestAccessArgs>
 async function restSetAccess(ctx: MutationCtx, a: RestAccessArgs, kind: 'users' | 'teams') {
   const me = await asMachineCaller(ctx, a.callerId, a.access)
   const b = needJson(a.body)
-  refuseUnknownFields(b, ['level', 'expected'])
+  refuseUnknownFields(b, ACCESS_PUT_FIELDS)
   const level = restLevel(b)
   const expected = parseExpected(GRANT_FIELDS, b.expected, ['level'])
   const project = await restProject(ctx, me, a.ref)
@@ -835,7 +839,7 @@ async function restSetAccess(ctx: MutationCtx, a: RestAccessArgs, kind: 'users' 
 async function restRemoveAccess(ctx: MutationCtx, a: RestAccessArgs, kind: 'users' | 'teams') {
   const me = await asMachineCaller(ctx, a.callerId, a.access, 'access_removal')
   const b = optionalJson(a.body)
-  refuseUnknownFields(b, ['on_held_tasks'])
+  refuseUnknownFields(b, HELD_TASKS_FIELDS)
   const held: HeldTasks = parseHeldTasks(b.on_held_tasks)
   const project = await restProject(ctx, me, a.ref)
   const subject = await restSubject(ctx, me, kind, a.subject)
@@ -885,6 +889,7 @@ function milestoneFields(
   b: Record<string, unknown>,
   required: boolean,
 ): { name?: string; week?: string } {
+  if (required) refuseCreateExpected(b, 'milestone')
   refuseUnknownFields(b, required ? ['name', 'date'] : ['name', 'date', 'expected'])
   const out: { name?: string; week?: string } = {}
   if ('name' in b) {
@@ -1219,7 +1224,7 @@ export const PROJECT_TOOLS: McpTool[] = [
         expected?: unknown
       }
       if (rest.milestone === undefined && expected !== undefined) {
-        throw badRequest('expected applies only when changing an existing milestone')
+        throw badRequest(createExpectedSentence('milestone'))
       }
       return r.runMutation(internal.machine.projects.mcpSetMilestone, {
         callerId,

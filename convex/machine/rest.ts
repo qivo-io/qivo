@@ -104,7 +104,7 @@ import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
 import { ingressShard } from '../model/billingUsage'
 import { postComment } from '../model/comments'
 import { moveTasksToTrash } from '../model/deletedItems'
-import { parseExpected, sentKeys } from '../model/expected'
+import { parseExpected, refuseCreateExpected, sentKeys } from '../model/expected'
 import {
   assertAssignable,
   assertAssignableChange,
@@ -679,6 +679,7 @@ export const createIssue = internalMutation({
     if ('archived' in b)
       throw badRequest('tasks are created active, so archive with PATCH after creating')
     refuseReadOnlyFields(b)
+    refuseCreateExpected(b, 'task')
     refuseUnknownFields(b, TASK_CREATE_FIELDS)
     const proj = findProjectRef(cat, typeof b.project === 'string' ? b.project : '')
     // A project the key cannot read reads like an unknown one (writable
@@ -939,6 +940,7 @@ export const addComment = internalMutation({
     if (!(await hasProjectLevel(ctx, me, issue.project_id, 'user'))) throw noWrite(me)
     const b = needJson(a.body)
     if ('author' in b || 'author_id' in b) throw badRequest(CALLER[me.kind].commentAuthor)
+    refuseCreateExpected(b, 'comment')
     refuseUnknownFields(b, ['body'])
     if (typeof b.body !== 'string') throw badRequest('body must be a non-empty string')
     const trimmed = b.body.trim()
@@ -1030,6 +1032,7 @@ function labelFields(
   b: Record<string, unknown>,
   required: boolean,
 ): { name?: string; color?: string } {
+  if (required) refuseCreateExpected(b, 'label')
   refuseUnknownFields(b, required ? ['name', 'color'] : ['name', 'color', 'expected'])
   const out: { name?: string; color?: string } = {}
   for (const field of ['name', 'color'] as const) {

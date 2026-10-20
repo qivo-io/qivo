@@ -24,7 +24,7 @@ import {
   BOOLEAN,
   exact,
   type Fields,
-  NUMBER_OR_NULL,
+  hoursOrNull,
   oneOf,
   TEXT_OR_NULL,
 } from './expected'
@@ -219,8 +219,18 @@ export const PROFILE_FIELDS: Fields<Doc<'profiles'>> = {
     type: BOOLEAN,
     form: (value) => value === true,
   },
-  // a seat created without a plannable week reads null
-  plannable_hours: { sends: 'plannable_hours', type: NUMBER_OR_NULL, form: exact },
+  // a seat created without a plannable week reads null; a set one follows
+  // model/orgs.ts setPlannableHoursCore's rule
+  plannable_hours: {
+    sends: 'plannable_hours',
+    type: hoursOrNull({
+      min: 1,
+      max: 168,
+      whole: true,
+      says: 'a whole number of hours from 1 to 168, or null',
+    }),
+    form: exact,
+  },
   avatar_storage_id: { sends: 'avatar_storage_id', type: TEXT_OR_NULL, form: exact },
 }
 

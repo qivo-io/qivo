@@ -43,8 +43,8 @@ import {
   BOOLEAN,
   exact,
   type Fields,
+  hoursOrNull,
   idForm,
-  NUMBER_OR_NULL,
   TEXT,
   TEXT_OR_NULL,
   uuidOf,
@@ -468,7 +468,12 @@ export const PROJECT_FIELDS: Fields<Doc<'projects'>> = {
   track_delay: { sends: 'track_delay', type: BOOLEAN, form: exact },
   review_hours: {
     sends: 'review_hours',
-    type: NUMBER_OR_NULL,
+    // cleanReviewHours's rule
+    type: hoursOrNull({
+      min: 0,
+      max: REVIEW_HOURS_MAX,
+      says: `a number of hours from 0 to ${REVIEW_HOURS_MAX}, or null`,
+    }),
     form: (value) => (typeof value === 'number' ? roundReviewHours(value) : (value ?? null)),
   },
   lead_id: {

@@ -209,6 +209,7 @@ describe('malformed expected', () => {
       'title, description, status, priority, assignee_id, reviewer_id, start_week, end_week, due_date, remaining_hours, paused, parent_id, has_hidden_parent, project_id'
     const NOT_OBJECT = 'expected must be an object of the fields as you last read them'
     const cases: [Record<string, unknown>, string][] = [
+      [{ title: 'X', expected: null }, NOT_OBJECT],
       [{ title: 'X', expected: [] }, NOT_OBJECT],
       [{ title: 'X', expected: 'x' }, NOT_OBJECT],
       [{ title: 'X', expected: {} }, 'expected must name at least one field'],
@@ -247,11 +248,6 @@ describe('malformed expected', () => {
         toolError(error),
       )
     }
-    // REST reads a JSON null as a value, which MCP's schema refuses first
-    expect(await send(fx, 'PATCH', `/v1/tasks/${row.id}`, { title: 'X', expected: null })).toEqual({
-      status: 400,
-      text: JSON.stringify({ error: NOT_OBJECT }),
-    })
     expect((await task(fx, row.id))?.title).toBe('One')
 
     // the tools that create without an id, and a removal, take no expected
@@ -277,6 +273,183 @@ describe('malformed expected', () => {
         toolError(error),
       )
     }
+  })
+})
+
+describe('typed values in expected', () => {
+  /* Each value differs from the stored one, so without the check of its
+   * type the request would be answered as a conflict. */
+  it('refuses a value its field would refuse with a 400 sentence, before any comparison', async () => {
+    const fx = await setup()
+    const row = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, title: 'One' })
+    const DAY = 'a calendar date as YYYY-MM-DD or null'
+    const cases: [Record<string, unknown>, string][] = [
+      [
+        { due_date: '2026-07-01', expected: { due_date: 'soon' } },
+        `expected.due_date must be ${DAY}`,
+      ],
+      // shaped like a date, but no such day
+      [
+        { due_date: '2026-07-01', expected: { due_date: '2026-02-31' } },
+        `expected.due_date must be ${DAY}`,
+      ],
+      [
+        {
+          start_week: '2026-06-01',
+          end_week: '2026-06-05',
+          expected: { start_week: '2026-6-1', end_week: null },
+        },
+        `expected.start_week must be ${DAY}`,
+      ],
+      [
+        { remaining_hours: 3, expected: { remaining_hours: -1 } },
+        'expected.remaining_hours must be a non-negative number or null',
+      ],
+    ]
+    for (const [body, error] of cases) {
+      expect(await send(fx, 'PATCH', `/v1/tasks/${row.id}`, body), error).toEqual({
+        status: 400,
+        text: JSON.stringify({ error }),
+      })
+      expect(await tool(fx, 'update_task', { ref: row.id, ...body }), error).toMatchObject(
+        toolError(error),
+      )
+    }
+    const kept = await task(fx, row.id)
+    expect([kept?.due_date, kept?.start_week, kept?.remaining_hours]).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ])
+    // a real day still compares, and saves when it matches
+    const saved = await send(fx, 'PATCH', `/v1/tasks/${row.id}`, {
+      due_date: '2026-07-01',
+      expected: { due_date: null },
+    })
+    expect(saved.status).toBe(200)
+    expect(
+      await send(fx, 'PATCH', `/v1/tasks/${row.id}`, {
+        due_date: '2026-08-01',
+        expected: { due_date: '2026-06-30' },
+      }),
+    ).toMatchObject({ status: 409 })
+
+    const milestone = uuid()
+    const label = uuid()
+    // only an organization admin reaches a label's body over REST
+    const ADMIN = `qvt_${'fieldadm'.repeat(6)}`
+    const token_hash = await sha256hex(ADMIN)
+    await fx.t.run(async (ctx) => {
+      await ctx.db.insert('mcp_tokens', {
+        id: uuid(),
+        profile_id: fx.admin.id,
+        name: 'admin',
+        token_prefix: ADMIN.slice(0, 11),
+        token_hash,
+        access: 'write',
+        created_at: NOW,
+      })
+      await ctx.db.insert('milestones', {
+        id: milestone,
+        project_id: fx.meta.id,
+        name: 'Prototype',
+        week: '2026-06-01',
+        created_at: NOW,
+      })
+      await ctx.db.insert('labels', {
+        id: label,
+        org_id: fx.org.id,
+        name: 'Hardware',
+        name_lower: 'hardware',
+        color: '#336699',
+        created_at: NOW,
+      })
+    })
+    const other: [
+      string,
+      string,
+      Record<string, unknown>,
+      string,
+      Record<string, unknown>,
+      string,
+    ][] = [
+      [
+        'PATCH',
+        '/v1/projects/TBED',
+        { review_hours: 3, expected: { review_hours: 1000 } },
+        'update_project',
+        { project: 'TBED', review_hours: 3, expected: { review_hours: 1000 } },
+        'expected.review_hours must be a number of hours from 0 to 999, or null',
+      ],
+      [
+        'PATCH',
+        `/v1/users/${fx.user.id}`,
+        { plannable_hours: 30, expected: { plannable_hours: 2.5 } },
+        'update_user',
+        { user_id: fx.user.id, plannable_hours: 30, expected: { plannable_hours: 0 } },
+        'expected.plannable_hours must be a whole number of hours from 1 to 168, or null',
+      ],
+      [
+        'PATCH',
+        `/v1/projects/TBED/milestones/${milestone}`,
+        { date: '2026-07-01', expected: { date: '2026-02-31' } },
+        'set_milestone',
+        { project: 'TBED', milestone, date: '2026-07-01', expected: { date: 'June' } },
+        'expected.date must be a calendar date as YYYY-MM-DD',
+      ],
+      [
+        'PATCH',
+        `/v1/labels/${label}`,
+        { color: '#112233', expected: { color: 'red' } },
+        'set_label',
+        { label, color: '#112233', expected: { color: '#12345' } },
+        'expected.color must be # followed by six hex digits, like #4C9AFF',
+      ],
+    ]
+    for (const [method, path, body, name, args, error] of other) {
+      const asAdmin = path.startsWith('/v1/labels') ? { Authorization: `Bearer ${ADMIN}` } : {}
+      expect(await send(fx, method, path, body, asAdmin), error).toEqual({
+        status: 400,
+        text: JSON.stringify({ error }),
+      })
+      expect(await tool(fx, name, args), error).toMatchObject(toolError(error))
+    }
+  })
+})
+
+describe('expected on a create', () => {
+  it('refuses it with the sentence of the record, over REST and MCP', async () => {
+    const fx = await setup()
+    const row = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    const sentence = (record: string) => `expected applies only when changing an existing ${record}`
+    const expected = { name: 'x' }
+    for (const [path, body, record] of [
+      ['/v1/tasks', { project: 'TBED', sub_project: 'PCB', title: 'X', expected }, 'task'],
+      [`/v1/tasks/${row.id}/comments`, { body: 'x', expected }, 'comment'],
+      ['/v1/projects', { name: 'X', expected }, 'project'],
+      ['/v1/projects/TBED/milestones', { name: 'M', date: '2026-06-01', expected }, 'milestone'],
+      ['/v1/labels', { name: 'L', color: '#336699', expected }, 'label'],
+      ['/v1/teams', { name: 'T', expected }, 'team'],
+    ] as const) {
+      expect(await send(fx, 'POST', path, body), path).toEqual({
+        status: 400,
+        text: JSON.stringify({ error: sentence(record) }),
+      })
+    }
+    for (const [name, args, record] of [
+      ['create_task', { project: 'TBED', sub_project: 'PCB', title: 'X' }, 'task'],
+      ['add_comment', { ref: row.id, body: 'x' }, 'comment'],
+      ['create_project', { name: 'X' }, 'project'],
+    ] as const) {
+      // null too, which is no object of fields either
+      for (const value of [expected, null])
+        expect(await tool(fx, name, { ...args, expected: value }), name).toMatchObject(
+          toolError(sentence(record)),
+        )
+    }
+    // nothing was created
+    const tasks = await fx.t.run((ctx) => ctx.db.query('issues').collect())
+    expect(tasks.map((t) => t.id)).toEqual([row.id])
   })
 })
 

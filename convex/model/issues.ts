@@ -104,10 +104,11 @@ import {
   assertExpected,
   BOOLEAN,
   changedPrints,
+  dayOf,
   exact,
   type Fields,
+  hoursOrNull,
   idForm,
-  NUMBER_OR_NULL,
   oneOf,
   type Read,
   sentKeys,
@@ -245,12 +246,13 @@ export const TASK_FIELDS: Fields<Doc<'issues'>> = {
   priority: { sends: 'priority', type: oneOf(ISSUE_PRIORITIES), form: exact },
   assignee_id: { sends: 'assignee_id', type: uuidOf('profile', true), form: idForm },
   reviewer_id: { sends: 'reviewer_id', type: uuidOf('profile', true), form: idForm },
-  start_week: { sends: 'start_week', type: TEXT_OR_NULL, form: exact },
-  end_week: { sends: 'end_week', type: TEXT_OR_NULL, form: exact },
-  due_date: { sends: 'due_date', type: TEXT_OR_NULL, form: exact },
+  start_week: { sends: 'start_week', type: dayOf(true), form: exact },
+  end_week: { sends: 'end_week', type: dayOf(true), form: exact },
+  due_date: { sends: 'due_date', type: dayOf(true), form: exact },
   remaining_hours: {
     sends: 'remaining_hours',
-    type: NUMBER_OR_NULL,
+    // cleanRemaining's rule
+    type: hoursOrNull({ min: 0, says: 'a non-negative number or null' }),
     form: hoursForm,
     // REST and MCP read an active group's hours as null, even while it
     // still stores hours from before its subtasks (lib/core.ts issueOut)
