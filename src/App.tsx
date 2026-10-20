@@ -25,7 +25,7 @@ import {
 } from './components/WorkspaceShell'
 import { flushWalkInput } from './components/walk'
 import { addressMoved, rememberAddress } from './lib/addressBook'
-import { lazyFromModule } from './lib/lazyModule'
+import { lazyFromModule, preloadInBackground } from './lib/lazyModule'
 import { parseSyncScope } from './lib/teamSync'
 import { useMobile } from './lib/useMobile'
 import './styles/mobile.css'
@@ -57,6 +57,7 @@ import {
   loadSettings,
   loadTaskCreation,
   loadTeamSync,
+  workspaceModules,
 } from './lib/workspaceChunks'
 import { P } from './store/planner'
 import { usePlannerVersion } from './store/usePlannerVersion'
@@ -878,6 +879,20 @@ function App() {
     }
   }, [])
   const dismissToast = (id: number) => setToasts((t) => t.filter((x) => x.id !== id))
+
+  // After the first paint, download the code of every view not opened yet,
+  // so each still opens if the connection drops. What this person can use
+  // is asked again whenever the list goes on after a pause.
+  useEffect(
+    () =>
+      preloadInBackground(() =>
+        workspaceModules({
+          editor: P.projects.some((project) => P.canWrite(project.id)),
+          admin: P.isAdmin(),
+        }),
+      ),
+    [],
+  )
 
   // ui persistence
   useEffect(() => {

@@ -54,6 +54,50 @@ describe('the notices’ bands', () => {
     expect([band('top'), band('bottom')]).toEqual(['220px', '0px'])
   })
 
+  it('count only the part of the notices their shared box shows', () => {
+    place('update', 16, 144)
+    const notices = document.querySelector<HTMLElement>('[data-float-notices]')
+    if (!notices) throw new Error('no notices box')
+    // the box stops short of the snapshot notice, which scrolls inside it
+    notices.getBoundingClientRect = () => ({ top: 16, bottom: 400, height: 384 }) as DOMRect
+    place('snapshot', 152, 560)
+    expect([band('top'), band('bottom')]).toEqual(['400px', '0px'])
+    expect(notices.contains(stack.floatSlot('snapshot'))).toBe(true)
+    expect(notices.contains(stack.floatSlot('toasts'))).toBe(false)
+  })
+
+  it('leave out the shadow padding while the notices fit, and count it once they overflow', () => {
+    place('update', 16, 144)
+    const notices = document.querySelector<HTMLElement>('[data-float-notices]')
+    if (!notices) throw new Error('no notices box')
+    // a phone: the box starts at the window's top and pads 16px below
+    notices.style.padding = '16px 16px 16px'
+    notices.getBoundingClientRect = () => ({ top: 0, bottom: 300, height: 300 }) as DOMRect
+    const size = { scroll: 268, client: 268 }
+    Object.defineProperty(notices, 'scrollHeight', { get: () => size.scroll })
+    Object.defineProperty(notices, 'clientHeight', { get: () => size.client })
+    observed()
+    expect(band('top')).toBe('284px')
+    size.scroll = 500
+    observed()
+    expect(band('top')).toBe('300px')
+  })
+
+  it('keep their scrolling from a dialog’s scroll lock at the document', () => {
+    const notice = document.createElement('div')
+    stack.floatSlot('snapshot').append(notice)
+    const lock = vi.fn((event: Event) => event.preventDefault())
+    document.addEventListener('wheel', lock)
+    document.addEventListener('touchmove', lock)
+    const wheel = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 40 })
+    notice.dispatchEvent(wheel)
+    notice.dispatchEvent(new Event('touchmove', { bubbles: true, cancelable: true }))
+    document.removeEventListener('wheel', lock)
+    document.removeEventListener('touchmove', lock)
+    expect(lock).not.toHaveBeenCalled()
+    expect(wheel.defaultPrevented).toBe(false)
+  })
+
   it('take no room for toasts', () => {
     place('toasts', 700, 760)
     expect(band('bottom')).toBe('')

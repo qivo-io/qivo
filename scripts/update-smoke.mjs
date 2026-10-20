@@ -62,6 +62,14 @@ const chunks = (name) =>
     .filter((asset) => asset.startsWith(`${name}-`) && asset.endsWith('.js'))
     .map((asset) => `/assets/${asset}`)
 
+/** Waits until `ready()` holds, failing with `message` after 15 seconds. */
+async function waitUntil(ready, message) {
+  for (let waited = 0; !ready(); waited += 100) {
+    assert.ok(waited < 15_000, message)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+}
+
 function assertChunkRequested(name, expected) {
   const paths = chunks(name)
   assert.ok(paths.length > 0, `The production build has no ${name} chunk`)
@@ -186,8 +194,14 @@ async function verifyLazyLoading() {
   const boardURL = `${demo.base}/app/${demo.orgSlug}/board/all`
   await page.locator('[data-card]').first().waitFor()
   assertChunkRequested('Kanban', true)
-  for (const name of ['Overview', 'Inbox', 'IssueDetail', 'Modals', 'Palette'])
-    assertChunkRequested(name, false)
+  // After the first paint the workspace downloads the other views in the
+  // background (lib/lazyModule preloadInBackground), so a later drop of the
+  // connection finds their code already there.
+  const background = ['Overview', 'Inbox', 'IssueDetail', 'Modals', 'Palette']
+  await waitUntil(
+    () => background.every((name) => chunks(name).some((path) => requestedAssets.has(path))),
+    'The workspace did not download the other views after its first paint',
+  )
 
   // Creation also loads the task window before submit can hand focus to it.
   await page
@@ -216,7 +230,9 @@ async function verifyLazyLoading() {
   await page.getByRole('combobox', { name: 'Search tasks and projects' }).waitFor()
   assertChunkRequested('Palette', true)
   await page.locator('[data-palette-close]').click()
-  log('Cold Board defers other views and loads task, creation and search chunks on demand')
+  log(
+    'Cold Board paints with its own chunk, then downloads the other views; task, creation and search open',
+  )
 
   // An embedded Inbox task leaves Search reachable without bypassing a scrim.
   // A reply stays unsaved when focus moves; title edits intentionally save on blur.

@@ -9,9 +9,11 @@
    the operator console, over the landscape phone Roadmap and on phones, it
    spans the window.
 
-   Members taller than the window scroll instead of leaving it. The column
-   lets presses through to the page, so wheel and touch over a member scroll
-   it, and it shows no scrollbar that could not be dragged.
+   Members taller than the window scroll instead of leaving it. The two
+   notices share one box ([data-float-notices]) that takes at most half the
+   window, the most room the page makes for them, and scrolls inside. The
+   column lets presses through to the page, so wheel and touch over a member
+   scroll it, and it shows no scrollbar that could not be dragged.
 
    The page leaves the notices' bands free (--float-inset-top and
    --float-inset-bottom, measured by lib/floatStack). The column sits above
@@ -42,6 +44,23 @@
 }
 .float-stack > [data-float-slot] {
   width: 100%;
+}
+/* The notices' box takes at most half the window and scrolls inside. It
+   reaches into the column's padding at the sides and on the window edge, and
+   pads that back, so the notices keep their shadows inside its clip. The page
+   makes room for its content box only (lib/floatStack), so the band stays
+   within the half the page makes free. On a desktop the notices sit at the
+   bottom and their shadows fall downwards. */
+.float-stack > [data-float-notices] {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: calc(100% + 32px);
+  max-height: 50dvh;
+  margin: 0 -16px -16px;
+  padding: 0 16px 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
 }
 /* The free space goes above the toasts, which puts the members at the bottom.
    Unlike flex-end alignment, the auto margin gives way when the members
@@ -84,6 +103,12 @@
   }
   .float-stack > [data-float-slot="toasts"] {
     order: 1;
+  }
+  /* On a phone they sit at the top, and the shadow below the last one keeps
+     the box's bottom padding, which the page does not leave free. */
+  .float-stack > [data-float-notices] {
+    margin: calc(-1 * max(16px, env(safe-area-inset-top))) -16px 0;
+    padding: max(16px, env(safe-area-inset-top)) 16px 16px;
   }
   .float-stack .planner-toast-host > * {
     max-width: 100%;

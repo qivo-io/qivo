@@ -15,7 +15,9 @@ import { useSyncExternalStore } from 'react'
    --float-inset-top and --float-inset-bottom on <html>. Every layout that
    fills the window leaves those bands free, and so does the landscape phone
    Roadmap through useFloatInsets. Toasts pass on their own, so they take no
-   room.
+   room. The two notice slots share one box that takes at most half the
+   window and scrolls inside, so notices that do not fit there never cover
+   the page beyond its band.
 
    The column is a [data-top-layer] child of <body>, so modal layers leave it
    exposed and usable (lib/useHideOthers, the task window's inert siblings). */
@@ -61,16 +63,35 @@ export function roomBeside(
   return { top, height: Math.max(0, bottom - top) }
 }
 
-/** Measures the notices and publishes their bands when they changed. */
+/** Measures the notices and publishes their bands when they changed. Their
+    shared box counts, which holds the notices with their margins and stays
+    put while they scroll inside. While they fit, its padding only keeps
+    their shadows and is left out. Once they overflow they show through the
+    padding, so it counts too. Without a laid-out box (jsdom) the slots
+    count. */
 function measure(stack: HTMLElement) {
-  const boxes = [
-    ...stack.querySelectorAll<HTMLElement>('[data-float-slot]:not([data-float-slot="toasts"])'),
-  ]
-    .map((slot) => slot.getBoundingClientRect())
-    .filter((rect) => rect.height > 0)
-  const box = boxes.length
-    ? { top: Math.min(...boxes.map((b) => b.top)), bottom: Math.max(...boxes.map((b) => b.bottom)) }
-    : null
+  const notices = stack.querySelector<HTMLElement>('[data-float-notices]')
+  const shown = notices?.getBoundingClientRect()
+  let box: { top: number; bottom: number } | null = null
+  if (notices && shown?.height) {
+    const style = getComputedStyle(notices)
+    const overflows = notices.scrollHeight > notices.clientHeight + 1
+    const pad = (value: string) => (overflows ? 0 : Number.parseFloat(value) || 0)
+    const top = shown.top + pad(style.paddingTop)
+    const bottom = shown.bottom - pad(style.paddingBottom)
+    if (bottom > top) box = { top, bottom }
+  } else {
+    const boxes = [
+      ...stack.querySelectorAll<HTMLElement>('[data-float-slot]:not([data-float-slot="toasts"])'),
+    ]
+      .map((slot) => slot.getBoundingClientRect())
+      .filter((rect) => rect.height > 0)
+    if (boxes.length)
+      box = {
+        top: Math.min(...boxes.map((b) => b.top)),
+        bottom: Math.max(...boxes.map((b) => b.bottom)),
+      }
+  }
   const next = noticeInsets(box, window.innerHeight)
   if (next.top === insets.top && next.bottom === insets.bottom) return
   insets = next
@@ -91,7 +112,9 @@ let measured: HTMLElement | null = null
 function watch(column: HTMLElement) {
   measured = column
   const observer = new ResizeObserver(() => measure(column))
-  for (const element of column.children) observer.observe(element)
+  // the slots too: the notices' box stops growing once they overflow it
+  for (const element of column.querySelectorAll('[data-float-slot], [data-float-notices]'))
+    observer.observe(element)
   window.addEventListener('resize', () => measure(column))
 }
 
@@ -104,11 +127,19 @@ export function floatSlot(slot: FloatSlot): HTMLElement {
     column.className = 'float-stack'
     column.setAttribute('data-float-stack', '')
     column.setAttribute('data-top-layer', '')
+    const notices = document.createElement('div')
+    notices.setAttribute('data-float-notices', '')
+    // An open dialog's scroll lock cancels wheel and touch moves outside it
+    // where they reach the document. The notices scroll on their own, so
+    // those moves stop here and the page behind stays put (float-stack.css).
+    for (const type of ['wheel', 'touchmove'])
+      notices.addEventListener(type, (event) => event.stopPropagation(), { passive: true })
     for (const name of SLOTS) {
       const element = document.createElement('div')
       element.setAttribute('data-float-slot', name)
-      column.append(element)
+      ;(name === 'toasts' ? column : notices).append(element)
     }
+    column.append(notices)
     document.body.append(column)
     stack = column
   }
