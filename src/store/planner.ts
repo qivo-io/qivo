@@ -3320,8 +3320,9 @@ let lastContext: unknown[] = []
     `beforeById` and delay map) when it holds the same data and its delay is
     the same (stable.ts). Views also read a task's family through P, such as
     isDone, remainingOf and the people who may own it, so every task above
-    or below a changed one takes its new object too. P.issueById follows
-    P.issues. */
+    or below a changed one takes its new object too, and so does every task
+    linked to one of those, whose Team sync row says what blocks it.
+    P.issueById follows P.issues. */
 function keepIssues(
   before: IssueVM[],
   beforeById: Record<string, IssueVM>,
@@ -3363,6 +3364,9 @@ function keepIssues(
       stack.push(...(byId[at]?.children ?? []))
     }
   }
+  // links are mirrored, so a changed blocker reaches the task it blocks; a
+  // copy, because the tasks linked to a linked task did not change
+  for (const id of [...fresh]) for (const link of byId[id]?.links ?? []) fresh.add(link.id)
   P.issues = P.issues.map((it) => (fresh.has(it.id) ? it : beforeById[it.id]))
   const kept: Record<string, IssueVM> = {}
   P.issues.forEach((it) => {

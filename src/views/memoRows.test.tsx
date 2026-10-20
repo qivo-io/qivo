@@ -39,8 +39,9 @@ let deliver: (snap: Snapshot) => void
 let container: HTMLDivElement
 let root: Root
 
-/* Boots a fresh store on three tasks, then loads the views on it. */
-async function load() {
+/* Boots a fresh store on three tasks, changed by `prepare`, then loads the
+   views on it. */
+async function load(prepare: (snap: Snapshot) => void = noop) {
   vi.resetModules()
   snapshot = plannerFixture()
   for (const [n, id] of TASKS.entries())
@@ -60,6 +61,7 @@ async function load() {
       has_hidden_subtasks: false,
       has_hidden_parent: false,
     })
+  prepare(snapshot)
   network.query.mockResolvedValue(null)
   network.onUpdate.mockImplementation((ref, _args, next) => {
     if (getFunctionName(ref) === 'snapshot:forMe') {
@@ -80,13 +82,15 @@ async function load() {
     BoardCard: (await import('./kanbanCards')).BoardCard,
     groupBoardCell: (await import('../lib/boardGroups')).groupBoardCell,
     TimelineRow: (await import('./roadmap/TimelineRow')).TimelineRow,
+    SyncCard: (await import('./teamSync/SyncCard')).SyncCard,
+    syncDay: (await import('../lib/teamSync')).syncDay,
   }
 }
 type Loaded = Awaited<ReturnType<typeof load>>
 
 /* Renders `view` again on every store change, as App does. */
-async function mount(view: (loaded: Loaded) => ReactNode) {
-  const loaded = await load()
+async function mount(view: (loaded: Loaded) => ReactNode, prepare?: (snap: Snapshot) => void) {
+  const loaded = await load(prepare)
   const { usePlannerVersion, TooltipProvider } = loaded
   function Screen() {
     usePlannerVersion()
@@ -220,6 +224,57 @@ describe('memoized task rows', () => {
     expect(new Set(portraits.rendered)).toEqual(new Set(TASKS))
     expect(await renderedBy(rename('three'))).toEqual(['three'])
     expect(await renderedBy(() => {})).toEqual([])
+    expect(await renderedBy(renamePerson)).toEqual(['one', 'three', 'two'])
+  })
+
+  it('render a Team sync card again only for its task and the tasks it is linked to', async () => {
+    const blockedByTwo = (snap: Snapshot) => {
+      snap.links.push({
+        id: 'link-1',
+        source_id: 'one',
+        target_id: 'two',
+        type: 'blocked_by',
+        pair_key: 'one:two',
+        created_at: AT,
+      })
+    }
+    await mount(({ P, SyncCard, syncDay }) => {
+      const now = Date.now()
+      // a new page context every render, as TeamSync builds it
+      const ctx = {
+        owner: P.CURRENT_USER,
+        since: 0,
+        now,
+        day: syncDay(now),
+        mobile: false,
+        reviewed: { has: () => false, mark: noop, toggle: noop, count: () => 0 },
+        stamp: () => {},
+        touched: () => {},
+        prompt: null,
+        setPrompt: noop,
+        onOpenTask: noop,
+        onShowTask: noop,
+      }
+      return P.issues.map((it) => (
+        <SyncCard
+          key={it.uuid}
+          it={it}
+          ctx={ctx}
+          context={P.contextVersion}
+          lastComment={P.lastComments.get(it.uuid)}
+          reviewed={false}
+        />
+      ))
+    }, blockedByTwo)
+    expect(await renderedBy(rename('three'))).toEqual(['three'])
+    expect(await renderedBy(() => {})).toEqual([])
+    // the blocker is done, so the card it blocks drops its mark
+    expect(
+      await renderedBy((snap) => {
+        snap.issues.find((issue) => issue.id === 'two')!.status = 'done'
+      }),
+    ).toEqual(['one', 'two'])
+    expect(document.querySelector('[data-sync-blocked]')).toBeNull()
     expect(await renderedBy(renamePerson)).toEqual(['one', 'three', 'two'])
   })
 })

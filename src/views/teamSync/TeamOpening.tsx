@@ -5,7 +5,7 @@
    Naming someone here stamps no one: it is not a change made on a person's
    page. Finished work is not listed: it belongs to each person's page,
    since each person's "since" differs. */
-import type { ReactNode } from 'react'
+import { memo, type ReactNode } from 'react'
 import { AssigneeAvatar } from '@/components/AssigneeAvatar'
 import { Avatar, Icon, IssueKey, ProjectNameOf } from '@/components/qivo'
 import { relativeWeek } from '@/lib/dates'
@@ -23,6 +23,7 @@ import {
 } from '@/lib/teamSync'
 import { cn } from '@/lib/utils'
 import { type IssueVM, P, type UserVM } from '@/store/planner'
+import type { StoreVersion } from '@/store/updates'
 import { LoadChip, type PageCtx, TitleButton, weekFigure } from './SyncCard'
 
 function Fact({
@@ -96,6 +97,73 @@ function AskRow({
   )
 }
 
+/* The two lists can hold a large share of the organization's tasks, and the
+   opening renders again on each store change. A row renders the same while
+   its task keeps its object (P.issues), with the same context
+   (P.contextVersion) and label, so it skips. TeamSync keeps onOpenTask. */
+
+/** A "Needs an owner" row. */
+const OwnerAsk = memo(function OwnerAsk({
+  it,
+  onOpenTask,
+}: {
+  it: IssueVM
+  onOpenTask: (handle: string) => void
+  context: StoreVersion
+}) {
+  const urgent = it.priority === 'urgent'
+  return (
+    <AskRow
+      it={it}
+      ctx={{ onOpenTask }}
+      hook={{ 'data-sync-needs-owner': it.id }}
+      meta={
+        <>
+          <span className="truncate">
+            <ProjectNameOf id={it.project} withOwner />
+          </span>
+          {(urgent || it.priority === 'high') && (
+            <span className={urgent ? 'font-semibold text-danger' : 'text-text-2'}>
+              {P.PRIORITIES[it.priority].name}
+            </span>
+          )}
+          {it.due && <span className="!font-mono">due {P.fmtISO(it.due)}</span>}
+        </>
+      }
+      control={<AssigneeAvatar issue={it} field="assignee" variant="label" backLayer />}
+    />
+  )
+})
+
+/** A "Needs a reviewer" row; `waiting` is its age, or null when unknown. */
+const ReviewerAsk = memo(function ReviewerAsk({
+  it,
+  waiting,
+  onOpenTask,
+}: {
+  it: IssueVM
+  waiting: string | null
+  onOpenTask: (handle: string) => void
+  context: StoreVersion
+}) {
+  return (
+    <AskRow
+      it={it}
+      ctx={{ onOpenTask }}
+      hook={{ 'data-sync-needs-reviewer': it.id }}
+      meta={
+        <>
+          <span className="truncate">
+            <ProjectNameOf id={it.project} withOwner />
+          </span>
+          {waiting != null && <span>{waiting}</span>}
+        </>
+      }
+      control={<AssigneeAvatar issue={it} field="reviewer" variant="label" backLayer />}
+    />
+  )
+})
+
 export function TeamOpening({
   rows,
   humans,
@@ -115,7 +183,6 @@ export function TeamOpening({
   now: number
   onOpenTask: (handle: string) => void
 }) {
-  const ctx = { onOpenTask }
   const facts = openingFacts(rows, {
     verdictOf: (it) => bannerVerdict(P.delayOf(it), P.tracksDelay(it)),
     issueById: P.issueById,
@@ -229,33 +296,14 @@ export function TeamOpening({
           <ListHeading title="Needs an owner" count={unowned.length} />
           {unowned.length ? (
             <div className="mb-6 overflow-hidden rounded-lg border border-border">
-              {unowned.map((it) => {
-                const urgent = it.priority === 'urgent'
-                return (
-                  <AskRow
-                    key={it.uuid}
-                    it={it}
-                    ctx={ctx}
-                    hook={{ 'data-sync-needs-owner': it.id }}
-                    meta={
-                      <>
-                        <span className="truncate">
-                          <ProjectNameOf id={it.project} withOwner />
-                        </span>
-                        {(urgent || it.priority === 'high') && (
-                          <span className={urgent ? 'font-semibold text-danger' : 'text-text-2'}>
-                            {P.PRIORITIES[it.priority].name}
-                          </span>
-                        )}
-                        {it.due && <span className="!font-mono">due {P.fmtISO(it.due)}</span>}
-                      </>
-                    }
-                    control={
-                      <AssigneeAvatar issue={it} field="assignee" variant="label" backLayer />
-                    }
-                  />
-                )
-              })}
+              {unowned.map((it) => (
+                <OwnerAsk
+                  key={it.uuid}
+                  it={it}
+                  onOpenTask={onOpenTask}
+                  context={P.contextVersion}
+                />
+              ))}
             </div>
           ) : (
             <div className="mb-6">
@@ -267,20 +315,12 @@ export function TeamOpening({
           {unreviewed.length ? (
             <div className="overflow-hidden rounded-lg border border-border">
               {unreviewed.map(({ issue: it, since }) => (
-                <AskRow
+                <ReviewerAsk
                   key={it.uuid}
                   it={it}
-                  ctx={ctx}
-                  hook={{ 'data-sync-needs-reviewer': it.id }}
-                  meta={
-                    <>
-                      <span className="truncate">
-                        <ProjectNameOf id={it.project} withOwner />
-                      </span>
-                      {since != null && <span>{waitingLabel(since, now)}</span>}
-                    </>
-                  }
-                  control={<AssigneeAvatar issue={it} field="reviewer" variant="label" backLayer />}
+                  waiting={since != null ? waitingLabel(since, now) : null}
+                  onOpenTask={onOpenTask}
+                  context={P.contextVersion}
                 />
               ))}
             </div>

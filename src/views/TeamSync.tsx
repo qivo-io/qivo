@@ -41,6 +41,7 @@ import {
   syncScopeKey,
   waitingOnReview,
 } from '@/lib/teamSync'
+import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
 import { type IssueVM, P, type UserVM } from '@/store/planner'
@@ -145,6 +146,18 @@ function PersonColumns({
   laterOpen: boolean
   onToggleLater: () => void
 }) {
+  /* A card with what its memo compares (SyncCard). */
+  const card = (it: IssueVM, later?: boolean) => (
+    <SyncCard
+      key={it.uuid}
+      it={it}
+      ctx={ctx}
+      later={later}
+      context={P.contextVersion}
+      lastComment={P.lastComments.get(it.uuid)}
+      reviewed={ctx.reviewed.has(it.uuid)}
+    />
+  )
   const groups = personGroups(person.id, rows, ctx.day)
   const group = (id: SyncGroupId) => groups.find((g) => g.id === id)?.rows ?? []
   const onIt = [...group('progress'), ...group('review')]
@@ -178,9 +191,7 @@ function PersonColumns({
           {!done.length && <Empty>Nothing finished since {sinceLabel}</Empty>}
         </SyncCol>
         <SyncCol id="onit" title="On it" count={onIt.length}>
-          {onIt.map((it) => (
-            <SyncCard key={it.uuid} it={it} ctx={ctx} />
-          ))}
+          {onIt.map((it) => card(it))}
           {!onIt.length && <Empty>Nothing under way</Empty>}
           {waiting.length > 0 && (
             <div data-sync-waiting-foot className="mt-1 flex flex-col gap-1.5">
@@ -200,9 +211,7 @@ function PersonColumns({
           )}
         </SyncCol>
         <SyncCol id="next" title="Next" count={week.length + later.length}>
-          {week.map((it) => (
-            <SyncCard key={it.uuid} it={it} ctx={ctx} />
-          ))}
+          {week.map((it) => card(it))}
           {!week.length && !later.length && <Empty>Nothing planned</Empty>}
           {later.length > 0 && (
             <Button
@@ -218,7 +227,7 @@ function PersonColumns({
               Later <span className="font-normal text-text-3">{later.length}</span>
             </Button>
           )}
-          {laterOpen && later.map((it) => <SyncCard key={it.uuid} it={it} ctx={ctx} later />)}
+          {laterOpen && later.map((it) => card(it, true))}
         </SyncCol>
       </div>
     </div>
@@ -357,8 +366,8 @@ export function TeamSync({
   onPlace,
   onCorrect = onPlace,
   onClose,
-  onOpenTask,
-  onShowTask,
+  onOpenTask: openTask,
+  onShowTask: showTask,
   onShowPerson,
 }: {
   place: SyncPlace
@@ -375,6 +384,9 @@ export function TeamSync({
   onShowPerson: (view: 'kanban' | 'roadmap', profileId: string) => void
 }) {
   usePlannerVersion('teamSync')
+  // App makes these again every render; the memoized rows keep one identity
+  const onOpenTask = useLatest(openTask)
+  const onShowTask = useLatest(showTask)
   const mobile = useMobile()
   const { paneRef } = useOverviewPanelClipping(!mobile)
   // the page's scroller, which the clipping hook also measures

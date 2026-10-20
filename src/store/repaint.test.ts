@@ -32,9 +32,6 @@ describe('view model identity across repaints', () => {
   const P = () => store.P
   const task = (id: string) => P().issues.find((issue) => issue.uuid === id)!
   const row = (snap: Snapshot, id: string) => snap.issues.find((issue) => issue.id === id)!
-  const settle = async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve()
-  }
 
   /* The next delivery: the last one with `change` applied, as the server
      holds it. */
@@ -131,6 +128,26 @@ describe('view model identity across repaints', () => {
     // a subtask's owner list asks about the tasks above it
     for (const id of ['parent', 'child-a', 'child-b']) expect(task(id), id).not.toBe(before.get(id))
     for (const id of ['alone', 'other']) expect(task(id), id).toBe(before.get(id))
+  })
+
+  it('gives a task a new object when a task it is linked to changes', () => {
+    deliverChange((snap) => {
+      snap.links.push({
+        id: 'link-1',
+        source_id: 'alone',
+        target_id: 'other',
+        type: 'blocked_by',
+        pair_key: 'alone:other',
+        created_at: AT,
+      })
+    })
+    const before = new Map(P().issues.map((it) => [it.uuid, it]))
+    // the blocker is done: Team sync's row for the task it blocks says so
+    deliverChange((snap) => {
+      row(snap, 'other').status = 'done'
+    })
+    for (const id of ['other', 'alone']) expect(task(id), id).not.toBe(before.get(id))
+    for (const id of ['parent', 'child-a', 'child-b']) expect(task(id), id).toBe(before.get(id))
   })
 
   it('keeps the very same list when a delivery changes no task', () => {
