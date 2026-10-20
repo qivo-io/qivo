@@ -255,14 +255,14 @@ function FocusWindow({
       data-modal-shell
       data-focus-window={name}
       onMouseDown={onClose}
-      className="[position:fixed] [inset:0] [z-index:100] [display:grid] [place-items:start_center] [padding:8vh_6vw]"
+      className="[position:fixed] [inset:var(--float-inset-top)_0_var(--float-inset-bottom)] [z-index:100] [display:grid] [place-items:start_center] [padding:8vh_6vw]"
     >
       {/* 980 × 84vh against the task window's 1110 × 92vh, and 8vh down its
           4vh: a clear inset on every side, whichever frame it came from */}
       <div
         data-issue-design="alignment"
         data-floating-surface
-        className="animate-in fade-in zoom-in-95 [width:980px] [max-width:88vw] [height:84vh] [display:flex] [flex-direction:column] [background:var(--background)] [border:1px_solid_var(--border)] [border-radius:var(--r-lg)] [box-shadow:var(--qivo-shadow-pop)] [overflow:hidden]"
+        className="animate-in fade-in zoom-in-95 [width:980px] [max-width:88vw] [height:calc(84vh-var(--float-inset-y))] [display:flex] [flex-direction:column] [background:var(--background)] [border:1px_solid_var(--border)] [border-radius:var(--r-lg)] [box-shadow:var(--qivo-shadow-pop)] [overflow:hidden]"
         onMouseDown={(e) => e.stopPropagation()}
       >
         {children}
@@ -2202,7 +2202,7 @@ function IssueDetail({
         className={cn(
           embedded
             ? 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden'
-            : 'fixed inset-0 z-[60] grid items-start justify-items-center overflow-y-auto px-[3vw] py-[4vh]',
+            : 'fixed inset-x-0 top-[var(--float-inset-top)] bottom-[var(--float-inset-bottom)] z-[60] grid items-start justify-items-center overflow-y-auto px-[3vw] py-[4vh]',
           // Override the mobile stylesheet's inset so the measured visual
           // viewport, including its keyboard offset, determines the frame.
           mobile && '!bottom-auto',
@@ -2232,7 +2232,13 @@ function IssueDetail({
         }
         style={{
           ...(!embedded ? { pointerEvents: open ? 'auto' : 'none', ...(mobile ? fade : {}) } : {}),
-          ...(mobile ? { height: mobileViewport.height, top: mobileViewport.top } : {}),
+          // below the floating notices' band (lib/floatStack)
+          ...(mobile
+            ? {
+                height: `calc(${mobileViewport.height}px - var(--float-inset-y))`,
+                top: `calc(${mobileViewport.top}px + var(--float-inset-top))`,
+              }
+            : {}),
         }}
       >
         {/* The backdrop stands beside the window rather than around it, so the
@@ -2267,7 +2273,7 @@ function IssueDetail({
           className={`flex flex-col overflow-hidden bg-background !outline-none ${
             embedded
               ? 'min-h-0 min-w-0 flex-1 rounded-none border-0 shadow-none'
-              : 'w-[1110px] h-[92vh] max-w-[94vw] rounded-xl border border-border shadow-pop'
+              : 'w-[1110px] h-[calc(92vh-var(--float-inset-y))] max-w-[94vw] rounded-xl border border-border shadow-pop'
           }`}
           onClick={embedded ? undefined : (e) => e.stopPropagation()}
           style={

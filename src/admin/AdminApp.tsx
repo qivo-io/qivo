@@ -56,7 +56,7 @@ export function AdminApp() {
   return (
     <div
       data-admin-shell
-      className="flex h-screen min-h-0 flex-col overflow-hidden bg-[var(--bg)] text-text-1 lg:flex-row"
+      className="flex h-[calc(100vh-var(--float-inset-y))] min-h-0 flex-col overflow-hidden bg-[var(--bg)] text-text-1 lg:flex-row"
     >
       <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-[var(--chrome)] lg:flex">
         <AdminBrand />

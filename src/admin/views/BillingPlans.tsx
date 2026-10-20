@@ -18,6 +18,7 @@ import { convex } from '@/lib/convex'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { api } from '../../../convex/_generated/api'
 import type { BillingPlan } from '../../../convex/lib/billingTypes'
+import { runAction, sendMutation } from '../convex'
 
 const initial = {
   name: '',
@@ -77,7 +78,7 @@ export function BillingPlans() {
   function create(event: React.FormEvent) {
     event.preventDefault()
     void write(async () => {
-      await convex.action(api.billingActions.createPlan, {
+      await runAction(api.billingActions.createPlan, {
         plan: {
           name: form.name.trim(),
           currency: form.currency.toLowerCase(),
@@ -217,7 +218,7 @@ export function BillingPlans() {
                       <AlertDialogAction
                         onClick={() =>
                           void write(async () => {
-                            await convex.mutation(api.adminBilling.setDefaultPlan, {
+                            await sendMutation(api.adminBilling.setDefaultPlan, {
                               plan_id: plan.id,
                             })
                             setMessage(
@@ -241,7 +242,7 @@ export function BillingPlans() {
                 busy={busy}
                 onConnect={(ids) =>
                   write(async () => {
-                    await convex.action(api.billingActions.connectPlan, {
+                    await runAction(api.billingActions.connectPlan, {
                       plan_id: plan.id,
                       ...ids,
                     })

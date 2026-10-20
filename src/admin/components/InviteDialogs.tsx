@@ -388,7 +388,7 @@ function InviteDialog({
           if (dirty || busy) event.preventDefault()
         }}
         className={cn(
-          'max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] gap-5 overflow-y-auto p-6',
+          'max-h-[calc(100dvh-2rem-var(--float-inset-y))] w-[calc(100%-2rem)] gap-5 overflow-y-auto p-6',
           narrow ? 'max-w-[480px]' : 'max-w-[760px]',
         )}
       >

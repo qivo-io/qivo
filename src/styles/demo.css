@@ -1,5 +1,5 @@
 .demo-workspace {
-  height: 100dvh;
+  height: calc(100dvh - var(--float-inset-y));
   display: flex;
   flex-direction: column;
 }
@@ -31,7 +31,7 @@
   height: 100%;
 }
 .demo-gate {
-  min-height: 100dvh;
+  min-height: calc(100dvh - var(--float-inset-y));
   display: grid;
   place-items: center;
   padding: 24px 20px;

@@ -133,7 +133,8 @@ function ModalShell({
     <Dialog open onOpenChange={(open) => !open && closeLayer()}>
       {/* top-anchored 4vh from the browser edge (IssueDetail matches); the
           card grows with content and caps at 92vh so the 4vh margin also
-          holds at the bottom before the body starts scrolling */}
+          holds at the bottom before the body starts scrolling, both inside
+          the floating notices' bands (lib/floatStack) */}
       {/* Dialogs and task windows share the theme's window material and
           backdrop (appearance.css), with borders and shadows separating them
           from the page beneath. */}
@@ -143,7 +144,7 @@ function ModalShell({
         aria-describedby={undefined}
         overlayClassName="z-[100]"
         className={cn(
-          'top-[4vh] z-[101] flex max-h-[92vh] max-w-[94vw] translate-y-0 flex-col gap-0 overflow-hidden rounded-xl bg-background p-0 shadow-pop',
+          'top-[calc(4vh+var(--float-inset-top))] z-[101] flex max-h-[calc(92vh-var(--float-inset-y))] max-w-[94vw] translate-y-0 flex-col gap-0 overflow-hidden rounded-xl bg-background p-0 shadow-pop',
           danger && 'border-[color-mix(in_oklab,var(--danger)_45%,var(--border))]',
         )}
         style={{ width: mobile ? '100%' : width }}

@@ -18,6 +18,7 @@ import { convex } from '@/lib/convex'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { api } from '../../../convex/_generated/api'
 import type { BillingPlan, BillingSummary } from '../../../convex/lib/billingTypes'
+import { sendMutation } from '../convex'
 
 /* `seatsVersion` changes when the page reloads its people. The summary then
    reloads in place, so the billable counts follow invitations and cancels
@@ -217,7 +218,7 @@ export function OrgBilling({ orgId, seatsVersion = 0 }: { orgId: string; seatsVe
                     <AlertDialogAction
                       onClick={() =>
                         void write(async () => {
-                          await convex.mutation(api.adminBilling.assignPlan, {
+                          await sendMutation(api.adminBilling.assignPlan, {
                             org_id: orgId,
                             plan_id: planId,
                           })
@@ -257,7 +258,7 @@ export function OrgBilling({ orgId, seatsVersion = 0 }: { orgId: string; seatsVe
                   <AlertDialogAction
                     onClick={() =>
                       void write(async () => {
-                        await convex.mutation(api.adminBilling.grantComplimentary, {
+                        await sendMutation(api.adminBilling.grantComplimentary, {
                           org_id: orgId,
                           months: 6,
                         })

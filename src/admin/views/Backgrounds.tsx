@@ -50,6 +50,7 @@ import { convex } from '../../lib/convex'
 import { fmtBytes } from '../api'
 import { readBackgroundReviewQueue } from '../backgroundReview'
 import { BackgroundBoardPreview } from '../components/BackgroundBoardPreview'
+import { runAction, sendMutation } from '../convex'
 import { AdminPageHeader, Badge, Loading } from '../ui'
 
 type ImageStatus = 'pending' | 'approved' | 'removed'
@@ -161,7 +162,7 @@ export function useLiveMutation<M extends FunctionReference<'mutation'>>(mutatio
     async (args: FunctionArgs<M>) => {
       const releaseUpdateBlock = beginUpdateBlock()
       try {
-        return await convex.mutation(stableMutation, args)
+        return await sendMutation(stableMutation, args)
       } finally {
         releaseUpdateBlock()
       }
@@ -177,7 +178,7 @@ function useLiveAction<A extends FunctionReference<'action'>>(action: A) {
     async (args: FunctionArgs<A>) => {
       const releaseUpdateBlock = beginUpdateBlock()
       try {
-        return await convex.action(stableAction, args)
+        return await runAction(stableAction, args)
       } finally {
         releaseUpdateBlock()
       }
@@ -441,7 +442,7 @@ function ImagePreview({
         data-image-review-preview={image.id}
         aria-busy={busy}
         showCloseButton={!busy}
-        className="max-h-[95dvh] w-[calc(100%-2rem)] max-w-[1100px] grid-cols-[minmax(0,1fr)] overflow-x-hidden overflow-y-auto"
+        className="max-h-[calc(95dvh-var(--float-inset-y))] w-[calc(100%-2rem)] max-w-[1100px] grid-cols-[minmax(0,1fr)] overflow-x-hidden overflow-y-auto"
       >
         <DialogHeader className="min-w-0 pr-7">
           <DialogTitle className="leading-snug [overflow-wrap:anywhere]">{image.title}</DialogTitle>
@@ -1709,7 +1710,7 @@ function SubmissionCard({
             if (!open) setPreview(false)
           }}
         >
-          <DialogContent className="max-h-[95dvh] w-[calc(100%-2rem)] max-w-[1100px] overflow-y-auto">
+          <DialogContent className="max-h-[calc(95dvh-var(--float-inset-y))] w-[calc(100%-2rem)] max-w-[1100px] overflow-y-auto">
             <DialogHeader className="pr-7">
               <DialogTitle>{sourceName}</DialogTitle>
               <DialogDescription>
@@ -2245,7 +2246,7 @@ function DateAssignment({
       }}
     >
       <DialogContent
-        className="max-h-[90dvh] w-[calc(100%-2rem)] max-w-4xl grid-cols-[minmax(0,1fr)] overflow-x-hidden overflow-y-auto"
+        className="max-h-[calc(90dvh-var(--float-inset-y))] w-[calc(100%-2rem)] max-w-4xl grid-cols-[minmax(0,1fr)] overflow-x-hidden overflow-y-auto"
         showCloseButton={!busy}
       >
         <DialogHeader className="min-w-0 pr-7 whitespace-normal [overflow-wrap:anywhere]">

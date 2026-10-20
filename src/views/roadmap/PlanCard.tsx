@@ -100,7 +100,7 @@ export function PlanCard({
   const freePerWk = scheduled ? Math.max(0, cap - committedInWindow / fitDur) : cap
   return (
     <div
-      className="animate-in fade-in slide-in-from-bottom-2 [position:fixed] [right:20px] [bottom:20px] [width:344px] [max-width:calc(100vw-40px)] [max-height:calc(100vh-40px)] [overflow-y:auto] [z-index:60] [background:var(--surface-2)] [border:1px_solid_var(--border)] [border-radius:var(--r-lg)] [box-shadow:var(--qivo-shadow-pop)] [display:flex] [flex-direction:column] [overflow-x:hidden]"
+      className="animate-in fade-in slide-in-from-bottom-2 [position:fixed] [right:20px] [bottom:calc(20px+var(--float-inset-bottom))] [width:344px] [max-width:calc(100vw-40px)] [max-height:calc(100vh-40px-var(--float-inset-y))] [overflow-y:auto] [z-index:60] [background:var(--surface-2)] [border:1px_solid_var(--border)] [border-radius:var(--r-lg)] [box-shadow:var(--qivo-shadow-pop)] [display:flex] [flex-direction:column] [overflow-x:hidden]"
       data-plan-card={issue.id}
     >
       <div className="[display:flex] [align-items:center] [gap:8px] [padding:20px] [border-bottom:1px_solid_var(--border)]">

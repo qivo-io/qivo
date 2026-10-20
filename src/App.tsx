@@ -1392,7 +1392,7 @@ function App() {
   if (addrMoved) {
     return (
       <>
-        <div className="[height:100vh] [display:grid] [place-items:center]">
+        <div className="[height:calc(100vh-var(--float-inset-y))] [display:grid] [place-items:center]">
           <div
             data-floating-surface
             className="animate-in fade-in slide-in-from-bottom-1 [width:420px] [max-width:calc(100vw-40px)] [padding:20px] [border-radius:var(--r-lg)] [background:var(--surface-1)] [border:1px_solid_var(--border)] [box-shadow:var(--qivo-shadow-pop)]"

@@ -2,12 +2,14 @@
 // operator-gated Convex functions (admin.ts platform* queries/mutations, the
 // adminStats.ts and adminPeople.ts paged actions and the adminAuth.ts
 // session-bound actions).
-// Every call throws on error; views catch and surface the message.
+// Every call throws on error; views catch and surface the message. Changes
+// go through ./convex.ts, which refuses them while Qivo cannot save.
 import type { FunctionArgs, FunctionReturnType } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { api } from '../../convex/_generated/api'
 import type { DemoMetricsResult } from '../../convex/lib/demoMetricsReport'
 import { convex } from '../lib/convex'
+import { runAction, sendMutation } from './convex'
 
 // Admin responses normalize absent optional fields to null on the wire.
 export type OrgRow = FunctionReturnType<typeof api.adminStats.listOrgs>[number]
@@ -52,9 +54,9 @@ function mapError(e: unknown): never {
 }
 
 export const listOrgs = (): Promise<OrgRow[]> =>
-  convex.action(api.adminStats.listOrgs, {}).catch(mapError)
+  runAction(api.adminStats.listOrgs, {}).catch(mapError)
 /* Every organization's id and name, without the counts listOrgs reads. */
-export const listOrgNames = () => convex.action(api.adminStats.orgNames, {}).catch(mapError)
+export const listOrgNames = () => runAction(api.adminStats.orgNames, {}).catch(mapError)
 /* Every Users page row matching `search`, read one bounded page after
    another (adminPeople.ts userPage). The view orders them. Once `wanted`
    answers false, no further page is read and the rows read so far return. */
@@ -65,7 +67,7 @@ export async function listUsers(
   const rows: UserRow[] = []
   let cursor: string | null = null
   do {
-    const page = await convex.action(api.adminPeople.userPage, { search, cursor }).catch(mapError)
+    const page = await runAction(api.adminPeople.userPage, { search, cursor }).catch(mapError)
     rows.push(...page.rows)
     cursor = page.next
   } while (cursor !== null && wanted())
@@ -74,13 +76,13 @@ export async function listUsers(
 export const auditLog = (limit = 200): Promise<AuditRow[]> =>
   convex.query(api.admin.auditLog, { limit }).catch(mapError)
 export const orgDetail = (orgId: string): Promise<OrgDetail> =>
-  convex.action(api.adminPeople.orgDetail, { org_id: orgId }).catch(mapError)
+  runAction(api.adminPeople.orgDetail, { org_id: orgId }).catch(mapError)
 export const platformStats = (): Promise<PlatformStats> =>
-  convex.action(api.adminStats.platformStats, {}).catch(mapError)
+  runAction(api.adminStats.platformStats, {}).catch(mapError)
 export const demoMetrics = (): Promise<DemoMetricsResult> =>
   convex.query(api.adminDemo.metrics, {}).catch(mapError)
 export const promoteOrgAdmin = (profileId: string): Promise<null> =>
-  convex.mutation(api.admin.promoteOrgAdmin, { profile_id: profileId }).catch(mapError)
+  sendMutation(api.admin.promoteOrgAdmin, { profile_id: profileId }).catch(mapError)
 
 export const listPlans = (): Promise<BillingPlans> =>
   convex.query(api.adminBilling.listPlans, {}).catch(mapError)
@@ -96,18 +98,18 @@ export const checkPeople = (emails: string[], orgId?: string): Promise<PeopleChe
     .query(api.adminOrgs.checkPeople, orgId === undefined ? { emails } : { emails, org_id: orgId })
     .catch(mapError)
 export const createOrganization = (input: NewOrganization) =>
-  convex.action(api.adminOrgs.createOrganization, input).catch(mapError)
+  runAction(api.adminOrgs.createOrganization, input).catch(mapError)
 export const invitePeople = (orgId: string, people: PersonInput[]) =>
-  convex.action(api.adminOrgs.invitePeople, { org_id: orgId, people }).catch(mapError)
+  runAction(api.adminOrgs.invitePeople, { org_id: orgId, people }).catch(mapError)
 export const resendInvite = (profileId: string): Promise<InviteResult> =>
-  convex.action(api.adminOrgs.resendInvite, { profile_id: profileId }).catch(mapError)
+  runAction(api.adminOrgs.resendInvite, { profile_id: profileId }).catch(mapError)
 /* sent is null when the address did not change and no email went out. */
 export const editInvite = (profileId: string, name: string, email: string) =>
-  convex.action(api.adminOrgs.editInvite, { profile_id: profileId, name, email }).catch(mapError)
+  runAction(api.adminOrgs.editInvite, { profile_id: profileId, name, email }).catch(mapError)
 export const cancelInvite = (profileId: string): Promise<null> =>
-  convex.mutation(api.adminOrgs.cancelInvite, { profile_id: profileId }).catch(mapError)
+  sendMutation(api.adminOrgs.cancelInvite, { profile_id: profileId }).catch(mapError)
 export const setMemberRole = (profileId: string, role: InviteRole): Promise<null> =>
-  convex.mutation(api.adminOrgs.setMemberRole, { profile_id: profileId, role }).catch(mapError)
+  sendMutation(api.adminOrgs.setMemberRole, { profile_id: profileId, role }).catch(mapError)
 
 /* Where an invited person signs up or signs in. The console and the app share
    one origin, so the link is built here rather than asked of the server. */
@@ -124,15 +126,15 @@ type AuthAction =
 export async function authAction(body: AuthAction): Promise<{ ok?: boolean; link?: string }> {
   try {
     if (body.action === 'recovery_link') {
-      return await convex.action(api.adminAuth.recoveryLink, { email: body.email })
+      return await runAction(api.adminAuth.recoveryLink, { email: body.email })
     }
     if (body.action === 'ban') {
-      return await convex.action(api.adminAuth.banUser, { email: body.email })
+      return await runAction(api.adminAuth.banUser, { email: body.email })
     }
     if (body.action === 'unban') {
-      return await convex.action(api.adminAuth.unbanUser, { email: body.email })
+      return await runAction(api.adminAuth.unbanUser, { email: body.email })
     }
-    return await convex.action(api.adminAuth.createBreakGlass, {
+    return await runAction(api.adminAuth.createBreakGlass, {
       org_id: body.org_id,
       email: body.email,
       ...(body.name !== undefined ? { name: body.name } : {}),

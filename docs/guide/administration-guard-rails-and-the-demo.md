@@ -226,6 +226,12 @@ Restoring payment restores editing.
 **Qivo Admin** at `/admin` requires platform-operator access and has a separate
 session. Signing in or out there does not change your planner session.
 
+Qivo Admin pauses changes the way the app does. If the connection drops, or
+saving takes much longer than usual, the same notice appears and a change you
+try says why instead of running, so nothing waits to be sent later. If the
+connection drops while a change is underway, Qivo Admin says it may or may not
+have happened. Check before you try it again.
+
 **Billing plans** creates fixed monthly plan versions. Connect a draft once to
 its matching Polar product and usage meters. **Use for new customers** changes
 the default without changing existing organizations. Open an organization to
