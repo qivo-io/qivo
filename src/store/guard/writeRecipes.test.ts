@@ -124,7 +124,7 @@ async function drive(
   ) => void,
 ) {
   // an awaited act may wait for a write the test answers later
-  void Promise.resolve(recipe.act(P())).catch(() => null)
+  void Promise.resolve(recipe.act(P(), store)).catch(() => null)
   const sentNames: string[] = []
   for (let round = 0; round < 10; round++) {
     await settle()
