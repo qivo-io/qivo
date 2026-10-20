@@ -2,6 +2,11 @@ import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  ACCESS_PUT_FIELDS,
+  HELD_TASKS_FIELDS,
+  MEMBER_PUT_FIELDS,
+} from '../convex/machine/bodyFields'
+import {
   addDays,
   deleteOutcome,
   evaluate,
@@ -11,6 +16,7 @@ import {
   pace,
   parseArgs,
   RATE_BUDGET,
+  REST_BODY_FIELDS,
   redact,
   request,
   resolveConfig,
@@ -22,6 +28,16 @@ import {
   weekOf,
   windowOrder,
 } from './staging-check.mjs'
+
+describe('staging check REST contract', () => {
+  it('expects the body fields the access and member routes take', () => {
+    expect(REST_BODY_FIELDS).toEqual({
+      accessPut: [...ACCESS_PUT_FIELDS],
+      heldTasks: [...HELD_TASKS_FIELDS],
+      memberPut: [...MEMBER_PUT_FIELDS],
+    })
+  })
+})
 
 describe('staging check arguments', () => {
   it('takes the target, the comment cap and the cleanup options', () => {

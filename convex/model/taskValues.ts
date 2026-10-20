@@ -3,18 +3,30 @@ import { roundTenths } from '../lib/numbers'
 
 type TaskDateField = 'start_week' | 'end_week' | 'due_date'
 
+/** The shape of a date, YYYY-MM-DD, as a JSON Schema pattern. */
+export const DATE_PATTERN = '^\\d{4}-\\d{2}-\\d{2}$'
+
+/* Whether `value` is written YYYY-MM-DD. */
+const dateShaped = (value: unknown): value is string =>
+  typeof value === 'string' && new RegExp(DATE_PATTERN).test(value)
+
+/* Whether YYYY-MM-DD text `value` names a day that exists. */
+const dayExists = (value: string): boolean => {
+  const date = new Date(`${value}T00:00:00.000Z`)
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value
+}
+
+/** Whether `value` is one real calendar day written YYYY-MM-DD (calendarDay). */
+export const isCalendarDay = (value: unknown): value is string =>
+  dateShaped(value) && dayExists(value)
+
 /** Returns `value` when it is one real calendar day written YYYY-MM-DD, the
  * rule for task dates and milestone weeks (model/milestones.ts). Refuses
  * other text with `refusals.shape` and a day that does not exist, such as
  * 2026-02-31, with `refusals.date`. */
 export function calendarDay(value: unknown, refusals: { shape: string; date: string }): string {
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    throw badRequest(refusals.shape)
-  }
-  const date = new Date(`${value}T00:00:00.000Z`)
-  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
-    throw badRequest(refusals.date)
-  }
+  if (!dateShaped(value)) throw badRequest(refusals.shape)
+  if (!dayExists(value)) throw badRequest(refusals.date)
   return value
 }
 

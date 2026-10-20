@@ -28,6 +28,7 @@ describe('task creation through the client store', () => {
   let P: Planner
   let snap: Snapshot
   let publish: (value: Snapshot) => void
+  let deliverThread: (value: unknown) => void
   let requests: Pending[]
   let showToast: ReturnType<typeof vi.fn>
 
@@ -40,7 +41,9 @@ describe('task creation through the client store', () => {
     snap = fixture()
     requests = []
     network.query.mockResolvedValue(null)
-    network.onUpdate.mockImplementation((_ref, _args, next) => {
+    network.onUpdate.mockImplementation((ref, _args, next) => {
+      if (getFunctionName(ref) === 'snapshot:commentThread') deliverThread = next
+      if (getFunctionName(ref) !== 'snapshot:forMe') return () => {}
       publish = next
       next(structuredClone(snap))
       return () => {}
@@ -78,6 +81,62 @@ describe('task creation through the client store', () => {
     expect(P.issueById[key].uuid).toBe(task.uuid)
     expect(moved).not.toHaveBeenCalled()
     expect(showToast).not.toHaveBeenCalled()
+  })
+
+  it("subscribes to a new task's thread only once a delivery holds the task", async () => {
+    // the server refuses the thread of a task it does not hold yet
+    const threads = () =>
+      network.onUpdate.mock.calls.filter(
+        ([ref]) => getFunctionName(ref) === 'snapshot:commentThread',
+      )
+    const key = P.addIssue({ project: snap.projects[0].id, title: 'New task' })!
+    const task = P.issueById[key]
+    P.watchComments(task.uuid)
+    expect(threads()).toHaveLength(0)
+    expect(P.commentsLoaded).toBe(true)
+    expect(P.comments).toEqual([])
+
+    // a delivery without it, such as another person's change, still waits
+    publish(structuredClone(snap))
+    expect(threads()).toHaveLength(0)
+
+    snap.issues = [
+      {
+        id: task.uuid,
+        org_id: snap.orgs[0].id,
+        project_id: snap.projects[0].id,
+        num: snap.orgs[0].next_issue_num + 1,
+        title: 'New task',
+        description: '',
+        status: 'backlog',
+        priority: 'low',
+        paused: false,
+        created_at: NOW,
+        updated_at: NOW,
+        has_hidden_subtasks: false,
+        has_hidden_parent: false,
+      },
+    ]
+    publish(structuredClone(snap))
+    expect(threads()).toHaveLength(1)
+    expect(threads()[0][1]).toEqual({ org_id: snap.orgs[0].id, issue_id: task.uuid })
+    // the create answers; until the first page the window offers nothing earlier
+    requests[0].resolve({ num: snap.orgs[0].next_issue_num + 1 })
+    await settled()
+    expect(P.commentsEarlier).toBe('none')
+    // later deliveries keep the one subscription
+    publish(structuredClone(snap))
+    expect(threads()).toHaveLength(1)
+    // a first page with comments before it offers them
+    const comment = { id: 'comment-51', issue_id: task.uuid, author: snap.profiles[0].id }
+    deliverThread({
+      comments: [{ ...comment, body: '#51', created_at: NOW }],
+      earlier: true,
+      events: [],
+    })
+    expect(P.comments.map((c) => c.id)).toEqual(['comment-51'])
+    expect(P.commentsEarlier).toBe('more')
+    P.watchComments(null)
   })
 
   it('corrects an open preview after successful renumbering without reporting a refusal', async () => {

@@ -386,7 +386,10 @@ function receiveThread(
       if (kept === -1) threadStart = false
     }
   }
-  if (!page.earlier) threadStart = true
+  // the first page decides, also after the empty thread a new task shows
+  // while its create is on its way (subscribeWaitingThread)
+  if (prev === null) threadStart = !page.earlier
+  else if (!page.earlier) threadStart = true
   // a fresh window holds the comments in it as the server has them now
   if (!replay) for (const comment of page.comments) acceptedCommentChanges.delete(comment.id)
   commentsSnap = page.comments
@@ -452,6 +455,21 @@ async function checkSlidOut(
 function dropComment(id: string) {
   olderComments = olderComments.filter((r) => r.id !== id)
   if (commentsSnap) commentsSnap = commentsSnap.filter((r) => r.id !== id)
+}
+
+/* The server's row of task `uuid` in the last snapshot delivery. A task the
+   rows show without one is a create still on its way, painted by its layer,
+   which the server does not know yet. */
+const serverTask = (uuid: string) => serverSnap?.issues.find((r) => r.id === uuid)
+
+/* Subscribes to the watched thread once the snapshot holds its task, for a
+   task watched while its create was on its way (watchComments). Asking
+   earlier would refuse with not_found, which the server logs as an error.
+   Runs after each snapshot delivery. */
+function subscribeWaitingThread() {
+  if (!watchedComments || commentsUnsub) return
+  const row = serverTask(watchedComments)
+  if (row) subscribeThread(watchedComments, row.org_id)
 }
 
 /* Subscribes to the watched thread `issueUuid` in organization `orgId`,
@@ -5876,8 +5894,10 @@ export const PLANNER = {
     PLANNER.commentsFailure = 'none'
     // commentThread is org-scoped; the watched issue is in the snapshot,
     // which is where its org comes from. An unknown uuid loads an empty
-    // thread rather than spinning forever.
-    const row = issueUuid ? rows.issues.get(issueUuid) : undefined
+    // thread rather than spinning forever, and so does a new task whose
+    // create is on its way: it has no comments yet, and its thread
+    // subscribes once a delivery holds the task (subscribeWaitingThread).
+    const row = issueUuid ? serverTask(issueUuid) : undefined
     if (issueUuid && !row) {
       PLANNER.commentsLoaded = true
       threadStart = true
@@ -8082,6 +8102,7 @@ function subscribeSnapshot(
       if (replay) {
         serverSnap = snap
         snapshotCurrent = false
+        subscribeWaitingThread()
         owe('workspace')
         return
       }
@@ -8090,6 +8111,7 @@ function subscribeSnapshot(
       snapshotCurrent = true
       snapshotDeliveries++
       noteDelivery(prev, snap)
+      subscribeWaitingThread()
       // a good delivery holds every write accepted before it
       layers.dropSaved('workspace')
       // Snapshot trouble ends with the paint of this delivery (endHeldRecovery)

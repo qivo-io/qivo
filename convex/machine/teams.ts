@@ -38,9 +38,11 @@ import { vCredentialAccess } from '../lib/enums'
 import { badRequest, notFound, type Refusal } from '../lib/functions'
 import { NAME_MAX } from '../lib/textLimits'
 import {
+  createExpectedSentence,
   EXPECTED_SENTENCE,
   expectedSchema,
   parseExpected,
+  refuseCreateExpected,
   sentKeys,
   vExpected,
 } from '../model/expected'
@@ -62,6 +64,7 @@ import {
   teamsJson,
   updateTeamCore,
 } from '../model/teams'
+import { HELD_TASKS_FIELDS, MEMBER_PUT_FIELDS } from './bodyFields'
 import type { TOOLS } from './mcp'
 import { orgProfile, orgTeam, removalJson } from './projects'
 import type { ROUTES, route as restRoute } from './rest'
@@ -153,7 +156,7 @@ export const mcpSetTeam = internalMutation({
   handler: async (ctx, a): Promise<string> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     if (a.team_id === undefined && a.expected !== undefined) {
-      throw badRequest('expected applies only when changing an existing team')
+      throw badRequest(createExpectedSentence('team'))
     }
     if (a.team_id === undefined) {
       const now = new Date().toISOString()
@@ -273,6 +276,7 @@ export const restCreateTeam = internalMutation({
   handler: async (ctx, a) => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const b = needJson(a.body)
+    refuseCreateExpected(b, 'team')
     refuseUnknownFields(b, ['name'])
     const name = restName(b)
     if (name === undefined) throw badRequest('name is required')
@@ -315,7 +319,7 @@ export const restPutMember = internalMutation({
   handler: async (ctx, a) => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const b = optionalJson(a.body)
-    refuseUnknownFields(b, ['leader'])
+    refuseUnknownFields(b, MEMBER_PUT_FIELDS)
     if ('leader' in b && typeof b.leader !== 'boolean') {
       throw badRequest('leader must be a boolean')
     }
@@ -348,7 +352,7 @@ export const restDeleteMember = internalMutation({
   handler: async (ctx, a) => {
     const me = await asMachineCaller(ctx, a.callerId, a.access, 'access_removal')
     const b = optionalJson(a.body)
-    refuseUnknownFields(b, ['on_held_tasks'])
+    refuseUnknownFields(b, HELD_TASKS_FIELDS)
     const held = parseHeldTasks(b.on_held_tasks)
     const team = await restTeam(ctx, me, a.ref)
     const member = await restUser(ctx, me, a.user)
@@ -401,7 +405,7 @@ export const TEAM_TOOLS: McpTool[] = [
     run: (r, { callerId, access, args }) => {
       const { expected, ...rest } = args as { team_id?: string; name: string; expected?: unknown }
       if (rest.team_id === undefined && expected !== undefined) {
-        throw badRequest('expected applies only when changing an existing team')
+        throw badRequest(createExpectedSentence('team'))
       }
       return r.runMutation(internal.machine.teams.mcpSetTeam, {
         callerId,

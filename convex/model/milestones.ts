@@ -19,7 +19,16 @@ import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { NAME_MAX, nameOverCap } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
-import { assertExpected, DELETES, exact, type Fields, type Next, TEXT, type View } from './expected'
+import {
+  assertExpected,
+  DELETES,
+  dayOf,
+  exact,
+  type Fields,
+  type Next,
+  TEXT,
+  type View,
+} from './expected'
 import { weekLabel } from './orgs'
 import { calendarDay } from './taskValues'
 
@@ -168,7 +177,7 @@ export const MILESTONE_FIELDS: Fields<Doc<'milestones'>> = {
  * day as `date`. */
 export const MILESTONE_MACHINE_FIELDS: Fields<Doc<'milestones'>> = {
   name: MILESTONE_FIELDS.name,
-  date: { sends: 'date', type: TEXT, form: exact, stored: (m) => m.week },
+  date: { sends: 'date', type: dayOf(false), form: exact, stored: (m) => m.week },
 }
 
 /** The app's `expected` for a milestone edit or delete. */

@@ -677,7 +677,8 @@ be restored. An empty body still deletes without a check. Either request
 saves nothing when someone changed one of those fields since (see [Refusing a
 change when a field changed since you read
 it](#refusing-a-change-when-a-field-changed-since-you-read-it)). `POST`
-takes no `expected`.
+takes no `expected`, and refuses it with `expected applies only when
+changing an existing milestone`.
 
 ### Teams
 
@@ -1137,7 +1138,8 @@ request changes, keyed as a read names them. The keys are `title`,
 changed one of them since, the PATCH is a `409` and nothing changes. See
 [Refusing a change when a field changed since you read
 it](#refusing-a-change-when-a-field-changed-since-you-read-it). POST takes no
-`expected`.
+`expected`, and refuses it with `expected applies only when changing an
+existing task`.
 
 **Moving a task.** `project` and `sub_project` on PATCH move the task, named
 exactly as on POST. Name the destination sub-project directly as `project`, or
@@ -1516,7 +1518,8 @@ an optional `expected` with the `name` and `color` you last read of the
 fields it changes, and saves nothing when someone changed one of them since
 (see [Refusing a change when a field changed since you read
 it](#refusing-a-change-when-a-field-changed-since-you-read-it)); `POST`
-takes no `expected`. Deleting a label is not offered over the API. Put labels on a task with `add_labels`
+takes no `expected`, and refuses it with `expected applies only when
+changing an existing label`. Deleting a label is not offered over the API. Put labels on a task with `add_labels`
 and `remove_labels` on `PATCH /v1/tasks/{ref}`.
 
 ### Comments
@@ -2067,12 +2070,21 @@ exceptions on a task. `parent_id` and `has_hidden_parent` belong to
 `parent`, and `project_id` to `project` or `sub_project`. A delete changes
 the whole record, so it takes any of its keys. `archived`, `archive_reason`,
 `add_labels` and `remove_labels` take no key and are never checked. Routes
-and tools that create a record take no `expected`.
+and tools that create a record take no `expected`. A request that creates a
+task, comment, project, milestone, label or team and sends it is a `400`
+with `expected applies only when changing an existing <record>`, such as
+`expected applies only when changing an existing task`.
 
 A value has the type a read answers, which is a string for text and dates,
 a number for `remaining_hours`, `review_hours` and `plannable_hours`, a
 boolean for `paused`, `track_delay` and `has_hidden_parent`, a uuid for an
 id, and `null` where the field can be unset. `level` is `user`, `viewer` or `null`.
+A value also follows the rule of its field, the one a write of that field
+follows. `start_week`, `end_week`, `due_date` and a milestone's `date` are
+real calendar dates written `YYYY-MM-DD`. `remaining_hours` is a number of
+at least 0, `review_hours` a number from 0 to 999, `plannable_hours` a whole
+number from 1 to 168, and a label's `color` `#` followed by six hex digits.
+Every read answers values that follow these rules.
 Send each field as the read showed it:
 
 - **A task's parent.** Send `parent_id` and `has_hidden_parent` together, as
@@ -2100,7 +2112,9 @@ treats `""` as `null`. A comment body is trimmed. `remaining_hours` and
 `review_hours` are rounded to 0.1. Ids compare in any case, and so do label
 colors.
 
-A malformed `expected` is a `400`, and nothing is saved:
+A malformed `expected` is a `400`, and nothing is saved. Qivo answers it
+before it compares anything, so a date, an hour count or a label color that
+breaks its field's rule is a `400`, never a `409`:
 
 - `expected must be an object of the fields as you last read them`, for
   `null`, an array or any other value that is not an object.
@@ -2108,15 +2122,24 @@ A malformed `expected` is a `400`, and nothing is saved:
 - `unknown field "expected.<key>"; expected takes <keys>`, such as
   `unknown field "expected.colour"; expected takes name, color`.
 - `expected.<key> must be <type>`, such as `expected.remaining_hours must be
-  a number or null`, `expected.status must be one of backlog, todo,
-  progress, review, done` or `expected.assignee_id must be a profile uuid or
-  null`.
+  a non-negative number or null`, `expected.due_date must be a calendar date
+  as YYYY-MM-DD or null` (also for a day that does not exist, such as
+  `2026-02-31`), `expected.status must be one of backlog, todo, progress,
+  review, done` or `expected.assignee_id must be a profile uuid or null`.
+- `expected applies only when changing an existing <record>`, for
+  `expected` on a request that creates a task, comment, project, milestone,
+  label or team.
 - `expected.<key> applies only when the request sends <field>`, such as
   `expected.parent_id applies only when the request sends parent`.
 - `expected.parent_id and expected.has_hidden_parent go together`, when one
   of the two is missing.
 - `expected.has_hidden_parent must be false when expected.parent_id names a
   task`.
+
+Until later in October 2026, a value that broke its field's rule, such as a
+`due_date` of `2026-02-31`, was compared and could answer `409`, and a
+create that sent `expected` answered `unknown field "expected"; this request
+takes …`.
 
 A conflict is a `409` with one sentence in `error`. It names the fields by
 their request field, never their values, and names a person only where Qivo

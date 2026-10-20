@@ -102,6 +102,7 @@ import { COMMENT_MAX } from '../model/commentCounts'
 import { postComment } from '../model/comments'
 import { moveTasksToTrash } from '../model/deletedItems'
 import {
+  createExpectedSentence,
   EXPECTED_SENTENCE,
   expectedSchema,
   parseExpected,
@@ -930,7 +931,7 @@ export const TOOLS: McpTool[] = [
         expected?: unknown
       }
       if (rest.label === undefined && expected !== undefined) {
-        throw badRequest('expected applies only when changing an existing label')
+        throw badRequest(createExpectedSentence('label'))
       }
       return r.runMutation(internal.machine.mcp.setLabel, {
         callerId,
@@ -1178,6 +1179,25 @@ function checkValue(p: SchemaProp, x: unknown, codePoints = false): string | nul
   }
 }
 
+/* The tools that create a kind of record whose edits take `expected`, by
+ * that kind. Their schemas have no `expected`, so a call sending it would
+ * meet a bare `Unrecognized key`; it gets the sentence REST gives instead
+ * (model/expected.ts createExpectedSentence). set_label, set_milestone and
+ * set_team, which also edit, refuse it themselves. */
+const CREATES: Readonly<Record<string, string>> = {
+  create_task: 'task',
+  add_comment: 'comment',
+  create_project: 'project',
+}
+
+/* createExpectedSentence when `tool` creates a record and the call's `raw`
+ * arguments send `expected`, else null. */
+function createExpectedRefusal(tool: ToolDef, raw: unknown): string | null {
+  const record = Object.hasOwn(CREATES, tool.name) ? CREATES[tool.name] : undefined
+  const sends = typeof raw === 'object' && raw !== null && Object.hasOwn(raw, 'expected')
+  return record !== undefined && sends ? createExpectedSentence(record) : null
+}
+
 /* null = valid; else the joined issue list for the isError text. `raw` is the
  * call's `arguments`, where absent and null both mean none. */
 function validateArgs(tool: ToolDef, raw: unknown): string | null {
@@ -1268,6 +1288,10 @@ async function callTool(
     return { kind: 'protocol', error: { code: -32602, message: `Tool ${String(name)} not found` } }
   }
   const raw = params?.arguments
+  const creates = createExpectedRefusal(tool, raw)
+  if (creates !== null) {
+    return { kind: 'result', result: { content: [{ type: 'text', text: creates }], isError: true } }
+  }
   const issues = validateArgs(tool, raw)
   if (issues !== null) {
     return {
@@ -2184,7 +2208,7 @@ export const setLabel = internalMutation({
     const now = new Date().toISOString()
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     if (a.label === undefined && a.expected !== undefined) {
-      throw badRequest('expected applies only when changing an existing label')
+      throw badRequest(createExpectedSentence('label'))
     }
     if (a.label === undefined) {
       await assertLabelCreator(ctx, me)

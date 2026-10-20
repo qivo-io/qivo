@@ -54,6 +54,17 @@ import { signInBrowser } from './browser-demo.mjs'
 import { fixtureDirectory, loadCredentials, resolveTarget } from './marketing-demo.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+
+/** The body fields of the access and team member routes, in the order their
+ * unknown-field refusals list them. The server keeps the same lists in
+ * convex/machine/bodyFields.ts, and staging-check.test.mjs holds the two
+ * equal, so this check follows the REST contract while plain Node reads no
+ * TypeScript. */
+export const REST_BODY_FIELDS = {
+  accessPut: ['level', 'expected'],
+  heldTasks: ['on_held_tasks'],
+  memberPut: ['leader'],
+}
 const ORG_SLUG = 'northstar-labs'
 /** Every name this script gives a record starts with the tag and a space. */
 export const TAG_PREFIX = 'stgchk-'
@@ -2888,14 +2899,14 @@ async function unknownArgumentChecks() {
       `/projects/${A.id}/access/users/${std.id}`,
       { level: 'user', levle: 'user' },
       'levle',
-      'level',
+      REST_BODY_FIELDS.accessPut,
     ],
     [
       'DELETE',
       `/projects/${A.id}/access/users/${std.id}`,
       { on_held_task: 'keep_as_viewer' },
       'on_held_task',
-      'on_held_tasks',
+      REST_BODY_FIELDS.heldTasks,
     ],
     ...(team
       ? [
@@ -2904,22 +2915,28 @@ async function unknownArgumentChecks() {
             `/projects/${M.id}/access/teams/${team.id}`,
             { level: 'viewer', levle: 'viewer' },
             'levle',
-            'level',
+            REST_BODY_FIELDS.accessPut,
           ],
           [
             'DELETE',
             `/projects/${M.id}/access/teams/${team.id}`,
             { on_held_task: 'leave' },
             'on_held_task',
-            'on_held_tasks',
+            REST_BODY_FIELDS.heldTasks,
           ],
-          ['PUT', `/teams/${team.id}/members/${nora}`, { leadr: true }, 'leadr', 'leader'],
+          [
+            'PUT',
+            `/teams/${team.id}/members/${nora}`,
+            { leadr: true },
+            'leadr',
+            REST_BODY_FIELDS.memberPut,
+          ],
           [
             'DELETE',
             `/teams/${team.id}/members/${nora}`,
             { on_held_task: 'leave' },
             'on_held_task',
-            'on_held_tasks',
+            REST_BODY_FIELDS.heldTasks,
           ],
         ]
       : []),
@@ -2938,7 +2955,7 @@ async function unknownArgumentChecks() {
           path,
           body,
           400,
-          `unknown field "${field}"; this request takes ${takes}`,
+          `unknown field "${field}"; this request takes ${takes.join(', ')}`,
         )
       await restRefusal(
         w,
@@ -2946,7 +2963,7 @@ async function unknownArgumentChecks() {
         `/projects/${A.id}/access/users/${std.id}`,
         { level: 'user', aa: 1, bb: 2 },
         400,
-        'unknown fields "aa", "bb"; this request takes level',
+        `unknown fields "aa", "bb"; this request takes ${REST_BODY_FIELDS.accessPut.join(', ')}`,
       )
       const project = await restOk(w, 'GET', `/projects/${A.id}`)
       eq(project.grants.users.find((g) => g.id === std.id)?.level, 'user', "the agent's grant")

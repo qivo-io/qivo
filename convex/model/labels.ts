@@ -52,10 +52,13 @@ export function isLabelColor(value: string): boolean {
   return /^#[0-9a-f]{6}$/i.test(value)
 }
 
+/* A label color's rule in words. */
+const LABEL_COLOR_SHAPE = '# followed by six hex digits, like #4C9AFF'
+
 /** The color as given, refused unless it is `#rrggbb`. */
 export function labelColor(raw: string): string {
   if (!isLabelColor(raw)) {
-    throw badRequest('a label color must be # followed by six hex digits, like #4C9AFF')
+    throw badRequest(`a label color must be ${LABEL_COLOR_SHAPE}`)
   }
   return raw
 }
@@ -159,7 +162,12 @@ export const LABEL_FIELDS: Fields<Doc<'labels'>> = {
   name: { sends: 'name', type: TEXT, form: trimmedForm },
   color: {
     sends: 'color',
-    type: TEXT,
+    // the rule of the field itself (labelColor)
+    type: {
+      ok: (v) => typeof v === 'string' && isLabelColor(v),
+      says: LABEL_COLOR_SHAPE,
+      schema: { type: 'string', pattern: '^#[0-9a-fA-F]{6}$' },
+    },
     form: (value) => (value == null ? null : shownLabelColor(String(value)).toLowerCase()),
   },
 }

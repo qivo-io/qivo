@@ -25,6 +25,7 @@ import type { QueryCtx } from '../_generated/server'
 import { byId } from '../lib/db'
 import { FIELD_CHANGED, printOf } from '../lib/fieldPrints'
 import { badRequest, type FieldChange, type Refusal } from '../lib/functions'
+import { DATE_PATTERN, isCalendarDay } from './taskValues'
 
 export { FIELD_CHANGED }
 
@@ -132,6 +133,40 @@ export const uuidOf = (what: string, nullable: boolean): KeyType => ({
     : { type: 'string', format: 'uuid' },
 })
 
+/** A calendar date written YYYY-MM-DD, by the rule of the date fields
+ * themselves (model/taskValues.ts calendarDay), or also null when
+ * `nullable`. */
+export const dayOf = (nullable: boolean): KeyType => ({
+  ok: (v) => (nullable && v === null) || isCalendarDay(v),
+  says: `a calendar date as YYYY-MM-DD${nullable ? ' or null' : ''}`,
+  schema: nullable
+    ? orNull({ type: 'string', pattern: DATE_PATTERN })
+    : { type: 'string', pattern: DATE_PATTERN },
+})
+/** A number of hours the field itself accepts: finite, at least `min`, at
+ * most `max` when given, whole when `whole`, or null. `says` is the rule in
+ * words. */
+export const hoursOrNull = (a: {
+  min: number
+  max?: number
+  whole?: true
+  says: string
+}): KeyType => ({
+  ok: (v) =>
+    v === null ||
+    (typeof v === 'number' &&
+      Number.isFinite(v) &&
+      v >= a.min &&
+      (a.max === undefined || v <= a.max) &&
+      (a.whole === undefined || Number.isInteger(v))),
+  says: a.says,
+  schema: orNull({
+    type: a.whole ? 'integer' : 'number',
+    minimum: a.min,
+    ...(a.max === undefined ? {} : { maximum: a.max }),
+  }),
+})
+
 /** The validator of a parsed `expected` handed to an internal function
  * (parseExpected checks each key's type first). */
 export const vExpected = v.record(
@@ -158,6 +193,18 @@ export const EXPECTED_DELETE_SENTENCE =
   '`expected` holds the values you last read; if one of them changed since, nothing is deleted and the call says which.'
 
 /* --- the request's shape */
+
+/** The sentence for `expected` on a request that creates a `record`, a
+ * kind of record whose edits take it. REST and MCP say the same. */
+export const createExpectedSentence = (record: string) =>
+  `expected applies only when changing an existing ${record}`
+
+/** Refuses a REST body that creates a `record` and sends `expected`, with
+ * createExpectedSentence. Routes call it before refuseUnknownFields; MCP's
+ * create tools refuse in machine/mcp.ts createExpectedRefusal. */
+export function refuseCreateExpected(body: Readonly<Record<string, unknown>>, record: string) {
+  if (Object.hasOwn(body, 'expected')) throw badRequest(createExpectedSentence(record))
+}
 
 /** Joins words as people list them: "a", "a and b", "a, b and c". */
 export const listed = (words: readonly string[]): string =>

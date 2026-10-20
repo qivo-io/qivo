@@ -192,6 +192,16 @@ holding the older catalogue keeps working, but its calls save without the
 check until the client refreshes its tool list and its model learns to send
 `expected`.
 
+Later in October 2026 the schema of `expected` gained the rules of the
+typed keys' fields: a date pattern on the date keys, the ranges of the hour
+keys and the color pattern. A
+value that breaks the rule, such as `expected.due_date: "2026-02-31"`, is
+now refused with its own sentence before Qivo compares anything, where
+before it could be answered as a changed field. `expected` on
+`create_task`, `add_comment` and `create_project` now answers `expected
+applies only when changing an existing task` (or `comment`, `project`)
+instead of `Unrecognized key: "expected"`.
+
 ## Access model: the credential is a user
 
 MCP authenticates as **one user**, with three connection options. **OAuth is
@@ -1009,6 +1019,8 @@ a task. `parent_id` and `has_hidden_parent` belong to `parent`, and
 `project_id` to `project` or `sub_project`. A delete takes any of its keys.
 `archived`, `archive_reason`, `add_labels` and `remove_labels` take no key
 and are never checked. A call that creates a record takes no `expected`.
+A call that creates a task, comment, project, milestone, label or team
+refuses it with the sentence below.
 
 Send each value as a read tool answered it:
 
@@ -1028,20 +1040,35 @@ Send each value as a read tool answered it:
 - `list_comments`, `list_teams` and `list_users` give a comment's `body`, a
   team's `name` and a person's `plannable_hours`.
 
+A value also follows the rule of its field. `start_week`, `end_week`,
+`due_date` and a milestone's `date` are real calendar dates written
+`YYYY-MM-DD`, `remaining_hours` is at least 0, `review_hours` is from 0 to
+999, `plannable_hours` is a whole number from 1 to 168, and a label's
+`color` is `#` followed by six hex digits. The schema of `expected` in the
+tool list carries the date shape, the hour ranges and the color pattern,
+and Qivo also checks that a date exists. Every read answers values that
+follow these rules.
+
 Values compare in a normalized form, so formatting alone never refuses a
 call. Titles, names and comment bodies are trimmed, a task's or project's
 description treats `""` as `null`, `remaining_hours` and `review_hours` are
 rounded to 0.1, and ids and label colors compare in any case.
 
-A malformed `expected` is refused before anything is saved, with the
-sentences [REST](rest-api.md#refusing-a-change-when-a-field-changed-since-you-read-it)
-gives, such as `expected must name at least one field`, `unknown field
-"expected.colour"; expected takes name, color`, `expected.remaining_hours
-must be a number or null`, `expected.parent_id applies only when the request
-sends parent` and `expected.parent_id and expected.has_hidden_parent go
-together`. `expected` on a `set_label` call that creates is refused with
-`expected applies only when changing an existing label`, and the same
-sentence ends in `team` for `set_team` and `milestone` for `set_milestone`.
+A malformed `expected` is refused before anything is saved or compared,
+with the sentences [REST](rest-api.md#refusing-a-change-when-a-field-changed-since-you-read-it)
+gives, such as `expected must be an object of the fields as you last read
+them` (also for `null`), `expected must name at least one field`, `unknown
+field "expected.colour"; expected takes name, color`,
+`expected.remaining_hours must be a non-negative number or null`,
+`expected.due_date must be a calendar date as YYYY-MM-DD or null`,
+`expected.parent_id applies only when the request sends parent` and
+`expected.parent_id and expected.has_hidden_parent go together`. `expected`
+on a call that creates is refused with `expected applies only when changing
+an existing <record>`: `task` for `create_task`, `comment` for
+`add_comment`, `project` for `create_project`, and `label`, `team` and
+`milestone` for `set_label`, `set_team` and `set_milestone` without the
+record. It is this sentence, not `Unrecognized key`, although the schemas of
+`create_task`, `add_comment` and `create_project` have no `expected`.
 On `set_project_access` with `level: null` it is refused with `expected
 applies only when level is not null`.
 
