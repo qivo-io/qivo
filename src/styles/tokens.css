@@ -420,8 +420,11 @@ body {
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
 }
+/* The page leaves the floating notices' bands free (styles/float-stack.css),
+   so a screen as tall as the window subtracts --float-inset-y. */
 #root {
   height: 100vh;
+  padding-block: var(--float-inset-top) var(--float-inset-bottom);
 }
 /* Instrument Sans (--sans) and Geist Mono (--mono), served from this origin so
    no visitor's browser asks Google for them. These are the woff2 files and

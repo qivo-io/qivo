@@ -7,5 +7,14 @@
     "convex/betterAuth/schema.ts",
     "public/favicon.svg"
   ],
-  "rules": {}
+  "rules": {},
+  "overrides": [
+    {
+      "files": ["src/components/{NoticeCard,SavePauseNotice,SnapshotNotice}.tsx"],
+      "plugins": ["react"],
+      "rules": {
+        "react/only-export-components": "error"
+      }
+    }
+  ]
 }

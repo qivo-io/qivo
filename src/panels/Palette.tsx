@@ -64,7 +64,7 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
       }}
       title="Search tasks and projects"
       description="Search visible Qivo tasks and projects"
-      className="top-[13vh] w-[580px] max-w-[93vw] translate-y-0 gap-0 overflow-hidden rounded-xl border-border bg-popover p-0 shadow-pop"
+      className="top-[calc(13vh+var(--float-inset-top))] max-h-[calc(87vh-var(--float-inset-y)-16px)] w-[580px] max-w-[93vw] translate-y-0 grid-rows-[minmax(0,1fr)] gap-0 overflow-hidden rounded-xl border-border bg-popover p-0 shadow-pop"
     >
       <CommandInput
         aria-label="Search tasks and projects"
@@ -87,7 +87,7 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
           </Button>
         }
       />
-      <CommandList className="max-h-[388px] p-2">
+      <CommandList className="max-h-[388px] min-h-0 p-2">
         {!hasResults && query.trim() && (
           <CommandEmpty className="py-6 text-center text-base text-text-3">
             No results for “{query}”

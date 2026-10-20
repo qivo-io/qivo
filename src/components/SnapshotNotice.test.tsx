@@ -4,6 +4,7 @@ import { ConvexError } from 'convex/values'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { asOfText, pauseSentence } from '../lib/noticeText'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 import { TooltipProvider } from './ui/tooltip'
 
@@ -59,6 +60,14 @@ const AS_OF = new Date(2026, 9, 16, 14, 32)
 beforeEach(async () => {
   vi.resetModules()
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  // jsdom has no layout, so the column's measuring sees nothing to measure
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  )
   vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(new Date(2026, 9, 16, 15, 5))
   vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -273,7 +282,14 @@ describe('SnapshotNotice after a page closed with changes unconfirmed', () => {
 
 describe('asOfText', () => {
   it('names the day when the view went stale on an earlier one', () => {
-    expect(notice.asOfText(AS_OF.toISOString(), new Date(2026, 9, 16, 18))).toBe('14:32')
-    expect(notice.asOfText(AS_OF.toISOString(), new Date(2026, 9, 17, 9))).toBe('16 Oct, 14:32')
+    expect(asOfText(AS_OF.toISOString(), new Date(2026, 9, 16, 18))).toBe('14:32')
+    expect(asOfText(AS_OF.toISOString(), new Date(2026, 9, 17, 9))).toBe('16 Oct, 14:32')
+  })
+})
+
+describe('pauseSentence', () => {
+  it('is the sentence the store refuses a paused edit with', () => {
+    expect(pauseSentence('offline')).toBe(store.OFFLINE_TEXT)
+    expect(pauseSentence('slow')).toBe(store.SLOW_TEXT)
   })
 })

@@ -1,6 +1,7 @@
 import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
+import { useFloatInsets } from '@/lib/floatStack'
 import { LandscapeContext } from '@/lib/landscape'
 import { useHideOthers } from '@/lib/useHideOthers'
 import { useMobileBackLayer } from '@/lib/useMobile'
@@ -32,9 +33,13 @@ export function LandscapeRoadmap({
   const closeLayer = useMobileBackLayer(true, onClose, true)
   const closeRef = useRef(closeLayer)
   closeRef.current = closeLayer
+  // The screen fills the window between the floating notices' bands
+  // (lib/floatStack), which stay level while the screen turns.
+  const band = useFloatInsets()
   const rotated = size.height > size.width
-  const width = rotated ? size.height : size.width
-  const height = rotated ? size.width : size.height
+  const room = Math.max(0, size.height - band.top - band.bottom)
+  const width = rotated ? room : size.width
+  const height = rotated ? size.width : room
 
   useEffect(() => {
     const resize = () => setSize({ width: innerWidth, height: innerHeight })
@@ -52,7 +57,8 @@ export function LandscapeRoadmap({
         rotated,
         width,
         height,
-        toLocal: (x, y) => (rotated ? { x: y, y: size.width - x } : { x, y }),
+        toLocal: (x, y) =>
+          rotated ? { x: y - band.top, y: size.width - x } : { x, y: y - band.top },
       }}
     >
       <div
@@ -63,6 +69,7 @@ export function LandscapeRoadmap({
         className="mobile-roadmap-landscape"
         style={
           {
+            top: band.top,
             width,
             height,
             '--landscape-width': `${width}px`,

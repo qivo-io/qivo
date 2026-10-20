@@ -104,7 +104,7 @@
     grid-row: 3;
   }
   .mobile-workspace-header {
-    padding: max(8px, env(safe-area-inset-top)) 16px 8px;
+    padding: max(8px, var(--float-safe-top)) 16px 8px;
     background: var(--workspace-panel, var(--chrome));
     backdrop-filter: var(--workspace-panel-blur);
   }
@@ -291,14 +291,14 @@
        variable-based translate remains separate. Reset its axes as well. */
     --tw-translate-x: 0;
     --tw-translate-y: 0;
-    inset: 0;
+    inset: var(--float-inset-top) 0 var(--float-inset-bottom);
     transform: none;
     translate: none;
     width: 100%;
     max-width: none;
-    height: 100dvh;
+    height: calc(100dvh - var(--float-inset-y));
     border-radius: 0;
-    padding: max(12px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+    padding: max(12px, var(--float-safe-top)) 16px max(16px, env(safe-area-inset-bottom));
     display: flex;
     flex-direction: column;
     align-items: stretch;
@@ -318,16 +318,16 @@
   [data-slot="dialog-content"][data-modal-shell] {
     --tw-translate-x: 0;
     --tw-translate-y: 0;
-    top: 0;
+    top: var(--float-inset-top);
     left: 0;
     transform: none;
     translate: none;
     width: 100%;
     max-width: 100%;
-    max-height: 100dvh;
-    height: 100dvh;
+    max-height: calc(100dvh - var(--float-inset-y));
+    height: calc(100dvh - var(--float-inset-y));
     border-radius: 0;
-    padding-top: env(safe-area-inset-top);
+    padding-top: var(--float-safe-top);
     padding-bottom: env(safe-area-inset-bottom);
   }
   [data-modal-shell] > :first-child {

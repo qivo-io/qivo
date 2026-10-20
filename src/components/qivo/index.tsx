@@ -1129,7 +1129,8 @@ function AnchoredPop({
   return createPortal(
     <>
       {/* z 110/111: above ModalShell (100) — the calendar opens from fields
-          inside the new-issue/milestone modals — below palette (120)/toasts (130).
+          inside the new-issue/milestone modals — and the floating notices and
+          toasts (105, lib/floatStack), below palette (120) and tooltips (200).
           pointer-events-auto on both, in every case: a Radix modal dialog
           (ModalShell) turns pointer events OFF on <body> while it is open, and
           a portal to <body> inherits that — the calendar painted above the

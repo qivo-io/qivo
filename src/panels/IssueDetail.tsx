@@ -45,6 +45,7 @@ import {
 } from '../components/qivo'
 import { copyText } from '../lib/clipboard'
 import { DELAY_MARK } from '../lib/delay'
+import { roomBeside, useFloatInsets } from '../lib/floatStack'
 import { lastInputWasPointer, restoreFocus } from '../lib/focusVisibility'
 import { useFieldUnsaved, useUnsaved } from '../lib/leaveGuard'
 import {
@@ -255,14 +256,14 @@ function FocusWindow({
       data-modal-shell
       data-focus-window={name}
       onMouseDown={onClose}
-      className="[position:fixed] [inset:0] [z-index:100] [display:grid] [place-items:start_center] [padding:8vh_6vw]"
+      className="[position:fixed] [inset:var(--float-inset-top)_0_var(--float-inset-bottom)] [z-index:100] [display:grid] [place-items:start_center] [padding:8vh_6vw]"
     >
       {/* 980 × 84vh against the task window's 1110 × 92vh, and 8vh down its
           4vh: a clear inset on every side, whichever frame it came from */}
       <div
         data-issue-design="alignment"
         data-floating-surface
-        className="animate-in fade-in zoom-in-95 [width:980px] [max-width:88vw] [height:84vh] [display:flex] [flex-direction:column] [background:var(--background)] [border:1px_solid_var(--border)] [border-radius:var(--r-lg)] [box-shadow:var(--qivo-shadow-pop)] [overflow:hidden]"
+        className="animate-in fade-in zoom-in-95 [width:980px] [max-width:88vw] [height:calc(84vh-var(--float-inset-y))] [display:flex] [flex-direction:column] [background:var(--background)] [border:1px_solid_var(--border)] [border-radius:var(--r-lg)] [box-shadow:var(--qivo-shadow-pop)] [overflow:hidden]"
         onMouseDown={(e) => e.stopPropagation()}
       >
         {children}
@@ -1103,6 +1104,9 @@ function IssueDetail({
     height: window.visualViewport?.height || window.innerHeight,
     top: window.visualViewport?.offsetTop || 0,
   }))
+  // the visible viewport less the floating notices' bands (lib/floatStack)
+  const noticeBands = useFloatInsets()
+  const mobileFrame = roomBeside(mobileViewport, noticeBands, window.innerHeight)
   useEffectID(() => {
     if (!mobile) return
     const viewport = window.visualViewport
@@ -2202,7 +2206,7 @@ function IssueDetail({
         className={cn(
           embedded
             ? 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden'
-            : 'fixed inset-0 z-[60] grid items-start justify-items-center overflow-y-auto px-[3vw] py-[4vh]',
+            : 'fixed inset-0 z-[60] grid items-start justify-items-center overflow-y-auto px-[3vw] pt-[calc(4vh+var(--float-inset-top))] pb-[calc(4vh+var(--float-inset-bottom))]',
           // Override the mobile stylesheet's inset so the measured visual
           // viewport, including its keyboard offset, determines the frame.
           mobile && '!bottom-auto',
@@ -2232,7 +2236,15 @@ function IssueDetail({
         }
         style={{
           ...(!embedded ? { pointerEvents: open ? 'auto' : 'none', ...(mobile ? fade : {}) } : {}),
-          ...(mobile ? { height: mobileViewport.height, top: mobileViewport.top } : {}),
+          ...(mobile
+            ? {
+                height: mobileFrame.height,
+                top: mobileFrame.top,
+                // the status bar's room, less what the notices' band above
+                // the frame already holds
+                paddingTop: `max(0px, env(safe-area-inset-top) - ${mobileFrame.top - mobileViewport.top}px)`,
+              }
+            : {}),
         }}
       >
         {/* The backdrop stands beside the window rather than around it, so the
@@ -2262,12 +2274,12 @@ function IssueDetail({
             mobile ? 'mobile' : embedded ? 'embedded' : narrow ? 'stacked' : 'columns'
           }
           data-mobile-task={mobile ? '' : undefined}
-          data-mobile-task-compact={mobile && mobileViewport.height < 600 ? '' : undefined}
+          data-mobile-task-compact={mobile && mobileFrame.height < 600 ? '' : undefined}
           data-mobile-tab={mobile ? mobileTab : undefined}
           className={`flex flex-col overflow-hidden bg-background !outline-none ${
             embedded
               ? 'min-h-0 min-w-0 flex-1 rounded-none border-0 shadow-none'
-              : 'w-[1110px] h-[92vh] max-w-[94vw] rounded-xl border border-border shadow-pop'
+              : 'w-[1110px] h-[calc(92vh-var(--float-inset-y))] max-w-[94vw] rounded-xl border border-border shadow-pop'
           }`}
           onClick={embedded ? undefined : (e) => e.stopPropagation()}
           style={
