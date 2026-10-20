@@ -14,20 +14,31 @@ type AuthChange = Parameters<ConvexClient['setAuth']>[1]
 function socket() {
   let fetcher: SocketFetcher
   let onChange: AuthChange
-  const clearAuth = vi.fn()
+  // whether Convex holds a token; the first confirmed answer gives it one
+  let held = false
+  const clearAuth = vi.fn(() => {
+    held = false
+  })
   const setAuth = vi.fn<ConvexClient['setAuth']>((nextFetcher, nextOnChange) => {
     fetcher = nextFetcher
     onChange = nextOnChange
   })
   // Only the network socket is replaced; the auth client, plugins, request
   // headers, cookie parsing, and session cache all use the installed SDK.
-  const client = { setAuth, client: { clearAuth } } as unknown as ConvexClient
+  const client = {
+    setAuth,
+    client: { clearAuth, hasAuth: () => held },
+  } as unknown as ConvexClient
   return {
     client,
     setAuth,
     clearAuth,
-    token: () => fetcher({ forceRefreshToken: true }),
-    settle: (authenticated: boolean) => onChange?.(authenticated),
+    /** A refresh, or with `false` the first fetch of an arm. */
+    token: (forceRefreshToken = true) => fetcher({ forceRefreshToken }),
+    settle: (authenticated: boolean) => {
+      held = authenticated
+      onChange?.(authenticated)
+    },
   }
 }
 
@@ -56,6 +67,7 @@ function authService(baseURL = SITE_URL) {
   const socialRequests: Record<string, unknown>[] = []
   let serial = 0
   let failPath: string | undefined
+  let failStatus: number | undefined
   const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
     const request = new Request(input, init)
     const url = new URL(request.url)
@@ -66,7 +78,10 @@ function authService(baseURL = SITE_URL) {
     // Browser cookies must never supplement either explicitly scoped jar.
     expect(request.credentials).toBe('omit')
     expect(request.headers.has('Cookie')).toBe(false)
-    if (path === failPath) throw new TypeError('Simulated offline request')
+    if (path === failPath) {
+      if (failStatus) return Response.json({ message: 'Unavailable' }, { status: failStatus })
+      throw new TypeError('Simulated offline request')
+    }
     const token = cookie.match(/(?:^|; )better-auth\.session_token=([^;]+)/)?.[1]
     const session = sessions.get(token)
     const user = (email: string) => ({
@@ -178,8 +193,13 @@ function authService(baseURL = SITE_URL) {
     requests,
     oauthQueries,
     socialRequests,
-    fail: (path: string) => {
+    /** Fails every request to `path`: offline, or with `status`. */
+    fail: (path: string, status?: number) => {
       failPath = path
+      failStatus = status
+    },
+    recover: () => {
+      failPath = undefined
     },
   }
 }
@@ -525,9 +545,9 @@ describe('independent app and admin browser sessions', () => {
     expect(await adminReady).toBe(false)
   })
 
-  it('reports a sign-in Convex drops after the first answer, and only that', async () => {
+  it('reports a sign-in Convex drops after the first answer once the session is gone', async () => {
     const { admin, adminSocket } = pair()
-    await login(admin, 'operator@example.test')
+    const token = await login(admin, 'operator@example.test')
     const lost = vi.fn()
     const ready = admin.armConvexAuth(lost)
     adminSocket.settle(false)
@@ -535,8 +555,47 @@ describe('independent app and admin browser sessions', () => {
     // the first answer is the promise's, never a loss
     expect(lost).not.toHaveBeenCalled()
     adminSocket.settle(true)
-    expect(lost).not.toHaveBeenCalled()
+    service.sessions.delete(token)
     adminSocket.settle(false)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(lost).toHaveBeenCalledOnce()
+    expect(adminSocket.setAuth).toHaveBeenCalledTimes(2)
+  })
+
+  it('arms a dropped sign-in again while the session lasts, waiting out an outage', async () => {
+    const { admin, adminSocket } = pair()
+    await login(admin, 'operator@example.test')
+    const lost = vi.fn()
+    const ready = admin.armConvexAuth(lost)
+    adminSocket.settle(true)
+    expect(await ready).toBe(true)
+    service.fail('/get-session')
+    adminSocket.settle(false)
+    await vi.advanceTimersByTimeAsync(60_000)
+    // a session check that cannot reach the service is no answer
+    expect(lost).not.toHaveBeenCalled()
+    expect(adminSocket.setAuth).toHaveBeenCalledTimes(2)
+    service.recover()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(adminSocket.setAuth).toHaveBeenCalledTimes(3)
+    adminSocket.settle(true)
+    expect(lost).not.toHaveBeenCalled()
+  })
+
+  it('stops arming again when the server keeps refusing a live session', async () => {
+    const { admin, adminSocket } = pair()
+    await login(admin, 'operator@example.test')
+    const lost = vi.fn()
+    const ready = admin.armConvexAuth(lost)
+    adminSocket.settle(true)
+    expect(await ready).toBe(true)
+    adminSocket.settle(false)
+    for (let arm = 0; arm < 3; arm++) {
+      await vi.advanceTimersByTimeAsync(30_000)
+      adminSocket.settle(false)
+    }
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(adminSocket.setAuth).toHaveBeenCalledTimes(5)
     expect(lost).toHaveBeenCalledOnce()
   })
 
@@ -569,14 +628,95 @@ describe('independent app and admin browser sessions', () => {
     expect(await appSocket.token()).toBe(`jwt:${appToken}:nora@example.test`)
   })
 
-  it('a token network failure returns null without changing either saved login', async () => {
-    const { app, admin, adminSocket } = pair()
+  it('a token network failure with no sign-in to keep returns null without changing either saved login', async () => {
+    const app = createAuthSession(APP_PREFIX, socket().client, oauthProviderClient())
+    const adminSocket = socket()
+    const admin = createAuthSession(ADMIN_PREFIX, adminSocket.client)
     await login(app, 'nora@example.test')
     await login(admin, 'operator@example.test')
+    void admin.armConvexAuth()
     const before = [saved(APP_PREFIX), saved(ADMIN_PREFIX)]
     service.fail('/convex/token')
+    // a boot holds no token yet, and an arm's first fetch answers at once
     expect(await adminSocket.token()).toBeNull()
+    adminSocket.settle(true)
+    expect(await adminSocket.token(false)).toBeNull()
     expect([saved(APP_PREFIX), saved(ADMIN_PREFIX)]).toEqual(before)
+  })
+
+  it.each([
+    { failure: 'is offline', status: undefined },
+    { failure: 'answers 503', status: 503 },
+  ])(
+    'keeps a refresh waiting while the token service $failure, and resolves once it answers',
+    async ({ status }) => {
+      const { admin, adminSocket } = pair()
+      const token = await login(admin, 'operator@example.test')
+      service.fail('/convex/token', status)
+      let answer: string | null | undefined = 'pending'
+      void adminSocket.token().then((value) => {
+        answer = value
+      })
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(answer).toBe('pending')
+      service.recover()
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(answer).toBe(`jwt:${token}:operator@example.test`)
+    },
+  )
+
+  it('asks again as soon as the browser is back online, in one loop for every caller', async () => {
+    const events = new EventTarget()
+    Object.assign(window, {
+      addEventListener: events.addEventListener.bind(events),
+      removeEventListener: events.removeEventListener.bind(events),
+    })
+    const { admin, adminSocket } = pair()
+    const token = await login(admin, 'operator@example.test')
+    service.fail('/convex/token')
+    const refresh = adminSocket.token()
+    const again = adminSocket.token()
+    await vi.advanceTimersByTimeAsync(20_000)
+    const asked = () => service.requests.filter(({ path }) => path === '/convex/token').length
+    const before = asked()
+    service.recover()
+    events.dispatchEvent(new Event('online'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(asked()).toBe(before + 1)
+    expect(await refresh).toBe(`jwt:${token}:operator@example.test`)
+    expect(await again).toBe(`jwt:${token}:operator@example.test`)
+  })
+
+  it('asks again at once when Convex asks again while the loop waits', async () => {
+    const { admin, adminSocket } = pair()
+    const token = await login(admin, 'operator@example.test')
+    service.fail('/convex/token')
+    const refresh = adminSocket.token()
+    await vi.advanceTimersByTimeAsync(20_000)
+    const asked = () => service.requests.filter(({ path }) => path === '/convex/token').length
+    const before = asked()
+    service.recover()
+    // what Convex does after the server refuses the expired token
+    const again = adminSocket.token()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(asked()).toBe(before + 1)
+    expect(await again).toBe(`jwt:${token}:operator@example.test`)
+    expect(await refresh).toBe(`jwt:${token}:operator@example.test`)
+  })
+
+  it('answers a refresh null when the server says the session is gone, and when signed out', async () => {
+    const { admin, adminSocket } = pair()
+    const token = await login(admin, 'operator@example.test')
+    service.fail('/convex/token')
+    const refresh = adminSocket.token()
+    await admin.signOut()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(await refresh).toBeNull()
+    service.recover()
+    adminSocket.settle(true)
+    expect(service.sessions.has(token)).toBe(false)
+    // the 401 from /convex/token is the one answer that means signed out
+    expect(await adminSocket.token()).toBeNull()
   })
 
   it('a failed sign-out request still clears only its own local jar and socket', async () => {

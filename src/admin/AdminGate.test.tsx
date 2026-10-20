@@ -5,8 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 
 /* The operator console's gate when Convex drops its sign-in after the first
-   answer. A session that still exists is armed again; otherwise the gate
-   shows the sign-in form without the password typed earlier. */
+   answer. lib/authSession.ts arms a session that still exists again and
+   reports the rest as lost, and the gate then shows the sign-in form
+   without the password typed earlier. */
 
 const auth = vi.hoisted(() => ({
   // armConvexAuth's first answer: whether Convex got a token
@@ -97,15 +98,6 @@ describe('the operator gate after Convex drops the sign-in', () => {
     )
     expect(field('admin-email')?.value).toBe('ops@example.com')
     expect(field('admin-password')?.value).toBe('')
-  })
-
-  it('arms the sign-in again while the session lasts', async () => {
-    await signIn()
-    auth.session = { data: { session: {} } }
-    const armed = auth.lost.length
-    await act(async () => auth.lost.at(-1)?.())
-    expect(auth.lost.length).toBe(armed + 1)
-    expect(container.textContent).toContain('Operator console')
   })
 })
 

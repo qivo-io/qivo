@@ -32,11 +32,10 @@ export function AdminGate() {
      session that gets no Convex token, because it ended on the server or
      the token request failed, is no answer about access, so the gate shows
      the sign-in form and says so. Any throw reads as denied — the gate
-     never surfaces a console error. A sign-in Convex drops later is armed
-     again while the session lasts, since a token refresh that failed on the
-     network drops it too. Otherwise the gate returns to an empty sign-in
-     form, since every operator query and change would be refused from then
-     on. */
+     never surfaces a console error. lib/authSession.ts arms a sign-in
+     Convex drops later again while the session lasts. Once it reports the
+     sign-in lost, the gate returns to an empty sign-in form, since every
+     operator query and change would be refused from then on. */
   async function gate() {
     try {
       if (!(await armConvexAuth(lost))) {
@@ -52,18 +51,12 @@ export function AdminGate() {
     }
   }
 
-  /* Convex dropped the sign-in after the first answer and does not try
-     again. The password typed earlier never comes back with the form. */
+  /* The session ended, or the server kept refusing its tokens. The password
+     typed earlier never comes back with the form. */
   function lost() {
-    void authClient
-      .getSession()
-      .catch(() => ({ data: null }))
-      .then(({ data }) => {
-        if (data?.session) return gate()
-        setPassword('')
-        setError('Your session ended. Sign in again.')
-        setPhase('signedOut')
-      })
+    setPassword('')
+    setError('Your session ended. Sign in again.')
+    setPhase('signedOut')
   }
 
   useEffect(() => {

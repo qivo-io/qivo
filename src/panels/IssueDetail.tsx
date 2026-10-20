@@ -1330,7 +1330,8 @@ function IssueDetail({
     toRead.forEach((id: string) => {
       readSent.current.done.add(id)
     })
-    P.markMessagesRead(toRead)
+    // sent on its own, so a paused mark is refused without a toast
+    P.markMessagesRead(toRead, { quiet: true })
   }, [toReadKey])
 
   // The spine opens at its newest end, like the inbox thread it now matches.
