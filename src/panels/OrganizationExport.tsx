@@ -6,6 +6,7 @@ import { billingDate } from '@/lib/billingDisplay'
 import { convex } from '@/lib/convex'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { api } from '../../convex/_generated/api'
+import { P } from '../store/planner'
 import { useOrgRemovalState } from './OrganizationDeletion'
 
 /** Lets an admin download the organization's data as a ZIP and records
@@ -36,6 +37,12 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
 
   async function download() {
     if (active.current) return
+    // offline the export would wait without a word
+    const paused = P.cannotSaveText()
+    if (paused) {
+      setError(paused)
+      return
+    }
     const releaseUpdateBlock = beginUpdateBlock()
     const controller = new AbortController()
     active.current = controller

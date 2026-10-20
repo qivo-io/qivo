@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { billingDate, billingError } from '@/lib/billingDisplay'
 import { convex } from '@/lib/convex'
 import { DEMO_MODE, WORKSPACE_SIGNUP_URL } from '@/lib/demoMode'
+import { holdUnsaved } from '@/lib/leaveGuard'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { api } from '../../convex/_generated/api'
 import type {
@@ -115,6 +116,12 @@ function LiveBillingSettings({
 
   async function openPayment(kind: 'checkout' | 'portal') {
     if (actionInFlight.current) return
+    // offline the request would wait without a word
+    const paused = P.cannotSaveText()
+    if (paused) {
+      setActionError(paused)
+      return
+    }
     actionInFlight.current = true
     const release = beginUpdateBlock()
     setBusy(true)
@@ -139,8 +146,12 @@ function LiveBillingSettings({
    * once Polar accepted the cancellation. */
   async function cancelSubscription(): Promise<string | null> {
     if (actionInFlight.current) return 'Another billing action is still running.'
+    const paused = P.cannotSaveText()
+    if (paused) return paused
     actionInFlight.current = true
     const release = beginUpdateBlock()
+    // closing the page before the answer would leave the cancellation unknown
+    const releaseUnsaved = holdUnsaved()
     setBusy(true)
     setActionError('')
     try {
@@ -154,6 +165,7 @@ function LiveBillingSettings({
     } finally {
       actionInFlight.current = false
       setBusy(false)
+      releaseUnsaved()
       release()
     }
   }

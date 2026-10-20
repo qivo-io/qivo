@@ -7,6 +7,7 @@ import { LABEL_NAME_MAX } from '../../../convex/lib/textLimits'
 import { Icon, Popover } from '../../components/qivo'
 import { FieldHint, PageTitle, SettingsGroup, SettingsSection } from '../../components/settingsPage'
 import { LABEL_COLORS } from '../../lib/labelColors'
+import { useUnsaved } from '../../lib/leaveGuard'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { useConfirmArm } from '../../lib/useConfirmArm'
 import type { LabelVM } from '../../store/planner'
@@ -26,6 +27,7 @@ function LabelRow({
 }) {
   const [name, setName] = useStateS(label.name)
   useUpdateBlocker(canEdit && name !== label.name)
+  useUnsaved(canEdit && name !== label.name)
   useEffectS(() => {
     setName(label.name)
   }, [label.name])
@@ -158,6 +160,7 @@ export function OrgLabelsPage() {
   // a create in flight: Add waits for the server's answer
   const [adding, setAdding] = useStateS(false)
   useUpdateBlocker(!!newLabel)
+  useUnsaved(!!newLabel.trim())
   const confirm = useConfirmArm<string>()
   const dup = labels.some((l) => l.name.toLowerCase() === newLabel.trim().toLowerCase())
   const addLabel = () => {

@@ -6,6 +6,7 @@ import { NativeSelect } from '@/components/ui/native-select'
 import { Seg } from '../../components/qivo'
 import { PageTitle, SettingsField, SettingsSection } from '../../components/settingsPage'
 import { DEMO_MODE } from '../../lib/demoMode'
+import { useFieldUnsaved, useUnsaved } from '../../lib/leaveGuard'
 import { creatorPhrase, projectCreatorsIn } from '../../lib/projectCreators'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { DEFAULT_PLANNABLE_HOURS } from '../../lib/workload'
@@ -33,6 +34,7 @@ function OrgAddressField() {
   const next = v.trim()
   const dirty = next !== current
   useUpdateBlocker(dirty || busy)
+  useUnsaved(dirty)
   const save = async () => {
     if (busy || !dirty) return
     setBusy(true)
@@ -169,6 +171,9 @@ function ProjectCreatorsField({ setPage }: { setPage: (page: string) => void }) 
 
 export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void }) {
   const canManage = P.isAdmin()
+  // numbers typed and not yet saved (the fields save on blur)
+  const attachmentUnsaved = useFieldUnsaved(P.editsPaused, `${P.org.maxAttachmentMb}`)
+  const plannableUnsaved = useFieldUnsaved(P.editsPaused, `${P.org.defaultPlannableHours}`)
   return (
     <>
       <PageTitle>Organization</PageTitle>
@@ -205,6 +210,7 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
               step={1}
               data-org-attachment-limit
               aria-label="Max attachment size"
+              {...attachmentUnsaved}
               key={`attachment${P.org.maxAttachmentMb}`}
               defaultValue={P.org.maxAttachmentMb ?? 20}
               disabled={!canManage}
@@ -302,6 +308,7 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
               step={1}
               data-org-plannable
               aria-label="Default plannable hours per week"
+              {...plannableUnsaved}
               key={`dph${P.org.defaultPlannableHours}`}
               defaultValue={P.org.defaultPlannableHours || DEFAULT_PLANNABLE_HOURS}
               onKeyDown={(e) => {

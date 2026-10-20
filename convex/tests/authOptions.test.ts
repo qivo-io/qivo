@@ -2,7 +2,7 @@ import type { GenericCtx } from '@convex-dev/better-auth'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { internal } from '../_generated/api'
 import type { DataModel } from '../_generated/dataModel'
-import { appOrigins, createAuthOptions } from '../auth'
+import { appOrigins, createAuthOptions, tokenPayload } from '../auth'
 
 /* The options object is built without touching ctx — every dereference lives
  * inside a callback — so reading a flag needs no context at all. */
@@ -165,5 +165,28 @@ describe('SITE_URL is required, not assumed', () => {
     expect(options.trustedOrigins).toEqual(['http://schema-only.invalid'])
     // the plugin list (which feeds getAuthTables' schema) is still complete
     expect(options.plugins.map((p) => p.id)).toContain('cross-domain')
+  })
+})
+
+describe('every minted token is new', () => {
+  const user = { id: 'user-1', name: 'Ana', email: 'ana@example.com', image: 'https://img.test/a' }
+  const session = { expiresAt: new Date(Date.now() + 3_600_000) }
+
+  it('gives each token its own jti and keeps the default user claims', async () => {
+    const payload = tokenPayload(noCtx, false)
+    const first = await payload({ user, session })
+    const second = await payload({ user, session })
+    expect(first).toEqual({ name: 'Ana', email: 'ana@example.com', jti: expect.any(String) })
+    expect(second.jti).not.toBe(first.jti)
+  })
+
+  it('gives a demo token its own jti and only its expiry', async () => {
+    const deadline = Date.now() + 60_000
+    const ctx = { runQuery: vi.fn(async () => deadline) } as unknown as GenericCtx<DataModel>
+    const payload = tokenPayload(ctx, true)
+    const first = await payload({ user, session })
+    const second = await payload({ user, session })
+    expect(first).toEqual({ exp: Math.floor(deadline / 1_000), jti: expect.any(String) })
+    expect(second.jti).not.toBe(first.jti)
   })
 })

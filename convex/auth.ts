@@ -99,6 +99,41 @@ export const appOrigins = (opts?: { schemaOnly?: boolean }): string[] => {
  * or answer with an empty token, and nothing in Qivo calls them. */
 const PROVIDER_TOKEN_PATHS = ['/get-access-token', '/refresh-token', '/account-info']
 
+/** The user claims the Convex plugin puts in a token by default: every user
+    field but its id and image. */
+const userClaims = (user: Record<string, unknown>) =>
+  Object.fromEntries(Object.entries(user).filter(([key]) => key !== 'id' && key !== 'image'))
+
+/* Every token gets its own `jti`. Two tokens minted for one session in the
+   same second are otherwise the same bytes, and the Convex client, which
+   then sees no new sign-in, never schedules the next refresh. The app asks
+   twice at boot, so that is common. The rest is the plugin's own payload,
+   every user field but its id and image, or for the demo only an expiry
+   that ends with the demo. */
+export const tokenPayload =
+  (ctx: GenericCtx<DataModel>, demo: boolean) =>
+  async ({
+    user,
+    session,
+  }: {
+    user: { id: string } & Record<string, unknown>
+    session: { expiresAt: Date }
+  }) => {
+    const jti = crypto.randomUUID()
+    if (!demo) return { ...userClaims(user), jti }
+    if (!('runQuery' in ctx)) throw demoRefusal()
+    const deadline = await ctx.runQuery(
+      makeFunctionReference<'query', { auth_user_id: string }, number>('demo:tokenDeadline'),
+      { auth_user_id: user.id },
+    )
+    return {
+      exp: Math.floor(
+        Math.min(Date.now() + 900_000, new Date(session.expiresAt).getTime(), deadline) / 1_000,
+      ),
+      jti,
+    }
+  }
+
 const authFunctions = {
   onCreate: makeFunctionReference('demo:onCreate'),
   onDelete: makeFunctionReference('demo:onDelete'),
@@ -290,36 +325,7 @@ export const createAuthOptions = (ctx: GenericCtx<DataModel>, opts?: { schemaOnl
     plugins: [
       convex({
         authConfig,
-        ...(demo
-          ? {
-              jwt: {
-                definePayload: async ({
-                  user,
-                  session,
-                }: {
-                  user: { id: string }
-                  session: { expiresAt: Date }
-                }) => {
-                  if (!('runQuery' in ctx)) throw demoRefusal()
-                  const deadline = await ctx.runQuery(
-                    makeFunctionReference<'query', { auth_user_id: string }, number>(
-                      'demo:tokenDeadline',
-                    ),
-                    { auth_user_id: user.id },
-                  )
-                  return {
-                    exp: Math.floor(
-                      Math.min(
-                        Date.now() + 900_000,
-                        new Date(session.expiresAt).getTime(),
-                        deadline,
-                      ) / 1_000,
-                    ),
-                  }
-                },
-              },
-            }
-          : {}),
+        jwt: { definePayload: tokenPayload(ctx, demo) },
       }),
       ...(!demo ? [qivoOAuthProvider(ctx, siteUrl, opts?.schemaOnly)] : []),
       crossDomain({ siteUrl }),

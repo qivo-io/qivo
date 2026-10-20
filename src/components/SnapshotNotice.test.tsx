@@ -13,6 +13,30 @@ import { TooltipProvider } from './ui/tooltip'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', () => ({ convex: network }))
+// The note of the page under test. Each boot opens a new page, and every
+// other page has closed (Web Locks). Mocked modules outlive resetModules, so
+// the mock forwards to the page's own note.
+const page = vi.hoisted(() => ({
+  note: null as null | ReturnType<typeof import('../lib/unconfirmedNote')['createUnconfirmedNote']>,
+}))
+vi.mock('../lib/unconfirmedNote', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../lib/unconfirmedNote')>()
+  const open = () =>
+    (page.note = original.createUnconfirmedNote({
+      storage: () => localStorage,
+      page: crypto.randomUUID(),
+      livePages: async () => new Set(),
+    }))
+  return {
+    ...original,
+    unconfirmedNote: {
+      add: (...args: Parameters<NonNullable<typeof page.note>['add']>) =>
+        (page.note ?? open()).add(...args),
+      forgetAll: () => (page.note ?? open()).forgetAll(),
+      collect: (scopes: Iterable<string>) => (page.note ?? open()).collect(scopes),
+    },
+  }
+})
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: { getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }) },
@@ -25,6 +49,7 @@ let store: typeof import('../store/planner')
 let fail: (error: Error) => void
 let deliverLater: (snap: Snapshot | null) => void
 let subscribed: number
+let firstSnapshot: Snapshot
 let container: HTMLDivElement
 let root: Root
 
@@ -40,6 +65,7 @@ beforeEach(async () => {
   window.showToast = vi.fn()
   const snap: Snapshot = plannerFixture()
   snap.delivered_at = AS_OF.toISOString()
+  firstSnapshot = snap
   subscribed = 0
   network.query.mockResolvedValue(null)
   network.mutation.mockResolvedValue(null)
@@ -71,6 +97,7 @@ afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
   document.querySelector('[data-float-stack]')?.remove()
+  localStorage.clear()
   vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
@@ -154,6 +181,93 @@ describe('SnapshotNotice', () => {
     expect(subscribed).toBe(2)
     expect(button('Trying again…')?.disabled).toBe(true)
     expect(button('Try again')).toBeUndefined()
+  })
+})
+
+describe('SnapshotNotice while Qivo cannot save', () => {
+  async function offline() {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+    const { syncStatus, OFFLINE_DELAY_MS } = await import('../lib/syncStatus')
+    await act(async () => {
+      syncStatus.setSocket({ connected: true, everConnected: true })
+      syncStatus.setSocket({ connected: false, everConnected: true })
+      vi.advanceTimersByTime(OFFLINE_DELAY_MS)
+    })
+    return syncStatus
+  }
+
+  it('says editing is paused offline and counts the changes still waiting', async () => {
+    network.mutation.mockReturnValue(new Promise(() => {}))
+    void store.P.addTeam('Field crew')
+    await offline()
+    expect(shown()?.dataset.snapshotNotice).toBe('offline')
+    expect(shown()?.textContent).toContain('You’re offline')
+    expect(shown()?.textContent).toContain(
+      'Editing is paused until the connection is back. 1 change made before the connection dropped will save when it is back. Keep Qivo open until then.',
+    )
+    expect(shown()?.closest('[aria-live="polite"]')).not.toBeNull()
+    // nothing hides it while editing is paused
+    expect(document.querySelectorAll('[data-snapshot-notice] button')).toHaveLength(0)
+  })
+
+  it('puts snapshot trouble before the connection, and the connection before the crash note', async () => {
+    const status = await offline()
+    await failWith(new Error('[CONVEX Q(snapshot:forMe)] Server Error'))
+    expect(shown()?.dataset.snapshotNotice).toBe('failed')
+    expect(document.querySelectorAll('[data-snapshot-notice]')).toHaveLength(1)
+    await act(async () => deliverLater(plannerFixture()))
+    expect(shown()?.dataset.snapshotNotice).toBe('offline')
+    await act(async () => {
+      status.setSocket({ connected: true, everConnected: true })
+    })
+    expect(shown()).toBeNull()
+    expect(window.showToast).toHaveBeenCalledWith('Back online. Editing is on again.', 'success')
+  })
+
+  it('says how long saving takes, and nothing once it caught up', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+    const { syncStatus, SLOW_SAVE_MS } = await import('../lib/syncStatus')
+    let answer = () => {}
+    network.mutation.mockReturnValue(new Promise<null>((resolve) => (answer = () => resolve(null))))
+    await act(async () => {
+      syncStatus.setSocket({ connected: true, everConnected: true })
+      void store.P.addTeam('Field crew')
+      vi.advanceTimersByTime(SLOW_SAVE_MS)
+    })
+    expect(shown()?.dataset.snapshotNotice).toBe('slow')
+    expect(shown()?.textContent).toContain('Saving is taking longer than usual')
+    expect(shown()?.textContent).toContain(
+      'Editing is paused until it finishes. 1 change is still saving.',
+    )
+    await act(async () => answer())
+    expect(shown()).toBeNull()
+  })
+})
+
+describe('SnapshotNotice after a page closed with changes unconfirmed', () => {
+  it('tells which change it could not confirm until dismissed', async () => {
+    const { P } = store
+    localStorage.setItem(
+      `qivo.unconfirmed.v1:${P.org.id}:${P.CURRENT_USER}:closed-page`,
+      JSON.stringify([{ task: 'QN-3', what: 'title', id: '1', at: Date.now() }]),
+    )
+    // the next start, on the same browser storage
+    page.note = null
+    await act(async () => {
+      const booted = store.initStore()
+      await vi.waitFor(() => expect(subscribed).toBe(2))
+      deliverLater(structuredClone(firstSnapshot))
+      await booted
+    })
+    expect(shown()?.dataset.snapshotNotice).toBe('unconfirmed')
+    expect(shown()?.textContent).toContain(
+      'Qivo closed before it could confirm 1 change to QN-3 (title). Check the task.',
+    )
+    expect(Object.keys(localStorage).filter((key) => key.startsWith('qivo.unconfirmed'))).toEqual(
+      [],
+    )
+    await act(async () => button('Dismiss')?.click())
+    expect(shown()).toBeNull()
   })
 })
 

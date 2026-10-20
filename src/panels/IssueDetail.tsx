@@ -46,6 +46,7 @@ import {
 import { copyText } from '../lib/clipboard'
 import { DELAY_MARK } from '../lib/delay'
 import { lastInputWasPointer, restoreFocus } from '../lib/focusVisibility'
+import { useFieldUnsaved, useUnsaved } from '../lib/leaveGuard'
 import {
   parentBlock,
   parentCandidatesFor,
@@ -1265,6 +1266,9 @@ function IssueDetail({
 
   const it = issueId ? P.issueById[issueId] : null
   useUpdateBlocker(editTitle && !!it && titleDraft !== it.title)
+  useUnsaved(editTitle && !!it && titleDraft !== it.title)
+  // remaining hours typed and not yet saved (the field saves on blur)
+  const remainingUnsaved = useFieldUnsaved(P.editsPaused, `${it?.id}:${it?.remaining ?? ''}`)
   // point the store's one-thread comment cache at this issue; release it when
   // the modal closes (uuid null) or the component unmounts
   const watchUuid = it ? it.uuid : null
@@ -2684,6 +2688,7 @@ function IssueDetail({
                                 onKeyDown={(e) => {
                                   if (e.key === 'Enter') e.currentTarget.blur()
                                 }}
+                                {...remainingUnsaved}
                                 onBlur={(e) => {
                                   const p = remainingPatchFromInput(e.target, it.remaining)
                                   if (p.write) upd({ remaining: p.value })

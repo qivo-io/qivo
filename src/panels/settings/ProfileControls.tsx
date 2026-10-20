@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Avatar, type AvatarSize, Icon, MenuItem, Popover } from '../../components/qivo'
 import { SettingsField } from '../../components/settingsPage'
+import { useUnsaved } from '../../lib/leaveGuard'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { P, type ToastTone, type UserVM } from '../../store/planner'
 
@@ -137,6 +138,7 @@ export function NameField({ me }: { me: Pick<UserVM, 'name'> }) {
   const next = v.replace(/\s+/g, ' ').trim()
   const dirty = next !== me.name
   useUpdateBlocker(dirty || busy)
+  useUnsaved(dirty)
   const save = async () => {
     if (busy || !dirty) return
     setBusy(true)

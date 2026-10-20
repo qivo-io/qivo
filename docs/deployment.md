@@ -160,8 +160,10 @@ backend's admin key in `QIVO_LOCAL_ADMIN_KEY`. The check reads the
 credentials the seed stored for exactly its origins, so give the seed's
 `--url` and `--site-url` the same origins as the check's `--convex-url` and
 `--app-url`, spelled the same way (`localhost` and `127.0.0.1` differ), and
-give both the same `--deployment` and `QIVO_FIXTURE_CREDENTIALS_DIR`. It
-prints status lines only, never a secret, and
+give both the same `--deployment` and `QIVO_FIXTURE_CREDENTIALS_DIR`. For
+`--local` that directory may sit under the checkout's git-ignored
+`dev-temp/`, which the dev server does not serve. Every other target keeps
+it outside the checkout. The check prints status lines only, never a secret, and
 refuses to start while `DEBUG`, `PWDEBUG`, `DEBUG_FILE` or `NODE_DEBUG` is
 set, because Playwright's and Node's debug output would bypass that. If a
 run is killed before it cleans up, `--cleanup --run <hex>` with the six digits

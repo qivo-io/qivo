@@ -7,6 +7,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Icon } from '../../components/qivo'
 import { SettingsField } from '../../components/settingsPage'
 import { WORKSPACE_SIGNUP_URL } from '../../lib/demoMode'
+import { useUnsaved } from '../../lib/leaveGuard'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 
 /* ---------- shared page atoms ---------- */
@@ -65,6 +66,7 @@ export function TextField({
 }) {
   const [v, setV] = useStateS(value)
   useUpdateBlocker(!disabled && v !== value)
+  useUnsaved(!disabled && v !== value)
   useEffectS(() => {
     setV(value)
   }, [value])

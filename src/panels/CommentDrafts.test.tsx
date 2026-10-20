@@ -245,6 +245,33 @@ describe('comment drafts in the task window', { timeout: 20_000 }, () => {
     expect(window.showToast).not.toHaveBeenCalled()
   })
 
+  it('warns before the page closes while the comment is typed or waits, and not after', async () => {
+    await load()
+    const { installLeaveGuard } = await import('../lib/leaveGuard')
+    const remove = installLeaveGuard(P.hasUnsavedWork)
+    const leave = () => {
+      const event = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(event)
+      return event.defaultPrevented
+    }
+    try {
+      await open()
+      await act(async () => deliver({ comments: range(1, 4), earlier: false }))
+      const composer = await editorOf('Leave a comment')
+      expect(leave()).toBe(false)
+      await act(async () => composer.commands.insertContent('Soak run finished'))
+      expect(leave()).toBe(true)
+      await click('Comment')
+      // sent, not yet confirmed
+      expect(leave()).toBe(true)
+      await act(async () => writes[0].answer.resolve(null))
+      expect(composer.getText()).toBe('')
+      expect(leave()).toBe(false)
+    } finally {
+      remove()
+    }
+  })
+
   it('refuses formatting and link changes to the comment it is sending', async () => {
     await load()
     await open()

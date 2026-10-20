@@ -1,9 +1,11 @@
+import { spawnSync } from 'node:child_process'
 import {
   chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -14,6 +16,7 @@ import { dirname, join } from 'node:path'
 import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  fixtureDirectory,
   loadCredentials as loadPrivateCredentials,
   mondayAnchor,
   parseArgs,
@@ -76,6 +79,7 @@ function writeAvatars(cwd) {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs()
   for (const path of folders.splice(0)) rmSync(path, { recursive: true, force: true })
 })
 
@@ -417,6 +421,28 @@ describe('private, persistent credentials', () => {
     symlinkSync(outside, credentials.path)
     expect(() => loadCredentials(safe, DEV_TARGET, { create: true })).toThrow(/symlinks/)
     expect(readFileSync(outside, 'utf8')).toBe('do not overwrite')
+  })
+
+  it('lets only a local backend keep credentials in the checkout, under a git-ignored dev-temp/', () => {
+    const cwd = folder()
+    // only this repository's rules count, not the machine's global ignore file
+    vi.stubEnv('HOME', cwd)
+    vi.stubEnv('XDG_CONFIG_HOME', cwd)
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1')
+    spawnSync('git', ['init', '--quiet'], { cwd })
+    writeFileSync(join(cwd, '.gitignore'), 'dev-temp/\n')
+    const ignored = join(cwd, 'dev-temp', 'credentials')
+    const tracked = join(cwd, 'credentials')
+    for (const directory of [ignored, tracked]) {
+      mkdirSync(directory, { recursive: true })
+      chmodSync(directory, 0o700)
+    }
+    const env = (directory) => ({ QIVO_FIXTURE_CREDENTIALS_DIR: directory })
+    expect(fixtureDirectory(cwd, env(ignored), { local: true })).toBe(realpathSync(ignored))
+    expect(() => fixtureDirectory(cwd, env(ignored))).toThrow(/outside the application checkout\.$/)
+    expect(() => fixtureDirectory(cwd, env(tracked), { local: true })).toThrow(/dev-temp/)
+    writeFileSync(join(cwd, '.gitignore'), '')
+    expect(() => fixtureDirectory(cwd, env(ignored), { local: true })).toThrow(/dev-temp/)
   })
 })
 

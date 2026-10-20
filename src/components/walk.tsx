@@ -6,6 +6,7 @@
 import { type ReactNode, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { useFieldUnsaved } from '@/lib/leaveGuard'
 import { remainingPatchFromInput, remainingValue } from '@/lib/remaining'
 import { cn } from '@/lib/utils'
 import { type IssueVM, P, type UserVM } from '@/store/planner'
@@ -163,6 +164,8 @@ export function RemainingInput({
   // takes the ELEMENT, not its value: the parse verdict (validity.badInput)
   // only exists on the element, and without it unparseable text arrives as ""
   // and reads as a deliberate clear
+  // the hours typed and not yet saved
+  const unsaved = useFieldUnsaved(P.editsPaused, `${it.uuid}:${it.remaining ?? ''}`)
   const commit = (el: HTMLInputElement) => {
     const p = remainingPatchFromInput(el, it.remaining)
     if (!p.write) return
@@ -183,6 +186,7 @@ export function RemainingInput({
       onKeyDown={(e) => {
         if (e.key === 'Enter') e.currentTarget.blur()
       }}
+      {...unsaved}
       onBlur={(e) => commit(e.target)}
       className={cn('h-control w-15 shrink-0 bg-surface-1 px-2 py-0 text-sm !font-mono', className)}
     />

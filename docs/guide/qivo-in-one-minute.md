@@ -74,14 +74,31 @@ and tokens, and admins can still deactivate or remove people. If you were
 signed out, the notice offers **Reload** to sign in again. Until then nothing
 in the workspace saves, and a change you try says you are signed out instead of
 appearing. View preferences still change on this device. Losing your internet
-connection does not sign you out, and changes waiting to save go out once Qivo
-reconnects, unless your sign-in expires meanwhile. If an admin removes
-or deactivates you and you belong to no other organization, the notice says you
+connection does not sign you out, unless your sign-in expires meanwhile. If an
+admin removes or deactivates you and you belong to no other organization, the notice says you
 no longer have access and offers **Reload**. Your view stays as it was, but
 comments and images that were not already on screen no longer load, and
 attached files no longer download. Nothing in the workspace saves, read marks
 and preferences included. You can still change your appearance and delete
 connected apps.
+
+If you lose your internet connection, or saving takes much longer than usual, a
+notice says so and editing pauses, read marks included. A change you try says why
+instead of appearing, and text you were typing stays in its field. Qivo saves
+nothing on your device to send later, because others may change the same tasks
+meanwhile. Changes you made just before the connection dropped still save once
+Qivo reconnects, and the notice counts them until then. When the connection is
+back and those changes are saved, Qivo says so and editing continues. View
+preferences still change on this device and save once the connection is back.
+
+If you close or reload Qivo while a change is not saved yet, or while a field
+holds text you haven't saved, your browser asks before it leaves. The desktop app
+asks with **Leave** or **Stay**. Qivo does not sign you out while a change is not
+saved yet. If Qivo closes before it can ask, after a crash for example, the next start
+names the tasks with changes it could not confirm, so you can check them. For
+that, your browser keeps a note of each change until the server answers. The note
+holds the task's number and what kind of change it was, never what you typed.
+Signing out clears it.
 
 ## Desktop app
 
