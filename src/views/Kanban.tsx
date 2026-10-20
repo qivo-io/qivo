@@ -545,6 +545,10 @@ function Kanban({
         onDragEnd={endDrag}
         dragId={dragId}
         context={P.contextVersion}
+        stale={group.issues
+          .filter((it) => P.isStale(it))
+          .map((it) => it.id)
+          .join()}
       />
     ))
   }

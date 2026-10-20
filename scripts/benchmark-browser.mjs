@@ -523,7 +523,10 @@ try {
   if (baselineRevision !== null) {
     let baseline
     try {
-      baseline = await resolveBaseline(baselineRevision ? [baselineRevision] : [])
+      // git in the measured checkout, which --root may name
+      const git = async (args) =>
+        (await promisify(execFile)('git', args, { cwd: root, encoding: 'utf8' })).stdout.trim()
+      baseline = await resolveBaseline(baselineRevision ? [baselineRevision] : [], git)
     } catch (error) {
       if (!(error instanceof BaselineError)) throw error
       console.error(error.message)

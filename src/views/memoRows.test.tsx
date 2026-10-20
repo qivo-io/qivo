@@ -128,26 +128,48 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
+/* The Board's cards as Kanban renders them. */
+const board = ({ P, BoardCard, groupBoardCell }: Loaded) =>
+  groupBoardCell(P.issues, P.issueById).map((group) => (
+    <BoardCard
+      key={group.key}
+      group={group}
+      place={() => null}
+      dimmed={false}
+      onOpen={noop}
+      onDragStart={noop}
+      onDragEnd={noop}
+      dragId={null}
+      context={P.contextVersion}
+      stale={group.issues
+        .filter((it) => P.isStale(it))
+        .map((it) => it.id)
+        .join()}
+    />
+  ))
+
 describe('memoized task rows', () => {
   it('render a Board card again only for the task that changed', async () => {
-    await mount(({ P, BoardCard, groupBoardCell }) =>
-      groupBoardCell(P.issues, P.issueById).map((group) => (
-        <BoardCard
-          key={group.key}
-          group={group}
-          place={() => null}
-          dimmed={false}
-          onOpen={noop}
-          onDragStart={noop}
-          onDragEnd={noop}
-          dragId={null}
-          context={P.contextVersion}
-        />
-      )),
-    )
+    await mount(board)
     expect(await renderedBy(rename('two'))).toEqual(['two'])
     expect(await renderedBy(() => {})).toEqual([])
     expect(await renderedBy(renamePerson)).toEqual(['one', 'three', 'two'])
+  })
+
+  it('render a Board card again once its task turns stale', async () => {
+    // a minute before the tasks, last updated at AT, are 120 days old
+    const stale = Date.parse(AT) + 120 * 86_400_000
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(stale - 60_000)
+      await mount(board)
+      vi.setSystemTime(stale + 60_000)
+      // the next delivery renders every card whose task crossed the age
+      expect(await renderedBy(rename('two'))).toEqual(['one', 'three', 'two'])
+      expect(await renderedBy(rename('one'))).toEqual(['one'])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('render a Roadmap row again only for the task that changed', async () => {

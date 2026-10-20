@@ -204,9 +204,20 @@ type BoardCardProps = CardActions & {
   dimmed: boolean
   /** P.contextVersion, for what the rows read besides their tasks. */
   context: StoreVersion
+  /** The ids of the card's tasks that are stale now (P.isStale), joined.
+      Staleness follows the clock, so a task that crosses the age renders
+      again although nothing else changed. */
+  stale: string
 }
 
-function BoardCardView({ group, place, dimmed, context: _context, ...actions }: BoardCardProps) {
+function BoardCardView({
+  group,
+  place,
+  dimmed,
+  context: _context,
+  stale: _stale,
+  ...actions
+}: BoardCardProps) {
   // Repeated child project labels already name this shared project. Keep the
   // parent's label when it has no local children or belongs to another project.
   const parentPlace =
@@ -275,9 +286,9 @@ const ownDrag = (props: BoardCardProps) =>
 
 /* A board renders every card again on each store change. A card whose tasks
    are the same objects (P.issues keeps a task's object while it, its delay
-   and its family stay the same), in the same places, with the same context
-   and drag, renders the same, so it skips. Kanban keeps the callbacks'
-   identity. */
+   and its family stay the same), in the same places, with the same context,
+   drag and stale tasks, renders the same, so it skips. Kanban keeps the
+   callbacks' identity. */
 const BoardCard = memo(BoardCardView, (before, after) => {
   const a = members(before.group)
   const b = members(after.group)
@@ -285,6 +296,7 @@ const BoardCard = memo(BoardCardView, (before, after) => {
     before.group.key === after.group.key &&
     before.dimmed === after.dimmed &&
     before.context === after.context &&
+    before.stale === after.stale &&
     before.onOpen === after.onOpen &&
     before.onDragStart === after.onDragStart &&
     before.onDragEnd === after.onDragEnd &&
