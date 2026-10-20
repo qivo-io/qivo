@@ -66,6 +66,11 @@ Organization admins can download a ZIP from
 The manifest lists record counts and file locations. Format version 2 stores
 tasks in `data/tasks.json`, with `task_links.json`, `task_labels.json` and
 `task_attachments.json` in the same folder. Related records use `task_id`.
+A move to another sub-project clears a task's `status_at` and sets its
+`done_at`, `review_at` and `remaining_set_at`, where it has them, to the move
+time, for the task and each subtask that moves with it. Later changes stamp
+them again. The move changes no activity, so the task's history still shows
+when it was completed.
 
 The export excludes [Deleted items](./how-work-is-organized.md#deleted-items),
 personal inboxes, subscriptions, preferences, private backgrounds, login

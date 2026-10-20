@@ -61,7 +61,8 @@ date window or layout clears the week lock.
 
 Qivo spreads each task's remaining hours evenly from its measurement week,
 or planned start if later, through its planned end. An estimate saved after
-the planned end counts in the save week. These figures update while you drag
+the planned end counts in the save week. A move to another sub-project makes
+the move week the measurement week. These figures update while you drag
 bars; there is no separate allocation to enter.
 
 ## Team sync

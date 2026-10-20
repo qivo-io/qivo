@@ -4252,9 +4252,11 @@ export const PLANNER = {
       moved.project_id = projectId
       moved.updated_at = now
       // the server's move clears the status stamp and restarts a review
-      // hand-off or Done time at the move (model/issues.ts movedStamps)
+      // hand-off, remaining-hours measurement or Done time at the move
+      // (model/issues.ts movedStamps)
       moved.status_at = undefined
       if (moved.review_at != null) moved.review_at = now
+      if (moved.remaining_set_at != null) moved.remaining_set_at = now
       if (moved.done_at != null) moved.done_at = now
     }
     if (leavesParent) {

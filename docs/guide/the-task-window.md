@@ -136,7 +136,11 @@ view. Choosing another parent replaces it, and **Remove parent** removes it.
 
 Choose **Move to sub-project…** to move within the task's organization to a
 sub-project you can edit. The task keeps its ID, comments, attachments, labels,
-activity, links and subtasks.
+activity, links and subtasks. Its Remaining estimate counts as measured at the
+move, which can change its
+[delay projection](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works),
+and its review hand-off and the time it became Done start again too, for the
+task and each subtask that moves with it.
 
 A move between sub-projects of the same project moves only the task. A move
 to a sub-project of another project also moves the task's subtasks, at any
@@ -175,10 +179,12 @@ starts this count again, for the task and each subtask that moves with it.
 It sends no inbox update. The task's messages are marked read as with any
 archive.
 
-The sweep archives subtasks before their parents. Once a group's active
-subtasks are gone, its saved status applies again. A saved Done task can
-archive on a later sweep when its Done age meets the threshold;
-a saved To Do task returns to To Do.
+The sweep archives subtasks before their parents. A Done subtask moved to
+another sub-project of the same project starts its count again, so its Done
+parent archives no earlier than the night after that subtask archives, even
+if the parent itself did not move. Once a group's active subtasks are gone, its saved status
+applies again. A saved Done task can archive on a later sweep when its Done
+age meets the threshold; a saved To Do task returns to To Do.
 
 **Manual archiving** uses **Archive or delete…** in the task's **…** menu,
 which needs edit access. **Archive** is selected first. For a task with
