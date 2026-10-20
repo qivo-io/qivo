@@ -195,7 +195,7 @@ export function PlannableHoursInput({
   width?: number
 }) {
   // hours typed and not yet saved (the field saves on blur)
-  const hoursUnsaved = useFieldUnsaved(P.editsPaused)
+  const hoursUnsaved = useFieldUnsaved(P.editsPaused, `${user.id}:${user.plannableHours ?? ''}`)
   // Agents have unlimited capacity and cannot receive a weekly-hour value.
   if (user.isAgent) {
     return (

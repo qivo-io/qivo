@@ -40,7 +40,7 @@ const appRewrite =
    can itself sit inside another checkout's dev-temp/, so the rules name this
    one directory by its full path, never any dev-temp/ on the way. */
 const devTemp = normalizePath(fileURLToPath(new URL('./dev-temp', import.meta.url))).replace(
-  /[()[\]{}*?!+@]/g,
+  /[()[\]{}*?!+@|]/g,
   '\\$&',
 )
 const devTempGlob = `${devTemp}/**`

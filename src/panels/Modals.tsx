@@ -26,7 +26,7 @@ import { Avatar, DateSelect, FieldSelect, Icon } from '../components/qivo'
 import { relativeWeek, weekToISO } from '../lib/dates'
 import { restoreFocus } from '../lib/focusVisibility'
 import { isLandscapeRoadmapOpen } from '../lib/landscape'
-import { useTypedUnsaved } from '../lib/leaveGuard'
+import { useTypedUnsaved, useUnsaved } from '../lib/leaveGuard'
 import {
   type AccessDraft,
   afterAccessChange,
@@ -84,6 +84,7 @@ function ModalShell({
   footer,
   focusAfterClose,
   keepOnOutsideClick = false,
+  savesAsYouGo = false,
   children,
 }: {
   icon: string
@@ -111,6 +112,10 @@ function ModalShell({
    * lose for good (a secret shown once). Close, Escape and the footer still
    * close it */
   keepOnOutsideClick?: boolean
+  /** for a dialog whose fields save on their own (Milestones, Update
+   * Estimate). They hold their own close-warning leases, so typing alone
+   * does not count as unsaved until the dialog closes */
+  savesAsYouGo?: boolean
   children?: ReactNodeM
 }) {
   // A create/edit dialog also holds non-text draft choices and staged files.
@@ -118,6 +123,7 @@ function ModalShell({
   useUpdateBlocker(true)
   // text typed into the dialog is lost if the page closes before it is sent
   const unsaved = useTypedUnsaved()
+  const typed = savesAsYouGo ? undefined : unsaved.typed
   const mobile = useMobile()
   const closeLayer = useMobileBackLayer(true, onClose, mobile || isLandscapeRoadmapOpen())
   const returnFocusRef = useRefM<HTMLElement | null>(
@@ -141,7 +147,7 @@ function ModalShell({
           danger && 'border-[color-mix(in_oklab,var(--danger)_45%,var(--border))]',
         )}
         style={{ width: mobile ? '100%' : width }}
-        onInputCapture={unsaved.typed}
+        onInputCapture={typed}
         onOpenAutoFocus={(event) => {
           // Preserve the shell's chosen field instead of Radix's close-button
           // fallback. data-autofocus takes precedence over document order; a
@@ -1849,6 +1855,8 @@ function MilestoneModal({
   const [initialDate] = useStateM(() => (init.week == null ? null : weekToISO(init.week)))
   const [name, setName] = useStateM('')
   const [date, setDate] = useStateM(() => initialDate ?? weekToISO(P.TODAY_WEEK))
+  // a new milestone's name, typed and not added yet
+  useUnsaved(!!name.trim())
   // a create in flight: Add waits for the server's answer
   const [adding, setAdding] = useStateM(false)
   // the draft as it is now, so an answer can tell whether it changed since
@@ -1886,6 +1894,7 @@ function MilestoneModal({
     <ModalShell
       icon="diamond"
       title="Milestones"
+      savesAsYouGo
       // the shell's chip is set in mono for task keys; a project name is prose
       badge={project && <span className="font-sans">{project.name}</span>}
       onClose={onClose}
@@ -2049,6 +2058,8 @@ function MilestoneRowView({
    edit and leaves the window open (data-escape-owner, see ModalShell). */
 function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }) {
   const [name, setName] = useStateM(m.name)
+  // a rename typed and not saved yet
+  useUnsaved(name.trim() !== m.name)
   const [date, setDate] = useStateM(() => weekToISO(m.week))
   const week = exactWeekForDate(date)
   // a save in flight: the editor stays open, its fields read-only, until

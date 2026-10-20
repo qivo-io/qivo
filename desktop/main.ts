@@ -425,7 +425,11 @@ function createWindow(startHidden = false): void {
   win.webContents.on(
     'will-prevent-unload',
     createLeavePrompt({
-      ask: (options) => dialog.showMessageBoxSync(win, options),
+      // a quit from the tray can find the window hidden; show what is at stake
+      ask: (options) => {
+        showWindow()
+        return dialog.showMessageBoxSync(win, options)
+      },
       // a quit that the page held back is over; closing hides to the tray again
       onStay: () => {
         quitting = false

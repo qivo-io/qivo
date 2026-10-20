@@ -14,6 +14,7 @@ import {
 import { useAppearance } from '../AppearanceProvider'
 import { SettingsGroup } from '../components/settingsPage'
 import { ThemeSelector } from '../components/ThemeSelector'
+import { useUnsaved } from '../lib/leaveGuard'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { type AppearancePreferences, P } from '../store/planner'
 
@@ -205,6 +206,8 @@ export function AppearanceSettings() {
   const [busy, setBusy] = useState(false)
   const [uploading, setUploading] = useState(false)
   useUpdateBlocker(busy || uploading)
+  // an image on its way to the server is lost if the page closes
+  useUnsaved(uploading)
   const [attempt, setAttempt] = useState(0)
   const alive = useRef(false)
   const uploadController = useRef<AbortController | null>(null)

@@ -80,7 +80,14 @@ function UpdateEstimateModal({ onClose }: { onClose: () => void }) {
   )
 
   return (
-    <ModalShell icon="history" title="Update Estimate" onClose={close} width={640} footer={footer}>
+    <ModalShell
+      icon="history"
+      title="Update Estimate"
+      onClose={close}
+      width={640}
+      footer={footer}
+      savesAsYouGo
+    >
       <div data-update-estimate>
         <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [margin-bottom:24px]">
           To Do, In Progress and In Review. All visible projects.

@@ -48,8 +48,10 @@ setup instructions and the shared command-level credential helper.
 
 Set backend `QIVO_ENVIRONMENT=development` explicitly. Fixture provisioning
 requires private generated credentials and an absolute
-`QIVO_FIXTURE_CREDENTIALS_DIR` outside the public checkout. Deployments never
-provision shared accounts or reset data automatically.
+`QIVO_FIXTURE_CREDENTIALS_DIR` outside the public checkout. Only a disposable
+local backend (`--local`) may keep them in a private directory under the
+checkout's git-ignored `dev-temp/`, which the dev server does not serve.
+Deployments never provision shared accounts or reset data automatically.
 
 After configuring your development backend, `npm run dev` runs Convex and Vite
 on port 5199. `/` redirects to the planner at `/app`, and the operator console

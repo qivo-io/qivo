@@ -1,4 +1,5 @@
 import { type FocusEvent, useLayoutEffect, useState } from 'react'
+import { useUpdateBlocker } from './updateSafety'
 
 /* The warning before the page closes or reloads with work that is not saved.
 
@@ -12,6 +13,8 @@ import { type FocusEvent, useLayoutEffect, useState } from 'react'
    warning (desktop/main.ts). */
 
 const leases = new Set<symbol>()
+// set once the page leaves on purpose, after the person was told what it loses
+let leaving = false
 
 /** Whether an editor or an upload holds something unsent. */
 export const hasUnsaved = () => leases.size > 0
@@ -33,11 +36,17 @@ export function useUnsaved(unsaved: boolean) {
   }, [unsaved])
 }
 
+/** Lets the page leave without the warning, for a reload the person chose
+    after Qivo said what it would lose, such as a confirmed sign-out. */
+export function leaveDeliberately() {
+  leaving = true
+}
+
 /** Warns before the page unloads while `unsaved()` holds. Answers a function
     that removes the handler. */
 export function installLeaveGuard(unsaved: () => boolean, win: Window = window) {
   const onBeforeUnload = (event: BeforeUnloadEvent) => {
-    if (!unsaved()) return
+    if (leaving || !unsaved()) return
     event.preventDefault()
     // older browsers show the warning only for a returnValue
     event.returnValue = ''
@@ -48,26 +57,37 @@ export function installLeaveGuard(unsaved: () => boolean, win: Window = window) 
 
 /** Holds a lease from the person's first keystroke in a form until `reset`,
     for fields that keep typed text without a draft state of their own. Put
-    `typed` on the form's `onInputCapture`. */
+    `typed` on the form's `onInputCapture`. The text also holds back a
+    version reload, which would otherwise stop at the close warning. */
 export function useTypedUnsaved() {
   const [typed, setTyped] = useState(false)
   useUnsaved(typed)
+  useUpdateBlocker(typed)
   return { typed: () => setTyped(true), reset: () => setTyped(false) }
 }
 
-/** Props for an uncontrolled field that saves on blur. They hold a lease
-    from the first keystroke until a blur leaves nothing unsent, which they
-    check once the field's own blur handler has run. A blur while `paused()`
-    holds keeps the lease when the field still shows text other than its
-    saved value, because the save was refused and the draft stays. */
-export function useFieldUnsaved(paused: () => boolean) {
+/** Props for an uncontrolled field that saves on blur and is keyed by its
+    `saved` value. They hold a lease from the first keystroke until a blur
+    leaves nothing unsent, which they check once the field's own blur
+    handler has run. A blur while `paused()` holds keeps the lease when the
+    field still shows another value than the saved one, because the save
+    was refused and the draft stays. A new saved value remounts the field
+    and ends the draft, and the lease with it. */
+export function useFieldUnsaved(paused: () => boolean, saved: string) {
   const { typed, reset } = useTypedUnsaved()
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new saved value is the trigger
+  useLayoutEffect(reset, [saved])
   return {
     onInput: typed,
     onBlurCapture: (event: FocusEvent<HTMLInputElement>) => {
       const field = event.currentTarget
       setTimeout(() => {
-        if (!paused() || field.value === field.defaultValue) reset()
+        const same =
+          field.value === field.defaultValue ||
+          (field.type === 'number' &&
+            field.value.trim() !== '' &&
+            Number(field.value) === Number(field.defaultValue))
+        if (!paused() || same) reset()
       }, 0)
     },
   }

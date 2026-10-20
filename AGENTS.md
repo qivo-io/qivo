@@ -144,3 +144,5 @@ customer data and backend identities. Staging has its own backend and private
 credentials. Deployments never seed or reset data. Use `QIVO_ENVIRONMENT` to
 identify the target explicitly, and keep fixture credentials outside this
 checkout in the private directory chosen by `QIVO_FIXTURE_CREDENTIALS_DIR`.
+Only a disposable local backend (`--local`) may keep them under the
+checkout's git-ignored `dev-temp/`.

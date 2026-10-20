@@ -79,6 +79,7 @@ function writeAvatars(cwd) {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs()
   for (const path of folders.splice(0)) rmSync(path, { recursive: true, force: true })
 })
 
@@ -424,6 +425,10 @@ describe('private, persistent credentials', () => {
 
   it('lets only a local backend keep credentials in the checkout, under a git-ignored dev-temp/', () => {
     const cwd = folder()
+    // only this repository's rules count, not the machine's global ignore file
+    vi.stubEnv('HOME', cwd)
+    vi.stubEnv('XDG_CONFIG_HOME', cwd)
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1')
     spawnSync('git', ['init', '--quiet'], { cwd })
     writeFileSync(join(cwd, '.gitignore'), 'dev-temp/\n')
     const ignored = join(cwd, 'dev-temp', 'credentials')

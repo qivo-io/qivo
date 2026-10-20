@@ -108,10 +108,8 @@ describe('the automatic read in the task window', { timeout: 20_000 }, () => {
     expect(reads()).toHaveLength(0)
     expect(window.showToast).not.toHaveBeenCalled()
 
-    await act(async () => {
-      syncStatus.setSocket(UP)
-      syncStatus.transitioned()
-    })
+    // no probe is set, so the server's answer counts as immediate
+    await act(async () => syncStatus.setSocket(UP))
     expect(reads()).toHaveLength(1)
     expect(reads()[0][1]).toEqual({ org_id: snap.orgs[0].id, ids: ['message-a'] })
   })

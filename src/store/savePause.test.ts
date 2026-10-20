@@ -1,6 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Id } from '../../convex/_generated/dataModel'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 /* Edits pause while Qivo cannot save (lib/syncStatus), and every sent change
@@ -29,7 +30,7 @@ vi.mock('../lib/unconfirmedNote', async (importOriginal) => {
     unconfirmedNote: {
       add: (...args: Parameters<NonNullable<typeof page.note>['add']>) =>
         (page.note ?? open()).add(...args),
-      forget: (scopes: Iterable<string>) => (page.note ?? open()).forget(scopes),
+      forgetAll: () => (page.note ?? open()).forgetAll(),
       collect: (scopes: Iterable<string>) => (page.note ?? open()).collect(scopes),
     },
   }
@@ -58,6 +59,9 @@ describe('the pause while Qivo cannot save', () => {
   let showToast: ReturnType<typeof vi.fn>
   let storage: Map<string, string>
   let reload: ReturnType<typeof vi.fn>
+  let probes: (() => void)[] = []
+  let snapshotFail: (error: Error) => void = () => {}
+  const subscription = () => ({ fail: snapshotFail })
 
   const settle = async () => {
     for (let i = 0; i < 8; i++) await Promise.resolve()
@@ -73,8 +77,14 @@ describe('the pause while Qivo cannot save', () => {
     status = await import('../lib/syncStatus')
     store = await import('./planner')
     await store.initStore()
+    probes = []
+    status.syncStatus.setProbe(() => new Promise<void>((resolve) => probes.push(resolve)))
     status.syncStatus.setSocket(UP)
-    status.syncStatus.transitioned()
+    await answerProbe()
+  }
+  /** Answers the newest probe query, as the server would. */
+  async function answerProbe() {
+    probes.at(-1)?.()
     await settle()
   }
   async function goOffline() {
@@ -120,6 +130,16 @@ describe('the pause while Qivo cannot save', () => {
       has_hidden_subtasks: false,
       has_hidden_parent: false,
     })
+    snapshot.attachments.push({
+      id: 'file-a',
+      issue_id: 'task-a',
+      name: 'plot.png',
+      mime: 'image/png',
+      size_bytes: 1024,
+      storage_id: 'storage-file-a' as Id<'_storage'>,
+      inline: false,
+      created_at: '2026-09-14T08:00:00.000Z',
+    })
     snapshot.messages.push({
       id: 'message-a',
       org_id: org.id,
@@ -132,8 +152,11 @@ describe('the pause while Qivo cannot save', () => {
     })
     sent = []
     network.query.mockResolvedValue(null)
-    network.onUpdate.mockImplementation((ref, _args, deliver) => {
-      if (getFunctionName(ref) === 'snapshot:forMe') deliver(structuredClone(snapshot))
+    network.onUpdate.mockImplementation((ref, _args, deliver, fail) => {
+      if (getFunctionName(ref) === 'snapshot:forMe') {
+        snapshotFail = fail
+        deliver(structuredClone(snapshot))
+      }
       return vi.fn()
     })
     network.mutation.mockImplementation((ref, args) => {
@@ -184,10 +207,9 @@ describe('the pause while Qivo cannot save', () => {
     status.syncStatus.setSocket(UP)
     sent[0].resolve(null)
     await settle()
-    // the writes settled, and the pause holds until the new connection's results arrive
+    // the writes settled, and the pause holds until the server answers the probe
     expect(P.savePause()?.kind).toBe('offline')
-    status.syncStatus.transitioned()
-    await settle()
+    await answerProbe()
     expect(P.savePause()).toBeNull()
     expect(P.hasUnconfirmed()).toBe(false)
     expect(P.issueById[task.id].status).toBe('progress')
@@ -223,7 +245,7 @@ describe('the pause while Qivo cannot save', () => {
     expect(sentNames()).toEqual(['prefs:save', 'prefs:save'])
   })
 
-  it('notes each sent change without its text, and clears it on an answer or a sign-out', async () => {
+  it('notes each sent change without its text, and clears it on an answer', async () => {
     await boot()
     const { P } = store
     const [task] = P.issues
@@ -242,25 +264,63 @@ describe('the pause while Qivo cannot save', () => {
     await settle()
     expect(notes()).toEqual([])
 
+    // a removal names its task, though its paint took the row away first
+    store.P.removeAttachment('file-a')
+    await settle()
+    expect(JSON.parse(notes()[0][1])).toEqual([
+      { task: 'QN-12', what: 'attachment removal', id: '3', at: expect.any(Number) },
+    ])
+    // a new task has no key until the server numbers it
+    void P.addIssue({ title: 'Fresh task', project: snapshot.projects[0].id })
+    await settle()
+    expect(JSON.parse(notes()[0][1]).at(-1)).toMatchObject({ task: null, what: 'a new task' })
+  })
+
+  it('leaves the read that opening a task sends out of the count and the note', async () => {
+    await boot()
+    store.P.markMessagesRead(['message-a'], { quiet: true })
+    await settle()
+    expect(sentNames()).toEqual(['messages:markRead'])
+    expect(store.P.hasUnconfirmed()).toBe(false)
+    expect(notes()).toEqual([])
+  })
+
+  it('signs out past a waiting change only on a second press, and then clears every note', async () => {
+    await boot()
+    const { P } = store
+    const [task] = P.issues
     void P.updateIssue(task.id, { title: 'Recalibrate' })
     await settle()
-    expect(notes()).toHaveLength(1)
-    // a change still waiting holds the sign-out back and says why
+    storage.set('qivo.unconfirmed.v1:org-8:someone-else:closed-page', '[]')
     P.signOut()
     expect(showToast).toHaveBeenLastCalledWith(
-      '1 change is not saved yet. Sign out once it is saved.',
+      '1 change is not saved yet. Press Sign out again to sign out and lose it.',
       'error',
     )
-    expect(notes()).toHaveLength(1)
-    sent[2].resolve(null)
-    await settle()
-    // a note a page that already closed left is cleared too
-    const scope = `${snapshot.orgs[0].id}:${snapshot.profiles[0].id}`
-    storage.set(`qivo.unconfirmed.v1:${scope}:closed-page`, '[]')
+    expect(reload).not.toHaveBeenCalled()
+    expect(notes()).toHaveLength(2)
     P.signOut()
     expect(notes()).toEqual([])
     await settle()
     expect(reload).toHaveBeenCalled()
+  })
+
+  it('says why a credential revoke is refused offline', async () => {
+    await boot()
+    await goOffline()
+    expect(await store.P.revokeMcpToken('token-a')).toBe(false)
+    expect(showToast).toHaveBeenCalledWith(store.OFFLINE_TEXT, 'error')
+    expect(sent).toEqual([])
+  })
+
+  it('does not say editing is on again while snapshot trouble still pauses it', async () => {
+    await boot()
+    await goOffline()
+    subscription().fail(new Error('[CONVEX Q(snapshot:forMe)] Server Error'))
+    status.syncStatus.setSocket(UP)
+    await answerProbe()
+    expect(store.P.savePause()).toBeNull()
+    expect(showToast).toHaveBeenCalledWith('Back online.', 'success')
   })
 
   it('tells the next start about a change no page heard back about, once', async () => {

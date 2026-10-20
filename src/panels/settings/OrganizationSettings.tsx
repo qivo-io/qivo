@@ -172,8 +172,8 @@ function ProjectCreatorsField({ setPage }: { setPage: (page: string) => void }) 
 export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void }) {
   const canManage = P.isAdmin()
   // numbers typed and not yet saved (the fields save on blur)
-  const attachmentUnsaved = useFieldUnsaved(P.editsPaused)
-  const plannableUnsaved = useFieldUnsaved(P.editsPaused)
+  const attachmentUnsaved = useFieldUnsaved(P.editsPaused, `${P.org.maxAttachmentMb}`)
+  const plannableUnsaved = useFieldUnsaved(P.editsPaused, `${P.org.defaultPlannableHours}`)
   return (
     <>
       <PageTitle>Organization</PageTitle>

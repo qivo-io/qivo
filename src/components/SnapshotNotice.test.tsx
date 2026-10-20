@@ -32,7 +32,7 @@ vi.mock('../lib/unconfirmedNote', async (importOriginal) => {
     unconfirmedNote: {
       add: (...args: Parameters<NonNullable<typeof page.note>['add']>) =>
         (page.note ?? open()).add(...args),
-      forget: (scopes: Iterable<string>) => (page.note ?? open()).forget(scopes),
+      forgetAll: () => (page.note ?? open()).forgetAll(),
       collect: (scopes: Iterable<string>) => (page.note ?? open()).collect(scopes),
     },
   }
@@ -190,7 +190,6 @@ describe('SnapshotNotice while Qivo cannot save', () => {
     const { syncStatus, OFFLINE_DELAY_MS } = await import('../lib/syncStatus')
     await act(async () => {
       syncStatus.setSocket({ connected: true, everConnected: true })
-      syncStatus.transitioned()
       syncStatus.setSocket({ connected: false, everConnected: true })
       vi.advanceTimersByTime(OFFLINE_DELAY_MS)
     })
@@ -220,7 +219,6 @@ describe('SnapshotNotice while Qivo cannot save', () => {
     expect(shown()?.dataset.snapshotNotice).toBe('offline')
     await act(async () => {
       status.setSocket({ connected: true, everConnected: true })
-      status.transitioned()
     })
     expect(shown()).toBeNull()
     expect(window.showToast).toHaveBeenCalledWith('Back online. Editing is on again.', 'success')
@@ -233,7 +231,6 @@ describe('SnapshotNotice while Qivo cannot save', () => {
     network.mutation.mockReturnValue(new Promise<null>((resolve) => (answer = () => resolve(null))))
     await act(async () => {
       syncStatus.setSocket({ connected: true, everConnected: true })
-      syncStatus.transitioned()
       void store.P.addTeam('Field crew')
       vi.advanceTimersByTime(SLOW_SAVE_MS)
     })

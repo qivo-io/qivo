@@ -11,9 +11,9 @@ let paused = false
 let container: HTMLDivElement
 let root: Root
 
-function Field() {
-  const unsaved = useFieldUnsaved(() => paused)
-  return <input aria-label="Hours" defaultValue="16" {...unsaved} />
+function Field({ saved = '16' }: { saved?: string }) {
+  const unsaved = useFieldUnsaved(() => paused, saved)
+  return <input aria-label="Hours" type="number" key={saved} defaultValue={saved} {...unsaved} />
 }
 
 beforeEach(async () => {
@@ -54,6 +54,15 @@ describe('useFieldUnsaved', () => {
     expect(hasUnsaved()).toBe(true)
     // put back by hand: nothing left to send
     await typeAndLeave('16')
+    expect(hasUnsaved()).toBe(false)
+  })
+
+  it('drops the warning when a new saved value replaces the draft, or the same number is typed', async () => {
+    paused = true
+    await typeAndLeave('12')
+    await act(async () => root.render(<Field saved="20" />))
+    expect(hasUnsaved()).toBe(false)
+    await typeAndLeave('20.0')
     expect(hasUnsaved()).toBe(false)
   })
 

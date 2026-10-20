@@ -165,7 +165,7 @@ export function RemainingInput({
   // only exists on the element, and without it unparseable text arrives as ""
   // and reads as a deliberate clear
   // the hours typed and not yet saved
-  const unsaved = useFieldUnsaved(P.editsPaused)
+  const unsaved = useFieldUnsaved(P.editsPaused, `${it.uuid}:${it.remaining ?? ''}`)
   const commit = (el: HTMLInputElement) => {
     const p = remainingPatchFromInput(el, it.remaining)
     if (!p.write) return

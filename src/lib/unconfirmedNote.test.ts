@@ -43,7 +43,9 @@ describe('unconfirmed note', () => {
     open('still-open').add(SCOPE, { task: 'QN-14', what: 'comment' })
     open('crashed').add('org-2:profile-2', { task: 'QN-1', what: 'title' })
     const next = open('next')
-    expect(await next.collect([SCOPE])).toEqual([{ task: 'QN-12', what: 'description' }])
+    expect(await next.collect([SCOPE])).toEqual([
+      { task: 'QN-12', what: 'description', scope: SCOPE },
+    ])
     expect(await next.collect([SCOPE])).toEqual([])
     expect([...storage.items.keys()]).toEqual([
       `qivo.unconfirmed.v1:${SCOPE}:still-open`,
@@ -64,12 +66,26 @@ describe('unconfirmed note', () => {
     expect([...storage.items.keys()]).toEqual([`qivo.unconfirmed.v1:${SCOPE}:maybe-open`])
   })
 
-  it('never reports its own page, and a sign-out clears every page', async () => {
+  it('drops a month-old note in any scope, and leaves a fresh one of another person', async () => {
+    const { storage, open } = pages()
+    storage.setItem(
+      'qivo.unconfirmed.v1:org-9:left-org:gone',
+      JSON.stringify([{ task: 'QN-1', what: 'title', id: '1', at: 0 }]),
+    )
+    open('other-person').add('org-8:someone-else', { task: 'QN-2', what: 'title' })
+    expect(await open('next').collect([SCOPE])).toEqual([])
+    expect([...storage.items.keys()]).toEqual([
+      'qivo.unconfirmed.v1:org-8:someone-else:other-person',
+    ])
+  })
+
+  it('never reports its own page, and a sign-out clears every note in the browser', async () => {
     const { storage, open } = pages()
     const note = open('a')
     note.add(SCOPE, { task: null, what: 'a project change' })
     open('b').add(SCOPE, { task: 'QN-3', what: 'archive' })
-    note.forget([SCOPE])
+    open('c').add('org-8:someone-else', { task: 'QN-2', what: 'title' })
+    note.forgetAll()
     expect(storage.items.size).toBe(0)
     note.add(SCOPE, { task: 'QN-4', what: 'title' })
     expect(await note.collect([SCOPE])).toEqual([])

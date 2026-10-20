@@ -1268,7 +1268,7 @@ function IssueDetail({
   useUpdateBlocker(editTitle && !!it && titleDraft !== it.title)
   useUnsaved(editTitle && !!it && titleDraft !== it.title)
   // remaining hours typed and not yet saved (the field saves on blur)
-  const remainingUnsaved = useFieldUnsaved(P.editsPaused)
+  const remainingUnsaved = useFieldUnsaved(P.editsPaused, `${it?.id}:${it?.remaining ?? ''}`)
   // point the store's one-thread comment cache at this issue; release it when
   // the modal closes (uuid null) or the component unmounts
   const watchUuid = it ? it.uuid : null

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /* Explicit Northstar fixtures for isolated development and staging backends,
  * and for a disposable local backend (--local). Passwords stay outside the
- * checkout. Only password hashes reach Convex. */
+ * checkout, or for --local in a directory under its git-ignored dev-temp/,
+ * which the dev server does not serve. Only password hashes reach Convex. */
 import { spawnSync } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
 import {
@@ -599,6 +600,8 @@ exact SITE_URL. Production fixture commands are disabled.
 --site-url, default http://localhost:5199), QIVO_FIXTURE_LOCAL=true and the
 local backend admin key in QIVO_LOCAL_ADMIN_KEY, never CONVEX_DEPLOY_KEY.
 Set QIVO_FIXTURE_CREDENTIALS_DIR to a private directory outside this checkout.
+With --local it may also be a private directory under the checkout's
+git-ignored dev-temp/.
 Credentials are stored under <directory>/<deployment>/credentials.json (0600).
 No secret command-line flags are supported. plan is fully offline.
 Wipe preserves logins and portraits; it removes all demo organization work.

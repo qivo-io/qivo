@@ -38,6 +38,7 @@ import { lazyFromModule } from './lib/lazyModule'
 import { useUnsaved } from './lib/leaveGuard'
 import { loadFailureText } from './lib/loadFailure'
 import { oauthConnectRequest, oauthNeedsLogin } from './lib/oauthConnection'
+import { unconfirmedNote } from './lib/unconfirmedNote'
 import { beginUpdateBlock, isUpdateBlocked, useUpdateBlocker } from './lib/updateSafety'
 import { loadWorkspace, preloadWorkspacePage } from './lib/workspacePreload'
 import { initStore, P } from './store/planner'
@@ -658,6 +659,8 @@ export function AuthGate() {
   }
 
   const signOutAndReload = () => {
+    // a sign-out clears the crash note too (lib/unconfirmedNote)
+    unconfirmedNote.forgetAll()
     signingOut.current = true
     loadAttempt.current++
     setAppearanceAccount(null)

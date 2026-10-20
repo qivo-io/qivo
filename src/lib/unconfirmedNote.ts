@@ -49,14 +49,14 @@ export function createUnconfirmedNote(deps: Dependencies) {
     }
   }
 
-  /** The stored keys of every page's notes in `scope`. */
-  function keysOf(scope: string): string[] {
+  /** The stored keys of every note in this browser. */
+  function noteKeys(): string[] {
     const keys: string[] = []
     try {
       const storage = deps.storage()
       for (let i = 0; i < storage.length; i++) {
         const key = storage.key(i)
-        if (key?.startsWith(`${PREFIX}${scope}:`)) keys.push(key)
+        if (key?.startsWith(PREFIX)) keys.push(key)
       }
     } catch {
       // Unavailable storage holds no notes.
@@ -79,55 +79,55 @@ export function createUnconfirmedNote(deps: Dependencies) {
       }
     },
 
-    /** Clears every page's notes in `scopes`, for a sign-out. */
-    forget(scopes: Iterable<string>) {
-      for (const scope of scopes) {
-        own.delete(scope)
-        for (const key of keysOf(scope)) {
-          try {
-            deps.storage().removeItem(key)
-          } catch {
-            // Nothing more can be done about storage that refuses.
-          }
+    /** Clears every note in this browser, for a sign-out. */
+    forgetAll() {
+      own.clear()
+      for (const key of noteKeys()) {
+        try {
+          deps.storage().removeItem(key)
+        } catch {
+          // Nothing more can be done about storage that refuses.
         }
       }
     },
 
-    /** Answers the changes that pages which have closed noted in `scopes`
-        and never cleared, and clears those notes, so each is told once.
+    /** Answers the changes that pages which have closed noted in `scopes`,
+        each with its scope, and clears those notes, so each is told once.
         When the browser cannot tell which pages are open, it reports none,
         because the page that wrote a note may still be waiting for its
-        answer, and only drops notes older than KEEP_MS. */
-    async collect(scopes: Iterable<string>): Promise<UnconfirmedChange[]> {
+        answer. Notes older than KEEP_MS go unread in every scope, such as
+        those of an organization the person has left. */
+    async collect(scopes: Iterable<string>): Promise<(UnconfirmedChange & { scope: string })[]> {
       const live = await deps.livePages()
-      const found: UnconfirmedChange[] = []
-      for (const scope of scopes) {
-        for (const key of keysOf(scope)) {
-          const page = key.slice(`${PREFIX}${scope}:`.length)
-          if (page === deps.page || live?.has(page)) continue
-          let entries: Partial<Stored>[] = []
-          try {
-            const parsed: unknown = JSON.parse(deps.storage().getItem(key) || 'null')
-            if (Array.isArray(parsed)) entries = parsed
-          } catch {
-            // A note that cannot be read says nothing.
-          }
-          const kept = entries.filter(
-            (entry) => typeof entry?.what === 'string' && now() - Number(entry.at) < KEEP_MS,
-          )
-          if (!live && kept.length) continue
-          try {
-            deps.storage().removeItem(key)
-          } catch {
-            // The note stays, and the next start reads it again.
-          }
-          if (!live) continue
-          for (const entry of kept)
-            found.push({
-              task: typeof entry.task === 'string' ? entry.task : null,
-              what: String(entry.what),
-            })
+      const wanted = new Set(scopes)
+      const found: (UnconfirmedChange & { scope: string })[] = []
+      for (const key of noteKeys()) {
+        const rest = key.slice(PREFIX.length)
+        const scope = rest.slice(0, rest.lastIndexOf(':'))
+        const page = rest.slice(scope.length + 1)
+        if (page === deps.page) continue
+        let entries: Partial<Stored>[] = []
+        try {
+          const parsed: unknown = JSON.parse(deps.storage().getItem(key) || 'null')
+          if (Array.isArray(parsed)) entries = parsed
+        } catch {
+          // A note that cannot be read says nothing.
         }
+        const kept = entries.filter(
+          (entry) => typeof entry?.what === 'string' && now() - Number(entry.at) < KEEP_MS,
+        )
+        if (kept.length && (!wanted.has(scope) || !live || live.has(page))) continue
+        try {
+          deps.storage().removeItem(key)
+        } catch {
+          // The note stays, and the next start reads it again.
+        }
+        for (const entry of kept)
+          found.push({
+            task: typeof entry.task === 'string' ? entry.task : null,
+            what: String(entry.what),
+            scope,
+          })
       }
       return found
     },

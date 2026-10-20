@@ -88,7 +88,7 @@ import { AVATAR_TYPES, avatarImage, compressImage } from '../lib/images'
 import { nameInitials } from '../lib/initials'
 import { groupProgress, groupSpan, isIssueDone, isIssueGroup } from '../lib/issueGroups'
 import { LABEL_COLORS } from '../lib/labelColors'
-import { hasUnsaved, holdUnsaved } from '../lib/leaveGuard'
+import { hasUnsaved, holdUnsaved, leaveDeliberately } from '../lib/leaveGuard'
 import { watchLocalDay } from '../lib/localDay'
 import { desktopNotify } from '../lib/notify'
 import { matchesAllWords, taskSearchText } from '../lib/search'
@@ -1157,6 +1157,10 @@ export type SnapshotTrouble = {
 let snapshotTrouble: SnapshotTrouble | null = null
 /* The crash note's report from this start (P.unconfirmedReport). */
 let unconfirmedReport: string | null = null
+/* When a sign-out last said what it would lose. A second press within
+   SIGN_OUT_CONFIRM_MS goes ahead. */
+const SIGN_OUT_CONFIRM_MS = 5_000
+let signOutWarnedAt = Number.NEGATIVE_INFINITY
 /* A delivery that ends the trouble while run()'s paint gate holds it. The
    trouble ends when that paint lands, not before, so nobody edits the stale
    rows still on screen in the meantime. */
@@ -1540,6 +1544,7 @@ const TASK_FIELD: Record<string, string> = {
 /* …and what any other write changed, by its module. */
 const OTHER_CHANGE: Record<string, string> = {
   issues: 'a task change',
+  comments: 'a comment change',
   projects: 'a project change',
   teams: 'a team change',
   labels: 'a label change',
@@ -1558,15 +1563,21 @@ const OTHER_CHANGE: Record<string, string> = {
 
 /** What the crash note says about write `name` with `args`: the key of the
     task it changes, when the store knows it, and what kind of change it is.
-    It never holds the text or any other content of the change. */
-function describeWrite(name: string, args: unknown): UnconfirmedChange {
+    `taskId` names the task when the args do not, such as for a removal
+    whose paint already took the row away. A new task has no key yet: the
+    one on screen is a preview the server can change. The note never holds
+    the text or any other content of the change. */
+function describeWrite(name: string, args: unknown, taskId = ''): UnconfirmedChange {
+  if (name === 'issues:create') return { task: null, what: 'a new task' }
   const a = (args && typeof args === 'object' ? args : {}) as Record<string, unknown>
   const text = (value: unknown) => (typeof value === 'string' ? value : '')
   const issueId =
+    taskId ||
     text(a.issue_id) ||
+    text(a.source_id) ||
+    (name === 'issues:removeLink' ? text(a.a) : '') ||
     (name.startsWith('issues:') ? text(a.id) : '') ||
-    (name.startsWith('comments:') ? (rows.comments.get(text(a.id))?.issue_id ?? '') : '') ||
-    (name === 'files:removeAttachment' ? (rows.attachments.get(text(a.id))?.issue_id ?? '') : '')
+    (name.startsWith('comments:') ? (rows.comments.get(text(a.id))?.issue_id ?? '') : '')
   const task = uuidToDisplayKey.get(issueId)
   const fields =
     name === 'issues:update' && a.patch && typeof a.patch === 'object'
@@ -1587,6 +1598,22 @@ function noteScope(args: unknown): string | null {
   const org = named || HOME_ORG || [...myProfiles.keys()][0] || ''
   const profile = myProfiles.get(org)
   return org && profile ? `${org}:${profile}` : null
+}
+
+/* What the next write() is about, set only while a mutator calls it
+   (writeAbout): the task a write concerns when its args do not name it, or
+   that the person did not make the change, such as the read that opening a
+   task sends, which the notice does not count and the crash note leaves out. */
+let writeContext: { task?: string; background?: boolean } = {}
+
+/** Calls write() inside `send` with `context` (see writeContext). */
+function writeAbout<T>(context: { task?: string; background?: boolean }, send: () => T): T {
+  writeContext = context
+  try {
+    return send()
+  } finally {
+    writeContext = {}
+  }
 }
 
 /** Every crash-note scope the signed-in person has now. */
@@ -1611,7 +1638,11 @@ const write: typeof convex.mutation = (mutation, args, options) => {
   const releaseUpdate = beginUpdateBlock()
   const visit = roadmapVisit
   const clearsHistory = visit && !visit.disabled && isTaskContentWrite(name)
-  const change = BACKGROUND_WRITES.has(name) ? null : describeWrite(name, args)
+  const context = writeContext
+  const change =
+    context.background || BACKGROUND_WRITES.has(name)
+      ? null
+      : describeWrite(name, args, context.task)
   const scope = change && noteScope(args)
   const settleWaiting = syncStatus.track(change !== null)
   const clearNote = change && scope ? unconfirmedNote.add(scope, change) : null
@@ -4891,7 +4922,11 @@ export const PLANNER = {
     emit()
     // no visible issue = the server cascade already owns (or took) the row
     if (!issueRow) return
-    run(write(api.files.removeAttachment, { org_id: issueRow.org_id, id: attId }))
+    run(
+      writeAbout({ task: issueRow.id }, () =>
+        write(api.files.removeAttachment, { org_id: issueRow.org_id, id: attId }),
+      ),
+    )
   },
 
   /** Resolve an attachment to a fetchable gateway URL — minted fresh through
@@ -5169,7 +5204,10 @@ export const PLANNER = {
     // edit is written into olderComments, the truth a later adopt reads. The
     // last settle repaints from it, in case another write's refusal has
     // rolled the screen back to before this edit meanwhile.
-    return runSaved(write(api.comments.update, { org_id: org, id, body: text }), () => {
+    const sent = writeAbout({ task: rec.issue_id }, () =>
+      write(api.comments.update, { org_id: org, id, body: text }),
+    )
+    return runSaved(sent, () => {
       const kept = olderComments.find((r) => r.id === id)
       if (!kept) return
       Object.assign(kept, edit)
@@ -5185,7 +5223,10 @@ export const PLANNER = {
     rebuildComments()
     emit('comments')
     // as updateComment does for an edit
-    run(write(api.comments.remove, { org_id: issue ? issue.org_id : HOME_ORG, id }), () => {
+    const sent = writeAbout({ task: rec.issue_id }, () =>
+      write(api.comments.remove, { org_id: issue ? issue.org_id : HOME_ORG, id }),
+    )
+    run(sent, () => {
       if (!olderComments.some((r) => r.id === id)) return
       olderComments = olderComments.filter((r) => r.id !== id)
       commentsDirty = true
@@ -5215,9 +5256,11 @@ export const PLANNER = {
     rebuild()
     emit()
     byOrg.forEach((list, org) => {
-      run(write(api.messages.markRead, { org_id: org, ids: list }), () =>
-        keepAcceptedPaint(() => markLoadedMessagesRead(list, at)),
+      // the read that opening a task sends is not a change the person made
+      const sent = writeAbout({ background: quiet }, () =>
+        write(api.messages.markRead, { org_id: org, ids: list }),
       )
+      run(sent, () => keepAcceptedPaint(() => markLoadedMessagesRead(list, at)))
     })
     return true
   },
@@ -5545,6 +5588,8 @@ export const PLANNER = {
   }),
 
   revokeAgentKey: async (id: string) => {
+    // a paused revoke says why, beside the panel's own failure line
+    if (refusePausedWrite(api.tokens.revokeAgentKey)) return false
     try {
       await write(api.tokens.revokeAgentKey, {
         org_id: agentKeyOrg.get(id) || HOME_ORG,
@@ -5558,6 +5603,7 @@ export const PLANNER = {
   },
 
   deleteAgentKey: async (id: string) => {
+    if (refusePausedWrite(api.tokens.deleteAgentKey)) return false
     try {
       await write(api.tokens.deleteAgentKey, {
         org_id: agentKeyOrg.get(id) || HOME_ORG,
@@ -5591,6 +5637,7 @@ export const PLANNER = {
       whether the server accepted it; revoking one that is already revoked
       counts as accepted. */
   revokeApiCredential: async (table: ApiCredentialTable, id: string) => {
+    if (refusePausedWrite(api.apiAccess.revoke)) return false
     try {
       await write(api.apiAccess.revoke, { org_id: HOME_ORG, table, id })
       return true
@@ -5618,6 +5665,7 @@ export const PLANNER = {
       organization deletes that seat's connections). The caller shows any
       other refusal, so nothing is toasted here. */
   revokeOAuthConnection: async (id: string) => {
+    if (refusePausedWrite(api.oauthConnections.revoke)) return false
     const operation = write(api.oauthConnections.revoke, { id })
     runUnpainted(operation, undefined, undefined, () => {})
     try {
@@ -5665,6 +5713,7 @@ export const PLANNER = {
   }),
 
   revokeMcpToken: async (id: string) => {
+    if (refusePausedWrite(api.tokens.revokeMcpToken)) return false
     try {
       await write(api.tokens.revokeMcpToken, { id })
       return true
@@ -5675,6 +5724,7 @@ export const PLANNER = {
   },
 
   deleteMcpToken: async (id: string) => {
+    if (refusePausedWrite(api.tokens.deleteMcpToken)) return false
     try {
       await write(api.tokens.deleteMcpToken, { id })
       return true
@@ -6857,19 +6907,27 @@ export const PLANNER = {
     )
   },
 
-  /** Signs out and reloads. A change still waiting for the server is not
-      dropped behind the person's back: the sign-out is refused with a
-      sentence that says so, and a reload can still discard it knowingly
-      (the close warning and the crash note tell about it). */
+  /** Signs out and reloads, or leaves the demo. Work that is not saved is
+      never dropped behind the person's back: while a change waits for the
+      server or a field holds typed text, the first press says what would be
+      lost, and only a second press within SIGN_OUT_CONFIRM_MS goes ahead,
+      without the close warning asking again. Signing out works offline
+      too, because it clears the sign-in stored in this browser. */
   signOut: () => {
     const waiting = syncStatus.unconfirmed()
-    if (waiting) {
-      toast(
-        `${waiting === 1 ? '1 change is' : `${waiting} changes are`} not saved yet. Sign out once ${waiting === 1 ? 'it is' : 'they are'} saved.`,
-      )
+    if ((waiting || hasUnsaved()) && Date.now() - signOutWarnedAt > SIGN_OUT_CONFIRM_MS) {
+      signOutWarnedAt = Date.now()
+      const what = !waiting
+        ? 'Text you typed is not saved'
+        : waiting === 1
+          ? '1 change is not saved yet'
+          : `${waiting} changes are not saved yet`
+      const again = DEMO_MODE ? 'Leave demo again to leave' : 'Sign out again to sign out'
+      toast(`${what}. Press ${again} and lose ${waiting > 1 ? 'them' : 'it'}.`)
       return
     }
-    unconfirmedNote.forget(noteScopes())
+    leaveDeliberately()
+    unconfirmedNote.forgetAll()
     clearAvatarSources()
     if (DEMO_MODE) {
       notifyDemoEnded('lost')
@@ -6975,12 +7033,9 @@ syncStatus.subscribe((ended) => {
   emit(kind === savePauseKind ? 'health' : 'workspace')
   savePauseKind = kind
   if (!ended) return
-  toast(
-    ended === 'offline'
-      ? 'Back online. Editing is on again.'
-      : 'Saving caught up. Editing is on again.',
-    'success',
-  )
+  // snapshot trouble can still pause edits, and its notice says why
+  const back = ended === 'offline' ? 'Back online.' : 'Saving caught up.'
+  toast(snapshotTrouble ? back : `${back} Editing is on again.`, 'success')
   reapPausedUploads()
   // after the failed save's own handler, which runs once this one returns
   setTimeout(() => preferences.retry(), 0)
@@ -7133,7 +7188,7 @@ export function disposeDemoStore() {
   unexaminedUnread = false
   unexaminedRead = false
   // the demo's seats end with it, and its sign-out is this disposal
-  unconfirmedNote.forget(noteScopes())
+  unconfirmedNote.forgetAll()
   unconfirmedReport = null
   HOME_ORG = ''
   CURRENT_USER = ''
@@ -7382,9 +7437,19 @@ export async function initStore(
     rebuild()
     emit()
   })
-  // Changes an earlier page sent and never heard back about, said once.
+  // Changes an earlier page sent and never heard back about, said once. With
+  // seats in several organizations, each change says which one.
   void unconfirmedNote.collect(noteScopes()).then((changes) => {
-    const text = unconfirmedText(changes)
+    const several = myProfiles.size > 1
+    const text = unconfirmedText(
+      changes.map(({ scope, ...change }) => {
+        const org = several ? rows.orgs.get(scope.split(':')[0])?.name : undefined
+        if (!org) return change
+        return change.task
+          ? { ...change, task: `${change.task} in ${org}` }
+          : { ...change, what: `${change.what} in ${org}` }
+      }),
+    )
     if (!text || !stillCurrent()) return
     unconfirmedReport = text
     emit('health')
