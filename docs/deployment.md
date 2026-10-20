@@ -337,6 +337,15 @@ existing records deliberately, and remove old fields/functions only after old
 clients no longer need them. Test migrations with representative synthetic
 data and retain verified production backups before destructive changes.
 
+Organizations no longer have the fields `next_issue_num`, `next_project_num`
+and `activity_count`. Every hosted deployment cleared them with the one-time
+`internal/orgCountersBackfill`. Convex refuses to deploy a later commit to a
+backend where any organization still holds one of them, for example a
+development backend that never ran the backfill, or data from a backup taken
+before it ran. Deploy an earlier commit that still has the backfill, such as
+v0.1.21 (`ab0a802`), run `internal/orgCountersBackfill:start`, wait until its
+`remaining` query reports 0 on every page, and then deploy the later commit.
+
 A frontend rollback changes the served application build. It does not roll
 back Convex code, schema changes, stored files or customer writes. A database
 restore can discard newer customer changes and requires a separate reviewed
