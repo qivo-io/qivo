@@ -85,6 +85,7 @@
     "fast-check": "4.10.0",
     "jsdom": "29.1.1",
     "markdown-it": "^15.0.2",
+    "oxc-parser": "^0.148.0",
     "oxlint": "^1.85.0",
     "playwright": "^1.63.0",
     "typescript": "^7.0.2",
