@@ -20,13 +20,25 @@
  * seed/reset mutations simply do not call them. */
 
 import type { WithoutSystemFields } from 'convex/server'
+import { v } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { isTeamLeader } from '../lib/access'
 import { byId } from '../lib/db'
+import { trimmedForm } from '../lib/fieldPrints'
 import { conflict, notFound, require, rule } from '../lib/functions'
 import { NAME_MAX, nameOverCap } from '../lib/textLimits'
 import { logActivity } from './activity'
+import {
+  assertExpected,
+  exact,
+  type Fields,
+  NUMBER,
+  NUMBER_OR_NULL,
+  TEXT,
+  TEXT_OR_NULL,
+} from './expected'
+import { assertProfileExpected } from './people'
 
 /* Web Crypto exists in the Convex isolate (and the edge-runtime VM), but
  * convex/tsconfig's lib is ESNext only, which does not declare the global. */
@@ -63,6 +75,54 @@ export function cleanOrgName(raw: string, current?: string): string {
   const name = raw.trim()
   if (nameOverCap(name, current)) throw rule(ORG_NAME_TOO_LONG)
   return name
+}
+
+/** The keys of an organization's `expected` (model/expected.ts): its
+ * settings and its address. */
+export const ORG_FIELDS: Fields<Doc<'organizations'>> = {
+  name: { sends: 'name', type: TEXT, form: trimmedForm },
+  date_format: { sends: 'date_format', type: TEXT, form: exact },
+  week_start: { sends: 'week_start', type: NUMBER, form: exact },
+  week_one_rule: { sends: 'week_one_rule', type: TEXT, form: exact },
+  default_plannable_hours: { sends: 'default_plannable_hours', type: NUMBER, form: exact },
+  max_attachment_mb: { sends: 'max_attachment_mb', type: NUMBER_OR_NULL, form: exact },
+  project_creators: { sends: 'project_creators', type: TEXT_OR_NULL, form: exact },
+  slug: { sends: 'slug', type: TEXT, form: exact },
+}
+
+/** The app's `expected` for an organization edit. */
+export const vOrgExpected = v.object({
+  name: v.optional(v.string()),
+  date_format: v.optional(v.string()),
+  week_start: v.optional(v.number()),
+  week_one_rule: v.optional(v.string()),
+  default_plannable_hours: v.optional(v.number()),
+  max_attachment_mb: v.optional(v.union(v.number(), v.null())),
+  project_creators: v.optional(v.union(v.string(), v.null())),
+  slug: v.optional(v.string()),
+})
+
+/** Refuses an organization edit over a setting someone else changed since
+ * `expected` was read. `next` holds what the edit stores for each key. */
+export async function assertOrgExpected(
+  ctx: QueryCtx,
+  a: {
+    me: Doc<'profiles'>
+    org: Doc<'organizations'>
+    expected: Readonly<Record<string, unknown>> | undefined
+    next: Readonly<Record<string, unknown>>
+  },
+): Promise<void> {
+  await assertExpected({
+    read: { ctx, me: a.me, view: 'app' },
+    fields: ORG_FIELDS,
+    record: 'organization',
+    id: a.org.id,
+    label: 'the organization',
+    row: a.org,
+    expected: a.expected,
+    next: a.next,
+  })
 }
 
 /* ---------------------------------------------------------------------- slug
@@ -383,7 +443,13 @@ export const PLANNABLE_HOURS_RIGHTS =
 
 export async function setPlannableHoursCore(
   ctx: MutationCtx,
-  a: { me: Doc<'profiles'>; profile_id: string; hours: number },
+  a: {
+    me: Doc<'profiles'>
+    profile_id: string
+    hours: number
+    /** The hours the caller read (model/people.ts PROFILE_FIELDS). */
+    expected?: Readonly<Record<string, unknown>>
+  },
 ): Promise<Doc<'profiles'>> {
   const rights = rule(PLANNABLE_HOURS_RIGHTS)
   const target = await byId(ctx, 'profiles', a.profile_id)
@@ -413,6 +479,13 @@ export async function setPlannableHoursCore(
   if (h < 1 || h > 168) {
     throw rule('plannable hours must be a whole number of hours from 1 to 168')
   }
+  // after the rules, so a request no check can let through says why
+  await assertProfileExpected(ctx, {
+    me: a.me,
+    seat: target,
+    expected: a.expected,
+    next: { plannable_hours: h },
+  })
   await ctx.db.patch(target._id, { plannable_hours: h })
   return (await ctx.db.get(target._id)) as Doc<'profiles'>
 }

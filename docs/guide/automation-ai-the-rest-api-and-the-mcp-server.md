@@ -102,7 +102,10 @@ it also sets a person's plannable weekly hours. It checks field values,
 including the 80-character title limit and paired planning dates. An
 unreadable task returns 404, as does a nonexistent one. Changes name the agent
 or person in the activity feed with **via the REST API** attribution, plus the
-key name for an agent key; comments use them as their author.
+key name for an agent key; comments use them as their author. A change can
+carry `expected`, the values the script last read, and then answers `409`
+and saves nothing when someone changed one of those fields since
+([When someone else changed it first](./working-together.md#when-someone-else-changed-it-first)).
 
 Project listings show active projects by default. Request `?archived=true`
 for archived projects. Task listings omit their tasks unless you name the project;
@@ -199,7 +202,12 @@ list teams, projects, users, project users and tasks; read and change tasks
 and projects, their sharing and milestones; manage teams and their members;
 read, add, edit and delete comments; follow tasks; read and clear your inbox;
 upload, attach text and delete attachments; read a task's history and the
-planned hours per person; and set plannable weekly hours. Request
+planned hours per person; and set plannable weekly hours. The tools that
+update a task, comment, project, access level, milestone, label, team or
+plannable hours, and the ones that delete a comment or a milestone, take
+`expected`, the values the assistant last read, and save nothing when
+someone changed one of those fields since
+([When someone else changed it first](./working-together.md#when-someone-else-changed-it-first)). Request
 `archived: true` to list archived projects. Name an archived project to list
 its tasks, and restore it before creating new ones.
 

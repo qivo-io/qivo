@@ -10,14 +10,17 @@
  * refuses with its own sentences in its own order first; postComment only
  * repeats the write gate as defense in depth. */
 
-import { getDocumentSize } from 'convex/values'
+import { getDocumentSize, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { hasProjectLevel } from '../lib/access'
 import { assertNewRowId, byId, insertUnique } from '../lib/db'
+import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, rule } from '../lib/functions'
+import { issueKey } from '../lib/taskRefs'
 import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
 import { assertRoomForComment, noteCommentAdded, noteCommentRemoved } from './commentCounts'
+import { assertExpected, DELETES, type Fields, type Next, TEXT, type View } from './expected'
 import { assertCanEdit } from './issues'
 import { notifyCommentInsert, notifyCommentUpdate } from './messages'
 import { newUuid } from './orgs'
@@ -121,6 +124,46 @@ export async function assertCommentEditor(
   throw forbidden(`only the author or a project lead can ${a.verb} this comment`)
 }
 
+/** The key of a comment's `expected`. The app sends the body's print
+ * (lib/fieldPrints.ts). */
+export const COMMENT_FIELDS: Fields<Doc<'comments'>> = {
+  body: { sends: 'body', type: TEXT, form: trimmedForm, printed: true },
+}
+
+/** The app's `expected` for a comment edit or delete. */
+export const vCommentExpected = v.object({ body: v.string() })
+
+/* Refuses a comment edit or delete over a body someone else changed since
+ * `expected` was read (model/expected.ts). The comment's edit stamps name
+ * who, because editComment is the only writer of a body. */
+async function assertCommentExpected(
+  ctx: QueryCtx,
+  a: {
+    me: Doc<'profiles'>
+    comment: Doc<'comments'>
+    issue: Doc<'issues'>
+    view: View
+    expected: Readonly<Record<string, unknown>> | undefined
+    next: Next
+  },
+): Promise<void> {
+  const { comment } = a
+  await assertExpected({
+    read: { ctx, me: a.me, view: a.view },
+    fields: COMMENT_FIELDS,
+    record: 'comment',
+    id: comment.id,
+    label: `comment ${comment.id} on ${issueKey(a.issue.num)}`,
+    row: comment,
+    expected: a.expected,
+    next: a.next,
+    writers: async () =>
+      comment.edited_by !== undefined && comment.edited_at !== undefined
+        ? new Map([['body', { by: comment.edited_by, at: comment.edited_at }]])
+        : new Map(),
+  })
+}
+
 /**
  * Replaces the body of `comment` with `body`, trimmed, as `me`, in place and
  * without history. Refuses anyone but the author or a project lead, then a
@@ -139,10 +182,21 @@ export async function editComment(
     issue: Doc<'issues'>
     body: string
     now: string
+    /** The body the caller read, in its view (assertCommentExpected). */
+    expected?: Readonly<Record<string, unknown>>
+    view?: View
   },
 ): Promise<{ comment: Doc<'comments'>; changed: boolean }> {
   const { me, comment, issue, now } = a
   await assertCommentEditor(ctx, { me, comment, issue, verb: 'edit' })
+  await assertCommentExpected(ctx, {
+    me,
+    comment,
+    issue,
+    view: a.view ?? 'app',
+    expected: a.expected,
+    next: { body: a.body },
+  })
   const text = a.body.trim()
   if (text === '') throw badRequest('a comment cannot be empty')
   if (text === comment.body) return { comment, changed: false }
@@ -156,13 +210,29 @@ export async function editComment(
 /**
  * Deletes `comment` as `me`, its author or a project lead. The thread just
  * loses the row, and the task's comment count one comment. Nothing is
- * narrated and nobody is notified.
+ * narrated and nobody is notified. Deleted items cannot bring a comment
+ * back, so a delete may carry `expected`, the body the caller read, and is
+ * refused when someone changed it since.
  */
 export async function deleteComment(
   ctx: MutationCtx,
-  a: { me: Doc<'profiles'>; comment: Doc<'comments'>; issue: Doc<'issues'> },
+  a: {
+    me: Doc<'profiles'>
+    comment: Doc<'comments'>
+    issue: Doc<'issues'>
+    expected?: Readonly<Record<string, unknown>>
+    view?: View
+  },
 ): Promise<void> {
   await assertCommentEditor(ctx, { ...a, verb: 'delete' })
+  await assertCommentExpected(ctx, {
+    me: a.me,
+    comment: a.comment,
+    issue: a.issue,
+    view: a.view ?? 'app',
+    expected: a.expected,
+    next: DELETES,
+  })
   await ctx.db.delete(a.comment._id)
   await noteCommentRemoved(ctx, a.comment)
 }

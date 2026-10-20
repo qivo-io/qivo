@@ -103,6 +103,24 @@ describe('the notices’ bands', () => {
     expect(band('bottom')).toBe('')
   })
 
+  it('take room for a sticky toast, which stays until it is closed', () => {
+    const toast = document.createElement('div')
+    toast.setAttribute('data-float-sticky', '')
+    toast.getBoundingClientRect = () => ({ top: 760, bottom: 820, height: 60 }) as DOMRect
+    stack.floatSlot('toasts').append(toast)
+    place('toasts', 760, 820)
+    expect([band('top'), band('bottom')]).toEqual(['0px', '140px'])
+  })
+
+  it('give a phone’s top notices and its bottom sticky toast a band each', () => {
+    const toast = document.createElement('div')
+    toast.setAttribute('data-float-sticky', '')
+    toast.getBoundingClientRect = () => ({ top: 740, bottom: 820, height: 80 }) as DOMRect
+    stack.floatSlot('toasts').append(toast)
+    place('update', 16, 120)
+    expect([band('top'), band('bottom')]).toEqual(['120px', '160px'])
+  })
+
   it('never take more than half the window', () => {
     expect(stack.noticeInsets({ top: 100, bottom: 884 }, 900)).toEqual({ top: 0, bottom: 450 })
     expect(stack.noticeInsets({ top: 16, bottom: 700 }, 900)).toEqual({ top: 450, bottom: 0 })

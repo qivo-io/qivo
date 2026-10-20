@@ -43,6 +43,7 @@ import {
 import type { Via } from '../model/deletedItems'
 import {
   assertLive,
+  assertTaskExpected,
   type IssuePatch,
   type LaterPeople,
   metaNeedsSub,
@@ -2108,9 +2109,24 @@ export async function applyTaskUpdate(
     reason?: string
     now: string
     provenance: string
+    /** What the caller read, as REST and MCP show it (model/expected.ts). */
+    expected?: Readonly<Record<string, unknown>>
   },
 ): Promise<Doc<'issues'>> {
   const { me, now, provenance } = a
+  // against the task as it is before the move changes it
+  await assertTaskExpected(ctx, {
+    me,
+    issue: a.issue,
+    view: 'machine',
+    expected: a.expected,
+    next: {
+      ...a.patch,
+      ...(a.parent !== undefined ? { parent_id: a.parent, has_hidden_parent: null } : {}),
+      ...(a.destination !== undefined ? { project_id: a.destination.id } : {}),
+    },
+    destination: a.destination,
+  })
   const archives = a.archive === true && a.issue.archived_at === undefined
   const toggles = a.archive !== undefined && a.archive !== (a.issue.archived_at !== undefined)
   // the people the field patch sets, which that write checks itself

@@ -27,10 +27,37 @@ import {
 
 export type RefusalCode = 'not_found' | 'forbidden' | 'bad_request' | 'rule' | 'conflict'
 
+/** One field an edit was refused over because someone else changed it
+ * (model/expected.ts). `id` is the record's id, for a grant the project's
+ * and for a link task a's; `of` is a grant's person or team, or a link's
+ * task b. `by` is the profile that wrote the stored value and `at` when,
+ * only where the server can prove it. */
+export type FieldChange = {
+  record:
+    | 'task'
+    | 'comment'
+    | 'milestone'
+    | 'project'
+    | 'grant'
+    | 'team'
+    | 'label'
+    | 'profile'
+    | 'organization'
+    | 'link'
+  id: string
+  of?: string
+  field: string
+  by: string | null
+  at: string | null
+}
+
+/** A refusal's data. `changes` lists the fields of a `field_changed`
+ * conflict (model/expected.ts). */
 export type Refusal = {
   code: RefusalCode
   message: string
   reason?: string
+  changes?: FieldChange[]
 }
 
 export const notFound = (message: string): ConvexError<Refusal> =>

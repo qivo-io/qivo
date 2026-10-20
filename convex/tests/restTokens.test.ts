@@ -648,7 +648,7 @@ describe('PATCH /v1/users/{id}', () => {
       [{ plannable_hours: 0 }, whole],
       [{ plannable_hours: 169 }, whole],
       [{}, 'no recognized fields to update'],
-      [{ name: 'Renamed' }, 'unknown field "name"; this request takes plannable_hours'],
+      [{ name: 'Renamed' }, 'unknown field "name"; this request takes plannable_hours, expected'],
       ['not json', 'request body must be JSON'],
     ] as const) {
       expect(await patch(fx.writer, f.user.id, body), JSON.stringify(body)).toEqual({

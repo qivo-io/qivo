@@ -1221,6 +1221,11 @@ export default defineSchema({
     // tasks the detail names, in text order, [] when none. The visibility
     // rule reads it instead of the text (lib/activityVisibility.ts).
     named_task_nums: v.optional(v.array(v.number())),
+    // On task rows written since the field check, the print of each field
+    // the write changed, by field (lib/fieldPrints.ts), so a refused edit
+    // can tell who wrote the stored value (model/expected.ts taskWriters).
+    // Only the server reads it: the app's thread and the export strip it.
+    field_prints: v.optional(v.record(v.string(), v.string())),
   })
     .index('by_uuid', ['id'])
     .index('by_org_ts', ['org_id', 'ts'])

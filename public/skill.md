@@ -174,6 +174,21 @@ same request again, and split a change whose time out repeats.
 `internal error` (REST `500`) does not say whether the change was saved, so
 read the task first, as after a lost response.
 
+When you change something you read earlier, send `expected` with the values
+you read of the fields you change, such as
+`{"status": "progress", "expected": {"status": "todo"}}`. `update_task`,
+`update_comment`, `delete_comment`, `update_project`, `set_project_access`,
+`set_milestone`, `delete_milestone`, `set_label`, `set_team` and
+`update_user` take it, and so do their REST routes. If someone changed one
+of those fields since, nothing is saved, and the answer, REST `409` or the
+MCP tool's error, says which fields changed and, where Qivo knows, who
+changed them. Do not send the same change again. Read the task again, look
+at the other change, and decide whether yours still applies before you
+resend it with the new values in `expected`; ask the user when the two
+changes disagree. Fields you leave out of `expected` are not checked. Send
+each value as the last read showed it, such as `parent_id` with
+`has_hidden_parent` for `parent`, and `null` for a field that was unset.
+
 Useful field rules:
 
 - Status: `backlog`, `todo`, `progress`, `review`, `done`. Priority: `urgent`,

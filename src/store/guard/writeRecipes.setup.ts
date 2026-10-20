@@ -11,7 +11,8 @@ import type { Row } from '../rows'
 
 export type Snapshot = NonNullable<FunctionReturnType<typeof api.snapshot.forMe>>
 export type Thread = FunctionReturnType<typeof api.snapshot.commentThread>
-type Planner = typeof import('../planner')['P']
+type Store = typeof import('../planner')
+type Planner = Store['P']
 
 /** How a recipe's preparation answers the writes it sends. */
 export type Prepare = {
@@ -46,8 +47,9 @@ export type Recipe = {
       answers the writes they send, with the server's rows changed by
       `edit` first. */
   prepare?: (P: Planner, server: Prepare) => void | Promise<void>
-  /** Makes the store send the write. Never rejects. */
-  act: (P: Planner) => unknown
+  /** Makes the store send the write, through P or, for the boot, the
+      store's module. Never rejects. */
+  act: (P: Planner, store: Store) => unknown
   /** The server's answer to each write the act sends, by mutation. */
   answers?: Record<string, (args: Record<string, unknown>) => unknown>
   /** The snapshot after the server applied the write, for a write that
@@ -59,8 +61,6 @@ export type Recipe = {
   /** The write paints only once the server accepts it (a keep), such as
       an upload or a removal the window waits for. */
   paintsOnAccept?: true
-  /** Why the runner cannot drive this write, when it cannot. */
-  unrunnable?: string
 }
 
 const task = (id: string, num: number, over: Partial<Row<'issues'>> = {}): Row<'issues'> => ({
@@ -771,14 +771,16 @@ export const recipes: Recipe[] = [
     what: 'a new organization',
     pause: 'P',
     act: (P) => P.createOrg('New Labs'),
+    // the boot createOrg runs again claims the seats first
+    answers: { 'identity:claimMySeats': () => null },
   },
   {
     mutation: 'identity:claimMySeats',
     mutator: 'initStore',
     what: 'the seat claim at boot',
     pause: 'P',
-    act: () => {},
-    unrunnable: 'it runs once while the store boots, before any edit',
+    // the boot run again, as createOrg does
+    act: (_P, store) => store.initStore(),
   },
   {
     mutation: 'projects:inviteGuest',

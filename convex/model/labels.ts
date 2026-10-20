@@ -8,13 +8,16 @@
  * the other writes. */
 
 import { makeFunctionReference } from 'convex/server'
+import { v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { canManageOrgLabels, canWriteOrgLabels } from '../lib/access'
 import { assertNewRowId, byId, insertUnique } from '../lib/db'
+import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, rule } from '../lib/functions'
 import { LABEL_NAME_MAX } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
+import { assertExpected, DELETES, type Fields, type Next, TEXT } from './expected'
 import { assertCanEdit } from './issues'
 
 /** Refuses a caller who may not add labels to the organization's list. */
@@ -150,17 +153,67 @@ export async function createLabelCore(
   return (await ctx.db.get(docId)) as Doc<'labels'>
 }
 
+/** The keys of a label's `expected`, the color in the form every read
+ * shows it (shownLabelColor). */
+export const LABEL_FIELDS: Fields<Doc<'labels'>> = {
+  name: { sends: 'name', type: TEXT, form: trimmedForm },
+  color: {
+    sends: 'color',
+    type: TEXT,
+    form: (value) => (value == null ? null : shownLabelColor(String(value)).toLowerCase()),
+  },
+}
+
+/** The app's `expected` for a label edit or delete. */
+export const vLabelExpected = v.object({
+  name: v.optional(v.string()),
+  color: v.optional(v.string()),
+})
+
+/** Refuses a label edit or delete over a field someone else changed since
+ * `expected` was read (model/expected.ts). `next` holds what the edit
+ * stores, or DELETES. */
+async function assertLabelExpected(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  label: Doc<'labels'>,
+  expected: Readonly<Record<string, unknown>> | undefined,
+  next: Next,
+): Promise<void> {
+  await assertExpected({
+    read: { ctx, me, view: 'app' },
+    fields: LABEL_FIELDS,
+    record: 'label',
+    id: label.id,
+    label: `label "${label.name}"`,
+    row: label,
+    expected,
+    next,
+  })
+}
+
 /**
  * Renames or recolors `label`, for organization admins only. It writes no
  * activity row, as the app never did. A name another label already has, in
  * any case, is refused; a case-only rename of the label itself passes.
+ * `expected` holds what the caller read (model/expected.ts).
  */
 export async function updateLabelCore(
   ctx: MutationCtx,
-  a: { me: Doc<'profiles'>; label: Doc<'labels'>; name?: string; color?: string },
+  a: {
+    me: Doc<'profiles'>
+    label: Doc<'labels'>
+    name?: string
+    color?: string
+    expected?: Readonly<Record<string, unknown>>
+  },
 ): Promise<Doc<'labels'>> {
   const { me, label } = a
   assertLabelManager(me)
+  await assertLabelExpected(ctx, me, label, a.expected, {
+    ...(a.name !== undefined ? { name: a.name } : {}),
+    ...(a.color !== undefined ? { color: a.color } : {}),
+  })
   const fields: Partial<Pick<Doc<'labels'>, 'name' | 'name_lower' | 'color'>> = {}
   if (a.name !== undefined) {
     const name = labelName(a.name)
@@ -232,10 +285,18 @@ export async function deleteLabelAssignments(
  */
 export async function deleteLabelCore(
   ctx: MutationCtx,
-  a: { me: Doc<'profiles'>; label: Doc<'labels'>; now: string },
+  a: {
+    me: Doc<'profiles'>
+    label: Doc<'labels'>
+    now: string
+    /** The name and color the caller read: Deleted items cannot bring a
+     * label back, so a delete over a change since is refused. */
+    expected?: Readonly<Record<string, unknown>>
+  },
 ): Promise<void> {
   const { me, label, now } = a
   assertLabelManager(me)
+  await assertLabelExpected(ctx, me, label, a.expected, DELETES)
   const more = await deleteLabelAssignments(ctx, label.id, LABEL_REMOVAL.inline)
   await ctx.db.delete(label._id)
   await logActivity(ctx, {

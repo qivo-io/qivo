@@ -60,6 +60,7 @@
  * Both surfaces call the work items tasks and their children subtasks. */
 
 import type { WithoutSystemFields } from 'convex/server'
+import { v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
@@ -68,8 +69,17 @@ import {
   profileCanBeAssigned,
   profileCanSeeProject,
 } from '../lib/access'
+import { taskActivity } from '../lib/activityVisibility'
 import { assertNewRowId, byId, insertUnique, usedMoreThan } from '../lib/db'
-import type { IssuePriority, IssueStatus } from '../lib/enums'
+import {
+  ISSUE_PRIORITIES,
+  ISSUE_STATUSES,
+  type IssuePriority,
+  type IssueStatus,
+  vIssuePriority,
+  vIssueStatus,
+} from '../lib/enums'
+import { descriptionForm, printOf, trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { countsAsSubtask, type Liveness, projectLiveness } from '../lib/liveTasks'
 import { reviewStamp } from '../lib/review'
@@ -81,8 +91,32 @@ import {
 } from '../lib/taskLimits'
 import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { plainText, TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
-import { issueChanges, logActivity, machineDetail, narratedChange } from './activity'
+import { inWorkingSet } from '../lib/workingSet'
+import {
+  issueChanges,
+  logActivity,
+  machineDetail,
+  narratedChange,
+  SUBJECT_ACTIVITY_CAP,
+} from './activity'
 import { scheduleMarkClears } from './archiveMarks'
+import {
+  assertExpected,
+  BOOLEAN,
+  changedPrints,
+  exact,
+  type Fields,
+  idForm,
+  NUMBER_OR_NULL,
+  oneOf,
+  type Read,
+  sentKeys,
+  TEXT,
+  TEXT_OR_NULL,
+  uuidOf,
+  type View,
+  type Writers,
+} from './expected'
 import {
   type NotifyPreload,
   newNotifyPreload,
@@ -177,6 +211,202 @@ export function cleanDescription(raw: string | null | undefined, current?: strin
   const text = raw ?? ''
   if (text !== current && text.length > TEXT_MAX) throw rule(DESCRIPTION_TOO_LONG)
   return text
+}
+
+/* ------------------------------------------------------- the field check
+ * A task edit's `expected` (model/expected.ts) takes these keys. The
+ * parent compares as the pair a read shows: parent_id when the reader is
+ * shown the parent, else has_hidden_parent. project_id is a move's. */
+
+/** Whether `parentId` is shown to the reader as a parent: a task of the
+ * reader's organization in a project it can see, and in the app also active
+ * in an active project (lib/workingSet.ts inWorkingSet). */
+async function parentShown(read: Read, parentId: string): Promise<boolean> {
+  const parent = await byId(read.ctx, 'issues', parentId)
+  if (parent === null || parent.org_id !== read.me.org_id) return false
+  const project = await byId(read.ctx, 'projects', parent.project_id)
+  if (project === null || !(await canSeeProject(read.ctx, read.me, project))) return false
+  return read.view === 'machine' || inWorkingSet(parent, project, true)
+}
+
+const hoursForm = (value: unknown): unknown =>
+  typeof value === 'number' ? roundTenths(value) : (value ?? null)
+
+/** The keys of a task's `expected`, in the order refusals name them. */
+export const TASK_FIELDS: Fields<Doc<'issues'>> = {
+  title: { sends: 'title', type: TEXT, form: trimmedForm, printed: true },
+  description: {
+    sends: 'description',
+    type: TEXT_OR_NULL,
+    form: descriptionForm,
+    printed: true,
+  },
+  status: { sends: 'status', type: oneOf(ISSUE_STATUSES), form: exact },
+  priority: { sends: 'priority', type: oneOf(ISSUE_PRIORITIES), form: exact },
+  assignee_id: { sends: 'assignee_id', type: uuidOf('profile', true), form: idForm },
+  reviewer_id: { sends: 'reviewer_id', type: uuidOf('profile', true), form: idForm },
+  start_week: { sends: 'start_week', type: TEXT_OR_NULL, form: exact },
+  end_week: { sends: 'end_week', type: TEXT_OR_NULL, form: exact },
+  due_date: { sends: 'due_date', type: TEXT_OR_NULL, form: exact },
+  remaining_hours: {
+    sends: 'remaining_hours',
+    type: NUMBER_OR_NULL,
+    form: hoursForm,
+    // REST and MCP read an active group's hours as null, even while it
+    // still stores hours from before its subtasks (lib/core.ts issueOut)
+    stored: async (issue, read) =>
+      read.view === 'machine' &&
+      issue.archived_at === undefined &&
+      (await hasSubtasks(read.ctx, issue))
+        ? null
+        : issue.remaining_hours,
+  },
+  paused: { sends: 'paused', type: BOOLEAN, form: exact },
+  parent_id: {
+    sends: 'parent',
+    type: uuidOf('task', true),
+    form: idForm,
+    pair: 'has_hidden_parent',
+    shape: (expected) =>
+      expected.parent_id != null && expected.has_hidden_parent === true
+        ? 'expected.has_hidden_parent must be false when expected.parent_id names a task'
+        : undefined,
+    // A parent seen by id matches while it is stored. A parent seen hidden
+    // matches any stored parent the reader is not shown, so a change from
+    // one hidden parent to another goes unseen: telling it would tell of
+    // tasks the reader cannot see. For the same reason an id the reader is
+    // not shown now counts as a hidden parent, so the answer never says
+    // whether a task the reader cannot see is the parent.
+    compare: async ({ row, read, expected, next }) => {
+      const stored = idForm(row.parent_id)
+      const seenId = idForm(expected.parent_id)
+      const hidden = async () => stored !== null && !(await parentShown(read, String(stored)))
+      const seen =
+        seenId !== null
+          ? (await parentShown(read, String(seenId)))
+            ? stored === seenId
+            : await hidden()
+          : expected.has_hidden_parent === true
+            ? await hidden()
+            : stored === null
+      return { seen, next: idForm(next.parent_id) === stored }
+    },
+  },
+  has_hidden_parent: { sends: 'parent', type: BOOLEAN, form: exact, pair: 'parent_id' },
+  project_id: { sends: 'project', type: uuidOf('project', false), form: idForm },
+}
+
+/** The keys of a task's `expected` whose fields a REST body or MCP call
+ * sends, a move by `project` or `sub_project` included. */
+export function taskSentKeys(body: Readonly<Record<string, unknown>>): string[] {
+  const keys = sentKeys(TASK_FIELDS, body)
+  return 'sub_project' in body && !keys.includes('project_id') ? [...keys, 'project_id'] : keys
+}
+
+const nullableText = v.optional(v.union(v.string(), v.null()))
+
+/** The app's `expected` for a task edit (TASK_FIELDS): the title and the
+ * description as their prints (lib/fieldPrints.ts), every other key as the
+ * value read. */
+export const vTaskExpected = v.object({
+  title: v.optional(v.string()),
+  description: v.optional(v.string()),
+  status: v.optional(vIssueStatus),
+  priority: v.optional(vIssuePriority),
+  assignee_id: nullableText,
+  reviewer_id: nullableText,
+  start_week: nullableText,
+  end_week: nullableText,
+  due_date: nullableText,
+  remaining_hours: v.optional(v.union(v.number(), v.null())),
+  paused: v.optional(v.boolean()),
+  parent_id: nullableText,
+  has_hidden_parent: v.optional(v.boolean()),
+  project_id: v.optional(v.string()),
+})
+
+/** Rows above this share of the transaction's budget leave the writers
+ * unnamed, so a refusal late in a large batch still refuses cleanly. */
+const WRITERS_ROOM = 0.5
+
+/** Who wrote each of a task's `fields` as stored now: the actor of the
+ * newest activity row whose field_prints holds the field, when that print is
+ * the stored value's (`printed`, the print of the stored compare form) and
+ * the caller may see the row (lib/activityVisibility.ts taskActivity). The
+ * writers that log no row (a carried subtask, a cleared holder or parent's
+ * hours, a detach) touch the task, so a task touched after its newest row
+ * names nobody: such a writer may have put back a value an older row
+ * printed. A newer row the caller cannot see hides the person rather than
+ * naming an older one. Both reads cover the task's newest
+ * SUBJECT_ACTIVITY_CAP rows. */
+export async function taskWriters(
+  read: Read,
+  issue: Doc<'issues'>,
+  fields: readonly string[],
+  printed: (field: string) => string,
+): Promise<Writers> {
+  const out = new Map<string, { by: string; at: string }>()
+  if (await usedMoreThan(read.ctx, WRITERS_ROOM)) return out
+  const newest = await read.ctx.db
+    .query('activity_events')
+    .withIndex('by_target', (q) =>
+      q.eq('org_id', issue.org_id).eq('target_type', 'issue').eq('target_id', issue.id),
+    )
+    .order('desc')
+    .take(SUBJECT_ACTIVITY_CAP)
+  if (newest[0] === undefined || issue.updated_at > newest[0].ts) return out
+  const visible = new Set((await taskActivity(read.ctx, read.me, issue)).map((row) => row.id))
+  for (const field of fields) {
+    const row = newest.find((r) => r.field_prints?.[field] !== undefined)
+    if (row === undefined || row.actor_id === undefined) continue
+    if (row.field_prints?.[field] !== printed(field) || !visible.has(row.id)) continue
+    out.set(field, { by: row.actor_id, at: row.ts })
+  }
+  return out
+}
+
+/** Refuses a task edit over a field someone else changed since `expected`
+ * was read (model/expected.ts assertExpected), naming who where an activity
+ * row proves it. `next` holds the value the edit sends for each key; hours
+ * cleared by an edit that enters Review compare as the review time the core
+ * stores instead, from `destination` for a move. */
+export async function assertTaskExpected(
+  ctx: QueryCtx,
+  a: {
+    me: Doc<'profiles'>
+    issue: Doc<'issues'>
+    view: View
+    expected: Readonly<Record<string, unknown>> | undefined
+    next: Readonly<Record<string, unknown>>
+    destination?: Doc<'projects'>
+  },
+): Promise<void> {
+  if (a.expected === undefined) return
+  const read: Read = { ctx, me: a.me, view: a.view }
+  let next = a.next
+  if (
+    'remaining_hours' in next &&
+    next.remaining_hours == null &&
+    next.status === 'review' &&
+    a.issue.status !== 'review'
+  ) {
+    const project = a.destination ?? (await byId(ctx, 'projects', a.issue.project_id))
+    if (project !== null) next = { ...next, remaining_hours: await reviewHoursFor(ctx, project) }
+  }
+  await assertExpected({
+    read,
+    fields: TASK_FIELDS,
+    record: 'task',
+    id: a.issue.id,
+    label: issueKey(a.issue.num),
+    row: a.issue,
+    expected: a.expected,
+    next,
+    writers: (fields) =>
+      taskWriters(read, a.issue, fields, (field) =>
+        printOf(TASK_FIELDS[field].form((a.issue as Record<string, unknown>)[field])),
+      ),
+  })
 }
 
 /* assertOwnUser + assertAssignable (core.ts:327-347). Checked in this order
@@ -1609,6 +1839,7 @@ export async function updateIssueCore(
     project_id: after.project_id,
     ts: now,
     named_task_nums: named,
+    field_prints: changedPrints(TASK_FIELDS, issue, after),
   }
   await logActivity(ctx, event)
   return after
@@ -1996,6 +2227,8 @@ export async function moveIssueCore(
     related_project_id: target.id, // the detail names it, so readers need it too
     ts: now,
     named_task_nums: [],
+    // every field the move changed, the parent of a detach included
+    field_prints: changedPrints(TASK_FIELDS, issue, after),
   }
   await logActivity(ctx, event)
   // leaving the parent gets the row a detach writes, as a machine update's

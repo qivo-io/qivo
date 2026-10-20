@@ -45,7 +45,7 @@ import {
   scopeForIssue,
   syncPlaceOf,
 } from './lib/router'
-import { type ToastTone, toastLook } from './lib/toasts'
+import { type Toast, toastLook, withToast } from './lib/toasts'
 import {
   loadInbox,
   loadIssueDetail,
@@ -661,7 +661,6 @@ function TopBar({
 }
 
 /* ---------- toasts ---------- */
-type Toast = { id: number; text: string; tone?: ToastTone }
 
 /* The visible toasts, at the top of the floating column so the app update and
    snapshot notices never cover them (lib/floatStack). A screen reader hears
@@ -675,6 +674,9 @@ function ToastHost({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number)
         <div
           key={t.id}
           data-floating-surface
+          // a notice that stays takes room, so it never covers a control
+          // (lib/floatStack)
+          data-float-sticky={t.sticky ? '' : undefined}
           // A modal layer below turns off pointer events on <body>, and a press
           // here would count as an outside press that closes it. Take the press
           // so Dismiss closes only the toast, as the update notice does. While
@@ -687,7 +689,7 @@ function ToastHost({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number)
           className="pointer-events-auto animate-in fade-in slide-in-from-bottom-2 [display:flex] [align-items:center] [gap:8px] [padding:8px] [background:var(--surface-2)] [border:1px_solid_var(--border)] [border-radius:var(--r-lg)] [box-shadow:var(--qivo-shadow-pop)] [font-size:var(--fs-base)] [color:var(--text-1)]"
         >
           <Icon name={toastLook(t.tone).icon} size={16} color={toastLook(t.tone).color} />
-          <span className="min-w-0 [overflow-wrap:anywhere]">{t.text}</span>
+          <span className="min-w-0 [overflow-wrap:anywhere] [white-space:pre-line]">{t.text}</span>
           <Button
             type="button"
             variant="ghost"
@@ -868,17 +870,22 @@ function App() {
 
   // toasts
   useEffect(() => {
-    window.showToast = (text, tone) => {
+    window.showToast = (text, tone, opts = {}) => {
       const id = ++toastSeq
       announce(text, toastLook(tone).politeness)
-      setToasts((t) => [...t.slice(-2), { id, text, tone }])
-      setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200)
+      const { sticky, key, onDismiss } = opts
+      setToasts((t) => withToast(t, { id, text, tone, sticky, key, onDismiss }))
+      if (!sticky) setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200)
     }
     return () => {
       window.showToast = null
     }
   }, [])
-  const dismissToast = (id: number) => setToasts((t) => t.filter((x) => x.id !== id))
+  const dismissToast = (id: number) => {
+    // outside the updater, which React may run twice
+    toasts.find((x) => x.id === id)?.onDismiss?.()
+    setToasts((t) => t.filter((x) => x.id !== id))
+  }
 
   // After the first paint, download the code of every view not opened yet,
   // so each still opens if the connection drops. What this person can use

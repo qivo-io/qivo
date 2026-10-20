@@ -12,21 +12,26 @@ import { assertOrgWritable } from './lib/billingAccess'
 import { assertNewRowId, byId, insertUnique, usedMoreThan } from './lib/db'
 import { authedMutation, badRequest, conflict, forbidden, notFound, rule } from './lib/functions'
 import { logActivity } from './model/activity'
+import { changedPrints, DELETES } from './model/expected'
 import {
   assertOwnRemaining,
+  assertTaskExpected,
   assertWeekPair,
   type BulkUpdate,
   cleanRemaining,
   GROUP_DATES_RULE,
   hasSubtasks,
+  TASK_FIELDS,
   updateIssueCore,
 } from './model/issues'
 import { newNotifyPreload, notifyIssueUpdate } from './model/messages'
 import {
+  assertMilestoneExpected,
   changeableMilestone,
   cleanMilestoneName,
   cleanMilestoneWeek,
   milestoneTarget,
+  vMilestoneExpected,
 } from './model/milestones'
 import { weekLabel } from './model/orgs'
 
@@ -210,15 +215,21 @@ export const expire = internalMutation({
   },
 })
 
+const planValues = v.object({
+  start_week: v.optional(v.union(v.string(), v.null())),
+  end_week: v.optional(v.union(v.string(), v.null())),
+  remaining_hours: v.optional(v.union(v.number(), v.null())),
+})
+
+/* One change of a batch. A task or milestone operation may carry
+ * `expected`, the values its sender read (model/expected.ts); one that
+ * conflicts refuses the whole batch. */
 const operation = v.union(
   v.object({
     kind: v.literal('task'),
     id: v.string(),
-    patch: v.object({
-      start_week: v.optional(v.union(v.string(), v.null())),
-      end_week: v.optional(v.union(v.string(), v.null())),
-      remaining_hours: v.optional(v.union(v.number(), v.null())),
-    }),
+    patch: planValues,
+    expected: v.optional(planValues),
   }),
   v.object({
     kind: v.literal('milestone_create'),
@@ -231,8 +242,13 @@ const operation = v.union(
     kind: v.literal('milestone_update'),
     id: v.string(),
     patch: v.object({ name: v.optional(v.string()), week: v.optional(v.string()) }),
+    expected: v.optional(vMilestoneExpected),
   }),
-  v.object({ kind: v.literal('milestone_remove'), id: v.string() }),
+  v.object({
+    kind: v.literal('milestone_remove'),
+    id: v.string(),
+    expected: v.optional(vMilestoneExpected),
+  }),
 )
 
 async function logMilestone(
@@ -304,6 +320,15 @@ export const change = authedMutation({
           const end = 'end_week' in patch ? (patch.end_week ?? undefined) : row.end_week
           assertWeekPair(start, end)
         }
+        // before the no-op skip, so a malformed expected is refused even
+        // on an operation that changes nothing
+        await assertTaskExpected(ctx, {
+          me,
+          issue: row,
+          view: 'app',
+          expected: op.expected,
+          next: patch,
+        })
         if (
           Object.entries(patch).every(
             ([field, value]) => (row[field as keyof typeof patch] ?? null) === value,
@@ -351,6 +376,19 @@ export const change = authedMutation({
           await changeableMilestone(ctx, me, op.id)
           await assertOrgWritable(ctx, me.org_id)
           const before = milestoneValues(existing)
+          await assertMilestoneExpected(ctx, {
+            me,
+            milestone: existing,
+            view: 'app',
+            expected: op.expected,
+            next:
+              op.kind === 'milestone_remove'
+                ? DELETES
+                : {
+                    ...(op.patch.name !== undefined ? { name: op.patch.name } : {}),
+                    ...(op.patch.week !== undefined ? { week: op.patch.week } : {}),
+                  },
+          })
           if (op.kind === 'milestone_remove') {
             await ctx.db.delete(existing._id)
             await logMilestone(ctx, before, undefined, now)
@@ -501,6 +539,7 @@ async function restoreStep(ctx: Context, changes: Change[], now: string, batch: 
       project_id: after.project_id,
       ts: now,
       named_task_nums: [],
+      field_prints: changedPrints(TASK_FIELDS, before, after),
     })
   }
 }

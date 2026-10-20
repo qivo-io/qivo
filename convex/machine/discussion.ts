@@ -57,7 +57,15 @@ import { badRequest, notFound, type Refusal } from '../lib/functions'
 import { INBOX_LIMIT, loadInbox } from '../lib/inbox'
 import { TEXT_MAX } from '../lib/textLimits'
 import { inWorkingSet } from '../lib/workingSet'
-import { deleteComment, editComment } from '../model/comments'
+import { COMMENT_FIELDS, deleteComment, editComment } from '../model/comments'
+import {
+  EXPECTED_DELETE_SENTENCE,
+  EXPECTED_SENTENCE,
+  expectedSchema,
+  parseExpected,
+  sentKeys,
+  vExpected,
+} from '../model/expected'
 import {
   followTask,
   itemMessages,
@@ -457,13 +465,26 @@ const setFollowing = async (
  * project lead. Answers the comment with its task's key and whether it
  * changed. */
 export const mcpUpdateComment = internalMutation({
-  args: { callerId: v.string(), access: vCredentialAccess, comment: v.string(), body: v.string() },
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    comment: v.string(),
+    body: v.string(),
+    expected: v.optional(vExpected),
+  },
   handler: async (ctx, a): Promise<string> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const found = await findComment(ctx, me, a.comment)
     if (found === null) throw mcpCommentMissing(a.comment)
     const now = new Date().toISOString()
-    const { comment, changed } = await editComment(ctx, { me, ...found, body: a.body, now })
+    const { comment, changed } = await editComment(ctx, {
+      me,
+      ...found,
+      body: a.body,
+      now,
+      expected: a.expected,
+      view: 'machine',
+    })
     const { id, ...out } = await commentOut(ctx, comment, { surface: 'mcp' })
     return pretty({ id, task: issueKey(found.issue.num), changed, ...out })
   },
@@ -471,12 +492,17 @@ export const mcpUpdateComment = internalMutation({
 
 /* delete_comment runs model/comments.ts deleteComment, by the same rule. */
 export const mcpDeleteComment = internalMutation({
-  args: { callerId: v.string(), access: vCredentialAccess, comment: v.string() },
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    comment: v.string(),
+    expected: v.optional(vExpected),
+  },
   handler: async (ctx, a): Promise<string> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const found = await findComment(ctx, me, a.comment)
     if (found === null) throw mcpCommentMissing(a.comment)
-    await deleteComment(ctx, { me, ...found })
+    await deleteComment(ctx, { me, ...found, expected: a.expected, view: 'machine' })
     return pretty({ deleted: true, id: found.comment.id, task: issueKey(found.issue.num) })
   },
 })
@@ -548,15 +574,24 @@ export const restUpdateComment = internalMutation({
     const found = await findComment(ctx, me, a.ref)
     if (found === null) throw notFound('comment not found')
     const b = needJson(a.body)
-    refuseUnknownFields(b, ['body'])
+    refuseUnknownFields(b, ['body', 'expected'])
     if (typeof b.body !== 'string') throw badRequest('body must be a non-empty string')
+    const expected = parseExpected(COMMENT_FIELDS, b.expected, sentKeys(COMMENT_FIELDS, b))
     const now = new Date().toISOString()
-    const { comment } = await editComment(ctx, { me, ...found, body: b.body, now })
+    const { comment } = await editComment(ctx, {
+      me,
+      ...found,
+      body: b.body,
+      now,
+      expected,
+      view: 'machine',
+    })
     return (await commentOut(ctx, comment, { surface: 'rest' })) as RestCommentJson
   },
 })
 
-/* DELETE /v1/comments/{id}, which takes no body. */
+/* DELETE /v1/comments/{id}, with an optional body {expected}: the body the
+ * caller read, because Deleted items cannot bring a comment back. */
 export const restDeleteComment = internalMutation({
   args: {
     callerId: v.string(),
@@ -568,8 +603,10 @@ export const restDeleteComment = internalMutation({
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const found = await findComment(ctx, me, a.ref)
     if (found === null) throw notFound('comment not found')
-    refuseUnknownFields(optionalJson(a.body ?? ''), [])
-    await deleteComment(ctx, { me, ...found })
+    const b = optionalJson(a.body ?? '')
+    refuseUnknownFields(b, ['expected'])
+    const expected = parseExpected(COMMENT_FIELDS, b.expected, Object.keys(COMMENT_FIELDS))
+    await deleteComment(ctx, { me, ...found, expected, view: 'machine' })
     return { deleted: true, id: found.comment.id, task_id: found.issue.id }
   },
 })
@@ -685,7 +722,8 @@ export const DISCUSSION_TOOLS: McpTool[] = [
       name: 'update_comment',
       title: 'Edit comment',
       description:
-        "Replace a comment's markdown `body`. `comment` is the comment's id from list_comments. You may edit your own comments, and a project lead any comment in the project. People the edit newly mentions are notified.",
+        "Replace a comment's markdown `body`. `comment` is the comment's id from list_comments. You may edit your own comments, and a project lead any comment in the project. People the edit newly mentions are notified. " +
+        EXPECTED_SENTENCE,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -698,16 +736,20 @@ export const DISCUSSION_TOOLS: McpTool[] = [
             minLength: 1,
             maxLength: TEXT_MAX,
           },
+          expected: expectedSchema(COMMENT_FIELDS),
         },
         required: ['comment', 'body'],
       },
     },
-    run: (r, { callerId, access, args }) =>
-      r.runMutation(internal.machine.discussion.mcpUpdateComment, {
+    run: (r, { callerId, access, args }) => {
+      const { expected, ...rest } = args as { comment: string; body: string; expected?: unknown }
+      return r.runMutation(internal.machine.discussion.mcpUpdateComment, {
         callerId,
         access,
-        ...(args as { comment: string; body: string }),
-      }),
+        ...rest,
+        expected: parseExpected(COMMENT_FIELDS, expected, sentKeys(COMMENT_FIELDS, rest)),
+      })
+    },
   },
   {
     access: 'write',
@@ -715,7 +757,8 @@ export const DISCUSSION_TOOLS: McpTool[] = [
       name: 'delete_comment',
       title: 'Delete comment',
       description:
-        'Delete a comment by its id from list_comments. You may delete your own comments, and a project lead any comment in the project.',
+        'Delete a comment by its id from list_comments. You may delete your own comments, and a project lead any comment in the project. ' +
+        EXPECTED_DELETE_SENTENCE,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -723,16 +766,20 @@ export const DISCUSSION_TOOLS: McpTool[] = [
           comment: {
             type: 'string',
           },
+          expected: expectedSchema(COMMENT_FIELDS),
         },
         required: ['comment'],
       },
     },
-    run: (r, { callerId, access, args }) =>
-      r.runMutation(internal.machine.discussion.mcpDeleteComment, {
+    run: (r, { callerId, access, args }) => {
+      const { expected, ...rest } = args as { comment: string; expected?: unknown }
+      return r.runMutation(internal.machine.discussion.mcpDeleteComment, {
         callerId,
         access,
-        ...(args as { comment: string }),
-      }),
+        ...rest,
+        expected: parseExpected(COMMENT_FIELDS, expected, Object.keys(COMMENT_FIELDS)),
+      })
+    },
   },
   {
     access: 'read',

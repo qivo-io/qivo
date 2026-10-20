@@ -71,14 +71,16 @@ import { cleanReason, moveTasksToTrash } from './model/deletedItems'
 import {
   archiveIssueCore,
   assertCanEdit,
+  assertTaskExpected,
   createIssueCore,
   hasSubtasks,
   moveIssueCore,
   subtasksWouldMove,
   unarchiveIssueCore,
   updateIssueCore,
+  vTaskExpected,
 } from './model/issues'
-import { addLinkCore, removeLinkCore } from './model/links'
+import { addLinkCore, removeLinkCore, vTaskLinkKind } from './model/links'
 import { followTask, subscribeToIssue, unfollowTask } from './model/messages'
 
 type MeCtx = QueryCtx & { me: Doc<'profiles'> }
@@ -297,11 +299,15 @@ export const update = orgMutation({
       remaining_hours: v.optional(v.union(v.number(), v.null())),
       paused: v.optional(v.boolean()),
     }),
+    expected: v.optional(vTaskExpected),
   },
-  handler: async (ctx, { id, patch }) => {
+  handler: async (ctx, { id, patch, expected }) => {
     const now = new Date().toISOString()
     const issue = await myIssue(ctx, id)
     await assertWritable(ctx, issue.project_id)
+    // the parent pair goes with parent_id
+    const next = 'parent_id' in patch ? { ...patch, has_hidden_parent: null } : patch
+    await assertTaskExpected(ctx, { me: ctx.me, issue, view: 'app', expected, next })
     const after = await updateIssueCore(ctx, { me: ctx.me, issue, patch, now })
     return await pubFor(ctx, ctx.me, after)
   },
@@ -316,11 +322,23 @@ export const update = orgMutation({
  * with the new parent's number (`parent_num`), which the app shows until a
  * delivery holds the parent. */
 export const createParent = orgMutation({
-  args: { id: v.string(), parent_id: v.string(), title: v.string() },
-  handler: async (ctx, { id, parent_id, title }) => {
+  args: {
+    id: v.string(),
+    parent_id: v.string(),
+    title: v.string(),
+    expected: v.optional(vTaskExpected),
+  },
+  handler: async (ctx, { id, parent_id, title, expected }) => {
     const now = new Date().toISOString()
     const issue = await myIssue(ctx, id)
     await assertWritable(ctx, issue.project_id)
+    await assertTaskExpected(ctx, {
+      me: ctx.me,
+      issue,
+      view: 'app',
+      expected,
+      next: { parent_id, has_hidden_parent: null },
+    })
     const parent = await createIssueCore(ctx, {
       me: ctx.me,
       args: { id: parent_id, project_id: issue.project_id, title },
@@ -347,12 +365,25 @@ export const createParent = orgMutation({
  * project needs (the Move window says so); a move to another top-level
  * project carries the task's subtasks along. */
 export const move = orgMutation({
-  args: { id: v.string(), project_id: v.string(), detach_parent: v.optional(v.boolean()) },
-  handler: async (ctx, { id, project_id, detach_parent }) => {
+  args: {
+    id: v.string(),
+    project_id: v.string(),
+    detach_parent: v.optional(v.boolean()),
+    expected: v.optional(vTaskExpected),
+  },
+  handler: async (ctx, { id, project_id, detach_parent, expected }) => {
     const now = new Date().toISOString()
     const issue = await myIssue(ctx, id)
     await assertWritable(ctx, issue.project_id)
     if (project_id !== issue.project_id) await assertWritable(ctx, project_id)
+    const detach = detach_parent === true ? { parent_id: null, has_hidden_parent: null } : {}
+    await assertTaskExpected(ctx, {
+      me: ctx.me,
+      issue,
+      view: 'app',
+      expected,
+      next: { project_id, ...detach },
+    })
     const after = await moveIssueCore(ctx, {
       me: ctx.me,
       issue,
@@ -515,12 +546,13 @@ export const addLink = orgMutation({
  * Either end being missing, foreign or hidden reads 'task not found', so no
  * answer tells whether a task the caller cannot see exists. */
 export const removeLink = orgMutation({
-  args: { a: v.string(), b: v.string() },
-  handler: async (ctx, { a, b }) => {
+  args: { a: v.string(), b: v.string(), expected: v.optional(v.object({ kind: vTaskLinkKind })) },
+  handler: async (ctx, { a, b, expected }) => {
     await removeLinkCore(ctx, {
       me: ctx.me,
       a: await byId(ctx, 'issues', a),
       b: await byId(ctx, 'issues', b),
+      expected,
     })
     return null
   },

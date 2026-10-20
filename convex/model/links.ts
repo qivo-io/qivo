@@ -18,6 +18,7 @@ import type { LinkType } from '../lib/enums'
 import { badRequest, forbidden, notFound, rule } from '../lib/functions'
 import { issueKey } from '../lib/taskRefs'
 import { logActivity, signedDetail } from './activity'
+import { assertExpected, DELETES, exact, type Fields, oneOf } from './expected'
 import { assertLinkableIssues, linkAccess } from './issues'
 import { newUuid } from './orgs'
 
@@ -54,6 +55,17 @@ export function linkKindFrom(
   if (link.type !== 'blocks') return 'relates'
   return link.source_id === taskId ? 'blocks' : 'blocked_by'
 }
+
+/** The key of a link removal's `expected`, the link's kind as seen from
+ * task `fromId`. */
+const linkFields = (fromId: string): Fields<Doc<'issue_links'>> => ({
+  kind: {
+    sends: 'kind',
+    type: oneOf(TASK_LINK_KINDS),
+    form: exact,
+    stored: (link) => linkKindFrom(link, fromId),
+  },
+})
 
 /** Every stored link of one task, whichever end it is. */
 export async function linksOf(ctx: QueryCtx, taskId: string): Promise<Doc<'issue_links'>[]> {
@@ -156,6 +168,9 @@ export async function removeLinkCore(
     a: Doc<'issues'> | null
     b: Doc<'issues'> | null
     kind?: TaskLinkKind
+    /** The link's kind as the app saw it from task a: a link of another
+     * kind on the pair, put there since, refuses the removal. */
+    expected?: { kind: TaskLinkKind }
   },
 ): Promise<number> {
   const { a: from, b: to } = a
@@ -166,6 +181,17 @@ export async function removeLinkCore(
   let removed = 0
   const links = ctx.db.query('issue_links').withIndex('by_pair', (q) => q.eq('pair_key', key))
   for await (const link of links) {
+    await assertExpected({
+      read: { ctx, me: a.me, view: 'app' },
+      fields: linkFields(from.id),
+      record: 'link',
+      id: from.id,
+      of: to.id,
+      label: `the link between ${issueKey(from.num)} and ${issueKey(to.num)}`,
+      row: link,
+      expected: a.expected,
+      next: DELETES,
+    })
     if (a.kind !== undefined && linkKindFrom(link, from.id) !== a.kind) continue
     await ctx.db.delete(link._id)
     removed += 1

@@ -189,23 +189,32 @@ describe('settings edits through the client store', () => {
       P.updateUser('u-ana', { canCreateProjects: true })
       P.updateUser('u-ana', { active: false })
       expect(P.user('u-ana')?.canCreateProjects).toBe(true)
-      // the role select sends the role it shows, changed or not
+      // the role select sends the role it shows, changed or not, and only
+      // the fields that differ from the screen go out, each as expected
       P.updateUser('u-ana', { orgRole: 'user', active: true })
       expect(P.user('u-ana')?.canCreateProjects).toBe(true)
       P.updateUser('u-ana', { orgRole: 'viewer', active: true })
       expect(P.user('u-ana')?.canCreateProjects).toBe(false)
-      expect(requests.at(-1)?.args.patch).toEqual({ org_role: 'viewer', active: true })
+      expect(requests.at(-1)?.args.patch).toEqual({ org_role: 'viewer' })
+      expect(requests.at(-1)?.args.expected).toEqual({ org_role: 'user' })
     })
 
     it('sends deactivation alone to its own door and reactivation through update', () => {
       P.updateUser('u-ana', { active: false })
       expect(P.user('u-ana')?.active).toBe(false)
       P.updateUser('u-ana', { orgRole: 'user', active: true })
+      // the role is unchanged, so only the reactivation goes out, over the
+      // deactivation still on screen
       expect(requests.map((r) => [r.name, r.args])).toEqual([
         ['profiles:deactivate', { org_id: snap.orgs[0].id, id: 'u-ana' }],
         [
           'profiles:update',
-          { org_id: snap.orgs[0].id, id: 'u-ana', patch: { org_role: 'user', active: true } },
+          {
+            org_id: snap.orgs[0].id,
+            id: 'u-ana',
+            patch: { active: true },
+            expected: { active: false },
+          },
         ],
       ])
     })

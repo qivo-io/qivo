@@ -64,6 +64,7 @@ import { pendingRemoval, removeProfile } from './model/cascade'
 import { assertNotLastAdmin, nameInitials, setPlannableHoursCore } from './model/orgs'
 import {
   assertNameShape,
+  assertProfileExpected,
   assertViewerLeadsNothing,
   avatarColor,
   byCreated,
@@ -71,6 +72,7 @@ import {
   EMAIL_SHAPE,
   inheritedRetention,
   normalizeEmail,
+  vProfileExpected,
 } from './model/people'
 
 /* The 0112/0116 fan-out predicate: every profile carrying the caller's login,
@@ -234,8 +236,8 @@ const vProfilePatch = v.object({
 })
 
 export const update = adminMutation({
-  args: { id: v.string(), patch: vProfilePatch },
-  handler: (ctx, { id, patch }) => updateProfile(ctx, id, patch),
+  args: { id: v.string(), patch: vProfilePatch, expected: v.optional(vProfileExpected) },
+  handler: (ctx, { id, patch, expected }) => updateProfile(ctx, id, patch, expected),
 })
 
 /* ------------------------------------------------------------- deactivate
@@ -258,12 +260,16 @@ async function updateProfile(
   ctx: MutationCtx & { me: Doc<'profiles'> },
   id: string,
   patch: Infer<typeof vProfilePatch>,
+  expected?: Infer<typeof vProfileExpected>,
 ): Promise<null> {
   const now = new Date().toISOString()
   const row = await byId(ctx, 'profiles', id)
   if (row === null || row.org_id !== ctx.me.org_id) throw notFound('user not found')
   const org = await byId(ctx, 'organizations', ctx.me.org_id)
   require(org !== null, notFound('organization not found'))
+  // teams is a list the server diffs, not a field the check compares
+  const { teams: _teams, ...fields } = patch
+  await assertProfileExpected(ctx, { me: ctx.me, seat: row, expected, next: fields })
   const newRole = patch.org_role ?? row.org_role
   const newActive = patch.active ?? row.active
 
@@ -464,9 +470,13 @@ export const remove = accessRemovalMutation({
  * agent / range, in that order — lives in model/orgs.setPlannableHoursCore,
  * shared verbatim with MCP's update_user (phase 8). */
 export const setPlannableHours = orgMutation({
-  args: { profile_id: v.string(), hours: v.number() },
-  handler: async (ctx, { profile_id, hours }) => {
-    await setPlannableHoursCore(ctx, { me: ctx.me, profile_id, hours })
+  args: {
+    profile_id: v.string(),
+    hours: v.number(),
+    expected: v.optional(v.object({ plannable_hours: v.union(v.number(), v.null()) })),
+  },
+  handler: async (ctx, { profile_id, hours, expected }) => {
+    await setPlannableHoursCore(ctx, { me: ctx.me, profile_id, hours, expected })
     return null
   },
 })
@@ -482,7 +492,12 @@ export const setPlannableHours = orgMutation({
  * itself); an org where the caller holds no active claimed seat narrates
  * with no actor — the feed's neutral "Someone". */
 export const setDisplayName = authedMutation({
-  args: { name: v.string() },
+  args: {
+    name: v.string(),
+    // the seat the app showed and the name it read there: only that seat
+    // is checked, because the person's seats may carry different names
+    expected: v.optional(v.object({ profile_id: v.string(), name: v.string() })),
+  },
   handler: async (ctx, args): Promise<string | null> => {
     const now = new Date().toISOString()
     const name = cleanName(args.name)
@@ -490,6 +505,17 @@ export const setDisplayName = authedMutation({
     if ([...name].length > 80) return 'a name is at most 80 characters'
     const matched = await myMatchedSeats(ctx)
     if (matched.length === 0) return 'no profile for this account'
+    const seen = args.expected
+    const shown = seen && matched.find((p) => p.id === seen.profile_id)
+    if (seen && !shown) throw badRequest('expected.profile_id must name one of your seats')
+    if (seen && shown) {
+      await assertProfileExpected(ctx, {
+        me: ctx.myProfiles.get(shown.org_id) ?? shown,
+        seat: shown,
+        expected: { name: seen.name },
+        next: { name },
+      })
+    }
     const initials = nameInitials(name)
     for (const p of matched) {
       if (p.name === name) continue

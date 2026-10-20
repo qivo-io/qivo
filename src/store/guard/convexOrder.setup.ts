@@ -30,14 +30,17 @@ export function createConvexDouble() {
   const current = new Map<string, unknown>()
   /* What a one-shot query answers, by query name. */
   const answers = new Map<string, (args: Record<string, unknown>) => unknown>()
+  /* Whether the seat claim waits for the test like any write, rather than
+     answering at once as the boot needs. */
+  let holdClaims = false
 
   const live = (name: string) => (subscriptions.get(name) ?? []).filter((s) => !s.closed)
 
   const client = {
     mutation(ref: FunctionReference<'mutation'>, args: Record<string, unknown>) {
       const name = getFunctionName(ref)
-      // the boot's seat claim answers at once
-      if (name === 'identity:claimMySeats') return Promise.resolve(null)
+      // the boot's seat claim answers at once, unless the test holds it
+      if (name === 'identity:claimMySeats' && !holdClaims) return Promise.resolve(null)
       return new Promise((resolve, reject) => requests.push({ name, args, resolve, reject }))
     },
     query(ref: FunctionReference<'query'>, args: Record<string, unknown>) {
@@ -66,8 +69,13 @@ export function createConvexDouble() {
   return {
     client,
     requests,
+    /** Makes the seat claim wait for the test, for a boot run again. */
+    holdClaims() {
+      holdClaims = true
+    },
     /** Forgets everything, for the next test. */
     reset() {
+      holdClaims = false
       requests.length = 0
       subscriptions.clear()
       current.clear()

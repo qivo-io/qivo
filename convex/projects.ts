@@ -60,12 +60,15 @@ import {
   changeableMilestone,
   removeMilestoneCore,
   updateMilestoneCore,
+  vMilestoneExpected,
 } from './model/milestones'
 import { newUuid } from './model/orgs'
 import {
   type AccessSubject,
+  assertGrantExpected,
   removeProjectGrantCore,
   setProjectGrantCore,
+  vGrantExpected,
   vHeldTasks,
 } from './model/projectAccess'
 import {
@@ -75,6 +78,7 @@ import {
   removalSummaryOf,
   unarchiveProjectCore,
   updateProjectCore,
+  vProjectExpected,
 } from './model/projects'
 
 type MeCtx = QueryCtx & { me: Doc<'profiles'> }
@@ -162,10 +166,17 @@ export const update = orgMutation({
       access: v.optional(vAccessMap),
       team_access: v.optional(vTeamAccessMap),
     }),
+    expected: v.optional(vProjectExpected),
   },
-  handler: async (ctx, { id, patch }) => {
+  handler: async (ctx, { id, patch, expected }) => {
     const project = await myProject(ctx, id)
-    await updateProjectCore(ctx, { me: ctx.me, project, patch, now: new Date().toISOString() })
+    await updateProjectCore(ctx, {
+      me: ctx.me,
+      project,
+      patch,
+      now: new Date().toISOString(),
+      expected,
+    })
     return null
   },
 })
@@ -184,6 +195,7 @@ export const setAccess = orgMutation({
     user_id: v.optional(v.string()),
     team_id: v.optional(v.string()),
     level: vGrantLevel,
+    expected: v.optional(vGrantExpected),
   },
   handler: async (ctx, a) => {
     const project = await myProject(ctx, a.id)
@@ -193,6 +205,7 @@ export const setAccess = orgMutation({
       subject: await accessSubject(ctx, a),
       level: a.level,
       now: new Date().toISOString(),
+      expected: a.expected,
     })
   },
 })
@@ -338,8 +351,14 @@ export const removalSummary = orgQuery({
  * let 'lead' pass this check only to die on project_access_level_ck (a bare
  * 23514, the T12 latent bug); here 'lead' reads the sentence too. */
 export const inviteGuest = orgMutation({
-  args: { project_id: v.string(), email: v.string(), level: v.string() },
-  handler: async (ctx, { project_id, email, level }) => {
+  args: {
+    project_id: v.string(),
+    email: v.string(),
+    level: v.string(),
+    // the level the inviter saw for a person the address already names
+    expected: v.optional(vGrantExpected),
+  },
+  handler: async (ctx, { project_id, email, level, expected }) => {
     refuseDemoFeature()
     const now = new Date().toISOString()
     const project = await myProject(ctx, project_id)
@@ -357,6 +376,19 @@ export const inviteGuest = orgMutation({
       .query('profiles')
       .withIndex('by_org_email', (q) => q.eq('org_id', ctx.me.org_id).eq('email', em))
       .first()
+    // A seat the address named when the inviter looked, gone since, holds no
+    // grant now: an expected level other than none is stale, so a removed
+    // member is not invited back unseen. Checked before the new seat.
+    if (existing === null && expected !== undefined) {
+      await assertGrantExpected(ctx, {
+        me: ctx.me,
+        project,
+        of: { id: em, name: em },
+        level: null,
+        expected,
+        next: level,
+      })
+    }
     let pid: string
     if (existing !== null) {
       await assertGrantee(ctx, project, existing.id, level)
@@ -402,6 +434,16 @@ export const inviteGuest = orgMutation({
       .query('project_access')
       .withIndex('by_project_profile', (q) => q.eq('project_id', project.id).eq('profile_id', pid))
       .unique()
+    if (existing !== null) {
+      await assertGrantExpected(ctx, {
+        me: ctx.me,
+        project,
+        of: existing,
+        level: grant?.level ?? null,
+        expected,
+        next: level,
+      })
+    }
     if (grant !== null) await ctx.db.patch(grant._id, { level })
     else await ctx.db.insert('project_access', { project_id: project.id, profile_id: pid, level })
     if (existing === null) {
@@ -442,24 +484,31 @@ export const updateMilestone = orgMutation({
   args: {
     id: v.string(),
     patch: v.object({ name: v.optional(v.string()), week: v.optional(v.string()) }),
+    expected: v.optional(vMilestoneExpected),
   },
-  handler: async (ctx, { id, patch }) => {
+  handler: async (ctx, { id, patch, expected }) => {
     const { milestone } = await changeableMilestone(ctx, ctx.me, id)
     await updateMilestoneCore(ctx, {
       me: ctx.me,
       milestone,
       patch,
       now: new Date().toISOString(),
+      expected,
     })
     return null
   },
 })
 
 export const removeMilestone = orgMutation({
-  args: { id: v.string() },
-  handler: async (ctx, { id }) => {
+  args: { id: v.string(), expected: v.optional(vMilestoneExpected) },
+  handler: async (ctx, { id, expected }) => {
     const { milestone } = await changeableMilestone(ctx, ctx.me, id)
-    await removeMilestoneCore(ctx, { me: ctx.me, milestone, now: new Date().toISOString() })
+    await removeMilestoneCore(ctx, {
+      me: ctx.me,
+      milestone,
+      now: new Date().toISOString(),
+      expected,
+    })
     return null
   },
 })

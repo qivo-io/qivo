@@ -98,6 +98,8 @@ async function boot(recipe: Recipe) {
   for (let turn = 0; turn < 50 && !booted; turn++) await vi.advanceTimersByTimeAsync(0)
   await booting
   P().watchComments('task-a')
+  // a boot run again, such as the seat claim's recipe, waits like any write
+  d.holdClaims()
   await recipe.prepare?.(P(), {
     answer: async (name, value, edit) => {
       await settle()
@@ -122,7 +124,7 @@ async function drive(
   ) => void,
 ) {
   // an awaited act may wait for a write the test answers later
-  void Promise.resolve(recipe.act(P())).catch(() => null)
+  void Promise.resolve(recipe.act(P(), store)).catch(() => null)
   const sentNames: string[] = []
   for (let round = 0; round < 10; round++) {
     await settle()
@@ -196,12 +198,10 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-const runnable = recipes.filter((recipe) => !recipe.unrunnable)
-
 /** Whether `recipe`'s write paints when it is sent, not only once accepted. */
 const paintsAtSend = (recipe: Recipe) => !!(recipe.truth || recipe.thread) && !recipe.paintsOnAccept
 
-describe.each(runnable.map((recipe) => [`${recipe.mutation} (${recipe.what})`, recipe] as const))(
+describe.each(recipes.map((recipe) => [`${recipe.mutation} (${recipe.what})`, recipe] as const))(
   '%s',
   (_name, recipe) => {
     const pauses =

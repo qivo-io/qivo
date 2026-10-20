@@ -39,20 +39,24 @@ export type View = { workspace?: Paint; thread?: { task: string; paint: Paint } 
 export type Part = 'workspace' | 'thread'
 
 /** The values on screen for the fields one write changes, before its paint:
-    the row's table and id, and each field's value. Nothing reads them yet:
-    the field check that follows this store change (t3code/field-check) will
-    send them, so the server can refuse an edit over a field someone else
-    changed meanwhile. */
+    the row's table and id, and each field's value. The store sends them as
+    the write's `expected` (store/planner.ts expectedOf), so the server can
+    refuse an edit over a field someone else changed meanwhile
+    (convex/model/expected.ts). */
 export type Over = { table: string; id: string; fields: Record<string, unknown> }
 
 /** One write's optimistic change. `open` collects paints before it is sent
     (a Roadmap batch) or covers several writes (an umbrella), `pending` waits
     for the server's answer, and `saved` is accepted but not yet known to be
-    held by a delivery. `seen` holds the delivery counters when it was sent. */
+    held by a delivery. `seen` holds the delivery counters when it was sent.
+    `seenFrom` names, for each field of `over`, the newest open or pending
+    layer that painted it when this one was made, so a refusal of that
+    earlier write explains this one's (store/planner.ts). */
 export type Layer = {
   readonly id: number
   readonly name: string
   readonly over?: Over
+  readonly seenFrom?: ReadonlyMap<string, number>
   state: 'open' | 'pending' | 'saved'
   seen: { snapshot: number; thread: number }
   view: View
@@ -77,10 +81,17 @@ export function createLayers() {
     /** Starts a layer that is not sent yet: an umbrella, or a batch that
         collects paints before its one write. */
     open(name: string, view: View, over?: Over): Layer {
+      const seenFrom = new Map<string, number>()
+      // the live list is in creation order, so the last match is the newest
+      for (const l of over ? live : [])
+        if (over && l.over?.table === over.table && l.over.id === over.id)
+          for (const field of Object.keys(over.fields))
+            if (field in l.over.fields) seenFrom.set(field, l.id)
       const layer: Layer = {
         id: ++nextId,
         name,
         ...(over ? { over } : {}),
+        ...(seenFrom.size ? { seenFrom } : {}),
         state: 'open',
         seen: { snapshot: 0, thread: 0 },
         view,

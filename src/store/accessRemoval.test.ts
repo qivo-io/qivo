@@ -547,8 +547,26 @@ describe('removing someone who has work in the project', () => {
     expect(await P.setProjectAccess(work, 'leo', 'viewer')).toBe(true)
     const org = P.orgOf(work)
     expect(requests.map((r) => [r.name, r.args])).toEqual([
-      ['projects:setAccess', { org_id: org, id: work, user_id: 'leo', level: 'viewer' }],
-      ['projects:setAccess', { org_id: org, id: work, team_id: 'crew', level: 'viewer' }],
+      [
+        'projects:setAccess',
+        {
+          org_id: org,
+          id: work,
+          user_id: 'leo',
+          level: 'viewer',
+          expected: { level: 'user' },
+        },
+      ],
+      [
+        'projects:setAccess',
+        {
+          org_id: org,
+          id: work,
+          team_id: 'crew',
+          level: 'viewer',
+          expected: { level: 'user' },
+        },
+      ],
     ])
     expect(P.levelOn(work, 'leo')).toBe('viewer')
     expect(P.project(work)?.teamAccess).toEqual({ crew: 'viewer' })

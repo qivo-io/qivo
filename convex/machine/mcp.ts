@@ -102,6 +102,13 @@ import { COMMENT_MAX } from '../model/commentCounts'
 import { postComment } from '../model/comments'
 import { moveTasksToTrash } from '../model/deletedItems'
 import {
+  EXPECTED_SENTENCE,
+  expectedSchema,
+  parseExpected,
+  sentKeys,
+  vExpected,
+} from '../model/expected'
+import {
   assertAssignable,
   assertAssignableChange,
   assertLive,
@@ -116,12 +123,15 @@ import {
   pairRule,
   REPORTER_IMMUTABLE_SENTENCE,
   SUB_MUST_NAME,
+  TASK_FIELDS,
+  taskSentKeys,
 } from '../model/issues'
 import {
   assertLabelCreator,
   assertLabelManager,
   createLabelCore,
   findLabel,
+  LABEL_FIELDS,
   labelChanges,
   labelJson,
   listLabelsCore,
@@ -135,6 +145,7 @@ import {
   vTaskLinkKind,
 } from '../model/links'
 import { newUuid, setPlannableHoursCore } from '../model/orgs'
+import { PLANNABLE_FIELDS } from '../model/people'
 import { teamsJson } from '../model/teams'
 import { authenticateSecret, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
 import { DISCUSSION_TOOLS } from './discussion'
@@ -324,7 +335,8 @@ export const TOOLS: McpTool[] = [
       name: 'update_user',
       title: 'Update user',
       description:
-        'Set how many hours a week someone can be planned for, as a WHOLE number of hours from 1 to 168. Allowed for an organization admin, or a leader of a team that user belongs to, and nobody else, your own account included; the database decides, so a refusal here is the same refusal the app would give. An AGENT has no plannable week and cannot be given one (its capacity is unbounded), so this tool applies to people only.',
+        'Set how many hours a week someone can be planned for, as a WHOLE number of hours from 1 to 168. Allowed for an organization admin, or a leader of a team that user belongs to, and nobody else, your own account included; the database decides, so a refusal here is the same refusal the app would give. An AGENT has no plannable week and cannot be given one (its capacity is unbounded), so this tool applies to people only. ' +
+        EXPECTED_SENTENCE,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -340,16 +352,24 @@ export const TOOLS: McpTool[] = [
             minimum: 1,
             maximum: 168,
           },
+          expected: expectedSchema(PLANNABLE_FIELDS),
         },
         required: ['user_id', 'plannable_hours'],
       },
     },
-    run: (r, { callerId, access, args }) =>
-      r.runMutation(internal.machine.mcp.updateUser, {
+    run: (r, { callerId, access, args }) => {
+      const { expected, ...rest } = args as {
+        user_id: string
+        plannable_hours: number
+        expected?: unknown
+      }
+      return r.runMutation(internal.machine.mcp.updateUser, {
         callerId,
         access,
-        ...(args as { user_id: string; plannable_hours: number }),
-      }),
+        ...rest,
+        expected: parseExpected(PLANNABLE_FIELDS, expected, sentKeys(PLANNABLE_FIELDS, rest)),
+      })
+    },
   },
   {
     access: 'read',
@@ -659,7 +679,9 @@ export const TOOLS: McpTool[] = [
       name: 'update_task',
       title: 'Update task',
       description:
-        "Patch fields on a task in a project you can write to. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid. Omitted fields stay unchanged. A task with subtasks is a group. Its stored status and dates are dormant, and `status`, `start_week` and `end_week` cannot be changed until its last active subtask is removed. The reporter is set at creation and cannot be changed or cleared. A non-null `assignee_id` must name an active Qivo user with effective Edit or Lead permission on the task's project; use `list_project_users` and select a row with `assignable: true`. `archived: true/false` archives / restores the task (archiving carries its subtasks along; restoring surfaces its parents); `archive_reason` with `archived: true` posts the reason as a comment. `reviewer_id` follows the same rule as `assignee_id` (a row with `assignable: true`); null clears it; a task with subtasks takes no reviewer. `project` and `sub_project` move the task, named as in create_task; a move to another top-level project carries its subtasks along, and a subtask moved there must leave its parent in the same call (`parent` null, or a task in that project). `parent` (a task ref) makes it a subtask, null detaches it; a task with subtasks cannot get a parent, and the parent follows create_task's rules. `add_labels` and `remove_labels` take label ids or names. A task that enters `review`, created there or moved there, gets its project's review time as `remaining_hours` (2 hours unless the project sets another) unless the same call sends a non-null `remaining_hours`; leaving `review` keeps whatever is left.",
+        "Patch fields on a task in a project you can write to. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid. Omitted fields stay unchanged. A task with subtasks is a group. Its stored status and dates are dormant, and `status`, `start_week` and `end_week` cannot be changed until its last active subtask is removed. The reporter is set at creation and cannot be changed or cleared. A non-null `assignee_id` must name an active Qivo user with effective Edit or Lead permission on the task's project; use `list_project_users` and select a row with `assignable: true`. `archived: true/false` archives / restores the task (archiving carries its subtasks along; restoring surfaces its parents); `archive_reason` with `archived: true` posts the reason as a comment. `reviewer_id` follows the same rule as `assignee_id` (a row with `assignable: true`); null clears it; a task with subtasks takes no reviewer. `project` and `sub_project` move the task, named as in create_task; a move to another top-level project carries its subtasks along, and a subtask moved there must leave its parent in the same call (`parent` null, or a task in that project). `parent` (a task ref) makes it a subtask, null detaches it; a task with subtasks cannot get a parent, and the parent follows create_task's rules. `add_labels` and `remove_labels` take label ids or names. A task that enters `review`, created there or moved there, gets its project's review time as `remaining_hours` (2 hours unless the project sets another) unless the same call sends a non-null `remaining_hours`; leaving `review` keeps whatever is left. " +
+        EXPECTED_SENTENCE +
+        ' Its keys are the fields as get_task reads them: `parent_id` with `has_hidden_parent` for `parent`, and `project_id` for a move.',
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -762,15 +784,18 @@ export const TOOLS: McpTool[] = [
             type: 'array',
             items: { type: 'string' },
           },
+          expected: expectedSchema(TASK_FIELDS),
         },
         required: ['ref'],
       },
     },
-    run: (r, { callerId, access, args }) =>
-      r.runMutation(internal.machine.mcp.updateIssue, {
+    run: (r, { callerId, access, args }) => {
+      const { expected, ...rest } = args as { expected?: unknown }
+      return r.runMutation(internal.machine.mcp.updateIssue, {
         callerId,
         access,
-        ...(args as {
+        expected: parseExpected(TASK_FIELDS, expected, taskSentKeys(rest)),
+        ...(rest as {
           ref: string
           title?: string
           description?: string
@@ -791,7 +816,8 @@ export const TOOLS: McpTool[] = [
           add_labels?: string[]
           remove_labels?: string[]
         }),
-      }),
+      })
+    },
   },
   {
     access: 'write',
@@ -876,7 +902,8 @@ export const TOOLS: McpTool[] = [
       name: 'set_label',
       title: 'Set label',
       description:
-        'Without `label`, create a label from `name` and `color` (#rrggbb); that needs Edit access to a top-level project. With `label` (an id or name), rename or recolor it; only organization admins may.',
+        'Without `label`, create a label from `name` and `color` (#rrggbb); that needs Edit access to a top-level project. With `label` (an id or name), rename or recolor it; only organization admins may. ' +
+        EXPECTED_SENTENCE,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -891,15 +918,27 @@ export const TOOLS: McpTool[] = [
           color: {
             type: 'string',
           },
+          expected: expectedSchema(LABEL_FIELDS),
         },
       },
     },
-    run: (r, { callerId, access, args }) =>
-      r.runMutation(internal.machine.mcp.setLabel, {
+    run: (r, { callerId, access, args }) => {
+      const { expected, ...rest } = args as {
+        label?: string
+        name?: string
+        color?: string
+        expected?: unknown
+      }
+      if (rest.label === undefined && expected !== undefined) {
+        throw badRequest('expected applies only when changing an existing label')
+      }
+      return r.runMutation(internal.machine.mcp.setLabel, {
         callerId,
         access,
-        ...(args as { label?: string; name?: string; color?: string }),
-      }),
+        ...rest,
+        expected: parseExpected(LABEL_FIELDS, expected, sentKeys(LABEL_FIELDS, rest)),
+      })
+    },
   },
   ...RECORD_TOOLS,
   ...DISCUSSION_TOOLS,
@@ -1637,8 +1676,9 @@ export const updateUser = internalMutation({
     access: vCredentialAccess,
     user_id: v.string(),
     plannable_hours: v.number(),
+    expected: v.optional(vExpected),
   },
-  handler: async (ctx, { callerId, access, user_id, plannable_hours }) => {
+  handler: async (ctx, { callerId, access, user_id, plannable_hours, expected }) => {
     const me = await asMachineCaller(ctx, callerId, access)
     const target = await assertOwnUser(ctx, me, user_id)
     // the core refuses an agent too — this is the readable version, and it
@@ -1652,6 +1692,7 @@ export const updateUser = internalMutation({
       me,
       profile_id: target.id,
       hours: plannable_hours,
+      expected,
     })
     return pretty(userJson(fresh))
   },
@@ -1909,6 +1950,7 @@ export const updateIssue = internalMutation({
     parent: v.optional(v.union(v.string(), v.null())),
     add_labels: v.optional(v.array(v.string())),
     remove_labels: v.optional(v.array(v.string())),
+    expected: v.optional(vExpected),
   },
   handler: async (ctx, a) => {
     const now = new Date().toISOString()
@@ -2040,6 +2082,7 @@ export const updateIssue = internalMutation({
       reason: a.archive_reason,
       now,
       provenance: PROVENANCE,
+      expected: a.expected,
     })
     return pretty({ id: issue.id, key: issueKey(issue.num), updated })
   },
@@ -2135,10 +2178,14 @@ export const setLabel = internalMutation({
     label: v.optional(v.string()),
     name: v.optional(v.string()),
     color: v.optional(v.string()),
+    expected: v.optional(vExpected),
   },
   handler: async (ctx, a) => {
     const now = new Date().toISOString()
     const me = await asMachineCaller(ctx, a.callerId, a.access)
+    if (a.label === undefined && a.expected !== undefined) {
+      throw badRequest('expected applies only when changing an existing label')
+    }
     if (a.label === undefined) {
       await assertLabelCreator(ctx, me)
       if (a.name === undefined || a.color === undefined) {
@@ -2158,7 +2205,13 @@ export const setLabel = internalMutation({
     const label = await findLabel(ctx, me.org_id, a.label)
     if (label === null) throw notFound(`label "${a.label}" not found`)
     if (a.name === undefined && a.color === undefined) throw badRequest('no fields to update')
-    const after = await updateLabelCore(ctx, { me, label, name: a.name, color: a.color })
+    const after = await updateLabelCore(ctx, {
+      me,
+      label,
+      name: a.name,
+      color: a.color,
+      expected: a.expected,
+    })
     return pretty({ ...labelJson(after), created: false })
   },
 })

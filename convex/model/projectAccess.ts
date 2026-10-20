@@ -36,11 +36,12 @@ import {
 } from '../lib/access'
 import { assertOrgWritable } from '../lib/billingAccess'
 import { byId, usedMoreThan } from '../lib/db'
-import type { GrantLevel } from '../lib/enums'
+import { GRANT_LEVELS, type GrantLevel, vGrantLevel } from '../lib/enums'
 import { badRequest, forbidden, type Refusal, rule } from '../lib/functions'
 import { liveIn } from '../lib/liveTasks'
 import { REASSIGN_MAX } from '../lib/projectGrants'
 import { logActivity, signedDetail } from './activity'
+import { assertExpected, exact, type Fields, oneOf } from './expected'
 import { assertAssigneeRule, hasSubtasks, holderKey, updateIssueCore } from './issues'
 import { newNotifyPreload } from './messages'
 import { assertGrantee, assertTeamGrantee } from './projects'
@@ -170,11 +171,54 @@ export async function narrateAccess(
   })
 }
 
+/** One person's or team's grant on a project as the field check reads
+ * it: its level, null when there is none. */
+type Grant = { level: GrantLevel | null }
+
+/** The key of a grant's `expected`, the level the caller read, null for
+ * "no grant". */
+export const GRANT_FIELDS: Fields<Grant> = {
+  level: { sends: 'level', type: oneOf(GRANT_LEVELS, true), form: exact },
+}
+
+/** The app's `expected` for a grant write. */
+export const vGrantExpected = v.object({ level: v.union(vGrantLevel, v.null()) })
+
+/** Refuses a grant write over a level someone else changed since `expected`
+ * was read (model/expected.ts). `of` is the person or team the grant is
+ * for, by id and name, `level` the grant held now, null for none, and
+ * `next` the level the write stores. */
+export async function assertGrantExpected(
+  ctx: QueryCtx,
+  a: {
+    me: Doc<'profiles'>
+    project: Doc<'projects'>
+    of: { id: string; name: string }
+    level: GrantLevel | null
+    expected: Readonly<Record<string, unknown>> | undefined
+    next: GrantLevel
+  },
+): Promise<void> {
+  const { of } = a
+  await assertExpected({
+    read: { ctx, me: a.me, view: 'app' },
+    fields: GRANT_FIELDS,
+    record: 'grant',
+    id: a.project.id,
+    of: of.id,
+    label: `the access of ${of.name} to project ${a.project.key}`,
+    row: { level: a.level },
+    expected: a.expected,
+    next: { level: a.next },
+  })
+}
+
 /**
  * Gives one person or one team `level` on the project, or changes the level
  * they have. A viewer-role person only ever receives Viewer, and the lead's
  * access is the lead role. Returns whether anything changed; a level the
- * subject already has narrates nothing.
+ * subject already has narrates nothing. `expected` holds the level the
+ * caller read (assertGrantExpected).
  */
 export async function setProjectGrantCore(
   ctx: MutationCtx,
@@ -185,6 +229,7 @@ export async function setProjectGrantCore(
     level: GrantLevel
     now: string
     provenance?: string
+    expected?: Readonly<Record<string, unknown>>
   },
 ): Promise<{ changed: boolean }> {
   const { project, subject, level } = a
@@ -193,6 +238,14 @@ export async function setProjectGrantCore(
   if ('team' in subject) await assertTeamGrantee(ctx, project, subject.team.id)
   else await assertGrantee(ctx, project, subject.profile.id, level)
   const row = await grantOf(ctx, project, subject)
+  await assertGrantExpected(ctx, {
+    me: a.me,
+    project,
+    of: 'team' in subject ? subject.team : subject.profile,
+    level: row?.level ?? null,
+    expected: a.expected,
+    next: level,
+  })
   if (row?.level === level) return { changed: false }
   if (row !== null) await ctx.db.patch(row._id, { level })
   else if ('team' in subject) {

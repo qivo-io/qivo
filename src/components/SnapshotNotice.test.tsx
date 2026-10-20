@@ -4,7 +4,7 @@ import { ConvexError } from 'convex/values'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { asOfText, pauseSentence } from '../lib/noticeText'
+import { asOfText } from '../lib/noticeText'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 import { TooltipProvider } from './ui/tooltip'
 
@@ -284,12 +284,5 @@ describe('asOfText', () => {
   it('names the day when the view went stale on an earlier one', () => {
     expect(asOfText(AS_OF.toISOString(), new Date(2026, 9, 16, 18))).toBe('14:32')
     expect(asOfText(AS_OF.toISOString(), new Date(2026, 9, 17, 9))).toBe('16 Oct, 14:32')
-  })
-})
-
-describe('pauseSentence', () => {
-  it('is the sentence the store refuses a paused edit with', () => {
-    expect(pauseSentence('offline')).toBe(store.OFFLINE_TEXT)
-    expect(pauseSentence('slow')).toBe(store.SLOW_TEXT)
   })
 })

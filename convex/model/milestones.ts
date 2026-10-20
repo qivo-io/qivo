@@ -10,13 +10,16 @@
  * (orgMutation, the roadmap writer, asMachineCaller). A machine caller passes
  * its `provenance`, which signs the activity row. */
 
+import { v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { canSeeProject, hasProjectLevel, rootMetaOf } from '../lib/access'
 import { assertNewRowId, byId, insertUnique } from '../lib/db'
+import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { NAME_MAX, nameOverCap } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
+import { assertExpected, DELETES, exact, type Fields, type Next, TEXT, type View } from './expected'
 import { weekLabel } from './orgs'
 import { calendarDay } from './taskValues'
 
@@ -154,6 +157,51 @@ export async function addMilestoneCore(
   return row
 }
 
+/** The keys of a milestone's `expected` in the app, which reads its day as
+ * `week`. */
+export const MILESTONE_FIELDS: Fields<Doc<'milestones'>> = {
+  name: { sends: 'name', type: TEXT, form: trimmedForm },
+  week: { sends: 'week', type: TEXT, form: exact },
+}
+
+/** The keys of a milestone's `expected` over REST and MCP, which read its
+ * day as `date`. */
+export const MILESTONE_MACHINE_FIELDS: Fields<Doc<'milestones'>> = {
+  name: MILESTONE_FIELDS.name,
+  date: { sends: 'date', type: TEXT, form: exact, stored: (m) => m.week },
+}
+
+/** The app's `expected` for a milestone edit or delete. */
+export const vMilestoneExpected = v.object({
+  name: v.optional(v.string()),
+  week: v.optional(v.string()),
+})
+
+/** Refuses a milestone edit or delete over a field someone else changed
+ * since `expected` was read (model/expected.ts). `next` holds the name and
+ * day the edit stores, under the surface's keys, or DELETES. */
+export async function assertMilestoneExpected(
+  ctx: QueryCtx,
+  a: {
+    me: Doc<'profiles'>
+    milestone: Doc<'milestones'>
+    view: View
+    expected: Readonly<Record<string, unknown>> | undefined
+    next: Next
+  },
+): Promise<void> {
+  await assertExpected({
+    read: { ctx, me: a.me, view: a.view },
+    fields: a.view === 'app' ? MILESTONE_FIELDS : MILESTONE_MACHINE_FIELDS,
+    record: 'milestone',
+    id: a.milestone.id,
+    label: `milestone "${a.milestone.name}"`,
+    row: a.milestone,
+    expected: a.expected,
+    next: a.next,
+  })
+}
+
 /**
  * Renames or moves a milestone the caller may change (changeableMilestone)
  * and narrates it. The verb names what actually CHANGED, so a pure rename
@@ -170,9 +218,24 @@ export async function updateMilestoneCore(
     patch: { name?: string; week?: string }
     now: string
     provenance?: string
+    /** What the caller read (assertMilestoneExpected), in its view. */
+    expected?: Readonly<Record<string, unknown>>
+    view?: View
   },
 ): Promise<Doc<'milestones'>> {
   const { me, milestone, now } = a
+  const view = a.view ?? 'app'
+  const day = view === 'app' ? 'week' : 'date'
+  await assertMilestoneExpected(ctx, {
+    me,
+    milestone,
+    view,
+    expected: a.expected,
+    next: {
+      ...(a.patch.name !== undefined ? { name: a.patch.name } : {}),
+      ...(a.patch.week !== undefined ? { [day]: a.patch.week } : {}),
+    },
+  })
   const db: Partial<Doc<'milestones'>> = {}
   if (a.patch.name !== undefined) db.name = cleanMilestoneName(a.patch.name, milestone.name)
   if (a.patch.week !== undefined) db.week = cleanMilestoneWeek(a.patch.week)
@@ -204,12 +267,29 @@ export async function updateMilestoneCore(
   return row
 }
 
-/** Deletes a milestone the caller may change and narrates it. */
+/** Deletes a milestone the caller may change and narrates it. Deleted
+ * items cannot bring a milestone back, so a delete may carry `expected`,
+ * the name and day the caller read, and is refused when someone changed
+ * one of them since. */
 export async function removeMilestoneCore(
   ctx: MutationCtx,
-  a: { me: Doc<'profiles'>; milestone: Doc<'milestones'>; now: string; provenance?: string },
+  a: {
+    me: Doc<'profiles'>
+    milestone: Doc<'milestones'>
+    now: string
+    provenance?: string
+    expected?: Readonly<Record<string, unknown>>
+    view?: View
+  },
 ): Promise<void> {
   const { me, milestone, now } = a
+  await assertMilestoneExpected(ctx, {
+    me,
+    milestone,
+    view: a.view ?? 'app',
+    expected: a.expected,
+    next: DELETES,
+  })
   await ctx.db.delete(milestone._id)
   await logActivity(ctx, {
     org_id: me.org_id,

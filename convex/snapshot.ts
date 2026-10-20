@@ -460,7 +460,10 @@ export const commentThread = orgQuery({
     // the app shows history only for a task in the working set (lib/workingSet.ts);
     // threadTask already refused a project the caller cannot see
     const events = inWorkingSet(issue, project, true) ? await taskActivity(ctx, ctx.me, issue) : []
-    return { comments: page.comments.map(rowOf), earlier: page.earlier, events: events.map(rowOf) }
+    // field prints only let a refused edit name who wrote a value
+    // (model/expected.ts), so the thread leaves them out
+    const shown = events.map(({ field_prints: _prints, ...event }) => rowOf(event))
+    return { comments: page.comments.map(rowOf), earlier: page.earlier, events: shown }
   },
 })
 

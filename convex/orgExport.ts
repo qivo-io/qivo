@@ -241,6 +241,9 @@ function exportRow(doc: Doc<OrgExportSection>, section: OrgExportSection): OrgEx
   delete row.gravatar_avatars
   // a task's archive-mark flag only steers the app snapshot's reads
   delete row.relations_marked
+  // an activity row's field prints only let a refused edit name who wrote
+  // the value (model/expected.ts)
+  delete row.field_prints
   // The organization id and the archive mark only serve the app's index reads.
   if (section === 'issue_links' || section === 'issue_labels' || section === 'issue_attachments') {
     delete row.org_id

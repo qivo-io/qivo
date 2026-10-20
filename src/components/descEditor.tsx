@@ -141,21 +141,24 @@ const serialize = (editor: Editor) => {
 /* An upload can outlive the editor that started it (commit-on-blur
    mid-flight), and the user may have re-opened the issue — completions
    route through whichever live editor owns the issue now, falling back to
-   patching the committed text. */
+   patching the committed text. Keyed by the task's uuid: a new task's
+   handle can move to another task while an upload runs (P.watchHandles). */
 const liveEditors = new Map<
   string,
   (src: string, repl: { attId: string; alt: string } | null) => boolean
 >()
 
-/** Settles one inline image upload for `issueKey`. The placeholder `src`
+/** Settles one inline image upload for task `uuid`. The placeholder `src`
     becomes the attachment `attId`, shown with `alt`, in the live draft and
     in the committed description, wherever it still is. A failed upload (no
     `attId`), or a reference that would take the committed description over
     TEXT_MAX, removes the image instead, and the attachment is deleted again
     when no text keeps it. */
-function finishUpload(issueKey: string, src: string, attId: string | null, alt: string) {
+function finishUpload(uuid: string, src: string, attId: string | null, alt: string) {
   const token = `![Uploading image…](${src})`
-  const it = P.issueById[issueKey]
+  // the task's handle now, which may have moved since the upload began
+  const issueKey = P.handleOf(uuid)
+  const it = issueKey ? P.issueById[issueKey] : undefined
   const committed = !!it && typeof it.description === 'string' && it.description.includes(token)
   const patched = (repl: string) => it.description.split(token).join(repl).trim()
   const ref = attId ? `![${alt}](att:${attId})` : ''
@@ -164,9 +167,10 @@ function finishUpload(issueKey: string, src: string, attId: string | null, alt: 
   // alike, or the store would refuse the patch and leave the placeholder for
   // good, and the draft would keep an image it cannot save
   const overflow = committed && patched(ref).length > TEXT_MAX
-  const live = liveEditors.get(issueKey)
+  const live = liveEditors.get(uuid)
   const inDraft = live ? live(src, attId && !overflow ? { attId, alt } : null) : false
-  if (committed) P.updateIssue(issueKey, { description: patched(overflow ? '' : ref) || null })
+  if (committed && issueKey)
+    P.updateIssue(issueKey, { description: patched(overflow ? '' : ref) || null })
   if (overflow) {
     toast(`Image not added. The description would go over the ${TEXT_MAX_LABEL} character limit.`)
   }
@@ -297,6 +301,13 @@ export type DescEditorHandle = {
   focus: () => void
 }
 
+/** What an editor gives the store with a save: `seen`, the text the person
+    began from, and `keepDraft`, which the store runs when the server refuses
+    the save because someone changed the text first. The draft then stays,
+    and the text the server keeps becomes its baseline once it shows, so a
+    second Save deliberately replaces it. */
+export type DraftKeep = { seen: string; keepDraft: (shown: unknown) => boolean }
+
 /** Comment mode: commit goes to onCommit (the store's add/updateComment),
     not the issue description. onCommit resolves whether the server saved
     the text; the editor keeps the draft, locked, until it answers, and keeps
@@ -305,7 +316,7 @@ export type DescEditorHandle = {
     commit (composer); `onClose` lets edit-in-place close on Esc/Discard and
     after a saved commit. */
 export type CommentMode = {
-  onCommit: (text: string) => Promise<boolean>
+  onCommit: (text: string, keep: DraftKeep) => Promise<boolean>
   onClose?: () => void
   label: string
   reset?: boolean
@@ -337,6 +348,11 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const rawRef = useRef(value) // committed text, prop form
   const canonRef = useRef(canonical(value)) // its canonical bytes (commit compare)
+  // a save refused over someone else's change: the next text shown that is
+  // neither the old baseline nor the draft becomes the baseline (draftKeep)
+  const rebaseRef = useRef(false)
+  // the task this editor writes to, which a moving handle keeps
+  const taskUuid = issueKey === null ? undefined : P.issueById[issueKey]?.uuid
   const sessionUploadsRef = useRef<string[]>([])
   const [linkPop, setLinkPop] = useState<LinkPop | null>(null)
   const [headMenu, setHeadMenu] = useState(false)
@@ -722,7 +738,8 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
         },
       },
     },
-    [issueKey],
+    // one editor per task: a new task's handle may move while it is open
+    [taskUuid],
   )
   editorRef.current = editor
   if (editor && !committedDocRef.current) committedDocRef.current = editor.state.doc
@@ -754,6 +771,29 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     committedDocRef.current = ed.state.doc
   }
 
+  /* The DraftKeep of a save from baseline `seen`. Its keepDraft gets the
+     text on screen once the refused save's paint has gone. That is the
+     text the server keeps, which becomes the baseline, unless it is still
+     `seen` because no delivery holds the other change yet. Then the
+     baseline stays `seen` and reconcile moves it once the change shows.
+     Either way the draft shows as unsaved, with its Save bar. */
+  const draftKeep = (ed: Editor, seen: string): DraftKeep => ({
+    seen,
+    keepDraft: (shown) => {
+      if (ed.isDestroyed) return false
+      const text = typeof shown === 'string' ? shown : seen
+      // the server's text becomes the baseline unless it is still `seen`;
+      // when it reads as the draft already, the draft is simply saved
+      const base = text !== seen ? text : seen
+      rebaseRef.current = base === seen
+      rawRef.current = base
+      canonRef.current = canonical(base)
+      committedDocRef.current = ed.schema.nodeFromJSON(astToDoc(parseMd(base)))
+      refreshDirtyRef.current()
+      return true
+    },
+  })
+
   const commit = () => {
     const ed = editorRef.current
     if (!ed) return
@@ -778,7 +818,8 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       setLinkPop(null)
       setHeadMenu(false)
       ed.setEditable(false, false)
-      void cm.onCommit(text).then((saved) => {
+      rebaseRef.current = false
+      void cm.onCommit(text, draftKeep(ed, rawRef.current)).then((saved) => {
         sendingRef.current = false
         setSending(false)
         if (closedRef.current || ed.isDestroyed) {
@@ -794,7 +835,8 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
         if (!saved) {
           // No reconcile here. The value prop may still hold the store's
           // optimistic paint of this very text, which would pass for an echo
-          // and become the baseline. The rollback's own render reconciles.
+          // and become the baseline. The rollback's own render reconciles,
+          // and moves a kept draft's baseline (rebaseRef).
           if (idle) ed.commands.focus()
           return
         }
@@ -831,12 +873,19 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       // A paused save would roll back to the stale text and, once the editor
       // blurs, replace the draft. Keep the draft dirty with the Save bar up.
       if (P.refusePausedEdit()) return
+      // the text this draft began from, sent as what the person saw
+      const keep = draftKeep(ed, rawRef.current)
+      rebaseRef.current = false
       rawRef.current = text
       canonRef.current = text
       // ids entering committed text are the store's from here on — its
       // description GC decides their lifetime, never this editor's reap
       sessionUploadsRef.current = sessionUploadsRef.current.filter((id) => !text.includes(id))
-      P.updateIssue(issueKey, { description: text || null })
+      P.updateIssue(
+        issueKey,
+        { description: text || null },
+        { seen: { description: keep.seen }, keepDraft: keep.keepDraft },
+      )
     }
     // the save is the new baseline; undo may cross it freely — the store GC
     // keeps the just-replaced text's images for one more save, so an att:
@@ -867,6 +916,8 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       canonRef.current = canonical(latest)
     }
     setDocFromText(ed, rawRef.current)
+    // a discarded draft keeps no claim on the next text the server shows
+    rebaseRef.current = false
     reapSessionUploads()
     refreshDirty()
     ed.commands.blur()
@@ -898,6 +949,17 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     // rolls it back; neither echo may move the baseline under the draft
     if (!ed || ed.isDestroyed || sendingRef.current || val === rawRef.current) return
     const canon = canonical(val)
+    if (rebaseRef.current) {
+      // a kept draft: the text shown is the refused save's own paint until
+      // the rollback, then the server's text, which becomes the baseline
+      if (serialize(ed) === canon) return
+      rebaseRef.current = false
+      rawRef.current = val
+      canonRef.current = canon
+      committedDocRef.current = ed.schema.nodeFromJSON(astToDoc(parseMd(val)))
+      refreshDirty()
+      return
+    }
     if (serialize(ed) === canon) {
       // doc already matches (finishUpload patched both sides) — just advance
       rawRef.current = val
@@ -1008,7 +1070,8 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   // upload completion routing + discard-reap on unmount / issue switch
   useEffect(() => {
     const ed = editor
-    if (!ed || issueKey === null) return
+    const uuid = taskUuid
+    if (!ed || !uuid) return
     const entry = (src: string, repl: { attId: string; alt: string } | null): boolean => {
       let found: { pos: number; attrs: Record<string, unknown>; size: number } | null = null
       ed.state.doc.descendants((node, pos) => {
@@ -1028,15 +1091,16 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       ed.view.dispatch(tr)
       return true
     }
-    liveEditors.set(issueKey, entry)
+    liveEditors.set(uuid, entry)
     return () => {
-      if (liveEditors.get(issueKey) === entry) liveEditors.delete(issueKey)
+      if (liveEditors.get(uuid) === entry) liveEditors.delete(uuid)
       // an unmount (modal closed, issue deleted remotely) drops any unsaved
       // draft — say so, since only the Save button persists now
       if (dirtyRef.current) toast('Unsaved description changes discarded')
       reapRef.current()
     }
-  }, [issueKey, editor])
+    // by the task, so a handle that moves keeps the routing and the draft
+  }, [taskUuid, editor])
 
   // comment mode has no upload plumbing, but the same unmount contract: a
   // dirty draft (typed composer, half-edited comment) dies with the editor
@@ -1060,7 +1124,9 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       toast('Attach images to the task instead of the comment.')
       return
     }
-    if (issueKey === null) {
+    // the task's uuid, which an upload follows if the task's handle moves
+    const uuid = issueKey === null ? undefined : P.issueById[issueKey]?.uuid
+    if (!uuid) {
       toast('Create the task before adding images.')
       return
     }
@@ -1098,14 +1164,16 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
           // at most 60 code points, so a long file name adds little to the
           // description's length
           const alt = [...name.replace(/[[\]()\n\\]/g, '_')].slice(0, 60).join('')
-          return P.addAttachment(issueKey, file, { inline: true }).then(
+          const key = P.handleOf(uuid)
+          if (!key) return finishUpload(uuid, src, null, alt)
+          return P.addAttachment(key, file, { inline: true }).then(
             (attId: string | null) => {
               if (attId) sessionUploadsRef.current.push(attId)
-              finishUpload(issueKey, src, attId, alt)
+              finishUpload(uuid, src, attId, alt)
               // finishUpload(null) is the existing "this one didn't make it" path;
               // reaching it matters more than the reason
             },
-            () => finishUpload(issueKey, src, null, alt),
+            () => finishUpload(uuid, src, null, alt),
           )
           // and one image failing must never strand the rest of the queue
         })

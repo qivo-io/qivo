@@ -116,7 +116,14 @@ it keeps happening"}`. The `503` means the request saved nothing, so wait
 the `Retry-After` seconds and send the same request again. A change too
 large to finish in time runs out every time, so if the time out repeats,
 split the change into smaller requests. Creating a webhook subscription is the exception, as
-[Generic webhooks](#generic-webhooks) describes. A failure that is not a
+[Generic webhooks](#generic-webhooks) describes. A `409` is a different
+answer. It refuses a change that carried `expected` because someone changed
+one of those fields since you read it, and the request saved nothing (see
+[Refusing a change when a field changed since you read
+it](#refusing-a-change-when-a-field-changed-since-you-read-it)). Unlike a
+`503`, never send a `409`'s request again unchanged, because Qivo refuses it
+again. Read the record, decide whether your change still applies, and send
+it with the values you read now. A failure that is not a
 refusal, such as a server limit, is a `500` with `{"error": "internal
 error"}`, and Qivo keeps its details in its own logs. A `500` does not say
 whether a change was saved, so read the task or list before you send a
@@ -507,7 +514,7 @@ read, `access` flags included.
 ```
 PATCH /v1/projects/{ref}  {"name": "…", "description": "…", "review_hours": 3,
                            "track_delay": false, "lead_id": "…uuid…",
-                           "archived": true}
+                           "archived": true, "expected": {"name": "…"}}
 ```
 
 Every field is optional, and the answer is the single-project read. Changing a
@@ -535,6 +542,12 @@ project`.
   with `only people can change who has access, not agents`. The outgoing lead
   keeps User access, and the new lead's own grant goes, because the lead role
   carries their access.
+- `expected` holds the values you last read of the fields the request
+  changes, from `name`, `description`, `review_hours`, `track_delay` and
+  `lead_id`, and the request saves nothing when someone changed one of them
+  since. `lead_id` is the lead the single-project read shows. See [Refusing a
+  change when a field changed since you read
+  it](#refusing-a-change-when-a-field-changed-since-you-read-it).
 - `key`, `access` and `team_access` are refused with the sentences `POST`
   gives them, and `parent`, `parent_id` and `type` with `a project's parent
   is set when it is created, with parent`. Any other field the route does
@@ -553,9 +566,11 @@ A request that renames a project and hands over its lead writes only
 ### Project access
 
 ```
-PUT    /v1/projects/{ref}/access/users/{user}  {"level": "user" | "viewer"}
+PUT    /v1/projects/{ref}/access/users/{user}  {"level": "user" | "viewer",
+                                                "expected"?: {"level": …}}
 DELETE /v1/projects/{ref}/access/users/{user}  [{"on_held_tasks": …}]
-PUT    /v1/projects/{ref}/access/teams/{team}  {"level": "user" | "viewer"}
+PUT    /v1/projects/{ref}/access/teams/{team}  {"level": "user" | "viewer",
+                                                "expected"?: {"level": …}}
 DELETE /v1/projects/{ref}/access/teams/{team}  [{"on_held_tasks": …}]
 ```
 
@@ -573,6 +588,11 @@ this project; hand the lead to someone else first`.
 
 `PUT` answers `{"project_id", "user" | "team": {"id", "name"}, "level",
 "changed"}`; giving the level someone already has changes nothing.
+`expected.level` is the level you last read for that user or team in the
+project's `grants`, or `null` when the project listed no grant of their own,
+and `PUT` saves nothing when it changed since (see [Refusing a change when a
+field changed since you read
+it](#refusing-a-change-when-a-field-changed-since-you-read-it)).
 
 Removing access can hide open tasks from the people working on them. These
 are the tasks of the project and its sub-projects that are not Done, whose
@@ -591,9 +611,10 @@ what happens to them:
   unassigned. The new holder must be able to work on each task once the
   access is gone, by the usual assignee rules.
 
-`PUT` takes only `level` and `DELETE` only `on_held_tasks`. Any other field
-is refused with `400`, such as `unknown field "on_held_task"; this request
-takes on_held_tasks`, so a misspelled choice never falls back to `leave`.
+`PUT` takes only `level` and `expected`, and `DELETE` only `on_held_tasks`.
+Any other field is refused with `400`, such as `unknown field
+"on_held_task"; this request takes on_held_tasks`, so a misspelled choice
+never falls back to `leave`.
 Both check the body before the path, so a bad body is a `400` even when the
 project, user or team is unknown.
 
@@ -625,8 +646,8 @@ curl -X DELETE -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: applicatio
 
 ```
 POST   /v1/projects/{ref}/milestones       {"name": "…", "date": "2026-11-02"}
-PATCH  /v1/projects/{ref}/milestones/{id}  {"name"?, "date"?}
-DELETE /v1/projects/{ref}/milestones/{id}
+PATCH  /v1/projects/{ref}/milestones/{id}  {"name"?, "date"?, "expected"?}
+DELETE /v1/projects/{ref}/milestones/{id}  [{"expected": {"name"?, "date"?}}]
 ```
 
 Milestones live on a top-level project's roadmap. Naming a sub-project in
@@ -649,13 +670,22 @@ unchanged. `POST` answers `201` and `PATCH` `200` with `{"id", "name",
 `renamed milestone`, `moved milestone` or `deleted milestone`. A `PATCH` that
 changes neither the name nor the date writes no row.
 
+`PATCH` takes an optional `expected` with the `name` and `date` you last read
+of the fields it changes. `DELETE` takes an optional JSON body
+`{"expected": {…}}` with either or both, because a deleted milestone cannot
+be restored. An empty body still deletes without a check. Either request
+saves nothing when someone changed one of those fields since (see [Refusing a
+change when a field changed since you read
+it](#refusing-a-change-when-a-field-changed-since-you-read-it)). `POST`
+takes no `expected`.
+
 ### Teams
 
 ```
 GET    /v1/teams                      → every team, with its members
 GET    /v1/teams/{id}                 → one team
 POST   /v1/teams                      {"name": "…"}
-PATCH  /v1/teams/{id}                 {"name": "…"}
+PATCH  /v1/teams/{id}                 {"name": "…", "expected"?: {"name": "…"}}
 PUT    /v1/teams/{id}/members/{user}  [{"leader": true | false}]
 DELETE /v1/teams/{id}/members/{user}  [{"on_held_tasks": …}]
 ```
@@ -676,9 +706,13 @@ renames it with `PATCH`, and anyone else gets `requires an organization admin
 or a leader of this team`. `name` is trimmed and may not be blank (`a team
 name cannot be blank`) or longer than 80 characters (`a team name must be at
 most 80 characters`), unless it is a longer name the team had before that
-limit, sent back unchanged. `PATCH` changes only `name`. Any other field is a
-`400` (`unknown field "nmae"; this request takes name`), and a body without
-`name`, such as `{}`, is a `400` (`no recognized fields to update`). Deleting a team stays in
+limit, sent back unchanged. `PATCH` changes only `name`, and its optional
+`expected` holds the `name` you last read, so the rename saves nothing when
+someone renamed the team since (see [Refusing a change when a field changed
+since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it)).
+Any other field is a `400` (`unknown field "nmae"; this request takes name,
+expected`), and a body without `name`, such as `{}`, is a `400` (`no
+recognized fields to update`). Deleting a team stays in
 the app ([Stays in the app](#stays-in-the-app)). `POST` answers `201` and
 `PATCH` `200` with the team. Neither writes an activity row, as in the app.
 
@@ -837,10 +871,14 @@ subset and the authoritative reporter, assignee and reviewer picker.
 
 **Setting plannable hours.** `PATCH /v1/users/{id}` with
 `{ "plannable_hours": 32 }` sets that person's weekly capacity and answers
-their updated row. It is the one user field the API changes; any other field
-is a `400` (`unknown field "name"; this request takes plannable_hours`), and
-a body without `plannable_hours`, such as `{}`, is a `400` (`no recognized
-fields to update`). The value is a whole number from 1 to 168, otherwise a
+their updated row. It is the one user field the API changes. An optional
+`expected` holds the `plannable_hours` you last read, so the request saves
+nothing when someone changed them since (see [Refusing a change when a field
+changed since you read
+it](#refusing-a-change-when-a-field-changed-since-you-read-it)). Any other
+field is a `400` (`unknown field "name"; this request takes plannable_hours,
+expected`), and a body without `plannable_hours`, such as `{}`, is a `400`
+(`no recognized fields to update`). The value is a whole number from 1 to 168, otherwise a
 `400` with `plannable hours must be a whole number of hours from 1 to 168`.
 Like the app and MCP's `update_user`, it takes an organization admin or a
 leader of a team the person belongs to (migration 0094), and nobody else,
@@ -903,7 +941,9 @@ POST   /v1/tasks                           requires write on the target
                                            sub-project (see below)
 PATCH  /v1/tasks/{ref}                     requires write; also moves the
                                            task, sets its parent and adds or
-                                           removes labels
+                                           removes labels; `expected` refuses
+                                           it when a field it changes changed
+                                           since you read it
 DELETE /v1/tasks/{ref}                     requires write; moves the task
                                            to Deleted items (below)
 ```
@@ -1088,6 +1128,16 @@ detach`) rather than ignore it, and nothing is created or changed.
 Any other field the route does not take is refused with `400`, so a
 misspelled `parent` cannot create a top-level task; invalid values are
 rejected with `400` and a message.
+
+PATCH also takes `expected`, the values you last read of the fields the
+request changes, keyed as a read names them. The keys are `title`,
+`description`, `status`, `priority`, `assignee_id`, `reviewer_id`, `start_week`,
+`end_week`, `due_date`, `remaining_hours`, `paused`, `parent_id` with
+`has_hidden_parent` for `parent`, and `project_id` for a move. When someone
+changed one of them since, the PATCH is a `409` and nothing changes. See
+[Refusing a change when a field changed since you read
+it](#refusing-a-change-when-a-field-changed-since-you-read-it). POST takes no
+`expected`.
 
 **Moving a task.** `project` and `sub_project` on PATCH move the task, named
 exactly as on POST. Name the destination sub-project directly as `project`, or
@@ -1449,7 +1499,8 @@ The organization's labels, which any member may read:
 ```
 GET   /v1/labels         every label, ordered by name
 POST  /v1/labels         { "name": "Hardware", "color": "#4C9AFF" }
-PATCH /v1/labels/{id}    { "name": "…", "color": "…" }; {id} is an id or name
+PATCH /v1/labels/{id}    { "name": "…", "color": "…", "expected"?: {…} };
+                         {id} is an id or name
 ```
 
 A label is `{ "id": "…uuid…", "name": "Hardware", "color": "#4C9AFF" }`.
@@ -1460,8 +1511,12 @@ or a person or agent with the User role and Edit access to a top-level
 project (a sub-project alone is not enough), and answers `201`; it
 writes a `created label` activity row with the provenance. Renaming and
 recoloring are for organization admins only, as on the app's Labels
-settings page, and are checked before the label is looked up. Deleting a
-label is not offered over the API. Put labels on a task with `add_labels`
+settings page, and are checked before the label is looked up. `PATCH` takes
+an optional `expected` with the `name` and `color` you last read of the
+fields it changes, and saves nothing when someone changed one of them since
+(see [Refusing a change when a field changed since you read
+it](#refusing-a-change-when-a-field-changed-since-you-read-it)); `POST`
+takes no `expected`. Deleting a label is not offered over the API. Put labels on a task with `add_labels`
 and `remove_labels` on `PATCH /v1/tasks/{ref}`.
 
 ### Comments
@@ -1474,8 +1529,9 @@ GET    /v1/tasks/{ref}/comments   the newest comments, oldest first (read)
        ?limit=50                  1 to 50, 50 by default
        &before=<comment id>       the comments posted before that one
 POST   /v1/tasks/{ref}/comments   { "body": "Markdown text" }      (write)
-PATCH  /v1/comments/{id}          { "body": "Markdown text" }      (write)
-DELETE /v1/comments/{id}                                           (write)
+PATCH  /v1/comments/{id}          { "body": "Markdown text",
+                                    "expected"?: { "body": "…" } }  (write)
+DELETE /v1/comments/{id}          [{ "expected": { "body": "…" } }] (write)
 ```
 
 ```json
@@ -1532,6 +1588,15 @@ a comment saved earlier with more than 20,000 characters. An edit
 records `edited_at` and `edited_by_id`, and people it newly mentions follow
 the task and get an inbox message, as on a new comment. Neither writes an
 activity row or a webhook event.
+
+Both take `expected` with the `body` you last read. `PATCH` takes it beside
+the new `body`, and `DELETE` as an optional JSON body `{"expected": {"body": "…"}}`,
+because a deleted comment cannot be restored. Either saves
+nothing when someone edited the comment since you read it, and the `409`
+names the person who last edited it (see [Refusing a change when a field
+changed since you read
+it](#refusing-a-change-when-a-field-changed-since-you-read-it)). A `DELETE`
+without a body deletes without a check, as before.
 
 **Mentions and inbox messages (0074/0075/0114).** Description and comment
 markdown may carry the app's mention form — `@[Display Name](user:<profile
@@ -1957,6 +2022,131 @@ at https://qivo.io/app.
 - The **Last sync** time on the Team sync page. Changes over REST and MCP do
   not update it.
 
+## Refusing a change when a field changed since you read it
+
+Two callers can read the same task and both change it, and the second change
+then overwrites the first without either of them knowing. To prevent that, a
+change can carry `expected`, an object with the value you last read of each
+field the request changes. Qivo saves the change only when nobody else
+changed those fields since. `expected` arrived in October 2026. It is
+optional, and a request without it saves as before.
+
+The rule, for each key of `expected`:
+
+- The key names a field the same request changes, and its value is the field
+  as you last read it, `null` for unset.
+- Qivo refuses the request when the stored value differs from the value you
+  read and also from the value the request would store. Two callers who
+  choose the same value both pass, and so does a field someone changed and
+  changed back.
+- A field without a key is not checked, so someone else's change to another
+  field never refuses yours.
+- If any field conflicts, the request saves nothing, its other fields, moves,
+  labels and archive toggle included.
+
+Qivo checks after the permission checks and before the first write, in the
+same transaction as the change, so nothing can change in between.
+
+These routes and tools take `expected`, with these keys:
+
+| Route | MCP tool | Keys |
+|---|---|---|
+| `PATCH /v1/tasks/{ref}` | `update_task` | `title`, `description`, `status`, `priority`, `assignee_id`, `reviewer_id`, `start_week`, `end_week`, `due_date`, `remaining_hours`, `paused`, `parent_id` with `has_hidden_parent`, `project_id` |
+| `PATCH /v1/comments/{id}` | `update_comment` | `body` |
+| `DELETE /v1/comments/{id}` | `delete_comment` | `body` |
+| `PATCH /v1/projects/{ref}` | `update_project` | `name`, `description`, `track_delay`, `review_hours`, `lead_id` |
+| `PUT /v1/projects/{ref}/access/users/{user}`, `PUT /v1/projects/{ref}/access/teams/{team}` | `set_project_access` with a `level` other than `null` | `level` |
+| `PATCH /v1/projects/{ref}/milestones/{id}` | `set_milestone` with `milestone` | `name`, `date` |
+| `DELETE /v1/projects/{ref}/milestones/{id}` | `delete_milestone` | `name`, `date` |
+| `PATCH /v1/labels/{id}` | `set_label` with `label` | `name`, `color` |
+| `PATCH /v1/teams/{id}` | `set_team` with `team_id` | `name` |
+| `PATCH /v1/users/{id}` | `update_user` | `plannable_hours` |
+
+Each key belongs to the request field of the same name, with three
+exceptions on a task. `parent_id` and `has_hidden_parent` belong to
+`parent`, and `project_id` to `project` or `sub_project`. A delete changes
+the whole record, so it takes any of its keys. `archived`, `archive_reason`,
+`add_labels` and `remove_labels` take no key and are never checked. Routes
+and tools that create a record take no `expected`.
+
+A value has the type a read answers, which is a string for text and dates,
+a number for `remaining_hours`, `review_hours` and `plannable_hours`, a
+boolean for `paused`, `track_delay` and `has_hidden_parent`, a uuid for an
+id, and `null` where the field can be unset. `level` is `user`, `viewer` or `null`.
+Send each field as the read showed it:
+
+- **A task's parent.** Send `parent_id` and `has_hidden_parent` together, as
+  `GET /v1/tasks/{ref}` answered them. That is the parent's uuid with
+  `false`, `null` with `true` for a parent you cannot read, or `null` with
+  `false` for no parent. A parent you read by uuid matches while it stays
+  the parent, even after you lose sight of it. A parent you read as hidden matches any
+  parent you cannot read, so a move from one hidden parent to another is not
+  detected, because telling you would reveal tasks you cannot see.
+- **A group's remaining time.** An active task with subtasks reads
+  `remaining_hours: null`, also while it stores hours from before its
+  subtasks, so send `null`.
+- **A project's lead.** `lead_id` is the lead the single-project read shows,
+  so a sub-project without a lead of its own compares its parent's lead.
+- **A label's color.** `color` is the color reads show, so a label stored
+  before the `#rrggbb` rule compares as `#8A8F98`.
+- **A milestone's day.** `date` is the `date` the project read lists for the
+  milestone.
+- **A grant.** `level` is the level the project's `grants` list for that user
+  or team, or `null` when it lists no grant of their own.
+
+Values compare in a normalized form, so formatting alone never refuses a
+change. Titles and names are trimmed. A task's or project's description
+treats `""` as `null`. A comment body is trimmed. `remaining_hours` and
+`review_hours` are rounded to 0.1. Ids compare in any case, and so do label
+colors.
+
+A malformed `expected` is a `400`, and nothing is saved:
+
+- `expected must be an object of the fields as you last read them`, for
+  `null`, an array or any other value that is not an object.
+- `expected must name at least one field`, for `{}`.
+- `unknown field "expected.<key>"; expected takes <keys>`, such as
+  `unknown field "expected.colour"; expected takes name, color`.
+- `expected.<key> must be <type>`, such as `expected.remaining_hours must be
+  a number or null`, `expected.status must be one of backlog, todo,
+  progress, review, done` or `expected.assignee_id must be a profile uuid or
+  null`.
+- `expected.<key> applies only when the request sends <field>`, such as
+  `expected.parent_id applies only when the request sends parent`.
+- `expected.parent_id and expected.has_hidden_parent go together`, when one
+  of the two is missing.
+- `expected.has_hidden_parent must be false when expected.parent_id names a
+  task`.
+
+A conflict is a `409` with one sentence in `error`. It names the fields by
+their request field, never their values, and names a person only where Qivo
+can prove who wrote the stored value:
+
+```
+<Name> changed <fields> of <record> since you read it, so nothing was saved; read <record> again and resend your change
+<fields> of <record> changed since you read it, so nothing was saved; read <record> again and resend your change
+```
+
+The first form appears when one person wrote every conflicting field. For a
+task Qivo finds that person in the task's history you may read, and for a
+comment it is the person who last edited it. Other records never name
+anyone. `it` becomes `them` for several fields, listed as `status and
+remaining_hours` or `title, status and parent`. `<record>` is the task's key,
+such as `QN-12`, `comment <id> on QN-12`, `project ENC`, `milestone
+"Prototype validated"`, `label "Hardware"`, `team "Hardware"`, `the access of
+Emil Strand to project PCB` or `user "Priya Patel"`. For example:
+
+```json
+{ "error": "Aisha Rahman changed status of QN-12 since you read it, so nothing was saved; read QN-12 again and resend your change" }
+```
+
+A refused delete ends `so nothing was deleted; read <record> again before
+you delete it` instead of `so nothing was saved; read <record> again and
+resend your change`. Do not send the
+same request again, because Qivo refuses it again. Read the record, look
+at the other change, decide whether yours still applies, and send it with
+the new values in `expected`.
+
 ## Examples
 
 `$QIVO_KEY` is an agent key or a personal access token.
@@ -1996,6 +2186,11 @@ curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application
 # hand it to a reviewer (a row with assignable: true), or clear with null
 curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
   -d '{"reviewer_id":"<profile uuid>"}' "$BASE/tasks/QN-26"
+
+# start QN-26 only if its status is still the To Do you read; a 409 says
+# someone changed it since, and nothing was saved
+curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
+  -d '{"status":"progress","expected":{"status":"todo"}}' "$BASE/tasks/QN-26"
 
 # create a subtask of QN-26
 curl -X POST -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
@@ -2043,6 +2238,10 @@ curl -H "Authorization: Bearer $QIVO_KEY" \
 # fix a typo in a comment you wrote (the id comes from the thread)
 curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
   -d '{"body":"Measured 0.4 mm of play"}' "$BASE/comments/<comment uuid>"
+
+# delete that comment only if nobody edited it since you read it
+curl -X DELETE -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
+  -d '{"expected":{"body":"Measured 0.4 mm of play"}}' "$BASE/comments/<comment uuid>"
 ```
 
 ## Side effects and audit trail

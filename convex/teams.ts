@@ -31,14 +31,17 @@ import type { MutationCtx } from './_generated/server'
 import { byId } from './lib/db'
 import { accessRemovalMutation, adminMutation, notFound, orgMutation, rule } from './lib/functions'
 import { deleteTeamDeep } from './model/cascade'
+import { DELETES } from './model/expected'
 import { assertNotLastTeam } from './model/orgs'
 import { vHeldTasks } from './model/projectAccess'
 import {
   addTeamMemberCore,
+  assertTeamExpected,
   createTeamCore,
   removeTeamMemberCore,
   setTeamLeaderCore,
   updateTeamCore,
+  vTeamExpected,
 } from './model/teams'
 
 type MeCtx = MutationCtx & { me: Doc<'profiles'> }
@@ -75,9 +78,10 @@ export const update = orgMutation({
       archive_days: v.optional(v.number()),
       track_delay_default: v.optional(v.boolean()),
     }),
+    expected: v.optional(vTeamExpected),
   },
-  handler: async (ctx, { id, patch }) => {
-    await updateTeamCore(ctx, { me: ctx.me, team: await myTeam(ctx, id), patch })
+  handler: async (ctx, { id, patch, expected }) => {
+    await updateTeamCore(ctx, { me: ctx.me, team: await myTeam(ctx, id), patch, expected })
     return null
   },
 })
@@ -90,12 +94,13 @@ export const update = orgMutation({
  * rows keep their team_id. The deleted team's membership rows then reach
  * organization admins only. No narration (the old client wrote no event). */
 export const deleteDeep = orgMutation({
-  args: { id: v.string() },
-  handler: async (ctx, { id }) => {
+  args: { id: v.string(), expected: v.optional(vTeamExpected) },
+  handler: async (ctx, { id, expected }) => {
     const now = new Date().toISOString()
     const team = await myTeam(ctx, id)
     if (ctx.me.org_role !== 'admin') throw rule('only organization admins can delete teams')
     await assertNotLastTeam(ctx, team)
+    await assertTeamExpected(ctx, ctx.me, team, expected, DELETES)
     await deleteTeamDeep(ctx, { team, actor: ctx.me, now })
     return null
   },

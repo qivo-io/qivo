@@ -37,6 +37,13 @@ import { asMachineCaller, type Caller } from '../lib/core'
 import { vCredentialAccess } from '../lib/enums'
 import { badRequest, notFound, type Refusal } from '../lib/functions'
 import { NAME_MAX } from '../lib/textLimits'
+import {
+  EXPECTED_SENTENCE,
+  expectedSchema,
+  parseExpected,
+  sentKeys,
+  vExpected,
+} from '../model/expected'
 import { newUuid } from '../model/orgs'
 import {
   type AccessRemoval,
@@ -50,6 +57,7 @@ import {
   createTeamCore,
   removeTeamMemberCore,
   setTeamLeaderCore,
+  TEAM_MACHINE_FIELDS,
   teamJson,
   teamsJson,
   updateTeamCore,
@@ -140,9 +148,13 @@ export const mcpSetTeam = internalMutation({
     access: vCredentialAccess,
     team_id: v.optional(v.string()),
     name: v.string(),
+    expected: v.optional(vExpected),
   },
   handler: async (ctx, a): Promise<string> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
+    if (a.team_id === undefined && a.expected !== undefined) {
+      throw badRequest('expected applies only when changing an existing team')
+    }
     if (a.team_id === undefined) {
       const now = new Date().toISOString()
       const team = await createTeamCore(ctx, { me, id: newUuid(), name: a.name, now })
@@ -150,7 +162,12 @@ export const mcpSetTeam = internalMutation({
     }
     const found = await orgTeam(ctx, me, a.team_id)
     if (found === null) throw mcpTeamMissing(a.team_id)
-    const team = await updateTeamCore(ctx, { me, team: found, patch: { name: a.name } })
+    const team = await updateTeamCore(ctx, {
+      me,
+      team: found,
+      patch: { name: a.name },
+      expected: a.expected,
+    })
     return pretty({ ...(await teamJson(ctx, team)), created: false })
   },
 })
@@ -271,10 +288,15 @@ export const restUpdateTeam = internalMutation({
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const team = await restTeam(ctx, me, a.ref)
     const b = needJson(a.body)
-    refuseUnknownFields(b, ['name'])
+    refuseUnknownFields(b, ['name', 'expected'])
     const name = restName(b)
+    const expected = parseExpected(
+      TEAM_MACHINE_FIELDS,
+      b.expected,
+      sentKeys(TEAM_MACHINE_FIELDS, b),
+    )
     if (name === undefined) throw badRequest('no recognized fields to update')
-    return await teamJson(ctx, await updateTeamCore(ctx, { me, team, patch: { name } }))
+    return await teamJson(ctx, await updateTeamCore(ctx, { me, team, patch: { name }, expected }))
   },
 })
 
@@ -358,7 +380,8 @@ export const TEAM_TOOLS: McpTool[] = [
       name: 'set_team',
       title: 'Set team',
       description:
-        'Without `team_id`, create a team called `name`, which only an organization admin may do. With `team_id` (from list_teams), rename that team, which an organization admin or a leader of the team may do.',
+        'Without `team_id`, create a team called `name`, which only an organization admin may do. With `team_id` (from list_teams), rename that team, which an organization admin or a leader of the team may do. ' +
+        EXPECTED_SENTENCE,
       inputSchema: {
         type: 'object',
         $schema: SCHEMA,
@@ -370,16 +393,23 @@ export const TEAM_TOOLS: McpTool[] = [
             type: 'string',
             maxLength: NAME_MAX,
           },
+          expected: expectedSchema(TEAM_MACHINE_FIELDS),
         },
         required: ['name'],
       },
     },
-    run: (r, { callerId, access, args }) =>
-      r.runMutation(internal.machine.teams.mcpSetTeam, {
+    run: (r, { callerId, access, args }) => {
+      const { expected, ...rest } = args as { team_id?: string; name: string; expected?: unknown }
+      if (rest.team_id === undefined && expected !== undefined) {
+        throw badRequest('expected applies only when changing an existing team')
+      }
+      return r.runMutation(internal.machine.teams.mcpSetTeam, {
         callerId,
         access,
-        ...(args as { team_id?: string; name: string }),
-      }),
+        ...rest,
+        expected: parseExpected(TEAM_MACHINE_FIELDS, expected, sentKeys(TEAM_MACHINE_FIELDS, rest)),
+      })
+    },
   },
   {
     access: 'write',

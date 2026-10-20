@@ -1,4 +1,5 @@
 import { badRequest } from '../lib/functions'
+import { roundTenths } from '../lib/numbers'
 
 type TaskDateField = 'start_week' | 'end_week' | 'due_date'
 
@@ -38,11 +39,7 @@ export function assertWeekPair(start: string | undefined, end: string | undefine
   }
 }
 
-/** At magnitudes where scaling overflows, the number already has no fraction. */
-export function roundTenths(value: number): number {
-  const scaled = value * 10
-  return Number.isFinite(scaled) ? Math.round(scaled) / 10 : value
-}
+export { roundTenths } from '../lib/numbers'
 
 /** Estimates are finite, nonnegative hours, stored to one decimal place. */
 export function cleanRemaining(value: unknown): number | undefined {

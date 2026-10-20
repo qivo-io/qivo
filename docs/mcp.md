@@ -180,6 +180,18 @@ same arguments and answers the same way. Its `upload_url` now points at
 Qivo and stores one file, where before it was a Convex URL that stored a
 file for every POST until it expired (see [Attachments](#attachments)).
 
+In October 2026 `update_task`, `update_comment`, `delete_comment`,
+`update_project`, `set_project_access`, `set_milestone`, `delete_milestone`,
+`set_label`, `set_team` and `update_user` gained an optional `expected`
+argument, the values you last read of the fields the call changes, and their
+descriptions end with a sentence about it. A call whose fields someone else
+changed since is refused and saves nothing (see [Refusing a change when a
+field changed since you read
+it](#refusing-a-change-when-a-field-changed-since-you-read-it)). A client
+holding the older catalogue keeps working, but its calls save without the
+check until the client refreshes its tool list and its model learns to send
+`expected`.
+
 ## Access model: the credential is a user
 
 MCP authenticates as **one user**, with three connection options. **OAuth is
@@ -899,7 +911,15 @@ out every time, so if the time out repeats, split the change into smaller
 calls. A conflict or time out before the tool runs, while Qivo counts or
 authenticates the request, is an HTTP `503` with `Retry-After: 1` and the
 matching sentence as `error`, and the request is safe to send again in the
-same way. A failure that is not a refusal, such as a server limit, answers `internal error` there instead, and outside a tool call
+same way. A call that sent `expected` and is refused because someone
+changed one of those fields since answers a sentence that ends `so nothing
+was saved; read <record> again and resend your change`, or for a delete `so
+nothing was deleted; read <record> again before you delete it` (see [Refusing a
+change when a field changed since you read
+it](#refusing-a-change-when-a-field-changed-since-you-read-it)). Unlike the
+conflict above, never make that call again unchanged, because Qivo refuses
+it again. Read the record, decide whether your change still applies, and
+send it with the values you read now. A failure that is not a refusal, such as a server limit, answers `internal error` there instead, and outside a tool call
 it is an HTTP `500` with the same error. Qivo keeps its details in its own
 logs. `internal error` does not say whether a change was saved, so read the
 task or list before you make a changing call again.
@@ -923,11 +943,11 @@ tools that take no arguments, `get_me`, `list_teams`, `list_users` and
 | `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `offset`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Every result also has `progress` (for a group, the done and total tasks without subtasks under it that you can see), `delay` (the app's projected delay when the task's project tracks it) and `last_comment_at`. Active tasks only by default, oldest first by creation, so `offset` pages through them. `archived: true` lists archived tasks instead (0070), one `project` at a time with all its sub-projects you can read, as `{next_cursor, tasks}` paged with `cursor` (see [Task results](#task-results)). Tasks in an ARCHIVED PROJECT are left out of active lists unless `project` names that project (0106). That is a different axis, and the one without a flag |
 | `get_project` | One readable `project` (number/key/uuid), as the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, `completion` (the Overview's done and total tasks), the top-level project's `milestones` and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
 | `create_project` | Create a top-level project from `name` (at most 80 characters), or with `parent` (number/key/uuid) a sub-project; optional `lead_id` (you by default) and `description`. Answers like `get_project` |
-| `update_project` | Change a project you lead: `name` (at most 80 characters), `description`, `review_hours`, `track_delay`, `archived: true/false` to archive or restore it, and `lead_id` to hand over the lead (people only). Answers like `get_project`. It takes no `archive_reason`, which only tasks take |
-| `set_project_access` | Give one `user_id` or `team_id` `level` `user` or `viewer` on a `project`, or with `level: null` remove it, settling the open tasks it hides by `on_held_tasks`. People only, with Lead access |
-| `set_milestone` | Add a milestone (`name` of at most 80 characters, `date`) to a `project`'s top-level project, or with `milestone` rename or move one |
-| `delete_milestone` | Delete a `milestone` of a `project` |
-| `set_team` | Without `team_id`, create a team called `name` (at most 80 characters, organization admins only); with `team_id`, rename it (an organization admin or a leader of the team). Answers the `list_teams` row with `created` |
+| `update_project` | Change a project you lead: `name` (at most 80 characters), `description`, `review_hours`, `track_delay`, `archived: true/false` to archive or restore it, and `lead_id` to hand over the lead (people only). Answers like `get_project`. It takes no `archive_reason`, which only tasks take. `expected` holds what you last read of the fields it changes, `lead_id` as `get_project` shows it. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
+| `set_project_access` | Give one `user_id` or `team_id` `level` `user` or `viewer` on a `project`, or with `level: null` remove it, settling the open tasks it hides by `on_held_tasks`. People only, with Lead access. With a level, `expected` holds the `level` you last read in `get_project`'s `grants`, `null` for none; with `level: null` it is refused. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
+| `set_milestone` | Add a milestone (`name` of at most 80 characters, `date`) to a `project`'s top-level project, or with `milestone` rename or move one; then `expected` holds the `name` and `date` you last read of the fields it changes. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
+| `delete_milestone` | Delete a `milestone` of a `project`. `expected` holds the `name` and `date` you last read, either or both. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
+| `set_team` | Without `team_id`, create a team called `name` (at most 80 characters, organization admins only); with `team_id`, rename it (an organization admin or a leader of the team), and then `expected` holds the `name` you last read. Answers the `list_teams` row with `created`. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `set_team_member` | Add (`member: true`) or remove (`member: false`) one `user_id` in a team, and with `member: true` make or unmake them a leader (`leader`). People only, as an organization admin or a leader of the team. A removal settles the user's open tasks by `on_held_tasks` |
 | `list_users` | Every Qivo user in the organization, for general roster discovery. The row is `id`, `name`, `org_role`, `kind`, `active`, `plannable_hours` — no email address and no profile picture. Presence here does **not** prove access to a destination project; use `list_project_users` before writing `reporter_id`, `assignee_id` or `reviewer_id`. `plannable_hours` is the **whole** hours a week that user has for **planned project work** (the work week minus meetings and other overhead). It is what the planner divides by: plan someone at most that many hours in a week, shared across every project they work on (0092). It is **`null` for an agent** (0103), whose capacity is unbounded, never zero |
 | `list_project_users` | Users with access to `project` (number/key/uuid), and therefore valid non-null `reporter_id` values. On a parent project these are the people with access to the parent itself (organization admins, its lead and its individual or team grants); someone who reaches the parent only through one of its sub-projects is listed under that sub-project. It returns the `list_users` shape plus `assignable`: only active users with effective project Edit (`user`) or Lead access have `assignable: true` and are valid new `assignee_id` or `reviewer_id` selections. Inactive users and users with only View access remain valid reporters when they can see the project, because reporter is attribution rather than work or permission |
@@ -935,23 +955,114 @@ tools that take no arguments, `get_me`, `list_teams`, `list_users` and
 | `list_comments` | The task's newest comments, oldest first, with author and edit attribution. `limit` (50 by default, at most 50) caps how many, and `before`, a comment's `id`, reads the comments posted before it. See [Comments, inbox and following](#comments-inbox-and-following) |
 | `add_comment` | Comment on a task **as yourself** (the credential's user is the pinned author); markdown body of at most 20,000 characters; a task holds at most 400 comments; returns the comment `id`, task reference as `task`, and `created_at`; leaves no activity row, because the comment is its own feed entry |
 | `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs. Another project's sub-project is a hard error; move a task later with `update_task`. `parent` (a task ref) makes it a subtask; you need Edit access on the parent's project, because the parent becomes a group, and the parent must be in the same top-level project, in any of its sub-projects. `start_week` and `end_week` plan it (week starts, both or neither), and `paused` holds it. Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` is capped at 80 characters and `description` at 20,000. Returns `id` and `key` |
-| `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain) and `archive_reason`, posted as your comment when the call archives the task. It also moves the task (`project`, `sub_project`; to another top-level project its subtasks move along, and a subtask must leave its parent in the same call), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. A subtask or parent in a project being moved to Deleted items refuses the toggle for everyone, admins included, with `a subtask of this task is being moved to Deleted items; try again when that finishes` or `a parent of this task is being moved to Deleted items; try again when that finishes`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` is capped at 80 characters, and `description` and `archive_reason` at 20,000. The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time |
+| `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain) and `archive_reason`, posted as your comment when the call archives the task. It also moves the task (`project`, `sub_project`; to another top-level project its subtasks move along, and a subtask must leave its parent in the same call), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. A subtask or parent in a project being moved to Deleted items refuses the toggle for everyone, admins included, with `a subtask of this task is being moved to Deleted items; try again when that finishes` or `a parent of this task is being moved to Deleted items; try again when that finishes`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` is capped at 80 characters, and `description` and `archive_reason` at 20,000. The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time. `expected` holds what you last read of the fields the call changes, keyed as `get_task` reads them, with `parent_id` and `has_hidden_parent` for `parent` and `project_id` for a move. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `delete_task` | Move a task to Deleted items with its comments, attachments, links, labels and follows; its subtasks stay as top-level tasks and its inbox messages are deleted. A person can restore it in the app for 30 days, and no tool restores. Answers `{deleted: true, key}` |
 | `set_task_link` | Add (`linked: true`) or remove (`linked: false`) the link between `ref` and `other`, with `kind` `blocks`, `blocked_by` or `relates` as seen from `ref`. Two tasks share at most one link. It needs read access to both tasks and Edit access on either, the app's rule. Adding the link that exists, or removing one that does not, changes nothing; `changed` in the result says whether the call did. A different link between the same tasks is refused with `these tasks are already linked`. `get_task` lists the links |
 | `list_labels` | The organization's labels as `id`, `name` and `color`, ordered by name |
-| `set_label` | Without `label`, create a label from `name` (at most 40 characters) and `color` (`#` and six hex digits); this needs an organization admin, or a user (person or agent) with the User role and Edit access to a top-level project. With `label` (an id or name), rename or recolor that label; only organization admins may, as on the app's Labels settings page. Returns the label with `created` |
+| `set_label` | Without `label`, create a label from `name` (at most 40 characters) and `color` (`#` and six hex digits); this needs an organization admin, or a user (person or agent) with the User role and Edit access to a top-level project. With `label` (an id or name), rename or recolor that label; only organization admins may, as on the app's Labels settings page, and `expected` holds the `name` and `color` you last read of the fields it changes. Returns the label with `created`. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `delete_attachment` | Delete a file attached to the task `ref`; `attachment` is an id from `get_task`'s `attachments`. It needs Edit access to the task's project, as in the app, and leaves description images (`inline: true`) to the app. See [Attachments](#attachments) |
 | `start_attachment_upload` | Start attaching a file to the task `ref`, given its `name` (1 to 255 characters), its exact `size` in bytes and an optional `content_type`. Answers `ticket`, an `upload_url` that stores one file and `expires_at`, an hour on. Send exactly `size` bytes to `upload_url`, then call `confirm_attachment_upload`. It needs Edit access to the task's project. See [Attachments](#attachments) |
 | `confirm_attachment_upload` | Attach the file sent to `upload_url`, given the task `ref`, the `ticket` and the `storageId` the upload answered as `storage_id`. Answers the attachment as `get_task` lists it |
 | `attach_text_file` | Attach text you write yourself, such as notes, a CSV table or a log, to the task `ref` as a file called `name`, with an optional `content_type` (`text/plain; charset=utf-8` by default). Qivo stores `text` as UTF-8, at most 256 KiB and within the organization's per-file limit. It needs Edit access to the task's project and answers the attachment as `get_task` lists it |
 | `list_task_activity` | The task's history, oldest first, as the task window's Activity shows it: `id`, `created_at`, `actor_id`, `actor_name`, `verb` and `detail`. See [Task activity](#task-activity) |
 | `get_workload` | Each person's planned hours per week from the week holding `from_week` (default this week) for `weeks` weeks (1 to 52, default 8), optionally limited to one `project`. See [Workload](#workload) |
-| `update_comment` | Replace a comment's `body` (at most 20,000 characters); `comment` is its `id` from `list_comments`. The comment's author may, and so may a lead of the task's project. See [Comments, inbox and following](#comments-inbox-and-following) |
-| `delete_comment` | Delete a comment, by the same rule as `update_comment` |
+| `update_comment` | Replace a comment's `body` (at most 20,000 characters); `comment` is its `id` from `list_comments`. The comment's author may, and so may a lead of the task's project. `expected` holds the `body` you last read. See [Comments, inbox and following](#comments-inbox-and-following) and [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
+| `delete_comment` | Delete a comment, by the same rule as `update_comment`. `expected` holds the `body` you last read, because a deleted comment cannot be restored |
 | `list_inbox` | Your inbox as `items`, one per active task you can read, latest activity first, with `unread_only`, `include_snoozed`, `limit` (50 by default, at most 200) and `offset`. `truncated` says some messages were not looked at |
 | `update_inbox` | `read`, `unread`, `remove` or `snooze` your items about `tasks`, or with `all: true` mark every item read or remove every read item. `snooze` takes `until` |
 | `set_following` | Follow a task (`following: true`) or stop following it |
-| `update_user` | Set a user's `plannable_hours`. Allowed for an **organization admin**, or a **leader of a team that person belongs to**. Nobody else may, your own account included. An agent is never an organization admin (0100/0102) and never leads a team (only people do), so a leaked agent key cannot rewrite the organization's capacity plan. The database decides (0094), so a refusal here is the same refusal the app gives; the value is a **whole number of hours**, 1 to 168, and the schema turns a fraction away (0095). It applies to **people only**. An agent has no plannable week and cannot be given one (0103, "an agent has no plannable week, because its capacity is unbounded"), refused by the tool and by the RPC underneath |
+| `update_user` | Set a user's `plannable_hours`. Allowed for an **organization admin**, or a **leader of a team that person belongs to**. Nobody else may, your own account included. An agent is never an organization admin (0100/0102) and never leads a team (only people do), so a leaked agent key cannot rewrite the organization's capacity plan. The database decides (0094), so a refusal here is the same refusal the app gives; the value is a **whole number of hours**, 1 to 168, and the schema turns a fraction away (0095). It applies to **people only**. An agent has no plannable week and cannot be given one (0103, "an agent has no plannable week, because its capacity is unbounded"), refused by the tool and by the RPC underneath. `expected` holds the `plannable_hours` you last read. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
+
+### Refusing a change when a field changed since you read it
+
+Two callers can read the same task and both change it, and the second call
+then overwrites the first without either of them knowing. To prevent that,
+`update_task`, `update_comment`, `delete_comment`, `update_project`,
+`set_project_access`, `set_milestone`, `delete_milestone`, `set_label`,
+`set_team` and `update_user` take an optional `expected` argument, an object with the value you last read of each field the call
+changes. Qivo saves the change only when nobody else changed those fields
+since. A call without `expected` saves as before. The rule, for each key:
+
+- The key names a field the same call changes, and its value is the field as
+  you last read it, `null` for unset.
+- Qivo refuses the call when the stored value differs from the value you read
+  and also from the value the call would store. Two callers who choose the
+  same value both pass, and so does a field someone changed and changed back.
+- A field without a key is not checked, so someone else's change to another
+  field never refuses yours.
+- If any field conflicts, the call saves nothing, its other fields, moves,
+  labels and archive toggle included.
+
+| Tool | Keys of `expected` |
+|---|---|
+| `update_task` | `title`, `description`, `status`, `priority`, `assignee_id`, `reviewer_id`, `start_week`, `end_week`, `due_date`, `remaining_hours`, `paused`, `parent_id` with `has_hidden_parent`, `project_id` |
+| `update_comment`, `delete_comment` | `body` |
+| `update_project` | `name`, `description`, `track_delay`, `review_hours`, `lead_id` |
+| `set_project_access` with a `level` other than `null` | `level` |
+| `set_milestone` with `milestone`, `delete_milestone` | `name`, `date` |
+| `set_label` with `label` | `name`, `color` |
+| `set_team` with `team_id` | `name` |
+| `update_user` | `plannable_hours` |
+
+Each key belongs to the argument of the same name, with three exceptions on
+a task. `parent_id` and `has_hidden_parent` belong to `parent`, and
+`project_id` to `project` or `sub_project`. A delete takes any of its keys.
+`archived`, `archive_reason`, `add_labels` and `remove_labels` take no key
+and are never checked. A call that creates a record takes no `expected`.
+
+Send each value as a read tool answered it:
+
+- `get_task` gives a task's fields. Send `parent_id` and `has_hidden_parent`
+  together, as the parent's uuid with `false`, `null` with `true` for a
+  parent you cannot read, or `null` with `false` for no parent. A parent you read as
+  hidden matches any parent you cannot read, so a move from one hidden parent
+  to another is not detected, because telling you would reveal tasks you
+  cannot see. An active task with subtasks reads `remaining_hours: null`,
+  also while it stores hours of its own, so send `null`.
+- `get_project` gives a project's fields, its milestones' `name` and `date`
+  and its `grants`. `lead_id` is the lead it shows, so a sub-project without
+  a lead of its own compares its parent's lead. A grant's `level` is `null`
+  when `grants` lists no grant of that user or team.
+- `list_labels` gives a label's `color` as clients paint it, so a label
+  stored before the `#rrggbb` rule compares as `#8A8F98`.
+- `list_comments`, `list_teams` and `list_users` give a comment's `body`, a
+  team's `name` and a person's `plannable_hours`.
+
+Values compare in a normalized form, so formatting alone never refuses a
+call. Titles, names and comment bodies are trimmed, a task's or project's
+description treats `""` as `null`, `remaining_hours` and `review_hours` are
+rounded to 0.1, and ids and label colors compare in any case.
+
+A malformed `expected` is refused before anything is saved, with the
+sentences [REST](rest-api.md#refusing-a-change-when-a-field-changed-since-you-read-it)
+gives, such as `expected must name at least one field`, `unknown field
+"expected.colour"; expected takes name, color`, `expected.remaining_hours
+must be a number or null`, `expected.parent_id applies only when the request
+sends parent` and `expected.parent_id and expected.has_hidden_parent go
+together`. `expected` on a `set_label` call that creates is refused with
+`expected applies only when changing an existing label`, and the same
+sentence ends in `team` for `set_team` and `milestone` for `set_milestone`.
+On `set_project_access` with `level: null` it is refused with `expected
+applies only when level is not null`.
+
+A conflict answers one sentence as the tool's error result. It names the
+fields by their argument, never their values, and names a person only where
+Qivo can prove who wrote the stored value, from the task's history you may
+read or, for a comment, its last editor:
+
+```
+<Name> changed <fields> of <record> since you read it, so nothing was saved; read <record> again and resend your change
+<fields> of <record> changed since you read it, so nothing was saved; read <record> again and resend your change
+```
+
+For example, `Aisha Rahman changed status of QN-12 since you read it, so
+nothing was saved; read QN-12 again and resend your change`. `it` becomes
+`them` for several fields, and `<record>` reads as REST describes. A refused
+delete ends `so nothing was deleted; read <record> again before you delete
+it` instead of `so nothing was saved; read <record> again and resend your
+change`. Never make the same call
+again unchanged. Read the record, look at the other change, decide whether yours
+still applies, and send it with the new values in `expected`.
 
 ### Stays in the app
 

@@ -283,21 +283,33 @@ describe('roadmap undo through the client store', () => {
     expect(P.roadmapUndo).toEqual({ count: 0, busy: false, disabled: false })
   })
 
-  it('reconciles a rounded planning no-op without adding history or needing a new snapshot', async () => {
-    P.updateIssue(task().id, { remaining: 8.01 })
-    expect(task().remaining).toBe(8.01)
-    expect(latest().name).toBe('roadmap:change')
-    // The server rounds to the existing eight hours. With no data change,
-    // the mutation returns the unchanged history count and publishes nothing.
-    latest().resolve({ count: 0 })
-    await settled()
-
+  it('sends nothing for hours that round to the stored ones', async () => {
+    const sent = requests.length
+    // the server stores hours to the tenth, so 8.01 is the eight hours shown
+    expect(await P.updateIssue(task().id, { remaining: 8.01 })).toBe(true)
+    expect(requests).toHaveLength(sent)
     expect(task().remaining).toBe(8)
     expect(P.roadmapUndo).toEqual({ count: 0, busy: false, disabled: false })
   })
 
+  it('sends the hours on screen as expected and paints them rounded', () => {
+    P.updateIssue(task().id, { remaining: 9.04 })
+    expect(task().remaining).toBe(9)
+    expect(latest().name).toBe('roadmap:change')
+    expect(latest().args.operations).toEqual([
+      {
+        kind: 'task',
+        id: task().uuid,
+        patch: { remaining_hours: 9 },
+        expected: { remaining_hours: 8 },
+      },
+    ])
+  })
+
   it('drops a planning no-op during trouble and keeps a saved edit on screen', async () => {
-    P.updateIssue(task().id, { remaining: 8.01 })
+    // someone else stored these hours meanwhile, so the server changes
+    // nothing and answers the unchanged history count
+    P.updateIssue(task().id, { remaining: 9 })
     const change = latest()
     const other = P.issues.find((item) => item.title === 'Planning task 2')!
     P.updateIssue(other.id, { title: 'Order the gaskets' })
