@@ -208,7 +208,8 @@ Useful field rules:
   the task to see the value; MCP `updated` lists only the fields you sent.
 - Reporter is set only when creating a task. Any update containing
   `reporter_id` is refused in full, including its other requested changes.
-- `remaining_hours` means work left, not the original estimate. A task with
+- `remaining_hours` means work left, not the original estimate, from 0 to
+  99999.9 hours on both interfaces. A task with
   `is_group: true` derives its progress, remaining work and planned weeks from
   active subtasks. A subtask in an archived project makes no task in an
   active project a group. Setting its status, dates, a non-null

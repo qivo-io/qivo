@@ -20,7 +20,7 @@ import { badRequest, forbidden, rule } from '../lib/functions'
 import { issueKey } from '../lib/taskRefs'
 import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
 import { assertRoomForComment, noteCommentAdded, noteCommentRemoved } from './commentCounts'
-import { assertExpected, DELETES, type Fields, type Next, TEXT, type View } from './expected'
+import { assertExpected, DELETES, type Fields, filledText, type Next, type View } from './expected'
 import { assertCanEdit } from './issues'
 import { notifyCommentInsert, notifyCommentUpdate } from './messages'
 import { newUuid } from './orgs'
@@ -127,7 +127,8 @@ export async function assertCommentEditor(
 /** The key of a comment's `expected`. The app sends the body's print
  * (lib/fieldPrints.ts). */
 export const COMMENT_FIELDS: Fields<Doc<'comments'>> = {
-  body: { sends: 'body', type: TEXT, form: trimmedForm, printed: true },
+  // editComment's rule; a body saved before the cap reads back longer
+  body: { sends: 'body', type: filledText(), form: trimmedForm, printed: true },
 }
 
 /** The app's `expected` for a comment edit or delete. */

@@ -311,7 +311,7 @@ export const change = authedMutation({
         const { me } = await writer(ctx, row.project_id)
         const patch = { ...op.patch }
         if ('remaining_hours' in patch)
-          patch.remaining_hours = cleanRemaining(patch.remaining_hours) ?? null
+          patch.remaining_hours = cleanRemaining(patch.remaining_hours, row.remaining_hours) ?? null
         if ('start_week' in patch || 'end_week' in patch) {
           // A group takes its dates from its subtasks. Refused before the
           // no-op skip, so a group's date operation never passes silently.

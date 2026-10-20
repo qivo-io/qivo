@@ -107,12 +107,12 @@ import {
   dayOf,
   exact,
   type Fields,
+  filledText,
   hoursOrNull,
   idForm,
   oneOf,
   type Read,
   sentKeys,
-  TEXT,
   TEXT_OR_NULL,
   uuidOf,
   type View,
@@ -235,7 +235,8 @@ const hoursForm = (value: unknown): unknown =>
 
 /** The keys of a task's `expected`, in the order refusals name them. */
 export const TASK_FIELDS: Fields<Doc<'issues'>> = {
-  title: { sends: 'title', type: TEXT, form: trimmedForm, printed: true },
+  // cleanTitle's rule
+  title: { sends: 'title', type: filledText(TITLE_MAX), form: trimmedForm, printed: true },
   description: {
     sends: 'description',
     type: TEXT_OR_NULL,
@@ -1697,7 +1698,7 @@ export async function updateIssueCore(
     }
   }
   if ('remaining_hours' in patch) {
-    const next = cleanRemaining(patch.remaining_hours)
+    const next = cleanRemaining(patch.remaining_hours, issue.remaining_hours)
     const changed = (issue.remaining_hours ?? null) !== (next ?? null)
     if (changed && next !== undefined) await assertOwnRemaining(ctx, issue)
     w.remaining_hours = next

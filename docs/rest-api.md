@@ -1234,9 +1234,14 @@ subtasks and refuses them on PATCH (see **Group dates** below). Both dates
 denote week starts and the end week is included: on a Monday-based calendar,
 `2026-09-21` through `2026-09-28` is a two-week plan. Use the organization's **Workdays start on**
 setting, `organization.week_start` in `GET /v1/me`, before calculating week
-dates. `remaining_hours` accepts finite nonnegative
-numbers, rounded to one decimal place, or `null` to clear. Numeric overflow
-(for example `1e309`) is refused. `remaining_hours` was named
+dates. `remaining_hours` accepts numbers from 0 to 99999.9, rounded to one
+decimal place, or `null` to clear. Any other value, numeric overflow such as
+`1e309` included, is a `400` with `remaining_hours must be a number of hours
+from 0 to 99999.9, or null`, the sentence MCP gives too. A task given more
+than 99999.9 hours before the cap was added in October 2026 reads them back
+as stored, and a PATCH may send them back unchanged or lower them; any other
+value above the cap is refused. Until then REST took any finite nonnegative
+number. `remaining_hours` was named
 `estimate_hours` until 2026-07-17 (0063; the field now means hours of work
 *left*). The old name is no longer recognized, so a request still sending
 `estimate_hours` is refused as an unknown field. Update callers.
@@ -2082,9 +2087,21 @@ id, and `null` where the field can be unset. `level` is `user`, `viewer` or `nul
 A value also follows the rule of its field, the one a write of that field
 follows. `start_week`, `end_week`, `due_date` and a milestone's `date` are
 real calendar dates written `YYYY-MM-DD`. `remaining_hours` is a number of
-at least 0, `review_hours` a number from 0 to 999, `plannable_hours` a whole
-number from 1 to 168, and a label's `color` `#` followed by six hex digits.
-Every read answers values that follow these rules.
+at least 0, with no upper limit, because a task given more than 99999.9 hours
+before the cap reads them back. `review_hours` is a number from 0 to 999,
+`plannable_hours` a whole number from 1 to 168, and a label's `color` `#`
+followed by six hex digits. A task's `title`, a name and a comment's `body`
+are not blank once trimmed. A `title` has at most 80 characters and a
+label's `name` at most 40, counted as code points once trimmed, and a
+project's `description` at most 500 characters. Other names, a comment's
+`body` and a task's `description` have no length limit here, because a
+record saved before their caps reads back longer, and a stale read of it
+must compare. Every read answers values that follow these rules.
+
+An id key is checked for its shape only. A well-formed uuid that names no
+person, task or project is compared like any other value and can answer
+`409`. Qivo does not check that it exists, because a refusal that did would
+tell you which ids exist.
 Send each field as the read showed it:
 
 - **A task's parent.** Send `parent_id` and `has_hidden_parent` together, as
@@ -2124,8 +2141,10 @@ breaks its field's rule is a `400`, never a `409`:
 - `expected.<key> must be <type>`, such as `expected.remaining_hours must be
   a non-negative number or null`, `expected.due_date must be a calendar date
   as YYYY-MM-DD or null` (also for a day that does not exist, such as
-  `2026-02-31`), `expected.status must be one of backlog, todo, progress,
-  review, done` or `expected.assignee_id must be a profile uuid or null`.
+  `2026-02-31`), `expected.title must be a string that is not blank, of at
+  most 80 characters`, `expected.name must be a string that is not blank`,
+  `expected.status must be one of backlog, todo, progress, review, done` or
+  `expected.assignee_id must be a profile uuid or null`.
 - `expected applies only when changing an existing <record>`, for
   `expected` on a request that creates a task, comment, project, milestone,
   label or team.
@@ -2137,9 +2156,9 @@ breaks its field's rule is a `400`, never a `409`:
   task`.
 
 Until later in October 2026, a value that broke its field's rule, such as a
-`due_date` of `2026-02-31`, was compared and could answer `409`, and a
-create that sent `expected` answered `unknown field "expected"; this request
-takes …`.
+`due_date` of `2026-02-31` or a `title` of `""`, was compared and could
+answer `409`, and a create that sent `expected` answered `unknown field
+"expected"; this request takes …`.
 
 A conflict is a `409` with one sentence in `error`. It names the fields by
 their request field, never their values, and names a person only where Qivo

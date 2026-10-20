@@ -53,11 +53,25 @@ export function assertWeekPair(start: string | undefined, end: string | undefine
 
 export { roundTenths } from '../lib/numbers'
 
-/** Estimates are finite, nonnegative hours, stored to one decimal place. */
-export function cleanRemaining(value: unknown): number | undefined {
+/** The most remaining hours a task takes, the range of the numeric(6,1)
+ * column the hours came from. The app, REST and MCP refuse more with
+ * REMAINING_HOURS_RULE (cleanRemaining), and MCP's task schemas publish it as
+ * `maximum`. */
+export const REMAINING_HOURS_MAX = 99_999.9
+
+/** The refusal of remaining hours outside 0..REMAINING_HOURS_MAX. */
+export const REMAINING_HOURS_RULE = `remaining_hours must be a number of hours from 0 to ${REMAINING_HOURS_MAX}, or null`
+
+/** Estimates are finite hours from 0 to REMAINING_HOURS_MAX, stored to one
+ * decimal place; null clears them. More than the cap passes when it rounds
+ * to `current`, the task's stored hours, so a task given more before the cap
+ * keeps them through writes that send them back unchanged. */
+export function cleanRemaining(value: unknown, current?: number): number | undefined {
   if (value == null) return undefined
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-    throw badRequest('remaining_hours must be a non-negative number or null')
+    throw badRequest(REMAINING_HOURS_RULE)
   }
-  return roundTenths(value)
+  const hours = roundTenths(value)
+  if (value > REMAINING_HOURS_MAX && hours !== current) throw badRequest(REMAINING_HOURS_RULE)
+  return hours
 }

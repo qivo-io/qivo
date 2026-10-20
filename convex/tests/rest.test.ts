@@ -1203,7 +1203,7 @@ describe('POST /v1/tasks', () => {
     await refused(
       post({ project: 'FW', title: 'ok', remaining_hours: -1 }),
       'bad_request',
-      'remaining_hours must be a non-negative number or null',
+      'remaining_hours must be a number of hours from 0 to 99999.9, or null',
     )
     await refused(
       post({ project: 'FW', title: 'ok', paused: 'yes' }),

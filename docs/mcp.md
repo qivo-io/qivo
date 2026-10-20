@@ -202,6 +202,24 @@ before it could be answered as a changed field. `expected` on
 applies only when changing an existing task` (or `comment`, `project`)
 instead of `Unrecognized key: "expected"`.
 
+Later in October 2026 the text keys of `expected` gained their fields'
+rules too. A task's `title`, a name and a comment's `body` must not be
+blank, a `title` has at most 80 characters, a label's `name` at most 40 and a
+project's `description` at most 500. A value that breaks the rule, such as
+`expected.title: ""`, is refused with its own sentence before Qivo compares
+anything, where before it was answered as a changed field. The schema of
+`expected` carries `minLength` and these `maxLength` values. At the same
+time `remaining_hours` got one limit on every interface, 0 to 99999.9 hours.
+The schemas of `create_task` and `update_task` already said so, but REST and
+the app took any finite nonnegative number, so a task given more over REST
+could not be sent back through `update_task`. The server now checks the
+range on all three, and `create_task` and `update_task` refuse a value
+outside it, `1e309` included, with REST's `remaining_hours must be a number
+of hours from 0 to 99999.9, or null` instead of a schema message such as
+`Input validation error: … remaining_hours: Too big: expected number to be
+<=99999.9`. A task given more before the cap reads them back, and
+`update_task` takes them unchanged or lower.
+
 ## Access model: the credential is a user
 
 MCP authenticates as **one user**, with three connection options. **OAuth is
@@ -1044,10 +1062,23 @@ A value also follows the rule of its field. `start_week`, `end_week`,
 `due_date` and a milestone's `date` are real calendar dates written
 `YYYY-MM-DD`, `remaining_hours` is at least 0, `review_hours` is from 0 to
 999, `plannable_hours` is a whole number from 1 to 168, and a label's
-`color` is `#` followed by six hex digits. The schema of `expected` in the
-tool list carries the date shape, the hour ranges and the color pattern,
-and Qivo also checks that a date exists. Every read answers values that
+`color` is `#` followed by six hex digits. `remaining_hours` has no upper
+limit here, because a task given more than 99999.9 hours before the cap
+reads them back. A task's `title`, a name and a comment's `body` are not
+blank once trimmed. A `title` has at most 80 characters and a label's
+`name` at most 40, counted as code points once trimmed, and a project's
+`description` at most 500 characters. Other names, a comment's `body` and a
+task's `description` have no length limit here, because a record saved
+before their caps reads back longer, and a stale read of it must compare.
+The schema of `expected` in the tool list carries the date shape, the hour
+ranges, the color pattern and the text lengths, and Qivo also checks that a
+date exists and that text is not blank. Every read answers values that
 follow these rules.
+
+An id key is checked for its shape only. A well-formed uuid that names no
+person, task or project is compared like any other value and can answer as
+a changed field. Qivo does not check that it exists, because a refusal that
+did would tell you which ids exist.
 
 Values compare in a normalized form, so formatting alone never refuses a
 call. Titles, names and comment bodies are trimmed, a task's or project's
@@ -1061,6 +1092,8 @@ them` (also for `null`), `expected must name at least one field`, `unknown
 field "expected.colour"; expected takes name, color`,
 `expected.remaining_hours must be a non-negative number or null`,
 `expected.due_date must be a calendar date as YYYY-MM-DD or null`,
+`expected.title must be a string that is not blank, of at most 80
+characters`, `expected.name must be a string that is not blank`,
 `expected.parent_id applies only when the request sends parent` and
 `expected.parent_id and expected.has_hidden_parent go together`. `expected`
 on a call that creates is refused with `expected applies only when changing
@@ -2109,8 +2142,11 @@ layer looks like the object not existing, matching the app.
   any authentication or work: an old client probing for the removed GET
   stream costs nothing.
 - **Numbers are numbers.** `remaining_hours` is a finite JSON number from
-  0 through 99999.9, rounded to one decimal place (or `null` to clear).
-  Numeric overflow such as `1e309` is refused. Task dates are real calendar days in `YYYY-MM-DD`
+  0 through 99999.9, rounded to one decimal place (or `null` to clear), the
+  same limit REST and the app use. Any other value, numeric overflow such as
+  `1e309` included, is refused with `remaining_hours must be a number of
+  hours from 0 to 99999.9, or null`. A task given more before the cap reads
+  them back, and `update_task` takes them unchanged or lower. Task dates are real calendar days in `YYYY-MM-DD`
   form (or `null` to clear), so impossible dates are refused instead of
   rolling into the next month. Timestamps are full ISO strings.
   `plannable_hours` is integer-or-null — for an agent it is `null` (0103),

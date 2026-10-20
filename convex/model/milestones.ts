@@ -25,6 +25,7 @@ import {
   dayOf,
   exact,
   type Fields,
+  filledText,
   type Next,
   TEXT,
   type View,
@@ -169,7 +170,8 @@ export async function addMilestoneCore(
 /** The keys of a milestone's `expected` in the app, which reads its day as
  * `week`. */
 export const MILESTONE_FIELDS: Fields<Doc<'milestones'>> = {
-  name: { sends: 'name', type: TEXT, form: trimmedForm },
+  // cleanMilestoneName's rule; a name saved before the cap reads back longer
+  name: { sends: 'name', type: filledText(), form: trimmedForm },
   week: { sends: 'week', type: TEXT, form: exact },
 }
 

@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { assertNoSubtasks, type IssuePatch } from '../model/issues'
+import { REMAINING_HOURS_RULE } from '../model/taskValues'
 import {
   as,
   expectRefusal,
@@ -191,7 +192,7 @@ describe('remaining time', () => {
       updateAs(t, f, childless.id, { remaining_hours: -1 }),
       'bad_request',
     )
-    expect(neg.data.message).toBe('remaining_hours must be a non-negative number or null')
+    expect(neg.data.message).toBe(REMAINING_HOURS_RULE)
   })
 
   it('done stamp (0071): set on entering done, kept on unrelated edits, never invented, cleared on leaving', async () => {
