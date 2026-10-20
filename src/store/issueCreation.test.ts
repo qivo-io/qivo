@@ -40,7 +40,8 @@ describe('task creation through the client store', () => {
     snap = fixture()
     requests = []
     network.query.mockResolvedValue(null)
-    network.onUpdate.mockImplementation((_ref, _args, next) => {
+    network.onUpdate.mockImplementation((ref, _args, next) => {
+      if (getFunctionName(ref) !== 'snapshot:forMe') return () => {}
       publish = next
       next(structuredClone(snap))
       return () => {}
@@ -78,6 +79,49 @@ describe('task creation through the client store', () => {
     expect(P.issueById[key].uuid).toBe(task.uuid)
     expect(moved).not.toHaveBeenCalled()
     expect(showToast).not.toHaveBeenCalled()
+  })
+
+  it("subscribes to a new task's thread only once a delivery holds the task", async () => {
+    // the server refuses the thread of a task it does not hold yet
+    const threads = () =>
+      network.onUpdate.mock.calls.filter(
+        ([ref]) => getFunctionName(ref) === 'snapshot:commentThread',
+      )
+    const key = P.addIssue({ project: snap.projects[0].id, title: 'New task' })!
+    const task = P.issueById[key]
+    P.watchComments(task.uuid)
+    expect(threads()).toHaveLength(0)
+    expect(P.commentsLoaded).toBe(true)
+    expect(P.comments).toEqual([])
+
+    // a delivery without it, such as another person's change, still waits
+    publish(structuredClone(snap))
+    expect(threads()).toHaveLength(0)
+
+    snap.issues = [
+      {
+        id: task.uuid,
+        org_id: snap.orgs[0].id,
+        project_id: snap.projects[0].id,
+        num: task.num,
+        title: 'New task',
+        description: '',
+        status: 'backlog',
+        priority: 'low',
+        paused: false,
+        created_at: NOW,
+        updated_at: NOW,
+        has_hidden_subtasks: false,
+        has_hidden_parent: false,
+      },
+    ]
+    publish(structuredClone(snap))
+    expect(threads()).toHaveLength(1)
+    expect(threads()[0][1]).toEqual({ org_id: snap.orgs[0].id, issue_id: task.uuid })
+    // later deliveries keep the one subscription
+    publish(structuredClone(snap))
+    expect(threads()).toHaveLength(1)
+    P.watchComments(null)
   })
 
   it('corrects an open preview after successful renumbering without reporting a refusal', async () => {
