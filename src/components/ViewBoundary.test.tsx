@@ -2,7 +2,7 @@
 import { act, type ReactNode, Suspense } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { lazyFromModule, preloadModule } from '../lib/lazyModule'
+import { CodeWaitsForConnection, lazyFromModule, preloadModule } from '../lib/lazyModule'
 import { createSyncStatus, OFFLINE_DELAY_MS, type SyncStatus } from '../lib/syncStatus'
 import { TooltipProvider } from './ui/tooltip'
 import { ViewBoundary } from './ViewBoundary'
@@ -129,6 +129,22 @@ describe('a view whose code did not load', () => {
     expect(importModule).toHaveBeenCalledTimes(1)
     expect(container.textContent).toContain('This view could not be loaded.')
     expect(container.textContent).not.toContain('Task')
+  })
+
+  it('mounts again at once when the connection came back before it caught the refusal', async () => {
+    // the refusal reached the boundary only after the status stopped waiting;
+    // React renders the child more than once before the boundary takes it
+    let refusals = 3
+    function Stale() {
+      if (refusals-- > 0) throw new CodeWaitsForConnection()
+      return <p>Board</p>
+    }
+    await show(
+      <ViewBoundary onBack={() => {}} status={status}>
+        <Stale />
+      </ViewBoundary>,
+    )
+    expect(container.textContent).toBe('Board')
   })
 
   it('names why in an overlay for screen readers', async () => {

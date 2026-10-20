@@ -77,12 +77,19 @@ export class ViewBoundary extends Component<
   }
 
   override componentDidMount() {
-    const status = this.status
-    this.stopListening = watchCodeWaits(status, () => {
-      const cause = this.state.error?.cause
-      if (cause instanceof CodeWaitsForConnection && !codeWaits(status))
-        this.setState({ error: null })
-    })
+    this.stopListening = watchCodeWaits(this.status, () => this.resumeIfReady())
+  }
+
+  // the connection can come back between the refusal and this catch
+  override componentDidCatch() {
+    this.resumeIfReady()
+  }
+
+  /** Mounts the children again once code that waited for the connection may load. */
+  private resumeIfReady() {
+    const cause = this.state.error?.cause
+    if (cause instanceof CodeWaitsForConnection && !codeWaits(this.status))
+      this.setState({ error: null })
   }
 
   override componentWillUnmount() {

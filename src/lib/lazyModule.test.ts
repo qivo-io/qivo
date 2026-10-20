@@ -190,6 +190,31 @@ describe('background loading', () => {
     expect(modules.every((load) => load.peek())).toBe(true)
   })
 
+  it('goes on after a pass that a drop and return interrupted mid-download', async () => {
+    status = connected()
+    const order: string[] = []
+    let fail = (_: Error) => {}
+    const first = preloadModule(
+      () =>
+        new Promise<{ name: string }>((_, reject) => {
+          order.push('a')
+          fail = reject
+        }),
+      status,
+    )
+    const modules = [first, loader('b', order)]
+    preloadInBackground(() => modules, status, idleNow)
+    await settle()
+    expect(order).toEqual(['a'])
+    // the connection drops and returns while a downloads, then a fails
+    drop(status, { notice: false })
+    status.setSocket({ connected: true, everConnected: true })
+    fail(new Error('a failed'))
+    await settle()
+    expect(order).toEqual(['a', 'b'])
+    expect(modules[1].peek()).toBeDefined()
+  })
+
   it('stops at a failure and skips the failed module afterwards', async () => {
     status = connected()
     const order: string[] = []

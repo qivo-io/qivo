@@ -126,11 +126,18 @@ export function preloadInBackground(
 ) {
   let stopped = false
   let running = false
+  // a change of the status during a pass, which the pass may have missed
+  let again = false
   let cancelIdle = () => {}
   const waits = () => stopped || status.pause() !== null || codeWaits(status)
-  const run = async () => {
-    if (running || waits()) return
+  const run = async (): Promise<void> => {
+    if (running) {
+      again = true
+      return
+    }
+    if (waits()) return
     running = true
+    again = false
     try {
       const list = loaders()
       await Promise.allSettled(list.filter((load) => load.loading()).map((load) => load()))
@@ -150,6 +157,7 @@ export function preloadInBackground(
     } finally {
       running = false
     }
+    if (again) await run()
   }
   const unsubscribe = watchCodeWaits(status, () => void run())
   void run()
