@@ -1,5 +1,7 @@
 // Deterministic authenticated transport for browser CPU/DOM measurements only.
+// Like Convex, a write's snapshot reaches the listeners before it resolves.
 import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
 
 const parameters = new URLSearchParams(location.search)
 const count = Number(parameters.get('tasks') || 100)
@@ -103,6 +105,9 @@ const snapshot = {
   orgLoad: [],
   messages: [],
   readMessageCount: 0,
+  unreadTruncated: false,
+  readTruncated: false,
+  delivered_at: now,
 }
 const listeners = new Map()
 const comments = []
@@ -126,8 +131,12 @@ const read = (name, args = {}) => {
         complimentary_until: null,
         current_period_end: null,
       }
-    case 'snapshot:commentsForIssue':
-      return comments.filter((comment) => comment.issue_id === args.issue_id)
+    case 'snapshot:commentThread':
+      return {
+        comments: comments.filter((comment) => comment.issue_id === args.issue_id),
+        earlier: false,
+        events: [],
+      }
     case 'teamSync:lastComments':
       return { rows: [], complete: true }
     case 'admin:isOperator':
@@ -137,9 +146,31 @@ const read = (name, args = {}) => {
   }
 }
 function emit(name) {
+  if (name === 'snapshot:forMe') snapshot.delivered_at = new Date().toISOString()
   for (const { args, receive } of listeners.get(name) || [])
     receive(structuredClone(read(name, args)))
 }
+/* The server's prune of one inbox item after a read (convex/model/messages.ts
+   pruneStampedItem): it keeps the newest unread row or, with none, the
+   newest read row, and deletes the other read rows. */
+function pruneItem(issueId) {
+  const rows = snapshot.messages.filter((m) => m.issue_id === issueId)
+  const newer = (a, b) =>
+    b.created_at > a.created_at || (b.created_at === a.created_at && b.id > a.id) ? b : a
+  const unread = rows.filter((m) => !m.read_at)
+  const keep = unread.length ? unread.reduce(newer) : rows.reduce(newer)
+  snapshot.messages = snapshot.messages.filter(
+    (m) => m.issue_id !== issueId || !m.read_at || m === keep,
+  )
+}
+/* Counts the read rows and delivers the inbox's new state. */
+function settleInbox() {
+  snapshot.readMessageCount = snapshot.messages.filter((m) => m.read_at).length
+  emit('snapshot:forMe')
+}
+/* Writes the scenarios hold until they release them, in order. */
+const held = []
+let holding = false
 function patchTask(taskId, patch) {
   const row = snapshot.issues.find((issue) => issue.id === taskId)
   if (!row) throw new Error('Unknown benchmark task')
@@ -176,7 +207,38 @@ export const convex = {
   async mutation(ref, args) {
     const name = getFunctionName(ref)
     await delay()
+    if (holding && name !== 'identity:claimMySeats' && name !== 'prefs:save') {
+      const refused = await new Promise((resolve) => held.push(resolve))
+      if (refused) throw new ConvexError({ code: 'forbidden', message: 'no write access' })
+    }
     if (name === 'identity:claimMySeats' || name === 'prefs:save') return null
+    if (name === 'messages:markRead') {
+      const ids = new Set(args.ids)
+      const at = new Date().toISOString()
+      const marked = snapshot.messages.filter((m) => ids.has(m.id) && !m.read_at)
+      for (const message of marked) message.read_at = at
+      for (const issue of new Set(marked.map((m) => m.issue_id))) pruneItem(issue)
+      settleInbox()
+      return null
+    }
+    if (name === 'messages:markAllRead') {
+      // as convex/model/messages.ts markAllMessagesRead does: at most 256
+      // unsnoozed unread rows a batch, created no later than the first
+      // batch's cutoff, the newest unread row's creation, then the prune
+      const unread = snapshot.messages.filter(
+        (m) => !m.read_at && !m.snoozed_until && m.org_id === args.org_id,
+      )
+      const before = args.before ?? Math.max(0, ...unread.map((m) => Date.parse(m.created_at)))
+      const due = unread.filter((m) => Date.parse(m.created_at) <= before)
+      const batch = due.slice(0, 256)
+      const at = new Date().toISOString()
+      for (const message of batch) message.read_at = at
+      for (const issue of new Set(batch.map((m) => m.issue_id))) pruneItem(issue)
+      if (batch.length) settleInbox()
+      window.__perf.writes++
+      const ids = batch.map((m) => m.id)
+      return { marked: ids.length, ids, hasMore: due.length > batch.length, before }
+    }
     if (name === 'issues:update') {
       if (patchTask(args.id, args.patch)) emit('snapshot:forMe')
       window.__perf.writes++
@@ -216,8 +278,45 @@ window.__perf = {
   writes: 0,
   count,
   fixtureTime: now,
+  /* Holds every write from now until release(). */
+  hold() {
+    holding = true
+  },
+  /* How many writes are held. */
+  held: () => held.length,
+  /* Answers the oldest held write, refused when `refuse`. */
+  releaseOne(refuse = false) {
+    held.shift()?.(refuse)
+  },
+  /* Answers every held write and stops holding. */
+  releaseAll() {
+    holding = false
+    while (held.length) held.shift()(false)
+  },
+  /* Delivers `n` new unread messages for the signed-in person, one per task,
+     for the bulk-read scenario. */
+  seedMessages(n) {
+    const created = new Date().toISOString()
+    for (let i = 0; i < n; i++)
+      snapshot.messages.push({
+        id: id('6', snapshot.messages.length),
+        org_id: org,
+        recipient_id: profiles[0].id,
+        issue_id: id('4', i % count),
+        issue_title: `Testbed task ${(i % count) + 1}`,
+        kind: 'change',
+        detail: 'Status changed',
+        created_at: created,
+      })
+    emit('snapshot:forMe')
+  },
+  /* Another person renames task `n`, which every listener receives. */
+  deliverRemote(n) {
+    snapshot.issues[n].title = `Renamed elsewhere ${Date.now()}`
+    emit('snapshot:forMe')
+  },
   deliverComments() {
-    const active = [...(listeners.get('snapshot:commentsForIssue') || [])]
+    const active = [...(listeners.get('snapshot:commentThread') || [])]
     if (active.length !== 1) throw new Error('Benchmark requires one open comment thread')
     const body = `Benchmark delivered comment ${comments.length + 1}`
     comments.push({
@@ -227,7 +326,7 @@ window.__perf = {
       body,
       created_at: new Date().toISOString(),
     })
-    emit('snapshot:commentsForIssue')
+    emit('snapshot:commentThread')
     return body
   },
 }

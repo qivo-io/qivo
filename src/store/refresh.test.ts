@@ -217,6 +217,25 @@ describe('planner refresh boundaries', () => {
     expect(detail).toHaveBeenCalledTimes(1)
   })
 
+  it("shows another person's change within a task while my edit waits, mine on top", async () => {
+    const { P } = store
+    P.updateIssue(P.issues[0].id, { status: 'review' })
+    snapshot.issues[0].title = 'Renamed remotely'
+    publish(structuredClone(snapshot))
+    // an echo of my own write would answer first; this one waits a task
+    expect(P.issues[0].title).toBe('Due today')
+    vi.advanceTimersByTime(0)
+    expect(P.issues[0].title).toBe('Renamed remotely')
+    expect(P.issues[0].status).toBe('review')
+    // Convex delivers the write before it answers
+    snapshot.issues[0].status = 'review'
+    publish(structuredClone(snapshot))
+    resolve(null)
+    await settle()
+    expect(P.issues[0].title).toBe('Renamed remotely')
+    expect(P.issues[0].status).toBe('review')
+  })
+
   it('restores the original comment after a refused optimistic edit without a new delivery', async () => {
     const { P } = store
     P.watchComments('task-a')
@@ -229,7 +248,8 @@ describe('planner refresh boundaries', () => {
     reject(new ConvexError({ code: 'forbidden', message: 'Cannot edit this comment' }))
     await settle()
     expect(P.comments[0].body).toBe('Original')
-    expect(workspace).toHaveBeenCalledTimes(1)
+    // a thread layer's refusal repaints the thread alone
+    expect(workspace).not.toHaveBeenCalled()
     expect(detail).toHaveBeenCalledTimes(1)
   })
 

@@ -254,6 +254,22 @@ describe('roadmap undo through the client store', () => {
     expect(P.roadmapUndo.disabled).toBe(false)
   })
 
+  it('keeps Undo busy while a comment from a task opened on Roadmap waits', async () => {
+    await savePlan()
+    expect(P.roadmapUndo).toEqual({ count: 1, busy: false, disabled: false })
+    // a comment paints only the thread of the task, and clears the history
+    // once the server accepts it
+    void P.addComment(task().uuid, 'Posted from Roadmap')
+    expect(latest().name).toBe('comments:create')
+    expect(P.roadmapUndo.busy).toBe(true)
+    const sent = requests.length
+    P.undoRoadmap()
+    expect(requests).toHaveLength(sent)
+    latest().resolve(null)
+    await settled()
+    expect(P.roadmapUndo).toEqual({ count: 0, busy: false, disabled: true })
+  })
+
   it('does not let an ordinary task write from an earlier visit disable the new visit', async () => {
     await savePlan()
     P.roadmapContext(true, true)
@@ -280,7 +296,7 @@ describe('roadmap undo through the client store', () => {
     expect(P.roadmapUndo).toEqual({ count: 0, busy: false, disabled: false })
   })
 
-  it('keeps a saved edit on screen when the snapshot is in trouble as a planning no-op returns', async () => {
+  it('drops a planning no-op during trouble and keeps a saved edit on screen', async () => {
     P.updateIssue(task().id, { remaining: 8.01 })
     const change = latest()
     const other = P.issues.find((item) => item.title === 'Planning task 2')!
@@ -293,8 +309,8 @@ describe('roadmap undo through the client store', () => {
     change.resolve({ count: 0 })
     await settled()
     expect(P.issues.some((item) => item.title === 'Order the gaskets')).toBe(true)
-    // the unrounded hours show until the next good delivery
-    expect(task().remaining).toBe(8.01)
+    // the server changed nothing, so the hours last delivered are right
+    expect(task().remaining).toBe(8)
   })
 
   it('rolls back a refused roadmap change and the group span that followed it without another snapshot', async () => {

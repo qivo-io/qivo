@@ -3,10 +3,9 @@
    project access and week-indexed schedules are derived from the raw rows.
 
    Every non-null snapshot updates serverSnap. A later null (no seat left)
-   keeps the last one as the rollback anchor. During optimistic writes, run()
-   holds their paint until the last write settles; refusal restores server
-   truth, with the personal writes, archives and deletes accepted since that
-   snapshot painted again.
+   keeps the last one. Every write paints its own optimistic layer
+   (store/layers.ts) over the server's rows, and a refusal takes away only
+   that layer (see the write path below).
    Comments and Team sync have separate subscriptions and update channels.
    Preferences load once and save through their own debounced lifecycle.
    Uploads remain awaited; signed file URLs are minted with one-shot queries. */
@@ -103,6 +102,15 @@ import {
   plannableHoursOf,
 } from '../lib/workload'
 import { createEntityLookup } from './entityLookup'
+import {
+  createLayers,
+  type Layer,
+  type Over,
+  type Paint,
+  type Part,
+  paints,
+  type View,
+} from './layers'
 import { createPreferences } from './preferences'
 
 export type { UIPrefs } from './preferences'
@@ -278,10 +286,10 @@ let threadSubscription = 0
 /* How long a failure skipped as held (subscribeThread) waits for the
    server's answer before it shows anyway. */
 const HELD_FAILURE_MS = 5000
-/* The last thread the comments subscription delivered — the rollback anchor
-   for optimistic comment rows (rows.comments is outside serverSnap). null =
-   nothing delivered yet for the watched issue. It is the thread's live
-   window, its newest comments, oldest first in thread order. */
+/* The last thread the comments subscription delivered, the anchor the
+   thread's rows are built from (buildThreadRows), as serverSnap is for the
+   rest. null = nothing delivered yet for the watched issue. It is the
+   thread's live window, its newest comments, oldest first in thread order. */
 let commentsSnap: Row<'comments'>[] | null = null
 /* The watched task's history from the same delivery as commentsSnap, oldest
    first, the task window's changes under All. */
@@ -293,6 +301,12 @@ let eventsSnap: Row<'activity_events'>[] = []
    edits and deletes; other people's changes to these comments show when the
    task opens again. */
 let olderComments: Row<'comments'>[] = []
+/* The person's comment edits and deletes in the watched thread that the
+   server accepted (null for a delete), until a live window holds the
+   comment. A comment that slides out of the window moves into olderComments
+   from the window delivered before, which can predate the edit, so the edit
+   applies again there (receiveThread). */
+const acceptedCommentChanges = new Map<string, Partial<Row<'comments'>> | null>()
 /* Whether the watched thread's first comment is loaded, so nothing is
    earlier, and how the last load of an earlier page went. */
 let threadStart = false
@@ -307,11 +321,15 @@ export type CommentsEarlier = 'none' | 'more' | 'loading' | 'failed'
     server answers the new subscription (subscribeThread), else 'none'. */
 export type CommentsFailure = 'none' | 'failed' | 'retrying'
 
-/* Re-adopt the watched thread from its last delivery and the comments loaded
-   before it. Safe to call blind: with nothing delivered (or nothing watched)
-   it leaves the cache alone. */
-function adoptComments() {
-  if (commentsSnap === null) return
+/* Builds the watched thread's rows from its last delivery and the comments
+   loaded before it, empty while nothing is delivered (or nothing watched).
+   The thread's layers paint over them (repaint). */
+function buildThreadRows() {
+  if (commentsSnap === null) {
+    rows.comments = new Map()
+    rows.threadEvents = []
+    return
+  }
   rows.comments = new Map(
     structuredClone([...olderComments, ...commentsSnap]).map((r) => [r.id, r]),
   )
@@ -328,12 +346,17 @@ function adoptComments() {
    alone cannot tell one deleted from the old end from one that slid out
    (checkSlidOut). When the window no longer meets what was loaded, because
    more comments arrived between two deliveries than it holds, the thread
-   starts over from the window. */
-function receiveThread(page: {
-  comments: Row<'comments'>[]
-  earlier: boolean
-  events: Row<'activity_events'>[]
-}): Row<'comments'>[] {
+   starts over from the window. A `replay`, a result held from an earlier
+   listener, may predate edits the server accepted since, so it keeps them
+   remembered. */
+function receiveThread(
+  page: {
+    comments: Row<'comments'>[]
+    earlier: boolean
+    events: Row<'activity_events'>[]
+  },
+  replay = false,
+): Row<'comments'>[] {
   const prev = commentsSnap
   const first = page.comments[0]
   let slid: Row<'comments'>[] = []
@@ -344,7 +367,13 @@ function receiveThread(page: {
     if (at > 0) {
       const known = new Set(olderComments.map((r) => r.id))
       slid = prev.slice(0, at)
-      olderComments = [...olderComments, ...slid.filter((r) => !known.has(r.id))]
+      const moved = slid
+        .filter((r) => !known.has(r.id) && acceptedCommentChanges.get(r.id) !== null)
+        .map((r) => {
+          const change = acceptedCommentChanges.get(r.id)
+          return change ? { ...r, ...change } : r
+        })
+      olderComments = [...olderComments, ...moved]
     } else if (at === -1) {
       // the window reached down into what was loaded before it, or past it
       const kept = olderComments.findIndex((r) => r.id === first.id)
@@ -353,6 +382,8 @@ function receiveThread(page: {
     }
   }
   if (!page.earlier) threadStart = true
+  // a fresh window holds the comments in it as the server has them now
+  if (!replay) for (const comment of page.comments) acceptedCommentChanges.delete(comment.id)
   commentsSnap = page.comments
   eventsSnap = page.events
   return slid
@@ -407,27 +438,22 @@ async function checkSlidOut(
     page.comments.every((r) => loaded.has(r.id))
   if (start) threadStart = true
   if (!gone.length && !start) return
-  if (inFlight > 0) {
-    commentsDirty = true
-    return
-  }
-  adoptComments()
-  rebuildComments()
-  emit('comments')
+  // the anchors changed, and the thread's layers paint again over them
+  repaint({ thread: true })
 }
 
 /* Drops the comment `id` from the watched thread's server truth, for a
-   comment the server says no longer exists. */
+   comment the server says no longer exists. The caller repaints. */
 function dropComment(id: string) {
   olderComments = olderComments.filter((r) => r.id !== id)
   if (commentsSnap) commentsSnap = commentsSnap.filter((r) => r.id !== id)
-  rows.comments.delete(id)
 }
 
 /* Subscribes to the watched thread `issueUuid` in organization `orgId`,
-   replacing any earlier subscription. Deliveries share run()'s paint gate,
+   replacing any earlier subscription. A delivery is the thread's new
+   anchor, and the comment writes still waiting paint over it again (owe),
    so a server echo cannot erase an optimistic comment before its write
-   settles. A failed query keeps the comments delivered before it and shows
+   answers. A failed query keeps the comments delivered before it and shows
    as P.commentsFailure. Convex reruns it when the data it read changes, and
    the next delivery ends the failure. not_found (the task is gone or hidden)
    loads the thread empty instead, so it fails closed. forbidden (the
@@ -454,7 +480,9 @@ function subscribeThread(issueUuid: string, orgId: string) {
     const code = errData(err).code
     PLANNER.commentsFailure = code === 'not_found' ? 'none' : 'failed'
     if (code !== 'not_found') {
-      // nothing to adopt. What is on screen stays, with the failure under it.
+      // nothing to build from. What is on screen stays, with the failure
+      // under it, and comment writes accepted meanwhile stay saved.
+      threadCurrent = false
       emit('comments')
       return
     }
@@ -462,34 +490,27 @@ function subscribeThread(issueUuid: string, orgId: string) {
     eventsSnap = []
     olderComments = []
     threadStart = true
-    if (inFlight > 0) {
-      commentsDirty = true
-      return
-    }
-    adoptComments()
-    rebuildComments()
-    emit('comments')
+    threadDelivered(issueUuid)
   }
   commentsUnsub = convex.onUpdate(
     api.snapshot.commentThread,
     { org_id: orgId, issue_id: issueUuid },
-    (page) => {
+    (delivered) => {
       if (!current()) return
       skipped = null
-      PLANNER.commentsFailure = 'none'
-      // gate the paint, never the data: while our own writes are in flight
-      // (an optimistic comment among them) the delivery is recorded and the
-      // last settle flushes it — adopting now would eat the optimistic row
-      const slid = receiveThread(page)
+      // a result held from an earlier listener, which may predate writes
+      // accepted since (deliveredValues): it ends no failure
+      const replay = deliveredValues.has(delivered)
+      deliveredValues.add(delivered)
+      if (!replay) PLANNER.commentsFailure = 'none'
+      const page = anchor(delivered)
+      const slid = receiveThread(page, replay)
       if (slid.length && page.comments[0])
         void checkSlidOut(orgId, issueUuid, page.comments[0].id, slid, current)
-      if (inFlight > 0) {
-        commentsDirty = true
-        return
-      }
-      adoptComments()
-      rebuildComments()
-      emit('comments')
+      if (replay) {
+        threadCurrent = false
+        owe('thread')
+      } else threadDelivered(issueUuid)
     },
     (err) => {
       if (!current()) return
@@ -512,6 +533,16 @@ function subscribeThread(issueUuid: string, orgId: string) {
   }, HELD_FAILURE_MS)
 }
 
+/* Records a live good delivery of task `issueUuid`'s thread, whose anchors
+   are already in place: it holds every comment write accepted before it,
+   so their saved parts go, and the thread paints again (owe). */
+function threadDelivered(issueUuid: string) {
+  threadDeliveries++
+  threadCurrent = true
+  layers.dropSaved('thread', issueUuid)
+  owe('thread')
+}
+
 /* Desktop notifications (0074): fired once per inbox row id. An id set, not
    a timestamp watermark — created_at is the writer TRANSACTION's start (0109
    tried clock_timestamp() and 0111 put it back, because a comment's message
@@ -519,8 +550,8 @@ function subscribeThread(issueUuid: string, orgId: string) {
    stamped before an already-announced quick one, and a watermark would
    silently swallow it. Empty until the FIRST snapshot lands — sign-in must
    show the unread badge, not replay every stored message as an OS
-   notification. adopt() calls this on every delivery, so the null-prime runs
-   on the first one. */
+   notification. noteDelivery() calls this once per delivery, so the
+   null-prime runs on the first one. */
 let announcedMessages: Map<string, string | undefined> | null = null // id → woke_at announced
 // the server time of the previous snapshot; older messages on a task that
 // newly enters the working set are history, not news
@@ -531,37 +562,6 @@ let lastDeliveryAt: string | null = null
    Either way, keep them from looking like new arrivals when the next
    snapshot admits the restored task (and any ancestors restored with it). */
 const pendingRestoreIssueIds = new Set<string>()
-/* An archive the server accepted can be mirrored here before the delivery
-   that drops it, and another write can refuse in between. Keep its root here,
-   with whether its subtasks were kept, so that rollback from the stale server
-   snapshot cannot briefly resurrect the archived working set. */
-const pendingArchiveIssueIds = new Map<string, { keepSubtasks: boolean }>()
-/* Accepted deletes, kept for the same reason as archives: the tasks a task
-   delete removed, by root, and the projects a project delete removed. */
-const pendingTaskDeletes = new Map<string, Set<string>>()
-const pendingProjectDeletes = new Set<string>()
-/* The optimistic paints of writes the server accepted since the newest good
-   snapshot delivery, in the order it accepted them. While the snapshot is in
-   trouble serverSnap stays at the last good delivery, so a rollback that
-   re-adopts it would take these saved changes off the screen. Each paint
-   runs again on rows that may already hold it, so it is safe to repeat and
-   skips rows that are gone. The next good delivery holds them all. */
-let acceptedPaints: (() => void)[] = []
-/* Whether the newest snapshot result was a good delivery. Convex hands the
-   query results that hold a write to their callbacks before the write's
-   promise resolves, so a write accepted while this holds is already in
-   serverSnap. Painting it again over that delivery could undo a newer
-   change made elsewhere, such as a message reopened on another device. */
-let snapshotCurrent = false
-
-/** Keeps `paint`, the optimistic paint of a write the server accepted, for
-    rollbacks until the next good delivery (acceptedPaints), unless the
-    newest delivery already holds the write. Answers whether it was kept. */
-function keepAcceptedPaint(paint: () => void): boolean {
-  if (snapshotCurrent) return false
-  acceptedPaints.push(paint)
-  return true
-}
 /* Draft-only uploads a discarded draft let go of while edits were paused
    (removeAttachment's deferWhilePaused). The pause would refuse their
    delete, so it waits for the snapshot to recover (reapPausedUploads). A
@@ -618,46 +618,39 @@ function purgeIssueRows(subtree: Set<string>) {
   rows.orgLoad = rows.orgLoad.filter(
     (load) => load.issue_id === null || !subtree.has(load.issue_id),
   )
-  if (watchedComments !== null && subtree.has(watchedComments)) PLANNER.watchComments(null)
   subtree.forEach((id) => {
     rows.issues.delete(id)
   })
 }
 
-/* The local mirror of an accepted archive. With `keepSubtasks` the server
-   detached every active direct child first (it keeps its own subtasks) and
-   archived the task alone, so only the task leaves the board; otherwise the
-   whole visible subtree goes with it. */
-function mirrorArchive(rootId: string, keepSubtasks: boolean) {
-  if (!keepSubtasks) {
-    purgeIssueRows(issueSubtree(rootId))
-    return
-  }
-  const now = new Date().toISOString()
-  rows.issues.forEach((issue) => {
-    // the detach fires the touch server-side, as a delete's does
-    if (issue.parent_id === rootId) {
-      issue.parent_id = undefined
-      issue.updated_at = now
+/* The paint of an accepted archive of task `rootId` at `at`. With
+   `keepSubtasks` the server detached every active direct child first (it
+   keeps its own subtasks) and archived the task alone, so only the task
+   leaves the board; otherwise the whole visible subtree goes with it. */
+function archivePaint(rootId: string, keepSubtasks: boolean, at: string): Paint {
+  return () => {
+    if (!rows.issues.has(rootId)) return
+    if (!keepSubtasks) {
+      purgeIssueRows(issueSubtree(rootId))
+      return
     }
-  })
-  purgeIssueRows(new Set([rootId]))
+    rows.issues.forEach((issue) => {
+      // the detach fires the touch server-side, as a delete's does
+      if (issue.parent_id === rootId) {
+        issue.parent_id = undefined
+        issue.updated_at = at
+      }
+    })
+    purgeIssueRows(new Set([rootId]))
+  }
 }
 
-/* The local mirror of an accepted project delete. The server hides the
-   project and its sub-projects in one transaction and moves their tasks to
-   Deleted items in steps, so the next delivery already lacks all of them. */
-function mirrorProjectDelete(id: string) {
-  if (!dropProjectRows(id)) return
-  rebuild()
-  emit()
-}
-
-/* The rows part of mirrorProjectDelete. Answers whether the project was
-   still here. */
-function dropProjectRows(id: string): boolean {
+/* The paint of an accepted project delete. The server hides the project and
+   its sub-projects in one transaction and moves their tasks to Deleted
+   items in steps, so the next delivery already lacks all of them. */
+function dropProjectRows(id: string) {
   const row = rows.projects.get(id)
-  if (!row) return false
+  if (!row) return
   const ids =
     row.type === 'meta'
       ? [id, ...[...rows.projects.values()].filter((x) => x.parent_id === id).map((x) => x.id)]
@@ -678,76 +671,40 @@ function dropProjectRows(id: string): boolean {
   ids.forEach((pid) => {
     rows.projects.delete(pid)
   })
-  return true
 }
 
-/* The rows part of a task delete: the tasks in `gone` leave, and their
+/* The paint of a task delete at `at`: the tasks in `gone` leave, and their
    subtasks outside it become top-level tasks, as the server detaches them. */
-function dropDeletedTasks(gone: Set<string>) {
+function dropDeletedTasks(gone: Set<string>, at: string) {
   rows.issues.forEach((r) => {
     // the SET NULL cascade fires the touch server-side — mirror both
     if (r.parent_id && gone.has(r.parent_id) && !gone.has(r.id)) {
       r.parent_id = undefined
-      r.updated_at = new Date().toISOString()
+      r.updated_at = at
     }
   })
   // the rows, and everything hung on them: links, labels, attachments,
-  // inbox messages, load and the watched comment thread
+  // inbox messages and load. The task's window releases the watched thread
+  // once the task leaves the rows (IssueDetail).
   purgeIssueRows(gone)
 }
 
-/* Forgets what a server snapshot no longer holds: an archive or project
-   delete whose root it lacks, and each task of a task delete that left it,
-   the whole delete once none is left. Runs on every delivery, also one the
-   paint gate holds, so that a delivery that drops the work and then one that
-   restores it, both held behind another write, leave no marker to hide the
-   restored work. */
-function pruneAcceptedRemovals(snap: Snapshot) {
-  const issueIds = new Set(snap.issues.map((issue) => issue.id))
-  for (const rootId of pendingArchiveIssueIds.keys()) {
-    if (!issueIds.has(rootId)) pendingArchiveIssueIds.delete(rootId)
-  }
-  pendingTaskDeletes.forEach((gone, rootId) => {
-    for (const id of gone) if (!issueIds.has(id)) gone.delete(id)
-    if (gone.size === 0) pendingTaskDeletes.delete(rootId)
-  })
-  const projectIds = new Set(snap.projects.map((project) => project.id))
-  for (const id of pendingProjectDeletes) {
-    if (!projectIds.has(id)) pendingProjectDeletes.delete(id)
-  }
-}
-
-/* Applies every accepted write again after a rollback to a server snapshot
-   that predates it: the kept paints, then archives and deletes. */
-function reapplyAcceptedWrites() {
-  for (const paint of acceptedPaints) paint()
-  reapplyAcceptedRemovals()
-}
-
-/* Applies every accepted archive and delete again after a rollback to a
-   server snapshot that predates them. */
-function reapplyAcceptedRemovals() {
-  pendingArchiveIssueIds.forEach(({ keepSubtasks }, rootId) => {
-    mirrorArchive(rootId, keepSubtasks)
-  })
-  pendingTaskDeletes.forEach((gone) => {
-    dropDeletedTasks(gone)
-  })
-  pendingProjectDeletes.forEach((id) => {
-    dropProjectRows(id)
-  })
-}
-
-function announceNewMessages() {
+/* Raises a desktop notification for each message of delivery `snap` that is
+   new since the last one, and for each item back from a snooze. It reads
+   the delivery, not the painted rows, so the person's own pending changes,
+   such as a snooze the server then refuses, never raise one. */
+function announceNewMessages(snap: Snapshot) {
   if (announcedMessages === null) {
-    announcedMessages = new Map([...rows.messages.values()].map((m) => [m.id, m.woke_at]))
+    announcedMessages = new Map(snap.messages.map((m) => [m.id, m.woke_at]))
     return
   }
   const fresh: Row<'messages'>[] = []
   // a snooze that ended since the last delivery: the server stamps every
   // row of the item with one woke_at, so the item announces once, not per row
   const returned = new Map<string, Row<'messages'>>()
-  rows.messages.forEach((m) => {
+  const issues = new Map(snap.issues.map((issue) => [issue.id, issue]))
+  const profiles = new Map(snap.profiles.map((profile) => [profile.id, profile]))
+  snap.messages.forEach((m) => {
     const known = announcedMessages!.has(m.id)
     const wokeBefore = announcedMessages!.get(m.id)
     announcedMessages!.set(m.id, m.woke_at)
@@ -774,13 +731,13 @@ function announceNewMessages() {
     window.dispatchEvent(new PopStateEvent('popstate'))
   }
   const titleOf = (m: Row<'messages'>) => {
-    const iss = rows.issues.get(m.issue_id)
+    const iss = issues.get(m.issue_id)
     return (iss ? iss.title : m.issue_title) || m.issue_title
   }
   fresh
     .sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
     .forEach((m) => {
-      const actor = m.actor_id && rows.profiles.get(m.actor_id)
+      const actor = m.actor_id && profiles.get(m.actor_id)
       // null actor = an agent-less API write OR a since-deleted user (the FK
       // set-null cascade) — same neutral fallback the feed and comments use
       const who = actor ? actor.name : 'Someone'
@@ -903,11 +860,12 @@ function messagesByOrg(ids: string[]): Map<string, string[]> {
 
 /* Mirror the server prune after a read. A task retains its newest message
    plus any unread arrivals that were not part of this action. Skips rows
-   that are gone or already read, so a kept paint can run again. */
-function markLoadedMessagesRead(ids: string[], at: string) {
+   that are gone or already read, so it can paint again, and with
+   `skipSnoozed` the snoozed rows a bulk action leaves alone. */
+function markLoadedMessagesRead(ids: string[], at: string, skipSnoozed = false) {
   const hit = ids.filter((id) => {
     const row = rows.messages.get(id)
-    return row && !row.read_at
+    return row && !row.read_at && !(skipSnoozed && row.snoozed_until !== undefined)
   })
   hit.forEach((id) => {
     rows.messages.get(id)!.read_at = at
@@ -923,7 +881,12 @@ function markLoadedMessagesRead(ids: string[], at: string) {
 }
 
 const updates = createPlannerUpdates()
-const emit = updates.emit
+/* Publishes `section` (updates.ts). In tests it first checks that the rows
+   on screen are exactly what the layers paint (checkLayers). */
+const emit = (section?: Parameters<typeof updates.emit>[0]) => {
+  if (STRICT_LAYERS) checkLayers()
+  updates.emit(section)
+}
 
 export type { ToastTone }
 
@@ -952,35 +915,570 @@ export const TEXT_TOO_LONG = {
 }
 
 /* --- the write path ---------------------------------------------------------
-   Fire-and-forget mutations go through run(): the optimistic patch has
-   already painted (rebuild + emit) by the time the mutation is dispatched,
-   so run() only has to (a) reconcile off a return value, (b) roll a refusal
-   back, and (c) gate the paint of concurrent subscription deliveries.
+   Every store write goes through send() or sendAwaited(), each with its own
+   optimistic layer (store/layers.ts). The rows on screen are always built
+   the same way: the server's last snapshot delivery (serverSnap) and the
+   watched thread (commentsSnap, olderComments, eventsSnap), then every live
+   layer painted over them in order (repaint). So:
 
-   The gate ("gate the paint, never the data"): a delivery caused by ANOTHER
-   client can arrive while our own mutation is in flight; that snapshot does
-   not contain our effects, and adopting it would wipe the optimistic patch,
-   flicker the pre-write state, then repaint when our write's own delivery
-   lands. So both subscription handlers ALWAYS record the delivery (serverSnap
-   / commentsSnap; a later null snapshot keeps the last serverSnap) but defer
-   adopt/rebuild/emit while inFlight > 0; the last settle flushes the newest
-   held delivery. Convergence is guaranteed — Convex redelivers snapshots
-   that include our own completed mutations. A rollback re-adopts the newest
-   serverSnap, because a failed write's effects never existed server-side,
-   and then paints again the personal writes, archives and deletes the
-   server accepted after that delivery (reapplyAcceptedWrites). While the
-   snapshot is in trouble no delivery holds the personal writes that still
-   go out, so without that a refused write would take saved read marks,
-   snoozes and follows off the screen. Shared writes keep no paint: they
-   pause during trouble, and one sent before the trouble began and accepted
-   during it can still vanish until the next good delivery. */
-let inFlight = 0
+   - A refused write takes away only its own layer, and every other change
+     stays on screen.
+   - A delivery cannot erase a change still waiting for its answer, because
+     the change paints again over the new rows, which hold it already or not.
+   - An accepted write keeps its layer until a live delivery is known to
+     hold it. Convex runs a delivery's listeners before the write that
+     delivery holds resolves (lib/convexOrdering.test.ts), so a write
+     accepted while the snapshot is current, with a delivery since it was
+     sent, drops its layer at once. During snapshot trouble no delivery holds
+     it, so it stays saved until the trouble ends, and so do comment writes
+     while the thread fails.
+
+   A delivery that arrives while a painted write waits is painted at the
+   first of two moments (owe): when the last painted write answers, which
+   covers the echo Convex sends for that write in the same task, or a 0 ms
+   timer. So other people's changes show within one task, and an echo costs
+   one repaint. Paints follow the rules in store/layers.ts. */
+const layers = createLayers()
+/* Whether the newest snapshot result was a live good delivery. Convex hands
+   a delivery that holds a write to the listeners before the write resolves,
+   so a write accepted while this holds, with a delivery since it was sent,
+   is already in serverSnap. */
+let snapshotCurrent = false
+/* Live good deliveries counted since the store started, of the snapshot and
+   of the watched thread. A layer remembers both when it is sent. */
+let snapshotDeliveries = 0
+let threadDeliveries = 0
+/* Whether the newest thread result was a live good delivery of the watched
+   task, as snapshotCurrent is for the snapshot. */
+let threadCurrent = false
+/* The parts whose anchor changed while a painted write waited, and the
+   timer that paints them at the latest (owe). */
+const owed = { workspace: false, thread: false }
+let payTimer: ReturnType<typeof setTimeout> | null = null
+/* Every raw snapshot and thread value the store received. Convex hands a new
+   listener the result it already holds as the same object, so a value seen
+   before is a replay, which may predate writes accepted since, not a
+   delivery (lib/convexOrdering.test.ts). */
+const deliveredValues = new WeakSet<object>()
 let storeEpoch = 0
 let demoDisposed = false
-let snapDirty = false // a snapshot delivery arrived while a write was in flight
-// …same for the watched comments thread, or a saved change to its comments
-// older than the live window (olderComments), which no delivery repaints
-let commentsDirty = false
+
+/* Tests check every emit against the layers (checkLayers) and freeze the
+   anchors, so a paint or answer that writes into the server's rows throws. */
+const STRICT_LAYERS = import.meta.env.MODE === 'test'
+
+/** Freezes `value` and everything in it. */
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value)
+    for (const inner of Object.values(value)) deepFreeze(inner)
+  }
+  return value
+}
+
+/** A delivered value as the store keeps it as an anchor: frozen copy in
+    tests, the value itself otherwise. */
+const anchor = <T>(value: T): T => (STRICT_LAYERS ? deepFreeze(structuredClone(value)) : value)
+
+/** Rebuilds the rows of `parts` from their anchors and every live layer
+    (paintRows), and shows them. A workspace repaint also tells new tasks'
+    callers their final handle and ends trouble a recovering delivery held. */
+function repaint(parts: { workspace?: boolean; thread?: boolean }) {
+  if (heldRepaint) {
+    heldRepaint.workspace ||= !!parts.workspace
+    heldRepaint.thread ||= !!parts.thread
+    return
+  }
+  const workspace = !!parts.workspace
+  const thread = !!parts.thread
+  if (workspace) owed.workspace = false
+  if (thread) owed.thread = false
+  if (!owed.workspace && !owed.thread && payTimer) {
+    clearTimeout(payTimer)
+    payTimer = null
+  }
+  const handles = workspace ? new Map(uuidToKey) : null
+  paintRows(workspace, thread)
+  if (workspace) {
+    rebuild()
+    if (handles) moveHandles(handles)
+    emit()
+    // after the emit: it may send (reapPausedUploads)
+    endHeldRecovery()
+  } else if (thread) {
+    rebuildComments()
+    emit('comments')
+  }
+}
+
+/* The parts asked to repaint while together() runs its step. */
+let heldRepaint: { workspace: boolean; thread: boolean } | null = null
+
+/** Runs `step`, which settles several layers, and repaints what they asked
+    for once at its end. React renders after each emit, so one repaint per
+    layer would render the screen once for each. */
+function together(step: () => void) {
+  if (heldRepaint) return step()
+  heldRepaint = { workspace: false, thread: false }
+  try {
+    step()
+  } finally {
+    const parts = heldRepaint
+    heldRepaint = null
+    if (parts.workspace || parts.thread) repaint(parts)
+  }
+}
+
+/** Builds the rows of the parts named from their anchors and paints every
+    live layer over them, in order (layers.ordered), without showing them. */
+function paintRows(workspace: boolean, thread: boolean) {
+  const snap = workspace ? serverSnap : null
+  if (snap) {
+    adoptIdentity(snap)
+    buildRows(snap)
+  }
+  if (thread) buildThreadRows()
+  for (const layer of layers.ordered()) {
+    // one paint that throws cannot keep every later delivery off the screen
+    if (snap && layer.view.workspace) guarded(layer.view.workspace)
+    const part = layer.view.thread
+    if (thread && part && part.task === watchedComments) guarded(part.paint)
+  }
+}
+
+/* Faults the layer machinery caught (reportFault), kept in tests so the
+   guard tests can show none happened. */
+const faults: unknown[] = []
+
+/** Logs `fault`, a defect the store caught so it cannot stop other work,
+    and in tests keeps it for __layerProbe.faults(). */
+function reportFault(fault: unknown) {
+  console.error('[qivo] store fault:', fault)
+  if (STRICT_LAYERS) faults.push(fault)
+}
+
+/** Runs `step`, reporting a throw (reportFault) instead of passing it on. */
+function guarded(step: () => void) {
+  try {
+    step()
+  } catch (fault) {
+    reportFault(fault)
+  }
+}
+
+/** Records that the anchor of `part` changed. It paints now when no painted
+    write waits, else when the last one answers or a 0 ms timer fires. */
+function owe(part: Part) {
+  owed[part] = true
+  if (!layers.paintedPending()) pay()
+  else payTimer ??= setTimeout(pay, 0)
+}
+
+/** Paints the owed parts once. */
+function pay() {
+  if (payTimer) clearTimeout(payTimer)
+  payTimer = null
+  if (owed.workspace || owed.thread) repaint({ ...owed })
+}
+
+/** Paints `view` over the rows on screen, the moment its write is sent, and
+    shows the change. A thread part shows only while its task is watched. */
+function showPaint(view: View) {
+  view.workspace?.()
+  const thread = view.thread && view.thread.task === watchedComments ? view.thread : null
+  thread?.paint()
+  if (view.workspace) {
+    rebuild()
+    emit()
+  } else if (thread) {
+    rebuildComments()
+    emit('comments')
+  }
+}
+
+/* Who hears that tasks' handles moved (P.watchHandles). */
+const handleWatchers = new Set<(moved: ReadonlyMap<string, string>) => void>()
+
+/** Tells P.watchHandles' listeners, once per repaint, every task whose
+    handle moved since `before` (uuid to handle), as one map from the old
+    handle to the new. A new task's preview number moves when another
+    person's create takes it while the write waits, and again when the
+    server's answer fixes it. Taken together, two creates that both move
+    cannot make a caller follow the wrong one. */
+function moveHandles(before: ReadonlyMap<string, string>) {
+  const moved = new Map<string, string>()
+  for (const [uuid, handle] of before) {
+    const now = uuidToKey.get(uuid)
+    if (now && now !== handle) moved.set(handle, now)
+  }
+  if (moved.size) for (const watcher of handleWatchers) watcher(moved)
+}
+
+/** What a write is about when its args do not say (describeWrite): the
+    task it concerns, or that the person did not make the change, such as the
+    read that opening a task sends, which the notice does not count and the
+    crash note leaves out. */
+type WriteAbout = { task?: string; background?: boolean }
+
+/** How send() and sendAwaited() treat a write's answer. */
+type SendOptions<R> = {
+  /** The view the accepted write keeps, from its result: undefined keeps the
+      sent one, null keeps nothing, for a write the server made no change
+      with. A view it returns is painted at once while no delivery holds it. */
+  keep?: (result: R) => View | null | undefined
+  /** Runs on acceptance after keep. It may change captured data or the
+      comment anchors, never rows. */
+  onOk?: (result: R) => void
+  /** Runs on a refusal or a pause while the paint is still on screen.
+      send() toasts by default (toastWriteError); sendAwaited() does not. */
+  onError?: (error: unknown) => void
+  /** Runs last, after either answer or a pause. */
+  onSettled?: () => void
+  /** A pause refuses the write without onError, for a write the person did
+      not ask for. */
+  quietPause?: boolean
+  about?: WriteAbout
+  /** The values the write paints over (Over). */
+  over?: Over
+}
+
+/** What a write shows: a view, an open layer it was collected in (a Roadmap
+    batch), or nothing until it is accepted. */
+type Target = View | Layer | 'none'
+
+/** Sends write `m` with its own layer for `target` and resolves whether the
+    server accepted it. Never rejects. A paused write paints nothing and
+    sends nothing, and a refusal takes away only this write's paint. */
+function send<M extends FunctionReference<'mutation'>>(
+  m: M,
+  args: FunctionArgs<M>,
+  target: Target,
+  options: SendOptions<FunctionReturnType<M>> = {},
+): Promise<boolean> {
+  return start(
+    m,
+    args,
+    target,
+    options,
+    false,
+    () => true,
+    () => false,
+  )
+}
+
+/** send(), resolving with the server's answer and rejecting with its
+    refusal (or the pause), without a toast unless `onError` makes one. */
+function sendAwaited<M extends FunctionReference<'mutation'>>(
+  m: M,
+  args: FunctionArgs<M>,
+  target: Target,
+  options: SendOptions<FunctionReturnType<M>> = {},
+): Promise<FunctionReturnType<M>> {
+  return start(
+    m,
+    args,
+    target,
+    options,
+    true,
+    (result) => result,
+    (error) => {
+      throw error
+    },
+  )
+}
+
+/* send() and sendAwaited(): the pause first, then the layer and its paint,
+   then dispatch, and one handler per answer (settleAccepted, settleRefused)
+   that ends in `answer` or `refusal`, so a write costs its caller one step
+   after the server's answer. */
+function start<M extends FunctionReference<'mutation'>, T>(
+  m: M,
+  args: FunctionArgs<M>,
+  target: Target,
+  o: SendOptions<FunctionReturnType<M>>,
+  awaited: boolean,
+  answer: (result: FunctionReturnType<M>) => T,
+  refusal: (error: unknown) => T,
+): Promise<T> {
+  const name = getFunctionName(m)
+  const batch = target !== 'none' && 'id' in target ? target : null
+  const paused =
+    DEMO_MODE && demoDisposed
+      ? new ConvexError({ code: 'forbidden', message: 'Your demo has expired.' })
+      : isPausedWrite(name)
+        ? new ConvexError({ code: 'paused', message: pausedText(name) })
+        : null
+  if (paused) {
+    // a paused write creates no layer; a batch that painted already goes
+    if (batch) {
+      const had = batch.view
+      layers.remove(batch)
+      if (paints(had)) repaint({ workspace: !!had.workspace, thread: !!had.thread })
+    }
+    const quiet = o.quietPause && errData(paused).code === 'paused'
+    if (!quiet) (o.onError ?? (awaited ? undefined : (e) => toastWriteError(e, !!batch)))?.(paused)
+    o.onSettled?.()
+    return new Promise<T>((resolve) => resolve(refusal(paused)))
+  }
+  const view: View = target === 'none' || 'id' in target ? {} : target
+  const layer = batch ?? layers.open(name, view, o.over)
+  layers.send(layer, { snapshot: snapshotDeliveries, thread: threadDeliveries })
+  if (!batch) {
+    try {
+      showPaint(layer.view)
+    } catch (fault) {
+      // a paint that throws is a defect: the write goes nowhere, and says so
+      reportFault(fault)
+      settleRefused(layer)
+      ;(o.onError ?? (awaited ? undefined : (e) => toastWriteError(e, false)))?.(fault)
+      o.onSettled?.()
+      return new Promise<T>((resolve) => resolve(refusal(fault)))
+    }
+  }
+  const epoch = storeEpoch
+  const releaseUpdate = beginUpdateBlock()
+  let sent: Promise<FunctionReturnType<M>>
+  try {
+    sent = dispatch(m, args, o.about)
+  } catch (error) {
+    sent = Promise.reject(error)
+  }
+  return sent.then(
+    (result) => {
+      releaseUpdate()
+      if (epoch === storeEpoch) {
+        // a callback that throws still leaves the layer settled
+        let next: View | null | undefined
+        guarded(() => {
+          next = o.keep?.(result)
+          o.onOk?.(result)
+        })
+        guarded(() => settleAccepted(layer, next))
+        guarded(() => o.onSettled?.())
+      }
+      return answer(result)
+    },
+    (error) => {
+      releaseUpdate()
+      if (epoch === storeEpoch) {
+        console.error('[qivo] write failed:', error)
+        const painted = paints(layer.view)
+        guarded(() =>
+          (o.onError ?? (awaited ? undefined : (e) => toastWriteError(e, painted)))?.(error),
+        )
+        guarded(() => settleRefused(layer))
+        guarded(() => o.onSettled?.())
+      }
+      return refusal(error)
+    },
+  )
+}
+
+/** Keeps the parts of accepted `layer` that no live delivery is known to
+    hold yet, with `next` from its keep. A dropped part paints the delivery
+    that holds it (owe); a part keep changed paints at once. */
+function settleAccepted(layer: Layer, next: View | null | undefined) {
+  const sent = layer.view
+  const view = next === null ? {} : (next ?? sent)
+  const held = snapshotCurrent && snapshotDeliveries > layer.seen.snapshot
+  const workspace = view.workspace && !held ? view.workspace : undefined
+  const thread =
+    view.thread &&
+    !(threadCurrent && watchedComments === view.thread.task && threadDeliveries > layer.seen.thread)
+      ? view.thread
+      : undefined
+  layers.save(layer, { workspace, thread })
+  if (sent.workspace && !workspace) owed.workspace = true
+  if (sent.thread && !thread && sent.thread.task === watchedComments) owed.thread = true
+  // a view keep gave paints now, unless a delivery holds it already
+  const now = {
+    workspace: !!next && !!workspace,
+    thread: !!next && !!thread && thread.task === watchedComments,
+  }
+  if (now.workspace || now.thread) repaint(now)
+  if (!owed.workspace && !owed.thread) return
+  if (!layers.paintedPending()) pay()
+  else payTimer ??= setTimeout(pay, 0)
+}
+
+/** Takes refused `layer` away and paints the rows without it, with
+    anything owed. */
+function settleRefused(layer: Layer) {
+  const had = layer.view
+  layers.remove(layer)
+  if (paints(had)) {
+    repaint({
+      workspace: !!had.workspace || owed.workspace,
+      thread: (!!had.thread && had.thread.task === watchedComments) || owed.thread,
+    })
+  } else if ((owed.workspace || owed.thread) && !layers.paintedPending()) pay()
+}
+
+/* Test builds only (STRICT_LAYERS): before every emit, the rows on screen
+   must be exactly the anchors with every live layer painted over them, and
+   painting every layer once more with the clock an hour ahead must change
+   nothing but server stamps, and write no time it read from the clock (the
+   paint rules in store/layers.ts). Skipped while a part is owed or before
+   the first load. Leaves the rows as they were. */
+let checkingLayers = false
+function checkLayers() {
+  if (checkingLayers || owed.workspace || owed.thread || !PLANNER.loaded || !serverSnap) return
+  checkingLayers = true
+  const shownRows = { ...rows }
+  const counters = { hiddenReadMessages, unexaminedUnread, unexaminedRead }
+  try {
+    const shown = canonicalRows()
+    paintRows(true, true)
+    const outside = firstDifference(shown, canonicalRows())
+    if (outside) throw new Error(`rows changed outside a layer: ${outside}`)
+    const built = canonicalRows(true)
+    const ahead = withClockAhead(() => {
+      for (const layer of layers.ordered()) {
+        layer.view.workspace?.()
+        const thread = layer.view.thread
+        if (thread && thread.task === watchedComments) thread.paint()
+      }
+    })
+    // the shifted clock answers one instant, so a time read from it shows as that
+    const marks = [new Date(ahead).toISOString(), String(ahead)]
+    const read = Object.entries(canonicalRows()).find(([, json]) =>
+      marks.some((mark) => json.includes(mark)),
+    )
+    if (read) throw new Error(`a paint read the clock: ${read[0]}`)
+    const changed = firstDifference(built, canonicalRows(true))
+    if (changed) throw new Error(`a paint is not safe to run again: ${changed}`)
+  } finally {
+    Object.assign(rows, shownRows)
+    ;({ hiddenReadMessages, unexaminedUnread, unexaminedRead } = counters)
+    checkingLayers = false
+  }
+}
+
+/* The row fields the server stamps with its own clock. The paint stamps
+   them with the browser's, and one painted again over its own result, or
+   over the paints after it, may leave one at another time it captured.
+   Whether one is set still counts. */
+const SERVER_STAMPS = new Set([
+  'created_at',
+  'updated_at',
+  'status_at',
+  'done_at',
+  'review_at',
+  'remaining_set_at',
+  'edited_at',
+  'read_at',
+  'archived_at',
+  'sync_at',
+])
+/* Snapshot fields that only feed a row section's set (buildRows), where
+   false means the same as absent. */
+const SET_FLAGS = new Set(['has_hidden_subtasks', 'has_hidden_parent'])
+
+/** Every row section and inbox counter in one canonical form: map entries,
+    set members and array items sorted, object keys sorted and undefined
+    fields left out, each section as JSON. With `noStamps` a server stamp
+    shows only that it is set. */
+function canonicalRows(noStamps = false): Record<string, string> {
+  const norm = (value: unknown): unknown => {
+    if (value instanceof Map)
+      return [...value.entries()].map(([key, item]) => [String(key), norm(item)]).sort()
+    if (value instanceof Set) return [...value].map(String).sort()
+    if (Array.isArray(value)) return value.map((item) => JSON.stringify(norm(item))).sort()
+    if (value && typeof value === 'object')
+      return Object.fromEntries(
+        Object.entries(value)
+          .filter(([key, item]) => item !== undefined && !(SET_FLAGS.has(key) && item === false))
+          .sort(([a], [b]) => (a < b ? -1 : 1))
+          .map(([key, item]) => [key, noStamps && SERVER_STAMPS.has(key) ? 'stamp' : norm(item)]),
+      )
+    return value
+  }
+  const out: Record<string, string> = {}
+  for (const [section, value] of Object.entries(rows)) out[section] = JSON.stringify(norm(value))
+  out.counters = JSON.stringify([hiddenReadMessages, unexaminedUnread, unexaminedRead])
+  return out
+}
+
+/** The first section that differs between two canonical forms, with where,
+    or null. */
+function firstDifference(a: Record<string, string>, b: Record<string, string>): string | null {
+  for (const section of Object.keys(a)) {
+    const x = a[section]
+    const y = b[section]
+    if (x === y) continue
+    let at = 0
+    while (at < x.length && x[at] === y[at]) at++
+    return `${section} at …${x.slice(Math.max(0, at - 60), at + 60)}… versus …${y.slice(Math.max(0, at - 60), at + 60)}…`
+  }
+  return null
+}
+
+/** Runs `paint` with Date and Date.now an hour ahead, and answers that
+    time. */
+function withClockAhead(paint: () => void): number {
+  const RealDate = Date
+  const ahead = RealDate.now() + 3_600_000
+  globalThis.Date = new Proxy(RealDate, {
+    construct: (target, args) =>
+      args.length ? Reflect.construct(target, args) : new target(ahead),
+    get: (target, prop, receiver) =>
+      prop === 'now' ? () => ahead : Reflect.get(target, prop, receiver),
+  })
+  try {
+    paint()
+  } finally {
+    globalThis.Date = RealDate
+  }
+  return ahead
+}
+
+/** Test builds only: breaks the layer rules on purpose, so a test sees
+    checkLayers catch it (layerGuard.test.ts). */
+export const __layerProbe = STRICT_LAYERS
+  ? {
+      /** The rows in canonical form, without server stamps when `noStamps`,
+          and how many layers are live. */
+      rows: (noStamps = false) => canonicalRows(noStamps),
+      layerCount: () => layers.ordered().length,
+      /** The faults the store caught and reported, and forgets them. */
+      faults: () => faults.splice(0),
+      /** Changes a task's title outside any layer and emits. */
+      writeOutside() {
+        const issue = rows.issues.values().next().value
+        if (issue) issue.title = `${issue.title}!`
+        emit()
+      },
+      /** Paints a layer that reads the clock, which emits. */
+      paintClock() {
+        const layer = layers.open('probe', {
+          workspace: () => {
+            const issue = rows.issues.values().next().value
+            if (issue) issue.updated_at = new Date().toISOString()
+          },
+        })
+        layers.send(layer, { snapshot: snapshotDeliveries, thread: threadDeliveries })
+        showPaint(layer.view)
+      },
+    }
+  : null
+
+/** Starts a layer that covers several writes, such as the rows a bulk inbox
+    action reaches before its batches name them, and paints it. */
+function openUmbrella(name: string, view: View): Layer {
+  const layer = layers.open(name, view)
+  layers.send(layer, { snapshot: snapshotDeliveries, thread: threadDeliveries })
+  showPaint(view)
+  return layer
+}
+
+/** Ends umbrella `layer`: with `save` as an accepted write, which stays
+    until a live delivery holds it (settleAccepted), otherwise its paint goes
+    now. */
+function endUmbrella(layer: Layer, save: boolean) {
+  if (!layers.has(layer)) return
+  if (save) settleAccepted(layer, undefined)
+  else settleRefused(layer)
+}
 
 type RoadmapOperation = FunctionArgs<typeof api.roadmap.change>['operations'][number]
 type RoadmapVisit = {
@@ -992,9 +1490,13 @@ type RoadmapVisit = {
 }
 let roadmapVisit: RoadmapVisit | null = null
 let roadmapDetailOpen = false
-/* The operations batchRoadmapChanges collects, and the answers waiting for
-   their one submission. */
-let roadmapBatch: { operations: RoadmapOperation[]; saved: ((ok: boolean) => void)[] } | null = null
+/* The operations batchRoadmapChanges collects, the answers waiting for their
+   one submission, and the one layer their paints go into. */
+let roadmapBatch: {
+  operations: RoadmapOperation[]
+  saved: ((ok: boolean) => void)[]
+  layer: Layer
+} | null = null
 
 // View state is deliberately memory-only. A new visit gets a fresh server
 // journal, so a late reply from an earlier visit cannot repopulate history.
@@ -1027,48 +1529,58 @@ function expireRoadmapHistory() {
   }
 }
 
-/* Sends operations to the visit's journal. Resolves whether the server
-   accepted them; a refusal is toasted and rolled back by run(). */
-function submitRoadmapChanges(operations: RoadmapOperation[]): Promise<boolean> {
+/* Sends operations to the visit's journal with `target`'s paint. Resolves
+   whether the server accepted them; a refusal is toasted and takes the
+   paint away. A clamped or rounded no-op emits no snapshot, so its paint
+   goes at once (keep), even during trouble: the server changed nothing, so
+   the values last delivered are right. */
+function submitRoadmapChanges(
+  operations: RoadmapOperation[],
+  target: View | Layer,
+): Promise<boolean> {
   const visit = roadmapVisit
-  if (!visit || !operations.length) return Promise.resolve(true)
+  if (!visit || !operations.length) {
+    // a batch whose visit ended before its write went out paints no more
+    if ('id' in target) settleRefused(target)
+    return Promise.resolve(!operations.length)
+  }
   visit.pending++
-  let saved = false
-  const answer = new Promise<boolean>((resolve) =>
-    run(
-      write(api.roadmap.change, { session_id: visit.id, operations }).then((result) => {
-        // A clamped or rounded no-op emits no snapshot. Re-adopt the saved
-        // values anyway so speculative dates, hours and touch time disappear.
-        // Only while the snapshot is current: during trouble serverSnap is an
-        // older delivery that would take saved edits away, so the unclamped
-        // values show until the next good delivery replaces them.
-        if (result.count <= visit.count && snapshotCurrent) snapDirty = true
-        if (roadmapVisit === visit && !visit.disabled)
-          visit.count = Math.max(visit.count, result.count)
-      }),
-      () => {
-        saved = true
-      },
-      () => {
-        visit.pending--
-        emit()
-        resolve(saved)
-      },
-    ),
-  )
+  const answer = send(api.roadmap.change, { session_id: visit.id, operations }, target, {
+    keep: (result) => (result.count <= visit.count ? null : undefined),
+    onOk: (result) => {
+      if (roadmapVisit === visit && !visit.disabled)
+        visit.count = Math.max(visit.count, result.count)
+    },
+    onSettled: () => {
+      visit.pending--
+      emit()
+    },
+  })
   emit()
   return answer
 }
 
-/* Records an operation in the open Roadmap visit's journal, in the open
-   batch when there is one. Returns null when no visit records it, so the
-   caller writes it directly, or else the server's answer. */
-function recordRoadmapChange(operation: RoadmapOperation): Promise<boolean> | null {
+/* Records an operation in the open Roadmap visit's journal with `view`, its
+   paint, in the open batch when there is one. Returns null when no visit
+   records it, so the caller sends it directly, or else the server's answer. */
+function recordRoadmapChange(operation: RoadmapOperation, view: View): Promise<boolean> | null {
   expireRoadmapHistory()
   if (!roadmapVisit || roadmapVisit.disabled || roadmapDetailOpen) return null
   const batch = roadmapBatch
-  if (!batch) return submitRoadmapChanges([operation])
+  if (!batch) return submitRoadmapChanges([operation], view)
   batch.operations.push(operation)
+  const before = batch.layer.view.workspace
+  const paint = view.workspace
+  if (paint)
+    batch.layer.view = {
+      workspace: before
+        ? () => {
+            before()
+            paint()
+          }
+        : paint,
+    }
+  showPaint(view)
   return new Promise((resolve) => batch.saved.push(resolve))
 }
 
@@ -1104,20 +1616,18 @@ const asSentence = (m: string) =>
    can also come back empty (null) when the person loses every seat: an admin
    removed or deactivated them, or their organization's deletion began.
    The last good snapshot stays on screen and the snapshot notice says so.
-   While it is stale, edits to shared data pause. An edit made from stale
-   data can overwrite newer work, and run()'s rollback would re-adopt the
-   stale snapshot over edits that did save. So every optimistic mutator of
-   shared data calls refusePausedEdit() before its paint, and the refusal
-   never reaches that rollback. write() refuses any other shared write
-   before it is sent, the backstop for a mutator that does not check first.
-   Personal state (read marks, preferences, appearance, following) still
-   saves, and so do the writes that only take access away (UNPAUSED_WRITES).
-   Their mutators keep each accepted paint (keepAcceptedPaint), so a refused
-   write's rollback paints them again over the stale snapshot. Without a
-   seat most of those need one too, so only the login's appearance and
-   connected apps still save, and signed out nothing saves. Those mutators
-   check the pause before their paint as well (refusePausedWrite), and a
-   write that painted nothing (runUnpainted) is never rolled back. Panels that
+   While it is stale, edits to shared data pause, because an edit made from
+   stale data can overwrite newer work. Every optimistic mutator of shared
+   data calls refusePausedEdit() before its paint, and send() refuses any
+   other shared write before it paints or is sent, the backstop for a
+   mutator that does not check first. Personal state (read marks,
+   preferences, appearance, following) still saves, and so do the writes
+   that only take access away (UNPAUSED_WRITES). Each keeps its layer once
+   accepted, until a good delivery holds it, so another write's refusal
+   cannot take it off the stale snapshot. Without a seat most of those need
+   one too, so only the login's appearance and connected apps still save,
+   and signed out nothing saves. Those mutators check the pause before
+   their paint as well (refusePausedWrite). Panels that
    call Convex directly (organization deletion and its export record,
    billing) act on their own live queries, not on the snapshot, so they do
    not pause. Convex reruns a failed query when the data it read changes, so
@@ -1161,7 +1671,7 @@ let unconfirmedReport: string | null = null
    SIGN_OUT_CONFIRM_MS goes ahead. */
 const SIGN_OUT_CONFIRM_MS = 5_000
 let signOutWarnedAt = Number.NEGATIVE_INFINITY
-/* A delivery that ends the trouble while run()'s paint gate holds it. The
+/* A delivery that ends the trouble but waits to be painted (owe). The
    trouble ends when that paint lands, not before, so nobody edits the stale
    rows still on screen in the meantime. */
 let recoveryHeld = false
@@ -1212,7 +1722,7 @@ const isUnpausedWrite = (name: string, trouble: SnapshotTrouble) =>
 /** Why Qivo cannot save now, or null (lib/syncStatus). */
 const savePause = (): SavePause | null => syncStatus.pause()
 
-/** Whether write() refuses `name` now: every write while Qivo cannot save,
+/** Whether send() refuses `name` now: every write while Qivo cannot save,
     and during snapshot trouble every write that does not go on. */
 const isPausedWrite = (name: string) =>
   savePause() !== null || (snapshotTrouble !== null && !isUnpausedWrite(name, snapshotTrouble))
@@ -1256,7 +1766,7 @@ function refusePausedEdit(): boolean {
   return true
 }
 
-/** Toasts the pause and answers true when write() would refuse `mutation`
+/** Toasts the pause and answers true when send() would refuse `mutation`
     now. A mutator whose write goes on while the snapshot is stale calls it
     before its paint, because offline, signed out or without a seat most of
     those writes pause too, and a caller that announces success must not
@@ -1309,7 +1819,7 @@ function refusedAsPaused(e: unknown): boolean {
 
 /** The sentence of a refusal that reads as the pause (refusedAsPaused). A
     lost seat or sign-in says so even before the snapshot reports it, and a
-    write that write() paused keeps the sentence it was paused with. */
+    write that send() paused keeps the sentence it was paused with. */
 function refusalPauseText(e: unknown) {
   if (seatGone(e)) return NO_ACCESS_TEXT
   if (notSignedIn(e)) return SIGNED_OUT_TEXT
@@ -1319,8 +1829,8 @@ function refusalPauseText(e: unknown) {
 
 /* 'rule' and read-only sentences are the P0001 successors and keep their
    words, shaped by asSentence. Everything else is deliberately generic. The
-   wording says "reverted", never "reloading", because rollback is a repaint,
-   not a refetch. A paused write's sentence is the pause itself
+   wording says "reverted", never "reloading", because taking a refused
+   write's paint away is a repaint, not a refetch. A paused write's sentence is the pause itself
    (refusedAsPaused). */
 function toastWriteError(e: unknown, reverted = true) {
   const d = errData(e)
@@ -1328,7 +1838,7 @@ function toastWriteError(e: unknown, reverted = true) {
     toastPaused(refusalPauseText(e))
     return
   }
-  // a write that painted nothing (runUnpainted) has nothing to revert
+  // a write that painted nothing has nothing to revert
   const after = reverted ? ' Change reverted.' : ''
   if ((readOnly(d) || d.code === 'rule') && d.message) {
     toast(`${asSentence(String(d.message))}${after}`)
@@ -1379,7 +1889,7 @@ const DELETED_ITEMS_BATCH = 25
    only its own ids. */
 async function deletedItemsCalls<Reason>(
   items: { id: string; org_id: string }[],
-  send: (
+  call: (
     orgId: string,
     ids: string[],
   ) => Promise<
@@ -1407,7 +1917,7 @@ async function deletedItemsCalls<Reason>(
     for (let at = 0; at < ids.length; at += DELETED_ITEMS_BATCH) {
       const batch = ids.slice(at, at + DELETED_ITEMS_BATCH)
       try {
-        const answer = await send(orgId, batch)
+        const answer = await call(orgId, batch)
         outcome.done.push(...('restored' in answer ? answer.restored : answer.purged))
         outcome.refused.push(...answer.refused)
         outcome.deferred.push(...(answer.deferred ?? []))
@@ -1600,35 +2110,19 @@ function noteScope(args: unknown): string | null {
   return org && profile ? `${org}:${profile}` : null
 }
 
-/* What the next write() is about, set only while a mutator calls it
-   (writeAbout): the task a write concerns when its args do not name it, or
-   that the person did not make the change, such as the read that opening a
-   task sends, which the notice does not count and the crash note leaves out. */
-let writeContext: { task?: string; background?: boolean } = {}
-
-/** Calls write() inside `send` with `context` (see writeContext). */
-function writeAbout<T>(context: { task?: string; background?: boolean }, send: () => T): T {
-  writeContext = context
-  try {
-    return send()
-  } finally {
-    writeContext = {}
-  }
-}
-
 /** Every crash-note scope the signed-in person has now. */
 const noteScopes = () => [...myProfiles].map(([org, profile]) => `${org}:${profile}`)
 
-// Every store mutation passes through write(). Awaited writes (invitations,
-// credentials, restores, account settings) do not use run()'s optimistic
-// paint gate. They still need to finish before a version reload; preserve the
-// Convex client's exact generic wire signature. While the live snapshot is
-// stale, a shared-data write is refused here with code `paused` before it is
-// sent, and so is every write while Qivo cannot save (see snapshot health
-// above). A sent write counts as waiting (lib/syncStatus), and a change the
-// person made is noted for the crash note (lib/unconfirmedNote), until the
-// server answers.
-const write: typeof convex.mutation = (mutation, args, options) => {
+/* Sends one write to Convex, for send() and sendAwaited() only. They check
+   the pause first; the check here is the backstop. A sent write counts as
+   waiting (lib/syncStatus), and a change the person made is noted for the
+   crash note (lib/unconfirmedNote), until the server answers. A refusal
+   notes a read-only organization and the organization it named. */
+function dispatch<M extends FunctionReference<'mutation'>>(
+  mutation: M,
+  args: FunctionArgs<M>,
+  about: WriteAbout = {},
+): Promise<FunctionReturnType<M>> {
   const epoch = storeEpoch
   if (DEMO_MODE && demoDisposed)
     return Promise.reject(new ConvexError({ code: 'forbidden', message: 'Your demo has expired.' }))
@@ -1638,11 +2132,8 @@ const write: typeof convex.mutation = (mutation, args, options) => {
   const releaseUpdate = beginUpdateBlock()
   const visit = roadmapVisit
   const clearsHistory = visit && !visit.disabled && isTaskContentWrite(name)
-  const context = writeContext
   const change =
-    context.background || BACKGROUND_WRITES.has(name)
-      ? null
-      : describeWrite(name, args, context.task)
+    about.background || BACKGROUND_WRITES.has(name) ? null : describeWrite(name, args, about.task)
   const scope = change && noteScope(args)
   const settleWaiting = syncStatus.track(change !== null)
   const clearNote = change && scope ? unconfirmedNote.add(scope, change) : null
@@ -1651,14 +2142,14 @@ const write: typeof convex.mutation = (mutation, args, options) => {
     clearNote?.()
   }
   try {
-    const sent = convex.mutation(mutation, args, options)
+    const sent: Promise<FunctionReturnType<M>> = convex.mutation(mutation, args)
     // beside the chain below, so the callers' timing stays as it was
     sent.then(answered, answered)
     return sent
       .then((result) => {
         // Awaited uploads have their own adoption after this promise. Refuse
-        // late results here as well as run() so they cannot restore bytes or
-        // rows from a demo that the interface already disposed.
+        // late results here so they cannot restore bytes or rows from a demo
+        // that the interface already disposed.
         if (DEMO_MODE && epoch !== storeEpoch)
           throw new ConvexError({ code: 'forbidden', message: 'Your demo has expired.' })
         if (clearsHistory) clearRoadmapHistory(visit)
@@ -1718,115 +2209,6 @@ async function mintCredential(scheme: 'qva' | 'qvt') {
   const secret = `${scheme}_${hex(crypto.getRandomValues(new Uint8Array(24)))}`
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret))
   return { id: crypto.randomUUID(), secret, hash: hex(new Uint8Array(digest)) }
-}
-
-/* Sends an optimistic write. The caller painted it already. A refusal is
-   toasted (onError) and rolled back by re-adopting the newest server truth,
-   unless `painted` is false (runUnpainted). While any write is in flight the
-   paint gate holds snapshot deliveries, and the last settle paints them. */
-function run<T>(
-  op: Promise<T>,
-  onOk?: (v: T) => void,
-  onSettled?: () => void,
-  onError = toastWriteError,
-  painted = true,
-): void {
-  const epoch = storeEpoch
-  const releaseUpdate = beginUpdateBlock()
-  inFlight++
-  void op
-    .then(
-      (v) => {
-        if (epoch !== storeEpoch) return
-        if (onOk) onOk(v)
-      },
-      (e) => {
-        if (epoch !== storeEpoch) return
-        console.error('[qivo] write failed:', e)
-        onError(e)
-        // nothing to take back, and re-adopting the snapshot would only take
-        // other edits off the screen during trouble
-        if (!painted) return
-        // rollback = re-adopt the newest server truth; a delivery held by the
-        // gate IS that truth, so the flags clear here. Writes still in flight
-        // lose their paint with it, so the last settle paints the server
-        // truth again, with the paints they keep once accepted.
-        snapDirty = inFlight > 1
-        commentsDirty = false
-        if (serverSnap) adopt(serverSnap)
-        /* Writes the server accepted after that delivery, such as read marks
-           saved while the snapshot is in trouble, or an archive or delete
-           still awaiting its delivery, stay on screen. */
-        reapplyAcceptedWrites()
-        adoptComments()
-        rebuild()
-        emit()
-        endHeldRecovery()
-      },
-    )
-    .finally(() => {
-      try {
-        if (epoch === storeEpoch) {
-          inFlight--
-          if (inFlight === 0) flushHeldPaint()
-        }
-      } finally {
-        if (epoch === storeEpoch) onSettled?.()
-        releaseUpdate()
-      }
-    })
-}
-
-/* run() for a write that painted nothing, such as a setting or a write whose
-   result arrives with the next delivery. A refusal is toasted, without
-   claiming a revert, and leaves the board as it is. */
-function runUnpainted<T>(
-  op: Promise<T>,
-  onOk?: (v: T) => void,
-  onSettled?: () => void,
-  onError = (e: unknown) => toastWriteError(e, false),
-): void {
-  run(op, onOk, onSettled, onError, false)
-}
-
-/* run() a write and resolve whether the server accepted it. A refusal is
-   toasted and rolled back as usual before the promise settles. `onOk` is
-   run()'s, called with the result before the promise resolves. */
-function runSaved<T>(op: Promise<T>, onOk?: (v: T) => void): Promise<boolean> {
-  return new Promise<boolean>((resolve) =>
-    run(
-      op,
-      (v) => {
-        onOk?.(v)
-        resolve(true)
-      },
-      undefined,
-      (error) => {
-        toastWriteError(error)
-        resolve(false)
-      },
-    ),
-  )
-}
-
-/* The last settle repaints whatever the gate held back. One rebuild+emit
-   even when both a snapshot and a comments delivery were held. */
-function flushHeldPaint() {
-  const snapHeld = snapDirty
-  const comHeld = commentsDirty
-  snapDirty = false
-  commentsDirty = false
-  if (!snapHeld && !comHeld) return
-  if (snapHeld && serverSnap) {
-    adopt(serverSnap)
-    // the held delivery can predate a write accepted meanwhile
-    reapplyAcceptedWrites()
-  }
-  if (comHeld) adoptComments()
-  if (snapHeld) rebuild()
-  else rebuildComments()
-  emit(snapHeld ? 'workspace' : 'comments')
-  if (snapHeld) endHeldRecovery()
 }
 
 /* --- minted file URLs (phase 7) ---------------------------------------------
@@ -2057,7 +2439,8 @@ const agentKeyOrg = new Map<string, string>()
 const preferences = createPreferences({
   profileId: () => CURRENT_USER,
   read: () => convex.query(api.prefs.get, {}),
-  write: (profileId, prefs) => write(api.prefs.save, { profile_id: profileId, prefs }),
+  write: (profileId, prefs) =>
+    sendAwaited(api.prefs.save, { profile_id: profileId, prefs }, 'none'),
   storage: () => localStorage,
   beginUpdate: beginUpdateBlock,
 })
@@ -2547,15 +2930,15 @@ function normalizeEmail(v: unknown): string | null {
     not by a pattern. */
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 
-/* --- sub-issue remaining rollup (0066) — the optimistic mirror ------------ */
-function clearParentRemaining(parentKey: string | null | undefined) {
-  const pUuid = parentKey ? keyToUuid.get(parentKey) : null
-  const pRow = pUuid ? rows.issues.get(pUuid) : null
+/* --- sub-issue remaining rollup (0066) — the optimistic mirror ------------
+   A task that gains a subtask loses its own hours, at `at`. */
+function clearParentHours(parentUuid: string | null | undefined, at: string) {
+  const pRow = parentUuid ? rows.issues.get(parentUuid) : null
   if (pRow && (pRow.remaining_hours != null || pRow.review_at != null)) {
     pRow.remaining_hours = undefined
     pRow.remaining_set_at = undefined // the server stamp pairs the two (0072)
     pRow.review_at = undefined // a group has no review hand-off of its own
-    pRow.updated_at = new Date().toISOString() // the server-side clear fires the touch too
+    pRow.updated_at = at // the server-side clear fires the touch too
   }
 }
 
@@ -2698,7 +3081,7 @@ function removalRefusal(change: AccessRemoval): string | null {
 /* Removes a person's or a team's grant on one project, or a member from a
    team, in one server write that settles the tasks it hides by `choice`
    (projects.removeAccess, teams.removeMember), and paints the outcome at
-   once; a refusal re-adopts the server's rows. With nobody losing sight of a
+   once; a refusal takes the paint away again. With nobody losing sight of a
    task, the access just goes. Resolves whether the server accepted it. */
 function removeAtOnce(
   change: Extract<AccessRemoval, { kind: 'userGrant' | 'teamGrant' | 'teamMember' }>,
@@ -2718,78 +3101,92 @@ function removeAtOnce(
         ? { reassign_to: choice.to }
         : ('leave' as const)
   const level = levelAfter(change)
-  if (typeof held === 'object') {
-    for (const i of items) {
-      const row = rows.issues.get(i.task.uuid)
-      if (row) {
-        applyIssuePatchToRow(
-          row,
-          i.role === 'assignee' ? { assignee: held.reassign_to } : { reviewer: held.reassign_to },
-        )
-      }
-    }
-  }
-  if (change.kind === 'userGrant') {
-    rows.access = rows.access.filter(
-      (a) => !(a.project_id === change.projectId && a.profile_id === change.userId),
-    )
-  } else if (change.kind === 'teamGrant') {
-    rows.teamAccess = rows.teamAccess.filter(
-      (a) => !(a.project_id === change.projectId && a.team_id === change.teamId),
-    )
-  } else {
-    rows.teamMembers = rows.teamMembers.filter(
-      (m) => !(m.team_id === change.teamId && m.profile_id === change.userId),
-    )
-  }
+  // everything the paint needs, worked out now from the rows and views
+  const at = new Date().toISOString()
+  const patches =
+    typeof held === 'object'
+      ? items.map((i) => ({
+          uuid: i.task.uuid,
+          uid: i.uid,
+          field: i.role === 'assignee' ? ('assignee_id' as const) : ('reviewer_id' as const),
+          db: mapIssuePatch(
+            i.role === 'assignee' ? { assignee: held.reassign_to } : { reviewer: held.reassign_to },
+          ),
+        }))
+      : []
+  // the server's Viewer grants: each project that showed a listed task
+  const grants = new Map<string, Row<'project_access'>>()
   if (held === 'keep_as_viewer') {
-    // the server's Viewer grants: each project that showed a listed task
-    const kept = new Set<string>()
     for (const i of items) {
       const pid = keptOn(change, i.task)
-      if (kept.has(`${i.uid}:${pid}`) || level(i.uid, pid)) continue
-      kept.add(`${i.uid}:${pid}`)
-      rows.access.push({ project_id: pid, profile_id: i.uid, level: 'viewer' })
+      if (grants.has(`${i.uid}:${pid}`) || level(i.uid, pid)) continue
+      grants.set(`${i.uid}:${pid}`, { project_id: pid, profile_id: i.uid, level: 'viewer' })
     }
   }
-  rebuild()
-  emit()
-  const op =
-    change.kind === 'teamMember'
-      ? write(api.teams.removeMember, {
+  const view: View = {
+    workspace: () => {
+      // the server settles only the tasks the person still holds at commit
+      for (const { uuid, uid, field, db } of patches)
+        if (rows.issues.get(uuid)?.[field] === uid) patchIssueRow(uuid, db, at)
+      if (change.kind === 'userGrant') {
+        rows.access = rows.access.filter(
+          (a) => !(a.project_id === change.projectId && a.profile_id === change.userId),
+        )
+      } else if (change.kind === 'teamGrant') {
+        rows.teamAccess = rows.teamAccess.filter(
+          (a) => !(a.project_id === change.projectId && a.team_id === change.teamId),
+        )
+      } else {
+        rows.teamMembers = rows.teamMembers.filter(
+          (m) => !(m.team_id === change.teamId && m.profile_id === change.userId),
+        )
+      }
+      for (const grant of grants.values()) {
+        const has = rows.access.some(
+          (a) => a.project_id === grant.project_id && a.profile_id === grant.profile_id,
+        )
+        const there = rows.projects.has(grant.project_id) && rows.profiles.has(grant.profile_id)
+        if (!has && there) rows.access.push({ ...grant })
+      }
+    },
+  }
+  const onError = (error: unknown) => {
+    // dispatch() has noted a read-only refusal for the next removal
+    // (noteReadOnlyRefusal). Only a refused reassignment or Viewer grant
+    // (model/projectAccess.ts HELD_TASKS_REFUSED) blames the tasks; a
+    // refused removal, a billing pause or a lost connection says so itself
+    const settling = errData(error).reason === 'held_tasks'
+    if (settling && typeof held === 'object') {
+      toast(`${stays}, because not every task could be reassigned.`, 'error')
+    } else if (settling && held === 'keep_as_viewer' && change.kind === 'teamMember') {
+      toast(`${stays}, because not every Viewer grant could be saved.`, 'error')
+    } else toastWriteError(error)
+  }
+  return change.kind === 'teamMember'
+    ? send(
+        api.teams.removeMember,
+        {
           org_id: orgId,
           team_id: change.teamId,
           profile_id: change.userId,
           on_held_tasks: held,
-        })
-      : write(api.projects.removeAccess, {
+        },
+        view,
+        { onError },
+      )
+    : send(
+        api.projects.removeAccess,
+        {
           org_id: orgId,
           id: change.projectId,
           ...(change.kind === 'userGrant'
             ? { user_id: change.userId }
             : { team_id: change.teamId }),
           on_held_tasks: held,
-        })
-  return new Promise<boolean>((resolve) =>
-    run(
-      op,
-      () => resolve(true),
-      undefined,
-      (error) => {
-        // write() has noted a read-only refusal for the next removal
-        // (noteReadOnlyRefusal). Only a refused reassignment or Viewer grant
-        // (model/projectAccess.ts HELD_TASKS_REFUSED) blames the tasks; a
-        // refused removal, a billing pause or a lost connection says so itself
-        const settling = errData(error).reason === 'held_tasks'
-        if (settling && typeof held === 'object') {
-          toast(`${stays}, because not every task could be reassigned.`, 'error')
-        } else if (settling && held === 'keep_as_viewer' && change.kind === 'teamMember') {
-          toast(`${stays}, because not every Viewer grant could be saved.`, 'error')
-        } else toastWriteError(error)
-        resolve(false)
-      },
-    ),
-  )
+        },
+        view,
+        { onError },
+      )
 }
 
 /* The individual grants a new project is stored with: the request's own,
@@ -2898,24 +3295,25 @@ function reviewHoursForProject(projectId: string): number {
   return resolveReviewHours(p?.review_hours, parent?.review_hours)
 }
 
-/* Optimistic mirror of the server's touch + remaining-stamp rule (0072).
-   The wire carries null-to-clear; the STORED row carries absence as
-   undefined (the snapshot's own shape, header line 54), so nulls translate
-   on the way in. */
-function applyIssuePatchToRow(row: Row<'issues'>, patch: IssuePatch) {
-  const db = mapIssuePatch(patch)
+/* Paints the issues.update wire patch `db` on task `uuid` at `at`, with the
+   server's touch and stamp rules (updateIssueCore, 0072), worked out from
+   the row it paints. The wire carries null-to-clear; the STORED row carries
+   absence as undefined (the snapshot's own shape), so nulls translate on
+   the way in. Skips a task that is gone. */
+function patchIssueRow(uuid: string, db: IssueWirePatch, at: string) {
+  const row = rows.issues.get(uuid)
+  if (!row) return
   const prevStatus = row.status
   const before = { status: row.status, reviewer_id: row.reviewer_id, review_at: row.review_at }
   const oldRem = row.remaining_hours == null ? null : Number(row.remaining_hours)
-  const newRem =
-    !('remaining' in patch) || db.remaining_hours == null ? null : Number(db.remaining_hours)
-  const remChanged = 'remaining' in patch && oldRem !== newRem
+  const newRem = db.remaining_hours == null ? null : Number(db.remaining_hours)
+  const remChanged = 'remaining_hours' in db && oldRem !== newRem
   Object.entries(db).forEach(([k, v]) => {
     ;(row as Record<string, unknown>)[k] = v === null ? undefined : v
   })
   // mirror the server's pause rule: a move into Done or Backlog resumes
   if (db.status === 'done' || db.status === 'backlog') row.paused = false
-  row.updated_at = new Date().toISOString() // mirror the server's touch
+  row.updated_at = at // mirror the server's touch
   // mirror updateIssueCore's stamps: a status change stamps status_at now,
   // and a move into Done stamps done_at while a move out clears it (0071)
   if (db.status !== undefined && db.status !== prevStatus) {
@@ -2933,6 +3331,98 @@ function applyIssuePatchToRow(row: Row<'issues'>, patch: IssuePatch) {
   }
   // the server's review hand-off stamp, by the same shared rule
   row.review_at = reviewStamp(before, row, row.updated_at)
+}
+
+/* The paint of new task `row`: inserted unless the server's row is there,
+   its dependents included, with the number the server answered
+   (`created.num`) or else the next one free in its organization's counter,
+   which it raises. A task created under a parent clears the parent's own
+   hours, as the server does. */
+function newTaskPaint(row: Row<'issues'>, created: { num: number | null }): Paint {
+  return () => {
+    const org = rows.orgs.get(row.org_id)
+    if (rows.issues.has(row.id) || !org || !rows.projects.has(row.project_id)) return
+    const num = created.num ?? Math.max(row.num, (org.next_issue_num || 0) + 1)
+    org.next_issue_num = Math.max(org.next_issue_num || 0, num)
+    rows.issues.set(row.id, { ...row, num })
+    clearParentHours(row.parent_id, row.created_at)
+  }
+}
+
+/* Runs a bulk inbox action on every seat. The loaded `messages` it reaches
+   show `paint` at once under one umbrella layer per seat, and the `flags`
+   it clears under one more. Each seat sends `batch` until an answer has no
+   more, and each batch keeps a layer, `named`, for the rows its answer
+   names (`keep`).
+   A seat's umbrella goes when its batches end, so a refused or paused batch
+   takes back only the rows no accepted batch named. The first refusal is
+   toasted once and takes the flags back; with every seat done they stay
+   until the next delivery. The last seat's umbrella and the flags end in one
+   repaint. */
+async function bulkInbox<R extends { ids: string[]; hasMore: boolean }>(
+  name: string,
+  messages: MessageVM[],
+  paint: (ids: string[]) => View,
+  named: (ids: string[]) => View,
+  flags: View,
+  batch: (org: string, previous: R | null, keep: (answer: R) => View) => Promise<R>,
+): Promise<void> {
+  const epoch = storeEpoch
+  const loaded = messagesByOrg(messages.map((message) => message.id))
+  const flag = openUmbrella(name, flags)
+  let refused = false
+  let running = myProfiles.size
+  let last: Layer | null = null
+  const seats = [...myProfiles.keys()].map(async (org) => {
+    const umbrella = openUmbrella(name, paint(loaded.get(org) ?? []))
+    let previous: R | null = null
+    try {
+      while (epoch === storeEpoch) {
+        previous = await batch(org, previous, (answer) => named(answer.ids))
+        if (!previous.hasMore) return true
+      }
+      return false
+    } catch (error) {
+      if (epoch === storeEpoch && !refused) {
+        refused = true
+        toastWriteError(error)
+        endUmbrella(flag, false)
+      }
+      return false
+    } finally {
+      if (--running > 0) {
+        if (epoch === storeEpoch) endUmbrella(umbrella, false)
+      } else last = umbrella
+    }
+  })
+  const done = await Promise.all(seats)
+  if (epoch !== storeEpoch) return
+  together(() => {
+    if (last) endUmbrella(last, false)
+    endUmbrella(flag, done.every(Boolean))
+  })
+}
+
+/* The paint of removing messages `ids`. With `onlyRead` it removes, as the
+   server's Remove all read selects at commit, only those still read and not
+   snoozed, for rows named before the server answered. */
+function removeMessagesPaint(ids: string[], onlyRead = false): View {
+  return {
+    workspace: () =>
+      ids.forEach((id) => {
+        const row = rows.messages.get(id)
+        if (!row) return
+        if (onlyRead && (row.read_at === undefined || row.snoozed_until !== undefined)) return
+        rows.messages.delete(id)
+      }),
+  }
+}
+
+/** The values of `row`'s `fields` on screen before a write paints over them
+    (Over), for the field check. */
+function overOf(table: string, row: { id: string }, fields: string[]): Over {
+  const values: Record<string, unknown> = { ...row }
+  return { table, id: row.id, fields: Object.fromEntries(fields.map((f) => [f, values[f]])) }
 }
 
 /* --- app-side inputs ---------------------------------------------------------
@@ -3030,61 +3520,67 @@ export const PLANNER = {
   get roadmapUndo() {
     return {
       count: roadmapVisit?.count ?? 0,
-      busy: (roadmapVisit?.pending ?? 0) > 0 || inFlight > 0,
+      // any write in flight: a task content write clears the history when
+      // it is accepted, which an undo sent before it would not know
+      busy: (roadmapVisit?.pending ?? 0) > 0 || layers.waiting(),
       disabled: !roadmapVisit || roadmapVisit.disabled,
     }
   },
+  /** Runs `change`, whose Roadmap operations go to the server as one write
+      with one layer that holds all their paints. */
   batchRoadmapChanges: (change: () => void) => {
     if (roadmapBatch || !roadmapVisit || roadmapVisit.disabled || roadmapDetailOpen) {
       change()
       return
     }
-    const batch: NonNullable<typeof roadmapBatch> = { operations: [], saved: [] }
+    const batch: NonNullable<typeof roadmapBatch> = {
+      operations: [],
+      saved: [],
+      layer: layers.open('roadmap:change', {}),
+    }
     roadmapBatch = batch
     try {
       change()
     } finally {
       roadmapBatch = null
-      void submitRoadmapChanges(batch.operations).then((ok) => {
-        for (const answer of batch.saved) answer(ok)
-      })
+      if (!batch.operations.length) layers.remove(batch.layer)
+      else
+        void submitRoadmapChanges(batch.operations, batch.layer).then((ok) => {
+          for (const answer of batch.saved) answer(ok)
+        })
     }
   },
   undoRoadmap: (all = false) => {
     expireRoadmapHistory()
     const visit = roadmapVisit
-    if (!visit || visit.disabled || visit.pending || inFlight || !visit.count) return
-    if (refusePausedEdit()) return
+    if (!visit || visit.disabled || visit.pending || layers.waiting()) return
+    if (!visit.count || refusePausedEdit()) return
     visit.pending++
     // the undone values arrive with the next delivery
-    runUnpainted(
-      write(api.roadmap.undo, { session_id: visit.id, all })
-        .then((result) => {
-          if (roadmapVisit === visit && !visit.disabled) visit.count = result.count
-          toast(all ? 'Roadmap changes reverted' : 'Roadmap change undone', 'success')
-        })
-        .catch((error) => {
-          // A conflicting history remains unavailable until a fresh visit. The
-          // server refused the entire undo, preserving all current work.
-          if (['conflict', 'forbidden', 'not_found'].includes(errData(error).code))
-            clearRoadmapHistory(visit)
-          throw error
-        }),
-      undefined,
-      () => {
-        visit.pending--
-        emit()
+    void send(api.roadmap.undo, { session_id: visit.id, all }, 'none', {
+      onOk: (result) => {
+        if (roadmapVisit === visit && !visit.disabled) visit.count = result.count
+        toast(all ? 'Roadmap changes reverted' : 'Roadmap change undone', 'success')
       },
-      (error) => {
+      onError: (error) => {
+        // A conflicting history remains unavailable until a fresh visit. The
+        // server refused the entire undo, preserving all current work.
         const d = errData(error)
-        const detail = d.message
+        if (['conflict', 'forbidden', 'not_found'].includes(d.code ?? ''))
+          clearRoadmapHistory(visit)
         if (refusedAsPaused(error)) toastPaused(refusalPauseText(error))
         else
           toast(
-            detail ? `Couldn't undo: ${detail}. No changes reverted.` : "Couldn't undo. Try again.",
+            d.message
+              ? `Couldn't undo: ${d.message}. No changes reverted.`
+              : "Couldn't undo. Try again.",
           )
       },
-    )
+      onSettled: () => {
+        visit.pending--
+        emit()
+      },
+    })
     emit()
   },
   /* timeline + formatting (same names as the prototype) */
@@ -3865,7 +4361,7 @@ export const PLANNER = {
      refusal. */
   createOrg: async (name: string): Promise<boolean> => {
     try {
-      await write(api.identity.createOrganization, { name: name.trim() })
+      await sendAwaited(api.identity.createOrganization, { name: name.trim() }, 'none')
     } catch (e) {
       const msg = errData(e).message || "couldn't create the organization"
       toast(msg.charAt(0).toUpperCase() + msg.slice(1))
@@ -3883,12 +4379,11 @@ export const PLANNER = {
     const org = orgOfProject(metaId)
     if (!org) return false
     try {
-      await write(api.projects.inviteGuest, {
-        org_id: org,
-        project_id: metaId,
-        email: email.trim(),
-        level,
-      })
+      await sendAwaited(
+        api.projects.inviteGuest,
+        { org_id: org, project_id: metaId, email: email.trim(), level },
+        'none',
+      )
     } catch (e) {
       const msg = errData(e).message || "couldn't send the invitation"
       toast(msg.charAt(0).toUpperCase() + msg.slice(1))
@@ -4078,6 +4573,16 @@ export const PLANNER = {
   updates: updates.channels,
   emit,
 
+  /** Calls `listener` with every task handle that moved, as a map from the
+      old handle to the new, once per repaint (moveHandles). A caller that
+      keeps a handle, such as the open task window, applies the whole map
+      at once. Answers a function that stops it. */
+  watchHandles: (listener: (moved: ReadonlyMap<string, string>) => void) => {
+    handleWatchers.add(listener)
+    return () => {
+      handleWatchers.delete(listener)
+    }
+  },
   /** Why the live snapshot is stale, or null while it is current. Observe
       it through the `health` channel. */
   snapshotTrouble: (): SnapshotTrouble | null => snapshotTrouble,
@@ -4178,7 +4683,7 @@ export const PLANNER = {
   saveUINow: preferences.saveNow,
 
   /* ------------------------------- mutations -------------------------------
-     Optimistic patch → rebuild() → emit() → run(write(...)) with
+     send(mutation, args, view): the view paints its own layer, with
      org_id = THE SUBJECT ROW'S organization (0081: a guest-seat write with
      the home org would be refused — the wrapper picks the caller's seat by
      it). The awaited exceptions carry their own error mapping (§ header). */
@@ -4196,13 +4701,14 @@ export const PLANNER = {
 
   /** Returns the new issue's HANDLE (exact unless someone creates
       concurrently), so callers can reference it right away. The org-wide
-      counter (0050) means ANY concurrent create can invalidate the preview;
-      `onKeyFixed` fires with the real key when issues.create's returned row
-      disagrees, so callers can re-anchor UI state bound to the preview.
-      `onRefused` lets an open preview close before rollback can replace its
-      number with another task that was created concurrently.
-      Returns null for an invalid target (callers take their no-create path). */
-  addIssue: (it: NewIssueInput, onKeyFixed?: (key: string) => void, onRefused?: () => void) => {
+      counter (0050) means ANY concurrent create can invalidate the preview:
+      the paint takes the next free number as other people's creates arrive,
+      and the server's answer fixes it. A caller that keeps the handle
+      follows it with P.watchHandles. `onRefused` hears the handle shown just
+      before the refusal takes the task away, so an open preview can close
+      first. Returns null for an invalid target (callers take their
+      no-create path). */
+  addIssue: (it: NewIssueInput, onRefused?: (key: string) => void) => {
     const proj = rows.projects.get(it.project)
     // Numbering, org and reporter all follow the TARGET project's organization
     // (0081): creating in a foreign project is attributed to my guest profile
@@ -4211,7 +4717,6 @@ export const PLANNER = {
     const uuid = crypto.randomUUID()
     const now = new Date().toISOString()
     const previewNum = (orgRow.next_issue_num || 0) + 1
-    orgRow.next_issue_num = previewNum // optimistic; reconciled in onOk
     const hasRemaining = it.remaining != null && it.remaining !== ''
     // born In Review without stated hours: the server gives it the project's
     // review time (createIssueCore); the paint mirrors it
@@ -4252,13 +4757,12 @@ export const PLANNER = {
       created_at: now,
       updated_at: now,
     }
-    rows.issues.set(uuid, row)
-    // born under a parent: the parent's own hours clear (0066 mirror)
-    if (row.parent_id) clearParentRemaining(it.parent)
-    rebuild()
-    emit()
-    run(
-      write(api.issues.create, {
+    const created = { num: null as number | null }
+    const paint = newTaskPaint(row, created)
+    const preview = handleFor(uuid, row.org_id, `${ISSUE_PREFIX}-${previewNum}`)
+    void send(
+      api.issues.create,
+      {
         org_id: row.org_id,
         id: uuid,
         project_id: row.project_id,
@@ -4275,29 +4779,22 @@ export const PLANNER = {
         // from the INPUT, never the painted review time: the server decides it
         remaining_hours: hasRemaining ? Number(it.remaining) : null,
         paused: row.paused,
-      }),
-      (created) => {
-        const o = rows.orgs.get(row.org_id)
-        if (o) o.next_issue_num = Math.max(o.next_issue_num || 0, created.num)
-        if (created.num !== previewNum) {
-          // merge, don't replace: a whole-row overwrite would clobber
-          // optimistic patches issued while the create was in flight
-          const cur = rows.issues.get(uuid)
-          if (cur) cur.num = created.num
-          rebuild()
-          emit()
-          // only a home-org handle can change under a renumber — a foreign
-          // issue's handle IS its uuid, which the server never reassigns
-          if (onKeyFixed && row.org_id === HOME_ORG) onKeyFixed(`${ISSUE_PREFIX}-${created.num}`)
-        }
       },
-      undefined,
-      (error) => {
-        toastWriteError(error)
-        onRefused?.()
+      { workspace: paint },
+      {
+        // the server's number, painted while no delivery holds the task yet
+        keep: (result) => {
+          created.num = result.num
+          return { workspace: paint }
+        },
+        onError: (error) => {
+          toastWriteError(error)
+          // the handle on screen, which a delivery may have moved
+          onRefused?.(uuidToKey.get(uuid) ?? preview)
+        },
       },
     )
-    return handleFor(uuid, row.org_id, `${ISSUE_PREFIX}-${previewNum}`)
+    return preview
   },
 
   /* Paints the change at once and sends it. Resolves true when the server
@@ -4310,7 +4807,7 @@ export const PLANNER = {
     if (!row || !uuid || !patch || !Object.keys(patch).length) return Promise.resolve(false)
     if (refusePausedEdit()) return Promise.resolve(false)
     // text over the server's cap is refused before the paint, so a draft is
-    // never lost to a rollback; a task saved before the cap may send its
+    // never lost to a refusal; a task saved before the cap may send its
     // stored text back unchanged, as the server allows
     if ('description' in patch) {
       const text = patch.description ?? ''
@@ -4362,24 +4859,30 @@ export const PLANNER = {
         if (!Object.keys(patch).length) return Promise.resolve(true)
       }
     }
+    const at = new Date().toISOString()
     // attaching a sub-issue clears the new parent's own hours (0066 mirror)
-    if ('parent' in patch && patch.parent) clearParentRemaining(patch.parent)
+    const newParent = 'parent' in patch && patch.parent ? keyToUuid.get(patch.parent) : undefined
     const prevDesc = String(row.description || '') // pre-patch, for the GC below
     const paintPatch = { ...patch }
     if (PLANNER.isGroup(id)) delete paintPatch.status
-    applyIssuePatchToRow(row, paintPatch)
-    // a new visible parent or a detach replaces a hidden one; a refusal
-    // re-adopts the server snapshot, which restores the flag
-    if ('parent' in patch) rows.hiddenParentTasks.delete(uuid)
-    rebuild()
-    emit()
+    const paintDb = mapIssuePatch(paintPatch)
     const wire = mapIssuePatch(patch)
+    const view: View = {
+      workspace: () => {
+        clearParentHours(newParent, at)
+        patchIssueRow(uuid, paintDb, at)
+        // a new visible parent or a detach replaces a hidden one
+        if ('parent_id' in paintDb && rows.issues.has(uuid)) rows.hiddenParentTasks.delete(uuid)
+      },
+    }
     const planningOnly = Object.keys(patch).every((key) =>
       ['start', 'end', 'remaining'].includes(key),
     )
     const saved =
-      (planningOnly && recordRoadmapChange({ kind: 'task', id: uuid, patch: wire })) ||
-      runSaved(write(api.issues.update, { org_id: row.org_id, id: uuid, patch: wire }))
+      (planningOnly && recordRoadmapChange({ kind: 'task', id: uuid, patch: wire }, view)) ||
+      send(api.issues.update, { org_id: row.org_id, id: uuid, patch: wire }, view, {
+        over: overOf('issues', row, Object.keys(wire)),
+      })
     // inline description images are hidden attachments; when neither the new
     // text nor the text it just replaced references one any more, reap the
     // row + bytes. Keeping the replaced text's refs for one more save gives
@@ -4395,9 +4898,9 @@ export const PLANNER = {
     // draft, and genuine orphans (crashed tabs) re-qualify on every later
     // description save, so they still get cleaned up. Draft-only uploads
     // are otherwise reaped by the editor's own discard paths, never by this
-    // GC. (An unauthorized editor's removeAttachment is refused server-side
-    // and rolls back by re-adopting serverSnap, along with the description
-    // update itself, so both revert together.)
+    // GC. A refused removal takes back only its own paint, and the
+    // description update keeps or loses its own, which is safe either way:
+    // the cleanup only removes images neither text references.
     // Known limit: references only count within their own issue, so an att:
     // link hand-copied into another issue's description dies with the original.
     if ('description' in patch) {
@@ -4470,18 +4973,56 @@ export const PLANNER = {
       makes it that task's parent, for the Parent picker, in one server
       transaction (api.issues.createParent). The view holds no archived
       subtasks, which also keep a task from getting a parent
-      (convex/lib/taskLimits.ts), so a refusal shows its sentence and leaves
-      no new task. The new task appears with the next delivery. */
+      (convex/lib/taskLimits.ts), so a refusal shows its sentence and takes
+      the new task away again. The new task paints at once, with
+      createIssueCore's defaults. */
   createParent: (id: string, title: string): void => {
     const it = PLANNER.issueById[id]
-    if (!it || refusePausedEdit()) return
-    runUnpainted(
-      write(api.issues.createParent, {
-        org_id: it.org,
-        id: it.uuid,
-        parent_id: crypto.randomUUID(),
-        title: title.trim(),
-      }),
+    const orgRow = it ? rows.orgs.get(it.org) : undefined
+    if (!it || !orgRow || refusePausedEdit()) return
+    const parentId = crypto.randomUUID()
+    const at = new Date().toISOString()
+    const me = profileIn(it.org) || undefined
+    const parent: Row<'issues'> = {
+      id: parentId,
+      project_id: it.project,
+      num: (orgRow.next_issue_num || 0) + 1,
+      org_id: it.org,
+      title: clampTitle(title),
+      description: '',
+      status: 'backlog',
+      priority: 'low',
+      reporter_id: me,
+      created_by: me,
+      paused: false,
+      status_at: at,
+      created_at: at,
+      updated_at: at,
+    }
+    const created = { num: null as number | null }
+    const paintParent = newTaskPaint(parent, created)
+    const child = mapIssuePatch({})
+    child.parent_id = parentId
+    const view: View = {
+      workspace: () => {
+        if (!rows.issues.has(it.uuid)) return
+        paintParent()
+        if (rows.issues.get(it.uuid)?.parent_id === parentId) return
+        patchIssueRow(it.uuid, child, at)
+        rows.hiddenParentTasks.delete(it.uuid)
+      },
+    }
+    void send(
+      api.issues.createParent,
+      { org_id: it.org, id: it.uuid, parent_id: parentId, title: title.trim() },
+      view,
+      {
+        // the server's number for the parent, painted while no delivery holds it
+        keep: (answer) => {
+          created.num = answer.parent_num
+          return view
+        },
+      },
     )
   },
 
@@ -4507,32 +5048,38 @@ export const PLANNER = {
     )
       return null
     const { leavesParent, carried } = PLANNER.moveFamily(it, projectId)
-    const now = new Date().toISOString() // the server's move fires the touch
-    for (const task of [it, ...carried]) {
-      const moved = rows.issues.get(task.uuid)
-      if (!moved) continue
-      moved.project_id = projectId
-      moved.updated_at = now
-      // the server's move clears the status stamp and restarts a review
-      // hand-off or Done time at the move, keeping the remaining-hours
-      // measurement (model/issues.ts movedStamps)
-      moved.status_at = undefined
-      if (moved.review_at != null) moved.review_at = now
-      if (moved.done_at != null) moved.done_at = now
+    const at = new Date().toISOString() // the server's move fires the touch
+    const family = [uuid, ...carried.map((task) => task.uuid)]
+    const view: View = {
+      workspace: () => {
+        for (const taskId of family) {
+          const moved = rows.issues.get(taskId)
+          if (!moved || moved.project_id === projectId) continue
+          moved.project_id = projectId
+          moved.updated_at = at
+          // the server's move clears the status stamp and restarts a review
+          // hand-off or Done time at the move, keeping the remaining-hours
+          // measurement (model/issues.ts movedStamps)
+          moved.status_at = undefined
+          if (moved.review_at != null) moved.review_at = at
+          if (moved.done_at != null) moved.done_at = at
+        }
+        const moved = rows.issues.get(uuid)
+        if (leavesParent && moved) {
+          moved.parent_id = undefined
+          rows.hiddenParentTasks.delete(uuid)
+        }
+      },
     }
-    if (leavesParent) {
-      row.parent_id = undefined
-      rows.hiddenParentTasks.delete(uuid)
-    }
-    rebuild()
-    emit()
-    run(
-      write(api.issues.move, {
+    void send(
+      api.issues.move,
+      {
         org_id: row.org_id,
         id: uuid,
         project_id: projectId,
         ...(leavesParent ? { detach_parent: true } : {}),
-      }),
+      },
+      view,
     )
     return id
   },
@@ -4570,7 +5117,7 @@ export const PLANNER = {
      a deleted task loses its parent and becomes a top-level task; the server
      checks the subtasks again and refuses the whole delete if they changed.
      Resolves whether the server deleted it (a refusal is toasted). Normally
-     the change paints at once and rolls back on refusal; with `wait`, as the
+     the change paints at once and goes again on refusal; with `wait`, as the
      window asks, nothing changes here until the server accepts, so a refusal
      leaves the task and the window in place. `reason` is shown in Deleted
      items. */
@@ -4585,46 +5132,25 @@ export const PLANNER = {
     if (!row || !uuid || refusePausedEdit()) return Promise.resolve(false)
     const subtaskIds = subtasks.flatMap((key) => keyToUuid.get(key) || [])
     const gone = new Set([uuid, ...subtaskIds])
-    // local mirror of the delete; the server moves the rows to Deleted items
+    // the paint of the delete; the server moves the rows to Deleted items
     // (convex/model/deletedItems.ts) and keeps the attachment bytes there
-    const mirror = () => {
-      dropDeletedTasks(gone)
-      rebuild()
-      emit()
-    }
-    const epoch = storeEpoch
-    // kept until a delivery no longer holds them (adopt), so a rollback after
-    // another refused write cannot bring them back meanwhile. Only while the
-    // server's last snapshot still holds them: once a delivery dropped them,
-    // nothing can bring them back, and a marker left behind would hide them
-    // again after a restore.
-    const accepted = () => {
-      if (epoch !== storeEpoch) return
-      if (serverSnap?.issues.some((issue) => gone.has(issue.id))) pendingTaskDeletes.set(uuid, gone)
-    }
+    const at = new Date().toISOString()
+    const view: View = { workspace: () => dropDeletedTasks(gone, at) }
     const text = (reason || '').trim()
-    const sent = write(api.issues.deleteDeep, {
+    const args = {
       org_id: row.org_id,
       id: uuid,
       ...(subtaskIds.length ? { subtask_ids: subtaskIds } : {}),
       ...(text ? { reason: text } : {}),
-    })
-    if (!wait) {
-      mirror()
-      sent.then(accepted, () => {})
-      return runSaved(sent)
     }
-    return sent.then(
-      () => {
-        // the delivery may already hold the result; the mirror finds nothing then
-        if (epoch === storeEpoch) {
-          accepted()
-          mirror()
-        }
-        return true
-      },
+    // The task's window releases its thread once the task leaves the rows
+    // (IssueDetail), and takes it again if a refusal brings the task back.
+    if (!wait) return send(api.issues.deleteDeep, args, view)
+    const epoch = storeEpoch
+    // the delivery may already hold the result; nothing paints then
+    return sendAwaited(api.issues.deleteDeep, args, 'none', { keep: () => view }).then(
+      () => true,
       (error) => {
-        console.error('[qivo] delete failed:', error)
         if (epoch === storeEpoch) toastWriteError(error)
         return false
       },
@@ -4648,30 +5174,22 @@ export const PLANNER = {
     if (!row || !uuid || refusePausedEdit()) return Promise.resolve(false)
     const text = (reason || '').trim()
     const epoch = storeEpoch
-    return write(api.issues.archive, {
-      org_id: row.org_id,
-      id: uuid,
-      ...(text ? { reason: text } : {}),
-      ...(keepSubtasks ? { keep_subtasks: true } : {}),
-    }).then(
-      () => {
-        /* The delivery that drops the task usually lands first. When it has
-           not, mirror it. Keep the root only while the server's last snapshot
-           still holds it, so that a rollback or held paint from that stale
-           snapshot applies the archive again. A snapshot that already dropped
-           it needs no marker, and one would hide the task if it is restored
-           before the held paint lands. */
-        if (epoch !== storeEpoch) return true
-        if (serverSnap?.issues.some((issue) => issue.id === uuid))
-          pendingArchiveIssueIds.set(uuid, { keepSubtasks })
-        if (!rows.issues.has(uuid)) return true
-        mirrorArchive(uuid, keepSubtasks)
-        rebuild()
-        emit()
-        return true
+    const at = new Date().toISOString()
+    return sendAwaited(
+      api.issues.archive,
+      {
+        org_id: row.org_id,
+        id: uuid,
+        ...(text ? { reason: text } : {}),
+        ...(keepSubtasks ? { keep_subtasks: true } : {}),
       },
+      'none',
+      // The delivery that drops the task usually lands first, and then
+      // nothing paints. When it has not, the archive paints until one does.
+      { keep: () => ({ workspace: archivePaint(uuid, keepSubtasks, at) }) },
+    ).then(
+      () => true,
       (error) => {
-        console.error('[qivo] archive failed:', error)
         if (epoch === storeEpoch) toastWriteError(error)
         return false
       },
@@ -4689,7 +5207,7 @@ export const PLANNER = {
     const org = orgOfProject(projectId) || HOME_ORG
     pendingRestoreIssueIds.add(issueUuid)
     try {
-      await write(api.issues.unarchive, { org_id: org, id: issueUuid })
+      await sendAwaited(api.issues.unarchive, { org_id: org, id: issueUuid }, 'none')
     } catch (e) {
       pendingRestoreIssueIds.delete(issueUuid)
       console.error('[qivo] restore failed:', e)
@@ -4779,17 +5297,17 @@ export const PLANNER = {
       pair_key: source < target ? `${source}:${target}` : `${target}:${source}`,
       created_at: new Date().toISOString(),
     }
-    rows.links.set(row.id, row)
-    rebuild()
-    emit()
-    run(
-      write(api.issues.addLink, {
-        org_id: src.org_id,
-        id: row.id,
-        source_id: source,
-        target_id: target,
-        type: dbType,
-      }),
+    const view: View = {
+      workspace: () => {
+        if (!rows.issues.has(source) || !rows.issues.has(target)) return
+        if ([...rows.links.values()].some((l) => l.pair_key === row.pair_key)) return
+        rows.links.set(row.id, { ...row })
+      },
+    }
+    void send(
+      api.issues.addLink,
+      { org_id: src.org_id, id: row.id, source_id: source, target_id: target, type: dbType },
+      view,
     )
   },
 
@@ -4799,13 +5317,15 @@ export const PLANNER = {
     if (!a || !b) return
     const src = rows.issues.get(a) || rows.issues.get(b)
     if (!src || refusePausedEdit()) return
-    ;[...rows.links.values()].forEach((l) => {
-      if ((l.source_id === a && l.target_id === b) || (l.source_id === b && l.target_id === a))
-        rows.links.delete(l.id)
-    })
-    rebuild()
-    emit()
-    run(write(api.issues.removeLink, { org_id: src.org_id, a, b }))
+    const view: View = {
+      workspace: () => {
+        ;[...rows.links.values()].forEach((l) => {
+          if ((l.source_id === a && l.target_id === b) || (l.source_id === b && l.target_id === a))
+            rows.links.delete(l.id)
+        })
+      },
+    }
+    void send(api.issues.removeLink, { org_id: src.org_id, a, b }, view)
   },
 
   /* --- attachments ---------------------------------------------------------- */
@@ -4828,9 +5348,10 @@ export const PLANNER = {
       resolves the new attachment id, or null on any failure (toasted).
       `inline` marks description images, which the attachments list hides.
 
-      No optimistic row and no compensating delete: three awaited hops make
+      No optimistic row until the server accepts it: three awaited hops make
       optimism pointless, and the server deletes oversize bytes inside attach
-      itself (the returned refusal). bc022c2's pendingIssueInserts gate is
+      itself (the returned refusal). The accepted row paints until a
+      delivery holds it. bc022c2's pendingIssueInserts gate is
       dead too — mutations from one ConvexClient are ordered on one socket, so
       by the time uploadUrl's handler runs, a just-dispatched issues.create
       has already been accepted or refused server-side. */
@@ -4862,7 +5383,11 @@ export const PLANNER = {
       const attId = crypto.randomUUID()
       const inline = !!opts?.inline
       try {
-        const url = await write(api.files.uploadUrl, { org_id: row.org_id, issue_id: uuid })
+        const url = await sendAwaited(
+          api.files.uploadUrl,
+          { org_id: row.org_id, issue_id: uuid },
+          'none',
+        )
         // the POST's Content-Type is what lands in storage metadata and what
         // the gateway serves back — an empty type would break inline rendering
         const res = await fetch(browserBackendUrl(url), {
@@ -4872,15 +5397,30 @@ export const PLANNER = {
         })
         if (!res.ok) throw new Error(`upload failed (${res.status})`)
         const { storageId } = (await res.json()) as { storageId: string }
-        const out = await write(api.files.attach, {
-          org_id: row.org_id,
-          id: attId,
-          issue_id: uuid,
-          storage_id: storageId as Id<'_storage'>,
-          name: file.name,
-          ...(file.type ? { mime: file.type } : {}),
-          inline,
-        })
+        const out = await sendAwaited(
+          api.files.attach,
+          {
+            org_id: row.org_id,
+            id: attId,
+            issue_id: uuid,
+            storage_id: storageId as Id<'_storage'>,
+            name: file.name,
+            ...(file.type ? { mime: file.type } : {}),
+            inline,
+          },
+          'none',
+          {
+            keep: (answer) =>
+              'refused' in answer
+                ? null
+                : {
+                    workspace: () => {
+                      if (!rows.issues.has(uuid) || rows.attachments.has(attId)) return
+                      rows.attachments.set(attId, { ...answer.attachment })
+                    },
+                  },
+          },
+        )
         if ('refused' in out) {
           // the server's cap verdict (size from storage metadata, never ours) —
           // a RETURNED refusal so its byte-delete commits; belt-and-braces
@@ -4888,10 +5428,6 @@ export const PLANNER = {
           toast(`Couldn't upload "${file.name}". ${asSentence(out.refused.message)}`)
           return null
         }
-        // adopt the returned row; the next snapshot delivery carries it anyway
-        rows.attachments.set(attId, out.attachment)
-        rebuild()
-        emit()
         return attId
       } catch (e) {
         console.error('[qivo] upload failed:', e)
@@ -4903,7 +5439,7 @@ export const PLANNER = {
   ),
 
   /** Delete an attachment (row + bytes, one server transaction). Optimistic
-      like every other run() mutator; any project member may remove any
+      like every other send() mutator; any project member may remove any
       attachment on an issue they can write. With `deferWhilePaused`, for an
       upload only a discarded draft held, a paused delete says nothing and
       runs once edits resume (reapPausedUploads). */
@@ -4916,16 +5452,18 @@ export const PLANNER = {
     }
     if (refusePausedEdit()) return
     const issueRow = rows.issues.get(rec.issue_id)
-    rows.attachments.delete(attId)
-    minted.delete(`att:${attId}`)
-    rebuild()
-    emit()
     // no visible issue = the server cascade already owns (or took) the row
     if (!issueRow) return
-    run(
-      writeAbout({ task: issueRow.id }, () =>
-        write(api.files.removeAttachment, { org_id: issueRow.org_id, id: attId }),
-      ),
+    void send(
+      api.files.removeAttachment,
+      { org_id: issueRow.org_id, id: attId },
+      {
+        workspace: () => {
+          rows.attachments.delete(attId)
+          minted.delete(`att:${attId}`)
+        },
+      },
+      { about: { task: issueRow.id } },
     )
   },
 
@@ -4949,7 +5487,9 @@ export const PLANNER = {
     return download ? `${url}&download=1` : url
   },
 
-  /** Subscribe to one task's thread (subscribeThread). */
+  /** Subscribe to one task's thread (subscribeThread). Comment changes
+      still waiting for their answer paint over it again, and saved ones of
+      other tasks go. */
   watchComments: (issueUuid: string | null) => {
     if (watchedComments === issueUuid) return
     ++commentsWatchEpoch
@@ -4958,31 +5498,26 @@ export const PLANNER = {
       commentsUnsub()
       commentsUnsub = null
     }
-    rows.comments = new Map()
-    rows.threadEvents = []
-    commentsSnap = null // the old thread must not resurrect via a rollback
+    commentsSnap = null
     eventsSnap = []
-    commentsDirty = false // …nor may a held delivery flush into the new one
     olderComments = []
+    acceptedCommentChanges.clear()
     threadStart = false
     earlierLoad = 'idle'
+    threadCurrent = false
+    layers.dropSaved('thread', issueUuid ?? undefined, true)
     PLANNER.commentsLoaded = false
     PLANNER.commentsFailure = 'none'
-    rebuildComments()
-    emit('comments')
-    if (!issueUuid) return
     // commentThread is org-scoped; the watched issue is in the snapshot,
     // which is where its org comes from. An unknown uuid loads an empty
     // thread rather than spinning forever.
-    const row = rows.issues.get(issueUuid)
-    if (!row) {
+    const row = issueUuid ? rows.issues.get(issueUuid) : undefined
+    if (issueUuid && !row) {
       PLANNER.commentsLoaded = true
       threadStart = true
-      rebuildComments()
-      emit('comments')
-      return
     }
-    subscribeThread(issueUuid, row.org_id)
+    repaint({ thread: true })
+    if (issueUuid && row) subscribeThread(issueUuid, row.org_id)
   },
 
   /** Retry. A fresh subscription makes the server run the watched thread's
@@ -4994,6 +5529,8 @@ export const PLANNER = {
     const row = watchedComments ? rows.issues.get(watchedComments) : undefined
     if (!watchedComments || !row || PLANNER.commentsFailure !== 'failed') return
     PLANNER.commentsFailure = 'retrying'
+    // the new subscription has delivered nothing yet
+    threadCurrent = false
     emit('comments')
     subscribeThread(watchedComments, row.org_id)
   },
@@ -5010,21 +5547,21 @@ export const PLANNER = {
     if (!issueUuid || !row || commentsSnap === null || threadStart || earlierLoad === 'loading')
       return
     const current = () => watchedComments === issueUuid && commentsWatchEpoch === watchEpoch
+    // the anchors may have changed too, so the thread paints again
     const show = (state: typeof earlierLoad) => {
       earlierLoad = state
-      rebuildComments()
-      emit('comments')
+      repaint({ thread: true })
     }
     show('loading')
     for (;;) {
-      const anchor = olderComments[0] ?? commentsSnap?.[0]
-      if (!anchor) return show('idle')
+      const first = olderComments[0] ?? commentsSnap?.[0]
+      if (!first) return show('idle')
       let page: FunctionReturnType<typeof api.snapshot.commentsBefore>
       try {
         page = await convex.query(api.snapshot.commentsBefore, {
           org_id: row.org_id,
           issue_id: issueUuid,
-          before: anchor.id,
+          before: first.id,
         })
       } catch (e) {
         if (!current()) return
@@ -5032,7 +5569,7 @@ export const PLANNER = {
         // now. Drop it, unless my own delete already did, and ask again before
         // the next one. Each pass drops a comment, so this ends.
         if (errData(e).code === 'bad_request') {
-          dropComment(anchor.id)
+          dropComment(first.id)
           continue
         }
         console.error('[qivo] earlier comments failed to load:', e)
@@ -5042,11 +5579,10 @@ export const PLANNER = {
       // Added only above the comment the page was asked about. When the
       // thread started over from its live window meanwhile, the next click
       // asks again.
-      if ((olderComments[0] ?? commentsSnap?.[0])?.id === anchor.id) {
+      if ((olderComments[0] ?? commentsSnap?.[0])?.id === first.id) {
         const known = new Set([...olderComments, ...(commentsSnap ?? [])].map((r) => r.id))
-        const added = page.comments.filter((r) => !known.has(r.id))
+        const added = anchor(page.comments.filter((r) => !known.has(r.id)))
         olderComments = [...added, ...olderComments]
-        for (const comment of added) rows.comments.set(comment.id, structuredClone(comment))
         if (!page.earlier) threadStart = true
       }
       return show('idle')
@@ -5120,12 +5656,24 @@ export const PLANNER = {
       prev === null
         ? firstSittingDay(now, rows.orgs.get(row.org_id)?.week_start ?? DEFAULT_WEEK_START)
         : undefined
-    const next = nextSyncStamp(prev, new Date(now).toISOString(), first_since)
-    row.sync_at = next.at
-    row.sync_since = next.since
-    rebuild()
-    emit()
-    run(write(api.teamSync.stamp, { org_id: row.org_id, profile_id: profileId, first_since }))
+    const at = new Date(now).toISOString()
+    // the sitting rule runs on the stamp the paint finds, as the server's
+    // runs on the one it stores
+    const view: View = {
+      workspace: () => {
+        const live = rows.profiles.get(profileId)
+        if (!live) return
+        const next = nextSyncStamp(syncStampOf(live), at, first_since)
+        live.sync_at = next.at
+        live.sync_since = next.since
+      },
+    }
+    void send(
+      api.teamSync.stamp,
+      { org_id: row.org_id, profile_id: profileId, first_since },
+      view,
+      { quietPause: true },
+    )
   },
 
   /** Post a comment (issue uuid — modal-side, like addAttachment). Resolves
@@ -5133,7 +5681,7 @@ export const PLANNER = {
       did. A body over TEXT_MAX after trimming, or any comment while edits
       are paused, is refused here with a toast, before the optimistic row.
       A server refusal, such as the comment cap, is toasted and its row
-      rolled back before the promise resolves false. */
+      taken away before the promise resolves false. */
   addComment: (issueUuid: string, body: string): Promise<boolean> => {
     const row = rows.issues.get(issueUuid)
     if (!row) return Promise.resolve(false)
@@ -5151,28 +5699,18 @@ export const PLANNER = {
       body: text,
       created_at: new Date().toISOString(), // ISO-Z, the isNewer format
     }
-    if (watchedComments === issueUuid) {
-      rows.comments.set(rec.id, rec)
-      rebuildComments()
-      emit('comments')
-    }
-    return runSaved(
-      write(api.comments.create, {
-        org_id: row.org_id,
-        id: rec.id,
-        issue_id: issueUuid,
-        body: text,
-      }),
-    ).then((saved) => {
-      // The rollback re-adopts the delivered thread, which drops this row.
-      // A thread that never arrived (still loading, or failed) has no
-      // delivery to re-adopt, so the refused row goes here.
-      if (!saved && rows.comments.delete(rec.id)) {
-        rebuildComments()
-        emit('comments')
-      }
-      return saved
-    })
+    return send(
+      api.comments.create,
+      { org_id: row.org_id, id: rec.id, issue_id: issueUuid, body: text },
+      {
+        thread: {
+          task: issueUuid,
+          paint: () => {
+            if (!rows.comments.has(rec.id)) rows.comments.set(rec.id, { ...rec })
+          },
+        },
+      },
+    )
   },
 
   /** Replaces a comment's body with `body`, trimmed, and stamps the edit.
@@ -5192,45 +5730,64 @@ export const PLANNER = {
     if (refusePausedEdit()) return Promise.resolve(false)
     const issue = rows.issues.get(rec.issue_id)
     const org = issue ? issue.org_id : HOME_ORG
-    rec.body = text
-    rec.edited_at = new Date().toISOString()
     // the server stamps the profile I hold in the ISSUE's org (0081) — mirror
     // that optimistically, or a foreign edit would flash my home identity
-    rec.edited_by = profileIn(org) || CURRENT_USER
-    const edit = { body: text, edited_at: rec.edited_at, edited_by: rec.edited_by }
-    rebuildComments()
-    emit('comments')
-    // A comment older than the live window gets no delivery, so the saved
-    // edit is written into olderComments, the truth a later adopt reads. The
-    // last settle repaints from it, in case another write's refusal has
-    // rolled the screen back to before this edit meanwhile.
-    const sent = writeAbout({ task: rec.issue_id }, () =>
-      write(api.comments.update, { org_id: org, id, body: text }),
+    const edit = {
+      body: text,
+      edited_at: new Date().toISOString(),
+      edited_by: profileIn(org) || CURRENT_USER,
+    }
+    return send(
+      api.comments.update,
+      { org_id: org, id, body: text },
+      {
+        thread: {
+          task: rec.issue_id,
+          paint: () => {
+            const live = rows.comments.get(id)
+            if (live) Object.assign(live, edit)
+          },
+        },
+      },
+      {
+        about: { task: rec.issue_id },
+        over: overOf('comments', rec, ['body']),
+        // A comment older than the live window gets no delivery, so the saved
+        // edit goes into olderComments, the truth the thread is built from.
+        onOk: () => {
+          acceptedCommentChanges.set(id, edit)
+          if (olderComments.some((r) => r.id === id))
+            olderComments = olderComments.map((r) => (r.id === id ? { ...r, ...edit } : r))
+        },
+      },
     )
-    return runSaved(sent, () => {
-      const kept = olderComments.find((r) => r.id === id)
-      if (!kept) return
-      Object.assign(kept, edit)
-      commentsDirty = true
-    })
   },
 
   deleteComment: (id: string) => {
     const rec = rows.comments.get(id)
     if (!rec || refusePausedEdit()) return
     const issue = rows.issues.get(rec.issue_id)
-    rows.comments.delete(id)
-    rebuildComments()
-    emit('comments')
     // as updateComment does for an edit
-    const sent = writeAbout({ task: rec.issue_id }, () =>
-      write(api.comments.remove, { org_id: issue ? issue.org_id : HOME_ORG, id }),
+    void send(
+      api.comments.remove,
+      { org_id: issue ? issue.org_id : HOME_ORG, id },
+      {
+        thread: {
+          task: rec.issue_id,
+          paint: () => {
+            rows.comments.delete(id)
+          },
+        },
+      },
+      {
+        about: { task: rec.issue_id },
+        onOk: () => {
+          acceptedCommentChanges.set(id, null)
+          if (olderComments.some((r) => r.id === id))
+            olderComments = olderComments.filter((r) => r.id !== id)
+        },
+      },
     )
-    run(sent, () => {
-      if (!olderComments.some((r) => r.id === id)) return
-      olderComments = olderComments.filter((r) => r.id !== id)
-      commentsDirty = true
-    })
   },
 
   /* ---- inbox messages (0074) ----
@@ -5238,7 +5795,8 @@ export const PLANNER = {
      read_at (and delete). The inbox acts on an ITEM — every message for one
      task — so these take an id LIST. The singular forms stay for callers
      that hold one message. Each checks the pause before its paint, so a
-     paused write paints nothing and no rollback follows. */
+     paused write paints nothing, and sends one write per organization, each
+     with its own layer, so a seat that refuses takes back only its rows. */
   /** Marks messages read and answers whether it sent the mark. `quiet`
       refuses a paused mark without a toast, for the mark that opening a task
       sends on its own. */
@@ -5250,58 +5808,39 @@ export const PLANNER = {
     })
     if (!hit.length || refusePausedWrite(api.messages.markRead, quiet)) return false
     // an item's messages share one org, but a bulk mark-all spans seats —
-    // group per org BEFORE the prune below deletes any of the hit rows
-    const byOrg = messagesByOrg(hit)
-    markLoadedMessagesRead(hit, at)
-    rebuild()
-    emit()
-    byOrg.forEach((list, org) => {
-      // the read that opening a task sends is not a change the person made
-      const sent = writeAbout({ background: quiet }, () =>
-        write(api.messages.markRead, { org_id: org, ids: list }),
+    // group per org BEFORE any paint prunes the hit rows
+    messagesByOrg(hit).forEach((list, org) => {
+      void send(
+        api.messages.markRead,
+        { org_id: org, ids: list },
+        { workspace: () => markLoadedMessagesRead(list, at) },
+        // the read that opening a task sends is not a change the person made
+        { about: { background: quiet } },
       )
-      run(sent, () => keepAcceptedPaint(() => markLoadedMessagesRead(list, at)))
     })
     return true
   },
   /* Mark every current notification read, including messages hidden by the
      snapshot cap and notifications in other organization seats. The server
-     returns a fixed cutoff per seat, so new arrivals stay unread. */
+     returns a fixed cutoff per seat, so new arrivals stay unread (bulkInbox). */
   markAllMessagesRead: async (): Promise<void> => {
     if (!PLANNER.canMarkAllRead || refusePausedWrite(api.messages.markAllRead)) return
-    const epoch = storeEpoch
-    const orgs = [...myProfiles.keys()]
-    const ids = PLANNER.messages
-      .filter((message) => !message.read && message.snoozedUntil === null)
-      .map((message) => message.id)
     const at = new Date().toISOString()
-    markLoadedMessagesRead(ids, at)
-    unexaminedUnread = false
-    rebuild()
-    emit()
-    const operations = orgs.map(async (org) => {
-      let before: number | undefined
-      while (epoch === storeEpoch) {
-        const operation = write(api.messages.markAllRead, { org_id: org, before })
-        // each batch names the rows it marked, so the kept paint is exact
-        run(operation, (result) => keepAcceptedPaint(() => markLoadedMessagesRead(result.ids, at)))
-        const result = await operation
-        if (!result.hasMore) return true
-        before = result.before
-      }
-      return false
-    })
-    const done = await Promise.allSettled(operations)
-    const noUnreadLeft = () => {
-      unexaminedUnread = false
-    }
-    // after the last batch, so a rollback in between may have undone it
-    if (done.every((outcome) => outcome.status === 'fulfilled' && outcome.value))
-      if (keepAcceptedPaint(noUnreadLeft)) {
-        noUnreadLeft()
-        rebuild()
-        emit()
-      }
+    await bulkInbox<FunctionReturnType<typeof api.messages.markAllRead>>(
+      'messages:markAllRead',
+      PLANNER.messages.filter((message) => !message.read && message.snoozedUntil === null),
+      (ids) => ({ workspace: () => markLoadedMessagesRead(ids, at, true) }),
+      (ids) => ({ workspace: () => markLoadedMessagesRead(ids, at, true) }),
+      {
+        workspace: () => {
+          unexaminedUnread = false
+        },
+      },
+      (org, previous, keep) =>
+        sendAwaited(api.messages.markAllRead, { org_id: org, before: previous?.before }, 'none', {
+          keep,
+        }),
+    )
   },
   /* Back to unread — the same column, the other way. Nothing is pruned by
      it: the rows it re-opens are no longer read, which is exactly what the
@@ -5312,19 +5851,15 @@ export const PLANNER = {
       return r?.read_at
     })
     if (!hit.length || refusePausedWrite(api.messages.markUnread)) return
-    const byOrg = messagesByOrg(hit)
-    const markUnread = (list: string[]) =>
-      list.forEach((id) => {
-        const row = rows.messages.get(id)
-        if (row) row.read_at = undefined
-      })
-    markUnread(hit)
-    rebuild()
-    emit()
-    byOrg.forEach((list, org) => {
-      run(write(api.messages.markUnread, { org_id: org, ids: list }), () =>
-        keepAcceptedPaint(() => markUnread(list)),
-      )
+    messagesByOrg(hit).forEach((list, org) => {
+      const view: View = {
+        workspace: () =>
+          list.forEach((id) => {
+            const row = rows.messages.get(id)
+            if (row) row.read_at = undefined
+          }),
+      }
+      void send(api.messages.markUnread, { org_id: org, ids: list }, view)
     })
   },
   /* Removing an item removes every message in it — the caller passes the
@@ -5332,62 +5867,31 @@ export const PLANNER = {
   deleteMessages: (ids: string[]) => {
     const hit = ids.filter((id) => rows.messages.has(id))
     if (!hit.length || refusePausedWrite(api.messages.remove)) return
-    const byOrg = messagesByOrg(hit)
-    const remove = (list: string[]) =>
-      list.forEach((id) => {
-        rows.messages.delete(id)
-      })
-    remove(hit)
-    rebuild()
-    emit()
-    byOrg.forEach((list, org) => {
-      run(write(api.messages.remove, { org_id: org, ids: list }), () =>
-        keepAcceptedPaint(() => remove(list)),
-      )
+    messagesByOrg(hit).forEach((list, org) => {
+      void send(api.messages.remove, { org_id: org, ids: list }, removeMessagesPaint(list))
     })
   },
   /* Inbox cleanup spans every seat and the full server inbox, beyond the
      snapshot's display cap. Each bounded batch selects current read rows,
-     so unread arrivals and messages reopened on another device survive.
-     Completion means all writes settled; run handles refusal/rollback. */
+     so unread arrivals and messages reopened on another device survive
+     (bulkInbox). Completion means all writes settled. */
   deleteReadMessages: async (): Promise<void> => {
     if (!PLANNER.canRemoveRead || refusePausedWrite(api.messages.removeRead)) return
-    const epoch = storeEpoch
-    const orgs = [...myProfiles.keys()]
-    const ids = PLANNER.messages
-      .filter((message) => message.read && message.snoozedUntil === null)
-      .map((message) => message.id)
-    const remove = (list: string[]) =>
-      list.forEach((id) => {
-        rows.messages.delete(id)
-      })
-    remove(ids)
-    hiddenReadMessages = 0
-    unexaminedRead = false
-    rebuild()
-    emit()
-    const operations = orgs.map(async (org) => {
-      while (epoch === storeEpoch) {
-        const operation = write(api.messages.removeRead, { org_id: org })
-        // each batch names the rows it deleted, as markAllMessagesRead's do
-        run(operation, (result) => keepAcceptedPaint(() => remove(result.ids)))
-        const result = await operation
-        if (!result.hasMore) return true
-      }
-      return false
-    })
-    const done = await Promise.allSettled(operations)
-    const noReadLeft = () => {
-      hiddenReadMessages = 0
-      unexaminedRead = false
-    }
-    // as markAllMessagesRead does
-    if (done.every((outcome) => outcome.status === 'fulfilled' && outcome.value))
-      if (keepAcceptedPaint(noReadLeft)) {
-        noReadLeft()
-        rebuild()
-        emit()
-      }
+    await bulkInbox<FunctionReturnType<typeof api.messages.removeRead>>(
+      'messages:removeRead',
+      PLANNER.messages.filter((message) => message.read && message.snoozedUntil === null),
+      (ids) => removeMessagesPaint(ids, true),
+      // the rows each batch's answer names, which the server removed
+      (ids) => removeMessagesPaint(ids),
+      {
+        workspace: () => {
+          hiddenReadMessages = 0
+          unexaminedRead = false
+        },
+      },
+      (org, _previous, keep) =>
+        sendAwaited(api.messages.removeRead, { org_id: org }, 'none', { keep }),
+    )
   },
   markMessageRead: (id: string) => {
     void PLANNER.markMessagesRead([id])
@@ -5397,60 +5901,58 @@ export const PLANNER = {
   },
   /* Snooze an item until an ISO instant, or bring it back now (null). Both
      leave it UNREAD — a reminder returns bold. The ids name the item; the
-     server stamps every row of the (recipient, task) pair, so the mirror
+     server stamps every row of the (recipient, task) pair, so the paint
      walks the loaded rows of the same pairs rather than just the ids. The
      timed return is the server's scheduled wake (messages.wake), never a
      client timer — every device shows it at the same instant. */
   snoozeMessages: (ids: string[], until: string | null) => {
     const hit = ids.filter((id) => rows.messages.has(id))
     if (!hit.length || refusePausedWrite(api.messages.snooze)) return
-    const byOrg = messagesByOrg(hit)
     const pairOf = (r: Row<'messages'>) => `${r.recipient_id}\n${r.issue_id}`
-    const pairsOf = (list: string[]) =>
-      new Set(list.flatMap((id) => (rows.messages.has(id) ? [pairOf(rows.messages.get(id)!)] : [])))
-    const snooze = (pairs: Set<string>) =>
-      rows.messages.forEach((r) => {
-        if (!pairs.has(pairOf(r))) return
-        if (until === null) {
-          if (r.snoozed_until === undefined) return
-          r.snoozed_until = undefined
-          r.read_at = undefined
-        } else {
-          r.snoozed_until = until
-          r.read_at = undefined
-          r.woke_at = undefined
-        }
-      })
-    // the items, named before the paint, which a kept paint covers again
-    const pairsByOrg = new Map([...byOrg].map(([org, list]) => [org, pairsOf(list)]))
-    snooze(pairsOf(hit))
-    rebuild()
-    emit()
-    byOrg.forEach((list, org) => {
-      run(write(api.messages.snooze, { org_id: org, ids: list, until }), () =>
-        keepAcceptedPaint(() => snooze(pairsByOrg.get(org)!)),
+    messagesByOrg(hit).forEach((list, org) => {
+      // the items, named before the paint
+      const pairs = new Set(
+        list.flatMap((id) => {
+          const row = rows.messages.get(id)
+          return row ? [pairOf(row)] : []
+        }),
       )
+      const view: View = {
+        workspace: () =>
+          rows.messages.forEach((r) => {
+            if (!pairs.has(pairOf(r))) return
+            if (until === null) {
+              if (r.snoozed_until === undefined) return
+              r.snoozed_until = undefined
+              r.read_at = undefined
+            } else {
+              r.snoozed_until = until
+              r.read_at = undefined
+              r.woke_at = undefined
+            }
+          }),
+      }
+      void send(api.messages.snooze, { org_id: org, ids: list, until }, view)
     })
   },
 
   /* How long this person keeps a message they have read (0110); null = for
      ever. Fans out across every seat of this login server-side (auth +
-     address arms); the optimistic mirror walks the auth arm, exactly as the
-     old echo did — the delivery trues any invited-seat stragglers. Answers
-     whether the change was sent. */
+     address arms); the paint walks the auth arm, exactly as the old echo
+     did — the delivery trues any invited-seat stragglers. Answers whether
+     the change was sent. */
   setMessageRetention: (days: number | null): boolean => {
     const me = rows.profiles.get(CURRENT_USER)
     if (!me || refusePausedWrite(api.profiles.setMessageRetention)) return false
     const account = me.auth_user_id
-    const paint = () =>
-      rows.profiles.forEach((p) => {
-        if (p.auth_user_id && p.auth_user_id === account)
-          p.message_retention_days = days == null ? undefined : days
-      })
-    paint()
-    rebuild()
-    emit()
-    run(write(api.profiles.setMessageRetention, { days }), () => keepAcceptedPaint(paint))
+    const view: View = {
+      workspace: () =>
+        rows.profiles.forEach((p) => {
+          if (p.auth_user_id && p.auth_user_id === account)
+            p.message_retention_days = days == null ? undefined : days
+        }),
+    }
+    void send(api.profiles.setMessageRetention, { days }, view)
     return true
   },
 
@@ -5460,16 +5962,14 @@ export const PLANNER = {
     receive: (preferences: AppearancePreferences) => void,
     fail: (error: Error) => void,
   ) => convex.onUpdate(api.appearance.get, {}, receive, fail),
-  setAppearance: (preferences: Pick<AppearancePreferences, 'mode' | 'image_source'>) => {
-    const pending = write(api.appearance.save, preferences)
-    runUnpainted(pending)
-    return pending
-  },
-  removeAppearanceImage: () => {
-    const pending = write(api.appearance.removeCustom, {})
-    runUnpainted(pending)
-    return pending
-  },
+  setAppearance: (preferences: Pick<AppearancePreferences, 'mode' | 'image_source'>) =>
+    sendAwaited(api.appearance.save, preferences, 'none', {
+      onError: (e) => toastWriteError(e, false),
+    }),
+  removeAppearanceImage: () =>
+    sendAwaited(api.appearance.removeCustom, {}, 'none', {
+      onError: (e) => toastWriteError(e, false),
+    }),
   mintAppearanceImageUrl: async () => {
     const image = await convex.query(api.appearance.mintCustomUrl, {})
     return image
@@ -5482,7 +5982,7 @@ export const PLANNER = {
   },
   uploadAppearanceImage: (file: File, signal: AbortSignal): Promise<AppearancePreferences> => {
     const pending = (async () => {
-      const ticket = await write(api.appearance.createUpload, { name: file.name })
+      const ticket = await sendAwaited(api.appearance.createUpload, { name: file.name }, 'none')
       try {
         if (signal.aborted) throw new DOMException('Upload canceled', 'AbortError')
         const response = await fetch(browserBackendUrl(ticket.upload_url), {
@@ -5496,19 +5996,19 @@ export const PLANNER = {
           throw new Error(result?.error?.message || 'The image upload failed. Please try again.')
         return result as AppearancePreferences
       } catch (error) {
-        await write(api.appearance.cancelUpload, { ticket_id: ticket.ticket_id }).catch(() => {})
+        await sendAwaited(
+          api.appearance.cancelUpload,
+          { ticket_id: ticket.ticket_id },
+          'none',
+        ).catch(() => {})
         throw error
       }
     })()
-    // Leaving account settings cancels an in-flight upload. Still release
-    // run()'s paint gate, without reporting intentional cancellation as a
-    // failed preference save in the next screen.
-    runUnpainted(
-      pending.catch((error) => {
-        if (signal.aborted) return null
-        throw error
-      }),
-    )
+    // Leaving account settings cancels an in-flight upload, which is not a
+    // failed preference save to report in the next screen.
+    void pending.catch((error) => {
+      if (!signal.aborted) toastWriteError(error, false)
+    })
     return pending
   },
 
@@ -5531,7 +6031,7 @@ export const PLANNER = {
     if (next === me.name) return null
     let sentence: string | null
     try {
-      sentence = await write(api.profiles.setDisplayName, { name: next })
+      sentence = await sendAwaited(api.profiles.setDisplayName, { name: next }, 'none')
     } catch (e) {
       console.error('[qivo] rename failed:', e)
       return refusedAsPaused(e) ? refusalPauseText(e) : 'That name could not be saved'
@@ -5571,14 +6071,18 @@ export const PLANNER = {
     const org = agent ? agent.org_id : HOME_ORG
     try {
       const { id, secret, hash } = await mintCredential('qva')
-      await write(api.tokens.createAgentKey, {
-        org_id: org,
-        id,
-        agent_id: agentId,
-        name,
-        key_prefix: `${secret.slice(0, 7)}...${secret.slice(-5)}`,
-        key_hash: hash,
-      })
+      await sendAwaited(
+        api.tokens.createAgentKey,
+        {
+          org_id: org,
+          id,
+          agent_id: agentId,
+          name,
+          key_prefix: `${secret.slice(0, 7)}...${secret.slice(-5)}`,
+          key_hash: hash,
+        },
+        'none',
+      )
       agentKeyOrg.set(id, org)
       return { id, secret }
     } catch (e) {
@@ -5591,10 +6095,11 @@ export const PLANNER = {
     // a paused revoke says why, beside the panel's own failure line
     if (refusePausedWrite(api.tokens.revokeAgentKey)) return false
     try {
-      await write(api.tokens.revokeAgentKey, {
-        org_id: agentKeyOrg.get(id) || HOME_ORG,
-        id,
-      })
+      await sendAwaited(
+        api.tokens.revokeAgentKey,
+        { org_id: agentKeyOrg.get(id) || HOME_ORG, id },
+        'none',
+      )
       return true
     } catch (e) {
       console.error('[qivo] agent key revoke failed:', e)
@@ -5605,10 +6110,11 @@ export const PLANNER = {
   deleteAgentKey: async (id: string) => {
     if (refusePausedWrite(api.tokens.deleteAgentKey)) return false
     try {
-      await write(api.tokens.deleteAgentKey, {
-        org_id: agentKeyOrg.get(id) || HOME_ORG,
-        id,
-      })
+      await sendAwaited(
+        api.tokens.deleteAgentKey,
+        { org_id: agentKeyOrg.get(id) || HOME_ORG, id },
+        'none',
+      )
       return true
     } catch (e) {
       console.error('[qivo] agent key delete failed:', e)
@@ -5639,7 +6145,7 @@ export const PLANNER = {
   revokeApiCredential: async (table: ApiCredentialTable, id: string) => {
     if (refusePausedWrite(api.apiAccess.revoke)) return false
     try {
-      await write(api.apiAccess.revoke, { org_id: HOME_ORG, table, id })
+      await sendAwaited(api.apiAccess.revoke, { org_id: HOME_ORG, table, id }, 'none')
       return true
     } catch (e) {
       console.error('[qivo] API credential revoke failed:', e)
@@ -5648,11 +6154,10 @@ export const PLANNER = {
   },
 
   /* ---- OAuth connections (self-service, separately listed from tokens) ---- */
-  getOAuthConnectionContext: async (oauthQuery: string) => {
-    const operation = write(api.oauthConnections.getContext, { oauth_query: oauthQuery })
-    runUnpainted(operation)
-    return await operation
-  },
+  getOAuthConnectionContext: (oauthQuery: string) =>
+    sendAwaited(api.oauthConnections.getContext, { oauth_query: oauthQuery }, 'none', {
+      onError: (e) => toastWriteError(e, false),
+    }),
   listOAuthConnections: async () => {
     try {
       return await convex.query(api.oauthConnections.list, {})
@@ -5666,10 +6171,8 @@ export const PLANNER = {
       other refusal, so nothing is toasted here. */
   revokeOAuthConnection: async (id: string) => {
     if (refusePausedWrite(api.oauthConnections.revoke)) return false
-    const operation = write(api.oauthConnections.revoke, { id })
-    runUnpainted(operation, undefined, undefined, () => {})
     try {
-      await operation
+      await sendAwaited(api.oauthConnections.revoke, { id }, 'none')
       return true
     } catch (e) {
       return errData(e).code === 'not_found'
@@ -5696,15 +6199,19 @@ export const PLANNER = {
   createMcpToken: withUpdateBlock(async (name: string, { access, expiresAt }: McpTokenChoice) => {
     try {
       const { id, secret, hash } = await mintCredential('qvt')
-      await write(api.tokens.createMcpToken, {
-        id,
-        profile_id: CURRENT_USER,
-        name,
-        token_prefix: secret.slice(0, 11),
-        token_hash: hash,
-        access,
-        ...(expiresAt === undefined ? {} : { expires_at: expiresAt }),
-      })
+      await sendAwaited(
+        api.tokens.createMcpToken,
+        {
+          id,
+          profile_id: CURRENT_USER,
+          name,
+          token_prefix: secret.slice(0, 11),
+          token_hash: hash,
+          access,
+          ...(expiresAt === undefined ? {} : { expires_at: expiresAt }),
+        },
+        'none',
+      )
       return { id, secret }
     } catch (e) {
       console.error('[qivo] mcp token create failed:', e)
@@ -5715,7 +6222,7 @@ export const PLANNER = {
   revokeMcpToken: async (id: string) => {
     if (refusePausedWrite(api.tokens.revokeMcpToken)) return false
     try {
-      await write(api.tokens.revokeMcpToken, { id })
+      await sendAwaited(api.tokens.revokeMcpToken, { id }, 'none')
       return true
     } catch (e) {
       console.error('[qivo] mcp token revoke failed:', e)
@@ -5726,7 +6233,7 @@ export const PLANNER = {
   deleteMcpToken: async (id: string) => {
     if (refusePausedWrite(api.tokens.deleteMcpToken)) return false
     try {
-      await write(api.tokens.deleteMcpToken, { id })
+      await sendAwaited(api.tokens.deleteMcpToken, { id }, 'none')
       return true
     } catch (e) {
       console.error('[qivo] mcp token delete failed:', e)
@@ -5736,50 +6243,59 @@ export const PLANNER = {
 
   /** Paints the project at once and returns its uuid. `onSaved` runs once the
       server has stored it. `onRefused` runs after the refusal toast, just
-      before the rollback removes the optimistic rows. */
+      before the refusal takes the project away. */
   addProject: (p: NewProjectInput, onSaved?: () => void, onRefused?: () => void) => {
     const parentOrg = p.parent ? orgOfProject(p.parent) : ''
     const orgRow = rows.orgs.get(parentOrg || HOME_ORG)
     if (!orgRow || refusePausedEdit()) return
     const uuid = crypto.randomUUID()
+    const orgId = orgRow.id
     const siblings = p.parent
       ? [...rows.projects.values()].filter((x) => x.parent_id === p.parent)
       : [...rows.projects.values()].filter((x) => x.type === 'meta')
     // projects.num is a per-org durable number used only in links (0050);
-    // preview it like addIssue previews issue numbers, reconcile in onOk
+    // preview it like addIssue previews issue numbers, fixed by the answer
     const previewNum = (orgRow.next_project_num || 0) + 1
-    orgRow.next_project_num = previewNum
     const row: Row<'projects'> = {
       id: uuid,
-      org_id: orgRow.id,
+      org_id: orgId,
       type: p.type,
       parent_id: p.parent || undefined,
       key: p.key,
       num: previewNum,
       name: p.name,
-      lead_id: p.lead || profileIn(orgRow.id),
+      lead_id: p.lead || profileIn(orgId),
       description: p.description || '',
       sort_order: siblings.length,
       track_delay: true,
       created_at: new Date().toISOString(),
     }
-    rows.projects.set(uuid, row)
     // the grant rows the server stores: the caller's map ('lead' entries are
     // carried by lead_id, null ones name no grant) and the creator's own
-    const grants = newProjectGrants(p, profileIn(orgRow.id), row.lead_id || '')
-    Object.entries(grants).forEach(([uid, level]) => {
-      rows.access.push({ project_id: uuid, profile_id: uid, level })
-    })
-    const teamAccess = p.teamAccess ?? {}
-    Object.entries(teamAccess).forEach(([teamId, level]) => {
-      rows.teamAccess.push({ project_id: uuid, team_id: teamId, level })
-    })
-    rebuild()
-    emit()
+    const grants = newProjectGrants(p, profileIn(orgId), row.lead_id || '')
+    const teamAccess = { ...p.teamAccess }
+    // the server replaces a key held by an archived or hidden project
+    let saved: { num: number; key: string } | null = null
+    const projectPaint = () => {
+      const org = rows.orgs.get(orgId)
+      if (rows.projects.has(uuid) || !org) return
+      if (row.parent_id && !rows.projects.has(row.parent_id)) return
+      const num = saved?.num ?? Math.max(previewNum, (org.next_project_num || 0) + 1)
+      org.next_project_num = Math.max(org.next_project_num || 0, num)
+      rows.projects.set(uuid, { ...row, num, key: saved?.key ?? row.key })
+      Object.entries(grants).forEach(([uid, level]) => {
+        if (rows.profiles.has(uid)) rows.access.push({ project_id: uuid, profile_id: uid, level })
+      })
+      Object.entries(teamAccess).forEach(([teamId, level]) => {
+        if (rows.teams.has(teamId))
+          rows.teamAccess.push({ project_id: uuid, team_id: teamId, level })
+      })
+    }
     // ONE mutation carries row + access map; the follow-up grant upsert died
-    run(
-      write(api.projects.create, {
-        org_id: orgRow.id,
+    const sent = send(
+      api.projects.create,
+      {
+        org_id: orgId,
         id: uuid,
         type: p.type,
         parent_id: p.type === 'meta' ? null : p.parent,
@@ -5791,29 +6307,24 @@ export const PLANNER = {
         track_delay: row.track_delay,
         access: p.access || {},
         team_access: p.teamAccess,
-      }),
-      (created) => {
-        const o = rows.orgs.get(row.org_id)
-        if (o) o.next_project_num = Math.max(o.next_project_num || 0, created.num)
-        // the server replaces a key held by an archived or hidden project
-        const cur = rows.projects.get(uuid)
-        if (cur && (cur.num !== created.num || cur.key !== created.key)) {
-          cur.num = created.num
-          cur.key = created.key
-          rebuild()
-          emit()
-        }
-        onSaved?.()
       },
-      undefined,
-      (error) => {
-        toastCreateProjectError(
-          error,
-          `${p.type === 'meta' ? 'project' : 'sub-project'} “${p.name}”`,
-        )
-        onRefused?.()
+      { workspace: projectPaint },
+      {
+        keep: (created) => {
+          saved = { num: created.num, key: created.key }
+          return { workspace: projectPaint }
+        },
+        onError: (error) => {
+          toastCreateProjectError(
+            error,
+            `${p.type === 'meta' ? 'project' : 'sub-project'} “${p.name}”`,
+          )
+          onRefused?.()
+        },
       },
     )
+    // once the accepted project shows with its final number and key
+    if (onSaved) void sent.then((ok) => ok && onSaved())
     return uuid
   },
 
@@ -5826,25 +6337,6 @@ export const PLANNER = {
     if (!row || refusePausedEdit()) return Promise.resolve(false)
     if ('name' in patch && refuseLongName('project', patch.name ?? '', row.name))
       return Promise.resolve(false)
-    // a lead handover: the server keeps the outgoing lead as User and drops
-    // the incoming lead's own grant
-    if ('lead' in patch && patch.lead && patch.lead !== row.lead_id) {
-      const after = grantsAfterHandover(grantsOn(id), row.lead_id, patch.lead)
-      rows.access = rows.access.filter((a) => a.project_id !== id)
-      Object.entries(after).forEach(([uid, level]) => {
-        rows.access.push({ project_id: id, profile_id: uid, level })
-      })
-    }
-    const db: Partial<Row<'projects'>> = {}
-    if ('name' in patch) db.name = patch.name
-    if ('lead' in patch) db.lead_id = patch.lead || undefined
-    if ('description' in patch) db.description = patch.description || ''
-    if ('key' in patch) db.key = patch.key
-    if ('trackDelay' in patch) db.track_delay = !!patch.trackDelay
-    if ('reviewHours' in patch) db.review_hours = patch.reviewHours ?? undefined
-    Object.assign(row, db)
-    rebuild()
-    emit()
     const wire: FunctionArgs<typeof api.projects.update>['patch'] = {}
     if ('name' in patch) wire.name = patch.name
     if ('lead' in patch) wire.lead_id = patch.lead || null
@@ -5853,58 +6345,88 @@ export const PLANNER = {
     if ('trackDelay' in patch) wire.track_delay = !!patch.trackDelay
     if ('reviewHours' in patch) wire.review_hours = patch.reviewHours ?? null
     if (!Object.keys(wire).length) return Promise.resolve(true)
-    return runSaved(write(api.projects.update, { org_id: row.org_id, id, patch: wire }))
+    const db: Partial<Row<'projects'>> = {}
+    if ('name' in patch) db.name = patch.name
+    if ('lead' in patch) db.lead_id = patch.lead || undefined
+    if ('description' in patch) db.description = patch.description || ''
+    if ('key' in patch) db.key = patch.key
+    if ('trackDelay' in patch) db.track_delay = !!patch.trackDelay
+    if ('reviewHours' in patch) db.review_hours = patch.reviewHours ?? undefined
+    const lead = patch.lead || null
+    const view: View = {
+      workspace: () => {
+        const live = rows.projects.get(id)
+        if (!live) return
+        // a lead handover: the server keeps the outgoing lead as User and
+        // drops the incoming lead's own grant
+        if (lead && lead !== live.lead_id) {
+          const after = grantsAfterHandover(grantsOn(id), live.lead_id, lead)
+          rows.access = rows.access.filter((a) => a.project_id !== id)
+          Object.entries(after).forEach(([uid, level]) => {
+            rows.access.push({ project_id: id, profile_id: uid, level })
+          })
+        }
+        Object.assign(live, db)
+      },
+    }
+    return send(api.projects.update, { org_id: row.org_id, id, patch: wire }, view, {
+      over: overOf('projects', row, Object.keys(db)),
+    })
   },
 
   /* Archive a project (0106). The row stays — that is the difference between
      archiving and deleting — but everything it holds leaves the working
      snapshot on the spot. The server cascade carries the active subs on the
-     parent's own stamp; mirrored here on one timestamp so the optimistic
+     parent's own stamp; painted here on one timestamp so the optimistic
      snapshot and the delivery agree about which of them came along. */
   archiveProject: (id: string) => {
     const row = rows.projects.get(id)
     if (!row || row.archived_at || refusePausedEdit()) return
     const stamp = new Date().toISOString()
-    const ids =
-      row.type === 'meta'
-        ? [
-            id,
-            ...[...rows.projects.values()]
-              .filter((x) => x.parent_id === id && !x.archived_at)
-              .map((x) => x.id),
-          ]
-        : [id]
-    const issueIds = [...rows.issues.values()]
-      .filter((i) => ids.includes(i.project_id))
-      .map((i) => i.id)
-    ids.forEach((pid) => {
-      const r = rows.projects.get(pid)
-      if (r) r.archived_at = stamp
-    })
-    // A project archive hides its tasks; it does not archive the tasks. A
-    // subtask in an archived project no longer makes a task in an active
-    // one a group (convex/lib/liveTasks.ts countsAsSubtask), so a parent left
-    // in another project keeps only its other subtasks, as the next delivery
-    // says.
-    for (const iid of issueIds) rows.issues.delete(iid)
-    // and a child left in another project now has its parent outside this
-    // view, as the next delivery says
-    for (const r of rows.issues.values()) {
-      if (r.parent_id && issueIds.includes(r.parent_id)) {
-        r.parent_id = undefined
-        rows.hiddenParentTasks.add(r.id)
-      }
+    const view: View = {
+      workspace: () => {
+        const live = rows.projects.get(id)
+        if (!live) return
+        const ids =
+          live.type === 'meta'
+            ? [
+                id,
+                ...[...rows.projects.values()].filter((x) => x.parent_id === id).map((x) => x.id),
+              ]
+            : [id]
+        // an already archived sub-project keeps its own stamp
+        ids.forEach((pid) => {
+          const r = rows.projects.get(pid)
+          if (r && !r.archived_at) r.archived_at = stamp
+        })
+        const issueIds = new Set(
+          [...rows.issues.values()].filter((i) => ids.includes(i.project_id)).map((i) => i.id),
+        )
+        // A project archive hides its tasks; it does not archive the tasks. A
+        // subtask in an archived project no longer makes a task in an active
+        // one a group (convex/lib/liveTasks.ts countsAsSubtask), so a parent
+        // left in another project keeps only its other subtasks, as the next
+        // delivery says.
+        for (const iid of issueIds) rows.issues.delete(iid)
+        // and a child left in another project now has its parent outside this
+        // view, as the next delivery says
+        for (const r of rows.issues.values()) {
+          if (r.parent_id && issueIds.has(r.parent_id)) {
+            r.parent_id = undefined
+            rows.hiddenParentTasks.add(r.id)
+          }
+        }
+        ;[...rows.milestones.values()].forEach((m) => {
+          if (ids.includes(m.project_id)) rows.milestones.delete(m.id)
+        })
+        ;[...rows.links.values()].forEach((l) => {
+          if (!rows.issues.has(l.source_id) || !rows.issues.has(l.target_id))
+            rows.links.delete(l.id)
+        })
+        rows.issueLabels = rows.issueLabels.filter((il) => rows.issues.has(il.issue_id))
+      },
     }
-    ;[...rows.milestones.values()].forEach((m) => {
-      if (ids.includes(m.project_id)) rows.milestones.delete(m.id)
-    })
-    ;[...rows.links.values()].forEach((l) => {
-      if (!rows.issues.has(l.source_id) || !rows.issues.has(l.target_id)) rows.links.delete(l.id)
-    })
-    rows.issueLabels = rows.issueLabels.filter((il) => rows.issues.has(il.issue_id))
-    rebuild()
-    emit()
-    run(write(api.projects.archive, { org_id: row.org_id, id }))
+    void send(api.projects.archive, { org_id: row.org_id, id }, view)
   },
 
   /** Restore an archived project. Awaited rather than optimistic: its tasks
@@ -5914,7 +6436,7 @@ export const PLANNER = {
     const row = rows.projects.get(id)
     if (!row) return false
     try {
-      await write(api.projects.unarchive, { org_id: row.org_id, id })
+      await sendAwaited(api.projects.unarchive, { org_id: row.org_id, id }, 'none')
     } catch (e) {
       console.error('[qivo] restore failed:', e)
       toast(restoreErrorText(e))
@@ -5954,7 +6476,11 @@ export const PLANNER = {
     deletedItemsCalls(
       items,
       (orgId, ids) =>
-        write(api.deletedItems.restore, { org_id: orgId, ids, ...(bulk ? { bulk } : {}) }),
+        sendAwaited(
+          api.deletedItems.restore,
+          { org_id: orgId, ids, ...(bulk ? { bulk } : {}) },
+          'none',
+        ),
       "Couldn't restore",
     ),
 
@@ -5965,7 +6491,7 @@ export const PLANNER = {
   ): Promise<DeletedItemsOutcome<PurgeRefusal>> =>
     deletedItemsCalls(
       items,
-      (orgId, ids) => write(api.deletedItems.purge, { org_id: orgId, ids }),
+      (orgId, ids) => sendAwaited(api.deletedItems.purge, { org_id: orgId, ids }, 'none'),
       "Couldn't delete it for good",
     ),
 
@@ -5979,21 +6505,14 @@ export const PLANNER = {
     if (!row || refusePausedEdit()) return Promise.resolve(false)
     const text = (reason || '').trim()
     const epoch = storeEpoch
-    return write(api.projects.deleteDeep, {
-      org_id: row.org_id,
-      id,
-      ...(text ? { reason: text } : {}),
-    }).then(
-      () => {
-        // the delivery may already hold the result; the mirror finds nothing
-        // then. Kept for a rollback, as task deletes are.
-        if (epoch === storeEpoch) {
-          if (serverSnap?.projects.some((project) => project.id === id))
-            pendingProjectDeletes.add(id)
-          mirrorProjectDelete(id)
-        }
-        return true
-      },
+    return sendAwaited(
+      api.projects.deleteDeep,
+      { org_id: row.org_id, id, ...(text ? { reason: text } : {}) },
+      'none',
+      // the delivery may already hold the result; nothing paints then
+      { keep: () => ({ workspace: () => dropProjectRows(id) }) },
+    ).then(
+      () => true,
       (error) => {
         console.error('[qivo] project delete failed:', error)
         if (epoch === storeEpoch) toastWriteError(error)
@@ -6007,57 +6526,51 @@ export const PLANNER = {
      stored before it is). Narrates nothing, name included. Resolves whether
      the server saved the change: false without sending when it refused the
      change first (toasted) or there is no home organization here, and false
-     after a refusal, which run() toasts and rolls back. */
+     after a refusal, which is toasted and taken back. */
   setOrg: (patch: OrgPatch): Promise<boolean> => {
     const org = homeRow()
     if (!org || refusePausedEdit()) return Promise.resolve(false)
     if ('name' in patch && refuseLongName('organization', patch.name ?? '', org.name))
       return Promise.resolve(false)
     const wire: FunctionArgs<typeof api.orgs.update>['patch'] = {}
-    if ('name' in patch) {
-      org.name = patch.name
-      wire.name = patch.name
-    }
-    if ('dateFormat' in patch && DATE_FORMATS.includes(patch.dateFormat)) {
-      org.date_format = patch.dateFormat
+    if ('name' in patch) wire.name = patch.name
+    if ('dateFormat' in patch && DATE_FORMATS.includes(patch.dateFormat))
       wire.date_format = patch.dateFormat
-    }
     if (
       'weekStart' in patch &&
       Number.isInteger(patch.weekStart) &&
       patch.weekStart >= 0 &&
       patch.weekStart <= 6
-    ) {
-      org.week_start = patch.weekStart
+    )
       wire.week_start = patch.weekStart
-    }
-    if (
-      'weekOneRule' in patch &&
-      (WEEK_ONE_RULES as readonly string[]).includes(patch.weekOneRule)
-    ) {
-      org.week_one_rule = patch.weekOneRule
+    if ('weekOneRule' in patch && (WEEK_ONE_RULES as readonly string[]).includes(patch.weekOneRule))
       wire.week_one_rule = patch.weekOneRule
-    }
-    if ('defaultPlannableHours' in patch) {
-      // whole hours, within the server check [1, 168] — the same clamp the
-      // per-person setter uses, since this is the value it starts from
-      const h = Math.max(1, Math.min(168, Math.round(Number(patch.defaultPlannableHours) || 0)))
-      org.default_plannable_hours = h
-      wire.default_plannable_hours = h
-    }
-    if ('maxAttachmentMb' in patch) {
-      const mb = Math.max(1, Math.min(20, Math.round(Number(patch.maxAttachmentMb) || 0)))
-      org.max_attachment_mb = mb
-      wire.max_attachment_mb = mb
-    }
-    if ('projectCreators' in patch && isProjectCreators(patch.projectCreators)) {
-      org.project_creators = patch.projectCreators
+    // whole hours, within the server check [1, 168] — the same clamp the
+    // per-person setter uses, since this is the value it starts from
+    if ('defaultPlannableHours' in patch)
+      wire.default_plannable_hours = Math.max(
+        1,
+        Math.min(168, Math.round(Number(patch.defaultPlannableHours) || 0)),
+      )
+    if ('maxAttachmentMb' in patch)
+      wire.max_attachment_mb = Math.max(
+        1,
+        Math.min(20, Math.round(Number(patch.maxAttachmentMb) || 0)),
+      )
+    if ('projectCreators' in patch && isProjectCreators(patch.projectCreators))
       wire.project_creators = patch.projectCreators
-    }
     if (!Object.keys(wire).length) return Promise.resolve(true)
-    rebuild() // re-anchors the grid when the week settings moved
-    emit()
-    return runSaved(write(api.orgs.update, { org_id: org.id, patch: wire }))
+    const orgId = org.id
+    // the rebuild re-anchors the grid when the week settings moved
+    const view: View = {
+      workspace: () => {
+        const live = rows.orgs.get(orgId)
+        if (live) Object.assign(live, wire)
+      },
+    }
+    return send(api.orgs.update, { org_id: orgId, patch: wire }, view, {
+      over: overOf('organizations', org, Object.keys(wire)),
+    })
   },
 
   /** Change the organization's address — the first segment under /app/.
@@ -6079,30 +6592,34 @@ export const PLANNER = {
     if (slug.length > 40 || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug)) {
       return 'Use lowercase letters, digits and single hyphens; 40 characters maximum.'
     }
+    const orgId = org.id
     try {
-      await write(api.orgs.setSlug, { org_id: org.id, slug })
+      // the accepted address paints now, so the address-bar sync moves now
+      // rather than a delivery later
+      await sendAwaited(api.orgs.setSlug, { org_id: orgId, slug }, 'none', {
+        keep: () => ({
+          workspace: () => {
+            const live = rows.orgs.get(orgId)
+            if (live) live.slug = slug
+          },
+        }),
+      })
     } catch (e) {
       console.error('[qivo] slug change failed:', e)
       return slugErrorText(e)
     }
-    // patch the live row so the address-bar sync moves NOW rather than a
-    // delivery later — the awaited write already proved the value
-    const live = rows.orgs.get(org.id)
-    if (live) live.slug = slug
-    rebuild()
-    emit()
     return null
   },
 
   /** Paints the new team at once and resolves whether the server created
       it. Resolves false without sending when it refused the change first
-      (toasted), and false after a refusal, which run() toasts and rolls
+      (toasted), and false after a refusal, which is toasted and taken
       back. */
   addTeam: (name: string): Promise<boolean> => {
     const org = homeRow()
     if (!org || !String(name || '').trim() || refusePausedEdit()) return Promise.resolve(false)
     const uuid = crypto.randomUUID()
-    rows.teams.set(uuid, {
+    const team: Row<'teams'> = {
       id: uuid,
       org_id: org.id,
       name,
@@ -6110,46 +6627,42 @@ export const PLANNER = {
       archive_days: 30,
       track_delay_default: true,
       created_at: new Date().toISOString(),
-    })
-    rebuild()
-    emit()
-    return runSaved(write(api.teams.create, { org_id: org.id, id: uuid, name }))
+    }
+    const view: View = {
+      workspace: () => {
+        if (!rows.teams.has(uuid) && rows.orgs.has(team.org_id)) rows.teams.set(uuid, { ...team })
+      },
+    }
+    return send(api.teams.create, { org_id: org.id, id: uuid, name }, view)
   },
 
   /** Paints the change at once and resolves whether the server saved it.
       Resolves false without sending when it refused the change first
       (toasted) or the team is missing here, and false after a refusal,
-      which run() toasts and rolls back. */
+      which is toasted and taken back. */
   updateTeam: (id: string, patch: TeamPatch): Promise<boolean> => {
     const row = rows.teams.get(id)
     if (!row || refusePausedEdit()) return Promise.resolve(false)
     if ('name' in patch && refuseLongName('team', patch.name ?? '', row.name))
       return Promise.resolve(false)
     const wire: FunctionArgs<typeof api.teams.update>['patch'] = {}
-    if ('name' in patch) {
-      row.name = patch.name
-      wire.name = patch.name
-    }
-    if ('staleDays' in patch) {
-      // whole days, within the server check [1, 3650]
-      const d = Math.max(1, Math.min(3650, Math.round(Number(patch.staleDays) || 0)))
-      row.stale_days = d
-      wire.stale_days = d
-    }
-    if ('archiveDays' in patch) {
-      const d = Math.max(1, Math.min(3650, Math.round(Number(patch.archiveDays) || 0)))
-      row.archive_days = d
-      wire.archive_days = d
-    }
-    if ('trackDelayDefault' in patch) {
-      const on = !!patch.trackDelayDefault
-      row.track_delay_default = on
-      wire.track_delay_default = on
-    }
+    if ('name' in patch) wire.name = patch.name
+    // whole days, within the server check [1, 3650]
+    if ('staleDays' in patch)
+      wire.stale_days = Math.max(1, Math.min(3650, Math.round(Number(patch.staleDays) || 0)))
+    if ('archiveDays' in patch)
+      wire.archive_days = Math.max(1, Math.min(3650, Math.round(Number(patch.archiveDays) || 0)))
+    if ('trackDelayDefault' in patch) wire.track_delay_default = !!patch.trackDelayDefault
     if (!Object.keys(wire).length) return Promise.resolve(true)
-    rebuild()
-    emit()
-    return runSaved(write(api.teams.update, { org_id: row.org_id, id, patch: wire }))
+    const view: View = {
+      workspace: () => {
+        const live = rows.teams.get(id)
+        if (live) Object.assign(live, wire)
+      },
+    }
+    return send(api.teams.update, { org_id: row.org_id, id, patch: wire }, view, {
+      over: overOf('teams', row, Object.keys(wire)),
+    })
   },
 
   /* --- team membership (managed in Team settings) ------------------------- */
@@ -6158,32 +6671,30 @@ export const PLANNER = {
     if (!team || rows.teamMembers.some((m) => m.team_id === teamId && m.profile_id === uid)) return
     if (refusePausedEdit()) return
     // the server always inserts a plain member; leadership is its own verb
-    rows.teamMembers.push({ team_id: teamId, profile_id: uid, is_leader: false })
-    rebuild()
-    emit()
-    run(
-      write(api.teams.addMember, {
-        org_id: team.org_id,
-        team_id: teamId,
-        profile_id: uid,
-      }),
-    )
+    const view: View = {
+      workspace: () => {
+        if (!rows.teams.has(teamId) || !rows.profiles.has(uid)) return
+        if (rows.teamMembers.some((m) => m.team_id === teamId && m.profile_id === uid)) return
+        rows.teamMembers.push({ team_id: teamId, profile_id: uid, is_leader: false })
+      },
+    }
+    void send(api.teams.addMember, { org_id: team.org_id, team_id: teamId, profile_id: uid }, view)
   },
 
   setTeamLeader: (teamId: string, uid: string, isLeader: boolean) => {
     const team = rows.teams.get(teamId)
     const row = rows.teamMembers.find((m) => m.team_id === teamId && m.profile_id === uid)
     if (!team || !row || row.is_leader === isLeader || refusePausedEdit()) return
-    row.is_leader = isLeader
-    rebuild()
-    emit()
-    run(
-      write(api.teams.setLeader, {
-        org_id: team.org_id,
-        team_id: teamId,
-        profile_id: uid,
-        is_leader: isLeader,
-      }),
+    const view: View = {
+      workspace: () => {
+        const live = rows.teamMembers.find((m) => m.team_id === teamId && m.profile_id === uid)
+        if (live) live.is_leader = isLeader
+      },
+    }
+    void send(
+      api.teams.setLeader,
+      { org_id: team.org_id, team_id: teamId, profile_id: uid, is_leader: isLeader },
+      view,
     )
   },
 
@@ -6196,14 +6707,16 @@ export const PLANNER = {
     // Projects are independent of teams. Deleting a team removes only its
     // memberships and permission grants; project rows and their work remain.
     // labels are org-wide since 0078 — deleting a team leaves them alone
-    rows.issueLabels = rows.issueLabels.filter((il) => rows.issues.has(il.issue_id))
-    rows.issueSubs = rows.issueSubs.filter((s) => rows.issues.has(s.issue_id))
-    rows.teamMembers = rows.teamMembers.filter((m) => m.team_id !== id)
-    rows.teamAccess = rows.teamAccess.filter((a) => a.team_id !== id)
-    rows.teams.delete(id)
-    rebuild()
-    emit()
-    return runSaved(write(api.teams.deleteDeep, { org_id: team.org_id, id }))
+    const view: View = {
+      workspace: () => {
+        rows.issueLabels = rows.issueLabels.filter((il) => rows.issues.has(il.issue_id))
+        rows.issueSubs = rows.issueSubs.filter((s) => rows.issues.has(s.issue_id))
+        rows.teamMembers = rows.teamMembers.filter((m) => m.team_id !== id)
+        rows.teamAccess = rows.teamAccess.filter((a) => a.team_id !== id)
+        rows.teams.delete(id)
+      },
+    }
+    return send(api.teams.deleteDeep, { org_id: team.org_id, id }, view)
   },
   /** Whether a team exists and is not the last one in its organization.
       Other organizations' teams in this client do not count. */
@@ -6258,17 +6771,23 @@ export const PLANNER = {
       // accepted_at ABSENT: the seat IS the invitation (0118's kept column)
       created_at: new Date().toISOString(),
     }
-    rows.profiles.set(uuid, row)
-    const teams: string[] = rec.teams || []
-    teams.forEach((t) => {
-      rows.teamMembers.push({ team_id: t, profile_id: uuid, is_leader: false })
-    })
-    rebuild()
-    emit()
+    const teams: string[] = [...(rec.teams || [])]
+    const view: View = {
+      workspace: () => {
+        if (rows.profiles.has(uuid) || !rows.orgs.has(row.org_id)) return
+        rows.profiles.set(uuid, { ...row })
+        teams.forEach((t) => {
+          if (!rows.teams.has(t)) return
+          if (!rows.teamMembers.some((m) => m.team_id === t && m.profile_id === uuid))
+            rows.teamMembers.push({ team_id: t, profile_id: uuid, is_leader: false })
+        })
+      },
+    }
     // ONE mutation: profile + memberships land or none do (the two-step
     // insert died with the phase-5 port)
-    run(
-      write(api.profiles.create, {
+    void send(
+      api.profiles.create,
+      {
         org_id: org.id,
         id: uuid,
         name,
@@ -6277,7 +6796,8 @@ export const PLANNER = {
         kind: isAgent ? 'agent' : 'person',
         color: row.color,
         teams,
-      }),
+      },
+      view,
     )
     return uuid
   },
@@ -6332,43 +6852,28 @@ export const PLANNER = {
         return false
       }
     }
-    // teams diff — the membership mirror; the server diffs the same list
-    if ('teams' in patch) {
-      const next: string[] = patch.teams || []
-      const prev = rows.teamMembers.filter((m) => m.profile_id === id).map((m) => m.team_id)
-      const del = prev.filter((t) => !next.includes(t))
-      rows.teamMembers = rows.teamMembers.filter(
-        (m) => !(m.profile_id === id && del.includes(m.team_id)),
-      )
-      next
-        .filter((t) => !prev.includes(t))
-        .forEach((t) => {
-          rows.teamMembers.push({ team_id: t, profile_id: id, is_leader: false })
-        })
-    }
     // Capacity has its own write path (0094): the column may also be set by
-    // a team's LEADER, so it is its own mutation (orgMutation, not admin).
-    // An agent has no plannable week (0103) — skipping rather than clamping
-    // matters: Math.min(168, Infinity) is 168, the loudest wrong answer.
+    // a team's LEADER, so it is its own mutation (orgMutation, not admin),
+    // with its own layer. An agent has no plannable week (0103) — skipping
+    // rather than clamping matters: Math.min(168, Infinity) is 168, the
+    // loudest wrong answer.
     if ('plannableHours' in patch && row.kind !== 'agent') {
       const h = Math.max(1, Math.min(168, Math.round(Number(patch.plannableHours) || 0)))
-      row.plannable_hours = h
-      run(
-        write(api.profiles.setPlannableHours, {
-          org_id: row.org_id,
-          profile_id: id,
-          hours: h,
-        }),
+      const hours: View = {
+        workspace: () => {
+          const live = rows.profiles.get(id)
+          if (live) live.plannable_hours = h
+        },
+      }
+      void send(
+        api.profiles.setPlannableHours,
+        { org_id: row.org_id, profile_id: id, hours: h },
+        hours,
+        { over: overOf('profiles', row, ['plannable_hours']) },
       )
     }
     const db: Partial<Row<'profiles'>> = {}
     const wire: FunctionArgs<typeof api.profiles.update>['patch'] = {}
-    // computed before the role lands; the role select sends orgRole even when
-    // it is unchanged, and only a real change clears the right
-    const right = projectRightAfterUpdate(row, {
-      org_role: patch.orgRole,
-      can_create_projects: 'canCreateProjects' in patch ? !!patch.canCreateProjects : undefined,
-    })
     if ('orgRole' in patch) {
       db.org_role = patch.orgRole
       wire.org_role = patch.orgRole
@@ -6380,7 +6885,6 @@ export const PLANNER = {
     }
     // the server stores the same value (projectRightAfterUpdate)
     if ('canCreateProjects' in patch) wire.can_create_projects = !!patch.canCreateProjects
-    if (right !== row.can_create_projects) db.can_create_projects = right
     /* The admin door onto the name pair (deviation #93): writes ONE row —
        an admin's authority stops at their organization; set_display_name's
        every-seat fan-out is the other door, and they are different rules. */
@@ -6399,24 +6903,45 @@ export const PLANNER = {
       db.email = next || undefined
       wire.email = next
     }
-    if ('teams' in patch) wire.teams = patch.teams || []
-    Object.assign(row, db)
-    rebuild()
-    emit()
+    // teams: the membership the server diffs to, exactly
+    const teams = 'teams' in patch ? [...(patch.teams || [])] : null
+    if (teams) wire.teams = teams
+    // the role select sends orgRole even when it is unchanged, and only a
+    // real change clears the right; worked out on the row the paint finds,
+    // before the role lands, as the server does
+    const rightUpdate = {
+      org_role: patch.orgRole,
+      can_create_projects: 'canCreateProjects' in patch ? !!patch.canCreateProjects : undefined,
+    }
+    const view: View = {
+      workspace: () => {
+        const live = rows.profiles.get(id)
+        if (!live) return
+        if (teams) {
+          const prev = rows.teamMembers.filter((m) => m.profile_id === id).map((m) => m.team_id)
+          rows.teamMembers = rows.teamMembers.filter(
+            (m) => !(m.profile_id === id && !teams.includes(m.team_id)),
+          )
+          teams
+            .filter((t) => !prev.includes(t) && rows.teams.has(t))
+            .forEach((t) => {
+              rows.teamMembers.push({ team_id: t, profile_id: id, is_leader: false })
+            })
+        }
+        const right = projectRightAfterUpdate(live, rightUpdate)
+        Object.assign(live, db)
+        if (right !== live.can_create_projects) live.can_create_projects = right
+      },
+    }
     // Deactivation alone has its own door, which an admin can still use while
     // billing has paused editing. Every other change, reactivation included,
     // goes through update.
     const deactivateOnly = wire.active === false && Object.keys(wire).length === 1
-    if (deactivateOnly) {
-      run(write(api.profiles.deactivate, { org_id: row.org_id, id }), () =>
-        keepAcceptedPaint(() => {
-          const live = rows.profiles.get(id)
-          if (live) Object.assign(live, db)
-        }),
-      )
-    } else if (Object.keys(wire).length) {
-      run(write(api.profiles.update, { org_id: row.org_id, id, patch: wire }))
-    }
+    const over = overOf('profiles', row, Object.keys(db))
+    if (deactivateOnly)
+      void send(api.profiles.deactivate, { org_id: row.org_id, id }, view, { over })
+    else if (Object.keys(wire).length)
+      void send(api.profiles.update, { org_id: row.org_id, id, patch: wire }, view, { over })
     return true
   },
 
@@ -6430,7 +6955,8 @@ export const PLANNER = {
   /* --- profile picture ------------------------------------------------------
      Who may: that person, or an admin of their organization. The server owns
      that rule; the UI mirrors it in what it offers. Both mutators are
-     AWAITED, returning an error sentence or null — no run() rollback path. */
+     AWAITED, returning an error sentence or null. An accepted change paints
+     until a delivery holds it. */
 
   /** True when this session may change that person's picture. Mirrors the
       server rule so the UI can hide a control that would be refused. */
@@ -6460,9 +6986,8 @@ export const PLANNER = {
     // here than anywhere else in the app
     const small = await avatarImage(file)
     if (small.size > 2 * 1024 * 1024) return 'A picture has to be at most 2 MB'
-    let storageId: string
     try {
-      const url = await write(api.files.avatarUploadUrl, { profile_id: profileId })
+      const url = await sendAwaited(api.files.avatarUploadUrl, { profile_id: profileId }, 'none')
       const res = await fetch(browserBackendUrl(url), {
         method: 'POST',
         // the POST's Content-Type lands in storage metadata — it is what the
@@ -6471,23 +6996,26 @@ export const PLANNER = {
         body: small,
       })
       if (!res.ok) return "Couldn't upload that picture"
-      storageId = ((await res.json()) as { storageId: string }).storageId
-      await write(api.files.setAvatar, {
-        profile_id: profileId,
-        storage_id: storageId as Id<'_storage'>,
-      })
+      const stored = ((await res.json()) as { storageId: string }).storageId as Id<'_storage'>
+      // the accepted portrait paints until a delivery holds it; a rebuild
+      // prunes and revokes the replaced portrait source
+      await sendAwaited(
+        api.files.setAvatar,
+        { profile_id: profileId, storage_id: stored },
+        'none',
+        {
+          keep: () => ({
+            workspace: () => {
+              const live = rows.profiles.get(profileId)
+              if (live) live.avatar_storage_id = stored
+            },
+          }),
+        },
+      )
     } catch (e) {
       console.error('[qivo] avatar upload failed:', e)
       return avatarErrorText(e, "Couldn't set that picture")
     }
-    // optimistic paint for the immediate repaint; the snapshot delivery
-    // replaces the row reactively (no hand-carried re-read — adopt() brings
-    // the row whole). Rebuild prunes/revokes the replaced portrait source.
-    const live = rows.profiles.get(profileId)
-    if (!live) return null // removed mid-upload; the server state is already right
-    live.avatar_storage_id = storageId as Id<'_storage'>
-    rebuild()
-    emit()
     return null
   }),
 
@@ -6497,16 +7025,17 @@ export const PLANNER = {
     const row = rows.profiles.get(profileId)
     if (!row?.avatar_storage_id) return null
     try {
-      await write(api.files.clearAvatar, { profile_id: profileId })
+      await sendAwaited(api.files.clearAvatar, { profile_id: profileId }, 'none', {
+        keep: () => ({
+          workspace: () => {
+            const live = rows.profiles.get(profileId)
+            if (live) live.avatar_storage_id = undefined
+          },
+        }),
+      })
     } catch (e) {
       console.error('[qivo] avatar clear failed:', e)
       return avatarErrorText(e, "Couldn't remove that picture")
-    }
-    const live = rows.profiles.get(profileId)
-    if (live) {
-      live.avatar_storage_id = undefined
-      rebuild()
-      emit()
     }
     return null
   },
@@ -6531,33 +7060,31 @@ export const PLANNER = {
     // unless every seat is gone
     if (refusePausedWrite(api.profiles.remove)) return false
     const at = new Date().toISOString()
-    const paint = () => {
-      rows.issues.forEach((i) => {
-        if (
-          i.assignee_id !== id &&
-          i.reviewer_id !== id &&
-          i.reporter_id !== id &&
-          i.created_by !== id
-        )
-          return
-        if (i.assignee_id === id) i.assignee_id = undefined
-        if (i.reviewer_id === id) i.reviewer_id = undefined
-        if (i.reporter_id === id) i.reporter_id = undefined
-        if (i.created_by === id) i.created_by = undefined
-        i.updated_at = at
-      })
-      rows.teamMembers = rows.teamMembers.filter((m) => m.profile_id !== id)
-      rows.access = rows.access.filter((a) => a.profile_id !== id)
-      rows.projects.forEach((p) => {
-        if (p.lead_id === id) p.lead_id = undefined
-      })
-      for (const e of rows.threadEvents) if (e.actor_id === id) e.actor_id = undefined
-      rows.profiles.delete(id)
+    const view: View = {
+      workspace: () => {
+        rows.issues.forEach((i) => {
+          if (
+            i.assignee_id !== id &&
+            i.reviewer_id !== id &&
+            i.reporter_id !== id &&
+            i.created_by !== id
+          )
+            return
+          if (i.assignee_id === id) i.assignee_id = undefined
+          if (i.reviewer_id === id) i.reviewer_id = undefined
+          if (i.reporter_id === id) i.reporter_id = undefined
+          if (i.created_by === id) i.created_by = undefined
+          i.updated_at = at
+        })
+        rows.teamMembers = rows.teamMembers.filter((m) => m.profile_id !== id)
+        rows.access = rows.access.filter((a) => a.profile_id !== id)
+        rows.projects.forEach((p) => {
+          if (p.lead_id === id) p.lead_id = undefined
+        })
+        rows.profiles.delete(id)
+      },
     }
-    paint()
-    rebuild()
-    emit()
-    run(write(api.profiles.remove, { org_id: target.org_id, id }), () => keepAcceptedPaint(paint))
+    void send(api.profiles.remove, { org_id: target.org_id, id }, view)
     return true
   },
 
@@ -6582,17 +7109,18 @@ export const PLANNER = {
     if (m.lead === userId || refusePausedEdit()) return Promise.resolve(false)
     const held = rows.access.find((a) => a.project_id === metaId && a.profile_id === userId)
     if (held?.level === role) return Promise.resolve(true)
-    if (held) held.level = role
-    else rows.access.push({ project_id: metaId, profile_id: userId, level: role })
-    rebuild()
-    emit()
-    return runSaved(
-      write(api.projects.setAccess, {
-        org_id: row.org_id,
-        id: metaId,
-        user_id: userId,
-        level: role,
-      }),
+    const view: View = {
+      workspace: () => {
+        if (!rows.projects.has(metaId) || !rows.profiles.has(userId)) return
+        const live = rows.access.find((a) => a.project_id === metaId && a.profile_id === userId)
+        if (live) live.level = role
+        else rows.access.push({ project_id: metaId, profile_id: userId, level: role })
+      },
+    }
+    return send(
+      api.projects.setAccess,
+      { org_id: row.org_id, id: metaId, user_id: userId, level: role },
+      view,
     )
   },
 
@@ -6606,17 +7134,18 @@ export const PLANNER = {
     if (!row || refusePausedEdit()) return Promise.resolve(false)
     const held = rows.teamAccess.find((a) => a.project_id === metaId && a.team_id === teamId)
     if (held?.level === role) return Promise.resolve(true)
-    if (held) held.level = role
-    else rows.teamAccess.push({ project_id: metaId, team_id: teamId, level: role })
-    rebuild()
-    emit()
-    return runSaved(
-      write(api.projects.setAccess, {
-        org_id: row.org_id,
-        id: metaId,
-        team_id: teamId,
-        level: role,
-      }),
+    const view: View = {
+      workspace: () => {
+        if (!rows.projects.has(metaId) || !rows.teams.has(teamId)) return
+        const live = rows.teamAccess.find((a) => a.project_id === metaId && a.team_id === teamId)
+        if (live) live.level = role
+        else rows.teamAccess.push({ project_id: metaId, team_id: teamId, level: role })
+      },
+    }
+    return send(
+      api.projects.setAccess,
+      { org_id: row.org_id, id: metaId, team_id: teamId, level: role },
+      view,
     )
   },
 
@@ -6628,37 +7157,34 @@ export const PLANNER = {
      project; a sub-project id is folded up to it. Paints the milestone at
      once and resolves whether the server created it: false without sending
      when it refused the change first (toasted), and false after a refusal,
-     which is toasted and rolled back. */
+     which is toasted and taken back. */
   addMilestone: (m: { project: string; name: string; week: number }): Promise<boolean> => {
     const meta = PLANNER.metaOf(m.project)
     if (!meta || refusePausedEdit()) return Promise.resolve(false)
     const uuid = crypto.randomUUID()
     const week = weekToISO(m.week)
-    rows.milestones.set(uuid, {
+    const milestone: Row<'milestones'> = {
       id: uuid,
       project_id: meta.id,
       name: m.name,
       week,
       created_at: new Date().toISOString(),
-    })
-    rebuild()
-    emit()
+    }
+    const view: View = {
+      workspace: () => {
+        if (!rows.milestones.has(uuid) && rows.projects.has(meta.id))
+          rows.milestones.set(uuid, { ...milestone })
+      },
+    }
     return (
-      recordRoadmapChange({
-        kind: 'milestone_create',
-        id: uuid,
-        project_id: meta.id,
-        name: m.name,
-        week,
-      }) ??
-      runSaved(
-        write(api.projects.addMilestone, {
-          org_id: meta.org,
-          id: uuid,
-          project_id: meta.id,
-          name: m.name,
-          week,
-        }),
+      recordRoadmapChange(
+        { kind: 'milestone_create', id: uuid, project_id: meta.id, name: m.name, week },
+        view,
+      ) ??
+      send(
+        api.projects.addMilestone,
+        { org_id: meta.org, id: uuid, project_id: meta.id, name: m.name, week },
+        view,
       )
     )
   },
@@ -6666,7 +7192,7 @@ export const PLANNER = {
   /** Paints the change at once and resolves whether the server saved it.
       Resolves false without sending when it refused the change first
       (toasted) or the milestone is missing here, and false after a refusal,
-      which is toasted and rolled back. */
+      which is toasted and taken back. */
   updateMilestone: (id: string, patch: { name?: string; week?: number }): Promise<boolean> => {
     const row = rows.milestones.get(id)
     if (!row) return Promise.resolve(false)
@@ -6677,18 +7203,20 @@ export const PLANNER = {
     if (refusePausedEdit()) return Promise.resolve(false)
     if ('name' in patch && refuseLongName('milestone', patch.name ?? '', row.name))
       return Promise.resolve(false)
-    Object.assign(row, db)
-    rebuild()
-    emit()
+    const view: View = {
+      workspace: () => {
+        const live = rows.milestones.get(id)
+        if (live) Object.assign(live, db)
+      },
+    }
     // moved/renamed verb logic is server-side now (it diffs against its row)
     return (
-      recordRoadmapChange({ kind: 'milestone_update', id, patch: db }) ??
-      runSaved(
-        write(api.projects.updateMilestone, {
-          org_id: orgOfProject(row.project_id),
-          id,
-          patch: db,
-        }),
+      recordRoadmapChange({ kind: 'milestone_update', id, patch: db }, view) ??
+      send(
+        api.projects.updateMilestone,
+        { org_id: orgOfProject(row.project_id), id, patch: db },
+        view,
+        { over: overOf('milestones', row, Object.keys(db)) },
       )
     )
   },
@@ -6699,12 +7227,14 @@ export const PLANNER = {
     const row = rows.milestones.get(id)
     if (!row || refusePausedEdit()) return Promise.resolve(false)
     const org = orgOfProject(row.project_id)
-    rows.milestones.delete(id)
-    rebuild()
-    emit()
+    const view: View = {
+      workspace: () => {
+        rows.milestones.delete(id)
+      },
+    }
     return (
-      recordRoadmapChange({ kind: 'milestone_remove', id }) ??
-      runSaved(write(api.projects.removeMilestone, { org_id: org, id }))
+      recordRoadmapChange({ kind: 'milestone_remove', id }, view) ??
+      send(api.projects.removeMilestone, { org_id: org, id }, view)
     )
   },
 
@@ -6712,7 +7242,7 @@ export const PLANNER = {
   /** Paints a new label at once. Returns its id and whether the server
       created it, or the existing label of that name with nothing sent. Null
       when it refused the change first (toasted) or there is nothing to
-      create. A refusal after sending is toasted and rolled back. */
+      create. A refusal after sending is toasted and taken back. */
   addLabel: (rec: {
     name?: string
     color?: string
@@ -6731,19 +7261,22 @@ export const PLANNER = {
     // the shared palette picks the color unless rec.color overrides it
     const color = rec.color || LABEL_COLORS[rows.labels.size % LABEL_COLORS.length].color
     const uuid = crypto.randomUUID()
-    rows.labels.set(uuid, {
+    const label: Row<'labels'> = {
       id: uuid,
       org_id: org.id,
       name,
       name_lower: name.toLowerCase(),
       color,
       created_at: new Date().toISOString(),
-    })
-    rebuild()
-    emit()
+    }
+    const view: View = {
+      workspace: () => {
+        if (!rows.labels.has(uuid)) rows.labels.set(uuid, { ...label })
+      },
+    }
     return {
       id: uuid,
-      saved: runSaved(write(api.labels.create, { org_id: org.id, id: uuid, name, color })),
+      saved: send(api.labels.create, { org_id: org.id, id: uuid, name, color }, view),
     }
   },
 
@@ -6767,36 +7300,39 @@ export const PLANNER = {
         toast('A label with that name already exists')
         return false
       }
-      if (name !== row.name) {
-        row.name = name
-        row.name_lower = name.toLowerCase()
-        wire.name = name
-      }
+      if (name !== row.name) wire.name = name
     }
-    if ('color' in patch) {
-      row.color = patch.color
-      wire.color = patch.color
-    }
+    if ('color' in patch) wire.color = patch.color
     if (!Object.keys(wire).length) return false
-    rebuild()
-    emit()
-    run(write(api.labels.update, { org_id: row.org_id, id, patch: wire }))
+    const view: View = {
+      workspace: () => {
+        const live = rows.labels.get(id)
+        if (!live) return
+        Object.assign(live, wire)
+        if (wire.name !== undefined) live.name_lower = wire.name.toLowerCase()
+      },
+    }
+    void send(api.labels.update, { org_id: row.org_id, id, patch: wire }, view, {
+      over: overOf('labels', row, Object.keys(wire)),
+    })
     return true
   },
 
   /** Removes the label from the screen at once and resolves whether the
       server deleted it: false without sending when it refused the change
-      first (toasted), and false after a refusal, which run() toasts and
-      rolls back. */
+      first (toasted), and false after a refusal, which is toasted and
+      taken back. */
   removeLabel: (id: string): Promise<boolean> => {
     const row = rows.labels.get(id)
     if (!row || refusePausedEdit()) return Promise.resolve(false)
     // the attach rows go with the label server-side — mirror the sweep
-    rows.issueLabels = rows.issueLabels.filter((il) => il.label_id !== id)
-    rows.labels.delete(id)
-    rebuild()
-    emit()
-    return runSaved(write(api.labels.remove, { org_id: row.org_id, id }))
+    const view: View = {
+      workspace: () => {
+        rows.issueLabels = rows.issueLabels.filter((il) => il.label_id !== id)
+        rows.labels.delete(id)
+      },
+    }
+    return send(api.labels.remove, { org_id: row.org_id, id }, view)
   },
 
   /** Puts the label on the task or takes it off. `created` is the `saved`
@@ -6807,28 +7343,31 @@ export const PLANNER = {
     const uuid = keyToUuid.get(issueId)
     const issue = uuid ? rows.issues.get(uuid) : null
     if (!uuid || !issue || !rows.labels.get(labelId) || refusePausedEdit()) return
-    // the server toggles on ITS state, so a replay nets out either way
-    const attached = rows.issueLabels.some((il) => il.issue_id === uuid && il.label_id === labelId)
-    if (attached)
-      rows.issueLabels = rows.issueLabels.filter(
-        (il) => !(il.issue_id === uuid && il.label_id === labelId),
-      )
-    else rows.issueLabels.push({ issue_id: uuid, label_id: labelId })
-    rebuild()
-    emit()
-    run(
-      write(api.labels.toggle, {
-        org_id: issue.org_id,
-        issue_id: uuid,
-        label_id: labelId,
-      }),
-      undefined,
-      undefined,
-      created &&
-        ((e) =>
+    // the state asked for travels with the write (`on`), so the paint and
+    // the server set it, and a repeat changes nothing
+    const on = !rows.issueLabels.some((il) => il.issue_id === uuid && il.label_id === labelId)
+    const view: View = {
+      workspace: () => {
+        if (!rows.issues.has(uuid) || !rows.labels.has(labelId)) return
+        const has = rows.issueLabels.some((il) => il.issue_id === uuid && il.label_id === labelId)
+        if (has === on) return
+        if (on) rows.issueLabels.push({ issue_id: uuid, label_id: labelId })
+        else
+          rows.issueLabels = rows.issueLabels.filter(
+            (il) => !(il.issue_id === uuid && il.label_id === labelId),
+          )
+      },
+    }
+    void send(
+      api.labels.toggle,
+      { org_id: issue.org_id, issue_id: uuid, label_id: labelId, on },
+      view,
+      created && {
+        onError: (e) =>
           void created.then((saved) => {
             if (saved) toastWriteError(e)
-          })),
+          }),
+      },
     )
   },
 
@@ -6864,14 +7403,11 @@ export const PLANNER = {
       onSettled()
       return
     }
-    runUnpainted(
-      write(api.issues.setSubscriber, {
-        org_id: issue.org,
-        issue_id: issue.uuid,
-        profile_id: profileId,
-        subscribed,
-      }).finally(onSettled),
-      onSuccess,
+    void send(
+      api.issues.setSubscriber,
+      { org_id: issue.org, issue_id: issue.uuid, profile_id: profileId, subscribed },
+      'none',
+      { onOk: () => onSuccess?.(), onSettled },
     )
   },
 
@@ -6889,21 +7425,20 @@ export const PLANNER = {
     if (has() === on) return // already in the asked-for state
     if (refusePausedWrite(on ? api.issues.subscribe : api.issues.unsubscribe)) return
     const at = new Date().toISOString()
-    const paint = () => {
-      if (has() === on || !rows.issues.has(uuid)) return
-      if (on) rows.issueSubs.push({ issue_id: uuid, profile_id: me, created_at: at })
-      else
-        rows.issueSubs = rows.issueSubs.filter((s) => !(s.issue_id === uuid && s.profile_id === me))
+    const view: View = {
+      workspace: () => {
+        if (has() === on || !rows.issues.has(uuid)) return
+        if (on) rows.issueSubs.push({ issue_id: uuid, profile_id: me, created_at: at })
+        else
+          rows.issueSubs = rows.issueSubs.filter(
+            (s) => !(s.issue_id === uuid && s.profile_id === me),
+          )
+      },
     }
-    paint()
-    rebuild()
-    emit()
-    run(
-      write(on ? api.issues.subscribe : api.issues.unsubscribe, {
-        org_id: row.org_id,
-        issue_id: uuid,
-      }),
-      () => keepAcceptedPaint(paint),
+    void send(
+      on ? api.issues.subscribe : api.issues.unsubscribe,
+      { org_id: row.org_id, issue_id: uuid },
+      view,
     )
   },
 
@@ -6943,17 +7478,16 @@ export const PLANNER = {
 
 /* --- loading --------------------------------------------------------------
    One subscription to snapshot.forMe carries the whole workspace. Its first
-   result settles initStore; every later one is adopted (behind run()'s paint
-   gate). Its error callback fires when the query itself fails, not for
+   result settles initStore; every later one is the new anchor the rows are
+   built from (owe). Its error callback fires when the query itself fails, not for
    network drops, which only delay results until Convex reconnects and
    resubscribes. A failure after the first result is snapshot trouble (see
    snapshot health), and so is a later null result, which means no seat is
    left. The last snapshot stays on screen and shared edits pause until a
    later snapshot arrives and reaches the screen. */
 
-/* The last snapshot the server delivered, never a later null. It is run()'s
-   rollback anchor (rollback = re-adopt serverSnap, paint the writes accepted
-   since again, rebuild + emit; no refetch, no reload). */
+/* The last snapshot the server delivered, never a later null: the anchor the
+   rows are built from, with every live layer painted over it (repaint). */
 let serverSnap: Snapshot | null = null
 let snapUnsub: (() => void) | null = null
 let cancelDemoBoot: (() => void) | null = null
@@ -7059,21 +7593,27 @@ function subscribeSnapshot(
     {},
     (delivered) => {
       if (!stillCurrent() || bootFailed) return
+      // a result held from an earlier listener (deliveredValues)
+      const replay = delivered !== null && deliveredValues.has(delivered)
+      if (delivered) deliveredValues.add(delivered)
       // a large organization's long lists arrive in parts (lib/arrayLimit.ts)
-      const snap = delivered && joinLists(delivered)
+      const snap = delivered && anchor(joinLists(delivered))
       if (!settled) {
         settled = true
+        const prev = serverSnap
         serverSnap = snap
-        acceptedPaints = []
-        snapshotCurrent = snap !== null
-        if (snap) pruneAcceptedRemovals(snap)
+        snapshotCurrent = snap !== null && !replay
+        if (snap && !replay) {
+          snapshotDeliveries++
+          noteDelivery(prev, snap)
+        }
         first?.resolve(snap)
         return
       }
       // A later delivery of null means every seat vanished mid-session. The
-      // last snapshot stays on screen and stays run()'s rollback anchor, so a
-      // refused edit still reverts, and the notice says access ended. A held
-      // recovering delivery is gone with it, so it ends no trouble.
+      // last snapshot stays on screen and stays the anchor, so a refused
+      // edit still takes only its own paint away, and the notice says access
+      // ended. A recovering delivery not painted yet ends no trouble now.
       if (snap === null) {
         snapshotCurrent = false
         if (DEMO_MODE) {
@@ -7082,24 +7622,24 @@ function subscribeSnapshot(
         } else beginTrouble('no_access', '')
         return
       }
-      serverSnap = snap
-      // a good delivery holds every write accepted before it
-      acceptedPaints = []
-      snapshotCurrent = true
-      pruneAcceptedRemovals(snap)
-      // Gate the paint, never the data. While our own writes are in flight
-      // the optimistic patches own the screen. serverSnap is recorded above,
-      // and run()'s last settle flushes the newest held delivery. Snapshot
-      // trouble ends with that paint (endHeldRecovery).
-      if (inFlight > 0) {
-        snapDirty = true
-        if (snapshotTrouble) recoveryHeld = true
+      // A replay can predate writes accepted since: it paints, but no saved
+      // layer goes for it and it ends no trouble.
+      if (replay) {
+        serverSnap = snap
+        snapshotCurrent = false
+        owe('workspace')
         return
       }
-      adopt(snap)
-      rebuild()
-      emit()
-      snapshotRecovered()
+      const prev = serverSnap
+      serverSnap = snap
+      snapshotCurrent = true
+      snapshotDeliveries++
+      noteDelivery(prev, snap)
+      // a good delivery holds every write accepted before it
+      layers.dropSaved('workspace')
+      // Snapshot trouble ends with the paint of this delivery (endHeldRecovery)
+      if (snapshotTrouble) recoveryHeld = true
+      owe('workspace')
     },
     (err) => {
       if (!stillCurrent() || bootFailed) return
@@ -7161,6 +7701,7 @@ export function disposeDemoStore() {
   commentsSnap = null
   eventsSnap = []
   olderComments = []
+  acceptedCommentChanges.clear()
   threadStart = false
   earlierLoad = 'idle'
   syncUnsub?.()
@@ -7170,6 +7711,14 @@ export function disposeDemoStore() {
   PLANNER.lastComments = new Map()
   pendingRestoreIssueIds.clear()
   serverSnap = null
+  layers.clear()
+  owed.workspace = false
+  owed.thread = false
+  if (payTimer) clearTimeout(payTimer)
+  payTimer = null
+  snapshotDeliveries = 0
+  threadDeliveries = 0
+  threadCurrent = false
   preferences.dispose(myProfileSet)
   clearAvatarSources()
   minted.clear()
@@ -7203,18 +7752,11 @@ export function disposeDemoStore() {
   agentKeyOrg.clear()
   announcedMessages = null
   lastDeliveryAt = null
-  pendingArchiveIssueIds.clear()
-  pendingTaskDeletes.clear()
-  pendingProjectDeletes.clear()
-  acceptedPaints = []
   snapshotCurrent = false
   reapAfterPause.clear()
   roadmapVisit = null
   roadmapBatch = null
   roadmapDetailOpen = false
-  inFlight = 0
-  snapDirty = false
-  commentsDirty = false
   PLANNER.loaded = false
   PLANNER.commentsLoaded = false
   PLANNER.commentsFailure = 'none'
@@ -7222,16 +7764,13 @@ export function disposeDemoStore() {
   emit()
 }
 
-/* Replace the raw row cache per section from one snapshot delivery. adopt is
-   always followed by rebuild(): rebuild is deliberately impure (setWeekConfig
-   re-anchors dates.ts's live bindings), so nothing may patch P.* directly off
-   a snapshot. */
-function adopt(source: Snapshot) {
-  // Optimistic edits mutate these rows. Keep the server's snapshot separate
-  // so a refused write can restore it even without a newer delivery.
-  const snap = structuredClone(source)
-  pruneAcceptedRemovals(snap)
-  const priorIssueIds = new Set(rows.issues.keys())
+/* The arrival bookkeeping of live delivery `snap` after `prev`, once per
+   delivery and never on a repaint: the stored messages of tasks that a
+   restore brought back, or that newly entered the working set, raise no
+   desktop notification, and new messages do. Task ids are compared with the
+   previous delivery, not with the painted rows. */
+function noteDelivery(prev: Snapshot | null, snap: Snapshot) {
+  const priorIssueIds = new Set(prev ? prev.issues.map((issue) => issue.id) : [])
   const newlyVisibleIssueIds = new Set(
     snap.issues.filter((issue) => !priorIssueIds.has(issue.id)).map((issue) => issue.id),
   )
@@ -7241,10 +7780,10 @@ function adopt(source: Snapshot) {
        task that entered with that delivery so historical messages that are
        still unread do not trigger desktop notifications. New messages on
        already-visible tasks remain eligible for notification. */
-    const restoredIds = new Set(newlyVisibleIssueIds)
     if (announcedMessages !== null) {
       for (const message of snap.messages) {
-        if (restoredIds.has(message.issue_id)) announcedMessages.set(message.id, message.woke_at)
+        if (newlyVisibleIssueIds.has(message.issue_id))
+          announcedMessages.set(message.id, message.woke_at)
       }
     }
     for (const id of pendingRestoreIssueIds) {
@@ -7265,14 +7804,18 @@ function adopt(source: Snapshot) {
     }
   }
   lastDeliveryAt = snap.delivered_at
-  /* identity first — the snapshot says which roster rows are mine
-     (myProfileIds), so the blend can be re-keyed on every delivery. The
-     HOME pick mirrors the old boot: first non-guest seat, else the first
-     seat (guest-only logins have no home org, only a display fallback). */
-  const profById = new Map<string, Row<'profiles'>>(snap.profiles.map((p) => [p.id, p]))
+  announceNewMessages(snap)
+}
+
+/* Takes the identity from `snap`. The snapshot says which roster rows are
+   mine (myProfileIds), so the blend can be re-keyed on every delivery. The
+   HOME pick mirrors the old boot: first non-guest seat, else the first seat
+   (guest-only logins have no home org, only a display fallback). */
+function adoptIdentity(snap: Snapshot) {
+  const profById = new Map(snap.profiles.map((p) => [p.id, p]))
   myProfiles = new Map()
   myProfileSet.clear()
-  const mine: Row<'profiles'>[] = []
+  const mine: Snapshot['profiles'] = []
   snap.myProfileIds.forEach((pid) => {
     const p = profById.get(pid)
     if (!p) return
@@ -7283,13 +7826,21 @@ function adopt(source: Snapshot) {
   const home = mine.find((p) => p.org_role !== 'guest') || mine[0] || null
   HOME_ORG = home && home.org_role !== 'guest' ? home.org_id : ''
   CURRENT_USER = home ? home.id : ''
+}
 
+/* Builds every row section and the inbox counters from `source`, the rows
+   the layers paint over (paintRows). A copy, because paints change the rows
+   and the anchor must stay the server's. Always followed by rebuild():
+   rebuild is deliberately impure (setWeekConfig re-anchors dates.ts's live
+   bindings), so nothing may patch P.* directly off a snapshot. */
+function buildRows(source: Snapshot) {
+  const snap = structuredClone(source)
   rows.orgs = new Map(snap.orgs.map((r) => [r.id, r]))
   // the organization_billing successor: the home org's admin-only object
   const homeOrgRow = HOME_ORG ? rows.orgs.get(HOME_ORG) : null
   rows.billing = homeOrgRow?.billing || null
   rows.teams = new Map(snap.teams.map((r) => [r.id, r]))
-  rows.profiles = profById
+  rows.profiles = new Map(snap.profiles.map((r) => [r.id, r]))
   rows.teamMembers = snap.teamMembers
   rows.projects = new Map(snap.projects.map((r) => [r.id, r]))
   rows.access = snap.access
@@ -7314,9 +7865,6 @@ function adopt(source: Snapshot) {
   hiddenReadMessages = Math.max(0, (snap.readMessageCount ?? loadedReadCount) - loadedReadCount)
   unexaminedUnread = snap.unreadTruncated === true
   unexaminedRead = snap.readTruncated === true
-  // ALWAYS after the messages section lands: the null-primed first call is
-  // what keeps sign-in from replaying the stored inbox as OS notifications
-  announceNewMessages()
   // Preferences load once at boot; comments own their separate subscription.
 }
 
@@ -7367,7 +7915,7 @@ export async function initStore(
   // invitations that arrived after this login existed are claimed here, so a
   // guest seat is live on the very first snapshot (0081); a failure THROWS
   // (loadFailed), never masquerades as noProfile
-  if (!DEMO_MODE) await write(api.identity.claimMySeats, {})
+  if (!DEMO_MODE) await sendAwaited(api.identity.claimMySeats, {}, 'none')
   if (!stillCurrent()) return null
   // Both reads use the post-claim seat set. Preferences resolve the home
   // profile on the server, so they do not wait for the snapshot's roster.
@@ -7376,6 +7924,8 @@ export async function initStore(
     snapUnsub()
     snapUnsub = null
   }
+  // the new subscription has delivered nothing yet
+  snapshotCurrent = false
   // A new subscription starts from a clean state; its first result settles
   // the boot, so it never reports recovery from an earlier one's trouble.
   if (snapshotTrouble) {
@@ -7405,7 +7955,8 @@ export async function initStore(
     }
     return null
   }
-  adopt(first)
+  // the rows, with any layer from before a re-init painted over them
+  paintRows(true, false)
   avatarSources.sync(
     [...first.profiles]
       .filter((profile) => profile.avatar_storage_id)

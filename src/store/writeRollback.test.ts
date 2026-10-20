@@ -27,6 +27,8 @@ describe('rollback during snapshot trouble', () => {
   let store: typeof import('./planner')
   let snapshot: Snapshot
   let subscriptions: Subscription[]
+  // the boot's delivery, as the object the client handed over
+  let booted: Snapshot
   let sent: Sent[]
   let showToast: ReturnType<typeof vi.fn>
 
@@ -133,7 +135,10 @@ describe('rollback during snapshot trouble', () => {
     network.onUpdate.mockImplementation((ref, _args, deliver, fail) => {
       if (getFunctionName(ref) === 'snapshot:forMe') {
         subscriptions.push({ deliver, fail })
-        if (subscriptions.length === 1) deliver(structuredClone(snapshot))
+        if (subscriptions.length === 1) {
+          booted = structuredClone(snapshot)
+          deliver(booted)
+        }
       }
       return vi.fn()
     })
@@ -397,12 +402,12 @@ describe('rollback during snapshot trouble', () => {
     expect(message('message-a')?.snoozedUntil).toBe(Date.parse(UNTIL))
   })
 
-  it('paints a write accepted after another write was refused', async () => {
+  it('keeps a pending write on screen when another write is refused first', async () => {
     live().fail(new Error(QUERY_FAILURE))
     P().markMessagesRead(['message-a'])
-    // the refusal answers first and its rollback takes the pending paint
+    // the refusal answers first and takes away only its own paint
     await refuseFollow()
-    expect(message('message-a')?.read).toBe(false)
+    expect(message('message-a')?.read).toBe(true)
     await accept()
     expect(message('message-a')?.read).toBe(true)
   })
@@ -510,6 +515,112 @@ describe('rollback during snapshot trouble', () => {
     await accept({ removed: 0, ids: [], hasMore: false })
     await done
     expect(message('message-b')?.read).toBe(false)
+  })
+
+  it('takes back only the refused edit of three waiting online, at every step', async () => {
+    P().updateIssue(task('Calibrate the sensor').id, { title: 'Calibrate sensor A' })
+    P().updateIssue(task('Replace the gasket').id, { title: 'Replace gasket B' })
+    P().updateIssue(task('Order the brackets').id, { status: 'progress' })
+    const [first, middle, last] = sent.splice(0)
+    middle.reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
+    await settle()
+    expect(task('Calibrate sensor A')).toBeDefined()
+    expect(task('Replace the gasket')).toBeDefined()
+    expect(task('Order the brackets').status).toBe('progress')
+    first.resolve(null)
+    await settle()
+    expect(task('Calibrate sensor A')).toBeDefined()
+    expect(task('Order the brackets').status).toBe('progress')
+    last.resolve(null)
+    await settle()
+    expect(task('Calibrate sensor A')).toBeDefined()
+    expect(task('Order the brackets').status).toBe('progress')
+  })
+
+  it('keeps a write a delivery holds and one still waiting when the one between is refused', async () => {
+    P().updateIssue(task('Calibrate the sensor').id, { title: 'Calibrate sensor A' })
+    P().updateIssue(task('Replace the gasket').id, { title: 'Replace gasket B' })
+    P().updateIssue(task('Order the brackets').id, { status: 'progress' })
+    const [a, b] = sent.splice(0, 2)
+    // the delivery that holds A, then A's answer, then B's refusal
+    deliverTruth((snap) => {
+      snap.issues[0].title = 'Calibrate sensor A'
+    })
+    a.resolve(null)
+    await settle()
+    b.reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
+    await settle()
+    expect(task('Calibrate sensor A')).toBeDefined()
+    expect(task('Replace the gasket')).toBeDefined()
+    expect(task('Order the brackets').status).toBe('progress')
+  })
+
+  it('keeps an accepted address and portrait change during trouble after a refused write', async () => {
+    const me = snapshot.profiles[0]
+    snapshot.profiles[0] = { ...me, avatar_storage_id: 'storage-1' as typeof me.avatar_storage_id }
+    deliverTruth(() => {})
+    const slug = P().setOrgSlug('new-address')
+    const cleared = P().clearAvatar(me.id)
+    live().fail(new Error(QUERY_FAILURE))
+    await accept()
+    await expect(slug).resolves.toBeNull()
+    await expect(cleared).resolves.toBeNull()
+    expect(P().orgs[0].slug).toBe('new-address')
+    expect(P().user(me.id)?.avatarPath).toBeFalsy()
+    await refuseFollow()
+    expect(P().orgs[0].slug).toBe('new-address')
+    expect(P().user(me.id)?.avatarPath).toBeFalsy()
+  })
+
+  it('shows a task archived during trouble and restored elsewhere once the trouble ends', async () => {
+    const archived = P().archiveIssue(task('Replace the gasket').id)
+    live().fail(new Error(QUERY_FAILURE))
+    await accept()
+    await expect(archived).resolves.toBe(true)
+    expect(P().issues.some((issue) => issue.title === 'Replace the gasket')).toBe(false)
+    // someone restored it before the snapshot loaded again
+    deliverTruth(() => {})
+    expect(P().snapshotTrouble()).toBeNull()
+    expect(task('Replace the gasket')).toBeDefined()
+    await refuseFollow()
+    expect(task('Replace the gasket')).toBeDefined()
+  })
+
+  it('takes a held result Convex hands Try again for a replay, not a delivery', async () => {
+    live().fail(new Error(QUERY_FAILURE))
+    P().markMessagesRead(['message-a'])
+    await accept()
+    P().retrySnapshot()
+    // the new listener gets the object the client still holds, from before
+    // the read mark (lib/convexOrdering.test.ts)
+    live().deliver(booted)
+    vi.advanceTimersByTime(0)
+    await settle()
+    expect(P().snapshotTrouble()).not.toBeNull()
+    expect(message('message-a')?.read).toBe(true)
+    await refuseFollow()
+    expect(message('message-a')?.read).toBe(true)
+    // the server's own answer is a delivery
+    deliverTruth((snap) => {
+      snap.messages[0].read_at = '2026-09-15T08:30:00.000Z'
+    })
+    expect(P().snapshotTrouble()).toBeNull()
+    expect(message('message-a')?.read).toBe(true)
+  })
+
+  it('keeps a write waiting across a re-init whose new listener gets the held result', async () => {
+    P().markMessagesRead(['message-a'])
+    // a delivery since the read mark was sent, which does not hold it yet
+    deliverTruth(() => {})
+    const booting = store.initStore()
+    await vi.waitFor(() => expect(subscriptions).toHaveLength(2))
+    // Convex hands the new listener the object it still holds from the boot
+    live().deliver(booted)
+    await booting
+    await accept()
+    vi.advanceTimersByTime(0)
+    await settle()
+    expect(message('message-a')?.read).toBe(true)
   })
 
   it('reverts only the refused write outside trouble', async () => {

@@ -992,6 +992,35 @@ describe('labels — vocabulary + toggle', () => {
     }
   })
 
+  it('toggle with `on` sets the asked-for state, so a resent request changes nothing', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const label = await plantLabel(t, f.org.id, 'Bug')
+    const pairs = () =>
+      t.run(async (ctx) =>
+        ctx.db
+          .query('issue_labels')
+          .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+          .collect(),
+      )
+    const toggle = (on: boolean) =>
+      as(t, f.user).mutation(api.labels.toggle, {
+        org_id: f.org.id,
+        issue_id: issue.id,
+        label_id: label.id,
+        on,
+      })
+    await toggle(true)
+    await toggle(true)
+    expect(await pairs()).toHaveLength(1)
+    await toggle(false)
+    await toggle(false)
+    expect(await pairs()).toHaveLength(0)
+    const events = await activityFor(t, f.org.id)
+    expect(events.map((e) => e.verb)).toEqual(['labeled', 'removed a label from'])
+  })
+
   it('toggle refuses a foreign label with the 0078 sentence, verbatim', async () => {
     const t = newT()
     const f = await withOrg(t)

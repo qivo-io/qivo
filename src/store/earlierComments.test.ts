@@ -40,6 +40,10 @@ describe('earlier comments in the store', () => {
   const range = (from: number, to: number) =>
     Array.from({ length: to - from }, (_, n) => comment(from + n))
   const bodies = () => store.P.comments.map((c) => c.body)
+  let failThread: (error: unknown) => void = () => {}
+  /* Hands the current thread listener the result the last one held, as
+     Convex does for a new subscription to a query it still has. */
+  let replayThread: () => void = () => {}
   const settle = async () => {
     for (let i = 0; i < 8; i++) await Promise.resolve()
   }
@@ -88,11 +92,18 @@ describe('earlier comments in the store', () => {
           writes.push({ name, answer: { resolve, reject } })
         }),
     )
-    network.onUpdate.mockImplementation((ref, _args, receive) => {
+    let held: Page & { events: [] }
+    network.onUpdate.mockImplementation((ref, _args, receive, fail) => {
       if (getFunctionName(ref) === 'snapshot:forMe') receive(structuredClone(snap))
       // the live window also carries the task's changes, which these tests leave out
-      else if (getFunctionName(ref) === 'snapshot:commentThread')
-        publish = (page) => receive({ ...page, events: [] })
+      else if (getFunctionName(ref) === 'snapshot:commentThread') {
+        publish = (page) => {
+          held = { ...page, events: [] }
+          receive(held)
+        }
+        failThread = fail
+        replayThread = () => receive(held)
+      }
       return () => {}
     })
     store = await import('./planner')
@@ -254,20 +265,53 @@ describe('earlier comments in the store', () => {
     expect(bodies()).toEqual(range(100, 152).map((c) => c.body))
   })
 
-  it('drops a deleted comment the check finds only once my write in flight settles', async () => {
+  it('drops a deleted comment the check finds at once, with my write in flight on top', async () => {
     const { P } = store
     publish({ comments: range(100, 150), earlier: true })
     publish({ comments: range(102, 152), earlier: true })
     P.updateComment('comment-120', 'Edited')
     asked[0].answer.resolve({ comments: range(51, 101), earlier: true })
     await settle()
-    // the edit stays on screen while it is in flight
+    // the deleted comment goes, and the edit in flight stays on screen
+    expect(bodies()).not.toContain('#101')
     expect(P.comments.find((c) => c.id === 'comment-120')?.body).toBe('Edited')
-    expect(bodies()).toContain('#101')
     writes[0].answer.resolve(null)
     await settle()
     expect(bodies()).not.toContain('#101')
     expect(bodies()).toContain('#100')
+  })
+
+  it('keeps an edit saved while the thread failed when the comment slides out at recovery', async () => {
+    const { P } = store
+    publish({ comments: range(100, 150), earlier: true })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const edited = P.updateComment('comment-100', 'Edited while failing')
+    failThread(new Error('[CONVEX Q(snapshot:commentThread)] Server Error'))
+    writes[0].answer.resolve(null)
+    expect(await edited).toBe(true)
+    // the recovering window starts one comment later, so #100 slides out of
+    // it from the window delivered before the edit
+    publish({ comments: range(101, 151), earlier: true })
+    await settle()
+    expect(bodies()).toContain('Edited while failing')
+    expect(bodies()).not.toContain('#100')
+  })
+
+  it('keeps that edit through a Retry whose new listener gets the held window first', async () => {
+    const { P } = store
+    publish({ comments: range(100, 150), earlier: true })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const edited = P.updateComment('comment-100', 'Edited while failing')
+    failThread(new Error('[CONVEX Q(snapshot:commentThread)] Server Error'))
+    writes[0].answer.resolve(null)
+    expect(await edited).toBe(true)
+    P.retryComments()
+    // the held window predates the edit
+    replayThread()
+    publish({ comments: range(101, 151), earlier: true })
+    await settle()
+    expect(bodies()).toContain('Edited while failing')
+    expect(bodies()).not.toContain('#100')
   })
 
   it("drops a short thread's first comment that someone else deleted", () => {

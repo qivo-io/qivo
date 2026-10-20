@@ -391,6 +391,24 @@ describe('snapshot trouble', () => {
     expect(subscriptions).toHaveLength(1)
   })
 
+  it('ends the trouble within a task while a write still waits for its answer', async () => {
+    await boot()
+    const { P } = store
+    const [task] = P.issues
+    P.updateIssue(task.id, { status: 'progress' })
+    live().fail(new Error(QUERY_FAILURE))
+    const next = structuredClone(snapshot)
+    next.issues[0].title = 'Calibrate the sensor again'
+    live().deliver(next)
+    // painted at the latest on a 0 ms timer, with the waiting write on top
+    expect(P.snapshotTrouble()).not.toBeNull()
+    vi.advanceTimersByTime(0)
+    expect(P.snapshotTrouble()).toBeNull()
+    expect(P.issues[0].title).toBe('Calibrate the sensor again')
+    expect(P.issues[0].status).toBe('progress')
+    expect(sentNames()).toEqual(['issues:update'])
+  })
+
   it('ends the trouble when a delivery the paint gate held reaches the screen', async () => {
     await boot()
     const { P } = store

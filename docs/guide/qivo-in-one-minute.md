@@ -68,7 +68,10 @@ disabled while a draft or save needs to finish.
 If Qivo can't load the latest changes, a notice says so and shows when your
 view was last current. Editing pauses until the changes load again, and Qivo
 keeps trying. **Try again** asks right away, and **Details** shows the error
-to pass on to support. Text you were typing stays in its field. Marking
+to pass on to support. Text you were typing stays in its field. A change
+Qivo had already sent when the notice appeared still saves and stays on
+screen, unless the notice says you were signed out or lost access. An upload
+still under way stops and says why. Marking
 messages read and your own preferences still save. You can still revoke keys
 and tokens, and admins can still deactivate or remove people. If you were
 signed out, the notice offers **Reload** to sign in again. Until then nothing
