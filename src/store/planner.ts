@@ -6926,13 +6926,14 @@ export const PLANNER = {
       toast(`${what}. Press ${again} and lose ${waiting > 1 ? 'them' : 'it'}.`)
       return
     }
-    leaveDeliberately()
     unconfirmedNote.forgetAll()
     clearAvatarSources()
+    // a demo can start again in this page, so its warning stays armed
     if (DEMO_MODE) {
       notifyDemoEnded('lost')
       return
     }
+    leaveDeliberately()
     void authSignOut().then(
       () => location.reload(),
       () => location.reload(),

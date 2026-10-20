@@ -35,7 +35,7 @@ import { Icon } from './components/qivo'
 import { authClient, signOut as authSignOut, handleOAuthReturn } from './lib/auth'
 import { convex } from './lib/convex'
 import { lazyFromModule } from './lib/lazyModule'
-import { useUnsaved } from './lib/leaveGuard'
+import { leaveDeliberately, useUnsaved } from './lib/leaveGuard'
 import { loadFailureText } from './lib/loadFailure'
 import { oauthConnectRequest, oauthNeedsLogin } from './lib/oauthConnection'
 import { unconfirmedNote } from './lib/unconfirmedNote'
@@ -659,8 +659,10 @@ export function AuthGate() {
   }
 
   const signOutAndReload = () => {
-    // a sign-out clears the crash note too (lib/unconfirmedNote)
+    // a sign-out clears the crash note too (lib/unconfirmedNote), and the
+    // person chose to leave, so the reload does not ask about text typed here
     unconfirmedNote.forgetAll()
+    leaveDeliberately()
     signingOut.current = true
     loadAttempt.current++
     setAppearanceAccount(null)

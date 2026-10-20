@@ -10,7 +10,14 @@ import { plannerFixture, type Snapshot } from './plannerFixture.setup'
    drives the sync status the way the Convex socket would. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
+const demo = vi.hoisted(() => ({ on: false, ended: vi.fn() }))
 vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/demoMode', () => ({
+  get DEMO_MODE() {
+    return demo.on
+  },
+  notifyDemoEnded: demo.ended,
+}))
 // The note of the page under test. Each boot opens a new page, and every
 // other page has closed (Web Locks). Mocked modules outlive resetModules, so
 // the mock forwards to the page's own note.
@@ -96,6 +103,7 @@ describe('the pause while Qivo cannot save', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.useFakeTimers()
+    demo.on = false
     showToast = vi.fn()
     vi.stubGlobal('window', { showToast, setTimeout, clearTimeout })
     reload = vi.fn()
@@ -303,6 +311,18 @@ describe('the pause while Qivo cannot save', () => {
     expect(notes()).toEqual([])
     await settle()
     expect(reload).toHaveBeenCalled()
+  })
+
+  it('keeps the close warning armed after leaving the demo, which can start again in this page', async () => {
+    demo.on = true
+    await boot()
+    const { installLeaveGuard } = await import('../lib/leaveGuard')
+    const win = new EventTarget() as Window
+    installLeaveGuard(() => true, win)
+    store.P.signOut()
+    const event = new Event('beforeunload', { cancelable: true })
+    win.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(true)
   })
 
   it('says why a credential revoke is refused offline', async () => {
