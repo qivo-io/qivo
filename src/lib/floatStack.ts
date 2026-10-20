@@ -15,9 +15,11 @@ import { useSyncExternalStore } from 'react'
    --float-inset-top and --float-inset-bottom on <html>. Every layout that
    fills the window leaves those bands free, and so does the landscape phone
    Roadmap through useFloatInsets. Toasts pass on their own, so they take no
-   room. The two notice slots share one box that takes at most half the
-   window and scrolls inside, so notices that do not fit there never cover
-   the page beyond its band.
+   room, except a sticky one ([data-float-sticky], the notice of an edit the
+   server refused), which stays until the person closes it and takes a band
+   of its own. The two notice slots share one box that takes at most half
+   the window and scrolls inside, so notices that do not fit there never
+   cover the page beyond its band.
 
    The column is a [data-top-layer] child of <body>, so modal layers leave it
    exposed and usable (lib/useHideOthers, the task window's inert siblings). */
@@ -63,36 +65,46 @@ export function roomBeside(
   return { top, height: Math.max(0, bottom - top) }
 }
 
-/** Measures the notices and publishes their bands when they changed. Their
-    shared box counts, which holds the notices with their margins and stays
-    put while they scroll inside. While they fit, its padding only keeps
-    their shadows and is left out. Once they overflow they show through the
-    padding, so it counts too. Without a laid-out box (jsdom) the slots
-    count. */
-function measure(stack: HTMLElement) {
+/* The box of the notices: their shared box, which holds the notices with
+   their margins and stays put while they scroll inside. While they fit, its
+   padding only keeps their shadows and is left out. Once they overflow they
+   show through the padding, so it counts too. Without a laid-out box
+   (jsdom) the slots count. */
+function noticesBox(stack: HTMLElement): { top: number; bottom: number } | null {
   const notices = stack.querySelector<HTMLElement>('[data-float-notices]')
   const shown = notices?.getBoundingClientRect()
-  let box: { top: number; bottom: number } | null = null
   if (notices && shown?.height) {
     const style = getComputedStyle(notices)
     const overflows = notices.scrollHeight > notices.clientHeight + 1
     const pad = (value: string) => (overflows ? 0 : Number.parseFloat(value) || 0)
     const top = shown.top + pad(style.paddingTop)
     const bottom = shown.bottom - pad(style.paddingBottom)
-    if (bottom > top) box = { top, bottom }
-  } else {
-    const boxes = [
-      ...stack.querySelectorAll<HTMLElement>('[data-float-slot]:not([data-float-slot="toasts"])'),
-    ]
-      .map((slot) => slot.getBoundingClientRect())
-      .filter((rect) => rect.height > 0)
-    if (boxes.length)
-      box = {
-        top: Math.min(...boxes.map((b) => b.top)),
-        bottom: Math.max(...boxes.map((b) => b.bottom)),
-      }
+    return bottom > top ? { top, bottom } : null
   }
-  const next = noticeInsets(box, window.innerHeight)
+  return boxOf(stack, '[data-float-slot]:not([data-float-slot="toasts"])')
+}
+
+/* The box around the elements `selector` finds in `stack`, or null. */
+function boxOf(stack: HTMLElement, selector: string): { top: number; bottom: number } | null {
+  const boxes = [...stack.querySelectorAll<HTMLElement>(selector)]
+    .map((element) => element.getBoundingClientRect())
+    .filter((rect) => rect.height > 0)
+  return boxes.length
+    ? { top: Math.min(...boxes.map((b) => b.top)), bottom: Math.max(...boxes.map((b) => b.bottom)) }
+    : null
+}
+
+/** Measures the notices and publishes their bands when they changed. The
+    notices and the sticky toasts are measured apart, because on a phone the
+    notices sit at the top and the toasts at the bottom. */
+function measure(stack: HTMLElement) {
+  const height = window.innerHeight
+  const notices = noticeInsets(noticesBox(stack), height)
+  const sticky = noticeInsets(boxOf(stack, '[data-float-slot="toasts"] [data-float-sticky]'), height)
+  const next = {
+    top: Math.max(notices.top, sticky.top),
+    bottom: Math.max(notices.bottom, sticky.bottom),
+  }
   if (next.top === insets.top && next.bottom === insets.bottom) return
   insets = next
   const root = document.documentElement.style

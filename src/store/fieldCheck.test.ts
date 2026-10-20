@@ -270,16 +270,16 @@ describe('the field check in the store', () => {
     )
   })
 
-  it('runs keepDraft before the paint goes, and says the text is kept', async () => {
-    const kept: string[] = []
+  it('runs keepDraft with the text on screen once the paint goes, and says it is kept', async () => {
+    const kept: unknown[] = []
     void P.updateIssue(
       key('task-1'),
       { description: 'My text' },
-      { keepDraft: () => kept.push(P.issueById[key('task-1')].description) },
+      { keepDraft: (shown) => kept.push(shown, P.issueById[key('task-1')].description) },
     )
     latest().reject(changed([{ field: 'description' }]))
     await settle()
-    expect(kept).toEqual(['My text'])
+    expect(kept).toEqual(['The old text', 'The old text'])
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
       'Not saved. Emil Berg changed the description of QN-1. Your text is still in the editor. Save again to replace their version.',
     )

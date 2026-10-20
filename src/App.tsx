@@ -674,6 +674,9 @@ function ToastHost({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number)
         <div
           key={t.id}
           data-floating-surface
+          // a notice that stays takes room, so it never covers a control
+          // (lib/floatStack)
+          data-float-sticky={t.sticky ? '' : undefined}
           // A modal layer below turns off pointer events on <body>, and a press
           // here would count as an outside press that closes it. Take the press
           // so Dismiss closes only the toast, as the update notice does. While

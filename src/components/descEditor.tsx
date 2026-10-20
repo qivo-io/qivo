@@ -306,7 +306,7 @@ export type DescEditorHandle = {
     the save because someone changed the text first. The draft then stays,
     and the text the server keeps becomes its baseline once it shows, so a
     second Save deliberately replaces it. */
-export type DraftKeep = { seen: string; keepDraft: () => void }
+export type DraftKeep = { seen: string; keepDraft: (shown: unknown) => void }
 
 /** Comment mode: commit goes to onCommit (the store's add/updateComment),
     not the issue description. onCommit resolves whether the server saved
@@ -351,6 +351,8 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   // a save refused over someone else's change: the next text shown that is
   // neither the old baseline nor the draft becomes the baseline (draftKeep)
   const rebaseRef = useRef(false)
+  // the task this editor writes to, which a moving handle keeps
+  const taskUuid = issueKey === null ? undefined : P.issueById[issueKey]?.uuid
   const sessionUploadsRef = useRef<string[]>([])
   const [linkPop, setLinkPop] = useState<LinkPop | null>(null)
   const [headMenu, setHeadMenu] = useState(false)
@@ -736,7 +738,8 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
         },
       },
     },
-    [issueKey],
+    // one editor per task: a new task's handle may move while it is open
+    [taskUuid],
   )
   editorRef.current = editor
   if (editor && !committedDocRef.current) committedDocRef.current = editor.state.doc
@@ -768,17 +771,22 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     committedDocRef.current = ed.state.doc
   }
 
-  /* The DraftKeep of a save from baseline `seen`. Its keepDraft puts the
-     baseline back to `seen`, so the draft shows as unsaved with its Save
-     bar, and reconcile moves the baseline to the text the server keeps. */
+  /* The DraftKeep of a save from baseline `seen`. Its keepDraft gets the
+     text on screen once the refused save's paint has gone. That is the
+     text the server keeps, which becomes the baseline, unless it is still
+     `seen` because no delivery holds the other change yet. Then the
+     baseline stays `seen` and reconcile moves it once the change shows.
+     Either way the draft shows as unsaved, with its Save bar. */
   const draftKeep = (ed: Editor, seen: string): DraftKeep => ({
     seen,
-    keepDraft: () => {
+    keepDraft: (shown) => {
       if (ed.isDestroyed) return
-      rebaseRef.current = true
-      rawRef.current = seen
-      canonRef.current = canonical(seen)
-      committedDocRef.current = ed.schema.nodeFromJSON(astToDoc(parseMd(seen)))
+      const text = typeof shown === 'string' ? shown : seen
+      const base = text !== seen && canonical(text) !== serialize(ed) ? text : seen
+      rebaseRef.current = base === seen
+      rawRef.current = base
+      canonRef.current = canonical(base)
+      committedDocRef.current = ed.schema.nodeFromJSON(astToDoc(parseMd(base)))
       refreshDirtyRef.current()
     },
   })
@@ -1055,7 +1063,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   // upload completion routing + discard-reap on unmount / issue switch
   useEffect(() => {
     const ed = editor
-    const uuid = issueKey === null ? undefined : P.issueById[issueKey]?.uuid
+    const uuid = taskUuid
     if (!ed || !uuid) return
     const entry = (src: string, repl: { attId: string; alt: string } | null): boolean => {
       let found: { pos: number; attrs: Record<string, unknown>; size: number } | null = null
@@ -1084,7 +1092,8 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       if (dirtyRef.current) toast('Unsaved description changes discarded')
       reapRef.current()
     }
-  }, [issueKey, editor])
+    // by the task, so a handle that moves keeps the routing and the draft
+  }, [taskUuid, editor])
 
   // comment mode has no upload plumbing, but the same unmount contract: a
   // dirty draft (typed composer, half-edited comment) dies with the editor

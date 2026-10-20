@@ -2130,8 +2130,11 @@ function IssueDetail({
                     { title: v },
                     {
                       seen: { title: titleSeen },
-                      keepDraft: () => {
-                        titleRebase.current = true
+                      keepDraft: (shown) => {
+                        // the rename shown now is the title a second save
+                        // replaces; until a delivery shows it, wait for it
+                        if (typeof shown === 'string' && shown !== titleSeen) setTitleSeen(shown)
+                        else titleRebase.current = true
                         setTitleDraft(v)
                         setEditTitle(true)
                       },

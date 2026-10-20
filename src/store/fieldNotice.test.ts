@@ -78,10 +78,13 @@ describe('refusalLine', () => {
     )
   })
 
-  it('says a refused delete was not done', () => {
+  it('says a refused delete or link removal was not done', () => {
     expect(line({ deletes: true, changes: [change({ record: 'milestone', field: 'week' })] })).toBe(
       'Not deleted. Emil Berg changed the date of milestone “Beta”. Check it before you delete it again.',
     )
+    expect(
+      line({ deletes: true, changes: [change({ record: 'link', field: 'kind', by: null })] }),
+    ).toBe('Not removed. QN-12 was changed elsewhere. Check it before you remove it again.')
   })
 })
 

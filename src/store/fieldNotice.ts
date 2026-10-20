@@ -21,6 +21,9 @@ export type Refusal = {
   /** The write waited through a lost connection and the other change was
       made meanwhile. */
   offline?: boolean
+  /** The record's name as the person saw it before the refused write, which
+      names the record in place of the name on screen. */
+  seenName?: string
 }
 
 /** Who wrote a value: the person's own seat elsewhere (`you`), a name, or
@@ -31,7 +34,7 @@ export type Writer = 'you' | { name: string } | null
 export type Lookup = {
   /** The record a change is about, as the notice names it: a task key, or
       `this comment on QN-12`, `Ana's access to Website` and so on. */
-  record: (change: FieldChange) => string
+  record: (change: FieldChange, seenName?: string) => string
   writer: (profileId: string) => Writer
 }
 
@@ -121,8 +124,11 @@ function fieldWords(changes: readonly FieldChange[]): string[] {
 /** The one line a notice shows for refusal `r`. */
 export function refusalLine(r: Refusal, look: Lookup): string {
   const first = r.changes[0]
-  if (!first) return r.deletes ? 'Not deleted.' : 'Not saved.'
-  const record = look.record(first)
+  // a link is removed rather than deleted
+  const verb = first?.record === 'link' ? 'remove' : 'delete'
+  const not = r.deletes ? `Not ${verb}d.` : 'Not saved.'
+  if (!first) return not
+  const record = look.record(first, r.seenName)
   // one record per refusal: the server refuses the first record that conflicts
   const words = fieldWords(r.changes.filter((c) => c.id === first.id && c.of === first.of))
   const whole = WHOLE.has(first.record)
@@ -138,7 +144,7 @@ export function refusalLine(r: Refusal, look: Lookup): string {
         ? `${writer.name} changed ${what}${offline}.`
         : `${capital(what)} ${!whole && words.length > 1 ? 'were' : 'was'} changed elsewhere${offline}.`
   const tail = r.deletes
-    ? 'Check it before you delete it again.'
+    ? `Check it before you ${verb} it again.`
     : r.kept
       ? 'Your text is still in the editor. Save again to replace their version.'
       : r.batch !== undefined && r.batch > 1
@@ -150,7 +156,7 @@ export function refusalLine(r: Refusal, look: Lookup): string {
           : r.count > 1
             ? `Your ${r.count} changes were discarded.`
             : 'Your change was discarded.'
-  return `${r.deletes ? 'Not deleted.' : 'Not saved.'} ${changed} ${tail}`
+  return `${not} ${changed} ${tail}`
 }
 
 /** The most lines one notice shows before it says how many more. */

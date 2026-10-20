@@ -1152,9 +1152,10 @@ type SendOptions<R> = {
   /** How the notice of a field_changed refusal reads (store/fieldNotice.ts):
       a delete, or a Roadmap batch of this many changes. */
   notice?: { deletes?: boolean; batch?: number }
-  /** Runs on a field_changed refusal before the paint goes, for an editor
-      that keeps the person's draft; the notice then says so. */
-  keepDraft?: () => void
+  /** Runs on a field_changed refusal once the paint has gone, for an
+      editor that keeps the person's draft, with the value of the write's
+      first `over` field now on screen; the notice says the draft is kept. */
+  keepDraft?: (shown: unknown) => void
 }
 
 /** What a write shows: a view, an open layer it was collected in (a Roadmap
@@ -1281,19 +1282,13 @@ function start<M extends FunctionReference<'mutation'>, T>(
       if (epoch === storeEpoch) {
         console.error('[qivo] write failed:', error)
         const painted = paints(layer.view)
-        if (error instanceof ConvexError && errData(error).reason === FIELD_CHANGED) {
-          fieldRefusals.set(error, {
-            layer,
-            sentAt,
-            kept: !!o.keepDraft,
-            ...o.notice,
-          })
-          guarded(() => o.keepDraft?.())
-        }
+        const changed = error instanceof ConvexError && errData(error).reason === FIELD_CHANGED
+        if (changed) fieldRefusals.set(error, { layer, sentAt, kept: !!o.keepDraft, ...o.notice })
         guarded(() =>
           (o.onError ?? (awaited ? undefined : (e) => toastWriteError(e, painted)))?.(error),
         )
         guarded(() => settleRefused(layer))
+        if (changed && o.keepDraft) guarded(() => o.keepDraft?.(shownOf(o.over)))
         guarded(() => o.onSettled?.())
       }
       return refusal(error)
@@ -1929,9 +1924,9 @@ const refusedLines = new Map<number, FieldNoticeLine>()
 /* How a notice names the record a change is about, from the rows on
    screen, and who wrote it. */
 const fieldLookup = {
-  record(change: FieldChange): string {
+  record(change: FieldChange, seenName?: string): string {
     const task = (id: string | undefined) => (id && uuidToKey.get(id)) || 'a task'
-    const named = (name: string | undefined, fallback: string) => name ?? fallback
+    const named = (name: string | undefined, fallback: string) => seenName ?? name ?? fallback
     switch (change.record) {
       case 'task':
         return task(change.id)
@@ -1940,7 +1935,7 @@ const fieldLookup = {
         return comment ? `this comment on ${task(comment.issue_id)}` : 'this comment'
       }
       case 'milestone': {
-        const name = rows.milestones.get(change.id)?.name
+        const name = seenName ?? rows.milestones.get(change.id)?.name
         return name ? `milestone “${name}”` : 'a milestone'
       }
       case 'project':
@@ -1954,7 +1949,7 @@ const fieldLookup = {
       case 'team':
         return named(rows.teams.get(change.id)?.name, 'a team')
       case 'label': {
-        const name = rows.labels.get(change.id)?.name
+        const name = seenName ?? rows.labels.get(change.id)?.name
         return name ? `label “${name}”` : 'a label'
       }
       case 'profile':
@@ -2010,10 +2005,17 @@ function noticeFieldChanged(e: unknown) {
       : { key: `field-changed-${++fieldNoticeSeq}`, lines: [], at: now }
   box.at = now
   fieldNoticeBox = box
+  // the name the person saw, since the screen may still show their own new one
+  const over = layer?.over
+  const seenName =
+    over && over.id === changes[0]?.id && typeof over.fields.name === 'string'
+      ? over.fields.name
+      : undefined
   const line: FieldNoticeLine = {
     refusal: {
       changes,
       count: 1,
+      seenName,
       kept: context?.kept,
       deletes: context?.deletes,
       batch: context?.batch,
@@ -3629,6 +3631,20 @@ function overOf(
   return { table, id: row.id, fields: Object.fromEntries(fields.map((f) => [f, values[f]])) }
 }
 
+/** The value on screen of `over`'s first field, for a kept draft
+    (SendOptions.keepDraft): a task's or a comment's. */
+function shownOf(over: Over | undefined): unknown {
+  const field = over && Object.keys(over.fields)[0]
+  if (!over || !field) return undefined
+  const row =
+    over.table === 'issues'
+      ? rows.issues.get(over.id)
+      : over.table === 'comments'
+        ? rows.comments.get(over.id)
+        : undefined
+  return row ? Object.entries(row).find(([key]) => key === field)?.[1] : undefined
+}
+
 /* The fields the app sends as prints rather than values, with their
    compare forms (convex/lib/fieldPrints.ts), so an edit never carries a long
    text twice. */
@@ -5058,7 +5074,7 @@ export const PLANNER = {
   updateIssue: (
     id: string,
     patch: IssuePatch,
-    opts: { seen?: Partial<Row<'issues'>>; keepDraft?: () => void } = {},
+    opts: { seen?: Partial<Row<'issues'>>; keepDraft?: (shown: unknown) => void } = {},
   ): Promise<boolean> => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
@@ -6019,7 +6035,7 @@ export const PLANNER = {
   updateComment: (
     id: string,
     body: string,
-    opts: { seen?: string; keepDraft?: () => void } = {},
+    opts: { seen?: string; keepDraft?: (shown: unknown) => void } = {},
   ): Promise<boolean> => {
     const rec = rows.comments.get(id)
     const text = (body || '').trim()
