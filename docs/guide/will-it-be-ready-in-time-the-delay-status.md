@@ -25,8 +25,9 @@ The projection assumes progress since the measurement, so an estimate's age
 alone does not add more work. Saving another estimate starts the calculation
 from the new measurement. Moving a task to another sub-project records a new
 measurement at the move, for the task and each subtask that moves with it, so
-the projection counts its Remaining from the move week. An unfinished task's
-projected finish cannot be earlier than the current week.
+the projection starts from the move week or the planned start, whichever is
+later. An unfinished task's projected finish cannot be earlier than the
+current week.
 
 The owner is the assignee, or the reviewer while the task is In Review with
 one. Without an owner, remaining hours or positive weekly capacity, the

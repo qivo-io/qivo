@@ -124,13 +124,17 @@ describe('moving a task with its family', () => {
 
   it('restarts the remaining-hours measurement of the task and each subtask it carries', async () => {
     const measured = { remaining_hours: 4, remaining_set_at: '2026-08-03T08:00:00.000Z' }
+    // the leaves hold the hours, as a group holds none
     await load((snap) => {
-      for (const row of snap.issues) if (row.id !== 'epic') Object.assign(row, measured)
+      for (const row of snap.issues)
+        if (row.id === 'api' || row.id === 'lone') Object.assign(row, measured)
     })
     const week = vm('lone').remainingSet!
     P.moveIssue(vm('epic').id, ids.fw)
     expect(vm('api').remainingSet).toBeGreaterThan(week)
     expect(vm('lone').remainingSet).toBe(week)
+    // a task without hours gains no measurement
+    expect(vm('epic').remainingSet).toBeNull()
     // naming the current sub-project changes nothing
     expect(P.moveIssue(vm('lone').id, ids.fe)).toBeNull()
     expect(vm('lone').remainingSet).toBe(week)
