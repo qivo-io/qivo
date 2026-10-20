@@ -23,6 +23,8 @@ const latency = Number(option('latency', '100'))
 const bandwidth = Number(option('mbps', '8'))
 const output = option('output', '/tmp/qivo-browser-benchmark.json')
 const timeout = Number(option('timeout', '15000'))
+// unread messages in the fixture, for the bulk-read scenario
+const messages = Number(option('messages', '500'))
 const temporary = await mkdtemp(join(tmpdir(), 'qivo-browser-perf-'))
 const distribution = join(temporary, 'dist')
 const entry = join(here, 'perf/entry.tsx')
@@ -43,6 +45,12 @@ const report = {
   timeoutMs: timeout,
   kind: 'authenticated production UI; synthetic transport',
   scenarios: [],
+}
+// --trace prints each phase as it starts, to find a step that stalls
+const trace = process.argv.includes('--trace')
+const phase = (name) => {
+  running.phase = name
+  if (trace) console.error(`${running.tasks} tasks, sample ${running.sample}: ${name}`)
 }
 const summary = (values) => {
   const ordered = [...values].sort((a, b) => a - b)
@@ -136,6 +144,10 @@ try {
         drag: [],
         comments: [],
         commentAppRenders: [],
+        remoteWhilePending: [],
+        remoteSettle: [],
+        refusalWithTen: [],
+        markAllRead: [],
         heapMb: [],
         domNodes: [],
       }
@@ -150,7 +162,10 @@ try {
           console.error(error.message)
         })
         page.on('console', (message) => {
-          if (message.type() === 'error') {
+          // the refusal the refusalWithTen phase asks for is logged as one
+          const asked =
+            running.phase === 'refusalWithTen' && message.text().includes('no write access')
+          if (message.type() === 'error' && !asked) {
             errors.push(message.text())
             console.error(message.text())
           }
@@ -188,20 +203,20 @@ try {
           }
           return elapsed
         }
-        await page.goto(`${origin}/?tasks=${tasks}&latency=${latency}`)
+        await page.goto(`${origin}/?tasks=${tasks}&latency=${latency}&messages=${messages}`)
         await page.locator('[data-view-switch]').waitFor()
         await settle()
         metrics.startup.push(await page.evaluate(() => performance.now()))
         assert.equal(await page.evaluate(() => window.PLANNER.issues.length), tasks)
         const search = page.getByRole('combobox', { name: 'Search tasks and projects' })
-        running.phase = 'searchOpen'
+        phase('searchOpen')
         metrics.searchOpen.push(
           await timed(async () => {
             await page.locator('[data-sidebar-search]').click()
             await search.waitFor()
           }),
         )
-        running.phase = 'search'
+        phase('search')
         metrics.search.push(
           await timed(async () => {
             await search.fill('signed firm')
@@ -210,7 +225,7 @@ try {
         )
         assert.equal(await page.locator('[cmdk-item]').count(), 9)
         await page.keyboard.press('Escape')
-        running.phase = 'navigation'
+        phase('navigation')
         metrics.navigation.push(
           await timed(async () => {
             await page
@@ -244,7 +259,7 @@ try {
         const taskId = await bar.getAttribute('data-bar')
         const initial = await page.evaluate((id) => window.PLANNER.issueById[id].start, taskId)
         const writes = await page.evaluate(() => window.__perf.writes)
-        running.phase = 'drag'
+        phase('drag')
         assert.equal(
           await page.evaluate(
             ({ x, y }) =>
@@ -270,7 +285,7 @@ try {
           initial,
         )
         await page.locator('[data-roadmap-task-open]').first().click()
-        running.phase = 'comments'
+        phase('comments')
         await page.locator('[data-task-close]').waitFor()
         await page.waitForFunction(() => window.PLANNER.commentsLoaded)
         await settle()
@@ -291,8 +306,70 @@ try {
             1048576,
         )
         metrics.domNodes.push(await page.locator('*').count())
-        running.phase = 'offscreen focus'
         await page.locator('[data-task-close]').click()
+        await settle()
+        // Writes waiting for their answer: another person's change arrives
+        // while one waits, then the write answers with its own echo.
+        const heldCount = (n) => page.waitForFunction((count) => window.__perf.held() === count, n)
+        const paintTimer = () =>
+          page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)))
+        await page.evaluate(() => window.__perf.hold())
+        // not awaited in the page: the write waits until it is released
+        await page.evaluate(() => {
+          void window.PLANNER.updateIssue(window.PLANNER.issues[0].id, { title: 'Pending edit' })
+        })
+        await heldCount(1)
+        phase('remoteWhilePending')
+        metrics.remoteWhilePending.push(
+          await timed(async () => {
+            await page.evaluate(() => window.__perf.deliverRemote(1))
+            await paintTimer()
+          }),
+        )
+        const before = await page.evaluate(() => window.__perf.writes)
+        phase('remoteSettle')
+        metrics.remoteSettle.push(
+          await timed(async () => {
+            await page.evaluate(() => window.__perf.releaseAll())
+            await page.waitForFunction((count) => window.__perf.writes > count, before)
+            await paintTimer()
+          }),
+        )
+        assert.equal(await page.evaluate(() => window.PLANNER.issues[0].title), 'Pending edit')
+        // A refusal while ten other edits wait: only its own change goes.
+        await page.evaluate(() => {
+          window.__perf.hold()
+          for (const [n, task] of window.PLANNER.issues.slice(0, 11).entries())
+            window.PLANNER.updateIssue(task.id, { title: `Layer ${n}` })
+        })
+        await heldCount(11)
+        phase('refusalWithTen')
+        metrics.refusalWithTen.push(
+          await timed(async () => {
+            await page.evaluate(() => window.__perf.releaseOne(true))
+            await page.waitForFunction(() => window.PLANNER.issues[0].title !== 'Layer 0')
+            await paintTimer()
+          }),
+        )
+        await page.evaluate(() => window.__perf.releaseAll())
+        await page.waitForFunction(() => !window.PLANNER.roadmapUndo.busy)
+        // Mark all as read over the fixture's unread messages.
+        phase('markAllRead')
+        metrics.markAllRead.push(
+          await timed(async () => {
+            await page.evaluate(() =>
+              Promise.race([
+                window.PLANNER.markAllMessagesRead(),
+                new Promise((_, reject) =>
+                  setTimeout(() => reject(new Error('Mark all as read did not finish')), 15000),
+                ),
+              ]),
+            )
+            await paintTimer()
+          }),
+        )
+        assert.equal(await page.evaluate(() => window.PLANNER.unreadMessages), 0)
+        phase('offscreen focus')
         const lastTask = page.locator('[data-roadmap-task-open]').last()
         const lastId = await lastTask.getAttribute('data-roadmap-task-open')
         await lastTask.focus()
