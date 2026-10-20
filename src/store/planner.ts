@@ -972,10 +972,11 @@ function repaint(parts: { workspace?: boolean; thread?: boolean }) {
     clearTimeout(payTimer)
     payTimer = null
   }
+  const handles = workspace ? new Map(uuidToKey) : null
   paintRows(workspace, thread)
   if (workspace) {
     rebuild()
-    runKeyWatches()
+    if (handles) moveHandles(handles)
     emit()
     // after the emit: it may send (reapPausedUploads)
     endHeldRecovery()
@@ -1031,30 +1032,22 @@ function showPaint(view: View) {
   }
 }
 
-/* A caller that shows a new task's handle (addIssue): the handle it last
-   heard and how to tell it that the handle changed. `done` once the create
-   was answered, after which the next repaint is the last one it watches. */
-type KeyWatch = {
-  uuid: string
-  key: string
-  fixed: (key: string, previous: string) => void
-  done: boolean
-}
-const keyWatches = new Set<KeyWatch>()
+/* Who hears that tasks' handles moved (P.watchHandles). */
+const handleWatchers = new Set<(moved: ReadonlyMap<string, string>) => void>()
 
-/** Tells each new task's caller its handle after a repaint, when it moved:
-    another person's create can take the preview number while the write
-    waits, and the server's answer fixes it. */
-function runKeyWatches() {
-  for (const watch of keyWatches) {
-    const key = uuidToKey.get(watch.uuid)
-    if (key && key !== watch.key) {
-      const previous = watch.key
-      watch.key = key
-      watch.fixed(key, previous)
-    }
-    if (watch.done) keyWatches.delete(watch)
+/** Tells P.watchHandles' listeners, once per repaint, every task whose
+    handle moved since `before` (uuid to handle), as one map from the old
+    handle to the new. A new task's preview number moves when another
+    person's create takes it while the write waits, and again when the
+    server's answer fixes it. Taken together, two creates that both move
+    cannot make a caller follow the wrong one. */
+function moveHandles(before: ReadonlyMap<string, string>) {
+  const moved = new Map<string, string>()
+  for (const [uuid, handle] of before) {
+    const now = uuidToKey.get(uuid)
+    if (now && now !== handle) moved.set(handle, now)
   }
+  if (moved.size) for (const watcher of handleWatchers) watcher(moved)
 }
 
 /** What a write is about when its args do not say (describeWrite): the
@@ -4476,6 +4469,16 @@ export const PLANNER = {
   updates: updates.channels,
   emit,
 
+  /** Calls `listener` with every task handle that moved, as a map from the
+      old handle to the new, once per repaint (moveHandles). A caller that
+      keeps a handle, such as the open task window, applies the whole map
+      at once. Answers a function that stops it. */
+  watchHandles: (listener: (moved: ReadonlyMap<string, string>) => void) => {
+    handleWatchers.add(listener)
+    return () => {
+      handleWatchers.delete(listener)
+    }
+  },
   /** Why the live snapshot is stale, or null while it is current. Observe
       it through the `health` channel. */
   snapshotTrouble: (): SnapshotTrouble | null => snapshotTrouble,
@@ -4659,11 +4662,15 @@ export const PLANNER = {
     const preview = handleFor(uuid, row.org_id, `${ISSUE_PREFIX}-${previewNum}`)
     // only a home-org handle can change under a renumber — a foreign issue's
     // handle IS its uuid, which the server never reassigns
-    const watch: KeyWatch | null =
-      onKeyFixed && row.org_id === HOME_ORG
-        ? { uuid, key: preview, fixed: onKeyFixed, done: false }
-        : null
-    if (watch) keyWatches.add(watch)
+    let shown = preview
+    const follow = (moved: ReadonlyMap<string, string>) => {
+      const next = moved.get(shown)
+      if (!next) return
+      const previous = shown
+      shown = next
+      onKeyFixed?.(next, previous)
+    }
+    if (row.org_id === HOME_ORG) handleWatchers.add(follow)
     void send(
       api.issues.create,
       {
@@ -4693,12 +4700,11 @@ export const PLANNER = {
         },
         onError: (error) => {
           toastWriteError(error)
-          if (watch) keyWatches.delete(watch)
-          onRefused?.(watch?.key ?? preview)
+          handleWatchers.delete(follow)
+          onRefused?.(shown)
         },
-        onSettled: () => {
-          if (watch) watch.done = true
-        },
+        // the repaint that shows the server's number has run by now
+        onSettled: () => handleWatchers.delete(follow),
       },
     )
     return preview
@@ -4923,6 +4929,13 @@ export const PLANNER = {
       api.issues.createParent,
       { org_id: it.org, id: it.uuid, parent_id: parentId, title: title.trim() },
       view,
+      {
+        // the server's number for the parent, painted while no delivery holds it
+        keep: (answer) => {
+          created.num = answer.parent_num
+          return view
+        },
+      },
     )
   },
 
@@ -7603,7 +7616,6 @@ export function disposeDemoStore() {
   pendingRestoreIssueIds.clear()
   serverSnap = null
   layers.clear()
-  keyWatches.clear()
   owed.workspace = false
   owed.thread = false
   if (payTimer) clearTimeout(payTimer)

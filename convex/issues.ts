@@ -312,14 +312,16 @@ export const update = orgMutation({
  * top-level task `parent_id` titled `title` in task `id`'s sub-project, and
  * task `id` attached under it, in one transaction. A refused attach, such as
  * for a task with archived subtasks the app cannot see, rolls the new task
- * back too. Both writes run their usual cores and checks. */
+ * back too. Both writes run their usual cores and checks. Answers the task
+ * with the new parent's number (`parent_num`), which the app shows until a
+ * delivery holds the parent. */
 export const createParent = orgMutation({
   args: { id: v.string(), parent_id: v.string(), title: v.string() },
   handler: async (ctx, { id, parent_id, title }) => {
     const now = new Date().toISOString()
     const issue = await myIssue(ctx, id)
     await assertWritable(ctx, issue.project_id)
-    await createIssueCore(ctx, {
+    const parent = await createIssueCore(ctx, {
       me: ctx.me,
       args: { id: parent_id, project_id: issue.project_id, title },
       now,
@@ -331,7 +333,7 @@ export const createParent = orgMutation({
       patch: { parent_id },
       now,
     })
-    return await pubFor(ctx, ctx.me, after)
+    return { ...(await pubFor(ctx, ctx.me, after)), parent_num: parent.num }
   },
 })
 

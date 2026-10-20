@@ -141,6 +141,61 @@ describe('task creation through the client store', () => {
     vi.useRealTimers()
   })
 
+  it('moves two waiting creates together, so a window follows its own task', async () => {
+    vi.useFakeTimers()
+    const moves: ReadonlyMap<string, string>[] = []
+    const stop = P.watchHandles((moved) => moves.push(moved))
+    const first = P.addIssue({ project: snap.projects[0].id, title: 'First' })!
+    const second = P.addIssue({ project: snap.projects[0].id, title: 'Second' })!
+    const [a, b] = [P.issueById[first].uuid, P.issueById[second].uuid]
+    const next = snap.orgs[0].next_issue_num + 1
+    snap.orgs[0].next_issue_num = next
+    snap.issues = [
+      {
+        id: crypto.randomUUID(),
+        org_id: snap.orgs[0].id,
+        project_id: snap.projects[0].id,
+        num: next,
+        title: 'Task created by another user',
+        description: '',
+        status: 'backlog',
+        priority: 'low',
+        paused: false,
+        created_at: NOW,
+        updated_at: NOW,
+        has_hidden_subtasks: false,
+        has_hidden_parent: false,
+      },
+    ]
+    publish(structuredClone(snap))
+    vi.advanceTimersByTime(0)
+    // one map for the repaint: the open window applies it at once
+    expect(moves).toHaveLength(1)
+    const open = (handle: string) => moves[0].get(handle) ?? handle
+    expect(P.issueById[open(first)].uuid).toBe(a)
+    expect(P.issueById[open(second)].uuid).toBe(b)
+    stop()
+    vi.useRealTimers()
+  })
+
+  it('shows the parent number the server answers while no delivery holds it', async () => {
+    const child = P.addIssue({ project: snap.projects[0].id, title: 'Child' })!
+    requests.splice(0)[0].resolve({ num: snap.orgs[0].next_issue_num + 1 })
+    await settled()
+    const uuid = P.issueById[child].uuid
+    P.createParent(child, 'New parent')
+    expect(P.issues.find((task) => task.title === 'New parent')?.key).toBe(`${P.ISSUE_PREFIX}-2`)
+    // the snapshot fails before the answer, so no delivery shows the create
+    // or the other person's that took number 2
+    const subscription = network.onUpdate.mock.calls.find(
+      ([ref]) => getFunctionName(ref) === 'snapshot:forMe',
+    )!
+    subscription[3](new Error('[CONVEX Q(snapshot:forMe)] Server Error'))
+    requests[0].resolve({ id: uuid, parent_num: 5 })
+    await settled()
+    expect(P.issues.find((task) => task.title === 'New parent')?.key).toBe(`${P.ISSUE_PREFIX}-5`)
+  })
+
   it('paints a new parent at once and takes it away again on a refusal', async () => {
     const child = P.addIssue({ project: snap.projects[0].id, title: 'Child' })!
     const uuid = P.issueById[child].uuid

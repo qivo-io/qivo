@@ -320,6 +320,7 @@ export const recipes: Recipe[] = [
     what: 'a new parent task',
     pause: 'P',
     act: (P) => P.createParent('QN-3', 'New parent'),
+    answers: { 'issues:createParent': () => ({ parent_num: 4 }) },
     truth: (snap, args) => {
       created(snap, str(args.parent_id), 4, { title: 'New parent' })
       Object.assign(issue(snap, 'task-c'), { parent_id: str(args.parent_id), updated_at: SERVER })

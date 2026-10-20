@@ -214,16 +214,27 @@ export const convex = {
       return null
     }
     if (name === 'messages:markAllRead') {
-      const ids = []
-      for (const message of snapshot.messages)
-        if (!message.read_at && message.org_id === args.org_id) {
-          message.read_at = new Date().toISOString()
-          ids.push(message.id)
-        }
+      // as convex/model/messages.ts does: at most 256 rows a batch, created
+      // no later than the first batch's cutoff, then each task keeps only its
+      // newest read row
+      const before = args.before ?? Date.now()
+      const unread = snapshot.messages.filter(
+        (m) => !m.read_at && m.org_id === args.org_id && Date.parse(m.created_at) <= before,
+      )
+      const batch = unread.slice(0, 256)
+      const at = new Date().toISOString()
+      for (const message of batch) message.read_at = at
+      for (const issue of new Set(batch.map((m) => m.issue_id))) {
+        const rows = snapshot.messages.filter((m) => m.issue_id === issue)
+        if (rows.some((m) => !m.read_at)) continue
+        const newest = rows.reduce((a, b) => (b.created_at > a.created_at ? b : a))
+        snapshot.messages = snapshot.messages.filter((m) => m.issue_id !== issue || m === newest)
+      }
       snapshot.readMessageCount = snapshot.messages.filter((m) => m.read_at).length
-      if (ids.length) emit('snapshot:forMe')
+      if (batch.length) emit('snapshot:forMe')
       window.__perf.writes++
-      return { marked: ids.length, ids, hasMore: false, before: Date.now() }
+      const ids = batch.map((m) => m.id)
+      return { marked: ids.length, ids, hasMore: unread.length > batch.length, before }
     }
     if (name === 'issues:update') {
       if (patchTask(args.id, args.patch)) emit('snapshot:forMe')

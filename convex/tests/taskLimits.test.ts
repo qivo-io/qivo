@@ -181,8 +181,11 @@ describe('one level of subtasks', () => {
         title: 'New parent',
       })
     const parent_id = uuid()
-    expect(await createParent(lone, parent_id)).toMatchObject({ parent_id })
-    expect(await row(fx.t, parent_id)).toMatchObject({ title: 'New parent', project_id: fx.sub.id })
+    const answer = await createParent(lone, parent_id)
+    const parent = await row(fx.t, parent_id)
+    expect(parent).toMatchObject({ title: 'New parent', project_id: fx.sub.id })
+    // the answer names the task and the number the new parent got
+    expect(answer).toMatchObject({ parent_id, parent_num: parent?.num })
     // the archived subtask refuses the attach, and the new task goes with it
     const refusedId = uuid()
     await refused(createParent(former, refusedId), 'rule', SUBTASK_WITH_SUBTASKS)
