@@ -594,7 +594,7 @@ describe('changing a project', () => {
     await refused(
       patch(fx.user, { name: 'Testbed', unknown: 1 }),
       'bad_request',
-      'unknown field "unknown"; this request takes name, description, review_hours, track_delay, lead_id, archived',
+      'unknown field "unknown"; this request takes name, description, review_hours, track_delay, lead_id, archived, expected',
     )
     await refused(patch(fx.user, { name: ' ' }), 'bad_request', 'a project name cannot be blank')
     await refused(
@@ -1177,12 +1177,12 @@ describe('project access, one user or team at a time', () => {
     })
     expect(await call('PUT', path, { level: 'viewer', levle: 'user' })).toEqual({
       status: 400,
-      body: { error: 'unknown field "levle"; this request takes level' },
+      body: { error: 'unknown field "levle"; this request takes level, expected' },
     })
     const team = `/v1/projects/FW/access/teams/${fx.team.id}`
     expect(await call('PUT', team, { level: 'viewer', on_held_tasks: 'leave' })).toEqual({
       status: 400,
-      body: { error: 'unknown field "on_held_tasks"; this request takes level' },
+      body: { error: 'unknown field "on_held_tasks"; this request takes level, expected' },
     })
     expect(await call('DELETE', team, { level: null })).toEqual({
       status: 400,
@@ -1193,7 +1193,7 @@ describe('project access, one user or team at a time', () => {
     const unknown = `/v1/projects/NOPE/access/users/${uuid()}`
     expect(await call('PUT', unknown, { levle: 'user' })).toEqual({
       status: 400,
-      body: { error: 'unknown field "levle"; this request takes level' },
+      body: { error: 'unknown field "levle"; this request takes level, expected' },
     })
     expect(await call('PUT', unknown, { level: 'lead' })).toEqual({
       status: 400,

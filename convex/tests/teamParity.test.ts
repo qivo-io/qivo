@@ -321,7 +321,7 @@ describe('creating and renaming teams', () => {
     await refused(
       patch(fx.admin, { name: 'Renamed', icon: 'zap' }),
       'bad_request',
-      'unknown field "icon"; this request takes name',
+      'unknown field "icon"; this request takes name, expected',
     )
     expect((await teamRow(fx.t, fx.team.id))?.name).toBe('HW')
     // names are trimmed

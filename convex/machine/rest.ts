@@ -104,6 +104,7 @@ import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
 import { ingressShard } from '../model/billingUsage'
 import { postComment } from '../model/comments'
 import { moveTasksToTrash } from '../model/deletedItems'
+import { parseExpected, sentKeys } from '../model/expected'
 import {
   assertAssignable,
   assertAssignableChange,
@@ -120,12 +121,15 @@ import {
   pairRule,
   REPORTER_IMMUTABLE_SENTENCE,
   SUB_MUST_NAME,
+  TASK_FIELDS,
+  taskSentKeys,
 } from '../model/issues'
 import {
   assertLabelCreator,
   assertLabelManager,
   createLabelCore,
   findLabel,
+  LABEL_FIELDS,
   labelChanges,
   labelJson,
   listLabelsCore,
@@ -141,6 +145,7 @@ import {
   type TaskLinkKind,
 } from '../model/links'
 import { newUuid, PLANNABLE_HOURS_RIGHTS, setPlannableHoursCore } from '../model/orgs'
+import { PLANNABLE_FIELDS } from '../model/people'
 import { cleanRemaining, cleanTaskDate } from '../model/taskValues'
 import { authenticateSecret, restAuth401, sha256hex } from './auth'
 import { DISCUSSION_ROUTES } from './discussion'
@@ -262,6 +267,7 @@ const TASK_UPDATE_FIELDS = [
   'parent',
   'add_labels',
   'remove_labels',
+  'expected',
 ] as const
 
 /* Validates + maps a request body onto issue columns (rest:267-302, sentences
@@ -531,7 +537,8 @@ export const updateUser = internalMutation({
     const target = (await listUsersCore(ctx, me)).find((m) => m.id === a.ref.toLowerCase())
     if (target === undefined) throw notFound('user not found')
     const b = needJson(a.body)
-    refuseUnknownFields(b, ['plannable_hours'])
+    refuseUnknownFields(b, ['plannable_hours', 'expected'])
+    const expected = parseExpected(PLANNABLE_FIELDS, b.expected, sentKeys(PLANNABLE_FIELDS, b))
     if (!('plannable_hours' in b)) throw badRequest('no recognized fields to update')
     if (typeof b.plannable_hours !== 'number' || !Number.isInteger(b.plannable_hours)) {
       throw badRequest('plannable hours must be a whole number of hours from 1 to 168')
@@ -541,6 +548,7 @@ export const updateUser = internalMutation({
         me,
         profile_id: target.id,
         hours: b.plannable_hours,
+        expected,
       })
       return userJson(fresh)
     } catch (e) {
@@ -774,6 +782,7 @@ export const updateIssue = internalMutation({
     refuseReadOnlyFields(b)
     refuseUnknownFields(b, TASK_UPDATE_FIELDS)
     const fields = issueFields(b, false)
+    const expected = parseExpected(TASK_FIELDS, b.expected, taskSentKeys(b))
     // a group's dates come from its subtasks, so any date key on one is
     // refused, null and unchanged values included
     if ('start_week' in fields || 'end_week' in fields) await assertNoGroupDates(ctx, issue)
@@ -840,6 +849,7 @@ export const updateIssue = internalMutation({
       reason,
       now,
       provenance: provenanceOf(a.keyName),
+      expected,
     })
     return await taskOut(ctx, task, {
       surface: 'rest',
@@ -1020,7 +1030,7 @@ function labelFields(
   b: Record<string, unknown>,
   required: boolean,
 ): { name?: string; color?: string } {
-  refuseUnknownFields(b, ['name', 'color'])
+  refuseUnknownFields(b, required ? ['name', 'color'] : ['name', 'color', 'expected'])
   const out: { name?: string; color?: string } = {}
   for (const field of ['name', 'color'] as const) {
     if (!(field in b)) {
@@ -1065,11 +1075,13 @@ export const updateLabel = internalMutation({
     assertLabelManager(me)
     const label = await findLabel(ctx, me.org_id, a.ref)
     if (label === null) throw notFound('label not found')
-    const f = labelFields(needJson(a.body), false)
+    const b = needJson(a.body)
+    const f = labelFields(b, false)
+    const expected = parseExpected(LABEL_FIELDS, b.expected, sentKeys(LABEL_FIELDS, b))
     if (f.name === undefined && f.color === undefined) {
       throw badRequest('no recognized fields to update')
     }
-    return labelJson(await updateLabelCore(ctx, { me, label, ...f }))
+    return labelJson(await updateLabelCore(ctx, { me, label, ...f, expected }))
   },
 })
 
@@ -1449,6 +1461,9 @@ const STATUS_OF: Partial<Record<string, number>> = {
   forbidden: 403,
   bad_request: 400,
   rule: 400, // readable beats a 500; machine pre-checks fire first in practice
+  // a field changed since the caller read it (model/expected.ts); the
+  // retryable write_conflict is answered 503 before this map
+  conflict: 409,
 }
 
 /* The REST response for an error a route threw. A caller gone or

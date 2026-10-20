@@ -75,6 +75,7 @@ import {
   demoFileExpiry,
   reserveDemoUpload,
 } from './model/demoUploads'
+import { assertProfileExpected } from './model/people'
 
 /* The byte-reference fence and the attach result live in the shared
  * attachment model (model/attachments.ts); other modules still import them
@@ -192,10 +193,24 @@ export const removeAttachment = orgMutation({
 const AVATAR_TYPES = ['image/webp', 'image/png', 'image/jpeg', 'image/gif']
 const AVATAR_MAX_BYTES = 2_097_152
 
+/* The app's `expected` for a profile picture change: the picture it
+ * showed when the person picked the file, null for none. */
+const vAvatarExpected = v.object({ avatar_storage_id: v.union(v.string(), v.null()) })
+
 export const setAvatar = authedMutation({
-  args: { profile_id: v.string(), storage_id: v.id('_storage') },
-  handler: async (ctx, { profile_id, storage_id }) => {
+  args: {
+    profile_id: v.string(),
+    storage_id: v.id('_storage'),
+    expected: v.optional(vAvatarExpected),
+  },
+  handler: async (ctx, { profile_id, storage_id, expected }) => {
     const target = await avatarTarget(ctx, profile_id)
+    await assertProfileExpected(ctx, {
+      me: ctx.myProfiles.get(target.org_id) ?? target,
+      seat: target,
+      expected,
+      next: { avatar_storage_id: storage_id },
+    })
     await assertDemoFileOwnership(ctx, ctx.authUserId, storage_id, 'avatar', profile_id)
     if (target.avatar_storage_id === storage_id) return null
     const meta = await ctx.db.system.get(storage_id)
@@ -216,9 +231,15 @@ export const setAvatar = authedMutation({
 })
 
 export const clearAvatar = authedMutation({
-  args: { profile_id: v.string() },
-  handler: async (ctx, { profile_id }) => {
+  args: { profile_id: v.string(), expected: v.optional(vAvatarExpected) },
+  handler: async (ctx, { profile_id, expected }) => {
     const target = await avatarTarget(ctx, profile_id)
+    await assertProfileExpected(ctx, {
+      me: ctx.myProfiles.get(target.org_id) ?? target,
+      seat: target,
+      expected,
+      next: { avatar_storage_id: null },
+    })
     const prev = target.avatar_storage_id
     if (prev === undefined) return null
     await ctx.db.patch(target._id, { avatar_storage_id: undefined })

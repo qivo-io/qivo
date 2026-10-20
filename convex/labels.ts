@@ -25,6 +25,7 @@ import {
   deleteLabelCore,
   setTaskLabel,
   updateLabelCore,
+  vLabelExpected,
 } from './model/labels'
 
 type MeCtx = MutationCtx & { me: Doc<'profiles'> }
@@ -57,11 +58,18 @@ export const update = orgMutation({
   args: {
     id: v.string(),
     patch: v.object({ name: v.optional(v.string()), color: v.optional(v.string()) }),
+    expected: v.optional(vLabelExpected),
   },
-  handler: async (ctx, { id, patch }) => {
+  handler: async (ctx, { id, patch, expected }) => {
     assertLabelManager(ctx.me)
     const label = await myLabel(ctx, id)
-    await updateLabelCore(ctx, { me: ctx.me, label, name: patch.name, color: patch.color })
+    await updateLabelCore(ctx, {
+      me: ctx.me,
+      label,
+      name: patch.name,
+      color: patch.color,
+      expected,
+    })
     return null
   },
 })
@@ -73,12 +81,12 @@ export const update = orgMutation({
  * background steps past it (model/labels.ts deleteLabelCore,
  * labelRemovals.ts). */
 export const remove = orgMutation({
-  args: { id: v.string() },
-  handler: async (ctx, { id }) => {
+  args: { id: v.string(), expected: v.optional(vLabelExpected) },
+  handler: async (ctx, { id, expected }) => {
     const now = new Date().toISOString()
     assertLabelManager(ctx.me)
     const label = await myLabel(ctx, id)
-    await deleteLabelCore(ctx, { me: ctx.me, label, now })
+    await deleteLabelCore(ctx, { me: ctx.me, label, now, expected })
     return null
   },
 })

@@ -1801,7 +1801,7 @@ describe('PATCH /v1/tasks/{ref}', () => {
     await refused(
       patch({ title: 'x', estimate_hours: 5 }),
       'bad_request',
-      'unknown field "estimate_hours"; this request takes title, description, status, priority, assignee_id, reviewer_id, start_week, end_week, due_date, remaining_hours, paused, archived, archive_reason, project, sub_project, parent, add_labels, remove_labels',
+      'unknown field "estimate_hours"; this request takes title, description, status, priority, assignee_id, reviewer_id, start_week, end_week, due_date, remaining_hours, paused, archived, archive_reason, project, sub_project, parent, add_labels, remove_labels, expected',
     )
     await refused(patch({ archived: 'yes' }), 'bad_request', 'archived must be a boolean')
     // the response's own fields are refused with where to go, never dropped

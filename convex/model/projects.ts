@@ -13,6 +13,7 @@
  * canChangeAccess). */
 
 import { makeFunctionReference } from 'convex/server'
+import { v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
@@ -23,9 +24,11 @@ import {
   canManageProjectUsers,
   canSeeProject,
   hasProjectLevel,
+  rootMetaOf,
 } from '../lib/access'
 import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import type { GrantLevel, ProjectType } from '../lib/enums'
+import { descriptionForm, trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { canCreateProjects, projectCreationRefusal } from '../lib/projectCreators'
 import { creatorGrant, type Grants, grantsAfterHandover } from '../lib/projectGrants'
@@ -35,6 +38,18 @@ import { REVIEW_HOURS_MAX, resolveReviewHours, roundReviewHours } from '../lib/r
 import { NAME_MAX, nameOverCap } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
 import { estimateDocumentBytes } from './demoMetrics'
+import {
+  assertExpected,
+  BOOLEAN,
+  exact,
+  type Fields,
+  idForm,
+  NUMBER_OR_NULL,
+  TEXT,
+  TEXT_OR_NULL,
+  uuidOf,
+  type View,
+} from './expected'
 import { scheduleArchivedReads } from './messages'
 import { nextProjectNum } from './orgs'
 
@@ -444,6 +459,44 @@ export type ProjectPatch = {
 export const ACCESS_MAP_REMOVES =
   'an access map cannot remove access; remove it one person or team at a time'
 
+/** The keys of a project's `expected`. REST and MCP read a project with no
+ * lead of its own as led by its parent's lead, and cannot change the key. */
+export const PROJECT_FIELDS: Fields<Doc<'projects'>> = {
+  name: { sends: 'name', type: TEXT, form: trimmedForm },
+  description: { sends: 'description', type: TEXT_OR_NULL, form: descriptionForm },
+  key: { sends: 'key', type: TEXT, form: exact },
+  track_delay: { sends: 'track_delay', type: BOOLEAN, form: exact },
+  review_hours: {
+    sends: 'review_hours',
+    type: NUMBER_OR_NULL,
+    form: (value) => (typeof value === 'number' ? roundReviewHours(value) : (value ?? null)),
+  },
+  lead_id: {
+    sends: 'lead_id',
+    type: uuidOf('profile', true),
+    form: idForm,
+    stored: async (project, read) =>
+      read.view === 'machine'
+        ? (project.lead_id ?? (await rootMetaOf(read.ctx, project)).lead_id)
+        : project.lead_id,
+  },
+}
+
+/** PROJECT_FIELDS over REST and MCP, which cannot change the key. */
+export const PROJECT_MACHINE_FIELDS: Fields<Doc<'projects'>> = Object.fromEntries(
+  Object.entries(PROJECT_FIELDS).filter(([key]) => key !== 'key'),
+)
+
+/** The app's `expected` for a project edit. */
+export const vProjectExpected = v.object({
+  name: v.optional(v.string()),
+  description: v.optional(v.union(v.string(), v.null())),
+  key: v.optional(v.string()),
+  track_delay: v.optional(v.boolean()),
+  review_hours: v.optional(v.union(v.number(), v.null())),
+  lead_id: v.optional(v.union(v.string(), v.null())),
+})
+
 /**
  * Applies a field patch and any access-map change in ONE write, and narrates
  * it once, by priority access > name > lead; same-value name and lead writes
@@ -464,6 +517,10 @@ export async function updateProjectCore(
     patch: ProjectPatch
     now: string
     provenance?: string
+    /** What the caller read, in its view (model/expected.ts); the access
+     * maps take none. */
+    expected?: Readonly<Record<string, unknown>>
+    view?: View
   },
 ): Promise<Doc<'projects'>> {
   const { me, project, patch, now } = a
@@ -495,6 +552,17 @@ export async function updateProjectCore(
   if (managesTeams && !(await canManageProjectTeams(ctx, me, project))) {
     throw forbidden('no permission to manage users on this project')
   }
+  const { access: _access, team_access: _teams, ...fields } = patch
+  await assertExpected({
+    read: { ctx, me, view: a.view ?? 'app' },
+    fields: PROJECT_FIELDS,
+    record: 'project',
+    id,
+    label: `project ${project.key}`,
+    row: project,
+    expected: a.expected,
+    next: fields,
+  })
   const db: Partial<Doc<'projects'>> = {}
   if (patch.name !== undefined) db.name = cleanProjectName(patch.name, project.name)
   if (patch.description !== undefined) db.description = projectDescription(patch.description)

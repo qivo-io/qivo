@@ -13,10 +13,21 @@
  * Plain functions over ctx, with no wrappers and no auth. Callers hold the
  * refusal posture. */
 
+import { v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { byId } from '../lib/db'
+import { ORG_ROLES } from '../lib/enums'
 import { badRequest, rule } from '../lib/functions'
+import {
+  assertExpected,
+  BOOLEAN,
+  exact,
+  type Fields,
+  NUMBER,
+  oneOf,
+  TEXT_OR_NULL,
+} from './expected'
 import { isLabelColor } from './labels'
 
 /* invite_project_guest's regex, mirrored by the client's EMAIL_RE: something,
@@ -181,4 +192,67 @@ export async function assertViewerLeadsNothing(
   if (teamsLed > 0) {
     throw rule(`${name} leads ${teamsLed} team(s). Hand those over before making them a viewer.`)
   }
+}
+
+/* ------------------------------------------------------- the field check */
+
+/** The keys of a seat's `expected` (model/expected.ts) for an admin's edit
+ * on the Users page, the plannable week (REST's and MCP's only key), the
+ * display name a person gives themselves and the profile picture. */
+export const PROFILE_FIELDS: Fields<Doc<'profiles'>> = {
+  org_role: { sends: 'org_role', type: oneOf(ORG_ROLES), form: exact },
+  active: { sends: 'active', type: BOOLEAN, form: exact },
+  name: {
+    sends: 'name',
+    type: TEXT_OR_NULL,
+    form: (value) => (value == null ? null : cleanName(String(value))),
+  },
+  email: {
+    sends: 'email',
+    type: TEXT_OR_NULL,
+    form: (value) => normalizeEmail(value == null ? null : String(value)) ?? null,
+  },
+  can_create_projects: { sends: 'can_create_projects', type: BOOLEAN, form: exact },
+  plannable_hours: { sends: 'plannable_hours', type: NUMBER, form: exact },
+  avatar_storage_id: { sends: 'avatar_storage_id', type: TEXT_OR_NULL, form: exact },
+}
+
+/** The key REST's PATCH /v1/users/{ref} and MCP's update_user take. */
+export const PLANNABLE_FIELDS: Fields<Doc<'profiles'>> = {
+  plannable_hours: PROFILE_FIELDS.plannable_hours,
+}
+
+/** The app's `expected` for a seat edit. */
+export const vProfileExpected = v.object({
+  org_role: v.optional(v.string()),
+  active: v.optional(v.boolean()),
+  name: v.optional(v.union(v.string(), v.null())),
+  email: v.optional(v.union(v.string(), v.null())),
+  can_create_projects: v.optional(v.union(v.boolean(), v.null())),
+  plannable_hours: v.optional(v.union(v.number(), v.null())),
+  avatar_storage_id: v.optional(v.union(v.string(), v.null())),
+})
+
+/** Refuses an edit of `seat` over a field someone else changed since
+ * `expected` was read. `next` holds what the edit stores for each key it
+ * sends. */
+export async function assertProfileExpected(
+  ctx: QueryCtx,
+  a: {
+    me: Doc<'profiles'>
+    seat: Doc<'profiles'>
+    expected: Readonly<Record<string, unknown>> | undefined
+    next: Readonly<Record<string, unknown>>
+  },
+): Promise<void> {
+  await assertExpected({
+    read: { ctx, me: a.me, view: 'app' },
+    fields: PROFILE_FIELDS,
+    record: 'profile',
+    id: a.seat.id,
+    label: `user "${a.seat.name}"`,
+    row: a.seat,
+    expected: a.expected,
+    next: a.next,
+  })
 }

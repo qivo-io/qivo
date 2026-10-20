@@ -62,15 +62,25 @@ import { PROJECT_DESCRIPTION_MAX } from '../lib/projectLimits'
 import { REVIEW_HOURS_MAX } from '../lib/review'
 import { NAME_MAX } from '../lib/textLimits'
 import {
+  EXPECTED_DELETE_SENTENCE,
+  EXPECTED_SENTENCE,
+  expectedSchema,
+  parseExpected,
+  sentKeys,
+  vExpected,
+} from '../model/expected'
+import {
   addMilestoneCore,
   changeableMilestone,
   cleanMilestoneDate,
+  MILESTONE_MACHINE_FIELDS,
   removeMilestoneCore,
   updateMilestoneCore,
 } from '../model/milestones'
 import { newUuid } from '../model/orgs'
 import {
   type AccessSubject,
+  GRANT_FIELDS,
   type HeldTasks,
   type Holding,
   ON_HELD_TASKS_SCHEMA,
@@ -82,6 +92,7 @@ import {
 import {
   archiveProjectCore,
   createProjectCore,
+  PROJECT_MACHINE_FIELDS,
   type ProjectPatch,
   reviewHoursFor,
   unarchiveProjectCore,
@@ -291,11 +302,12 @@ const createFrom = (ctx: MutationCtx, me: Caller, input: CreateInput, provenance
     },
   })
 
-/* The fields update_project and PATCH /v1/projects/{ref} change. */
+/* The fields update_project and PATCH /v1/projects/{ref} change, and what
+ * the caller read of them (model/expected.ts). */
 type UpdateInput = Pick<
   ProjectPatch,
   'name' | 'description' | 'review_hours' | 'track_delay' | 'lead_id'
-> & { archived?: boolean }
+> & { archived?: boolean; expected?: Readonly<Record<string, unknown>> }
 
 /**
  * Applies an update in one transaction. The restore or archive runs first,
@@ -312,7 +324,7 @@ async function applyUpdate(
   provenance: string,
 ): Promise<Doc<'projects'>> {
   const now = new Date().toISOString()
-  const { archived, ...patch } = input
+  const { archived, expected, ...patch } = input
   let current = project
   if (archived !== undefined) {
     const step = { me, project: current, now, provenance }
@@ -321,7 +333,15 @@ async function applyUpdate(
     current = (await ctx.db.get(current._id)) ?? current
   }
   if (Object.keys(patch).length > 0) {
-    current = await updateProjectCore(ctx, { me, project: current, patch, now, provenance })
+    current = await updateProjectCore(ctx, {
+      me,
+      project: current,
+      patch,
+      now,
+      provenance,
+      expected,
+      view: 'machine',
+    })
   }
   return current
 }
@@ -456,14 +476,16 @@ export const mcpUpdateProject = internalMutation({
     track_delay: v.optional(v.boolean()),
     lead_id: v.optional(v.string()),
     archived: v.optional(v.boolean()),
+    expected: v.optional(vExpected),
   },
   handler: async (ctx, a): Promise<string> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const project = await mcpProject(ctx, me, a.project)
-    const { callerId: _caller, access: _access, project: _ref, lead_id, ...fields } = a
+    const { callerId: _caller, access: _access, project: _ref, lead_id, expected, ...fields } = a
     const input: UpdateInput = fields
     if (lead_id !== undefined) input.lead_id = await mcpLead(ctx, me, lead_id)
     if (Object.keys(input).length === 0) throw badRequest('no fields to update')
+    if (expected !== undefined) input.expected = expected
     const after = await applyUpdate(ctx, me, project, input, MCP_PROVENANCE)
     return pretty(await projectOut(ctx, me, after, a.access))
   },
@@ -481,12 +503,16 @@ export const mcpSetProjectAccess = internalMutation({
     team_id: v.optional(v.string()),
     level: v.union(vGrantLevel, v.null()),
     on_held_tasks: v.optional(vHeldTasks),
+    expected: v.optional(vExpected),
   },
   handler: async (ctx, a): Promise<string> => {
     const write = a.level === null ? 'access_removal' : 'change'
     const me = await asMachineCaller(ctx, a.callerId, a.access, write)
     if (a.level !== null && a.on_held_tasks !== undefined) {
       throw badRequest('on_held_tasks applies only when level is null')
+    }
+    if (a.level === null && a.expected !== undefined) {
+      throw badRequest('expected applies only when level is not null')
     }
     const project = await mcpProject(ctx, me, a.project)
     const subject = await mcpSubject(ctx, me, a)
@@ -500,6 +526,7 @@ export const mcpSetProjectAccess = internalMutation({
         level: a.level,
         now,
         provenance: MCP_PROVENANCE,
+        expected: a.expected,
       })
       return pretty({ ...base, level: a.level, changed })
     }
@@ -524,9 +551,13 @@ export const mcpSetMilestone = internalMutation({
     milestone: v.optional(v.string()),
     name: v.optional(v.string()),
     date: v.optional(v.string()),
+    expected: v.optional(vExpected),
   },
   handler: async (ctx, a): Promise<string> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
+    if (a.milestone === undefined && a.expected !== undefined) {
+      throw badRequest('expected applies only when changing an existing milestone')
+    }
     const project = await mcpProject(ctx, me, a.project)
     const week = a.date === undefined ? undefined : cleanMilestoneDate(a.date)
     const now = new Date().toISOString()
@@ -554,6 +585,8 @@ export const mcpSetMilestone = internalMutation({
       patch: { name: a.name, week },
       now,
       provenance: MCP_PROVENANCE,
+      expected: a.expected,
+      view: 'machine',
     })
     return pretty({ ...milestoneJson(m), project_id: m.project_id, created: false })
   },
@@ -566,6 +599,7 @@ export const mcpDeleteMilestone = internalMutation({
     access: vCredentialAccess,
     project: v.string(),
     milestone: v.string(),
+    expected: v.optional(vExpected),
   },
   handler: async (ctx, a): Promise<string> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
@@ -577,6 +611,8 @@ export const mcpDeleteMilestone = internalMutation({
       milestone,
       now: new Date().toISOString(),
       provenance: MCP_PROVENANCE,
+      expected: a.expected,
+      view: 'machine',
     })
     return pretty({ deleted: true, id: milestone.id })
   },
@@ -712,7 +748,13 @@ export const restUpdateProject = internalMutation({
       'track_delay',
       'lead_id',
       'archived',
+      'expected',
     ])
+    const expected = parseExpected(
+      PROJECT_MACHINE_FIELDS,
+      b.expected,
+      sentKeys(PROJECT_MACHINE_FIELDS, b),
+    )
     const input: UpdateInput = {}
     if ('name' in b) {
       if (typeof b.name !== 'string') throw badRequest('name must be a string')
@@ -740,6 +782,7 @@ export const restUpdateProject = internalMutation({
       input.archived = b.archived
     }
     if (Object.keys(input).length === 0) throw badRequest('no recognized fields to update')
+    if (expected !== undefined) input.expected = expected
     const after = await applyUpdate(ctx, me, project, input, restProvenance(a.keyName))
     return await projectOut(ctx, me, after, a.access)
   },
@@ -768,8 +811,9 @@ type RestAccessArgs = ObjectType<typeof vRestAccessArgs>
 async function restSetAccess(ctx: MutationCtx, a: RestAccessArgs, kind: 'users' | 'teams') {
   const me = await asMachineCaller(ctx, a.callerId, a.access)
   const b = needJson(a.body)
-  refuseUnknownFields(b, ['level'])
+  refuseUnknownFields(b, ['level', 'expected'])
   const level = restLevel(b)
+  const expected = parseExpected(GRANT_FIELDS, b.expected, ['level'])
   const project = await restProject(ctx, me, a.ref)
   const subject = await restSubject(ctx, me, kind, a.subject)
   const { changed } = await setProjectGrantCore(ctx, {
@@ -779,6 +823,7 @@ async function restSetAccess(ctx: MutationCtx, a: RestAccessArgs, kind: 'users' 
     level,
     now: new Date().toISOString(),
     provenance: restProvenance(a.keyName),
+    expected,
   })
   return { project_id: project.id, ...subjectJson(subject), level, changed }
 }
@@ -840,7 +885,7 @@ function milestoneFields(
   b: Record<string, unknown>,
   required: boolean,
 ): { name?: string; week?: string } {
-  refuseUnknownFields(b, ['name', 'date'])
+  refuseUnknownFields(b, required ? ['name', 'date'] : ['name', 'date', 'expected'])
   const out: { name?: string; week?: string } = {}
   if ('name' in b) {
     if (typeof b.name !== 'string') throw badRequest('name must be a string')
@@ -892,7 +937,13 @@ export const restUpdateMilestone = internalMutation({
     const project = await restProject(ctx, me, a.ref)
     const milestone = await milestoneOn(ctx, me, project, a.milestone)
     if (milestone === null) throw notFound('milestone not found')
-    const patch = milestoneFields(needJson(a.body), false)
+    const b = needJson(a.body)
+    const patch = milestoneFields(b, false)
+    const expected = parseExpected(
+      MILESTONE_MACHINE_FIELDS,
+      b.expected,
+      sentKeys(MILESTONE_MACHINE_FIELDS, b),
+    )
     if (patch.name === undefined && patch.week === undefined) {
       throw badRequest('no recognized fields to update')
     }
@@ -902,12 +953,16 @@ export const restUpdateMilestone = internalMutation({
       patch,
       now: new Date().toISOString(),
       provenance: restProvenance(a.keyName),
+      expected,
+      view: 'machine',
     })
     return { ...milestoneJson(m), project_id: m.project_id }
   },
 })
 
-/* DELETE /v1/projects/{ref}/milestones/{id}, which takes no body. */
+/* DELETE /v1/projects/{ref}/milestones/{id}, with an optional body
+ * {expected}: the name and date the caller read, because Deleted items
+ * cannot bring a milestone back. */
 export const restDeleteMilestone = internalMutation({
   args: {
     callerId: v.string(),
@@ -922,12 +977,20 @@ export const restDeleteMilestone = internalMutation({
     const project = await restProject(ctx, me, a.ref)
     const milestone = await milestoneOn(ctx, me, project, a.milestone)
     if (milestone === null) throw notFound('milestone not found')
-    refuseUnknownFields(optionalJson(a.body ?? ''), [])
+    const b = optionalJson(a.body ?? '')
+    refuseUnknownFields(b, ['expected'])
+    const expected = parseExpected(
+      MILESTONE_MACHINE_FIELDS,
+      b.expected,
+      Object.keys(MILESTONE_MACHINE_FIELDS),
+    )
     await removeMilestoneCore(ctx, {
       me,
       milestone,
       now: new Date().toISOString(),
       provenance: restProvenance(a.keyName),
+      expected,
+      view: 'machine',
     })
     return { deleted: true, id: milestone.id }
   },
@@ -1006,7 +1069,9 @@ export const PROJECT_TOOLS: McpTool[] = [
       name: 'update_project',
       title: 'Update project',
       description:
-        'Change a project you lead: `name`, `description`, `review_hours` (null uses the parent or default), `track_delay`, or `archived: true/false` to archive or restore it. `lead_id` hands the lead to another user, which only a person may do; the old lead keeps User access. Only tasks take an archive reason.',
+        'Change a project you lead: `name`, `description`, `review_hours` (null uses the parent or default), `track_delay`, or `archived: true/false` to archive or restore it. `lead_id` hands the lead to another user, which only a person may do; the old lead keeps User access. Only tasks take an archive reason. ' +
+        EXPECTED_SENTENCE +
+        ' Its `lead_id` is the lead get_project shows.',
       inputSchema: {
         type: 'object',
         $schema: SCHEMA,
@@ -1034,24 +1099,33 @@ export const PROJECT_TOOLS: McpTool[] = [
           archived: {
             type: 'boolean',
           },
+          expected: expectedSchema(PROJECT_MACHINE_FIELDS),
         },
         required: ['project'],
       },
     },
-    run: (r, { callerId, access, args }) =>
-      r.runMutation(internal.machine.projects.mcpUpdateProject, {
+    run: (r, { callerId, access, args }) => {
+      const { expected, ...rest } = args as {
+        project: string
+        name?: string
+        description?: string
+        review_hours?: number | null
+        track_delay?: boolean
+        lead_id?: string
+        archived?: boolean
+        expected?: unknown
+      }
+      return r.runMutation(internal.machine.projects.mcpUpdateProject, {
         callerId,
         access,
-        ...(args as {
-          project: string
-          name?: string
-          description?: string
-          review_hours?: number | null
-          track_delay?: boolean
-          lead_id?: string
-          archived?: boolean
-        }),
-      }),
+        ...rest,
+        expected: parseExpected(
+          PROJECT_MACHINE_FIELDS,
+          expected,
+          sentKeys(PROJECT_MACHINE_FIELDS, rest),
+        ),
+      })
+    },
   },
   {
     access: 'write',
@@ -1059,7 +1133,9 @@ export const PROJECT_TOOLS: McpTool[] = [
       name: 'set_project_access',
       title: 'Set project access',
       description:
-        'Give one user (`user_id`) or one team (`team_id`) `user` or `viewer` access to a project, or with `level: null` remove it. `on_held_tasks` settles open tasks a removal hides from the people working on them: `leave` (the default; the result lists them), `keep_as_viewer`, or `{"reassign_to": user id or null}`. Needs Lead access, and only a person may change access.',
+        'Give one user (`user_id`) or one team (`team_id`) `user` or `viewer` access to a project, or with `level: null` remove it. `on_held_tasks` settles open tasks a removal hides from the people working on them: `leave` (the default; the result lists them), `keep_as_viewer`, or `{"reassign_to": user id or null}`. Needs Lead access, and only a person may change access. ' +
+        EXPECTED_SENTENCE +
+        ' Its `level` is the access get_project shows, null for none, and takes no removal.',
       inputSchema: {
         type: 'object',
         $schema: SCHEMA,
@@ -1077,23 +1153,29 @@ export const PROJECT_TOOLS: McpTool[] = [
             anyOf: [{ type: 'string', enum: ['user', 'viewer'] }, { type: 'null' }],
           },
           on_held_tasks: ON_HELD_TASKS_SCHEMA,
+          expected: expectedSchema(GRANT_FIELDS),
         },
         required: ['project', 'level'],
       },
     },
     run: (r, { callerId, access, args }) => {
-      const { on_held_tasks, ...rest } = args as {
+      const { on_held_tasks, expected, ...rest } = args as {
         project: string
         user_id?: string
         team_id?: string
         level: GrantLevel | null
         on_held_tasks?: unknown
+        expected?: unknown
+      }
+      if (rest.level === null && expected !== undefined) {
+        throw badRequest('expected applies only when level is not null')
       }
       return r.runMutation(internal.machine.projects.mcpSetProjectAccess, {
         callerId,
         access,
         ...rest,
         ...(on_held_tasks === undefined ? {} : { on_held_tasks: parseHeldTasks(on_held_tasks) }),
+        expected: parseExpected(GRANT_FIELDS, expected, ['level']),
       })
     },
   },
@@ -1103,7 +1185,8 @@ export const PROJECT_TOOLS: McpTool[] = [
       name: 'set_milestone',
       title: 'Set milestone',
       description:
-        "Without `milestone`, add one to `project` from `name` and `date` (YYYY-MM-DD); a sub-project's goes on its top-level project. With `milestone` (an id from get_project), rename or move it. Needs Edit access on the top-level project.",
+        "Without `milestone`, add one to `project` from `name` and `date` (YYYY-MM-DD); a sub-project's goes on its top-level project. With `milestone` (an id from get_project), rename or move it. Needs Edit access on the top-level project. " +
+        EXPECTED_SENTENCE,
       inputSchema: {
         type: 'object',
         $schema: SCHEMA,
@@ -1122,16 +1205,33 @@ export const PROJECT_TOOLS: McpTool[] = [
             type: 'string',
             pattern: '^\\d{4}-\\d{2}-\\d{2}$',
           },
+          expected: expectedSchema(MILESTONE_MACHINE_FIELDS),
         },
         required: ['project'],
       },
     },
-    run: (r, { callerId, access, args }) =>
-      r.runMutation(internal.machine.projects.mcpSetMilestone, {
+    run: (r, { callerId, access, args }) => {
+      const { expected, ...rest } = args as {
+        project: string
+        milestone?: string
+        name?: string
+        date?: string
+        expected?: unknown
+      }
+      if (rest.milestone === undefined && expected !== undefined) {
+        throw badRequest('expected applies only when changing an existing milestone')
+      }
+      return r.runMutation(internal.machine.projects.mcpSetMilestone, {
         callerId,
         access,
-        ...(args as { project: string; milestone?: string; name?: string; date?: string }),
-      }),
+        ...rest,
+        expected: parseExpected(
+          MILESTONE_MACHINE_FIELDS,
+          expected,
+          sentKeys(MILESTONE_MACHINE_FIELDS, rest),
+        ),
+      })
+    },
   },
   {
     access: 'write',
@@ -1139,7 +1239,8 @@ export const PROJECT_TOOLS: McpTool[] = [
       name: 'delete_milestone',
       title: 'Delete milestone',
       description:
-        'Delete a milestone (an id from get_project) of `project`. Needs Edit access on the top-level project.',
+        'Delete a milestone (an id from get_project) of `project`. Needs Edit access on the top-level project. ' +
+        EXPECTED_DELETE_SENTENCE,
       inputSchema: {
         type: 'object',
         $schema: SCHEMA,
@@ -1150,16 +1251,28 @@ export const PROJECT_TOOLS: McpTool[] = [
           milestone: {
             type: 'string',
           },
+          expected: expectedSchema(MILESTONE_MACHINE_FIELDS),
         },
         required: ['project', 'milestone'],
       },
     },
-    run: (r, { callerId, access, args }) =>
-      r.runMutation(internal.machine.projects.mcpDeleteMilestone, {
+    run: (r, { callerId, access, args }) => {
+      const { expected, ...rest } = args as {
+        project: string
+        milestone: string
+        expected?: unknown
+      }
+      return r.runMutation(internal.machine.projects.mcpDeleteMilestone, {
         callerId,
         access,
-        ...(args as { project: string; milestone: string }),
-      }),
+        ...rest,
+        expected: parseExpected(
+          MILESTONE_MACHINE_FIELDS,
+          expected,
+          Object.keys(MILESTONE_MACHINE_FIELDS),
+        ),
+      })
+    },
   },
 ]
 

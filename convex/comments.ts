@@ -19,7 +19,7 @@ import type { MutationCtx } from './_generated/server'
 import { canSeeProject } from './lib/access'
 import { byId } from './lib/db'
 import { badRequest, notFound, orgMutation } from './lib/functions'
-import { deleteComment, editComment, postComment } from './model/comments'
+import { deleteComment, editComment, postComment, vCommentExpected } from './model/comments'
 import { assertCanEdit } from './model/issues'
 
 type MeCtx = MutationCtx & { me: Doc<'profiles'> }
@@ -76,11 +76,11 @@ export const create = orgMutation({
  * rule and the write are model/comments.ts editComment, shared with REST
  * and MCP. */
 export const update = orgMutation({
-  args: { id: v.string(), body: v.string() },
-  handler: async (ctx, { id, body }) => {
+  args: { id: v.string(), body: v.string(), expected: v.optional(vCommentExpected) },
+  handler: async (ctx, { id, body, expected }) => {
     const now = new Date().toISOString()
     const { comment, issue } = await myComment(ctx, id)
-    await editComment(ctx, { me: ctx.me, comment, issue, body, now })
+    await editComment(ctx, { me: ctx.me, comment, issue, body, now, expected })
     return null
   },
 })
@@ -89,10 +89,10 @@ export const update = orgMutation({
  * P.deleteComment. It notifies and narrates nothing; the thread just loses
  * the row (model/comments.ts deleteComment, shared with REST and MCP). */
 export const remove = orgMutation({
-  args: { id: v.string() },
-  handler: async (ctx, { id }) => {
+  args: { id: v.string(), expected: v.optional(vCommentExpected) },
+  handler: async (ctx, { id, expected }) => {
     const { comment, issue } = await myComment(ctx, id)
-    await deleteComment(ctx, { me: ctx.me, comment, issue })
+    await deleteComment(ctx, { me: ctx.me, comment, issue, expected })
     return null
   },
 })

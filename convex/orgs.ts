@@ -13,7 +13,13 @@ import type { Doc } from './_generated/dataModel'
 import { byId } from './lib/db'
 import { vProjectCreators } from './lib/enums'
 import { adminMutation, badRequest, notFound, require } from './lib/functions'
-import { assertSlugAvailable, cleanOrgName, narrateSlugChange } from './model/orgs'
+import {
+  assertOrgExpected,
+  assertSlugAvailable,
+  cleanOrgName,
+  narrateSlugChange,
+  vOrgExpected,
+} from './model/orgs'
 
 /* organizations_date_format_check (0020) / organizations_week_one_rule_check
  * (0039), member-for-member. */
@@ -42,8 +48,9 @@ export const update = adminMutation({
       max_attachment_mb: v.optional(v.number()),
       project_creators: v.optional(vProjectCreators),
     }),
+    expected: v.optional(vOrgExpected),
   },
-  handler: async (ctx, { patch }) => {
+  handler: async (ctx, { patch, expected }) => {
     const org = await byId(ctx, 'organizations', ctx.me.org_id)
     require(org !== null, notFound('organization not found'))
     const fields: Partial<
@@ -84,6 +91,7 @@ export const update = adminMutation({
       if (!Number.isFinite(n)) throw badRequest('max_attachment_mb must be a number')
       fields.max_attachment_mb = Math.max(1, Math.min(20, Math.round(n)))
     }
+    await assertOrgExpected(ctx, { me: ctx.me, org, expected, next: fields })
     if (Object.keys(fields).length > 0) await ctx.db.patch(org._id, fields)
     return null
   },
@@ -97,12 +105,13 @@ export const update = adminMutation({
  * a non-admin dies at the wrapper's `forbidden` and reads the client's
  * "You don't have permission to change the address." */
 export const setSlug = adminMutation({
-  args: { slug: v.string() },
-  handler: async (ctx, { slug }) => {
+  args: { slug: v.string(), expected: v.optional(v.object({ slug: v.string() })) },
+  handler: async (ctx, { slug, expected }) => {
     const now = new Date().toISOString()
     const org = await byId(ctx, 'organizations', ctx.me.org_id)
     require(org !== null, notFound('organization not found'))
     if (slug === org.slug) return null
+    await assertOrgExpected(ctx, { me: ctx.me, org, expected, next: { slug } })
     await assertSlugAvailable(ctx, slug, org.id)
     await ctx.db.patch(org._id, { slug })
     await narrateSlugChange(ctx, org, {

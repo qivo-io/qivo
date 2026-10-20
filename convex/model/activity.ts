@@ -26,6 +26,9 @@ type EntryFields = {
   project_id?: string
   related_project_id?: string
   team_id?: string
+  /** On a task row, the prints of the fields the write changed
+   * (model/expected.ts changedPrints). */
+  field_prints?: Record<string, string>
 }
 
 /** One activity row as its writers describe it. A task row lists the numbers
@@ -79,6 +82,7 @@ export async function insertActivity(
     team_id: e.team_id,
     seq,
     named_task_nums: e.target_type === 'issue' ? [...e.named_task_nums] : undefined,
+    field_prints: e.field_prints,
   })
   if (seq <= SUBJECT_ACTIVITY_CAP) return
   // first, not unique: a duplicate seq must not make every later write fail

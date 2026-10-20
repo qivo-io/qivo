@@ -21,14 +21,17 @@
  * user, hung on the team. A machine write appends its provenance. */
 
 import type { WithoutSystemFields } from 'convex/server'
+import { v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { ACCESS_NEEDS_A_PERSON, canChangeAccess, canLeadTeams, isTeamLeader } from '../lib/access'
 import { assertOrgWritable } from '../lib/billingAccess'
 import { assertNewRowId, byId, insertUnique } from '../lib/db'
+import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, rule } from '../lib/functions'
 import { NAME_MAX, nameOverCap } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
+import { assertExpected, BOOLEAN, exact, type Fields, type Next, NUMBER, TEXT } from './expected'
 import { newTeamDefaults } from './orgs'
 import {
   type AccessRemoval,
@@ -181,18 +184,79 @@ export type TeamPatch = {
 const clamp = (n: number, lo: number, hi: number) =>
   Math.max(lo, Math.min(hi, Math.round(Number(n) || 0)))
 
+/** The keys of a team's `expected`. REST and MCP change only the name. */
+export const TEAM_FIELDS: Fields<Doc<'teams'>> = {
+  name: { sends: 'name', type: TEXT, form: trimmedForm },
+  stale_days: { sends: 'stale_days', type: NUMBER, form: exact },
+  archive_days: { sends: 'archive_days', type: NUMBER, form: exact },
+  track_delay_default: { sends: 'track_delay_default', type: BOOLEAN, form: exact },
+}
+
+/** TEAM_FIELDS over REST and MCP, which change only the name. */
+export const TEAM_MACHINE_FIELDS: Fields<Doc<'teams'>> = { name: TEAM_FIELDS.name }
+
+/** The app's `expected` for a team edit or delete. */
+export const vTeamExpected = v.object({
+  name: v.optional(v.string()),
+  stale_days: v.optional(v.number()),
+  archive_days: v.optional(v.number()),
+  track_delay_default: v.optional(v.boolean()),
+})
+
+/** Refuses a team edit or delete over a field someone else changed since
+ * `expected` was read (model/expected.ts). `next` holds what the edit
+ * stores, or DELETES for a delete, which Deleted items cannot undo. */
+export async function assertTeamExpected(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  team: Doc<'teams'>,
+  expected: Readonly<Record<string, unknown>> | undefined,
+  next: Next,
+): Promise<void> {
+  await assertExpected({
+    read: { ctx, me, view: 'app' },
+    fields: TEAM_FIELDS,
+    record: 'team',
+    id: team.id,
+    label: `team "${team.name}"`,
+    row: team,
+    expected,
+    next,
+  })
+}
+
 /**
  * Renames a team or changes its settings, for an organization admin or a
  * leader of the team. Same-value fields are dropped, so an unchanged patch
  * writes nothing. Day counts clamp to 1..3650 like the old client's. Returns
- * the team as stored.
+ * the team as stored. `expected` holds what the caller read
+ * (model/expected.ts).
  */
 export async function updateTeamCore(
   ctx: MutationCtx,
-  a: { me: Doc<'profiles'>; team: Doc<'teams'>; patch: TeamPatch },
+  a: {
+    me: Doc<'profiles'>
+    team: Doc<'teams'>
+    patch: TeamPatch
+    expected?: Readonly<Record<string, unknown>>
+  },
 ): Promise<Doc<'teams'>> {
   const { team, patch } = a
   await assertRunsTeam(ctx, a.me, team)
+  const days = (n: number | undefined) => (n === undefined ? undefined : clamp(n, 1, 3650))
+  await assertTeamExpected(
+    ctx,
+    a.me,
+    team,
+    a.expected,
+    Object.fromEntries(
+      Object.entries({
+        ...patch,
+        stale_days: days(patch.stale_days),
+        archive_days: days(patch.archive_days),
+      }).filter(([, value]) => value !== undefined),
+    ),
+  )
   const upd: Partial<WithoutSystemFields<Doc<'teams'>>> = {}
   if (patch.name !== undefined) {
     const name = cleanTeamName(patch.name, team.name)

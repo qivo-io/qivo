@@ -41,6 +41,41 @@ Automated task changes identify **via MCP** or **via the REST API**, with the
 key name in parentheses for an agent key. Comments carry the author or agent's
 name without a separate API label.
 
+## When someone else changed it first
+
+Two people can open the same task and both change it before either sees the
+other's change. Qivo checks each field you change against the value you saw
+when you changed it. If someone else changed the same field since, Qivo does
+not save your change. A notice stays until you close it and says what
+changed and, where Qivo knows, who changed it, such as **Not saved. Emil
+Berg changed the status of QN-12. Your change was discarded.** If you made
+the other change yourself, in another tab or on another device, the notice
+says so.
+
+- Qivo checks only the fields you change. Someone else's change to another
+  field, such as the assignee while you edit the title, does not stop yours,
+  and two people who choose the same value both save.
+- Your own quick edits in a row save, such as several changes to the
+  remaining time.
+- A refused title, description or comment edit stays in its editor, so you
+  can copy your text or save it again on purpose to replace the other
+  version.
+- A Roadmap change that saves several tasks at once, such as **Auto-move**,
+  saves all or nothing. If one of its tasks changed since, none of its
+  changes are saved.
+- Deleting a comment, milestone, label or team that someone changed since
+  you saw it is refused too, so you can check it before you delete it again.
+  So is removing a link between two tasks after someone changed its kind.
+- New tasks and other new records are not checked, because nobody else can
+  have changed them yet.
+
+An edit that was waiting to save when your connection dropped is checked
+when it reaches Qivo. If someone changed the same field in the meantime, the
+notice says they changed it **while you were offline**.
+
+Agents and scripts can ask for the same check through the REST API and MCP
+([Automation and AI](./automation-ai-the-rest-api-and-the-mcp-server.md)).
+
 ## Appearance preferences. Themes and the Canvas background
 
 Choose **Dark** or **Light** under
