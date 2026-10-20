@@ -103,7 +103,7 @@ describe('task creation through the client store', () => {
         id: task.uuid,
         org_id: snap.orgs[0].id,
         project_id: snap.projects[0].id,
-        num: task.num,
+        num: snap.orgs[0].next_issue_num + 1,
         title: 'New task',
         description: '',
         status: 'backlog',
