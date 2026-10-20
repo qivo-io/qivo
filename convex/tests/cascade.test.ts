@@ -393,9 +393,6 @@ describe('deleteOrgDeep', () => {
         created_at: NOW,
         updated_at: NOW,
       })
-      // the counters rows (model/orgs.ts), for both organizations
-      for (const org_id of [f.org.id, f.otherOrg.id])
-        await ctx.db.insert('org_counters', { org_id, next_issue_num: 1, next_project_num: 5 })
       return storage_id
     })
     // the control: the other organization's own rows

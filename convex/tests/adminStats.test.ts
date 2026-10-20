@@ -22,6 +22,7 @@ import {
   NOW,
   newT,
   type OrgFixture,
+  patchCounters,
   plantIssue,
   type T,
   uuid,
@@ -131,7 +132,7 @@ async function consoleFixture(t: T): Promise<OrgFixture> {
       team_id: f.team.id,
       level: 'user',
     })
-    await ctx.db.insert('org_counters', { org_id, next_issue_num: 10, next_project_num: 5 })
+    await patchCounters(ctx, org_id, { next_issue_num: 10 })
     await ctx.db.insert('activity_events', activity(org_id, '2026-04-20T09:00:00.000Z'))
     await ctx.db.insert('activity_events', activity(f.otherOrg.id, '2026-03-02T09:00:00.000Z'))
   })

@@ -407,8 +407,6 @@ describe('background steps', () => {
           name: 'Twice',
           slug: 'twice',
           created_at: NOW,
-          next_issue_num: 1,
-          next_project_num: 2,
           date_format: 'iso',
           week_start: 1,
           week_one_rule: 'first4day',

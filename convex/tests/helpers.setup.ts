@@ -22,13 +22,14 @@ import { convexTest, type TestConvex } from 'convex-test'
 import { onTestFinished, TestRunner, vi } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import type { MutationCtx } from '../_generated/server'
 import authSchema from '../betterAuth/schema'
 import type { ReapCounts } from '../files'
 import type { RestIssueJson } from '../lib/core'
 import type { OrgRole } from '../lib/enums'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { type ActivityEntry, insertActivity } from '../model/activity'
-import { countersOf, type OrgCounters } from '../model/orgs'
+import { countersOf, countersRow, type OrgCounters } from '../model/orgs'
 import schema from '../schema'
 
 export type T = TestConvex<typeof schema>
@@ -360,8 +361,6 @@ export async function withOrg(t: T) {
       name: 'Testbed Labs',
       slug: 'testbed',
       created_at: NOW,
-      next_issue_num: 1,
-      next_project_num: 5,
       date_format: 'iso',
       week_start: 1,
       week_one_rule: 'first4day',
@@ -369,6 +368,7 @@ export async function withOrg(t: T) {
       max_attachment_mb: 10,
       billing: { plan: 'team', seats: 5, renewal_date: null },
     })
+    await ctx.db.insert('org_counters', { org_id: orgId, next_issue_num: 1, next_project_num: 5 })
 
     const team = await load('teams', {
       id: uuid(),
@@ -473,12 +473,15 @@ export async function withOrg(t: T) {
       name: 'Other',
       slug: 'other',
       created_at: NOW,
-      next_issue_num: 1,
-      next_project_num: 2,
       date_format: 'iso',
       week_start: 1,
       week_one_rule: 'first4day',
       default_plannable_hours: 40,
+    })
+    await ctx.db.insert('org_counters', {
+      org_id: otherOrg.id,
+      next_issue_num: 1,
+      next_project_num: 2,
     })
     const otherAdmin = await load('profiles', person('otherAdmin', 'OA', 'admin', otherOrg.id))
     const otherProject = await load(
@@ -774,9 +777,7 @@ export const plantActivity = (t: T, ...entries: ActivityEntry[]): Promise<void> 
     for (const entry of entries) await insertActivity(ctx, entry)
   })
 
-/** The organization's task and project counters from its org_counters row,
- * else from the legacy fields fixtures plant on the organization row
- * (model/orgs.ts countersOf). */
+/** The organization's task and project counters (model/orgs.ts countersOf). */
 export const countersFor = (t: T, orgId: string): Promise<OrgCounters> =>
   t.run(async (ctx) => {
     const org = await ctx.db
@@ -786,6 +787,18 @@ export const countersFor = (t: T, orgId: string): Promise<OrgCounters> =>
     if (org === null) throw new Error(`organization ${orgId} not found`)
     return await countersOf(ctx, org)
   })
+
+/** Overwrites the organization's stored counters, for fixtures that plant
+ * numbered rows directly. */
+export async function patchCounters(
+  ctx: MutationCtx,
+  orgId: string,
+  counters: Partial<OrgCounters>,
+): Promise<void> {
+  const row = await countersRow(ctx, orgId)
+  if (row === null) throw new Error(`organization ${orgId} has no counters`)
+  await ctx.db.patch(row._id, counters)
+}
 
 /* Mutations stamp their own real-clock `now`; a short sleep guarantees the
  * next one lands at a strictly later ISO millisecond (the prune survivor and

@@ -13,9 +13,14 @@ type InternalFields<T extends TableNames> =
       : never)
   | (T extends 'issue_attachments' ? 'project_id' : never)
   | (T extends 'issues' ? 'relations_marked' : never)
-  | (T extends 'organizations' ? 'activity_count' : never)
 
-export type Row<T extends TableNames> = Omit<Doc<T>, InternalFields<T>>
+// The snapshot adds each organization's task and project counters, which
+// live in org_counters (convex/snapshot.ts).
+type AddedFields<T extends TableNames> = T extends 'organizations'
+  ? Pick<Doc<'org_counters'>, 'next_issue_num' | 'next_project_num'>
+  : unknown
+
+export type Row<T extends TableNames> = Omit<Doc<T>, InternalFields<T>> & AddedFields<T>
 
 // organization_billing merged into organizations: the old
 // Row<'organization_billing'> is now the home org doc's billing object,

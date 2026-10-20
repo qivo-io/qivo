@@ -673,14 +673,6 @@ export default defineSchema({
     name: v.string(),
     slug: v.string(), // lowercase; shape + reserved list checked in model/orgs
     created_at: v.string(),
-    // Legacy. The activity row count that retention kept before the former
-    // organization trim. Only the backfill reads it, to clear it.
-    activity_count: v.optional(v.number()),
-    // Legacy. Moved to org_counters by the organization's first task or
-    // project number, or by internal/orgCountersBackfill. Only model/orgs
-    // and the backfill read them.
-    next_issue_num: v.optional(v.number()),
-    next_project_num: v.optional(v.number()),
     date_format: v.string(),
     week_start: v.number(),
     week_one_rule: v.string(), // jan1 | first4day | firstfull

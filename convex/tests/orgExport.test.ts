@@ -203,18 +203,14 @@ describe('organization export', () => {
     expect(row).not.toHaveProperty('gravatar_avatars')
   })
 
-  it('exports the counters wherever they are stored, never activity_count', async () => {
+  it('exports the counters from org_counters on the organization row', async () => {
     const t = newT()
     const f = await withOrg(t)
     const caller = as(t, f.admin)
     const organization = async () =>
       (await caller.query(page, { org_id: f.org.id, section: 'organizations', cursor: null }))
         .rows[0]
-    await t.run((ctx) => ctx.db.patch(f.org._id, { activity_count: 500 }))
-    // an organization whose counters are still on its row
     expect(await organization()).toMatchObject({ next_issue_num: 1, next_project_num: 5 })
-    expect(await organization()).not.toHaveProperty('activity_count')
-    // the first task number moves them to org_counters
     await caller.mutation(api.issues.create, {
       org_id: f.org.id,
       id: uuid(),
@@ -383,7 +379,6 @@ describe('organization export', () => {
     }
     expect(exported.organizations).toHaveLength(1)
     expect(exported.organizations[0]).toMatchObject({ id: f.org.id, billing: f.org.billing })
-    expect(exported.organizations[0]).not.toHaveProperty('activity_count')
     // activity rows keep their numbering, and rows about people reach the export
     expect(exported.activity_events.map((row) => [row.verb, row.seq, row.named_task_nums])).toEqual(
       [

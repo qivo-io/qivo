@@ -14,6 +14,7 @@ import {
   expectRefusal,
   newT,
   type OrgFixture,
+  patchCounters,
   plantProject,
   type T,
   uuid,
@@ -59,16 +60,14 @@ describe('issue numbering', () => {
     expect(c.num).toBe(b.num + 1) // the refused attempt's counter bump rolled back
   })
 
-  it('numbering stays dense across the move of the counters off the organization row', async () => {
+  it('numbering stays dense from the stored counters and never writes the organization row', async () => {
     const t = newT()
     const f = await withOrg(t)
-    // an organization created before org_counters, 41 tasks in
-    await t.run((ctx) => ctx.db.patch(f.org._id, { next_issue_num: 41 }))
+    // 41 tasks in
+    await t.run((ctx) => patchCounters(ctx, f.org.id, { next_issue_num: 41 }))
+    const before = await t.run((ctx) => ctx.db.get(f.org._id))
     const sharedId = uuid()
     expect((await createAs(t, f, { id: sharedId })).num).toBe(42)
-    const moved = await t.run(async (ctx) => (await ctx.db.get(f.org._id)) as Doc<'organizations'>)
-    expect(moved.next_issue_num).toBeUndefined()
-    expect(moved.next_project_num).toBeUndefined()
     expect(await countersFor(t, f.org.id)).toEqual({ next_issue_num: 42, next_project_num: 5 })
 
     await expectRefusal(createAs(t, f, { id: sharedId, title: 'Impostor' }), 'bad_request')
@@ -82,8 +81,7 @@ describe('issue numbering', () => {
       sort_order: 9,
     })
     expect(project.num).toBe(6)
-    // later numbers no longer write the organization row
-    expect(await t.run((ctx) => ctx.db.get(f.org._id))).toEqual(moved)
+    expect(await t.run((ctx) => ctx.db.get(f.org._id))).toEqual(before)
   })
 
   it('num is immutable: no public patch carries it, edits keep it, and the sentence is pinned', async () => {
