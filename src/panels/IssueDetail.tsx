@@ -45,6 +45,7 @@ import {
 } from '../components/qivo'
 import { copyText } from '../lib/clipboard'
 import { DELAY_MARK } from '../lib/delay'
+import { roomBeside, useFloatInsets } from '../lib/floatStack'
 import { lastInputWasPointer, restoreFocus } from '../lib/focusVisibility'
 import { useFieldUnsaved, useUnsaved } from '../lib/leaveGuard'
 import {
@@ -1103,6 +1104,9 @@ function IssueDetail({
     height: window.visualViewport?.height || window.innerHeight,
     top: window.visualViewport?.offsetTop || 0,
   }))
+  // the visible viewport less the floating notices' bands (lib/floatStack)
+  const noticeBands = useFloatInsets()
+  const mobileFrame = roomBeside(mobileViewport, noticeBands, window.innerHeight)
   useEffectID(() => {
     if (!mobile) return
     const viewport = window.visualViewport
@@ -2232,13 +2236,7 @@ function IssueDetail({
         }
         style={{
           ...(!embedded ? { pointerEvents: open ? 'auto' : 'none', ...(mobile ? fade : {}) } : {}),
-          // below the floating notices' band (lib/floatStack)
-          ...(mobile
-            ? {
-                height: `calc(${mobileViewport.height}px - var(--float-inset-y))`,
-                top: `calc(${mobileViewport.top}px + var(--float-inset-top))`,
-              }
-            : {}),
+          ...(mobile ? { height: mobileFrame.height, top: mobileFrame.top } : {}),
         }}
       >
         {/* The backdrop stands beside the window rather than around it, so the
@@ -2268,7 +2266,7 @@ function IssueDetail({
             mobile ? 'mobile' : embedded ? 'embedded' : narrow ? 'stacked' : 'columns'
           }
           data-mobile-task={mobile ? '' : undefined}
-          data-mobile-task-compact={mobile && mobileViewport.height < 600 ? '' : undefined}
+          data-mobile-task-compact={mobile && mobileFrame.height < 600 ? '' : undefined}
           data-mobile-tab={mobile ? mobileTab : undefined}
           className={`flex flex-col overflow-hidden bg-background !outline-none ${
             embedded

@@ -85,6 +85,25 @@ describe('console changes', () => {
     expect(client.action).toHaveBeenCalledTimes(2)
   })
 
+  it('pauses the other changes while a changing action takes too long, without counting it', async () => {
+    let answer: (value: null) => void = () => {}
+    client.action.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
+    const running = gate.runAction(api.adminOrgs.createOrganization, {} as never)
+    vi.advanceTimersByTime(sync.SLOW_SAVE_MS)
+    expect(sync.syncStatus.pause()).toEqual({ kind: 'slow', waiting: 0 })
+    await expect(
+      gate.runAction(api.adminAuth.banUser, { email: 'a@example.test' }),
+    ).rejects.toThrow('Saving is taking longer than usual. Editing is paused until it finishes.')
+    answer(null)
+    await running
+    expect(sync.syncStatus.pause()).toBeNull()
+    // a read takes as long as it takes
+    client.action.mockReturnValueOnce(new Promise(() => {}))
+    void gate.runAction(api.adminStats.platformStats, {})
+    vi.advanceTimersByTime(sync.SLOW_SAVE_MS)
+    expect(sync.syncStatus.pause()).toBeNull()
+  })
+
   it('says a changing action may have happened when the dropped socket lost its answer', async () => {
     client.action.mockRejectedValue(new Error('Connection lost while action was in flight'))
     await expect(

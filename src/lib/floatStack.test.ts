@@ -64,4 +64,25 @@ describe('the notices’ bands', () => {
     expect(stack.noticeInsets({ top: 16, bottom: 700 }, 900)).toEqual({ top: 450, bottom: 0 })
     expect(stack.noticeInsets(null, 900)).toEqual({ top: 0, bottom: 0 })
   })
+
+  it('leave the visible viewport alone once it has panned past the top band', () => {
+    const band = { top: 120, bottom: 0 }
+    // the whole window is visible: the task starts under the notices
+    expect(stack.roomBeside({ top: 0, height: 800 }, band, 800)).toEqual({ top: 120, height: 680 })
+    // the keyboard panned the visible part to 400..700, under the band
+    expect(stack.roomBeside({ top: 400, height: 300 }, band, 800)).toEqual({
+      top: 400,
+      height: 300,
+    })
+    // the visible part still holds the band's lower 20 px
+    expect(stack.roomBeside({ top: 100, height: 300 }, band, 800)).toEqual({
+      top: 120,
+      height: 280,
+    })
+    // a bottom band past the visible part takes nothing either
+    expect(stack.roomBeside({ top: 0, height: 500 }, { top: 0, bottom: 100 }, 800)).toEqual({
+      top: 0,
+      height: 500,
+    })
+  })
 })

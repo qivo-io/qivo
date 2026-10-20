@@ -44,6 +44,20 @@ export function noticeInsets(box: { top: number; bottom: number } | null, height
     : { top: 0, bottom: cap(height - box.top) }
 }
 
+/** The part of `view`, a box of the visible viewport in window
+    coordinates, that the notices leave free in a window `height` high. The
+    notices stay put in the window, so once the visible viewport has panned
+    past a band (a phone's keyboard can do that), the band takes nothing. */
+export function roomBeside(
+  view: { top: number; height: number },
+  band: FloatInsets,
+  height: number,
+): { top: number; height: number } {
+  const top = Math.max(view.top, band.top)
+  const bottom = Math.min(view.top + view.height, height - band.bottom)
+  return { top, height: Math.max(0, bottom - top) }
+}
+
 /** Measures the notices and publishes their bands when they changed. */
 function measure(stack: HTMLElement) {
   const boxes = [

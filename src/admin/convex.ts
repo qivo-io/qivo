@@ -16,7 +16,10 @@ import { syncStatus } from '../lib/syncStatus'
    Convex sends it again after a reconnect. An action is not sent again: one
    that is waiting when the socket drops fails once it is back, and the view
    says the change may or may not have happened. So an action only goes out
-   on a connected socket, never into Convex's queue. */
+   on a connected socket, never into Convex's queue, and it does not count as
+   waiting. While it runs it still holds the pause's clock, so one that takes
+   longer than SLOW_SAVE_MS pauses the other changes, as a slow mutation
+   does. */
 
 /** The actions that only read. Every other action changes something. */
 const READ_ACTIONS = new Set([
@@ -63,7 +66,10 @@ export const runAction: typeof convex.action = (ref, ...args) => {
   if (READ_ACTIONS.has(getFunctionName(ref))) return convex.action(ref, ...args)
   const refused = refusal('action')
   if (refused) return Promise.reject(refused)
-  return convex.action(ref, ...args).catch((error: unknown) => {
+  const settle = syncStatus.track(false)
+  const sent = convex.action(ref, ...args)
+  sent.then(settle, settle)
+  return sent.catch((error: unknown) => {
     throw error instanceof Error && error.message.includes(LOST_ACTION)
       ? new Error(LOST_TEXT)
       : error
