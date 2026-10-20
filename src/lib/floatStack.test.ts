@@ -66,6 +66,21 @@ describe('the notices’ bands', () => {
     expect(notices.contains(stack.floatSlot('toasts'))).toBe(false)
   })
 
+  it('keep their scrolling from a dialog’s scroll lock at the document', () => {
+    const notice = document.createElement('div')
+    stack.floatSlot('snapshot').append(notice)
+    const lock = vi.fn((event: Event) => event.preventDefault())
+    document.addEventListener('wheel', lock)
+    document.addEventListener('touchmove', lock)
+    const wheel = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 40 })
+    notice.dispatchEvent(wheel)
+    notice.dispatchEvent(new Event('touchmove', { bubbles: true, cancelable: true }))
+    document.removeEventListener('wheel', lock)
+    document.removeEventListener('touchmove', lock)
+    expect(lock).not.toHaveBeenCalled()
+    expect(wheel.defaultPrevented).toBe(false)
+  })
+
   it('take no room for toasts', () => {
     place('toasts', 700, 760)
     expect(band('bottom')).toBe('')

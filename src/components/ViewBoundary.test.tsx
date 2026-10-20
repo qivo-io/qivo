@@ -3,7 +3,12 @@ import { act, type ReactNode, Suspense } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { lazyFromModule, preloadModule } from '../lib/lazyModule'
-import { createSyncStatus, OFFLINE_DELAY_MS, type SyncStatus } from '../lib/syncStatus'
+import {
+  syncStatus as appStatus,
+  createSyncStatus,
+  OFFLINE_DELAY_MS,
+  type SyncStatus,
+} from '../lib/syncStatus'
 import { TooltipProvider } from './ui/tooltip'
 import { ViewBoundary } from './ViewBoundary'
 
@@ -94,6 +99,31 @@ describe('a view whose code did not load', () => {
     await reconnect()
     expect(container.textContent).toBe('Board')
     expect(importModule).toHaveBeenCalledTimes(2)
+  })
+
+  it('loads afresh when reopened after it was closed during a pause', async () => {
+    // the app's own status, which no mounted boundary watches meanwhile
+    appStatus.setSocket({ connected: true, everConnected: true })
+    const importModule = vi.fn(async () => ({ View: () => <p>Board</p> }))
+    const View = lazyFromModule(preloadModule(importModule), (module) => module.View)
+    const view = (
+      <ViewBoundary onBack={() => {}}>
+        <Suspense fallback="Loading">
+          <View />
+        </Suspense>
+      </ViewBoundary>
+    )
+    await act(async () => {
+      appStatus.setSocket({ connected: false, everConnected: true })
+      vi.advanceTimersByTime(OFFLINE_DELAY_MS)
+    })
+    await show(view)
+    expect(container.textContent).toContain('This view opens when the connection is back.')
+    await show(null)
+    await act(async () => appStatus.setSocket({ connected: true, everConnected: true }))
+    await show(view)
+    expect(container.textContent).toBe('Board')
+    expect(importModule).toHaveBeenCalledTimes(1)
   })
 
   it('shows its stand-in during a pause and hands a failure while Qivo can save up', async () => {

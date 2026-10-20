@@ -51,6 +51,7 @@
   flex-shrink: 0;
   max-height: calc(50dvh - 16px);
   overflow-y: auto;
+  overscroll-behavior: contain;
   scrollbar-width: none;
 }
 /* The free space goes above the toasts, which puts the members at the bottom.

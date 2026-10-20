@@ -114,6 +114,11 @@ export function floatSlot(slot: FloatSlot): HTMLElement {
     column.setAttribute('data-top-layer', '')
     const notices = document.createElement('div')
     notices.setAttribute('data-float-notices', '')
+    // An open dialog's scroll lock cancels wheel and touch moves outside it
+    // where they reach the document. The notices scroll on their own, so
+    // those moves stop here and the page behind stays put (float-stack.css).
+    for (const type of ['wheel', 'touchmove'])
+      notices.addEventListener(type, (event) => event.stopPropagation(), { passive: true })
     for (const name of SLOTS) {
       const element = document.createElement('div')
       element.setAttribute('data-float-slot', name)

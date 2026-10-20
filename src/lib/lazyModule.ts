@@ -40,12 +40,18 @@ export function preloadModule<Module extends object>(
   return Object.assign(load, { peek: () => loaded })
 }
 
-// bumps when an error boundary tries its view again (retryFailedLoads)
+// bumps when an error boundary tries its view again, and when a pause ends,
+// so a view closed while its code could not load starts afresh when reopened
 let retries = 0
+const stopCountingPauses = syncStatus.subscribe((ended) => {
+  if (ended && !syncStatus.pause()) retries++
+})
+import.meta.hot?.dispose(stopCountingPauses)
 
 /** Lets each lazily loaded view whose code failed start a new attempt the
  * next time it mounts. An error boundary calls it before it renders its
- * children again (components/ViewBoundary). */
+ * children again (components/ViewBoundary), and the end of every pause of
+ * the app's status counts as one too. */
 export function retryFailedLoads() {
   retries++
 }
