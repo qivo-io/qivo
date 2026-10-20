@@ -346,12 +346,17 @@ function buildThreadRows() {
    alone cannot tell one deleted from the old end from one that slid out
    (checkSlidOut). When the window no longer meets what was loaded, because
    more comments arrived between two deliveries than it holds, the thread
-   starts over from the window. */
-function receiveThread(page: {
-  comments: Row<'comments'>[]
-  earlier: boolean
-  events: Row<'activity_events'>[]
-}): Row<'comments'>[] {
+   starts over from the window. A `replay`, a result held from an earlier
+   listener, may predate edits the server accepted since, so it keeps them
+   remembered. */
+function receiveThread(
+  page: {
+    comments: Row<'comments'>[]
+    earlier: boolean
+    events: Row<'activity_events'>[]
+  },
+  replay = false,
+): Row<'comments'>[] {
   const prev = commentsSnap
   const first = page.comments[0]
   let slid: Row<'comments'>[] = []
@@ -377,8 +382,8 @@ function receiveThread(page: {
     }
   }
   if (!page.earlier) threadStart = true
-  // a live window holds the comments in it as the server has them now
-  for (const comment of page.comments) acceptedCommentChanges.delete(comment.id)
+  // a fresh window holds the comments in it as the server has them now
+  if (!replay) for (const comment of page.comments) acceptedCommentChanges.delete(comment.id)
   commentsSnap = page.comments
   eventsSnap = page.events
   return slid
@@ -499,7 +504,7 @@ function subscribeThread(issueUuid: string, orgId: string) {
       deliveredValues.add(delivered)
       if (!replay) PLANNER.commentsFailure = 'none'
       const page = anchor(delivered)
-      const slid = receiveThread(page)
+      const slid = receiveThread(page, replay)
       if (slid.length && page.comments[0])
         void checkSlidOut(orgId, issueUuid, page.comments[0].id, slid, current)
       if (replay) {
@@ -979,6 +984,11 @@ const anchor = <T>(value: T): T => (STRICT_LAYERS ? deepFreeze(structuredClone(v
     (paintRows), and shows them. A workspace repaint also tells new tasks'
     callers their final handle and ends trouble a recovering delivery held. */
 function repaint(parts: { workspace?: boolean; thread?: boolean }) {
+  if (heldRepaint) {
+    heldRepaint.workspace ||= !!parts.workspace
+    heldRepaint.thread ||= !!parts.thread
+    return
+  }
   const workspace = !!parts.workspace
   const thread = !!parts.thread
   if (workspace) owed.workspace = false
@@ -998,6 +1008,24 @@ function repaint(parts: { workspace?: boolean; thread?: boolean }) {
   } else if (thread) {
     rebuildComments()
     emit('comments')
+  }
+}
+
+/* The parts asked to repaint while together() runs its step. */
+let heldRepaint: { workspace: boolean; thread: boolean } | null = null
+
+/** Runs `step`, which settles several layers, and repaints what they asked
+    for once at its end. React renders after each emit, so one repaint per
+    layer would render the screen once for each. */
+function together(step: () => void) {
+  if (heldRepaint) return step()
+  heldRepaint = { workspace: false, thread: false }
+  try {
+    step()
+  } finally {
+    const parts = heldRepaint
+    heldRepaint = null
+    if (parts.workspace || parts.thread) repaint(parts)
   }
 }
 
@@ -3329,7 +3357,8 @@ function newTaskPaint(row: Row<'issues'>, created: { num: number | null }): Pain
    A seat's umbrella goes when its batches end, so a refused or paused batch
    takes back only the rows no accepted batch named. The first refusal is
    toasted once and takes the flags back; with every seat done they stay
-   until the next delivery. */
+   until the next delivery. The last seat's umbrella and the flags end in one
+   repaint. */
 async function bulkInbox<R extends { ids: string[]; hasMore: boolean }>(
   name: string,
   messages: MessageVM[],
@@ -3342,6 +3371,8 @@ async function bulkInbox<R extends { ids: string[]; hasMore: boolean }>(
   const loaded = messagesByOrg(messages.map((message) => message.id))
   const flag = openUmbrella(name, flags)
   let refused = false
+  let running = myProfiles.size
+  let last: Layer | null = null
   const seats = [...myProfiles.keys()].map(async (org) => {
     const umbrella = openUmbrella(name, paint(loaded.get(org) ?? []))
     let previous: R | null = null
@@ -3359,11 +3390,17 @@ async function bulkInbox<R extends { ids: string[]; hasMore: boolean }>(
       }
       return false
     } finally {
-      if (epoch === storeEpoch) endUmbrella(umbrella, false)
+      if (--running > 0) {
+        if (epoch === storeEpoch) endUmbrella(umbrella, false)
+      } else last = umbrella
     }
   })
   const done = await Promise.all(seats)
-  if (epoch === storeEpoch) endUmbrella(flag, done.every(Boolean))
+  if (epoch !== storeEpoch) return
+  together(() => {
+    if (last) endUmbrella(last, false)
+    endUmbrella(flag, done.every(Boolean))
+  })
 }
 
 /* The paint of removing messages `ids`. With `onlyRead` it removes, as the

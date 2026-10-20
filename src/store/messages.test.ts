@@ -175,8 +175,17 @@ describe('bulk notification actions through the client store', () => {
     requests[0].resolve({ marked: 1, hasMore: false, before: 20 })
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(completed).toBe(false)
+    // Convex delivers the last seat's reads before it answers. Its paint and
+    // the flags then end in one repaint, so the screen renders once for them
+    const org = requests[1].args.org_id
+    for (const message of snap.messages) if (message.org_id === org) message.read_at ??= NOW
+    publish(structuredClone(snap))
+    let emits = 0
+    const stop = P.subscribe(() => emits++)
     requests[1].resolve({ marked: 1, hasMore: false, before: 25 })
     await marking
+    stop()
+    expect(emits).toBe(1)
     expect(completed).toBe(true)
     expect(showToast).not.toHaveBeenCalled()
   })

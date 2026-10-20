@@ -2,7 +2,9 @@ import { type FunctionReference, getFunctionName } from 'convex/server'
 
 /* A Convex client double for store tests that keeps Convex's order: a write
    that the server accepts reaches the query listeners first and resolves
-   after (lib/convexOrdering.test.ts pins that order on the real client). */
+   after. Like the real client, it hands every listener of a query the same
+   result object, and a new listener the held one on a 0 ms timer
+   (lib/convexOrdering.test.ts pins both on the real client). */
 
 /** A write the store sent and the test has not answered yet. */
 export type Request = {
@@ -23,7 +25,8 @@ type Subscription = {
 export function createConvexDouble() {
   const requests: Request[] = []
   const subscriptions = new Map<string, Subscription[]>()
-  /* What a new subscription to a query gets at once, by query name. */
+  /* The result a query's listeners hold, which a new listener gets, by
+     query name. */
   const current = new Map<string, unknown>()
   /* What a one-shot query answers, by query name. */
   const answers = new Map<string, (args: Record<string, unknown>) => unknown>()
@@ -50,7 +53,10 @@ export function createConvexDouble() {
       const name = getFunctionName(ref)
       const subscription: Subscription = { args, receive, fail, closed: false }
       subscriptions.set(name, [...(subscriptions.get(name) ?? []), subscription])
-      if (current.has(name)) receive(structuredClone(current.get(name)))
+      if (current.has(name))
+        setTimeout(() => {
+          if (!subscription.closed && current.has(name)) receive(current.get(name))
+        }, 0)
       return () => {
         subscription.closed = true
       }
@@ -68,10 +74,11 @@ export function createConvexDouble() {
       answers.clear()
     },
     /** Sets what query `name` delivers to a new subscription, and delivers
-        it to the live ones when `now`. */
+        it to the live ones when `now`. Each call is a new result object. */
     publish(name: string, value: unknown, now = true) {
-      current.set(name, value)
-      if (now) for (const s of live(name)) s.receive(structuredClone(value))
+      const result = structuredClone(value)
+      current.set(name, result)
+      if (now) for (const s of live(name)) s.receive(result)
     },
     /** Fails the live subscriptions of query `name`. */
     fail(name: string, error: unknown) {

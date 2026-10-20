@@ -1,5 +1,5 @@
 import { readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { posix } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { plannerFixture } from '../plannerFixture.setup'
 import {
@@ -109,7 +109,7 @@ describe('the store sends every write through one door', () => {
   it('has no other store file that writes to Convex', () => {
     const others = readdirSync('src/store')
       .filter((name) => /\.tsx?$/.test(name) && !/\.(test|setup)\.tsx?$/.test(name))
-      .map((name) => join('src/store', name))
+      .map((name) => posix.join('src/store', name))
       .filter((path) => path !== STORE)
     const found: string[] = []
     for (const path of others) {
@@ -200,7 +200,8 @@ describe('Convex writes outside the store', () => {
   }
   const files = (dir: string): string[] =>
     readdirSync(dir).flatMap((name) => {
-      const path = join(dir, name)
+      // forward slashes on every platform, as the paths it compares with
+      const path = posix.join(dir, name)
       if (statSync(path).isDirectory())
         return path === 'src/store' || path === 'src/admin' ? [] : files(path)
       return /\.tsx?$/.test(name) && !/\.(test|setup)\.tsx?$/.test(name) ? [path] : []

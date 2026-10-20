@@ -90,7 +90,13 @@ async function boot(recipe: Recipe) {
   d.reset()
   d.publish('snapshot:forMe', snap, false)
   d.publish('snapshot:commentThread', page, false)
-  await store.initStore()
+  // a new listener gets the held snapshot on a 0 ms timer, as from Convex
+  let booted = false
+  const booting = store.initStore().then(() => {
+    booted = true
+  })
+  for (let turn = 0; turn < 50 && !booted; turn++) await vi.advanceTimersByTimeAsync(0)
+  await booting
   P().watchComments('task-a')
   await recipe.prepare?.(P(), {
     answer: async (name, value, edit) => {
