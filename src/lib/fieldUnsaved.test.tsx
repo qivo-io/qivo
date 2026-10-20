@@ -2,6 +2,8 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { Input } from '../components/ui/input'
+import { TooltipProvider } from '../components/ui/tooltip'
 import { hasUnsaved, useFieldUnsaved } from './leaveGuard'
 
 /* A field that saves on blur keeps the close warning while a refused save
@@ -13,7 +15,11 @@ let root: Root
 
 function Field({ saved = '16' }: { saved?: string }) {
   const unsaved = useFieldUnsaved(() => paused, saved)
-  return <input aria-label="Hours" type="number" key={saved} defaultValue={saved} {...unsaved} />
+  return (
+    <TooltipProvider>
+      <Input aria-label="Hours" type="number" key={saved} defaultValue={saved} {...unsaved} />
+    </TooltipProvider>
+  )
 }
 
 beforeEach(async () => {
