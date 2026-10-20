@@ -176,8 +176,8 @@ describe('durable task events', () => {
     expect(carried.find(([id]) => id === f.issue.id)?.[1]).toContain('project_id')
     expect((await f.t.run((ctx) => byId(ctx, 'issues', f.issue.id)))?.status_at).toBeUndefined()
     expect(carried.flatMap(([, fields]) => fields)).not.toContain('status_at')
-    // a review hand-off, measurement or Done time the move restarts is
-    // news, as any other change to it
+    // a review hand-off or Done time the move restarts is news, as any
+    // other change to it; the measurement stays
     const done = await plantIssue(f.t, {
       org_id,
       project_id: f.fx.sub.id,
@@ -195,7 +195,7 @@ describe('durable task events', () => {
           project_id: f.fx.sub2.id,
         }),
       ),
-    ).toEqual([[done.id, ['done_at', 'project_id', 'remaining_set_at', 'review_at']]])
+    ).toEqual([[done.id, ['done_at', 'project_id', 'review_at']]])
   })
 
   it('a carried subtask that lands as a group loses its hand-off once, never restarted first', async () => {

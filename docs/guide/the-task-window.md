@@ -136,11 +136,11 @@ view. Choosing another parent replaces it, and **Remove parent** removes it.
 
 Choose **Move to sub-project…** to move within the task's organization to a
 sub-project you can edit. The task keeps its ID, comments, attachments, labels,
-activity, links and subtasks. Its Remaining estimate counts as measured at the
-move, which can change its
-[delay projection](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works),
-and its review hand-off and the time it became Done start again too, for the
-task and each subtask that moves with it.
+activity, links and subtasks. Its review hand-off and the time it became Done
+start again at the move, for the task and each subtask that moves with it.
+A Remaining estimate that stays with the task keeps its measurement time, so
+the move does not restart its
+[delay projection](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works).
 
 A move between sub-projects of the same project moves only the task. A move
 to a sub-project of another project also moves the task's subtasks, at any

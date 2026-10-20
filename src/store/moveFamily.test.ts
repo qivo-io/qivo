@@ -122,24 +122,26 @@ describe('moving a task with its family', () => {
     expect(moves()).toEqual([expect.not.objectContaining({ detach_parent: expect.anything() })])
   })
 
-  it('restarts the remaining-hours measurement of the task and each subtask it carries', async () => {
+  it('keeps the remaining-hours measurement of the task and each subtask it carries', async () => {
     const measured = { remaining_hours: 4, remaining_set_at: '2026-08-03T08:00:00.000Z' }
     // the leaves hold the hours, as a group holds none
     await load((snap) => {
       for (const row of snap.issues)
         if (row.id === 'api' || row.id === 'lone') Object.assign(row, measured)
+      const api = snap.issues.find((row) => row.id === 'api')
+      Object.assign(api!, { status: 'review', review_at: measured.remaining_set_at })
     })
     const week = vm('lone').remainingSet!
+    const handed = vm('api').reviewAt!
     P.moveIssue(vm('epic').id, ids.fw)
-    expect(vm('api').remainingSet).toBeGreaterThan(week)
-    expect(vm('lone').remainingSet).toBe(week)
+    expect(vm('api').project).toBe(ids.fw)
+    expect(vm('api').remainingSet).toBe(week)
+    // the same move restarts the review hand-off it carries
+    expect(vm('api').reviewAt).toBeGreaterThan(handed)
     // a task without hours gains no measurement
     expect(vm('epic').remainingSet).toBeNull()
-    // naming the current sub-project changes nothing
-    expect(P.moveIssue(vm('lone').id, ids.fe)).toBeNull()
-    expect(vm('lone').remainingSet).toBe(week)
     P.moveIssue(vm('lone').id, ids.be)
-    expect(vm('lone').remainingSet).toBeGreaterThan(week)
+    expect(vm('lone').remainingSet).toBe(week)
   })
 
   it('moves only the task within its top-level project', async () => {
