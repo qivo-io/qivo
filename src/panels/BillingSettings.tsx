@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { billingDate, billingError } from '@/lib/billingDisplay'
 import { convex } from '@/lib/convex'
 import { DEMO_MODE, WORKSPACE_SIGNUP_URL } from '@/lib/demoMode'
+import { holdUnsaved } from '@/lib/leaveGuard'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { api } from '../../convex/_generated/api'
 import type {
@@ -149,6 +150,8 @@ function LiveBillingSettings({
     if (paused) return paused
     actionInFlight.current = true
     const release = beginUpdateBlock()
+    // closing the page before the answer would leave the cancellation unknown
+    const releaseUnsaved = holdUnsaved()
     setBusy(true)
     setActionError('')
     try {
@@ -162,6 +165,7 @@ function LiveBillingSettings({
     } finally {
       actionInFlight.current = false
       setBusy(false)
+      releaseUnsaved()
       release()
     }
   }

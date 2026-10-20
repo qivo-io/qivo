@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { billingDate } from '@/lib/billingDisplay'
 import { convex } from '@/lib/convex'
+import { holdUnsaved } from '@/lib/leaveGuard'
 import { useUpdateBlocker } from '@/lib/updateSafety'
 import { api } from '../../convex/_generated/api'
 import { P } from '../store/planner'
@@ -61,6 +62,8 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
     }
     setBusy(true)
     setError('')
+    // closing the page before the answer would leave the request unknown
+    const releaseUnsaved = holdUnsaved()
     try {
       await work()
       setOpen(false)
@@ -68,6 +71,7 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
     } catch (cause) {
       setError(failure(cause, fallback))
     } finally {
+      releaseUnsaved()
       setBusy(false)
     }
   }

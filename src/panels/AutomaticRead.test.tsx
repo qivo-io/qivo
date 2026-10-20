@@ -21,8 +21,8 @@ vi.mock('../lib/auth', () => ({
   signOut: vi.fn(),
 }))
 
-const UP = { connected: true, everConnected: true, synced: true }
-const DOWN = { connected: false, everConnected: true, synced: false }
+const UP = { connected: true, everConnected: true }
+const DOWN = { connected: false, everConnected: true }
 
 let container: HTMLDivElement
 let root: Root
@@ -108,7 +108,10 @@ describe('the automatic read in the task window', { timeout: 20_000 }, () => {
     expect(reads()).toHaveLength(0)
     expect(window.showToast).not.toHaveBeenCalled()
 
-    await act(async () => syncStatus.setSocket(UP))
+    await act(async () => {
+      syncStatus.setSocket(UP)
+      syncStatus.transitioned()
+    })
     expect(reads()).toHaveLength(1)
     expect(reads()[0][1]).toEqual({ org_id: snap.orgs[0].id, ids: ['message-a'] })
   })

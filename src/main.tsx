@@ -22,8 +22,11 @@ import.meta.hot?.dispose(disposeAnnouncer)
 // whether Qivo can save, which pauses edits (store/planner.ts write())
 const stopWatchingConnection = watchConnection(syncStatus, convex)
 import.meta.hot?.dispose(stopWatchingConnection)
-// a change waiting for the server, or typed text an editor has not sent
-const removeLeaveGuard = installLeaveGuard(P.hasUnsavedWork)
+// a change waiting for the server, or typed text an editor has not sent; the
+// Convex count also covers panels that call a mutation directly
+const removeLeaveGuard = installLeaveGuard(
+  () => P.hasUnsavedWork() || convex.connectionState().inflightMutations > 0,
+)
 import.meta.hot?.dispose(removeLeaveGuard)
 
 createRoot(document.getElementById('root')!).render(

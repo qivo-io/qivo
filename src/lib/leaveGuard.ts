@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from 'react'
+import { type FocusEvent, useLayoutEffect, useState } from 'react'
 
 /* The warning before the page closes or reloads with work that is not saved.
 
@@ -53,4 +53,22 @@ export function useTypedUnsaved() {
   const [typed, setTyped] = useState(false)
   useUnsaved(typed)
   return { typed: () => setTyped(true), reset: () => setTyped(false) }
+}
+
+/** Props for an uncontrolled field that saves on blur. They hold a lease
+    from the first keystroke until a blur leaves nothing unsent, which they
+    check once the field's own blur handler has run. A blur while `paused()`
+    holds keeps the lease when the field still shows text other than its
+    saved value, because the save was refused and the draft stays. */
+export function useFieldUnsaved(paused: () => boolean) {
+  const { typed, reset } = useTypedUnsaved()
+  return {
+    onInput: typed,
+    onBlurCapture: (event: FocusEvent<HTMLInputElement>) => {
+      const field = event.currentTarget
+      setTimeout(() => {
+        if (!paused() || field.value === field.defaultValue) reset()
+      }, 0)
+    },
+  }
 }

@@ -10,6 +10,30 @@ import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', () => ({ convex: network }))
+// The note of the page under test. Each boot opens a new page, and every
+// other page has closed (Web Locks). Mocked modules outlive resetModules, so
+// the mock forwards to the page's own note.
+const page = vi.hoisted(() => ({
+  note: null as null | ReturnType<typeof import('../lib/unconfirmedNote')['createUnconfirmedNote']>,
+}))
+vi.mock('../lib/unconfirmedNote', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../lib/unconfirmedNote')>()
+  const open = () =>
+    (page.note = original.createUnconfirmedNote({
+      storage: () => localStorage,
+      page: crypto.randomUUID(),
+      livePages: async () => new Set(),
+    }))
+  return {
+    ...original,
+    unconfirmedNote: {
+      add: (...args: Parameters<NonNullable<typeof page.note>['add']>) =>
+        (page.note ?? open()).add(...args),
+      forget: (scopes: Iterable<string>) => (page.note ?? open()).forget(scopes),
+      collect: (scopes: Iterable<string>) => (page.note ?? open()).collect(scopes),
+    },
+  }
+})
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: { getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }) },
@@ -23,9 +47,8 @@ type Sent = {
   reject: (error: Error) => void
 }
 
-const UP = { connected: true, everConnected: true, synced: true }
-const DOWN = { connected: false, everConnected: true, synced: false }
-const BACK = { connected: true, everConnected: true, synced: false }
+const UP = { connected: true, everConnected: true }
+const DOWN = { connected: false, everConnected: true }
 
 describe('the pause while Qivo cannot save', () => {
   let store: typeof import('./planner')
@@ -46,10 +69,12 @@ describe('the pause while Qivo cannot save', () => {
   /** Loads the store as a new page would, on the same browser storage. */
   async function boot() {
     vi.resetModules()
+    page.note = null
     status = await import('../lib/syncStatus')
     store = await import('./planner')
     await store.initStore()
     status.syncStatus.setSocket(UP)
+    status.syncStatus.transitioned()
     await settle()
   }
   async function goOffline() {
@@ -156,12 +181,12 @@ describe('the pause while Qivo cannot save', () => {
     await goOffline()
     expect(P.savePause()).toEqual({ kind: 'offline', waiting: 1 })
     expect(P.hasUnconfirmed()).toBe(true)
-    status.syncStatus.setSocket(BACK)
+    status.syncStatus.setSocket(UP)
     sent[0].resolve(null)
     await settle()
-    // the writes settled, and the pause holds until Convex has synced
+    // the writes settled, and the pause holds until the new connection's results arrive
     expect(P.savePause()?.kind).toBe('offline')
-    status.syncStatus.setSocket(UP)
+    status.syncStatus.transitioned()
     await settle()
     expect(P.savePause()).toBeNull()
     expect(P.hasUnconfirmed()).toBe(false)
@@ -182,6 +207,20 @@ describe('the pause while Qivo cannot save', () => {
     await settle()
     expect(P.savePause()).toBeNull()
     expect(sentNames()).toEqual(['issues:update'])
+  })
+
+  it('sends a slow preference save again when it fails and the pause ends', async () => {
+    await boot()
+    store.P.saveUI({ view: 'kanban' })
+    vi.advanceTimersByTime(600)
+    expect(sentNames()).toEqual(['prefs:save'])
+    vi.advanceTimersByTime(status.SLOW_SAVE_MS)
+    expect(store.P.savePause()?.kind).toBe('slow')
+    sent[0].reject(new Error('Server error'))
+    await settle()
+    expect(store.P.savePause()).toBeNull()
+    vi.advanceTimersByTime(0)
+    expect(sentNames()).toEqual(['prefs:save', 'prefs:save'])
   })
 
   it('notes each sent change without its text, and clears it on an answer or a sign-out', async () => {

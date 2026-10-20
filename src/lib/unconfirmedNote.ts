@@ -94,7 +94,10 @@ export function createUnconfirmedNote(deps: Dependencies) {
     },
 
     /** Answers the changes that pages which have closed noted in `scopes`
-        and never cleared, and clears those notes, so each is told once. */
+        and never cleared, and clears those notes, so each is told once.
+        When the browser cannot tell which pages are open, it reports none,
+        because the page that wrote a note may still be waiting for its
+        answer, and only drops notes older than KEEP_MS. */
     async collect(scopes: Iterable<string>): Promise<UnconfirmedChange[]> {
       const live = await deps.livePages()
       const found: UnconfirmedChange[] = []
@@ -102,21 +105,28 @@ export function createUnconfirmedNote(deps: Dependencies) {
         for (const key of keysOf(scope)) {
           const page = key.slice(`${PREFIX}${scope}:`.length)
           if (page === deps.page || live?.has(page)) continue
-          let entries: unknown = null
+          let entries: Partial<Stored>[] = []
           try {
-            entries = JSON.parse(deps.storage().getItem(key) || 'null')
-            deps.storage().removeItem(key)
+            const parsed: unknown = JSON.parse(deps.storage().getItem(key) || 'null')
+            if (Array.isArray(parsed)) entries = parsed
           } catch {
             // A note that cannot be read says nothing.
           }
-          if (!Array.isArray(entries)) continue
-          for (const entry of entries as Partial<Stored>[]) {
-            if (typeof entry?.what !== 'string' || !(now() - Number(entry.at) < KEEP_MS)) continue
+          const kept = entries.filter(
+            (entry) => typeof entry?.what === 'string' && now() - Number(entry.at) < KEEP_MS,
+          )
+          if (!live && kept.length) continue
+          try {
+            deps.storage().removeItem(key)
+          } catch {
+            // The note stays, and the next start reads it again.
+          }
+          if (!live) continue
+          for (const entry of kept)
             found.push({
               task: typeof entry.task === 'string' ? entry.task : null,
-              what: entry.what,
+              what: String(entry.what),
             })
-          }
         }
       }
       return found

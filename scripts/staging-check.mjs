@@ -4788,7 +4788,11 @@ async function start() {
       )
     cfg = { ...options, ...resolveConfig(options, process.env) }
     cfg.mcpUrl = `${cfg.apiOrigin}/mcp`
-    const credentials = loadCredentials(fixtureDirectory(ROOT, process.env), cfg.target)
+    // a local run may keep them in the checkout's ignored dev-temp/, as its seed does
+    const credentials = loadCredentials(
+      fixtureDirectory(ROOT, process.env, { local: cfg.target.target === 'local' }),
+      cfg.target,
+    )
     if (!credentials)
       throw new UsageError('The Northstar fixture credentials for this deployment are missing.')
     for (const account of credentials.value.accounts) keep(account.password)

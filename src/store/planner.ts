@@ -6982,7 +6982,8 @@ syncStatus.subscribe((ended) => {
     'success',
   )
   reapPausedUploads()
-  preferences.retry()
+  // after the failed save's own handler, which runs once this one returns
+  setTimeout(() => preferences.retry(), 0)
 })
 
 /** Subscribes to the live snapshot. With `first`, the subscription's first

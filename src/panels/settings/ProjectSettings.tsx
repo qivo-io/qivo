@@ -23,7 +23,7 @@ import {
 } from '../../components/settingsPage'
 import { dayInSentence, deletedAtFull } from '../../lib/deletedTime'
 import { DEMO_MODE } from '../../lib/demoMode'
-import { useUnsaved } from '../../lib/leaveGuard'
+import { useFieldUnsaved, useUnsaved } from '../../lib/leaveGuard'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import type { AccessLevel, AccessRemoval, ArchivedProjectVM, ProjectVM } from '../../store/planner'
 import { P } from '../../store/planner'
@@ -528,6 +528,8 @@ function ProjectSettingsFields({
   const [inviting, setInviting] = useStateS(false)
   useUpdateBlocker(!!inviteEmail || inviting)
   useUnsaved(!!inviteEmail.trim())
+  // the review time typed and not yet saved (the field saves on blur)
+  const reviewUnsaved = useFieldUnsaved(P.editsPaused)
   const accessHeading = React.useRef<HTMLDivElement>(null)
   const isMeta = proj.type === 'meta'
   const parentMeta = proj.parent ? P.project(proj.parent) : null
@@ -663,6 +665,7 @@ function ProjectSettingsFields({
               step={0.5}
               data-project-review-hours
               aria-label="Review time"
+              {...reviewUnsaved}
               key={`review:${proj.id}:${proj.reviewHours ?? ''}`}
               defaultValue={proj.reviewHours ?? ''}
               placeholder={String(inheritedReview)}

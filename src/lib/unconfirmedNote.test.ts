@@ -51,6 +51,19 @@ describe('unconfirmed note', () => {
     ])
   })
 
+  it('reports nothing when the browser cannot tell which pages are open', async () => {
+    const storage = memoryStorage()
+    const open = (page: string) =>
+      createUnconfirmedNote({ storage: () => storage, page, livePages: async () => null })
+    open('maybe-open').add(SCOPE, { task: 'QN-12', what: 'description' })
+    storage.setItem(
+      `qivo.unconfirmed.v1:${SCOPE}:long-gone`,
+      JSON.stringify([{ task: 'QN-1', what: 'title', id: '1', at: 0 }]),
+    )
+    expect(await open('next').collect([SCOPE])).toEqual([])
+    expect([...storage.items.keys()]).toEqual([`qivo.unconfirmed.v1:${SCOPE}:maybe-open`])
+  })
+
   it('never reports its own page, and a sign-out clears every page', async () => {
     const { storage, open } = pages()
     const note = open('a')

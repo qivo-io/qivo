@@ -10,8 +10,9 @@ import type { ConvexClient } from 'convex/browser'
    down for OFFLINE_DELAY_MS, or when a sent write has waited SLOW_SAVE_MS on
    a socket that counts as connected (a half-open socket can take Convex up
    to a minute to notice). The pause ends once the socket is back, every
-   write waiting has settled, and Convex has synced past the reconnect, so
-   the screen holds a fresh delivery before anyone edits again. */
+   write waiting has settled, and the server has sent the query results of
+   the new connection (a Transition after the latest connect), so the screen
+   holds a fresh delivery before anyone edits again. */
 
 /** How long the connection must stay down before edits pause, so a short
     blip does not flash a notice. */
@@ -24,10 +25,8 @@ export const SLOW_SAVE_MS = 10_000
     before the pause that have not been confirmed yet. */
 export type SavePause = { kind: 'offline' | 'slow'; waiting: number }
 
-/** What the status reads from the Convex socket. `synced` is false after a
-    reconnect until Convex has had the server's answer for everything it held
-    from before it (ConnectionState.connectionRetries returns to 0). */
-export type SocketState = { connected: boolean; everConnected: boolean; synced: boolean }
+/** What the status reads from the Convex socket. */
+export type SocketState = { connected: boolean; everConnected: boolean }
 
 /** A listener hears every change of the pause, and of its `waiting` count
     during one. `ended` is the kind of a pause that just ended. */
@@ -36,8 +35,10 @@ export type SyncListener = (ended: SavePause['kind'] | null) => void
 /** Creates the status. It starts as able to save, and learns about the
     connection only through setSocket and setOnline (watchConnection). */
 export function createSyncStatus(now = () => Date.now()) {
-  let socket: SocketState = { connected: false, everConnected: false, synced: true }
+  let socket: SocketState = { connected: false, everConnected: false }
   let online = true
+  // whether the server sent query results since the socket last connected
+  let fresh = true
   // when the socket last became connected, so a write sent before a
   // reconnect waits SLOW_SAVE_MS from the reconnect, not from its send
   let connectedAt = Number.NEGATIVE_INFINITY
@@ -67,7 +68,7 @@ export function createSyncStatus(now = () => Date.now()) {
       const oldest = Math.min(...[...writes.values()].map((w) => Math.max(w.sentAt, connectedAt)))
       if (at - oldest >= SLOW_SAVE_MS) kind = 'slow'
       else wake = oldest + SLOW_SAVE_MS
-    } else if (socket.synced) kind = null
+    } else if (fresh) kind = null
     if (timer) clearTimeout(timer)
     timer = wake === null ? null : setTimeout(evaluate, Math.max(0, wake - at))
     const count = countWaiting()
@@ -85,8 +86,17 @@ export function createSyncStatus(now = () => Date.now()) {
     unconfirmed: countWaiting,
     /** Records the socket's state. */
     setSocket(next: SocketState) {
-      if (next.connected && !socket.connected) connectedAt = now()
+      if (next.connected && !socket.connected) {
+        connectedAt = now()
+        fresh = false
+      }
       socket = next
+      evaluate()
+    },
+    /** Records that the server sent query results (a Convex Transition). */
+    transitioned() {
+      if (fresh) return
+      fresh = true
       evaluate()
     },
     /** Records whether the browser reports a network connection. */
@@ -120,12 +130,12 @@ export type SyncStatus = ReturnType<typeof createSyncStatus>
 /** The one status the app's store reads. */
 export const syncStatus = createSyncStatus()
 
-/** Feeds `status` from the Convex client's connection state and from the
-    browser's `online` and `offline` events, which Convex does not read for
-    going offline. Answers a function that stops it. */
+/** Feeds `status` from the Convex client's connection state and its
+    Transitions, and from the browser's `online` and `offline` events, which
+    Convex does not read for going offline. Answers a function that stops it. */
 export function watchConnection(
   status: SyncStatus,
-  client: Pick<ConvexClient, 'connectionState' | 'subscribeToConnectionState'>,
+  client: Pick<ConvexClient, 'connectionState' | 'subscribeToConnectionState' | 'client'>,
   win: Window = window,
 ) {
   const readSocket = () => {
@@ -133,17 +143,18 @@ export function watchConnection(
     status.setSocket({
       connected: state.isWebSocketConnected,
       everConnected: state.hasEverConnected,
-      synced: state.connectionRetries === 0,
     })
   }
   const readOnline = () => status.setOnline(win.navigator.onLine !== false)
   readSocket()
   readOnline()
   const stop = client.subscribeToConnectionState(readSocket)
+  const stopTransitions = client.client.addOnTransitionHandler(() => status.transitioned())
   win.addEventListener('online', readOnline)
   win.addEventListener('offline', readOnline)
   return () => {
     stop()
+    stopTransitions()
     win.removeEventListener('online', readOnline)
     win.removeEventListener('offline', readOnline)
   }

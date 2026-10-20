@@ -5,7 +5,7 @@ import { NativeSelect } from '@/components/ui/native-select'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { DEMO_MODE } from '../../lib/demoMode'
-import { useUnsaved } from '../../lib/leaveGuard'
+import { useFieldUnsaved, useUnsaved } from '../../lib/leaveGuard'
 import { projectRightBox } from '../../lib/projectCreators'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { DEFAULT_PLANNABLE_HOURS } from '../../lib/workload'
@@ -194,6 +194,8 @@ export function PlannableHoursInput({
   canEdit: boolean
   width?: number
 }) {
+  // hours typed and not yet saved (the field saves on blur)
+  const hoursUnsaved = useFieldUnsaved(P.editsPaused)
   // Agents have unlimited capacity and cannot receive a weekly-hour value.
   if (user.isAgent) {
     return (
@@ -228,6 +230,7 @@ export function PlannableHoursInput({
           step={1}
           data-plannable-for={user.id}
           aria-label={`Plannable hours per week for ${user.name}`}
+          {...hoursUnsaved}
           key={`ph${user.id}${stored}`}
           defaultValue={stored}
           disabled={!canEdit}

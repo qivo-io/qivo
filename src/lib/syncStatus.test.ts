@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSyncStatus, OFFLINE_DELAY_MS, SLOW_SAVE_MS, watchConnection } from './syncStatus'
 
-const UP = { connected: true, everConnected: true, synced: true }
-const DOWN = { connected: false, everConnected: true, synced: false }
-const BACK = { connected: true, everConnected: true, synced: false }
+const UP = { connected: true, everConnected: true }
+const DOWN = { connected: false, everConnected: true }
 
 describe('sync status', () => {
   beforeEach(() => {
@@ -18,6 +17,8 @@ describe('sync status', () => {
     const heard = vi.fn()
     status.subscribe(heard)
     status.setSocket(UP)
+    // the first query results of the connection
+    status.transitioned()
     return { status, heard }
   }
 
@@ -47,12 +48,12 @@ describe('sync status', () => {
 
   it('does not count a socket that never connected as offline', () => {
     const status = createSyncStatus()
-    status.setSocket({ connected: false, everConnected: false, synced: true })
+    status.setSocket({ connected: false, everConnected: false })
     vi.advanceTimersByTime(OFFLINE_DELAY_MS * 2)
     expect(status.pause()).toBeNull()
   })
 
-  it('counts the changes sent before the drop and ends once they settle and Convex has synced', () => {
+  it('counts the changes sent before the drop and ends once they settle and fresh results arrive', () => {
     const { status, heard } = connected()
     const first = status.track(true)
     const second = status.track(true)
@@ -62,13 +63,13 @@ describe('sync status', () => {
     expect(status.pause()).toEqual({ kind: 'offline', waiting: 2 })
     expect(status.unconfirmed()).toBe(2)
 
-    status.setSocket(BACK)
+    status.setSocket(UP)
     first()
     second()
     background()
-    // the writes settled, but the delivery from after the reconnect has not arrived
+    // the writes settled, but the results of the new connection have not arrived
     expect(status.pause()?.kind).toBe('offline')
-    status.setSocket(UP)
+    status.transitioned()
     expect(status.pause()).toBeNull()
     expect(heard).toHaveBeenLastCalledWith('offline')
   })
@@ -91,40 +92,42 @@ describe('sync status', () => {
     status.setSocket(DOWN)
     vi.advanceTimersByTime(SLOW_SAVE_MS * 3)
     expect(status.pause()?.kind).toBe('offline')
-    status.setSocket(BACK)
+    status.setSocket(UP)
     vi.advanceTimersByTime(SLOW_SAVE_MS - 1)
     expect(status.pause()?.kind).toBe('offline')
     vi.advanceTimersByTime(1)
     expect(status.pause()?.kind).toBe('slow')
   })
 
-  it('reads the Convex connection state and the browser events', () => {
+  it('reads the Convex connection state, its Transitions and the browser events', () => {
     const status = createSyncStatus()
-    const state = {
-      isWebSocketConnected: true,
-      hasEverConnected: true,
-      connectionRetries: 0,
-    }
+    const state = { isWebSocketConnected: true, hasEverConnected: true }
     let changed = () => {}
+    let transition = () => {}
     const client = {
       connectionState: () => state,
       subscribeToConnectionState: (cb: () => void) => {
         changed = cb
         return () => {}
       },
+      client: {
+        addOnTransitionHandler: (cb: () => void) => {
+          transition = cb
+          return () => true
+        },
+      },
     } as unknown as Parameters<typeof watchConnection>[1]
     const win = new EventTarget() as Window
     Object.defineProperty(win, 'navigator', { value: { onLine: true } })
     watchConnection(status, client, win)
-    Object.assign(state, { isWebSocketConnected: false, connectionRetries: 1 })
+    Object.assign(state, { isWebSocketConnected: false })
     changed()
     vi.advanceTimersByTime(OFFLINE_DELAY_MS)
     expect(status.pause()?.kind).toBe('offline')
     Object.assign(state, { isWebSocketConnected: true })
     changed()
     expect(status.pause()?.kind).toBe('offline')
-    Object.assign(state, { connectionRetries: 0 })
-    changed()
+    transition()
     expect(status.pause()).toBeNull()
 
     Object.defineProperty(win.navigator, 'onLine', { value: false })

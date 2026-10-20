@@ -13,6 +13,30 @@ import { TooltipProvider } from './ui/tooltip'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', () => ({ convex: network }))
+// The note of the page under test. Each boot opens a new page, and every
+// other page has closed (Web Locks). Mocked modules outlive resetModules, so
+// the mock forwards to the page's own note.
+const page = vi.hoisted(() => ({
+  note: null as null | ReturnType<typeof import('../lib/unconfirmedNote')['createUnconfirmedNote']>,
+}))
+vi.mock('../lib/unconfirmedNote', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../lib/unconfirmedNote')>()
+  const open = () =>
+    (page.note = original.createUnconfirmedNote({
+      storage: () => localStorage,
+      page: crypto.randomUUID(),
+      livePages: async () => new Set(),
+    }))
+  return {
+    ...original,
+    unconfirmedNote: {
+      add: (...args: Parameters<NonNullable<typeof page.note>['add']>) =>
+        (page.note ?? open()).add(...args),
+      forget: (scopes: Iterable<string>) => (page.note ?? open()).forget(scopes),
+      collect: (scopes: Iterable<string>) => (page.note ?? open()).collect(scopes),
+    },
+  }
+})
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: { getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }) },
@@ -165,8 +189,9 @@ describe('SnapshotNotice while Qivo cannot save', () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
     const { syncStatus, OFFLINE_DELAY_MS } = await import('../lib/syncStatus')
     await act(async () => {
-      syncStatus.setSocket({ connected: true, everConnected: true, synced: true })
-      syncStatus.setSocket({ connected: false, everConnected: true, synced: false })
+      syncStatus.setSocket({ connected: true, everConnected: true })
+      syncStatus.transitioned()
+      syncStatus.setSocket({ connected: false, everConnected: true })
       vi.advanceTimersByTime(OFFLINE_DELAY_MS)
     })
     return syncStatus
@@ -193,7 +218,10 @@ describe('SnapshotNotice while Qivo cannot save', () => {
     expect(document.querySelectorAll('[data-snapshot-notice]')).toHaveLength(1)
     await act(async () => deliverLater(plannerFixture()))
     expect(shown()?.dataset.snapshotNotice).toBe('offline')
-    await act(async () => status.setSocket({ connected: true, everConnected: true, synced: true }))
+    await act(async () => {
+      status.setSocket({ connected: true, everConnected: true })
+      status.transitioned()
+    })
     expect(shown()).toBeNull()
     expect(window.showToast).toHaveBeenCalledWith('Back online. Editing is on again.', 'success')
   })
@@ -204,7 +232,8 @@ describe('SnapshotNotice while Qivo cannot save', () => {
     let answer = () => {}
     network.mutation.mockReturnValue(new Promise<null>((resolve) => (answer = () => resolve(null))))
     await act(async () => {
-      syncStatus.setSocket({ connected: true, everConnected: true, synced: true })
+      syncStatus.setSocket({ connected: true, everConnected: true })
+      syncStatus.transitioned()
       void store.P.addTeam('Field crew')
       vi.advanceTimersByTime(SLOW_SAVE_MS)
     })
@@ -226,6 +255,7 @@ describe('SnapshotNotice after a page closed with changes unconfirmed', () => {
       JSON.stringify([{ task: 'QN-3', what: 'title', id: '1', at: Date.now() }]),
     )
     // the next start, on the same browser storage
+    page.note = null
     await act(async () => {
       const booted = store.initStore()
       await vi.waitFor(() => expect(subscribed).toBe(2))
