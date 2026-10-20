@@ -350,7 +350,8 @@ describe('rollback during snapshot trouble', () => {
     sent.pop()!.reject(new ConvexError({ code: 'not_found', message: 'gone' }))
     await settle()
     expect(task('Calibrate the sensor').status).toBe('progress')
-    expect(showToast).toHaveBeenCalledWith("Couldn't save. Change reverted.", 'error')
+    // nothing was painted, so nothing is said to be reverted
+    expect(showToast).toHaveBeenCalledWith("Couldn't save.", 'error')
   })
 
   it('paints accepted writes again in the order the server took them', async () => {

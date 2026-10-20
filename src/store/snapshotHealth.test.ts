@@ -199,15 +199,20 @@ describe('snapshot trouble', () => {
   it('pauses every write while signed out, before anything paints', async () => {
     await boot()
     const { P } = store
-    live().fail(new ConvexError({ code: 'forbidden', message: 'not signed in' }))
     const [task] = P.issues
+    // saved after the last good delivery, so a rollback would take it away
+    P.updateIssue(task.id, { status: 'progress' })
+    live().fail(new ConvexError({ code: 'forbidden', message: 'not signed in' }))
+    sent.splice(0)[0].resolve(null)
+    await settle()
     const read = () => P.messages.find((message) => message.id === 'message-a')?.read
     // opening the task reads its messages on its own, and says nothing
-    P.markMessagesRead(['message-a'], { quiet: true })
+    expect(P.markMessagesRead(['message-a'], { quiet: true })).toBe(false)
     expect(read()).toBeFalsy()
     expect(showToast).not.toHaveBeenCalled()
-    P.markMessagesRead(['message-a'])
+    expect(P.markMessagesRead(['message-a'])).toBe(false)
     P.setIssueSubscribed(task.id, true)
+    expect(P.issueById[task.id].subscribed).toBe(false)
     P.createParent(task.id, 'Sensor work')
     P.setAppearance({ mode: 'dark', image_source: 'none' }).catch(() => {})
     P.saveUI({ view: 'kanban' })
@@ -216,6 +221,8 @@ describe('snapshot trouble', () => {
     expect(sent).toEqual([])
     expect(read()).toBeFalsy()
     expect(P.issueById[task.id].subscribed).toBe(false)
+    // nothing was rolled back over the saved edit
+    expect(P.issueById[task.id].status).toBe('progress')
     expect(showToast).toHaveBeenCalledWith(store.SIGNED_OUT_TEXT, 'error')
     expect(showToast).not.toHaveBeenCalledWith(store.PAUSED_TEXT, 'error')
   })

@@ -90,11 +90,11 @@ async function signIn() {
 const NOT_ARMED = "Couldn't confirm your sign-in. Check your connection and sign in again."
 
 describe('the operator gate after Convex drops the sign-in', () => {
-  it('returns to the sign-in form without the password once the session ended', async () => {
+  it('returns to the sign-in form without the password once the sign-in is lost', async () => {
     await signIn()
     await act(async () => auth.lost.at(-1)?.())
     expect(container.querySelector('[role="alert"]')?.textContent).toBe(
-      'Your session ended. Sign in again.',
+      "Couldn't keep you signed in. Sign in again.",
     )
     expect(field('admin-email')?.value).toBe('ops@example.com')
     expect(field('admin-password')?.value).toBe('')

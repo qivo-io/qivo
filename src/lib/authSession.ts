@@ -17,9 +17,18 @@ const MAX_REARMS = 3
 /** What an auth request gets when the service gave no answer. */
 const UNANSWERED = Symbol('unanswered')
 
-/** Whether an HTTP status means the auth service could not answer right now,
-    as opposed to an answer about the session. */
-const isTransient = (status: number) => status >= 500 || status === 408 || status === 429
+/** Whether an HTTP status is the auth service's answer that the session does
+    not exist or may not be used. Any other failure, such as a fault, a rate
+    limit or a proxy's 404, is no answer about the session. */
+const refusesSession = (status: number) => status === 401 || status === 403
+
+/** Whether a thrown request failed in the browser itself, such as storage
+    that is full, rather than on the network. Fetch reports a network failure
+    as a TypeError and a timeout as an abort, and a captive portal's page is
+    not the JSON the service answers with. */
+const failedInBrowser = (error: unknown) =>
+  error instanceof DOMException &&
+  !['AbortError', 'TimeoutError', 'NetworkError'].includes(error.name)
 
 /** Waits out retry `attempt`'s backoff, with jitter so many pages do not
     retry together. Ends early when the browser reports it is back online,
@@ -62,17 +71,19 @@ export function createAuthSession(
   })
 
   /** Asks /convex/token once for a fresh 15-minute JWT from this session's
-      own jar. Null is the server's answer that there is no session (401).
-      UNANSWERED is a failed or timed-out fetch, or a service fault. */
+      own jar. Null is the server's answer that there is no session (401 or
+      403), or a failure in the browser itself. UNANSWERED is anything else
+      that brought no token: a failed or timed-out fetch, a service fault,
+      or a page that is not the service's answer. */
   async function requestToken(): Promise<string | null | typeof UNANSWERED> {
     try {
       const { data, error } = await authClient.convex.token({
         fetchOptions: { throw: false, timeout: REQUEST_TIMEOUT_MS },
       })
-      if (error) return isTransient(error.status) ? UNANSWERED : null
-      return data?.token ?? null
-    } catch {
-      return UNANSWERED
+      if (error) return refusesSession(error.status) ? null : UNANSWERED
+      return typeof data?.token === 'string' ? data.token : UNANSWERED
+    } catch (error) {
+      return failedInBrowser(error) ? null : UNANSWERED
     }
   }
 
@@ -81,10 +92,18 @@ export function createAuthSession(
      ends its current wait. */
   let retrying: Promise<string | null> | null = null
   let wakeRetry: (() => void) | null = null
+  /* Whether an arm waits for Convex's first answer. Its fetches answer at
+     once, so a page that cannot reach the service says so instead of
+     loading for good, even while Convex still holds an older token. */
+  let arming = false
+  /* A token recover() already got, for the first fetch of the arm it starts. */
+  let primed: string | null = null
 
   /** Asks again with backoff until the service answers, for as long as
-      Convex holds a token. A sign-out clears the token and ends the loop. */
+      Convex holds a token. A sign-out clears the token, and a newer arm or
+      sign-out starts a new generation; either ends the loop with null. */
   function retryToken(): Promise<string | null> {
+    const generation = armGeneration
     retrying ??= (async () => {
       try {
         for (let attempt = 0; ; attempt++) {
@@ -92,9 +111,10 @@ export function createAuthSession(
             wakeRetry = wake
           })
           wakeRetry = null
-          if (!client.client.hasAuth()) return null
+          if (generation !== armGeneration || !client.client.hasAuth()) return null
           const answer = await requestToken()
           if (answer !== UNANSWERED) return answer
+          if (generation !== armGeneration) return null
         }
       } finally {
         retrying = null
@@ -109,24 +129,30 @@ export function createAuthSession(
      Convex holds a token waits for a real answer instead. The old token
      stays in place meanwhile, and a write that reaches the server after it
      expires gets an auth error and waits in Convex's queue while Convex
-     stops the socket and asks here again. An arm's first fetch answers at
-     once, and so does every fetch at boot, which has no token to keep, so a
-     page that cannot reach the service says so instead of loading for good. */
+     stops the socket and asks here again. Every fetch of an arm (arming)
+     answers at once, and so does every fetch at boot, which has no token to
+     keep. */
   const fetchConvexToken = async ({ forceRefreshToken }: { forceRefreshToken: boolean }) => {
+    if (!forceRefreshToken && primed) {
+      const token = primed
+      primed = null
+      return token
+    }
     // Convex asks again after the server refused the old token, so the
     // server is reachable again: the loop asks at once
-    if (forceRefreshToken && retrying) {
+    if (forceRefreshToken && retrying && !arming) {
       wakeRetry?.()
       return retrying
     }
     const answer = await requestToken()
     if (answer !== UNANSWERED) return answer
-    if (!forceRefreshToken || !client.client.hasAuth()) return null
+    if (!forceRefreshToken || arming || !client.client.hasAuth()) return null
     return retryToken()
   }
 
   /** Asks the server, not the session cache, whether this page's session
-      still exists. UNANSWERED as in requestToken. */
+      still exists. False and UNANSWERED as null and UNANSWERED in
+      requestToken. */
   async function requestSession(): Promise<boolean | typeof UNANSWERED> {
     try {
       const { data, error } = await authClient.getSession({
@@ -134,9 +160,9 @@ export function createAuthSession(
         fetchOptions: { timeout: REQUEST_TIMEOUT_MS },
       })
       if (!error) return !!data?.session
-      return isTransient(error.status) ? UNANSWERED : false
-    } catch {
-      return UNANSWERED
+      return refusesSession(error.status) ? false : UNANSWERED
+    } catch (error) {
+      return failedInBrowser(error) ? false : UNANSWERED
     }
   }
 
@@ -163,11 +189,13 @@ export function createAuthSession(
   /** Installs the token fetcher on the socket. Resolves with Convex's first
       answer, and recovers a sign-in Convex drops after that. */
   function connect(generation: number, onLost?: () => void): Promise<boolean> {
+    arming = true
     return new Promise((resolve) => {
       let settled = false
       client.setAuth(fetchConvexToken, (isAuthenticated) => {
         if (!settled) {
           settled = true
+          arming = false
           resolve(isAuthenticated)
         } else if (!isAuthenticated) void recover(generation, onLost)
       })
@@ -183,12 +211,15 @@ export function createAuthSession(
   async function recover(generation: number, onLost?: () => void) {
     for (let rearm = 0; rearm < MAX_REARMS; rearm++) {
       if (rearm) await retryPause(rearm)
+      if (generation !== armGeneration) return
       const lasts = await untilAnswered(generation, requestSession)
       if (lasts === undefined) return
       if (!lasts) break
       const token = await untilAnswered(generation, requestToken)
       if (token === undefined) return
       if (token === null) break
+      // the arm's first fetch uses it, so a flaky service cannot fail the arm
+      primed = token
       const armed = await connect(generation, onLost)
       if (generation !== armGeneration || armed) return
     }
@@ -202,9 +233,23 @@ export function createAuthSession(
    * after this callback is installed. Resolves with the first answer.
    * A sign-in Convex drops later is armed again while the session lasts.
    * `onLost` runs when that fails: the session ended on the server, or the
-   * server kept refusing new tokens. The page must then sign in again. */
-  function armConvexAuth(onLost?: () => void): Promise<boolean> {
-    return connect(++armGeneration, onLost)
+   * server kept refusing new tokens. The page must then sign in again.
+   * A refresh still waiting in the retry loop ends first, as failed. Convex
+   * may have stopped the socket for it, and only that refresh restarts the
+   * socket once Convex has its answer, so the arm waits for that. Resolves
+   * false when a newer arm or a sign-out takes over meanwhile. */
+  async function armConvexAuth(onLost?: () => void): Promise<boolean> {
+    const generation = ++armGeneration
+    primed = null
+    const pending = retrying
+    if (pending) {
+      wakeRetry?.()
+      await pending
+      // Convex handles the answer in later microtasks
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      if (generation !== armGeneration) return false
+    }
+    return connect(generation, onLost)
   }
 
   // The plugin clears only this prefix; the server revokes only its session.

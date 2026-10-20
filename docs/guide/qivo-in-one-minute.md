@@ -71,10 +71,11 @@ keeps trying. **Try again** asks right away, and **Details** shows the error
 to pass on to support. Text you were typing stays in its field. Marking
 messages read and your own preferences still save. You can still revoke keys
 and tokens, and admins can still deactivate or remove people. If you were
-signed out, the notice offers **Reload** to sign in again. Nothing saves until
-then, and a change you try says you are signed out instead of appearing. A lost
-internet connection does not sign you out, however long it lasts. Changes
-waiting to save go out once Qivo reconnects. If an admin removes
+signed out, the notice offers **Reload** to sign in again. Until then nothing
+in the workspace saves, and a change you try says you are signed out instead of
+appearing. View preferences still change on this device. Losing your internet
+connection does not sign you out, and changes waiting to save go out once Qivo
+reconnects, unless your sign-in expires meanwhile. If an admin removes
 or deactivates you and you belong to no other organization, the notice says you
 no longer have access and offers **Reload**. Your view stays as it was, but
 comments and images that were not already on screen no longer load, and

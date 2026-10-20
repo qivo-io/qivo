@@ -219,6 +219,8 @@ describe('independent app and admin browser sessions', () => {
 
   beforeEach(() => {
     vi.useFakeTimers()
+    // the longest jitter, so every backoff step takes its full 1.25 times
+    vi.spyOn(Math, 'random').mockReturnValue(1)
     vi.stubEnv('VITE_CONVEX_SITE_URL', SITE_URL)
     storage = sharedStorage()
     vi.stubGlobal('localStorage', storage)
@@ -232,6 +234,7 @@ describe('independent app and admin browser sessions', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     vi.clearAllTimers()
     vi.useRealTimers()
     vi.unstubAllGlobals()
@@ -543,6 +546,10 @@ describe('independent app and admin browser sessions', () => {
     adminSocket.settle(true)
     expect(await appReady).toBe(true)
     expect(await adminReady).toBe(false)
+    // the app's later drop arms only the app socket again, its session lasting
+    await vi.advanceTimersByTimeAsync(0)
+    expect(appSocket.setAuth).toHaveBeenCalledTimes(3)
+    expect(adminSocket.setAuth).toHaveBeenCalledTimes(2)
   })
 
   it('reports a sign-in Convex drops after the first answer once the session is gone', async () => {
@@ -576,7 +583,8 @@ describe('independent app and admin browser sessions', () => {
     expect(lost).not.toHaveBeenCalled()
     expect(adminSocket.setAuth).toHaveBeenCalledTimes(2)
     service.recover()
-    await vi.advanceTimersByTimeAsync(30_000)
+    // the longest backoff step with its jitter is 37.5 s
+    await vi.advanceTimersByTimeAsync(40_000)
     expect(adminSocket.setAuth).toHaveBeenCalledTimes(3)
     adminSocket.settle(true)
     expect(lost).not.toHaveBeenCalled()
@@ -596,8 +604,13 @@ describe('independent app and admin browser sessions', () => {
     expect(lost).not.toHaveBeenCalled()
     expect(adminSocket.setAuth).toHaveBeenCalledTimes(2)
     service.recover()
-    await vi.advanceTimersByTimeAsync(30_000)
+    // the longest backoff step with its jitter is 37.5 s
+    await vi.advanceTimersByTimeAsync(40_000)
     expect(adminSocket.setAuth).toHaveBeenCalledTimes(3)
+    // the arm's first fetch gets the token recovery waited for, unasked
+    const asked = service.requests.length
+    expect(await adminSocket.token(false)).toMatch(/^jwt:session-/)
+    expect(service.requests).toHaveLength(asked)
     adminSocket.settle(true)
     expect(lost).not.toHaveBeenCalled()
   })
@@ -723,6 +736,65 @@ describe('independent app and admin browser sessions', () => {
     expect(await again).toBe(`jwt:${token}:operator@example.test`)
     expect(await refresh).toBe(`jwt:${token}:operator@example.test`)
   })
+
+  /* Arms the way Convex's setConfig does: the first fetch may use a cached
+     token, and a null answer is followed by a forced one. Settles with
+     whether either got a token. */
+  async function armLikeConvex(session: AuthSession, target: ReturnType<typeof socket>) {
+    const ready = session.armConvexAuth()
+    await vi.advanceTimersByTimeAsync(0)
+    const token = (await target.token(false)) ?? (await target.token(true))
+    target.settle(!!token)
+    return { token, armed: await ready }
+  }
+
+  it('fails a new arm at once when the token service cannot answer, though Convex holds a token', async () => {
+    const { admin, adminSocket } = pair()
+    await login(admin, 'operator@example.test')
+    service.fail('/convex/token', 503)
+    // nothing advances the clock, so a wait in the retry loop never ends
+    expect(await armLikeConvex(admin, adminSocket)).toEqual({ token: null, armed: false })
+  })
+
+  it('ends a refresh waiting in the retry loop before a new arm, so Convex can restart its socket', async () => {
+    const { admin, adminSocket } = pair()
+    const token = await login(admin, 'operator@example.test')
+    service.fail('/convex/token')
+    const refresh = adminSocket.token()
+    await vi.advanceTimersByTimeAsync(5_000)
+    service.recover()
+    const ready = admin.armConvexAuth()
+    // the arm waits until Convex has the refresh's answer
+    expect(adminSocket.setAuth).toHaveBeenCalledTimes(1)
+    expect(await refresh).toBeNull()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(adminSocket.setAuth).toHaveBeenCalledTimes(2)
+    expect(await adminSocket.token(false)).toBe(`jwt:${token}:operator@example.test`)
+    adminSocket.settle(true)
+    expect(await ready).toBe(true)
+  })
+
+  it.each([
+    { answer: 'a 404 from a proxy', status: 404 },
+    { answer: 'a rate limit', status: 429 },
+    { answer: 'a captive portal page', status: 200 },
+  ])(
+    'keeps a refresh waiting after $answer, which says nothing about the session',
+    async ({ status }) => {
+      const { admin, adminSocket } = pair()
+      const token = await login(admin, 'operator@example.test')
+      service.fail('/convex/token', status)
+      let answer: string | null | undefined = 'pending'
+      void adminSocket.token().then((value) => {
+        answer = value
+      })
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(answer).toBe('pending')
+      service.recover()
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(answer).toBe(`jwt:${token}:operator@example.test`)
+    },
+  )
 
   it('answers a refresh null when the server says the session is gone, and when signed out', async () => {
     const { admin, adminSocket } = pair()

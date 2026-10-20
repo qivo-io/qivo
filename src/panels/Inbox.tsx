@@ -483,9 +483,8 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   const select = (g: MessageGroupVM) => {
     queueScrollTop.current = listScrollRef.current?.scrollTop || 0
     setFrozen({ uuid: g.issueUuid, ts: firstUnreadTs(P.messages, g.issueUuid) })
-    // a sleeping row is a reminder that returns unread; looking does not read
-    // it. Opening reads on its own, so a paused mark is refused quietly.
-    if (!g.snoozed) P.markMessagesRead(g.ids, { quiet: true })
+    // a sleeping row is a reminder that returns unread; looking does not read it
+    if (!g.snoozed) P.markMessagesRead(g.ids)
     if (g.issueKey) showTask(g.issueKey)
     else {
       openTask(null)

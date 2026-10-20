@@ -18,6 +18,8 @@ type Phase = 'loading' | 'signedOut' | 'denied' | 'ready'
 
 /** The sign-in form's note when a session exists but Convex gets no token. */
 const NOT_ARMED = "Couldn't confirm your sign-in. Check your connection and sign in again."
+/** The sign-in form's note when the console lost a sign-in it had. */
+const SIGN_IN_LOST = "Couldn't keep you signed in. Sign in again."
 
 export function AdminGate() {
   const [phase, setPhase] = useState<Phase>('loading')
@@ -51,11 +53,12 @@ export function AdminGate() {
     }
   }
 
-  /* The session ended, or the server kept refusing its tokens. The password
-     typed earlier never comes back with the form. */
+  /* The session ended, or the server kept refusing its tokens, so the
+     words name neither. The password typed earlier never comes back with
+     the form. */
   function lost() {
     setPassword('')
-    setError('Your session ended. Sign in again.')
+    setError(SIGN_IN_LOST)
     setPhase('signedOut')
   }
 

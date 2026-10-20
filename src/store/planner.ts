@@ -1278,22 +1278,24 @@ const refusalPauseText = (e: unknown) =>
    wording says "reverted", never "reloading", because rollback is a repaint,
    not a refetch. A paused write's sentence is the pause itself
    (refusedAsPaused). */
-function toastWriteError(e: unknown) {
+function toastWriteError(e: unknown, reverted = true) {
   const d = errData(e)
   if (refusedAsPaused(e)) {
     toastPaused(refusalPauseText(e))
     return
   }
+  // a write that painted nothing (runUnpainted) has nothing to revert
+  const after = reverted ? ' Change reverted.' : ''
   if ((readOnly(d) || d.code === 'rule') && d.message) {
-    toast(`${asSentence(String(d.message))} Change reverted.`)
+    toast(`${asSentence(String(d.message))}${after}`)
     return
   }
   if (d.code === 'forbidden') {
-    toast("You don't have permission for that. Change reverted.")
+    toast(`You don't have permission for that.${after}`)
     return
   }
   // not_found, bad_request, conflict, transport — all generic
-  toast("Couldn't save. Change reverted.")
+  toast(`Couldn't save.${after}`)
 }
 
 /* The two awaited restores share one refusal voice: a `rule` (or not_found)
@@ -1587,13 +1589,13 @@ function run<T>(
 }
 
 /* run() for a write that painted nothing, such as a setting or a write whose
-   result arrives with the next delivery. A refusal is toasted and leaves the
-   board as it is. */
+   result arrives with the next delivery. A refusal is toasted, without
+   claiming a revert, and leaves the board as it is. */
 function runUnpainted<T>(
   op: Promise<T>,
   onOk?: (v: T) => void,
   onSettled?: () => void,
-  onError = toastWriteError,
+  onError = (e: unknown) => toastWriteError(e, false),
 ): void {
   run(op, onOk, onSettled, onError, false)
 }
@@ -5015,15 +5017,16 @@ export const PLANNER = {
      task — so these take an id LIST. The singular forms stay for callers
      that hold one message. Each checks the pause before its paint, so a
      paused write paints nothing and no rollback follows. */
-  /** Marks messages read. `quiet` refuses a paused mark without a toast,
-      for the mark that opening a task sends on its own. */
-  markMessagesRead: (ids: string[], { quiet = false } = {}) => {
+  /** Marks messages read and answers whether it sent the mark. `quiet`
+      refuses a paused mark without a toast, for the mark that opening a task
+      sends on its own. */
+  markMessagesRead: (ids: string[], { quiet = false } = {}): boolean => {
     const at = new Date().toISOString()
     const hit = ids.filter((id) => {
       const r = rows.messages.get(id)
       return r && !r.read_at
     })
-    if (!hit.length || refusePausedWrite(api.messages.markRead, quiet)) return
+    if (!hit.length || refusePausedWrite(api.messages.markRead, quiet)) return false
     // an item's messages share one org, but a bulk mark-all spans seats —
     // group per org BEFORE the prune below deletes any of the hit rows
     const byOrg = messagesByOrg(hit)
@@ -5035,6 +5038,7 @@ export const PLANNER = {
         keepAcceptedPaint(() => markLoadedMessagesRead(list, at)),
       )
     })
+    return true
   },
   /* Mark every current notification read, including messages hidden by the
      snapshot cap and notifications in other organization seats. The server
@@ -5162,7 +5166,7 @@ export const PLANNER = {
       }
   },
   markMessageRead: (id: string) => {
-    PLANNER.markMessagesRead([id])
+    void PLANNER.markMessagesRead([id])
   },
   deleteMessage: (id: string) => {
     PLANNER.deleteMessages([id])
