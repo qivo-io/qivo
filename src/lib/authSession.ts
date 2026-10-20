@@ -125,23 +125,32 @@ export function createAuthSession(
     return retryToken()
   }
 
-  /** Asks whether this page's session still exists, from the server rather
-      than the session cache. Retries with backoff while the service gives
-      no answer, because offline is no answer about the session. Undefined
-      when a newer arm or a sign-out took over meanwhile. */
-  async function sessionLasts(generation: number): Promise<boolean | undefined> {
+  /** Asks the server, not the session cache, whether this page's session
+      still exists. UNANSWERED as in requestToken. */
+  async function requestSession(): Promise<boolean | typeof UNANSWERED> {
+    try {
+      const { data, error } = await authClient.getSession({
+        query: { disableCookieCache: true },
+        fetchOptions: { timeout: REQUEST_TIMEOUT_MS },
+      })
+      if (!error) return !!data?.session
+      return isTransient(error.status) ? UNANSWERED : false
+    } catch {
+      return UNANSWERED
+    }
+  }
+
+  /** Asks with `ask` until the service answers, with backoff between tries,
+      because offline is no answer about the session. Undefined when a newer
+      arm or a sign-out took over meanwhile. */
+  async function untilAnswered<T>(
+    generation: number,
+    ask: () => Promise<T | typeof UNANSWERED>,
+  ): Promise<T | undefined> {
     for (let attempt = 0; ; attempt++) {
-      try {
-        const { data, error } = await authClient.getSession({
-          query: { disableCookieCache: true },
-          fetchOptions: { timeout: REQUEST_TIMEOUT_MS },
-        })
-        if (generation !== armGeneration) return undefined
-        if (!error) return !!data?.session
-        if (!isTransient(error.status)) return false
-      } catch {
-        if (generation !== armGeneration) return undefined
-      }
+      const answer = await ask()
+      if (generation !== armGeneration) return undefined
+      if (answer !== UNANSWERED) return answer
       await retryPause(attempt)
       if (generation !== armGeneration) return undefined
     }
@@ -167,13 +176,19 @@ export function createAuthSession(
 
   /** Convex dropped the sign-in after its first answer and does not try
       again. Arms the socket again while the session lasts, and reports
-      `onLost` once the session is gone or MAX_REARMS arms in a row fail. */
+      `onLost` once the session is gone or MAX_REARMS arms in a row fail.
+      It waits for both the session and a token to be answered first, since
+      an arm with no token to keep fails at once without one, so an outage
+      of either service never counts as a failed arm. */
   async function recover(generation: number, onLost?: () => void) {
     for (let rearm = 0; rearm < MAX_REARMS; rearm++) {
       if (rearm) await retryPause(rearm)
-      const lasts = await sessionLasts(generation)
+      const lasts = await untilAnswered(generation, requestSession)
       if (lasts === undefined) return
       if (!lasts) break
+      const token = await untilAnswered(generation, requestToken)
+      if (token === undefined) return
+      if (token === null) break
       const armed = await connect(generation, onLost)
       if (generation !== armGeneration || armed) return
     }

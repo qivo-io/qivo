@@ -582,6 +582,26 @@ describe('independent app and admin browser sessions', () => {
     expect(lost).not.toHaveBeenCalled()
   })
 
+  it('waits out a token service outage before arming a dropped sign-in again', async () => {
+    const { admin, adminSocket } = pair()
+    await login(admin, 'operator@example.test')
+    const lost = vi.fn()
+    const ready = admin.armConvexAuth(lost)
+    adminSocket.settle(true)
+    expect(await ready).toBe(true)
+    service.fail('/convex/token', 503)
+    adminSocket.settle(false)
+    await vi.advanceTimersByTimeAsync(180_000)
+    // the session lasts, and a service that cannot mint a token is no arm
+    expect(lost).not.toHaveBeenCalled()
+    expect(adminSocket.setAuth).toHaveBeenCalledTimes(2)
+    service.recover()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(adminSocket.setAuth).toHaveBeenCalledTimes(3)
+    adminSocket.settle(true)
+    expect(lost).not.toHaveBeenCalled()
+  })
+
   it('stops arming again when the server keeps refusing a live session', async () => {
     const { admin, adminSocket } = pair()
     await login(admin, 'operator@example.test')
