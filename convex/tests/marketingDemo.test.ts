@@ -1142,14 +1142,6 @@ describe('marketing demo rebuild ownership', () => {
     const result = await seeded(t)
     const roster = await profiles(t, result.org_id)
     const issueIds = (await t.run(async (ctx) => ctx.db.query('issues').collect())).map((i) => i.id)
-    await t.run(async (ctx) => {
-      const org = (await ctx.db
-        .query('organizations')
-        .withIndex('by_uuid', (q) => q.eq('id', result.org_id))
-        .unique())!
-      // a demo provisioned before org_counters kept this on its row
-      await ctx.db.patch(org._id, { activity_count: 500 })
-    })
     expect(await wipe(t)).toMatchObject({
       state: 'empty',
       wipe_done: true,
@@ -1187,12 +1179,6 @@ describe('marketing demo rebuild ownership', () => {
           .withIndex('by_org_ts', (q) => q.eq('org_id', result.org_id))
           .collect(),
       ).toHaveLength(1)
-      expect(
-        (await ctx.db
-          .query('organizations')
-          .withIndex('by_uuid', (q) => q.eq('id', result.org_id))
-          .unique())!.activity_count,
-      ).toBeUndefined()
     })
     // the wipe rewinds the counters, so the reseed numbers tasks from 1
     expect(await countersFor(t, result.org_id)).toEqual({ next_issue_num: 0, next_project_num: 0 })

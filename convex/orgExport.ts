@@ -237,7 +237,6 @@ function exportRow(doc: Doc<OrgExportSection>, section: OrgExportSection): OrgEx
   // Login identifiers and credential hashes are not portable organization data.
   delete row.auth_user_id
   delete row.message_retention_days
-  delete row.activity_count
   // the retired Gravatar setting (schema.ts)
   delete row.gravatar_avatars
   // a task's archive-mark flag only steers the app snapshot's reads
@@ -302,7 +301,7 @@ export const page = orgQuery({
       if (cursor !== null) throw badRequest('the organization has a single export page')
       const org = await byId(ctx, 'organizations', orgId)
       if (org === null) throw notFound('organization not found')
-      // The counters live in org_counters; they win over legacy copies.
+      // The counters live in org_counters.
       const row = { ...exportRow(org, section), ...(await countersOf(ctx, org)) }
       return { rows: [row], continueCursor: '', isDone: true }
     }

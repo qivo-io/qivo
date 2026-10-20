@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { Doc } from '../_generated/dataModel'
 import { RELATION_READ, snapshotRelations } from '../lib/snapshotRelations'
 import { invokeSnapshot } from './backendPerformance.setup'
-import { as, NOW, newT, type T, withOrg } from './helpers.setup'
+import { as, NOW, newT, patchCounters, type T, withOrg } from './helpers.setup'
 
 /* Two reads differ in their delivery time; everything else must match. */
 const sameDelivery = <S extends { delivered_at: string } | null>(snapshot: S): S =>
@@ -378,7 +378,7 @@ async function plantHistory(t: T) {
         color: '#888888',
         created_at: NOW,
       })
-    await ctx.db.patch(f.org._id, { next_issue_num: TOTAL + 1, activity_count: 500 })
+    await patchCounters(ctx, f.org.id, { next_issue_num: TOTAL + 1 })
     return ids
   })
   // in transactions of 500 tasks, under the write limit
@@ -555,7 +555,7 @@ async function plantDense(
       }
     })
   }
-  await t.run((ctx) => ctx.db.patch(f.org._id, { next_issue_num: a.total + 1 }))
+  await t.run((ctx) => patchCounters(ctx, f.org.id, { next_issue_num: a.total + 1 }))
   return f
 }
 

@@ -13,6 +13,7 @@ import { ARCHIVE_REASON_TOO_LONG, COMMENT_TOO_LONG } from '../model/comments'
 import { DESCRIPTION_TOO_LONG } from '../model/issues'
 import {
   as,
+  countersFor,
   expectRefusal,
   NOW,
   newT,
@@ -101,8 +102,7 @@ describe('task descriptions in the app', () => {
       expect(e.data.message).toBe(DESCRIPTION_TOO_LONG)
       expect(await issueRow(t, id)).toBeNull()
     }
-    const org = await t.run(async (ctx) => (await ctx.db.get(f.org._id)) as Doc<'organizations'>)
-    expect(org.next_issue_num).toBe(1)
+    expect((await countersFor(t, f.org.id)).next_issue_num).toBe(1)
   })
 
   it('updates to exactly 20,000 or to null, and refuses 20,001 leaving the text', async () => {

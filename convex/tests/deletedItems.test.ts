@@ -968,11 +968,11 @@ describe('reservations while items are in Deleted items', () => {
     expect((await t.run((ctx) => byId(ctx, 'projects', f.sub.id)))?.key).toBe('PCB')
   })
 
-  it('keeps the numbers of trashed work while the counters move off the organization row', async () => {
+  it('never hands out the numbers of trashed work again', async () => {
     const t = newT()
     const f = await withOrg(t)
     const org_id = f.org.id
-    // an organization created before org_counters, with one task
+    // one task, numbered by the fixture's counters
     const first = await plantIssue(t, { org_id, project_id: f.sub.id, num: 1 })
     await deleteTask(t, f, first.id)
     await deleteProject(t, f, f.sub2.id)
@@ -998,8 +998,7 @@ describe('reservations while items are in Deleted items', () => {
           sort_order: 9,
         })
       ).num
-    // the first numbers after the deletes move the counters and go on past
-    // the trashed work
+    // the numbers after the deletes go on past the trashed work
     expect(await task()).toBe(2)
     expect(await project('NEW')).toBe(6)
     const result = await as(t, f.user).mutation(api.deletedItems.restore, { org_id, ids: items })

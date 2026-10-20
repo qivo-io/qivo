@@ -250,25 +250,6 @@ describe('billing redaction', () => {
     expect(guest.orgs[0]?.billing).toBeUndefined()
   })
 
-  it('counters come from org_counters once they moved there; activity_count never rides', async () => {
-    // an organization whose counters are still on its row
-    expect((await snapFor(f.user)).orgs[0]).toMatchObject({
-      next_issue_num: 1,
-      next_project_num: 5,
-    })
-    await t.run(async (ctx) => {
-      await ctx.db.patch(f.org._id, { activity_count: 500 })
-      await ctx.db.insert('org_counters', {
-        org_id: f.org.id,
-        next_issue_num: 7,
-        next_project_num: 9,
-      })
-    })
-    const [org] = (await snapFor(f.user)).orgs
-    expect(org).toMatchObject({ next_issue_num: 7, next_project_num: 9 })
-    expect(org).not.toHaveProperty('activity_count')
-  })
-
   it('tells earlier app builds that Gravatar is off, whatever an older row stored', async () => {
     // Earlier builds read a missing gravatar_avatars as on.
     expect((await snapFor(f.user)).orgs[0]?.gravatar_avatars).toBe(false)

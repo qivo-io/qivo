@@ -172,57 +172,38 @@ export async function narrateSlugChange(
  * numbers are dense per org at assignment, never reused, and nothing else may
  * write the counters. They live in the org's org_counters row, not on the
  * organization row, so task and project creation do not conflict with the
- * many reads of the organization's settings. An organization created before
- * that table holds them on its own row until its first number moves them
- * (ensureCounters) or internal/orgCountersBackfill does. */
+ * many reads of the organization's settings. */
 
 export type OrgCounters = Pick<Doc<'org_counters'>, 'next_issue_num' | 'next_project_num'>
 
-/** The organization's org_counters row, or null before its counters moved. */
+/** The organization's org_counters row, or null if it has none. */
 export const countersRow = (ctx: QueryCtx, orgId: string) =>
   ctx.db
     .query('org_counters')
     .withIndex('by_org', (q) => q.eq('org_id', orgId))
     .unique()
 
-/** The organization's counters from its org_counters row, else the values
- * an organization created before that table still holds on its own row. */
+/** The organization's counters, zero before its org_counters row exists. */
 export async function countersOf(ctx: QueryCtx, org: Doc<'organizations'>): Promise<OrgCounters> {
   const row = await countersRow(ctx, org.id)
-  return row === null
-    ? { next_issue_num: org.next_issue_num ?? 0, next_project_num: org.next_project_num ?? 0 }
-    : { next_issue_num: row.next_issue_num, next_project_num: row.next_project_num }
+  return {
+    next_issue_num: row?.next_issue_num ?? 0,
+    next_project_num: row?.next_project_num ?? 0,
+  }
 }
 
-/** Whether the organization row still holds a field that moved off it, the
- * legacy counters or the activity_count retention used before the
- * organization activity trim. */
-export const hasLegacyFields = (org: Doc<'organizations'>): boolean =>
-  org.next_issue_num !== undefined ||
-  org.next_project_num !== undefined ||
-  org.activity_count !== undefined
-
-/** The organization's org_counters row, created from the legacy fields on
- * first use. The same transaction removes those fields, so exactly one place
- * holds the counters at any time and no number can be handed out twice. A
- * refused mutation rolls the move back with everything else. */
-export async function ensureCounters(
-  ctx: MutationCtx,
-  org: Doc<'organizations'>,
-): Promise<Doc<'org_counters'>> {
-  const existing = await countersRow(ctx, org.id)
+/** The organization's org_counters row, created zeroed on first use.
+ * insertOrgRows creates it with the organization, so this only covers a row
+ * that is missing anyway. A refused mutation rolls the insert back with
+ * everything else. */
+async function ensureCounters(ctx: MutationCtx, orgId: string): Promise<Doc<'org_counters'>> {
+  const existing = await countersRow(ctx, orgId)
   if (existing !== null) return existing
-  // The caller's doc may be stale; the live row holds the legacy values.
-  const live = await ctx.db.get(org._id)
-  require(live !== null, notFound('organization not found'))
   const id = await ctx.db.insert('org_counters', {
-    org_id: org.id,
-    next_issue_num: live.next_issue_num ?? 0,
-    next_project_num: live.next_project_num ?? 0,
+    org_id: orgId,
+    next_issue_num: 0,
+    next_project_num: 0,
   })
-  if (live.next_issue_num !== undefined || live.next_project_num !== undefined) {
-    await ctx.db.patch(org._id, { next_issue_num: undefined, next_project_num: undefined })
-  }
   const row = await ctx.db.get(id)
   require(row !== null, notFound('organization counters not found'))
   return row
@@ -235,7 +216,7 @@ async function bump(
   org: Doc<'organizations'>,
   field: keyof OrgCounters,
 ): Promise<number> {
-  const row = await ensureCounters(ctx, org)
+  const row = await ensureCounters(ctx, org.id)
   const used = row[field] + 1
   await ctx.db.patch(row._id, { [field]: used })
   return used
@@ -247,14 +228,13 @@ export const nextIssueNum = (ctx: MutationCtx, org: Doc<'organizations'>): Promi
 export const nextProjectNum = (ctx: MutationCtx, org: Doc<'organizations'>): Promise<number> =>
   bump(ctx, org, 'next_project_num')
 
-/** Sets the counters, for the demo seed and the Northstar wipe only, and
- * removes the legacy copies from the organization row. */
+/** Sets the counters, for the demo seed and the Northstar wipe only. */
 export async function setCounters(
   ctx: MutationCtx,
   org: Doc<'organizations'>,
   counters: OrgCounters,
 ): Promise<void> {
-  const row = await ensureCounters(ctx, org)
+  const row = await ensureCounters(ctx, org.id)
   await ctx.db.patch(row._id, counters)
 }
 
@@ -262,10 +242,7 @@ export async function setCounters(
  * fixture start numbering past rows it plants. */
 export async function insertOrgRows(
   ctx: MutationCtx,
-  row: Omit<
-    WithoutSystemFields<Doc<'organizations'>>,
-    'next_issue_num' | 'next_project_num' | 'activity_count'
-  >,
+  row: WithoutSystemFields<Doc<'organizations'>>,
   counters: OrgCounters = { next_issue_num: 0, next_project_num: 0 },
 ): Promise<Id<'organizations'>> {
   const id = await ctx.db.insert('organizations', row)

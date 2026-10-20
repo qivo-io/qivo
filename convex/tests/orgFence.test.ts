@@ -15,8 +15,8 @@
  *      forbidden rows are planted raw and proven inert on the read path.
  *   D. guest write-probes into the hidden pair of the guest's OWN org.
  *
- * 0056 D — counters. The task and project counters (org_counters, legacy
- * copies on older organization rows) have no public surface to fence:
+ * 0056 D — counters. The task and project counters (org_counters) have no
+ * public surface to fence:
  * nextIssueNum/nextProjectNum live in model/orgs and no public function
  * carries them or their arguments. That absence is
  * manifest.test.ts's row — the committed public-surface baseline is where a

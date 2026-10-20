@@ -339,7 +339,6 @@ async function clearWork(
   )
   if (done) {
     await setCounters(ctx, org, { next_issue_num: 0, next_project_num: 0 })
-    await ctx.db.patch(org._id, { activity_count: undefined })
   }
   return done
 }

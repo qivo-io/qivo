@@ -90,8 +90,6 @@ const plantOrg = (
       name: slug,
       slug,
       created_at: NOW,
-      next_issue_num: 0,
-      next_project_num: 0,
       date_format: 'YYYY-MM-DD',
       week_start: 1,
       week_one_rule: 'first4day',
@@ -213,7 +211,7 @@ describe('assertSlugAvailable — the setSlug refusal taxonomy', () => {
 })
 
 describe('counters — nextIssueNum / nextProjectNum (0050/0100)', () => {
-  it('moves legacy counters to org_counters on first use, chaining inside one mutation', async () => {
+  it('creates a zeroed org_counters row on first use, chaining inside one mutation', async () => {
     const org = await plantOrg(t, 'counting')
     const nums = await t.run(async (ctx) => [
       await nextIssueNum(ctx, org),
@@ -222,13 +220,10 @@ describe('counters — nextIssueNum / nextProjectNum (0050/0100)', () => {
     ])
     expect(nums).toEqual([1, 2, 1])
     expect(await countersFor(t, org.id)).toEqual({ next_issue_num: 2, next_project_num: 1 })
-    const after = await t.run(async (ctx) => (await ctx.db.get(org._id))!)
-    expect(after.next_issue_num).toBeUndefined()
-    expect(after.next_project_num).toBeUndefined()
   })
 
-  it('an org_counters row wins over legacy values left on the organization row', async () => {
-    const org = await plantOrg(t, 'stale', { next_issue_num: 3, next_project_num: 3 })
+  it('continues from the numbers in an existing org_counters row', async () => {
+    const org = await plantOrg(t, 'stale')
     await t.run((ctx) =>
       ctx.db.insert('org_counters', { org_id: org.id, next_issue_num: 10, next_project_num: 0 }),
     )
@@ -249,9 +244,6 @@ describe('identity.createOrganization — the whole door', () => {
     expect(org!.name).toBe('Nimbus Labs')
     expect(org!.slug).toBe('nimbus-labs')
     // the counters start in their own row
-    expect(org!.next_issue_num).toBeUndefined()
-    expect(org!.next_project_num).toBeUndefined()
-    expect(org!.activity_count).toBeUndefined()
     expect(await countersFor(t, orgId)).toEqual({ next_issue_num: 0, next_project_num: 0 })
     expect(org!.date_format).toBe('YYYY-MM-DD')
     expect(org!.week_start).toBe(1)

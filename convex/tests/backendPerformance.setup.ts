@@ -5,7 +5,7 @@ import type { QueryCtx } from '../_generated/server'
 import { joinLists } from '../lib/arrayLimit'
 import { logActivity } from '../model/activity'
 import { forMe } from '../snapshot'
-import { NOW, newT, withOrg } from './helpers.setup'
+import { NOW, newT, patchCounters, withOrg } from './helpers.setup'
 
 declare const performance: { now(): number }
 
@@ -38,8 +38,6 @@ function comparable(delivered: Snapshot) {
   if (delivered === null) return delivered
   const joined = joinLists(delivered)
   const { activity: _activity, ...result } = joined as typeof joined & { activity?: unknown }
-  const legacy = result as typeof result & { orgs: { activity_count?: number }[] }
-  for (const row of legacy.orgs) delete row.activity_count
   for (const rows of [result.links, result.issueLabels, result.attachments]) {
     for (const row of rows) delete (row as { org_id?: string }).org_id
   }
@@ -52,7 +50,7 @@ export async function benchmarkBackend(baseline: Baseline) {
     const t = newT()
     const f = await withOrg(t)
     await t.run(async (ctx) => {
-      await ctx.db.patch(f.org._id, { next_issue_num: count, activity_count: 500 })
+      await patchCounters(ctx, f.org.id, { next_issue_num: count })
       for (let i = 0; i < count; i++) {
         await ctx.db.insert('issues', {
           id: `benchmark-task-${i}`,
@@ -169,7 +167,6 @@ export async function benchmarkBackend(baseline: Baseline) {
       }
       for (const event of await ctx.db.query('activity_events').collect())
         await ctx.db.delete(event._id)
-      await ctx.db.patch(f.org._id, { activity_count: 0 })
     })
     await compare('restricted 1%', t.withIdentity({ subject: f.guest.auth_user_id! }))
     await t.run(async (ctx) => {
