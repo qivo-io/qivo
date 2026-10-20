@@ -117,11 +117,12 @@ import {
   type View,
 } from './layers'
 import { createPreferences } from './preferences'
+import { keep, keepItems, sameData } from './stable'
 
 export type { UIPrefs } from './preferences'
 
 import type { Row } from './rows'
-import { createPlannerUpdates } from './updates'
+import { createPlannerUpdates, type StoreVersion } from './updates'
 import {
   type ActivityVM,
   type ArchivedIssueVM,
@@ -264,6 +265,9 @@ let unexaminedRead = false
 
 /* issue uuid → projected-delay info, rebuilt with every snapshot */
 let delayMap = new Map<string, DelayInfo>()
+/* The plan_org_load rows the last rebuild read, so it can tell whether the
+   load P.weekLoadOf answers from changed (contextVersion). */
+let lastOrgLoad: Snapshot['orgLoad'] = []
 
 /* plan_org_load grouped by owner (rebuilt with the delay map, which reads
    the same spans), and each owner's hours in the weeks P.weekLoadOf was asked
@@ -894,8 +898,15 @@ function markLoadedMessagesRead(ids: string[], at: string, skipSnoozed = false) 
     rows.messages.get(id)!.read_at = at
   })
   const issues = new Set(hit.map((id) => rows.messages.get(id)!.issue_id))
-  issues.forEach((issue) => {
-    const mine = [...rows.messages.values()].filter((row) => row.issue_id === issue)
+  // one pass over the loaded rows, however many tasks the read reaches
+  const byIssue = new Map<string, Row<'messages'>[]>()
+  for (const row of rows.messages.values()) {
+    if (!issues.has(row.issue_id)) continue
+    const mine = byIssue.get(row.issue_id)
+    if (mine) mine.push(row)
+    else byIssue.set(row.issue_id, [row])
+  }
+  byIssue.forEach((mine) => {
     const newest = mine.reduce((x, y) => (isNewer(x.created_at, x.id, y.created_at, y.id) ? y : x))
     mine.forEach((row) => {
       if (row.read_at && row.id !== newest.id) rows.messages.delete(row.id)
@@ -908,7 +919,63 @@ const updates = createPlannerUpdates()
    on screen are exactly what the layers paint (checkLayers). */
 const emit = (section?: Parameters<typeof updates.emit>[0]) => {
   if (STRICT_LAYERS) checkLayers()
+  if (!section || section === 'workspace') lastShown = shownWorkspace()
   updates.emit(section)
+}
+
+/** What a workspace emit shows: the rows outside the inbox, every value
+    rebuild() derives from them, and whether a write waits, which Roadmap's
+    undo reads (P.roadmapUndo). The layers' paints show in the rows. */
+function shownWorkspace() {
+  const P = PLANNER
+  return {
+    rows: Object.entries(rows).filter(([section]) => section !== 'messages'),
+    derived: [
+      P.gridEpoch,
+      P.TIMELINE_START.getTime(),
+      P.TODAY_POS,
+      P.TODAY_ISO,
+      P.users,
+      P.org,
+      P.homeOrg,
+      P.orgs,
+      P.myProfileIds,
+      P.teams,
+      P.labels,
+      P.projects,
+      P.archivedProjects,
+      P.projectTags,
+      P.issues,
+      P.milestones,
+      P.comments,
+      P.threadEvents,
+      P.commentsEarlier,
+      P.messages,
+      P.messageGroups,
+      P.unreadMessages,
+      P.readMessageCount,
+      P.canMarkAllRead,
+      P.canRemoveRead,
+      P.CURRENT_USER,
+      P.contextVersion,
+    ],
+    waiting: layers.waiting(),
+  }
+}
+/* What the last workspace emit showed, or null before the first. */
+let lastShown: ReturnType<typeof shownWorkspace> | null = null
+
+/** Whether `a` and `b` show the same: the same derived values (which
+    rebuild keeps identical while their data is, stable.ts), rows holding
+    the same data and the same answer to whether a write waits. The inbox's
+    rows are left out, because a painted read and the server's read differ
+    only in its time, which no view shows; its view models count instead. */
+function sameShown(a: ReturnType<typeof shownWorkspace>, b: ReturnType<typeof shownWorkspace>) {
+  return (
+    a.waiting === b.waiting &&
+    a.derived.every((value, i) => value === b.derived[i]) &&
+    a.rows.every(([section, value], i) => b.rows[i][0] === section && sameData(value, b.rows[i][1]))
+  )
 }
 
 export type { ToastTone }
@@ -1033,7 +1100,10 @@ function repaint(parts: { workspace?: boolean; thread?: boolean }) {
   if (workspace) {
     rebuild()
     if (handles) moveHandles(handles)
-    emit()
+    // a delivery that brings nothing new to the screen, such as a batch's
+    // echo of rows a bulk inbox action painted already, renders nothing
+    if (!lastShown || !sameShown(lastShown, shownWorkspace())) emit()
+    else if (thread) emit('comments')
     // after the emit: it may send (reapPausedUploads)
     endHeldRecovery()
   } else if (thread) {
@@ -2805,13 +2875,17 @@ const findUser = createEntityLookup<UserVM>()
 const findTeam = createEntityLookup<TeamVM>()
 
 function rebuildComments() {
-  PLANNER.comments = [...rows.comments.values()]
-    .map(shapeComment)
-    .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1))
+  PLANNER.comments = keepItems(
+    PLANNER.comments,
+    [...rows.comments.values()]
+      .map(shapeComment)
+      .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1)),
+  )
   // oldest first
-  PLANNER.threadEvents = rows.threadEvents
-    .map((e) => shapeActivity(e, uuidToKey))
-    .sort((a, b) => a.ts - b.ts)
+  PLANNER.threadEvents = keepItems(
+    PLANNER.threadEvents,
+    rows.threadEvents.map((e) => shapeActivity(e, uuidToKey)).sort((a, b) => a.ts - b.ts),
+  )
   PLANNER.commentsEarlier =
     !PLANNER.commentsLoaded || threadStart ? 'none' : earlierLoad === 'idle' ? 'more' : earlierLoad
 }
@@ -2862,51 +2936,68 @@ function rebuild(now = new Date()) {
       leadsByProfile.set(m.profile_id, a)
     }
   })
-  P.users = [...rows.profiles.values()]
-    .sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
-    .map((u) =>
-      shapeUser(
-        u,
-        teamsByProfile.get(u.id) || [],
-        leadsByProfile.get(u.id) || [],
-        avatarSources.url(`avatar:${u.id}:${u.avatar_storage_id}`),
-        DEMO_MODE,
+  P.users = keepItems(
+    P.users,
+    [...rows.profiles.values()]
+      .sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
+      .map((u) =>
+        shapeUser(
+          u,
+          teamsByProfile.get(u.id) || [],
+          leadsByProfile.get(u.id) || [],
+          avatarSources.url(`avatar:${u.id}:${u.avatar_storage_id}`),
+          DEMO_MODE,
+        ),
       ),
-    )
+  )
 
   // org — P.org IS the home org (the one whose settings the app runs on);
   // identity is the HOME org's (empty for a guest-only login), the display
   // settings fall back to a visible org's — see shapeOrg
-  P.org = shapeOrg(home, displayOrg, rows.billing)
+  P.org = keep(P.org, shapeOrg(home, displayOrg, rows.billing))
   P.homeOrg = HOME_ORG
-  P.orgs = [...rows.orgs.values()]
-    .map(shapeOrgRef)
-    .sort((a, b) => (a.id === HOME_ORG ? -1 : b.id === HOME_ORG ? 1 : a.name.localeCompare(b.name)))
-  P.myProfileIds = [...myProfileSet]
+  P.orgs = keepItems(
+    P.orgs,
+    [...rows.orgs.values()]
+      .map(shapeOrgRef)
+      .sort((a, b) =>
+        a.id === HOME_ORG ? -1 : b.id === HOME_ORG ? 1 : a.name.localeCompare(b.name),
+      ),
+  )
+  P.myProfileIds = keep(P.myProfileIds, [...myProfileSet])
 
   // teams
   // name tiebreak: seeded teams share one transaction-stable created_at,
   // and without it the order follows the DB's arbitrary physical row order
-  P.teams = [...rows.teams.values()]
-    .sort((a, b) =>
-      a.created_at < b.created_at
-        ? -1
-        : a.created_at > b.created_at
-          ? 1
-          : a.name.localeCompare(b.name),
-    )
-    .map(shapeTeam)
+  P.teams = keepItems(
+    P.teams,
+    [...rows.teams.values()]
+      .sort((a, b) =>
+        a.created_at < b.created_at
+          ? -1
+          : a.created_at > b.created_at
+            ? 1
+            : a.name.localeCompare(b.name),
+      )
+      .map(shapeTeam),
+  )
 
   // labels (one shared, curated list per ORGANIZATION since 0078 — a task
   // keeps its labels wherever in the org it moves)
-  P.labels = [...rows.labels.values()]
-    .sort((a, b) => (a.name.toLowerCase() < b.name.toLowerCase() ? -1 : 1))
-    .map(shapeLabel)
-  const labelById: Record<string, LabelVM> = {}
-  P.labels.forEach((l) => {
-    labelById[l.id] = l
-  })
-  P.labelById = labelById
+  const labelsBefore = P.labels
+  P.labels = keepItems(
+    P.labels,
+    [...rows.labels.values()]
+      .sort((a, b) => (a.name.toLowerCase() < b.name.toLowerCase() ? -1 : 1))
+      .map(shapeLabel),
+  )
+  if (P.labels !== labelsBefore) {
+    const labelById: Record<string, LabelVM> = {}
+    P.labels.forEach((l) => {
+      labelById[l.id] = l
+    })
+    P.labelById = labelById
+  }
   const labelsByIssue = new Map<string, string[]>() // issue uuid -> label ids (name order)
   rows.issueLabels
     .slice()
@@ -2947,7 +3038,10 @@ function rebuild(now = new Date()) {
     .sort(byOrder)
     .map((p) => shapeProject(p, childrenOf, accByProject, teamAccByProject))
   const shapeById = new Map(allShapes.map((s) => [s.id, s]))
-  P.projects = allShapes.filter((s) => s.archivedAt == null)
+  P.projects = keepItems(
+    P.projects,
+    allShapes.filter((s) => s.archivedAt == null),
+  )
   /* …and the archived ones. Each row answers its page's two questions itself
      because the ordinary route (metaOf → levelOn) resolves through
      P.projects, which by construction no longer holds these. `withParent` is
@@ -2962,15 +3056,18 @@ function rebuild(now = new Date()) {
   const viaSubProject = (s: ProjectVM) =>
     s.type === 'meta' &&
     (childrenOf.get(s.id) || []).some((c) => levelOnProject(shapeOf(c.id), undefined, shapeOf))
-  P.archivedProjects = allShapes
-    .filter((s) => s.archivedAt != null)
-    .flatMap((s) => {
-      const meta = s.type === 'meta' ? s : s.parent ? shapeOf(s.parent) : undefined
-      const level = levelOnProject(s, undefined, shapeOf) ?? (viaSubProject(s) ? 'viewer' : null)
-      return level ? [shapeArchivedProject(s, meta, level === 'lead')] : []
-    })
-    .sort((a, b) => (b.archivedAt || 0) - (a.archivedAt || 0) || a.name.localeCompare(b.name))
-  P.projectTags = duplicateNameTags(P.projects, P.archivedProjects)
+  P.archivedProjects = keepItems(
+    P.archivedProjects,
+    allShapes
+      .filter((s) => s.archivedAt != null)
+      .flatMap((s) => {
+        const meta = s.type === 'meta' ? s : s.parent ? shapeOf(s.parent) : undefined
+        const level = levelOnProject(s, undefined, shapeOf) ?? (viaSubProject(s) ? 'viewer' : null)
+        return level ? [shapeArchivedProject(s, meta, level === 'lead')] : []
+      })
+      .sort((a, b) => (b.archivedAt || 0) - (a.archivedAt || 0) || a.name.localeCompare(b.name)),
+  )
+  P.projectTags = keep(P.projectTags, duplicateNameTags(P.projects, P.archivedProjects))
 
   // issues — handle mapping first, then shapes with mirrored links + children.
   // Numbers are per ORG (0050), so a blended snapshot (0081) can hold two
@@ -3051,6 +3148,9 @@ function rebuild(now = new Date()) {
     hiddenSubtaskParents: rows.hiddenSubtaskParents,
     hiddenParentTasks: rows.hiddenParentTasks,
   }
+  const issuesBefore = P.issues
+  const issueByIdBefore = P.issueById
+  const delayBefore = delayMap
   P.issues = [...rows.issues.values()]
     .sort((a, b) => a.num - b.num)
     .map((i) => shapeIssue(i, issueCtx))
@@ -3119,11 +3219,15 @@ function rebuild(now = new Date()) {
     })),
     loadByOwner,
   )
+  keepIssues(issuesBefore, issueByIdBefore, delayBefore)
 
   // milestones
-  P.milestones = [...rows.milestones.values()]
-    .sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
-    .map(shapeMilestone)
+  P.milestones = keepItems(
+    P.milestones,
+    [...rows.milestones.values()]
+      .sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
+      .map(shapeMilestone),
+  )
 
   // comments — the watched issue's only (oldest first, like its history; the
   // discussion spine reverses for newest-first display). Ties on the insert
@@ -3131,9 +3235,12 @@ function rebuild(now = new Date()) {
   rebuildComments()
 
   // inbox messages (0074) — own rows only, newest first (shapeMessage)
-  P.messages = [...rows.messages.values()]
-    .map((message) => shapeMessage(message, { issues: rows.issues, uuidToKey, uuidToDisplayKey }))
-    .sort((a, b) => b.ts - a.ts || (a.id < b.id ? -1 : 1))
+  P.messages = keepItems(
+    P.messages,
+    [...rows.messages.values()]
+      .map((message) => shapeMessage(message, { issues: rows.issues, uuidToKey, uuidToDisplayKey }))
+      .sort((a, b) => b.ts - a.ts || (a.id < b.id ? -1 : 1)),
+  )
 
   // …folded into inbox ITEMS, one per task (0109) — see shapeMessageGroup.
   // Every row here is already the signed-in user's, so the task uuid alone
@@ -3144,9 +3251,12 @@ function rebuild(now = new Date()) {
     if (g) g.push(m)
     else groups.set(m.issueUuid, [m])
   })
-  P.messageGroups = [...groups.entries()]
-    .map(([issueUuid, newestFirst]) => shapeMessageGroup(issueUuid, newestFirst))
-    .sort((a, b) => b.ts - a.ts || (a.id < b.id ? -1 : 1))
+  P.messageGroups = keepItems(
+    P.messageGroups,
+    [...groups.entries()]
+      .map(([issueUuid, newestFirst]) => shapeMessageGroup(issueUuid, newestFirst))
+      .sort((a, b) => b.ts - a.ts || (a.id < b.id ? -1 : 1)),
+  )
   // the badge counts ITEMS, matching what the list shows — a snoozed item is
   // out of sight and out of the count until it returns
   P.unreadMessages = P.messageGroups.reduce((n, g) => n + (g.read || g.snoozed ? 0 : 1), 0)
@@ -3159,6 +3269,28 @@ function rebuild(now = new Date()) {
   P.canRemoveRead = P.readMessageCount > 0 || unexaminedRead
 
   P.CURRENT_USER = CURRENT_USER
+  const context = [
+    P.users,
+    P.org,
+    P.orgs,
+    P.myProfileIds,
+    P.teams,
+    P.labels,
+    P.projects,
+    P.archivedProjects,
+    P.projectTags,
+    P.milestones,
+    P.CURRENT_USER,
+    P.homeOrg,
+    P.gridEpoch,
+    P.TODAY_ISO,
+    P.TODAY_POS,
+  ]
+  const loadSame = sameData(lastOrgLoad, rows.orgLoad)
+  lastOrgLoad = rows.orgLoad
+  if (!loadSame || context.some((part, i) => part !== lastContext[i]))
+    P.contextVersion = Object.freeze({ revision: P.contextVersion.revision + 1 })
+  lastContext = context
 
   // Uploaded pictures prepare shared decoded sources after minting access.
   // A prepared portrait is baked into this snapshot, so fresh mints have to
@@ -3179,6 +3311,64 @@ function rebuild(now = new Date()) {
       }
     })
   }
+}
+
+/* What the last rebuild's contextVersion was taken from. */
+let lastContext: unknown[] = []
+
+/** Keeps each task's view model from the last rebuild (`before`, with its
+    `beforeById` and delay map) when it holds the same data and its delay is
+    the same (stable.ts). Views also read a task's family through P, such as
+    isDone, remainingOf and the people who may own it, so every task above
+    or below a changed one takes its new object too. P.issueById follows
+    P.issues. */
+function keepIssues(
+  before: IssueVM[],
+  beforeById: Record<string, IssueVM>,
+  delayBefore: ReadonlyMap<string, DelayInfo>,
+) {
+  const P = PLANNER
+  const byId = P.issueById
+  const changed: string[] = []
+  for (const it of P.issues) {
+    const prev = beforeById[it.id]
+    if (
+      !prev ||
+      !sameData(prev, it) ||
+      !sameData(delayBefore.get(prev.uuid), delayMap.get(it.uuid))
+    )
+      changed.push(it.id)
+  }
+  if (!changed.length && before.length === P.issues.length) {
+    // the same handles in the same order (by num, which each holds)
+    P.issues = before
+    P.issueById = beforeById
+    return
+  }
+  // each walk stops where an earlier one went on, so this is linear
+  const fresh = new Set(changed)
+  const up = new Set<string>()
+  const down = new Set<string>()
+  for (const id of changed) {
+    for (let at = byId[id]?.parent; at && !up.has(at); at = byId[at]?.parent) {
+      up.add(at)
+      fresh.add(at)
+    }
+    const stack = [id]
+    while (stack.length) {
+      const at = stack.pop() as string
+      if (down.has(at)) continue
+      down.add(at)
+      fresh.add(at)
+      stack.push(...(byId[at]?.children ?? []))
+    }
+  }
+  P.issues = P.issues.map((it) => (fresh.has(it.id) ? it : beforeById[it.id]))
+  const kept: Record<string, IssueVM> = {}
+  P.issues.forEach((it) => {
+    kept[it.id] = it
+  })
+  P.issueById = kept
 }
 
 /* --- email addresses ------------------------------------------------------
@@ -3940,7 +4130,10 @@ export const PLANNER = {
   DEFAULT_MESSAGE_RETENTION_DAYS,
 
   /* data (assigned by rebuild(); the seeds carry the view-model types so
-     every read and every callback over them infers) */
+     every read and every callback over them infers). Each list, and each
+     item in it, keeps its identity while its data stays the same
+     (stable.ts); a task also takes a new object when its delay or a task
+     above or below it changed (keepIssues). */
   gridEpoch: 0, // bumped whenever TIMELINE_START re-anchors (see rebuild)
   users: [] as UserVM[],
   CURRENT_USER: '',
@@ -3972,6 +4165,12 @@ export const PLANNER = {
   // 'more', or 'loading' while P.loadEarlierComments runs and 'failed' after
   // it failed
   commentsEarlier: 'none' as CommentsEarlier,
+  /* Changes whenever a rebuild changes anything a task's view reads besides
+     the task's own view model and delay (keepIssues): people, organizations
+     and their settings, projects and access, teams, labels, milestones, the
+     organization-wide load, the week grid and today. A view that skips
+     unchanged tasks by identity compares this as well. */
+  contextVersion: Object.freeze({ revision: 0 }) as StoreVersion,
   // whether the watched thread stopped loading; the comments delivered
   // before the failure stay (P.retryComments)
   commentsFailure: 'none' as CommentsFailure,
@@ -8305,13 +8504,45 @@ function adoptIdentity(snap: Snapshot) {
   CURRENT_USER = home ? home.id : ''
 }
 
+/** A copy of `row` that a paint may change without touching the anchor:
+    its own fields, and a deep copy of any object or list in it. Faster than
+    cloning the whole snapshot at once. */
+function copyRow<T extends object>(row: T): T {
+  const copy = { ...row }
+  for (const key in copy) {
+    const value = copy[key]
+    if (value && typeof value === 'object') copy[key] = structuredClone(value)
+  }
+  return copy
+}
+
 /* Builds every row section and the inbox counters from `source`, the rows
-   the layers paint over (paintRows). A copy, because paints change the rows
-   and the anchor must stay the server's. Always followed by rebuild():
-   rebuild is deliberately impure (setWeekConfig re-anchors dates.ts's live
-   bindings), so nothing may patch P.* directly off a snapshot. */
+   the layers paint over (paintRows). Copies (copyRow), because paints change
+   the rows and the anchor must stay the server's. Always followed by
+   rebuild(): rebuild is deliberately impure (setWeekConfig re-anchors
+   dates.ts's live bindings), so nothing may patch P.* directly off a
+   snapshot. */
 function buildRows(source: Snapshot) {
-  const snap = structuredClone(source)
+  const copied = <T extends object>(list: readonly T[]) => list.map(copyRow)
+  const snap = {
+    ...source,
+    orgs: copied(source.orgs),
+    teams: copied(source.teams),
+    profiles: copied(source.profiles),
+    teamMembers: copied(source.teamMembers),
+    projects: copied(source.projects),
+    access: copied(source.access),
+    teamAccess: source.teamAccess && copied(source.teamAccess),
+    issues: copied(source.issues),
+    links: copied(source.links),
+    milestones: copied(source.milestones),
+    labels: copied(source.labels),
+    issueLabels: copied(source.issueLabels),
+    issueSubs: copied(source.issueSubs),
+    attachments: copied(source.attachments),
+    orgLoad: copied(source.orgLoad),
+    messages: copied(source.messages),
+  }
   rows.orgs = new Map(snap.orgs.map((r) => [r.id, r]))
   // the organization_billing successor: the home org's admin-only object
   const homeOrgRow = HOME_ORG ? rows.orgs.get(HOME_ORG) : null

@@ -36,7 +36,7 @@ type Props = {
   weekW: number
   timelineW: number
   hasSubHeads: boolean
-  workspaceVersion: StoreVersion
+  context: StoreVersion
   observer: RowObserver
   guidesKey: string
   renderGuides: () => ReactNode
@@ -368,8 +368,10 @@ function TimelineRowView({
 }
 
 // Local drag state recreates layout records, but unchanged rows keep their
-// tooltip/popover trees. Workspace revisions still refresh permissions, dates
-// and owner portraits. Guide identity covers everything renderGuides reads.
+// tooltip/popover trees. A task's view model keeps its identity while it, its
+// delay and its family stay the same (P.issues), and P.contextVersion covers
+// what else a row reads: permissions, dates and owner portraits. Guide
+// identity covers everything renderGuides reads.
 export const TimelineRow = memo(TimelineRowView, (before, after) => {
   if (
     before.row.kind !== after.row.kind ||

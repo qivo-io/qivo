@@ -1,5 +1,6 @@
 import { createContext, type ReactNode, useContext, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useRootMark } from '@/lib/rootMark'
 import { Icon } from './qivo'
 
 const ToolbarHost = createContext<HTMLElement | null>(null)
@@ -22,6 +23,8 @@ export function WorkspaceShell({
   children: ReactNode
 }) {
   const [toolbarHost, setToolbarHost] = useState<HTMLDivElement | null>(null)
+  // the floating notices line up with the workspace column (float-stack.css)
+  useRootMark('workspace-shell')
   return (
     <ToolbarHost.Provider value={toolbarHost}>
       <div className={`workspace-shell ${className}`}>

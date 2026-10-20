@@ -97,6 +97,11 @@ export function boardDropPatch(
   return patch
 }
 
+/* The parents' uuids of each task map groupBoardCell was given. A board asks
+   once per cell, and the store hands the same map until a task changes. The
+   map is read only, never changed in place. */
+const parentsOf = new WeakMap<object, Set<string>>()
+
 /** Group one already-filtered status × swimlane cell, in its supplied priority
  * order. Accessible parents may appear as context even when outside the cell
  * or filter; children are never pulled in from outside the supplied issues.
@@ -120,10 +125,14 @@ export function groupBoardCell<T extends BoardCellIssue>(
   }
 
   // Direct links also identify groups when a caller's children list is incomplete.
-  const parentUuids = new Set<string>()
-  for (const issue of Object.values(issueById)) {
-    const parent = accessibleParent(issue)
-    if (parent) parentUuids.add(parent.uuid)
+  let parentUuids = parentsOf.get(issueById)
+  if (!parentUuids) {
+    parentUuids = new Set<string>()
+    for (const issue of Object.values(issueById)) {
+      const parent = accessibleParent(issue)
+      if (parent) parentUuids.add(parent.uuid)
+    }
+    parentsOf.set(issueById, parentUuids)
   }
 
   const groups = new Map<string, BoardCellGroup<T>>()

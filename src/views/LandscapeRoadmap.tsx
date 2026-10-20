@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
 import { useFloatInsets } from '@/lib/floatStack'
 import { LandscapeContext } from '@/lib/landscape'
+import { useRootMark } from '@/lib/rootMark'
 import { useHideOthers } from '@/lib/useHideOthers'
 import { useMobileBackLayer } from '@/lib/useMobile'
 import { useAppearance } from '../AppearanceProvider'
@@ -30,6 +31,8 @@ export function LandscapeRoadmap({
   // the page behind is hidden from assistive technology while this is open;
   // aria-modal would also silence the announcer (lib/announce)
   useHideOthers(frameRef, true)
+  // the floating notices keep the window's axis while this covers it
+  useRootMark('landscape-roadmap')
   const closeLayer = useMobileBackLayer(true, onClose, true)
   const closeRef = useRef(closeLayer)
   closeRef.current = closeLayer
