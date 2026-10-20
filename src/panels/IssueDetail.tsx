@@ -1324,13 +1324,18 @@ function IssueDetail({
         )
         .map((m) => m.id)
     : []
-  const toReadKey = toRead.join(',')
+  // the pause is part of the key, so a mark it refused goes out once it ends
+  const toReadKey = `${toRead.join(',')}${P.editsPaused() ? ':paused' : ''}`
   useEffectID(() => {
     if (!toRead.length) return
     toRead.forEach((id: string) => {
       readSent.current.done.add(id)
     })
-    P.markMessagesRead(toRead)
+    // sent on its own, so a paused mark is refused without a toast
+    if (!P.markMessagesRead(toRead, { quiet: true }))
+      toRead.forEach((id: string) => {
+        readSent.current.done.delete(id)
+      })
   }, [toReadKey])
 
   // The spine opens at its newest end, like the inbox thread it now matches.

@@ -5,8 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 
 /* The operator console's gate when Convex drops its sign-in after the first
-   answer. A session that still exists is armed again; otherwise the gate
-   shows the sign-in form without the password typed earlier. */
+   answer. lib/authSession.ts arms a session that still exists again and
+   reports the rest as lost, and the gate then shows the sign-in form
+   without the password typed earlier. */
 
 const auth = vi.hoisted(() => ({
   // armConvexAuth's first answer: whether Convex got a token
@@ -89,23 +90,14 @@ async function signIn() {
 const NOT_ARMED = "Couldn't confirm your sign-in. Check your connection and sign in again."
 
 describe('the operator gate after Convex drops the sign-in', () => {
-  it('returns to the sign-in form without the password once the session ended', async () => {
+  it('returns to the sign-in form without the password once the sign-in is lost', async () => {
     await signIn()
     await act(async () => auth.lost.at(-1)?.())
     expect(container.querySelector('[role="alert"]')?.textContent).toBe(
-      'Your session ended. Sign in again.',
+      "Couldn't keep you signed in. Sign in again.",
     )
     expect(field('admin-email')?.value).toBe('ops@example.com')
     expect(field('admin-password')?.value).toBe('')
-  })
-
-  it('arms the sign-in again while the session lasts', async () => {
-    await signIn()
-    auth.session = { data: { session: {} } }
-    const armed = auth.lost.length
-    await act(async () => auth.lost.at(-1)?.())
-    expect(auth.lost.length).toBe(armed + 1)
-    expect(container.textContent).toContain('Operator console')
   })
 })
 

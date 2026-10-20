@@ -182,6 +182,7 @@ describe('snapshot trouble', () => {
     P.addTeam('Field crew')
     P.updateProject(project, { name: 'Renamed project' })
     P.removeProject(project)
+    P.createParent(task.id, 'Sensor work')
     await settle()
     // nothing was painted, so no rollback took the saved read mark away
     expect(read()).toBe(true)
@@ -193,6 +194,55 @@ describe('snapshot trouble', () => {
     expect(P.project(project)?.name).toBe('Task creation fixture')
     // one action can reach several mutators, so the pause toasts once
     expect(showToast.mock.calls.filter(([text]) => text === store.PAUSED_TEXT)).toHaveLength(1)
+  })
+
+  it('pauses every write while signed out, before anything paints', async () => {
+    await boot()
+    const { P } = store
+    const [task] = P.issues
+    // saved after the last good delivery, so a rollback would take it away
+    P.updateIssue(task.id, { status: 'progress' })
+    live().fail(new ConvexError({ code: 'forbidden', message: 'not signed in' }))
+    sent.splice(0)[0].resolve(null)
+    await settle()
+    const read = () => P.messages.find((message) => message.id === 'message-a')?.read
+    // opening the task reads its messages on its own, and says nothing
+    expect(P.markMessagesRead(['message-a'], { quiet: true })).toBe(false)
+    expect(read()).toBeFalsy()
+    expect(showToast).not.toHaveBeenCalled()
+    expect(P.markMessagesRead(['message-a'])).toBe(false)
+    P.setIssueSubscribed(task.id, true)
+    expect(P.issueById[task.id].subscribed).toBe(false)
+    P.createParent(task.id, 'Sensor work')
+    P.setAppearance({ mode: 'dark', image_source: 'none' }).catch(() => {})
+    P.saveUI({ view: 'kanban' })
+    vi.advanceTimersByTime(600)
+    await settle()
+    expect(sent).toEqual([])
+    expect(read()).toBeFalsy()
+    expect(P.issueById[task.id].subscribed).toBe(false)
+    // nothing was rolled back over the saved edit
+    expect(P.issueById[task.id].status).toBe('progress')
+    expect(showToast).toHaveBeenCalledWith(store.SIGNED_OUT_TEXT, 'error')
+    expect(showToast).not.toHaveBeenCalledWith(store.PAUSED_TEXT, 'error')
+  })
+
+  it('keeps a saved task edit when opening a task tries to read its messages without a seat', async () => {
+    await boot()
+    const { P } = store
+    const [task] = P.issues
+    P.updateIssue(task.id, { status: 'progress' })
+    // the seat went in the same delivery that would have held the edit
+    live().deliver(null)
+    sent[0].resolve(null)
+    await settle()
+    expect(P.issueById[task.id].status).toBe('progress')
+    P.markMessagesRead(['message-a'], { quiet: true })
+    await settle()
+    expect(sent).toHaveLength(1)
+    expect(P.issueById[task.id].status).toBe('progress')
+    expect(P.messages.find((message) => message.id === 'message-a')?.read).toBeFalsy()
+    expect(showToast).not.toHaveBeenCalled()
   })
 
   it('refuses a paused label create even when the name is taken', async () => {

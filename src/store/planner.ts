@@ -1034,7 +1034,10 @@ function submitRoadmapChanges(operations: RoadmapOperation[]): Promise<boolean> 
       write(api.roadmap.change, { session_id: visit.id, operations }).then((result) => {
         // A clamped or rounded no-op emits no snapshot. Re-adopt the saved
         // values anyway so speculative dates, hours and touch time disappear.
-        if (result.count <= visit.count) snapDirty = true
+        // Only while the snapshot is current: during trouble serverSnap is an
+        // older delivery that would take saved edits away, so the unclamped
+        // values show until the next good delivery replaces them.
+        if (result.count <= visit.count && snapshotCurrent) snapDirty = true
         if (roadmapVisit === visit && !visit.disabled)
           visit.count = Math.max(visit.count, result.count)
       }),
@@ -1107,7 +1110,9 @@ const asSentence = (m: string) =>
    Their mutators keep each accepted paint (keepAcceptedPaint), so a refused
    write's rollback paints them again over the stale snapshot. Without a
    seat most of those need one too, so only the login's appearance and
-   connected apps still save. Panels that
+   connected apps still save, and signed out nothing saves. Those mutators
+   check the pause before their paint as well (refusePausedWrite), and a
+   write that painted nothing (runUnpainted) is never rolled back. Panels that
    call Convex directly (organization deletion and its export record,
    billing) act on their own live queries, not on the snapshot, so they do
    not pause. Convex reruns a failed query when the data it read changes, so
@@ -1118,6 +1123,8 @@ const asSentence = (m: string) =>
 export const PAUSED_TEXT = 'Editing is paused until Qivo loads the latest changes.'
 /** The sentence a paused edit shows after every seat is gone. */
 export const NO_ACCESS_TEXT = 'You no longer have access to this workspace.'
+/** The sentence a paused edit shows after the sign-in ended. */
+export const SIGNED_OUT_TEXT = 'You’re signed out. Reload Qivo to sign in again.'
 
 /** Why the live snapshot is not current, while it is not. `no_access` means
     a delivery found no seat left. `asOf` is the last good delivery's server
@@ -1168,17 +1175,25 @@ const UNPAUSED_WRITES = new Set([
   'profiles:deactivate',
   'profiles:remove',
 ])
-/* Whether `name` still goes out during `trouble`. Without a seat only the
-   login's own settings go out: its appearance and deleting a connected app,
-   which need no seat. The rest act on seats the person can no longer use,
-   and the server refuses them, so they pause. */
+/* Whether `name` still goes out during `trouble`. Signed out, nothing goes
+   out, since the server refuses every write without a sign-in. Without a
+   seat only the login's own settings go out: its appearance and deleting a
+   connected app, which need no seat. The rest act on seats the person can no
+   longer use, and the server refuses them, so they pause. */
 const isUnpausedWrite = (name: string, trouble: SnapshotTrouble) =>
-  trouble.kind === 'no_access'
-    ? name.startsWith('appearance:') || name === 'oauthConnections:revoke'
-    : /^(messages|appearance):/.test(name) || UNPAUSED_WRITES.has(name)
+  trouble.kind === 'signed_out'
+    ? false
+    : trouble.kind === 'no_access'
+      ? name.startsWith('appearance:') || name === 'oauthConnections:revoke'
+      : /^(messages|appearance):/.test(name) || UNPAUSED_WRITES.has(name)
 
 /** The sentence a paused edit shows during the current trouble. */
-const pausedText = () => (snapshotTrouble?.kind === 'no_access' ? NO_ACCESS_TEXT : PAUSED_TEXT)
+const pausedText = () =>
+  snapshotTrouble?.kind === 'no_access'
+    ? NO_ACCESS_TEXT
+    : snapshotTrouble?.kind === 'signed_out'
+      ? SIGNED_OUT_TEXT
+      : PAUSED_TEXT
 
 /* One action can reach several mutators. The pause toast shows once for it. */
 const PAUSED_TOAST_GAP_MS = 1000
@@ -1205,11 +1220,13 @@ function refusePausedEdit(): boolean {
 
 /** Toasts the pause and answers true when write() would refuse `mutation`
     now. A mutator whose write goes on while the snapshot is stale calls it
-    before its paint, because without a seat most of those writes pause too,
-    and a caller that announces success must not announce a paused one. */
-function refusePausedWrite(mutation: FunctionReference<'mutation'>): boolean {
+    before its paint, because signed out or without a seat most of those
+    writes pause too, and a caller that announces success must not announce
+    a paused one. `quiet` skips the toast, for a write the person did not
+    ask for, such as reading the messages of a task they open. */
+function refusePausedWrite(mutation: FunctionReference<'mutation'>, quiet = false): boolean {
   if (!snapshotTrouble || isUnpausedWrite(getFunctionName(mutation), snapshotTrouble)) return false
-  toastPaused()
+  if (!quiet) toastPaused()
   return true
 }
 
@@ -1230,43 +1247,55 @@ function seatGone(e: unknown): boolean {
   return [...myProfiles.keys()].every((seat) => seat === org)
 }
 
+/** Whether the server refused a write because the sign-in ended
+    (convex/lib/functions.ts). */
+function notSignedIn(e: unknown): boolean {
+  const d = errData(e)
+  return d.code === 'forbidden' && d.message === 'not signed in'
+}
+
 /** Whether a refusal reads as the pause: a paused write never left the
-    browser, and a write that was in flight when the last seat went is
-    refused as forbidden, so it reads like the writes paused after it. */
+    browser, and a write that was in flight when the last seat or the
+    sign-in went is refused as forbidden, so it reads like the writes paused
+    after it. */
 function refusedAsPaused(e: unknown): boolean {
   const d = errData(e)
   return (
     d.code === 'paused' ||
     seatGone(e) ||
+    notSignedIn(e) ||
     (d.code === 'forbidden' && snapshotTrouble?.kind === 'no_access')
   )
 }
 
 /** The sentence of a refusal that reads as the pause (refusedAsPaused). A
-    lost seat says so even before the snapshot reports it. */
-const refusalPauseText = (e: unknown) => (seatGone(e) ? NO_ACCESS_TEXT : pausedText())
+    lost seat or sign-in says so even before the snapshot reports it. */
+const refusalPauseText = (e: unknown) =>
+  seatGone(e) ? NO_ACCESS_TEXT : notSignedIn(e) ? SIGNED_OUT_TEXT : pausedText()
 
 /* 'rule' and read-only sentences are the P0001 successors and keep their
    words, shaped by asSentence. Everything else is deliberately generic. The
    wording says "reverted", never "reloading", because rollback is a repaint,
    not a refetch. A paused write's sentence is the pause itself
    (refusedAsPaused). */
-function toastWriteError(e: unknown) {
+function toastWriteError(e: unknown, reverted = true) {
   const d = errData(e)
   if (refusedAsPaused(e)) {
     toastPaused(refusalPauseText(e))
     return
   }
+  // a write that painted nothing (runUnpainted) has nothing to revert
+  const after = reverted ? ' Change reverted.' : ''
   if ((readOnly(d) || d.code === 'rule') && d.message) {
-    toast(`${asSentence(String(d.message))} Change reverted.`)
+    toast(`${asSentence(String(d.message))}${after}`)
     return
   }
   if (d.code === 'forbidden') {
-    toast("You don't have permission for that. Change reverted.")
+    toast(`You don't have permission for that.${after}`)
     return
   }
   // not_found, bad_request, conflict, transport — all generic
-  toast("Couldn't save. Change reverted.")
+  toast(`Couldn't save.${after}`)
 }
 
 /* The two awaited restores share one refusal voice: a `rule` (or not_found)
@@ -1502,11 +1531,16 @@ async function mintCredential(scheme: 'qva' | 'qvt') {
   return { id: crypto.randomUUID(), secret, hash: hex(new Uint8Array(digest)) }
 }
 
+/* Sends an optimistic write. The caller painted it already. A refusal is
+   toasted (onError) and rolled back by re-adopting the newest server truth,
+   unless `painted` is false (runUnpainted). While any write is in flight the
+   paint gate holds snapshot deliveries, and the last settle paints them. */
 function run<T>(
   op: Promise<T>,
   onOk?: (v: T) => void,
   onSettled?: () => void,
   onError = toastWriteError,
+  painted = true,
 ): void {
   const epoch = storeEpoch
   const releaseUpdate = beginUpdateBlock()
@@ -1521,6 +1555,9 @@ function run<T>(
         if (epoch !== storeEpoch) return
         console.error('[qivo] write failed:', e)
         onError(e)
+        // nothing to take back, and re-adopting the snapshot would only take
+        // other edits off the screen during trouble
+        if (!painted) return
         // rollback = re-adopt the newest server truth; a delivery held by the
         // gate IS that truth, so the flags clear here. Writes still in flight
         // lose their paint with it, so the last settle paints the server
@@ -1549,6 +1586,18 @@ function run<T>(
         releaseUpdate()
       }
     })
+}
+
+/* run() for a write that painted nothing, such as a setting or a write whose
+   result arrives with the next delivery. A refusal is toasted, without
+   claiming a revert, and leaves the board as it is. */
+function runUnpainted<T>(
+  op: Promise<T>,
+  onOk?: (v: T) => void,
+  onSettled?: () => void,
+  onError = (e: unknown) => toastWriteError(e, false),
+): void {
+  run(op, onOk, onSettled, onError, false)
 }
 
 /* run() a write and resolve whether the server accepted it. A refusal is
@@ -2818,7 +2867,8 @@ export const PLANNER = {
     if (!visit || visit.disabled || visit.pending || inFlight || !visit.count) return
     if (refusePausedEdit()) return
     visit.pending++
-    run(
+    // the undone values arrive with the next delivery
+    runUnpainted(
       write(api.roadmap.undo, { session_id: visit.id, all })
         .then((result) => {
           if (roadmapVisit === visit && !visit.disabled) visit.count = result.count
@@ -4212,8 +4262,8 @@ export const PLANNER = {
       no new task. The new task appears with the next delivery. */
   createParent: (id: string, title: string): void => {
     const it = PLANNER.issueById[id]
-    if (!it) return
-    run(
+    if (!it || refusePausedEdit()) return
+    runUnpainted(
       write(api.issues.createParent, {
         org_id: it.org,
         id: it.uuid,
@@ -4965,14 +5015,18 @@ export const PLANNER = {
      Rows are created only by the server; the client's whole write surface is
      read_at (and delete). The inbox acts on an ITEM — every message for one
      task — so these take an id LIST. The singular forms stay for callers
-     that hold one message. */
-  markMessagesRead: (ids: string[]) => {
+     that hold one message. Each checks the pause before its paint, so a
+     paused write paints nothing and no rollback follows. */
+  /** Marks messages read and answers whether it sent the mark. `quiet`
+      refuses a paused mark without a toast, for the mark that opening a task
+      sends on its own. */
+  markMessagesRead: (ids: string[], { quiet = false } = {}): boolean => {
     const at = new Date().toISOString()
     const hit = ids.filter((id) => {
       const r = rows.messages.get(id)
       return r && !r.read_at
     })
-    if (!hit.length) return
+    if (!hit.length || refusePausedWrite(api.messages.markRead, quiet)) return false
     // an item's messages share one org, but a bulk mark-all spans seats —
     // group per org BEFORE the prune below deletes any of the hit rows
     const byOrg = messagesByOrg(hit)
@@ -4984,12 +5038,13 @@ export const PLANNER = {
         keepAcceptedPaint(() => markLoadedMessagesRead(list, at)),
       )
     })
+    return true
   },
   /* Mark every current notification read, including messages hidden by the
      snapshot cap and notifications in other organization seats. The server
      returns a fixed cutoff per seat, so new arrivals stay unread. */
   markAllMessagesRead: async (): Promise<void> => {
-    if (!PLANNER.canMarkAllRead) return
+    if (!PLANNER.canMarkAllRead || refusePausedWrite(api.messages.markAllRead)) return
     const epoch = storeEpoch
     const orgs = [...myProfiles.keys()]
     const ids = PLANNER.messages
@@ -5032,7 +5087,7 @@ export const PLANNER = {
       const r = rows.messages.get(id)
       return r?.read_at
     })
-    if (!hit.length) return
+    if (!hit.length || refusePausedWrite(api.messages.markUnread)) return
     const byOrg = messagesByOrg(hit)
     const markUnread = (list: string[]) =>
       list.forEach((id) => {
@@ -5052,7 +5107,7 @@ export const PLANNER = {
      whole list (P.messageGroups' ids). */
   deleteMessages: (ids: string[]) => {
     const hit = ids.filter((id) => rows.messages.has(id))
-    if (!hit.length) return
+    if (!hit.length || refusePausedWrite(api.messages.remove)) return
     const byOrg = messagesByOrg(hit)
     const remove = (list: string[]) =>
       list.forEach((id) => {
@@ -5072,7 +5127,7 @@ export const PLANNER = {
      so unread arrivals and messages reopened on another device survive.
      Completion means all writes settled; run handles refusal/rollback. */
   deleteReadMessages: async (): Promise<void> => {
-    if (!PLANNER.canRemoveRead) return
+    if (!PLANNER.canRemoveRead || refusePausedWrite(api.messages.removeRead)) return
     const epoch = storeEpoch
     const orgs = [...myProfiles.keys()]
     const ids = PLANNER.messages
@@ -5111,7 +5166,7 @@ export const PLANNER = {
       }
   },
   markMessageRead: (id: string) => {
-    PLANNER.markMessagesRead([id])
+    void PLANNER.markMessagesRead([id])
   },
   deleteMessage: (id: string) => {
     PLANNER.deleteMessages([id])
@@ -5124,7 +5179,7 @@ export const PLANNER = {
      client timer — every device shows it at the same instant. */
   snoozeMessages: (ids: string[], until: string | null) => {
     const hit = ids.filter((id) => rows.messages.has(id))
-    if (!hit.length) return
+    if (!hit.length || refusePausedWrite(api.messages.snooze)) return
     const byOrg = messagesByOrg(hit)
     const pairOf = (r: Row<'messages'>) => `${r.recipient_id}\n${r.issue_id}`
     const pairsOf = (list: string[]) =>
@@ -5183,12 +5238,12 @@ export const PLANNER = {
   ) => convex.onUpdate(api.appearance.get, {}, receive, fail),
   setAppearance: (preferences: Pick<AppearancePreferences, 'mode' | 'image_source'>) => {
     const pending = write(api.appearance.save, preferences)
-    run(pending)
+    runUnpainted(pending)
     return pending
   },
   removeAppearanceImage: () => {
     const pending = write(api.appearance.removeCustom, {})
-    run(pending)
+    runUnpainted(pending)
     return pending
   },
   mintAppearanceImageUrl: async () => {
@@ -5224,7 +5279,7 @@ export const PLANNER = {
     // Leaving account settings cancels an in-flight upload. Still release
     // run()'s paint gate, without reporting intentional cancellation as a
     // failed preference save in the next screen.
-    run(
+    runUnpainted(
       pending.catch((error) => {
         if (signal.aborted) return null
         throw error
@@ -5367,7 +5422,7 @@ export const PLANNER = {
   /* ---- OAuth connections (self-service, separately listed from tokens) ---- */
   getOAuthConnectionContext: async (oauthQuery: string) => {
     const operation = write(api.oauthConnections.getContext, { oauth_query: oauthQuery })
-    run(operation)
+    runUnpainted(operation)
     return await operation
   },
   listOAuthConnections: async () => {
@@ -5383,7 +5438,7 @@ export const PLANNER = {
       other refusal, so nothing is toasted here. */
   revokeOAuthConnection: async (id: string) => {
     const operation = write(api.oauthConnections.revoke, { id })
-    run(operation, undefined, undefined, () => {})
+    runUnpainted(operation, undefined, undefined, () => {})
     try {
       await operation
       return true
@@ -6578,7 +6633,7 @@ export const PLANNER = {
       onSettled()
       return
     }
-    run(
+    runUnpainted(
       write(api.issues.setSubscriber, {
         org_id: issue.org,
         issue_id: issue.uuid,
@@ -6601,6 +6656,7 @@ export const PLANNER = {
     if (!me) return
     const has = () => rows.issueSubs.some((s) => s.issue_id === uuid && s.profile_id === me)
     if (has() === on) return // already in the asked-for state
+    if (refusePausedWrite(on ? api.issues.subscribe : api.issues.unsubscribe)) return
     const at = new Date().toISOString()
     const paint = () => {
       if (has() === on || !rows.issues.has(uuid)) return

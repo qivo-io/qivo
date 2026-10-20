@@ -117,6 +117,7 @@ describe('roadmap undo through the client store', () => {
   let P: Planner
   let snap: Snapshot
   let publish: (value: Snapshot) => void
+  let fail: (error: Error) => void
   let requests: Pending[]
   let showToast: ReturnType<typeof vi.fn>
 
@@ -129,8 +130,9 @@ describe('roadmap undo through the client store', () => {
     snap = fixture()
     requests = []
     network.query.mockResolvedValue(null)
-    network.onUpdate.mockImplementation((_ref, _args, next) => {
+    network.onUpdate.mockImplementation((_ref, _args, next, failed) => {
       publish = next
+      fail = failed
       next(structuredClone(snap))
       return () => {}
     })
@@ -276,6 +278,23 @@ describe('roadmap undo through the client store', () => {
 
     expect(task().remaining).toBe(8)
     expect(P.roadmapUndo).toEqual({ count: 0, busy: false, disabled: false })
+  })
+
+  it('keeps a saved edit on screen when the snapshot is in trouble as a planning no-op returns', async () => {
+    P.updateIssue(task().id, { remaining: 8.01 })
+    const change = latest()
+    const other = P.issues.find((item) => item.title === 'Planning task 2')!
+    P.updateIssue(other.id, { title: 'Order the gaskets' })
+    const rename = latest()
+    expect(rename.name).toBe('issues:update')
+    fail(new Error('[CONVEX Q(snapshot:forMe)] Server Error'))
+    // saved, but the failing snapshot never delivers it
+    rename.resolve(null)
+    change.resolve({ count: 0 })
+    await settled()
+    expect(P.issues.some((item) => item.title === 'Order the gaskets')).toBe(true)
+    // the unrounded hours show until the next good delivery
+    expect(task().remaining).toBe(8.01)
   })
 
   it('rolls back a refused roadmap change and the group span that followed it without another snapshot', async () => {

@@ -306,19 +306,52 @@ describe('rollback during snapshot trouble', () => {
     },
   )
 
-  it('keeps writes saved before a lost sign-in when every later write is refused', async () => {
+  it('keeps writes saved before a lost sign-in when a write in flight is refused', async () => {
     live().fail(new Error(QUERY_FAILURE))
     P().markMessagesRead(['message-a'])
     P().snoozeMessages(['message-b'], UNTIL)
     await accept()
+    P().setIssueSubscribed(task('Order the brackets').id, true)
     live().fail(new ConvexError({ code: 'forbidden', message: 'not signed in' }))
     expect(P().snapshotTrouble()?.kind).toBe('signed_out')
-    P().setIssueSubscribed(task('Order the brackets').id, true)
     sent.pop()!.reject(new ConvexError({ code: 'forbidden', message: 'not signed in' }))
     await settle()
+    // the refused write takes back only its own paint, and says why
     expect(task('Order the brackets').subscribed).toBe(false)
     expect(message('message-a')?.read).toBe(true)
     expect(message('message-b')?.snoozedUntil).toBe(Date.parse(UNTIL))
+    expect(showToast).toHaveBeenCalledWith(store.SIGNED_OUT_TEXT, 'error')
+    expect(showToast).not.toHaveBeenCalledWith(
+      "You don't have permission for that. Change reverted.",
+      'error',
+    )
+  })
+
+  it.each([
+    {
+      name: 'an appearance save',
+      act: () =>
+        void P()
+          .setAppearance({ mode: 'dark', image_source: 'none' })
+          .catch(() => {}),
+    },
+    {
+      name: 'a follower change',
+      act: () =>
+        P().setIssueSubscriber(task('Calibrate the sensor').id, 'profile-other', true, () => {}),
+    },
+  ])('leaves the board alone when $name, which painted nothing, is refused', async ({ act }) => {
+    P().updateIssue(task('Calibrate the sensor').id, { status: 'progress' })
+    live().fail(new Error(QUERY_FAILURE))
+    // saved after the last good delivery, which does not hold it
+    await accept()
+    act()
+    expect(sent).toHaveLength(1)
+    sent.pop()!.reject(new ConvexError({ code: 'not_found', message: 'gone' }))
+    await settle()
+    expect(task('Calibrate the sensor').status).toBe('progress')
+    // nothing was painted, so nothing is said to be reverted
+    expect(showToast).toHaveBeenCalledWith("Couldn't save.", 'error')
   })
 
   it('paints accepted writes again in the order the server took them', async () => {
