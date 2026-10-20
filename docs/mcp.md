@@ -192,8 +192,9 @@ holding the older catalogue keeps working, but its calls save without the
 check until the client refreshes its tool list and its model learns to send
 `expected`.
 
-Later in October 2026 the schema of `expected` gained the rule of each key's
-field: a date pattern on the date keys and the ranges of the hour keys. A
+Later in October 2026 the schema of `expected` gained the rules of the
+typed keys' fields: a date pattern on the date keys, the ranges of the hour
+keys and the color pattern. A
 value that breaks the rule, such as `expected.due_date: "2026-02-31"`, is
 now refused with its own sentence before Qivo compares anything, where
 before it could be answered as a changed field. `expected` on
@@ -1017,8 +1018,9 @@ Each key belongs to the argument of the same name, with three exceptions on
 a task. `parent_id` and `has_hidden_parent` belong to `parent`, and
 `project_id` to `project` or `sub_project`. A delete takes any of its keys.
 `archived`, `archive_reason`, `add_labels` and `remove_labels` take no key
-and are never checked. A call that creates a record takes no `expected`,
-and refuses one with the sentence below.
+and are never checked. A call that creates a record takes no `expected`.
+A call that creates a task, comment, project, milestone, label or team
+refuses it with the sentence below.
 
 Send each value as a read tool answered it:
 
@@ -1043,7 +1045,9 @@ A value also follows the rule of its field. `start_week`, `end_week`,
 `YYYY-MM-DD`, `remaining_hours` is at least 0, `review_hours` is from 0 to
 999, `plannable_hours` is a whole number from 1 to 168, and a label's
 `color` is `#` followed by six hex digits. The schema of `expected` in the
-tool list says the same, and every read answers values that follow it.
+tool list carries the date shape, the hour ranges and the color pattern,
+and Qivo also checks that a date exists. Every read answers values that
+follow these rules.
 
 Values compare in a normalized form, so formatting alone never refuses a
 call. Titles, names and comment bodies are trimmed, a task's or project's

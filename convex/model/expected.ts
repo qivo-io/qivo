@@ -199,9 +199,9 @@ export const EXPECTED_DELETE_SENTENCE =
 export const createExpectedSentence = (record: string) =>
   `expected applies only when changing an existing ${record}`
 
-/** Refuses a request that creates a `record` when its `body` (a REST body or
- * MCP arguments) sends `expected`, with createExpectedSentence, before
- * anything is looked up. */
+/** Refuses a REST body that creates a `record` and sends `expected`, with
+ * createExpectedSentence. Routes call it before refuseUnknownFields; MCP's
+ * create tools refuse in machine/mcp.ts createExpectedRefusal. */
 export function refuseCreateExpected(body: Readonly<Record<string, unknown>>, record: string) {
   if (Object.hasOwn(body, 'expected')) throw badRequest(createExpectedSentence(record))
 }

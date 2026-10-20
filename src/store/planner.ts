@@ -386,7 +386,10 @@ function receiveThread(
       if (kept === -1) threadStart = false
     }
   }
-  if (!page.earlier) threadStart = true
+  // the first page decides, also after the empty thread a new task shows
+  // while its create is on its way (subscribeWaitingThread)
+  if (prev === null) threadStart = !page.earlier
+  else if (!page.earlier) threadStart = true
   // a fresh window holds the comments in it as the server has them now
   if (!replay) for (const comment of page.comments) acceptedCommentChanges.delete(comment.id)
   commentsSnap = page.comments
@@ -466,11 +469,7 @@ const serverTask = (uuid: string) => serverSnap?.issues.find((r) => r.id === uui
 function subscribeWaitingThread() {
   if (!watchedComments || commentsUnsub) return
   const row = serverTask(watchedComments)
-  if (!row) return
-  // the empty thread shown meanwhile is no start the first page can meet
-  // (receiveThread), so that page decides whether earlier comments exist
-  threadStart = false
-  subscribeThread(watchedComments, row.org_id)
+  if (row) subscribeThread(watchedComments, row.org_id)
 }
 
 /* Subscribes to the watched thread `issueUuid` in organization `orgId`,

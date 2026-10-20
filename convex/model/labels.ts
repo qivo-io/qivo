@@ -166,7 +166,7 @@ export const LABEL_FIELDS: Fields<Doc<'labels'>> = {
     type: {
       ok: (v) => typeof v === 'string' && isLabelColor(v),
       says: LABEL_COLOR_SHAPE,
-      schema: { type: 'string' },
+      schema: { type: 'string', pattern: '^#[0-9a-fA-F]{6}$' },
     },
     form: (value) => (value == null ? null : shownLabelColor(String(value)).toLowerCase()),
   },

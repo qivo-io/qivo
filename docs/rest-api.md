@@ -2113,8 +2113,8 @@ treats `""` as `null`. A comment body is trimmed. `remaining_hours` and
 colors.
 
 A malformed `expected` is a `400`, and nothing is saved. Qivo answers it
-before it compares anything, so a value no read can show is never answered
-as a `409`:
+before it compares anything, so a date, an hour count or a label color that
+breaks its field's rule is a `400`, never a `409`:
 
 - `expected must be an object of the fields as you last read them`, for
   `null`, an array or any other value that is not an object.
@@ -2127,7 +2127,8 @@ as a `409`:
   `2026-02-31`), `expected.status must be one of backlog, todo, progress,
   review, done` or `expected.assignee_id must be a profile uuid or null`.
 - `expected applies only when changing an existing <record>`, for
-  `expected` on a request that creates a record.
+  `expected` on a request that creates a task, comment, project, milestone,
+  label or team.
 - `expected.<key> applies only when the request sends <field>`, such as
   `expected.parent_id applies only when the request sends parent`.
 - `expected.parent_id and expected.has_hidden_parent go together`, when one

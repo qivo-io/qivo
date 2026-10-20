@@ -120,6 +120,10 @@ describe('task creation through the client store', () => {
     publish(structuredClone(snap))
     expect(threads()).toHaveLength(1)
     expect(threads()[0][1]).toEqual({ org_id: snap.orgs[0].id, issue_id: task.uuid })
+    // the create answers; until the first page the window offers nothing earlier
+    requests[0].resolve({ num: snap.orgs[0].next_issue_num + 1 })
+    await settled()
+    expect(P.commentsEarlier).toBe('none')
     // later deliveries keep the one subscription
     publish(structuredClone(snap))
     expect(threads()).toHaveLength(1)
@@ -130,8 +134,6 @@ describe('task creation through the client store', () => {
       earlier: true,
       events: [],
     })
-    // the create still waits, so the thread paints on the next timer
-    await new Promise((resolve) => setTimeout(resolve, 0))
     expect(P.comments.map((c) => c.id)).toEqual(['comment-51'])
     expect(P.commentsEarlier).toBe('more')
     P.watchComments(null)
