@@ -54,6 +54,18 @@ describe('the notices’ bands', () => {
     expect([band('top'), band('bottom')]).toEqual(['220px', '0px'])
   })
 
+  it('count only the part of the notices their shared box shows', () => {
+    place('update', 16, 144)
+    const notices = document.querySelector<HTMLElement>('[data-float-notices]')
+    if (!notices) throw new Error('no notices box')
+    // the box stops short of the snapshot notice, which scrolls inside it
+    notices.getBoundingClientRect = () => ({ top: 16, bottom: 400, height: 384 }) as DOMRect
+    place('snapshot', 152, 560)
+    expect([band('top'), band('bottom')]).toEqual(['400px', '0px'])
+    expect(notices.contains(stack.floatSlot('snapshot'))).toBe(true)
+    expect(notices.contains(stack.floatSlot('toasts'))).toBe(false)
+  })
+
   it('take no room for toasts', () => {
     place('toasts', 700, 760)
     expect(band('bottom')).toBe('')

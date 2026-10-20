@@ -15,7 +15,9 @@ import { useSyncExternalStore } from 'react'
    --float-inset-top and --float-inset-bottom on <html>. Every layout that
    fills the window leaves those bands free, and so does the landscape phone
    Roadmap through useFloatInsets. Toasts pass on their own, so they take no
-   room.
+   room. The two notice slots share one box that takes at most half the
+   window and scrolls inside, so notices that do not fit there never cover
+   the page beyond its band.
 
    The column is a [data-top-layer] child of <body>, so modal layers leave it
    exposed and usable (lib/useHideOthers, the task window's inert siblings). */
@@ -61,15 +63,21 @@ export function roomBeside(
   return { top, height: Math.max(0, bottom - top) }
 }
 
-/** Measures the notices and publishes their bands when they changed. */
+/** Measures the notices and publishes their bands when they changed. Only
+    the part their shared box shows counts. */
 function measure(stack: HTMLElement) {
   const boxes = [
     ...stack.querySelectorAll<HTMLElement>('[data-float-slot]:not([data-float-slot="toasts"])'),
   ]
     .map((slot) => slot.getBoundingClientRect())
     .filter((rect) => rect.height > 0)
+  const shown = stack.querySelector('[data-float-notices]')?.getBoundingClientRect()
+  const clip = shown?.height ? shown : { top: -Infinity, bottom: Infinity }
   const box = boxes.length
-    ? { top: Math.min(...boxes.map((b) => b.top)), bottom: Math.max(...boxes.map((b) => b.bottom)) }
+    ? {
+        top: Math.max(clip.top, Math.min(...boxes.map((b) => b.top))),
+        bottom: Math.min(clip.bottom, Math.max(...boxes.map((b) => b.bottom))),
+      }
     : null
   const next = noticeInsets(box, window.innerHeight)
   if (next.top === insets.top && next.bottom === insets.bottom) return
@@ -104,11 +112,14 @@ export function floatSlot(slot: FloatSlot): HTMLElement {
     column.className = 'float-stack'
     column.setAttribute('data-float-stack', '')
     column.setAttribute('data-top-layer', '')
+    const notices = document.createElement('div')
+    notices.setAttribute('data-float-notices', '')
     for (const name of SLOTS) {
       const element = document.createElement('div')
       element.setAttribute('data-float-slot', name)
-      column.append(element)
+      ;(name === 'toasts' ? column : notices).append(element)
     }
+    column.append(notices)
     document.body.append(column)
     stack = column
   }
