@@ -92,12 +92,88 @@ describe('task creation through the client store', () => {
     requests[0].resolve({ num: correctedNum })
     await settled()
 
-    expect(onKeyFixed).toHaveBeenCalledExactlyOnceWith(`${P.ISSUE_PREFIX}-${correctedNum}`)
+    expect(onKeyFixed).toHaveBeenCalledExactlyOnceWith(`${P.ISSUE_PREFIX}-${correctedNum}`, key)
     const correctedKey = onKeyFixed.mock.calls[0][0]
     expect(P.issueById[correctedKey].uuid).toBe(task.uuid)
     expect(P.issueById[key]).toBeUndefined()
     expect(onRefused).not.toHaveBeenCalled()
     expect(showToast).not.toHaveBeenCalled()
+  })
+
+  it('moves an open preview past a competing create while the write waits, never sharing a handle', async () => {
+    vi.useFakeTimers()
+    const onKeyFixed = vi.fn()
+    const key = P.addIssue({ project: snap.projects[0].id, title: 'Mine' }, onKeyFixed)!
+    const mine = P.issueById[key].uuid
+    const next = snap.orgs[0].next_issue_num + 1
+    const competing: Snapshot['issues'][number] = {
+      id: crypto.randomUUID(),
+      org_id: snap.orgs[0].id,
+      project_id: snap.projects[0].id,
+      num: next,
+      title: 'Task created by another user',
+      description: '',
+      status: 'backlog',
+      priority: 'low',
+      paused: false,
+      created_at: NOW,
+      updated_at: NOW,
+      has_hidden_subtasks: false,
+      has_hidden_parent: false,
+    }
+    snap.orgs[0].next_issue_num = next
+    snap.issues = [competing]
+    publish(structuredClone(snap))
+    vi.advanceTimersByTime(0)
+    const moved = `${P.ISSUE_PREFIX}-${next + 1}`
+    expect(onKeyFixed).toHaveBeenCalledExactlyOnceWith(moved, key)
+    expect(P.issueById[moved].uuid).toBe(mine)
+    expect(P.issueById[key].uuid).toBe(competing.id)
+    expect(new Set(P.issues.map((task) => task.key)).size).toBe(P.issues.length)
+    // Convex delivers the create before it answers
+    snap.orgs[0].next_issue_num = next + 1
+    snap.issues = [competing, { ...competing, id: mine, num: next + 1, title: 'Mine' }]
+    publish(structuredClone(snap))
+    requests[0].resolve({ num: next + 1 })
+    await settled()
+    expect(onKeyFixed).toHaveBeenCalledOnce()
+    expect(P.issueById[moved].uuid).toBe(mine)
+    vi.useRealTimers()
+  })
+
+  it('paints a new parent at once and takes it away again on a refusal', async () => {
+    const child = P.addIssue({ project: snap.projects[0].id, title: 'Child' })!
+    const uuid = P.issueById[child].uuid
+    snap.orgs[0].next_issue_num = 1
+    snap.issues = [
+      {
+        id: uuid,
+        org_id: snap.orgs[0].id,
+        project_id: snap.projects[0].id,
+        num: 1,
+        title: 'Child',
+        description: '',
+        status: 'backlog',
+        priority: 'low',
+        paused: false,
+        created_at: NOW,
+        updated_at: NOW,
+        has_hidden_subtasks: false,
+        has_hidden_parent: false,
+      },
+    ]
+    publish(structuredClone(snap))
+    requests.splice(0)[0].resolve({ num: 1 })
+    await settled()
+    P.createParent(child, 'New parent')
+    const parent = P.issues.find((task) => task.title === 'New parent')
+    expect(parent?.key).toBe(`${P.ISSUE_PREFIX}-2`)
+    expect(P.issueById[child].parent).toBe(parent?.id)
+    expect(requests[0]).toMatchObject({ name: 'issues:createParent', args: { id: uuid } })
+    requests[0].reject(new ConvexError({ code: 'rule', message: 'a task with archived subtasks' }))
+    await settled()
+    expect(P.issues.some((task) => task.title === 'New parent')).toBe(false)
+    expect(P.issueById[child].parent).toBeNull()
   })
 
   it('notifies the caller once before rollback can reuse the preview number for another task', async () => {
@@ -135,7 +211,7 @@ describe('task creation through the client store', () => {
     requests[0].reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
     await settled()
 
-    expect(onRefused).toHaveBeenCalledExactlyOnceWith()
+    expect(onRefused).toHaveBeenCalledExactlyOnceWith(key)
     expect(taskAtRefusal).toBe(preview.uuid)
     expect(P.issues.some((task) => task.uuid === preview.uuid)).toBe(false)
     expect(P.issueById[key].uuid).toBe(competing.id)

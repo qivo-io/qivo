@@ -28,9 +28,9 @@ Uploaded pictures are visible to members and invited guests in that
 organization. Qivo uses temporary download links, which you should treat as
 private. Your browser may cache pictures for your signed-in account.
 
-Other people's changes appear automatically. Your edits appear immediately;
-if the server refuses an edit, Qivo restores the previous value and shows an
-error.
+Other people's changes appear automatically, also while your own changes are
+still saving. Your edits appear immediately. If the server refuses an edit,
+Qivo undoes only that edit and shows an error, and your other changes stay.
 
 A task's **Activity** lists comments and changes from oldest to newest. Qivo
 keeps each task's newest 500 changes, and changes to other tasks never remove

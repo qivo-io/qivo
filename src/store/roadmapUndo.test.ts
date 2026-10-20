@@ -280,7 +280,7 @@ describe('roadmap undo through the client store', () => {
     expect(P.roadmapUndo).toEqual({ count: 0, busy: false, disabled: false })
   })
 
-  it('keeps a saved edit on screen when the snapshot is in trouble as a planning no-op returns', async () => {
+  it('drops a planning no-op during trouble and keeps a saved edit on screen', async () => {
     P.updateIssue(task().id, { remaining: 8.01 })
     const change = latest()
     const other = P.issues.find((item) => item.title === 'Planning task 2')!
@@ -293,8 +293,8 @@ describe('roadmap undo through the client store', () => {
     change.resolve({ count: 0 })
     await settled()
     expect(P.issues.some((item) => item.title === 'Order the gaskets')).toBe(true)
-    // the unrounded hours show until the next good delivery
-    expect(task().remaining).toBe(8.01)
+    // the server changed nothing, so the hours last delivered are right
+    expect(task().remaining).toBe(8)
   })
 
   it('rolls back a refused roadmap change and the group span that followed it without another snapshot', async () => {

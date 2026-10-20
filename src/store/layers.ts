@@ -108,7 +108,8 @@ export function createLayers() {
         holds them: every part for the workspace, and for the thread only the
         parts of task `task`, or of every task but `task` with `except`. */
     dropSaved(part: Part, task?: string, except = false) {
-      for (const layer of [...saved]) {
+      // remove() replaces `saved`, so this walks the list as it was
+      for (const layer of saved) {
         if (part === 'workspace') {
           if (!layer.view.workspace) continue
           layer.view = { ...layer.view, workspace: undefined }

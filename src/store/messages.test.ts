@@ -120,12 +120,33 @@ describe('bulk notification actions through the client store', () => {
     network.mutation.mockImplementation((ref, args) => {
       const name = getFunctionName(ref)
       if (name === 'identity:claimMySeats') return Promise.resolve(null)
-      return new Promise((resolve, reject) => requests.push({ name, args, resolve, reject }))
+      return new Promise((resolve, reject) =>
+        requests.push({
+          name,
+          args,
+          resolve: (value) => resolve(naming(name, args, value)),
+          reject,
+        }),
+      )
     })
     const store = await import('./planner')
     P = store.P
     await store.initStore()
   })
+
+  /* A bulk batch's answer names the rows it changed (convex/messages.ts):
+     the seat's unread rows for Mark all as read, its read rows for Remove
+     all read, as the server holds them when it answers, snoozed rows left
+     out. Answers that name them already stay as they are. */
+  function naming(name: string, args: Pending['args'], value: unknown) {
+    if (!value || typeof value !== 'object' || 'ids' in value) return value
+    const read = name === 'messages:removeRead'
+    if (!read && name !== 'messages:markAllRead') return value
+    const ids = snap.messages
+      .filter((m) => m.org_id === args.org_id && !m.snoozed_until && !!m.read_at === read)
+      .map((m) => m.id)
+    return { ...value, ids }
+  }
 
   afterEach(() => {
     vi.restoreAllMocks()
@@ -177,7 +198,9 @@ describe('bulk notification actions through the client store', () => {
     const firstOrg = snap.orgs[0].id
     const first = requests.find((request) => request.args.org_id === firstOrg)!
     const other = requests.find((request) => request.args.org_id !== firstOrg)!
-    first.resolve({ marked: 256, hasMore: true, before: 1234.5 })
+    // the batches name the rows before the seat's cutoff, never a later arrival
+    const loaded = snap.messages.map((message) => message.id)
+    first.resolve({ marked: 256, ids: loaded.slice(0, 256), hasMore: true, before: 1234.5 })
     await vi.waitFor(() => expect(requests).toHaveLength(3))
     expect(requests[2]).toMatchObject({
       name: 'messages:markAllRead',
@@ -194,10 +217,10 @@ describe('bulk notification actions through the client store', () => {
     snap.readMessageCount = 600
     publish(structuredClone(snap))
     expect(P.unreadMessages).toBe(0)
-    requests[2].resolve({ marked: 256, hasMore: true, before: 1234.5 })
+    requests[2].resolve({ marked: 244, ids: loaded.slice(256), hasMore: true, before: 1234.5 })
     await vi.waitFor(() => expect(requests).toHaveLength(4))
     expect(requests[3].args).toEqual({ org_id: firstOrg, before: 1234.5 })
-    requests[3].resolve({ marked: 88, hasMore: false, before: 1234.5 })
+    requests[3].resolve({ marked: 88, ids: [], hasMore: false, before: 1234.5 })
     await marking
     expect(P.unreadMessages).toBe(1)
     expect(P.messages.find((message) => message.id === arrival.id)?.read).toBe(false)
@@ -240,6 +263,28 @@ describe('bulk notification actions through the client store', () => {
     expect(P.canMarkAllRead).toBe(false)
   })
 
+  it('shows a new arrival within a task while mark all as read still runs', async () => {
+    const unread = snap.messages.filter((message) => !message.read_at)
+    const marking = P.markAllMessagesRead()
+    expect(P.unreadMessages).toBe(0)
+    const arrival = { ...snap.messages[1], id: crypto.randomUUID(), issue_id: crypto.randomUUID() }
+    snap.messages = [...snap.messages, arrival]
+    publish(structuredClone(snap))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(P.messages.find((message) => message.id === arrival.id)?.read).toBe(false)
+    expect(P.unreadMessages).toBe(1)
+    // each seat marks its rows before its cutoff, never the arrival, and
+    // Convex delivers that before it answers
+    snap.messages = snap.messages.map((m) => (m.id === arrival.id ? m : { ...m, read_at: NOW }))
+    publish(structuredClone(snap))
+    for (const request of requests) {
+      const ids = unread.filter((m) => m.org_id === request.args.org_id).map((m) => m.id)
+      request.resolve({ marked: ids.length, ids, hasMore: false, before: 1 })
+    }
+    await marking
+    expect(P.unreadMessages).toBe(1)
+  })
+
   it('restores refused reads and keeps another seat’s completed reads from the latest snapshot', async () => {
     const firstOrg = snap.orgs[0].id
     const secondOrg = snap.orgs[1].id
@@ -253,7 +298,8 @@ describe('bulk notification actions through the client store', () => {
     refused.reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
     await vi.waitFor(() => expect(showToast).toHaveBeenCalledOnce())
     expect(completed).toBe(false)
-    expect(P.unreadMessages).toBe(2)
+    // only the refused seat's reads go back; the other seat's still wait
+    expect(P.unreadMessages).toBe(1)
     snap.messages = snap.messages.map((message) =>
       message.org_id === secondOrg ? { ...message, read_at: NOW } : message,
     )
@@ -312,7 +358,7 @@ describe('bulk notification actions through the client store', () => {
     }
     expect(P.readMessageCount).toBe(0)
 
-    // A new arrival is recorded while the optimistic deletion owns the paint.
+    // A new arrival waits for the deletion's answer or a 0 ms timer.
     const incoming = { ...unread[0], id: crypto.randomUUID(), detail: 'Another update' }
     snap.messages = [...unread, incoming]
     snap.readMessageCount = 0
@@ -321,7 +367,8 @@ describe('bulk notification actions through the client store', () => {
     requests[0].resolve({ removed: 2, hasMore: false })
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(completed).toBe(false)
-    expect(ids()).not.toContain(incoming.id)
+    // the arrival shows within a task, while the other seat still waits
+    expect(ids()).toContain(incoming.id)
 
     requests[1].resolve({ removed: 1, hasMore: false })
     await removal
@@ -509,12 +556,33 @@ describe('snooze through the client store', () => {
     network.mutation.mockImplementation((ref, args) => {
       const name = getFunctionName(ref)
       if (name === 'identity:claimMySeats') return Promise.resolve(null)
-      return new Promise((resolve, reject) => requests.push({ name, args, resolve, reject }))
+      return new Promise((resolve, reject) =>
+        requests.push({
+          name,
+          args,
+          resolve: (value) => resolve(naming(name, args, value)),
+          reject,
+        }),
+      )
     })
     const store = await import('./planner')
     P = store.P
     await store.initStore()
   })
+
+  /* A bulk batch's answer names the rows it changed (convex/messages.ts):
+     the seat's unread rows for Mark all as read, its read rows for Remove
+     all read, as the server holds them when it answers, snoozed rows left
+     out. Answers that name them already stay as they are. */
+  function naming(name: string, args: Pending['args'], value: unknown) {
+    if (!value || typeof value !== 'object' || 'ids' in value) return value
+    const read = name === 'messages:removeRead'
+    if (!read && name !== 'messages:markAllRead') return value
+    const ids = snap.messages
+      .filter((m) => m.org_id === args.org_id && !m.snoozed_until && !!m.read_at === read)
+      .map((m) => m.id)
+    return { ...value, ids }
+  }
 
   afterEach(() => {
     vi.restoreAllMocks()

@@ -397,12 +397,12 @@ describe('rollback during snapshot trouble', () => {
     expect(message('message-a')?.snoozedUntil).toBe(Date.parse(UNTIL))
   })
 
-  it('paints a write accepted after another write was refused', async () => {
+  it('keeps a pending write on screen when another write is refused first', async () => {
     live().fail(new Error(QUERY_FAILURE))
     P().markMessagesRead(['message-a'])
-    // the refusal answers first and its rollback takes the pending paint
+    // the refusal answers first and takes away only its own paint
     await refuseFollow()
-    expect(message('message-a')?.read).toBe(false)
+    expect(message('message-a')?.read).toBe(true)
     await accept()
     expect(message('message-a')?.read).toBe(true)
   })
@@ -510,6 +510,75 @@ describe('rollback during snapshot trouble', () => {
     await accept({ removed: 0, ids: [], hasMore: false })
     await done
     expect(message('message-b')?.read).toBe(false)
+  })
+
+  it('takes back only the refused edit of three waiting online, at every step', async () => {
+    P().updateIssue(task('Calibrate the sensor').id, { title: 'Calibrate sensor A' })
+    P().updateIssue(task('Replace the gasket').id, { title: 'Replace gasket B' })
+    P().updateIssue(task('Order the brackets').id, { status: 'progress' })
+    const [first, middle, last] = sent.splice(0)
+    middle.reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
+    await settle()
+    expect(task('Calibrate sensor A')).toBeDefined()
+    expect(task('Replace the gasket')).toBeDefined()
+    expect(task('Order the brackets').status).toBe('progress')
+    first.resolve(null)
+    await settle()
+    expect(task('Calibrate sensor A')).toBeDefined()
+    expect(task('Order the brackets').status).toBe('progress')
+    last.resolve(null)
+    await settle()
+    expect(task('Calibrate sensor A')).toBeDefined()
+    expect(task('Order the brackets').status).toBe('progress')
+  })
+
+  it('keeps a write a delivery holds and one still waiting when the one between is refused', async () => {
+    P().updateIssue(task('Calibrate the sensor').id, { title: 'Calibrate sensor A' })
+    P().updateIssue(task('Replace the gasket').id, { title: 'Replace gasket B' })
+    P().updateIssue(task('Order the brackets').id, { status: 'progress' })
+    const [a, b] = sent.splice(0, 2)
+    // the delivery that holds A, then A's answer, then B's refusal
+    deliverTruth((snap) => {
+      snap.issues[0].title = 'Calibrate sensor A'
+    })
+    a.resolve(null)
+    await settle()
+    b.reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
+    await settle()
+    expect(task('Calibrate sensor A')).toBeDefined()
+    expect(task('Replace the gasket')).toBeDefined()
+    expect(task('Order the brackets').status).toBe('progress')
+  })
+
+  it('keeps an accepted address and portrait change during trouble after a refused write', async () => {
+    const me = snapshot.profiles[0]
+    snapshot.profiles[0] = { ...me, avatar_storage_id: 'storage-1' as typeof me.avatar_storage_id }
+    deliverTruth(() => {})
+    const slug = P().setOrgSlug('new-address')
+    const cleared = P().clearAvatar(me.id)
+    live().fail(new Error(QUERY_FAILURE))
+    await accept()
+    await expect(slug).resolves.toBeNull()
+    await expect(cleared).resolves.toBeNull()
+    expect(P().orgs[0].slug).toBe('new-address')
+    expect(P().user(me.id)?.avatarPath).toBeFalsy()
+    await refuseFollow()
+    expect(P().orgs[0].slug).toBe('new-address')
+    expect(P().user(me.id)?.avatarPath).toBeFalsy()
+  })
+
+  it('shows a task archived during trouble and restored elsewhere once the trouble ends', async () => {
+    const archived = P().archiveIssue(task('Replace the gasket').id)
+    live().fail(new Error(QUERY_FAILURE))
+    await accept()
+    await expect(archived).resolves.toBe(true)
+    expect(P().issues.some((issue) => issue.title === 'Replace the gasket')).toBe(false)
+    // someone restored it before the snapshot loaded again
+    deliverTruth(() => {})
+    expect(P().snapshotTrouble()).toBeNull()
+    expect(task('Replace the gasket')).toBeDefined()
+    await refuseFollow()
+    expect(task('Replace the gasket')).toBeDefined()
   })
 
   it('reverts only the refused write outside trouble', async () => {

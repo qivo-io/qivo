@@ -1298,13 +1298,14 @@ function App() {
     if (P.refusePausedEdit()) return false
     // the issue's key exists only once the row does — addIssue returns it.
     // The preview can be invalidated by ANY concurrent create in the org
-    // (0050's shared counter): onKeyFixed re-anchors the newly opened
-    // editor when the insert reconciles, so it
-    // doesn't blank (or later resolve to the concurrent issue).
+    // (0050's shared counter), more than once: onKeyFixed re-anchors the
+    // newly opened editor from the handle it showed to the new one, so it
+    // doesn't blank (or later resolve to the concurrent issue), and a
+    // refusal closes it under the handle it showed last.
     const key = P.addIssue(
       issue,
-      (fixed) => setOpenIssue((cur) => (cur === key ? fixed : cur)),
-      () => setOpenIssue((cur) => (cur === key ? null : cur)),
+      (fixed, previous) => setOpenIssue((cur) => (cur === previous ? fixed : cur)),
+      (last) => setOpenIssue((cur) => (cur === last ? null : cur)),
     )
     if (!key) {
       window.showToast?.('That sub-project is gone, so the task was not created.', 'error')
@@ -1354,8 +1355,8 @@ function App() {
         })
       }
       // Visibility comes from the draft by the rule the dialog's warning used,
-      // not from the painted rows, because another write's rollback can drop
-      // those before the server's delivery of the project is adopted.
+      // not from the rows, which hold the project only until the delivery
+      // that holds it arrives when the creator cannot see it.
       // Sub-projects ignore it, since their creator leads the parent.
       const saved = afterProjectSaved({
         type: p.type,

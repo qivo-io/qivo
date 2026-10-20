@@ -254,16 +254,16 @@ describe('earlier comments in the store', () => {
     expect(bodies()).toEqual(range(100, 152).map((c) => c.body))
   })
 
-  it('drops a deleted comment the check finds only once my write in flight settles', async () => {
+  it('drops a deleted comment the check finds at once, with my write in flight on top', async () => {
     const { P } = store
     publish({ comments: range(100, 150), earlier: true })
     publish({ comments: range(102, 152), earlier: true })
     P.updateComment('comment-120', 'Edited')
     asked[0].answer.resolve({ comments: range(51, 101), earlier: true })
     await settle()
-    // the edit stays on screen while it is in flight
+    // the deleted comment goes, and the edit in flight stays on screen
+    expect(bodies()).not.toContain('#101')
     expect(P.comments.find((c) => c.id === 'comment-120')?.body).toBe('Edited')
-    expect(bodies()).toContain('#101')
     writes[0].answer.resolve(null)
     await settle()
     expect(bodies()).not.toContain('#101')

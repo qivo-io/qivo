@@ -211,6 +211,27 @@ describe('comment drafts and a failed thread in the store', () => {
     })
   })
 
+  describe('while the thread fails', () => {
+    it('keeps an edit saved meanwhile when another comment write is refused', async () => {
+      const { P } = store
+      live().deliver({ comments: range(1, 4), earlier: false })
+      const edited = P.updateComment('comment-2', 'Edited')
+      live().fail(new Error('[CONVEX Q(snapshot:commentThread)] Server Error'))
+      writes[0].answer.resolve(null)
+      expect(await edited).toBe(true)
+      const refused = P.updateComment('comment-3', 'Refused')
+      writes[1].answer.reject(new ConvexError({ code: 'forbidden', message: 'not yours' }))
+      expect(await refused).toBe(false)
+      expect(bodies()).toEqual(['#1', 'Edited', '#3'])
+      // the next delivery holds the edit
+      live().deliver({
+        comments: [comment(1), { ...comment(2), body: 'Edited' }, comment(3)],
+        earlier: false,
+      })
+      expect(bodies()).toEqual(['#1', 'Edited', '#3'])
+    })
+  })
+
   describe("the task's changes beside the thread", () => {
     it('shows the changes the latest delivery holds, oldest first', () => {
       expect(changes()).toEqual([])
