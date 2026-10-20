@@ -209,6 +209,21 @@ describe('the field check in the store', () => {
     })
   })
 
+  it('says the change was discarded when the editor kept nothing', async () => {
+    void P.updateIssue(key('task-1'), { description: 'My text' }, { keepDraft: () => false })
+    latest().reject(changed([{ field: 'description' }]))
+    await settle()
+    expect(showToast.mock.calls.at(-1)?.[0]).toBe(
+      'Not saved. Emil Berg changed the description of QN-1. Your change was discarded.',
+    )
+  })
+
+  it('sends no expected with a change of teams alone, which is no field it compares', () => {
+    P.updateUser(EMIL, { teams: [] })
+    expect(latest()).toMatchObject({ name: 'profiles:update', args: { patch: { teams: [] } } })
+    expect(latest().args).not.toHaveProperty('expected')
+  })
+
   it('sends the link kind on screen with a removal', () => {
     P.removeLink(key('task-1'), key('task-3'))
     expect(latest()).toMatchObject({
@@ -275,7 +290,11 @@ describe('the field check in the store', () => {
     void P.updateIssue(
       key('task-1'),
       { description: 'My text' },
-      { keepDraft: (shown) => kept.push(shown, P.issueById[key('task-1')].description) },
+      {
+        keepDraft: (shown) => {
+          kept.push(shown, P.issueById[key('task-1')].description)
+        },
+      },
     )
     latest().reject(changed([{ field: 'description' }]))
     await settle()

@@ -212,7 +212,13 @@ export const PROFILE_FIELDS: Fields<Doc<'profiles'>> = {
     type: TEXT_OR_NULL,
     form: (value) => normalizeEmail(value == null ? null : String(value)) ?? null,
   },
-  can_create_projects: { sends: 'can_create_projects', type: BOOLEAN, form: exact },
+  // Off is stored as absence (lib/projectCreators.ts), so false and absent
+  // are one value
+  can_create_projects: {
+    sends: 'can_create_projects',
+    type: BOOLEAN,
+    form: (value) => value === true,
+  },
   plannable_hours: { sends: 'plannable_hours', type: NUMBER, form: exact },
   avatar_storage_id: { sends: 'avatar_storage_id', type: TEXT_OR_NULL, form: exact },
 }

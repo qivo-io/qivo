@@ -147,7 +147,7 @@ export const expectedSchema = <Row>(fields: Fields<Row>) => ({
 
 /** The keys of `fields` whose request field `body` sends. */
 export const sentKeys = <Row>(fields: Fields<Row>, body: Readonly<Record<string, unknown>>) =>
-  Object.keys(fields).filter((key) => fields[key].sends in body)
+  Object.keys(fields).filter((key) => Object.hasOwn(body, fields[key].sends))
 
 /** The sentence an MCP tool description adds for its `expected` argument. */
 export const EXPECTED_SENTENCE =
@@ -176,7 +176,8 @@ function checkKeys<Row>(
   const keys = Object.keys(expected)
   if (keys.length === 0) throw badRequest('expected must name at least one field')
   for (const key of keys) {
-    const field = fields[key]
+    // own keys only, so a key such as "constructor" reads as unknown
+    const field = Object.hasOwn(fields, key) ? fields[key] : undefined
     if (field === undefined) {
       throw badRequest(
         `unknown field "expected.${key}"; expected takes ${Object.keys(fields).join(', ')}`,
@@ -185,7 +186,7 @@ function checkKeys<Row>(
     if (!sent.has(key)) {
       throw badRequest(`expected.${key} applies only when the request sends ${field.sends}`)
     }
-    if (field.pair !== undefined && !(field.pair in expected)) {
+    if (field.pair !== undefined && !Object.hasOwn(expected, field.pair)) {
       const [first, second] = Object.keys(fields).filter((k) => k === key || k === field.pair)
       throw badRequest(`expected.${first} and expected.${second} go together`)
     }
@@ -209,7 +210,7 @@ export function parseExpected<Row>(
   }
   const expected = raw as Record<string, unknown>
   for (const [key, value] of Object.entries(expected)) {
-    const field = fields[key]
+    const field = Object.hasOwn(fields, key) ? fields[key] : undefined
     if (field !== undefined && !field.type.ok(value))
       throw badRequest(`expected.${key} must be ${field.type.says}`)
   }
@@ -242,7 +243,7 @@ export async function conflictingFields<Row>(
 ): Promise<string[]> {
   const out: string[] = []
   for (const [key, field] of Object.entries(fields)) {
-    if (!(key in expected)) continue
+    if (!Object.hasOwn(expected, key)) continue
     if (field.pair !== undefined && field.compare === undefined) continue
     let matches: { seen: boolean; next: boolean }
     if (field.compare !== undefined) {

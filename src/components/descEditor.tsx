@@ -306,7 +306,7 @@ export type DescEditorHandle = {
     the save because someone changed the text first. The draft then stays,
     and the text the server keeps becomes its baseline once it shows, so a
     second Save deliberately replaces it. */
-export type DraftKeep = { seen: string; keepDraft: (shown: unknown) => void }
+export type DraftKeep = { seen: string; keepDraft: (shown: unknown) => boolean }
 
 /** Comment mode: commit goes to onCommit (the store's add/updateComment),
     not the issue description. onCommit resolves whether the server saved
@@ -780,7 +780,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   const draftKeep = (ed: Editor, seen: string): DraftKeep => ({
     seen,
     keepDraft: (shown) => {
-      if (ed.isDestroyed) return
+      if (ed.isDestroyed) return false
       const text = typeof shown === 'string' ? shown : seen
       const base = text !== seen && canonical(text) !== serialize(ed) ? text : seen
       rebaseRef.current = base === seen
@@ -788,6 +788,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       canonRef.current = canonical(base)
       committedDocRef.current = ed.schema.nodeFromJSON(astToDoc(parseMd(base)))
       refreshDirtyRef.current()
+      return true
     },
   })
 

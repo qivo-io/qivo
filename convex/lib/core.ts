@@ -2125,6 +2125,7 @@ export async function applyTaskUpdate(
       ...(a.parent !== undefined ? { parent_id: a.parent, has_hidden_parent: null } : {}),
       ...(a.destination !== undefined ? { project_id: a.destination.id } : {}),
     },
+    destination: a.destination,
   })
   const archives = a.archive === true && a.issue.archived_at === undefined
   const toggles = a.archive !== undefined && a.archive !== (a.issue.archived_at !== undefined)

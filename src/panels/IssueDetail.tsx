@@ -1152,6 +1152,9 @@ function IssueDetail({
   // differs from it becomes the new one (titleRebase)
   const [titleSeen, setTitleSeen] = useStateID('')
   const titleRebase = useRefID(false)
+  // counts the title edits begun, so a refusal that answers after another
+  // edit began, or after the window moved to another task, keeps nothing
+  const titleSession = useRefID(0)
   const [labelAnchor, setLabelAnchor] = useStateID<{ x: number; y: number } | null>(null)
   const [subAnchor, setSubAnchor] = useStateID<{ x: number; y: number } | null>(null)
   const [parentAnchor, setParentAnchor] = useStateID<{ x: number; y: number } | null>(null)
@@ -2124,19 +2127,24 @@ function IssueDetail({
                   // a paused save keeps the field open with the draft
                   if (P.refusePausedEdit()) return
                   // refused over someone else's rename, the field opens again
-                  // with this draft (keepDraft)
+                  // with this draft (keepDraft), unless the person has moved on
+                  const session = titleSession.current
+                  const task = it.uuid
                   void P.updateIssue(
                     it.id,
                     { title: v },
                     {
                       seen: { title: titleSeen },
                       keepDraft: (shown) => {
+                        const here = shownIssue.current && P.issueById[shownIssue.current]
+                        if (titleSession.current !== session || here?.uuid !== task) return false
                         // the rename shown now is the title a second save
                         // replaces; until a delivery shows it, wait for it
                         if (typeof shown === 'string' && shown !== titleSeen) setTitleSeen(shown)
                         else titleRebase.current = true
                         setTitleDraft(v)
                         setEditTitle(true)
+                        return true
                       },
                     },
                   )
@@ -2165,6 +2173,7 @@ function IssueDetail({
                         setTitleDraft(it.title)
                         setTitleSeen(it.title)
                         titleRebase.current = false
+                        titleSession.current++
                         setEditTitle(true)
                       }
                     : undefined

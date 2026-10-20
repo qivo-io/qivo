@@ -238,6 +238,34 @@ describe('people', () => {
     expect((await fx.t.run((ctx) => byId(ctx, 'profiles', fx.viewer.id)))?.name).toBe('Vera')
   })
 
+  it('reads a creation right turned off as absent, so two admins turning it off both pass', async () => {
+    const fx = await setup()
+    const right = (on: boolean, seen: boolean) =>
+      as(fx.t, fx.admin).mutation(api.profiles.update, {
+        org_id: fx.org.id,
+        id: fx.user.id,
+        patch: { can_create_projects: on },
+        expected: { can_create_projects: seen },
+      })
+    await right(true, false)
+    await right(false, true)
+    // the second admin read it on too, and also turns it off
+    await right(false, true)
+    expect(
+      (await fx.t.run((ctx) => byId(ctx, 'profiles', fx.user.id)))?.can_create_projects,
+    ).not.toBe(true)
+    await right(true, false)
+    // one who read it off while it is on now is stale
+    await fieldChanged(
+      as(fx.t, fx.admin).mutation(api.profiles.update, {
+        org_id: fx.org.id,
+        id: fx.user.id,
+        patch: { can_create_projects: false, name: 'Ulla' },
+        expected: { can_create_projects: false },
+      }),
+    )
+  })
+
   it('compares the plannable week in the app and over REST', async () => {
     const fx = await setup()
     const hours = async () =>

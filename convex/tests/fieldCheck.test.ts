@@ -211,6 +211,39 @@ describe('task edits', () => {
   })
 })
 
+describe('entering Review', () => {
+  it('compares cleared hours as the review time the move into Review stores', async () => {
+    const fx = await setup()
+    const row = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      status: 'progress',
+      remaining_hours: 5,
+    })
+    // someone clears the estimate the sender read as 5 hours
+    await edit(fx, fx.user, row.id, { remaining_hours: null })
+    await fieldChanged(
+      edit(
+        fx,
+        fx.admin,
+        row.id,
+        { status: 'review', remaining_hours: null },
+        { remaining_hours: 5 },
+      ),
+    )
+    expect(await task(fx.t, row.id)).toMatchObject({ status: 'progress' })
+    // read as cleared, the same request saves and gets the review time
+    await edit(
+      fx,
+      fx.admin,
+      row.id,
+      { status: 'review', remaining_hours: null },
+      { remaining_hours: null },
+    )
+    expect((await task(fx.t, row.id))?.status).toBe('review')
+  })
+})
+
 describe('task parents', () => {
   it('compares a hidden parent without telling which one it is', async () => {
     const fx = await setup()

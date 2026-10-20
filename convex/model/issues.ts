@@ -358,8 +358,9 @@ export async function taskWriters(
 
 /** Refuses a task edit over a field someone else changed since `expected`
  * was read (model/expected.ts assertExpected), naming who where an activity
- * row proves it. `next` holds the value the edit stores for each key it
- * sends. */
+ * row proves it. `next` holds the value the edit sends for each key; hours
+ * cleared by an edit that enters Review compare as the review time the core
+ * stores instead, from `destination` for a move. */
 export async function assertTaskExpected(
   ctx: QueryCtx,
   a: {
@@ -368,9 +369,21 @@ export async function assertTaskExpected(
     view: View
     expected: Readonly<Record<string, unknown>> | undefined
     next: Readonly<Record<string, unknown>>
+    destination?: Doc<'projects'>
   },
 ): Promise<void> {
+  if (a.expected === undefined) return
   const read: Read = { ctx, me: a.me, view: a.view }
+  let next = a.next
+  if (
+    'remaining_hours' in next &&
+    next.remaining_hours == null &&
+    next.status === 'review' &&
+    a.issue.status !== 'review'
+  ) {
+    const project = a.destination ?? (await byId(ctx, 'projects', a.issue.project_id))
+    if (project !== null) next = { ...next, remaining_hours: await reviewHoursFor(ctx, project) }
+  }
   await assertExpected({
     read,
     fields: TASK_FIELDS,
@@ -379,7 +392,7 @@ export async function assertTaskExpected(
     label: issueKey(a.issue.num),
     row: a.issue,
     expected: a.expected,
-    next: a.next,
+    next,
     writers: (fields) =>
       taskWriters(read, a.issue, fields, (field) =>
         printOf(TASK_FIELDS[field].form((a.issue as Record<string, unknown>)[field])),

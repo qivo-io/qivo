@@ -215,6 +215,11 @@ describe('malformed expected', () => {
         { title: 'X', expected: { bogus: 1 } },
         `unknown field "expected.bogus"; expected takes ${TASK_KEYS}`,
       ],
+      // a name every object inherits is no field either
+      [
+        { title: 'X', expected: { constructor: 'x' } },
+        `unknown field "expected.constructor"; expected takes ${TASK_KEYS}`,
+      ],
       [
         { status: 'done', expected: { status: 'finished' } },
         'expected.status must be one of backlog, todo, progress, review, done',

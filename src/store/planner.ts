@@ -1154,8 +1154,10 @@ type SendOptions<R> = {
   notice?: { deletes?: boolean; batch?: number }
   /** Runs on a field_changed refusal once the paint has gone, for an
       editor that keeps the person's draft, with the value of the write's
-      first `over` field now on screen; the notice says the draft is kept. */
-  keepDraft?: (shown: unknown) => void
+      first `over` field now on screen. It answers false when the editor
+      has moved on and keeps nothing; otherwise the notice, which shows
+      after it, says the draft is kept. */
+  keepDraft?: (shown: unknown) => boolean | void
 }
 
 /** What a write shows: a view, an open layer it was collected in (a Roadmap
@@ -1282,13 +1284,19 @@ function start<M extends FunctionReference<'mutation'>, T>(
       if (epoch === storeEpoch) {
         console.error('[qivo] write failed:', error)
         const painted = paints(layer.view)
-        const changed = error instanceof ConvexError && errData(error).reason === FIELD_CHANGED
-        if (changed) fieldRefusals.set(error, { layer, sentAt, kept: !!o.keepDraft, ...o.notice })
-        guarded(() =>
-          (o.onError ?? (awaited ? undefined : (e) => toastWriteError(e, painted)))?.(error),
-        )
-        guarded(() => settleRefused(layer))
-        if (changed && o.keepDraft) guarded(() => o.keepDraft?.(shownOf(o.over)))
+        const onError = o.onError ?? (awaited ? undefined : (e) => toastWriteError(e, painted))
+        if (error instanceof ConvexError && errData(error).reason === FIELD_CHANGED) {
+          // the paint goes first, so a kept draft rebases on the text the
+          // server keeps and the notice says whether the draft stayed
+          guarded(() => settleRefused(layer))
+          let kept = false
+          if (o.keepDraft) guarded(() => (kept = o.keepDraft?.(shownOf(o.over)) !== false))
+          fieldRefusals.set(error, { layer, sentAt, kept, ...o.notice })
+          guarded(() => onError?.(error))
+        } else {
+          guarded(() => onError?.(error))
+          guarded(() => settleRefused(layer))
+        }
         guarded(() => o.onSettled?.())
       }
       return refusal(error)
@@ -1559,6 +1567,7 @@ function expireRoadmapHistory() {
 function submitRoadmapChanges(
   operations: RoadmapOperation[],
   target: View | Layer,
+  keepDraft?: SendOptions<unknown>['keepDraft'],
 ): Promise<boolean> {
   const visit = roadmapVisit
   if (!visit || !operations.length) {
@@ -1569,6 +1578,7 @@ function submitRoadmapChanges(
   visit.pending++
   const answer = send(api.roadmap.change, { session_id: visit.id, operations }, target, {
     notice: { batch: operations.length },
+    keepDraft,
     keep: (result) => (result.count <= visit.count ? null : undefined),
     onOk: (result) => {
       if (roadmapVisit === visit && !visit.disabled)
@@ -1586,19 +1596,21 @@ function submitRoadmapChanges(
 /* Records an operation in the open Roadmap visit's journal with `view`, its
    paint, in the open batch when there is one. `over` holds the values on
    screen it changes, read now, after the paints of the batch's earlier
-   operations, and goes with the operation as its `expected`. Returns null
-   when no visit records it, so the caller sends it directly, or else the
-   server's answer. */
+   operations, and goes with the operation as its `expected`. `keepDraft`
+   is an editor's, for an operation sent on its own (SendOptions). Returns
+   null when no visit records it, so the caller sends it directly, or else
+   the server's answer. */
 function recordRoadmapChange(
   change: RoadmapOperation,
   view: View,
   over?: Over,
+  keepDraft?: SendOptions<unknown>['keepDraft'],
 ): Promise<boolean> | null {
   expireRoadmapHistory()
   if (!roadmapVisit || roadmapVisit.disabled || roadmapDetailOpen) return null
   const operation = over ? ({ ...change, expected: expectedOf(over) } as RoadmapOperation) : change
   const batch = roadmapBatch
-  if (!batch) return submitRoadmapChanges([operation], view)
+  if (!batch) return submitRoadmapChanges([operation], view, keepDraft)
   batch.operations.push(operation)
   const before = batch.layer.view.workspace
   const paint = view.workspace
@@ -1886,6 +1898,36 @@ function toastWriteError(e: unknown, reverted = true) {
   }
   // not_found, bad_request, conflict, transport — all generic
   toast(`Couldn't save.${after}`)
+}
+
+/** Reads older comment `id` of the watched thread again from the server
+    (snapshot.commentsBefore, the page before the comment after it) and
+    shows what is stored now: a comment older than the live window gets no
+    delivery. A comment gone meanwhile leaves the thread. */
+async function refreshOlderComment(id: string) {
+  const issueUuid = watchedComments
+  const watchEpoch = commentsWatchEpoch
+  const row = issueUuid ? rows.issues.get(issueUuid) : undefined
+  const thread = [...olderComments, ...(commentsSnap ?? [])]
+  const after = thread[thread.findIndex((r) => r.id === id) + 1]
+  if (!issueUuid || !row || !after || thread.every((r) => r.id !== id)) return
+  let page: FunctionReturnType<typeof api.snapshot.commentsBefore>
+  try {
+    page = await convex.query(api.snapshot.commentsBefore, {
+      org_id: row.org_id,
+      issue_id: issueUuid,
+      before: after.id,
+    })
+  } catch (e) {
+    console.error('[qivo] an older comment failed to load again:', e)
+    return
+  }
+  if (watchedComments !== issueUuid || commentsWatchEpoch !== watchEpoch) return
+  const fresh = page.comments.find((r) => r.id === id)
+  olderComments = fresh
+    ? olderComments.map((r) => (r.id === id ? anchor([fresh])[0] : r))
+    : olderComments.filter((r) => r.id !== id)
+  repaint({ thread: true })
 }
 
 /* --- refusals over a field someone else changed ----------------------------
@@ -5074,7 +5116,7 @@ export const PLANNER = {
   updateIssue: (
     id: string,
     patch: IssuePatch,
-    opts: { seen?: Partial<Row<'issues'>>; keepDraft?: (shown: unknown) => void } = {},
+    opts: { seen?: Partial<Row<'issues'>>; keepDraft?: (shown: unknown) => boolean | void } = {},
   ): Promise<boolean> => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
@@ -6035,7 +6077,7 @@ export const PLANNER = {
   updateComment: (
     id: string,
     body: string,
-    opts: { seen?: string; keepDraft?: (shown: unknown) => void } = {},
+    opts: { seen?: string; keepDraft?: (shown: unknown) => boolean | void } = {},
   ): Promise<boolean> => {
     const rec = rows.comments.get(id)
     const text = (body || '').trim()
@@ -6072,6 +6114,13 @@ export const PLANNER = {
         // the body the editor began from, which a delivery may have passed
         over: overOf('comments', rec, ['body'], opts.seen === undefined ? {} : { body: opts.seen }),
         keepDraft: opts.keepDraft,
+        onError: (error) => {
+          toastWriteError(error)
+          // an older comment gets no delivery, so it is read again to show
+          // the text that refused this edit
+          if (errData(error).reason === FIELD_CHANGED && olderComments.some((r) => r.id === id))
+            void refreshOlderComment(id)
+        },
         // A comment older than the live window gets no delivery, so the saved
         // edit goes into olderComments, the truth the thread is built from.
         onOk: () => {
@@ -7277,10 +7326,14 @@ export const PLANNER = {
     const deactivateOnly = wire.active === false && Object.keys(wire).length === 1
     if (deactivateOnly) void send(api.profiles.deactivate, { org_id: row.org_id, id }, view)
     else if (Object.keys(wire).length) {
+      // teams is a list the server diffs, not a field the check compares
       const checked = Object.keys(wire).filter((key) => key !== 'teams')
-      void send(api.profiles.update, { org_id: row.org_id, id, patch: wire }, view, {
-        over: overOf('profiles', row, checked),
-      })
+      void send(
+        api.profiles.update,
+        { org_id: row.org_id, id, patch: wire },
+        view,
+        checked.length ? { over: overOf('profiles', row, checked) } : {},
+      )
     }
     return true
   },
@@ -7555,11 +7608,14 @@ export const PLANNER = {
   /** Paints the change at once and resolves whether the server saved it.
       Resolves false without sending when it refused the change first
       (toasted) or the milestone is missing here, and false after a refusal,
-      which is toasted and taken back. */
+      which is toasted and taken back. `seen` is the milestone as an editor
+      showed it when opened, and `keepDraft` runs when the server refuses
+      because someone changed it first (SendOptions). */
   updateMilestone: (
     id: string,
     patch: { name?: string; week?: number },
     seen?: { name: string; week: string },
+    keepDraft?: () => boolean,
   ): Promise<boolean> => {
     const row = rows.milestones.get(id)
     if (!row) return Promise.resolve(false)
@@ -7584,12 +7640,12 @@ export const PLANNER = {
     // moved/renamed verb logic is server-side now (it diffs against its row)
     const over = overOf('milestones', row, Object.keys(db), seen)
     return (
-      recordRoadmapChange({ kind: 'milestone_update', id, patch: db }, view, over) ??
+      recordRoadmapChange({ kind: 'milestone_update', id, patch: db }, view, over, keepDraft) ??
       send(
         api.projects.updateMilestone,
         { org_id: orgOfProject(row.project_id), id, patch: db },
         view,
-        { over },
+        { over, keepDraft },
       )
     )
   },

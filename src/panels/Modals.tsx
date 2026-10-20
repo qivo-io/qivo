@@ -2059,8 +2059,21 @@ function MilestoneRowView({
    edit and leaves the window open (data-escape-owner, see ModalShell). */
 function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }) {
   // the name and day stored when the editor opened, which the save sends as
-  // what the person saw
-  const [seen] = useStateM(() => P.milestoneRow(m.id) ?? undefined)
+  // what the person saw. After a save refused over someone else's change,
+  // the draft stays and their version becomes it once it shows (rebase), so
+  // a second Save replaces it on purpose.
+  const [seen, setSeen] = useStateM(() => P.milestoneRow(m.id) ?? undefined)
+  const rebase = useRefM(false)
+  const takeStored = () => {
+    const row = P.milestoneRow(m.id)
+    if (!row || (row.name === seen?.name && row.week === seen?.week)) return false
+    rebase.current = false
+    setSeen(row)
+    return true
+  }
+  useEffectM(() => {
+    if (rebase.current) takeStored()
+  }, [m.name, m.week])
   const [name, setName] = useStateM(m.name)
   // a rename typed and not saved yet
   useUnsaved(name.trim() !== m.name)
@@ -2105,14 +2118,22 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
     // a refused save (paused, a name over the cap, or refused by the server)
     // keeps the editor open with the draft
     setSaving(true)
-    void P.updateMilestone(m.id, { name: name.trim(), week: exactWeekForDate(date) }, seen).then(
-      (saved) => {
-        setSaving(false)
-        if (!saved) return
-        window.showToast?.('Milestone updated')
-        if (mounted.current) closeRef.current()
-      },
-    )
+    const keepDraft = () => {
+      if (!mounted.current) return false
+      if (!takeStored()) rebase.current = true
+      return true
+    }
+    void P.updateMilestone(
+      m.id,
+      { name: name.trim(), week: exactWeekForDate(date) },
+      seen,
+      keepDraft,
+    ).then((saved) => {
+      setSaving(false)
+      if (!saved) return
+      window.showToast?.('Milestone updated')
+      if (mounted.current) closeRef.current()
+    })
   }
   // Two-click arm-then-confirm with the app-wide timing (lib/useConfirmArm).
   const deletion = useConfirmArm<'delete'>()
