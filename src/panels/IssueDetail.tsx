@@ -6,7 +6,7 @@
    (copy ID, copy link, move to another sub-project, delete) and close. */
 
 import React, {
-  lazy,
+  type ReactNode,
   Suspense,
   useEffect as useEffectID,
   useLayoutEffect as useLayoutEffectID,
@@ -43,10 +43,12 @@ import {
   UnreadDivider,
   useBottomSnap,
 } from '../components/qivo'
+import { ViewBoundary } from '../components/ViewBoundary'
 import { copyText } from '../lib/clipboard'
 import { DELAY_MARK } from '../lib/delay'
 import { roomBeside, useFloatInsets } from '../lib/floatStack'
 import { lastInputWasPointer, restoreFocus } from '../lib/focusVisibility'
+import { lazyFromModule } from '../lib/lazyModule'
 import { useFieldUnsaved, useUnsaved } from '../lib/leaveGuard'
 import {
   parentBlock,
@@ -61,6 +63,7 @@ import { eventsBeside, firstUnreadTs, mergeSpine, unreadMark } from '../lib/spin
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { useConfirmArm } from '../lib/useConfirmArm'
 import { useMobile } from '../lib/useMobile'
+import { loadDescEditor } from '../lib/workspaceChunks'
 import '../styles/mobile-issue.css'
 import {
   type ActivityVM,
@@ -74,8 +77,19 @@ import {
 import { ArchiveOrDeleteTaskModal, fmtSize, MoveIssueModal, useWindowDropGuard } from './Modals'
 
 // the editor chunk (~150 KB gz of TipTap) loads only for users who can edit,
-// when the modal opens; viewers render the plain Markdown component
-const DescEditor = lazy(() => import('../components/descEditor'))
+// after the workspace's first paint (App.tsx); viewers render the plain
+// Markdown component
+const DescEditor = lazyFromModule(loadDescEditor, (module) => module.default)
+
+/** Shows `fallback` while the editor loads, and in its place while a pause
+ * keeps the editor's code from downloading (editing waits then anyway). */
+function EditorSlot({ fallback, children }: { fallback: ReactNode; children: ReactNode }) {
+  return (
+    <ViewBoundary whilePaused={fallback}>
+      <Suspense fallback={fallback}>{children}</Suspense>
+    </ViewBoundary>
+  )
+}
 const NO_PROFILE = '__none__'
 
 function MiniIssueRow({
@@ -1032,7 +1046,7 @@ function CommentRow({
         </div>
         {editing ? (
           <div className="descfield [margin-top:3px]">
-            <Suspense fallback={<Markdown text={c.body} />}>
+            <EditorSlot fallback={<Markdown text={c.body} />}>
               <DescEditor
                 issueKey={null}
                 org={it.org}
@@ -1046,7 +1060,7 @@ function CommentRow({
                   onClose: onDoneEdit,
                 }}
               />
-            </Suspense>
+            </EditorSlot>
           </div>
         ) : (
           <div className="[margin-top:3px]">
@@ -1805,7 +1819,7 @@ function IssueDetail({
       >
         {/* 104 = the 32px row + the field's 72px floor; a short reservation
             lets useBottomSnap measure the wrong height */}
-        <Suspense
+        <EditorSlot
           fallback={
             <div className="[min-height:104px]">
               {it.description ? <Markdown text={it.description} /> : null}
@@ -1821,7 +1835,7 @@ function IssueDetail({
             org={it.org}
             value={it.description || ''}
           />
-        </Suspense>
+        </EditorSlot>
       </div>
     ) : it.description ? (
       // a viewer's copy has no field border to close, so the cap stays on the
@@ -1920,7 +1934,7 @@ function IssueDetail({
                 if (e.target === e.currentTarget && composerRef.current) composerRef.current.focus()
               }}
             >
-              <Suspense fallback={<div className="[min-height:104px]" />}>
+              <EditorSlot fallback={<div className="[min-height:104px]" />}>
                 {/* the description field, verbatim — same dialect, same
                     Save/Discard contract; posting clears it (reset) */}
                 <DescEditor
@@ -1933,7 +1947,7 @@ function IssueDetail({
                   ariaLabel="Leave a comment"
                   comment={{ label: 'Comment', reset: true, onCommit: postComment }}
                 />
-              </Suspense>
+              </EditorSlot>
             </div>
           </div>
         </div>

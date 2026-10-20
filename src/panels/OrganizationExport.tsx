@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { billingDate } from '@/lib/billingDisplay'
 import { convex } from '@/lib/convex'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
+import { loadOrgExport } from '@/lib/workspaceChunks'
 import { api } from '../../convex/_generated/api'
 import { P } from '../store/planner'
 import { useOrgRemovalState } from './OrganizationDeletion'
@@ -50,7 +51,7 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
     setError('')
     setStatus('Preparing export…')
     try {
-      const { exportOrganization } = await import('../lib/orgExport')
+      const { exportOrganization } = await loadOrgExport()
       const { blob, filename } = await exportOrganization({
         orgId,
         signal: controller.signal,

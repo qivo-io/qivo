@@ -61,7 +61,10 @@ field or the tab is in the background.
 current address. **Hide notice** dismisses the notice while you edit; it
 returns when your work is finished.
 
-If a view or dialog fails to load, close its recovery message or reload to
+Shortly after your workspace opens, Qivo downloads every view and dialog, so
+they still open if the connection drops later. One that has not downloaded
+while you are offline says so and opens once the connection is back. If a view
+or dialog fails to load otherwise, close its recovery message or reload to
 retry. A failed dialog leaves the page and other drafts open. Reload stays
 disabled while a draft or save needs to finish.
 
