@@ -50,6 +50,13 @@ import { mkdirSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+// the field lists the routes take, from the server's own module, so the
+// expected refusal sentences follow the REST contract
+import {
+  ACCESS_PUT_FIELDS,
+  HELD_TASKS_FIELDS,
+  MEMBER_PUT_FIELDS,
+} from '../convex/machine/bodyFields.ts'
 import { signInBrowser } from './browser-demo.mjs'
 import { fixtureDirectory, loadCredentials, resolveTarget } from './marketing-demo.mjs'
 
@@ -2888,14 +2895,14 @@ async function unknownArgumentChecks() {
       `/projects/${A.id}/access/users/${std.id}`,
       { level: 'user', levle: 'user' },
       'levle',
-      'level',
+      ACCESS_PUT_FIELDS,
     ],
     [
       'DELETE',
       `/projects/${A.id}/access/users/${std.id}`,
       { on_held_task: 'keep_as_viewer' },
       'on_held_task',
-      'on_held_tasks',
+      HELD_TASKS_FIELDS,
     ],
     ...(team
       ? [
@@ -2904,22 +2911,22 @@ async function unknownArgumentChecks() {
             `/projects/${M.id}/access/teams/${team.id}`,
             { level: 'viewer', levle: 'viewer' },
             'levle',
-            'level',
+            ACCESS_PUT_FIELDS,
           ],
           [
             'DELETE',
             `/projects/${M.id}/access/teams/${team.id}`,
             { on_held_task: 'leave' },
             'on_held_task',
-            'on_held_tasks',
+            HELD_TASKS_FIELDS,
           ],
-          ['PUT', `/teams/${team.id}/members/${nora}`, { leadr: true }, 'leadr', 'leader'],
+          ['PUT', `/teams/${team.id}/members/${nora}`, { leadr: true }, 'leadr', MEMBER_PUT_FIELDS],
           [
             'DELETE',
             `/teams/${team.id}/members/${nora}`,
             { on_held_task: 'leave' },
             'on_held_task',
-            'on_held_tasks',
+            HELD_TASKS_FIELDS,
           ],
         ]
       : []),
@@ -2938,7 +2945,7 @@ async function unknownArgumentChecks() {
           path,
           body,
           400,
-          `unknown field "${field}"; this request takes ${takes}`,
+          `unknown field "${field}"; this request takes ${takes.join(', ')}`,
         )
       await restRefusal(
         w,
@@ -2946,7 +2953,7 @@ async function unknownArgumentChecks() {
         `/projects/${A.id}/access/users/${std.id}`,
         { level: 'user', aa: 1, bb: 2 },
         400,
-        'unknown fields "aa", "bb"; this request takes level',
+        `unknown fields "aa", "bb"; this request takes ${ACCESS_PUT_FIELDS.join(', ')}`,
       )
       const project = await restOk(w, 'GET', `/projects/${A.id}`)
       eq(project.grants.users.find((g) => g.id === std.id)?.level, 'user', "the agent's grant")
