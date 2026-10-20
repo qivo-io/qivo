@@ -121,8 +121,12 @@ function editorOf(label: string) {
   )
 }
 const question = () => document.querySelector('[data-discard-prompt] h2')?.textContent ?? null
+/** Presses `selector`, then lets a close's one tick pass. */
 const press = (selector: string) =>
-  act(async () => document.querySelector<HTMLElement>(selector)?.click())
+  act(async () => {
+    document.querySelector<HTMLElement>(selector)?.click()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
 /** The titles sent to the server. */
 const renames = () =>
   network.mutation.mock.calls
@@ -239,6 +243,35 @@ describe('closing the task window with unsent text', { timeout: 30_000 }, () => 
     await press('[data-discard-keep]')
     expect(composer.getText()).toBe('Drift is under 3%')
     // the editor's own question never closes the window
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('asks before a description draft moves into or out of its own window', async () => {
+    await open()
+    const column = await editorOf('Task description')
+    await act(async () => column.commands.insertContent(' Twice.'))
+    await press('[data-desc-popout]')
+    expect(question()).toBe('Discard your unsent description?')
+    await press('[data-discard-keep]')
+    expect(document.querySelector('[data-focus-window]')).toBeNull()
+    await press('[data-discard-confirm]')
+    await press('[data-desc-popout]')
+    await press('[data-discard-confirm]')
+    expect(document.querySelector('[data-focus-window="Description"]')).not.toBeNull()
+    const lifted = await editorOf('Task description')
+    await act(async () => lifted.commands.insertContent(' Three times.'))
+    await press('[data-focus-close]')
+    expect(question()).toBe('Discard your unsent description?')
+    // Escape answers the question, Keep editing, and leaves the window open
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+      )
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(question()).toBeNull()
+    expect(document.querySelector('[data-focus-window="Description"]')).not.toBeNull()
+    expect(lifted.getText()).toContain('Three times.')
     expect(onClose).not.toHaveBeenCalled()
   })
 

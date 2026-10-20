@@ -11,10 +11,14 @@ import { installAnnouncer } from './lib/announce'
 import { convex } from './lib/convex'
 import { DEMO_MODE } from './lib/demoMode'
 import { installFocusVisibility } from './lib/focusVisibility'
+import { installHistoryIndex } from './lib/historyIndex'
 import { installLeaveGuard } from './lib/leaveGuard'
 import { syncStatus, watchConnection } from './lib/syncStatus'
 import { P } from './store/planner'
 
+// before anything adds a history entry (lib/historyIndex)
+const removeHistoryIndex = installHistoryIndex()
+import.meta.hot?.dispose(removeHistoryIndex)
 const disposeFocusVisibility = installFocusVisibility()
 import.meta.hot?.dispose(disposeFocusVisibility)
 // before any dialog can open, so modal layers leave the regions exposed

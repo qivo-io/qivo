@@ -77,6 +77,20 @@ describe('closing a window with unsent text', () => {
     expect(scope.held()).toEqual([])
   })
 
+  it('returns focus to the text field after a close button took it', async () => {
+    const field = document.createElement('textarea')
+    const button = document.createElement('button')
+    document.body.append(field, button)
+    field.focus()
+    // a press on the close button moves focus to it first
+    button.focus()
+    scope.hold('comment')
+    await close(vi.fn())
+    await press('[data-discard-keep]')
+    await act(async () => vi.runAllTimers())
+    expect(document.activeElement).toBe(field)
+  })
+
   it('closes without asking when the text was saved by the blur the close caused', async () => {
     const saved = scope.hold('remaining hours')
     const go = vi.fn()

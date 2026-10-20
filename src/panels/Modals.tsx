@@ -140,14 +140,19 @@ function ModalShell({
   // later, so this close stays open (a phone keeps its Back step) and
   // Discard closes through the layer again, past the then empty question.
   const close = () => {
-    if (!scope.held().length) return onClose()
+    if (cancelling.current || !scope.held().length) {
+      cancelling.current = false
+      return onClose()
+    }
     closeOrAsk([scope], () => closeLayer())
     return false
   }
   const closeLayer = useMobileBackLayer(true, close, mobile || isLandscapeRoadmapOpen())
-  // Cancel is the person's own choice to drop what they typed
+  // Cancel is the person's own choice to drop what they typed, for the one
+  // close it starts; a dialog that refuses that close asks again later
+  const cancelling = useRefM(false)
   const cancel = () => {
-    scope.discard()
+    cancelling.current = true
     closeLayer()
   }
   const returnFocusRef = useRefM<HTMLElement | null>(

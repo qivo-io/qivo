@@ -71,9 +71,11 @@ people's comments. The edit indicator shows when and by whom a comment changed,
 including a **(project lead)** label when someone other than the author edited it.
 
 Use the pop-out beside **Description** or **Activity** to read that section
-in a separate window. It keeps the task's breadcrumb, title and ID. The same
-draft and All / Comments filter follow you, so there is only one editor for
-each section. Close it with **X** or **Esc** to return to the task.
+in a separate window. It keeps the task's breadcrumb, title and ID, and the
+All / Comments filter follows you. A draft does not move between the column
+and the window, so opening or closing the window while that section holds
+unsent text asks before the text is discarded. Close it with **X** or **Esc**
+to return to the task.
 
 ## The details column
 

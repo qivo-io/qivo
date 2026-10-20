@@ -21,6 +21,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { HoverTooltip, hasOpenTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { usePlannerVersion } from '@/store/usePlannerVersion'
+import { closeOrAsk } from '../components/DiscardPrompt'
 import type { DescEditorHandle } from '../components/descEditor'
 import { IssueSubscribers } from '../components/IssueSubscribers'
 import { Markdown } from '../components/markdown'
@@ -49,7 +50,13 @@ import { DELAY_MARK } from '../lib/delay'
 import { roomBeside, useFloatInsets } from '../lib/floatStack'
 import { lastInputWasPointer, restoreFocus } from '../lib/focusVisibility'
 import { lazyFromModule } from '../lib/lazyModule'
-import { useFieldUnsaved, useUnsaved } from '../lib/leaveGuard'
+import {
+  type UnsentScope,
+  UnsentScopeContext,
+  useFieldUnsaved,
+  useUnsaved,
+  useUnsentScope,
+} from '../lib/leaveGuard'
 import {
   parentBlock,
   parentCandidatesFor,
@@ -228,16 +235,23 @@ function SectionHead({
 function FocusWindow({
   name,
   onClose,
+  scope,
   children,
 }: {
   name: string
+  /** asks first while `scope` holds unsent text (DiscardPrompt) */
   onClose: () => void
+  /** the text typed in this window, which closing it throws away: the
+      section's editors mount again in the column behind */
+  scope: UnsentScope
   children?: React.ReactNode
 }) {
   useEffectID(() => {
     const h = (e) => {
       if (e.key !== 'Escape') return
       if (e.defaultPrevented) return
+      // the discard question, which opens above this window, owns the key
+      if (document.querySelector('[data-discard-prompt]')) return
       // an open tooltip closes first and passes the Escape on, read then
       if (hasOpenTooltip()) return
       if (
@@ -280,7 +294,7 @@ function FocusWindow({
         className="animate-in fade-in zoom-in-95 [width:980px] [max-width:88vw] [height:calc(84vh-var(--float-inset-y))] [display:flex] [flex-direction:column] [background:var(--background)] [border:1px_solid_var(--border)] [border-radius:var(--r-lg)] [box-shadow:var(--qivo-shadow-pop)] [overflow:hidden]"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        {children}
+        <UnsentScopeContext.Provider value={scope}>{children}</UnsentScopeContext.Provider>
       </div>
       {/* The backdrop stands beside the window, under it, rather than around
           it, so the window's own blur still reaches the page (appearance.css).
@@ -1186,6 +1200,15 @@ function IssueDetail({
   // one at a time: they are two views of the same column, and stacking them
   // would put a scrim over a scrim for nothing.
   const [focus, setFocus] = useStateID(null as null | 'desc' | 'activity')
+  // The text typed in each half, in the column and in its window. Moving a
+  // half between the two mounts its editors afresh, so a move that would
+  // drop typed text asks first (DiscardPrompt).
+  const descColumn = useUnsentScope()
+  const activityColumn = useUnsentScope()
+  const focusWindow = useUnsentScope()
+  const openFocus = (which: 'desc' | 'activity') =>
+    closeOrAsk([which === 'desc' ? descColumn : activityColumn], () => setFocus(which))
+  const closeFocus = () => closeOrAsk([focusWindow], () => setFocus(null))
   const [editingComment, setEditingComment] = useStateID<string | null>(null) // comment id being edited in place
   const winNarrow = useNarrow()
   const narrow = (!embedded || mobile) && winNarrow
@@ -1994,7 +2017,7 @@ function IssueDetail({
       size="icon"
       {...{ [hook]: '' }}
       className="w-control-sm h-control-sm [flex-shrink:0]"
-      onClick={() => setFocus(which)}
+      onClick={() => openFocus(which)}
       aria-label={`Open ${what} in a window`}
       title={`Open ${what} in a window`}
     >
@@ -2240,7 +2263,7 @@ function IssueDetail({
         size="icon"
         data-focus-close
         className="w-control-sm h-control-sm"
-        onClick={() => setFocus(null)}
+        onClick={closeFocus}
         aria-label="Close (esc)"
         title="Close (esc)"
       >
@@ -2634,7 +2657,11 @@ function IssueDetail({
                     )}
                     {/* not while it is in a window of its own — one field, one
                   draft; the pane behind the scrim is nobody's view */}
-                    {(!descOpen && !mobile) || focus === 'desc' ? null : descBody(true)}
+                    {(!descOpen && !mobile) || focus === 'desc' ? null : (
+                      <UnsentScopeContext.Provider value={descColumn}>
+                        {descBody(true)}
+                      </UnsentScopeContext.Provider>
+                    )}
                   </div>
 
                   <div className="task-activity-head flex items-center gap-2 px-5 pt-6 pb-2 shrink-0">
@@ -2654,7 +2681,9 @@ function IssueDetail({
                   {focus === 'activity' ? (
                     <div className="[flex:1] [min-height:0]" />
                   ) : (
-                    spineScroller('0 20px 20px')
+                    <UnsentScopeContext.Provider value={activityColumn}>
+                      {spineScroller('0 20px 20px')}
+                    </UnsentScopeContext.Provider>
                   )}
                 </div>
 
@@ -3192,7 +3221,7 @@ function IssueDetail({
           own heading exactly as the column draws it — minus the pop-out
           button, which is what got you here. */}
       {it && focus === 'desc' && (
-        <FocusWindow name="Description" onClose={() => setFocus(null)}>
+        <FocusWindow name="Description" onClose={closeFocus} scope={focusWindow}>
           {windowHead({ chrome: focusChrome, live: false, padBottom: 10 })}
           <div className="[flex:1] [min-height:0] [display:flex] [flex-direction:column] [padding:0_20px_20px]">
             <SectionHead icon="page" label="Description" />
@@ -3201,7 +3230,7 @@ function IssueDetail({
         </FocusWindow>
       )}
       {it && focus === 'activity' && (
-        <FocusWindow name="Activity" onClose={() => setFocus(null)}>
+        <FocusWindow name="Activity" onClose={closeFocus} scope={focusWindow}>
           {windowHead({ chrome: focusChrome, live: false, padBottom: 4 })}
           <div className="task-activity-head flex items-center gap-2 px-5 py-2 shrink-0">
             <Icon name="comment" size={16} color="var(--text-3)" />

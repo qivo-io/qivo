@@ -33,6 +33,7 @@ import './styles/mobile.css'
 import { announce } from './lib/announce'
 import { closedBy } from './lib/closingMoves'
 import { floatSlot } from './lib/floatStack'
+import { stepTo } from './lib/historyIndex'
 import { isLandscapeRoadmapOpen } from './lib/landscape'
 import { createUnsentScope, UnsentScopeContext } from './lib/leaveGuard'
 import { afterProjectSaved } from './lib/newProjectAccess'
@@ -975,7 +976,14 @@ function App() {
     if (org) rememberAddress(P.CURRENT_USER, seg, org.id)
   }, [addrMoved, scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync, rev])
   useEffect(() => {
+    // set while the page steps back over a Back or Forward it refused
+    let returning = false
     const onPop = () => {
+      const step = stepTo(history.state)
+      if (returning) {
+        returning = false
+        return
+      }
       // a Remaining number typed on Team sync and not yet committed: history
       // unmounts its box without a blur, so commit it before the page moves
       flushWalkInput('sync')
@@ -983,9 +991,10 @@ function App() {
       // legacy entry from earlier in this session's history
       const r = parsePath(location.pathname) || parseHash(location.hash)
       if (!r) return
-      /* Back or Forward that would close a window holding unsent text puts
-         the address it left back on top, so nothing moves, and asks.
-         Discard goes Back to the entry it reached again, which then moves. */
+      /* Back or Forward that would close a window holding unsent text steps
+         back to the entry it left, so nothing moves, and asks. Discard takes
+         the same step again, which then moves. An entry without a position
+         (lib/historyIndex) gets the address it left pushed on top instead. */
       const was = hereRef.current
       const nextSync = r.sync && P.homeOrg ? syncPlaceFor(r.sync, mobileRef.current) : null
       const closing = closedBy(
@@ -1002,8 +1011,14 @@ function App() {
         unsent,
       )
       if (closing.some((held) => held.held().length)) {
-        history.pushState({ qivoPrevious: location.pathname }, '', buildPath(was))
-        closeOrAsk(closing, () => history.back())
+        if (step) {
+          returning = true
+          history.go(-step)
+          closeOrAsk(closing, () => history.go(step))
+        } else {
+          history.pushState({ qivoPrevious: location.pathname }, '', buildPath(was))
+          closeOrAsk(closing, () => history.back())
+        }
         return
       }
       /* A return belongs to the visit that opened its page. A pop that stays
@@ -1560,6 +1575,36 @@ function App() {
     )
   }
 
+  /* The create and Milestones dialogs, rendered in the same place whichever
+     page is open, so a move between Settings and the workspace (Back, for
+     example) keeps an open dialog and what was typed into it. Settings opens
+     the project dialogs itself. */
+  const dialogs = modal && (
+    <DeferredOverlay key={`dialog:${modal.kind}`} onClose={() => setModal(null)}>
+      {modal.kind === 'issue' && (
+        <NewIssueModal init={modal.init} onClose={() => setModal(null)} onCreate={createIssue} />
+      )}
+      {modal.kind === 'program' && (
+        <NewProjectModal
+          init={modal.init}
+          onClose={() => setModal(null)}
+          onCreate={createProject}
+        />
+      )}
+      {modal.kind === 'subproject' && (
+        <NewSubProjectModal
+          init={modal.init}
+          onClose={() => setModal(null)}
+          onCreate={createProject}
+        />
+      )}
+      {modal.kind === 'milestone' && (
+        <MilestoneModal init={modal.init} onClose={() => setModal(null)} />
+      )}
+      {modal.kind === 'createorg' && <CreateOrgModal onClose={() => setModal(null)} />}
+    </DeferredOverlay>
+  )
+
   if (settingsPage) {
     // null from either sentinel scope, on purpose. Archived tasks shows ONE
     // project at a time, so it opens on its own picker rather than being
@@ -1622,25 +1667,7 @@ function App() {
             </UnsentScopeContext.Provider>
           </Suspense>
         </ViewBoundary>
-        {/* Settings opens both project dialogs: the Projects header's +
-            and a project's New sub-project… / Add sub-project */}
-        {modal && (modal.kind === 'program' || modal.kind === 'subproject') && (
-          <DeferredOverlay key={modal.kind} onClose={() => setModal(null)}>
-            {modal.kind === 'program' ? (
-              <NewProjectModal
-                init={modal.init}
-                onClose={() => setModal(null)}
-                onCreate={createProject}
-              />
-            ) : (
-              <NewSubProjectModal
-                init={modal.init}
-                onClose={() => setModal(null)}
-                onCreate={createProject}
-              />
-            )}
-          </DeferredOverlay>
-        )}
+        {dialogs}
         <ToastHost toasts={toasts} dismiss={dismissToast} />
       </>
     )
@@ -1672,136 +1699,137 @@ function App() {
   const roadmapFilters = { ...effFilters, stale: false, focus: false }
 
   return (
-    <WorkspaceShell
-      className="planner-shell"
-      header={
-        mobile ? (
-          <MobileHeader
-            scope={scope}
-            view={view}
-            inboxOpen={inboxOpen}
-            projectsOpen={projectsOpen}
-            syncOpen={!!sync}
-            actions={actions}
-          />
-        ) : projectsOpen ? (
-          <WorkspacePageHeader label="Projects" icon="layers" />
-        ) : (
-          (inboxOpen || sync || scopeInfo) && (
-            <TopBar
-              info={scopeInfo}
+    <>
+      <WorkspaceShell
+        className="planner-shell"
+        header={
+          mobile ? (
+            <MobileHeader
+              scope={scope}
               view={view}
               inboxOpen={inboxOpen}
+              projectsOpen={projectsOpen}
               syncOpen={!!sync}
-              setView={navView}
-              filters={filters}
-              setFilters={setFilters}
-              tweaks={tweaks}
-              setTweak={setTweak}
               actions={actions}
             />
+          ) : projectsOpen ? (
+            <WorkspacePageHeader label="Projects" icon="layers" />
+          ) : (
+            (inboxOpen || sync || scopeInfo) && (
+              <TopBar
+                info={scopeInfo}
+                view={view}
+                inboxOpen={inboxOpen}
+                syncOpen={!!sync}
+                setView={navView}
+                filters={filters}
+                setFilters={setFilters}
+                tweaks={tweaks}
+                setTweak={setTweak}
+                actions={actions}
+              />
+            )
           )
-        )
-      }
-      navigation={
-        mobile ? (
-          <MobileNavigation
-            scope={scope}
-            inboxOpen={inboxOpen}
-            projectsOpen={projectsOpen}
-            syncOpen={!!sync}
-            actions={actions}
+        }
+        navigation={
+          mobile ? (
+            <MobileNavigation
+              scope={scope}
+              inboxOpen={inboxOpen}
+              projectsOpen={projectsOpen}
+              syncOpen={!!sync}
+              actions={actions}
+            />
+          ) : (
+            <Sidebar
+              scope={scope}
+              setScope={navScope}
+              actions={actions}
+              inboxOpen={inboxOpen}
+              syncOpen={!!sync}
+            />
+          )
+        }
+      >
+        <main className="[flex:1] [display:flex] [flex-direction:column] [overflow:hidden] [min-width:0]">
+          <BillingNotice
+            key={P.org.id}
+            orgId={P.org.id}
+            orgName={P.org.name}
+            admin={P.isAdmin()}
+            onBilling={() => actions.openSettings('org-billing')}
+            onExport={() => actions.openSettings('org-general')}
           />
-        ) : (
-          <Sidebar
-            scope={scope}
-            setScope={navScope}
-            actions={actions}
-            inboxOpen={inboxOpen}
-            syncOpen={!!sync}
-          />
-        )
-      }
-    >
-      <main className="[flex:1] [display:flex] [flex-direction:column] [overflow:hidden] [min-width:0]">
-        <BillingNotice
-          key={P.org.id}
-          orgId={P.org.id}
-          orgName={P.org.name}
-          admin={P.isAdmin()}
-          onBilling={() => actions.openSettings('org-billing')}
-          onExport={() => actions.openSettings('org-general')}
-        />
-        <ViewBoundary
-          key={sync ? 'sync' : inboxOpen ? 'inbox' : projectsOpen ? 'projects' : view}
-          onBack={() => {
-            setSync(null)
-            setInboxOpen(false)
-            setProjectsOpen(false)
-            setView('overview')
-          }}
-        >
-          <Suspense fallback={<ViewLoading />}>
-            <UnsentScopeContext.Provider value={unsent.page}>
-              {projectsOpen ? (
-                <ProjectDirectory actions={actions} />
-              ) : inboxOpen ? (
-                // openTask does not use navOpenIssue on purpose: the inbox's right pane IS
-                // the task window, so opening a task must NOT leave the inbox — and
-                // `openIssue` is what that pane shows, which is why the address
-                // (/inbox/tasks/<task>) restores it
-                <UnsentScopeContext.Provider value={unsent.task}>
-                  <Inbox
-                    showOnBoard={showOnBoard}
-                    onExit={() => move({ inboxOpen: false }, () => setInboxOpen(false))}
-                    openTask={(id) => (id ? openTask(id) : closeIssue())}
-                    openIssue={openIssue}
-                    onPlanOnRoadmap={planOnRoadmap}
-                  />
-                </UnsentScopeContext.Provider>
-              ) : sync ? (
-                /* Team sync, over the scope and view it returns to. Its tasks open
+          <ViewBoundary
+            key={sync ? 'sync' : inboxOpen ? 'inbox' : projectsOpen ? 'projects' : view}
+            onBack={() => {
+              setSync(null)
+              setInboxOpen(false)
+              setProjectsOpen(false)
+              setView('overview')
+            }}
+          >
+            <Suspense fallback={<ViewLoading />}>
+              <UnsentScopeContext.Provider value={unsent.page}>
+                {projectsOpen ? (
+                  <ProjectDirectory actions={actions} />
+                ) : inboxOpen ? (
+                  // openTask does not use navOpenIssue on purpose: the inbox's right pane IS
+                  // the task window, so opening a task must NOT leave the inbox — and
+                  // `openIssue` is what that pane shows, which is why the address
+                  // (/inbox/tasks/<task>) restores it
+                  <UnsentScopeContext.Provider value={unsent.task}>
+                    <Inbox
+                      showOnBoard={showOnBoard}
+                      onExit={() => move({ inboxOpen: false }, () => setInboxOpen(false))}
+                      openTask={(id) => (id ? openTask(id) : closeIssue())}
+                      openIssue={openIssue}
+                      onPlanOnRoadmap={planOnRoadmap}
+                    />
+                  </UnsentScopeContext.Provider>
+                ) : sync ? (
+                  /* Team sync, over the scope and view it returns to. Its tasks open
              in the floating window below (openTask, not navOpenIssue: opening one must
              not leave the page), and Escape does not close it: a meeting
              page must not vanish on a stray key. */
-                <div
-                  data-workspace-view="sync"
-                  className="animate-in fade-in slide-in-from-bottom-1 [flex:1] [display:flex] [flex-direction:column] [overflow:hidden]"
-                >
-                  <TeamSync
-                    place={sync}
-                    onPlace={placeSync}
-                    onClose={closeSync}
-                    onOpenTask={openTask}
-                    onShowTask={showTaskOn}
-                    onShowPerson={showPersonOn}
-                  />
-                </div>
-              ) : (
-                scopeInfo && (
                   <div
-                    key={scope + view}
-                    data-workspace-view={view}
+                    data-workspace-view="sync"
                     className="animate-in fade-in slide-in-from-bottom-1 [flex:1] [display:flex] [flex-direction:column] [overflow:hidden]"
                   >
-                    {view === 'overview' && <Overview info={scopeInfo} actions={actions} />}
-                    {view === 'kanban' &&
-                      (mobile ? (
-                        <MobileTaskList
-                          info={scopeInfo}
-                          filters={filters}
-                          setFilters={setFilters}
-                          actions={actions}
-                        />
-                      ) : (
-                        <Kanban
-                          info={scopeInfo}
-                          filters={effFilters}
-                          tweaks={tweaks}
-                          actions={actions}
-                        />
-                      ))}
-                    {/* The roadmap's toolbar row is its own — the window controls, the
+                    <TeamSync
+                      place={sync}
+                      onPlace={placeSync}
+                      onClose={closeSync}
+                      onOpenTask={openTask}
+                      onShowTask={showTaskOn}
+                      onShowPerson={showPersonOn}
+                    />
+                  </div>
+                ) : (
+                  scopeInfo && (
+                    <div
+                      key={scope + view}
+                      data-workspace-view={view}
+                      className="animate-in fade-in slide-in-from-bottom-1 [flex:1] [display:flex] [flex-direction:column] [overflow:hidden]"
+                    >
+                      {view === 'overview' && <Overview info={scopeInfo} actions={actions} />}
+                      {view === 'kanban' &&
+                        (mobile ? (
+                          <MobileTaskList
+                            info={scopeInfo}
+                            filters={filters}
+                            setFilters={setFilters}
+                            actions={actions}
+                          />
+                        ) : (
+                          <Kanban
+                            info={scopeInfo}
+                            filters={effFilters}
+                            tweaks={tweaks}
+                            actions={actions}
+                          />
+                        ))}
+                      {/* The roadmap's toolbar row is its own — the window controls, the
                 estimate walk and the auto-correct count are all local to it and
                 cannot be handed up to the bar. So the bar hands the FILTERS
                 down instead, ready-made: App holds the state, the roadmap holds
@@ -1817,88 +1845,61 @@ function App() {
                 above ViewFilters.
                 `filters` (not effFilters) on purpose — the controls edit the raw
                 object for the same reason TopBar does. */}
-                    {view === 'roadmap' && (
-                      <Roadmap
-                        info={scopeInfo}
-                        filters={roadmapFilters}
-                        actions={actions}
-                        filterControls={(phone) => (
-                          <ViewFilters
-                            info={scopeInfo}
-                            filters={filters}
-                            setFilters={setFilters}
-                            actions={actions}
-                            searchWidth={180}
-                            hideSearch={phone}
-                            hide={['mine', 'stale', 'focus']}
-                          />
-                        )}
-                        focusPlan={focusPlan}
-                        onFocusConsumed={() => setFocusPlan(null)}
-                        revealTask={revealTask}
-                        onRevealConsumed={() => setRevealTask(null)}
-                      />
-                    )}
-                  </div>
-                )
-              )}
-            </UnsentScopeContext.Provider>
-          </Suspense>
-        </ViewBoundary>
-      </main>
-      {/* the floating window — everywhere but the inbox, which embeds the same
+                      {view === 'roadmap' && (
+                        <Roadmap
+                          info={scopeInfo}
+                          filters={roadmapFilters}
+                          actions={actions}
+                          filterControls={(phone) => (
+                            <ViewFilters
+                              info={scopeInfo}
+                              filters={filters}
+                              setFilters={setFilters}
+                              actions={actions}
+                              searchWidth={180}
+                              hideSearch={phone}
+                              hide={['mine', 'stale', 'focus']}
+                            />
+                          )}
+                          focusPlan={focusPlan}
+                          onFocusConsumed={() => setFocusPlan(null)}
+                          revealTask={revealTask}
+                          onRevealConsumed={() => setRevealTask(null)}
+                        />
+                      )}
+                    </div>
+                  )
+                )}
+              </UnsentScopeContext.Provider>
+            </Suspense>
+          </ViewBoundary>
+        </main>
+        {/* the floating window — everywhere but the inbox, which embeds the same
           component in its right pane instead of stacking one over the other */}
-      {!inboxOpen && openIssue && (
-        <DeferredOverlay onClose={closeIssue}>
-          <UnsentScopeContext.Provider value={unsent.task}>
-            <IssueDetail
-              issueId={openIssue}
-              onClose={closeIssue}
-              onOpen={openTask}
-              onPlanOnRoadmap={planOnRoadmap}
-              unreadTs={undefined}
-              onPopOut={undefined}
-              onShowOnBoard={showOnBoard}
-            />
-          </UnsentScopeContext.Provider>
-        </DeferredOverlay>
-      )}
-      {modal && (
-        <DeferredOverlay key={modal.kind} onClose={() => setModal(null)}>
-          {modal.kind === 'issue' && (
-            <NewIssueModal
-              init={modal.init}
-              onClose={() => setModal(null)}
-              onCreate={createIssue}
-            />
-          )}
-          {modal.kind === 'program' && (
-            <NewProjectModal
-              init={modal.init}
-              onClose={() => setModal(null)}
-              onCreate={createProject}
-            />
-          )}
-          {modal.kind === 'subproject' && (
-            <NewSubProjectModal
-              init={modal.init}
-              onClose={() => setModal(null)}
-              onCreate={createProject}
-            />
-          )}
-          {modal.kind === 'milestone' && (
-            <MilestoneModal init={modal.init} onClose={() => setModal(null)} />
-          )}
-          {modal.kind === 'createorg' && <CreateOrgModal onClose={() => setModal(null)} />}
-        </DeferredOverlay>
-      )}
-      {paletteOpen && (
-        <DeferredOverlay onClose={() => setPaletteOpen(false)}>
-          <SearchPalette ctx={paletteCtx} onClose={() => setPaletteOpen(false)} />
-        </DeferredOverlay>
-      )}
-      <ToastHost toasts={toasts} dismiss={dismissToast} />
-    </WorkspaceShell>
+        {!inboxOpen && openIssue && (
+          <DeferredOverlay onClose={closeIssue}>
+            <UnsentScopeContext.Provider value={unsent.task}>
+              <IssueDetail
+                issueId={openIssue}
+                onClose={closeIssue}
+                onOpen={openTask}
+                onPlanOnRoadmap={planOnRoadmap}
+                unreadTs={undefined}
+                onPopOut={undefined}
+                onShowOnBoard={showOnBoard}
+              />
+            </UnsentScopeContext.Provider>
+          </DeferredOverlay>
+        )}
+        {paletteOpen && (
+          <DeferredOverlay onClose={() => setPaletteOpen(false)}>
+            <SearchPalette ctx={paletteCtx} onClose={() => setPaletteOpen(false)} />
+          </DeferredOverlay>
+        )}
+        <ToastHost toasts={toasts} dismiss={dismissToast} />
+      </WorkspaceShell>
+      {dialogs}
+    </>
   )
 }
 

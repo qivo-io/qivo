@@ -106,7 +106,7 @@ async function press(name: string) {
 async function pressEscape() {
   await act(async () => {
     document.activeElement?.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
     )
     await new Promise((resolve) => setTimeout(resolve, 0))
   })
@@ -141,6 +141,22 @@ describe('closing a dialog with typed text', { timeout: 20_000 }, () => {
     await press('Cancel')
     expect(question()).toBeNull()
     expect(onClose).toHaveBeenCalledTimes(2)
+  })
+
+  it('asks again after a Cancel the dialog refused', async () => {
+    // busy for the first close, as a dialog waiting for the server is
+    const onClose = vi.fn().mockReturnValueOnce(false)
+    await render(
+      <dialogs.ModalShell icon="key" title="New token" onClose={onClose} unsent={['token name']}>
+        <input aria-label="Name" />
+      </dialogs.ModalShell>,
+    )
+    await press('Cancel')
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(question()).toBeNull()
+    await press('Close')
+    expect(question()).toBe('Discard your unsent token name?')
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 
   it('asks before Done drops a milestone name that was not added', async () => {

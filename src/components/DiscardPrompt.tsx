@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+import { useEffect, useRef, useSyncExternalStore } from 'react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,6 +28,17 @@ type Ask = { what: string[]; scopes: UnsentScope[]; go: () => void; field: HTMLE
 let asking: Ask | null = null
 // the field focus returns to once the question closes, unless Discard
 let returnTo: HTMLElement | null = null
+// the last text field that had focus, for a close whose button press moved
+// focus off it (DiscardPrompt records it)
+let lastField: HTMLElement | null = null
+
+/** Whether `el` takes typed text. */
+const typesText = (el: unknown): el is HTMLElement =>
+  el instanceof HTMLElement &&
+  (el.isContentEditable ||
+    el.matches(
+      'textarea, input:not([type="button"], [type="checkbox"], [type="radio"], [type="submit"], [type="reset"], [type="file"])',
+    ))
 const listeners = new Set<() => void>()
 const show = (next: Ask | null) => {
   if (next) returnTo = next.field
@@ -64,8 +75,9 @@ export function closeOrAsk(
     go()
     return true
   }
-  const field = document.activeElement instanceof HTMLElement ? document.activeElement : null
-  field?.blur()
+  const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  const field = typesText(focused) ? focused : lastField?.isConnected ? lastField : focused
+  focused?.blur()
   setTimeout(() => {
     const what = heldIn(live)
     if (what.length) show({ what, scopes: live, go, field })
@@ -77,6 +89,16 @@ export function closeOrAsk(
 /** The one Keep editing or Discard question, mounted once at the root. */
 export function DiscardPrompt() {
   const ask = useSyncExternalStore(subscribe, () => asking)
+  // the words stay while the question fades out after an answer
+  const shown = useRef(ask)
+  if (ask) shown.current = ask
+  useEffect(() => {
+    const record = (event: FocusEvent) => {
+      if (typesText(event.target)) lastField = event.target
+    }
+    document.addEventListener('focusin', record)
+    return () => document.removeEventListener('focusin', record)
+  }, [])
   return (
     <AlertDialog
       open={!!ask}
@@ -98,7 +120,9 @@ export function DiscardPrompt() {
         }}
       >
         <AlertDialogHeader>
-          <AlertDialogTitle>Discard your unsent {unsentList(ask?.what ?? [])}?</AlertDialogTitle>
+          <AlertDialogTitle>
+            Discard your unsent {unsentList(shown.current?.what ?? [])}?
+          </AlertDialogTitle>
           <AlertDialogDescription>It was not sent, and Qivo keeps no copy.</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
