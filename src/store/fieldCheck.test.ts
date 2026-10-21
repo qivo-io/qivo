@@ -202,7 +202,7 @@ describe('the field check in the store', () => {
     // the store takes a thread's first answer after a 0 ms timer
     await new Promise((resolve) => setTimeout(resolve, 0))
     await settle()
-    void P.updateComment('c-1', 'Second take', { seen: 'First take', keepDraft: () => {} })
+    void P.updateComment('c-1', 'Second take', { seen: 'First take', keepDraft: () => true })
     expect(latest()).toMatchObject({
       name: 'comments:update',
       args: { expected: { body: printOf('First take') } },
@@ -329,6 +329,7 @@ describe('the field check in the store', () => {
       {
         keepDraft: (shown) => {
           kept.push(shown, P.issueById[key('task-1')].description)
+          return true
         },
       },
     )

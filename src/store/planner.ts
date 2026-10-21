@@ -1245,9 +1245,9 @@ type SendOptions<R> = {
   /** Runs on a field_changed refusal once the paint has gone, for an
       editor that keeps the person's draft, with the value of the write's
       first `over` field now on screen. It answers false when the editor
-      has moved on and keeps nothing; otherwise the notice, which shows
-      after it, says the draft is kept. */
-  keepDraft?: (shown: unknown) => boolean | void
+      has moved on and keeps nothing, and true when it keeps the draft,
+      which the notice that shows after it then says. */
+  keepDraft?: (shown: unknown) => boolean
 }
 
 /** What a write shows: a view, an open layer it was collected in (a Roadmap
@@ -5359,7 +5359,7 @@ export const PLANNER = {
   updateIssue: (
     id: string,
     patch: IssuePatch,
-    opts: { seen?: Partial<Row<'issues'>>; keepDraft?: (shown: unknown) => boolean | void } = {},
+    opts: { seen?: Partial<Row<'issues'>>; keepDraft?: (shown: unknown) => boolean } = {},
   ): Promise<boolean> => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
@@ -6322,7 +6322,7 @@ export const PLANNER = {
   updateComment: (
     id: string,
     body: string,
-    opts: { seen?: string; keepDraft?: (shown: unknown) => boolean | void } = {},
+    opts: { seen?: string; keepDraft?: (shown: unknown) => boolean } = {},
   ): Promise<boolean> => {
     const rec = rows.comments.get(id)
     const text = (body || '').trim()
