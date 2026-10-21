@@ -3,9 +3,9 @@
  * The file lives in the private fixture directory QIVO_FIXTURE_CREDENTIALS_DIR
  * names, outside the checkout, so no dev server can serve it. The with-dev
  * helper exports it; like the reset, the pass otherwise reads it from
- * .env.local. A lease beside the stash keeps a second pass on the same
- * deployment from starting while one runs. Hermetic tests in
- * tests/contractSetup.test.ts. */
+ * .env.local. A lease beside the stash keeps a second pass that uses the
+ * same fixture directory on this machine from starting while one runs
+ * against the deployment. Hermetic tests in tests/contractSetup.test.ts. */
 import {
   closeSync,
   existsSync,
@@ -81,18 +81,26 @@ export function writeStash(
 /** SQLite's answer when another connection holds the lock. */
 const SQLITE_BUSY = 5
 
+/** The connections that hold a lease in this process. Garbage collection
+ * closes an unreachable connection, which would drop its lease. */
+const leases = new Set<DatabaseSync>()
+
 /**
  * Takes the lease that lets one contract pass at a time use the stash at
- * `stash`, and returns the function that gives it back. Throws, naming the
- * process that holds it, while another pass on `deployment` runs.
+ * `stash`, and returns the function that gives it back. The lease lasts
+ * until that function runs or the process ends. Throws, naming the process
+ * that holds it, while another pass on `deployment` holds it.
  *
  * The lease is an exclusive SQLite lock on a file beside the stash. The
  * operating system drops it when its process ends, even when the process is
  * killed, so a stash found under the lease belongs to a pass that is gone,
- * and two passes that start together cannot both take it. The lock file is
- * never removed: a pass could otherwise lock a file another pass removed,
- * while a third locks a new one. The holder file only names the process for
- * the refusal.
+ * and two passes that start together cannot both take it. It only sees
+ * passes on this machine that use the same fixture directory and take the
+ * lease, so a pass elsewhere, or from a checkout older than the lease, can
+ * still overlap. The lock file is never removed: a pass could otherwise lock
+ * a file another pass removed, while a third locks a new one. SQLite keeps a
+ * journal file beside it while the lease is held. The holder file only names
+ * the process for the refusal.
  *
  * Only SQLite opens an existing lock file. Closing any descriptor of a file
  * drops every lock its process holds on it, so a plain open and close in a
@@ -107,7 +115,9 @@ export function takeLease(stash: string, deployment: string): () => void {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
   }
-  const db = new DatabaseSync(lock, { timeout: 0 })
+  // A short wait lets one of two passes that start together win, instead
+  // of refusing both.
+  const db = new DatabaseSync(lock, { timeout: 250 })
   try {
     db.exec('BEGIN EXCLUSIVE')
   } catch (error) {
@@ -129,10 +139,9 @@ export function takeLease(stash: string, deployment: string): () => void {
     db.close()
     throw error
   }
-  let held = true
+  leases.add(db)
   return () => {
-    if (!held) return
-    held = false
+    if (!leases.delete(db)) return
     try {
       rmSync(holder, { force: true })
     } finally {

@@ -36,7 +36,8 @@
  *   3. Stash them for the suites in the private fixture directory, outside
  *      the checkout (contract/stash.mts). Setup refuses to start without
  *      that directory, and while another pass on the same deployment holds
- *      the lease beside the stash. The pass holds that lease until its
+ *      the lease beside the stash (only passes on this machine that use the
+ *      same fixture directory share it). The pass holds that lease until its
  *      teardown ends, and the operating system drops it when the pass is
  *      killed. The pass id is stashed before the first mint, after
  *      a call that deletes nothing proves the deployment has the delete
@@ -189,8 +190,9 @@ type Effects = { run: Run; reset: () => void }
  * on the deployment the key names. Returns the teardown.
  *
  * The pass holds the deployment's lease from before it revokes a leftover
- * stash until its teardown ends, so it never revokes a running pass's
- * credentials. A setup that fails gives the lease back.
+ * stash until its teardown ends, so it never revokes the credentials of a
+ * running pass that shares its fixture directory. A setup that fails gives
+ * the lease back.
  */
 export async function contractSetup(
   { env, run, reset }: Effects & { env: Record<string, string | undefined> },

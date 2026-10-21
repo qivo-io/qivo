@@ -13,7 +13,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { marketingId } from '../convex/internal/marketingDemoData'
 import { contractSetup } from './contract/global.setup.mts'
 
@@ -98,18 +98,30 @@ const legacy = () => join(root, 'tests', 'contract', '.credentials.json')
 const resetMarker = () => calls.push({ fn: 'reset', args: {} })
 /** The lease module, for a pass in another process. */
 const leaseModule = pathToFileURL(join(import.meta.dirname, 'contract', 'stash.mts')).href
-/** Whether a pass in another process can take the lease now. */
-const takenElsewhere = () =>
-  spawnSync(
+/** Whether a pass in another process can take the lease now. Throws when
+ * the other process fails for another reason than the lease. */
+const takenElsewhere = () => {
+  const child = spawnSync(
     process.execPath,
     [
       '--input-type=module',
       '-e',
       `import { takeLease } from ${JSON.stringify(leaseModule)}
-try { takeLease(${JSON.stringify(stash())}, 'fine-goose-986'); console.log('taken') } catch { console.log('refused') }`,
+try {
+  takeLease(${JSON.stringify(stash())}, 'fine-goose-986')
+  console.log('taken')
+} catch (error) {
+  if (!/another contract pass/.test(error.message)) throw error
+  console.log('refused')
+}`,
     ],
     { encoding: 'utf8' },
-  ).stdout.trim() === 'taken'
+  )
+  const answer = child.stdout.trim()
+  if (child.status !== 0 || !['taken', 'refused'].includes(answer))
+    throw new Error(`the other process failed (${child.status}): ${child.stderr}`)
+  return answer === 'taken'
+}
 
 describe('contract pass setup', () => {
   it('stashes the credentials privately outside the checkout and removes them at teardown', async () => {
@@ -179,15 +191,22 @@ describe('contract pass setup', () => {
     const holder = spawn(
       process.execPath,
       [
+        // drops the function that gives the lease back, and collects it
+        '--expose-gc',
         '--input-type=module',
         '-e',
         `import { takeLease } from ${JSON.stringify(leaseModule)}
 takeLease(${JSON.stringify(stash())}, 'fine-goose-986')
+globalThis.gc()
 console.log('held')
 setInterval(() => {}, 1 << 30)`,
       ],
       { stdio: ['ignore', 'pipe', 'inherit'] },
     )
+    // also when the test times out
+    onTestFinished(() => {
+      holder.kill('SIGKILL')
+    })
     try {
       await new Promise((done, fail) => {
         holder.stdout.once('data', done)
@@ -360,6 +379,8 @@ setInterval(() => {}, 1 << 30)`,
     const teardown = await contractSetup({ env, run, reset: () => {} }, root)
     tearingDown = true
     expect(() => teardown()).toThrow(AggregateError)
+    // a failed teardown still gives the lease back
+    expect(takenElsewhere()).toBe(true)
     expect(process.exitCode).toBe(1)
     expect(named()).toHaveLength(3)
     expect(rows.map((row) => row.kind)).toEqual(['mcp_token'])
@@ -377,7 +398,7 @@ setInterval(() => {}, 1 << 30)`,
     rows = [{ id: 'old', kind: 'mcp_token', profile_id: nora, name: `contract pass token ${pass}` }]
     rows.push(own)
 
-    await contractSetup({ env, run: runner(), reset: resetMarker }, root)
+    const teardown = await contractSetup({ env, run: runner(), reset: resetMarker }, root)
     expect(calls.slice(0, 3)).toEqual([
       {
         fn: 'machine/testing:deleteNamedCredentials',
@@ -393,6 +414,8 @@ setInterval(() => {}, 1 << 30)`,
       own,
     ])
     expect(JSON.parse(readFileSync(stash(), 'utf8')).pass).not.toBe(pass)
+
+    teardown()
   })
 
   it('revokes by id what an older pass left, and removes its stash', async () => {
@@ -400,7 +423,7 @@ setInterval(() => {}, 1 << 30)`,
     const site = 'https://fine-goose-986.convex.site'
     writeFileSync(stash(), JSON.stringify({ siteUrl: site, qvaId: 'old-qva', qvtId: 'old-qvt' }))
     writeFileSync(legacy(), JSON.stringify({ siteUrl: 'https://other-1.convex.site', qvaId: 'x' }))
-    await contractSetup({ env, run: runner(), reset: resetMarker }, root)
+    const teardown = await contractSetup({ env, run: runner(), reset: resetMarker }, root)
     expect(existsSync(legacy())).toBe(false)
     expect(calls.slice(0, 3)).toEqual([
       { fn: 'machine/testing:deleteCredential', args: { id: 'old-qva', kind: 'agent_key' } },
@@ -408,6 +431,8 @@ setInterval(() => {}, 1 << 30)`,
       { fn: 'reset', args: {} },
     ])
     expect(JSON.parse(readFileSync(stash(), 'utf8')).qvaId).toBe('id-agent_key')
+
+    teardown()
   })
 
   it('keeps a leftover stash and stops before the reset when revoking it fails', async () => {

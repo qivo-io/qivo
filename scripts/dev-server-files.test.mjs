@@ -298,6 +298,31 @@ describe('dev server files', () => {
       expect([path, ignored(path)]).toEqual([path, false])
   })
 
+  it('covers a local directory that is itself a link, and keeps linked env files watched', () => {
+    const other = join(parent, 'other')
+    const elsewhere = join(parent, 'elsewhere')
+    mkdirSync(join(other, 'src'), { recursive: true })
+    mkdirSync(join(other, '.vercel'))
+    mkdirSync(elsewhere)
+    writeFileSync(join(elsewhere, 'report.html'), 'report')
+    writeFileSync(join(other, '.vercel', '.env.development.local'), 'SECRET=1')
+    writeFileSync(join(other, 'src', 'main.js'), '')
+    symlinkSync(elsewhere, join(other, 'dev-temp'))
+    symlinkSync(join(other, 'dev-temp', 'report.html'), join(other, 'src', 'report.html'))
+    symlinkSync(join(other, '.vercel', '.env.development.local'), join(other, '.env.local'))
+    symlinkSync(join(other, '.vercel', '.env.development.local'), join(other, 'src', 'env.txt'))
+    const [ignored] = devServerFiles(other).watch.ignored
+    expect(ignored(join(other, 'src', 'report.html'))).toBe(true)
+    expect(ignored(join(other, 'src', 'env.txt'))).toBe(true)
+    // Vite restarts the server when an env file changes
+    expect(ignored(join(other, '.env.local'))).toBe(false)
+    // a local directory that links around the checkout ignores no source
+    rmSync(join(other, 'dev-temp'))
+    symlinkSync(parent, join(other, 'dev-temp'))
+    const [around] = devServerFiles(other).watch.ignored
+    expect(around(join(other, 'src', 'main.js'))).toBe(false)
+  })
+
   it("matches only this checkout's directories, not one around it", () => {
     const [ignored] = devServerFiles(parent).watch.ignored
     expect(ignored(`${parent}/dev-temp`)).toBe(true)
