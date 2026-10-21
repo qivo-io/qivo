@@ -93,8 +93,9 @@ export function WalkRail({
     must not be the surface that quietly undoes someone else's edit.
     Commits on blur or Enter with the details pane's rule (lib/remaining):
     empty = unset, a stored 0 is a value, unparseable or unchanged text writes
-    nothing, so a bare tab-through is not an edit. `onCommit` runs after a
-    write. */
+    nothing, so a bare tab-through is not an edit. `onCommit` runs once the
+    server accepts the write, so a refused value (whose refusal the store
+    shows) leaves the row unreviewed. */
 export function RemainingInput({
   hook: walk,
   it,
@@ -122,8 +123,9 @@ export function RemainingInput({
   const commit = (el: HTMLInputElement) => {
     const p = remainingPatchFromInput(el, it.remaining)
     if (!p.write) return
-    P.updateIssue(it.id, { remaining: p.value })
-    onCommit?.(it)
+    void P.updateIssue(it.id, { remaining: p.value }).then((saved) => {
+      if (saved) onCommit?.(it)
+    })
   }
   return (
     <Input
