@@ -625,7 +625,10 @@ Their followers' inbox messages arrive moments after the removal. A larger
 handover is a `400` with `a removal can reassign at most 120 tasks at once,
 fewer when the change is too large for one request, so keep the people as
 Viewers or reassign some of the tasks first` (without the Viewer choice when
-you cannot give it) and nothing changes. The answer is
+you cannot give it) and nothing changes. Keeping people as Viewers is refused
+the same way when their grants do not fit in one request, with `a removal can
+keep only as many people as Viewers as fit in one request, so remove some of
+these people first or reassign the tasks`. The answer is
 `{"project_id", "user" | "team", "removed", "stranded", "kept_as_viewer",
 "reassigned"}`, where `stranded` and `reassigned` list `{"id", "key",
 "title", "user_id", "role"}`, and `kept_as_viewer` the user uuids given a
@@ -750,7 +753,8 @@ project access, the body is checked before the team and user.
 The removal and its choice land together or not at all. One removal
 reassigns at most 120 tasks, and fewer when the change is too large for one
 request. Their followers' inbox messages arrive moments after the removal. A
-larger handover is a `400` and nothing changes.
+larger handover, or Viewer grants too many for one request, is a `400` and
+nothing changes.
 The answer is
 `{"team_id", "user", "removed", "stranded", "kept_as_viewer",
 "reassigned"}`, shaped as for project access; removing someone who is not a

@@ -36,6 +36,8 @@ to save at once. Their followers hear of it a few seconds later. With more
 than 120, keep the people as Viewers and hand the tasks over later, or
 reassign some of the tasks first. The message says which of these you can
 choose, and the window says so before you save when it lists more than 120
+tasks. Keeping people as Viewers is refused the same way when their grants are
+too many to save at once; remove some of those people first, or reassign the
 tasks.
 Removing a person's grant that is already Viewer offers only the reassignment.
 Done tasks keep their assignee and are not listed.

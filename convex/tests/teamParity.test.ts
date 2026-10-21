@@ -22,7 +22,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { sha256hex } from '../machine/auth'
-import { HELD_TASKS_SHAPE } from '../model/projectAccess'
+import { HELD_TASKS_SHAPE, KEEP_TOO_LARGE } from '../model/projectAccess'
 import { deleteTeamCore, TEAM_RUNS_RULE, teamsJson } from '../model/teams'
 import {
   activityFor,
@@ -910,6 +910,31 @@ describe("deleting a team settles its members' open tasks", () => {
     await deleteHardware(fx, 'keep_as_viewer')
     expect(await grantsOf(fx.t, fx.emil.id)).toEqual([[fx.sub.id, 'viewer']])
     expect(await grantsOf(fx.t, ola.id)).toEqual([[fx.sub2.id, 'viewer']])
+  })
+
+  it('refuses Viewer grants that would fill the transaction, and keeps the team', async () => {
+    const fx = await setup()
+    await plantTeam(fx, fx.org.id, 'Design')
+    // the deployment reports the transaction nearly full before the first grant
+    const e = await expectRefusal(
+      fx.t.run((ctx) =>
+        deleteTeamCore(
+          {
+            ...ctx,
+            meta: {
+              getTransactionMetrics: async () => ({ databaseQueries: { used: 99, remaining: 1 } }),
+            },
+          } as unknown as MutationCtx,
+          { me: fx.admin, team: fx.team, held: 'keep_as_viewer', now: NOW },
+        ),
+      ),
+      'rule',
+    )
+    expect((e.data as Refusal).message).toBe(KEEP_TOO_LARGE)
+    // the app quotes the sentence rather than blaming one grant
+    expect((e.data as Refusal).reason).toBeUndefined()
+    expect(await hardwareLeft(fx)).toMatchObject({ members: 3, shares: 1 })
+    expect(await grantsOf(fx.t, fx.emil.id)).toEqual([])
   })
 
   it('refuses the last team and anyone but an admin before anything is settled', async () => {

@@ -1365,8 +1365,9 @@ without subtasks) and can no longer see afterwards are settled by
 
 The removal and its choice land together or not at all. One removal reassigns
 at most 120 tasks, and fewer when the change is too large for one call. Their
-followers' inbox messages arrive moments after the removal. A larger handover
-is refused and nothing changes. The result adds `stranded`,
+followers' inbox messages arrive moments after the removal. A larger handover,
+or Viewer grants too many for one call, is refused and nothing changes. The
+result adds `stranded`,
 `kept_as_viewer` and `reassigned`; `stranded` and `reassigned` list `{id, key,
 title, user_id, role}`. `changed` is `false` when there was no grant to
 remove. `on_held_tasks` with a level is refused, and so is a misspelled
@@ -1433,7 +1434,8 @@ person who is an organization admin or a leader of the team; an agent gets
   tasks. The removal and its choice land together or not at all. One removal
   reassigns at most 120 tasks, and fewer when the change is too large for one
   call. Their followers' inbox messages arrive moments after the removal. A
-  larger handover is refused and nothing changes. The result is `{team,
+  larger handover, or Viewer grants too many for one call, is refused and
+  nothing changes. The result is `{team,
   user, member: false, leader: false, changed}` plus `stranded`,
   `kept_as_viewer` and `reassigned`; `changed` is `false` when the user was
   not a member.

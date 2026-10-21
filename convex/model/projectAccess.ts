@@ -311,10 +311,15 @@ export const REASSIGN_ROOM = 0.95
 export const reassignTooLarge = (canKeep: boolean): string =>
   `a removal can reassign at most ${REASSIGN_MAX} tasks at once, fewer when the change is too large for one request, so ${canKeep ? 'keep the people as Viewers or ' : ''}reassign some of the tasks first`
 
-/* Thrown by a reassignment's guard once the transaction has used more than
- * REASSIGN_ROOM of a limit (lib/db.ts usedMoreThan), and turned into
- * reassignTooLarge by removeAndSettle. It is no ConvexError, so settling
- * passes it on without HELD_TASKS_REFUSED. */
+/** The refusal of Viewer grants too many for one removal: they would fill
+ * REASSIGN_ROOM of the transaction before the last one is saved. */
+export const KEEP_TOO_LARGE =
+  'a removal can keep only as many people as Viewers as fit in one request, so remove some of these people first or reassign the tasks'
+
+/* Thrown by a reassignment's or a Viewer grant's guard once the transaction
+ * has used more than REASSIGN_ROOM of a limit (lib/db.ts usedMoreThan), and
+ * turned into reassignTooLarge or KEEP_TOO_LARGE by removeAndSettle. It is no
+ * ConvexError, so settling passes it on without HELD_TASKS_REFUSED. */
 class RemovalFull extends Error {}
 
 /**
@@ -481,7 +486,9 @@ export type Settlement = Omit<AccessRemoval, 'removed'> & { viewer_grants: Doc<'
  * Edit access and sight of every task above once the access is gone. A
  * handover of more than REASSIGN_MAX tasks, or one that fills REASSIGN_ROOM
  * of the transaction before its last task, is refused with
- * reassignTooLarge, which blames its size rather than the tasks. Any refusal
+ * reassignTooLarge, which blames its size rather than the tasks. Viewer
+ * grants that fill REASSIGN_ROOM before the last one is saved are refused
+ * the same way with KEEP_TOO_LARGE. Any refusal
  * throws, so the removal and its settlement land together or not at all, and
  * one while settling the tasks carries HELD_TASKS_REFUSED. Project grant
  * removal, team member removal and team deletion (model/teams.ts) all run
@@ -512,11 +519,16 @@ export async function removeAndSettle(
   const { lost, orgProjects } = await removeAndFindLost(ctx, a)
   const stranded = lost.map(({ project: _where, ...h }) => h)
   const result: Settlement = { stranded, kept_as_viewer: [], reassigned: [], viewer_grants: [] }
-  if (stranded.length > 0 && held === 'keep_as_viewer') {
+  // Each Viewer grant and each reassigned task first checks the room left
+  const full = async () => {
+    if (await usedMoreThan(ctx, REASSIGN_ROOM)) throw new RemovalFull()
+  }
+  const keepAsViewers = async () => {
     await settling(async () => {
       if (a.keepRefusal !== undefined) throw rule(a.keepRefusal)
       const granted = new Set<string>()
       for (const h of lost) {
+        await full()
         const where = await a.viewerOn(h.project)
         const key = `${h.profile_id}:${where.id}`
         if (granted.has(key)) continue
@@ -542,6 +554,14 @@ export async function removeAndSettle(
         }
       }
     })
+  }
+  if (stranded.length > 0 && held === 'keep_as_viewer') {
+    try {
+      await keepAsViewers()
+    } catch (e) {
+      // the number of grants is at fault, not one of them
+      throw e instanceof RemovalFull ? rule(KEEP_TOO_LARGE) : e
+    }
     result.stranded = []
     result.kept_as_viewer = [...new Set(lost.map((h) => h.profile_id))]
   } else if (stranded.length > 0 && typeof held === 'object') {
@@ -554,9 +574,6 @@ export async function removeAndSettle(
     // out first, because a refusal from the guard leaves little room to read.
     const tooLarge = rule(reassignTooLarge(await canKeepAsViewers(ctx, a, lost)))
     if (byTask.size > REASSIGN_MAX) throw tooLarge
-    const full = async () => {
-      if (await usedMoreThan(ctx, REASSIGN_ROOM)) throw new RemovalFull()
-    }
     // The access is gone and the loop below writes only tasks, follows,
     // messages and activity, so one preload serves every task update. The
     // followers hear from background steps (NotifyPreload.deferFollowers).
