@@ -193,6 +193,18 @@ restores `BILLING_ENABLED` only while it is still the `true` the run set,
 and otherwise removes just the mark, so a setting someone changed since
 stays. Run one local run per backend at a time.
 
+### A large organization on a local backend
+
+To check the Board at scale by hand, grow that local Northstar copy with
+`node scripts/board-scale-seed.mjs --local --deployment local-<name>-<port> --url <backend origin>`,
+which takes the same loopback origins, `QIVO_FIXTURE_LOCAL=true` and
+`QIVO_LOCAL_ADMIN_KEY` as the Northstar seed and refuses every other
+target. It adds 10,000 tasks by default (`--tasks` sets another count) as
+Nora, the organization's admin, through the app's own task mutations, in
+every status, with parents and subtasks, due dates, pauses, long titles and
+unowned tasks. Run it again to add only the tasks still missing. It writes
+to that local backend alone.
+
 ## Production release
 
 `.github/workflows/release.yml` calls the shared deployment workflow, whose
