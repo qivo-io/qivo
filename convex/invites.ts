@@ -321,8 +321,10 @@ export type InviteDelivery = 'sending' | 'sent' | 'unsent' | 'uncertain' | 'held
 
 /* A send still unsettled this long after it was reserved will not settle:
  * its action died between reserve() and settle(). It is reported as
- * uncertain, since the letter may have gone out. The batch budget is a minute. */
-const STALE_SEND_MS = 5 * 60_000
+ * uncertain, since the letter may have gone out. The batch budget is a minute.
+ * A query does not run again as time passes, so the app also turns a
+ * 'sending' row uncertain at this age (src/lib/inviteDeliveries.ts). */
+export const STALE_SEND_MS = 5 * 60_000
 
 const deliveryOf = (row: SendRow & { ts: string }, now: number): InviteDelivery =>
   row.detail.limited === true
@@ -337,8 +339,14 @@ const deliveryOf = (row: SendRow & { ts: string }, now: number): InviteDelivery 
           ? 'uncertain'
           : 'unsent'
 
-/** One pending seat's invitation email, as deliveries() reports it. */
-export type InviteDeliveryRow = { profile_id: string; email: string; state: InviteDelivery }
+/** One pending seat's invitation email, as deliveries() reports it, with
+ * when the send was reserved. */
+export type InviteDeliveryRow = {
+  profile_id: string
+  email: string
+  state: InviteDelivery
+  since: string
+}
 
 /** The newest invitation email to each pending seat's current address in
  * the caller's organization, so the app can say when one was not delivered.
@@ -370,7 +378,12 @@ export const deliveries = orgQuery({
         break
       }
       if (newest === undefined || (!admin && newest.detail.by !== ctx.me.id)) continue
-      out.push({ profile_id: seat.id, email: seat.email, state: deliveryOf(newest, Date.now()) })
+      out.push({
+        profile_id: seat.id,
+        email: seat.email,
+        state: deliveryOf(newest, Date.now()),
+        since: newest.ts,
+      })
     }
     return out
   },

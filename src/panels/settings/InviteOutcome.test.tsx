@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 /* The line under the project invite form: what it says about the invitation
    email to the seat the form just created, as invites.deliveries changes. */
 
-type Row = { profile_id: string; email: string; state: string }
+type Row = { profile_id: string; email: string; state: string; since: string }
 const network = vi.hoisted(() => ({
   onUpdate: vi.fn(),
   push: (_rows: Row[] | null) => {},
@@ -35,6 +35,7 @@ const row = (state: string, address = 'guest.new@example.test'): Row => ({
   profile_id: seat,
   email: address,
   state,
+  since: new Date().toISOString(),
 })
 
 async function mount() {
@@ -80,6 +81,21 @@ describe('the outcome of an invitation from the project form', () => {
       expect(said()).toBe(`Sending the invitation email to ${email}…`)
       act(() => vi.advanceTimersByTime(2 * 60_000 + 1))
       expect(said()).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('turns a send that never settles uncertain after five minutes, on a page left open', async () => {
+    vi.useFakeTimers()
+    try {
+      await mount()
+      push([row('sending')])
+      expect(said()).toBe(`Sending the invitation email to ${email}…`)
+      act(() => vi.advanceTimersByTime(5 * 60_000 + 1))
+      expect(said()).toBe(
+        `${email}: The mail service did not confirm the invitation email. If it does not arrive, they can still join by creating an account with this address.`,
+      )
     } finally {
       vi.useRealTimers()
     }

@@ -3,7 +3,7 @@
    the person who added someone learns the outcome here, live, from the
    server's record of the send. */
 import type { FunctionReturnType } from 'convex/server'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../convex/_generated/api'
 import { convex } from './convex'
 import { DEMO_MODE } from './demoMode'
@@ -11,22 +11,53 @@ import { DEMO_MODE } from './demoMode'
 type Row = FunctionReturnType<typeof api.invites.deliveries>[number]
 export type InviteDelivery = Row['state']
 
+/* The age at which an unsettled send is uncertain, as STALE_SEND_MS in
+   convex/invites.ts. The query says so on a fresh load; this covers a page
+   left open, because a query does not run again as time passes. */
+const STALE_SEND_MS = 5 * 60_000
+
+const staleAt = (row: Row) => Date.parse(row.since) + STALE_SEND_MS
+
 /** Each visible pending seat's newest invitation email in `orgId`, keyed by
     profile id. Org admins see every pending seat, others the sends they
-    caused. Null while loading, after a refusal and in the demo. */
+    caused. A send unsettled for five minutes reads as uncertain, also while
+    the page stays open. Null while loading, after a refusal and in the demo. */
 export function useInviteDeliveries(orgId: string | undefined): ReadonlyMap<string, Row> | null {
-  const [rows, setRows] = useState<ReadonlyMap<string, Row> | null>(null)
+  const [rows, setRows] = useState<readonly Row[] | null>(null)
+  const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     setRows(null)
     if (DEMO_MODE || !orgId) return
     return convex.onUpdate(
       api.invites.deliveries,
       { org_id: orgId },
-      (next) => setRows(new Map(next.map((row) => [row.profile_id, row]))),
+      (next) => {
+        setNow(Date.now())
+        setRows(next)
+      },
       () => setRows(null),
     )
   }, [orgId])
-  return rows
+  // wake at the next send that turns stale
+  useEffect(() => {
+    const next = Math.min(
+      ...(rows ?? []).filter((row) => row.state === 'sending' && staleAt(row) > now).map(staleAt),
+    )
+    if (!Number.isFinite(next)) return
+    const timer = setTimeout(() => setNow(Date.now()), next - Date.now())
+    return () => clearTimeout(timer)
+  }, [rows, now])
+  return useMemo(
+    () =>
+      rows &&
+      new Map(
+        rows.map((row) => [
+          row.profile_id,
+          row.state === 'sending' && staleAt(row) <= now ? { ...row, state: 'uncertain' } : row,
+        ]),
+      ),
+    [rows, now],
+  )
 }
 
 const JOIN_ANYWAY = 'They can still join by creating an account with this address.'

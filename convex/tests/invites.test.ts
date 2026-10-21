@@ -438,12 +438,27 @@ describe('whoever caused an app invitation sees whether it went out', () => {
 
     expect(byId(await deliveries(f.admin))).toEqual(
       byId([
-        { profile_id: added.id, email: 'refused@example.se', state: 'unsent' },
-        { profile_id: guest, email: 'guest.new@example.se', state: 'sent' },
+        {
+          profile_id: added.id,
+          email: 'refused@example.se',
+          state: 'unsent',
+          since: expect.any(String),
+        },
+        {
+          profile_id: guest,
+          email: 'guest.new@example.se',
+          state: 'sent',
+          since: expect.any(String),
+        },
       ]),
     )
     expect(await deliveries(f.user)).toEqual([
-      { profile_id: guest, email: 'guest.new@example.se', state: 'sent' },
+      {
+        profile_id: guest,
+        email: 'guest.new@example.se',
+        state: 'sent',
+        since: expect.any(String),
+      },
     ])
     expect(await deliveries(f.viewer)).toEqual([])
   })
@@ -496,10 +511,20 @@ describe('whoever caused an app invitation sees whether it went out', () => {
       )
     expect(byId(await as(t, f.admin).query(api.invites.deliveries, { org_id: f.org.id }))).toEqual(
       byId([
-        { profile_id: sending.id, email: sending.email, state: 'sending' },
-        { profile_id: held.id, email: held.email, state: 'held' },
-        { profile_id: uncertain.id, email: uncertain.email, state: 'uncertain' },
-        { profile_id: stuck.id, email: stuck.email, state: 'uncertain' },
+        {
+          profile_id: sending.id,
+          email: sending.email,
+          state: 'sending',
+          since: expect.any(String),
+        },
+        { profile_id: held.id, email: held.email, state: 'held', since: expect.any(String) },
+        {
+          profile_id: uncertain.id,
+          email: uncertain.email,
+          state: 'uncertain',
+          since: expect.any(String),
+        },
+        { profile_id: stuck.id, email: stuck.email, state: 'uncertain', since: expect.any(String) },
       ]),
     )
   })
