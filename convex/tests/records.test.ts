@@ -73,7 +73,7 @@ const MiB = 1024 * 1024
 const AGENT_NO_WRITE = 'this agent has no write access to that project'
 const PERSON_NO_WRITE = 'your account has no write access to that project'
 const INLINE_STAYS =
-  'this image belongs to the task description; remove it by editing the description in the app'
+  'this image belongs to the task description; remove it by taking it out of the description'
 
 async function refused(p: Promise<unknown>, code: RefusalCode, sentence: string): Promise<void> {
   const e = await expectRefusal(p, code)

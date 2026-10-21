@@ -11,7 +11,6 @@ type InternalFields<T extends TableNames> =
   | (T extends 'issue_links' | 'issue_labels' | 'issue_attachments' | 'issue_subscriptions'
       ? 'task_archived'
       : never)
-  | (T extends 'issue_attachments' ? 'project_id' : never)
   | (T extends 'issues' ? 'relations_marked' : never)
 
 // The snapshot adds each organization's task and project counters, which

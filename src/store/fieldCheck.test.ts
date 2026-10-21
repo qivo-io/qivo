@@ -343,16 +343,17 @@ describe('the field check in the store', () => {
     )
   })
 
-  it('runs keepDraft on a rule refusal too, so the refused draft stays unsaved', async () => {
-    const kept: unknown[] = []
+  it('runs keepUnsaved, not keepDraft, on a refusal that is no conflict', async () => {
+    const calls: string[] = []
     void P.updateIssue(
       key('task-1'),
       { description: 'My text ![photo](att:0b7d6f4e-1c2a-4d3b-9e8f-7a6b5c4d3e2f)' },
       {
-        keepDraft: (shown) => {
-          kept.push(shown)
+        keepDraft: () => {
+          calls.push('keepDraft')
           return true
         },
+        keepUnsaved: () => calls.push('keepUnsaved'),
       },
     )
     latest().reject(
@@ -362,7 +363,7 @@ describe('the field check in the store', () => {
       }),
     )
     await settle()
-    expect(kept).toEqual(['The old text'])
+    expect(calls).toEqual(['keepUnsaved'])
   })
 
   it("says a field rule the server refuses in the app's words", async () => {

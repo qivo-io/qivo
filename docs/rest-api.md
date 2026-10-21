@@ -1185,11 +1185,15 @@ cannot move to another top-level project (otherwise `400`, `this task has
 more than 200 subtasks, archived ones included, and a move to another
 project carries them all; restore some archived subtasks and remove them
 from this task first, or move it within its project`). A move whose task and subtasks are
-too large for one request, such as about 120 or more subtasks with
-descriptions near 20,000 characters, is a `400` with `this task and its
-subtasks are too large to move to another project in one request; remove
-some subtasks from this task first, restoring archived ones to do so, or
-move it within its project`. Each moved subtask
+too large for one request, such as about 120 or more subtasks whose
+descriptions hold 20,000 characters of a script that takes three bytes a
+character, such as Japanese, is a `400` with `this task and its subtasks
+are too large to move to another project in one request; remove some
+subtasks from this task first, restoring archived ones to do so, or move
+it within its project`. Any other change whose task and subtasks are too
+large for one request, such as an archive, a new parent or a restore, is a
+`400` with `this task and its subtasks are too large to change in one
+request; detach some subtasks first`. Each moved subtask
 sends `task.updated`, but only the task itself gets an activity row and an
 inbox message. A subtask moved to
 another top-level project must leave its parent in the same request, with
@@ -1459,9 +1463,10 @@ such as thousands of subtasks or hundreds with very long descriptions. Its
 single-task shape then still lists its direct `subtasks`, but `start_week`
 and `end_week` are `null`, `progress` is `0` of `0` with `partial: true`
 and `group_remaining_hours` is `null`. When even its direct subtasks do not
-all fit, `subtasks` lists the first ones that do, at least one, and
-`has_more_subtasks` is `true`. Find the rest in the project's archived list
-(`?archived=true&project=<ref>`), where each one's `parent_id` names the
+all fit, `subtasks` lists those of the first ones that do which the caller
+can read, and `has_more_subtasks` is `true`. Find the rest in the archived
+list of the group's top-level project (`?archived=true&project=<ref>`),
+which covers its sub-projects, where each one's `parent_id` names the
 group. `has_more_subtasks` is `false` on every other task. The answer of a
 `PATCH`, such as one that archives such a group, takes the same shape.
 
@@ -1955,10 +1960,10 @@ file and answers `{ "deleted": true, "id": "…", "name": "wiring.pdf", "key":
 "QN-26" }`, writing a `removed an attachment from` activity row. An id that
 is not a file of that task is a `404` (`attachment not found`). A
 description image (`inline: true`) is a `400` (`this image belongs to the
-task description; remove it by editing the description in the app`).
+task description; remove it by taking it out of the description`).
 
-Description images stay with the app. The API neither uploads nor deletes
-them. When a `PATCH` rewrites a description, keep every `![alt](att:<id>)`
+The API uploads no description images; the app does. When a `PATCH`
+rewrites a description, keep every `![alt](att:<id>)`
 reference whose image should stay. A description save, from the app or the
 API, that takes out an image's last reference removes the image from the
 task at once: it no longer counts toward the 100 attachments and no longer

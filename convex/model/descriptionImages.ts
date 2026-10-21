@@ -30,7 +30,7 @@ import { makeFunctionReference } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import { rule } from '../lib/functions'
-import { imageRefs } from '../lib/imageRefs'
+import { imageRefs, shownImages } from '../lib/imageRefs'
 import { ATTACHMENT_MAX, ATTACHMENTS_FULL } from '../lib/taskLimits'
 import { logActivity, signedDetail } from './activity'
 
@@ -82,9 +82,12 @@ async function deleteImage(ctx: MutationCtx, row: Doc<'issue_attachments'>): Pro
  * the inline images the save takes out and those no saved text named for
  * ORPHAN_AFTER_MS, brings back dropped ones it shows again, and deletes
  * dropped ones older than DROPPED_KEEP_MS or past DROPPED_IMAGES_MAX.
- * Refuses with IMAGE_NOT_ATTACHED a new reference to an image that is not
- * the task's, and with ATTACHMENTS_FULL one that would bring an image back
- * to a task with ATTACHMENT_MAX attachments. A dropped or returned image
+ * Whether a text names an image is read broadly (lib/imageRefs.ts
+ * imageRefs), so an image is dropped only once no `att:` of either text
+ * names it; what a text shows is read as the app renders it (shownImages).
+ * Refuses with IMAGE_NOT_ATTACHED a newly shown image that is not the
+ * task's, and with ATTACHMENTS_FULL one that would bring an image back to a
+ * task with ATTACHMENT_MAX attachments. A dropped or returned image
  * writes the activity row a removal or an attach writes, signed with
  * `provenance` for a machine caller.
  */
@@ -101,12 +104,13 @@ export async function settleDescriptionImages(
   const { issue, now } = a
   const before = imageRefs(issue.description ?? '')
   const after = imageRefs(a.description)
+  const shown = shownImages(a.description)
   const rows = await ctx.db
     .query('issue_attachments')
     .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
     .take(ATTACHMENT_MAX + DROPPED_IMAGES_MAX)
   const byId = new Map(rows.map((row) => [row.id, row]))
-  for (const id of after) {
+  for (const id of shown) {
     if (!before.has(id) && !byId.has(id)) throw rule(IMAGE_NOT_ATTACHED)
   }
   const log = (
@@ -140,7 +144,7 @@ export async function settleDescriptionImages(
     if (removed) await log(row, 'removed an image from')
   }
   let counted = [...dropped.values()].filter((at) => at === undefined).length
-  for (const id of after) {
+  for (const id of shown) {
     const row = byId.get(id)
     if (row === undefined || row.dropped_at === undefined) continue
     if (counted >= ATTACHMENT_MAX) throw rule(ATTACHMENTS_FULL)

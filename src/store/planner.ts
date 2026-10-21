@@ -26,8 +26,8 @@ import { joinLists } from '../../convex/lib/arrayLimit'
 import { AVATAR_COLORS } from '../../convex/lib/avatarColors'
 import { BILLING_READ_ONLY, deletionReadOnly } from '../../convex/lib/billingAccess'
 import { descriptionForm, FIELD_CHANGED, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
-import { imageRefs } from '../../convex/lib/imageRefs'
 import type { FieldChange } from '../../convex/lib/functions'
+import { imageRefs, shownImages } from '../../convex/lib/imageRefs'
 import { TOO_MANY_MENTIONS, tooManyMentions } from '../../convex/lib/mentions'
 import { roundTenths } from '../../convex/lib/numbers'
 import {
@@ -1407,10 +1407,12 @@ type SendOptions<R> = {
       editor that keeps the person's draft, with the value of the write's
       first `over` field now on screen. It answers false when the editor
       has moved on and keeps nothing, and true when it keeps the draft,
-      which the notice that shows after it then says. Any other refusal,
-      such as a description image the server refuses, runs it too, after
-      the toast, so the refused draft stays unsaved for another try. */
+      which the notice that shows after it then says. */
   keepDraft?: (shown: unknown) => boolean
+  /** Runs on any other refusal from the server, after its toast, for an
+      editor that then keeps the refused draft unsaved against the text it
+      began from, such as a description whose image the server refuses. */
+  keepUnsaved?: () => void
 }
 
 /** What a write shows: a view, an open layer it was collected in (a Roadmap
@@ -1560,8 +1562,7 @@ function start<M extends FunctionReference<'mutation'>, T>(
           guarded(() => settleRefused(layer))
           // a refused draft stays, unsaved, rather than reading as saved
           // and giving way to the stored text once its editor blurs
-          if (o.keepDraft && error instanceof ConvexError)
-            guarded(() => o.keepDraft?.(shownOf(o.over)))
+          if (o.keepUnsaved && error instanceof ConvexError) guarded(() => o.keepUnsaved?.())
         }
         guarded(() => o.onSettled?.())
       }
@@ -2597,6 +2598,7 @@ const BACKGROUND_WRITES = new Set([
 const TASK_CHANGE: Record<string, string> = {
   'issues:create': 'new task',
   'issues:createParent': 'new parent task',
+  'issues:createLinked': 'new linked task',
   'issues:move': 'move',
   'issues:archive': 'archive',
   'issues:unarchive': 'restore',
@@ -3969,29 +3971,30 @@ function patchIssueRow(uuid: string, db: IssueWirePatch, at: string) {
   row.review_at = reviewStamp(before, row, row.updated_at)
 }
 
+/* Paints what the server's description save does to task `uuid`'s images
+   (convex/model/descriptionImages.ts settleDescriptionImages): an inline
+   image no `att:` of the new text names any more is dropped at `at`, so
+   the attachment cap frees its place at once, and a dropped one the new
+   text shows is back. The server also drops images no saved text named
+   for a day, which a delivery brings. */
+function paintDescriptionImages(uuid: string, before: string, after: string, at: string) {
+  const was = imageRefs(before)
+  const named = imageRefs(after)
+  const shown = shownImages(after)
+  for (const a of rows.attachments.values()) {
+    if (a.issue_id !== uuid) continue
+    if (a.inline && a.dropped_at === undefined && was.has(a.id) && !named.has(a.id))
+      rows.attachments.set(a.id, { ...a, dropped_at: at })
+    else if (a.dropped_at !== undefined && shown.has(a.id))
+      rows.attachments.set(a.id, { ...a, dropped_at: undefined })
+  }
+}
+
 /* The paint of new task `row`: inserted unless the server's row is there,
    its dependents included, with the number the server answered
    (`created.num`) or else the next one free in its organization's counter,
    which it raises. A task created under a parent clears the parent's own
    hours, as the server does. */
-/* Paints what the server's description save does to task `uuid`'s images
-   (convex/model/descriptionImages.ts settleDescriptionImages): an inline
-   image the new text takes out is dropped at `at`, so the attachment cap
-   frees its place at once, and a dropped one it shows again is back. The
-   server also drops images no saved text named for a day, which a delivery
-   brings. */
-function paintDescriptionImages(uuid: string, before: string, after: string, at: string) {
-  const was = imageRefs(before)
-  const now = imageRefs(after)
-  for (const a of rows.attachments.values()) {
-    if (a.issue_id !== uuid) continue
-    if (a.inline && a.dropped_at === undefined && was.has(a.id) && !now.has(a.id))
-      rows.attachments.set(a.id, { ...a, dropped_at: at })
-    else if (a.dropped_at !== undefined && now.has(a.id) && !was.has(a.id))
-      rows.attachments.set(a.id, { ...a, dropped_at: undefined })
-  }
-}
-
 function newTaskPaint(row: Row<'issues'>, created: { num: number | null }): Paint {
   return () => {
     const org = rows.orgs.get(row.org_id)
@@ -5586,11 +5589,16 @@ export const PLANNER = {
      value as its `expected`. `opts.seen` gives what an editor showed when
      the person began, by wire field, in place of the row on screen, and
      `opts.keepDraft` runs when the server refuses because someone changed
-     the field first and the editor keeps the draft. */
+     the field first and the editor keeps the draft, and `opts.keepUnsaved`
+     when it refuses for any other reason (SendOptions.keepUnsaved). */
   updateIssue: (
     id: string,
     patch: IssuePatch,
-    opts: { seen?: Partial<Row<'issues'>>; keepDraft?: (shown: unknown) => boolean } = {},
+    opts: {
+      seen?: Partial<Row<'issues'>>
+      keepDraft?: (shown: unknown) => boolean
+      keepUnsaved?: () => void
+    } = {},
   ): Promise<boolean> => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
@@ -5696,6 +5704,7 @@ export const PLANNER = {
       send(api.issues.update, { org_id: row.org_id, id: uuid, patch: wire }, view, {
         over,
         keepDraft: opts.keepDraft,
+        keepUnsaved: opts.keepUnsaved,
       })
     return saved
   },

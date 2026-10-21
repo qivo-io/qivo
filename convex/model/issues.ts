@@ -81,6 +81,7 @@ import {
 } from '../lib/enums'
 import { descriptionForm, printOf, trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
+import { shownImages } from '../lib/imageRefs'
 import { countsAsSubtask, type Liveness, projectLiveness } from '../lib/liveTasks'
 import { TOO_MANY_MENTIONS, tooManyMentions } from '../lib/mentions'
 import { projectName } from '../lib/recordNames'
@@ -92,7 +93,6 @@ import {
   SUBTASK_WITH_SUBTASKS,
 } from '../lib/taskLimits'
 import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
-import { imageRefs } from '../lib/imageRefs'
 import { DESCRIPTION_TOO_LONG, plainText, TEXT_MAX } from '../lib/textLimits'
 import { inWorkingSet } from '../lib/workingSet'
 import { issueChanges, logActivity, machineDetail, narratedChange } from './activity'
@@ -1414,7 +1414,7 @@ export async function createIssueCore(
   const description = cleanDescription(args.description)
   // a new task has no attachments, so its description can show no image of
   // its own (model/descriptionImages.ts)
-  if (imageRefs(description).size > 0) throw rule(IMAGE_NOT_ATTACHED)
+  if (shownImages(description).size > 0) throw rule(IMAGE_NOT_ATTACHED)
   const parent_id = args.parent_id ?? undefined
   if (parent_id !== undefined) {
     // a used id, live or held by Deleted items, is refused first, so the

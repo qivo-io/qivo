@@ -101,7 +101,7 @@ const route: typeof restRoute = (declared) => declared
 /* An attachment's description image is the description's to remove, by an
  * edit in the app, so the machine surfaces leave it alone. */
 const INLINE_STAYS =
-  'this image belongs to the task description; remove it by editing the description in the app'
+  'this image belongs to the task description; remove it by taking it out of the description'
 
 /* --------------------------------------------------------- attachments */
 
@@ -659,7 +659,7 @@ export const RECORD_TOOLS: McpTool[] = [
       name: 'delete_attachment',
       title: 'Delete attachment',
       description:
-        "Delete a file attached to a task, by `ref` and the `attachment` id from get_task's `attachments`. Needs Edit access to the task's project. Description images (`inline: true`) are left to the app.",
+        "Delete a file attached to a task, by `ref` and the `attachment` id from get_task's `attachments`. Needs Edit access to the task's project. A description image (`inline: true`) goes when the description stops showing it.",
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',

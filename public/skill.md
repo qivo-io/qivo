@@ -310,7 +310,8 @@ Useful field rules:
   requests as UTF-8, because Qivo refuses a body with other bytes.
 - **Delete a file:** `delete_attachment` or
   `DELETE /v1/tasks/{ref}/attachments/{id}`, with User or Lead access to the
-  project. Description images are left to the app. When you rewrite a
+  project. A description image goes when the description stops showing it,
+  and only the app uploads one. When you rewrite a
   description, keep its `![alt](att:<id>)` references: a save that drops one
   removes that image from the task, and it is deleted a day later unless a
   save names it again. A description can only show images attached to its

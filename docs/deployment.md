@@ -362,7 +362,17 @@ v0.1.21 (`ab0a802`), run `internal/orgCountersBackfill:start`, wait until its
 
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to
-deploy. Roll forward instead.
+deploy. Roll forward instead. Later releases no longer accept those fields,
+a team's `max_attachment_mb` or an attachment's `project_id` at all, and
+v0.1.40 (`a09b44e`) is the last commit with `internal/retiredFields`. A
+backend that still holds any of them, such as a development backend that
+never ran the clear or data restored from an older backup, takes v0.1.40
+first, `internal/retiredFields:clear`, and then the later release.
+
+An image a description save took out keeps a `dropped_at` for a day, in
+Deleted items for as long as its task stays there. Releases before the one
+that added it do not accept that field, so a rollback past it fails to
+deploy while such an image exists. Roll forward instead.
 
 A frontend rollback changes the served application build. It does not roll
 back Convex code, schema changes, stored files or customer writes. A database

@@ -1506,8 +1506,9 @@ async function activeTasksUnder(
  * archived subtasks it has. When that stops the walk, the index keeps only
  * the root's own subtasks, which it reads first, as many as fit. When not
  * even one fit, it reads the first, within the reserve, so the read still
- * tells a group from a leaf. Active subtasks number at most SUBTASK_MAX, so
- * an active task's read lists them all. */
+ * tells a group from a leaf, and it reads one past the last listed, so
+ * `more` is set only when a subtask is left out. Active subtasks number at
+ * most SUBTASK_MAX, so an active task's read lists them all. */
 async function taskSubtree(
   ctx: QueryCtx,
   root: Doc<'issues'>,
@@ -1521,15 +1522,24 @@ async function taskSubtree(
   const walk = await subtreeIndex(ctx, root, counts, room)
   if (walk.whole) return { children: walk.children, partial: false, more: false }
   let kids = walk.children.get(root.id) ?? []
-  if (kids.length === 0 && !walk.rootWhole) {
-    const first = await ctx.db
+  if (walk.rootWhole) return { children: new Map([[root.id, kids]]), partial: true, more: false }
+  // the subtask after the last one read, in by_parent order: the first
+  // when none was read, and one past them all says whether any is left out
+  const after = (last: Doc<'issues'> | undefined) =>
+    ctx.db
       .query('issues')
-      .withIndex('by_parent', (q) => q.eq('parent_id', root.id))
+      .withIndex('by_parent', (q) =>
+        last === undefined
+          ? q.eq('parent_id', root.id)
+          : q.eq('parent_id', root.id).gt('_creationTime', last._creationTime),
+      )
       .first()
-    if (first === null) return { children: new Map([[root.id, []]]), partial: true, more: false }
-    kids = [first]
+  if (kids.length === 0) {
+    const first = await after(undefined)
+    kids = first === null ? [] : [first]
   }
-  return { children: new Map([[root.id, kids]]), partial: true, more: !walk.rootWhole }
+  const more = kids.length > 0 && (await after(kids[kids.length - 1])) !== null
+  return { children: new Map([[root.id, kids]]), partial: true, more }
 }
 
 /** Whether a task under a group counts toward the group's totals. */

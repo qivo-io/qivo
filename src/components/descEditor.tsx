@@ -3,7 +3,8 @@ import { HoverTooltip } from '@/components/ui/tooltip'
 import { hasOpenTooltip } from '@/lib/passEscapeOn'
 /* Rich editor for the lib/md dialect; viewers use Markdown. Load through
    parseMd -> astToDoc, save through docToAst -> astToMd and reparse to a fixed
-   point. updateIssue GC preserves images referenced by new or previous text.
+   point. The server's description saves settle images
+   (convex/model/descriptionImages.ts).
    Editable users load this component lazily.
 
    Save/Mod-S commits; blur retains drafts and dirty unmount discards with a
@@ -312,7 +313,12 @@ export type DescEditorHandle = {
     the save because someone changed the text first. The draft then stays,
     and the text the server keeps becomes its baseline once it shows, so a
     second Save deliberately replaces it. */
-export type DraftKeep = { seen: string; keepDraft: (shown: unknown) => boolean }
+export type DraftKeep = {
+  seen: string
+  keepDraft: (shown: unknown) => boolean
+  /** For any other refusal: the draft stays unsaved against `seen`. */
+  keepUnsaved: () => void
+}
 
 /** Comment mode: commit goes to onCommit (the store's add/updateComment),
     not the issue description. onCommit resolves whether the server saved
@@ -804,6 +810,17 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       refreshDirtyRef.current()
       return true
     },
+    // a refusal for any other reason, such as an image the server refuses,
+    // puts back the baseline the save had moved, so the draft is unsaved
+    // again; a later change by someone else still refuses the next save
+    keepUnsaved: () => {
+      if (ed.isDestroyed) return
+      rebaseRef.current = false
+      rawRef.current = seen
+      canonRef.current = canonical(seen)
+      committedDocRef.current = ed.schema.nodeFromJSON(astToDoc(parseMd(seen)))
+      refreshDirtyRef.current()
+    },
   })
 
   const commit = () => {
@@ -900,7 +917,11 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       P.updateIssue(
         issueKey,
         { description: text || null },
-        { seen: { description: keep.seen }, keepDraft: keep.keepDraft },
+        {
+          seen: { description: keep.seen },
+          keepDraft: keep.keepDraft,
+          keepUnsaved: keep.keepUnsaved,
+        },
       )
     }
     // the save is the new baseline; undo may cross it freely — an image the

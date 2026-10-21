@@ -1506,6 +1506,20 @@ describe('a single-task read of an archived group', () => {
     const { rest } = await reads(fx, group.id)
     expect(rest).toMatchObject({ is_group: true, has_more_subtasks: true })
     expect(rest.subtasks.map((t) => t.id)).toEqual(kids.slice(0, 1))
+    // a group of one lists it and leaves nothing out
+    const single = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      archived_at: day(9),
+    })
+    const only = await plantMany(fx, 1, {
+      project_id: fx.sub.id,
+      archived_at: day(9),
+      parent_id: single.id,
+    })
+    const { rest: one } = await reads(fx, single.id)
+    expect(one).toMatchObject({ is_group: true, has_more_subtasks: false })
+    expect(one.subtasks.map((t) => t.id)).toEqual(only)
   })
 
   it('reads and archives a group of hundreds of long subtasks within the real limits', async () => {

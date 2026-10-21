@@ -254,7 +254,7 @@ const issueSubscriptionsTable = defineTable({
   .index('by_issue_profile', ['issue_id', 'profile_id'])
 
 // A task holds at most ATTACHMENT_MAX rows (lib/taskLimits.ts) without a
-// dropped_at, and at most DROPPED_IMAGES_MAX with one (model/attachments.ts).
+// dropped_at, and at most DROPPED_IMAGES_MAX with one (model/descriptionImages.ts).
 // A row names no project: storage totals read it through its task
 // (model/billing.ts storagePage), so a move writes no attachment row.
 const issueAttachmentsTable = defineTable({
@@ -270,7 +270,7 @@ const issueAttachmentsTable = defineTable({
   created_at: v.string(),
   task_archived: taskArchived,
   // When a description save took this image out of the description
-  // (model/attachments.ts settleDescriptionImages). It no longer counts
+  // (model/descriptionImages.ts settleDescriptionImages). It no longer counts
   // toward ATTACHMENT_MAX, and a save that shows it again within a day
   // brings it back; after that it is deleted with its bytes.
   dropped_at: v.optional(v.string()),

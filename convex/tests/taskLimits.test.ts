@@ -36,7 +36,7 @@ import {
 } from '../lib/taskLimits'
 import { TEXT_MAX } from '../lib/textLimits'
 import { ARCHIVED_DETACH, STALLED_MS } from '../model/deletedItems'
-import { DROPPED_KEEP_MS, IMAGE_NOT_ATTACHED } from '../model/descriptionImages'
+import { DROPPED_IMAGES_MAX, DROPPED_KEEP_MS, IMAGE_NOT_ATTACHED } from '../model/descriptionImages'
 import {
   MOVE_SUBTREE_MAX,
   MOVE_SUBTREE_TOO_LARGE,
@@ -989,6 +989,52 @@ describe('the attachment, link and label limits', () => {
       expect((await attachment(fx, back))?.dropped_at).toBeUndefined()
     } finally {
       vi.useRealTimers()
+    }
+  })
+
+  it('deletes overdue dropped images, and the oldest past the cap, on a description save', async () => {
+    const fx = await setup()
+    const issue = await task(fx, { title: 'Many drops' })
+    const minute = 60_000
+    // DROPPED_IMAGES_MAX dropped in the last hours, one older among them,
+    // and one dropped two days ago
+    const recent = await fx.t.run(async (ctx) => {
+      const ids: string[] = []
+      for (let i = 0; i <= DROPPED_IMAGES_MAX; i++) {
+        const id = uuid()
+        ids.push(id)
+        await ctx.db.insert('issue_attachments', {
+          id,
+          org_id: fx.org.id,
+          issue_id: issue.id,
+          name: `drop-${i}.png`,
+          size_bytes: 3,
+          storage_id: await ctx.storage.store(new Blob(['png']) as never),
+          inline: true,
+          created_at: NOW,
+          dropped_at: new Date(Date.now() - (i + 1) * minute).toISOString(),
+        })
+      }
+      return ids
+    })
+    const overdue = await plantImage(fx, issue)
+    await fx.t.run(async (ctx) => {
+      const row = await ctx.db
+        .query('issue_attachments')
+        .withIndex('by_uuid', (q) => q.eq('id', overdue))
+        .unique()
+      if (row !== null) {
+        await ctx.db.patch(row._id, {
+          dropped_at: new Date(Date.now() - 2 * DROPPED_KEEP_MS).toISOString(),
+        })
+      }
+    })
+    await saveDescription(fx, issue, 'Text without images')
+    expect(await attachment(fx, overdue)).toBeNull()
+    // the oldest of the recent ones goes, the newest DROPPED_IMAGES_MAX stay
+    expect(await attachment(fx, recent[DROPPED_IMAGES_MAX])).toBeNull()
+    for (const id of recent.slice(0, DROPPED_IMAGES_MAX)) {
+      expect((await attachment(fx, id))?.dropped_at).toBeDefined()
     }
   })
 
