@@ -3,7 +3,7 @@
  * authenticate a test anyway, so the contract scripts mint their own pair:
  * node mints `qva_…`/`qvt_…` + sha256 locally, then
  *   npx convex run machine/testing:mintCredential '{"profile_id":…, "kind":…,
- *     "key_prefix":…, "key_hash":…, "name":…, "access":…}'
+ *     "key_prefix":…, "key_hash":…, "name":…, "access":…, "pending":true}'
  * and drives <deployment>.convex.site. internalMutation = deploy-key-gated;
  * no public wrapper may ever reach this. Only the hash crosses the wire,
  * exactly like the real minting paths (convex/tokens.ts). A personal token
@@ -16,11 +16,14 @@
  * revoked_at equal to its created_at, and machine/auth refuses it until
  *   npx convex run machine/testing:activateNamedCredentials
  *     '{"profile_id":…, "name":…}'
- * makes it usable. A contract pass whose process is killed while a mint
- * runs can leave that mint running after the next pass has deleted the
- * killed pass's credentials by name. The late mint then leaves only a
- * pending row, and a late activation finds nothing to activate, because
- * each runs in one transaction. deleteOldCredentials sweeps such rows. */
+ * makes it usable. The mint requires `pending: true`, so a caller that
+ * expects a usable credential fails at the mint instead of with 401s
+ * later. A contract pass whose process is killed while a call runs can
+ * leave that one call running after the next pass has deleted the killed
+ * pass's credentials by name. The pass starts each call only after the one
+ * before it returned, and activates only after both mints, so the call left
+ * is either a late mint, which leaves a pending row, or a late activation,
+ * which finds nothing. deleteOldCredentials sweeps such rows. */
 
 import { v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
@@ -48,6 +51,8 @@ export const mintCredential = internalMutation({
     access: v.optional(vCredentialAccess),
     /** mcp_token only; any UTC date-time, so a test can mint an expired token */
     expires_at: v.optional(v.string()),
+    /** the caller knows the credential stays unusable until activated */
+    pending: v.literal(true),
   },
   handler: async (ctx, a): Promise<{ id: string; profile_id: string }> => {
     refuseProduction('machine/testing')
@@ -172,8 +177,12 @@ async function profileCredentials(ctx: MutationCtx, profile_id: string) {
 }
 
 /* Makes the pending credentials of one profile with exactly that name
- * usable. A row that is gone, or that someone revoked after its mint, stays
- * as it is, so this never brings back a deleted or revoked credential. */
+ * usable: the rows whose revoked_at still equals their created_at. A row
+ * that is gone stays gone, and one whose revoked_at changed after its mint,
+ * as a person's own revoke writes it, stays revoked. An organization admin's
+ * revoke leaves a row that already reads as revoked unchanged, so it does
+ * not stop this activation. The contract pass activates within seconds of
+ * its mints and deletes its credentials when it ends. */
 export const activateNamedCredentials = internalMutation({
   args: { profile_id: v.string(), name: v.string() },
   handler: async (ctx, a): Promise<{ activated: number }> => {

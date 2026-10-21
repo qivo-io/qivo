@@ -28,6 +28,7 @@ type Args = {
   name?: string
   name_prefix?: string
   created_before?: string
+  pending?: boolean
 }
 let calls: { fn: string; args: Args }[]
 /** A credential row on the fake deployment. A pending row is not usable. */
@@ -186,6 +187,8 @@ describe('contract pass setup', () => {
       `contract pass token ${saved.pass}`,
       `contract pass key ${saved.pass}`,
     ])
+    // each mint asks for a credential that stays unusable until activated
+    expect(minted().map((args) => args.pending)).toEqual([true, true])
 
     // both credentials are usable, and were activated only after both mints
     expect(rows.map((row) => [row.kind, row.pending])).toEqual([

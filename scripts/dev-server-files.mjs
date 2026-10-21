@@ -38,19 +38,18 @@ const literalGlob = (path) => path.replace(/[\\()[\]{}*?!+@|]/g, '\\$&')
  * allowed source too. A local directory that is itself a link counts under
  * its real path as well. Each check looks for those links again, so a local
  * directory created, removed or replaced by a link while the server runs
- * counts from the next check on. That takes an lstat call per local
- * directory, about 8 microseconds per check on Linux, and a realpath call
- * for a directory that is a link. The watcher checks the rule only when it
- * starts to watch a path, so refuseLinkedFiles also drops the events of a
- * path it already watches once the rule ignores it. The env files at the
- * checkout's root keep
+ * counts from the next check on. That takes seven lstat calls per check,
+ * one per local directory, .git and scripts/, about 8 microseconds on
+ * Linux, and a realpath call for a directory that is a link. The watcher
+ * does not check the rule again before it reports a change to a path it
+ * already watches, so refuseLinkedFiles also drops the events of such a
+ * path once the rule ignores it. The env files at the checkout's root keep
  * being watched wherever they link, because Vite restarts the server when
  * one changes.
  */
 export function devServerFiles(root) {
-  const checkouts = new Set(
-    [root, realpathSync.native(root)].map((path) => normalizePath(path).replace(/\/$/, '')),
-  )
+  const resolved = normalizePath(realpathSync.native(root)).replace(/\/$/, '')
+  const checkouts = new Set([normalizePath(root).replace(/\/$/, ''), resolved])
   const directories = [...checkouts].flatMap((checkout) =>
     LOCAL.map((name) => `${checkout}/${name}`),
   )
@@ -59,16 +58,14 @@ export function devServerFiles(root) {
   const named = [...directories, ...[...checkouts].map((checkout) => `${checkout}/.git`)]
   // Each named directory with its paths inside the checkout, any of which
   // makes it lead elsewhere when it is a link, such as scripts/ for
-  // scripts/shots/.
-  const steps = [...checkouts].flatMap((checkout) =>
-    [...LOCAL, '.git'].map((name) => {
-      const parts = name.split('/')
-      return {
-        directory: `${checkout}/${name}`,
-        paths: parts.map((_, i) => `${checkout}/${parts.slice(0, i + 1).join('/')}`),
-      }
-    }),
-  )
+  // scripts/shots/. The resolved checkout answers for the given one too.
+  const steps = [...LOCAL, '.git'].map((name) => {
+    const parts = name.split('/')
+    return {
+      directory: `${resolved}/${name}`,
+      paths: parts.map((_, i) => `${resolved}/${parts.slice(0, i + 1).join('/')}`),
+    }
+  })
   // A path that cannot be read, such as one under a file, is no link.
   const isLink = (path) => {
     try {
@@ -258,11 +255,12 @@ function dropIgnoredEvents(watcher, ignored) {
  * A build copies the public directory and the files its links point to, so
  * a build fails while the public directory links to a refused file.
  *
- * The watcher checks server.watch.ignored only when it starts to watch a
- * path, so a source that links to a file outside the checkout keeps
- * reporting writes after a local directory becomes a link to that file's
- * directory. The plugin drops every watcher event for a path the functions
- * in server.watch.ignored ignore now, before Vite reloads anything.
+ * The watcher does not check server.watch.ignored again before it reports a
+ * change to a path it already watches, so a source that links to a file
+ * outside the checkout keeps reporting writes after a local directory
+ * becomes a link to that file's directory. The plugin drops every watcher
+ * event for a path the functions in server.watch.ignored ignore now, before
+ * Vite reloads anything.
  */
 export function refuseLinkedFiles() {
   let config

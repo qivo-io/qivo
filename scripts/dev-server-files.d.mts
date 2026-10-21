@@ -5,5 +5,5 @@ export function devServerFiles(root: string): Required<Pick<ServerOptions, 'watc
 
 /** Refuses dev server requests for a file whose real path server.fs refuses,
  * and a build whose public directory links to one, and drops watcher events
- * for a path server.watch.ignored ignores now. */
+ * for a path the functions in server.watch.ignored ignore now. */
 export function refuseLinkedFiles(): Plugin
