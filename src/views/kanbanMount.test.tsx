@@ -240,6 +240,22 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
     expect(waiting()).toBeGreaterThan(before)
   })
 
+  it('sizes the waiting cards again when the date format changes', async () => {
+    const board = await loadBoard(network, (snap) => {
+      for (let n = 0; n < 500; n++)
+        snap.issues.push({ ...taskRow(snap, `t${n}`, 'todo', n + 1), due_date: '2026-10-22' })
+    })
+    await board.render(root)
+    const waiting = 500 - cards().length
+    const dates = vi.spyOn(board.P, 'fmtISO')
+    // the organization's new date format, as App sets it on its next render
+    board.P.setDateFormat('MMM D, YYYY')
+    board.snapshot.issues[0].title = 'Renamed elsewhere'
+    await board.deliver()
+    // each waiting card's due date is measured again in the new format
+    expect(dates.mock.calls.length).toBeGreaterThanOrEqual(waiting)
+  })
+
   it('keeps the cards it sized when a change moves only the store context', async () => {
     const board = await loadBoard(network, tasks(500))
     await board.render(root)

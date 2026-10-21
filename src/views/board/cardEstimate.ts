@@ -5,6 +5,7 @@ import {
   META_TEXT_LINE,
   type MetaItem,
 } from '@/lib/boardGroups'
+import { dateFormatInUse } from '@/lib/dates'
 import { type IssueVM, P, type ProjectPlace } from '@/store/planner'
 
 /** The place the card's parent heading shows. Repeated child project
@@ -61,14 +62,22 @@ export function estimateBoardCard(
     sizes every waiting card, so it works out only the cards that changed. A
     task gets a new object when its title or delay changes; whether it shows
     a delay banner or a place line also follows its project's delay setting
-    and the projects' tree, which change P.projects, and the layout. Nothing
+    and the projects' tree, which change P.projects, and the layout, and its
+    due date's width follows the organization's date format. Nothing
     else of the store's moves an estimate. A parent's card repeats in each
     cell that holds one of its subtasks, with other tasks, so the cell is
     part of the key. */
 export function createEstimateCache() {
   const known = new Map<
     string,
-    { members: IssueVM[]; width: number; kind: string; projects: typeof P.projects; value: number }
+    {
+      members: IssueVM[]
+      width: number
+      kind: string
+      projects: typeof P.projects
+      dates: string
+      value: number
+    }
   >()
   return (
     group: BoardCellGroup<IssueVM>,
@@ -85,12 +94,20 @@ export function createEstimateCache() {
       entry.width === cardWidth &&
       entry.kind === kind &&
       entry.projects === P.projects &&
+      entry.dates === dateFormatInUse() &&
       entry.members.length === members.length &&
       entry.members.every((it, i) => it === members[i])
     )
       return entry.value
     const value = estimateBoardCard(group, place, cardWidth)
-    known.set(key, { members, width: cardWidth, kind, projects: P.projects, value })
+    known.set(key, {
+      members,
+      width: cardWidth,
+      kind,
+      projects: P.projects,
+      dates: dateFormatInUse(),
+      value,
+    })
     return value
   }
 }

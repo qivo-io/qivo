@@ -154,9 +154,12 @@ export function DeferredList<T extends object>({
      array, a render can only mount more of it: a slice. It then works on
      the items it adds alone, as work on every mounted item in each slice
      would grow with the list and leave the slices little time to mount. */
-  const last = useRef<{ items: T[]; initial: number; mounted: number; blocks: Block<T>[] } | null>(
-    null,
-  )
+  const last = useRef<{
+    items: readonly T[]
+    initial: number
+    mounted: number
+    blocks: Block<T>[]
+  } | null>(null)
   const grown =
     last.current?.items === items && last.current.initial === initial ? last.current : null
   // a length a slice or mountThrough asked for, 0 once rendered
