@@ -260,8 +260,8 @@ because you have no access or the project is archived, nor archived subtasks.
 Clear the box to delete only the task. A subtask whose parent is deleted, and
 that is not deleted itself, stays in its project and becomes a top-level
 task; archived subtasks follow a moment after the delete. Restoring the
-parent does not bring it back under it. People following it are told its
-parent was removed.
+parent does not bring it back under it. People following it are told
+moments later that its parent was removed.
 
 If the subtasks change while the window is open, it shows the new list and
 asks again. The window stays open until Qivo has saved the archive or delete,

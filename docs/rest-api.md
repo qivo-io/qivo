@@ -1475,7 +1475,8 @@ the newest one makes the one before it the newest.
 and returns `{ "deleted": true, "id": "…", "key": "QN-3" }`. Its comments,
 attachments, links, labels and follows go with it, its inbox messages are
 deleted, and its active subtasks become top-level tasks at once and its
-archived ones a moment later. From then on the task
+archived ones a moment later. Their followers' inbox messages arrive
+moments after the delete. From then on the task
 answers `404` like an unknown one, while its number, uuid and files stay
 reserved. A person can restore it in the app under **Settings → Projects →
 Deleted items**, and the API has no restore. A nightly job deletes it for
@@ -1639,7 +1640,8 @@ routes](#inbox).
 All of it happens server-side, inside the same transaction as the write, so
 it needs nothing from the caller. The exceptions are follower messages on a
 task with more than 128 followers, past the first 128, and every follower
-message of a roadmap save or an access removal, which arrive moments later
+message of a roadmap save, an access removal or the subtasks a task delete
+detaches, which arrive moments later
 (see [Inbox](#inbox)). Unknown or out-of-org uuids in mention
 position are silently ignored, as are users without visibility into the
 project and agents that receive no inbox messages (see [Inbox](#inbox)), so a
@@ -1691,8 +1693,8 @@ with many followers it does so moments after the arrival, so an item can
 briefly hold one more. A comment or a change on a task with more than 128
 followers, such as a task from before the follower limit, reaches the
 first 128 at once and the rest moments later. The followers of the tasks a
-roadmap save or an access removal changes get their messages moments after
-it saves.
+roadmap save or an access removal changes, and of the subtasks a task delete
+detaches, get their messages moments after it saves.
 
 ```
 GET  /v1/inbox                 items, latest activity first (read)

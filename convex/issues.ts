@@ -475,10 +475,10 @@ export const unarchive = orgMutation({
  * P.deleteIssue: the task and the chosen subtasks move to Deleted items as
  * one item (model/deletedItems.ts moveTasksToTrash), where a person can
  * restore them. Their messages are deleted, children left behind are
- * detached, touched and notified, and each task writes the 'deleted'
- * activity row the old client wrote, with no detail. `reason` is shown in
- * Deleted items, trimmed and refused past DELETE_REASON_MAX
- * (lib/textLimits.ts, 500 characters).
+ * detached and touched, their followers told moments later, and each task
+ * writes the 'deleted' activity row the old client wrote, with no detail.
+ * `reason` is shown in Deleted items, trimmed and refused past
+ * DELETE_REASON_MAX (lib/textLimits.ts, 500 characters).
  *
  * `subtask_ids` names the subtasks the caller chose to delete with it, as
  * the delete window listed them. Each must still be an active task under one
@@ -505,18 +505,29 @@ export const deleteDeep = orgMutation({
     const why = cleanReason(reason)
     const chosen = new Set(subtask_ids ?? [])
     const doomed: Doc<'issues'>[] = []
+    // the root's active children, read once here and handed on
+    let children: Doc<'issues'>[] | undefined
     if (chosen.size) {
-      const kids = await ctx.db
+      children = await ctx.db
         .query('issues')
         .withIndex('by_parent_archived', (q) =>
           q.eq('parent_id', issue.id).eq('archived_at', undefined),
         )
         .take(SUBTASK_MAX)
-      for (const kid of kids) {
+      // whether the caller may delete a subtask in each project, read once
+      // per project rather than once per subtask
+      const usable = new Map<string, boolean>()
+      for (const kid of children) {
         if (!chosen.has(kid.id)) continue
-        // an archived project keeps its tasks and grants, but they are put away
-        if ((await byId(ctx, 'projects', kid.project_id))?.archived_at !== undefined) continue
-        if (!(await hasProjectLevel(ctx, ctx.me, kid.project_id, 'user'))) continue
+        let ok = usable.get(kid.project_id)
+        if (ok === undefined) {
+          // an archived project keeps its tasks and grants, but they are put away
+          ok =
+            (await byId(ctx, 'projects', kid.project_id))?.archived_at === undefined &&
+            (await hasProjectLevel(ctx, ctx.me, kid.project_id, 'user'))
+          usable.set(kid.project_id, ok)
+        }
+        if (!ok) continue
         chosen.delete(kid.id)
         doomed.push(kid)
       }
@@ -525,6 +536,7 @@ export const deleteDeep = orgMutation({
     await moveTasksToTrash(ctx, {
       actor: ctx.me,
       root: issue,
+      children,
       subtasks: doomed,
       now,
       reason: why,

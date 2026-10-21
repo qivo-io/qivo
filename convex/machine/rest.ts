@@ -864,8 +864,9 @@ export const updateIssue = internalMutation({
  * items as the app's delete does (model/deletedItems.ts moveTasksToTrash), where a person can
  * restore it in the app. Its comments, follows, labels, links and
  * attachments go with it, its messages are deleted, and its subtasks stay,
- * detached, touched AND notified. The item records the credential (`via`),
- * and the 'deleted' narration's detail is exactly the provenance. */
+ * detached and touched, and their followers told moments later. The item
+ * records the credential (`via`), and the 'deleted' narration's detail is
+ * exactly the provenance. */
 export const deleteIssue = internalMutation({
   args: {
     callerId: v.string(),

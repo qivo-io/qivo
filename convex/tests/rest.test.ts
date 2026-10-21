@@ -11,7 +11,7 @@
  * fields+archived single PATCH: one row write, one fan-out, one activity row,
  * plus the cascade with its suppression semantics. */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import { CALLER_GONE, SUBTREE_WALK } from '../lib/core'
@@ -2195,6 +2195,11 @@ describe("a group's dates on REST", () => {
 
 describe('DELETE /v1/tasks/{ref}', () => {
   it('moves the task to Deleted items with the key, detaches children with notify, narrates deleted with provenance', async () => {
+    // the detach notice reaches followers from a background step
+    vi.useFakeTimers()
+    onTestFinished(() => {
+      vi.useRealTimers()
+    })
     const t = newT()
     const f = await machineOrg(t)
     const credential = await plantCredential(t, f.agent, 'agent_keys', KEY)
@@ -2246,6 +2251,8 @@ describe('DELETE /v1/tasks/{ref}', () => {
     ])
     const childRow = await issueRow(t, child.id)
     expect(childRow?.parent_id).toBeUndefined()
+    expect(await messagesFor(t, f.user.id, child.id)).toEqual([])
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
     const childMsgs = await messagesFor(t, f.user.id, child.id)
     expect(childMsgs.map((m) => m.detail)).toEqual(['Detached from its parent'])
     const acts = await activityFor(t, f.org.id)
