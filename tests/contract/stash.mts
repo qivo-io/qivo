@@ -93,12 +93,20 @@ const SQLITE_BUSY = 5
  * never removed: a pass could otherwise lock a file another pass removed,
  * while a third locks a new one. The holder file only names the process for
  * the refusal.
+ *
+ * Only SQLite opens an existing lock file. Closing any descriptor of a file
+ * drops every lock its process holds on it, so a plain open and close in a
+ * process that holds the lease would give the lease away.
  */
 export function takeLease(stash: string, deployment: string): () => void {
   const base = stash.replace(/\.credentials\.json$/, '')
   const lock = `${base}.lease`
   const holder = `${base}.lease.json`
-  closeSync(openSync(lock, 'a', 0o600))
+  try {
+    closeSync(openSync(lock, 'wx', 0o600))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+  }
   const db = new DatabaseSync(lock, { timeout: 0 })
   try {
     db.exec('BEGIN EXCLUSIVE')

@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
 import {
   chmodSync,
@@ -96,6 +96,20 @@ const stash = () => join(fixtures, 'contract-fine-goose-986.credentials.json')
 const next = () => join(fixtures, 'contract-fine-goose-986.new.credentials.json')
 const legacy = () => join(root, 'tests', 'contract', '.credentials.json')
 const resetMarker = () => calls.push({ fn: 'reset', args: {} })
+/** The lease module, for a pass in another process. */
+const leaseModule = pathToFileURL(join(import.meta.dirname, 'contract', 'stash.mts')).href
+/** Whether a pass in another process can take the lease now. */
+const takenElsewhere = () =>
+  spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `import { takeLease } from ${JSON.stringify(leaseModule)}
+try { takeLease(${JSON.stringify(stash())}, 'fine-goose-986'); console.log('taken') } catch { console.log('refused') }`,
+    ],
+    { encoding: 'utf8' },
+  ).stdout.trim() === 'taken'
 
 describe('contract pass setup', () => {
   it('stashes the credentials privately outside the checkout and removes them at teardown', async () => {
@@ -147,7 +161,10 @@ describe('contract pass setup', () => {
       2,
     ])
     expect(reset).not.toHaveBeenCalled()
+    // the refusal leaves the running pass holding the lease
+    expect(takenElsewhere()).toBe(false)
     teardown()
+    expect(takenElsewhere()).toBe(true)
     ;(await contractSetup({ env, run: runner(), reset }, root))()
     expect(reset).toHaveBeenCalledOnce()
   })
@@ -159,13 +176,12 @@ describe('contract pass setup', () => {
     const left = JSON.stringify({ siteUrl: env.VITE_CONVEX_SITE_URL, orgId: 'org', pass })
     writeFileSync(stash(), left)
     rows = [{ id: 'old', kind: 'mcp_token', profile_id: nora, name: `contract pass token ${pass}` }]
-    const module = pathToFileURL(join(import.meta.dirname, 'contract', 'stash.mts')).href
     const holder = spawn(
       process.execPath,
       [
         '--input-type=module',
         '-e',
-        `import { takeLease } from ${JSON.stringify(module)}
+        `import { takeLease } from ${JSON.stringify(leaseModule)}
 takeLease(${JSON.stringify(stash())}, 'fine-goose-986')
 console.log('held')
 setInterval(() => {}, 1 << 30)`,
