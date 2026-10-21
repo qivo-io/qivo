@@ -4,13 +4,11 @@ import {
   type RefObject,
   useContext,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
 } from 'react'
 import { lastInputWasPointer } from './focusVisibility'
 import { markTaskFocus, type TaskFocusMark } from './taskFocus'
-import { useLatest } from './useLatest'
 
 /* Static controls for long lists. A row in a static scope renders today's
    DOM but mounts no Radix tooltip or popover roots: HoverTooltip clones its
@@ -55,16 +53,20 @@ export function useLiveControls(root: RefObject<HTMLElement | null>) {
   const [live, setLive] = useState(false)
   // what to restore once the live controls are in
   const handover = useRef<{ focus: TaskFocusMark | null; wrap: number } | null>(null)
-  const activate = useLatest((wrap?: HTMLElement | null) => {
-    const element = root.current
-    if (!element || handover.current) return
-    const active = document.activeElement
-    handover.current = {
-      focus: active && element.contains(active) ? markTaskFocus(active) : null,
-      wrap: wrap ? [...element.querySelectorAll('[data-popover-wrap]')].indexOf(wrap) : -1,
-    }
-    setLive(true)
-  })
+  // made once: it reads only the refs and the setter, which keep their identity
+  const [statics] = useState<StaticControls>(() => ({
+    activate: (wrap) => {
+      const element = root.current
+      if (!element || handover.current) return
+      const active = document.activeElement
+      handover.current = {
+        focus: active && element.contains(active) ? markTaskFocus(active) : null,
+        wrap: wrap ? [...element.querySelectorAll('[data-popover-wrap]')].indexOf(wrap) : -1,
+      }
+      setLive(true)
+    },
+  }))
+  const { activate } = statics
   useLayoutEffect(() => {
     const next = handover.current
     const element = root.current
@@ -80,7 +82,7 @@ export function useLiveControls(root: RefObject<HTMLElement | null>) {
     // the live trigger opens through its own Radix toggle
     trigger.click()
   }, [live, root])
-  const value = useMemo(() => (live ? null : { activate }), [live, activate])
+  const value = live ? null : statics
   /* A mouse that points at the row, never a touch, and never while a button
      is held: a press or drag keeps the node it started on. */
   const pointed = (event: PointerEvent) => {
