@@ -88,6 +88,22 @@ describe('unsent scopes', () => {
     expect(cleared).toHaveLength(3)
   })
 
+  it('tells a chosen Discard from a close that went ahead unasked', () => {
+    const task = createUnsentScope()
+    const editor = createUnsentScope(task)
+    const release = editor.hold('comment')
+    // the task was archived: the window closes without the question
+    task.discard('unasked')
+    expect(editor.discarded()).toBe(true)
+    expect(editor.chosen()).toBe(false)
+    release()
+    const again = editor.hold('comment')
+    task.discard()
+    expect(editor.chosen()).toBe(true)
+    again()
+    expect(editor.chosen()).toBe(true)
+  })
+
   it('ends a discard after DISCARD_MS', () => {
     vi.useFakeTimers()
     try {

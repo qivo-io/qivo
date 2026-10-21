@@ -47,12 +47,17 @@ export type UnsentScope = {
       moment later, after a history step: the window, and every window
       inside it, reports nothing for DISCARD_MS, or until a new lease
       begins. A window that stays open after all asks again from then on.
-      Runs the leases' onDiscard. */
-  discard: () => void
+      Runs the leases' onDiscard. `how` is 'chosen' when the person chose
+      Discard or a notice names what went, and 'unasked' for a close that
+      goes ahead without the question, such as after the task was archived,
+      whose editors still say what went. */
+  discard: (how?: 'chosen' | 'unasked') => void
   /** Whether a Discard on this window or one around it is letting a close
-      go ahead now, also while that close ends the window's leases, so an
-      editor that unmounts with it can tell its text went by Discard. */
+      go ahead now, also while that close ends the window's leases. */
   discarded: () => boolean
+  /** Whether that Discard was chosen (discard), so an editor that unmounts
+      with the close says nothing more of its text. */
+  chosen: () => boolean
 }
 
 /** How long a Discard lets the close it answered go ahead. */
@@ -62,15 +67,18 @@ export const DISCARD_MS = 1500
 export function createUnsentScope(parent: UnsentScope | null = null): UnsentScope {
   const own = new Map<symbol, { what: string; onDiscard?: () => void }>()
   let discardedAt: number | null = null
-  const discarded = () =>
-    (discardedAt !== null && Date.now() - discardedAt < DISCARD_MS) || !!parent?.discarded()
+  let chosenAt: number | null = null
+  const lasts = (at: number | null) => at !== null && Date.now() - at < DISCARD_MS
+  const discarded = () => lasts(discardedAt) || !!parent?.discarded()
   return {
     held: () => (discarded() ? [] : [...new Set([...own.values()].map((lease) => lease.what))]),
     discarded,
+    chosen: () => lasts(chosenAt) || !!parent?.chosen(),
     hold: (what, onDiscard) => {
       const lease = Symbol()
       own.set(lease, { what, onDiscard })
       discardedAt = null
+      chosenAt = null
       // the window around runs it, as a Discard there throws `what` away too
       const outer = parent?.hold(what, onDiscard)
       return () => {
@@ -78,9 +86,10 @@ export function createUnsentScope(parent: UnsentScope | null = null): UnsentScop
         outer?.()
       }
     },
-    discard: () => {
+    discard: (how = 'chosen') => {
       if (!own.size) return
       discardedAt = Date.now()
+      chosenAt = how === 'chosen' ? discardedAt : null
       for (const lease of [...own.values()]) lease.onDiscard?.()
     },
   }

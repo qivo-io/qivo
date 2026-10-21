@@ -1219,9 +1219,10 @@ function IssueDetail({
   // the window this one counts its unsent text in (App's task window)
   const windowScope = useContextID(UnsentScopeContext)
   /** Closes the window after its task was archived or deleted, without the
-      question: what was typed for the task goes with it. */
+      question: what was typed for the task goes with it, and its editors
+      say so as they unmount. */
   const closeGone = () => {
-    windowScope?.discard()
+    windowScope?.discard('unasked')
     onClose()
   }
   const [editingComment, setEditingComment] = useStateID<string | null>(null) // comment id being edited in place
