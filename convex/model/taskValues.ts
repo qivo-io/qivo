@@ -65,8 +65,9 @@ export const REMAINING_HOURS_RULE = `remaining_hours must be a number of hours f
 
 /** Refuses remaining hours no task can hold, anything but a finite number
  * of at least 0 or null, with REMAINING_HOURS_RULE. These are cleanRemaining's
- * checks that need no stored row. REST and MCP run it first, so such a value
- * is refused before anything is looked up or compared. */
+ * checks that need no stored row. REST and MCP run it as they parse the
+ * request, after finding the task an edit names, so such a value is refused
+ * before the field check and the task's other rules. */
 export function assertRemainingShape(value: unknown): asserts value is number | null | undefined {
   if (value == null) return
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
