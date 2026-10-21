@@ -8,6 +8,7 @@ import {
   estimateCardHeight,
   groupBoardAssignees,
   groupBoardCell,
+  type MetaItem,
   MIN_CARD_PITCH,
   sideEagerCounts,
 } from './boardGroups'
@@ -335,7 +336,14 @@ describe('groupBoardCell', () => {
 })
 
 describe('estimateCardHeight', () => {
-  type Task = BoardCellIssue & { title: string; late?: boolean; placed?: boolean }
+  type Task = BoardCellIssue & {
+    title: string
+    late?: boolean
+    placed?: boolean
+    meta?: MetaItem[]
+  }
+  const icon = { width: 11, height: 11 }
+  const text = (width: number) => ({ width, height: 17.4 })
   const task = (id: string, title = 'Testbed signed firmware task 12', more: Partial<Task> = {}) =>
     ({ id, uuid: id, title, ...more }) as Task
   const card = (issues: Task[], parent: Task | null = null, ancestors: Task[] = []) => ({
@@ -344,14 +352,39 @@ describe('estimateCardHeight', () => {
     ancestors,
     issues,
   })
-  const shown = { banner: (it: Task) => !!it.late, placed: (it: Task) => !!it.placed }
+  const shown = {
+    banner: (it: Task) => !!it.late,
+    placed: (it: Task) => !!it.placed,
+    // the priority mark and the hours, one line
+    meta: (it: Task) => it.meta ?? [icon, text(21)],
+  }
   const height = (group: BoardCellGroup<Task>, width = 203) =>
     estimateCardHeight(group, width, shown)
 
   it('matches the measured plain card, and the pitch is its height and gap', () => {
     // 81.17px measured for a two-line title at 203px (see the constants)
     expect(height(card([task('a')]))).toBe(82)
-    expect(height(card([task('a', 'Short')]))).toBe(MIN_CARD_PITCH - 8 + 1)
+    // the least card: one title line and the priority mark alone
+    expect(height(card([task('a', 'Short', { meta: [icon] })]))).toBe(MIN_CARD_PITCH - 8 + 1)
+    expect(height(card([task('a', 'Short', { meta: [] })]))).toBeLessThan(
+      height(card([task('a', 'Short')])),
+    )
+  })
+
+  it('wraps the meta line as the card does', () => {
+    // measured at 203px: the mark, then a 156px place on a line of its own
+    // (32px), and the mark with 10h, then the place (39px)
+    const title = 'Board scale calibrate task 341'
+    expect(height(card([task('a', title, { meta: [icon, text(156)] })]))).toBe(
+      Math.ceil(2 + 16 + 2 * 18.9 + 8 + 11 + 4 + 17.4),
+    )
+    expect(height(card([task('a', title, { meta: [icon, text(21), text(156)] })]))).toBe(
+      Math.ceil(2 + 16 + 2 * 18.9 + 8 + 17.4 + 4 + 17.4),
+    )
+    // the mark, the place and a due date that fit one wide card's line
+    expect(height(card([task('a', 'Short', { meta: [icon, text(60), text(85)] })]), 400)).toBe(
+      Math.ceil(2 + 16 + 18.9 + 8 + 17.4),
+    )
   })
 
   it('never falls for a longer title, a banner, a place, more rows or a narrower card', () => {
@@ -360,6 +393,7 @@ describe('estimateCardHeight', () => {
     const grown = [
       card([task('a', 'A long title '.repeat(6))], task('p'), [task('g')]),
       card([task('a', undefined, { late: true })], task('p'), [task('g')]),
+      card([task('a', undefined, { meta: [icon, text(21), text(156)] })], task('p'), [task('g')]),
       card([task('a')], task('p', undefined, { placed: true }), [task('g')]),
       card([task('a'), task('b')], task('p'), [task('g')]),
       card([task('a')], task('p'), [task('g'), task('h')]),

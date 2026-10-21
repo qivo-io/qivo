@@ -1,4 +1,10 @@
-import { type BoardCellGroup, estimateCardHeight } from '@/lib/boardGroups'
+import {
+  type BoardCellGroup,
+  estimateCardHeight,
+  META_ICON_PX,
+  META_TEXT_LINE,
+  type MetaItem,
+} from '@/lib/boardGroups'
 import { type IssueVM, P, type ProjectPlace } from '@/store/planner'
 
 /** The place the card's parent heading shows. Repeated child project
@@ -13,6 +19,28 @@ export const parentPlaceOf = (
     ? place(group.parent)
     : null
 
+/* The meta line's text, measured like the card constants (boardGroups):
+   the mono hours and date take 7px a character, the place's sans text at
+   most 6.1px (5.8px on average), and a due date its 11px calendar and a
+   4px gap before the date. */
+const MONO_CHAR_PX = 7
+const SANS_CHAR_PX = 6
+const ICON: MetaItem = { width: META_ICON_PX, height: META_ICON_PX }
+const text = (width: number): MetaItem => ({ width, height: META_TEXT_LINE })
+
+/** What a task row's meta line holds (kanbanCards TaskRow), in its order. */
+function metaOf(it: IssueVM, place: ProjectPlace | null) {
+  const items: MetaItem[] = []
+  if (P.PRIORITIES[it.priority]) items.push(ICON)
+  const remaining = P.remainingOf(it)
+  if (remaining != null)
+    items.push(text(MONO_CHAR_PX * `${it.children.length ? 'Σ ' : ''}${remaining}h`.length))
+  if (place) items.push(text(SANS_CHAR_PX * P.placeLabel(place).length))
+  if (it.due) items.push(text(META_ICON_PX + 4 + MONO_CHAR_PX * P.fmtISO(it.due).length))
+  if (!P.user(it.owner)) items.push(text(SANS_CHAR_PX * 'Unassigned'.length))
+  return items
+}
+
 /** The height of `group`'s card `cardWidth` pixels wide before it renders,
     with the delay banners and place lines it will show. */
 export function estimateBoardCard(
@@ -23,6 +51,7 @@ export function estimateBoardCard(
   return estimateCardHeight(group, cardWidth, {
     banner: (it) => !!P.delayColor(it),
     placed: (it) => !!(it === group.parent ? parentPlaceOf(group, place) : place(it)),
+    meta: (it) => metaOf(it, place(it)),
   })
 }
 

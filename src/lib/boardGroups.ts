@@ -181,9 +181,12 @@ export function groupBoardCell<T extends BoardCellIssue>(
    1440 x 1000) on the benchmark's varied workspace at 500 tasks: each row's
    getBoundingClientRect height by shape, with the title's line count from
    its height over its line height. Rows: 8px padding above and below; a
-   task title line is 18.9px, then an 8px gap and a 17.4px meta line; a
-   parent title line is 19.6px, then an 8px gap and the 18px portrait line;
-   the delay banner is 25.4px; a place line adds its 8px gap and 17.4px.
+   task title line is 18.9px, then an 8px gap and the meta line; a parent
+   title line is 19.6px, then an 8px gap and the 18px portrait line; the
+   delay banner is 25.4px; a place line adds its 8px gap and 17.4px. A
+   task's meta line wraps its items as flex-wrap does, 8px apart across and
+   4px down, and a line of text is 17.4px high, a line of the 11px priority
+   mark alone 11px (measured on the 10,000-task local Northstar).
    TITLE_CHAR_PX is the width of a title character with its share of word
    wrapping: 8px predicted 538 of 540 titles' lines exactly and 2 one line
    high (the font's mean glyph is 6.8px). A task title is 54px narrower than
@@ -191,7 +194,12 @@ export function groupBoardCell<T extends BoardCellIssue>(
    the rail, a parent title 18px. */
 const ROW_PAD = 8
 const TITLE_LINE = 18.9
-const META = 8 + 17.4
+const META_TOP = 8
+const META_GAP_X = 8
+const META_GAP_Y = 4
+/** The height of a line of meta text, and the size of the priority mark. */
+export const META_TEXT_LINE = 17.4
+export const META_ICON_PX = 11
 const PARENT_LINE = 19.6
 const PARENT_META = 8 + 18
 const BANNER = 25.4
@@ -203,8 +211,34 @@ const PARENT_CHROME_PX = 18
 const CARD_BORDER = 2
 /** The gap between cards in a cell. */
 export const CARD_GAP = 8
-/** The least a card and the gap after it take: one plain row of one line. */
-export const MIN_CARD_PITCH = Math.floor(CARD_BORDER + 2 * ROW_PAD + TITLE_LINE + META + CARD_GAP)
+/** The least a card and the gap after it take: one plain row of one line,
+    with the priority mark alone on its meta line. */
+export const MIN_CARD_PITCH = Math.floor(
+  CARD_BORDER + 2 * ROW_PAD + TITLE_LINE + META_TOP + META_ICON_PX + CARD_GAP,
+)
+
+/** One item of a task row's meta line, as wide and high as it draws. */
+export type MetaItem = { width: number; height: number }
+
+/** The height of a task row's meta line `width` pixels wide, with its gap
+    above: the items in rows as flex-wrap lays them out, each at most the
+    line's width, as a place truncates. */
+function metaHeight(items: readonly MetaItem[], width: number) {
+  let height = META_TOP
+  let row = 0
+  let x = -1
+  for (const item of items) {
+    const w = Math.min(item.width, width)
+    if (x >= 0 && x + META_GAP_X + w > width) {
+      height += row + META_GAP_Y
+      row = 0
+      x = -1
+    }
+    x = x < 0 ? w : x + META_GAP_X + w
+    row = Math.max(row, item.height)
+  }
+  return height + row
+}
 
 /** The lines a title of `length` characters takes in `width` pixels. */
 const titleLines = (length: number, width: number) =>
@@ -212,13 +246,21 @@ const titleLines = (length: number, width: number) =>
 
 /** The height in pixels a card of `group` takes `cardWidth` pixels wide,
     for a card that has not rendered yet. `banner` says whether a task row
-    shows the delay banner, `placed` whether a heading shows its place line.
-    It never falls for a longer title, a banner, more rows or a narrower
-    card. */
+    shows the delay banner, `placed` whether a heading shows its place line,
+    and `meta` what a task row's meta line holds. It never falls for a
+    longer title, a banner, more rows, more meta or a narrower card. */
 export function estimateCardHeight<T extends BoardCellIssue & { title: string }>(
   group: BoardCellGroup<T>,
   cardWidth: number,
-  { banner, placed }: { banner: (issue: T) => boolean; placed: (issue: T) => boolean },
+  {
+    banner,
+    placed,
+    meta,
+  }: {
+    banner: (issue: T) => boolean
+    placed: (issue: T) => boolean
+    meta: (issue: T) => readonly MetaItem[]
+  },
 ) {
   const heading = (issue: T) =>
     2 * ROW_PAD +
@@ -229,7 +271,7 @@ export function estimateCardHeight<T extends BoardCellIssue & { title: string }>
     (banner(issue) ? BANNER : 0) +
     2 * ROW_PAD +
     TITLE_LINE * titleLines(issue.title.length, cardWidth - chrome) +
-    META
+    metaHeight(meta(issue), Math.max(1, cardWidth - chrome))
   let height = CARD_BORDER
   for (const ancestor of group.ancestors) height += heading(ancestor)
   if (group.parent) {
