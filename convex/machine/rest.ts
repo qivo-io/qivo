@@ -100,9 +100,8 @@ import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
 import { utcToday } from '../lib/machineDelay'
 import { mcpResource } from '../lib/oauth'
 import { type EventOwner, vEventOwner } from '../lib/taskEvents'
-import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
 import { ingressShard } from '../model/billingUsage'
-import { postComment } from '../model/comments'
+import { assertArchiveReasonFits, postComment } from '../model/comments'
 import { moveTasksToTrash } from '../model/deletedItems'
 import { parseExpected, refuseCreateExpected, sentKeys } from '../model/expected'
 import {
@@ -408,15 +407,13 @@ function labelRefs(b: Record<string, unknown>, field: 'add_labels' | 'remove_lab
 
 /* archive_reason, posted as a comment when the same request archives the
  * task, as the app's archive dialog does. Undefined when absent. The length
- * check names the field and runs at parse time, before any write, also for a
- * task that is already archived and so posts no comment. */
+ * check runs at parse time, before any write, also for a task that is
+ * already archived and so posts no comment. */
 function archiveReason(b: Record<string, unknown>): string | undefined {
   if (!('archive_reason' in b)) return undefined
   if (typeof b.archive_reason !== 'string') throw badRequest('archive_reason must be a string')
   if (b.archived !== true) throw badRequest('archive_reason needs archived set to true')
-  if (b.archive_reason.trim().length > TEXT_MAX) {
-    throw badRequest(`archive_reason must be at most ${TEXT_MAX_LABEL} characters`)
-  }
+  assertArchiveReasonFits(b.archive_reason)
   return b.archive_reason
 }
 

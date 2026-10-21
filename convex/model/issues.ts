@@ -28,7 +28,7 @@
  *   clear       clearParentRemaining on attach (0066/0067) — also notifies
  *               and touches the parent
  *   notify      notifyIssueInsert/Update fan-out for the row itself
- *   activity    logActivity (each task keeps its newest 500 rows,
+ *   activity    logActivity (a task keeps its whole history,
  *               model/activity.ts); a save that changes nothing it
  *               narrates writes none (narratedChange)
  *
@@ -69,7 +69,7 @@ import {
   profileCanBeAssigned,
   profileCanSeeProject,
 } from '../lib/access'
-import { taskActivity } from '../lib/activityVisibility'
+import { HISTORY_PAGE_MAX, receivedRows } from '../lib/activityVisibility'
 import { assertNewRowId, byId, insertUnique, usedMoreThan } from '../lib/db'
 import {
   ISSUE_PRIORITIES,
@@ -93,13 +93,7 @@ import {
 import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { DESCRIPTION_TOO_LONG, plainText, TEXT_MAX } from '../lib/textLimits'
 import { inWorkingSet } from '../lib/workingSet'
-import {
-  issueChanges,
-  logActivity,
-  machineDetail,
-  narratedChange,
-  SUBJECT_ACTIVITY_CAP,
-} from './activity'
+import { issueChanges, logActivity, machineDetail, narratedChange } from './activity'
 import { scheduleMarkClears } from './archiveMarks'
 import {
   assertExpected,
@@ -347,13 +341,13 @@ const WRITERS_ROOM = 0.5
 /** Who wrote each of a task's `fields` as stored now: the actor of the
  * newest activity row whose field_prints holds the field, when that print is
  * the stored value's (`printed`, the print of the stored compare form) and
- * the caller may see the row (lib/activityVisibility.ts taskActivity). The
+ * the caller may see the row (lib/activityVisibility.ts receivedRows). The
  * writers that log no row (a carried subtask, a cleared holder or parent's
  * hours, a detach) touch the task, so a task touched after its newest row
  * names nobody: such a writer may have put back a value an older row
  * printed. A newer row the caller cannot see hides the person rather than
- * naming an older one. Both reads cover the task's newest
- * SUBJECT_ACTIVITY_CAP rows. */
+ * naming an older one. It reads the task's newest HISTORY_PAGE_MAX rows, so
+ * a field last written before them names nobody. */
 export async function taskWriters(
   read: Read,
   issue: Doc<'issues'>,
@@ -368,9 +362,11 @@ export async function taskWriters(
       q.eq('org_id', issue.org_id).eq('target_type', 'issue').eq('target_id', issue.id),
     )
     .order('desc')
-    .take(SUBJECT_ACTIVITY_CAP)
+    .take(HISTORY_PAGE_MAX)
   if (newest[0] === undefined || issue.updated_at > newest[0].ts) return out
-  const visible = new Set((await taskActivity(read.ctx, read.me, issue)).map((row) => row.id))
+  const visible = new Set(
+    (await receivedRows(read.ctx, read.me, issue, newest)).map((row) => row.id),
+  )
   for (const field of fields) {
     const row = newest.find((r) => r.field_prints?.[field] !== undefined)
     if (row === undefined || row.actor_id === undefined) continue

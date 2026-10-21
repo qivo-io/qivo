@@ -47,7 +47,7 @@ import {
   type QueryCtx,
 } from '../_generated/server'
 import { canSeeProject, hasProjectLevel } from '../lib/access'
-import { taskActivity } from '../lib/activityVisibility'
+import { HISTORY_PAGE_MAX, historyAnchor, taskHistoryPage } from '../lib/activityVisibility'
 import { asMachineCaller, type Caller, findIssue, findProject, issueKey, UUID } from '../lib/core'
 import { byId } from '../lib/db'
 import { vCredentialAccess } from '../lib/enums'
@@ -486,16 +486,20 @@ type ActivityJson = {
   detail: string | null
 }
 
-/* The task's history the caller receives (lib/activityVisibility.ts
- * taskActivity, the app's rule), oldest first, with actor names. An actor
- * whose profile is gone reads as null, also on rows a profile removal has
- * not cleared yet (profileRemovals.ts clears older rows in the background). */
+/* A page of the task's history the caller receives (lib/activityVisibility.ts
+ * taskHistoryPage, the app's rule), the newest rows or those before the row
+ * `before` names, oldest first, with actor names. An empty page means there
+ * is no earlier history the caller receives. An actor whose profile is gone
+ * reads as null, also on rows a profile removal has not cleared yet
+ * (profileRemovals.ts clears older rows in the background). */
 async function activityOut(
   ctx: QueryCtx,
   me: Caller,
   issue: Doc<'issues'>,
+  before: string | undefined,
 ): Promise<ActivityJson[]> {
-  const rows = await taskActivity(ctx, me, issue)
+  const anchor = before === undefined ? undefined : await historyAnchor(ctx, issue, before)
+  const { rows } = await taskHistoryPage(ctx, me, issue, anchor)
   const names = new Map<string, string | null>()
   const out: ActivityJson[] = []
   for (const ev of rows) {
@@ -516,25 +520,35 @@ async function activityOut(
   return out
 }
 
-/* GET /v1/tasks/{ref}/activity, the task's history. */
+/* GET /v1/tasks/{ref}/activity?before=, a page of the task's history. */
 export const restTaskActivity = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    ref: v.string(),
+    before: v.optional(v.string()),
+  },
   handler: async (ctx, a): Promise<ActivityJson[]> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
-    return await activityOut(ctx, me, issue)
+    return await activityOut(ctx, me, issue, a.before)
   },
 })
 
-/* list_task_activity, the task's history. */
+/* list_task_activity, a page of the task's history. */
 export const mcpTaskActivity = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    ref: v.string(),
+    before: v.optional(v.string()),
+  },
   handler: async (ctx, a): Promise<string> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound(`task "${a.ref}" not found (or not visible to you)`)
-    return pretty(await activityOut(ctx, me, issue))
+    return pretty(await activityOut(ctx, me, issue, a.before))
   },
 })
 
@@ -772,13 +786,15 @@ export const RECORD_TOOLS: McpTool[] = [
     def: {
       name: 'list_task_activity',
       title: 'List task activity',
-      description:
-        "A task's history, oldest first: who changed what and when, as the app's Activity shows it. Comments are in list_comments.",
+      description: `A task's newest history, oldest first: who changed what and when, as the app's Activity shows it. A page holds at most ${HISTORY_PAGE_MAX} rows. To read further back, pass the first row's \`id\` as \`before\`. An empty list means there is no earlier history. Comments are in list_comments.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
         properties: {
           ref: {
+            type: 'string',
+          },
+          before: {
             type: 'string',
           },
         },
@@ -789,7 +805,7 @@ export const RECORD_TOOLS: McpTool[] = [
       r.runQuery(internal.machine.records.mcpTaskActivity, {
         callerId,
         access,
-        ...(args as { ref: string }),
+        ...(args as { ref: string; before?: string }),
       }),
   },
   {
@@ -893,11 +909,13 @@ export const RECORD_ROUTES: RestRoute[] = [
     path: 'tasks/:ref/activity',
     access: 'read',
     status: 200,
-    run: (r, { callerId, access, param }) =>
+    query: ['before'],
+    run: (r, { callerId, access, param, query }) =>
       r.runQuery(internal.machine.records.restTaskActivity, {
         callerId,
         access,
         ref: param('ref'),
+        before: query('before'),
       }),
   }),
   route({

@@ -14,6 +14,7 @@ import type { WithoutSystemFields } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { namedTaskNums } from '../internal/activityRows'
 import { byId } from '../lib/db'
 import { INBOX_LIMIT, loadInbox } from '../lib/inbox'
 import { insertActivity } from '../model/activity'
@@ -1268,7 +1269,7 @@ describe('task history visibility', () => {
     expect(await seenRows(f.admin)).toEqual(all)
   })
 
-  it('a relation row in the wording before or after October 2026 reaches the same people', async () => {
+  it('a relation row in the wording before or after October 2026 reaches the same people once listed', async () => {
     const member = await seatOn(f.sub.id)
     const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const hiddenTask = await plantIssue(t, { org_id: f.org.id, project_id: hiddenSub.id })
@@ -1294,6 +1295,10 @@ describe('task history visibility', () => {
       for (const row of Object.values(rows)) await ctx.db.insert('activity_events', row)
       return rows
     })
+    // stored without a list, they reach admins only until the migration lists
+    // the tasks their text names (internal/activityRows.ts)
+    expect(await seen(member)).toEqual([])
+    await t.mutation(internal.internal.activityRows.run, {})
     expect(await seen(f.admin)).toEqual(
       Object.values(ids)
         .map((r) => r.id)
@@ -1714,13 +1719,14 @@ describe('commentThread events', () => {
     project_id: f.sub.id,
     ...extra,
   })
-  /* Raw rows, one second apart in this order, standing for rows stored
-   * before numbering. */
+  /* Raw rows, one second apart in this order, each with the list of tasks
+   * its text names unless it brings its own. */
   const plantRows = (rows: ReturnType<typeof ev>[]) =>
     t.run(async (ctx) => {
       const base = Date.parse(NOW)
       for (const [i, row] of rows.entries())
         await ctx.db.insert('activity_events', {
+          named_task_nums: namedTaskNums(row) ?? undefined,
           ...row,
           ts: new Date(base + i * 1000).toISOString(),
         })
@@ -1820,6 +1826,14 @@ describe('commentThread events', () => {
         const page = await thread(p, task.id)
         expect(page.comments.map((c) => c.body)).toEqual(['still here'])
         expect(page.events).toEqual([])
+        expect(page.events_earlier).toBe(false)
+        const anchor = (await rest(f.admin, task.id))[0]
+        const before = await as(t, p).query(api.snapshot.historyBefore, {
+          org_id: f.org.id,
+          issue_id: task.id,
+          before: anchor,
+        })
+        expect(before).toEqual({ events: [], earlier: false })
         expect(await rest(p, task.id)).toHaveLength(1)
         expect(await mcp(p, task.id)).toHaveLength(1)
       }
@@ -1929,7 +1943,7 @@ describe('commentThread events', () => {
     for (const p of [f.admin, f.guest]) expect(await events(p, issueVis.id)).toEqual([ids[0]])
   })
 
-  it("keeps a task's newest 500 rows whatever other tasks and organizations write", async () => {
+  it("pages a task's whole history whatever other tasks and organizations write", async () => {
     const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // the admin's seat in the other organization
     await plantSeat(t, {
@@ -1958,10 +1972,56 @@ describe('commentThread events', () => {
         await insertActivity(ctx, entry(uuid(), f.otherOrg.id, 1_000 + i))
       }
     })
+    const times = (from: number, n: number) =>
+      Array.from({ length: n }, (_, i) => new Date(base + (from + i) * 1000).toISOString())
     const page = await thread(f.admin, issueVis.id)
-    expect(page.events).toHaveLength(500)
-    expect(page.events.map((e) => e.seq)).toEqual(Array.from({ length: 500 }, (_, i) => i + 101))
+    expect(page.events.map((e) => e.ts)).toEqual(times(100, 500))
+    expect(page.events_earlier).toBe(true)
     expect(await rest(f.admin, issueVis.id)).toEqual(page.events.map((e) => e.id))
+    // "Show earlier comments" reads the rest, which REST and MCP page the same way
+    const before = page.events[0].id
+    const earlier = await as(t, f.admin).query(api.snapshot.historyBefore, {
+      org_id: f.org.id,
+      issue_id: issueVis.id,
+      before,
+    })
+    expect(earlier.events.map((e) => e.ts)).toEqual(times(0, 100))
+    expect(earlier.earlier).toBe(false)
+    expect(earlier.events.every((e) => !('field_prints' in e))).toBe(true)
+    const restBefore = await t.query(internal.machine.records.restTaskActivity, {
+      callerId: f.admin.id,
+      access: 'read',
+      ref: issueVis.id,
+      before,
+    })
+    expect(restBefore.map((row) => row.id)).toEqual(earlier.events.map((e) => e.id))
+    const mcpBefore = JSON.parse(
+      await t.query(internal.machine.records.mcpTaskActivity, {
+        callerId: f.admin.id,
+        access: 'read',
+        ref: issueVis.id,
+        before: before.toUpperCase(),
+      }),
+    ) as { id: string }[]
+    expect(mcpBefore.map((row) => row.id)).toEqual(earlier.events.map((e) => e.id))
+    // a row of another task is no place in this history
+    const elsewhere = await t.run((ctx) =>
+      ctx.db
+        .query('activity_events')
+        .withIndex('by_target', (q) =>
+          q.eq('org_id', f.org.id).eq('target_type', 'issue').eq('target_id', other.id),
+        )
+        .first(),
+    )
+    await expectRefusal(
+      as(t, f.admin).query(api.snapshot.historyBefore, {
+        org_id: f.org.id,
+        issue_id: issueVis.id,
+        before: elsewhere!.id,
+      }),
+      'bad_request',
+      /^before must be the id of a row in this task's history$/,
+    )
   })
 })
 
@@ -1995,19 +2055,19 @@ describe('commentThread events near the read limits', () => {
           return out
         })),
       )
-    // the task's rows, numbered: a link to each long task, and after every
-    // tenth a row that names none
+    // the task's rows: a link to each long task, and after every tenth a row
+    // that names none
     const rows = await big.run(async (ctx) => {
       const base = Date.parse(NOW)
       const out: { id: string; names: boolean }[] = []
-      let seq = 0
+      let n = 0
       const add = async (names?: Doc<'issues'>) => {
         const id = uuid()
-        seq++
+        n++
         await ctx.db.insert('activity_events', {
           id,
           org_id: g.org.id,
-          ts: new Date(base + seq * 1000).toISOString(),
+          ts: new Date(base + n * 1000).toISOString(),
           actor_id: g.user.id,
           verb: names === undefined ? 'changed' : 'linked',
           target_type: 'issue',
@@ -2015,7 +2075,6 @@ describe('commentThread events near the read limits', () => {
           label: task.title,
           detail: names === undefined ? undefined : `(blocks QN-${names.num})`,
           project_id: g.sub.id,
-          seq,
           named_task_nums: names === undefined ? [] : [names.num],
         })
         out.push({ id, names: names !== undefined })
@@ -2038,11 +2097,12 @@ describe('commentThread events near the read limits', () => {
         })
     })
     const plain = rows.filter((row) => !row.names).map((row) => row.id)
-    /* The ids `got` holds: some leading link rows and every plain row. */
+    /* The ids `got` holds: some of the newest link rows, since a page reads
+     * newest first, and every plain row. */
     const fits = (got: string[]) => {
       const links = got.filter((id) => !plain.includes(id))
       const allLinks = rows.filter((row) => row.names).map((row) => row.id)
-      expect(links).toEqual(allLinks.slice(0, links.length))
+      expect(links).toEqual(allLinks.slice(allLinks.length - links.length))
       expect(links.length).toBeGreaterThan(0)
       expect(links.length).toBeLessThan(allLinks.length)
       expect(got.filter((id) => plain.includes(id))).toEqual(plain)

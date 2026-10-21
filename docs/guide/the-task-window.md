@@ -42,11 +42,9 @@ your place in the thread. It disappears once the first comment is loaded. If
 loading fails, **Retry** asks again. Comments that arrive while the task is
 open add to the end, and the earlier ones stay loaded. Edits and deletions
 that other people, or your other tabs, make to comments older than the newest
-50 show the next time you open the task. A task holds at most 400 comments.
-Once it has 400, Qivo refuses new ones, so start a new task to continue. An
-archive reason is still posted.
+50 show the next time you open the task. A task has no limit on comments.
 The composer keeps your comment until Qivo saves it, and the text cannot
-change meanwhile. If Qivo refuses it, for example on a task with 400 comments,
+change meanwhile. If Qivo refuses it, for example after you lose edit access,
 the text stays for another try. A refused edit stays open with your text too.
 If you close the task while Qivo saves a comment and Qivo then refuses it,
 Qivo says the comment was discarded. Closing the task, or opening another task
@@ -58,10 +56,13 @@ stay. A task that was deleted or hidden from you shows an empty thread
 instead. The changes under **All** load with the comments and behave the same
 way.
 **Comments** is the default filter; **All** adds changes such as assignments,
-status moves, dates, labels and attachments. Until the first comment is
-loaded, **All** shows only the changes since the oldest loaded comment. Each
-task keeps its newest 500 changes, and changes to other tasks never remove
-them. Field-change entries show before and after
+status moves, dates, labels and attachments. A task keeps all its changes.
+**All** opens at the newest 500 changes beside the loaded comments, and
+**Show earlier activity** above the oldest row loads earlier comments and
+changes together. Until the first comment and the first change are loaded,
+**All** shows only the rows since the later of the oldest loaded comment and
+the oldest loaded change, so it never shows comments beside a gap in the
+changes, or changes beside a gap in the comments. Field-change entries show before and after
 values, including short description excerpts. A **New** line marks unread
 activity, and sits at the top of the loaded comments when the first unread one
 is earlier ([Your inbox](./working-together.md#your-inbox)).
@@ -204,7 +205,8 @@ can be. Clear the box to archive only the task. Its subtasks stay in their
 projects, those directly under it become top-level tasks, and restoring the
 task later does not bring them back under it.
 
-Archiving unfinished work requires a reason, which becomes a task comment. A
+Archiving unfinished work requires a reason, which becomes a task comment.
+The reason, for an archive or a delete, holds at most 500 characters. A
 Done task with no unfinished work going with it needs none. REST and MCP
 archiving always include the subtasks. They accept the same optional reason,
 which also becomes a comment, but do not require one

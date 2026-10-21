@@ -29,8 +29,8 @@ type Thread = {
 }
 
 const START = Date.parse('2026-09-14T08:00:00.000Z')
-// The server's sentence for the 401st comment (convex/model/commentCounts.ts).
-const CAP = 'this task has 400 comments, the most a task can have; start a new task to continue'
+// A `rule` refusal the server answers a post with (convex/lib/textLimits.ts).
+const RULE = 'a comment must be at most 20,000 characters'
 
 /* What a comment's writer learns from the store, and what the thread shows
    when its subscription fails. Writes and thread deliveries are answered by
@@ -185,12 +185,12 @@ describe('comment drafts and a failed thread in the store', () => {
     it('resolves false on a refusal, toasts its sentence and drops the comment', async () => {
       const { P } = store
       live().deliver({ comments: range(1, 4), earlier: false })
-      const saved = P.addComment('task-a', 'The 401st comment')
-      expect(bodies()).toContain('The 401st comment')
-      writes[0].answer.reject(new ConvexError({ code: 'rule', message: CAP }))
+      const saved = P.addComment('task-a', 'One more comment')
+      expect(bodies()).toContain('One more comment')
+      writes[0].answer.reject(new ConvexError({ code: 'rule', message: RULE }))
       expect(await saved).toBe(false)
       expect(toast).toHaveBeenCalledWith(
-        expect.stringContaining('This task has 400 comments'),
+        expect.stringContaining('A comment must be at most 20,000 characters'),
         'error',
       )
       expect(bodies()).toEqual(['#1', '#2', '#3'])
@@ -271,7 +271,7 @@ describe('comment drafts and a failed thread in the store', () => {
       const saved = P.addComment('task-a', 'Refused on A')
       P.watchComments('task-b')
       live().deliver({ comments: range(5, 7), earlier: false })
-      writes[0].answer.reject(new ConvexError({ code: 'rule', message: CAP }))
+      writes[0].answer.reject(new ConvexError({ code: 'rule', message: RULE }))
       expect(await saved).toBe(false)
       expect(bodies()).toEqual(['#5', '#6'])
       P.watchComments('task-a')

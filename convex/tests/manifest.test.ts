@@ -203,7 +203,6 @@ billingSync:restartStorage mutation internal {"type":"object","value":{"period":
 billingSync:storageStep mutation internal {"type":"object","value":{"period":{"fieldType":{"type":"id","tableName":"billing_periods"},"optional":false},"run":{"fieldType":{"type":"string"},"optional":false},"phase":{"fieldType":{"type":"union","value":[{"type":"literal","value":"own"},{"type":"literal","value":"unscoped"},{"type":"literal","value":"tasks"}]},"optional":false},"cursor":{"fieldType":{"type":"string"},"optional":true},"size":{"fieldType":{"type":"number"},"optional":true},"bytes":{"fieldType":{"type":"number"},"optional":false}}}
 billingSync:sweep action internal {"type":"object","value":{}}
 billingSync:webhook action internal {"type":"object","value":{"event_id":{"fieldType":{"type":"string"},"optional":false},"subscription_id":{"fieldType":{"type":"string"},"optional":false}}}
-commentCounts:step mutation internal {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false}}}
 comments:create mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"issue_id":{"fieldType":{"type":"string"},"optional":false},"body":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 comments:remove mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"expected":{"fieldType":{"type":"object","value":{"body":{"fieldType":{"type":"string"},"optional":false}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 comments:update mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"body":{"fieldType":{"type":"string"},"optional":false},"expected":{"fieldType":{"type":"object","value":{"body":{"fieldType":{"type":"string"},"optional":false}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -247,6 +246,8 @@ identity:claimMySeats mutation public {"type":"object","value":{}}
 identity:claimSeatsInternal mutation internal {"type":"object","value":{"userId":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"emailVerified":{"fieldType":{"type":"boolean"},"optional":false}}}
 identity:createOrganization mutation public {"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false}}}
 identity:whoami query public {"type":"object","value":{}}
+internal/activityRows:check query internal {"type":"object","value":{"cursor":{"fieldType":{"type":"string"},"optional":true}}}
+internal/activityRows:run mutation internal {"type":"object","value":{"cursor":{"fieldType":{"type":"string"},"optional":true}}}
 internal/archivedReadsBackfill:org mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"phase":{"fieldType":{"type":"union","value":[{"type":"literal","value":"tasks"},{"type":"literal","value":"projects"}]},"optional":false},"cursor":{"fieldType":{"type":"string"},"optional":true},"tasks":{"fieldType":{"type":"number"},"optional":false},"projects":{"fieldType":{"type":"number"},"optional":false},"page":{"fieldType":{"type":"number"},"optional":true}}}
 internal/archivedReadsBackfill:start mutation internal {"type":"object","value":{"cursor":{"fieldType":{"type":"string"},"optional":true},"page":{"fieldType":{"type":"number"},"optional":true}}}
 internal/attachmentScopeBackfill:start mutation internal {"type":"object","value":{"from":{"fieldType":{"type":"string"},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true},"rows":{"fieldType":{"type":"number"},"optional":true},"filled":{"fieldType":{"type":"number"},"optional":true},"orphans":{"fieldType":{"type":"number"},"optional":true}}}
@@ -356,13 +357,13 @@ machine/records:mcpCheckTextFile mutation internal {"type":"object","value":{"ca
 machine/records:mcpConfirmUpload mutation internal {"type":"object","value":{"callerId":{"fieldType":{"type":"string"},"optional":false},"access":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"write"}]},"optional":false},"ref":{"fieldType":{"type":"string"},"optional":false},"ticket":{"fieldType":{"type":"string"},"optional":false},"storage_id":{"fieldType":{"type":"string"},"optional":false}}}
 machine/records:mcpDeleteAttachment mutation internal {"type":"object","value":{"callerId":{"fieldType":{"type":"string"},"optional":false},"access":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"write"}]},"optional":false},"ref":{"fieldType":{"type":"string"},"optional":false},"attachment":{"fieldType":{"type":"string"},"optional":false}}}
 machine/records:mcpStartUpload mutation internal {"type":"object","value":{"callerId":{"fieldType":{"type":"string"},"optional":false},"access":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"write"}]},"optional":false},"ref":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"size":{"fieldType":{"type":"number"},"optional":false},"content_type":{"fieldType":{"type":"string"},"optional":true}}}
-machine/records:mcpTaskActivity query internal {"type":"object","value":{"callerId":{"fieldType":{"type":"string"},"optional":false},"access":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"write"}]},"optional":false},"ref":{"fieldType":{"type":"string"},"optional":false}}}
+machine/records:mcpTaskActivity query internal {"type":"object","value":{"callerId":{"fieldType":{"type":"string"},"optional":false},"access":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"write"}]},"optional":false},"ref":{"fieldType":{"type":"string"},"optional":false},"before":{"fieldType":{"type":"string"},"optional":true}}}
 machine/records:mcpWorkload query internal {"type":"object","value":{"callerId":{"fieldType":{"type":"string"},"optional":false},"access":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"write"}]},"optional":false},"today":{"fieldType":{"type":"string"},"optional":false},"from_week":{"fieldType":{"type":"string"},"optional":true},"weeks":{"fieldType":{"type":"number"},"optional":true},"project":{"fieldType":{"type":"string"},"optional":true}}}
 machine/records:restConfirmUpload mutation internal {"type":"object","value":{"callerId":{"fieldType":{"type":"string"},"optional":false},"access":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"write"}]},"optional":false},"keyName":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"ref":{"fieldType":{"type":"string"},"optional":false},"ticket":{"fieldType":{"type":"string"},"optional":false},"body":{"fieldType":{"type":"string"},"optional":false}}}
 machine/records:restDeleteAttachment mutation internal {"type":"object","value":{"callerId":{"fieldType":{"type":"string"},"optional":false},"access":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"write"}]},"optional":false},"keyName":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"ref":{"fieldType":{"type":"string"},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"body":{"fieldType":{"type":"string"},"optional":true}}}
 machine/records:restListAttachments query internal {"type":"object","value":{"callerId":{"fieldType":{"type":"string"},"optional":false},"access":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"write"}]},"optional":false},"ref":{"fieldType":{"type":"string"},"optional":false}}}
 machine/records:restStartUpload mutation internal {"type":"object","value":{"callerId":{"fieldType":{"type":"string"},"optional":false},"access":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"write"}]},"optional":false},"ref":{"fieldType":{"type":"string"},"optional":false},"body":{"fieldType":{"type":"string"},"optional":false}}}
-machine/records:restTaskActivity query internal {"type":"object","value":{"callerId":{"fieldType":{"type":"string"},"optional":false},"access":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"write"}]},"optional":false},"ref":{"fieldType":{"type":"string"},"optional":false}}}
+machine/records:restTaskActivity query internal {"type":"object","value":{"callerId":{"fieldType":{"type":"string"},"optional":false},"access":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"write"}]},"optional":false},"ref":{"fieldType":{"type":"string"},"optional":false},"before":{"fieldType":{"type":"string"},"optional":true}}}
 machine/records:restWorkload query internal {"type":"object","value":{"callerId":{"fieldType":{"type":"string"},"optional":false},"access":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"write"}]},"optional":false},"today":{"fieldType":{"type":"string"},"optional":false},"from_week":{"fieldType":{"type":"string"},"optional":true},"weeks":{"fieldType":{"type":"string"},"optional":true},"project":{"fieldType":{"type":"string"},"optional":true}}}
 machine/rest:addComment mutation internal {"type":"object","value":{"callerId":{"fieldType":{"type":"string"},"optional":false},"access":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"write"}]},"optional":false},"ref":{"fieldType":{"type":"string"},"optional":false},"body":{"fieldType":{"type":"string"},"optional":false}}}
 machine/rest:addLink mutation internal {"type":"object","value":{"callerId":{"fieldType":{"type":"string"},"optional":false},"access":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"write"}]},"optional":false},"keyName":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"ref":{"fieldType":{"type":"string"},"optional":false},"body":{"fieldType":{"type":"string"},"optional":false}}}
@@ -507,6 +508,7 @@ snapshot:commentThread query public {"type":"object","value":{"issue_id":{"field
 snapshot:commentsBefore query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"before":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 snapshot:commentsForIssue query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 snapshot:forMe query public {"type":"object","value":{}}
+snapshot:historyBefore query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"before":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teamSync:lastComments query public {"type":"object","value":{"owner_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teamSync:stamp mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"first_since":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teams:addMember mutation public {"type":"object","value":{"team_id":{"fieldType":{"type":"string"},"optional":false},"profile_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -677,7 +679,6 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     cancelInvite: 'platformMutation',
     setMemberRole: 'platformMutation',
   },
-  // A post on a thread too long to count at once schedules commentCounts:step (internal).
   comments: { create: 'orgMutation', update: 'orgMutation', remove: 'orgMutation' },
   // Deleted items spans organizations like Archived projects: list, item
   // and matches read every active seat and judge each item with the seat in
@@ -828,12 +829,14 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     updateMilestone: 'orgMutation',
     removeMilestone: 'orgMutation',
   },
-  // The task window's thread, its earlier pages, and the thread as tabs
-  // loaded before commentThread read it (remove the release after).
+  // The task window's thread, its earlier pages of comments and of history,
+  // and the thread as tabs loaded before commentThread read it (remove the
+  // release after).
   snapshot: {
     forMe: 'authedQuery',
     commentThread: 'orgQuery',
     commentsBefore: 'orgQuery',
+    historyBefore: 'orgQuery',
     commentsForIssue: 'orgQuery',
   },
   // Team sync: staff stamp the person a change was made on (often not
@@ -864,7 +867,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 166
+const PUBLIC_COUNT = 167
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

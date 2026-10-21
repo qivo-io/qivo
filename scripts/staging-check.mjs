@@ -14,10 +14,8 @@
  * the text, name and request size limits, unknown arguments, comment paging,
  * the archived task lists, task progress, last comment times, delay and
  * project completion, and the live group rule. It opens the Settings page
- * Archived tasks in the browser. With --comment-cap it also fills one task
- * to its 400 comments and pages them in the task window. Every task,
- * comment, grant and file lives in projects the run creates and names with
- * its run tag. It revokes every credential in the app, checks that the next
+ * Archived tasks in the browser. Every task, comment, grant and file lives
+ * in projects the run creates and names with its run tag. It revokes every credential in the app, checks that the next
  * call is refused, and removes everything it made, also after a failure
  * (try/finally, and --cleanup for a later sweep).
  *
@@ -37,7 +35,7 @@
  *
  *   staging, from the application checkout (see docs/deployment.md):
  *     "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-staging" \
- *       node scripts/staging-check.mjs --staging --comment-cap
+ *       node scripts/staging-check.mjs --staging
  *     ... node scripts/staging-check.mjs --staging --cleanup
  *   local, with QIVO_LOCAL_ADMIN_KEY in the environment for the billing
  *   pause checks:
@@ -83,8 +81,6 @@ const MCP_VERSION = '2026-07-28'
 /** The one app origin a staging run accepts. */
 export const STAGING_APP_ORIGIN = 'https://preview.qivo.io'
 const PRODUCTION_HOSTS = new Set(['qivo.io', 'www.qivo.io', 'demo.qivo.io', 'api.qivo.io'])
-/** The most comments a task holds (convex/model/commentCounts.ts COMMENT_MAX). */
-const COMMENT_MAX = 400
 /** The longest REST or MCP request body (convex/machine/shared.ts BODY_MAX_BYTES). */
 const BODY_MAX = 1024 * 1024
 
@@ -118,7 +114,6 @@ export function parseArgs(argv) {
     require: new Set(),
     invert: new Set(),
     cleanup: false,
-    commentCap: false,
   }
   const takes = new Set([
     '--site-url',
@@ -137,7 +132,6 @@ export function parseArgs(argv) {
       if (o.target) throw new UsageError('Choose either --staging or --local.')
       o.target = arg.slice(2)
     } else if (arg === '--cleanup') o.cleanup = true
-    else if (arg === '--comment-cap') o.commentCap = true
     else if (takes.has(arg)) {
       const value = argv[++i]
       if (!value || value.startsWith('--')) throw new UsageError(`${arg} needs a value.`)
@@ -157,7 +151,6 @@ export function parseArgs(argv) {
   }
   if (!o.target) throw new UsageError('Choose --staging or --local.')
   if (o.run && !o.cleanup) throw new UsageError('--run is for --cleanup.')
-  if (o.commentCap && o.cleanup) throw new UsageError('--comment-cap does not go with --cleanup.')
   return o
 }
 
@@ -1592,7 +1585,8 @@ export const WRITE_CONFLICT =
 const WRITE_TIMEOUT =
   'the request took too long and changed nothing; send it again, or change less at once if it keeps happening'
 const changedNothing = (error) => error === WRITE_CONFLICT || error === WRITE_TIMEOUT
-const TOO_MANY_COMMENTS = `this task has ${COMMENT_MAX} comments, the most a task can have; start a new task to continue`
+/** The archive reason's cap (convex/model/comments.ts ARCHIVE_REASON_TOO_LONG). */
+const ARCHIVE_REASON_TOO_LONG = 'an archive reason must be at most 500 characters'
 const NOT_SAME_FAMILY =
   'a subtask must be in the same project as its parent task, in any of its sub-projects'
 const UPLOAD_MISSING = 'upload not found or expired; start a new upload'
@@ -2389,7 +2383,8 @@ const schemaOf = (name) => run.tools.get(name)?.inputSchema?.properties ?? {}
 /** `n` code points starting with the run tag. */
 const nameOf = (n, fill = 'n') => `${run.tag} ${fill.repeat(n - run.tag.length - 1)}`
 
-/** 20,000 characters on descriptions, comments and archive reasons (#114). */
+/** 20,000 characters on descriptions and comments (#114), and 500 on archive
+ *  reasons, the delete reason's cap. */
 async function textCapChecks() {
   const w = run.creds.writeToken
   const A = run.projects.A
@@ -2450,9 +2445,9 @@ async function textCapChecks() {
       w,
       'PATCH',
       `/tasks/${key}`,
-      { archived: true, archive_reason: 'c'.repeat(20001) },
+      { archived: true, archive_reason: 'c'.repeat(501) },
       400,
-      'archive_reason must be at most 20,000 characters',
+      ARCHIVE_REASON_TOO_LONG,
     )
     eq((await restOk(w, 'GET', `/tasks/${key}`)).archived, false, 'archived after the refusal')
   })
@@ -2481,9 +2476,9 @@ async function textCapChecks() {
       await toolRefusal(w, 'update_task', {
         ref: key,
         archived: true,
-        archive_reason: 'c'.repeat(20001),
+        archive_reason: 'c'.repeat(501),
       }),
-      'archive_reason must be at most 20,000 characters',
+      ARCHIVE_REASON_TOO_LONG,
       'refusal',
     )
     eq((await restOk(w, 'GET', `/tasks/${key}`)).archived, false, 'archived after the refusal')
@@ -3353,265 +3348,6 @@ async function archiveChecks() {
   })
 }
 
-/* --------------------------------------------------------- comment cap */
-
-/** Posts until a task holds 400 comments with two profiles at once, checks
- *  the refusal of the next one, every page of the thread and the room a
- *  delete makes, then deletes the task (#118, --comment-cap). */
-async function commentCapChecks() {
-  const w = run.creds.writeToken
-  const s = run.creds.stdKey
-  // the Standard agent posts half the comments, which needs its grant on Alpha
-  if (run.standardGrant === false) {
-    skip('comment-cap', "the Standard agent's User grant on Alpha could not be restored")
-    return
-  }
-  let task
-  await check('comment-cap/task', async () => {
-    task = await restOk(w, 'POST', '/tasks', {
-      project: run.projects.A.id,
-      title: `${run.tag} comment cap`,
-    })
-    run.created.push(task)
-  })
-  if (!task) {
-    skip('comment-cap', 'the task for the comment cap could not be created')
-    return
-  }
-  const started = Date.now()
-  const posted = []
-  let next = 0
-  let failure = null
-  let retried = 0
-  const bodyOf = (n) => `${run.tag} cap ${n}`
-  /** The id of comment `n` if the task already holds it. A gateway error
-   *  can come after the post was stored, and the read can wait for a rate
-   *  window while the other worker posts more, so it pages back through the
-   *  whole thread rather than trusting the newest 50. */
-  const stored = (n) =>
-    findComment(
-      (before) =>
-        readOk(w, `/tasks/${task.key}/comments?limit=50${before ? `&before=${before}` : ''}`),
-      bodyOf(n),
-    )
-  // One post, over REST for Nora and over MCP for the agent, tried once
-  // more after a transient failure. A write conflict or time out changed
-  // nothing, so it is sent again after a second. An internal error (500), a gateway error
-  // (502 to 504) or a network failure may have come after the comment was
-  // stored, so it is sent again only when reads 2 and 10 seconds later do
-  // not find it.
-  const post = async (cred, n) => {
-    const body = bodyOf(n)
-    for (let attempt = 0; ; attempt++) {
-      let r
-      try {
-        r =
-          cred === w
-            ? await rest(w, 'POST', `/tasks/${task.key}/comments`, { body })
-            : await tool(s, 'add_comment', { ref: task.key, body })
-      } catch (error) {
-        if (error instanceof CheckError || attempt > 0) throw error
-        r = { status: 0, error: describe(error) }
-      }
-      if (cred === w && r.status === 201) return r.json.id
-      if (cred !== w && r.status === 200 && r.data?.id) return r.data.id
-      const conflict = changedNothing(r.json?.error) || (r.isError && changedNothing(r.text))
-      const transient =
-        conflict ||
-        r.status === 0 ||
-        (r.status >= 500 && r.status <= 504) ||
-        (r.isError && r.text === 'internal error') ||
-        r.json?.error === 'internal error'
-      if (!transient || attempt > 0)
-        fail(r.error ?? `HTTP ${r.status} ${short(r.isError ? r.text : r.json?.error)}`)
-      retried++
-      say(
-        'NOTE',
-        'comment-cap',
-        `comment ${n} answered ${r.status === 0 ? 'a network error' : r.isError ? short(r.text) : `HTTP ${r.status}`}; trying it once more`,
-      )
-      if (conflict) {
-        await sleep(1000)
-        continue
-      }
-      await sleep(2000)
-      let id = await stored(n)
-      if (!id) {
-        await sleep(8000)
-        id = await stored(n)
-      }
-      if (id) return id
-    }
-  }
-  // each profile has its own request window, so two workers each post at
-  // most RATE_BUDGET a minute; a signal stops both before their next post
-  const worker = async (cred) => {
-    while (!failure && !interrupted && next < COMMENT_MAX) {
-      const n = ++next
-      try {
-        posted.push(await post(cred, n))
-      } catch (error) {
-        failure = `comment ${n}: ${describe(error)}`
-        return
-      }
-      if (posted.length % 50 === 0)
-        say(
-          'NOTE',
-          'comment-cap',
-          `${posted.length} of ${COMMENT_MAX} comments after ${Math.round((Date.now() - started) / 1000)} s`,
-        )
-    }
-  }
-  // A failed fill fails its check, skips the checks that need a full task
-  // and still deletes the task, so the rest of the run goes on.
-  const full = await check('comment-cap/fill', async () => {
-    await Promise.all([worker(w), worker(s)])
-    if (interrupted) fail('interrupted by a signal')
-    if (failure) fail(failure)
-    eq(posted.length, COMMENT_MAX, 'comments posted')
-    return `${COMMENT_MAX} comments in ${Math.round((Date.now() - started) / 1000)} s${retried ? `, ${retried} tried twice after a server or network error` : ''}`
-  })
-  if (full) await commentCapFullChecks(task, posted)
-  else
-    for (const id of [
-      'refused',
-      'pages',
-      'ui/earlier-comments',
-      'delete-makes-room',
-      'archive-reason-past-cap',
-    ])
-      skip(`comment-cap/${id}`, 'the task could not be filled to its cap')
-  await check('comment-cap/delete-task', async () => {
-    eq((await restOk(w, 'DELETE', `/tasks/${task.key}`)).deleted, true, 'deleted')
-    eq((await rest(w, 'GET', `/tasks/${task.key}`)).status, 404, 'the task after its delete')
-    return `${Math.round((Date.now() - started) / 1000)} s in all`
-  })
-}
-
-/** The checks of a task that holds its 400 comments: the next post is
- *  refused, every page of the thread, the room a delete makes and the
- *  archive reason past the cap. `posted` are the ids of the 400 comments. */
-async function commentCapFullChecks(task, posted) {
-  const w = run.creds.writeToken
-  const s = run.creds.stdKey
-  await check('comment-cap/refused', async () => {
-    await restRefusal(
-      w,
-      'POST',
-      `/tasks/${task.key}/comments`,
-      { body: `${run.tag} cap 401` },
-      400,
-      TOO_MANY_COMMENTS,
-    )
-    eq(
-      await toolRefusal(s, 'add_comment', { ref: task.key, body: `${run.tag} cap 401` }),
-      TOO_MANY_COMMENTS,
-      'add_comment',
-    )
-  })
-  // every page, newest first, until the empty one
-  const walk = async (read, limit) => {
-    const pages = []
-    let before
-    for (let i = 0; i < COMMENT_MAX + 2; i++) {
-      const page = await read(limit, before)
-      if (page.length === 0) return pages
-      pages.push(page)
-      before = page[0].id
-    }
-    fail('paging did not end')
-  }
-  const restRead = async (limit, before) =>
-    restOk(
-      w,
-      'GET',
-      `/tasks/${task.key}/comments?${limit ? `limit=${limit}` : ''}${before ? `&before=${before}` : ''}`,
-    )
-  const mcpRead = async (limit, before) =>
-    toolOk(s, 'list_comments', {
-      ref: task.key,
-      ...(limit ? { limit } : {}),
-      ...(before ? { before } : {}),
-    })
-  let thread = []
-  await check('comment-cap/pages', async () => {
-    const pages = await walk(restRead)
-    eq(pages.length, COMMENT_MAX / 50, 'pages of the default size')
-    for (const page of pages) {
-      eq(page.length, 50, 'a default page')
-      for (let i = 1; i < page.length; i++)
-        expect(page[i - 1].created_at <= page[i].created_at, 'a page is not oldest first')
-    }
-    thread = pages.toReversed().flat()
-    eq(new Set(thread.map((c) => c.id)).size, COMMENT_MAX, 'distinct comments across pages')
-    same(thread.map((c) => c.id).toSorted(), posted.toSorted(), 'the comments posted')
-    for (let i = 1; i < thread.length; i++)
-      expect(thread[i - 1].created_at <= thread[i].created_at, 'pages overlap or skip')
-    same(
-      (await restRead()).map((c) => c.id),
-      thread.slice(-50).map((c) => c.id),
-      'the newest 50 by default',
-    )
-    const by37 = (await walk(restRead, 37)).toReversed().flat()
-    same(
-      by37.map((c) => c.id),
-      thread.map((c) => c.id),
-      'pages of 37',
-    )
-    const viaMcp = (await walk(mcpRead, 50)).toReversed().flat()
-    same(
-      viaMcp.map((c) => c.id),
-      thread.map((c) => c.id),
-      'MCP pages',
-    )
-    same(
-      (await mcpRead()).map((c) => c.id),
-      thread.slice(-50).map((c) => c.id),
-      'MCP newest 50 by default',
-    )
-    return '8 pages of 50, the same thread by 37 and over MCP'
-  })
-  if (thread.length === COMMENT_MAX) await earlierCommentsCheck(task, thread)
-  else skip('comment-cap/ui/earlier-comments', 'the thread could not be read')
-  await check('comment-cap/delete-makes-room', async () => {
-    const oldest = thread[0]?.id ?? posted[0]
-    eq((await restOk(w, 'DELETE', `/comments/${oldest}`)).deleted, true, 'deleted')
-    await restOk(w, 'POST', `/tasks/${task.key}/comments`, { body: `${run.tag} cap again` })
-    await restRefusal(
-      w,
-      'POST',
-      `/tasks/${task.key}/comments`,
-      { body: `${run.tag} cap 401 again` },
-      400,
-      TOO_MANY_COMMENTS,
-    )
-  })
-  await check('comment-cap/archive-reason-past-cap', async () => {
-    const reason = `${run.tag} archived at the cap`
-    eq(
-      (await restOk(w, 'PATCH', `/tasks/${task.key}`, { archived: true, archive_reason: reason }))
-        .archived,
-      true,
-      'archived',
-    )
-    eq((await restRead(1))[0]?.body, reason, 'the reason, posted past the cap')
-  })
-}
-
-/** The id of the comment with `body`, paging back 50 at a time from the
- *  newest with `readPage(before)` until it is found or the thread ends. */
-export async function findComment(readPage, body) {
-  let before
-  for (let pages = 0; pages <= COMMENT_MAX / 50; pages++) {
-    const page = await readPage(before)
-    const hit = page.find((c) => c.body === body)
-    if (hit) return hit.id
-    if (page.length < 50) return undefined
-    before = page[0].id
-  }
-  return undefined
-}
-
 /** What one attachment delete answered: 'deleted' for a success that says
  *  deleted: true, 'unsure' for an answer that leaves open whether the file
  *  is gone (a server or network error, MCP's internal error, or the
@@ -3633,55 +3369,6 @@ export function deleteOutcome(r, surface, attachmentId, taskKey) {
           r.text === `attachment "${attachmentId}" not found on ${taskKey}`))
   if (unsure) return 'unsure'
   return r.error ?? `HTTP ${r.status} ${short(r.isError ? r.text : r.json?.error)}`
-}
-
-/** The ids of `comments` in the order the task window shows them: by time,
- *  then by id for comments posted in the same millisecond, where REST keeps
- *  the order they were stored in (src/lib/spine.ts mergeSpine). */
-export const windowOrder = (comments) =>
-  comments
-    .map((c) => ({ ts: Date.parse(c.created_at), id: c.id }))
-    .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1))
-    .map((c) => c.id)
-
-/** The task window opens the full task at its newest 50 comments, and
- *  "Show earlier comments" loads the rest 50 at a time, oldest first, until
- *  it goes once the first comment is in (#140). `thread` holds the task's
- *  comments in order, as REST pages them. */
-async function earlierCommentsCheck(task, thread) {
-  await check('comment-cap/ui/earlier-comments', async () => {
-    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${task.key.toLowerCase()}`, {
-      waitUntil: 'domcontentloaded',
-    })
-    const more = app.locator('[data-earlier-comments="more"] button')
-    await more.waitFor({ timeout: 45_000 })
-    const shown = () =>
-      app
-        .locator('[data-comment]')
-        .evaluateAll((els) => els.map((el) => el.getAttribute('data-comment')))
-    same(await shown(), windowOrder(thread.slice(-50)), 'the comments the task opens with')
-    let clicks = 0
-    while ((await shown()).length < COMMENT_MAX) {
-      expect(clicks < COMMENT_MAX / 50, 'Show earlier comments did not reach the first comment')
-      const before = (await shown()).length
-      await more.click()
-      clicks++
-      expect(
-        await until(async () => (await shown()).length > before, 20_000),
-        `Show earlier comments loaded nothing after ${before} comments`,
-      )
-      same(
-        await shown(),
-        windowOrder(thread.slice(-Math.min(before + 50, COMMENT_MAX))),
-        `the thread after click ${clicks}`,
-      )
-    }
-    await app.locator('[data-earlier-comments]').waitFor({ state: 'detached' })
-    // leave the task, so its thread is not open while the run changes it
-    await app.goto(`${cfg.appOrigin}/app/~/board/all`, { waitUntil: 'domcontentloaded' })
-    await app.waitForSelector('[data-all-nav]', { timeout: 60_000 })
-    return `50 at first, then ${clicks} clicks of 50 to the first comment`
-  })
 }
 
 /* ------------------------------------------------- task and project facts
@@ -4694,8 +4381,6 @@ async function main() {
   await unknownArgumentChecks()
   await listOrderChecks()
   await subtaskRuleChecks()
-  if (cfg.commentCap) await commentCapChecks()
-  else skip('comment-cap', 'pass --comment-cap to fill a task to 400 comments')
   // task and project facts, the live group rule and the billing pause
   await factChecks()
   // archived tasks and projects, then delete the projects in the app
@@ -4857,11 +4542,7 @@ async function start() {
   run.created = []
   run.clients = []
   run.nora = { name: cfg.nora.name }
-  say(
-    'NOTE',
-    'start',
-    `${cfg.cleanup ? 'cleanup' : `run ${run.tag}`} on ${cfg.appOrigin}${cfg.commentCap ? ' with the comment cap' : ''}`,
-  )
+  say('NOTE', 'start', `${cfg.cleanup ? 'cleanup' : `run ${run.tag}`} on ${cfg.appOrigin}`)
   if (cfg.invert.size)
     say(
       'NOTE',

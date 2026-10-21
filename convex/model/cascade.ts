@@ -17,7 +17,6 @@ import { LARGE_ROWS_PER_READ } from '../lib/db'
 import { REMOVAL_PHASES } from '../lib/enums'
 import { require, rule } from '../lib/functions'
 import { hasPendingCheckout } from './billing'
-import { dropCommentCount } from './commentCounts'
 import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
 import { deleteOrgBookkeeping } from './orgs'
@@ -404,7 +403,6 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
       .withIndex('by_issue', (q) => q.eq('issue_id', i.id))
       .collect())
       await ctx.db.delete(c._id)
-    await dropCommentCount(ctx, i.id)
     for (const il of await ctx.db
       .query('issue_labels')
       .withIndex('by_issue', (q) => q.eq('issue_id', i.id))

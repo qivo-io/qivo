@@ -59,9 +59,6 @@ const EXCLUDED_TABLES = [
   'attachment_uploads',
   'marketing_demo',
   'issue_subscriptions',
-  // Each task's comment count is derived from its comments and counted again
-  // when it is missing (model/commentCounts.ts).
-  'comment_counts',
   'messages',
   'user_prefs',
   'mcp_tokens',
@@ -379,14 +376,12 @@ describe('organization export', () => {
     }
     expect(exported.organizations).toHaveLength(1)
     expect(exported.organizations[0]).toMatchObject({ id: f.org.id, billing: f.org.billing })
-    // activity rows keep their numbering, and rows about people reach the export
-    expect(exported.activity_events.map((row) => [row.verb, row.seq, row.named_task_nums])).toEqual(
-      [
-        ['created', undefined, undefined],
-        ['linked', 1, [task.num]],
-        ['renamed', 1, undefined],
-      ],
-    )
+    // activity rows keep the tasks they name, and rows about people reach the export
+    expect(exported.activity_events.map((row) => [row.verb, row.named_task_nums])).toEqual([
+      ['created', undefined],
+      ['linked', [task.num]],
+      ['renamed', undefined],
+    ])
     expect(exported.projects.find((row) => row.id === f.sub.id)).toMatchObject({ archived_at: NOW })
     expect(exported.issues.find((row) => row.id === task.id)).toMatchObject({
       archived_at: NOW,

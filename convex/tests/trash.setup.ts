@@ -135,7 +135,7 @@ export async function plantHistory(
   )
   await t.run(async (ctx) => {
     for (let i = 0; i < legacy; i++)
-      // a row stored before numbering, so it has no seq
+      // a row stored before named_task_nums, so it has no list
       await ctx.db.insert('activity_events', { ...row, id: uuid(), target_type: 'issue' })
   })
 }
@@ -166,20 +166,6 @@ export async function assertNoOrphanHistory(t: T, label: string): Promise<void> 
   })
 }
 
-/** A whole comment count of `count` for `task`, as posts leave one
- * (model/commentCounts.ts). */
-export const plantCount = (t: T, task: Doc<'issues'>, count = 1) =>
-  t.run(async (ctx) => {
-    await ctx.db.insert('comment_counts', { issue_id: task.id, count })
-  })
-/** The comment count rows of task `id`. */
-export const countsOf = (t: T, id: string) =>
-  t.run((ctx) =>
-    ctx.db
-      .query('comment_counts')
-      .withIndex('by_issue', (q) => q.eq('issue_id', id))
-      .collect(),
-  )
 export const blobExists = (t: T, id: Id<'_storage'>) =>
   t.run(async (ctx) => (await ctx.storage.get(id)) !== null)
 export const deleteTask = (t: T, f: OrgFixture, id: string, extra: object = {}) =>

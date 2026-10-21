@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { eventsBeside, firstUnreadTs, mergeSpine, unreadMark } from './spine'
+import { firstUnreadTs, mergeSpine, spineWindow, unreadMark } from './spine'
 
 const c = (id: string, ts: number) => ({ id, ts, body: id })
 const e = (id: string, ts: number) => ({ id, ts, verb: 'moved' })
@@ -90,20 +90,48 @@ describe('unreadMark', () => {
   })
 })
 
-describe('eventsBeside', () => {
+describe('spineWindow', () => {
+  const side = (rows: { ts: number }[], whole: boolean) => ({ rows, whole })
+  const comments = [c('c1', 300), c('c2', 600)]
   const events = [e('e1', 100), e('e2', 300), e('e3', 500)]
 
-  it('shows every event once the thread is complete', () => {
-    expect(eventsBeside(events, [c('c1', 400)], true).map((x) => x.id)).toEqual(['e1', 'e2', 'e3'])
-    expect(eventsBeside(events, [], true).map((x) => x.id)).toEqual(['e1', 'e2', 'e3'])
+  it('shows everything once both the thread and the history are whole', () => {
+    expect(spineWindow(side(comments, true), side(events, true))).toEqual({
+      start: Number.NEGATIVE_INFINITY,
+      load: { comments: false, events: false },
+    })
   })
 
-  it('hides events older than the oldest loaded comment while earlier comments are not loaded', () => {
-    const loaded = [c('c2', 600), c('c1', 300)]
-    expect(eventsBeside(events, loaded, false).map((x) => x.id)).toEqual(['e2', 'e3'])
+  it('hides changes older than the oldest loaded comment while earlier comments remain', () => {
+    expect(spineWindow(side(comments, false), side(events, true))).toEqual({
+      start: 300,
+      load: { comments: true, events: false },
+    })
   })
 
-  it('shows no events before any comment is loaded', () => {
-    expect(eventsBeside(events, [], false)).toEqual([])
+  it('hides comments older than the oldest loaded change while earlier history remains', () => {
+    const recent = [e('e4', 450), e('e5', 700)]
+    expect(spineWindow(side(comments, true), side(recent, false))).toEqual({
+      start: 450,
+      load: { comments: false, events: true },
+    })
+  })
+
+  it('starts at the later side, and loads both when they meet at one instant', () => {
+    expect(spineWindow(side(comments, false), side([e('e9', 200)], false)).load).toEqual({
+      comments: true,
+      events: false,
+    })
+    expect(spineWindow(side(comments, false), side([e('e9', 300)], false)).load).toEqual({
+      comments: true,
+      events: true,
+    })
+  })
+
+  it('hides everything while a side with earlier rows has none loaded', () => {
+    expect(spineWindow(side([], false), side(events, true))).toEqual({
+      start: Number.POSITIVE_INFINITY,
+      load: { comments: true, events: false },
+    })
   })
 })

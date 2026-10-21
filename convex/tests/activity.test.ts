@@ -4,9 +4,9 @@
  * - issueChanges: the machine from→to narration, verbatim (core.ts grammar —
  *   clean() strips the diff grammar's own marks so a crafted value cannot
  *   forge phantom clauses);
- * - activity retention: each subject (one task, project, person...)
- *   numbers its rows and keeps its newest 500, whatever other subjects
- *   write, and readers ask for one task's rows;
+ * - activity history: each subject (one task, project, person...) keeps
+ *   every row, whatever other subjects write, and readers page one task's
+ *   rows, newest first, past rows a member does not receive;
  * - the browser verbs/details ported from the old client — the feed icon
  *   substring-matches the verb (IssueDetail.tsx evIcon), so every byte of
  *   every verb string is load-bearing.
@@ -18,14 +18,15 @@ import type { FunctionArgs, WithoutSystemFields } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { taskActivity } from '../lib/activityVisibility'
 import {
-  type ActivityEntry,
-  insertActivity,
-  issueChanges,
-  logActivity,
-  namedTaskNums,
-} from '../model/activity'
+  BEFORE_NOT_A_CHANGE,
+  HISTORY_HIDDEN,
+  HISTORY_PAGE_MAX,
+  HISTORY_ROOM,
+  historyAnchor,
+  taskHistoryPage,
+} from '../lib/activityVisibility'
+import { type ActivityEntry, insertActivity, issueChanges, logActivity } from '../model/activity'
 import { pendingRemoval } from '../model/cascade'
 import {
   activityFor,
@@ -142,7 +143,7 @@ describe('issueChanges — machine narration, verbatim', () => {
   })
 })
 
-describe('per-subject retention, each subject numbered and capped at 500', () => {
+describe('per-subject history, kept whole and read a page at a time', () => {
   // Fake time keeps the clock and any scheduled work deterministic.
   const START = Date.parse('2026-05-04T10:00:00.000Z')
   const at = (ms: number) => new Date(ms).toISOString()
@@ -173,140 +174,55 @@ describe('per-subject retention, each subject numbered and capped at 500', () =>
       return ctx.meta.getTransactionMetrics()
     })
 
-  /* The stored seq values of `target`'s rows, in index order. */
-  const seqs = (t: T, orgId: string, target: string) =>
+  /* The rows about `target`, in index order. */
+  const stored = (t: T, orgId: string, target: string) =>
     t.run(async (ctx) =>
-      (
-        await ctx.db
-          .query('activity_events')
-          .withIndex('by_target', (q) =>
-            q.eq('org_id', orgId).eq('target_type', 'issue').eq('target_id', target),
-          )
-          .collect()
-      ).map((row) => row.seq ?? null),
+      ctx.db
+        .query('activity_events')
+        .withIndex('by_target', (q) =>
+          q.eq('org_id', orgId).eq('target_type', 'issue').eq('target_id', target),
+        )
+        .collect(),
     )
 
-  /* `count` rows about `target` inserted raw, as rows stored before numbering. */
-  const plantLegacy = (t: T, orgId: string, target: string, count: number, from: number) =>
-    t.run(async (ctx) => {
-      for (let i = 0; i < count; i++)
-        await ctx.db.insert('activity_events', {
-          id: `legacy-${target}-${i}`,
-          org_id: orgId,
-          ts: at(from + i),
-          verb: 'seeded',
-          target_type: 'issue',
-          target_id: target,
-          label: 'x',
-        })
-    })
-
-  it('numbers a subject’s rows in commit order, within a mutation and across mutations', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    await write(t, f.org.id, 'task-a', 3)
-    expect(await seqs(t, f.org.id, 'task-a')).toEqual([1, 2, 3])
-    await write(t, f.org.id, 'task-a')
-    expect(await seqs(t, f.org.id, 'task-a')).toEqual([1, 2, 3, 4])
-    // another subject starts at 1, not where task-a stopped
-    await write(t, f.org.id, 'task-b')
-    expect(await seqs(t, f.org.id, 'task-b')).toEqual([1])
-    // and the same target id in another organization is another subject
-    await write(t, f.otherOrg.id, 'task-a')
-    expect(await seqs(t, f.otherOrg.id, 'task-a')).toEqual([1])
-  })
-
-  it('keeps a subject’s newest 500 rows and never touches another subject', async () => {
+  it('keeps every row of a subject past 500, in insertion order, and numbers none', async () => {
     const t = newT()
     const f = await withOrg(t)
     await write(t, f.org.id, 'task-b', 2)
     await write(t, f.org.id, 'task-a', 600)
-    const kept = await seqs(t, f.org.id, 'task-a')
-    expect(kept).toEqual(Array.from({ length: 500 }, (_, i) => i + 101))
-    expect(kept.filter((seq) => (seq ?? 0) <= 100)).toEqual([])
-    expect(await seqs(t, f.org.id, 'task-b')).toEqual([1, 2])
+    const kept = await stored(t, f.org.id, 'task-a')
+    expect(kept.map((row) => row.ts)).toEqual(Array.from({ length: 600 }, (_, i) => at(START + i)))
+    expect(kept.filter((row) => row.seq !== undefined)).toEqual([])
+    expect(await stored(t, f.org.id, 'task-b')).toHaveLength(2)
   })
 
   it('writes to other tasks never remove a task’s rows', async () => {
     const t = newT()
     const f = await withOrg(t)
     await write(t, f.org.id, 'task-a', 3, START - 3_600_000)
-    // 2,000 newer rows over 50 other tasks, 1,000 to a mutation, four times
-    // the 500 the former organization trim kept
+    // 2,000 newer rows over 50 other tasks, 1,000 to a mutation
     for (let m = 0; m < 2; m++)
       await t.run(async (ctx) => {
         for (let i = 0; i < 1_000; i++)
           await logActivity(ctx, entry(f.org.id, `other-${i % 50}`, at(START - 60_000 + m)))
       })
     await t.finishAllScheduledFunctions(() => vi.runAllTimers())
-    expect(await seqs(t, f.org.id, 'task-a')).toEqual([1, 2, 3])
+    expect(await stored(t, f.org.id, 'task-a')).toHaveLength(3)
     expect(await activityFor(t, f.org.id)).toHaveLength(2_003)
   }, 180_000)
 
-  it('leaves rows stored before numbering alone and reads the numbered ones', async () => {
+  it('a write past 500 rows stores one document, reads none and schedules nothing', async () => {
     const t = newT()
     const f = await withOrg(t)
-    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    await plantLegacy(t, f.org.id, task.id, 300, START - 3_600_000)
-    // the first numbered row of a task with only legacy rows is 1
-    await write(t, f.org.id, task.id)
-    expect((await seqs(t, f.org.id, task.id)).filter((seq) => seq !== null)).toEqual([1])
-    await write(t, f.org.id, task.id, 599, START + 1)
-    const stored = await seqs(t, f.org.id, task.id)
-    expect(stored.filter((seq) => seq === null)).toHaveLength(300)
-    expect(stored.filter((seq) => seq !== null)).toEqual(
-      Array.from({ length: 500 }, (_, i) => i + 101),
-    )
-    const history = await t.run((ctx) => taskActivity(ctx, f.admin, task))
-    expect(history.map((row) => row.seq)).toEqual(Array.from({ length: 500 }, (_, i) => i + 101))
-  })
-
-  it('a missing or duplicated row at the cap neither fails the write nor deletes twice', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    const plantNumbered = (target: string, seqsToPlant: number[]) =>
-      t.run(async (ctx) => {
-        for (const seq of seqsToPlant)
-          await ctx.db.insert('activity_events', {
-            id: `${target}-${seq}-${Math.random()}`,
-            org_id: f.org.id,
-            ts: at(START),
-            verb: 'seeded',
-            target_type: 'issue',
-            target_id: target,
-            label: 'x',
-            seq,
-            named_task_nums: [],
-          })
-      })
-    const upTo500 = Array.from({ length: 500 }, (_, i) => i + 1)
-    // seq 1, the row the next write would drop, is already gone
-    await plantNumbered('gap', upTo500.slice(1))
-    await write(t, f.org.id, 'gap')
-    const gap = await seqs(t, f.org.id, 'gap')
-    expect(gap).toHaveLength(500)
-    expect(gap.at(-1)).toBe(501)
-    // two rows hold seq 1; the write drops exactly one of them
-    await plantNumbered('twice', [1, ...upTo500])
-    await write(t, f.org.id, 'twice')
-    const twice = await seqs(t, f.org.id, 'twice')
-    expect(twice).toHaveLength(501)
-    expect(twice.filter((seq) => seq === 1)).toHaveLength(1)
-    expect(twice.at(-1)).toBe(501)
-  })
-
-  it('a write stores one document below the cap and two past it, and schedules nothing', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    await write(t, f.org.id, 'task-a', 499)
-    const below = await write(t, f.org.id, 'task-a')
-    expect(below.documentsWritten.used).toBe(1)
-    expect(below.functionsScheduled.used).toBe(0)
-    const past = await write(t, f.org.id, 'task-a')
-    expect(past.documentsWritten.used).toBe(2)
-    expect(past.functionsScheduled.used).toBe(0)
-    // the organization row is only read
-    expect(await t.run((ctx) => ctx.db.get(f.org._id))).toEqual(f.org)
+    await write(t, f.org.id, 'task-a', 600)
+    const metrics = await t.run(async (ctx) => {
+      await insertActivity(ctx, entry(f.org.id, 'task-a', at(START + 600)))
+      return ctx.meta.getTransactionMetrics()
+    })
+    expect(metrics.documentsWritten.used).toBe(1)
+    expect(metrics.documentsRead.used).toBe(0)
+    expect(metrics.functionsScheduled.used).toBe(0)
+    expect(await stored(t, f.org.id, 'task-a')).toHaveLength(601)
   })
 
   it('a project purge and profile removal clear every row, within limits', async () => {
@@ -383,24 +299,80 @@ describe('per-subject retention, each subject numbered and capped at 500', () =>
     await assertNoDanglingRefs(t, 'after a project purge and a profile removal')
   }, 180_000)
 
-  it('reads a task’s 500 rows however many newer rows other tasks have', async () => {
+  it('pages a task’s whole history, newest first, however many rows other tasks have', async () => {
     const t = newT()
     const f = await withOrg(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await t.run(async (ctx) => {
-      for (let i = 0; i < 500; i++)
+      for (let i = 0; i < 1_200; i++)
         await insertActivity(ctx, entry(f.org.id, task.id, at(START - 3_600_000 + i)))
       for (let i = 0; i < 100; i++)
         await insertActivity(ctx, entry(f.org.id, other.id, at(START - 60_000 + i)))
     })
-    const history = await t.run((ctx) => taskActivity(ctx, f.admin, task))
-    expect(history).toHaveLength(500)
-    expect(history.every((row) => row.target_id === task.id)).toBe(true)
+    const page = (before?: string) =>
+      t.run(async (ctx) =>
+        taskHistoryPage(
+          ctx,
+          f.admin,
+          task,
+          before === undefined ? undefined : await historyAnchor(ctx, task, before),
+        ),
+      )
+    const times = (from: number, n: number) =>
+      Array.from({ length: n }, (_, i) => at(START - 3_600_000 + from + i))
+    const newest = await page()
+    expect(HISTORY_PAGE_MAX).toBe(500)
+    expect(newest.earlier).toBe(true)
     // oldest first by ts
-    expect(history.map((row) => row.ts)).toEqual(
-      Array.from({ length: 500 }, (_, i) => at(START - 3_600_000 + i)),
+    expect(newest.rows.map((row) => row.ts)).toEqual(times(700, 500))
+    const middle = await page(newest.rows[0].id)
+    expect(middle.earlier).toBe(true)
+    expect(middle.rows.map((row) => row.ts)).toEqual(times(200, 500))
+    const first = await page(middle.rows[0].id.toUpperCase())
+    expect(first.earlier).toBe(false)
+    expect(first.rows.map((row) => row.ts)).toEqual(times(0, 200))
+    expect(first.rows.every((row) => row.target_id === task.id)).toBe(true)
+    expect(await page(first.rows[0].id)).toEqual({ rows: [], earlier: false })
+    // a row of another task, or no row, is no place in this history
+    const elsewhere = (await stored(t, f.org.id, other.id))[0]
+    for (const before of [elsewhere.id, uuid()]) {
+      const e = await expectRefusal(page(before), 'bad_request')
+      expect(e.data.message).toBe(BEFORE_NOT_A_CHANGE)
+    }
+  })
+
+  it('reads on past rows a member does not receive, and refuses rather than answer empty', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // 20 rows the viewer receives, then 600 newer ones naming the hidden project
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 20; i++)
+        await insertActivity(ctx, entry(f.org.id, task.id, at(START - 3_600_000 + i)))
+      for (let i = 0; i < 600; i++)
+        await insertActivity(ctx, {
+          ...entry(f.org.id, task.id, at(START - 60_000 + i)),
+          verb: 'moved',
+          related_project_id: f.hidden.id,
+        })
+    })
+    const page = () => t.run((ctx) => taskHistoryPage(ctx, f.viewer, task))
+    const seen = await page()
+    expect(seen.earlier).toBe(false)
+    expect(seen.rows.map((row) => row.ts)).toEqual(
+      Array.from({ length: 20 }, (_, i) => at(START - 3_600_000 + i)),
     )
+    expect((await t.run((ctx) => taskHistoryPage(ctx, f.admin, task))).rows).toHaveLength(500)
+    // a read that fills up before it finds a row says so instead
+    const room = HISTORY_ROOM.room
+    HISTORY_ROOM.room = 0
+    try {
+      const e = await expectRefusal(page(), 'rule')
+      expect(e.data.message).toBe(HISTORY_HIDDEN)
+    } finally {
+      HISTORY_ROOM.room = room
+    }
   })
 
   it('a Deleted items delete of a task with 200 subtasks stays within limits', async () => {
@@ -419,7 +391,6 @@ describe('per-subject retention, each subject numbered and capped at 500', () =>
     })
     const deleted = (await activityFor(t, f.org.id)).filter((row) => row.verb === 'deleted')
     expect(deleted).toHaveLength(201)
-    expect(deleted.every((row) => row.seq === 1)).toBe(true)
   }, 120_000)
 })
 
@@ -599,9 +570,6 @@ describe('browser verbs — the feed contract (evIcon substring-matches these)',
     expect(events[0].verb).toBe('detached')
     expect(events[0].detail).toBe(`from QN-${other.num}`)
     expect(events[0].named_task_nums).toEqual([other.num])
-    // every stored list matches what the text says
-    for (const row of await activityFor(t, f.org.id))
-      expect(row.named_task_nums).toEqual(namedTaskNums(row))
   })
 
   it('stores an empty list on task rows that name no task, whatever their text', async () => {
@@ -639,7 +607,7 @@ describe('browser verbs — the feed contract (evIcon substring-matches these)',
       'deleted',
     ])
     expect(rows.map((row) => row.named_task_nums)).toEqual(rows.map(() => []))
-    expect(rows.map((row) => row.seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+    expect(rows.filter((row) => 'seq' in row)).toEqual([])
   })
 
   it('lifecycle verbs: created, moved (source-keyed), linked, archived, restored, deleted — and history survives its subjects', async () => {
@@ -737,44 +705,6 @@ describe('browser verbs — the feed contract (evIcon substring-matches these)',
   })
 })
 
-describe('namedTaskNums — the relation grammar the snapshot checks', () => {
-  const row = (verb: string, detail?: string, target_type: 'issue' | 'project' = 'issue') => ({
-    verb,
-    detail,
-    target_type,
-  })
-
-  it('reads the task numbers a parent change or link names', () => {
-    expect(namedTaskNums(row('moved', 'under QN-5 (from QN-3)'))).toEqual([5, 3])
-    expect(namedTaskNums(row('moved', 'under QN-5'))).toEqual([5])
-    expect(namedTaskNums(row('moved', 'under its parent (from QN-3)'))).toEqual([3])
-    expect(namedTaskNums(row('detached', 'from QN-3'))).toEqual([3])
-    expect(namedTaskNums(row('detached', 'from its parent'))).toEqual([])
-    expect(namedTaskNums(row('linked', '(blocks QN-6)'))).toEqual([6])
-    expect(namedTaskNums(row('linked', '(relates to QN-6)'))).toEqual([6])
-    // the wording rows were stored with before October 2026
-    expect(namedTaskNums(row('linked', '— blocks QN-6'))).toEqual([6])
-    expect(namedTaskNums(row('linked', '— relates to QN-6'))).toEqual([6])
-  })
-
-  it('names nothing for other rows', () => {
-    expect(namedTaskNums(row('moved', 'from To Do to Done'))).toEqual([])
-    expect(namedTaskNums(row('moved', 'to the Firmware sub-project (from Board rev)'))).toEqual([])
-    expect(namedTaskNums(row('renamed', 'from “Fix QN-9”'))).toEqual([])
-    expect(namedTaskNums(row('linked', '— blocks QN-6', 'project'))).toEqual([])
-  })
-
-  it('answers null for relation wording no writer produces, so readers fail closed', () => {
-    expect(namedTaskNums(row('linked', '— blocks PCB-12'))).toBeNull()
-    expect(namedTaskNums(row('linked', '(blocks PCB-12)'))).toBeNull()
-    expect(namedTaskNums(row('linked', '(blocks QN-6'))).toBeNull()
-    expect(namedTaskNums(row('linked', '— (blocks QN-6)'))).toBeNull()
-    expect(namedTaskNums(row('linked'))).toBeNull()
-    expect(namedTaskNums(row('detached', 'from QN-3 and QN-4'))).toBeNull()
-    expect(namedTaskNums(row('moved', 'under QN-5 (from PCB-3)'))).toBeNull()
-  })
-})
-
 describe('which task rows a member receives, in the task window and over REST', () => {
   /* The task, a task the guest may read, one it may not, and a reader that
    * asks commentThread and REST for the task's history and checks they agree.
@@ -824,41 +754,28 @@ describe('which task rows a member receives, in the task window and over REST', 
     return { t, f, task, visible, hidden, seen, plant }
   }
 
-  it('decides a numbered row by its stored list, not its text', async () => {
+  it('decides a row by its stored list, not its text', async () => {
     const { f, visible, hidden, seen, plant } = await setup()
     const [namesHidden, namesVisible] = await plant([
       // the text names a task the guest may read, the list one it may not
-      { seq: 1, named_task_nums: [hidden.num], detail: `(blocks QN-${visible.num})` },
-      // text the parser refuses, a list the guest passes
-      { seq: 2, named_task_nums: [visible.num], detail: '(blocks PCB-12)' },
+      { named_task_nums: [hidden.num], detail: `(blocks QN-${visible.num})` },
+      // text no writer produces, a list the guest passes
+      { named_task_nums: [visible.num], detail: '(blocks PCB-12)' },
     ])
     expect(await seen(f.guest)).toEqual([namesVisible])
     expect(await seen(f.admin)).toEqual([namesHidden, namesVisible])
   })
 
-  it('hides a numbered row stored without its list from members only', async () => {
+  it('hides a row stored without its list from members only, whatever its text', async () => {
     const { f, visible, seen, plant } = await setup()
     const ids = await plant([
-      { seq: 1, detail: `(blocks QN-${visible.num})` },
-      { seq: 2, verb: 'renamed', detail: 'from “Old”' },
-      { seq: 3, verb: 'renamed', detail: 'from “Older”', named_task_nums: [] },
+      { detail: `(blocks QN-${visible.num})` },
+      { verb: 'renamed', detail: 'from “Old”' },
+      // a row from before numbering, which the migration has not reached
+      { verb: 'renamed', detail: 'from “Older”', seq: 4 },
+      { verb: 'renamed', detail: 'from “Oldest”', named_task_nums: [] },
     ])
-    expect(await seen(f.guest)).toEqual([ids[2]])
-    expect(await seen(f.admin)).toEqual(ids)
-  })
-
-  it('parses rows stored before numbering in both wordings and refuses others', async () => {
-    const { f, visible, seen, plant } = await setup()
-    const ids = await plant([
-      { detail: `— blocks QN-${visible.num} — via MCP` },
-      { detail: `(blocks QN-${visible.num}), via MCP` },
-      { verb: 'detached', detail: `from QN-${visible.num}, via the REST API (CI key)` },
-      { detail: '— blocks PCB-12' },
-      { verb: 'detached', detail: `from QN-3 and QN-${visible.num}` },
-      { detail: `blocks QN-${visible.num}` },
-      { verb: 'renamed', detail: 'from “Fix QN-999999”' },
-    ])
-    expect(await seen(f.guest)).toEqual([ids[0], ids[1], ids[2], ids[6]])
+    expect(await seen(f.guest)).toEqual([ids[3]])
     expect(await seen(f.admin)).toEqual(ids)
   })
 

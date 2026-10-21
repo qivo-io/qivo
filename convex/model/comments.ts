@@ -1,8 +1,7 @@
 /* The comment writes the app, REST and MCP share. postComment inserts the
  * row and runs its fan-out (model/messages.ts notifyCommentInsert), so the
  * author follows the task, mentions are notified and followers read 'New
- * comment'. It holds a task to COMMENT_MAX comments, and it and
- * deleteComment keep the task's comment count (model/commentCounts.ts).
+ * comment'. A thread has no length limit; every reader pages it.
  * editComment and deleteComment hold the app's rule that only a comment's
  * author or a lead of the task's project may change it. A comment writes no
  * activity row, because the comment is its own entry in the discussion.
@@ -18,17 +17,25 @@ import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, rule } from '../lib/functions'
 import { issueKey } from '../lib/taskRefs'
-import { COMMENT_TOO_LONG, TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
-import { assertRoomForComment, noteCommentAdded, noteCommentRemoved } from './commentCounts'
+import { COMMENT_TOO_LONG, DELETE_REASON_MAX, TEXT_MAX } from '../lib/textLimits'
 import { assertExpected, DELETES, type Fields, filledText, type Next, type View } from './expected'
 import { assertCanEdit } from './issues'
 import { notifyCommentInsert, notifyCommentUpdate } from './messages'
 import { newUuid } from './orgs'
 
-/* Both caps count the trimmed text, which is what is stored. They are `rule`
- * refusals, so the app shows the sentence (lib/textLimits.ts
- * DESCRIPTION_TOO_LONG says why). */
-export const ARCHIVE_REASON_TOO_LONG = `an archive reason must be at most ${TEXT_MAX_LABEL} characters`
+/* The archive reason's cap is the delete reason's (lib/textLimits.ts
+ * DELETE_REASON_MAX), because the app's archive and delete window share one
+ * reason field. It counts the trimmed text, which is what is stored. The app,
+ * REST and MCP refuse with this sentence, a `rule` refusal so the app shows
+ * it (lib/textLimits.ts DESCRIPTION_TOO_LONG says why). */
+export const ARCHIVE_REASON_TOO_LONG = `an archive reason must be at most ${DELETE_REASON_MAX} characters`
+
+/** Refuses an archive reason longer than DELETE_REASON_MAX once trimmed.
+ * REST and MCP call it while they parse a request, before any write, so a
+ * task already archived, which posts no reason, refuses it too. */
+export function assertArchiveReasonFits(reason: string): void {
+  if (reason.trim().length > DELETE_REASON_MAX) throw rule(ARCHIVE_REASON_TOO_LONG)
+}
 
 type NewComment = {
   id?: string
@@ -43,28 +50,16 @@ type NewComment = {
  * every message its fan-out posts share. `id` is the app's client-made id;
  * machine callers omit it and get a new one. Refuses an id that is not a
  * lowercase UUID (lib/db.ts assertNewRowId), an author without Edit on the
- * task's project, a blank body, a body longer than TEXT_MAX, a task that
- * holds COMMENT_MAX comments (model/commentCounts.ts TOO_MANY_COMMENTS) and
- * an id already in use. Every caller trims `body`
- * first, so the cap measures the stored text.
+ * task's project, a blank body, a body longer than TEXT_MAX and an id
+ * already in use. Every caller trims `body` first, so the cap measures the
+ * stored text.
  */
 export async function postComment(ctx: MutationCtx, a: NewComment): Promise<Doc<'comments'>> {
-  return await insertComment(ctx, a, { capped: true })
-}
-
-/* postComment, and with `capped` false, without the comment count cap.
- * Either way the comment counts toward the task's count. */
-async function insertComment(
-  ctx: MutationCtx,
-  a: NewComment,
-  o: { capped: boolean },
-): Promise<Doc<'comments'>> {
   const { issue, author, now } = a
   if (a.id !== undefined) assertNewRowId(a.id)
   await assertCanEdit(ctx, author, issue.project_id)
   if (a.body.trim() === '') throw badRequest('a comment cannot be empty')
   if (a.body.length > TEXT_MAX) throw rule(COMMENT_TOO_LONG)
-  if (o.capped) await assertRoomForComment(ctx, issue.id)
   const id = a.id ?? newUuid()
   const docId = await insertUnique(
     ctx,
@@ -74,7 +69,6 @@ async function insertComment(
     { id, issue_id: issue.id, author: author.id, body: a.body, created_at: now },
     badRequest('a comment with this id already exists'),
   )
-  await noteCommentAdded(ctx, issue.id)
   const comment = (await ctx.db.get(docId)) as Doc<'comments'>
   await notifyCommentInsert(ctx, { comment, issue, actor: author, now })
   return comment
@@ -84,11 +78,8 @@ async function insertComment(
  * Posts the reason given for archiving `issue` as a normal comment by
  * `author`, trimmed and sharing the archive's `now`. The app's archive and
  * the machine archive call it only when their write archived the task; a
- * blank or missing reason posts nothing, and one longer than TEXT_MAX after
- * trimming is refused with a sentence that names the reason. The comment
- * count cap does not apply, so archiving never fails on it. Each archive
- * with a reason can add one comment past COMMENT_MAX, so a task archived,
- * restored and archived again can pass it by more than one.
+ * blank or missing reason posts nothing, and one longer than
+ * DELETE_REASON_MAX after trimming is refused with ARCHIVE_REASON_TOO_LONG.
  */
 export async function postArchiveReason(
   ctx: MutationCtx,
@@ -96,12 +87,8 @@ export async function postArchiveReason(
 ): Promise<Doc<'comments'> | null> {
   const body = (a.reason ?? '').trim()
   if (body === '') return null
-  if (body.length > TEXT_MAX) throw rule(ARCHIVE_REASON_TOO_LONG)
-  return await insertComment(
-    ctx,
-    { issue: a.issue, author: a.author, body, now: a.now },
-    { capped: false },
-  )
+  assertArchiveReasonFits(body)
+  return await postComment(ctx, { issue: a.issue, author: a.author, body, now: a.now })
 }
 
 /**
@@ -209,7 +196,7 @@ export async function editComment(
 
 /**
  * Deletes `comment` as `me`, its author or a project lead. The thread just
- * loses the row, and the task's comment count one comment. Nothing is
+ * loses the row. Nothing is
  * narrated and nobody is notified. Deleted items cannot bring a comment
  * back, so a delete may carry `expected`, the body the caller read, and is
  * refused when someone changed it since.
@@ -234,7 +221,6 @@ export async function deleteComment(
     next: DELETES,
   })
   await ctx.db.delete(a.comment._id)
-  await noteCommentRemoved(ctx, a.comment)
 }
 
 /* -------------------------------------------------------------- reading */
@@ -296,8 +282,8 @@ export async function latestComment(
  * transactions that start at the same instant, or an import that sets the
  * times, make such a group. A group larger than Convex's 16 MiB read limit,
  * such as 17 comments near the 1 MiB document limit at one time, so fails
- * every page before one of its comments. The newest page and the comment
- * count (model/commentCounts.ts) still work on such a thread.
+ * every page before one of its comments. The newest page still works on
+ * such a thread.
  *
  * The index orders a thread by insertion, so a task's comments must be
  * inserted in the order they were posted (latestComment relies on this

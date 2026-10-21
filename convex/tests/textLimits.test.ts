@@ -1,13 +1,19 @@
-/* The 20,000-character cap on task descriptions, comment bodies and archive
- * reasons (lib/textLimits.ts). The model layer enforces it for the app, REST
- * and MCP alike, and MCP's tool schemas declare it as maxLength. Lengths are
- * UTF-16 code units. Rows saved before the cap are planted raw, so they can
- * be longer, and they keep working. */
+/* The 20,000-character cap on task descriptions and comment bodies, and the
+ * 500-character cap on archive reasons, the delete reason's (lib/textLimits.ts).
+ * The model layer enforces them for the app, REST and MCP alike, and MCP's
+ * tool schemas declare them as maxLength. Lengths are UTF-16 code units.
+ * Rows saved before the cap are planted raw, so they can be longer, and they
+ * keep working. */
 
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { COMMENT_TOO_LONG, DESCRIPTION_TOO_LONG, TEXT_MAX } from '../lib/textLimits'
+import {
+  COMMENT_TOO_LONG,
+  DELETE_REASON_MAX,
+  DESCRIPTION_TOO_LONG,
+  TEXT_MAX,
+} from '../lib/textLimits'
 import { sha256hex } from '../machine/auth'
 import { ARCHIVE_REASON_TOO_LONG } from '../model/comments'
 import {
@@ -29,6 +35,8 @@ const OVER = 'a'.repeat(TEXT_MAX + 1)
 // also let the one-letter-longer text through
 const EMOJI_AT_CAP = '😀'.repeat(TEXT_MAX / 2)
 const LEGACY = 'b'.repeat(25_000)
+const REASON_AT_CAP = 'r'.repeat(DELETE_REASON_MAX)
+const REASON_OVER = 'r'.repeat(DELETE_REASON_MAX + 1)
 
 const issueRow = (t: T, id: string): Promise<Doc<'issues'> | null> =>
   t.run(
@@ -203,19 +211,20 @@ describe('comments and archive reasons in the app', () => {
     expect((await commentRow(t, legacy))?.body).toBe(LEGACY)
   })
 
-  it('archives with a 20,000-character reason and refuses 20,001 without archiving', async () => {
+  it('archives with a 500-character reason and refuses 501 without archiving', async () => {
     const t = newT()
     const f = await withOrg(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const archive = (reason: string) =>
       as(t, f.user).mutation(api.issues.archive, { org_id: f.org.id, id: task.id, reason })
-    const e = await expectRefusal(archive(` ${OVER} `), 'rule')
+    const e = await expectRefusal(archive(` ${REASON_OVER} `), 'rule')
+    expect(e.data.message).toBe('an archive reason must be at most 500 characters')
     expect(e.data.message).toBe(ARCHIVE_REASON_TOO_LONG)
     expect((await issueRow(t, task.id))?.archived_at).toBeUndefined()
     expect(await commentsOn(t, task.id)).toEqual([])
-    await archive(` ${AT_CAP} `)
+    await archive(` ${REASON_AT_CAP} `)
     expect((await issueRow(t, task.id))?.archived_at).toBeDefined()
-    expect((await commentsOn(t, task.id)).map((c) => c.body)).toEqual([AT_CAP])
+    expect((await commentsOn(t, task.id)).map((c) => c.body)).toEqual([REASON_AT_CAP])
   })
 })
 
@@ -327,16 +336,17 @@ describe('REST', () => {
     const done = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: NOW })
     const archive = (id: string, archive_reason: string) =>
       rest(t, 'PATCH', `/v1/tasks/${id}`, { archived: true, archive_reason })
-    const sentence = { error: 'archive_reason must be at most 20,000 characters' }
-    expect(await archive(task.id, ` ${OVER} `)).toEqual({ status: 400, json: sentence })
-    expect(await archive(done.id, OVER)).toEqual({ status: 400, json: sentence })
+    const sentence = { error: ARCHIVE_REASON_TOO_LONG }
+    expect(await archive(task.id, ` ${REASON_OVER} `)).toEqual({ status: 400, json: sentence })
+    expect(await archive(done.id, REASON_OVER)).toEqual({ status: 400, json: sentence })
     expect((await issueRow(t, task.id))?.archived_at).toBeUndefined()
     expect(await commentsOn(t, task.id)).toEqual([])
-    expect(await archive(task.id, ` ${AT_CAP} `)).toMatchObject({
+    expect(await commentsOn(t, done.id)).toEqual([])
+    expect(await archive(task.id, ` ${REASON_AT_CAP} `)).toMatchObject({
       status: 200,
       json: { archived: true },
     })
-    expect((await commentsOn(t, task.id)).map((c) => c.body)).toEqual([AT_CAP])
+    expect((await commentsOn(t, task.id)).map((c) => c.body)).toEqual([REASON_AT_CAP])
   })
 
   it('caps comment bodies on POST and PATCH', async () => {
@@ -410,7 +420,7 @@ const tooBig = (name: string, field: string): ToolResult => ({
 })
 
 describe('MCP', () => {
-  it('declares maxLength 20000 on the five text arguments', async () => {
+  it('declares maxLength 20000 on the four text arguments and 500 on archive_reason', async () => {
     const t = newT()
     await wireOrg(t)
     const { tools } = (await mcp(t, 'tools/list', {})) as {
@@ -424,7 +434,7 @@ describe('MCP', () => {
       max('update_task', 'archive_reason'),
       max('add_comment', 'body'),
       max('update_comment', 'body'),
-    ]).toEqual([20000, 20000, 20000, 20000, 20000])
+    ]).toEqual([20000, 20000, 500, 20000, 20000])
   })
 
   it('writes 20,000 characters and refuses 20,001, by the schema or by the server rule', async () => {
@@ -454,8 +464,8 @@ describe('MCP', () => {
       refusal('description must be at most 20,000 characters'),
     )
     expect(
-      await tool(t, 'update_task', { ref: key, archived: true, archive_reason: OVER }),
-    ).toMatchObject(refusal('archive_reason must be at most 20,000 characters'))
+      await tool(t, 'update_task', { ref: key, archived: true, archive_reason: REASON_OVER }),
+    ).toMatchObject(refusal(ARCHIVE_REASON_TOO_LONG))
 
     const commented = await tool(t, 'add_comment', { ref: key, body: AT_CAP })
     expect(commented.isError).toBeUndefined()
@@ -501,10 +511,13 @@ describe('MCP', () => {
     const archived = await tool(t, 'update_task', {
       ref: key,
       archived: true,
-      archive_reason: ` ${AT_CAP} `,
+      archive_reason: ` ${REASON_AT_CAP} `,
     })
     expect(archived.isError).toBeUndefined()
     expect((await issueRow(t, taskId))?.archived_at).toBeDefined()
-    expect((await commentsOn(t, taskId)).map((c) => c.body.length)).toEqual([TEXT_MAX, TEXT_MAX])
+    expect((await commentsOn(t, taskId)).map((c) => c.body.length)).toEqual([
+      TEXT_MAX,
+      DELETE_REASON_MAX,
+    ])
   })
 })

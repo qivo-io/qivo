@@ -9,9 +9,9 @@ import type { Row } from '../store/rows'
 
 /* "Show earlier comments" in the task window, on the real store. The thread
    arrives through the commentThread subscription and earlier pages through
-   commentsBefore, both answered by hand. Comment #n is posted n minutes
-   after START. The thread's deliveries also carry the task's changes, and
-   change(n) moves the task n minutes after START. */
+   commentsBefore and historyBefore, all answered by hand. Comment #n is
+   posted n minutes after START. The thread's deliveries also carry the task's
+   newest changes, and change(n) moves the task n minutes after START. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', () => ({ convex: network }))
@@ -25,7 +25,9 @@ vi.mock('../lib/auth', () => ({
 
 type Page = { comments: Row<'comments'>[]; earlier: boolean }
 // A commentThread delivery. Unlike a commentsBefore page, it carries the task's changes.
-type Delivery = Page & { events: Row<'activity_events'>[] }
+type Delivery = Page & { events: Row<'activity_events'>[]; events_earlier: boolean }
+// A historyBefore page.
+type History = { events: Row<'activity_events'>[]; earlier: boolean }
 type Planner = typeof import('../store/planner')['P']
 type Detail = typeof import('./IssueDetail')
 
@@ -40,6 +42,7 @@ let me: string
 let org: string
 let publish: (page: Delivery) => void
 let pages: { before: string; resolve: (page: Page) => void; reject: (e: unknown) => void }[]
+let histories: { before: string; resolve: (page: History) => void }[]
 
 const comment = (n: number): Row<'comments'> => ({
   id: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
@@ -97,6 +100,7 @@ async function load({ unread }: { unread?: number } = {}) {
     })
   }
   pages = []
+  histories = []
   network.onUpdate.mockImplementation((ref, _args, next) => {
     const name = getFunctionName(ref)
     if (name === 'snapshot:forMe') next(structuredClone(snap))
@@ -106,7 +110,10 @@ async function load({ unread }: { unread?: number } = {}) {
   network.query.mockImplementation(
     (ref, args: { before?: string }) =>
       new Promise((resolve, reject) => {
-        if (getFunctionName(ref) !== 'snapshot:commentsBefore') return resolve(null)
+        const name = getFunctionName(ref)
+        if (name === 'snapshot:historyBefore')
+          return histories.push({ before: args.before ?? '', resolve })
+        if (name !== 'snapshot:commentsBefore') return resolve(null)
         pages.push({ before: args.before ?? '', resolve, reject })
       }),
   )
@@ -182,9 +189,11 @@ async function focusControl() {
 }
 
 /* Delivers the thread's live window, with no changes unless the page
-   names some. */
-async function deliver(page: Page & { events?: Row<'activity_events'>[] }) {
-  await act(async () => publish({ events: [], ...page }))
+   names some, and the whole history unless it says there is more. */
+async function deliver(
+  page: Page & { events?: Row<'activity_events'>[]; events_earlier?: boolean },
+) {
+  await act(async () => publish({ events: [], events_earlier: false, ...page }))
 }
 async function press(name: string) {
   const button = [...document.querySelectorAll('[data-earlier-comments] button')].find(
@@ -330,10 +339,46 @@ describe('earlier comments in the task window', { timeout: 20_000 }, () => {
     await deliver({ comments: range(20, 70), earlier: true, events: [change(10)] })
     await showAll()
     expect(thread()).not.toContain('event')
-    await press('Show earlier comments')
+    await press('Show earlier activity')
     await answer({ comments: range(1, 20), earlier: false })
     const rows = thread()
     expect(rows.indexOf('event')).toBe(rows.findIndex((r) => r.includes('Check 10')) + 1)
+  })
+
+  it('with All, hides comments older than the oldest loaded change and pages the history', async () => {
+    await load()
+    await open()
+    const newest = Array.from({ length: 10 }, (_, i) => change(30 + i))
+    await deliver({ comments: range(1, 40), earlier: false, events: newest, events_earlier: true })
+    // Comments shows every comment and nothing to load
+    expect(thread().filter((r) => r.startsWith('Check'))).toHaveLength(39)
+    expect(control()).toBeNull()
+    await showAll()
+    expect(thread()[0]).toBe('[Show earlier activity]')
+    expect(thread()[1]).toContain('Check 30')
+    await press('Show earlier activity')
+    expect(histories.map((h) => h.before)).toEqual(['event-30'])
+    expect(thread()[0]).toBe('[Loading earlier activity…]')
+    await act(async () => histories[0].resolve({ events: [change(5), change(12)], earlier: false }))
+    const rows = thread()
+    expect(control()).toBeNull()
+    expect(rows.filter((r) => r === 'event')).toHaveLength(12)
+    expect(rows[0]).toContain('Check 1')
+    expect(rows.indexOf('event')).toBe(rows.findIndex((r) => r.includes('Check 5')) + 1)
+    expect(pages).toEqual([])
+  })
+
+  it('keeps a change that left the live page as newer ones arrived', async () => {
+    await load()
+    await open()
+    await showAll()
+    const page = (from: number) => Array.from({ length: 5 }, (_, i) => change(from + i))
+    await deliver({ comments: range(1, 3), earlier: false, events: page(30), events_earlier: true })
+    await deliver({ comments: range(1, 3), earlier: false, events: page(31), events_earlier: true })
+    expect(thread().filter((r) => r === 'event')).toHaveLength(6)
+    // the next page is asked before the oldest change kept
+    await press('Show earlier activity')
+    expect(histories.map((h) => h.before)).toEqual(['event-30'])
   })
 
   it('points at All for a new change the thread delivered', async () => {

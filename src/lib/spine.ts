@@ -28,20 +28,31 @@ export function mergeSpine<
   ].sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1))
 }
 
-/* The task's events the spine shows beside its loaded comments. While the
-   thread's first comment is not loaded (`complete` false), events older than
-   the oldest loaded comment stay hidden, so the All filter never shows
-   changes next to a gap in the comments. Events at that comment's instant
-   stay. With no comment loaded yet there is nothing to place them beside. */
-export function eventsBeside<E extends { ts: number }>(
-  events: readonly E[],
-  comments: readonly { ts: number }[],
-  complete: boolean,
-): E[] {
-  if (complete) return [...events]
-  if (comments.length === 0) return []
-  const oldest = Math.min(...comments.map((c) => c.ts))
-  return events.filter((e) => e.ts >= oldest)
+/* Where the All filter's spine starts while the thread's first comment or
+   the task's first change is not loaded (`whole` false). It shows rows from
+   `start` on: the later of the oldest loaded comment and the oldest loaded
+   change, each counted only while its own start is not loaded, so the spine
+   never shows comments next to a gap in the history or changes next to a gap
+   in the comments. Rows at that instant stay. A side whose start is not
+   loaded and that has nothing loaded yet hides everything, since there is
+   nothing to place the other beside. `load` names the sides whose earlier
+   page moves `start` back, the ones whose oldest loaded row is at it. With
+   both whole, `start` is -Infinity and nothing is left to load. */
+export function spineWindow(
+  comments: { rows: readonly { ts: number }[]; whole: boolean },
+  events: { rows: readonly { ts: number }[]; whole: boolean },
+): { start: number; load: { comments: boolean; events: boolean } } {
+  const oldest = (side: { rows: readonly { ts: number }[]; whole: boolean }) =>
+    side.whole
+      ? Number.NEGATIVE_INFINITY
+      : side.rows.reduce((min, row) => Math.min(min, row.ts), Number.POSITIVE_INFINITY)
+  const c = oldest(comments)
+  const e = oldest(events)
+  const start = Math.max(c, e)
+  return {
+    start,
+    load: { comments: !comments.whole && c === start, events: !events.whole && e === start },
+  }
 }
 
 type UnreadSource = { issueUuid: string; ts: number; read: boolean }

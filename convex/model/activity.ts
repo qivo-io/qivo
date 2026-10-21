@@ -3,17 +3,16 @@ import type { MutationCtx } from '../_generated/server'
 import { byId } from '../lib/db'
 import type { ActivityTarget, IssuePriority, IssueStatus } from '../lib/enums'
 import { notFound } from '../lib/functions'
-import { ISSUE_PREFIX, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
+import { PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { plainText } from '../lib/textLimits'
 import { newUuid } from './orgs'
 
-/* ----------------------------------------------------------------- retention
- * Each subject keeps its own newest SUBJECT_ACTIVITY_CAP rows. The writer
- * (insertActivity) numbers a subject's rows through seq and deletes the one
- * row a new row pushes past the cap, so writes about one subject never remove
- * another's history. Readers ask for one subject's rows through the by_target
- * index. Rows stored before numbering have no seq; they sort first and stay
- * until their task is deleted for good. */
+/* ------------------------------------------------------------------- history
+ * Every row stays until its subject is deleted for good, as Deleted items
+ * deletes a task's history (model/deletedItems.ts purgeActivity) and an
+ * organization's deletion its own. Readers ask for one subject's rows through
+ * the by_target index, which orders them by insertion, and read a task's
+ * history a page at a time (lib/activityVisibility.ts taskHistoryPage). */
 
 type EntryFields = {
   org_id: string
@@ -38,35 +37,17 @@ export type ActivityEntry =
   | (EntryFields & { target_type: 'issue'; named_task_nums: readonly number[] })
   | (EntryFields & { target_type: Exclude<ActivityTarget, 'issue'>; named_task_nums?: never })
 
-/** Rows each subject keeps. A subject is one (target_type, target_id): a
- * task, project, milestone or person, or under 'org' the organization or one
- * of its labels. Team rows are rows about the person they name. Writes about
- * other subjects never remove them. */
-export const SUBJECT_ACTIVITY_CAP = 500
-
-/** Inserts `e` as its subject's next row, one past the subject's newest
- * numbered row, and deletes the row this pushes past SUBJECT_ACTIVITY_CAP.
- * It reads only the subject's own newest row, so writers about different
- * subjects never conflict. Rows written earlier in the same mutation count,
- * so rows about one subject written one after another get consecutive
- * numbers. Never run two calls for one subject at the same time, as in
- * Promise.all: both would read the same newest row. Rows stored before
- * numbering have no seq, sort first and are neither counted nor deleted.
- * `opts.id` fixes the row id, for the Northstar seed only. It does not check
- * the organization; logActivity does. */
+/** Inserts `e` as a new row of its subject's history. A subject is one
+ * (target_type, target_id): a task, project, milestone or person, or under
+ * 'org' the organization or one of its labels. Team rows are rows about the
+ * person they name. It reads nothing, so writers about one subject never
+ * conflict over its history. `opts.id` fixes the row id, for the Northstar
+ * seed only. It does not check the organization; logActivity does. */
 export async function insertActivity(
   ctx: MutationCtx,
   e: ActivityEntry,
   opts: { id?: string } = {},
 ): Promise<void> {
-  const newest = await ctx.db
-    .query('activity_events')
-    .withIndex('by_target', (q) =>
-      q.eq('org_id', e.org_id).eq('target_type', e.target_type).eq('target_id', e.target_id),
-    )
-    .order('desc')
-    .first()
-  const seq = (newest?.seq ?? 0) + 1
   await ctx.db.insert('activity_events', {
     id: opts.id ?? newUuid(),
     org_id: e.org_id,
@@ -80,23 +61,9 @@ export async function insertActivity(
     project_id: e.project_id,
     related_project_id: e.related_project_id,
     team_id: e.team_id,
-    seq,
     named_task_nums: e.target_type === 'issue' ? [...e.named_task_nums] : undefined,
     field_prints: e.field_prints,
   })
-  if (seq <= SUBJECT_ACTIVITY_CAP) return
-  // first, not unique: a duplicate seq must not make every later write fail
-  const dropped = await ctx.db
-    .query('activity_events')
-    .withIndex('by_target', (q) =>
-      q
-        .eq('org_id', e.org_id)
-        .eq('target_type', e.target_type)
-        .eq('target_id', e.target_id)
-        .eq('seq', seq - SUBJECT_ACTIVITY_CAP),
-    )
-    .first()
-  if (dropped !== null) await ctx.db.delete(dropped._id)
 }
 
 /** Inserts one activity row with the mutation it describes and checks that
@@ -107,50 +74,6 @@ export async function logActivity(ctx: MutationCtx, e: ActivityEntry): Promise<v
   // an export record), so this check seldom makes a write retry.
   const org = await byId(ctx, 'organizations', e.org_id)
   if (org === null) throw notFound('organization not found')
-}
-
-/* The task numbers a task row stored before named_task_nums existed names
- * by key, read from its text: a parent change written by model/issues.ts
- * browserVerbDetail ('moved' under QN-n (from QN-m), 'detached' from QN-m)
- * and a link written by model/links.ts addLinkCore ('linked' (blocks QN-n)).
- * A REST or MCP write appended its provenance (machineDetail below), which
- * names no task. Returns [] when the row names none, and null when the
- * wording is not one those writers produced, so the reader can fail closed.
- * Newer rows store the numbers instead, so their wording no longer needs to
- * match this parser.
- *
- * Rows written before October 2026 joined the provenance with ' — ' and
- * wrote a link as '— blocks QN-n'; later ones use ', ' and '(blocks QN-n)'.
- * Stored rows keep their text, so both forms are read. */
-const KEY = `${ISSUE_PREFIX}-(\\d+)`
-const SIGNED = '(?:(?: —|,) via (?:MCP|the REST API(?: \\(.*\\))?))?'
-const NAMED_PARENT_CHANGE = new RegExp(
-  `^under (?:${KEY}|its parent)(?: \\(from ${KEY}\\))?${SIGNED}$`,
-)
-const NAMED_DETACH = new RegExp(`^from (?:${KEY}|its parent)${SIGNED}$`)
-const NAMED_LINK = new RegExp(
-  `^(?:— (?:blocks|relates to) ${KEY}|\\((?:blocks|relates to) ${KEY}\\))${SIGNED}$`,
-)
-export function namedTaskNums(
-  ev: Pick<Doc<'activity_events'>, 'target_type' | 'verb' | 'detail'>,
-): number[] | null {
-  if (ev.target_type !== 'issue') return []
-  const detail = ev.detail ?? ''
-  const grammar =
-    ev.verb === 'moved' && detail.startsWith('under ')
-      ? NAMED_PARENT_CHANGE
-      : ev.verb === 'detached'
-        ? NAMED_DETACH
-        : ev.verb === 'linked'
-          ? NAMED_LINK
-          : undefined
-  if (grammar === undefined) return []
-  const m = grammar.exec(detail)
-  if (m === null) return null
-  return m
-    .slice(1)
-    .filter((n): n is string => n !== undefined)
-    .map(Number)
 }
 
 // Stable narration order and labels.
@@ -189,8 +112,7 @@ const clean = (s: string): string => {
 }
 
 /** Appends a machine write's provenance to a detail, after a comma, or is
- * the provenance alone when there is no detail. namedTaskNums reads the
- * joined form back. */
+ * the provenance alone when there is no detail. */
 export const machineDetail = (extra: string | undefined, provenance: string): string =>
   (extra !== undefined && extra !== '' ? `${extra}, ` : '') + provenance
 

@@ -80,14 +80,6 @@
  * item row, activity rows and notices count as any write does, and each user
  * transaction counts as one demo change.
  *
- * A task's comment count (model/commentCounts.ts) does not travel with it.
- * It is deleted before the task's other rows wherever they leave the live
- * tables: when the move drains them, or a purge or teardown deletes them
- * (dropCommentCount). The user's own transaction so reads nothing more per
- * task, and no count comes back with a task, whose thread a restore writes
- * anew. A restored task is counted again at its next post, as any task
- * without a count is.
- *
  * Teardowns that delete an organization's work outright (deleteOrgDeep, an
  * organization's deletion in steps, the public demo's cleanup, the
  * Northstar wipe) empty its Deleted items with clearOrgTrash, whatever
@@ -124,7 +116,6 @@ import { SUBTASK_MAX } from '../lib/taskLimits'
 import { DELETE_REASON_MAX } from '../lib/textLimits'
 import { insertActivity, logActivity } from './activity'
 import { storageIdInUse } from './attachments'
-import { dropCommentCount } from './commentCounts'
 import { estimateDocumentBytes } from './demoMetrics'
 import { assertCanEdit, clearParentRemaining, detachChild, sameTopLevel } from './issues'
 import {
@@ -835,10 +826,9 @@ async function idTaken(run: Run, taskId: string): Promise<boolean> {
 }
 
 /** Moves (keep) or deletes (purge) task `task` of a project item with what
- * travels with it, in order: its comment count, which is deleted, its rows,
- * its messages, its children outside the item's projects (childrenOutside),
- * on a purge its history (purgeHistory), then the task row. True once the
- * task row is gone.
+ * travels with it, in order: its rows, its messages, its children outside
+ * the item's projects (childrenOutside), on a purge its history
+ * (purgeHistory), then the task row. True once the task row is gone.
  * A task left half done stays hidden, because its project is absent, and
  * the next step picks it up. A task too large to store is purged instead.
  * A task that a restore wrote back without its parent, and that still waits
@@ -847,7 +837,6 @@ async function idTaken(run: Run, taskId: string): Promise<boolean> {
 async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boolean> {
   const live = { table: 'issues', doc: task } as const
   const how = mode === 'keep' && tooLarge(run.item, live, task.id) ? 'purge' : mode
-  await dropCommentCount(run.ctx, task.id)
   for (const relation of TASK_ROWS) {
     const done = await drain(
       run.budget,
@@ -1079,11 +1068,10 @@ async function moveProjectTasks(run: Run): Promise<boolean> {
   return true
 }
 
-/* A task item's stored tasks: the rows that travel with each, after its
- * comment count, which is deleted. First the history of each task the move
- * deleted for good because it was too large to store (purge_history),
- * only the rows written up to the deletion, because a new task may take the
- * id it freed. */
+/* A task item's stored tasks: the rows that travel with each. First the
+ * history of each task the move deleted for good because it was too large
+ * to store (purge_history), only the rows written up to the deletion,
+ * because a new task may take the id it freed. */
 const moveDrain = async (run: Run): Promise<boolean> => {
   const purge = run.state.purge_history ?? []
   while (purge.length > 0) {
@@ -1092,7 +1080,6 @@ const moveDrain = async (run: Run): Promise<boolean> => {
   }
   run.state.purge_history = undefined
   return await eachStoredTask(run, async ({ task_id }) => {
-    await dropCommentCount(run.ctx, task_id)
     for (const relation of TASK_ROWS) {
       const done = await drain(
         run.budget,
@@ -1204,7 +1191,6 @@ async function purgeDependents(run: Run): Promise<boolean> {
 async function purgeLive(run: Run): Promise<boolean> {
   if (run.item.kind === 'task' || run.item.restore_by !== undefined) {
     const done = await eachStoredTask(run, async ({ task_id }) => {
-      await dropCommentCount(run.ctx, task_id)
       for (const relation of TASK_ROWS) {
         const drained = await drain(
           run.budget,
@@ -3567,11 +3553,9 @@ async function releaseFile(ctx: MutationCtx, storageId: Id<'_storage'>): Promise
   if ((await ctx.db.system.get(storageId)) !== null) await ctx.storage.delete(storageId)
 }
 
-/** Deletes the rows task `taskId` still has in the live tables, its comment
- * count first, attachment bytes with their row unless another row names
- * them, then its messages. */
+/** Deletes the rows task `taskId` still has in the live tables, attachment
+ * bytes with their row unless another row names them, then its messages. */
 async function clearLiveRows(ctx: MutationCtx, taskId: string, budget: Teardown): Promise<boolean> {
-  await dropCommentCount(ctx, taskId)
   for (const relation of TASK_ROWS) {
     const cleared = await clearPages(
       budget,
@@ -3860,7 +3844,6 @@ export async function moveTasksToTrash(
         item_id: item.id,
         task_id: task.id,
       })
-      await dropCommentCount(counted, task.id)
       await clearAll(counted, TASK_ROWS, task.id, (row) => discard(counted, row))
       await counted.db.delete(task._id)
       tally.dropped_rows += 1

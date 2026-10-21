@@ -33,8 +33,8 @@ still saving. Your edits appear immediately. If the server refuses an edit,
 Qivo undoes only that edit and shows an error, and your other changes stay.
 
 A task's **Activity** lists comments and changes from oldest to newest. Qivo
-keeps each task's newest 500 changes, and changes to other tasks never remove
-them. Changes name the
+keeps every change of a task, and **Show earlier activity** loads older ones.
+Changes name the
 person or agent responsible and show old and new field values. Description
 changes include short excerpts. Departed members appear as **Someone**.
 Automated task changes identify **via MCP** or **via the REST API**, with the
