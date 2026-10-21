@@ -7,7 +7,6 @@ import { DropdownChevron } from '@/components/ui/select'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { BillingNotice } from './components/BillingNotice'
-import { closeOrAsk } from './components/DiscardPrompt'
 import {
   MobileHeader,
   MobileNavigation,
@@ -24,8 +23,9 @@ import {
   WorkspaceShell,
   WorkspaceToolbar,
 } from './components/WorkspaceShell'
-import { flushWalkInput } from './components/walk'
+import { flushWalkInput } from './components/walkRows'
 import { addressMoved, rememberAddress } from './lib/addressBook'
+import { closeOrAsk } from './lib/discardQuestion'
 import { lazyFromModule, preloadInBackground } from './lib/lazyModule'
 import { parseSyncScope } from './lib/teamSync'
 import { useMobile } from './lib/useMobile'

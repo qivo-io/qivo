@@ -5,7 +5,6 @@
    (docs/team-sync-brief.md, "Each row carries"). */
 import { memo, type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { AssigneeAvatar, OwnerPickList } from '@/components/AssigneeAvatar'
-import { closeOrAsk, questionOpen } from '@/components/DiscardPrompt'
 import {
   AnchoredPop,
   Avatar,
@@ -21,13 +20,14 @@ import { Button } from '@/components/ui/button'
 import { PopoverContent, Popover as PopoverRoot, PopoverTrigger } from '@/components/ui/popover'
 import { Textarea } from '@/components/ui/textarea'
 import { HoverTooltip } from '@/components/ui/tooltip'
-import { planHint, RemainingInput, type Reviewed, ReviewTick } from '@/components/walk'
+import { RemainingInput, ReviewTick } from '@/components/walk'
+import { planHint, type Reviewed } from '@/components/walkRows'
+import { closeOrAsk, questionOpen } from '@/lib/discardQuestion'
 import { useUnsaved, useUnsentScope } from '@/lib/leaveGuard'
 import {
   bannerVerdict,
   dayLabel,
   type LoadFigure,
-  loadFigure,
   mentionBody,
   rowMarks,
   type SinceMark,
@@ -37,11 +37,12 @@ import {
 import { useUpdateBlocker } from '@/lib/updateSafety'
 import { useMenuBackLayer, useMobileBackLayer } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
-import { fmtHours, plannableHoursOf } from '@/lib/workload'
+import { fmtHours } from '@/lib/workload'
 import { type IssueVM, P, type UserVM } from '@/store/planner'
 import type { StoreVersion } from '@/store/updates'
 import { TEXT_MAX } from '../../../convex/lib/textLimits'
 import { DelayBanner } from '../kanbanCards'
+import { weekFigure } from './weekFigure'
 
 /** What every card on one page shares: whose page it is, their reading
     point, and the page's callbacks. */
@@ -69,12 +70,6 @@ export type PageCtx = {
 const READ_ONLY = 'Read-only project access'
 
 const firstName = (name: string) => name.split(' ')[0]
-
-/** A person's week as the Team strip reads it: org-wide hours (P.weekLoadOf)
-    over plannable hours, in the strip's colour rule. */
-export function weekFigure(u: UserVM): LoadFigure {
-  return loadFigure(P.weekLoadOf(u.id, P.TODAY_WEEK), plannableHoursOf(u))
-}
 
 const LOAD_FILL: Record<LoadFigure['tone'], string> = {
   normal: 'bg-[color-mix(in_oklab,var(--primary)_16%,transparent)]',

@@ -31,3 +31,13 @@ export function passEscapeOn(pressed: EventTarget | null, tooltip: HTMLElement |
   }
   requestAnimationFrame(waitForClose)
 }
+
+/** True while a tooltip shows. An Escape handler that runs before the
+    tooltip's own (window capture, or document capture registered earlier)
+    skips that Escape: the tooltip closes and passes it on (passEscapeOn),
+    and the handler acts on the one passed on, so one press acts once. */
+export function hasOpenTooltip() {
+  return !!document.querySelector(
+    '[data-slot="tooltip-content"][data-state="delayed-open"], [data-slot="tooltip-content"][data-state="instant-open"]',
+  )
+}

@@ -19,7 +19,8 @@
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Avatar, FieldSelect, Icon } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
-import { flushWalkInput, useReviewed, WalkFooter, WalkRail } from '@/components/walk'
+import { WalkFooter, WalkRail } from '@/components/walk'
+import { flushWalkInput, useReviewed } from '@/components/walkRows'
 import {
   bannerVerdict,
   dayLabel,

@@ -2,9 +2,10 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { closeOrAsk, DiscardPrompt } from '../components/DiscardPrompt'
+import { DiscardPrompt } from '../components/DiscardPrompt'
 import { Input } from '../components/ui/input'
 import { TooltipProvider } from '../components/ui/tooltip'
+import { closeOrAsk } from './discardQuestion'
 import { createUnsentScope, hasUnsaved, UnsentScopeContext, useFieldUnsaved } from './leaveGuard'
 
 /* A field that saves on blur keeps the close warning while a refused save

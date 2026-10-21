@@ -10,10 +10,16 @@
   "rules": {},
   "overrides": [
     {
-      "files": ["src/components/{NoticeCard,SavePauseNotice,SnapshotNotice}.tsx"],
+      "files": ["src/**/*.tsx"],
       "plugins": ["react"],
       "rules": {
-        "react/only-export-components": "error"
+        "react/only-export-components": ["error", { "allowConstantExport": true }],
+        "react/exhaustive-deps": "off",
+        "react/globals": "off",
+        "react/immutability": "off",
+        "react/purity": "off",
+        "react/refs": "off",
+        "react/set-state-in-effect": "off"
       }
     }
   ]

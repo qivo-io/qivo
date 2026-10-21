@@ -21,15 +21,6 @@ import {
 import { P, type ScopeInfo, type UserVM } from '../store/planner'
 import './Resources.css'
 
-const STRIP_HEAD_H = 48
-// One line per person: a 40px row plus its divider.
-const STRIP_ROW_H = 41
-
-// Header, body's top rule, rows and panel borders.
-function stripHeight(n: number) {
-  return STRIP_HEAD_H + 1 + (n ? n * STRIP_ROW_H : 38) + 2
-}
-
 type Props = {
   users: UserVM[]
   w0: number
@@ -341,4 +332,4 @@ function ResourceStrip({
   )
 }
 
-export { ResourceStrip, STRIP_HEAD_H, stripHeight }
+export { ResourceStrip }

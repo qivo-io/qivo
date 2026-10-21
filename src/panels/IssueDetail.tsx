@@ -19,10 +19,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
-import { HoverTooltip, hasOpenTooltip } from '@/components/ui/tooltip'
+import { HoverTooltip } from '@/components/ui/tooltip'
+import { hasOpenTooltip } from '@/lib/passEscapeOn'
 import { cn } from '@/lib/utils'
 import { usePlannerVersion } from '@/store/usePlannerVersion'
-import { closeOrAsk, questionOpen } from '../components/DiscardPrompt'
 import type { DescEditorHandle } from '../components/descEditor'
 import { IssueSubscribers } from '../components/IssueSubscribers'
 import { Markdown } from '../components/markdown'
@@ -43,11 +43,12 @@ import {
   Seg,
   StatusDot,
   UnreadDivider,
-  useBottomSnap,
 } from '../components/qivo'
 import { ViewBoundary } from '../components/ViewBoundary'
+import { fmtSize, useWindowDropGuard } from '../lib/attachments'
 import { copyText } from '../lib/clipboard'
 import { DELAY_MARK } from '../lib/delay'
+import { closeOrAsk, questionOpen } from '../lib/discardQuestion'
 import { roomBeside, useFloatInsets } from '../lib/floatStack'
 import { lastInputWasPointer, restoreFocus } from '../lib/focusVisibility'
 import { lazyFromModule } from '../lib/lazyModule'
@@ -69,6 +70,7 @@ import { buildPath, issueLink } from '../lib/router'
 import { matchesAllWords } from '../lib/search'
 import { eventsBeside, firstUnreadTs, mergeSpine, unreadMark } from '../lib/spine'
 import { useUpdateBlocker } from '../lib/updateSafety'
+import { useBottomSnap } from '../lib/useBottomSnap'
 import { useConfirmArm } from '../lib/useConfirmArm'
 import { useMobile } from '../lib/useMobile'
 import { loadDescEditor } from '../lib/workspaceChunks'
@@ -82,7 +84,7 @@ import {
   type IssueVM,
   P,
 } from '../store/planner'
-import { ArchiveOrDeleteTaskModal, fmtSize, MoveIssueModal, useWindowDropGuard } from './Modals'
+import { ArchiveOrDeleteTaskModal, MoveIssueModal } from './Modals'
 
 // the editor chunk (~150 KB gz of TipTap) loads only for users who can edit,
 // after the workspace's first paint (App.tsx); viewers render the plain

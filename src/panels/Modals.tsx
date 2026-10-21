@@ -15,16 +15,16 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
-import { hasOpenTooltip } from '@/components/ui/tooltip'
+import { hasOpenTooltip } from '@/lib/passEscapeOn'
 import { cn } from '@/lib/utils'
 import { REASSIGN_MAX } from '../../convex/lib/projectGrants'
 import { projectKeyBase, projectKeyCandidate } from '../../convex/lib/projectKeys'
 import { PROJECT_DESCRIPTION_MAX } from '../../convex/lib/projectLimits'
 import { DELETE_REASON_MAX, NAME_MAX, TEXT_MAX } from '../../convex/lib/textLimits'
-import { closeOrAsk } from '../components/DiscardPrompt'
 import { ProjectAccessSelect } from '../components/ProjectAccessSelect'
 import { Avatar, DateSelect, FieldSelect, Icon } from '../components/qivo'
 import { relativeWeek, weekToISO } from '../lib/dates'
+import { closeOrAsk } from '../lib/discardQuestion'
 import { restoreFocus } from '../lib/focusVisibility'
 import { isLandscapeRoadmapOpen } from '../lib/landscape'
 import { UnsentScopeContext, useTypedUnsaved, useUnsaved, useUnsentScope } from '../lib/leaveGuard'
@@ -296,26 +296,6 @@ function HoldUnsent({ what }: { what: string }) {
 }
 
 /* ---------- New issue ---------- */
-function fmtSize(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1048576) return `${(bytes / 1024).toFixed(bytes < 102400 ? 1 : 0)} KB`
-  return `${(bytes / 1048576).toFixed(1)} MB`
-}
-
-/* While a drop target is mounted, a drop that misses it must not navigate
-   the tab to the dropped file — that would destroy the whole open draft. */
-function useWindowDropGuard() {
-  useEffectM(() => {
-    const swallow = (e: DragEvent) => e.preventDefault()
-    window.addEventListener('dragover', swallow)
-    window.addEventListener('drop', swallow)
-    return () => {
-      window.removeEventListener('dragover', swallow)
-      window.removeEventListener('drop', swallow)
-    }
-  }, [])
-}
-
 function NewIssueModal({
   init = {},
   onClose,
@@ -2327,7 +2307,6 @@ export {
   ArchiveOrDeleteProjectModal,
   ArchiveOrDeleteTaskModal,
   CreateOrgModal,
-  fmtSize,
   MField,
   MilestoneModal,
   ModalShell,
@@ -2335,5 +2314,4 @@ export {
   NewIssueModal,
   NewProjectModal,
   NewSubProjectModal,
-  useWindowDropGuard,
 }

@@ -7,8 +7,8 @@ import { convex } from '@/lib/convex'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { loadOrgExport } from '@/lib/workspaceChunks'
 import { api } from '../../convex/_generated/api'
+import { useOrgRemovalState } from '../lib/orgRemovalState'
 import { P } from '../store/planner'
-import { useOrgRemovalState } from './OrganizationDeletion'
 
 /** Lets an admin download the organization's data as a ZIP and records
  * when the browser finished it. */

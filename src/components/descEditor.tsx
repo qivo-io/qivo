@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button'
-import { HoverTooltip, hasOpenTooltip } from '@/components/ui/tooltip'
+import { HoverTooltip } from '@/components/ui/tooltip'
+import { hasOpenTooltip } from '@/lib/passEscapeOn'
 /* Rich editor for the lib/md dialect; viewers use Markdown. Load through
    parseMd -> astToDoc, save through docToAst -> astToMd and reparse to a fixed
    point. updateIssue GC preserves images referenced by new or previous text.
@@ -56,6 +57,7 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState }
 import { createPortal } from 'react-dom'
 import { Input } from '@/components/ui/input'
 import { DropdownChevron } from '@/components/ui/select'
+import { closeOrAsk } from '@/lib/discardQuestion'
 import { TEXT_MAX, TEXT_MAX_LABEL } from '../../convex/lib/textLimits'
 import { compressImage } from '../lib/images'
 import { useUnsaved, useUnsentScope } from '../lib/leaveGuard'
@@ -64,7 +66,6 @@ import { MAX_PARSE, parseMd, sanitizeHref } from '../lib/md'
 import { astToMd } from '../lib/mdSerialize'
 import { beginUpdateBlock, useUpdateBlocker } from '../lib/updateSafety'
 import { P, TEXT_TOO_LONG } from '../store/planner'
-import { closeOrAsk } from './DiscardPrompt'
 import type { PMNode } from './descDoc'
 import { astToDoc, docToAst } from './descDoc'
 import { copyImage, downloadImage, openImageFull, toast } from './imgActions'

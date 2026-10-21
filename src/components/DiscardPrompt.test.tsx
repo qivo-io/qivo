@@ -2,8 +2,9 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { closeOrAsk } from '@/lib/discardQuestion'
 import { createUnsentScope, type UnsentScope } from '../lib/leaveGuard'
-import { closeOrAsk, DiscardPrompt } from './DiscardPrompt'
+import { DiscardPrompt } from './DiscardPrompt'
 import { TooltipProvider } from './ui/tooltip'
 
 /* The question before a window closes with unsent text: none while the

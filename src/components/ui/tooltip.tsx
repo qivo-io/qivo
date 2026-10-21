@@ -4,16 +4,6 @@ import * as React from 'react'
 import { passEscapeOn } from '@/lib/passEscapeOn'
 import { cn } from '@/lib/utils'
 
-/** True while a tooltip shows. An Escape handler that runs before the
-    tooltip's own (window capture, or document capture registered earlier)
-    skips that Escape: the tooltip closes and passes it on (passEscapeOn),
-    and the handler acts on the one passed on, so one press acts once. */
-function hasOpenTooltip() {
-  return !!document.querySelector(
-    '[data-slot="tooltip-content"][data-state="delayed-open"], [data-slot="tooltip-content"][data-state="instant-open"]',
-  )
-}
-
 // Tooltips hold no interactive controls (design-spec §3.1), so Radix's
 // hoverable-content grace area is disabled: the tooltip closes on the
 // trigger's own pointer-leave instead of lingering while the pointer crosses
@@ -175,4 +165,4 @@ function HoverTooltip({
   )
 }
 
-export { HoverTooltip, hasOpenTooltip, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger }
+export { HoverTooltip, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger }
