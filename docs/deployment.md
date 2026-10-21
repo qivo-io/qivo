@@ -275,7 +275,9 @@ later release removed. The operator console before v0.1.15 calls
 `admin.listUsers` and `admin.orgDetail`, so after such a rollback its Users
 and organization pages fail. The v0.1.15 console calls `adminPeople.listUsers`,
 so its Users page fails. The app before v0.1.16 calls `billing.usage`, so its
-Billing page cannot load usage. Later releases removed all four.
+Billing page cannot load usage. Later releases removed all four. The app
+before v0.1.26 calls `labels.toggle` without `on`, which later releases
+refuse, so after such a rollback it cannot add or remove labels.
 
 The app before v0.1.18 reads an activity list that the snapshot no longer
 sends, so it cannot load at all. Never return the app or the demo to a

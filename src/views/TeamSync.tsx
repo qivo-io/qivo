@@ -417,7 +417,8 @@ export function TeamSync({
   const [prompt, setPrompt] = useState<string | null>(null)
   const [openAgents, setOpenAgents] = useState(() => new Set<string>())
   const [laterOpen, setLaterOpen] = useState(() => new Set<string>())
-  // the scope of each card on the page, by task (PageCtx.cards)
+  // the scope of each card on the page, with its task and section's person
+  // (PageCtx.cards)
   const [cards] = useState(() => new Map<UnsentScope, SyncCardPlace>())
   // the step last shown, its index and scope, for a person who leaves mid-sitting
   const shown = useRef<{ step: string; idx: number; scope: string } | null>(null)
@@ -495,8 +496,9 @@ export function TeamSync({
     onPlace({ scope: nextScope, step: next })
   }
   /* Another scope keeps the step when it still walks it, and with it each
-     card whose task it still holds: the cards then keep their text, so the
-     switch asks only about the cards it takes away. */
+     card whose task it still holds and whose section's person it still
+     walks: the cards then keep their text, so the switch asks only about the
+     cards it takes away (cardsClosedBy). */
   const pickScope = (key: string) => {
     const closes = cardsClosedBy(cards, step, walkOf(key, world))
     flushWalkInput('sync')
