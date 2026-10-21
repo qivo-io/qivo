@@ -7,7 +7,8 @@
  *
  * The target deployment is SHARED: globalSetup resets the Northstar Labs work
  * (manual edits and saved views there are lost by design; logins, portraits and keys survive) and mints test credentials that the
- * teardown deletes. Never run this while `npm run dev` work or the smoke is
+ * teardown deletes, together with their stash in the private fixture
+ * directory (tests/contract/stash.mts). Never run this while `npm run dev` work or the smoke is
  * in flight. */
 import { defineConfig } from 'vitest/config'
 

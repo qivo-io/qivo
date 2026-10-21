@@ -3,8 +3,9 @@ import { extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
-import { type Connect, defineConfig, loadEnv, normalizePath } from 'vite'
+import { type Connect, defineConfig, loadEnv } from 'vite'
 import { demoProxy } from './scripts/demo-proxy.mjs'
+import { devServerFiles } from './scripts/dev-server-files.mjs'
 
 /* Match the app and operator console rewrites in vercel.json. The website at
    `/` is built by website/scripts/build.mjs after `vite build`, so the dev
@@ -35,16 +36,6 @@ const appRewrite =
     next()
   }
 
-/* This checkout's own dev-temp/, which holds disposable local files such as
-   screenshots, logs and a local backend's fixture credentials. A worktree
-   can itself sit inside another checkout's dev-temp/, so the rules name this
-   one directory by its full path, never any dev-temp/ on the way. */
-const devTemp = normalizePath(fileURLToPath(new URL('./dev-temp', import.meta.url))).replace(
-  /[()[\]{}*?!+@|]/g,
-  '\\$&',
-)
-const devTempGlob = `${devTemp}/**`
-
 // A fresh identity for every artifact, including rebuilds of the same commit
 // and rollbacks. The bundle and uncached manifest must describe the same build.
 const buildId = crypto.randomUUID()
@@ -66,22 +57,8 @@ export default defineConfig(({ mode, command }) => {
     server: {
       allowedHosts: [],
       proxy: demoProxy(env, command),
-      // Writing into dev-temp/ must not reload the pages under test, and the
-      // dev server must not serve what is there. A deny list replaces Vite's
-      // own, so it repeats Vite's defaults.
-      watch: { ignored: [devTempGlob] },
-      fs: {
-        deny: [
-          '.env',
-          '.env.*',
-          '*.{crt,pem,key,p12,pfx,cer,der}',
-          '.npmrc',
-          '.yarnrc.yml',
-          '**/.git/**',
-          devTemp,
-          devTempGlob,
-        ],
-      },
+      // Local secrets and disposable files stay out of the server and watcher.
+      ...devServerFiles(fileURLToPath(new URL('.', import.meta.url))),
     },
     preview: { allowedHosts: [] },
     plugins: [

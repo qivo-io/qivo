@@ -2,13 +2,10 @@
  * create keys, submissions or files. The contract config's shared globalSetup
  * still resets the Northstar Labs development copy; run only through the coordinated contract pass. */
 import { randomBytes } from 'node:crypto'
-import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
+import { readStash } from './stash.mts'
 
-type Stash = { siteUrl: string; qva: string; qvt: string }
-const stash: Stash = JSON.parse(
-  readFileSync(new URL('./.credentials.json', import.meta.url), 'utf8'),
-)
+const stash = readStash()
 // global.setup.mts checked this site against the deploy key
 const BASE = stash.siteUrl
 const UNKNOWN = `qvc_${randomBytes(32).toString('hex')}`
