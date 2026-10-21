@@ -2,6 +2,7 @@
 import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { Input } from '../components/ui/input'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { plannerFixture } from '../store/plannerFixture.setup'
 
@@ -175,7 +176,7 @@ describe('closing a dialog with typed text', { timeout: 20_000 }, () => {
     const onClose = vi.fn().mockReturnValueOnce(false)
     await render(
       <dialogs.ModalShell icon="key" title="New token" onClose={onClose} unsent={['token name']}>
-        <input aria-label="Name" />
+        <Input aria-label="Name" />
       </dialogs.ModalShell>,
     )
     await press('Cancel')

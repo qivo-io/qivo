@@ -69,6 +69,28 @@ describe('a refused Back or Forward', () => {
     expect(location.pathname).toBe('/app/a')
   })
 
+  it('ends a refusal that another Back or Forward overtook', async () => {
+    history.pushState(null, '', '/app/x')
+    history.pushState(null, '', '/app/y')
+    const scope = createUnsentScope()
+    scope.hold('comment')
+    // a step back that never lands, as when another move overtakes it
+    const refusal = createPopRefusal(vi.fn(), { ...history, go: vi.fn() })
+    const refused = new Promise<void>((resolve) =>
+      listen((event) => {
+        refusal.refuse(event, [scope])
+        resolve()
+      }),
+    )
+    history.back()
+    await refused
+    expect(refusal.stepping()).toBe(true)
+    // the next popstate is somewhere else, so it is the move, and history
+    // writes resume
+    expect(refusal.landed(new PopStateEvent('popstate'))).toBe(false)
+    expect(refusal.stepping()).toBe(false)
+  })
+
   it('takes the same step again after Discard', async () => {
     const { ask, state } = await setUp()
     history.forward()

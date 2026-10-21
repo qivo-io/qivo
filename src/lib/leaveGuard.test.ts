@@ -49,6 +49,17 @@ describe('unsent scopes', () => {
     expect(hasUnsaved()).toBe(false)
   })
 
+  it('lets the windows inside a discarded one close too', () => {
+    const page = createUnsentScope()
+    const note = createUnsentScope(page)
+    const release = note.hold('note')
+    page.discard()
+    expect(note.held()).toEqual([])
+    expect(note.discarded()).toBe(true)
+    release()
+    expect(page.discarded()).toBe(false)
+  })
+
   it('reports nothing after a discard until a new lease begins', () => {
     const scope = createUnsentScope()
     scope.discard()

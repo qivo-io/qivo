@@ -41,10 +41,14 @@ export type UnsentScope = {
   /** Holds `what` until the answered function is called. */
   hold: (what: string) => () => void
   /** Lets the close the person chose to discard go ahead, which can land a
-      moment later, after a history step: the window reports nothing for
-      DISCARD_MS, or until its leases end or a new one begins. A window that
-      stays open after all asks again from then on. */
+      moment later, after a history step: the window, and every window
+      inside it, reports nothing for DISCARD_MS, or until its leases end or
+      a new one begins. A window that stays open after all asks again from
+      then on. */
   discard: () => void
+  /** Whether a Discard on this window or one around it is letting a close
+      go ahead now. */
+  discarded: () => boolean
 }
 
 /** How long a Discard lets the close it answered go ahead. */
@@ -54,9 +58,11 @@ export const DISCARD_MS = 1500
 export function createUnsentScope(parent: UnsentScope | null = null): UnsentScope {
   const own = new Map<symbol, string>()
   let discardedAt: number | null = null
-  const discarded = () => discardedAt !== null && Date.now() - discardedAt < DISCARD_MS
+  const discarded = () =>
+    (discardedAt !== null && Date.now() - discardedAt < DISCARD_MS) || !!parent?.discarded()
   return {
     held: () => (discarded() ? [] : [...new Set(own.values())]),
+    discarded,
     hold: (what) => {
       const lease = Symbol()
       own.set(lease, what)

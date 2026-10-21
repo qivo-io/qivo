@@ -26,7 +26,12 @@ export function createPopRefusal(ask: Ask, h: History = history) {
         popstate, which this ends by asking; the caller then does nothing
         else. */
     landed(event: PopStateEvent): boolean {
-      if (!back || position() !== back.to) return false
+      if (!back) return false
+      if (position() !== back.to) {
+        // another Back or Forward overtook the step back: it is the move now
+        back = null
+        return false
+      }
       event.stopImmediatePropagation()
       const { reached, scopes } = back
       back = null
