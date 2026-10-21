@@ -14,6 +14,7 @@ import {
   canManageProjectUsers,
   canSeeProject,
   hasProjectLevel,
+  LEVELS_READ,
   machineAccess,
   type OrgProjectLevels,
   projectLevelsForOrg,
@@ -120,15 +121,22 @@ describe('accessFlags', () => {
               f.agent,
               f.otherAdmin,
             ]
-            const together = await projectLevelsForPeople(ctx, people, projects)
-            for (const me of people) {
-              const alone = await projectLevelsForOrg(ctx, me, projects)
-              const levels = (l: OrgProjectLevels | undefined) =>
-                projects.map((p) => [p.id, l?.levelOf(p), l?.navigationOnly(p.id)])
-              expect(
-                levels(together.get(me.id)),
-                `${name}: ${me.name} as ${me.org_role} ${me.kind}`,
-              ).toEqual(levels(alone))
+            const levels = (l: OrgProjectLevels | undefined) =>
+              projects.map((p) => [p.id, l?.levelOf(p), l?.navigationOnly(p.id)])
+            // read together, then past the row budget one by one
+            for (const max of [LEVELS_READ.max, 0]) {
+              const before = LEVELS_READ.max
+              LEVELS_READ.max = max
+              const together = await projectLevelsForPeople(ctx, people, projects).finally(() => {
+                LEVELS_READ.max = before
+              })
+              for (const me of people) {
+                const alone = await projectLevelsForOrg(ctx, me, projects)
+                expect(
+                  levels(together.get(me.id)),
+                  `${name}: ${me.name} as ${me.org_role} ${me.kind}, budget ${max}`,
+                ).toEqual(levels(alone))
+              }
             }
           }
         }

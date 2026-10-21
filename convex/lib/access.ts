@@ -341,67 +341,137 @@ export async function projectLevelsForOrg(
   return levelsFrom(me, projects, grants, shares)
 }
 
-/** projectLevelsForOrg for each of `people`, by profile id, over
- * `projects`, every project of one organization. Asked alone, a person costs
- * about four index ranges: their grants, their memberships and each of their
- * teams and its shares. Many people are answered together instead from every
- * grant of the organization's projects and every member and share of its
- * teams, one range for each project and two for each team however many
- * people it answers, whichever reads fewer ranges. Removing a large team's
- * access asked each of its members alone and passed Convex's 4,096. */
+/** How many grant, membership and share rows projectLevelsForPeople reads to
+ * answer many people together before it asks each of them alone instead, so
+ * rows that concern none of them cannot fill the transaction. 4,000 is an
+ * eighth of Convex's 32,000 documents. Tests lower it. */
+export const LEVELS_READ = { max: 4000 }
+
+type LevelRow = Pick<Doc<'project_access'>, 'project_id' | 'level'>
+
+/** projectLevelsForOrg for each of `people`, by profile id, over `projects`,
+ * every project of one organization. Each person alone costs two index
+ * ranges, their grants and their memberships, and each of their teams' shares
+ * are read once for everyone. Many people are answered together instead from
+ * every grant of the organization's projects and every member and share of
+ * its teams, one range for each project and two for each team however many
+ * people it answers, when that reads fewer ranges and at most LEVELS_READ
+ * rows. Removing a large team's access asked each member alone, about four
+ * ranges before the change and four after, and passed Convex's 4,096. */
 export async function projectLevelsForPeople(
   ctx: QueryCtx,
   people: readonly Doc<'profiles'>[],
   projects: readonly Doc<'projects'>[],
 ): Promise<Map<string, OrgProjectLevels>> {
-  const out = new Map<string, OrgProjectLevels>()
-  if (people.length === 0 || projects.length === 0) return out
+  if (people.length === 0 || projects.length === 0) return new Map()
   const orgId = projects[0].org_id
   const teams = await ctx.db
     .query('teams')
     .withIndex('by_org', (q) => q.eq('org_id', orgId))
     .collect()
-  if (people.length * 4 <= projects.length + 2 * teams.length) {
-    for (const person of people)
-      out.set(person.id, await projectLevelsForOrg(ctx, person, projects))
-    return out
-  }
-  type Level = Pick<Doc<'project_access'>, 'project_id' | 'level'>
+  const together =
+    people.length * 2 > projects.length + 2 * teams.length
+      ? await levelsTogether(ctx, people, projects, teams)
+      : null
+  return together ?? (await levelsOneByOne(ctx, people, projects, teams))
+}
+
+/* projectLevelsForPeople from every grant, member and share of the
+ * organization, or null once that passes LEVELS_READ rows. */
+async function levelsTogether(
+  ctx: QueryCtx,
+  people: readonly Doc<'profiles'>[],
+  projects: readonly Doc<'projects'>[],
+  teams: readonly Doc<'teams'>[],
+): Promise<Map<string, OrgProjectLevels> | null> {
   const ids = new Set(people.map((p) => p.id))
-  const grantsOf = new Map<string, Level[]>()
-  const sharesOf = new Map<string, Level[]>()
-  const add = (to: Map<string, Level[]>, profileId: string, levels: Level[]) => {
+  const grantsOf = new Map<string, LevelRow[]>()
+  const sharesOf = new Map<string, LevelRow[]>()
+  const add = (to: Map<string, LevelRow[]>, profileId: string, levels: LevelRow[]) => {
     const held = to.get(profileId)
     if (held === undefined) to.set(profileId, [...levels])
     else held.push(...levels)
   }
+  let rows = 0
   for (const project of projects) {
     const grants = ctx.db
       .query('project_access')
       .withIndex('by_project', (q) => q.eq('project_id', project.id))
-    for await (const grant of grants)
+    for await (const grant of grants) {
+      if (++rows > LEVELS_READ.max) return null
       if (ids.has(grant.profile_id)) add(grantsOf, grant.profile_id, [grant])
+    }
   }
   for (const team of teams) {
     const members: string[] = []
     const memberships = ctx.db
       .query('team_members')
       .withIndex('by_team', (q) => q.eq('team_id', team.id))
-    for await (const m of memberships) if (ids.has(m.profile_id)) members.push(m.profile_id)
+    for await (const m of memberships) {
+      if (++rows > LEVELS_READ.max) return null
+      if (ids.has(m.profile_id)) members.push(m.profile_id)
+    }
     if (members.length === 0) continue
     const shares = await ctx.db
       .query('project_team_access')
       .withIndex('by_team', (q) => q.eq('team_id', team.id))
       .collect()
+    rows += shares.length
+    if (rows > LEVELS_READ.max) return null
     for (const profileId of members) add(sharesOf, profileId, shares)
   }
+  const out = new Map<string, OrgProjectLevels>()
   for (const person of people) {
     out.set(
       person.id,
-      person.org_id === orgId
+      person.org_id === projects[0].org_id
         ? levelsFrom(person, projects, grantsOf.get(person.id) ?? [], sharesOf.get(person.id) ?? [])
         : await projectLevelsForOrg(ctx, person, projects),
     )
+  }
+  return out
+}
+
+/* projectLevelsForPeople one person at a time, as projectLevelsForOrg reads,
+ * with each team of the organization's shares read once for everyone. */
+async function levelsOneByOne(
+  ctx: QueryCtx,
+  people: readonly Doc<'profiles'>[],
+  projects: readonly Doc<'projects'>[],
+  teams: readonly Doc<'teams'>[],
+): Promise<Map<string, OrgProjectLevels>> {
+  const orgId = projects[0].org_id
+  const orgTeams = new Set(teams.map((t) => t.id))
+  const sharesOfTeam = new Map<string, Doc<'project_team_access'>[]>()
+  const out = new Map<string, OrgProjectLevels>()
+  for (const person of people) {
+    if (person.org_id !== orgId) {
+      out.set(person.id, await projectLevelsForOrg(ctx, person, projects))
+      continue
+    }
+    const grants = await ctx.db
+      .query('project_access')
+      .withIndex('by_profile', (q) => q.eq('profile_id', person.id))
+      .collect()
+    const shares: Doc<'project_team_access'>[] = []
+    if (receivesTeamAccess(person)) {
+      const memberships = ctx.db
+        .query('team_members')
+        .withIndex('by_profile', (q) => q.eq('profile_id', person.id))
+      for await (const { team_id } of memberships) {
+        if (!orgTeams.has(team_id)) continue
+        let teamShares = sharesOfTeam.get(team_id)
+        if (teamShares === undefined) {
+          teamShares = await ctx.db
+            .query('project_team_access')
+            .withIndex('by_team', (q) => q.eq('team_id', team_id))
+            .collect()
+          sharesOfTeam.set(team_id, teamShares)
+        }
+        shares.push(...teamShares)
+      }
+    }
+    out.set(person.id, levelsFrom(person, projects, grants, shares))
   }
   return out
 }

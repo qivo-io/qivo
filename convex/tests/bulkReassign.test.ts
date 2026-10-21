@@ -29,6 +29,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { LEVELS_READ } from '../lib/access'
 import type { Refusal } from '../lib/functions'
 import { REASSIGN_MAX } from '../lib/projectGrants'
 import { type BulkUpdate, holderKey, type IssuePatch, updateIssueCore } from '../model/issues'
@@ -42,6 +43,7 @@ import {
   newT,
   type OrgFixture,
   plantIssue,
+  plantProject,
   plantSeat,
   plantSubscription,
   type T,
@@ -356,6 +358,81 @@ describe('reassigning the tasks of an access removal', () => {
       ).filter((g) => g.level === 'viewer' && members.includes(g.profile_id)),
     )
     expect(viewers).toHaveLength(600)
+  }, 60_000)
+
+  it('removes a team grant past many grants that concern none of its holders', async () => {
+    // 3,000 grants of other people on 30 other projects would be read whole
+    // if the 25 holders' sight were worked out together without a budget
+    const t = newT({ transactionLimits: { documentsRead: 2500 } })
+    const f = await withOrg(t)
+    const others: Doc<'projects'>[] = []
+    for (let i = 0; i < 30; i++) others.push(await plantProject(t, { org_id: f.org.id }))
+    const profile = (name: string) => ({
+      id: uuid(),
+      org_id: f.org.id,
+      name,
+      initials: 'PP',
+      color: '#7a7ad0',
+      org_role: 'user' as const,
+      active: true,
+      kind: 'person' as const,
+      plannable_hours: 40,
+      accepted_at: NOW,
+      created_at: NOW,
+    })
+    const holders: string[] = []
+    await t.run(async (ctx) => {
+      await ctx.db.insert('project_team_access', {
+        project_id: f.meta.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+      for (let i = 0; i < 25; i++) {
+        const member = profile(`h${i}`)
+        await ctx.db.insert('profiles', member)
+        await ctx.db.insert('team_members', {
+          team_id: f.team.id,
+          profile_id: member.id,
+          is_leader: false,
+        })
+        holders.push(member.id)
+      }
+    })
+    for (const assignee_id of holders)
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, assignee_id })
+    for (let from = 0; from < 100; from += 25) {
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 25; i++) {
+          const other = profile(`o${i}`)
+          await ctx.db.insert('profiles', other)
+          for (const project of others)
+            await ctx.db.insert('project_access', {
+              project_id: project.id,
+              profile_id: other.id,
+              level: 'viewer',
+            })
+        }
+      })
+    }
+    const before = LEVELS_READ.max
+    LEVELS_READ.max = 500
+    try {
+      await as(t, f.admin).mutation(api.projects.removeAccess, {
+        org_id: f.org.id,
+        id: f.meta.id,
+        team_id: f.team.id,
+        on_held_tasks: 'leave',
+      })
+    } finally {
+      LEVELS_READ.max = before
+    }
+    const grant = await t.run((ctx) =>
+      ctx.db
+        .query('project_team_access')
+        .withIndex('by_project_team', (q) => q.eq('project_id', f.meta.id).eq('team_id', f.team.id))
+        .unique(),
+    )
+    expect(grant).toBeNull()
   }, 60_000)
 
   it('refuses a project grant removal above the cap too, keeping the grant', async () => {
