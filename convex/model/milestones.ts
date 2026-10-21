@@ -170,8 +170,8 @@ export async function addMilestoneCore(
 /** The keys of a milestone's `expected` in the app, which reads its day as
  * `week`. */
 export const MILESTONE_FIELDS: Fields<Doc<'milestones'>> = {
-  // any text: before 2026-10-15 a milestone took any name, blank or long,
-  // and a read answers it as stored
+  // any text: a milestone took a blank name until 2026-10-16 and a longer
+  // one until 2026-10-19, and a read answers it as stored
   name: { sends: 'name', type: TEXT, form: trimmedForm },
   week: { sends: 'week', type: TEXT, form: exact },
 }
@@ -180,7 +180,7 @@ export const MILESTONE_FIELDS: Fields<Doc<'milestones'>> = {
  * day as `date`. */
 export const MILESTONE_MACHINE_FIELDS: Fields<Doc<'milestones'>> = {
   name: MILESTONE_FIELDS.name,
-  // the shape only: before 2026-10-14 a milestone took a day that does not
+  // the shape only: until 2026-10-16 a milestone took a day that does not
   // exist, such as 2026-02-31, and a read answers it as stored
   date: { sends: 'date', type: DAY_SHAPED, form: exact, stored: (m) => m.week },
 }

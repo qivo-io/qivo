@@ -223,17 +223,18 @@ more before the cap reads them back, and `update_task` takes them
 unchanged or any value from 0 to 99999.9. Any other value above the cap is
 refused, a lower one included.
 
-Days later, still in October 2026, `expected.name` of a team, project or
-milestone took any string again, blank included, and lost its `minLength`.
-Before 2026-10-15 these records took any name, so one can read back blank,
-and `set_team`, `update_project` and `set_milestone` refused the name a
-client read with `expected.name must be a string that is not blank`. A
-milestone's `expected.date` is checked for the `YYYY-MM-DD` shape only for
-the same reason, because a milestone saved before 2026-10-14 can hold a day
-that does not exist, such as `2026-02-31`. Such a day is compared, and text
-of another shape is refused with `expected.date must be a date as
-YYYY-MM-DD` instead of `expected.date must be a calendar date as
-YYYY-MM-DD`.
+Hours later, `expected.name` of a team, project or milestone took any
+string again, blank included, and lost its `minLength`. Until 2026-10-16
+these records took a blank name, so one can read back blank, and
+`set_team`, `update_project`, `set_milestone` and `delete_milestone`
+refused the name a client read with `expected.name must be a string that is
+not blank`. A milestone's `expected.date` on `set_milestone` and
+`delete_milestone` is checked for the `YYYY-MM-DD` shape only for the same
+reason, because a milestone saved until 2026-10-16 can hold a day that does
+not exist, such as `2026-02-31`. Such a day is compared, and text of another
+shape is refused with `expected.date must be a date as YYYY-MM-DD` instead
+of `expected.date must be a calendar date as YYYY-MM-DD`, which these tools
+answered from 2026-10-20.
 
 ## Access model: the credential is a user
 
@@ -1085,9 +1086,10 @@ trimmed. A `title` has at most 80 characters and a label's `name` at most
 Some rules are looser here than for the field itself, because a record
 saved before its field's rule reads back as stored and a stale read of it
 must compare. A team's, project's or milestone's `name` takes any string,
-blank or long, because these names had no rule before 2026-10-15. A
-milestone's `date` may name a day that does not exist, such as
-`2026-02-31`, because one saved before 2026-10-14 can. `remaining_hours` has
+blank or long, because these names could be blank until 2026-10-16 and
+longer than 80 characters until 2026-10-19. A milestone's `date` may name a
+day that does not exist, such as `2026-02-31`, because one saved until
+2026-10-16 can. `remaining_hours` has
 no upper limit, because a task given more than 99999.9 hours before the cap
 reads them back. A comment's `body` and a task's or project's `description`
 have no length limit, because a record saved before their caps reads back

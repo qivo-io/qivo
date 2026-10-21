@@ -30,7 +30,8 @@ export function TeamPage({
   onBackPage?: (page: string) => void
 }) {
   // A removed team shows an empty name until the settings shell redirects.
-  const teamName = P.teamById(teamId)?.name || ''
+  const team = P.teamById(teamId)
+  const teamName = team?.name || ''
   const ws = teamId // the update calls below all take the team id
   const canManage = P.isTeamLeader(teamId) // team leader or org admin
   const confirm = useConfirmArm<string>()
@@ -48,7 +49,7 @@ export function TeamPage({
   return (
     <>
       <BackLink to="Teams" onClick={() => onBackPage('org-teams')} />
-      <PageTitle>{teamName || 'Team'}</PageTitle>
+      <PageTitle>{team ? P.teamLabel(team) : 'Team'}</PageTitle>
       <SettingsSection
         title="Team"
         description={
@@ -259,9 +260,8 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
             // Count home teams only; P.teams also contains foreign teams.
             const last = homeTeams.length <= 1
             const arm = confirm.armed === `t:${t.id}`
-            // a team saved before names were required can have a blank one,
-            // and an empty button has no height to click
-            const name = t.name.trim() || 'Unnamed team'
+            // an empty button has no height to click (P.teamLabel)
+            const name = P.teamLabel(t)
             return (
               <div
                 key={t.id}

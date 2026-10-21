@@ -195,8 +195,8 @@ const clamp = (n: number, lo: number, hi: number) =>
 
 /** The keys of a team's `expected`. REST and MCP change only the name. */
 export const TEAM_FIELDS: Fields<Doc<'teams'>> = {
-  // any text: before 2026-10-15 a team took any name, blank or long, and
-  // a read answers it as stored
+  // any text: a team took a blank name until 2026-10-16 and a longer one
+  // until 2026-10-19, and a read answers it as stored
   name: { sends: 'name', type: TEXT, form: trimmedForm },
   stale_days: { sends: 'stale_days', type: NUMBER, form: exact },
   archive_days: { sends: 'archive_days', type: NUMBER, form: exact },

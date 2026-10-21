@@ -41,7 +41,10 @@ let toast: ReturnType<typeof vi.fn<(message: string, tone?: string) => void>>
 let container: HTMLDivElement
 let root: Root
 
-async function load(crewName = 'Crew') {
+/* Loads the store and pages. `crewName` and `betaName` name the Crew team
+   and the Beta milestone, so a test can store a name saved before names
+   were required. */
+async function load(crewName = 'Crew', betaName = 'Beta') {
   vi.resetModules()
   const snap: Snapshot = plannerFixture()
   const org = snap.orgs[0].id
@@ -67,7 +70,7 @@ async function load(crewName = 'Crew') {
     created_at: NOW,
   })
   snap.milestones.push(
-    { id: 'beta', project_id: 'sensor', name: 'Beta', week: '2026-10-05', created_at: NOW },
+    { id: 'beta', project_id: 'sensor', name: betaName, week: '2026-10-05', created_at: NOW },
     { id: 'gamma', project_id: 'sensor', name: 'Gamma', week: '2026-11-02', created_at: NOW },
   )
   snap.issues.push({
@@ -189,6 +192,40 @@ describe('a team saved with a blank name', () => {
     await render(() => <pages.teams.OrgTeamsPage setPage={setPage} />)
     await act(async () => button('Unnamed team')?.click())
     expect(setPage).toHaveBeenCalledWith('team:crew')
+    await render(() => <pages.teams.TeamPage teamId="crew" setPage={vi.fn()} />)
+    expect(document.querySelector('h1')?.textContent).toBe('Unnamed team')
+  })
+
+  it('reads as a team in the notice of a refused rename', async () => {
+    await load('  ')
+    const { P } = await import('../../store/planner')
+    void P.updateTeam('crew', { name: 'Field crew' })
+    const request = requests.find((r) => r.name === 'teams:update')
+    expect(request).toBeDefined()
+    await act(async () =>
+      request?.reject(
+        new ConvexError({
+          code: 'conflict',
+          reason: 'field_changed',
+          message: 'name of team crew changed since you read it',
+          changes: [{ record: 'team', id: 'crew', field: 'name', by: null, at: null }],
+        }),
+      ),
+    )
+    expect(toasts()).toContain(
+      'Not saved. The name of a team was changed elsewhere. Your change was discarded.',
+    )
+  })
+})
+
+describe('a milestone saved with spaces around its name', () => {
+  it('opens its editor with nothing unsaved', async () => {
+    await load('Crew', ' Beta ')
+    const onClose = vi.fn()
+    await render(() => <pages.modals.MilestoneModal init={{ id: 'beta' }} onClose={onClose} />)
+    expect(input('[data-milestone-editor] input[aria-label="Name"]')?.value).toBe('Beta')
+    const { hasUnsaved } = await import('../../lib/leaveGuard')
+    expect(hasUnsaved()).toBe(false)
   })
 })
 

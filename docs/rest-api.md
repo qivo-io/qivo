@@ -2101,9 +2101,9 @@ trimmed.
 Some rules are looser here than for a write, because a record saved before
 its field's rule reads back as stored and a stale read of it must compare.
 A team's, project's or milestone's `name` takes any string, blank or long,
-because these names had no rule before 2026-10-15. A milestone's `date` may
-name a day that does not exist, such as `2026-02-31`, because one saved
-before 2026-10-14 can. `remaining_hours` has no upper limit, because a task
+because these names could be blank until 2026-10-16 and longer than 80
+characters until 2026-10-19. A milestone's `date` may name a day that does
+not exist, such as `2026-02-31`, because one saved until 2026-10-16 can. `remaining_hours` has no upper limit, because a task
 given more than 99999.9 hours before the cap reads them back. A comment's
 `body` and a task's or project's `description` have no length limit,
 because a record saved before their caps reads back longer. Every read
@@ -2170,12 +2170,13 @@ that breaks its field's rule is a `400`, never a `409`:
 Until later in October 2026, a value that broke its field's rule, such as a
 `due_date` of `2026-02-31` or a `title` of `""`, was compared and could
 answer `409`, and a create that sent `expected` answered `unknown field
-"expected"; this request takes …`. For a few days after that, a blank
-`expected.name` of a team, project or milestone was a `400` with
-`expected.name must be a string that is not blank`, and so was a milestone's
-`expected.date` naming a day that does not exist, with `expected.date must
-be a calendar date as YYYY-MM-DD`. Both compare again, because records saved
-before their rules can read back that way.
+"expected"; this request takes …`. For a few hours on 2026-10-20 and
+2026-10-21, a blank `expected.name` of a team, project or milestone was a
+`400` with `expected.name must be a string that is not blank`, and so was a
+milestone's `expected.date` naming a day that does not exist, on `PATCH`
+and `DELETE`, with `expected.date must be a calendar date as YYYY-MM-DD`.
+Both compare again, because records saved before their rules can read back
+that way.
 
 A conflict is a `409` with one sentence in `error`. It names the fields by
 their request field, never their values, and names a person only where Qivo
@@ -2194,8 +2195,9 @@ remaining_hours` or `title, status and parent`. `<record>` is the task's key,
 such as `QN-12`, `comment <id> on QN-12`, `project ENC`, `milestone
 "Prototype validated"`, `label "Hardware"`, `team "Hardware"`, `the access of
 Emil Strand to project PCB` or `user "Priya Patel"`. A team or milestone
-whose name is blank, as one saved before 2026-10-15 can be, reads as `team
-<id>` or `milestone <id>`. For example:
+whose name is blank, as one saved until 2026-10-16 can be, reads as `team
+<id>` or `milestone <id>`, and its access as `the access of team <id> to
+project PCB`. For example:
 
 ```json
 { "error": "Aisha Rahman changed status of QN-12 since you read it, so nothing was saved; read QN-12 again and resend your change" }

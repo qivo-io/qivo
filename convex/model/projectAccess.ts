@@ -241,7 +241,11 @@ export async function setProjectGrantCore(
   await assertGrantExpected(ctx, {
     me: a.me,
     project,
-    of: 'team' in subject ? subject.team : subject.profile,
+    // a team saved blank before names were required is named by its id
+    of:
+      'team' in subject
+        ? { id: subject.team.id, name: subject.team.name.trim() || `team ${subject.team.id}` }
+        : subject.profile,
     level: row?.level ?? null,
     expected: a.expected,
     next: level,

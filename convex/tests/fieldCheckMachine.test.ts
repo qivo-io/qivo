@@ -435,6 +435,8 @@ describe('text values in expected', () => {
   it('refuses text its field would refuse with a 400 sentence, before any comparison', async () => {
     const fx = await setup()
     const row = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, title: 'One' })
+    // every write of a title has held this rule, so no task stores a blank
+    // or longer one, unlike a team, project or milestone name
     const TITLE = 'expected.title must be a string that is not blank, of at most 80 characters'
     for (const seen of ['', '   ', 'x'.repeat(81), '\u{1F680}'.repeat(81)]) {
       const body = { title: 'Two', expected: { title: seen } }
@@ -634,7 +636,7 @@ describe('values saved before their rule', () => {
     return { Authorization: `Bearer ${secret}` }
   }
 
-  /* Before 2026-10-15 a team, project or milestone took any name, so a
+  /* Until 2026-10-16 a team, project or milestone took any name, so a
    * stored one may be blank, and every read answers it as stored. */
   it('compares a blank name in the app, over REST and over MCP', async () => {
     const fx = await setup()
@@ -683,6 +685,12 @@ describe('values saved before their rule', () => {
     }
     expect(await names()).toEqual(['  ', '', ''])
     // a blank name gives the sentence nothing to quote, so it names the id
+    const changed = (what: string, label: string) => ({
+      status: 409,
+      text: JSON.stringify({
+        error: `${what} of ${label} changed since you read it, so nothing was saved; read ${label} again and resend your change`,
+      }),
+    })
     expect(
       await send(
         fx,
@@ -691,12 +699,20 @@ describe('values saved before their rule', () => {
         { name: 'Firmware', expected: { name: 'Hardware' } },
         admin,
       ),
-    ).toEqual({
-      status: 409,
-      text: JSON.stringify({
-        error: `name of team ${fx.team.id} changed since you read it, so nothing was saved; read team ${fx.team.id} again and resend your change`,
-      }),
-    })
+    ).toEqual(changed('name', `team ${fx.team.id}`))
+    expect(
+      await send(fx, 'PATCH', milestonePath, { name: 'Pilot', expected: { name: 'Beta' } }, admin),
+    ).toEqual(changed('name', `milestone ${milestone}`))
+    // and so does the access of a team named blank
+    expect(
+      await send(
+        fx,
+        'PUT',
+        `/v1/projects/TBED/access/teams/${fx.team.id}`,
+        { level: 'viewer', expected: { level: 'user' } },
+        admin,
+      ),
+    ).toEqual(changed('level', `the access of team ${fx.team.id} to project TBED`))
 
     // REST, blank as read or with spaces
     for (const [path, name, seen] of [
@@ -710,6 +726,14 @@ describe('values saved before their rule', () => {
       ).toMatchObject({ status: 200 })
     }
     expect(await names()).toEqual(['Firmware', 'Testbed', 'Pilot'])
+    // a name saved with spaces around it is quoted without them
+    await fx.t.run(async (ctx) => {
+      const team = await byId(ctx, 'teams', fx.team.id)
+      if (team) await ctx.db.patch(team._id, { name: ' Hardware ' })
+    })
+    expect(
+      await send(fx, 'PATCH', teamPath, { name: 'Firmware', expected: { name: 'Old' } }, admin),
+    ).toEqual(changed('name', 'team "Hardware"'))
 
     await blank()
     const calls: [string, Record<string, unknown>][] = [
@@ -747,20 +771,7 @@ describe('values saved before their rule', () => {
     expect(await names()).toEqual(['Firmware 3', 'Testbed 3', 'Pilot 3'])
   })
 
-  it('still refuses a blank title, which no task could ever store', async () => {
-    const fx = await setup()
-    const row = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, title: 'One' })
-    const error = 'expected.title must be a string that is not blank, of at most 80 characters'
-    const body = { title: 'Two', expected: { title: '' } }
-    expect(await send(fx, 'PATCH', `/v1/tasks/${row.id}`, body)).toEqual({
-      status: 400,
-      text: JSON.stringify({ error }),
-    })
-    expect(await tool(fx, 'update_task', { ref: row.id, ...body })).toMatchObject(toolError(error))
-    expect((await task(fx, row.id))?.title).toBe('One')
-  })
-
-  /* Before 2026-10-14 a milestone took any day written YYYY-MM-DD, one that
+  /* Until 2026-10-16 a milestone took any day written YYYY-MM-DD, one that
    * does not exist included, and REST and MCP read it back as its date. */
   it('compares a milestone date that does not exist, and refuses one of another shape', async () => {
     const fx = await setup()

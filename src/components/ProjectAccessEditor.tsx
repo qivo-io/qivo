@@ -80,7 +80,7 @@ export function ProjectAccessEditor({
         <div className="space-y-1.5">
           {teamIds.map((teamId) => {
             const team = P.teamById(teamId)
-            const name = team?.name || 'Unavailable team'
+            const name = team ? P.teamLabel(team) : 'Unavailable team'
             return (
               <div
                 key={teamId}
@@ -211,7 +211,7 @@ export function ProjectAccessEditor({
             <optgroup label="Teams">
               {addableTeams.map((team) => (
                 <option key={team.id} value={`team:${team.id}`}>
-                  {team.name}
+                  {P.teamLabel(team)}
                 </option>
               ))}
             </optgroup>
