@@ -21,7 +21,7 @@ const BLOCK_SIZE = 256
    mounted boundary, as when a filter is cleared. */
 const MOST_AT_ONCE = 64
 
-type Props<T> = {
+type Props<T extends object> = {
   /** the list's id with its scheduler */
   id: string
   items: readonly T[]
@@ -43,7 +43,7 @@ type Props<T> = {
 type Block<T> = { id: number; items: T[] }
 
 function BlockView<T>({ items, render }: { items: readonly T[]; render: (item: T) => ReactNode }) {
-  return items.map(render)
+  return items.map((item) => render(item))
 }
 
 /* A block renders again when the list's render or one of its items is new. */
@@ -64,7 +64,7 @@ const Block = memo(
     direction, to the first or last control of the items that came in. With
     `initial` covering every item it renders them all and no space, the same
     DOM as a plain list. */
-export function DeferredList<T>({
+export function DeferredList<T extends object>({
   id,
   items,
   keyOf,
@@ -138,6 +138,26 @@ export function DeferredList<T>({
   /* Items keep the block that first held them, so an insert or a delete
      moves no item to another block, and only an item reordered across a
      block boundary remounts. Block ids rise down the list. */
+  /* Each item's element, made once per item object and render, so the
+     block a slice grows hands its other items back unchanged and React
+     skips them without rendering or comparing them again. */
+  const made = useRef<{
+    render: typeof render
+    nodes: WeakMap<T, ReactNode>
+    node: (item: T) => ReactNode
+  } | null>(null)
+  if (made.current?.render !== render) {
+    const nodes = new WeakMap<T, ReactNode>()
+    made.current = {
+      render,
+      nodes,
+      node: (item) => {
+        if (!nodes.has(item)) nodes.set(item, render(item))
+        return nodes.get(item)
+      },
+    }
+  }
+  const node = made.current.node
   const owners = useRef(new Map<string, number>())
   const nextBlock = useRef(0)
   const blocks: Block<T>[] = []
@@ -220,7 +240,7 @@ export function DeferredList<T>({
   return (
     <>
       {blocks.map((block) => (
-        <Block key={block.id} items={block.items} render={render} />
+        <Block key={block.id} items={block.items} render={node} />
       ))}
       {waitingSpace && listRole ? (
         // biome-ignore lint/a11y/useSemanticElements: the list is a styled flex div that takes drops, not a <ul>

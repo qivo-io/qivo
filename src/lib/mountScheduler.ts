@@ -82,8 +82,10 @@ export function createMountScheduler({
   const mark = () => {
     if (!root) return
     const pending = pendingLists().length > 0
-    if (!pending && !root.hasAttribute('data-board-mount')) return
-    root.setAttribute('data-board-mount', pending ? 'pending' : 'complete')
+    const state = pending ? 'pending' : 'complete'
+    const was = root.getAttribute('data-board-mount')
+    if (was === state || (!pending && was === null)) return
+    root.setAttribute('data-board-mount', state)
     if (pending) root.setAttribute('aria-busy', 'true')
     else root.removeAttribute('aria-busy')
   }

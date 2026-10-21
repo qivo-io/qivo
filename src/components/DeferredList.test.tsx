@@ -17,7 +17,12 @@ let scheduler: ReturnType<typeof createMountScheduler>
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   tasks = []
-  scheduler = createMountScheduler({ post: (task) => tasks.push(task), observer: null })
+  // a clock that never moves: every slice looks free, so slices grow at once
+  scheduler = createMountScheduler({
+    post: (task) => tasks.push(task),
+    now: () => 0,
+    observer: null,
+  })
   container = document.createElement('div')
   document.body.append(container)
   scheduler.setRoot(container)
@@ -68,7 +73,9 @@ function random(seed: number) {
 }
 
 describe('DeferredList', () => {
-  it('renders every item once, in order, and keeps mounted nodes through random changes', { timeout: 60_000 }, async () => {
+  it('renders every item once, in order, and keeps mounted nodes through random changes', {
+    timeout: 60_000,
+  }, async () => {
     for (const seed of [1, 7, 42]) {
       const pick = random(seed)
       let next = 0

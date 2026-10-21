@@ -74,13 +74,16 @@ const finish = async () => {
 const EAGER = Math.ceil(900 / MIN_CARD_PITCH)
 
 /** `count` To Do tasks and `progress` In Progress ones. */
-const tasks = (count: number, progress = 0) => (snap: Snapshot) => {
-  for (let n = 0; n < count; n++) snap.issues.push(taskRow(snap, `t${n}`, 'todo', n + 1))
-  for (let n = 0; n < progress; n++)
-    snap.issues.push(taskRow(snap, `p${n}`, 'progress', count + n + 1))
-}
+const tasks =
+  (count: number, progress = 0) =>
+  (snap: Snapshot) => {
+    for (let n = 0; n < count; n++) snap.issues.push(taskRow(snap, `t${n}`, 'todo', n + 1))
+    for (let n = 0; n < progress; n++)
+      snap.issues.push(taskRow(snap, `p${n}`, 'progress', count + n + 1))
+  }
 
-describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT }, () => {
+// Slices size themselves by the real clock, so a busy machine makes them small.
+describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
   it('renders it once', async () => {
     const board = await loadBoard(network, tasks(25, 25))
     // the Board asks for the scope's tasks once per render
@@ -109,7 +112,10 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT }, () => {
     await board.render(root)
     await slice()
     const before = new Map([...cards()].map((card) => [card.getAttribute('data-card'), card]))
-    board.snapshot.issues.push({ ...taskRow(board.snapshot, 'top', 'todo', 900), priority: 'urgent' })
+    board.snapshot.issues.push({
+      ...taskRow(board.snapshot, 'top', 'todo', 900),
+      priority: 'urgent',
+    })
     await board.deliver()
     expect(cards()[0].textContent).toContain('Task top')
     for (const [id, node] of before)

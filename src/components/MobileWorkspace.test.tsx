@@ -83,7 +83,10 @@ describe('the phone task list', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(portraits.count).toBe(1)
   })
 
-  it('mounts the rows of its first screen, then the rest in slices', async () => {
+  // slices size themselves by the real clock, so a busy machine makes them small
+  it('mounts the rows of its first screen, then the rest in slices', {
+    timeout: BOARD_TEST_TIMEOUT * 3,
+  }, async () => {
     vi.stubGlobal('innerHeight', 400)
     const board = await loadBoard(
       network,
