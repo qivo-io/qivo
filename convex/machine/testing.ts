@@ -12,18 +12,22 @@
  * token. Agent keys take neither, because the agent's role decides their
  * access.
  *
- * Every credential starts pending: the mint stores it revoked, with its
- * revoked_at equal to its created_at, and machine/auth refuses it until
+ * Every credential starts pending: the mint stores its hash behind the
+ * `pending:` prefix, which no secret's sha256 hex can match, so machine/auth
+ * finds no row for the secret until
  *   npx convex run machine/testing:activateNamedCredentials
  *     '{"profile_id":…, "name":…}'
- * makes it usable. The mint requires `pending: true`, so a caller that
- * expects a usable credential fails at the mint instead of with 401s
- * later. A contract pass whose process is killed while a call runs can
- * leave that one call running after the next pass has deleted the killed
- * pass's credentials by name. The pass starts each call only after the one
- * before it returned, and activates only after both mints, so the call left
- * is either a late mint, which leaves a pending row, or a late activation,
- * which finds nothing. deleteOldCredentials sweeps such rows. */
+ * stores the plain hash. A pending row is not revoked, so every revoke path
+ * stamps it like any other credential, and activation skips a row that
+ * carries a revoked_at. No production code needs to know the pending state.
+ * The mint requires `pending: true`, so a caller that expects a usable
+ * credential fails at the mint instead of with 401s later. A contract pass
+ * whose process is killed while a call runs can leave that one call
+ * running after the next pass has deleted the killed pass's credentials by
+ * name. The pass starts each call only after the one before it returned,
+ * and activates only after both mints, so the call left is either a late
+ * mint, which leaves a pending row, or a late activation, which finds
+ * nothing. deleteOldCredentials sweeps such rows. */
 
 import { v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
@@ -36,6 +40,22 @@ import { badRequest, notFound } from '../lib/functions'
 import { newUuid } from '../model/orgs'
 
 const HASH_RE = /^[0-9a-f]{64}$/
+/** Prefix of the stored hash of a pending credential (see the header). */
+const PENDING = 'pending:'
+
+type Kind = 'agent_key' | 'mcp_token'
+
+/** The agent key or personal token whose stored hash is exactly `stored`. */
+const byStoredHash = (ctx: MutationCtx, kind: Kind, stored: string) =>
+  kind === 'agent_key'
+    ? ctx.db
+        .query('agent_keys')
+        .withIndex('by_hash', (q) => q.eq('key_hash', stored))
+        .first()
+    : ctx.db
+        .query('mcp_tokens')
+        .withIndex('by_hash', (q) => q.eq('token_hash', stored))
+        .first()
 
 export const mintCredential = internalMutation({
   args: {
@@ -100,6 +120,12 @@ export const mintCredential = internalMutation({
       profile = agents[0] ?? null
     }
     if (profile === null) throw notFound('profile not found')
+    // insertUnique checks the pending form; a usable row may hold the plain one
+    if ((await byStoredHash(ctx, a.kind, a.key_hash)) !== null) {
+      throw badRequest(
+        a.kind === 'agent_key' ? 'that key already exists' : 'that token already exists',
+      )
+    }
     const id = newUuid()
     if (a.kind === 'agent_key') {
       if (profile.kind !== 'agent') throw badRequest('agent keys belong to agent profiles')
@@ -107,15 +133,14 @@ export const mintCredential = internalMutation({
         ctx,
         'agent_keys',
         'by_hash',
-        { key_hash: a.key_hash },
+        { key_hash: PENDING + a.key_hash },
         {
           id,
           profile_id: profile.id,
           name: a.name,
           key_prefix: a.key_prefix,
-          key_hash: a.key_hash,
+          key_hash: PENDING + a.key_hash,
           created_at: now,
-          revoked_at: now,
         },
         badRequest('that key already exists'),
       )
@@ -124,17 +149,16 @@ export const mintCredential = internalMutation({
         ctx,
         'mcp_tokens',
         'by_hash',
-        { token_hash: a.key_hash },
+        { token_hash: PENDING + a.key_hash },
         {
           id,
           profile_id: profile.id,
           name: a.name,
           token_prefix: a.key_prefix,
-          token_hash: a.key_hash,
+          token_hash: PENDING + a.key_hash,
           access: a.access,
           expires_at: expiry,
           created_at: now,
-          revoked_at: now,
         },
         badRequest('that token already exists'),
       )
@@ -177,22 +201,33 @@ async function profileCredentials(ctx: MutationCtx, profile_id: string) {
 }
 
 /* Makes the pending credentials of one profile with exactly that name
- * usable: the rows whose revoked_at still equals their created_at. A row
- * that is gone stays gone, and one whose revoked_at changed after its mint,
- * as a person's own revoke writes it, stays revoked. An organization admin's
- * revoke leaves a row that already reads as revoked unchanged, so it does
- * not stop this activation. The contract pass activates within seconds of
- * its mints and deletes its credentials when it ends. */
+ * usable: stores the plain hash of each row whose hash is still pending and
+ * that nobody revoked. A row that is gone stays gone, and one that any
+ * revoke path stamped, a person's own revoke or an organization admin's
+ * alike, stays pending and revoked. A plain hash that another credential
+ * holds refuses the whole activation, because machine/auth reads one row per
+ * hash. The contract pass activates within seconds of its mints and deletes
+ * its credentials when it ends. */
 export const activateNamedCredentials = internalMutation({
   args: { profile_id: v.string(), name: v.string() },
   handler: async (ctx, a): Promise<{ activated: number }> => {
     refuseProduction('machine/testing')
     if (a.name.trim() === '') throw badRequest('a credential name is required')
-    const pending = (await profileCredentials(ctx, a.profile_id)).filter(
-      (row) => row.name === a.name && row.revoked_at === row.created_at,
-    )
-    for (const row of pending) await ctx.db.patch(row._id, { revoked_at: undefined })
-    return { activated: pending.length }
+    let activated = 0
+    for (const row of await profileCredentials(ctx, a.profile_id)) {
+      if (row.name !== a.name || row.revoked_at !== undefined) continue
+      const kind: Kind = 'key_hash' in row ? 'agent_key' : 'mcp_token'
+      const stored = 'key_hash' in row ? row.key_hash : row.token_hash
+      if (!stored.startsWith(PENDING)) continue
+      const hash = stored.slice(PENDING.length)
+      if ((await byStoredHash(ctx, kind, hash)) !== null) {
+        throw badRequest('another credential already holds that hash')
+      }
+      if ('key_hash' in row) await ctx.db.patch(row._id, { key_hash: hash })
+      else await ctx.db.patch(row._id, { token_hash: hash })
+      activated++
+    }
+    return { activated }
   },
 })
 

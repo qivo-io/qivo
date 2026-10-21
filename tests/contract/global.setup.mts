@@ -32,8 +32,10 @@
  *      machine/auth.ts looks up). Each credential's name carries a random
  *      pass id, so the pass can delete what it minted by name even when it
  *      never learned a row's id, for example after a mint whose output could
- *      not be parsed. A minted credential is pending, which machine/auth
- *      refuses, until the pass activates both by name after both mints.
+ *      not be parsed. A minted credential is pending, so machine/auth
+ *      finds no row for its secret, until the pass activates both by name
+ *      after both mints. Activation skips a credential that anyone revoked
+ *      while it was pending, its owner or an organization admin alike.
  *      When only the vitest process is killed, its running `npx convex run`
  *      child goes on and can finish after the next pass has revoked the
  *      killed pass's names. The pass runs one call at a time and activates

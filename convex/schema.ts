@@ -1293,7 +1293,9 @@ export default defineSchema({
     profile_id: v.string(), // always a kind='agent' profile
     name: v.string(),
     key_prefix: v.string(), // safe first/last fingerprint of the qva_ secret, display only
-    key_hash: v.string(), // sha256 hex, unique-checked on by_hash; secret never stored
+    // sha256 hex, unique-checked on by_hash; secret never stored. A pending
+    // test credential holds 'pending:' + the hash (machine/testing.ts).
+    key_hash: v.string(),
     created_by: v.optional(v.string()),
     created_at: v.string(),
     last_used_at: v.optional(v.string()),
@@ -1309,7 +1311,9 @@ export default defineSchema({
     profile_id: v.string(),
     name: v.string(),
     token_prefix: v.string(), // first chars of the qvt_ secret, display only
-    token_hash: v.string(), // sha256 hex, unique-checked on by_hash; secret never stored
+    // sha256 hex, unique-checked on by_hash; secret never stored. A pending
+    // test credential holds 'pending:' + the hash (machine/testing.ts).
+    token_hash: v.string(),
     // What the token may do (lib/access.ts credentialAccess). A missing value
     // means read, so the rule fails closed and tokens minted before this field
     // existed can only read. Optional only so those rows still validate.
