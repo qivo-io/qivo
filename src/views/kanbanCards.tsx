@@ -77,6 +77,7 @@ function ParentHeading({ it, place }: { it: IssueVM; place: ProjectPlace | null 
       <Button
         type="button"
         variant="unstyled"
+        noTooltip
         data-focus-key="parent"
         aria-label={`Parent: ${it.title}`}
         className="flex min-w-0 items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary"
@@ -167,6 +168,7 @@ function TaskRow({
             <Button
               type="button"
               variant="unstyled"
+              noTooltip
               data-focus-key="title"
               aria-label={it.title}
               className="min-w-0 cursor-inherit text-left font-normal outline-none focus-visible:ring-2 focus-visible:ring-primary"

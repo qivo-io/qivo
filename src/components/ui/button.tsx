@@ -11,29 +11,42 @@ const Button = React.forwardRef<
   React.ComponentProps<'button'> &
     VariantProps<typeof buttonVariants> & {
       asChild?: boolean
+      /** For a Button that never has a `title`: it renders without the
+          tooltip's Radix root, with the same DOM. Lists of many rows use it,
+          and a row that goes live keeps its button node. */
+      noTooltip?: boolean
     }
 >(function Button(
-  { className, variant = 'default', size = 'default', asChild = false, title, ...props },
+  {
+    className,
+    variant = 'default',
+    size = 'default',
+    asChild = false,
+    noTooltip = false,
+    title,
+    ...props
+  },
   ref,
 ) {
   const Comp = asChild ? Slot.Root : 'button'
+  if (import.meta.env.DEV && noTooltip && title)
+    console.warn('A Button with noTooltip drops its title', title)
   /* The props go first so the Button's own data hooks win: a Radix trigger's
      asChild Slot passes its data-slot (popover-trigger, ...) down, and theme
      rules find every Button by data-slot="button" and data-variant. */
-  return (
-    <HoverTooltip content={title}>
-      <Comp
-        {...props}
-        ref={ref}
-        data-slot="button"
-        data-variant={variant}
-        data-size={variant === 'unstyled' ? undefined : size}
-        className={
-          variant === 'unstyled' ? cn(className) : cn(buttonVariants({ variant, size, className }))
-        }
-      />
-    </HoverTooltip>
+  const button = (
+    <Comp
+      {...props}
+      ref={ref}
+      data-slot="button"
+      data-variant={variant}
+      data-size={variant === 'unstyled' ? undefined : size}
+      className={
+        variant === 'unstyled' ? cn(className) : cn(buttonVariants({ variant, size, className }))
+      }
+    />
   )
+  return noTooltip ? button : <HoverTooltip content={title}>{button}</HoverTooltip>
 })
 
 export { Button }

@@ -136,6 +136,20 @@ try {
             `${relative}:${line(node)} uses an SVG <title> tooltip; use shared HoverTooltip and an accessible label`,
           )
         }
+        const named = (name) =>
+          node.attributes.properties.some(
+            (attr) => ts.isJsxAttribute(attr) && attr.name.text === name,
+          )
+        if (
+          ts.isIdentifier(node.tagName) &&
+          node.tagName.text === 'Button' &&
+          named('noTooltip') &&
+          named('title')
+        ) {
+          errors.push(
+            `${relative}:${line(node)} gives a noTooltip Button a title; it would never show`,
+          )
+        }
         for (const attr of node.attributes.properties) {
           if (!ts.isJsxAttribute(attr)) continue
           if (nativeTag && attr.name.text === 'title') {

@@ -505,6 +505,7 @@ export function MobileTaskList({
                   <Button
                     key={task.id}
                     variant="unstyled"
+                    noTooltip
                     data-card={task.id}
                     data-focus-key="row"
                     className="mobile-task-row"
