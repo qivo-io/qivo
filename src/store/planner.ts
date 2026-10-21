@@ -713,6 +713,18 @@ function dropDeletedTasks(gone: Set<string>, at: string) {
   purgeIssueRows(gone)
 }
 
+/* What a click on a desktop notification runs: App's own way into the inbox,
+   so the click asks before it closes a window with unsent text, as the Inbox
+   button does, and the address follows only once the move goes ahead. A
+   refused click adds no history entry. Null while no App is mounted. */
+let inboxOpener: (() => void) | null = null
+
+/** Sets what a click on a desktop notification runs (App's openInbox), or
+    null to drop it. */
+function setInboxOpener(open: (() => void) | null) {
+  inboxOpener = open
+}
+
 /* Raises a desktop notification for each message of delivery `snap` that is
    new since the last one, and for each item back from a snooze. It reads
    the delivery, not the painted rows, so the person's own pending changes,
@@ -740,20 +752,8 @@ function announceNewMessages(snap: Snapshot) {
     const cur = returned.get(m.issue_id)
     if (!cur || isNewer(cur.created_at, cur.id, m.created_at, m.id)) returned.set(m.issue_id, m)
   })
-  /* Navigate the way Back does. This used to assign location.hash, which
-     fires `hashchange` — and nothing in the app has ever listened for
-     one (App listens for `popstate`), so clicking a desktop notification
-     moved the address bar and left the app where it was. Pushing the
-     entry and dispatching the event the router already handles makes the
-     click actually open the inbox. */
-  const openInbox = () => {
-    // the literal rather than router.ts's APP_PREFIX/ORG_NONE: router.ts
-    // imports THIS module, so importing it back would close a cycle for
-    // the sake of two constants. The inbox is about no one organization,
-    // hence the `~` segment.
-    history.pushState(null, '', '/app/~/inbox')
-    window.dispatchEvent(new PopStateEvent('popstate'))
-  }
+  // a click on the notification opens the inbox (setInboxOpener)
+  const openInbox = () => inboxOpener?.()
   const titleOf = (m: Row<'messages'>) => {
     const iss = issues.get(m.issue_id)
     return (iss ? iss.title : m.issue_title) || m.issue_title
@@ -4033,6 +4033,7 @@ export type IssueFilters = {
 /* --- the public store --------------------------------------------------------- */
 export const PLANNER = {
   roadmapContext,
+  setInboxOpener,
   get roadmapUndo() {
     return {
       count: roadmapVisit?.count ?? 0,

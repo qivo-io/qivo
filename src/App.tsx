@@ -1440,6 +1440,14 @@ function App() {
     openPalette: () => setPaletteOpen(true),
     createOrg: () => setModal({ kind: 'createorg' }),
   }
+  // a click on a desktop notification opens the inbox as the Inbox button
+  // does, asking first when a window holds unsent text
+  const openInboxRef = useRef(actions.openInbox)
+  openInboxRef.current = actions.openInbox
+  useEffect(() => {
+    P.setInboxOpener(() => openInboxRef.current())
+    return () => P.setInboxOpener(null)
+  }, [])
 
   const createIssue = (issue) => {
     // while edits are paused the dialog stays open with what was typed

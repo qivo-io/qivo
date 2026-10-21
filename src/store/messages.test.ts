@@ -758,6 +758,40 @@ describe('snooze through the client store', () => {
     expect(((window as { __qivoNotes?: unknown[] }).__qivoNotes ?? []).length).toBe(1)
   })
 
+  it('opens the inbox through the app on a notification click, and writes no history itself', async () => {
+    // the desktop app's bridge, whose click names the notification's tag
+    let click: ((tag: string) => void) | undefined
+    Object.assign(window, {
+      qivoDesktop: {
+        notifications: {
+          supported: true,
+          permission: 'granted',
+          show: async () => true,
+          onClick: (listener: (tag: string) => void) => {
+            click = listener
+            return () => {}
+          },
+        },
+      },
+    })
+    const pushState = vi.fn()
+    vi.stubGlobal('history', { pushState })
+    const openInbox = vi.fn()
+    P.setInboxOpener(openInbox)
+    const task1 = group('Notification task 1')
+    const wokeAt = '2026-09-15T08:00:01.000Z'
+    snap.messages = snap.messages.map((m) =>
+      task1.ids.includes(m.id) ? { ...m, read_at: undefined, woke_at: wokeAt } : m,
+    )
+    publish(structuredClone(snap))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    click?.(`${task1.id}:${wokeAt}`)
+    // App's openInbox asks before closing a window with unsent text and
+    // moves the address only once it goes ahead
+    expect(openInbox).toHaveBeenCalledTimes(1)
+    expect(pushState).not.toHaveBeenCalled()
+  })
+
   it('a task that comes back into view brings its older unread messages without notifying', () => {
     // the server stamps every delivery; messages up to the previous one are history
     const notes = () => (window as { __qivoNotes?: { title: string }[] }).__qivoNotes ?? []
