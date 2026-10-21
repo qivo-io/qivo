@@ -5,7 +5,9 @@
 import type { FunctionReturnType } from 'convex/server'
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../convex/_generated/api'
+import { APP_SENDS_PER_ORG_HOUR } from '../../convex/lib/inviteLimits'
 import { convex } from './convex'
+import { fmtTime } from './dates'
 import { DEMO_MODE } from './demoMode'
 
 type Row = FunctionReturnType<typeof api.invites.deliveries>[number]
@@ -63,8 +65,12 @@ export function useInviteDeliveries(orgId: string | undefined): ReadonlyMap<stri
 const JOIN_ANYWAY = 'They can still join by creating an account with this address.'
 
 /** What a pending seat says about its invitation email: a short label, the
-    sentence behind it, and whether the email failed. */
-export function inviteLabel(state: InviteDelivery | undefined): {
+    sentence behind it, and whether the email failed. A send held back by
+    the hourly cap says when it can go again, at `freeAt` (null: now). */
+export function inviteLabel(
+  state: InviteDelivery | undefined,
+  freeAt?: string | null,
+): {
   text: string
   detail?: string
   failed: boolean
@@ -82,7 +88,9 @@ export function inviteLabel(state: InviteDelivery | undefined): {
     case 'held':
       return {
         text: 'invitation not sent',
-        detail: `This organization sent too many invitations in the last hour, so this one was not emailed. ${JOIN_ANYWAY}`,
+        detail: `Invitation not sent. This organization sent ${APP_SENDS_PER_ORG_HOUR} invitation emails in the last hour. ${
+          freeAt ? `Send it again after ${fmtTime(new Date(freeAt))}.` : 'Send it again now.'
+        } ${JOIN_ANYWAY}`,
         failed: true,
       }
     case 'uncertain':

@@ -7674,6 +7674,13 @@ export const PLANNER = {
   /** Applies an admin's edit to one seat. Returns false when a client
       rule refused the whole patch (with a toast), so an inline editor can
       put the stored value back. */
+  /** Emails pending seat `profileId` of organization `orgId` its invitation
+      again (api.invites.sendAgain), which counts against the organization's
+      hourly cap. Resolves whether the server took it; a refusal, such as a
+      full hour, is toasted. The seat's delivery row then shows the send. */
+  sendInvitationAgain: (orgId: string, profileId: string): Promise<boolean> =>
+    send(api.invites.sendAgain, { org_id: orgId, profile_id: profileId }, 'none'),
+
   updateUser: (id: string, patch: UserPatch): boolean => {
     const row = rows.profiles.get(id)
     // deactivation alone only takes access away, so it goes on while paused,

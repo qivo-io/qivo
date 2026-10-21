@@ -20,7 +20,8 @@
  * whether it went out. The app's sends are capped per organization, because
  * any org admin can trigger them and they leave from the shared no-reply
  * address. Past the cap, people can still join by creating an account with
- * the invited address. */
+ * the invited address, and deliveries() says when the cap frees a send, which
+ * sendAgain() then makes. */
 
 import { type Infer, v } from 'convex/values'
 import { components, internal } from './_generated/api'
@@ -29,7 +30,8 @@ import type { ActionCtx, QueryCtx } from './_generated/server'
 import { internalAction, internalMutation, internalQuery } from './_generated/server'
 import { byId } from './lib/db'
 import { isDemoDeployment } from './lib/demo'
-import { notFound, orgQuery } from './lib/functions'
+import { forbidden, notFound, orgMutation, orgQuery, rule } from './lib/functions'
+import { APP_SENDS_PER_ORG_HOUR, INVITES_HELD } from './lib/inviteLimits'
 import { sendInviteEmail } from './mail'
 import { audit } from './model/admin'
 import { newUuid } from './model/orgs'
@@ -53,11 +55,12 @@ export type ScheduledInvite = Infer<typeof vInvite>
 const vActor = v.object({ auth_user_id: v.optional(v.string()), email: v.string() })
 type Actor = Infer<typeof vActor>
 
-/* App sends allowed per organization per hour, counting console sends too.
- * Sends in flight, delivered or uncertain count. Attempts held back by the
- * cap and sends the provider never accepted (refused, or never reached) do
- * not, because no email went out. */
-const APP_SENDS_PER_ORG_HOUR = 50
+/* The rolling window of the app's cap (lib/inviteLimits.ts
+ * APP_SENDS_PER_ORG_HOUR), which counts console sends too. Sends in flight,
+ * delivered or uncertain count. Attempts held back by the cap and sends the
+ * provider never accepted (refused, or never reached) do not, because no
+ * email went out. */
+const CAP_WINDOW_MS = 3_600_000
 
 type InviteTarget = {
   profile_id: string
@@ -70,6 +73,7 @@ type InviteTarget = {
 }
 
 type SendRow = {
+  ts: string
   detail: {
     email?: unknown
     sent?: unknown
@@ -107,6 +111,21 @@ async function recentSends(
     if (row.action === 'invite_email') out.push(row as SendRow)
   }
   return out
+}
+
+/* When organization `orgId`'s hourly cap lets the app send again: null when
+ * it may send now, else the instant the oldest counted send that keeps the
+ * hour full leaves the window. */
+async function capFreesAt(ctx: QueryCtx, orgId: string): Promise<string | null> {
+  const now = Date.now()
+  const since = new Date(now - CAP_WINDOW_MS).toISOString()
+  const counted = (await recentSends(ctx, { org_id: orgId }, since))
+    .filter(countsTowardCap)
+    .map((r) => r.ts)
+    .sort()
+  if (counted.length < APP_SENDS_PER_ORG_HOUR) return null
+  const keeping = counted[counted.length - APP_SENDS_PER_ORG_HOUR]
+  return new Date(Date.parse(keeping) + CAP_WINDOW_MS).toISOString()
 }
 
 /* An active person seat with an address and no login yet. The operator never
@@ -193,11 +212,7 @@ export const reserve = internalMutation({
       return { row: null, allowed: false }
     }
     let allowed = true
-    if (a.app) {
-      const since = new Date(Date.now() - 3_600_000).toISOString()
-      const recent = await recentSends(ctx, { org_id: a.org_id }, since)
-      allowed = recent.filter(countsTowardCap).length < APP_SENDS_PER_ORG_HOUR
-    }
+    if (a.app) allowed = (await capFreesAt(ctx, a.org_id)) === null
     const row = await audit(ctx, {
       ...(a.actor.auth_user_id !== undefined ? { actor_auth_id: a.actor.auth_user_id } : {}),
       actor_email: a.actor.email,
@@ -339,13 +354,34 @@ const deliveryOf = (row: SendRow & { ts: string }, now: number): InviteDelivery 
           ? 'uncertain'
           : 'unsent'
 
+/* Pending seat `profileId`'s newest invitation email to `email`, its
+ * current address. */
+async function newestSend(
+  ctx: QueryCtx,
+  profileId: string,
+  email: string,
+): Promise<SendRow | undefined> {
+  const sends = ctx.db
+    .query('platform_audit_log')
+    .withIndex('by_target_profile_action', (q) =>
+      q.eq('target_profile_id', profileId).eq('action', 'invite_email'),
+    )
+    .order('desc')
+  for await (const row of sends) {
+    if ((row as SendRow).detail.email === email) return row as SendRow
+  }
+  return undefined
+}
+
 /** One pending seat's invitation email, as deliveries() reports it, with
- * when the send was reserved. */
+ * when the send was reserved. A send held back by the cap carries `free_at`,
+ * when the organization may send again, or null when it may now. */
 export type InviteDeliveryRow = {
   profile_id: string
   email: string
   state: InviteDelivery
   since: string
+  free_at?: string | null
 }
 
 /** The newest invitation email to each pending seat's current address in
@@ -363,41 +399,68 @@ export const deliveries = orgQuery({
       .query('profiles')
       .withIndex('by_org_auth', (q) => q.eq('org_id', ctx.me.org_id).eq('auth_user_id', undefined))
     const out: InviteDeliveryRow[] = []
+    // read once, for the first held send
+    let freeAt: Promise<string | null> | undefined
     for await (const seat of pending) {
       if (!isInvitation(seat, false) || seat.email === undefined) continue
-      const sends = ctx.db
-        .query('platform_audit_log')
-        .withIndex('by_target_profile_action', (q) =>
-          q.eq('target_profile_id', seat.id).eq('action', 'invite_email'),
-        )
-        .order('desc')
-      let newest: (SendRow & { ts: string }) | undefined
-      for await (const row of sends) {
-        if ((row as SendRow).detail.email !== seat.email) continue
-        newest = row as SendRow & { ts: string }
-        break
-      }
+      const newest = await newestSend(ctx, seat.id, seat.email)
       if (newest === undefined || (!admin && newest.detail.by !== ctx.me.id)) continue
-      out.push({
+      const row = {
         profile_id: seat.id,
         email: seat.email,
         state: deliveryOf(newest, Date.now()),
         since: newest.ts,
-      })
+      }
+      if (row.state !== 'held') {
+        out.push(row)
+        continue
+      }
+      freeAt ??= capFreesAt(ctx, ctx.me.org_id)
+      out.push({ ...row, free_at: await freeAt })
     }
     return out
   },
 })
 
+/**
+ * Sends the invitation email to pending seat `profile_id` again, as the app
+ * sends one. It counts toward the organization's hourly cap, and
+ * deliveries() reports how it went. Org admins may send any pending seat's,
+ * others only one whose newest send their own change caused, the rows
+ * deliveries() shows them. Refuses with INVITES_HELD while the hour is full,
+ * so a held send is not recorded again, and anything that is not a pending
+ * invitation as not found.
+ */
+export const sendAgain = orgMutation({
+  args: { profile_id: v.string() },
+  handler: async (ctx, { profile_id }): Promise<null> => {
+    const seat = await byId(ctx, 'profiles', profile_id)
+    if (!isInvitation(seat, false) || seat.org_id !== ctx.me.org_id || seat.email === undefined)
+      throw notFound('invitation not found')
+    if (ctx.me.org_role !== 'admin') {
+      const newest = await newestSend(ctx, seat.id, seat.email)
+      if (newest?.detail.by !== ctx.me.id)
+        throw forbidden('only an organization admin or the person who invited them can send it')
+    }
+    if ((await capFreesAt(ctx, seat.org_id)) !== null) throw rule(INVITES_HELD)
+    await ctx.scheduler.runAfter(0, internal.invites.sendFromApp, {
+      invites: [{ profile_id: seat.id, email: seat.email, by: ctx.me.id }],
+      resend: true,
+    })
+    return null
+  },
+})
+
 /* The app's invitations, scheduled by the mutation that created, corrected
- * or reactivated the seat once it commits. A public demo sends and records
+ * or reactivated the seat once it commits, or that sends one again
+ * (sendAgain, `resend`). A public demo sends and records
  * nothing. Its sample people cannot be emailed, and demo cleanup never
  * purges the audit table. */
 export const sendFromApp = internalAction({
-  args: { invites: v.array(vInvite) },
-  handler: async (ctx, { invites }): Promise<null> => {
+  args: { invites: v.array(vInvite), resend: v.optional(v.boolean()) },
+  handler: async (ctx, { invites, resend }): Promise<null> => {
     if (isDemoDeployment()) return null
-    await sendInvites(ctx, invites, { resend: false })
+    await sendInvites(ctx, invites, { resend: resend === true })
     return null
   },
 })

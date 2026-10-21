@@ -78,6 +78,7 @@ import type * as lib_fieldPrints from "../lib/fieldPrints.js";
 import type * as lib_fileTokens from "../lib/fileTokens.js";
 import type * as lib_functions from "../lib/functions.js";
 import type * as lib_inbox from "../lib/inbox.js";
+import type * as lib_inviteLimits from "../lib/inviteLimits.js";
 import type * as lib_liveTasks from "../lib/liveTasks.js";
 import type * as lib_machineDelay from "../lib/machineDelay.js";
 import type * as lib_mailConfig from "../lib/mailConfig.js";
@@ -258,6 +259,7 @@ declare const fullApi: ApiFromModules<{
   "lib/fileTokens": typeof lib_fileTokens;
   "lib/functions": typeof lib_functions;
   "lib/inbox": typeof lib_inbox;
+  "lib/inviteLimits": typeof lib_inviteLimits;
   "lib/liveTasks": typeof lib_liveTasks;
   "lib/machineDelay": typeof lib_machineDelay;
   "lib/mailConfig": typeof lib_mailConfig;

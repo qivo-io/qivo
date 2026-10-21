@@ -1,9 +1,11 @@
 /* Roster identity, invitation address, role and weekly capacity controls. */
 import React, { useEffect as useEffectS, useState as useStateS } from 'react'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { fmtTime } from '../../lib/dates'
 import { DEMO_MODE } from '../../lib/demoMode'
 import { type InviteDelivery, inviteLabel, useInviteDeliveries } from '../../lib/inviteDeliveries'
 import { useFieldUnsaved, useUnsaved } from '../../lib/leaveGuard'
@@ -124,24 +126,64 @@ export function UserName({ user, isSelf }: { user: UserVM; isSelf: boolean }) {
 }
 
 /** A pending seat's marker. It says "invited", or that the invitation email
-    did not go out, with the reason on hover (lib/inviteDeliveries). */
+    did not go out, with the reason on hover (lib/inviteDeliveries). A send
+    the hourly cap held back, or one that failed, offers Send invitation,
+    which counts against the same cap and so waits until the hour frees a
+    send. */
 export function InviteLabel({ user, className }: { user: UserVM; className?: string }) {
-  const state = useInviteDeliveries(user.org)?.get(user.id)?.state
-  const label = inviteLabel(state)
+  const row = useInviteDeliveries(user.org)?.get(user.id)
+  const state = row?.state
+  const label = inviteLabel(state, row?.free_at)
+  const waitUntil = state === 'held' && row?.free_at ? Date.parse(row.free_at) : 0
+  const [now, setNow] = useStateS(Date.now)
+  // the control unlocks by itself once the hour frees a send
+  useEffectS(() => {
+    if (waitUntil <= Date.now()) return
+    const timer = window.setTimeout(() => setNow(Date.now()), waitUntil - Date.now() + 500)
+    return () => window.clearTimeout(timer)
+  }, [waitUntil])
+  const waiting = waitUntil > now
+  const [sending, setSending] = useStateS(false)
+  const again = state === 'held' || state === 'unsent'
   return (
-    <HoverTooltip content={label.detail}>
-      <span
-        data-invite-for={user.id}
-        data-invite-state={state ?? 'none'}
-        className={cn(
-          '[font-weight:700] [font-size:var(--fs-xs)]',
-          label.failed ? '[color:var(--danger)]' : '[color:var(--warn)]',
-          className,
-        )}
-      >
-        {label.text}
-      </span>
-    </HoverTooltip>
+    <>
+      <HoverTooltip content={label.detail}>
+        <span
+          data-invite-for={user.id}
+          data-invite-state={state ?? 'none'}
+          className={cn(
+            '[font-weight:700] [font-size:var(--fs-xs)]',
+            label.failed ? '[color:var(--danger)]' : '[color:var(--warn)]',
+            className,
+          )}
+        >
+          {label.text}
+        </span>
+      </HoverTooltip>
+      {again && (
+        <HoverTooltip
+          content={
+            waiting
+              ? `Available after ${fmtTime(new Date(waitUntil))}`
+              : 'Email the invitation again'
+          }
+        >
+          <Button
+            type="button"
+            variant="unstyled"
+            data-invite-again={user.id}
+            disabled={waiting || sending}
+            onClick={() => {
+              setSending(true)
+              void P.sendInvitationAgain(user.org, user.id).finally(() => setSending(false))
+            }}
+            className="[margin-left:6px] [flex-shrink:0] [font-size:var(--fs-xs)] [font-weight:600] [color:var(--primary)] [background:none] [border:none] [padding:0] [cursor:pointer] disabled:[color:var(--text-3)] disabled:[cursor:not-allowed]"
+          >
+            Send invitation
+          </Button>
+        </HoverTooltip>
+      )}
+    </>
   )
 }
 
