@@ -126,8 +126,9 @@ function EndpointFields({
   )
 }
 
-// Edit both relative-or-pinned endpoints together. A pair wider than
-// WIN_WEEKS_MAX is not applied: the fields keep it and the picker says why.
+// Edit both relative-or-pinned endpoints together. The picker keeps the pair
+// the fields show, and applies it whole; a pair wider than WIN_WEEKS_MAX is
+// not applied, and the picker says why until the fields show one that fits.
 export function WinRangePicker({
   x,
   y,
@@ -141,11 +142,12 @@ export function WinRangePicker({
   onApply: (win: RoadmapWin) => void
   onClose: () => void
 }) {
-  const [tooWide, setTooWide] = useStateR(false)
-  const apply = (next: RoadmapWin) => {
-    const wide = winWeeks(next) > WIN_WEEKS_MAX
-    setTooWide(wide)
-    if (!wide) onApply(next)
+  const [draft, setDraft] = useStateR(win)
+  const tooWide = winWeeks(draft) > WIN_WEEKS_MAX
+  const apply = (which: 'start' | 'end', ep: WinEndpoint) => {
+    const next = { ...draft, [which]: ep }
+    setDraft(next)
+    if (winWeeks(next) <= WIN_WEEKS_MAX) onApply(next)
   }
   return (
     // stayOnScroll: applying a shrink can clamp the pane's scrollLeft, and that
@@ -155,13 +157,9 @@ export function WinRangePicker({
         data-win-picker
         className="[padding:20px] [display:flex] [flex-direction:column] [gap:24px]"
       >
-        <EndpointFields
-          which="start"
-          ep={win.start}
-          onApply={(ep) => apply({ ...win, start: ep })}
-        />
+        <EndpointFields which="start" ep={win.start} onApply={(ep) => apply('start', ep)} />
         <div className="[height:1px] [background:var(--border)]" />
-        <EndpointFields which="end" ep={win.end} onApply={(ep) => apply({ ...win, end: ep })} />
+        <EndpointFields which="end" ep={win.end} onApply={(ep) => apply('end', ep)} />
         {tooWide && (
           <div
             role="alert"

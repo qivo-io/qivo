@@ -203,8 +203,8 @@ moments after the update arrives. The row says how many it dropped, such as
 **12 earlier updates on this task are not listed**, and the task's comments
 and history still show what those updates were about. The Inbox loads up to
 500 messages, unread ones first. When older ones exist, the list ends with
-**Older messages are not listed**, and **Mark all as read** and **Remove all
-read** reach them too.
+**Older messages are not listed**. **Mark all as read** and **Remove all
+read** reach them too, unless they are snoozed.
 
 The Inbox badge counts tasks with unread updates and shows **99+** above 99.
 Read state follows you across devices. Sort by newest or oldest, or filter for unread,

@@ -10,22 +10,24 @@ import { convex } from './convex'
 import { fmtTime } from './dates'
 import { DEMO_MODE } from './demoMode'
 
-type Row = FunctionReturnType<typeof api.invites.deliveries>[number]
-export type InviteDelivery = Row['state']
+export type InviteDeliveryRow = FunctionReturnType<typeof api.invites.deliveries>[number]
+export type InviteDelivery = InviteDeliveryRow['state']
 
 /* The age at which an unsettled send is uncertain, as STALE_SEND_MS in
    convex/invites.ts. The query says so on a fresh load; this covers a page
    left open, because a query does not run again as time passes. */
 const STALE_SEND_MS = 5 * 60_000
 
-const staleAt = (row: Row) => Date.parse(row.since) + STALE_SEND_MS
+const staleAt = (row: InviteDeliveryRow) => Date.parse(row.since) + STALE_SEND_MS
 
 /** Each visible pending seat's newest invitation email in `orgId`, keyed by
     profile id. Org admins see every pending seat, others the sends they
     caused. A send unsettled for five minutes reads as uncertain, also while
     the page stays open. Null while loading, after a refusal and in the demo. */
-export function useInviteDeliveries(orgId: string | undefined): ReadonlyMap<string, Row> | null {
-  const [rows, setRows] = useState<readonly Row[] | null>(null)
+export function useInviteDeliveries(
+  orgId: string | undefined,
+): ReadonlyMap<string, InviteDeliveryRow> | null {
+  const [rows, setRows] = useState<readonly InviteDeliveryRow[] | null>(null)
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     setRows(null)
@@ -66,7 +68,8 @@ const JOIN_ANYWAY = 'They can still join by creating an account with this addres
 
 /** What a pending seat says about its invitation email: a short label, the
     sentence behind it, and whether the email failed. A send held back by
-    the hourly cap says when it can go again, at `freeAt` (null: now). */
+    the hourly cap says when it can go again, at `freeAt` (null: now, and
+    undefined: not known here). */
 export function inviteLabel(
   state: InviteDelivery | undefined,
   freeAt?: string | null,
@@ -89,8 +92,12 @@ export function inviteLabel(
       return {
         text: 'invitation not sent',
         detail: `Invitation not sent. This organization sent ${APP_SENDS_PER_ORG_HOUR} invitation emails in the last hour. ${
-          freeAt ? `Send it again after ${fmtTime(new Date(freeAt))}.` : 'Send it again now.'
-        } ${JOIN_ANYWAY}`,
+          freeAt
+            ? `Send it again after ${fmtTime(new Date(freeAt))}. `
+            : freeAt === null
+              ? 'Send it again now. '
+              : ''
+        }${JOIN_ANYWAY}`,
         failed: true,
       }
     case 'uncertain':

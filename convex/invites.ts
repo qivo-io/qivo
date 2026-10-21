@@ -26,12 +26,12 @@
 import { type Infer, v } from 'convex/values'
 import { components, internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
-import type { ActionCtx, QueryCtx } from './_generated/server'
+import type { ActionCtx, MutationCtx, QueryCtx } from './_generated/server'
 import { internalAction, internalMutation, internalQuery } from './_generated/server'
 import { byId } from './lib/db'
 import { isDemoDeployment } from './lib/demo'
 import { forbidden, notFound, orgMutation, orgQuery, rule } from './lib/functions'
-import { APP_SENDS_PER_ORG_HOUR, INVITES_HELD } from './lib/inviteLimits'
+import { APP_SENDS_PER_ORG_HOUR, INVITE_SENDING, INVITES_HELD } from './lib/inviteLimits'
 import { sendInviteEmail } from './mail'
 import { audit } from './model/admin'
 import { newUuid } from './model/orgs'
@@ -43,12 +43,14 @@ export type InviteResult = { profile_id: string; email: string; sent: boolean }
  * later correction superseded is skipped, and a reactivation sends only if
  * the audit log, which keeps 90 days, holds no delivered email to that
  * address (unless_sent). `by` is the profile whose change caused an app send,
- * which deliveries() lets see the outcome. */
+ * which deliveries() lets see the outcome. `row` is a send sendAgain()
+ * already reserved, so it is sent without reserving another. */
 const vInvite = v.object({
   profile_id: v.string(),
   email: v.optional(v.string()),
   unless_sent: v.optional(v.boolean()),
   by: v.optional(v.string()),
+  row: v.optional(v.id('platform_audit_log')),
 })
 export type ScheduledInvite = Infer<typeof vInvite>
 
@@ -70,6 +72,7 @@ type InviteTarget = {
   has_account: boolean
   as_guest: boolean
   by?: string
+  row?: Id<'platform_audit_log'>
 }
 
 type SendRow = {
@@ -182,6 +185,7 @@ export const targets = internalQuery({
           seat.org_role === 'guest' ||
           (await homeElsewhere(ctx, email, seat.org_id, seat)) !== null,
         ...(invite.by !== undefined ? { by: invite.by } : {}),
+        ...(invite.row !== undefined ? { row: invite.row } : {}),
       })
     }
     return out
@@ -196,40 +200,50 @@ export const targets = internalQuery({
  * have committed since targets() read it. A seat that is no longer the same
  * invitation gets no row and no send (row is null). App rows carry channel
  * 'app', which keeps them out of the operator's audit listing. */
+const vReserve = v.object({
+  profile_id: v.string(),
+  org_id: v.string(),
+  email: v.string(),
+  resend: v.boolean(),
+  actor: vActor,
+  app: v.boolean(),
+  by: v.optional(v.string()),
+})
+
+/* reserve(), also for a mutation that reserves the send itself
+ * (sendAgain). */
+async function reserveSend(
+  ctx: MutationCtx,
+  a: Infer<typeof vReserve>,
+): Promise<{ row: Id<'platform_audit_log'> | null; allowed: boolean }> {
+  const seat = await byId(ctx, 'profiles', a.profile_id)
+  if (!isInvitation(seat, !a.app) || seat.org_id !== a.org_id || seat.email !== a.email) {
+    return { row: null, allowed: false }
+  }
+  let allowed = true
+  if (a.app) allowed = (await capFreesAt(ctx, a.org_id)) === null
+  const row = await audit(ctx, {
+    ...(a.actor.auth_user_id !== undefined ? { actor_auth_id: a.actor.auth_user_id } : {}),
+    actor_email: a.actor.email,
+    action: 'invite_email',
+    target_org_id: a.org_id,
+    target_profile_id: a.profile_id,
+    ...(a.app ? { channel: 'app' as const } : {}),
+    detail: {
+      email: a.email,
+      sent: false,
+      resend: a.resend,
+      ...(allowed ? {} : { limited: true }),
+      ...(a.by !== undefined ? { by: a.by } : {}),
+    },
+  })
+  return { row, allowed }
+}
+
 export const reserve = internalMutation({
-  args: {
-    profile_id: v.string(),
-    org_id: v.string(),
-    email: v.string(),
-    resend: v.boolean(),
-    actor: vActor,
-    app: v.boolean(),
-    by: v.optional(v.string()),
-  },
-  handler: async (ctx, a): Promise<{ row: Id<'platform_audit_log'> | null; allowed: boolean }> => {
-    const seat = await byId(ctx, 'profiles', a.profile_id)
-    if (!isInvitation(seat, !a.app) || seat.org_id !== a.org_id || seat.email !== a.email) {
-      return { row: null, allowed: false }
-    }
-    let allowed = true
-    if (a.app) allowed = (await capFreesAt(ctx, a.org_id)) === null
-    const row = await audit(ctx, {
-      ...(a.actor.auth_user_id !== undefined ? { actor_auth_id: a.actor.auth_user_id } : {}),
-      actor_email: a.actor.email,
-      action: 'invite_email',
-      target_org_id: a.org_id,
-      target_profile_id: a.profile_id,
-      ...(a.app ? { channel: 'app' as const } : {}),
-      detail: {
-        email: a.email,
-        sent: false,
-        resend: a.resend,
-        ...(allowed ? {} : { limited: true }),
-        ...(a.by !== undefined ? { by: a.by } : {}),
-      },
-    })
-    return { row, allowed }
-  },
+  args: vReserve,
+  handler: async (ctx, a): Promise<{ row: Id<'platform_audit_log'> | null; allowed: boolean }> =>
+    await reserveSend(ctx, a),
 })
 
 /* Records how a reserved send ended. A send that was refused or never reached
@@ -285,15 +299,19 @@ export async function sendInvites(
   const actor: Actor = opts.operator ?? { email: 'system' }
   const results: InviteResult[] = []
   const sendOne = async (target: InviteTarget, i: number) => {
-    const { row, allowed } = await ctx.runMutation(internal.invites.reserve, {
-      profile_id: target.profile_id,
-      org_id: target.org_id,
-      email: target.email,
-      resend: opts.resend,
-      actor,
-      app,
-      ...(app && target.by !== undefined ? { by: target.by } : {}),
-    })
+    // a send sendAgain() reserved under the cap goes as it is
+    const { row, allowed } =
+      target.row !== undefined
+        ? { row: target.row, allowed: true }
+        : await ctx.runMutation(internal.invites.reserve, {
+            profile_id: target.profile_id,
+            org_id: target.org_id,
+            email: target.email,
+            resend: opts.resend,
+            actor,
+            app,
+            ...(app && target.by !== undefined ? { by: target.by } : {}),
+          })
     if (row === null) {
       if (opts.strict) throw notFound('invitation not found')
       return
@@ -325,6 +343,17 @@ export async function sendInvites(
     }
   }
   await Promise.all(Array.from({ length: Math.min(SEND_CONCURRENCY, list.length) }, worker))
+  // A reserved send whose seat stopped being that invitation goes nowhere,
+  // and stops counting toward the cap.
+  const listed = new Set(list.map((target) => target.row))
+  for (const invite of invites) {
+    if (invite.row !== undefined && !listed.has(invite.row))
+      await ctx.runMutation(internal.invites.settle, {
+        row: invite.row,
+        sent: false,
+        uncertain: false,
+      })
+  }
   // A seat that changed between targets() and reserve() leaves a gap.
   return results.filter((r): r is InviteResult => r !== undefined)
 }
@@ -427,9 +456,10 @@ export const deliveries = orgQuery({
  * sends one. It counts toward the organization's hourly cap, and
  * deliveries() reports how it went. Org admins may send any pending seat's,
  * others only one whose newest send their own change caused, the rows
- * deliveries() shows them. Refuses with INVITES_HELD while the hour is full,
- * so a held send is not recorded again, and anything that is not a pending
- * invitation as not found.
+ * deliveries() shows them. Refuses with INVITE_SENDING while the seat's
+ * newest send is in flight, so two requests send one email, with
+ * INVITES_HELD while the hour is full, so a held send is not recorded
+ * again, and anything that is not a pending invitation as not found.
  */
 export const sendAgain = orgMutation({
   args: { profile_id: v.string() },
@@ -437,14 +467,27 @@ export const sendAgain = orgMutation({
     const seat = await byId(ctx, 'profiles', profile_id)
     if (!isInvitation(seat, false) || seat.org_id !== ctx.me.org_id || seat.email === undefined)
       throw notFound('invitation not found')
-    if (ctx.me.org_role !== 'admin') {
-      const newest = await newestSend(ctx, seat.id, seat.email)
-      if (newest?.detail.by !== ctx.me.id)
-        throw forbidden('only an organization admin or the person who invited them can send it')
-    }
+    const newest = await newestSend(ctx, seat.id, seat.email)
+    if (ctx.me.org_role !== 'admin' && newest?.detail.by !== ctx.me.id)
+      throw forbidden('only an organization admin or the person who invited them can send it')
+    // one send at a time: a second click, or another admin's, waits for it
+    if (newest !== undefined && deliveryOf(newest, Date.now()) === 'sending')
+      throw rule(INVITE_SENDING)
     if ((await capFreesAt(ctx, seat.org_id)) !== null) throw rule(INVITES_HELD)
+    // Reserved here, in the same transaction as the checks, so the seat
+    // shows the send in flight at once and a second request sees it.
+    const { row } = await reserveSend(ctx, {
+      profile_id: seat.id,
+      org_id: seat.org_id,
+      email: seat.email,
+      resend: true,
+      actor: { email: 'system' },
+      app: true,
+      by: ctx.me.id,
+    })
+    if (row === null) throw notFound('invitation not found')
     await ctx.scheduler.runAfter(0, internal.invites.sendFromApp, {
-      invites: [{ profile_id: seat.id, email: seat.email, by: ctx.me.id }],
+      invites: [{ profile_id: seat.id, email: seat.email, by: ctx.me.id, row }],
       resend: true,
     })
     return null

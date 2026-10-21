@@ -2,7 +2,7 @@
  * entries are deleted nightly (convex/auditRetention.ts). The newest 200
  * load first; when more exist the page says so, its search and filters
  * cover the loaded entries, and Load older entries adds the next 200. */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -62,6 +62,9 @@ export function Audit() {
   // the cursor of the next older page, null when every entry is loaded
   const [next, setNext] = useState<string | null>(null)
   const [loadingOlder, setLoadingOlder] = useState(false)
+  // which load the rows belong to; a refresh starts a new one, and an older
+  // page asked for by the one before is dropped
+  const load = useRef(0)
   const [orgNames, setOrgNames] = useState<Record<string, string>>({})
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
@@ -73,6 +76,8 @@ export function Audit() {
 
   useEffect(() => {
     let active = true
+    load.current += 1
+    setLoadingOlder(false)
     setLoading(true)
     setError('')
     auditLog()
@@ -132,16 +137,21 @@ export function Audit() {
   const hasFilters = !!search || action !== 'all' || organization !== 'all'
   const loadOlder = () => {
     if (next === null || loadingOlder) return
+    const asked = load.current
     setLoadingOlder(true)
     auditLog(next)
       .then((audit) => {
+        if (load.current !== asked) return
         setRows((current) => [...(current ?? []), ...audit.rows])
         setNext(audit.next)
       })
-      .catch((cause: unknown) =>
-        setError(cause instanceof Error ? cause.message : 'Could not load older entries.'),
-      )
-      .finally(() => setLoadingOlder(false))
+      .catch((cause: unknown) => {
+        if (load.current === asked)
+          setError(cause instanceof Error ? cause.message : 'Could not load older entries.')
+      })
+      .finally(() => {
+        if (load.current === asked) setLoadingOlder(false)
+      })
   }
   const clearFilters = () => {
     setSearch('')

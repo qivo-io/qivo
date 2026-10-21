@@ -932,6 +932,22 @@ describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', 
     expect(await details(t, f.admin, issue)).toEqual(arrivals(0, 2))
   })
 
+  it('keeps the dropped count when an earlier-stamped notice becomes the first row', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await arrive(t, f, { recipient: f.guest, issue }, SIXTY)
+    // a background step's notice stamped before the item's first row: the
+    // old first row, which carries the count of ten, makes way for it
+    await arrive(t, f, { recipient: f.guest, issue }, ['change'], -1)
+    const rows = await messagesFor(t, f.guest.id, issue.id)
+    expect(rows).toHaveLength(ITEM_UNREAD_CAP)
+    const details = rows.map((m) => m.detail)
+    expect(details).toContain('arrival -1')
+    expect(details).not.toContain('arrival 0')
+    expect(rows.reduce((n, m) => n + (m.dropped ?? 0), 0)).toBe(11)
+  })
+
   it('keeps the newest row of a kind, not the oldest one', async () => {
     const t = newT()
     const f = await withOrg(t)

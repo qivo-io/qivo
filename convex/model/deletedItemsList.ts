@@ -532,10 +532,13 @@ const TASK_REF = /^(?:QN-)?(\d+)$/i
  * item names the item's root. Every read of the call spends
  * one LIST.call budget, as a list call's do: the hits, each seat's sight
  * and each item it judges. Once it is spent, the search answers the
- * matches it found so far. `capped` says that more may match than
- * `matches` holds: the search stopped at MATCHES.max or at its budget
- * before it judged every candidate, or a seat had MATCHES.scan results, so
- * the page can ask for a longer text instead of hiding the rest.
+ * matches it found so far. `capped` says that the seats see more matches
+ * than MATCHES.max, so the page can ask for a longer text instead of hiding
+ * the rest: the search finds one visible match past the cap. It is decided
+ * by visible matches alone. The scan's MATCHES.scan results and the budget
+ * also count tasks the seat cannot see, so a stop at either is not
+ * reported, or `capped` would tell that hidden deleted tasks match the
+ * text.
  */
 export async function matchesFor(
   ctx: QueryCtx,
@@ -549,11 +552,8 @@ export async function matchesFor(
   let capped = false
   const call: Reads = { ...LIST.call }
   const reader = spending(ctx, call)
-  for (const me of seats) {
-    if (out.length >= MATCHES.max || spent(call)) {
-      capped = true
-      break
-    }
+  search: for (const me of seats) {
+    if (spent(call)) break
     const org = me.org_id
     const hits = reader.db.query('deleted_tasks')
     const byNum =
@@ -565,7 +565,6 @@ export async function matchesFor(
     const byTitle = await hits
       .withSearchIndex('search_title', (q) => q.search('title', query).eq('org_id', org))
       .take(MATCHES.scan)
-    if (byNum.length === MATCHES.scan || byTitle.length === MATCHES.scan) capped = true
     const found = [...byNum, ...byTitle]
     if (found.length === 0) continue
     const sight = await sightOf(reader, me)
@@ -573,10 +572,7 @@ export async function matchesFor(
     const items = new Map<string, Promise<{ item: Item; view: ItemView } | null>>()
     const seen = new Set<string>()
     for (const task of found) {
-      if (out.length >= MATCHES.max || spent(call)) {
-        capped = true
-        break
-      }
+      if (spent(call)) break search
       if (seen.has(task.task_id)) continue
       seen.add(task.task_id)
       let read = items.get(task.item_id)
@@ -591,6 +587,11 @@ export async function matchesFor(
       const { item, view } = visible
       // viewOf never shows a purging item; the check narrows the state
       if (item.state === 'purging') continue
+      // a visible match past the cap: say there are more, and stop
+      if (out.length === MATCHES.max) {
+        capped = true
+        break search
+      }
       const ready = item.state === 'ready'
       const block = view.redacted ? 'no_access' : await restoreBlock(reader, me, item, sight.memo)
       let blocked: BlockDetail | undefined

@@ -756,7 +756,8 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
               data-inbox-cut
               className="[font-size:var(--fs-sm)] [color:var(--text-3)] [padding:14px_10px]"
             >
-              Older messages are not listed. Mark all as read and Remove all read reach them too.
+              Older messages are not listed.
+              {P.inboxCleanable && ' Mark all as read and Remove all read reach them too.'}
             </div>
           )}
         </div>

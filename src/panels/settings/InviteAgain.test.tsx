@@ -87,4 +87,27 @@ describe('a held invitation', () => {
     act(() => network.push([{ profile_id: user.id, email: 'anna@example.test', state: 'sent' }]))
     expect(control()).toBeNull()
   })
+
+  it('offers it at once when the answer arrives after the time it names', () => {
+    act(() =>
+      root.render(
+        <TooltipProvider>
+          <InviteLabel user={user} />
+        </TooltipProvider>,
+      ),
+    )
+    act(() => vi.advanceTimersByTime(2000))
+    act(() =>
+      network.push([
+        {
+          profile_id: user.id,
+          email: 'anna@example.test',
+          state: 'held',
+          free_at: '2026-10-21T10:00:01.000Z',
+        },
+      ]),
+    )
+    expect(control()?.disabled).toBe(false)
+    expect(control()?.textContent).toBe('Send invitation')
+  })
 })

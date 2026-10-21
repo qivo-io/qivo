@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import authSchema from '../betterAuth/schema'
 import type { Refusal, RefusalCode } from '../lib/functions'
-import { APP_SENDS_PER_ORG_HOUR, INVITES_HELD } from '../lib/inviteLimits'
+import { APP_SENDS_PER_ORG_HOUR, INVITE_SENDING, INVITES_HELD } from '../lib/inviteLimits'
 import { as, expectRefusal, NOW, newT, plantSeat, type T, uuid, withOrg } from './helpers.setup'
 
 async function refused(p: Promise<unknown>, code: RefusalCode, sentence: string): Promise<void> {
@@ -579,9 +579,12 @@ describe('whoever caused an app invitation sees whether it went out', () => {
       'forbidden',
     )
     expect(letters()).toEqual([])
-    // once the oldest send leaves the hour, it goes, and counts as a resend
+    // once the oldest send leaves the hour, it goes, and counts as a resend;
+    // the seat shows it in flight at once, and a second click waits for it
     vi.setSystemTime(Date.parse(freeAt) + 1)
     await again()
+    expect(await row()).toMatchObject({ state: 'sending' })
+    await refused(again(), 'rule', INVITE_SENDING)
     await flush(t)
     expect(letters().map((l) => l.to[0])).toEqual(['later@example.se'])
     expect(await row()).toMatchObject({ state: 'sent' })

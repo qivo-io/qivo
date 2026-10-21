@@ -2,11 +2,18 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { TooltipProvider } from '@/components/ui/tooltip'
 
 /* The line under the project invite form: what it says about the invitation
    email to the seat the form just created, as invites.deliveries changes. */
 
-type Row = { profile_id: string; email: string; state: string; since: string }
+type Row = {
+  profile_id: string
+  email: string
+  state: string
+  since: string
+  free_at?: string | null
+}
 const network = vi.hoisted(() => ({
   onUpdate: vi.fn(),
   push: (_rows: Row[] | null) => {},
@@ -51,10 +58,17 @@ const row = (state: string, address = 'guest.new@example.test'): Row => ({
 })
 
 async function mount() {
-  act(() => root.render(<InviteOutcome orgId="org-1" seat={seat} email={email} />))
+  act(() =>
+    root.render(
+      <TooltipProvider>
+        <InviteOutcome orgId="org-1" seat={seat} email={email} />
+      </TooltipProvider>,
+    ),
+  )
 }
 const push = (rows: Row[] | null) => act(() => network.push(rows))
-const said = () => host.querySelector('[data-invite-outcome]')?.textContent ?? null
+// the sentence, without the Send invitation control after it
+const said = () => host.querySelector('[data-invite-outcome]')?.firstChild?.textContent ?? null
 
 describe('the outcome of an invitation from the project form', () => {
   it('says nothing until the deliveries load, then follows the send', async () => {
@@ -119,5 +133,14 @@ describe('the outcome of an invitation from the project form', () => {
     expect(said()).toBeNull()
     push(null)
     expect(said()).toBeNull()
+  })
+
+  it('says when a held invitation can go again, and offers to send it', async () => {
+    await mount()
+    const freeAt = new Date(Date.now() + 10 * 60_000)
+    push([{ ...row('held'), free_at: freeAt.toISOString() }])
+    const hhmm = `${String(freeAt.getHours()).padStart(2, '0')}:${String(freeAt.getMinutes()).padStart(2, '0')}`
+    expect(said()).toContain(`Send it again after ${hhmm}.`)
+    expect(host.querySelector('[data-invite-again]')?.textContent).toBe(`Send after ${hhmm}`)
   })
 })

@@ -39,10 +39,10 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-/* Types `value` into the end's relative weeks field. */
-async function typeEndWeeks(value: string) {
-  const input = document.querySelector<HTMLInputElement>('[data-win-weeks="end"]')
-  if (!input) throw new Error('no end weeks field')
+/* Types `value` into one end's relative weeks field. */
+async function typeWeeks(which: 'start' | 'end', value: string) {
+  const input = document.querySelector<HTMLInputElement>(`[data-win-weeks="${which}"]`)
+  if (!input) throw new Error(`no ${which} weeks field`)
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
   await act(async () => {
     setter?.call(input, value)
@@ -68,17 +68,40 @@ describe('the Roadmap range picker', () => {
       ),
     )
     const alert = () => document.querySelector('[data-win-too-wide]')
-    await typeEndWeeks(String(start + WIN_WEEKS_MAX))
+    await typeWeeks('end', String(start + WIN_WEEKS_MAX))
     expect(applied).toEqual([])
     expect(alert()?.textContent).toBe(WIN_TOO_WIDE)
     // the field keeps what was typed
     expect(document.querySelector<HTMLInputElement>('[data-win-weeks="end"]')?.value).toBe(
       String(start + WIN_WEEKS_MAX),
     )
-    await typeEndWeeks(String(start + WIN_WEEKS_MAX - 1))
+    await typeWeeks('end', String(start + WIN_WEEKS_MAX - 1))
     expect(applied).toEqual([
       { ...DEFAULT_WIN, end: { mode: 'weeks', value: start + WIN_WEEKS_MAX - 1 } },
     ])
     expect(alert()).toBeNull()
+  })
+
+  it('applies the pair the fields show once a refused one is corrected at the other end', async () => {
+    const applied: RoadmapWin[] = []
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <WinRangePicker
+            x={0}
+            y={0}
+            win={DEFAULT_WIN}
+            onApply={(w) => applied.push(w)}
+            onClose={() => {}}
+          />
+        </TooltipProvider>,
+      ),
+    )
+    await typeWeeks('end', '300')
+    await typeWeeks('start', '50')
+    expect(applied).toEqual([
+      { start: { mode: 'weeks', value: 50 }, end: { mode: 'weeks', value: 300 } },
+    ])
+    expect(document.querySelector('[data-win-too-wide]')).toBeNull()
   })
 })

@@ -854,6 +854,7 @@ describe('messages', () => {
     expect(snap.messages.map((m) => m.id)).toEqual([visible.unread.id, visible.read.id])
     expect(snap.readMessageCount).toBe(1)
     expect(snap.unreadTruncated).toBe(false)
+    expect(snap.messagesCut).toBeUndefined()
     // the machine inbox runs an item's messages oldest first, and these
     // share created_at, so their ids order them
     expect(await machineInbox(f.user)).toEqual({
@@ -912,6 +913,8 @@ describe('messages', () => {
     let snap = await snapFor(f.user)
     expect(snap.messages).toHaveLength(INBOX_LIMIT)
     expect(snap.unreadTruncated).toBe(false)
+    // the Inbox still says it lists fewer messages than there are
+    expect(snap.messagesCut).toBe(true)
     // the machine inbox still reports rows it did not look at
     expect((await machineInbox(f.user)).truncated).toBe(true)
 

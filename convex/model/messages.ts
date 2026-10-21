@@ -220,8 +220,10 @@ const itemStart = (ctx: MutationCtx, a: { recipient_id: string; issue_id: string
  * item. A kind whose newest row lies past the first TRIM_READ keeps one more
  * row than it needs to. It never deletes `arrival` either, the row the
  * caller just posted, which woke the item from any snooze. It adds the
- * number it deleted to the oldest unread row's `dropped`, so the item says
- * how many earlier updates it no longer lists (schema.ts). This is separate
+ * number it deleted, and the counts the deleted rows carried, to the oldest
+ * unread row's `dropped`, so the item says how many earlier updates it no
+ * longer lists (schema.ts). A notice stamped earlier than the item's first
+ * row becomes the first, so the count moves with the rows. This is separate
  * from retention, and the nightly sweep still never deletes an unread row. */
 async function trimRows(
   ctx: MutationCtx,
@@ -236,13 +238,15 @@ async function trimRows(
   const kept = new Set([first._id, ...[...newestOfKind.values()].map((r) => r._id)])
   if (arrival !== undefined) kept.add(arrival)
   let deleted = 0
+  let dropped = 0
   for (const r of unread) {
     if (deleted === excess) break
     if (kept.has(r._id)) continue
     await ctx.db.delete(r._id)
     deleted += 1
+    dropped += 1 + (r.dropped ?? 0)
   }
-  if (deleted > 0) await ctx.db.patch(first._id, { dropped: (first.dropped ?? 0) + deleted })
+  if (deleted > 0) await ctx.db.patch(first._id, { dropped: (first.dropped ?? 0) + dropped })
 }
 
 /** Trims one item toward ITEM_UNREAD_CAP (trimRows), reading its first

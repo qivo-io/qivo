@@ -1373,7 +1373,9 @@ describe('searching for deleted tasks', () => {
     for (const seat of seats)
       await plantLedProjects(t, { ...seat, id: uuid() }, MATCHES.scan, 'Survey the north gate')
 
-    expect(await matches(t, lena, 'survey')).toEqual([])
+    // the scan stops at MATCHES.scan hidden matches per seat, and saying so
+    // would tell Lena they exist
+    expect(await search(t, lena, 'survey')).toEqual({ matches: [], capped: false })
     // the whole call, its sights and items included, stays well inside them
     expectWellInside(
       await as(t, lena).query(async (ctx) => {
@@ -1397,8 +1399,8 @@ describe('searching for deleted tasks', () => {
     expect(few.matches.length).toBeGreaterThan(0)
     expect(few.matches.length).toBeLessThan(4)
     expect(few.matches).toEqual(all.matches.slice(0, few.matches.length))
-    // and says that more may match
-    expect(few.capped).toBe(true)
+    // a stop at the budget is not reported, since hidden tasks spend it too
+    expect(few.capped).toBe(false)
   })
 
   it(`says when more match than the ${MATCHES.max} it answers`, async () => {

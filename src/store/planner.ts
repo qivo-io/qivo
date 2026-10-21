@@ -273,6 +273,9 @@ let hiddenReadMessages = 0
 // touches a snoozed row.
 let unexaminedUnread = false
 let unexaminedRead = false
+// Whether the snapshot left out any message the Inbox would list, snoozed
+// ones included (snapshot messagesCut).
+let messagesCut = false
 
 /* issue uuid → projected-delay info, rebuilt with every snapshot */
 let delayMap = new Map<string, DelayInfo>()
@@ -1042,6 +1045,7 @@ function shownWorkspace() {
       P.canMarkAllRead,
       P.canRemoveRead,
       P.inboxCut,
+      P.inboxCleanable,
       P.CURRENT_USER,
       P.contextVersion,
       // Roadmap's undo (P.roadmapUndo), which a task edit's answer ends
@@ -1560,7 +1564,7 @@ function checkLayers() {
   if (checkingLayers || owed.workspace || owed.thread || !PLANNER.loaded || !serverSnap) return
   checkingLayers = true
   const shownRows = { ...rows }
-  const counters = { hiddenReadMessages, unexaminedUnread, unexaminedRead }
+  const counters = { hiddenReadMessages, unexaminedUnread, unexaminedRead, messagesCut }
   try {
     const shown = canonicalRows()
     paintRows(true, true)
@@ -1584,7 +1588,7 @@ function checkLayers() {
     if (changed) throw new Error(`a paint is not safe to run again: ${changed}`)
   } finally {
     Object.assign(rows, shownRows)
-    ;({ hiddenReadMessages, unexaminedUnread, unexaminedRead } = counters)
+    ;({ hiddenReadMessages, unexaminedUnread, unexaminedRead, messagesCut } = counters)
     checkingLayers = false
   }
 }
@@ -1630,7 +1634,7 @@ function canonicalRows(noStamps = false): Record<string, string> {
   }
   const out: Record<string, string> = {}
   for (const [section, value] of Object.entries(rows)) out[section] = JSON.stringify(norm(value))
-  out.counters = JSON.stringify([hiddenReadMessages, unexaminedUnread, unexaminedRead])
+  out.counters = JSON.stringify([hiddenReadMessages, unexaminedUnread, unexaminedRead, messagesCut])
   return out
 }
 
@@ -3403,8 +3407,10 @@ function rebuild(now = new Date()) {
   P.canMarkAllRead = P.unreadMessages > 0 || unexaminedUnread
   P.canRemoveRead = P.readMessageCount > 0 || unexaminedRead
   // the snapshot delivers at most 500 messages, so the Inbox says when older
-  // ones exist that it does not list
-  P.inboxCut = hiddenReadMessages > 0 || unexaminedUnread || unexaminedRead
+  // ones exist that it does not list, snoozed ones included, and whether
+  // Mark all as read and Remove all read reach them (they skip snoozed rows)
+  P.inboxCleanable = hiddenReadMessages > 0 || unexaminedUnread || unexaminedRead
+  P.inboxCut = messagesCut || P.inboxCleanable
 
   P.CURRENT_USER = CURRENT_USER
   const context = [
@@ -4360,8 +4366,10 @@ export const PLANNER = {
   // whether the Inbox's Mark all as read and Remove all read have rows to act on
   canMarkAllRead: false,
   canRemoveRead: false,
-  // whether older messages exist than the Inbox lists (the snapshot's 500)
+  // whether older messages exist than the Inbox lists (the snapshot's 500),
+  // and whether Mark all as read and Remove all read reach some of them
   inboxCut: false,
+  inboxCleanable: false,
   loaded: false,
 
   project: (id: string | null | undefined): ProjectVM | undefined =>
@@ -8682,6 +8690,7 @@ export function disposeDemoStore() {
   hiddenReadMessages = 0
   unexaminedUnread = false
   unexaminedRead = false
+  messagesCut = false
   // the demo's seats end with it, and its sign-out is this disposal
   unconfirmedNote.forgetAll()
   unconfirmedReport = null
@@ -8842,6 +8851,7 @@ function buildRows(source: Snapshot) {
   hiddenReadMessages = Math.max(0, (snap.readMessageCount ?? loadedReadCount) - loadedReadCount)
   unexaminedUnread = snap.unreadTruncated === true
   unexaminedRead = snap.readTruncated === true
+  messagesCut = snap.messagesCut === true
   // Preferences load once at boot; comments own their separate subscription.
 }
 
