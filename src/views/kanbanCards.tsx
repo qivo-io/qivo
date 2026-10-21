@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { AssigneeAvatar } from '@/components/AssigneeAvatar'
 import { Icon, PausedMark, PriorityIcon, ProjectName } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import type { BoardCellGroup } from '@/lib/boardGroups'
 import { type IssueVM, P, type ProjectPlace } from '@/store/planner'
+import type { StoreVersion } from '@/store/updates'
 
 type CardActions = {
   onOpen: (id: string) => void
@@ -197,16 +198,26 @@ function TaskRow({
   )
 }
 
-function BoardCard({
-  group,
-  place,
-  dimmed,
-  ...actions
-}: CardActions & {
+type BoardCardProps = CardActions & {
   group: BoardCellGroup<IssueVM>
   place: (issue: IssueVM) => ProjectPlace | null
   dimmed: boolean
-}) {
+  /** P.contextVersion, for what the rows read besides their tasks. */
+  context: StoreVersion
+  /** The ids of the card's tasks that are stale now (P.isStale), joined.
+      Staleness follows the clock, so a task that crosses the age renders
+      again although nothing else changed. */
+  stale: string
+}
+
+function BoardCardView({
+  group,
+  place,
+  dimmed,
+  context: _context,
+  stale: _stale,
+  ...actions
+}: BoardCardProps) {
   // Repeated child project labels already name this shared project. Keep the
   // parent's label when it has no local children or belongs to another project.
   const parentPlace =
@@ -260,5 +271,39 @@ function BoardCard({
     </div>
   )
 }
+
+/** The tasks a card shows, from its top heading down. */
+const members = (group: BoardCellGroup<IssueVM>) => [
+  ...group.ancestors,
+  ...(group.parent ? [group.parent] : []),
+  ...group.issues,
+]
+const samePlace = (a: ProjectPlace | null, b: ProjectPlace | null) =>
+  a === b || (!!a && !!b && a.project === b.project && a.owner === b.owner)
+/** The dragged task when this card holds it, the only drag a card shows. */
+const ownDrag = (props: BoardCardProps) =>
+  props.group.issues.some((it) => it.id === props.dragId) ? props.dragId : null
+
+/* A board renders every card again on each store change. A card whose tasks
+   are the same objects (P.issues keeps a task's object while it, its delay
+   and its family stay the same), in the same places, with the same context,
+   drag and stale tasks, renders the same, so it skips. Kanban keeps the
+   callbacks' identity. */
+const BoardCard = memo(BoardCardView, (before, after) => {
+  const a = members(before.group)
+  const b = members(after.group)
+  return (
+    before.group.key === after.group.key &&
+    before.dimmed === after.dimmed &&
+    before.context === after.context &&
+    before.stale === after.stale &&
+    before.onOpen === after.onOpen &&
+    before.onDragStart === after.onDragStart &&
+    before.onDragEnd === after.onDragEnd &&
+    ownDrag(before) === ownDrag(after) &&
+    a.length === b.length &&
+    a.every((it, i) => it === b[i] && samePlace(before.place(it), after.place(it)))
+  )
+})
 
 export { BoardCard, DelayBanner }

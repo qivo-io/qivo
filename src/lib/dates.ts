@@ -39,6 +39,10 @@ const WEEK_ONE_MIN_DAYS: Record<WeekOneRule, number> = { jan1: 1, first4day: 4, 
 
 let weekStart: number = DEFAULT_WEEK_START
 let weekOneRule: WeekOneRule = DEFAULT_WEEK_ONE_RULE
+/* isoToWeek's answers for the grid in weekCacheKey (its anchor and week
+   start). A rebuild converts every task's dates, and most tasks share them. */
+const weekCache = new Map<string, number>()
+let weekCacheKey = ''
 
 /** First day of d's week — the org's week-start day at local midnight. */
 export function weekStartOf(d: Date): Date {
@@ -241,8 +245,18 @@ export function weekToISO(w: number): string {
 /** Week index of an ISO date that is (or should be treated as) a week start.
     Uses floor: any day within a week belongs to that week. */
 export function isoToWeek(s: string): number {
-  const d = weekStartOf(isoToDate(s))
-  return Math.round((d.getTime() - TIMELINE_START.getTime()) / (7 * DAY))
+  const anchor = TIMELINE_START.getTime()
+  if (weekCacheKey !== `${anchor}:${weekStart}` || weekCache.size > 100_000) {
+    weekCache.clear()
+    weekCacheKey = `${anchor}:${weekStart}`
+  }
+  let week = weekCache.get(s)
+  if (week === undefined) {
+    const d = weekStartOf(isoToDate(s))
+    week = Math.round((d.getTime() - anchor) / (7 * DAY))
+    weekCache.set(s, week)
+  }
+  return week
 }
 
 /** Week index of a full timestamp (issues.remaining_set_at etc.) — the local

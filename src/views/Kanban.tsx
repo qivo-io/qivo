@@ -6,6 +6,7 @@ import { HoverTooltip } from '@/components/ui/tooltip'
 import { boardDropPatch, groupBoardAssignees, groupBoardCell } from '@/lib/boardGroups'
 import { Avatar, EmptyState, Icon, ProjectName, StatusDot } from '../components/qivo'
 import { useUpdateBlocker } from '../lib/updateSafety'
+import { useLatest } from '../lib/useLatest'
 import {
   type IssueFilters,
   type IssueVM,
@@ -448,10 +449,15 @@ function Kanban({
   tweaks: { metaViz: string }
   actions: Record<string, (...args: unknown[]) => void>
 }) {
-  const onOpenIssue = actions.openIssue
+  // App makes its actions again every render; the cards keep one identity
+  const onOpenIssue = useLatest(actions.openIssue)
   const [dragId, setDragId] = useStateK(null)
   useUpdateBlocker(!!dragId)
   const [dragOver, setDragOver] = useStateK(null)
+  const endDrag = useLatest(() => {
+    setDragId(null)
+    setDragOver(null)
+  })
 
   // `wide` = a scope that names no project (All projects, My view); `mine` is
   // the one that also narrows to my own tasks
@@ -536,11 +542,13 @@ function Kanban({
         dimmed={dimmed}
         onOpen={onOpenIssue}
         onDragStart={setDragId}
-        onDragEnd={() => {
-          setDragId(null)
-          setDragOver(null)
-        }}
+        onDragEnd={endDrag}
         dragId={dragId}
+        context={P.contextVersion}
+        stale={group.issues
+          .filter((it) => P.isStale(it))
+          .map((it) => it.id)
+          .join()}
       />
     ))
   }

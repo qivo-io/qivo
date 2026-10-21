@@ -88,9 +88,12 @@
   margin: 8px auto 0;
 }
 /* The landscape phone Roadmap covers the window while the workspace stays
-   mounted behind it, so the column keeps the window's axis there. */
+   mounted behind it, so the column keeps the window's axis there. The two
+   marks on <html> say a workspace shell or that Roadmap is mounted
+   (lib/rootMark), because an html:has() rule restyles the whole page on
+   every change. */
 @media (min-width: 761px) {
-  html:has(.workspace-shell):not(:has([data-roadmap-landscape])) .float-stack {
+  html[data-workspace-shell]:not([data-landscape-roadmap]) .float-stack {
     left: var(--sidebar-w);
   }
 }

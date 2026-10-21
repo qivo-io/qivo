@@ -38,10 +38,11 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
     closeLayer()
   }
 
-  // Workspace rebuilds replace these arrays, including after access changes.
+  // A rebuild keeps these lists while their data stays the same, and an
+  // access change carried only by people or teams moves P.contextVersion.
   const search = useMemo(
     () => createPaletteSearch(P.projects, P.issues, (id) => P.canSee(id)),
-    [P.projects, P.issues],
+    [P.projects, P.issues, P.contextVersion],
   )
   const { projects, issues } = search(query)
   const hasResults = projects.length > 0 || issues.length > 0

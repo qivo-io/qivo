@@ -3,7 +3,7 @@
    review items, and the load chip. Everything reads the live store; every
    change made from a card stamps the page owner and ticks the row
    (docs/team-sync-brief.md, "Each row carries"). */
-import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { memo, type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { AssigneeAvatar, OwnerPickList } from '@/components/AssigneeAvatar'
 import { closeOrAsk, questionOpen } from '@/components/DiscardPrompt'
 import {
@@ -39,6 +39,7 @@ import { useMenuBackLayer, useMobileBackLayer } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
 import { fmtHours, plannableHoursOf } from '@/lib/workload'
 import { type IssueVM, P, type UserVM } from '@/store/planner'
+import type { StoreVersion } from '@/store/updates'
 import { TEXT_MAX } from '../../../convex/lib/textLimits'
 import { DelayBanner } from '../kanbanCards'
 
@@ -507,10 +508,22 @@ function RowJumps({ it, ctx }: { it: IssueVM; ctx: PageCtx }) {
   )
 }
 
+type SyncCardProps = {
+  it: IssueVM
+  ctx: PageCtx
+  later?: boolean
+  /** P.contextVersion, for what the row reads besides its task */
+  context: StoreVersion
+  /** the task's latest comment (P.lastComments), which the marks read */
+  lastComment: number | null | undefined
+  /** whether the row is ticked (ctx.reviewed) */
+  reviewed: boolean
+}
+
 /** One row of a person's page, as a board card: the delay banner, the
     title, the meta and marks lines, then the controls. `later` quiets a
     To Do row planned past this week. */
-export function SyncCard({ it, ctx, later }: { it: IssueVM; ctx: PageCtx; later?: boolean }) {
+function SyncCardView({ it, ctx, later }: SyncCardProps) {
   const ownerRef = useRef<HTMLSpanElement>(null)
   const canWrite = P.canWrite(it.project)
   const marks = rowMarks(it, {
@@ -640,6 +653,31 @@ export function SyncCard({ it, ctx, later }: { it: IssueVM; ctx: PageCtx; later?
     </div>
   )
 }
+
+/* A person's page renders every card again on each store change. A card
+   renders the same while its task keeps its object (P.issues keeps it while
+   the task, its delay, its family and the tasks linked to it stay the
+   same), with the same context, comment, tick and prompt, the same page
+   owner and reading point, on the same day (every label it shows counts
+   whole days) and layout, so it skips. Its callbacks act the same for the
+   same page owner: TeamSync keeps onOpenTask and onShowTask, and the
+   reviewed set's mark and toggle update its latest state. */
+export const SyncCard = memo(
+  SyncCardView,
+  (a, b) =>
+    a.it === b.it &&
+    a.later === b.later &&
+    a.context === b.context &&
+    a.lastComment === b.lastComment &&
+    a.reviewed === b.reviewed &&
+    a.ctx.owner === b.ctx.owner &&
+    a.ctx.since === b.ctx.since &&
+    a.ctx.day.today === b.ctx.day.today &&
+    a.ctx.mobile === b.ctx.mobile &&
+    (a.ctx.prompt === a.it.id) === (b.ctx.prompt === b.it.id) &&
+    a.ctx.onOpenTask === b.ctx.onOpenTask &&
+    a.ctx.onShowTask === b.ctx.onShowTask,
+)
 
 /** A task finished since the page owner's reading point: quiet, not a row. */
 export function DoneItem({

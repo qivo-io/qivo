@@ -7,6 +7,7 @@ import {
   useCallback,
   useEffect as useEffectR,
   useLayoutEffect as useLayoutEffectR,
+  useMemo,
   useRef as useRefR,
   useState as useStateR,
 } from 'react'
@@ -14,6 +15,7 @@ import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { isRoadmapTaskVisible } from '@/lib/roadmapVisibility'
 import { useUpdateBlocker } from '@/lib/updateSafety'
+import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
 import { EmptyState, Icon } from '../components/qivo'
 import { RoadmapUndo } from '../components/RoadmapUndo'
@@ -109,7 +111,9 @@ function Roadmap({
   useEffectR(() => {
     if (revealTask && mobile) setMobileLayout('timeline')
   }, [revealTask?.n])
-  const onOpenIssue = actions.openIssue
+  // App makes its actions again every render; the rows keep one identity
+  const onOpenIssue = useLatest(actions.openIssue)
+  const onScope = useLatest(actions.setScope)
   // `wide` = a scope that names no project (All projects, My view); `mine` is
   // the one that also narrows to my own tasks
   const wide = info.wide
@@ -1161,6 +1165,21 @@ function Roadmap({
           </div>,
         )
 
+  /* Dependency pairs and the auto-move answer read only the tasks and the
+     write access canWrite reads, so they are worked out again only when one
+     of them changed: P.issues keeps its identity while no task changed, and
+     P.contextVersion covers the access. Above the early returns, as hooks. */
+  const allDeps = useMemo(() => dependencyPairs(P.issues), [P.issues])
+  const pendingMoves = useMemo(
+    () =>
+      autoMoves({
+        issues: P.issues,
+        byId: P.issueById,
+        canWrite: (it) => P.canWrite(it.project),
+      }),
+    [P.issues, P.contextVersion],
+  )
+
   /* ---------- empty state ---------- */
   if (info.subIds.length === 0) {
     if (wide) {
@@ -1336,7 +1355,7 @@ function Roadmap({
     stripMode === 'min' ? STRIP_HEAD_H + 2 : Math.min(stripHeight(stripUsers.length), stripCap)
 
   // dependency pairs (blocker -> blocked), dedup, both bars visible
-  const deps = dependencyPairs(P.issues).filter((dp) => geom[dp.blocker] && geom[dp.blocked])
+  const deps = allDeps.filter((dp) => geom[dp.blocker] && geom[dp.blocked])
   const depColor = (dp) =>
     getE(P.issueById[dp.blocker]) >= getS(P.issueById[dp.blocked])
       ? 'var(--danger)'
@@ -1347,16 +1366,11 @@ function Roadmap({
       barRing[dp.blocked] = 'color-mix(in oklab, var(--danger) 67%, transparent)'
   })
 
-  // Auto-move: push blocked tasks past their blockers, cascading. Computed
-  // every render so the button can disable itself when there is nothing to
-  // move. Only leaves move, and a group's span follows them. A pair that
-  // would move a task this person cannot edit keeps its red arrow instead
-  // (see autoMoves in src/lib/schedule.ts).
-  const pendingMoves = autoMoves({
-    issues: P.issues,
-    byId: P.issueById,
-    canWrite: (it) => P.canWrite(it.project),
-  })
+  // Auto-move: push blocked tasks past their blockers, cascading. Worked out
+  // with the tasks (pendingMoves, above) so the button can disable itself
+  // when there is nothing to move. Only leaves move, and a group's span
+  // follows them. A pair that would move a task this person cannot edit
+  // keeps its red arrow instead (see autoMoves in src/lib/schedule.ts).
   const autoArrange = () => {
     if (!pendingMoves.length || P.refusePausedEdit()) return
     P.batchRoadmapChanges(() => {
@@ -1894,12 +1908,12 @@ function Roadmap({
                         weekW={weekW}
                         timelineW={timelineW}
                         hasSubHeads={hasSubHeads}
-                        workspaceVersion={P.updates.workspace.getSnapshot()}
+                        context={P.contextVersion}
                         observer={rowObserver}
                         guidesKey={guidesKey}
                         renderGuides={guides}
                         onToggle={toggle}
-                        onScope={actions.setScope}
+                        onScope={onScope}
                         onOpen={onOpenIssue}
                         onSchedule={onSched}
                         onCommit={commit}
