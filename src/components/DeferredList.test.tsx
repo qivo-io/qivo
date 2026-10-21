@@ -190,6 +190,21 @@ describe('DeferredList', () => {
     for (const box of boxes) expect(box.children.length).toBeLessThanOrEqual(64)
   })
 
+  it('boxes the items that arrive above a list that mounts in slices', async () => {
+    const items = Array.from({ length: 500 }, (_, n) => ({ key: `k${n}` }))
+    await show(items, 12)
+    while (tasks.length) await slice()
+    // new tasks arrive one at a time at the top
+    for (let n = 0; n < 100; n++) items.unshift({ key: `new${n}` })
+    for (let n = 1; n <= 100; n++) await show(items.slice(100 - n), 12)
+    while (tasks.length) await slice()
+    expect(nodes()).toHaveLength(600)
+    for (const node of nodes())
+      expect(node.parentElement?.hasAttribute('data-deferred-block')).toBe(true)
+    for (const box of container.querySelectorAll('[data-deferred-block]'))
+      expect(box.children.length).toBeLessThanOrEqual(64)
+  })
+
   it('keeps its cards when its first screen changes size', async () => {
     const items = Array.from({ length: 30 }, (_, n) => ({ key: `k${n}` }))
     // a short cell on a large Board: its first screen holds all of it

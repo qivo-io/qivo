@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MIN_CARD_PITCH } from '../lib/boardGroups'
+import { TODAY_WEEK, weekToISO } from '../lib/dates'
 import type { Snapshot } from '../store/plannerFixture.setup'
 import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
 
@@ -210,6 +211,33 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
     board.snapshot.issues[200].title = 'Renamed elsewhere'
     await board.deliver()
     expect(delay.mock.calls.length).toBeLessThan(20)
+  })
+
+  it('sizes the waiting cards again when their project starts tracking delay', async () => {
+    // late tasks: a week's work with 400 hours left
+    const week = weekToISO(TODAY_WEEK)
+    const board = await loadBoard(network, (snap) => {
+      for (let n = 0; n < 500; n++)
+        snap.issues.push({
+          ...taskRow(snap, `t${n}`, 'todo', n + 1),
+          start_week: week,
+          end_week: week,
+          due_date: week,
+          remaining_hours: 400,
+          remaining_set_at: new Date().toISOString(),
+        })
+    })
+    await board.render(root)
+    const waiting = () =>
+      Number.parseFloat(
+        document.querySelector<HTMLElement>('[data-board-pending]')?.style.height ?? '0',
+      )
+    const before = waiting()
+    expect(before).toBeGreaterThan(0)
+    // the tasks keep their objects, and each card gains its delay banner
+    for (const project of board.snapshot.projects) project.track_delay = true
+    await board.deliver()
+    expect(waiting()).toBeGreaterThan(before)
   })
 
   it('keeps the cards it sized when a change moves only the store context', async () => {

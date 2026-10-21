@@ -227,14 +227,14 @@ export function DeferredList<T extends object>({
      browser renders them whole; slices fill new blocks below them, which
      it skips while they are offscreen. */
   const sealedBelow = useRef<number | null>(null)
-  /* Blocks below this id are plain: the blocks of a list that rendered
-     whole the first time. A block is boxed or plain for good, as a box
-     that came and went would remount every card in it. A plain block
-     takes any number of items while the list renders whole; once it mounts
-     in slices, new items go to new boxed blocks of BLOCK_SIZE. */
-  const plainBelow = useRef<number | null>(null)
+  /* The plain blocks: those of a list that rendered whole the first time.
+     A block is boxed or plain for good, as a box that came and went would
+     remount every card in it. A plain block takes any number of items
+     while the list renders whole; once it mounts in slices, new items go
+     to new boxed blocks of BLOCK_SIZE, above the plain ones too. */
+  const plainIds = useRef<ReadonlySet<number> | null>(null)
   const sliced = initial !== Number.POSITIVE_INFINITY
-  const plain = (id: number) => id < (plainBelow.current ?? 0)
+  const plain = (id: number) => plainIds.current?.has(id) ?? false
   const capacity = (id: number) =>
     plain(id) ? (sliced ? 0 : Number.POSITIVE_INFINITY) : BLOCK_SIZE
   const blocks: Block<T>[] = []
@@ -297,7 +297,7 @@ export function DeferredList<T extends object>({
     current.items.push(item)
   }
   owners.current = assigned
-  if (plainBelow.current === null) plainBelow.current = sliced ? 0 : nextBlock.current
+  plainIds.current ??= new Set(sliced ? [] : blocks.map((block) => block.id))
   if (sealedBelow.current === null && sliced) sealedBelow.current = nextBlock.current
 
   // the waiting items' estimated heights, each with the gap before it

@@ -27,17 +27,19 @@ export function estimateBoardCard(
 }
 
 /** estimateBoardCard, remembered per card of each cell while its tasks
-    (the same objects), its width and the layout `kind` stay the same. A
-    Board renders again on every store change and sizes every waiting card,
-    so it works out only the cards that changed. A task gets a new object
-    when its title or delay changes, and whether a heading shows its place
-    follows the layout, so nothing else of the store's moves an estimate. A
-    parent's card repeats in each cell that holds one of its subtasks, with
-    other tasks, so the cell is part of the key. */
+    (the same objects), its width, the layout `kind` and the store's
+    projects stay the same. A Board renders again on every store change and
+    sizes every waiting card, so it works out only the cards that changed. A
+    task gets a new object when its title or delay changes; whether it shows
+    a delay banner or a place line also follows its project's delay setting
+    and the projects' tree, which change P.projects, and the layout. Nothing
+    else of the store's moves an estimate. A parent's card repeats in each
+    cell that holds one of its subtasks, with other tasks, so the cell is
+    part of the key. */
 export function createEstimateCache() {
   const known = new Map<
     string,
-    { members: IssueVM[]; width: number; kind: string; value: number }
+    { members: IssueVM[]; width: number; kind: string; projects: typeof P.projects; value: number }
   >()
   return (
     group: BoardCellGroup<IssueVM>,
@@ -53,12 +55,13 @@ export function createEstimateCache() {
       entry &&
       entry.width === cardWidth &&
       entry.kind === kind &&
+      entry.projects === P.projects &&
       entry.members.length === members.length &&
       entry.members.every((it, i) => it === members[i])
     )
       return entry.value
     const value = estimateBoardCard(group, place, cardWidth)
-    known.set(key, { members, width: cardWidth, kind, value })
+    known.set(key, { members, width: cardWidth, kind, projects: P.projects, value })
     return value
   }
 }
