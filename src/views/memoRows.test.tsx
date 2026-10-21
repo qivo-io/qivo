@@ -28,6 +28,7 @@ vi.mock('@/components/AssigneeAvatar', () => ({
     portraits.rendered.push(issue.uuid)
     return null
   },
+  OwnerPickList: () => null,
 }))
 
 const AT = '2026-09-14T08:00:00.000Z'
@@ -83,20 +84,33 @@ async function load(prepare: (snap: Snapshot) => void = noop) {
     groupBoardCell: (await import('../lib/boardGroups')).groupBoardCell,
     TimelineRow: (await import('./roadmap/TimelineRow')).TimelineRow,
     SyncCard: (await import('./teamSync/SyncCard')).SyncCard,
+    TeamOpening: (await import('./teamSync/TeamOpening')).TeamOpening,
     syncDay: (await import('../lib/teamSync')).syncDay,
   }
 }
 type Loaded = Awaited<ReturnType<typeof load>>
 
+/* The mounted screen, for a render that no store change asks for. */
+let Screen: () => ReactNode
+
 /* Renders `view` again on every store change, as App does. */
 async function mount(view: (loaded: Loaded) => ReactNode, prepare?: (snap: Snapshot) => void) {
   const loaded = await load(prepare)
   const { usePlannerVersion, TooltipProvider } = loaded
-  function Screen() {
+  Screen = function Screen() {
     usePlannerVersion()
     return <TooltipProvider>{view(loaded)}</TooltipProvider>
   }
   await act(async () => root.render(<Screen />))
+}
+
+/* The tasks whose rows rendered when the screen rendered again after
+   `change`, which changes what the page itself holds. */
+async function rerenderedBy(change: () => void) {
+  portraits.rendered = []
+  change()
+  await act(async () => root.render(<Screen />))
+  return [...portraits.rendered].sort()
 }
 
 /* The tasks whose rows rendered while `change` was delivered. */
@@ -116,6 +130,15 @@ const renamePerson = (snap: Snapshot) => {
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  // the reviewer prompt's popover measures its anchor
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  )
   vi.stubGlobal(
     'matchMedia',
     vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
@@ -231,26 +254,38 @@ describe('memoized task rows', () => {
     const blockedByTwo = (snap: Snapshot) => {
       snap.links.push({
         id: 'link-1',
-        source_id: 'one',
-        target_id: 'two',
-        type: 'blocked_by',
+        // stored as the blocker's link
+        source_id: 'two',
+        target_id: 'one',
+        type: 'blocks',
         pair_key: 'one:two',
         created_at: AT,
       })
     }
+    // what the page holds besides the store, as TeamSync keeps it
+    const page = {
+      ticked: new Set<string>(),
+      prompt: null as string | null,
+      since: 0,
+      now: Date.now(),
+    }
     await mount(({ P, SyncCard, syncDay }) => {
-      const now = Date.now()
       // a new page context every render, as TeamSync builds it
       const ctx = {
         owner: P.CURRENT_USER,
-        since: 0,
-        now,
-        day: syncDay(now),
+        since: page.since,
+        now: page.now,
+        day: syncDay(page.now),
         mobile: false,
-        reviewed: { has: () => false, mark: noop, toggle: noop, count: () => 0 },
+        reviewed: {
+          has: (uuid: string) => page.ticked.has(uuid),
+          mark: noop,
+          toggle: noop,
+          count: () => 0,
+        },
         stamp: () => {},
         touched: () => {},
-        prompt: null,
+        prompt: page.prompt,
         setPrompt: noop,
         onOpenTask: noop,
         onShowTask: noop,
@@ -262,10 +297,21 @@ describe('memoized task rows', () => {
           ctx={ctx}
           context={P.contextVersion}
           lastComment={P.lastComments.get(it.uuid)}
-          reviewed={false}
+          reviewed={ctx.reviewed.has(it.uuid)}
         />
       ))
     }, blockedByTwo)
+    const { P } = await import('../store/planner')
+    const handle = (id: string) => P.issues.find((it) => it.uuid === id)!.id
+    // nothing changed: no card renders
+    expect(await rerenderedBy(noop)).toEqual([])
+    // a tick, and the reviewer prompt opening and closing, render that card
+    expect(await rerenderedBy(() => page.ticked.add('two'))).toEqual(['two'])
+    expect(await rerenderedBy(() => (page.prompt = handle('three')))).toEqual(['three'])
+    expect(await rerenderedBy(() => (page.prompt = null))).toEqual(['three'])
+    // another reading point or another day renders them all
+    expect(await rerenderedBy(() => (page.since = 1))).toEqual(['one', 'three', 'two'])
+    expect(await rerenderedBy(() => (page.now += 86_400_000))).toEqual(['one', 'three', 'two'])
     expect(await renderedBy(rename('three'))).toEqual(['three'])
     expect(await renderedBy(() => {})).toEqual([])
     // the blocker is done, so the card it blocks drops its mark
@@ -275,6 +321,33 @@ describe('memoized task rows', () => {
       }),
     ).toEqual(['one', 'two'])
     expect(document.querySelector('[data-sync-blocked]')).toBeNull()
+    expect(await renderedBy(renamePerson)).toEqual(['one', 'three', 'two'])
+  })
+
+  it('render a Needs an owner row again only for the task that changed', async () => {
+    const unowned = (snap: Snapshot) => {
+      // urgent enough to ask for an owner
+      for (const issue of snap.issues) {
+        delete issue.assignee_id
+        issue.priority = 'high'
+      }
+    }
+    await mount(({ P, TeamOpening, syncDay }) => {
+      const now = Date.now()
+      return (
+        <TeamOpening
+          rows={P.issues}
+          humans={P.users}
+          subIds={new Set(P.projects.map((p) => p.id))}
+          metaIds={new Set()}
+          day={syncDay(now)}
+          now={now}
+          onOpenTask={noop}
+        />
+      )
+    }, unowned)
+    expect(document.querySelectorAll('[data-sync-needs-owner]')).toHaveLength(3)
+    expect(await renderedBy(rename('two'))).toEqual(['two'])
     expect(await renderedBy(renamePerson)).toEqual(['one', 'three', 'two'])
   })
 })

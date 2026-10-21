@@ -47,6 +47,21 @@ const baselineRevision =
     : process.argv[baselineAt + 1] && !process.argv[baselineAt + 1].startsWith('--')
       ? process.argv[baselineAt + 1]
       : ''
+/* The --baseline commit, resolved before anything is made, so a revision
+   that is not usable stops here with nothing to clean up. */
+let baseline = null
+if (baselineRevision !== null) {
+  try {
+    // git in the measured checkout, which --root may name
+    const git = async (args) =>
+      (await promisify(execFile)('git', args, { cwd: root, encoding: 'utf8' })).stdout.trim()
+    baseline = await resolveBaseline(baselineRevision ? [baselineRevision] : [], git)
+  } catch (error) {
+    if (!(error instanceof BaselineError)) throw error
+    console.error(error.message)
+    process.exit(1)
+  }
+}
 const temporary = await mkdtemp(join(tmpdir(), 'qivo-browser-perf-'))
 const entry = join(here, 'perf/entry.tsx')
 const transport = join(here, 'perf/transport.mjs')
@@ -520,18 +535,7 @@ function comparison(scenarios, baseline) {
 
 const targets = [{ label: 'branch', source: root, scenarios: report.scenarios }]
 try {
-  if (baselineRevision !== null) {
-    let baseline
-    try {
-      // git in the measured checkout, which --root may name
-      const git = async (args) =>
-        (await promisify(execFile)('git', args, { cwd: root, encoding: 'utf8' })).stdout.trim()
-      baseline = await resolveBaseline(baselineRevision ? [baselineRevision] : [], git)
-    } catch (error) {
-      if (!(error instanceof BaselineError)) throw error
-      console.error(error.message)
-      process.exit(1)
-    }
+  if (baseline !== null) {
     report.baseline = { commit: baseline.commit, chosen: baseline.chosen, scenarios: [] }
     targets.push({
       label: 'baseline',

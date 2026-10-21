@@ -134,9 +134,10 @@ describe('view model identity across repaints', () => {
     deliverChange((snap) => {
       snap.links.push({
         id: 'link-1',
-        source_id: 'alone',
-        target_id: 'other',
-        type: 'blocked_by',
+        // stored as the blocker's link
+        source_id: 'other',
+        target_id: 'alone',
+        type: 'blocks',
         pair_key: 'alone:other',
         created_at: AT,
       })
@@ -220,6 +221,53 @@ describe('view model identity across repaints', () => {
       snap.profiles[0].name = 'Renamed person'
     })
     expect(P().contextVersion).not.toBe(renamed)
+    // a team membership decides what the person sees (the search palette
+    // asks P.canSee again when this moves)
+    const named = P().contextVersion
+    deliverChange((snap) => {
+      snap.teams.push({
+        id: 'team-1',
+        org_id: snap.orgs[0].id,
+        name: 'Field',
+        stale_days: 7,
+        archive_days: 30,
+        track_delay_default: true,
+        created_at: AT,
+      })
+    })
+    const teamed = P().contextVersion
+    expect(teamed).not.toBe(named)
+    deliverChange((snap) => {
+      snap.teamMembers.push({
+        team_id: 'team-1',
+        profile_id: snap.profiles[0].id,
+        is_leader: false,
+      })
+    })
+    expect(P().contextVersion).not.toBe(teamed)
+  })
+
+  it('keeps contextVersion for the organization load and Team sync stamps', () => {
+    const context = P().contextVersion
+    const people = P().users
+    // another person's hours outside this view: only the delays read them
+    deliverChange((snap) => {
+      snap.orgLoad.push({
+        issue_id: null,
+        owner_id: snap.profiles[0].id,
+        start_week: '2026-09-14',
+        end_week: '2026-09-21',
+        remaining: 12,
+        remaining_set_at: AT,
+      })
+    })
+    expect(P().contextVersion).toBe(context)
+    // a change made on a person through Team sync stamps them
+    deliverChange((snap) => {
+      snap.profiles[0].sync_at = '2026-09-16T08:00:00.000Z'
+    })
+    expect(P().users).not.toBe(people)
+    expect(P().contextVersion).toBe(context)
   })
 
   it('notifies no view for a delivery that changes nothing on screen', async () => {

@@ -265,9 +265,6 @@ let unexaminedRead = false
 
 /* issue uuid → projected-delay info, rebuilt with every snapshot */
 let delayMap = new Map<string, DelayInfo>()
-/* The plan_org_load rows the last rebuild read, so it can tell whether the
-   load P.weekLoadOf answers from changed (contextVersion). */
-let lastOrgLoad: Snapshot['orgLoad'] = []
 
 /* plan_org_load grouped by owner (rebuilt with the delay map, which reads
    the same spans), and each owner's hours in the weeks P.weekLoadOf was asked
@@ -3270,7 +3267,6 @@ function rebuild(now = new Date()) {
 
   P.CURRENT_USER = CURRENT_USER
   const context = [
-    P.users,
     P.org,
     P.orgs,
     P.myProfileIds,
@@ -3286,11 +3282,15 @@ function rebuild(now = new Date()) {
     P.TODAY_ISO,
     P.TODAY_POS,
   ]
-  const loadSame = sameData(lastOrgLoad, rows.orgLoad)
-  lastOrgLoad = rows.orgLoad
-  if (!loadSame || context.some((part, i) => part !== lastContext[i]))
+  // a Team sync stamp (UserVM.sync) gives P.users a new identity, but no row
+  // that compares contextVersion reads it; Team sync compares its own since
+  const people =
+    P.users === lastContextUsers ||
+    sameData(withoutStamps(lastContextUsers), withoutStamps(P.users))
+  if (!people || context.some((part, i) => part !== lastContext[i]))
     P.contextVersion = Object.freeze({ revision: P.contextVersion.revision + 1 })
   lastContext = context
+  lastContextUsers = P.users
 
   // Uploaded pictures prepare shared decoded sources after minting access.
   // A prepared portrait is baked into this snapshot, so fresh mints have to
@@ -3315,6 +3315,10 @@ function rebuild(now = new Date()) {
 
 /* What the last rebuild's contextVersion was taken from. */
 let lastContext: unknown[] = []
+let lastContextUsers: UserVM[] = []
+
+/** `users` without their Team sync stamps, for contextVersion. */
+const withoutStamps = (users: readonly UserVM[]) => users.map(({ sync: _sync, ...user }) => user)
 
 /** Keeps each task's view model from the last rebuild (`before`, with its
     `beforeById` and delay map) when it holds the same data and its delay is
@@ -4170,10 +4174,11 @@ export const PLANNER = {
   // it failed
   commentsEarlier: 'none' as CommentsEarlier,
   /* Changes whenever a rebuild changes anything a task's view reads besides
-     the task's own view model and delay (keepIssues): people, organizations
-     and their settings, projects and access, teams, labels, milestones, the
-     organization-wide load, the week grid and today. A view that skips
-     unchanged tasks by identity compares this as well. */
+     the task's own view model and delay (keepIssues): people (but not their
+     Team sync stamps), organizations and their settings, projects and
+     access, teams, labels, milestones, the week grid and today. A view that
+     skips unchanged tasks by identity compares this as well. The
+     organization-wide load reaches a task's view through its delay only. */
   contextVersion: Object.freeze({ revision: 0 }) as StoreVersion,
   // whether the watched thread stopped loading; the comments delivered
   // before the failure stay (P.retryComments)
