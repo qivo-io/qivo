@@ -921,6 +921,7 @@ describe('labels — vocabulary + toggle', () => {
       org_id: f.org.id,
       issue_id: issue.id,
       label_id: label.id,
+      on: true,
     })
     const managerOnly = /only organization admins can rename, recolor or delete labels/
     for (const patch of [{ name: 'Defect' }, { color: '#111111' }]) {
@@ -971,12 +972,14 @@ describe('labels — vocabulary + toggle', () => {
       org_id: f.org.id,
       issue_id: issue.id,
       label_id: label.id,
+      on: true,
     })
     expect(await pairs()).toHaveLength(1)
     await as(t, f.user).mutation(api.labels.toggle, {
       org_id: f.org.id,
       issue_id: issue.id,
       label_id: label.id,
+      on: false,
     })
     expect(await pairs()).toHaveLength(0)
     const events = await activityFor(t, f.org.id)
@@ -1021,6 +1024,25 @@ describe('labels — vocabulary + toggle', () => {
     expect(events.map((e) => e.verb)).toEqual(['labeled', 'removed a label from'])
   })
 
+  it('toggle refuses a request without `on` and writes nothing', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const label = await plantLabel(t, f.org.id, 'Bug')
+    // an app from before v0.1.26 sent no `on` and had the server flip the pair
+    const flip = { org_id: f.org.id, issue_id: issue.id, label_id: label.id }
+    // @ts-expect-error the request an old app sends
+    const sent = as(t, f.user).mutation(api.labels.toggle, flip)
+    await expect(sent).rejects.toThrow(/Missing required field `on`/)
+    const pairs = await t.run((ctx) =>
+      ctx.db
+        .query('issue_labels')
+        .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+        .collect(),
+    )
+    expect(pairs).toHaveLength(0)
+  })
+
   it('toggle refuses a foreign label with the 0078 sentence, verbatim', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -1031,6 +1053,7 @@ describe('labels — vocabulary + toggle', () => {
         org_id: f.org.id,
         issue_id: issue.id,
         label_id: foreign.id,
+        on: true,
       }),
       'rule',
     )
@@ -1042,6 +1065,7 @@ describe('labels — vocabulary + toggle', () => {
         org_id: f.org.id,
         issue_id: issue.id,
         label_id: label.id,
+        on: true,
       }),
       'forbidden',
     )
@@ -1058,6 +1082,7 @@ describe('labels — vocabulary + toggle', () => {
         org_id: f.org.id,
         issue_id: issue.id,
         label_id: label.id,
+        on: true,
       })
     }
     await drainActivity(t)

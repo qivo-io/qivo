@@ -1,21 +1,8 @@
 import type { FunctionReturnType } from 'convex/server'
-import {
-  createContext,
-  type ReactNode,
-  useContext,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react'
+import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../convex/_generated/api'
-import {
-  type CanvasImageQuality,
-  type CanvasImageState,
-  createCanvasImageLoader,
-  decodeCanvasImage,
-} from './lib/appearance'
+import { type CanvasImageState, createCanvasImageLoader, decodeCanvasImage } from './lib/appearance'
+import { AppearanceContext, type DailyImage } from './lib/appearanceContext'
 import { browserBackendUrl, configuredConvexDeploymentUrl } from './lib/backendUrl'
 import {
   type BackgroundSelection,
@@ -28,26 +15,7 @@ import { watchDemoCanvas } from './lib/demoCanvas'
 import { DEMO_MODE } from './lib/demoMode'
 import { type AppearancePreferences, P } from './store/planner'
 
-type DailyImage = NonNullable<FunctionReturnType<typeof api.appearance.dailyImage>>
 type ImageLease = NonNullable<FunctionReturnType<typeof api.appearance.mintCustomUrl>>
-type AppearanceState = {
-  mode: AppearancePreferences['mode']
-  /** 'none' when the account chose No image as its Canvas background. */
-  backgroundStatus: 'loading' | 'ready' | 'unavailable' | 'none'
-  backgroundQuality: CanvasImageQuality | null
-  backgroundUrl: string | null
-  dailyImage: DailyImage | null
-}
-
-const AppearanceContext = createContext<AppearanceState>({
-  mode: 'dark',
-  backgroundStatus: 'loading',
-  backgroundQuality: null,
-  backgroundUrl: null,
-  dailyImage: null,
-})
-
-export const useAppearance = () => useContext(AppearanceContext)
 
 function usePrivateImage(imageId: string | null, previewVersion: number | null) {
   const [lease, setLease] = useState<(ImageLease & { previewVersion: number | null }) | null>(null)

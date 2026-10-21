@@ -1,3 +1,4 @@
+import { unsentList } from './discardQuestion'
 import type { UnsentScope } from './leaveGuard'
 import type { UiState } from './router'
 
@@ -34,4 +35,16 @@ export function closedBy(
     ...(task && taskWindowAt(next) !== task ? [scopes.task] : []),
     ...(pageAt(next) !== pageAt(here) ? [scopes.page] : []),
   ]
+}
+
+/** Lets the task window of `key`, a new task whose create the server
+    refused, close with its unsent text: the task does not exist, so the
+    text has nowhere to go. Answers the sentence that says what went with
+    it, for a notice beside the refusal, or null when the window held none.
+    The editors' own "discarded" toasts stay quiet, as after a Discard. */
+export function dropRefusedTask(scope: UnsentScope, key: string): string | null {
+  const lost = scope.held()
+  if (!lost.length) return null
+  scope.discard()
+  return `${key} was not created, so its window closed and your unsent ${unsentList(lost)} went with it.`
 }

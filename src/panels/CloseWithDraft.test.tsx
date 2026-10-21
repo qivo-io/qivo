@@ -29,6 +29,8 @@ let container: HTMLDivElement
 let root: Root
 let onClose: ReturnType<typeof vi.fn<() => void>>
 let close: () => Promise<void>
+/** Takes the task window away, as App does once its close goes ahead. */
+let unmountTask: () => Promise<void>
 
 async function open({ embedded = false } = {}) {
   vi.resetModules()
@@ -62,7 +64,8 @@ async function open({ embedded = false } = {}) {
   const store = await import('../store/planner')
   await store.initStore()
   const { IssueDetail } = await import('./IssueDetail')
-  const { closeOrAsk, DiscardPrompt } = await import('../components/DiscardPrompt')
+  const { closeOrAsk } = await import('../lib/discardQuestion')
+  const { DiscardPrompt } = await import('../components/DiscardPrompt')
   const { createUnsentScope, UnsentScopeContext } = await import('../lib/leaveGuard')
   const scope = createUnsentScope()
   onClose = vi.fn<() => void>()
@@ -89,6 +92,14 @@ async function open({ embedded = false } = {}) {
       </TooltipProvider>,
     ),
   )
+  unmountTask = () =>
+    act(async () =>
+      root.render(
+        <TooltipProvider>
+          <DiscardPrompt />
+        </TooltipProvider>,
+      ),
+    )
 }
 
 beforeEach(() => {
@@ -253,6 +264,30 @@ describe('closing the task window with unsent text', { timeout: 30_000 }, () => 
     expect(onClose).not.toHaveBeenCalled()
   })
 
+  it('leaves the draft and the window alone on Escape inside the text', async () => {
+    await open()
+    const composer = await editorOf('Leave a comment')
+    await act(async () => composer.commands.insertContent('Drift is under 2%'))
+    const text = document.querySelector<HTMLElement>(
+      '[role="textbox"][aria-label="Leave a comment"]',
+    )
+    await act(async () => {
+      // ProseMirror reads keyCode, and takes Escape as its own
+      text?.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Escape',
+          keyCode: 27,
+          bubbles: true,
+          cancelable: true,
+        }),
+      )
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    })
+    expect(question()).toBeNull()
+    expect(composer.getText()).toBe('Drift is under 2%')
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
   it('asks before a description draft moves into or out of its own window', async () => {
     await open()
     const column = await editorOf('Task description')
@@ -293,6 +328,32 @@ describe('closing the task window with unsent text', { timeout: 30_000 }, () => 
     await press('[data-desc-toggle]')
     await press('[data-discard-confirm]')
     expect(document.querySelector('[role="textbox"][aria-label="Task description"]')).toBeNull()
+  })
+
+  it('says nothing of the text the person chose to discard as the window goes', async () => {
+    await open()
+    const composer = await editorOf('Leave a comment')
+    const description = await editorOf('Task description')
+    await act(async () => composer.commands.insertContent('Drift is under 2%'))
+    await act(async () => description.commands.insertContent(' Twice.'))
+    await close()
+    await press('[data-discard-confirm]')
+    expect(onClose).toHaveBeenCalledTimes(1)
+    await unmountTask()
+    expect(window.showToast).not.toHaveBeenCalled()
+  })
+
+  it('says the typed text went when the window goes without a Discard', async () => {
+    await open()
+    const composer = await editorOf('Leave a comment')
+    const description = await editorOf('Task description')
+    await act(async () => composer.commands.insertContent('Drift is under 2%'))
+    await act(async () => description.commands.insertContent(' Twice.'))
+    // a remote delete takes the window away without asking
+    await unmountTask()
+    const said = vi.mocked(window.showToast).mock.calls.map(([text]) => text)
+    expect(said).toContain('Unsaved comment discarded')
+    expect(said).toContain('Unsaved description changes discarded')
   })
 
   it('does not ask about a comment on its way to the server', async () => {

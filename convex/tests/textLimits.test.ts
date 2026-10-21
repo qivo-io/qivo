@@ -7,10 +7,9 @@
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { TEXT_MAX } from '../lib/textLimits'
+import { COMMENT_TOO_LONG, DESCRIPTION_TOO_LONG, TEXT_MAX } from '../lib/textLimits'
 import { sha256hex } from '../machine/auth'
-import { ARCHIVE_REASON_TOO_LONG, COMMENT_TOO_LONG } from '../model/comments'
-import { DESCRIPTION_TOO_LONG } from '../model/issues'
+import { ARCHIVE_REASON_TOO_LONG } from '../model/comments'
 import {
   as,
   countersFor,

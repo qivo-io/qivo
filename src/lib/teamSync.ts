@@ -639,3 +639,29 @@ export function mentionBody(user: Pick<UserVM, 'id' | 'name'>, text: string): st
     })
   return astToMd([{ t: 'p', children }])
 }
+
+/** A card on the Team sync page: its task, and the person whose section
+    shows it (the page owner, or an agent on the agents step). */
+export type SyncCardPlace = { task: string; owner: string }
+
+/** The cards a scope switch takes off the page at `step`, of `cards` (each
+    card's scope with its place): every card when the new walk `next` has no
+    such step, else the cards whose task it no longer holds or whose person
+    it no longer walks, such as an agent outside a team. */
+export function cardsClosedBy<S>(
+  cards: ReadonlyMap<S, SyncCardPlace>,
+  step: string,
+  next: {
+    steps: readonly string[]
+    rows: readonly { uuid: string }[]
+    humans: readonly { id: string }[]
+    agents: readonly { id: string }[]
+  },
+): S[] {
+  if (!next.steps.includes(step)) return [...cards.keys()]
+  const tasks = new Set(next.rows.map((it) => it.uuid))
+  const walkers = new Set([...next.humans, ...next.agents].map((u) => u.id))
+  return [...cards]
+    .filter(([, card]) => !tasks.has(card.task) || !walkers.has(card.owner))
+    .map(([scope]) => scope)
+}

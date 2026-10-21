@@ -4,15 +4,8 @@
    re-derive from the store so remote changes update owners and counts. */
 import { useState as useStateU } from 'react'
 import { Avatar, IssueKey, ProjectName, StatusDot } from '../components/qivo'
-import {
-  planHint,
-  RemainingInput,
-  ReviewTick,
-  rowOrder,
-  useReviewed,
-  WalkFooter,
-  WalkRail,
-} from '../components/walk'
+import { RemainingInput, ReviewTick, WalkFooter, WalkRail } from '../components/walk'
+import { planHint, rowOrder, useReviewed } from '../components/walkRows'
 import { type IssueVM, P } from '../store/planner'
 import { ModalShell } from './Modals'
 

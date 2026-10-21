@@ -11,9 +11,9 @@ import {
   validateManualImageFile,
   validatePanoramaDimensions,
 } from '../../convex/lib/panoramaImage'
-import { useAppearance } from '../AppearanceProvider'
 import { SettingsGroup } from '../components/settingsPage'
 import { ThemeSelector } from '../components/ThemeSelector'
+import { useAppearance } from '../lib/appearanceContext'
 import { useUnsaved } from '../lib/leaveGuard'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { type AppearancePreferences, P } from '../store/planner'

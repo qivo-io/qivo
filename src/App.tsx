@@ -7,7 +7,6 @@ import { DropdownChevron } from '@/components/ui/select'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { BillingNotice } from './components/BillingNotice'
-import { closeOrAsk } from './components/DiscardPrompt'
 import {
   MobileHeader,
   MobileNavigation,
@@ -24,17 +23,18 @@ import {
   WorkspaceShell,
   WorkspaceToolbar,
 } from './components/WorkspaceShell'
-import { flushWalkInput } from './components/walk'
+import { flushWalkInput } from './components/walkRows'
 import { addressMoved, rememberAddress } from './lib/addressBook'
+import { closeOrAsk } from './lib/discardQuestion'
 import { lazyFromModule, preloadInBackground } from './lib/lazyModule'
 import { parseSyncScope } from './lib/teamSync'
 import { useMobile } from './lib/useMobile'
 import './styles/mobile.css'
 import { announce } from './lib/announce'
-import { closedBy } from './lib/closingMoves'
+import { closedBy, dropRefusedTask } from './lib/closingMoves'
 import { floatSlot } from './lib/floatStack'
 import { isLandscapeRoadmapOpen } from './lib/landscape'
-import { createUnsentScope, UnsentScopeContext } from './lib/leaveGuard'
+import { createUnsentScope, type UnsentScope, UnsentScopeContext } from './lib/leaveGuard'
 import { afterProjectSaved } from './lib/newProjectAccess'
 import { createPopRefusal } from './lib/popRefusal'
 import {
@@ -1268,9 +1268,11 @@ function App() {
   /* ---- Team sync's hand-offs (the TeamSync props) ---- */
   // a step or a scope from the page; the address follows in place (the
   // router's sync rule), and a new scope is the viewer's saved choice
-  const placeSync = (next: SyncPlace) => {
+  const placeSync = (next: SyncPlace, closes?: UnsentScope[]) => {
     if (sync && next.scope === sync.scope && next.step === sync.step) return
-    move({ sync: next }, () => correctSync(next))
+    // a scope switch names the cards it takes away; the others keep their text
+    if (closes) closeOrAsk(closes, () => correctSync(next))
+    else move({ sync: next }, () => correctSync(next))
   }
   // …and the page's own correction of a place it cannot show, unasked
   const correctSync = (next: SyncPlace) => {
@@ -1440,6 +1442,14 @@ function App() {
     openPalette: () => setPaletteOpen(true),
     createOrg: () => setModal({ kind: 'createorg' }),
   }
+  // a click on a desktop notification opens the inbox as the Inbox button
+  // does, asking first when a window holds unsent text
+  const openInboxRef = useRef(actions.openInbox)
+  openInboxRef.current = actions.openInbox
+  useEffect(() => {
+    P.setInboxOpener(() => openInboxRef.current())
+    return () => P.setInboxOpener(null)
+  }, [])
 
   const createIssue = (issue) => {
     // while edits are paused the dialog stays open with what was typed
@@ -1448,8 +1458,14 @@ function App() {
     // The preview can be invalidated by ANY concurrent create in the org
     // (0050's shared counter), more than once: the open window follows its
     // task (P.watchHandles above), so it doesn't blank or show the concurrent
-    // issue, and a refusal closes it under the handle it showed last.
-    const key = P.addIssue(issue, (last) => setOpenIssue((cur) => (cur === last ? null : cur)))
+    // issue, and a refusal closes it under the handle it showed last, saying
+    // what text typed in it went with it.
+    const key = P.addIssue(issue, (last) => {
+      if (hereRef.current.openIssue !== last) return
+      const lost = dropRefusedTask(unsent.task, last)
+      setOpenIssue((cur) => (cur === last ? null : cur))
+      if (lost) window.showToast?.(lost, 'error')
+    })
     if (!key) {
       window.showToast?.('That sub-project is gone, so the task was not created.', 'error')
       return false

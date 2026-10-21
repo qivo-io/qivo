@@ -18,7 +18,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { closeOrAsk } from '../components/DiscardPrompt'
 import {
   AnchoredPop,
   Icon,
@@ -29,6 +28,7 @@ import {
   Seg,
 } from '../components/qivo'
 import { fmtDateTime } from '../lib/dates'
+import { closeOrAsk } from '../lib/discardQuestion'
 import { UnsentScopeContext, useUnsentScope } from '../lib/leaveGuard'
 import { notificationPermission, requestNotificationPermission } from '../lib/notify'
 import { matchesAllWords } from '../lib/search'
@@ -40,7 +40,7 @@ import { IssueDetail } from './IssueDetail'
 
 /* Spec'd age form: hours up to 24 h, then days (minutes only under an hour —
    "0h" would read as broken). */
-export function fmtMsgAge(ts: number): string {
+function fmtMsgAge(ts: number): string {
   const m = Math.max(0, Math.round((Date.now() - ts) / 60000))
   if (m < 60) return m < 1 ? 'now' : `${m}m`
   const h = Math.floor(m / 60)

@@ -1,6 +1,7 @@
 import { createContext, type FocusEvent, useContext, useLayoutEffect, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { useUpdateBlocker } from './updateSafety'
+import { useLatest } from './useLatest'
 
 /* The warning before the page closes or reloads with work that is not saved.
 
@@ -38,17 +39,25 @@ export function holdUnsaved(): () => void {
 export type UnsentScope = {
   /** What the window holds unsent, such as "comment", each name once. */
   held: () => string[]
-  /** Holds `what` until the answered function is called. */
-  hold: (what: string) => () => void
+  /** Holds `what` until the answered function is called. `onDiscard` runs
+      when a Discard on this window or one around it throws `what` away, for
+      a holder that may outlive the close, so the text goes all the same. */
+  hold: (what: string, onDiscard?: () => void) => () => void
   /** Lets the close the person chose to discard go ahead, which can land a
       moment later, after a history step: the window, and every window
-      inside it, reports nothing for DISCARD_MS, or until its leases end or
-      a new one begins. A window that stays open after all asks again from
-      then on. */
-  discard: () => void
+      inside it, reports nothing for DISCARD_MS, or until a new lease
+      begins. A window that stays open after all asks again from then on.
+      Runs the leases' onDiscard. `how` is 'chosen' when the person chose
+      Discard or a notice names what went, and 'unasked' for a close that
+      goes ahead without the question, such as after the task was archived,
+      whose editors still say what went. */
+  discard: (how?: 'chosen' | 'unasked') => void
   /** Whether a Discard on this window or one around it is letting a close
-      go ahead now. */
+      go ahead now, also while that close ends the window's leases. */
   discarded: () => boolean
+  /** Whether that Discard was chosen (discard), so an editor that unmounts
+      with the close says nothing more of its text. */
+  chosen: () => boolean
 }
 
 /** How long a Discard lets the close it answered go ahead. */
@@ -56,25 +65,32 @@ export const DISCARD_MS = 1500
 
 /** A window's scope, inside `parent` when the window opens in another. */
 export function createUnsentScope(parent: UnsentScope | null = null): UnsentScope {
-  const own = new Map<symbol, string>()
+  const own = new Map<symbol, { what: string; onDiscard?: () => void }>()
   let discardedAt: number | null = null
-  const discarded = () =>
-    (discardedAt !== null && Date.now() - discardedAt < DISCARD_MS) || !!parent?.discarded()
+  let chosenAt: number | null = null
+  const lasts = (at: number | null) => at !== null && Date.now() - at < DISCARD_MS
+  const discarded = () => lasts(discardedAt) || !!parent?.discarded()
   return {
-    held: () => (discarded() ? [] : [...new Set(own.values())]),
+    held: () => (discarded() ? [] : [...new Set([...own.values()].map((lease) => lease.what))]),
     discarded,
-    hold: (what) => {
+    chosen: () => lasts(chosenAt) || !!parent?.chosen(),
+    hold: (what, onDiscard) => {
       const lease = Symbol()
-      own.set(lease, what)
+      own.set(lease, { what, onDiscard })
       discardedAt = null
-      const outer = parent?.hold(what)
+      chosenAt = null
+      // the window around runs it, as a Discard there throws `what` away too
+      const outer = parent?.hold(what, onDiscard)
       return () => {
-        if (own.delete(lease) && !own.size) discardedAt = null
+        own.delete(lease)
         outer?.()
       }
     },
-    discard: () => {
-      if (own.size) discardedAt = Date.now()
+    discard: (how = 'chosen') => {
+      if (!own.size) return
+      discardedAt = Date.now()
+      chosenAt = how === 'chosen' ? discardedAt : null
+      for (const lease of [...own.values()]) lease.onDiscard?.()
     },
   }
 }
@@ -93,19 +109,26 @@ export function useUnsentScope() {
     has not sent. `what` names the text in the window's question; null keeps
     the lease out of it, for a lease that only the page's close warns about.
     `within` holds it in a scope of the component's own inside the window's
-    (useUnsentScope). */
-export function useUnsaved(unsaved: boolean, what: string | null = 'text', within?: UnsentScope) {
+    (useUnsentScope). `onDiscard` runs when the person chooses Discard for
+    it (UnsentScope.hold). */
+export function useUnsaved(
+  unsaved: boolean,
+  what: string | null = 'text',
+  within?: UnsentScope,
+  onDiscard?: () => void,
+) {
   const windowScope = useContext(UnsentScopeContext)
   const scope = within ?? windowScope
+  const discarded = useLatest(() => onDiscard?.())
   useLayoutEffect(() => {
     if (!unsaved) return
     const release = holdUnsaved()
-    const leave = what === null ? undefined : scope?.hold(what)
+    const leave = what === null ? undefined : scope?.hold(what, discarded)
     return () => {
       release()
       leave?.()
     }
-  }, [unsaved, scope, what])
+  }, [unsaved, scope, what, discarded])
 }
 
 /** Lets the page leave without the warning, for a reload the person chose

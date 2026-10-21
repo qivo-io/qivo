@@ -5,7 +5,6 @@
    (docs/team-sync-brief.md, "Each row carries"). */
 import { memo, type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { AssigneeAvatar, OwnerPickList } from '@/components/AssigneeAvatar'
-import { closeOrAsk, questionOpen } from '@/components/DiscardPrompt'
 import {
   AnchoredPop,
   Avatar,
@@ -21,27 +20,30 @@ import { Button } from '@/components/ui/button'
 import { PopoverContent, Popover as PopoverRoot, PopoverTrigger } from '@/components/ui/popover'
 import { Textarea } from '@/components/ui/textarea'
 import { HoverTooltip } from '@/components/ui/tooltip'
-import { planHint, RemainingInput, type Reviewed, ReviewTick } from '@/components/walk'
-import { useUnsaved, useUnsentScope } from '@/lib/leaveGuard'
+import { RemainingInput, ReviewTick } from '@/components/walk'
+import { planHint, type Reviewed } from '@/components/walkRows'
+import { closeOrAsk, questionOpen } from '@/lib/discardQuestion'
+import { type UnsentScope, UnsentScopeContext, useUnsaved, useUnsentScope } from '@/lib/leaveGuard'
 import {
   bannerVerdict,
   dayLabel,
   type LoadFigure,
-  loadFigure,
   mentionBody,
   rowMarks,
   type SinceMark,
+  type SyncCardPlace,
   type SyncDay,
   waitingLabel,
 } from '@/lib/teamSync'
 import { useUpdateBlocker } from '@/lib/updateSafety'
 import { useMenuBackLayer, useMobileBackLayer } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
-import { fmtHours, plannableHoursOf } from '@/lib/workload'
+import { fmtHours } from '@/lib/workload'
 import { type IssueVM, P, type UserVM } from '@/store/planner'
 import type { StoreVersion } from '@/store/updates'
 import { TEXT_MAX } from '../../../convex/lib/textLimits'
 import { DelayBanner } from '../kanbanCards'
+import { weekFigure } from './weekFigure'
 
 /** What every card on one page shares: whose page it is, their reading
     point, and the page's callbacks. */
@@ -63,18 +65,30 @@ export type PageCtx = {
   setPrompt: (handle: string | null) => void
   onOpenTask: (handle: string) => void
   onShowTask: (view: 'kanban' | 'roadmap', handle: string) => void
+  /** each mounted card's scope of unsent text, with its task and section's
+      person, which a scope switch reads to ask only about the cards it
+      takes away */
+  cards: Map<UnsentScope, SyncCardPlace>
+}
+
+/** The scope of the text typed in one card, inside the page's, registered
+    in `ctx.cards` while the card is mounted. */
+function useCardScope(ctx: PageCtx, uuid: string) {
+  const scope = useUnsentScope()
+  const { cards, owner } = ctx
+  useLayoutEffect(() => {
+    cards.set(scope, { task: uuid, owner })
+    return () => {
+      cards.delete(scope)
+    }
+  }, [cards, scope, uuid, owner])
+  return scope
 }
 
 /* The task window's words for every control a read-only viewer finds off. */
 const READ_ONLY = 'Read-only project access'
 
 const firstName = (name: string) => name.split(' ')[0]
-
-/** A person's week as the Team strip reads it: org-wide hours (P.weekLoadOf)
-    over plannable hours, in the strip's colour rule. */
-export function weekFigure(u: UserVM): LoadFigure {
-  return loadFigure(P.weekLoadOf(u.id, P.TODAY_WEEK), plannableHoursOf(u))
-}
 
 const LOAD_FILL: Record<LoadFigure['tone'], string> = {
   normal: 'bg-[color-mix(in_oklab,var(--primary)_16%,transparent)]',
@@ -170,8 +184,10 @@ function StatusCtl({ it, ctx, canWrite }: { it: IssueVM; ctx: PageCtx; canWrite:
           icon: <StatusDot status={s.id} />,
         }))}
         onChange={(v) => {
-          P.updateIssue(it.id, { status: v })
-          ctx.touched(it)
+          // the row counts as touched once the server saves the move
+          void P.updateIssue(it.id, { status: v }).then((saved) => {
+            if (saved) ctx.touched(it)
+          })
           if (v === 'review' && !it.reviewer) ctx.setPrompt(it.id)
         }}
         action={{
@@ -184,8 +200,9 @@ function StatusCtl({ it, ctx, canWrite }: { it: IssueVM; ctx: PageCtx; canWrite:
             />
           ),
           onSelect: () => {
-            P.updateIssue(it.id, { paused: !it.paused })
-            ctx.touched(it)
+            void P.updateIssue(it.id, { paused: !it.paused }).then((saved) => {
+              if (saved) ctx.touched(it)
+            })
           },
         }}
       />
@@ -277,7 +294,11 @@ export function MentionCtl({
   // kept note holds back an app update even while the window is closed.
   const [kept, setKept] = useState(false)
   useUpdateBlocker((open || kept) && text.trim() !== '')
-  useUnsaved((open || kept) && text.trim() !== '', 'note')
+  // a Discard throws the note away even while its card stays on the page
+  useUnsaved((open || kept) && text.trim() !== '', 'note', undefined, () => {
+    setKept(false)
+    setText('')
+  })
   // A note neither sent nor kept is gone once the window closes, so a close
   // asks first (DiscardPrompt), except the one Cancel or a saved note makes.
   const noteWindow = useUnsentScope()
@@ -552,105 +573,110 @@ function SyncCardView({ it, ctx, later }: SyncCardProps) {
       markTitle="Mark reviewed"
     />
   )
+  const scope = useCardScope(ctx, it.uuid)
   return (
-    <div
-      data-sync-card={it.id}
-      className={cn(
-        'board-card overflow-hidden rounded-md border border-border bg-surface-1 shadow-card',
-        later && 'opacity-60 focus-within:opacity-100 hover:opacity-100',
-      )}
-    >
-      <DelayBanner it={it} />
-      <div className="flex flex-col gap-2 p-2">
-        <div className="flex items-start gap-2">
-          <TitleButton
-            it={it}
-            ctx={ctx}
-            className="flex-1 break-words text-base font-medium leading-[1.35]"
-          />
-          {it.paused && (
-            <HoverTooltip content="Paused">
-              <PausedMark className="mt-0.5" />
-            </HoverTooltip>
-          )}
-          {ctx.mobile && tick}
-        </div>
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-3">
-          <IssueKey id={it.key} dim />
-          <span className="truncate">
-            <ProjectNameOf id={it.project} />
-          </span>
-          {hint && <span className="!font-mono">{hint}</span>}
-          {it.start != null && it.due && (
-            <span className={cn('!font-mono', dueLate && 'font-semibold text-danger')}>
-              due {P.fmtISO(it.due)}
-            </span>
-          )}
-        </div>
-        {hasMarks && (
-          <div
-            data-sync-marks
-            className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-3"
-          >
-            {marks.noEstimate && <span className="text-warning">no estimate</span>}
-            {marks.noReviewer && <span className="text-warning">no reviewer</span>}
-            {marks.blockedBy.length > 0 && (
-              <span data-sync-blocked className="inline-flex items-center gap-1 text-text-2">
-                <Icon name="blocked" size={12} color="var(--danger)" strokeWidth={2.2} />
-                blocked by <span className="!font-mono">{marks.blockedBy.join(', ')}</span>
-              </span>
+    <UnsentScopeContext.Provider value={scope}>
+      <div
+        data-sync-card={it.id}
+        className={cn(
+          'board-card overflow-hidden rounded-md border border-border bg-surface-1 shadow-card',
+          later && 'opacity-60 focus-within:opacity-100 hover:opacity-100',
+        )}
+      >
+        <DelayBanner it={it} />
+        <div className="flex flex-col gap-2 p-2">
+          <div className="flex items-start gap-2">
+            <TitleButton
+              it={it}
+              ctx={ctx}
+              className="flex-1 break-words text-base font-medium leading-[1.35]"
+            />
+            {it.paused && (
+              <HoverTooltip content="Paused">
+                <PausedMark className="mt-0.5" />
+              </HoverTooltip>
             )}
-            {marks.since && <SinceText mark={marks.since} now={ctx.now} />}
-            {reviewFor && (
-              <span className="inline-flex items-center gap-1.5 text-text-2">
-                <Avatar id={reviewFor.id} size={20} />
-                for {firstName(reviewFor.name)}
+            {ctx.mobile && tick}
+          </div>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-3">
+            <IssueKey id={it.key} dim />
+            <span className="truncate">
+              <ProjectNameOf id={it.project} />
+            </span>
+            {hint && <span className="!font-mono">{hint}</span>}
+            {it.start != null && it.due && (
+              <span className={cn('!font-mono', dueLate && 'font-semibold text-danger')}>
+                due {P.fmtISO(it.due)}
               </span>
             )}
           </div>
-        )}
-        {/* Two groups that wrap rather than clip: the edits (Remaining,
+          {hasMarks && (
+            <div
+              data-sync-marks
+              className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-3"
+            >
+              {marks.noEstimate && <span className="text-warning">no estimate</span>}
+              {marks.noReviewer && <span className="text-warning">no reviewer</span>}
+              {marks.blockedBy.length > 0 && (
+                <span data-sync-blocked className="inline-flex items-center gap-1 text-text-2">
+                  <Icon name="blocked" size={12} color="var(--danger)" strokeWidth={2.2} />
+                  blocked by <span className="!font-mono">{marks.blockedBy.join(', ')}</span>
+                </span>
+              )}
+              {marks.since && <SinceText mark={marks.since} now={ctx.now} />}
+              {reviewFor && (
+                <span className="inline-flex items-center gap-1.5 text-text-2">
+                  <Avatar id={reviewFor.id} size={20} />
+                  for {firstName(reviewFor.name)}
+                </span>
+              )}
+            </div>
+          )}
+          {/* Two groups that wrap rather than clip: the edits (Remaining,
             status, owner) and, pushed right, the ways out (mention, jumps,
             tick), which drop to a second line when the column is narrow. One
             line on a phone, whose controls are 44px: tighter gaps and a
             narrower box, the two jumps folded into one menu (RowJumps) and
             the tick up beside the title. */}
-        <div
-          data-sync-controls
-          className={cn(
-            'mt-1 flex flex-wrap items-center gap-y-1.5 border-t border-border pt-2',
-            ctx.mobile ? 'gap-x-1' : 'gap-x-2',
-          )}
-        >
-          <span className={cn('inline-flex shrink-0 items-center', ctx.mobile ? 'gap-1' : 'gap-2')}>
-            <RemainingInput
-              hook="sync"
-              it={it}
-              title={canWrite ? 'Remaining hours. Leave empty for no estimate' : READ_ONLY}
-              disabled={!canWrite}
-              onCommit={ctx.touched}
-              className={cn(ctx.mobile && 'w-12', it.remaining == null && 'border-warning')}
-            />
-            <span className="text-sm text-text-3">h</span>
-            <StatusCtl it={it} ctx={ctx} canWrite={canWrite} />
-            <span ref={ownerRef} data-sync-owner={it.id} className="inline-flex shrink-0">
-              <AssigneeAvatar
-                issue={it}
-                variant="chevron"
-                backLayer
-                onPick={() => ctx.touched(it)}
+          <div
+            data-sync-controls
+            className={cn(
+              'mt-1 flex flex-wrap items-center gap-y-1.5 border-t border-border pt-2',
+              ctx.mobile ? 'gap-x-1' : 'gap-x-2',
+            )}
+          >
+            <span
+              className={cn('inline-flex shrink-0 items-center', ctx.mobile ? 'gap-1' : 'gap-2')}
+            >
+              <RemainingInput
+                hook="sync"
+                it={it}
+                title={canWrite ? 'Remaining hours. Leave empty for no estimate' : READ_ONLY}
+                disabled={!canWrite}
+                onCommit={ctx.touched}
+                className={cn(ctx.mobile && 'w-12', it.remaining == null && 'border-warning')}
               />
+              <span className="text-sm text-text-3">h</span>
+              <StatusCtl it={it} ctx={ctx} canWrite={canWrite} />
+              <span ref={ownerRef} data-sync-owner={it.id} className="inline-flex shrink-0">
+                <AssigneeAvatar
+                  issue={it}
+                  variant="chevron"
+                  backLayer
+                  onPick={() => ctx.touched(it)}
+                />
+              </span>
             </span>
-          </span>
-          <span className="ml-auto inline-flex shrink-0 items-center">
-            <MentionCtl it={it} initial={marks.reviewFor} onSent={() => ctx.touched(it)} />
-            <RowJumps it={it} ctx={ctx} />
-            {!ctx.mobile && <span className="ml-2 inline-flex">{tick}</span>}
-          </span>
+            <span className="ml-auto inline-flex shrink-0 items-center">
+              <MentionCtl it={it} initial={marks.reviewFor} onSent={() => ctx.touched(it)} />
+              <RowJumps it={it} ctx={ctx} />
+              {!ctx.mobile && <span className="ml-2 inline-flex">{tick}</span>}
+            </span>
+          </div>
         </div>
+        {ctx.prompt === it.id && <ReviewerPrompt it={it} ctx={ctx} anchor={ownerRef} />}
       </div>
-      {ctx.prompt === it.id && <ReviewerPrompt it={it} ctx={ctx} anchor={ownerRef} />}
-    </div>
+    </UnsentScopeContext.Provider>
   )
 }
 
@@ -727,19 +753,22 @@ export function WaitingItem({
   since: number | null
   ctx: PageCtx
 }) {
+  const scope = useCardScope(ctx, it.uuid)
   return (
-    <div data-sync-waiting={it.id} className="flex min-w-0 items-center gap-2 px-1 text-sm">
-      <span className="inline-flex shrink-0">
-        <IssueKey id={it.key} dim />
-      </span>
-      <TitleButton it={it} ctx={ctx} className="flex-1 truncate text-text-2" />
-      <Avatar id={reviewer} size={20} />
-      {since != null && (
-        <span className="whitespace-nowrap text-xs text-text-3">
-          {waitingLabel(since, ctx.now)}
+    <UnsentScopeContext.Provider value={scope}>
+      <div data-sync-waiting={it.id} className="flex min-w-0 items-center gap-2 px-1 text-sm">
+        <span className="inline-flex shrink-0">
+          <IssueKey id={it.key} dim />
         </span>
-      )}
-      <MentionCtl it={it} initial={reviewer} onSent={ctx.stamp} />
-    </div>
+        <TitleButton it={it} ctx={ctx} className="flex-1 truncate text-text-2" />
+        <Avatar id={reviewer} size={20} />
+        {since != null && (
+          <span className="whitespace-nowrap text-xs text-text-3">
+            {waitingLabel(since, ctx.now)}
+          </span>
+        )}
+        <MentionCtl it={it} initial={reviewer} onSent={ctx.stamp} />
+      </div>
+    </UnsentScopeContext.Provider>
   )
 }

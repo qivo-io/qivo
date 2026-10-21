@@ -32,8 +32,16 @@ import {
 } from '../../convex/lib/projectCreators'
 import { creatorGrant, grantsAfterHandover } from '../../convex/lib/projectGrants'
 import { resolveReviewHours, reviewStamp } from '../../convex/lib/review'
+import { REMAINING_HOURS_MAX, REMAINING_HOURS_RULE } from '../../convex/lib/taskLimits'
 import { firstSittingDay, nextSyncStamp } from '../../convex/lib/teamSync'
-import { NAME_MAX, nameOverCap, TEXT_MAX, TEXT_MAX_LABEL } from '../../convex/lib/textLimits'
+import {
+  COMMENT_TOO_LONG,
+  DESCRIPTION_TOO_LONG,
+  NAME_MAX,
+  nameOverCap,
+  TEXT_MAX,
+  TEXT_MAX_LABEL,
+} from '../../convex/lib/textLimits'
 import { armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
 import { avatarCacheScope, createAvatarImageCache } from '../lib/avatarImageCache'
 import { createAvatarSources } from '../lib/avatarSources'
@@ -713,6 +721,18 @@ function dropDeletedTasks(gone: Set<string>, at: string) {
   purgeIssueRows(gone)
 }
 
+/* What a click on a desktop notification runs: App's own way into the inbox,
+   so the click asks before it closes a window with unsent text, as the Inbox
+   button does, and the address follows only once the move goes ahead. A
+   refused click adds no history entry. Null while no App is mounted. */
+let inboxOpener: (() => void) | null = null
+
+/** Sets what a click on a desktop notification runs (App's openInbox), or
+    null to drop it. */
+function setInboxOpener(open: (() => void) | null) {
+  inboxOpener = open
+}
+
 /* Raises a desktop notification for each message of delivery `snap` that is
    new since the last one, and for each item back from a snooze. It reads
    the delivery, not the painted rows, so the person's own pending changes,
@@ -740,20 +760,8 @@ function announceNewMessages(snap: Snapshot) {
     const cur = returned.get(m.issue_id)
     if (!cur || isNewer(cur.created_at, cur.id, m.created_at, m.id)) returned.set(m.issue_id, m)
   })
-  /* Navigate the way Back does. This used to assign location.hash, which
-     fires `hashchange` — and nothing in the app has ever listened for
-     one (App listens for `popstate`), so clicking a desktop notification
-     moved the address bar and left the app where it was. Pushing the
-     entry and dispatching the event the router already handles makes the
-     click actually open the inbox. */
-  const openInbox = () => {
-    // the literal rather than router.ts's APP_PREFIX/ORG_NONE: router.ts
-    // imports THIS module, so importing it back would close a cycle for
-    // the sake of two constants. The inbox is about no one organization,
-    // hence the `~` segment.
-    history.pushState(null, '', '/app/~/inbox')
-    window.dispatchEvent(new PopStateEvent('popstate'))
-  }
+  // a click on the notification opens the inbox (setInboxOpener)
+  const openInbox = () => inboxOpener?.()
   const titleOf = (m: Row<'messages'>) => {
     const iss = issues.get(m.issue_id)
     return (iss ? iss.title : m.issue_title) || m.issue_title
@@ -921,8 +929,9 @@ const emit = (section?: Parameters<typeof updates.emit>[0]) => {
 }
 
 /** What a workspace emit shows: the rows outside the inbox, every value
-    rebuild() derives from them, and whether a write waits, which Roadmap's
-    undo reads (P.roadmapUndo). The layers' paints show in the rows. */
+    rebuild() derives from them, Roadmap's undo history and whether a write
+    waits, which its undo reads too (P.roadmapUndo). The layers' paints show
+    in the rows. */
 function shownWorkspace() {
   const P = PLANNER
   return {
@@ -955,6 +964,9 @@ function shownWorkspace() {
       P.canRemoveRead,
       P.CURRENT_USER,
       P.contextVersion,
+      // Roadmap's undo (P.roadmapUndo), which a task edit's answer ends
+      roadmapVisit?.count ?? 0,
+      !roadmapVisit || roadmapVisit.disabled,
     ],
     waiting: layers.waiting(),
   }
@@ -1109,21 +1121,25 @@ function repaint(parts: { workspace?: boolean; thread?: boolean }) {
   }
 }
 
-/* The parts asked to repaint while together() runs its step. */
-let heldRepaint: { workspace: boolean; thread: boolean } | null = null
+/* The parts asked to repaint while together() runs its step, and whether
+   something outside the rows changed that a workspace emit shows (emit). */
+let heldRepaint: { workspace: boolean; thread: boolean; emit: boolean } | null = null
 
 /** Runs `step`, which settles several layers, and repaints what they asked
     for once at its end. React renders after each emit, so one repaint per
     layer would render the screen once for each. */
 function together(step: () => void) {
   if (heldRepaint) return step()
-  heldRepaint = { workspace: false, thread: false }
+  heldRepaint = { workspace: false, thread: false, emit: false }
   try {
     step()
   } finally {
     const parts = heldRepaint
     heldRepaint = null
-    if (parts.workspace || parts.thread) repaint(parts)
+    // a repaint shows the emit's change too, as one render
+    if (parts.workspace || parts.thread)
+      repaint({ workspace: parts.workspace || parts.emit, thread: parts.thread })
+    else if (parts.emit) emit()
   }
 }
 
@@ -1245,9 +1261,9 @@ type SendOptions<R> = {
   /** Runs on a field_changed refusal once the paint has gone, for an
       editor that keeps the person's draft, with the value of the write's
       first `over` field now on screen. It answers false when the editor
-      has moved on and keeps nothing; otherwise the notice, which shows
-      after it, says the draft is kept. */
-  keepDraft?: (shown: unknown) => boolean | void
+      has moved on and keeps nothing, and true when it keeps the draft,
+      which the notice that shows after it then says. */
+  keepDraft?: (shown: unknown) => boolean
 }
 
 /** What a write shows: a view, an open layer it was collected in (a Roadmap
@@ -1348,6 +1364,9 @@ function start<M extends FunctionReference<'mutation'>, T>(
   }
   const epoch = storeEpoch
   const releaseUpdate = beginUpdateBlock()
+  // an accepted task content write ends the Roadmap's undo history
+  const visit = roadmapVisit
+  const clearsHistory = !!visit && !visit.disabled && isTaskContentWrite(name)
   let sent: Promise<FunctionReturnType<M>>
   try {
     sent = dispatch(m, sentArgs, o.about)
@@ -1364,9 +1383,15 @@ function start<M extends FunctionReference<'mutation'>, T>(
           next = o.keep?.(result)
           o.onOk?.(result)
         })
-        guarded(() => settleAccepted(layer, next))
+        // the history's end and the settle show in one render
+        guarded(() =>
+          together(() => {
+            if (clearsHistory) clearRoadmapHistory(visit)
+            settleAccepted(layer, next)
+          }),
+        )
         guarded(() => o.onSettled?.())
-      }
+      } else if (clearsHistory) clearRoadmapHistory(visit)
       return answer(result)
     },
     (error) => {
@@ -1639,7 +1664,9 @@ function clearRoadmapHistory(visit: RoadmapVisit) {
   if (roadmapVisit !== visit || visit.disabled) return
   visit.count = 0
   visit.disabled = true
-  emit()
+  // inside together(), with the repaint at its end
+  if (heldRepaint) heldRepaint.emit = true
+  else emit()
 }
 
 function expireRoadmapHistory() {
@@ -1737,11 +1764,22 @@ const errData = (e: unknown): ErrData => (e instanceof ConvexError ? (e.data as 
    name the reason, and for a pending deletion its date, so they show verbatim. */
 const readOnly = (d: ErrData) =>
   d.reason === 'billing_required' || d.reason === 'deletion_scheduled'
-/** Capitalizes a refusal message and ends it with a period unless it already
-    ends in `.`, `!` or `?`. Server messages are often lowercase fragments,
-    and a toast joins them with a sentence of its own. */
+/** The app's words for the field rules a person can meet in it, which the
+    server says in the API's terms (REST and MCP keep them as they are). */
+const APP_RULE_WORDS = new Map([
+  [
+    REMAINING_HOURS_RULE,
+    `Remaining time must be between 0 and ${REMAINING_HOURS_MAX.toLocaleString('en-US')} hours.`,
+  ],
+  [DESCRIPTION_TOO_LONG, TEXT_TOO_LONG.description],
+  [COMMENT_TOO_LONG, TEXT_TOO_LONG.comment],
+])
+/** A refusal message as the app shows it: its own words for a field rule
+    (APP_RULE_WORDS), else the message capitalized and ending with a period
+    unless it already ends in `.`, `!` or `?`. Server messages are often
+    lowercase fragments, and a toast joins them with a sentence of its own. */
 const asSentence = (m: string) =>
-  m.charAt(0).toUpperCase() + m.slice(1) + (/[.!?]$/.test(m) ? '' : '.')
+  APP_RULE_WORDS.get(m) ?? m.charAt(0).toUpperCase() + m.slice(1) + (/[.!?]$/.test(m) ? '' : '.')
 
 /* --- snapshot health ---------------------------------------------------------
    The live snapshot (snapshot.forMe) can stop loading mid-session, after a
@@ -2469,8 +2507,6 @@ function dispatch<M extends FunctionReference<'mutation'>>(
   if (isPausedWrite(name))
     return Promise.reject(new ConvexError({ code: 'paused', message: pausedText(name) }))
   const releaseUpdate = beginUpdateBlock()
-  const visit = roadmapVisit
-  const clearsHistory = visit && !visit.disabled && isTaskContentWrite(name)
   const change =
     about.background || BACKGROUND_WRITES.has(name) ? null : describeWrite(name, args, about.task)
   const scope = change && noteScope(args)
@@ -2491,7 +2527,6 @@ function dispatch<M extends FunctionReference<'mutation'>>(
         // that the interface already disposed.
         if (DEMO_MODE && epoch !== storeEpoch)
           throw new ConvexError({ code: 'forbidden', message: 'Your demo has expired.' })
-        if (clearsHistory) clearRoadmapHistory(visit)
         return result
       })
       .catch((error) => {
@@ -4033,6 +4068,7 @@ export type IssueFilters = {
 /* --- the public store --------------------------------------------------------- */
 export const PLANNER = {
   roadmapContext,
+  setInboxOpener,
   get roadmapUndo() {
     return {
       count: roadmapVisit?.count ?? 0,
@@ -5359,7 +5395,7 @@ export const PLANNER = {
   updateIssue: (
     id: string,
     patch: IssuePatch,
-    opts: { seen?: Partial<Row<'issues'>>; keepDraft?: (shown: unknown) => boolean | void } = {},
+    opts: { seen?: Partial<Row<'issues'>>; keepDraft?: (shown: unknown) => boolean } = {},
   ): Promise<boolean> => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
@@ -6322,7 +6358,7 @@ export const PLANNER = {
   updateComment: (
     id: string,
     body: string,
-    opts: { seen?: string; keepDraft?: (shown: unknown) => boolean | void } = {},
+    opts: { seen?: string; keepDraft?: (shown: unknown) => boolean } = {},
   ): Promise<boolean> => {
     const rec = rows.comments.get(id)
     const text = (body || '').trim()

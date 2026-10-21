@@ -13,6 +13,13 @@ export const TEXT_MAX = 20_000
  * so the Convex runtime needs no Intl; a test keeps it equal to TEXT_MAX. */
 export const TEXT_MAX_LABEL = '20,000'
 
+/* The refusals of text over TEXT_MAX. They are `rule` refusals, so the app
+ * can show them to a tab that skipped its own check (one loaded before the
+ * cap), in its own words (src/store/planner.ts asSentence); REST and MCP
+ * answer them as written. */
+export const DESCRIPTION_TOO_LONG = `description must be at most ${TEXT_MAX_LABEL} characters`
+export const COMMENT_TOO_LONG = `a comment must be at most ${TEXT_MAX_LABEL} characters`
+
 /** The longest name of a project, sub-project, team, milestone or
  * organization, and of an agent key or personal token. Names count code
  * points ([...name].length), as task titles and display names do, so most

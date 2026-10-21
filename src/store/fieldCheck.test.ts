@@ -3,6 +3,8 @@ import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { descriptionForm, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
 import type { FieldChange } from '../../convex/lib/functions'
+import { REMAINING_HOURS_RULE } from '../../convex/lib/taskLimits'
+import { DESCRIPTION_TOO_LONG } from '../../convex/lib/textLimits'
 import { plannerFixture as fixture, type Snapshot } from './plannerFixture.setup'
 
 /* The field check in the app's store: every edit of an existing record
@@ -202,7 +204,7 @@ describe('the field check in the store', () => {
     // the store takes a thread's first answer after a 0 ms timer
     await new Promise((resolve) => setTimeout(resolve, 0))
     await settle()
-    void P.updateComment('c-1', 'Second take', { seen: 'First take', keepDraft: () => {} })
+    void P.updateComment('c-1', 'Second take', { seen: 'First take', keepDraft: () => true })
     expect(latest()).toMatchObject({
       name: 'comments:update',
       args: { expected: { body: printOf('First take') } },
@@ -329,6 +331,7 @@ describe('the field check in the store', () => {
       {
         keepDraft: (shown) => {
           kept.push(shown, P.issueById[key('task-1')].description)
+          return true
         },
       },
     )
@@ -338,5 +341,26 @@ describe('the field check in the store', () => {
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
       'Not saved. Emil Berg changed the description of QN-1. Your text is still in the editor. Save again to replace their version.',
     )
+  })
+
+  it("says a field rule the server refuses in the app's words", async () => {
+    const refuse = (message: string) => new ConvexError({ code: 'rule', message })
+    P.updateIssue(key('task-1'), { remaining: 120_000 })
+    latest().reject(refuse(REMAINING_HOURS_RULE))
+    await settle()
+    expect(showToast.mock.calls.at(-1)?.[0]).toBe(
+      'Remaining time must be between 0 and 99,999.9 hours. Change reverted.',
+    )
+    P.updateIssue(key('task-1'), { description: 'Long text' })
+    latest().reject(refuse(DESCRIPTION_TOO_LONG))
+    await settle()
+    expect(showToast.mock.calls.at(-1)?.[0]).toBe(
+      'Description too long to save. The limit is 20,000 characters, including formatting. Change reverted.',
+    )
+    // a rule without words of the app's own reads as the server says it
+    P.updateIssue(key('task-1'), { status: 'progress' })
+    latest().reject(refuse('the parent task is archived'))
+    await settle()
+    expect(showToast.mock.calls.at(-1)?.[0]).toBe('The parent task is archived. Change reverted.')
   })
 })

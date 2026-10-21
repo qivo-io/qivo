@@ -1,6 +1,6 @@
-/* The size limits of one task's family and followers, shared by the
- * server's model layer and the app, which disables the controls that would
- * pass them. No imports, so the app can import this file as it does
+/* The size limits of one task's family, followers and remaining hours,
+ * shared by the server's model layer and the app, which disables the
+ * controls that would pass them. No imports, so the app can import this file as it does
  * textLimits.ts.
  *
  * A task has one level of subtasks: a subtask has no subtasks of its own.
@@ -30,3 +30,14 @@ export const PARENT_FULL = `the parent task already has ${SUBTASK_MAX} subtasks,
 
 /** The refusal of a follow by hand on a task with FOLLOWER_MAX followers. */
 export const FOLLOWERS_FULL = `this task already has ${FOLLOWER_MAX} followers, the most a task can have`
+
+/** The most remaining hours a task takes, the range of the numeric(6,1)
+ * column the hours came from. The app, REST and MCP refuse more with
+ * REMAINING_HOURS_RULE (model/taskValues.ts cleanRemaining), and MCP's task
+ * schemas publish it as `maximum`. */
+export const REMAINING_HOURS_MAX = 99_999.9
+
+/** The refusal of remaining hours outside 0..REMAINING_HOURS_MAX. A `rule`,
+ * so the app shows it, in its own words (src/store/planner.ts asSentence);
+ * REST answers it as a 400 either way. */
+export const REMAINING_HOURS_RULE = `remaining_hours must be a number of hours from 0 to ${REMAINING_HOURS_MAX}, or null`

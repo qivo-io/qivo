@@ -1,6 +1,6 @@
 import type { Ref } from 'react'
 import { createPortal } from 'react-dom'
-import { useAppearance } from '../AppearanceProvider'
+import { useAppearance } from '../lib/appearanceContext'
 
 /* Keep one filtered photograph fixed to the viewport. The union clip follows
    visible panel shapes without re-capturing a live backdrop during scrolling. */

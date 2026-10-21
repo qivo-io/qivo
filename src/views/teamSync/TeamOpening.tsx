@@ -24,7 +24,8 @@ import {
 import { cn } from '@/lib/utils'
 import { type IssueVM, P, type UserVM } from '@/store/planner'
 import type { StoreVersion } from '@/store/updates'
-import { LoadChip, type PageCtx, TitleButton, weekFigure } from './SyncCard'
+import { LoadChip, type PageCtx, TitleButton } from './SyncCard'
+import { weekFigure } from './weekFigure'
 
 function Fact({
   label,

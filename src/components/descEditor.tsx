@@ -1,12 +1,16 @@
 import { Button } from '@/components/ui/button'
-import { HoverTooltip, hasOpenTooltip } from '@/components/ui/tooltip'
+import { HoverTooltip } from '@/components/ui/tooltip'
+import { hasOpenTooltip } from '@/lib/passEscapeOn'
 /* Rich editor for the lib/md dialect; viewers use Markdown. Load through
    parseMd -> astToDoc, save through docToAst -> astToMd and reparse to a fixed
    point. updateIssue GC preserves images referenced by new or previous text.
    Editable users load this component lazily.
 
    Save/Mod-S commits; blur retains drafts and dirty unmount discards with a
-   toast. Escape closes popovers, then, once the person confirms the discard
+   toast, unless the person chose Discard. Escape inside the text is
+   ProseMirror's, which prevents its default, so it leaves the draft and the
+   window as they are. Escape on the editor's controls (toolbar, link pop,
+   buttons) closes popovers, then, once the person confirms the discard
    (DiscardPrompt), reverts dirty content and clears undo history so redo
    cannot resurrect reaped attachments, then reaches the modal only when
    clean. Toolbar mousedown preserves selection. Remote edits replace
@@ -56,6 +60,7 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState }
 import { createPortal } from 'react-dom'
 import { Input } from '@/components/ui/input'
 import { DropdownChevron } from '@/components/ui/select'
+import { closeOrAsk } from '@/lib/discardQuestion'
 import { TEXT_MAX, TEXT_MAX_LABEL } from '../../convex/lib/textLimits'
 import { compressImage } from '../lib/images'
 import { useUnsaved, useUnsentScope } from '../lib/leaveGuard'
@@ -64,7 +69,6 @@ import { MAX_PARSE, parseMd, sanitizeHref } from '../lib/md'
 import { astToMd } from '../lib/mdSerialize'
 import { beginUpdateBlock, useUpdateBlocker } from '../lib/updateSafety'
 import { P, TEXT_TOO_LONG } from '../store/planner'
-import { closeOrAsk } from './DiscardPrompt'
 import type { PMNode } from './descDoc'
 import { astToDoc, docToAst } from './descDoc'
 import { copyImage, downloadImage, openImageFull, toast } from './imgActions'
@@ -366,7 +370,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   // the description or comment typed here and not sent yet. One on its way
   // is the store's to keep or report, so closing does not ask about it. It
   // counts in the window's question and in this editor's own, which Escape
-  // asks before it throws the draft away.
+  // on the editor's controls asks before it throws the draft away.
   const draft = useUnsentScope()
   useUnsaved(dirty && !sending, isComment ? 'comment' : 'description', draft)
   const sendingRef = useRef(false)
@@ -1101,8 +1105,9 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     return () => {
       if (liveEditors.get(uuid) === entry) liveEditors.delete(uuid)
       // an unmount (modal closed, issue deleted remotely) drops any unsaved
-      // draft — say so, since only the Save button persists now
-      if (dirtyRef.current) toast('Unsaved description changes discarded')
+      // draft — say so, since only the Save button persists now, unless the
+      // person chose Discard in the close's question
+      if (dirtyRef.current && !draft.chosen()) toast('Unsaved description changes discarded')
       reapRef.current()
     }
     // by the task, so a handle that moves keeps the routing and the draft
@@ -1110,14 +1115,16 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
 
   // comment mode has no upload plumbing, but the same unmount contract: a
   // dirty draft (typed composer, half-edited comment) dies with the editor
-  // (modal closed, comment deleted remotely), so say so. A draft still being
-  // sent may yet be saved, so commit says so only after a refusal.
+  // (modal closed, comment deleted remotely), so say so, unless the person
+  // chose Discard in the close's question. A draft still being sent may yet
+  // be saved, so commit says so only after a refusal.
   useEffect(() => {
     if (!isComment) return
     closedRef.current = false
     return () => {
       closedRef.current = true
-      if (dirtyRef.current && !sendingRef.current) toast('Unsaved comment discarded')
+      if (dirtyRef.current && !sendingRef.current && !draft.chosen())
+        toast('Unsaved comment discarded')
     }
   }, [isComment])
 
@@ -1206,6 +1213,9 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     reconcile() // a clean editor catches up with any echo held while focused
   }
 
+  /* Escape from the editor's controls. One pressed inside the text arrives
+     with its default prevented (ProseMirror takes Escape), so it ends here
+     and the draft and the window stay as they are. */
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key !== 'Escape' || e.defaultPrevented || hasOpenTooltip()) return
     const ed = editorRef.current

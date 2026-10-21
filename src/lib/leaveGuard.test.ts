@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest'
-import { createUnsentScope, hasUnsaved, holdUnsaved, installLeaveGuard } from './leaveGuard'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  createUnsentScope,
+  DISCARD_MS,
+  hasUnsaved,
+  holdUnsaved,
+  installLeaveGuard,
+} from './leaveGuard'
 
 /** Dispatches a cancelable beforeunload and answers whether it was stopped. */
 function leave(win: EventTarget) {
@@ -56,8 +62,62 @@ describe('unsent scopes', () => {
     page.discard()
     expect(note.held()).toEqual([])
     expect(note.discarded()).toBe(true)
+    // the close ends the leases, and is still the Discard's own
     release()
+    expect(note.discarded()).toBe(true)
+    const again = note.hold('note')
     expect(page.discarded()).toBe(false)
+    again()
+  })
+
+  it('runs onDiscard for the leases a Discard throws away, also from the window around', () => {
+    const page = createUnsentScope()
+    const card = createUnsentScope(page)
+    const other = createUnsentScope(page)
+    const cleared: string[] = []
+    const note = card.hold('note', () => cleared.push('note'))
+    const title = other.hold('title', () => cleared.push('title'))
+    card.discard()
+    expect(cleared).toEqual(['note'])
+    page.discard()
+    expect(cleared).toEqual(['note', 'note', 'title'])
+    note()
+    title()
+    // a scope without leases has nothing to throw away
+    page.discard()
+    expect(cleared).toHaveLength(3)
+  })
+
+  it('tells a chosen Discard from a close that went ahead unasked', () => {
+    const task = createUnsentScope()
+    const editor = createUnsentScope(task)
+    const release = editor.hold('comment')
+    // the task was archived: the window closes without the question
+    task.discard('unasked')
+    expect(editor.discarded()).toBe(true)
+    expect(editor.chosen()).toBe(false)
+    release()
+    const again = editor.hold('comment')
+    task.discard()
+    expect(editor.chosen()).toBe(true)
+    again()
+    expect(editor.chosen()).toBe(true)
+  })
+
+  it('ends a discard after DISCARD_MS', () => {
+    vi.useFakeTimers()
+    try {
+      const scope = createUnsentScope()
+      const release = scope.hold('note')
+      scope.discard()
+      release()
+      vi.advanceTimersByTime(DISCARD_MS - 1)
+      expect(scope.discarded()).toBe(true)
+      vi.advanceTimersByTime(1)
+      expect(scope.discarded()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('reports nothing after a discard until a new lease begins', () => {

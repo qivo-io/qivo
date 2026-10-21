@@ -3,7 +3,7 @@
    page (src/views/TeamSync.tsx, hooks `data-sync-*`). One walk, two presets
    (docs/team-sync-brief.md): each piece takes the hook prefix of the walk it
    sits in, so drives keep telling the two apart. */
-import { type ReactNode, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useFieldUnsaved } from '@/lib/leaveGuard'
@@ -11,62 +11,11 @@ import { remainingPatchFromInput, remainingValue } from '@/lib/remaining'
 import { cn } from '@/lib/utils'
 import { type IssueVM, P, type UserVM } from '@/store/planner'
 import { Avatar, Icon } from './qivo'
-
-/** Which walk a piece sits in: its data hooks read `data-<hook>-…`. */
-export type WalkHook = 'ue' | 'sync'
+import type { WalkHook } from './walkRows'
 
 /* One data hook of a walk, e.g. `data-ue-jump="<profile uuid>"`. */
 function hook(walk: WalkHook, name: string, value = '') {
   return { [`data-${walk}-${name}`]: value }
-}
-
-/** Review ticks: session-local, keyed by task uuid, stored nowhere. An edit
-    ticks a row, the tick button toggles it. `count` intersects the caller's
-    LIVE rows, so the total adjusts when a task leaves the walk. */
-export function useReviewed() {
-  const [set, setSet] = useState(() => new Set<string>())
-  return {
-    has: (uuid: string) => set.has(uuid),
-    mark: (uuid: string) => setSet((s) => (s.has(uuid) ? s : new Set(s).add(uuid))),
-    toggle: (uuid: string) =>
-      setSet((s) => {
-        const n = new Set(s)
-        if (n.has(uuid)) n.delete(uuid)
-        else n.add(uuid)
-        return n
-      }),
-    count: (rows: readonly { uuid: string }[]) => rows.filter((it) => set.has(it.uuid)).length,
-  }
-}
-export type Reviewed = ReturnType<typeof useReviewed>
-
-/** Scheduled first by planned start week, then unscheduled by due date
-    (undated last): the same per-track ordering the roadmap uses, so the
-    list reads in "this week first" order. */
-export function rowOrder(a: IssueVM, b: IssueVM) {
-  if (a.start != null && b.start != null) return a.start - b.start
-  if (a.start != null) return -1
-  if (b.start != null) return 1
-  return a.due && b.due ? a.due.localeCompare(b.due) : a.due ? -1 : b.due ? 1 : 0
-}
-
-/** The plan in a row's meta line: `W40` or `W40–W41`, else `due 23 Sep`. */
-export function planHint(it: IssueVM) {
-  if (it.start != null) {
-    const a = P.weekNumLabel(it.start),
-      b = P.weekNumLabel(it.end)
-    return a === b ? a : `${a}–${b}`
-  }
-  if (it.due) return `due ${P.fmtDate(P.isoToDate(it.due))}`
-  return null
-}
-
-/** Blur a focused Remaining box of this walk so it commits: closing or
-    stepping away unmounts the box, and React fires no blur on unmount, so a
-    typed-but-uncommitted number would vanish. */
-export function flushWalkInput(walk: WalkHook) {
-  const el = document.activeElement
-  if (el instanceof HTMLElement && el.hasAttribute(`data-${walk}-input`)) el.blur()
 }
 
 /** The person rail: jump anywhere, the current person ringed, a check on
@@ -144,8 +93,9 @@ export function WalkRail({
     must not be the surface that quietly undoes someone else's edit.
     Commits on blur or Enter with the details pane's rule (lib/remaining):
     empty = unset, a stored 0 is a value, unparseable or unchanged text writes
-    nothing, so a bare tab-through is not an edit. `onCommit` runs after a
-    write. */
+    nothing, so a bare tab-through is not an edit. `onCommit` runs once the
+    server accepts the write, so a refused value (whose refusal the store
+    shows) leaves the row unreviewed. */
 export function RemainingInput({
   hook: walk,
   it,
@@ -173,8 +123,9 @@ export function RemainingInput({
   const commit = (el: HTMLInputElement) => {
     const p = remainingPatchFromInput(el, it.remaining)
     if (!p.write) return
-    P.updateIssue(it.id, { remaining: p.value })
-    onCommit?.(it)
+    void P.updateIssue(it.id, { remaining: p.value }).then((saved) => {
+      if (saved) onCommit?.(it)
+    })
   }
   return (
     <Input

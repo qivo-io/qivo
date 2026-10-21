@@ -1,6 +1,5 @@
-import type { FunctionReturnType } from 'convex/server'
 import { ConvexError } from 'convex/values'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { SettingsSection } from '@/components/settingsPage'
 import {
   AlertDialog,
@@ -18,21 +17,10 @@ import { Label } from '@/components/ui/label'
 import { billingDate } from '@/lib/billingDisplay'
 import { convex } from '@/lib/convex'
 import { holdUnsaved } from '@/lib/leaveGuard'
+import { useOrgRemovalState } from '@/lib/orgRemovalState'
 import { useUpdateBlocker } from '@/lib/updateSafety'
 import { api } from '../../convex/_generated/api'
 import { P } from '../store/planner'
-
-export type OrgRemovalState = FunctionReturnType<typeof api.orgRemovals.state>
-
-/** The admin's view of the organization's last export and pending deletion. */
-export function useOrgRemovalState(orgId: string): OrgRemovalState | null {
-  const [state, setState] = useState<OrgRemovalState | null>(null)
-  useEffect(() => {
-    if (!orgId) return
-    return convex.onUpdate(api.orgRemovals.state, { org_id: orgId }, setState, () => setState(null))
-  }, [orgId])
-  return state
-}
 
 /** A refusal's own sentence, or `fallback` for any other failure. */
 const failure = (cause: unknown, fallback: string) => {

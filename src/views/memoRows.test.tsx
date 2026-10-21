@@ -289,6 +289,7 @@ describe('memoized task rows', () => {
         setPrompt: noop,
         onOpenTask: noop,
         onShowTask: noop,
+        cards: new Map(),
       }
       return P.issues.map((it) => (
         <SyncCard

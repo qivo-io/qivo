@@ -19,9 +19,12 @@
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Avatar, FieldSelect, Icon } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
-import { flushWalkInput, useReviewed, WalkFooter, WalkRail } from '@/components/walk'
+import { WalkFooter, WalkRail } from '@/components/walk'
+import { flushWalkInput, useReviewed } from '@/components/walkRows'
+import type { UnsentScope } from '@/lib/leaveGuard'
 import {
   bannerVerdict,
+  cardsClosedBy,
   dayLabel,
   doneSince,
   parseSyncScope,
@@ -29,6 +32,7 @@ import {
   previousSync,
   resolveSyncScope,
   type ScopeWorld,
+  type SyncCardPlace,
   type SyncDay,
   type SyncGroupId,
   type SyncScope,
@@ -57,6 +61,16 @@ import '../styles/mobile-views.css'
     `'team:<uuid>'`, `'project:<uuid>'`); `step` is `'team'`, `'agents'` or a
     person's profile uuid (an agent's opens the agents step with it open). */
 export type SyncPlace = { scope: string; step: string }
+
+/** The walk over scope `key`: its projects, rows, people and steps. */
+function walkOf(key: string, world: ScopeWorld) {
+  const scope = resolveSyncScope(parseSyncScope(key), world)
+  const subIds = scopeProjectIds(scope, world)
+  const rows = syncRows(P.issues, subIds)
+  const { humans, agents } = syncRoster(rows, P.users, scope)
+  const steps = ['team', ...humans.map((u) => u.id), ...(agents.length ? ['agents'] : [])]
+  return { scope, scopeKey: syncScopeKey(scope), subIds, rows, humans, agents, steps }
+}
 
 /* The walk's scope choice, saved per user by App: all projects, each team of
    the home organization, each of its projects. */
@@ -372,8 +386,9 @@ export function TeamSync({
 }: {
   place: SyncPlace
   /** App stores it, saves the scope when it changed, and REPLACES the URL;
-      it asks first while the step holds unsent text */
-  onPlace: (next: SyncPlace) => void
+      it asks first while the step holds unsent text, or while `closes`, the
+      windows the move takes away when the page knows them, holds some */
+  onPlace: (next: SyncPlace, closes?: UnsentScope[]) => void
   /** as onPlace, without asking, for a place the walk cannot show */
   onCorrect?: (next: SyncPlace) => void
   /** Done on the last step: App returns to the scope and view underneath */
@@ -402,6 +417,9 @@ export function TeamSync({
   const [prompt, setPrompt] = useState<string | null>(null)
   const [openAgents, setOpenAgents] = useState(() => new Set<string>())
   const [laterOpen, setLaterOpen] = useState(() => new Set<string>())
+  // the scope of each card on the page, with its task and section's person
+  // (PageCtx.cards)
+  const [cards] = useState(() => new Map<UnsentScope, SyncCardPlace>())
   // the step last shown, its index and scope, for a person who leaves mid-sitting
   const shown = useRef<{ step: string; idx: number; scope: string } | null>(null)
   const onCorrectRef = useRef(onCorrect)
@@ -415,16 +433,11 @@ export function TeamSync({
     teams: P.teams,
     canSee: (id) => P.canSee(id),
   }
-  const scope = resolveSyncScope(parseSyncScope(place.scope), world)
-  const scopeKey = syncScopeKey(scope)
-  const subIds = scopeProjectIds(scope, world)
-  const rows = syncRows(P.issues, subIds)
-  const { humans, agents } = syncRoster(rows, P.users, scope)
+  const { scope, scopeKey, subIds, rows, humans, agents, steps } = walkOf(place.scope, world)
   const walkers = new Set([...humans, ...agents].map((u) => u.id))
   // the footer's total: every row on some page of the walk (the Waiting on
   // review foot and the Done column are not rows)
   const counted = rows.filter((it) => walkers.has(it.owner))
-  const steps = ['team', ...humans.map((u) => u.id), ...(agents.length ? ['agents'] : [])]
 
   /* The step `place` asks for, as the walk can show it: an agent's id opens
      the agents step; the person just shown who has left the walk (their last
@@ -482,6 +495,16 @@ export function TeamSync({
     setPrompt(null)
     onPlace({ scope: nextScope, step: next })
   }
+  /* Another scope keeps the step when it still walks it, and with it each
+     card whose task it still holds and whose section's person it still
+     walks: the cards then keep their text, so the switch asks only about the
+     cards it takes away (cardsClosedBy). */
+  const pickScope = (key: string) => {
+    const closes = cardsClosedBy(cards, step, walkOf(key, world))
+    flushWalkInput('sync')
+    setPrompt(null)
+    onPlace({ scope: key, step }, closes)
+  }
   const pick = (id: string) => {
     if (agents.some((u) => u.id === id)) {
       setOpenAgents((s) => new Set(s).add(id))
@@ -513,6 +536,7 @@ export function TeamSync({
       setPrompt,
       onOpenTask,
       onShowTask,
+      cards,
     }
   }
 
@@ -597,7 +621,7 @@ export function TeamSync({
         <section className="overview-section">
           <div className="overview-section-body">
             <div className="mb-6 flex flex-wrap items-center gap-3">
-              <ScopeCtl scope={scope} onPick={(key) => go(step, key)} />
+              <ScopeCtl scope={scope} onPick={pickScope} />
               <span data-sync-today className="whitespace-nowrap text-sm text-text-3">
                 {P.WEEKDAYS[today.getDay()].slice(0, 3)} {P.fmtDate(today)}
               </span>

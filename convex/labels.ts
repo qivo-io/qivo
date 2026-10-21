@@ -95,14 +95,14 @@ export const remove = orgMutation({
  * P.toggleIssueLabel — landed HERE, absent from issues.ts. `on` names the
  * state the person asked for: attach = insert unless the pair exists,
  * detach = delete it, and a request for the current state writes nothing,
- * so a resent toggle cannot undo itself. Without `on` (a tab loaded before
- * it existed) the server flips ITS state. Predicate is
+ * so a resent toggle cannot undo itself. `on` is required: every app since
+ * v0.1.26 sends it, and the old flip without it is gone. Predicate is
  * has_project_level(project, 'user') (0010:65-69, member→user); the org
  * guard is issue_labels_check_org's sentence VERBATIM (0078:117) — in the
  * SQL a missing label read the same sentence as a foreign one, kept here.
  * The write is model/labels.ts setTaskLabel, which REST and MCP run too. */
 export const toggle = orgMutation({
-  args: { issue_id: v.string(), label_id: v.string(), on: v.optional(v.boolean()) },
+  args: { issue_id: v.string(), label_id: v.string(), on: v.boolean() },
   handler: async (ctx, { issue_id, label_id, on }) => {
     const now = new Date().toISOString()
     const issue = await byId(ctx, 'issues', issue_id)
@@ -114,11 +114,7 @@ export const toggle = orgMutation({
     if (label === null || label.org_id !== issue.org_id) {
       throw rule('label and task must belong to the same organization')
     }
-    const pair = await ctx.db
-      .query('issue_labels')
-      .withIndex('by_issue_label', (q) => q.eq('issue_id', issue.id).eq('label_id', label.id))
-      .unique()
-    await setTaskLabel(ctx, { me: ctx.me, issue, label, on: on ?? pair === null, now })
+    await setTaskLabel(ctx, { me: ctx.me, issue, label, on, now })
     return null
   },
 })

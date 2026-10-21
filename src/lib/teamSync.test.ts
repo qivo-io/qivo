@@ -12,6 +12,7 @@ import {
   type BlockerIssue,
   bannerVerdict,
   blockersOf,
+  cardsClosedBy,
   dayLabel,
   doneSince,
   loadFigure,
@@ -161,6 +162,42 @@ describe('sync scope', () => {
       expect(ids(scopeProjectIds(s, world))).toEqual(['S1', 'S3'])
     }
     expect(resolveSyncScope({ kind: 'team', id: 'T1' }, world)).toEqual({ kind: 'team', id: 'T1' })
+  })
+})
+
+describe('cardsClosedBy', () => {
+  const cards = new Map([
+    ['card a', { task: 'task-a', owner: 'aisha' }],
+    ['card b', { task: 'task-b', owner: 'aisha' }],
+  ])
+  const walk = (steps: string[], people: string[], ...tasks: string[]) => ({
+    steps,
+    rows: tasks.map((uuid) => ({ uuid })),
+    humans: people.map((id) => ({ id })),
+    agents: [],
+  })
+
+  it('keeps the cards whose task and person the new scope still walks on the same step', () => {
+    const next = walk(['team', 'aisha'], ['aisha'], 'task-a', 'task-c')
+    expect(cardsClosedBy(cards, 'aisha', next)).toEqual(['card b'])
+    expect(
+      cardsClosedBy(cards, 'aisha', walk(['team', 'aisha'], ['aisha'], 'task-a', 'task-b')),
+    ).toEqual([])
+  })
+
+  it('closes every card when the new scope does not walk the step', () => {
+    const next = walk(['team', 'emil'], ['emil'], 'task-a', 'task-b')
+    expect(cardsClosedBy(cards, 'aisha', next)).toEqual(['card a', 'card b'])
+  })
+
+  it("closes an agent's cards when the agents step stays but the agent leaves the walk", () => {
+    const agents = new Map([
+      ['atlas card', { task: 'task-a', owner: 'atlas' }],
+      ['nova card', { task: 'task-b', owner: 'nova' }],
+    ])
+    // a team that shares both tasks' projects, with Nova but not Atlas
+    const next = { ...walk(['team', 'agents'], [], 'task-a', 'task-b'), agents: [{ id: 'nova' }] }
+    expect(cardsClosedBy(agents, 'agents', next)).toEqual(['atlas card'])
   })
 })
 

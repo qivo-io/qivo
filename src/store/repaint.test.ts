@@ -300,6 +300,34 @@ describe('view model identity across repaints', () => {
     }
   })
 
+  it("renders once when a task edit's answer ends the Roadmap's undo history", async () => {
+    vi.useFakeTimers({ now: Date.parse('2026-09-16T08:00:00.000Z') })
+    try {
+      P().roadmapContext(true, false)
+      // an edit made outside the Roadmap's own changes, such as in the task window
+      void P().updateIssue(task('alone').id, { title: 'Renamed' })
+      expect(P().roadmapUndo.disabled).toBe(false)
+      // Convex delivers the snapshot that holds a write before the write
+      // resolves (lib/convexOrdering.test.ts)
+      deliverChange((snap) => {
+        Object.assign(row(snap, 'alone'), {
+          title: 'Renamed',
+          updated_at: new Date().toISOString(),
+        })
+      })
+      await vi.advanceTimersByTimeAsync(0)
+      const shown = emits
+      sent[0].resolve(null)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(P().roadmapUndo.disabled).toBe(true)
+      expect(P().roadmapUndo.busy).toBe(false)
+      expect(emits).toBe(shown + 1)
+    } finally {
+      P().roadmapContext(false, false)
+      vi.useRealTimers()
+    }
+  })
+
   it('still notifies for a delivery that changes only rows no view model holds', () => {
     const shown = emits
     // another person's task in a project this person cannot see takes the

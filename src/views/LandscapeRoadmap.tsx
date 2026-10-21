@@ -6,8 +6,8 @@ import { LandscapeContext } from '@/lib/landscape'
 import { useRootMark } from '@/lib/rootMark'
 import { useHideOthers } from '@/lib/useHideOthers'
 import { useMobileBackLayer } from '@/lib/useMobile'
-import { useAppearance } from '../AppearanceProvider'
 import { Icon } from '../components/qivo'
+import { useAppearance } from '../lib/appearanceContext'
 
 /** A landscape canvas even with the phone's portrait rotation lock enabled.
  * Portaling beside the workspace keeps its entrance animation from becoming

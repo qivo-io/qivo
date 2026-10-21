@@ -110,10 +110,7 @@ function errorMessage(error: unknown): string {
 /* AdminGate authenticates the vanilla ConvexClient. These local adapters
    subscribe on that same socket; introducing a React provider would create
    a second client and auth lifecycle for a single operator page. */
-export function useLiveQuery<Q extends FunctionReference<'query'>>(
-  query: Q,
-  args: FunctionArgs<Q>,
-) {
+function useLiveQuery<Q extends FunctionReference<'query'>>(query: Q, args: FunctionArgs<Q>) {
   const name = getFunctionName(query)
   const stableQuery = useMemo(() => query, [name])
   const key = JSON.stringify([name, args])
@@ -155,7 +152,7 @@ export function useLiveQuery<Q extends FunctionReference<'query'>>(
   }
 }
 
-export function useLiveMutation<M extends FunctionReference<'mutation'>>(mutation: M) {
+function useLiveMutation<M extends FunctionReference<'mutation'>>(mutation: M) {
   const name = getFunctionName(mutation)
   const stableMutation = useMemo(() => mutation, [name])
   return useCallback(
