@@ -77,8 +77,10 @@ describe('a held invitation', () => {
     )
     expect(host.querySelector('[data-invite-state]')?.textContent).toBe('invitation not sent')
     expect(control()?.disabled).toBe(true)
+    expect(control()?.textContent).toMatch(/^Send after \d\d:\d\d$/)
     act(() => vi.advanceTimersByTime(20 * 60_000 + 1000))
     expect(control()?.disabled).toBe(false)
+    expect(control()?.textContent).toBe('Send invitation')
     await act(async () => control()?.click())
     expect(again).toHaveBeenCalledWith('org-1', 'seat-1')
     // a delivered invitation offers nothing

@@ -128,8 +128,8 @@ export function UserName({ user, isSelf }: { user: UserVM; isSelf: boolean }) {
 /** A pending seat's marker. It says "invited", or that the invitation email
     did not go out, with the reason on hover (lib/inviteDeliveries). A send
     the hourly cap held back, or one that failed, offers Send invitation,
-    which counts against the same cap and so waits until the hour frees a
-    send. */
+    which counts against the same cap, so until the hour frees a send it
+    reads "Send after HH:MM" and is disabled. */
 export function InviteLabel({ user, className }: { user: UserVM; className?: string }) {
   const row = useInviteDeliveries(user.org)?.get(user.id)
   const state = row?.state
@@ -179,7 +179,7 @@ export function InviteLabel({ user, className }: { user: UserVM; className?: str
             }}
             className="[margin-left:6px] [flex-shrink:0] [font-size:var(--fs-xs)] [font-weight:600] [color:var(--primary)] [background:none] [border:none] [padding:0] [cursor:pointer] disabled:[color:var(--text-3)] disabled:[cursor:not-allowed]"
           >
-            Send invitation
+            {waiting ? `Send after ${fmtTime(new Date(waitUntil))}` : 'Send invitation'}
           </Button>
         </HoverTooltip>
       )}

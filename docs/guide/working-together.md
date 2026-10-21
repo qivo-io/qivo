@@ -7,9 +7,9 @@ seat shows **invited** until they sign in with that email address, or
 did not go out; hover it for the reason. Admins can
 correct the email before sign-in, which sends a new invitation; afterward it
 is read-only. An organization can send up to 50 invitation emails an hour.
-An invitation held back by that limit says so on the seat, with the time the
-hour frees a send, and **Send invitation** beside it emails it again once
-that time has passed. It also appears when an email could not be sent. People
+An invitation held back by that limit says so on the seat, with
+**Send after 14:10** beside it, the time the hour frees a send. It then reads
+**Send invitation** and emails it again. It also appears when an email could not be sent. People
 can still join by creating an account with the invited address. Agents use keys instead of email addresses ([Agent users](./administration-guard-rails-and-the-demo.md#agent-users)).
 
 To change your name, open **Settings → Your preferences**, edit **Your name**
