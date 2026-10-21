@@ -1,4 +1,4 @@
-import { memo, useRef } from 'react'
+import { memo, useId, useRef } from 'react'
 import { AssigneeAvatar } from '@/components/AssigneeAvatar'
 import { Icon, PausedMark, PriorityIcon, ProjectName } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
@@ -22,11 +22,14 @@ type CardActions = {
  * A neutral band names the state and ends in a block of the roadmap's
  * yellow or red carrying a clock (tokens.css, deviation #312). The Team sync
  * page draws the same banner on its rows. */
-function DelayBanner({ it }: { it: IssueVM }) {
+function DelayBanner({ it, id }: { it: IssueVM; id?: string }) {
   if (!P.delayColor(it)) return null
   const behind = P.delayOf(it)?.status === 'behind'
   return (
-    <span className="flex w-full items-stretch justify-between bg-[var(--delay-banner)] text-xs font-extrabold tracking-[.05em] text-text-1">
+    <span
+      id={id}
+      className="flex w-full items-stretch justify-between bg-[var(--delay-banner)] text-xs font-extrabold tracking-[.05em] text-text-1"
+    >
       <span className="px-2.5 py-1">{behind ? 'Slipping' : 'Delayed'}</span>
       <span
         className={`flex w-[30px] shrink-0 items-center justify-center text-white ${behind ? 'bg-[var(--delay-banner-behind-block)]' : 'bg-[var(--delay-banner-late-block)]'}`}
@@ -39,11 +42,11 @@ function DelayBanner({ it }: { it: IssueVM }) {
 
 /* The paused mark stays visible on a faded card: a pause is a fact about the
    task, not a hover detail. The reason lives in the task's comments. */
-function PausedGlyph({ it }: { it: IssueVM }) {
+function PausedGlyph({ it, id }: { it: IssueVM; id?: string }) {
   if (!P.isPaused(it)) return null
   return (
     <HoverTooltip content="Paused">
-      <PausedMark className="mt-0.5" />
+      <PausedMark className="mt-0.5" id={id} />
     </HoverTooltip>
   )
 }
@@ -74,6 +77,8 @@ function DueDate({ it, inButton = false }: { it: IssueVM; inButton?: boolean }) 
  * A group's owner is always its assignee. */
 function ParentHeading({ it, place }: { it: IssueVM; place: ProjectPlace | null }) {
   const owner = P.user(it.owner)
+  // a screen reader hears the owner, priority and due date after the title
+  const meta = useId()
   return (
     <span className="flex w-full min-w-0 flex-col gap-2 p-2">
       <Button
@@ -82,6 +87,7 @@ function ParentHeading({ it, place }: { it: IssueVM; place: ProjectPlace | null 
         noTooltip
         data-focus-key="parent"
         aria-label={`Parent: ${it.title}`}
+        aria-describedby={meta}
         className="flex min-w-0 items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary"
       >
         <PausedGlyph it={it} />
@@ -89,7 +95,10 @@ function ParentHeading({ it, place }: { it: IssueVM; place: ProjectPlace | null 
           {it.title}
         </span>
       </Button>
-      <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-2">
+      <span
+        id={meta}
+        className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-2"
+      >
         <HoverTooltip content={owner?.name || 'Unassigned'}>
           <span data-focus-key="owner-name" className="inline-flex min-w-0 items-center gap-1.5">
             <AssigneeAvatar issue={it} compact />
@@ -135,6 +144,13 @@ function TaskRow({
   const dragging = actualIssue && dragId === it.id
   const stale = actualIssue && P.isStale(it)
   const remaining = parentHeader ? null : P.remainingOf(it)
+  /* The title is the row's name. A screen reader hears the delay, the pause
+     and the meta row (priority, hours, place, due date, owner) after it. */
+  const ids = useId()
+  const banner = actualIssue && !!P.delayColor(it)
+  const describedBy = [banner && `${ids}delay`, P.isPaused(it) && `${ids}paused`, `${ids}meta`]
+    .filter(Boolean)
+    .join(' ')
   return (
     <div
       role="presentation"
@@ -159,7 +175,7 @@ function TaskRow({
       <div
         className={`relative flex w-full min-w-0 flex-col ${movable ? (dragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-pointer'}`}
       >
-        {actualIssue && <DelayBanner it={it} />}
+        {actualIssue && <DelayBanner it={it} id={`${ids}delay`} />}
         {parentHeader ? (
           <ParentHeading it={it} place={place} />
         ) : (
@@ -170,15 +186,19 @@ function TaskRow({
               noTooltip
               data-focus-key="title"
               aria-label={it.title}
+              aria-describedby={describedBy}
               className="min-w-0 cursor-inherit text-left font-normal outline-none focus-visible:ring-2 focus-visible:ring-primary"
             >
               <span className="flex min-w-0 items-start gap-2">
-                <PausedGlyph it={it} />
+                <PausedGlyph it={it} id={`${ids}paused`} />
                 <span className="min-w-0 break-words text-base font-medium leading-[1.35]">
                   {it.title}
                 </span>
               </span>
-              <span className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-3">
+              <span
+                id={`${ids}meta`}
+                className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-3"
+              >
                 <PriorityIcon priority={it.priority} size={11} />
                 {remaining != null && (
                   <span className="whitespace-nowrap !font-mono">
@@ -231,9 +251,11 @@ function BoardCardView({
   const root = useRef<HTMLDivElement>(null)
   const controls = useLiveControls(root)
   return (
+    // biome-ignore lint/a11y/useSemanticElements: one item of its status cell's list (Kanban), a styled div that drags
     <div
       ref={root}
       {...controls.rootProps}
+      role="listitem"
       data-parent-card={group.parent?.id}
       // Offscreen cards skip layout (Board.css) at this height until they
       // first render; `auto` then keeps the size they really had.

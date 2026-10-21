@@ -221,9 +221,19 @@ function Icon({
    (`[data-paused]`). The Board card, phone task row and Overview list draw it;
    task windows use a labelled edge tab. The Roadmap deliberately draws
    neither (a glyph on the bar would take room the bar cannot spare). */
-function PausedMark({ size = 13, className }: { size?: number; className?: string }) {
+function PausedMark({
+  size = 13,
+  className,
+  id,
+}: {
+  size?: number
+  className?: string
+  /** for a control the mark describes (aria-describedby) */
+  id?: string
+}) {
   return (
     <span
+      id={id}
       data-paused
       role="img"
       tabIndex={-1}

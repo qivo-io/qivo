@@ -736,6 +736,13 @@ function Kanban({
   // columns still render their (empty) stacks
   if (!sideBoards && lanes.length === 0) lanes = [{ key: 'pool', proj: null, items: [] }]
   const headed = (lane: Lane) => !!lane.proj || lane.owner !== undefined
+  /** The name a lane's heading shows, or null for a lane without one. */
+  const laneName = (lane: Lane) =>
+    lane.proj
+      ? P.projectName(lane.proj)
+      : lane.owner !== undefined
+        ? P.user(lane.owner)?.name || (lane.owner ? 'Unknown user' : 'Unassigned')
+        : null
   const laneCells = lanes.map((lane) =>
     statuses.map((s) =>
       cellOf(`${lane.key}:${s.id}`, lane.items.filter((i) => i.status === s.id).sort(byPrio)),
@@ -819,6 +826,7 @@ function Kanban({
         initial={initialOf(cell.key)}
         scheduler={scheduler}
         label={pendingLabel}
+        listRole
       />
     )
   }
@@ -1049,7 +1057,12 @@ function Kanban({
                               <StatusDot status={s.id} size={12} />
                               {s.name} <span className="[font-weight:400]">{items.length}</span>
                             </div>
-                            <div className="[display:flex] [flex-direction:column] [gap:8px] [min-height:8px]">
+                            {/* biome-ignore lint/a11y/useSemanticElements: a styled flex div inside the cell that takes drops */}
+                            <div
+                              role="list"
+                              aria-label={`${s.name}, ${P.projectName(proj)}`}
+                              className="[display:flex] [flex-direction:column] [gap:8px] [min-height:8px]"
+                            >
                               {cardList(cell, sidePlace, sideCardWidth)}
                             </div>
                           </DropCell>
@@ -1238,6 +1251,7 @@ function Kanban({
                           laneId={lane.key}
                           status={s.id}
                           last={ci === statuses.length - 1}
+                          label={[s.name, laneName(lane)].filter(Boolean).join(', ')}
                           {...cardDropHandlers(laneKey, s.id, lane)}
                         >
                           {cardList(cell, lanePlace, laneCardWidth)}
@@ -1270,6 +1284,7 @@ function DropCell({
   laneId,
   status,
   last = false,
+  label,
   onDragOver,
   onDragLeave,
   onDrop,
@@ -1282,13 +1297,19 @@ function DropCell({
   laneId: string
   status: string
   last?: boolean
+  /** a lane cell's list name: its status, and its lane's when the lane has one */
+  label?: string
   onDragOver: React.DragEventHandler
   onDragLeave: React.DragEventHandler
   onDrop: React.DragEventHandler
 }) {
   const over = useDropOver(store, dropKey)
+  // A lane's cell is the list of its cards; a side-board's cell holds its
+  // heading and the list.
+  const list = variant === 'lane' ? { role: 'list', 'aria-label': label } : {}
   return (
     <div
+      {...list}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
