@@ -110,6 +110,7 @@ import { HoverTooltip } from '@/components/ui/tooltip'
 import { questionOpen } from '@/lib/discardQuestion'
 import { restoreFocus } from '@/lib/focusVisibility'
 import { LandscapeContext, type LandscapeViewport } from '@/lib/landscape'
+import { type StaticControls, useStaticControls } from '@/lib/liveControls'
 import { hasOpenTooltip } from '@/lib/passEscapeOn'
 import { useMenuBackLayer } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
@@ -695,7 +696,44 @@ function LandscapePopover({
   )
 }
 
-function Popover({
+function Popover(props: PopoverProps) {
+  const statics = useStaticControls()
+  const landscape = useContext(LandscapeContext)
+  if (landscape)
+    return (
+      <LandscapePopover
+        button={props.button}
+        width={props.width}
+        align={props.align}
+        wrapStyle={props.wrapStyle}
+      >
+        {props.children}
+      </LandscapePopover>
+    )
+  if (statics) return <StaticPopover statics={statics} {...props} />
+  return <LivePopover {...props} />
+}
+
+/* A closed popover in a static row (liveControls.tsx): the trigger with the
+   attributes a closed Radix trigger gives it, and no Radix or Back layer.
+   A press makes the row live, which opens the live trigger's popover. */
+function StaticPopover({ statics, button, wrapStyle }: PopoverProps & { statics: StaticControls }) {
+  const wrap = useRef<HTMLDivElement>(null)
+  const trigger = button(() => statics.activate(wrap.current), false)
+  return (
+    <div ref={wrap} style={wrapStyle} data-popover-wrap>
+      {isValidElement(trigger)
+        ? cloneElement(trigger as ReactElement<Record<string, unknown>>, {
+            'aria-haspopup': 'dialog',
+            'aria-expanded': false,
+            'data-state': 'closed',
+          })
+        : trigger}
+    </div>
+  )
+}
+
+function LivePopover({
   button,
   children,
   width = 220,
@@ -705,16 +743,9 @@ function Popover({
 }: PopoverProps) {
   const [open, setOpen] = useState(false)
   const close = useMenuBackLayer(open, () => setOpen(false), backLayer)
-  const landscape = useContext(LandscapeContext)
-  if (landscape)
-    return (
-      <LandscapePopover button={button} width={width} align={align} wrapStyle={wrapStyle}>
-        {children}
-      </LandscapePopover>
-    )
   return (
     <ShadcnPopover open={open} onOpenChange={(next) => (next ? setOpen(true) : close())}>
-      <div style={wrapStyle}>
+      <div style={wrapStyle} data-popover-wrap>
         <PopoverTrigger asChild>{button(() => undefined, open)}</PopoverTrigger>
       </div>
       <PopoverContent

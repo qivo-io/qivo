@@ -1,6 +1,7 @@
 import { Slot, Tooltip as TooltipPrimitive } from 'radix-ui'
 import * as React from 'react'
 
+import { useStaticControls } from '@/lib/liveControls'
 import { passEscapeOn } from '@/lib/passEscapeOn'
 import { cn } from '@/lib/utils'
 
@@ -99,30 +100,50 @@ const TooltipTarget = React.forwardRef<
   )
 })
 
-// Keep the target's DOM, ref and event handlers intact, including grid items,
-// drag handles and disabled controls. Native `title` is never forwarded.
-function HoverTooltip({
-  content,
-  children,
-}: {
+type HoverTooltipProps = {
   content?: React.ReactNode
   children: React.ReactElement<React.HTMLAttributes<HTMLElement>>
-}) {
-  const [open, setOpen] = React.useState(false)
-  // closed by Escape: skip the exit animation, so the tooltip leaves Radix's
-  // layer stack at once and the Escape can go on to the layer below
-  const [escaped, setEscaped] = React.useState(false)
-  const contentRef = React.useRef<HTMLDivElement>(null)
-  const hasContent =
-    content !== undefined && content !== null && content !== '' && content !== false
-  React.useEffect(() => {
-    if (!hasContent) setOpen(false)
-  }, [hasContent])
+}
+
+const hasTooltipContent = (content: React.ReactNode) =>
+  content !== undefined && content !== null && content !== '' && content !== false
+
+/** The target's tab index: its own, or 0 for a plain element that has
+    content to show, so keyboard users can reach the tooltip. */
+function tooltipTabIndex(children: HoverTooltipProps['children'], hasContent: boolean) {
   const nativeTag = typeof children.type === 'string' ? children.type : null
   const focusable =
     nativeTag &&
     !['button', 'input', 'select', 'textarea', 'a', 'summary'].includes(nativeTag) &&
     !children.props.contentEditable
+  return children.props.tabIndex ?? (hasContent && focusable ? 0 : undefined)
+}
+
+// Keep the target's DOM, ref and event handlers intact, including grid items,
+// drag handles and disabled controls. Native `title` is never forwarded.
+// Inside a static row (liveControls.tsx) the target renders alone, with the
+// attributes a closed live tooltip gives it, until the row goes live.
+function HoverTooltip({ content, children }: HoverTooltipProps) {
+  const statics = useStaticControls()
+  if (!statics) return <LiveTooltip content={content}>{children}</LiveTooltip>
+  const hasContent = hasTooltipContent(content)
+  // in the order the live trigger's props land
+  return React.cloneElement(children, {
+    tabIndex: tooltipTabIndex(children, hasContent),
+    'data-tooltip-trigger': hasContent ? '' : undefined,
+  } as React.HTMLAttributes<HTMLElement>)
+}
+
+function LiveTooltip({ content, children }: HoverTooltipProps) {
+  const [open, setOpen] = React.useState(false)
+  // closed by Escape: skip the exit animation, so the tooltip leaves Radix's
+  // layer stack at once and the Escape can go on to the layer below
+  const [escaped, setEscaped] = React.useState(false)
+  const contentRef = React.useRef<HTMLDivElement>(null)
+  const hasContent = hasTooltipContent(content)
+  React.useEffect(() => {
+    if (!hasContent) setOpen(false)
+  }, [hasContent])
   const ignoreNested = (event: React.SyntheticEvent<HTMLElement>) => {
     if (!hasContent) return
     const target = event.target as HTMLElement
@@ -141,7 +162,7 @@ function HoverTooltip({
         data-tooltip-trigger={hasContent ? '' : undefined}
         onPointerMove={ignoreNested}
         onFocus={ignoreNested}
-        tabIndex={children.props.tabIndex ?? (hasContent && focusable ? 0 : undefined)}
+        tabIndex={tooltipTabIndex(children, hasContent)}
       >
         <TooltipTarget enabled={hasContent}>{children}</TooltipTarget>
       </TooltipTrigger>

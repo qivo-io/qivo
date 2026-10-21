@@ -1,9 +1,10 @@
-import { memo, useState } from 'react'
+import { memo, useRef } from 'react'
 import { AssigneeAvatar } from '@/components/AssigneeAvatar'
 import { Icon, PausedMark, PriorityIcon, ProjectName } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import type { BoardCellGroup } from '@/lib/boardGroups'
+import { StaticControlsContext, useLiveControls } from '@/lib/liveControls'
 import { type IssueVM, P, type ProjectPlace } from '@/store/planner'
 import type { StoreVersion } from '@/store/updates'
 import { BOARD_TASK_TYPE } from './board/dropOver'
@@ -129,10 +130,9 @@ function TaskRow({
   actualIssue?: boolean
   indented?: boolean
 }) {
-  const [hovered, setHovered] = useState(false)
   const movable = actualIssue && !P.isGroup(it) && P.canWrite(it.project)
   const dragging = actualIssue && dragId === it.id
-  const stale = actualIssue && P.isStale(it) && !hovered
+  const stale = actualIssue && P.isStale(it)
   const remaining = parentHeader ? null : P.remainingOf(it)
   return (
     <div
@@ -153,9 +153,7 @@ function TaskRow({
         onDragStart(it.id, e.currentTarget)
       }}
       onDragEnd={onDragEnd}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      className={`relative flex w-full min-w-0 flex-col overflow-hidden border-0 bg-transparent text-left font-normal text-text-1 transition-[background-color,opacity] hover:bg-hover focus-within:opacity-100 ${indented ? 'pl-3' : ''} ${dragging ? 'opacity-40' : stale ? 'opacity-50' : 'opacity-100'}`}
+      className={`relative flex w-full min-w-0 flex-col overflow-hidden border-0 bg-transparent text-left font-normal text-text-1 transition-[background-color,opacity] hover:bg-hover focus-within:opacity-100 ${indented ? 'pl-3' : ''} ${dragging ? 'opacity-40' : stale ? 'opacity-50 hover:opacity-100' : 'opacity-100'}`}
     >
       <div
         className={`relative flex w-full min-w-0 flex-col ${movable ? (dragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-pointer'}`}
@@ -231,49 +229,56 @@ function BoardCardView({
     !(group.issues.length > 0 && group.issues.every((it) => it.project === group.parent.project))
       ? place(group.parent)
       : null
+  // The card mounts no tooltip or popover roots until it is used.
+  const root = useRef<HTMLDivElement>(null)
+  const controls = useLiveControls(root)
   return (
     <div
+      ref={root}
+      {...controls.rootProps}
       data-parent-card={group.parent?.id}
       className="board-card overflow-hidden rounded-md border border-border bg-surface-1 shadow-card transition-opacity duration-150 motion-reduce:transition-none"
     >
-      {group.ancestors.map((ancestor) => (
-        <TaskRow
-          key={ancestor.uuid}
-          it={ancestor}
-          parentHeader
-          actualIssue={false}
-          place={place(ancestor)}
-          {...actions}
-        />
-      ))}
-      {group.parent && (
-        <TaskRow
-          it={group.parent}
-          parentHeader
-          actualIssue={false}
-          place={parentPlace}
-          {...actions}
-        />
-      )}
-      <div className={group.parent && group.issues.length ? 'pb-2' : undefined}>
-        {group.issues.map((it, index) => (
-          // The rail and elbow sit in the row's 12px gutter and are lifted
-          // above the row (an isolated stacking context) so the hover fill
-          // spanning the card never covers them. The sibling separator stays
-          // on the indented content, starting at the rail.
-          <div
-            key={it.uuid}
-            data-child-row={group.parent ? it.id : undefined}
-            className={
-              group.parent
-                ? `relative isolate before:pointer-events-none before:absolute before:top-0 before:left-3 before:z-[1] before:w-0.5 before:bg-[var(--board-hierarchy-line)] after:pointer-events-none after:absolute after:left-3 after:z-[1] after:h-px after:w-2 after:bg-[var(--board-hierarchy-line)] ${P.delayColor(it) ? 'after:top-[42px]' : 'after:top-[18px]'} ${index === group.issues.length - 1 ? (P.delayColor(it) ? 'before:h-[42px]' : 'before:h-[18px]') : 'before:bottom-0'} ${index > 0 ? '[&>div>div]:border-t [&>div>div]:border-border' : ''}`
-                : undefined
-            }
-          >
-            <TaskRow it={it} place={place(it)} indented={!!group.parent} {...actions} />
-          </div>
+      <StaticControlsContext.Provider value={controls.value}>
+        {group.ancestors.map((ancestor) => (
+          <TaskRow
+            key={ancestor.uuid}
+            it={ancestor}
+            parentHeader
+            actualIssue={false}
+            place={place(ancestor)}
+            {...actions}
+          />
         ))}
-      </div>
+        {group.parent && (
+          <TaskRow
+            it={group.parent}
+            parentHeader
+            actualIssue={false}
+            place={parentPlace}
+            {...actions}
+          />
+        )}
+        <div className={group.parent && group.issues.length ? 'pb-2' : undefined}>
+          {group.issues.map((it, index) => (
+            // The rail and elbow sit in the row's 12px gutter and are lifted
+            // above the row (an isolated stacking context) so the hover fill
+            // spanning the card never covers them. The sibling separator stays
+            // on the indented content, starting at the rail.
+            <div
+              key={it.uuid}
+              data-child-row={group.parent ? it.id : undefined}
+              className={
+                group.parent
+                  ? `relative isolate before:pointer-events-none before:absolute before:top-0 before:left-3 before:z-[1] before:w-0.5 before:bg-[var(--board-hierarchy-line)] after:pointer-events-none after:absolute after:left-3 after:z-[1] after:h-px after:w-2 after:bg-[var(--board-hierarchy-line)] ${P.delayColor(it) ? 'after:top-[42px]' : 'after:top-[18px]'} ${index === group.issues.length - 1 ? (P.delayColor(it) ? 'before:h-[42px]' : 'before:h-[18px]') : 'before:bottom-0'} ${index > 0 ? '[&>div>div]:border-t [&>div>div]:border-border' : ''}`
+                  : undefined
+              }
+            >
+              <TaskRow it={it} place={place(it)} indented={!!group.parent} {...actions} />
+            </div>
+          ))}
+        </div>
+      </StaticControlsContext.Provider>
     </div>
   )
 }

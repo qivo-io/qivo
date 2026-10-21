@@ -4,7 +4,7 @@
     "reason": "selection-anchored link-popover coordinates clamped to the viewport"
   },
   "src/components/qivo/index.tsx": {
-    "count": 20,
+    "count": 21,
     "reason": "Qivo icon/avatar/calendar geometry and data colors, configurable control sizes and forwarded caller styles; popup anchor coordinates, menu widths and measured landscape height"
   },
   "src/components/settingsPage.tsx": {
