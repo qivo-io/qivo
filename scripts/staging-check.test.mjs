@@ -14,6 +14,7 @@ import {
   deleteOutcome,
   evaluate,
   hasTag,
+  historyRows,
   isSiteOf,
   pace,
   parseArgs,
@@ -458,5 +459,33 @@ describe('attachment delete answers', () => {
       [{ status: 200, isError: true, text: `attachment "${id}" not found on QN-8` }, 'mcp'],
     ])
       expect(outcome(r, surface)).toMatch(/^HTTP /)
+  })
+})
+
+describe('thread pages', () => {
+  // 511 rows, oldest first, one second apart, paged newest first like REST
+  const all = Array.from({ length: 511 }, (_, i) => ({
+    id: `r${i}`,
+    verb: i === 0 ? 'created' : 'labeled',
+    created_at: new Date(Date.UTC(2026, 9, 21, 12, 0, i)).toISOString(),
+  }))
+  const pages = (rows) => [rows.slice(-500), rows.slice(0, -500)]
+  it('takes the whole history in a full page and the rest', () => {
+    expect(historyRows(pages(all), 511).map((r) => r.id)).toEqual(all.map((r) => r.id))
+  })
+  it('refuses a history with rows missing, repeated or out of order', () => {
+    // the earlier page holds only the created row
+    expect(() => historyRows([all.slice(-500), all.slice(0, 1)], 511)).toThrow('rows across pages')
+    expect(() => historyRows([all.slice(-500), all.slice(0, 12)], 511)).toThrow(
+      'distinct rows across pages',
+    )
+    expect(() => historyRows(pages(all.slice(1)), 510)).toThrow('the first row')
+    expect(() => historyRows([all.slice(-500)], 500)).toThrow('pages before the empty one')
+    expect(() =>
+      historyRows(
+        pages([...all.slice(0, 10), all[20], ...all.slice(10, 20), ...all.slice(21)]),
+        511,
+      ),
+    ).toThrow('pages overlap or skip')
   })
 })

@@ -2600,6 +2600,7 @@ async function threadPageChecks() {
   const w = run.creds.writeToken
   let task
   const comments = []
+  let changes = 0
   const made = await check('thread-pages/setup', async () => {
     task = await restOk(w, 'POST', '/tasks', {
       project: run.projects.A.id,
@@ -2622,7 +2623,8 @@ async function threadPageChecks() {
       await restOk(w, 'PATCH', `/tasks/${task.key}`, { add_labels: labels })
       await restOk(w, 'PATCH', `/tasks/${task.key}`, { remove_labels: labels })
     }
-    return `${task.key} with ${count} comments and ${1 + rounds * 2 * labels.length} changes`
+    changes = 1 + rounds * 2 * labels.length
+    return `${task.key} with ${count} comments and ${changes} changes`
   })
   if (!made) {
     for (const id of ['rest', 'mcp', 'ui/earlier-comments', 'ui/earlier-activity'])
@@ -2641,17 +2643,9 @@ async function threadPageChecks() {
     }
     fail('paging did not end')
   }
-  /** The history pages `read` answers: one full page, then the rest
-   *  starting with the created row. Returns the created row's id. */
+  /** The created row's id and the row count of the history `read` pages. */
   const history = async (read) => {
-    const pages = await walk(read)
-    eq(pages.length, 2, 'pages before the empty one')
-    eq(pages[0].length, THREAD_PAGE.history, 'the newest page')
-    const rows = pages.toReversed().flat()
-    eq(new Set(rows.map((r) => r.id)).size, rows.length, 'distinct rows across pages')
-    eq(rows[0].verb, 'created', 'the first row')
-    for (let i = 1; i < rows.length; i++)
-      expect(rows[i - 1].created_at <= rows[i].created_at, 'pages overlap or skip')
+    const rows = historyRows(await walk(read), changes)
     return { created: rows[0].id, count: rows.length }
   }
   let created
@@ -2670,6 +2664,22 @@ async function threadPageChecks() {
     return `${r.count} rows in 2 pages`
   })
   await earlierThreadChecks(task, comments, created)
+}
+
+/** The rows of a task's history, oldest first, from `pages`, the pages
+ *  REST or MCP answered newest first with `before` down to the empty one.
+ *  A task with `total` rows, a page and a little more, must answer a full
+ *  page and then the rest, every row once, starting with the created row. */
+export function historyRows(pages, total) {
+  eq(pages.length, 2, 'pages before the empty one')
+  eq(pages[0].length, THREAD_PAGE.history, 'the newest page')
+  const rows = pages.toReversed().flat()
+  eq(new Set(rows.map((r) => r.id)).size, rows.length, 'distinct rows across pages')
+  eq(rows.length, total, 'rows across pages')
+  eq(rows[0].verb, 'created', 'the first row')
+  for (let i = 1; i < rows.length; i++)
+    expect(rows[i - 1].created_at <= rows[i].created_at, 'pages overlap or skip')
+  return rows
 }
 
 /** The task window opens at the newest page of comments and of history.
