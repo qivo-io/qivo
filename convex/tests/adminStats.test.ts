@@ -133,6 +133,7 @@ async function consoleFixture(t: T): Promise<OrgFixture> {
       level: 'user',
     })
     await patchCounters(ctx, org_id, { next_issue_num: 10 })
+    await ctx.db.insert('sync_stamps', { org_id, profile_id: f.user.id, at: NOW })
     await ctx.db.insert('activity_events', activity(org_id, '2026-04-20T09:00:00.000Z'))
     await ctx.db.insert('activity_events', activity(f.otherOrg.id, '2026-03-02T09:00:00.000Z'))
   })
@@ -166,6 +167,12 @@ const measuredBytes = (t: T, orgId: string) =>
     bytes += sum(
       await ctx.db
         .query('org_counters')
+        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .collect(),
+    )
+    bytes += sum(
+      await ctx.db
+        .query('sync_stamps')
         .withIndex('by_org', (q) => q.eq('org_id', orgId))
         .collect(),
     )

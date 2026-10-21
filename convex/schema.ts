@@ -742,6 +742,21 @@ export default defineSchema({
     next_project_num: v.number(),
   }).index('by_org', ['org_id']),
 
+  // Team sync stamps (model/syncStamps.ts, lib/teamSync.ts), one row per
+  // stamped person: the latest change made on them through the sync page
+  // (server clock), and the reading point of the sitting that change belongs
+  // to: the previous sitting's last change, or in a first sitting the day the
+  // page read from (YYYY-MM-DD); absent = the default. Kept off the profile,
+  // which every query its owner subscribes reads.
+  sync_stamps: defineTable({
+    org_id: v.string(),
+    profile_id: v.string(),
+    at: v.string(),
+    since: v.optional(v.string()),
+  })
+    .index('by_profile', ['profile_id'])
+    .index('by_org', ['org_id']),
+
   teams: defineTable({
     id: v.string(),
     org_id: v.string(),
@@ -792,10 +807,9 @@ export default defineSchema({
       ),
     ),
     accepted_at: v.optional(v.string()), // kept from 0118: home-org uniqueness gates on it
-    // Team sync (lib/teamSync.ts): the latest change made on this person through
-    // the sync page (server clock), and the reading point of the sitting that
-    // change belongs to: the previous sitting's last change, or in a first
-    // sitting the day the page read from (YYYY-MM-DD); absent = the default.
+    // Retired Team sync stamp, now in sync_stamps. Nothing writes these any
+    // more; a person without a sync_stamps row is read from them until
+    // internal/syncStampsBackfill moves them, and a later release drops them.
     sync_at: v.optional(v.string()),
     sync_since: v.optional(v.string()),
     // The per-user project-creation right. It only counts for a standard

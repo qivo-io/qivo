@@ -26,7 +26,8 @@
  * org_approx_bytes and pg_database_size have no Convex analogue. The port
  * sums JSON.stringify(doc).length over the table set the SQL measured,
  * which was already approximate ("index/TOAST overhead excluded"). The set
- * also holds each organization's org_counters row and the copies of those
+ * also holds each organization's org_counters row, the Team sync stamps
+ * that moved off the profiles into sync_stamps, and the copies of those
  * tables that Deleted items keeps in deleted_rows. */
 
 import { type Infer, v } from 'convex/values'
@@ -158,7 +159,8 @@ type OrgHead = Pick<
 > & { bytes: number }
 
 /** An organization's own fields, billing and newest activity, or null once
- * it is gone. `bytes` covers its organizations and org_counters rows. */
+ * it is gone. `bytes` covers its organizations and org_counters rows and its
+ * sync_stamps rows, one small row per stamped person. */
 export const orgHead = internalQuery({
   args: { org_id: v.string() },
   handler: async (ctx, { org_id }): Promise<OrgHead | null> => {
@@ -167,6 +169,10 @@ export const orgHead = internalQuery({
     const subscription = await subscriptionFor(ctx, org.id)
     const plan = subscription ? await byId(ctx, 'billing_plans', subscription.plan_id) : null
     const counters = await countersRow(ctx, org.id)
+    const stamps = await ctx.db
+      .query('sync_stamps')
+      .withIndex('by_org', (q) => q.eq('org_id', org.id))
+      .collect()
     const newest = await ctx.db
       .query('activity_events')
       .withIndex('by_org_ts', (q) => q.eq('org_id', org.id))
@@ -181,7 +187,10 @@ export const orgHead = internalQuery({
       renewal_date:
         subscription?.current_period_end?.slice(0, 10) ?? org.billing?.renewal_date ?? null,
       last_activity: newest?.ts ?? null,
-      bytes: sizeOf(org) + (counters === null ? 0 : sizeOf(counters)),
+      bytes:
+        sizeOf(org) +
+        (counters === null ? 0 : sizeOf(counters)) +
+        stamps.reduce((sum, row) => sum + sizeOf(row), 0),
     }
   },
 })
@@ -471,6 +480,7 @@ const TOTAL_TABLES = [
   'issue_links',
   'milestones',
   'org_counters',
+  'sync_stamps',
   'deleted_rows',
 ] as const
 type TotalTable = (typeof TOTAL_TABLES)[number]

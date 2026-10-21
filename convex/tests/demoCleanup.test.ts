@@ -143,6 +143,7 @@ const APP_OWNED: TableNames[] = [
   'issue_subscriptions',
   'messages',
   'user_prefs',
+  'sync_stamps',
   'mcp_tokens',
   'oauth_connections',
   'oauth_credential_uses',

@@ -374,6 +374,18 @@ before it ran. Deploy an earlier commit that still has the backfill, such as
 v0.1.21 (`ab0a802`), run `internal/orgCountersBackfill:start`, wait until its
 `remaining` query reports 0 on every page, and then deploy the later commit.
 
+Team sync stamps live in their own `sync_stamps` table, off the profiles.
+The release that moved them adds the one-time `internal/syncStampsBackfill`.
+Run it on every hosted deployment once that deployment serves the release,
+with the owner's approval, as its header says: check with `remaining`, read
+the dry run, then run it. Until it runs, the app reads a person without a
+stamp row from the retired profile fields `sync_at` and `sync_since`. A later
+release drops those fields from the schema once `remaining` reports 0 on
+every page of every deployment, so Convex refuses that release on a backend
+where the backfill has not run. Returning the Convex functions to a commit
+before the move, after the backfill ran, shows nobody as stamped, because
+earlier code reads only the profile fields. Roll forward instead.
+
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to
 deploy. Roll forward instead. Later releases no longer accept those fields,
