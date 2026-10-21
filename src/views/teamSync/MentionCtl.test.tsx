@@ -28,8 +28,8 @@ type Planner = typeof import('../../store/planner')['P']
 type Answer = { resolve: (value: null) => void; reject: (reason: unknown) => void }
 
 const NOW = '2026-09-14T08:00:00.000Z'
-// The server's sentence for the 401st comment (convex/model/commentCounts.ts).
-const CAP = 'this task has 400 comments, the most a task can have; start a new task to continue'
+// A sample `rule` refusal of a post. The app toasts such a sentence as sent.
+const RULE = 'this sample rule refuses the comment; try again later'
 
 let P: Planner
 let card: typeof import('./SyncCard')
@@ -168,9 +168,9 @@ describe('the Team sync @ window', () => {
     expect(note()?.readOnly).toBe(true)
     expect(aisha()?.disabled).toBe(true)
     expect(button('Cancel').disabled).toBe(true)
-    await act(async () => writes[0].reject(new ConvexError({ code: 'rule', message: CAP })))
+    await act(async () => writes[0].reject(new ConvexError({ code: 'rule', message: RULE })))
     expect(window.showToast).toHaveBeenCalledWith(
-      expect.stringContaining('This task has 400 comments'),
+      expect.stringContaining('This sample rule refuses the comment'),
       'error',
     )
     expect(windowOpen()).toBe(true)
@@ -187,7 +187,7 @@ describe('the Team sync @ window', () => {
     await act(async () => send()?.click())
     await toggle()
     expect(windowOpen()).toBe(false)
-    await act(async () => writes[0].reject(new ConvexError({ code: 'rule', message: CAP })))
+    await act(async () => writes[0].reject(new ConvexError({ code: 'rule', message: RULE })))
     // the closed window's note still holds back an app update's reload
     expect(safety.isUpdateBlocked()).toBe(true)
     await toggle()
@@ -207,7 +207,7 @@ describe('the Team sync @ window', () => {
     await write('Can you check the soak report?', vi.fn(), page)
     await act(async () => send()?.click())
     await toggle()
-    await act(async () => writes[0].reject(new ConvexError({ code: 'rule', message: CAP })))
+    await act(async () => writes[0].reject(new ConvexError({ code: 'rule', message: RULE })))
     expect(page.held()).toEqual(['note'])
     // Discard on a question about the page, while the card stays on it
     await act(async () => page.discard())

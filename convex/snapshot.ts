@@ -40,7 +40,7 @@ import { v } from 'convex/values'
 import type { Doc, TableNames } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
 import { canSeeProject } from './lib/access'
-import { taskActivity } from './lib/activityVisibility'
+import { historyAnchor, taskHistoryPage } from './lib/activityVisibility'
 import { chunkLists } from './lib/arrayLimit'
 import { byId } from './lib/db'
 import { authedQuery, notFound, orgQuery } from './lib/functions'
@@ -442,28 +442,63 @@ async function threadTask(
   return { issue, project }
 }
 
+/* A page of history rows as the thread sends them. Field prints only let a
+ * refused edit name who wrote a value (model/expected.ts), so the thread
+ * leaves them out. */
+const historyOut = (rows: Doc<'activity_events'>[]) =>
+  rows.map(({ field_prints: _prints, ...event }) => rowOf(event))
+
 /* The task window's live thread. It holds the thread's newest
  * COMMENT_PAGE_MAX comments, and fewer when they are long, oldest first in
  * thread order, and says whether the thread holds earlier ones
  * (model/comments.ts threadPage). The window reads further back with
- * commentsBefore. `events` holds the task's history the caller receives
- * (lib/activityVisibility.ts taskActivity), oldest first, and is empty for
- * an archived task or a task in an archived project, which the app does not
- * show. */
+ * commentsBefore. `events` holds the newest page of the task's history the
+ * caller receives (lib/activityVisibility.ts taskHistoryPage), oldest first,
+ * `events_earlier` whether the history holds rows before it, and
+ * `events_next` the row the window reads those before with historyBefore. Both are empty for an archived task or a
+ * task in an archived project, which the app does not show. */
 export const commentThread = orgQuery({
   args: { issue_id: v.string() },
   handler: async (ctx, { issue_id }) => {
     const { issue, project } = await threadTask(ctx, issue_id)
     // comments first: the page counts only its own bytes (model/comments.ts
-    // newestComments), so taskActivity's room check must see what it spent
+    // newestComments), so the history page's room checks must see what it spent
     const page = await threadPage(ctx, issue.id)
     // the app shows history only for a task in the working set (lib/workingSet.ts);
     // threadTask already refused a project the caller cannot see
-    const events = inWorkingSet(issue, project, true) ? await taskActivity(ctx, ctx.me, issue) : []
-    // field prints only let a refused edit name who wrote a value
-    // (model/expected.ts), so the thread leaves them out
-    const shown = events.map(({ field_prints: _prints, ...event }) => rowOf(event))
-    return { comments: page.comments.map(rowOf), earlier: page.earlier, events: shown }
+    const history = inWorkingSet(issue, project, true)
+      ? await taskHistoryPage(ctx, ctx.me, issue)
+      : { rows: [], earlier: false, next: undefined }
+    return {
+      comments: page.comments.map(rowOf),
+      earlier: page.earlier,
+      events: historyOut(history.rows),
+      events_earlier: history.earlier,
+      events_next: history.next?.id ?? null,
+    }
+  },
+})
+
+/* The page of history "Show earlier activity" loads beside the comments. It
+ * holds the newest HISTORY_PAGE_MAX rows the caller receives before the row
+ * `before` (lib/activityVisibility.ts taskHistoryPage), oldest first,
+ * whether the history holds rows before them, and `next`, the row to read
+ * those before. It can hold no row while `earlier` is set. The app reads it once rather
+ * than subscribing. A `before` that is not a row of this task's history
+ * refuses with BEFORE_NOT_A_CHANGE as a bad_request, and a task the window
+ * shows no history for answers an empty page. */
+export const historyBefore = orgQuery({
+  args: { issue_id: v.string(), before: v.string() },
+  handler: async (ctx, { issue_id, before }) => {
+    const { issue, project } = await threadTask(ctx, issue_id)
+    const anchor = await historyAnchor(ctx, issue, before)
+    if (!inWorkingSet(issue, project, true)) return { events: [], earlier: false, next: null }
+    const history = await taskHistoryPage(ctx, ctx.me, issue, anchor)
+    return {
+      events: historyOut(history.rows),
+      earlier: history.earlier,
+      next: history.next?.id ?? null,
+    }
   },
 })
 

@@ -71,9 +71,9 @@ export. Deleting a task for good from Deleted items now also deletes its activit
 events. QN task numbers are organization-scoped; a task's num gives QN-<num>.
 The organization's next_task_num is its task-number counter. Task activity events
 use target_type "task" and target_id references the task's UUID.
-Newer activity events carry seq, their place in the history of their target, and
-newer task events carry named_task_nums, the QN numbers of the other tasks their
-detail names. Older events lack both.
+Task events carry named_task_nums, the QN numbers of the other tasks their
+detail names. Some events from before October 2026 lack it, and some carry seq,
+a number Qivo no longer uses.
 Description and comment content can contain att:<attachment UUID> image references;
 resolve these using task_attachments and the attachment entries in the manifest.
 Files are stored under files/attachments/ and files/avatars/. The manifest retains

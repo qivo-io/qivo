@@ -68,7 +68,7 @@ import {
 import { remainingPatchFromInput, remainingValue } from '../lib/remaining'
 import { buildPath, issueLink } from '../lib/router'
 import { matchesAllWords } from '../lib/search'
-import { eventsBeside, firstUnreadTs, mergeSpine, unreadMark } from '../lib/spine'
+import { firstUnreadTs, mergeSpine, spineWindow, unreadMark } from '../lib/spine'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { useBottomSnap } from '../lib/useBottomSnap'
 import { useConfirmArm } from '../lib/useConfirmArm'
@@ -862,16 +862,19 @@ function EditedGlyph({ c, it }: { c: CommentVM; it: IssueVM }) {
   )
 }
 
-/* The first row of a thread whose start is not loaded (P.commentsEarlier).
-   It is a muted "Show earlier comments" button above the oldest loaded
-   comment, static text while the page above loads, and Retry when it
-   failed. Each is one control tall, so the rows under it do not move when
-   it changes. */
+/* The first row of a thread whose start is not loaded (P.commentsEarlier,
+   and under All P.historyEarlier too). It is a muted "Show earlier comments"
+   button above the oldest loaded comment, or "Show earlier activity" above
+   the oldest loaded row under All, static text while the page above loads,
+   and Retry when it failed. Each is one control tall, so the rows under it
+   do not move when it changes. */
 function EarlierComments({
   state,
+  what,
   onLoad,
 }: {
   state: Exclude<CommentsEarlier, 'none'>
+  what: 'comments' | 'activity'
   onLoad: (control: HTMLElement) => void
 }) {
   if (state === 'loading') {
@@ -880,7 +883,7 @@ function EarlierComments({
         data-earlier-comments="loading"
         className="flex min-h-control-sm items-center text-sm italic text-text-3"
       >
-        Loading earlier comments…
+        Loading earlier {what}…
       </div>
     )
   }
@@ -890,7 +893,7 @@ function EarlierComments({
         data-earlier-comments="failed"
         className="flex min-h-control-sm items-center gap-2 text-sm text-text-2"
       >
-        Couldn't load earlier comments.
+        Couldn't load earlier {what}.
         <Button
           type="button"
           variant="ghost"
@@ -914,7 +917,7 @@ function EarlierComments({
         onClick={(e) => onLoad(e.currentTarget)}
       >
         <Icon name="chevronsUp" size={16} />
-        Show earlier comments
+        Show earlier {what}
       </Button>
     </div>
   )
@@ -1749,18 +1752,33 @@ function IssueDetail({
   // chat order — oldest at the top, newest at the bottom where the reply box
   // is and where the scroller opens. The Comments filter simply drops the
   // events from the merge.
-  // While the thread's start is not loaded, events older than its oldest
-  // loaded comment stay hidden, so All never shows a gap in the comments.
+  // Under All, while the start of the comments or of the history is not
+  // loaded, rows older than the later of the two oldest loaded rows stay
+  // hidden, so All never shows one beside a gap in the other (spineWindow).
   const comments = it ? P.comments.filter((c) => c.issue === it.uuid) : []
-  const events =
-    it && actFilter === 'all'
-      ? eventsBeside(
-          P.threadEvents.filter((e) => e.targetType === 'issue' && e.targetId === it.id),
-          comments,
-          P.commentsLoaded && P.commentsEarlier === 'none',
-        )
-      : []
-  const spine = mergeSpine(comments, events)
+  const history = it
+    ? P.threadEvents.filter((e) => e.targetType === 'issue' && e.targetId === it.id)
+    : []
+  const all = actFilter === 'all'
+  const from = spineWindow(
+    { rows: comments, whole: P.commentsLoaded && P.commentsEarlier === 'none' },
+    { rows: history, whole: P.commentsLoaded && P.historyEarlier === 'none' },
+  )
+  const spine = all
+    ? mergeSpine(
+        comments.filter((c) => c.ts >= from.start),
+        history.filter((e) => e.ts >= from.start),
+      )
+    : mergeSpine(comments, [])
+  // What the first row says: Comments pages its comments, All both.
+  const sides = all ? [P.commentsEarlier, P.historyEarlier] : [P.commentsEarlier]
+  const earlier: CommentsEarlier = sides.includes('loading')
+    ? 'loading'
+    : sides.includes('failed')
+      ? 'failed'
+      : sides.includes('more')
+        ? 'more'
+        : 'none'
   // "Show earlier comments" adds a page above the first row. The reader
   // keeps their place, because that row stays where it was on screen in
   // whichever ancestor scrolls (the spine, the stacked window's shared
@@ -1782,30 +1800,32 @@ function IssueDetail({
       const focused = document.activeElement === control && !lastInputWasPointer()
       earlierFrom.current = { feed, row, top: 0, focused }
     }
-    void P.loadEarlierComments()
+    // the sides whose page moves the spine back, and any that failed
+    if (!all || from.load.comments || P.commentsEarlier === 'failed') void P.loadEarlierComments()
+    if (all && (from.load.events || P.historyEarlier === 'failed')) void P.loadEarlierHistory()
   }
   // Measured while rendering the page in, when the screen still shows the
   // thread without it, so scrolling while it loaded is kept as well.
   const pending = earlierFrom.current
-  if (pending?.row?.isConnected && P.commentsEarlier !== 'loading') {
+  if (pending?.row?.isConnected && earlier !== 'loading') {
     pending.top = pending.row.getBoundingClientRect().top
   }
   useLayoutEffectID(() => {
-    const from = earlierFrom.current
-    if (!from || P.commentsEarlier === 'loading') return
+    const pressed = earlierFrom.current
+    if (!pressed || earlier === 'loading') return
     earlierFrom.current = null
-    if (from.row?.isConnected) {
-      const shift = from.row.getBoundingClientRect().top - from.top
-      if (shift !== 0) scrollerOf(from.row).scrollTop += shift
+    if (pressed.row?.isConnected) {
+      const shift = pressed.row.getBoundingClientRect().top - pressed.top
+      if (shift !== 0) scrollerOf(pressed.row).scrollTop += shift
     }
     const active = document.activeElement
-    if (from.focused && (active === null || active === document.body)) {
+    if (pressed.focused && (active === null || active === document.body)) {
       const next =
-        from.feed.querySelector<HTMLElement>('[data-earlier-comments] button') ??
-        firstRowForFocus(from.feed)
+        pressed.feed.querySelector<HTMLElement>('[data-earlier-comments] button') ??
+        firstRowForFocus(pressed.feed)
       next?.focus({ preventScroll: true })
     }
-  }, [P.commentsEarlier, spine.length])
+  }, [earlier, spine.length])
   // nothing is said until the thread is in: watchComments empties the cache
   // first, and against an empty spine every mark degrades to 'tail' — which
   // would flash "New activity on this task" over "Loading comments…" and then
@@ -1943,8 +1963,12 @@ function IssueDetail({
               Loading comments…
             </div>
           )}
-          {P.commentsLoaded && P.commentsEarlier !== 'none' && (
-            <EarlierComments state={P.commentsEarlier} onLoad={loadEarlier} />
+          {P.commentsLoaded && earlier !== 'none' && (
+            <EarlierComments
+              state={earlier}
+              what={all ? 'activity' : 'comments'}
+              onLoad={loadEarlier}
+            />
           )}
           {spine.flatMap((s, i) => {
             const row =
@@ -1966,11 +1990,14 @@ function IssueDetail({
               ? [<UnreadDivider key="unread" />, row]
               : [row]
           })}
-          {P.commentsLoaded && P.commentsFailure === 'none' && spine.length === 0 && (
-            <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic]">
-              {actFilter === 'comments' ? 'No comments yet.' : 'No activity yet.'}
-            </div>
-          )}
+          {P.commentsLoaded &&
+            P.commentsFailure === 'none' &&
+            spine.length === 0 &&
+            earlier === 'none' && (
+              <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic]">
+                {actFilter === 'comments' ? 'No comments yet.' : 'No activity yet.'}
+              </div>
+            )}
           {mark.place === 'tail' && <UnreadDivider key="unread" place="tail" note={tailNote} />}
           {/* a failed thread never passes for an empty one. The comments
               that did load stay, and this row closes the thread. */}

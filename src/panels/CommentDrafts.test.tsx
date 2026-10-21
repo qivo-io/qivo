@@ -32,8 +32,8 @@ type Answer = { resolve: (value: null) => void; reject: (reason: unknown) => voi
 
 const START = Date.parse('2026-09-14T08:00:00.000Z')
 const at = (minute: number) => new Date(START + minute * 60_000).toISOString()
-// The server's sentence for the 401st comment (convex/model/commentCounts.ts).
-const CAP = 'this task has 400 comments, the most a task can have; start a new task to continue'
+// A sample `rule` refusal of a post. The app toasts such a sentence as sent.
+const RULE = 'this sample rule refuses the comment; try again later'
 
 let P: Planner
 let detail: Detail
@@ -211,21 +211,21 @@ describe('comment drafts in the task window', { timeout: 20_000 }, () => {
     await open()
     await act(async () => deliver({ comments: range(1, 4), earlier: false }))
     const composer = await editorOf('Leave a comment')
-    await act(async () => composer.commands.insertContent('The 401st comment'))
+    await act(async () => composer.commands.insertContent('One more comment'))
     await click('Comment')
     // posted at once, and the draft waits, locked, for the server
-    expect(thread()).toEqual(['Check 1', 'Check 2', 'Check 3', 'The 401st comment'])
-    expect(composer.getText()).toBe('The 401st comment')
+    expect(thread()).toEqual(['Check 1', 'Check 2', 'Check 3', 'One more comment'])
+    expect(composer.getText()).toBe('One more comment')
     expect(composer.isEditable).toBe(false)
     expect(button('Comment').disabled).toBe(true)
     expect(button('Discard changes').disabled).toBe(true)
-    await act(async () => writes[0].answer.reject(new ConvexError({ code: 'rule', message: CAP })))
+    await act(async () => writes[0].answer.reject(new ConvexError({ code: 'rule', message: RULE })))
     expect(window.showToast).toHaveBeenCalledWith(
-      expect.stringContaining('This task has 400 comments'),
+      expect.stringContaining('This sample rule refuses the comment'),
       'error',
     )
     expect(thread()).toEqual(['Check 1', 'Check 2', 'Check 3'])
-    expect(composer.getText()).toBe('The 401st comment')
+    expect(composer.getText()).toBe('One more comment')
     expect(composer.isEditable).toBe(true)
     expect(button('Comment').disabled).toBe(false)
   })
@@ -316,12 +316,12 @@ describe('comment drafts in the task window', { timeout: 20_000 }, () => {
     // Tiptap destroys an unmounted editor on a 1 ms timer. Held here, the
     // refusal lands before it, as it can in the app.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-    await send('The 401st comment')
+    await send('One more comment')
     // it may yet be saved, so closing says nothing
     expect(window.showToast).not.toHaveBeenCalled()
-    await act(async () => writes[0].answer.reject(new ConvexError({ code: 'rule', message: CAP })))
+    await act(async () => writes[0].answer.reject(new ConvexError({ code: 'rule', message: RULE })))
     expect(window.showToast).toHaveBeenCalledWith(
-      expect.stringContaining('This task has 400 comments'),
+      expect.stringContaining('This sample rule refuses the comment'),
       'error',
     )
     expect(window.showToast).toHaveBeenLastCalledWith('Unsaved comment discarded', 'error')

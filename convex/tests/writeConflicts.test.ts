@@ -7,7 +7,7 @@
  *      a commit.
  *   2. A conflicted or timed out write runs again, at most twice, after a
  *      random wait, and a time out that persists says so.
- *   3. Over HTTP a comment whose count write conflicts is posted exactly
+ *   3. Over HTTP a comment whose fan-out write conflicts is posted exactly
  *      once after a retry. A conflict that outlasts the retries changes
  *      nothing and answers REST 503 with Retry-After, and the MCP tool's
  *      error result. A time out that persists answers the same way with its
@@ -20,7 +20,7 @@
  *      them.
  *
  * Convex's conflicts cannot happen in convex-test, which runs one
- * transaction at a time, so the comment count write, the ingress count and
+ * transaction at a time, so the comment fan-out, the ingress count and
  * the attach throw Convex's message for as many calls as `faults` asks. The
  * throw rolls the transaction back like the real failure. */
 /// <reference types="vite/client" />
@@ -48,10 +48,10 @@ import {
 import { NOW, newT, type OrgFixture, plantIssue, type T, uuid, withOrg } from './helpers.setup'
 
 /* What ctx.runMutation rejects with when a mutation kept conflicting on a
- * table, as the local backend reported it for two parallel comment posts
- * (the document id made low-entropy). */
+ * table, worded as the local backend reported it for two parallel comment
+ * posts (the document id made low-entropy). */
 const USER_CONFLICT =
-  'Documents read from or written to the "comment_counts" table changed while this mutation was ' +
+  'Documents read from or written to the "messages" table changed while this mutation was ' +
   'being run and on every subsequent retry. Another call to this mutation changed the document ' +
   'with ID "m1111111111111111111111111111111". See https://docs.convex.dev/error#1'
 
@@ -68,22 +68,23 @@ const TIMEOUT = 'Function execution timed out (maximum duration: 1s)\n'
 
 /* How many of the next calls of each faulty write throw, and with what. */
 const faults = vi.hoisted(() => ({
-  commentCount: 0,
+  comment: 0,
   commentError: '',
   ingress: [] as unknown[],
   attach: 0,
 }))
 
-vi.mock('../model/commentCounts', async (importOriginal) => {
-  const real = await importOriginal<typeof import('../model/commentCounts')>()
+// A post's fan-out runs after its insert, so a throw there undoes the comment.
+vi.mock('../model/messages', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../model/messages')>()
   return {
     ...real,
-    noteCommentAdded: async (...a: Parameters<typeof real.noteCommentAdded>) => {
-      if (faults.commentCount > 0) {
-        faults.commentCount--
+    notifyCommentInsert: async (...a: Parameters<typeof real.notifyCommentInsert>) => {
+      if (faults.comment > 0) {
+        faults.comment--
         throw new Error(faults.commentError || USER_CONFLICT)
       }
-      return await real.noteCommentAdded(...a)
+      return await real.notifyCommentInsert(...a)
     },
   }
 })
@@ -117,7 +118,7 @@ vi.mock('../model/billingUsage', async (importOriginal) => {
 const SECRET = `qva_${'conflicts1'.repeat(5)}`
 
 beforeEach(() => {
-  faults.commentCount = 0
+  faults.comment = 0
   faults.commentError = ''
   faults.ingress = []
   faults.attach = 0
@@ -343,82 +344,78 @@ const mcpPost = (fx: Fx, body: string) =>
     },
   )
 
-/* The task's comments and its stored count. */
+/* The bodies of the task's comments. */
 const stored = (fx: Fx) =>
   fx.t.run(async (ctx) => {
     const comments = await ctx.db
       .query('comments')
       .withIndex('by_issue', (q) => q.eq('issue_id', fx.task.id))
       .collect()
-    const count = await ctx.db
-      .query('comment_counts')
-      .withIndex('by_issue', (q) => q.eq('issue_id', fx.task.id))
-      .unique()
-    return { bodies: comments.map((c) => c.body), count: count?.count ?? null }
+    return { bodies: comments.map((c) => c.body) }
   })
 
 describe('a comment whose write conflicts', () => {
   it('is posted once after a retry on REST and MCP', async () => {
     const fx = await setup()
-    faults.commentCount = CONFLICT_RETRIES
+    faults.comment = CONFLICT_RETRIES
     expect(await restPost(fx, 'Over REST')).toMatchObject({ status: 201 })
-    faults.commentCount = 1
+    faults.comment = 1
     const mcp = await mcpPost(fx, 'Over MCP')
     expect(mcp.status).toBe(200)
     expect((mcp.json as { result: { isError?: true } }).result.isError).toBeUndefined()
-    expect(faults.commentCount).toBe(0)
-    expect(await stored(fx)).toEqual({ bodies: ['Over REST', 'Over MCP'], count: 2 })
+    expect(faults.comment).toBe(0)
+    expect(await stored(fx)).toEqual({ bodies: ['Over REST', 'Over MCP'] })
   })
 
   it('changes nothing and answers REST 503 with Retry-After when the conflict persists', async () => {
     const fx = await setup()
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    faults.commentCount = CONFLICT_RETRIES + 1
+    faults.comment = CONFLICT_RETRIES + 1
     const res = await restPost(fx, 'Lost in the crowd')
     expect(res.status).toBe(503)
     expect(res.headers.get('Retry-After')).toBe(String(WRITE_CONFLICT_RETRY_AFTER))
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
     expect(res.json).toEqual({ error: WRITE_CONFLICT_MESSAGE })
-    expect(faults.commentCount).toBe(0)
-    expect(await stored(fx)).toEqual({ bodies: [], count: null })
+    expect(faults.comment).toBe(0)
+    expect(await stored(fx)).toEqual({ bodies: [] })
     // sending it again posts it
     expect(await restPost(fx, 'Lost in the crowd')).toMatchObject({ status: 201 })
-    expect(await stored(fx)).toEqual({ bodies: ['Lost in the crowd'], count: 1 })
+    expect(await stored(fx)).toEqual({ bodies: ['Lost in the crowd'] })
   })
 
   it('changes nothing and answers 503 with its own sentence when the write keeps timing out', async () => {
     const fx = await setup()
     vi.spyOn(console, 'error').mockImplementation(() => {})
     faults.commentError = TIMEOUT
-    faults.commentCount = CONFLICT_RETRIES + 1
+    faults.comment = CONFLICT_RETRIES + 1
     const res = await restPost(fx, 'Too slow')
     expect(res.status).toBe(503)
     expect(res.headers.get('Retry-After')).toBe(String(WRITE_CONFLICT_RETRY_AFTER))
     expect(res.json).toEqual({ error: WRITE_TIMEOUT_MESSAGE })
-    faults.commentCount = CONFLICT_RETRIES + 1
+    faults.comment = CONFLICT_RETRIES + 1
     const mcp = await mcpPost(fx, 'Too slow')
     expect((mcp.json as { result: unknown }).result).toMatchObject({
       content: [{ type: 'text', text: WRITE_TIMEOUT_MESSAGE }],
       isError: true,
     })
-    expect(await stored(fx)).toEqual({ bodies: [], count: null })
+    expect(await stored(fx)).toEqual({ bodies: [] })
     // one that clears within the retries posts the comment once
-    faults.commentCount = CONFLICT_RETRIES
+    faults.comment = CONFLICT_RETRIES
     expect(await restPost(fx, 'Too slow')).toMatchObject({ status: 201 })
-    expect(await stored(fx)).toEqual({ bodies: ['Too slow'], count: 1 })
+    expect(await stored(fx)).toEqual({ bodies: ['Too slow'] })
   })
 
   it("changes nothing and answers the MCP tool's error result when the conflict persists", async () => {
     const fx = await setup()
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    faults.commentCount = CONFLICT_RETRIES + 1
+    faults.comment = CONFLICT_RETRIES + 1
     const res = await mcpPost(fx, 'Lost in the crowd')
     expect(res.status).toBe(200)
     expect((res.json as { result: unknown }).result).toMatchObject({
       content: [{ type: 'text', text: WRITE_CONFLICT_MESSAGE }],
       isError: true,
     })
-    expect(await stored(fx)).toEqual({ bodies: [], count: null })
+    expect(await stored(fx)).toEqual({ bodies: [] })
   })
 })
 
@@ -439,7 +436,7 @@ describe('a failure before dispatch', () => {
     // a conflict that clears within the retries does not show
     faults.ingress = [new Error(SYSTEM_CONFLICT)]
     expect(await mcpPost(fx, 'Sent')).toMatchObject({ status: 200 })
-    expect(await stored(fx)).toEqual({ bodies: ['Sent'], count: 1 })
+    expect(await stored(fx)).toEqual({ bodies: ['Sent'] })
   })
 
   it("answers MCP's JSON 500 with CORS for any other failure, and logs it", async () => {
@@ -455,7 +452,7 @@ describe('a failure before dispatch', () => {
     expect(res.headers.get('Content-Type')).toBe('application/json')
     expect(res.json).toEqual({ error: INTERNAL_ERROR })
     expect(log).toHaveBeenCalledWith(failure)
-    expect(await stored(fx)).toEqual({ bodies: [], count: null })
+    expect(await stored(fx)).toEqual({ bodies: [] })
   })
 })
 

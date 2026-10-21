@@ -17,7 +17,6 @@ import { require, rule } from '../lib/functions'
 import { issueKey } from '../lib/taskRefs'
 import { insertActivity, issueChanges, machineDetail } from './activity'
 import { markArchivedTask } from './archiveMarks'
-import { storeCommentCount } from './commentCounts'
 import { browserVerbDetail, cleanDescription } from './issues'
 import {
   type NotifyPreload,
@@ -280,7 +279,7 @@ export async function writeNorthstarWork(
     })
   }
   // Each task's short history, after its import row and oldest first, so
-  // seq follows ts. The words come from the app's own writers; nothing else
+  // insertion order follows ts. The words come from the app's own writers; nothing else
   // (notifications, follows, webhook events) is written for these rows.
   for (const c of data.history) {
     const doc = issueDocs.get(c.issue)
@@ -360,11 +359,6 @@ export async function writeNorthstarWork(
       skipTaskEvent: true,
     })
   }
-  // Every comment of these new tasks is written above, so their counts are
-  // whole from the start (model/commentCounts.ts).
-  const threads = new Map<string, number>()
-  for (const c of data.comments) threads.set(c.issue, (threads.get(c.issue) ?? 0) + 1)
-  for (const [issue, count] of threads) await storeCommentCount(ctx, issueIds[issue], count)
   // The archived tasks' labels, links and follows carry the mark the archive
   // steps leave (model/archiveMarks.ts), as in an organization in use.
   for (const issue of issueDocs.values()) {

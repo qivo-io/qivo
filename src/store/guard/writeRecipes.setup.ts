@@ -256,6 +256,8 @@ export function thread(): Thread {
     comments: [comment('comment-a', 'First', 1), comment('comment-b', 'Second', 2)],
     earlier: false,
     events: [],
+    events_earlier: false,
+    events_next: null,
   }
 }
 

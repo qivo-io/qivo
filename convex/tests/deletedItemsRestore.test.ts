@@ -54,7 +54,6 @@ import {
   attach,
   blobExists,
   comment,
-  countsOf,
   DAY,
   DEFAULT_BUDGET,
   deleteProject,
@@ -1364,7 +1363,7 @@ describe('notices, activity and events', () => {
       org_id,
       issue_id: root.id,
     })
-    expect(thread.events.map((e) => [e.verb, e.seq])).toEqual(verbs.map((v, i) => [v, i + 1]))
+    expect(thread.events.map((e) => e.verb)).toEqual(verbs)
     // no row of the organization is gone
     expect(await activityFor(t, org_id)).toHaveLength(3 + 1 + 600 + 1)
     for (const other of others) expect(await historyOf(t, other.id)).toHaveLength(300)
@@ -3033,44 +3032,6 @@ describe('restore calls', () => {
     })
     expect((await restore(t, f.admin, [ids.task])).restored).toEqual([ids.task])
     expect(await liveTask(t, task.id)).not.toBeNull()
-  })
-})
-
-describe('comment counts', () => {
-  it("leaves a task's count behind, and counts its thread again at the first post after a restore", async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    const org_id = f.org.id
-    const alone = await plantIssue(t, { org_id, project_id: f.sub.id })
-    const inProject = await plantIssue(t, { org_id, project_id: f.sub2.id })
-    const tasks = [alone, inProject]
-    const post = (task: Doc<'issues'>, body: string) =>
-      as(t, f.user).mutation(api.comments.create, { org_id, id: uuid(), issue_id: task.id, body })
-    for (const task of tasks) {
-      await post(task, 'First')
-      await post(task, 'Second')
-      expect(await countsOf(t, task.id)).toMatchObject([{ count: 2 }])
-    }
-
-    await deleteTask(t, f, alone.id)
-    await deleteProject(t, f, f.sub2.id)
-    await runSteps(t)
-    for (const task of tasks) expect(await countsOf(t, task.id)).toEqual([])
-    await assertNoDanglingRefs(t, 'with commented tasks in Deleted items')
-
-    const ids = [(await itemFor(t, alone.id)).id, (await itemFor(t, f.sub2.id)).id]
-    expect((await restore(t, f.user, ids)).restored.toSorted()).toEqual(ids.toSorted())
-    await runSteps(t)
-    for (const task of tasks) {
-      expect(await liveTask(t, task.id)).not.toBeNull()
-      expect(await countsOf(t, task.id)).toEqual([])
-      await post(task, 'Third')
-      const counts = await countsOf(t, task.id)
-      expect(counts.map(({ count, cursor }) => ({ count, cursor }))).toEqual([
-        { count: 3, cursor: undefined },
-      ])
-    }
-    await assertNoDanglingRefs(t, 'after commented tasks came back')
   })
 })
 

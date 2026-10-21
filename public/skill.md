@@ -196,8 +196,7 @@ Useful field rules:
   be nonblank and at most 80 characters, counted as Unicode code points (most
   single emoji count as one, a flag or a skin-tone emoji as two).
 - Descriptions and comments use Markdown, up to 20,000 characters each
-  (JavaScript string length, so an emoji can count as two). A task holds at
-  most 400 comments; past that, post in a new task. Omitted update
+  (JavaScript string length, so an emoji can count as two). Omitted update
   fields stay unchanged. Use `null` to clear `assignee_id`, `reviewer_id`, `due_date`, or
   `remaining_hours`; use `""` to clear a description.
 - While a task is in `review` with a reviewer set, it is the reviewer's to act
@@ -278,8 +277,9 @@ Useful field rules:
   `set_label` or `POST /v1/labels` creates a label (`#rrggbb` color); only
   organization admins rename or recolor one.
 - **Archive with a reason:** send `archived: true` with `archive_reason`; the
-  reason becomes a comment, as in the app's archive dialog. Only tasks take
-  a reason. Archive a project with `archived` alone.
+  reason becomes a comment, as in the app's archive dialog, and holds at most
+  500 characters. Only tasks take a reason. Archive a project with
+  `archived` alone.
 
 ## Files, history and workload
 
@@ -312,8 +312,9 @@ Useful field rules:
   more than a day ago that the description no longer names.
 - **History:** `list_task_activity` or `GET /v1/tasks/{ref}/activity`
   answers who changed what, oldest first. Comments are in `list_comments`.
-  It holds the task's newest 500 changes. An update that changes nothing adds
-  no row.
+  It holds the task's newest 500 changes; pass the first row's `id` as
+  `before` to read further back, until the answer is empty. An update that
+  changes nothing adds no row.
 - **Workload:** `get_workload` or `GET /v1/workload` answers each person's
   planned hours per week (`hours`, aligned with `week_starts`) beside their
   `plannable_hours`. Use it before assigning or scheduling work. For

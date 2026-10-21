@@ -20,7 +20,7 @@ import { cn } from '@/lib/utils'
 import { REASSIGN_MAX } from '../../convex/lib/projectGrants'
 import { projectKeyBase, projectKeyCandidate } from '../../convex/lib/projectKeys'
 import { PROJECT_DESCRIPTION_MAX } from '../../convex/lib/projectLimits'
-import { DELETE_REASON_MAX, NAME_MAX, TEXT_MAX } from '../../convex/lib/textLimits'
+import { DELETE_REASON_MAX, NAME_MAX } from '../../convex/lib/textLimits'
 import { ProjectAccessSelect } from '../components/ProjectAccessSelect'
 import { Avatar, DateSelect, FieldSelect, Icon } from '../components/qivo'
 import { relativeWeek, weekToISO } from '../lib/dates'
@@ -1315,17 +1315,12 @@ const refusedOnThrow = (sent: Promise<boolean>) =>
     return false
   })
 
-/** Whether a delete reason is longer than Deleted items stores, counted as
-    the server counts it, after trimming. A reason typed for an archive,
-    which may be far longer, stays when the person switches to Delete. */
-const reasonTooLong = (reason: string) => reason.trim().length > DELETE_REASON_MAX
-
 /** The reason field under the cards. Archive's is a comment on the task and
     is required, since the field shows for an archive only when work is
-    unfinished. Delete's is optional, shown in Deleted items and at most
-    DELETE_REASON_MAX characters; a longer one says so and holds the delete
-    rather than cut what was typed. The field tells assistive technology
-    both, and its hint. */
+    unfinished. Delete's is optional and shown in Deleted items. Both hold at
+    most DELETE_REASON_MAX characters, the server's cap for either, so a
+    reason typed for one fits the other. The field tells assistive
+    technology both, and its hint. */
 function FateReason({
   archiving,
   value,
@@ -1336,17 +1331,15 @@ function FateReason({
   onChange: (value: string) => void
 }) {
   const hint = useIdM()
-  const tooLong = !archiving && reasonTooLong(value)
   return (
     <MField data-fate-reason-field label={archiving ? 'Reason (required)' : 'Reason (optional)'}>
       <Textarea
         data-fate-reason
         aria-label={archiving ? 'Reason for archiving' : 'Reason for deleting'}
         aria-required={archiving}
-        aria-invalid={tooLong || undefined}
         aria-describedby={hint}
         rows={archiving ? 3 : 2}
-        maxLength={archiving ? TEXT_MAX : DELETE_REASON_MAX}
+        maxLength={DELETE_REASON_MAX}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className={cn(
@@ -1355,15 +1348,9 @@ function FateReason({
           archiving ? 'min-h-[72px]' : 'min-h-[56px]',
         )}
       />
-      <p
-        id={hint}
-        className={cn('mt-2 text-sm', tooLong ? '[color:var(--danger)]' : 'text-text-2')}
-      >
-        {archiving
-          ? "Saved to the task's comments."
-          : tooLong
-            ? `Shown in Deleted items. At most ${DELETE_REASON_MAX} characters.`
-            : 'Shown in Deleted items.'}
+      <p id={hint} className="mt-2 text-sm text-text-2">
+        {archiving ? "Saved to the task's comments." : 'Shown in Deleted items.'} At most{' '}
+        {DELETE_REASON_MAX} characters.
       </p>
     </MField>
   )
@@ -1470,10 +1457,7 @@ function ArchiveOrDeleteTaskModal({
   const showReason = !archiving || unfinished
   const archiveBlocked = archiving && withSubtasks && readOnly
   const canSubmit =
-    !saving &&
-    (archiving
-      ? !archiveBlocked && (!unfinished || reason.trim().length > 0)
-      : !reasonTooLong(reason))
+    !saving && (!archiving || (!archiveBlocked && (!unfinished || reason.trim().length > 0)))
   const viewOnly = plan.rows.some((r) => !r.deletable)
   const suffix = !withSubtasks
     ? ''
@@ -1750,7 +1734,7 @@ function ArchiveOrDeleteProjectModal({
         : `Moves the ${noun} to Deleted items. You can restore it from there.`
   const listed = archiving ? subs.filter((s) => !s.archived) : subs
   const submit = () => {
-    if (!summary || saving || (!archiving && reasonTooLong(reason))) return
+    if (!summary || saving) return
     if (archiving) {
       onArchive?.()
       return
@@ -1768,7 +1752,7 @@ function ArchiveOrDeleteProjectModal({
       busy={saving}
       unsent={[!saving && !!reason.trim() && 'reason']}
       onSubmit={submit}
-      canSubmit={!!summary && !saving && (archiving || !reasonTooLong(reason))}
+      canSubmit={!!summary && !saving}
       dangerSubmit={!archiving}
       focusAfterClose={focusAfterClose}
       submitLabel={

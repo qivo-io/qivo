@@ -52,7 +52,6 @@ const collect = <
     | 'issue_labels'
     | 'issue_subscriptions'
     | 'comments'
-    | 'comment_counts'
     | 'milestones'
     | 'project_access'
     | 'team_members'
@@ -351,7 +350,6 @@ describe('deleteOrgDeep', () => {
     const label = await plantLabel(t, f.org.id, 'Doomed')
     await plantMilestone(t, f.meta.id, 'Project milestone')
     await plantComment(t, { issue_id: issue.id, author: f.user.id })
-    await t.run((ctx) => ctx.db.insert('comment_counts', { issue_id: issue.id, count: 1 }))
     await plantSubscription(t, { issue_id: issue.id, profile_id: f.viewer.id })
     await plantMessageRow(t, { org_id: f.org.id, recipient_id: f.viewer.id, issue_id: issue.id })
     await plantEvent(t, { org_id: f.org.id, actor_id: f.admin.id, project_id: f.sub.id })
@@ -433,7 +431,6 @@ describe('deleteOrgDeep', () => {
       'issue_labels',
       'issue_subscriptions',
       'comments',
-      'comment_counts',
       'milestones',
       'project_access',
       'team_members',

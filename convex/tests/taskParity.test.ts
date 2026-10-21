@@ -34,7 +34,6 @@ import { liveIn } from '../lib/liveTasks'
 import { delayClock, taskForecaster } from '../lib/machineDelay'
 import { SUBTASK_WITH_SUBTASKS } from '../lib/taskLimits'
 import { sha256hex } from '../machine/auth'
-import { namedTaskNums } from '../model/activity'
 import { taskAttachments } from '../model/attachments'
 import {
   ASSIGNEE_RULE,
@@ -697,7 +696,6 @@ describe('PATCH /v1/tasks/{ref} moves, parents, labels and archive reasons', () 
       detail: `under QN-${parent.num}, ${VIA}`,
       named_task_nums: [parent.num],
     })
-    expect(namedTaskNums(attach as Doc<'activity_events'>)).toEqual([parent.num])
     // a cycle, a hidden parent and a read-only parent are refused
     await expectRefusal(restPatch(fx, parent.id, { parent: child.id }), 'rule')
     const hidden = await task(fx, { project_id: fx.hiddenSub.id })
@@ -864,7 +862,6 @@ describe('REST links', () => {
       detail: `(blocks QN-${a.num}), ${VIA}`,
       named_task_nums: [a.num],
     })
-    expect(namedTaskNums(events[0])).toEqual([a.num])
     expect((await restGet(fx, b.id)).links).toEqual([
       { kind: 'blocks', id: a.id, key: `QN-${a.num}`, title: 'A', status: a.status },
     ])
@@ -1053,13 +1050,8 @@ describe('MCP task parity', () => {
       ['archived', '(start week unset → 2026-09-21, end week unset → 2026-09-21), via MCP'],
       ['labeled', '“Bug”, via MCP'],
     ])
-    // one task's rows, numbered in write order, each listing the tasks it names
-    expect(rows.map((e) => [e.seq, e.named_task_nums])).toEqual([
-      [1, []],
-      [2, [parent.num]],
-      [3, []],
-      [4, []],
-    ])
+    // one task's rows in write order, each listing the tasks it names
+    expect(rows.map((e) => e.named_task_nums)).toEqual([[], [parent.num], [], []])
     const reason = await fx.t.run(async (ctx) =>
       ctx.db
         .query('comments')
@@ -1321,10 +1313,9 @@ describe('MCP task parity', () => {
       linked: true,
       changed: true,
     })
-    // the row names the other end of the stored link, as its text does
+    // the row names the other end of the stored link
     const linked = await activityFor(fx.t, fx.org.id)
     expect(linked).toHaveLength(1)
-    expect(linked[0].named_task_nums).toEqual(namedTaskNums(linked[0]))
     expect([[a.num], [b.num]]).toContainEqual(linked[0].named_task_nums)
     expect((await link({ ref: b.id, other: a.id, kind: 'relates', linked: true })).changed).toBe(
       false,
@@ -1492,33 +1483,5 @@ describe('the shared cores the app runs too', () => {
     await expectRefusal(link(id, c.id), 'bad_request', /^a link with this id already exists$/)
     await link(uuid(), c.id)
     expect(await activityFor(t, f.org.id)).toHaveLength(2)
-  })
-
-  it('namedTaskNums reads signed rows and still fails closed on other wording', () => {
-    const ev = (verb: string, detail: string) =>
-      ({ target_type: 'issue', verb, detail }) as Pick<
-        Doc<'activity_events'>,
-        'target_type' | 'verb' | 'detail'
-      >
-    expect(namedTaskNums(ev('linked', '— blocks QN-12 — via MCP'))).toEqual([12])
-    expect(namedTaskNums(ev('linked', '— relates to QN-3 — via the REST API (a (b) c)'))).toEqual([
-      3,
-    ])
-    expect(namedTaskNums(ev('moved', 'under QN-4 (from QN-5) — via the REST API'))).toEqual([4, 5])
-    expect(namedTaskNums(ev('detached', 'from QN-6 — via MCP'))).toEqual([6])
-    // the comma the writers have used since October 2026
-    expect(namedTaskNums(ev('linked', '(blocks QN-12), via MCP'))).toEqual([12])
-    expect(namedTaskNums(ev('linked', '(relates to QN-3), via the REST API (a (b) c)'))).toEqual([
-      3,
-    ])
-    expect(namedTaskNums(ev('moved', 'under QN-4 (from QN-5), via the REST API'))).toEqual([4, 5])
-    expect(namedTaskNums(ev('detached', 'from QN-6, via MCP'))).toEqual([6])
-    // anything else that follows the key is not a signature: fail closed
-    expect(namedTaskNums(ev('linked', '— blocks QN-12 and QN-13'))).toBeNull()
-    expect(namedTaskNums(ev('linked', '— blocks QN-12 — via email'))).toBeNull()
-    expect(namedTaskNums(ev('detached', 'from QN-6 — via MCP — via MCP'))).toBeNull()
-    expect(namedTaskNums(ev('detached', 'from QN-6, via MCP, via MCP'))).toBeNull()
-    expect(namedTaskNums(ev('linked', '(blocks QN-12), via email'))).toBeNull()
-    expect(namedTaskNums(ev('detached', 'from QN-6 via MCP'))).toBeNull()
   })
 })

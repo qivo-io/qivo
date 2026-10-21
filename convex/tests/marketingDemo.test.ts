@@ -600,21 +600,12 @@ describe('marketing demo rebuild ownership', () => {
       const roster = await ctx.db.query('profiles').collect()
       const messages = await ctx.db.query('messages').collect()
       const subscriptions = await ctx.db.query('issue_subscriptions').collect()
-      const counts = await ctx.db.query('comment_counts').collect()
       expect(comments).toHaveLength(MARKETING_DEMO.comments.length)
       expect(new Set(comments.map((comment) => comment.id)).size).toBe(comments.length)
-      expect(counts).toHaveLength(tasks.length)
       for (const task of tasks) {
         const thread = comments.filter((comment) => comment.issue_id === task.id)
         expect(thread.length, task.title).toBeGreaterThanOrEqual(1)
         expect(thread.length, task.title).toBeLessThanOrEqual(5)
-        // the seed stores each new task's whole comment count
-        expect(
-          counts
-            .filter((row) => row.issue_id === task.id)
-            .map(({ count, cursor }) => ({ count, cursor })),
-          task.title,
-        ).toEqual([{ count: thread.length, cursor: undefined }])
         expect(new Set(thread.map((comment) => comment.created_at)).size, task.title).toBe(
           thread.length,
         )
@@ -894,7 +885,6 @@ describe('marketing demo rebuild ownership', () => {
       t.run(async (ctx) => ({
         messages: await ctx.db.query('messages').collect(),
         comments: await ctx.db.query('comments').collect(),
-        counts: await ctx.db.query('comment_counts').collect(),
         subscriptions: await ctx.db.query('issue_subscriptions').collect(),
         teams: await ctx.db.query('teams').collect(),
         memberships: await ctx.db.query('team_members').collect(),
@@ -975,7 +965,6 @@ describe('marketing demo rebuild ownership', () => {
       for (const table of [
         'messages',
         'comments',
-        'counts',
         'subscriptions',
         'teams',
         'memberships',
@@ -1051,11 +1040,10 @@ describe('marketing demo rebuild ownership', () => {
     for (const issue of MARKETING_DEMO.issues) {
       const id = await demoId(`issue:${issue.key}`)
       const task = tasks.find((row) => row.id === id)!
-      const own = rows.filter((row) => row.target_id === id).sort((x, y) => x.seq! - y.seq!)
-      expect(
-        own.map((row) => row.seq),
-        issue.key,
-      ).toEqual(own.map((_, i) => i + 1))
+      // in insertion order, which the task window pages by
+      const own = rows
+        .filter((row) => row.target_id === id)
+        .sort((x, y) => x._creationTime - y._creationTime)
       for (const [i, row] of own.entries()) if (i > 0) expect(row.ts >= own[i - 1].ts).toBe(true)
       // the import row comes first, at the task's creation
       expect(own[0]).toMatchObject({
@@ -1134,7 +1122,8 @@ describe('marketing demo rebuild ownership', () => {
         )
         .collect(),
     )
-    expect(history.map((row) => row.seq).at(-1)).toBe(before + 1)
+    expect(history).toHaveLength(before + 1)
+    expect(history.at(-1)?.verb).toBe('renamed')
   }, 30_000)
 
   it('wipe removes work but preserves the roster and allows reseeding with stable issue UUIDs', async () => {

@@ -1346,11 +1346,11 @@ same way, as a comment by the caller, trimmed, at the moment of the archive.
 It is posted only when that PATCH archives the task, so not for a task that
 was already archived, and a blank reason posts nothing. `archive_reason`
 without `archived: true` is a `400` (`archive_reason needs archived set to
-true`). It is at most 20,000 characters after trimming, counted like a
-description; a longer one is a `400` (`archive_reason must be at most 20,000
-characters`) and the PATCH changes nothing. The reason is posted even when the
-task already holds 400 comments, the most a task can otherwise have
-([Comments](#comments)).
+true`). It is at most 500 characters after trimming, counted like a
+description, the same limit as the reason the app's delete window shows in
+Deleted items. A longer one is a `400` (`an archive reason must be at most 500
+characters`) and the PATCH changes nothing, also for a task that is already
+archived. Until October 2026 the limit was 20,000 characters.
 
 Task shape of a list row from `GET /v1/tasks`:
 
@@ -1578,14 +1578,7 @@ the created comment; a blank `body` is a `400`. A comment body is at most
 20,000 characters after trimming, counted like a description, on `POST` and
 `PATCH`; a longer one is a `400` (`a comment must be at most 20,000
 characters`). Comments go to Deleted items with their task and come back
-with it.
-
-A task holds at most 400 comments. `POST` on a task that has 400 is a `400`
-(`this task has 400 comments, the most a task can have; start a new task to
-continue`), and so is the same post in the app and over MCP. Deleting a
-comment makes room again. A task that had more than 400 comments before the
-limit keeps them, and only new comments are refused. An `archive_reason` is
-posted even on a task at the limit, so archiving never fails on it.
+with it. A task has no limit on the number of comments.
 
 `PATCH /v1/comments/{id}` replaces a comment's body and answers the comment;
 `DELETE /v1/comments/{id}` answers `{ "deleted": true, "id": "…", "task_id":
@@ -1930,7 +1923,8 @@ put a dropped reference back before then.
 ### Task activity
 
 ```
-GET /v1/tasks/{ref}/activity   the task's history, oldest first (read)
+GET /v1/tasks/{ref}/activity   the task's newest history, oldest first (read)
+       ?before=<activity id>  the rows before that one
 ```
 
 ```json
@@ -1951,9 +1945,16 @@ every row. Other users do not receive a row that names a project they cannot
 access, such as the project the task was in before a move, or one that names
 another task they cannot read, such as the other end of a link. An
 archived task's history is answered too, by the same rule; the app shows it
-again once the task is restored. Each task keeps its newest 500 activity
-rows, so an answer holds at most 500. Changes to other tasks never remove
-them. Deleting a task for good from Deleted items deletes its history.
+again once the task is restored. A task keeps all its activity rows, and an
+answer holds at most 500 of them. To read further back, pass the `id` of the
+first row in the array as `before`, and repeat until the array is empty. Only
+an empty array means there is no earlier history. A `before` that is not the
+`id` of a row in this task's history is a `400` (`before must be the id of a
+row in this task's history`). The request reads on past rows you do not
+receive. When it cannot find one row you receive before it has read as much
+as one request may, it is a `400` (`too many of this task's changes are
+hidden from you to read them at once; an organization admin can read them`).
+Deleting a task for good from Deleted items deletes its history.
 See [Side effects and audit trail](#side-effects-and-audit-trail) for the
 wording.
 

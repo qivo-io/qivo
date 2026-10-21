@@ -821,8 +821,8 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       // while edits are paused (snapshot trouble) the draft and edit mode stay
       if (P.refusePausedEdit()) return
       // The draft stays until the server answers, locked so nothing typed
-      // meanwhile is cleared with it. A refusal (the task's comment cap, lost
-      // access, a deleted task) keeps it dirty for another try.
+      // meanwhile is cleared with it. A refusal (a body over the length cap,
+      // lost access, a deleted task) keeps it dirty for another try.
       sendingRef.current = true
       setSending(true)
       setLinkPop(null)

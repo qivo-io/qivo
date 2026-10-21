@@ -139,7 +139,6 @@ const APP_OWNED: TableNames[] = [
   'issue_labels',
   'issue_attachments',
   'comments',
-  'comment_counts',
   'agent_keys',
   'issue_subscriptions',
   'messages',
@@ -588,8 +587,6 @@ describe('public Northstar provisioning and bounded deletion', () => {
     expect(remainder.bytes.slice(0, 4)).toEqual([null, null, null, null])
     expect(remainder.bytes[4]).not.toBeNull()
     expect(remainder.tables.comments).toBe(MARKETING_DEMO.comments.length)
-    // the other demo's tasks keep their comment counts, one each
-    expect(remainder.tables.comment_counts).toBe(MARKETING_DEMO.issues.length)
     expect(remainder.tables.roadmap_history).toBe(0)
     expect(remainder.tables.user_prefs).toBe(0)
     expect(remainder.tables.issue_attachments).toBe(0)

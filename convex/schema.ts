@@ -1213,13 +1213,14 @@ export default defineSchema({
     // owning team. Like related_project_id it may outlive its team. Only
     // task rows reach clients, so these rows are read in the export only.
     team_id: v.optional(v.string()),
-    // This row's place in its subject's history (target_type, target_id), 1,
-    // 2, 3 and so on in commit order. Only model/activity.ts insertActivity
-    // writes it. Rows stored before numbering have none and sort first.
+    // Unused. Rows written before October 2026 numbered their subject's
+    // history here. internal/activityRows.ts run removes it from them, and
+    // the field goes once every deployment has run it.
     seq: v.optional(v.number()),
-    // On task rows written since numbering, the QN numbers of the other
-    // tasks the detail names, in text order, [] when none. The visibility
-    // rule reads it instead of the text (lib/activityVisibility.ts).
+    // On task rows, the QN numbers of the other tasks the detail names, in
+    // text order, [] when none. The visibility rule reads it instead of the
+    // text, and a task row without it reaches organization admins only
+    // (lib/activityVisibility.ts).
     named_task_nums: v.optional(v.array(v.number())),
     // On task rows written since the field check, the print of each field
     // the write changed, by field (lib/fieldPrints.ts), so a refused edit
@@ -1230,24 +1231,12 @@ export default defineSchema({
     .index('by_uuid', ['id'])
     .index('by_org_ts', ['org_id', 'ts'])
     .index('by_actor', ['actor_id']) // removeProfile's SET NULL — rows survive their actor
-    // One subject's history, for its readers and its cap (model/activity.ts)
-    .index('by_target', ['org_id', 'target_type', 'target_id', 'seq'])
+    // One subject's history in insertion order, for its readers (model/activity.ts)
+    .index('by_target', ['org_id', 'target_type', 'target_id'])
     // The rows filed under one project, for the project purge
     .index('by_project', ['org_id', 'project_id']),
 
   comments: commentsTable,
-
-  // How many comments a task holds, for the per-task cap
-  // (model/commentCounts.ts). It is its own table and not a task field,
-  // because the app snapshot reads every active task and no other write
-  // changes the task when a comment is posted. A task without a row is not
-  // counted yet. While `cursor` is set, `count` covers the comments before
-  // that position in the by_issue index, and later steps count the rest.
-  comment_counts: defineTable({
-    issue_id: v.string(),
-    count: v.number(),
-    cursor: v.optional(v.string()),
-  }).index('by_issue', ['issue_id']),
 
   messages: defineTable({
     id: v.string(),

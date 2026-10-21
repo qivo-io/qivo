@@ -1,12 +1,11 @@
 /* An agent key's name in the provenance of its REST writes' activity rows,
  * `via the REST API (<name>)`. The app reads status moves out of these rows
- * (src/lib/teamSync.ts statusMoveOf, whose test reads such details) and the
- * snapshot reads the tasks a row names (model/activity.ts namedTaskNums), so
- * a name must neither add a clause nor break the signature. */
+ * (src/lib/teamSync.ts statusMoveOf, whose test reads such details), so a
+ * name must not add a clause. The tasks a row names are stored in
+ * named_task_nums, which the name cannot change. */
 
 import { describe, expect, it } from 'vitest'
 import { sha256hex } from '../machine/auth'
-import { namedTaskNums } from '../model/activity'
 import { activityFor, NOW, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
 
 /* An organization whose agent may edit the sub-project, with two tasks in
@@ -65,11 +64,11 @@ describe('an agent key name in the provenance of its writes', () => {
     )
   })
 
-  it('cannot break the signature of a link the snapshot reads', async () => {
+  it('cannot change the tasks a link row names', async () => {
     const { t, f, a, request } = await fixture('Line one\nline “two”')
     await request('POST', '/v1/tasks/QN-1/links', { task: 'QN-2', kind: 'blocks' })
     const row = await latest(t, f.org.id, a.id)
     expect(row?.detail).toBe("(blocks QN-2), via the REST API (Line one line 'two')")
-    expect(namedTaskNums(row!)).toEqual([2])
+    expect(row?.named_task_nums).toEqual([2])
   })
 })

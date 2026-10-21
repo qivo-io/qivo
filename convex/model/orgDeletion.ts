@@ -29,8 +29,8 @@
  * hold seats elsewhere), per-login appearance and roadmap history, pending
  * profile_removals and label_removals rows (their own steps finish), the
  * platform audit log, webhook receipts that only name provider ids, and any
- * activity_retention row an earlier release left, a table the schema no
- * longer lists. */
+ * activity_retention or comment_counts row an earlier release left, tables
+ * the schema no longer lists. */
 
 import type { Doc, Id, TableNames } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
@@ -245,15 +245,6 @@ const taskRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
             ctx.db
               .query('issue_subscriptions')
               .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issue.id))
-              .take(n),
-          ),
-        // The count goes before the comments it counts, so a count step
-        // scheduled earlier finds no row and ends (model/commentCounts.ts).
-        () =>
-          drain(ctx, budget, (n) =>
-            ctx.db
-              .query('comment_counts')
-              .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
               .take(n),
           ),
         () =>

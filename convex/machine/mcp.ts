@@ -96,10 +96,9 @@ import {
   vEventOwner,
   WEBHOOK_MAX_TTL_MS,
 } from '../lib/taskEvents'
-import { LABEL_NAME_MAX, TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
+import { DELETE_REASON_MAX, LABEL_NAME_MAX, TEXT_MAX } from '../lib/textLimits'
 import { ingressShard } from '../model/billingUsage'
-import { COMMENT_MAX } from '../model/commentCounts'
-import { postComment } from '../model/comments'
+import { assertArchiveReasonFits, postComment } from '../model/comments'
 import { moveTasksToTrash } from '../model/deletedItems'
 import {
   createExpectedSentence,
@@ -521,7 +520,7 @@ export const TOOLS: McpTool[] = [
     def: {
       name: 'add_comment',
       title: 'Add comment',
-      description: `Comment on a task's discussion thread, as yourself. \`ref\` is a task ID like QN-482 (bare 482 works too) or a uuid; \`body\` is markdown. Commenting does not change the task itself. A task holds at most ${COMMENT_MAX} comments; past that, start a new task.`,
+      description: `Comment on a task's discussion thread, as yourself. \`ref\` is a task ID like QN-482 (bare 482 works too) or a uuid; \`body\` is markdown. Commenting does not change the task itself.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -767,7 +766,7 @@ export const TOOLS: McpTool[] = [
           },
           archive_reason: {
             type: 'string',
-            maxLength: TEXT_MAX,
+            maxLength: DELETE_REASON_MAX,
           },
           project: {
             type: 'string',
@@ -2046,9 +2045,7 @@ export const updateIssue = internalMutation({
     }
     // REST's parse-time cap, after trimming, also for a task that is
     // already archived and so posts no comment
-    if (a.archive_reason !== undefined && a.archive_reason.trim().length > TEXT_MAX) {
-      throw badRequest(`archive_reason must be at most ${TEXT_MAX_LABEL} characters`)
-    }
+    if (a.archive_reason !== undefined) assertArchiveReasonFits(a.archive_reason)
     if (moves && a.project === undefined) {
       throw badRequest(
         'project is required to move a task; sub_project names one of its sub-projects',

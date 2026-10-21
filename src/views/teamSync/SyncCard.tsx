@@ -327,8 +327,8 @@ export function MentionCtl({
   const send = () => {
     if (!ready) return
     // The window closes once the server saves the note. A refused one (the
-    // store toasts why, such as the task's comment cap or a body over the
-    // length cap once escaped) keeps the window open, so the note is not lost.
+    // store toasts why, such as lost access or a body over the length cap
+    // once escaped) keeps the window open, so the note is not lost.
     setKept(true)
     setSending(true)
     void P.addComment(it.uuid, mentionBody(person, text)).then((saved) => {

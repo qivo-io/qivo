@@ -96,7 +96,7 @@ export function writeRunner(ctx: Runners): WriteRunner {
  * plain Error whose message is the backend's optimistic concurrency failure,
  * ErrorMetadata::user_occ in convex-backend's errors crate, or OCC_ERROR_MSG
  * for a conflict on a system table. A user_occ message reads, for example,
- * `Documents read from or written to the "comment_counts" table changed
+ * `Documents read from or written to the "messages" table changed
  * while this mutation was being run and on every subsequent retry. Another
  * call to this mutation changed the document with ID "…". See
  * https://docs.convex.dev/error#1`. Such a transaction never committed. The

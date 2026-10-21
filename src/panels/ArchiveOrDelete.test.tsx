@@ -305,30 +305,27 @@ describe('Archive or delete a task', () => {
     ])
   })
 
-  it('holds a delete whose reason is longer than Deleted items stores, and keeps the text', async () => {
+  it('holds an archive or a delete reason to the same 500 characters, and says so', async () => {
     answers['issues:deleteDeep'] = () => Promise.resolve(null)
     await openTask('root')
-    // 600 characters, fine for an archive's comment
-    const long = 'Measured drift '.repeat(40)
-    await type(long)
+    const field = () => find<HTMLTextAreaElement>('[data-fate-reason]')
+    expect(field().maxLength).toBe(500)
+    expect(text('[data-fate-reason-field]')).toContain(
+      "Saved to the task's comments. At most 500 characters.",
+    )
+    const full = 'Measured drift '.repeat(40).slice(0, 500)
+    await type(full)
     expect(button('Archive').disabled).toBe(false)
     await choose('delete')
-    const field = () => find<HTMLTextAreaElement>('[data-fate-reason]')
+    expect(field().maxLength).toBe(500)
     expect(text('[data-fate-reason-field]')).toContain(
       'Shown in Deleted items. At most 500 characters.',
     )
-    expect(field().getAttribute('aria-invalid')).toBe('true')
-    expect(field().maxLength).toBe(500)
-    expect(field().value).toBe(long)
-    expect(button('Delete 4 tasks').disabled).toBe(true)
-    await click(button('Delete 4 tasks'))
-    expect(writes()).toEqual([])
-    await type(long.slice(0, 500))
-    expect(field().hasAttribute('aria-invalid')).toBe(false)
+    expect(field().value).toBe(full)
     await click(button('Delete 4 tasks'))
     await settle()
     expect(writes()).toEqual([
-      { name: 'issues:deleteDeep', args: expect.objectContaining({ reason: long.slice(0, 500) }) },
+      { name: 'issues:deleteDeep', args: expect.objectContaining({ reason: full }) },
     ])
   })
 
@@ -493,10 +490,10 @@ describe('Archive or delete a task', () => {
     const field = () => find<HTMLTextAreaElement>('[data-fate-reason]')
     const hint = () => document.getElementById(field().getAttribute('aria-describedby') ?? '')
     expect(field().getAttribute('aria-required')).toBe('true')
-    expect(hint()?.textContent).toBe("Saved to the task's comments.")
+    expect(hint()?.textContent).toBe("Saved to the task's comments. At most 500 characters.")
     await choose('delete')
     expect(field().getAttribute('aria-required')).toBe('false')
-    expect(hint()?.textContent).toBe('Shown in Deleted items.')
+    expect(hint()?.textContent).toBe('Shown in Deleted items. At most 500 characters.')
   })
 
   it('asks again when the subtasks changed, and ignores clicks for a second after', async () => {

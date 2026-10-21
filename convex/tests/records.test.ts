@@ -24,6 +24,7 @@ import { ConvexError } from 'convex/values'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
+import { namedTaskNums } from '../internal/activityRows'
 import { verifyFileToken } from '../lib/fileTokens'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { weekGrid, weeksSpreadSoFar } from '../lib/workload'
@@ -1447,17 +1448,22 @@ describe('task activity', () => {
   ): Promise<void> {
     await fx.t.run(async (ctx) => {
       for (const [i, row] of rows.entries()) {
-        await ctx.db.insert('activity_events', {
+        const doc = {
           id: uuid(),
           org_id: fx.org.id,
           ts: `2026-01-01T00:00:0${i}.000Z`,
           actor_id: fx.user.id,
           verb: 'changed',
-          target_type: 'issue',
+          target_type: 'issue' as const,
           target_id: issue.id,
           label: issue.title,
           project_id: issue.project_id,
           ...row,
+        }
+        // each with the list of tasks its text names, as the app writes it
+        await ctx.db.insert('activity_events', {
+          named_task_nums: namedTaskNums(doc) ?? undefined,
+          ...doc,
         })
       }
     })

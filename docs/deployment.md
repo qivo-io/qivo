@@ -123,21 +123,18 @@ the protection bypass:
 
 ```sh
 "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-staging" \
-  node scripts/staging-check.mjs --staging --comment-cap
+  node scripts/staging-check.mjs --staging
 ```
 
-`--comment-cap` also fills one task to its 400 comments and pages through
-them with **Show earlier comments** in the task window. The script keeps
-each person and agent under 200 requests a minute, so a run with
-`--comment-cap` takes 4 to 8 minutes against a local backend and an
-estimated 8 to 15 minutes on staging. A tool that stops a foreground command
-after a few minutes would end the run before its cleanup, so start it in its
-own session with its output in a log file, which holds no secrets, and wait
-at least 30 minutes before treating it as stuck:
+The script keeps each person and agent under 200 requests a minute. A tool
+that stops a foreground command after a few minutes would end the run before
+its cleanup, so start it in its own session with its output in a log file,
+which holds no secrets, and wait at least 30 minutes before treating it as
+stuck:
 
 ```sh
 setsid "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-staging" \
-  node scripts/staging-check.mjs --staging --comment-cap \
+  node scripts/staging-check.mjs --staging \
   > "${TMPDIR:-/tmp}/staging-check.log" 2>&1 < /dev/null &
 ```
 

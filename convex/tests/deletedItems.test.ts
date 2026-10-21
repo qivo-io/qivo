@@ -58,7 +58,6 @@ import {
   attach,
   blobExists,
   comment,
-  countsOf,
   DAY,
   DEFAULT_BUDGET,
   deleteProject,
@@ -71,7 +70,6 @@ import {
   itemFor,
   jobFor,
   liveTask,
-  plantCount,
   plantHistory,
   plantRows,
   runSteps,
@@ -320,12 +318,9 @@ describe('moving a task to Deleted items', () => {
     // the wrapped comment adds a few hundred bytes to its body
     const fits = await comment(t, task, 'x'.repeat(STORED_ROW_MAX_BYTES - 1000))
     const tooLarge = await comment(t, task, 'x'.repeat(STORED_ROW_MAX_BYTES))
-    await plantCount(t, task, 2)
     await deleteTask(t, f, task.id)
     const item = await itemFor(t, task.id)
     expect(item.state).toBe('ready')
-    // the count stays out of Deleted items (model/commentCounts.ts)
-    expect(await countsOf(t, task.id)).toEqual([])
     expect(item.dropped_rows).toBe(1)
     expect(item.counts.tasks).toBe(1)
     expect(await commentStored(t, fits.id)).toBe(true)
@@ -348,7 +343,6 @@ describe('moving a task to Deleted items', () => {
     })
     const note = await comment(t, huge)
     const file = await attach(t, huge)
-    await plantCount(t, huge)
     await deleteTask(t, f, huge.id)
     const hugeItem = await itemFor(t, huge.id)
     expect(hugeItem).toMatchObject({ state: 'ready', dropped_rows: 1 })
@@ -356,7 +350,6 @@ describe('moving a task to Deleted items', () => {
     expect(await storedRows(t, hugeItem.id)).toEqual([])
     expect(await liveTask(t, huge.id)).toBeNull()
     expect(await t.run((ctx) => ctx.db.get(note._id))).toBeNull()
-    expect(await countsOf(t, huge.id)).toEqual([])
     expect(await blobExists(t, file.storage_id)).toBe(false)
     await assertNoDanglingRefs(t, 'after rows too large to store')
   })
@@ -1334,8 +1327,6 @@ describe('purging', () => {
       await ctx.db.patch(item._id, { state: 'stuck' })
     })
     expect(await liveTask(t, stranded.id)).not.toBeNull()
-    // a count, as posts leave on a task whose rows the move has not reached
-    await plantCount(t, stranded)
 
     Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
     await t.run(async (ctx) => startPurge(ctx, (await byId(ctx, 'deleted_items', item.id))!))
@@ -1349,7 +1340,6 @@ describe('purging', () => {
           .collect(),
       ).toEqual([])
       expect(await ctx.db.query('comments').collect()).toEqual([])
-      expect(await ctx.db.query('comment_counts').collect()).toEqual([])
       expect(await ctx.db.query('deleted_rows').collect()).toEqual([])
     })
     expect(await blobExists(t, strandedFile.storage_id)).toBe(false)
@@ -1638,7 +1628,6 @@ async function trashInFlight(t: T, f: OrgFixture) {
   const org_id = f.org.id
   const ready = await plantIssue(t, { org_id, project_id: f.sub.id })
   const readyFile = await attach(t, ready)
-  await plantCount(t, ready, 0)
   await deleteTask(t, f, ready.id)
   const draining = await plantIssue(t, { org_id, project_id: f.sub.id })
   const drainingFile = await attach(t, draining)
@@ -1661,8 +1650,6 @@ async function trashInFlight(t: T, f: OrgFixture) {
   expect((await itemFor(t, draining.id)).state).toBe('moving')
   expect((await itemFor(t, f.sub2.id)).state).toBe('moving')
   expect(await liveRowsOf(t, draining.id)).toBeGreaterThan(0)
-  // a move deletes a task's count with the rows it drains
-  expect(await countsOf(t, ready.id)).toEqual([])
   const left = await t.run((ctx) =>
     ctx.db
       .query('issues')
@@ -1670,9 +1657,6 @@ async function trashInFlight(t: T, f: OrgFixture) {
       .collect(),
   )
   expect(left.length).toBeGreaterThan(0)
-  // counts, as posts leave on tasks whose rows the moves have not reached,
-  // for a teardown to delete
-  for (const task of [draining, ...left]) await plantCount(t, task)
   return {
     files: [readyFile, drainingFile, strandedFile].map((file) => file.storage_id),
     elsewhere: { item: await itemFor(t, elsewhere.id), file: elsewhereFile.storage_id },
@@ -1713,7 +1697,7 @@ describe('organization teardown', () => {
 
     expect(await trashOf(t, f.org.id)).toEqual({ items: [], rows: [], tasks: [] })
     expect(await t.run((ctx) => ctx.db.query('deleted_item_jobs').collect())).toEqual([])
-    for (const table of ['issues', 'comments', 'comment_counts', 'issue_attachments'] as const)
+    for (const table of ['issues', 'comments', 'issue_attachments'] as const)
       expect(await t.run((ctx) => ctx.db.query(table).collect()), table).toEqual([])
     for (const file of files) expect(await blobExists(t, file)).toBe(false)
     // the other organization keeps its item and its bytes
@@ -1765,7 +1749,6 @@ describe('organization teardown', () => {
           .collect(),
       ),
     ).toEqual([])
-    expect(await t.run((ctx) => ctx.db.query('comment_counts').collect())).toEqual([])
     for (const file of files) expect(await blobExists(t, file)).toBe(false)
     // live work and the other organization stay
     expect(
@@ -1920,7 +1903,7 @@ describe("an organization's deletion", () => {
     await runSteps(t)
 
     expect(await trashOf(t, f.org.id)).toEqual({ items: [], rows: [], tasks: [] })
-    for (const table of ['deleted_item_jobs', 'deleted_item_parents', 'comment_counts'] as const)
+    for (const table of ['deleted_item_jobs', 'deleted_item_parents'] as const)
       expect(await t.run((ctx) => ctx.db.query(table).collect()), table).toEqual([])
     expect(await liveRowsOf(t, draining)).toBe(0)
     for (const file of trashOnly) expect(await blobExists(t, file)).toBe(false)

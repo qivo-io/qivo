@@ -306,9 +306,24 @@ const HELD_FAILURE_MS = 5000
    rest. null = nothing delivered yet for the watched issue. It is the
    thread's live window, its newest comments, oldest first in thread order. */
 let commentsSnap: Row<'comments'>[] | null = null
-/* The watched task's history from the same delivery as commentsSnap, oldest
-   first, the task window's changes under All. */
+/* The watched task's history from the same delivery as commentsSnap, its
+   newest page, oldest first in insertion order, the task window's changes
+   under All. */
 let eventsSnap: Row<'activity_events'>[] = []
+/* The watched task's history older than that page, oldest first: earlier
+   pages (P.loadEarlierHistory) and rows that left the page as newer ones
+   arrived. Server truth like eventsSnap, but not live, so a row someone's
+   change hides from the person stays until the task opens again. */
+let olderEvents: Row<'activity_events'>[] = []
+/* Whether the watched task's first history row is loaded, so nothing is
+   earlier, and how the last load of an earlier page of history went. */
+let historyStart = false
+let historyLoad: 'idle' | 'loading' | 'failed' = 'idle'
+/* The row the next earlier page of history is read before: the `next` of
+   the last page loaded, or of the live page the history started from (null
+   when the history start is loaded). A page can skip rows the person does
+   not receive, so this can be a row the thread does not show. */
+let historyNext: string | null = null
 /* The watched thread's comments older than the live window, oldest first in
    thread order. They are earlier pages (P.loadEarlierComments) and comments
    that left the window as newer ones arrived. Server truth like
@@ -348,7 +363,9 @@ function buildThreadRows() {
   rows.comments = new Map(
     structuredClone([...olderComments, ...commentsSnap]).map((r) => [r.id, r]),
   )
-  rows.threadEvents = structuredClone(eventsSnap)
+  rows.threadEvents = structuredClone([
+    ...new Map([...olderEvents, ...eventsSnap].map((r) => [r.id, r])).values(),
+  ])
   PLANNER.commentsLoaded = true
 }
 
@@ -369,9 +386,12 @@ function receiveThread(
     comments: Row<'comments'>[]
     earlier: boolean
     events: Row<'activity_events'>[]
+    events_earlier: boolean
+    events_next: string | null
   },
   replay = false,
 ): Row<'comments'>[] {
+  receiveHistory(page, commentsSnap === null)
   const prev = commentsSnap
   const first = page.comments[0]
   let slid: Row<'comments'>[] = []
@@ -403,8 +423,45 @@ function receiveThread(
   // a fresh window holds the comments in it as the server has them now
   if (!replay) for (const comment of page.comments) acceptedCommentChanges.delete(comment.id)
   commentsSnap = page.comments
-  eventsSnap = page.events
   return slid
+}
+
+/* Records the history page of a delivery of the watched thread, `first`
+   when it is the first since the thread was watched. A page with nothing
+   earlier holds the whole history. A page whose first row the last one
+   held slid forward as new rows arrived: the rows before that one left at
+   its old end and move to olderEvents, so the history a reader loaded
+   stays. A page whose first row is in olderEvents reaches back into what
+   was loaded, and one that again holds no row repeats the last. Neither
+   moves historyNext, which stays older than every row they hold. Any other
+   page, one that no longer meets the last because more rows arrived
+   between two deliveries than it holds, or one that gained rows at its old
+   end because what the person sees changed, starts the history over from
+   the page. */
+function receiveHistory(
+  page: {
+    events: Row<'activity_events'>[]
+    events_earlier: boolean
+    events_next?: string | null
+  },
+  first: boolean,
+) {
+  const prev = eventsSnap
+  const restart = () => {
+    olderEvents = []
+    historyStart = !page.events_earlier
+    historyNext = page.events_next ?? null
+  }
+  const head = page.events[0]
+  const at = head ? prev.findIndex((r) => r.id === head.id) : -1
+  const back = head ? olderEvents.findIndex((r) => r.id === head.id) : -1
+  if (first || !page.events_earlier) restart()
+  else if (at !== -1) {
+    const known = new Set(olderEvents.map((r) => r.id))
+    olderEvents = [...olderEvents, ...prev.slice(0, at).filter((r) => !known.has(r.id))]
+  } else if (back !== -1) olderEvents = olderEvents.slice(0, back)
+  else if (head !== undefined || prev.length > 0) restart()
+  eventsSnap = page.events
 }
 
 /* Drops the comments in `slid` that were deleted rather than pushed out of
@@ -522,7 +579,10 @@ function subscribeThread(issueUuid: string, orgId: string) {
     commentsSnap = []
     eventsSnap = []
     olderComments = []
+    olderEvents = []
+    historyNext = null
     threadStart = true
+    historyStart = true
     threadDelivered(issueUuid)
   }
   commentsUnsub = convex.onUpdate(
@@ -957,6 +1017,7 @@ function shownWorkspace() {
       P.comments,
       P.threadEvents,
       P.commentsEarlier,
+      P.historyEarlier,
       P.messages,
       P.messageGroups,
       P.unreadMessages,
@@ -2925,6 +2986,8 @@ function rebuildComments() {
   )
   PLANNER.commentsEarlier =
     !PLANNER.commentsLoaded || threadStart ? 'none' : earlierLoad === 'idle' ? 'more' : earlierLoad
+  PLANNER.historyEarlier =
+    !PLANNER.commentsLoaded || historyStart ? 'none' : historyLoad === 'idle' ? 'more' : historyLoad
 }
 
 function rebuild(now = new Date()) {
@@ -4218,6 +4281,9 @@ export const PLANNER = {
   // 'more', or 'loading' while P.loadEarlierComments runs and 'failed' after
   // it failed
   commentsEarlier: 'none' as CommentsEarlier,
+  // whether the watched task's history holds rows before the oldest loaded
+  // one, as commentsEarlier says for its comments (P.loadEarlierHistory)
+  historyEarlier: 'none' as CommentsEarlier,
   /* Changes whenever a rebuild changes anything a task's view reads besides
      the task's own view model and delay (keepIssues): people (but not their
      Team sync stamps), organizations and their settings, projects and
@@ -6146,9 +6212,13 @@ export const PLANNER = {
     commentsSnap = null
     eventsSnap = []
     olderComments = []
+    olderEvents = []
+    historyNext = null
     acceptedCommentChanges.clear()
     threadStart = false
+    historyStart = false
     earlierLoad = 'idle'
+    historyLoad = 'idle'
     threadCurrent = false
     layers.dropSaved('thread', issueUuid ?? undefined, true)
     PLANNER.commentsLoaded = false
@@ -6162,6 +6232,7 @@ export const PLANNER = {
     if (issueUuid && !row) {
       PLANNER.commentsLoaded = true
       threadStart = true
+      historyStart = true
     }
     repaint({ thread: true })
     if (issueUuid && row) subscribeThread(issueUuid, row.org_id)
@@ -6234,6 +6305,48 @@ export const PLANNER = {
       }
       return show('idle')
     }
+  },
+
+  /** Loads the history before the oldest loaded row of the watched task
+      (snapshot.historyBefore, one page) and adds it above. One load at a
+      time. A failure shows as historyEarlier 'failed', and calling this
+      again retries. Never throws. */
+  loadEarlierHistory: async (): Promise<void> => {
+    const issueUuid = watchedComments
+    const watchEpoch = commentsWatchEpoch
+    const row = issueUuid ? rows.issues.get(issueUuid) : undefined
+    if (!issueUuid || !row || commentsSnap === null || historyStart || historyLoad === 'loading')
+      return
+    const current = () => watchedComments === issueUuid && commentsWatchEpoch === watchEpoch
+    const show = (state: typeof historyLoad) => {
+      historyLoad = state
+      repaint({ thread: true })
+    }
+    const before = historyNext
+    if (!before) return
+    show('loading')
+    let page: FunctionReturnType<typeof api.snapshot.historyBefore>
+    try {
+      page = await convex.query(api.snapshot.historyBefore, {
+        org_id: row.org_id,
+        issue_id: issueUuid,
+        before,
+      })
+    } catch (e) {
+      if (!current()) return
+      console.error('[qivo] earlier history failed to load:', e)
+      return show('failed')
+    }
+    if (!current()) return
+    // Added only above the row the page was asked about. When the history
+    // started over from its live page meanwhile, the next click asks again.
+    if (historyNext === before) {
+      const known = new Set([...olderEvents, ...eventsSnap].map((r) => r.id))
+      olderEvents = [...anchor(page.events.filter((r) => !known.has(r.id))), ...olderEvents]
+      historyNext = page.next
+      if (!page.earlier) historyStart = true
+    }
+    show('idle')
   },
 
   /* ---- Team sync (docs/team-sync-brief.md) ----
@@ -6327,7 +6440,7 @@ export const PLANNER = {
       whether the server saved it, so the caller keeps the draft until it
       did. A body over TEXT_MAX after trimming, or any comment while edits
       are paused, is refused here with a toast, before the optimistic row.
-      A server refusal, such as the comment cap, is toasted and its row
+      A server refusal, such as lost access, is toasted and its row
       taken away before the promise resolves false. */
   addComment: (issueUuid: string, body: string): Promise<boolean> => {
     const row = rows.issues.get(issueUuid)
@@ -8439,9 +8552,13 @@ export function disposeDemoStore() {
   commentsSnap = null
   eventsSnap = []
   olderComments = []
+  olderEvents = []
+  historyNext = null
   acceptedCommentChanges.clear()
   threadStart = false
+  historyStart = false
   earlierLoad = 'idle'
+  historyLoad = 'idle'
   syncUnsub?.()
   syncUnsub = null
   watchedSyncOrg = null

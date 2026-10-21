@@ -17,7 +17,6 @@ import { LARGE_ROWS_PER_READ } from '../lib/db'
 import { REMOVAL_PHASES } from '../lib/enums'
 import { require, rule } from '../lib/functions'
 import { hasPendingCheckout } from './billing'
-import { dropCommentCount } from './commentCounts'
 import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
 import { deleteOrgBookkeeping } from './orgs'
@@ -321,8 +320,8 @@ export async function removeProfile(
  * and roadmap_history (per login, cleared with the login), demo_sessions
  * (internal/demoCleanup owns the public demo's lifecycle) and the platform
  * audit log (history survives its subjects until auditRetention.ts deletes
- * it after 90 days). Neither are activity_retention rows an earlier release
- * left, a table the schema no longer lists. Pending profile_removals rows
+ * it after 90 days). Neither are activity_retention or comment_counts rows an
+ * earlier release left, tables the schema no longer lists. Pending profile_removals rows
  * are also left alone. Their background steps still delete the removed
  * profiles' inboxes and OAuth connections, which this sweep only reaches
  * through live profiles. Deleted items go first, whatever state they are in,
@@ -404,7 +403,6 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
       .withIndex('by_issue', (q) => q.eq('issue_id', i.id))
       .collect())
       await ctx.db.delete(c._id)
-    await dropCommentCount(ctx, i.id)
     for (const il of await ctx.db
       .query('issue_labels')
       .withIndex('by_issue', (q) => q.eq('issue_id', i.id))
