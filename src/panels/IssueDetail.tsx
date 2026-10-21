@@ -1129,6 +1129,10 @@ function IssueDetail({
   modalActive?: boolean
 }) {
   usePlannerVersion('comments')
+  // P.editsPaused(), read below: the end of snapshot trouble emits only the
+  // store's health, and the start and end of a save pause a workspace emit,
+  // which reaches health too
+  usePlannerVersion('health')
   const mobile = useMobile()
   const [mobileTab, setMobileTab] = useStateID('activity')
   const [mobileViewport, setMobileViewport] = useStateID(() => ({
