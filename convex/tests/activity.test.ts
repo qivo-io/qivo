@@ -18,7 +18,6 @@ import type { FunctionArgs, WithoutSystemFields } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { SUBTASK_MAX } from '../lib/taskLimits'
 import {
   BEFORE_NOT_A_CHANGE,
   HISTORY_HIDDEN,
@@ -29,6 +28,7 @@ import {
   olderRows,
   taskHistoryPage,
 } from '../lib/activityVisibility'
+import { SUBTASK_MAX } from '../lib/taskLimits'
 import { type ActivityEntry, insertActivity, issueChanges, logActivity } from '../model/activity'
 import { pendingRemoval } from '../model/cascade'
 import {
