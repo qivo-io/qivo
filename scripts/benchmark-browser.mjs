@@ -45,7 +45,9 @@ const cpu = Number(option('cpu', '4'))
 const latency = Number(option('latency', '100'))
 const bandwidth = Number(option('mbps', '8'))
 const output = option('output', '/tmp/qivo-browser-benchmark.json')
-const timeout = Number(option('timeout', '15000'))
+// long enough for the default 10,000 tasks: at 8 Mbps every result of
+// theirs takes about 16 s, and marking 500 messages read takes two
+const timeout = Number(option('timeout', '60000'))
 // unread messages the bulk-read scenario adds just before it runs, so the
 // earlier scenarios load the same workspace as before it existed
 const messages = Number(option('messages', '500'))

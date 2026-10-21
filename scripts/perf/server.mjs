@@ -294,7 +294,7 @@ const issueLabels = tasks.flatMap((row, n) =>
 const every = (share) => (share > 0 ? Math.max(1, Math.round(1 / share)) : 0)
 const links = tasks.flatMap((row, n) => {
   const step = every(linkShare)
-  if (!step || n % step !== 1 || n + 3 >= count) return []
+  if (!step || n % step !== 1 % step || n + 3 >= count) return []
   const target = tasks[n + 3].id
   return [
     {
@@ -309,7 +309,7 @@ const links = tasks.flatMap((row, n) => {
 })
 const attachments = tasks.flatMap((row, n) => {
   const step = every(attachmentShare)
-  if (!step || n % step !== 2) return []
+  if (!step || n % step !== 2 % step) return []
   return [
     {
       id: id('b', n),
@@ -326,7 +326,9 @@ const attachments = tasks.flatMap((row, n) => {
 })
 const issueSubs = tasks.flatMap((row, n) => {
   const step = every(followShare)
-  return step && n % step === 3 ? [{ issue_id: row.id, profile_id: me.id, created_at: now }] : []
+  return step && n % step === 3 % step
+    ? [{ issue_id: row.id, profile_id: me.id, created_at: now }]
+    : []
 })
 const snapshot = {
   auth_user_id: 'perf-account',
@@ -398,11 +400,13 @@ function wireSnapshot() {
 /* --- the wire ------------------------------------------------------------- */
 const rowText = new WeakMap()
 /** UTF-8 length of `text`. */
-const utf8 = (text) => {
+export const utf8 = (text) => {
   let bytes = text.length
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i)
-    if (code >= 0x800) bytes += code >= 0xd800 && code <= 0xdbff ? 1 : 2
+    // a surrogate pair is two units and four bytes, so the high one adds two
+    if (code >= 0xd800 && code <= 0xdfff) bytes += code <= 0xdbff ? 2 : 0
+    else if (code >= 0x800) bytes += 2
     else if (code >= 0x80) bytes += 1
   }
   return bytes
@@ -748,7 +752,11 @@ self.onmessage = async ({ data }) => {
         }
       }
       try {
-        post({ type: 'answer', id: data.id, value: await mutate(data.name, data.args) })
+        const value = await mutate(data.name, data.args)
+        // as Convex answers a write only once the results before it are in,
+        // a write that changed nothing waits for the ones still on their way
+        await lastDelivery
+        post({ type: 'answer', id: data.id, value })
       } catch (error) {
         post({ type: 'answer', id: data.id, failure: String(error?.message ?? error) })
       }
