@@ -163,6 +163,17 @@ function itemPlace(g: MessageGroupVM) {
 
 /** The line an inbox row shows when the server's item cap deleted `n` of
     its earlier unread updates. */
+/** What the Inbox's "Older messages are not listed" line adds about the
+    bulk actions that reach the messages it leaves out. */
+const inboxReachLine = (reach: { markAllRead: boolean; removeRead: boolean }) =>
+  reach.markAllRead && reach.removeRead
+    ? ' Mark all as read and Remove all read reach them too.'
+    : reach.markAllRead
+      ? ' Mark all as read reaches them too.'
+      : reach.removeRead
+        ? ' Remove all read reaches them too.'
+        : ''
+
 const droppedLine = (n: number) =>
   n === 1
     ? '1 earlier update on this task is not listed'
@@ -757,7 +768,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
               className="[font-size:var(--fs-sm)] [color:var(--text-3)] [padding:14px_10px]"
             >
               Older messages are not listed.
-              {P.inboxCleanable && ' Mark all as read and Remove all read reach them too.'}
+              {inboxReachLine(P.inboxCutReach)}
             </div>
           )}
         </div>

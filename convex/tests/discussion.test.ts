@@ -501,6 +501,45 @@ describe('reading the inbox', () => {
     ).toEqual({ items, truncated: false })
   })
 
+  it('keeps the dropped count of every item it lists when the inbox holds more unread messages than it reads', async () => {
+    const fx = await setup()
+    const tasks = await Promise.all(
+      Array.from({ length: 11 }, () =>
+        plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id }),
+      ),
+    )
+    // 51 unread messages on each, more than INBOX_LIMIT in all
+    for (const task of tasks) {
+      await plantSubscription(fx.t, { issue_id: task.id, profile_id: fx.agent.id })
+      await fx.t.run(async (ctx) => {
+        for (let n = 0; n < ITEM_UNREAD_CAP + 1; n++) {
+          await ctx.db.insert('messages', {
+            id: uuid(),
+            org_id: fx.org.id,
+            recipient_id: fx.agent.id,
+            issue_id: task.id,
+            issue_title: task.title,
+            kind: 'change',
+            detail: `change ${n}`,
+            created_at: `2026-01-01T00:00:${String(n).padStart(2, '0')}.000Z`,
+          })
+        }
+      })
+    }
+    // a comment on each makes its item drop two
+    for (const task of tasks)
+      await as(fx.t, fx.user).mutation(api.comments.create, {
+        org_id: fx.org.id,
+        id: uuid(),
+        issue_id: task.id,
+        body: 'news',
+      })
+    const page = await pageMcp(fx)
+    expect(page.truncated).toBe(true)
+    expect(page.items.length).toBeGreaterThan(0)
+    expect(page.items.every((item) => item.dropped_count === 2)).toBe(true)
+  })
+
   it(`says how many earlier unread messages an item past ${ITEM_UNREAD_CAP} dropped, until it is read`, async () => {
     const fx = await setup()
     await plantSubscription(fx.t, { issue_id: fx.task.id, profile_id: fx.agent.id })

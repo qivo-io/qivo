@@ -540,9 +540,15 @@ export function OrgUsersPage({
                 >
                   <AvatarPicker user={g} />
                   <div className="[flex:1] [min-width:0]">
-                    <div className="[font-size:var(--fs-base)] [font-weight:600] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
-                      {g.email || g.name}
-                      {g.pending && <InviteLabel user={g} className="[margin-left:6px]" />}
+                    {/* the address gives way to a long line, never the
+                        invitation's state and its Send invitation */}
+                    <div className="[display:flex] [align-items:baseline] [min-width:0] [font-size:var(--fs-base)] [font-weight:600] [white-space:nowrap]">
+                      <span className="[min-width:0] [overflow:hidden] [text-overflow:ellipsis]">
+                        {g.email || g.name}
+                      </span>
+                      {g.pending && (
+                        <InviteLabel user={g} className="[margin-left:6px] [flex-shrink:0]" />
+                      )}
                     </div>
                     <div className="[font-size:var(--fs-xs)] [color:var(--text-2)] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
                       {on.length

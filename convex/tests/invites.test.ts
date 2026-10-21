@@ -9,7 +9,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import authSchema from '../betterAuth/schema'
 import type { Refusal, RefusalCode } from '../lib/functions'
-import { APP_SENDS_PER_ORG_HOUR, INVITE_SENDING, INVITES_HELD } from '../lib/inviteLimits'
+import {
+  APP_SENDS_PER_ORG_HOUR,
+  INVITE_NOT_HELD,
+  INVITE_SENDING,
+  INVITES_HELD,
+} from '../lib/inviteLimits'
 import { as, expectRefusal, NOW, newT, plantSeat, type T, uuid, withOrg } from './helpers.setup'
 
 async function refused(p: Promise<unknown>, code: RefusalCode, sentence: string): Promise<void> {
@@ -451,6 +456,7 @@ describe('whoever caused an app invitation sees whether it went out', () => {
           email: 'refused@example.se',
           state: 'unsent',
           since: expect.any(String),
+          free_at: null,
         },
         {
           profile_id: guest,
@@ -469,6 +475,45 @@ describe('whoever caused an app invitation sees whether it went out', () => {
       },
     ])
     expect(await deliveries(f.viewer)).toEqual([])
+
+    // the lead may not email a delivered invitation again, and once they no
+    // longer lead its project, they may not send it at all
+    const again = () =>
+      as(t, f.user).mutation(api.invites.sendAgain, { org_id: f.org.id, profile_id: guest })
+    await refused(again(), 'rule', INVITE_NOT_HELD)
+    await t.run(async (ctx) => {
+      const meta = await ctx.db
+        .query('projects')
+        .withIndex('by_uuid', (q) => q.eq('id', f.meta.id))
+        .unique()
+      if (meta) await ctx.db.patch(meta._id, { lead_id: f.admin.id })
+    })
+    await expectRefusal(again(), 'forbidden')
+    // the admin sends the refused one again, which a live demo refuses
+    await t.run((ctx) =>
+      ctx.db.insert('demo_sessions', {
+        id: uuid(),
+        auth_user_id: f.admin.auth_user_id ?? '',
+        org_id: f.org.id,
+        created_at: Date.now(),
+        expires_at: Date.now() + 86_400_000,
+        status: 'ready',
+        seed_version: 1,
+        anchor: '2026-09-14',
+      }),
+    )
+    vi.stubEnv('APP_MODE', 'demo')
+    await expectRefusal(
+      as(t, f.admin).mutation(api.invites.sendAgain, { org_id: f.org.id, profile_id: added.id }),
+      'forbidden',
+      /requires a regular workspace/,
+    )
+    vi.stubEnv('APP_MODE', '')
+    const before = (await inviteRows(t)).length
+    await as(t, f.admin).mutation(api.invites.sendAgain, { org_id: f.org.id, profile_id: added.id })
+    await flush(t)
+    expect(letters().at(-1)?.to).toEqual(['refused@example.se'])
+    expect(await inviteRows(t)).toHaveLength(before + 1)
   })
 
   it('tells a send in flight, a held-back one and an uncertain one apart, for the current address only', async () => {

@@ -329,12 +329,16 @@ describe('bulk notification actions through the client store', () => {
     expect(P.inboxCut).toBe(false)
     publish({ ...structuredClone(snap), readMessageCount: snap.readMessageCount + 5 })
     expect(P.inboxCut).toBe(true)
-    expect(P.inboxCleanable).toBe(true)
+    expect(P.inboxCutReach).toEqual({ markAllRead: false, removeRead: true })
     publish({ ...structuredClone(snap), unreadTruncated: true })
     expect(P.inboxCut).toBe(true)
     // snoozed messages left out, which neither bulk action reaches
     publish({ ...structuredClone(snap), messagesCut: true })
-    expect([P.inboxCut, P.inboxCleanable]).toEqual([true, false])
+    expect([P.inboxCut, P.inboxCutReach.markAllRead, P.inboxCutReach.removeRead]).toEqual([
+      true,
+      false,
+      false,
+    ])
     publish(structuredClone(snap))
     expect(P.inboxCut).toBe(false)
   })

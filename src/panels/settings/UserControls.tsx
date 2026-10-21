@@ -173,7 +173,8 @@ function SendAgain({
   row: InviteDeliveryRow | undefined
 }) {
   const state = row?.state
-  const waitUntil = state === 'held' && row?.free_at ? Date.parse(row.free_at) : 0
+  // a failed send waits for the hour too: it counts against the same cap
+  const waitUntil = row?.free_at ? Date.parse(row.free_at) : 0
   const [now, setNow] = useStateS(Date.now)
   useEffectS(() => {
     // a time already passed, such as one an answer brought late, counts now
@@ -289,10 +290,12 @@ export function UserEmail({ user }: { user: UserVM }) {
     return (
       <div
         data-user-email={user.id}
-        className="[padding-left:6px] [font-size:var(--fs-xs)] [color:var(--text-2)] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]"
+        className="[display:flex] [align-items:baseline] [min-width:0] [padding-left:6px] [font-size:var(--fs-xs)] [color:var(--text-2)] [white-space:nowrap]"
       >
-        {DEMO_MODE ? 'Fictional teammate' : user.email || 'no email address'}
-        {user.pending && <InviteLabel user={user} className="[margin-left:6px]" />}
+        <span className="[min-width:0] [overflow:hidden] [text-overflow:ellipsis]">
+          {DEMO_MODE ? 'Fictional teammate' : user.email || 'no email address'}
+        </span>
+        {user.pending && <InviteLabel user={user} className="[margin-left:6px] [flex-shrink:0]" />}
       </div>
     )
   }

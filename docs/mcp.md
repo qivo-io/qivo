@@ -1895,7 +1895,8 @@ have`, and a comment or a mention there adds no follower, though the
 mention still notifies. A new assignee or reviewer still becomes a follower.
 A comment or description can mention at most 100 distinct people. A tool
 call whose text mentions more is refused with `a text can mention at most
-100 people; remove some mentions and save again` and saves nothing.
+100 people; remove some mentions and save again` and saves nothing. Sending a
+stored text back unchanged is accepted, as for the length limit.
 
 `list_inbox` answers your inbox as the app's **Inbox** shows it, one item per
 task, latest activity first:

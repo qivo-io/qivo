@@ -91,12 +91,13 @@ export function inviteLabel(
     case 'held':
       return {
         text: 'invitation not sent',
-        detail: `Invitation not sent. This organization sent ${APP_SENDS_PER_ORG_HOUR} invitation emails in the last hour. ${
+        // the hour is still full only while freeAt lies ahead
+        detail: `Invitation not sent. ${
           freeAt
-            ? `Send it again after ${fmtTime(new Date(freeAt))}. `
-            : freeAt === null
-              ? 'Send it again now. '
-              : ''
+            ? `This organization sent ${APP_SENDS_PER_ORG_HOUR} invitation emails in the last hour. Send it again after ${fmtTime(new Date(freeAt))}. `
+            : `It was held back by the limit of ${APP_SENDS_PER_ORG_HOUR} invitation emails an hour. ${
+                freeAt === null ? 'Send it again now. ' : ''
+              }`
         }${JOIN_ANYWAY}`,
         failed: true,
       }

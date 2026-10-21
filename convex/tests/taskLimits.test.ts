@@ -1162,6 +1162,31 @@ describe('mentions', () => {
       (await messagesFor(fx.t, people[1].id, described.id)).filter((m) => m.kind === 'mention'),
     ).toEqual([])
   })
+
+  it('takes a stored text over the limit back unchanged, and an edit of it re-notifies no one past the 100th', async () => {
+    const fx = await setup()
+    const people = await plantFollowers(fx, await task(fx), MENTION_MAX + 2)
+    const stored = people.map(at).join(' ')
+    // planted, as a text saved before the limit would be
+    const described = await task(fx, { description: stored })
+    const update = (description: string) =>
+      as(fx.t, fx.admin).mutation(api.issues.update, {
+        org_id: fx.org.id,
+        id: described.id,
+        patch: { description },
+      })
+    await update(stored)
+    // dropping the first mention leaves 101, still over the limit
+    await refused(update(people.slice(1).map(at).join(' ')), 'rule', TOO_MANY_MENTIONS)
+    // dropping two leaves 100: the person who moved into the first 100 was
+    // mentioned before, so hears nothing new
+    await update(people.slice(2).map(at).join(' '))
+    expect(
+      (await messagesFor(fx.t, people[MENTION_MAX].id, described.id)).filter(
+        (m) => m.kind === 'mention',
+      ),
+    ).toEqual([])
+  })
 })
 
 /* -------------------------------------------- 5. an arrival's item, edge cases */

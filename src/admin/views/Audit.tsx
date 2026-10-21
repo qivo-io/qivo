@@ -139,6 +139,7 @@ export function Audit() {
     if (next === null || loadingOlder) return
     const asked = load.current
     setLoadingOlder(true)
+    setError('')
     auditLog(next)
       .then((audit) => {
         if (load.current !== asked) return

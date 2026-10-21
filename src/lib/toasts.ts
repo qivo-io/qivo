@@ -29,6 +29,30 @@ export type Toast = {
   key?: string
   /** Runs when the person closes the toast. */
   onDismiss?: () => void
+  /** How many earlier errors folded into this one no longer show their own
+      line (mergeErrors). */
+  earlier?: number
+}
+
+/** The most lines an error toast that holds earlier errors shows. */
+const ERROR_LINES = 3
+
+/* An error toast's own lines, without the line that counts earlier ones. */
+const linesOf = (t: Toast) => (t.earlier ? t.text.split('\n').slice(1) : t.text.split('\n'))
+
+/* `b` with `a`'s text before its own: a repeated line shows once, at its
+   latest place, and past ERROR_LINES the oldest give way to a line that
+   counts them, so nothing goes without a word and the toast stays short. */
+function mergeErrors(a: Toast, b: Toast): Toast {
+  const seen = new Set<string>()
+  const lines = [...linesOf(a), ...linesOf(b)]
+    .reverse()
+    .filter((line) => !seen.has(line) && seen.add(line))
+    .reverse()
+  const shown = lines.slice(-ERROR_LINES)
+  const earlier = (a.earlier ?? 0) + (b.earlier ?? 0) + lines.length - shown.length
+  const head = earlier ? [`${earlier} earlier problem${earlier === 1 ? '' : 's'} not listed.`] : []
+  return { ...b, text: [...head, ...shown].join('\n'), earlier: earlier || undefined }
 }
 
 /** How many toasts show at once, sticky ones aside once they fill it. */
@@ -41,7 +65,8 @@ export const TOASTS_SHOWN = 3
     and notices give way first, oldest first. An error, a refusal or failure
     the person must read, never just disappears: when only errors are left
     to give way, the oldest one's text moves into the next error, or into
-    the new toast when that is an error, and otherwise it stays. */
+    the new toast when that is an error (mergeErrors), and otherwise it
+    stays. */
 export function withToast(list: readonly Toast[], toast: Toast): Toast[] {
   const at = toast.key === undefined ? -1 : list.findIndex((t) => t.key === toast.key)
   if (at >= 0)
@@ -59,10 +84,10 @@ export function withToast(list: readonly Toast[], toast: Toast): Toast[] {
       continue
     }
     const [oldest, next] = passing
-    if (next !== undefined) passing.splice(0, 2, { ...next, text: `${oldest.text}\n${next.text}` })
+    if (next !== undefined) passing.splice(0, 2, mergeErrors(oldest, next))
     else if (last.tone === 'error') {
       passing.shift()
-      last = { ...last, text: `${oldest.text}\n${last.text}` }
+      last = mergeErrors(oldest, last)
     } else break
   }
   const kept = new Map(passing.map((t) => [t.id, t]))

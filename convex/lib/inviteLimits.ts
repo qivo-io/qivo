@@ -14,3 +14,8 @@ export const INVITES_HELD = `this organization sent ${APP_SENDS_PER_ORG_HOUR} in
 /** The refusal of a send again while the seat's newest invitation email is
  * still being sent. */
 export const INVITE_SENDING = 'this invitation email is being sent; wait for it to finish'
+
+/** The refusal of a send again for an invitation whose newest email went
+ * out, or may have. */
+export const INVITE_NOT_HELD =
+  'only an invitation email that was held back or could not be sent can be sent again'

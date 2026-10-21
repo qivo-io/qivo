@@ -219,15 +219,20 @@ const itemStart = (ctx: MutationCtx, a: { recipient_id: string; issue_id: string
  * newest unread row of each kind, so the Inbox kind filter still finds the
  * item. A kind whose newest row lies past the first TRIM_READ keeps one more
  * row than it needs to. It never deletes `arrival` either, the row the
- * caller just posted, which woke the item from any snooze. It adds the
- * number it deleted, and the counts the deleted rows carried, to the oldest
- * unread row's `dropped`, so the item says how many earlier updates it no
- * longer lists (schema.ts). A notice stamped earlier than the item's first
- * row becomes the first, so the count moves with the rows. This is separate
- * from retention, and the nightly sweep still never deletes an unread row. */
+ * caller just posted, which woke the item from any snooze.
+ *
+ * The item counts what the cap deleted in `dropped` (schema.ts), kept on
+ * `holder`, its newest unread row by insertion. The inbox reads walk unread
+ * rows newest first and stop at INBOX_LIMIT, so whenever they list an item
+ * they hold that row, while its oldest rows are the first they leave out.
+ * A trim adds the rows it deleted to the counts its rows carried, the
+ * deleted ones included, and moves the total to the holder. This is
+ * separate from retention, and the nightly sweep still never deletes an
+ * unread row. */
 async function trimRows(
   ctx: MutationCtx,
   unread: readonly Pick<Doc<'messages'>, '_id' | 'kind' | 'dropped'>[],
+  holder: Pick<Doc<'messages'>, '_id' | 'dropped'>,
   arrival?: Id<'messages'>,
 ): Promise<void> {
   const excess = Math.min(unread.length - ITEM_UNREAD_CAP, ITEM_TRIM_STEP)
@@ -235,22 +240,29 @@ async function trimRows(
   const first = unread[0]
   const newestOfKind = new Map<MessageKind, Pick<Doc<'messages'>, '_id' | 'kind'>>()
   for (const r of unread) newestOfKind.set(r.kind, r)
-  const kept = new Set([first._id, ...[...newestOfKind.values()].map((r) => r._id)])
+  const kept = new Set([first._id, holder._id, ...[...newestOfKind.values()].map((r) => r._id)])
   if (arrival !== undefined) kept.add(arrival)
-  let deleted = 0
-  let dropped = 0
+  let total = unread.some((r) => r._id === holder._id) ? 0 : (holder.dropped ?? 0)
+  for (const r of unread) total += r.dropped ?? 0
+  const gone = new Set<Id<'messages'>>()
   for (const r of unread) {
-    if (deleted === excess) break
+    if (gone.size === excess) break
     if (kept.has(r._id)) continue
     await ctx.db.delete(r._id)
-    deleted += 1
-    dropped += 1 + (r.dropped ?? 0)
+    gone.add(r._id)
   }
-  if (deleted > 0) await ctx.db.patch(first._id, { dropped: (first.dropped ?? 0) + dropped })
+  if (gone.size === 0) return
+  // the counts move to the holder: clear them on the other rows that stay
+  for (const r of unread) {
+    if (r._id !== holder._id && r.dropped && !gone.has(r._id))
+      await ctx.db.patch(r._id, { dropped: undefined })
+  }
+  await ctx.db.patch(holder._id, { dropped: total + gone.size })
 }
 
 /** Trims one item toward ITEM_UNREAD_CAP (trimRows), reading its first
- * TRIM_READ unread rows. The background trim step runs it. */
+ * TRIM_READ unread rows and its newest unread row, which holds the count.
+ * The background trim step runs it. */
 export async function trimUnreadMessages(
   ctx: MutationCtx,
   a: { recipient_id: string; issue_id: string },
@@ -261,7 +273,18 @@ export async function trimUnreadMessages(
       q.eq('recipient_id', a.recipient_id).eq('issue_id', a.issue_id).eq('read_at', undefined),
     )
     .take(TRIM_READ)
-  await trimRows(ctx, unread)
+  // the item keeps at most one read row (pruneReadMessages), so the newest
+  // unread row is among its last two by insertion
+  const holder = (
+    await ctx.db
+      .query('messages')
+      .withIndex('by_recipient_issue', (q) =>
+        q.eq('recipient_id', a.recipient_id).eq('issue_id', a.issue_id),
+      )
+      .order('desc')
+      .take(2)
+  ).find((r) => r.read_at === undefined)
+  if (holder !== undefined) await trimRows(ctx, unread, holder)
 }
 
 /* ---------------------------------------------------------------- preload
@@ -543,11 +566,21 @@ export async function postMessage(
   const unread = rows.filter((r) => r.read_at === undefined)
   // the arrival in its place in the item, which a background step's notice,
   // stamped with its write's time, may not be at the end of
-  await trimRows(
-    ctx,
-    row.read_at === undefined ? [...unread, { ...row, _id: inserted }].sort(oldestFirst) : unread,
-    inserted,
+  // the newest unread row by insertion holds the item's dropped count: the
+  // arrival, or the latest unread row before it when it is stored read
+  const arrived = { ...row, _id: inserted }
+  const latest = unread.reduce<(typeof unread)[number] | undefined>(
+    (best, r) => (best === undefined || r._creationTime > best._creationTime ? r : best),
+    undefined,
   )
+  const holder = row.read_at === undefined ? arrived : latest
+  if (holder !== undefined)
+    await trimRows(
+      ctx,
+      row.read_at === undefined ? [...unread, arrived].sort(oldestFirst) : unread,
+      holder,
+      inserted,
+    )
   return true
 }
 

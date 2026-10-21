@@ -28,10 +28,16 @@ import { components, internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import type { ActionCtx, MutationCtx, QueryCtx } from './_generated/server'
 import { internalAction, internalMutation, internalQuery } from './_generated/server'
+import { canManageProjectUsers } from './lib/access'
 import { byId } from './lib/db'
-import { isDemoDeployment } from './lib/demo'
+import { isDemoDeployment, refuseDemoFeature } from './lib/demo'
 import { forbidden, notFound, orgMutation, orgQuery, rule } from './lib/functions'
-import { APP_SENDS_PER_ORG_HOUR, INVITE_SENDING, INVITES_HELD } from './lib/inviteLimits'
+import {
+  APP_SENDS_PER_ORG_HOUR,
+  INVITE_NOT_HELD,
+  INVITE_SENDING,
+  INVITES_HELD,
+} from './lib/inviteLimits'
 import { sendInviteEmail } from './mail'
 import { audit } from './model/admin'
 import { newUuid } from './model/orgs'
@@ -192,14 +198,6 @@ export const targets = internalQuery({
   },
 })
 
-/* Records one send before it happens, as not sent yet, and settle() records
- * the outcome. For the app, the count and the new row commit in one
- * transaction, so concurrent sends cannot both take the last slot under the
- * cap. An app send over the cap is recorded as held back, and allowed is
- * false. The seat is read again first, because an edit or cancellation may
- * have committed since targets() read it. A seat that is no longer the same
- * invitation gets no row and no send (row is null). App rows carry channel
- * 'app', which keeps them out of the operator's audit listing. */
 const vReserve = v.object({
   profile_id: v.string(),
   org_id: v.string(),
@@ -210,8 +208,15 @@ const vReserve = v.object({
   by: v.optional(v.string()),
 })
 
-/* reserve(), also for a mutation that reserves the send itself
- * (sendAgain). */
+/* Records one send before it happens (reserve(), and sendAgain(), which
+ * reserves its send itself), as not sent yet, and settle() records
+ * the outcome. For the app, the count and the new row commit in one
+ * transaction, so concurrent sends cannot both take the last slot under the
+ * cap. An app send over the cap is recorded as held back, and allowed is
+ * false. The seat is read again first, because an edit or cancellation may
+ * have committed since targets() read it. A seat that is no longer the same
+ * invitation gets no row and no send (row is null). App rows carry channel
+ * 'app', which keeps them out of the operator's audit listing. */
 async function reserveSend(
   ctx: MutationCtx,
   a: Infer<typeof vReserve>,
@@ -240,6 +245,7 @@ async function reserveSend(
   return { row, allowed }
 }
 
+/* reserveSend() for sendInvites(), one transaction per send. */
 export const reserve = internalMutation({
   args: vReserve,
   handler: async (ctx, a): Promise<{ row: Id<'platform_audit_log'> | null; allowed: boolean }> =>
@@ -403,8 +409,9 @@ async function newestSend(
 }
 
 /** One pending seat's invitation email, as deliveries() reports it, with
- * when the send was reserved. A send held back by the cap carries `free_at`,
- * when the organization may send again, or null when it may now. */
+ * when the send was reserved. A send held back by the cap or one that failed,
+ * the ones sendAgain() takes, carries `free_at`, when the organization may
+ * send again, or null when it may now. */
 export type InviteDeliveryRow = {
   profile_id: string
   email: string
@@ -428,7 +435,7 @@ export const deliveries = orgQuery({
       .query('profiles')
       .withIndex('by_org_auth', (q) => q.eq('org_id', ctx.me.org_id).eq('auth_user_id', undefined))
     const out: InviteDeliveryRow[] = []
-    // read once, for the first held send
+    // read once, for the first send that can go again
     let freeAt: Promise<string | null> | undefined
     for await (const seat of pending) {
       if (!isInvitation(seat, false) || seat.email === undefined) continue
@@ -440,7 +447,8 @@ export const deliveries = orgQuery({
         state: deliveryOf(newest, Date.now()),
         since: newest.ts,
       }
-      if (row.state !== 'held') {
+      // a send that can go again says when the cap lets it
+      if (row.state !== 'held' && row.state !== 'unsent') {
         out.push(row)
         continue
       }
@@ -452,27 +460,56 @@ export const deliveries = orgQuery({
 })
 
 /**
+/* Whether `me`, not an org admin, may send `seat`'s invitation again: their
+ * own change caused its newest send, and they still lead a project the seat
+ * holds a grant on, the right inviteGuest asked for. */
+async function mayInviteAgain(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  seat: Doc<'profiles'>,
+  newest: SendRow | undefined,
+): Promise<boolean> {
+  if (newest?.detail.by !== me.id) return false
+  const grants = ctx.db
+    .query('project_access')
+    .withIndex('by_profile', (q) => q.eq('profile_id', seat.id))
+  for await (const grant of grants) {
+    const project = await byId(ctx, 'projects', grant.project_id)
+    if (project !== null && (await canManageProjectUsers(ctx, me, project))) return true
+  }
+  return false
+}
+
+/**
  * Sends the invitation email to pending seat `profile_id` again, as the app
  * sends one. It counts toward the organization's hourly cap, and
  * deliveries() reports how it went. Org admins may send any pending seat's,
  * others only one whose newest send their own change caused, the rows
- * deliveries() shows them. Refuses with INVITE_SENDING while the seat's
- * newest send is in flight, so two requests send one email, with
- * INVITES_HELD while the hour is full, so a held send is not recorded
- * again, and anything that is not a pending invitation as not found.
+ * deliveries() shows them, while they still lead a project the seat holds
+ * a grant on. Only a send held back by the cap or one that failed goes
+ * again (INVITE_NOT_HELD otherwise), so nobody can email one address over
+ * and over. Refuses with INVITE_SENDING while the seat's newest send is in
+ * flight, so two requests send one email, with INVITES_HELD while the hour
+ * is full, so a held send is not recorded again, and anything that is not a
+ * pending invitation as not found. A public demo refuses it, as every other
+ * invitation write.
  */
 export const sendAgain = orgMutation({
   args: { profile_id: v.string() },
   handler: async (ctx, { profile_id }): Promise<null> => {
+    refuseDemoFeature()
     const seat = await byId(ctx, 'profiles', profile_id)
     if (!isInvitation(seat, false) || seat.org_id !== ctx.me.org_id || seat.email === undefined)
       throw notFound('invitation not found')
     const newest = await newestSend(ctx, seat.id, seat.email)
-    if (ctx.me.org_role !== 'admin' && newest?.detail.by !== ctx.me.id)
-      throw forbidden('only an organization admin or the person who invited them can send it')
+    if (ctx.me.org_role !== 'admin' && !(await mayInviteAgain(ctx, ctx.me, seat, newest)))
+      throw forbidden('only an organization admin or the project lead who invited them can send it')
+    const state = newest === undefined ? undefined : deliveryOf(newest, Date.now())
     // one send at a time: a second click, or another admin's, waits for it
-    if (newest !== undefined && deliveryOf(newest, Date.now()) === 'sending')
-      throw rule(INVITE_SENDING)
+    if (state === 'sending') throw rule(INVITE_SENDING)
+    // only a send that did not go out goes again, so nobody can email one
+    // address over and over through this
+    if (state !== 'held' && state !== 'unsent') throw rule(INVITE_NOT_HELD)
     if ((await capFreesAt(ctx, seat.org_id)) !== null) throw rule(INVITES_HELD)
     // Reserved here, in the same transaction as the checks, so the seat
     // shows the send in flight at once and a second request sees it.

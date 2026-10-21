@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { type Toast, toastLook, withToast } from './toasts'
+import { TOASTS_SHOWN, type Toast, toastLook, withToast } from './toasts'
 
 describe('toastLook', () => {
   it('shows a toast without a tone as a success', () => {
@@ -75,5 +75,17 @@ describe('withToast', () => {
     ])
     list = withToast(list, plain(5))
     expect(list.map((t) => t.id)).toEqual([1, 2, 4, 5])
+  })
+
+  it('keeps a stream of errors to its newest lines, once each, and counts the rest', () => {
+    let list: Toast[] = []
+    for (let id = 1; id <= 20; id++)
+      list = withToast(list, { id, text: id % 2 ? 'Not saved.' : `error ${id}`, tone: 'error' })
+    const texts = list.map((t) => t.text)
+    expect(texts).toHaveLength(TOASTS_SHOWN)
+    for (const text of texts) expect(text.split('\n').length).toBeLessThanOrEqual(4)
+    // the oldest toast now says how many earlier problems it folds away
+    expect(texts[0]).toMatch(/^\d+ earlier problems not listed\./)
+    expect(texts[0].split('\n').filter((line) => line === 'Not saved.')).toHaveLength(1)
   })
 })

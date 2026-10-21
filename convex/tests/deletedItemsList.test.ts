@@ -1403,6 +1403,23 @@ describe('searching for deleted tasks', () => {
     expect(few.capped).toBe(false)
   })
 
+  it('leaves capped false when hidden matches lie past the visible ones at the cap', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const lena = await person(t, f.org.id, 'Lena')
+    await plantLedProjects(t, lena, 2, 'Survey the north gate')
+    // matching deleted tasks Lena cannot see
+    await plantLedProjects(t, { ...lena, id: uuid() }, 3, 'Survey the north gate')
+    const max = MATCHES.max
+    try {
+      MATCHES.max = 2
+      expect(await search(t, lena, 'survey')).toMatchObject({ capped: false })
+      expect((await matches(t, lena, 'survey')).length).toBe(2)
+    } finally {
+      MATCHES.max = max
+    }
+  })
+
   it(`says when more match than the ${MATCHES.max} it answers`, async () => {
     const t = newT()
     const f = await withOrg(t)

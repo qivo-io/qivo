@@ -110,4 +110,26 @@ describe('a held invitation', () => {
     expect(control()?.disabled).toBe(false)
     expect(control()?.textContent).toBe('Send invitation')
   })
+
+  it('waits for the hour on a failed send too, which counts against the same cap', () => {
+    act(() =>
+      root.render(
+        <TooltipProvider>
+          <InviteLabel user={user} />
+        </TooltipProvider>,
+      ),
+    )
+    act(() =>
+      network.push([
+        {
+          profile_id: user.id,
+          email: 'anna@example.test',
+          state: 'unsent',
+          free_at: '2026-10-21T10:30:00.000Z',
+        },
+      ]),
+    )
+    expect(control()?.disabled).toBe(true)
+    expect(control()?.textContent).toMatch(/^Send after \d\d:\d\d$/)
+  })
 })

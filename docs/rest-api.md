@@ -1626,7 +1626,8 @@ already has 100 followers, the most a task can have. The comment and the
 mention still go through, and the mention still notifies. A description or
 comment can mention at most 100 distinct people. A `POST` or `PATCH` whose
 text mentions more is a `400` (`a text can mention at most 100 people; remove
-some mentions and save again`) and saves nothing. Whoever a task passes
+some mentions and save again`) and saves nothing. Sending a stored text back
+unchanged is accepted, as for the length limit. Whoever a task passes
 to starts following it as well: the reviewer when the task enters `review`
 with a reviewer set (or a reviewer is set while it is there), who reads
 `Ready for your review`, and the assignee when it leaves `review` again or

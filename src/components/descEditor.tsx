@@ -812,10 +812,12 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       if (sendingRef.current) return // one commit at a time
       const text = serialize(ed)
       if (!text.trim()) return // an empty comment isn't a thing — Discard is the way out
-      const refusal = textRefusal('comment', text.trim())
+      // the server's caps, on the trimmed text the store sends; a comment's
+      // unchanged text goes back as the store and the server accept it.
+      // Refusing here keeps the draft and the edit mode
+      const refusal =
+        text.trim() === canonRef.current.trim() ? null : textRefusal('comment', text.trim())
       if (refusal) {
-        // the server's caps, on the trimmed text the store sends; refusing
-        // here keeps the draft and the edit mode
         toast(refusal)
         return
       }

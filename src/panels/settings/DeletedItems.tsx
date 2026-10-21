@@ -1089,7 +1089,7 @@ export function DeletedItemsPage() {
           </p>
         )}
         {/* the search answers at most 50 tasks (MATCHES.max) */}
-        {found.capped && found.text === text && (
+        {found.capped && found.text === text && kind !== 'project' && (
           <p data-deleted-search-capped className="mt-3 px-1 text-sm text-text-2">
             More deleted tasks match than the search shows. Type more of the title or key to narrow
             it.

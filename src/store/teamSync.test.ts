@@ -546,5 +546,19 @@ describe('the Team sync store', () => {
     watches[0].next({ rows: [{ issue_id: f.todo.id, at: NOW }], complete: true })
     watches[0].fail(new Error('not_found'))
     expect(P.lastComments.size).toBe(0)
+    // the subscription stays, and its next good answer brings the marks back
+    expect(watches[0].unsub).not.toHaveBeenCalled()
+    watches[0].next({ rows: [{ issue_id: f.todo.id, at: NOW }], complete: true })
+    expect(P.lastComments.has(f.todo.id)).toBe(true)
+  })
+
+  it('blanks only the failed part, and keeps the marks of the others', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const people = Array.from({ length: SYNC_OWNERS_MAX + 1 }, () => crypto.randomUUID())
+    P.watchTeamSync(f.org, people)
+    watches[0].next({ rows: [{ issue_id: f.todo.id, at: NOW }], complete: true })
+    watches[1].next({ rows: [{ issue_id: f.review.id, at: NOW }], complete: true })
+    watches[1].fail(new Error('offline'))
+    expect([...P.lastComments.keys()]).toEqual([f.todo.id])
   })
 })

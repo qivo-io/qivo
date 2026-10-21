@@ -1045,7 +1045,8 @@ function shownWorkspace() {
       P.canMarkAllRead,
       P.canRemoveRead,
       P.inboxCut,
-      P.inboxCleanable,
+      P.inboxCutReach.markAllRead,
+      P.inboxCutReach.removeRead,
       P.CURRENT_USER,
       P.contextVersion,
       // Roadmap's undo (P.roadmapUndo), which a task edit's answer ends
@@ -3409,8 +3410,11 @@ function rebuild(now = new Date()) {
   // the snapshot delivers at most 500 messages, so the Inbox says when older
   // ones exist that it does not list, snoozed ones included, and whether
   // Mark all as read and Remove all read reach them (they skip snoozed rows)
-  P.inboxCleanable = hiddenReadMessages > 0 || unexaminedUnread || unexaminedRead
-  P.inboxCut = messagesCut || P.inboxCleanable
+  P.inboxCutReach = {
+    markAllRead: unexaminedUnread,
+    removeRead: hiddenReadMessages > 0 || unexaminedRead,
+  }
+  P.inboxCut = messagesCut || P.inboxCutReach.markAllRead || P.inboxCutReach.removeRead
 
   P.CURRENT_USER = CURRENT_USER
   const context = [
@@ -4367,9 +4371,9 @@ export const PLANNER = {
   canMarkAllRead: false,
   canRemoveRead: false,
   // whether older messages exist than the Inbox lists (the snapshot's 500),
-  // and whether Mark all as read and Remove all read reach some of them
+  // and which of Mark all as read and Remove all read reach some of them
   inboxCut: false,
-  inboxCleanable: false,
+  inboxCutReach: { markAllRead: false, removeRead: false },
   loaded: false,
 
   project: (id: string | null | undefined): ProjectVM | undefined =>
@@ -6422,8 +6426,9 @@ export const PLANNER = {
      home organization whenever they change, and with null on unmount. No
      owners means no subscription. A new organization empties the marks; new
      owners in the same one keep the old marks until every part has
-     answered, so stepping through the walk does not blank them. Nothing here
-     is optimistic, so no paint gate is needed. */
+     answered, so stepping through the walk does not blank them. A part that
+     fails shows no marks for its people until its subscription answers
+     again. Nothing here is optimistic, so no paint gate is needed. */
   watchTeamSync: (orgId: string | null, ownerIds: readonly string[] = []) => {
     const owners = orgId ? [...new Set(ownerIds)] : []
     const key = owners.join(',')
@@ -6490,13 +6495,13 @@ export const PLANNER = {
         },
         (err) => {
           if (syncWatchEpoch !== watchEpoch || !syncParts.includes(entry)) return
-          // fail closed to "nothing known", so no card claims untouched
+          // fail closed to "nothing known" for this part's people, so none
+          // of their cards claims untouched. The subscription stays, and its
+          // next good answer brings their marks back.
           console.error('[qivo] team sync subscription failed:', err)
-          stopSyncParts()
-          syncFallback = new Map()
-          PLANNER.lastComments = new Map()
-          PLANNER.lastCommentsCut = []
-          emit('teamSync')
+          entry.rows = []
+          entry.complete = true
+          publish()
         },
       )
       if (stopped) unsub()
@@ -7679,9 +7684,6 @@ export const PLANNER = {
     return uuid
   },
 
-  /** Applies an admin's edit to one seat. Returns false when a client
-      rule refused the whole patch (with a toast), so an inline editor can
-      put the stored value back. */
   /** Emails pending seat `profileId` of organization `orgId` its invitation
       again (api.invites.sendAgain), which counts against the organization's
       hourly cap. Resolves whether the server took it; a refusal, such as a
@@ -7689,6 +7691,9 @@ export const PLANNER = {
   sendInvitationAgain: (orgId: string, profileId: string): Promise<boolean> =>
     send(api.invites.sendAgain, { org_id: orgId, profile_id: profileId }, 'none'),
 
+  /** Applies an admin's edit to one seat. Returns false when a client
+      rule refused the whole patch (with a toast), so an inline editor can
+      put the stored value back. */
   updateUser: (id: string, patch: UserPatch): boolean => {
     const row = rows.profiles.get(id)
     // deactivation alone only takes access away, so it goes on while paused,
