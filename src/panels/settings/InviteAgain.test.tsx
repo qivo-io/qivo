@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { UserVM } from '../../store/planner'
 
@@ -16,6 +16,20 @@ const network = vi.hoisted(() => ({
   push: (_rows: Row[]) => {},
 }))
 vi.mock('../../lib/convex', () => ({ convex: network }))
+// UserControls reaches the store, whose auth client needs a backend URL
+vi.mock('../../lib/auth', () => ({
+  armConvexAuth: async () => true,
+  authClient: { getSession: async () => ({ data: null }) },
+  signOut: vi.fn(),
+}))
+
+// the component's module graph is large; load it once, outside the tests' time limit
+let InviteLabel: typeof import('./UserControls').InviteLabel
+let P: typeof import('../../store/planner').P
+beforeAll(async () => {
+  InviteLabel = (await import('./UserControls')).InviteLabel
+  P = (await import('../../store/planner')).P
+}, 60_000)
 
 let root: Root
 let host: HTMLDivElement
@@ -42,8 +56,6 @@ const control = () => host.querySelector<HTMLButtonElement>('[data-invite-again]
 
 describe('a held invitation', () => {
   it('offers Send invitation once the hour frees a send, and only then sends', async () => {
-    const { InviteLabel } = await import('./UserControls')
-    const { P } = await import('../../store/planner')
     const again = vi.spyOn(P, 'sendInvitationAgain').mockResolvedValue(true)
     act(() =>
       root.render(

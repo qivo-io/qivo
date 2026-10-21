@@ -269,7 +269,8 @@ internal/retiredFields:clear action internal {"type":"object","value":{"dry_run"
 internal/retiredFields:page mutation internal {"type":"object","value":{"phase":{"fieldType":{"type":"union","value":[{"type":"literal","value":"teams"},{"type":"literal","value":"attachments"},{"type":"literal","value":"stored_attachments"}]},"optional":false},"dry_run":{"fieldType":{"type":"boolean"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
 invites:deliveries query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 invites:reserve mutation internal {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"resend":{"fieldType":{"type":"boolean"},"optional":false},"actor":{"fieldType":{"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":true},"email":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"app":{"fieldType":{"type":"boolean"},"optional":false},"by":{"fieldType":{"type":"string"},"optional":true}}}
-invites:sendFromApp action internal {"type":"object","value":{"invites":{"fieldType":{"type":"array","value":{"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":true},"unless_sent":{"fieldType":{"type":"boolean"},"optional":true},"by":{"fieldType":{"type":"string"},"optional":true}}}},"optional":false}}}
+invites:sendAgain mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+invites:sendFromApp action internal {"type":"object","value":{"invites":{"fieldType":{"type":"array","value":{"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":true},"unless_sent":{"fieldType":{"type":"boolean"},"optional":true},"by":{"fieldType":{"type":"string"},"optional":true}}}},"optional":false},"resend":{"fieldType":{"type":"boolean"},"optional":true}}}
 invites:settle mutation internal {"type":"object","value":{"row":{"fieldType":{"type":"id","tableName":"platform_audit_log"},"optional":false},"sent":{"fieldType":{"type":"boolean"},"optional":false},"uncertain":{"fieldType":{"type":"boolean"},"optional":false}}}
 invites:targets query internal {"type":"object","value":{"invites":{"fieldType":{"type":"array","value":{"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":true},"unless_sent":{"fieldType":{"type":"boolean"},"optional":true},"by":{"fieldType":{"type":"string"},"optional":true}}}},"optional":false},"operator":{"fieldType":{"type":"boolean"},"optional":false},"strict":{"fieldType":{"type":"boolean"},"optional":false}}}
 issues:addLink mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"source_id":{"fieldType":{"type":"string"},"optional":false},"target_id":{"fieldType":{"type":"string"},"optional":false},"type":{"fieldType":{"type":"union","value":[{"type":"literal","value":"blocks"},{"type":"literal","value":"relates"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -703,7 +704,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   },
   // Whether the invitation emails behind pending seats went out: an org admin
   // sees every pending seat, anyone else only the sends they caused.
-  invites: { deliveries: 'orgQuery' },
+  invites: { deliveries: 'orgQuery', sendAgain: 'orgMutation' },
   issues: {
     // deprecated: tabs from before archivedPage still call it (issues.ts)
     archivedFor: 'authedQuery',
@@ -865,7 +866,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 168
+const PUBLIC_COUNT = 169
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')
