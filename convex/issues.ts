@@ -65,6 +65,7 @@ import {
   orgQuery,
   rule,
 } from './lib/functions'
+import { SUBTASK_MAX } from './lib/taskLimits'
 import { ARCHIVED_SEARCH_MAX } from './lib/textLimits'
 import { postArchiveReason } from './model/comments'
 import { cleanReason, moveTasksToTrash } from './model/deletedItems'
@@ -449,7 +450,9 @@ export const archive = orgMutation({
 /* -------------------------------------------------------------- unarchive
  * P.unarchiveIssue awaits it. A refusal toasts "Couldn't restore." and then
  * the refusal sentence. The snapshot pulls the restored rows back in
- * reactively. */
+ * reactively. `left_parent` says the task came back as a top-level task,
+ * because its parent already had SUBTASK_MAX active subtasks
+ * (model/issues.ts unarchiveIssueCore), so the app can tell the person. */
 export const unarchive = orgMutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
@@ -457,7 +460,10 @@ export const unarchive = orgMutation({
     const issue = await myIssue(ctx, id)
     await assertWritable(ctx, issue.project_id)
     const after = await unarchiveIssueCore(ctx, { me: ctx.me, issue, now })
-    return await pubFor(ctx, ctx.me, after)
+    return {
+      issue: await pubFor(ctx, ctx.me, after),
+      left_parent: issue.parent_id !== undefined && after.parent_id === undefined,
+    }
   },
 })
 
@@ -475,10 +481,11 @@ export const unarchive = orgMutation({
  * being deleted here, in an active project the caller can edit; otherwise
  * nothing is deleted (SUBTASKS_CHANGED), so the outcome is the one the
  * window showed.
- * They go deepest first, so every subtask left behind (archived, in a
- * project the caller cannot edit or see, or not chosen) is detached from the
- * task above it and becomes a top-level task, keeping its own subtasks. A
- * chosen subtask keeps its parent in Deleted items. */
+ * Every subtask left behind (archived, in a project the caller cannot edit
+ * or see, or not chosen) is detached and becomes a top-level task. A chosen
+ * subtask keeps its parent in Deleted items. A subtask has no subtasks of
+ * its own, so the choice reads one range of at most SUBTASK_MAX active
+ * subtasks. */
 export const SUBTASKS_CHANGED =
   'the subtasks changed while the window was open; check them and delete again'
 export const deleteDeep = orgMutation({
@@ -494,14 +501,15 @@ export const deleteDeep = orgMutation({
     const why = cleanReason(reason)
     const chosen = new Set(subtask_ids ?? [])
     const doomed: Doc<'issues'>[] = []
-    for (let i = -1; i < doomed.length && chosen.size; i++) {
-      const above = i < 0 ? issue : doomed[i]
+    if (chosen.size) {
       const kids = await ctx.db
         .query('issues')
-        .withIndex('by_parent', (q) => q.eq('parent_id', above.id))
-        .collect()
+        .withIndex('by_parent_archived', (q) =>
+          q.eq('parent_id', issue.id).eq('archived_at', undefined),
+        )
+        .take(SUBTASK_MAX)
       for (const kid of kids) {
-        if (!chosen.has(kid.id) || kid.archived_at !== undefined) continue
+        if (!chosen.has(kid.id)) continue
         // an archived project keeps its tasks and grants, but they are put away
         if ((await byId(ctx, 'projects', kid.project_id))?.archived_at !== undefined) continue
         if (!(await hasProjectLevel(ctx, ctx.me, kid.project_id, 'user'))) continue
@@ -513,7 +521,7 @@ export const deleteDeep = orgMutation({
     await moveTasksToTrash(ctx, {
       actor: ctx.me,
       root: issue,
-      subtasks: doomed.reverse(),
+      subtasks: doomed,
       now,
       reason: why,
     })

@@ -56,7 +56,7 @@ async function myTeam(ctx: MeCtx, id: string): Promise<Doc<'teams'>> {
 
 /* ----------------------------------------------------------------- create
  * P.addTeam — admin only; the client pre-generates the uuid; defaults are
- * newTeamDefaults (stale 120, archive 30, delay true). */
+ * newTeamDefaults (delay true). */
 export const create = adminMutation({
   args: { id: v.string(), name: v.string() },
   handler: async (ctx, { id, name }) => {
@@ -73,8 +73,6 @@ export const update = orgMutation({
     id: v.string(),
     patch: v.object({
       name: v.optional(v.string()),
-      stale_days: v.optional(v.number()),
-      archive_days: v.optional(v.number()),
       track_delay_default: v.optional(v.boolean()),
     }),
     expected: v.optional(vTeamExpected),

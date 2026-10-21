@@ -37,6 +37,7 @@ import { refuseProduction } from './lib/deployment'
 import { adminMutation, authedQuery, orgMutation, rule } from './lib/functions'
 import {
   clearOrgTrash,
+  detachArchivedChildren,
   expireItems,
   myItem,
   PURGE_MAX,
@@ -146,6 +147,16 @@ export const step = internalMutation({
   args: { item_id: v.string() },
   handler: async (ctx, { item_id }): Promise<null> => {
     await runStep(ctx, item_id)
+    return null
+  },
+})
+
+/** One step of detaching the children a deleted task left behind
+ * (model/deletedItems.ts detachArchivedChildren). */
+export const detachArchived = internalMutation({
+  args: { parent_id: v.string(), actor_id: v.string(), now: v.string() },
+  handler: async (ctx, a): Promise<null> => {
+    await detachArchivedChildren(ctx, a)
     return null
   },
 })

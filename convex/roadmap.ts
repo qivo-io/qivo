@@ -11,6 +11,7 @@ import { canSeeProject, hasProjectLevel } from './lib/access'
 import { assertOrgWritable } from './lib/billingAccess'
 import { assertNewRowId, byId, insertUnique, usedMoreThan } from './lib/db'
 import { authedMutation, badRequest, conflict, forbidden, notFound, rule } from './lib/functions'
+import { SUBTASK_MAX } from './lib/taskLimits'
 import { logActivity } from './model/activity'
 import { changedPrints, DELETES } from './model/expected'
 import {
@@ -158,20 +159,23 @@ async function seatFor(ctx: Context, projectId: string | undefined) {
   return project ? ctx.myProfiles.get(project.org_id) : undefined
 }
 
+/* What an undo of a roadmap change to `row` checks is unchanged: the task's
+ * place and archive state and its active subtasks, which decide whether it
+ * is a group. Archived subtasks have no bound (lib/taskLimits.ts
+ * SUBTASK_MAX), so they are left out; one range of at most SUBTASK_MAX
+ * active ones is read. */
 async function taskGuard(ctx: MutationCtx, row: Doc<'issues'>): Promise<string> {
   const children = await ctx.db
     .query('issues')
-    .withIndex('by_parent', (q) => q.eq('parent_id', row.id))
-    .collect()
+    .withIndex('by_parent_archived', (q) => q.eq('parent_id', row.id).eq('archived_at', undefined))
+    .take(SUBTASK_MAX)
   return JSON.stringify({
     row: row._id,
     org: row.org_id,
     project: row.project_id,
     parent: row.parent_id,
     archived: row.archived_at,
-    children: children
-      .map((c) => [c._id, c.archived_at ?? null])
-      .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+    children: children.map((c) => c._id).sort((a, b) => String(a).localeCompare(String(b))),
   })
 }
 

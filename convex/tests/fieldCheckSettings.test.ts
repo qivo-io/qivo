@@ -226,12 +226,13 @@ describe('teams', () => {
         patch,
         expected,
       })
-    await update(fx.admin, { name: 'Hardware 2', stale_days: 21 }, { name: 'Hardware' })
-    // the leader read the old name and day count; a day count that rounds
-    // to the one stored passes all the same
+    await update(fx.admin, { name: 'Hardware 2', track_delay_default: false }, { name: 'Hardware' })
+    // the leader read the old name and delay default
     await fieldChanged(update(fx.user, { name: 'HW' }, { name: 'Hardware' }))
-    await update(fx.user, { stale_days: 21.4 }, { stale_days: 14 })
-    expect(await team()).toMatchObject({ name: 'Hardware 2', stale_days: 21 })
+    await fieldChanged(
+      update(fx.user, { track_delay_default: true }, { track_delay_default: true }),
+    )
+    expect(await team()).toMatchObject({ name: 'Hardware 2', track_delay_default: false })
 
     // a second team, so the first may go
     await as(fx.t, fx.admin).mutation(api.teams.create, {
@@ -247,7 +248,7 @@ describe('teams', () => {
       })
     await fieldChanged(remove({ name: 'Hardware' }))
     expect(await team()).not.toBeNull()
-    await remove({ name: 'Hardware 2', stale_days: 21 })
+    await remove({ name: 'Hardware 2', track_delay_default: false })
     expect(await team()).toBeNull()
   })
 })

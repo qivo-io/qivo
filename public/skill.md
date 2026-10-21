@@ -251,10 +251,11 @@ Useful field rules:
   reference. You need User or Lead access on the parent's project, because the
   parent becomes a group and loses its own remaining hours. A subtask stays in
   its parent's top-level project, in any of its sub-projects. A task has one
-  level of subtasks, at most 100 of them, archived ones included: a subtask
-  cannot be a parent, a task with subtasks cannot get a parent, and a parent
-  with 100 subtasks takes no more. Each is a `400` naming the rule. Tasks
-  nested deeper before these limits keep their shape. Change the parent
+  level of subtasks, at most 100 active ones; archived subtasks do not
+  count. A subtask cannot be a parent, a task with subtasks cannot get a
+  parent, and a parent with 100 active subtasks takes no more. Each is a
+  `400` naming the rule. Restoring a subtask under a full parent brings it
+  back as a top-level task. Change the parent
   later with `parent` on `update_task` or PATCH, or detach it with
   `parent: null`. `get_task` and `GET /v1/tasks/{ref}` list `subtasks`; a
   `parent_id` of `null` with `has_hidden_parent: true` means the parent
@@ -264,14 +265,17 @@ Useful field rules:
   both sub-projects, and the task's assignee and reviewer must be able to work
   in the destination. If they cannot, send a new `assignee_id` or
   `reviewer_id`, or `null`, in the same request. The task keeps its key. A
-  move to another top-level project carries the task's subtasks along, so a
-  task with more than 200 subtasks cannot make it. A subtask moved there must
+  move to another top-level project carries the task's subtasks along,
+  archived ones included, so a task with more than 200 subtasks cannot make
+  it. A subtask moved there must
   leave its parent in the same request, with `parent: null` or a new parent
   in that project.
 - **Link:** `set_task_link` with `ref`, `other`, `kind` (`blocks`,
   `blocked_by` or `relates`, as seen from `ref`) and `linked`, or the REST
   links routes. Two tasks share at most one link; remove a link before
-  adding another kind. `get_task` lists `links`.
+  adding another kind. A task has at most 100 links, 20 labels and 100
+  attachments; past each the request is a `400` saying which task is full.
+  `get_task` lists `links`.
 - **Label:** find label ids or names with `list_labels` or `GET /v1/labels`,
   then send `add_labels` and `remove_labels` on `update_task` or PATCH.
   `set_label` or `POST /v1/labels` creates a label (`#rrggbb` color); only

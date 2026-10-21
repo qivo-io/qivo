@@ -70,14 +70,11 @@ describe('parent candidates', () => {
 
   it('offers a task with subtasks only its current parent, so it can be cleared', () => {
     const { tasks, byId, view } = scene()
-    // open is a legacy subtask with a subtask of its own
+    // open has a subtask and a parent, which stays listed so it can go
     expect(ids(parentCandidatesFor(byId.open, tasks, view))).toEqual(['epic'])
-    expect(parentBlock(byId.open)).toBe('A task with subtasks can only leave its parent')
+    expect(parentBlock(byId.open)).toBe('A task with subtasks cannot become a subtask')
     expect(parentBlock(byId.epic)).toBe('A task with subtasks cannot become a subtask')
     expect(parentBlock(byId.sibling)).toBeUndefined()
-    // a legacy subtask with subtasks under a hidden parent can only leave it
-    const hiddenUnder = task('hiddenUnder', 'FE', { hasHiddenParent: true, children: ['x'] })
-    expect(parentBlock(hiddenUnder)).toBe('A task with subtasks can only leave its parent')
   })
 
   it('keeps a current parent in another top-level project so it can be cleared', () => {
@@ -117,7 +114,7 @@ describe('subtask candidates', () => {
     const offered = ids(subtaskCandidatesFor(byId.full, tasks, view))
     expect(offered).toEqual(kids)
     expect(subtaskBlock(byId.full)).toBe(
-      `This task has ${SUBTASK_MAX} subtasks, the most a task can have`,
+      `This task has ${SUBTASK_MAX} active subtasks, the most a task can have`,
     )
   })
 

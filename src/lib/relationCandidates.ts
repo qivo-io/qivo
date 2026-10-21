@@ -6,11 +6,13 @@
    the server's guard, so the blended snapshot is narrowed to the task's own
    organization first. The task's own sub-project comes first.
 
-   A task has one level of subtasks, at most SUBTASK_MAX of them
+   A task has one level of subtasks, at most SUBTASK_MAX active ones
    (convex/lib/taskLimits.ts), so neither picker offers a link the server
    would refuse: no subtask as a parent, no task with subtasks as a subtask
-   and no parent that is full. The view counts the subtasks it shows, so a
-   task whose other subtasks are archived or hidden can still be refused. */
+   and no parent that is full. Archived subtasks count for neither side, as
+   on the server. The view counts the active subtasks it shows, so a task
+   whose other active subtasks are hidden from the reader, or sit in an
+   archived sub-project, can still be refused, with the server's sentence. */
 
 import { SUBTASK_MAX } from '../../convex/lib/taskLimits'
 
@@ -42,18 +44,15 @@ const subtasksFull = (x: RelationTask): boolean => (x.children?.length ?? 0) >= 
  * when it can. */
 export function subtaskBlock(it: RelationTask): string | undefined {
   if (isSubtask(it)) return 'A subtask cannot have subtasks'
-  if (subtasksFull(it)) return `This task has ${SUBTASK_MAX} subtasks, the most a task can have`
+  if (subtasksFull(it))
+    return `This task has ${SUBTASK_MAX} active subtasks, the most a task can have`
   return undefined
 }
 
-/** Why `it` cannot get a parent, or another one, as a control's tooltip, or
- * undefined when it can. A subtask with subtasks, stored before the one
- * level of subtasks, can only leave its parent. */
+/** Why `it` cannot get a parent, as a control's tooltip, or undefined when
+ * it can. */
 export function parentBlock(it: RelationTask): string | undefined {
-  if (!hasSubtasks(it)) return undefined
-  return isSubtask(it)
-    ? 'A task with subtasks can only leave its parent'
-    : 'A task with subtasks cannot become a subtask'
+  return hasSubtasks(it) ? 'A task with subtasks cannot become a subtask' : undefined
 }
 
 /* Whether `x` is in `it`'s organization and top-level project. A project

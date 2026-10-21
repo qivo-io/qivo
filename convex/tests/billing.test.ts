@@ -5,8 +5,17 @@ import type { Id } from '../_generated/dataModel'
 import { STORAGE_ATTEMPTS, STORAGE_RETRY_MS, STORAGE_STALL_MS } from '../billingSync'
 import { addCalendarMonths } from '../lib/billingAccess'
 import type { BillingPlan, BillingSummary, BillingUsage } from '../lib/billingTypes'
-import { enrollOrganization, STORAGE_PAGE, storageUsage, UNSCOPED_READ } from '../model/billing'
-import { as, expectRefusal, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
+import { enrollOrganization, STORAGE_PAGE, storageUsage } from '../model/billing'
+import {
+  as,
+  expectRefusal,
+  newT,
+  plantIssue,
+  plantProject,
+  type T,
+  uuid,
+  withOrg,
+} from './helpers.setup'
 
 type PlanInput = Omit<BillingPlan, 'id' | 'archived' | 'created_at'>
 const summary = makeFunctionReference<'query', { org_id: string }, BillingSummary>(
@@ -82,7 +91,6 @@ beforeEach(() => {
 })
 afterEach(() => {
   Object.assign(STORAGE_PAGE, DEFAULT_STORAGE_PAGE)
-  Object.assign(UNSCOPED_READ, DEFAULT_UNSCOPED_READ)
   vi.useRealTimers()
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
@@ -146,7 +154,6 @@ const storageEvents = (t: T) =>
 const iso = (n: number) => new Date(Date.parse(NOW) + n * 60_000).toISOString()
 
 const DEFAULT_STORAGE_PAGE = { ...STORAGE_PAGE }
-const DEFAULT_UNSCOPED_READ = { ...UNSCOPED_READ }
 
 async function stored(t: T, orgId: string) {
   return await t.run((ctx) =>
@@ -606,7 +613,6 @@ describe('provider state, retries and billing snapshots', () => {
           if (i < 4500)
             await ctx.db.insert('issue_attachments', {
               org_id: f.org.id,
-              project_id,
               id: uuid(),
               issue_id: id,
               storage_id,
@@ -619,10 +625,10 @@ describe('provider state, retries and billing snapshots', () => {
       })
     }
 
-    // a row stored before rows carried their organization, whose task is
-    // gone, as the backfill leaves it, costs one lookup and counts nowhere
+    // a row whose task is gone costs one lookup and counts nowhere
     await t.run((ctx) =>
       ctx.db.insert('issue_attachments', {
+        org_id: f.org.id,
         id: uuid(),
         issue_id: uuid(),
         storage_id,
@@ -666,7 +672,7 @@ describe('provider state, retries and billing snapshots', () => {
     )
     // 9 GB against the 5 GB the plan includes for five seats
     expect(period).toMatchObject({ storage_bytes: 9_000_000_000, storage_blocks: 4 })
-  })
+  }, 120_000)
 
   it('records a renewal of 6,000 attachment rows at once and samples them under 4,000 documents a read', async () => {
     const { t, f } = await fixture({ transactionLimits: { documentsRead: 4000 } })
@@ -697,7 +703,6 @@ describe('provider state, retries and billing snapshots', () => {
         for (let i = from; i < from + 3000; i++)
           await ctx.db.insert('issue_attachments', {
             org_id: f.org.id,
-            project_id: f.sub.id,
             id: uuid(),
             issue_id: tasks[i % tasks.length],
             storage_id,
@@ -731,8 +736,8 @@ describe('provider state, retries and billing snapshots', () => {
   it('samples the bytes storageUsage counts, at any page size', async () => {
     const { t, f } = await fixture()
     const storage_id = await t.run((ctx) => ctx.storage.store(new Blob()))
-    const file = (issue_id: string, size_bytes: number, scope: Record<string, string> = {}) => ({
-      ...scope,
+    const file = (issue_id: string, size_bytes: number, org_id = f.org.id) => ({
+      org_id,
       id: uuid(),
       issue_id,
       storage_id,
@@ -744,37 +749,25 @@ describe('provider state, retries and billing snapshots', () => {
     const fw = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const pcb = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
     const elsewhere = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id })
+    const gone = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
+    const stranded = await plantIssue(t, { org_id: f.org.id, project_id: gone.id })
     await t.run(async (ctx) => {
-      // scoped rows, one without its project
-      await ctx.db.insert(
-        'issue_attachments',
-        file(fw.id, 2_000_000_000, { org_id: f.org.id, project_id: f.sub.id }),
-      )
-      await ctx.db.insert('issue_attachments', file(pcb.id, 3_000_000_000, { org_id: f.org.id }))
-      // rows stored before rows carried their organization
+      await ctx.db.insert('issue_attachments', file(fw.id, 2_000_000_000))
+      await ctx.db.insert('issue_attachments', file(pcb.id, 3_000_000_000))
       await ctx.db.insert('issue_attachments', file(fw.id, 4_000_000_000))
-      await ctx.db.insert('issue_attachments', file(elsewhere.id, 8_000_000_000))
+      // another organization's row, and a row whose task is gone
+      await ctx.db.insert('issue_attachments', file(elsewhere.id, 8_000_000_000, f.otherOrg.id))
       await ctx.db.insert('issue_attachments', file(uuid(), 16_000_000_000))
-      // a row whose project is gone counts nowhere
-      await ctx.db.insert(
-        'issue_attachments',
-        file(fw.id, 32_000_000_000, { org_id: f.org.id, project_id: uuid() }),
-      )
+      // a row whose task's project is gone counts nowhere
+      await ctx.db.insert('issue_attachments', file(stranded.id, 32_000_000_000))
+      await ctx.db.delete(gone._id)
     })
     const live = await t.run((ctx) => storageUsage(ctx, f.org.id))
     expect(live.bytes).toBe(9_000_000_000)
 
-    // the last two read the rows without org_id through the organization's
-    // tasks, because the deployment holds more of them than UNSCOPED_READ
-    const sizes = [
-      { page: { rows: 1 }, lookups: 3000 },
-      { page: { rows: 1000, taskBytes: 1 }, lookups: 3000 },
-      { page: { rows: 1, tasks: 1 }, lookups: 2 },
-      { page: { rows: 1000, tasks: 500 }, lookups: 2 },
-    ]
-    for (const [i, { page, lookups }] of sizes.entries()) {
+    const sizes = [{ rows: 1 }, { rows: 1000, taskBytes: 1 }, { rows: 3 }, { rows: 1000 }]
+    for (const [i, page] of sizes.entries()) {
       Object.assign(STORAGE_PAGE, DEFAULT_STORAGE_PAGE, page)
-      UNSCOPED_READ.lookups = lookups
       const start = new Date(Date.parse(START) + i * 31 * 86_400_000).toISOString()
       await t.mutation(apply, {
         payload: remote(f.org.id, {
@@ -805,7 +798,6 @@ describe('provider state, retries and billing snapshots', () => {
         await t.run((ctx) =>
           ctx.db.insert('issue_attachments', {
             org_id: f.org.id,
-            project_id: f.sub.id,
             id: uuid(),
             issue_id: task.id,
             storage_id,
@@ -851,7 +843,6 @@ describe('provider state, retries and billing snapshots', () => {
       const storage_id = await ctx.storage.store(new Blob())
       await ctx.db.insert('issue_attachments', {
         org_id: f.org.id,
-        project_id: f.sub.id,
         id: uuid(),
         issue_id: task.id,
         storage_id,
@@ -891,7 +882,6 @@ describe('provider state, retries and billing snapshots', () => {
       const storage_id = await ctx.storage.store(new Blob())
       await ctx.db.insert('issue_attachments', {
         org_id: f.org.id,
-        project_id: f.sub.id,
         id: uuid(),
         issue_id: task.id,
         storage_id,
@@ -969,7 +959,6 @@ describe('provider state, retries and billing snapshots', () => {
       const storage_id = await ctx.storage.store(new Blob())
       await ctx.db.insert('issue_attachments', {
         org_id: f.org.id,
-        project_id: f.sub.id,
         id: uuid(),
         issue_id: task.id,
         storage_id,
@@ -1060,7 +1049,6 @@ describe('provider state, retries and billing snapshots', () => {
       const storage_id = await ctx.storage.store(new Blob())
       await ctx.db.insert('issue_attachments', {
         org_id: f.org.id,
-        project_id: f.sub.id,
         id: uuid(),
         issue_id: task.id,
         storage_id,

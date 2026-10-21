@@ -43,7 +43,6 @@ import {
   exact,
   type Fields,
   type Next,
-  NUMBER,
   namedRecord,
   TEXT,
 } from './expected'
@@ -191,22 +190,14 @@ export async function createTeamCore(
 /** The team settings a change may carry. */
 export type TeamPatch = {
   name?: string
-  stale_days?: number
-  archive_days?: number
   track_delay_default?: boolean
 }
-
-/* The old client's whole-number clamp (Math.round + range), range per column. */
-const clamp = (n: number, lo: number, hi: number) =>
-  Math.max(lo, Math.min(hi, Math.round(Number(n) || 0)))
 
 /** The keys of a team's `expected`. REST and MCP change only the name. */
 export const TEAM_FIELDS: Fields<Doc<'teams'>> = {
   // any text: a team took a blank name until 2026-10-16 and a longer one
   // until 2026-10-19, and a read answers it as stored
   name: { sends: 'name', type: TEXT, form: trimmedForm },
-  stale_days: { sends: 'stale_days', type: NUMBER, form: exact },
-  archive_days: { sends: 'archive_days', type: NUMBER, form: exact },
   track_delay_default: { sends: 'track_delay_default', type: BOOLEAN, form: exact },
 }
 
@@ -216,8 +207,6 @@ export const TEAM_MACHINE_FIELDS: Fields<Doc<'teams'>> = { name: TEAM_FIELDS.nam
 /** The app's `expected` for a team edit or delete. */
 export const vTeamExpected = v.object({
   name: v.optional(v.string()),
-  stale_days: v.optional(v.number()),
-  archive_days: v.optional(v.number()),
   track_delay_default: v.optional(v.boolean()),
 })
 
@@ -246,8 +235,7 @@ export async function assertTeamExpected(
 /**
  * Renames a team or changes its settings, for an organization admin or a
  * leader of the team. Same-value fields are dropped, so an unchanged patch
- * writes nothing. Day counts clamp to 1..3650 like the old client's. Returns
- * the team as stored. `expected` holds what the caller read
+ * writes nothing. Returns the team as stored. `expected` holds what the caller read
  * (model/expected.ts).
  */
 export async function updateTeamCore(
@@ -261,32 +249,17 @@ export async function updateTeamCore(
 ): Promise<Doc<'teams'>> {
   const { team, patch } = a
   await assertRunsTeam(ctx, a.me, team)
-  const days = (n: number | undefined) => (n === undefined ? undefined : clamp(n, 1, 3650))
   await assertTeamExpected(
     ctx,
     a.me,
     team,
     a.expected,
-    Object.fromEntries(
-      Object.entries({
-        ...patch,
-        stale_days: days(patch.stale_days),
-        archive_days: days(patch.archive_days),
-      }).filter(([, value]) => value !== undefined),
-    ),
+    Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)),
   )
   const upd: Partial<WithoutSystemFields<Doc<'teams'>>> = {}
   if (patch.name !== undefined) {
     const name = cleanTeamName(patch.name, team.name)
     if (name !== team.name) upd.name = name
-  }
-  if (patch.stale_days !== undefined) {
-    const d = clamp(patch.stale_days, 1, 3650)
-    if (d !== team.stale_days) upd.stale_days = d
-  }
-  if (patch.archive_days !== undefined) {
-    const d = clamp(patch.archive_days, 1, 3650)
-    if (d !== team.archive_days) upd.archive_days = d
   }
   if (
     patch.track_delay_default !== undefined &&

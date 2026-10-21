@@ -38,8 +38,7 @@ import { type NotifyPreload, newNotifyPreload } from './model/messages'
  * followers and its task.updated subscribers, so neither has a fixed cost.
  * Before each page task after its first, a step therefore also stops once
  * it has used the share `room` of any of Convex's limits for one
- * transaction, as the subtask family backfill does
- * (internal/subtaskFamilyBackfill.ts). A step that stops leaves the next one
+ * transaction. A step that stops leaves the next one
  * the same page from the task after the last it finished. Tests lower
  * these. */
 export const RESTORE_REGROUP = { tasks: 200, bytes: 4 * 1024 * 1024, clears: 50, room: 0.5 }

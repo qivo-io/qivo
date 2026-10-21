@@ -466,8 +466,6 @@ describe('projects.update', () => {
         id: crew,
         org_id: f.org.id,
         name: 'Crew',
-        stale_days: 14,
-        archive_days: 30,
         track_delay_default: false,
         created_at: f.org.created_at,
       })

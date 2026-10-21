@@ -14,13 +14,16 @@
  * because a throw would roll the delete back (files.ts header, the probe
  * verdict).
  *
- * Each row carries its task's organization and project. The app snapshot
- * reads the organization's rows by index, and the storage totals group
- * them by project without reading tasks (model/billing.ts storagePage).
- * moveIssueCore moves the project with the task, and with each subtask a
- * move to another top-level project carries. A file name has 1 to 255
- * characters and a media type at most 255. That keeps every row small, so a
- * page of rows stays small too.
+ * Each row carries its task's organization, so the app snapshot reads the
+ * organization's rows by index. It names no project: the storage totals
+ * read each row's project through its task (model/billing.ts storagePage),
+ * so moving a task writes none of its rows. A task holds at most
+ * ATTACHMENT_MAX rows, files and description images together
+ * (lib/taskLimits.ts): an upload that would pass it is refused before any
+ * bytes are sent (startAttachmentUpload, files.ts uploadUrl, machine/records.ts
+ * attach_text_file), and attachFileCore checks again. A file name has 1 to
+ * 255 characters and a media type at most 255. That keeps every row small,
+ * so a page of rows stays small too.
  *
  * REST and MCP upload in two steps. startAttachmentUpload checks the write
  * gate and the declared size, records a ticket naming the caller, the task
@@ -47,7 +50,8 @@ import {
   FILE_TOKEN_TTL_SECONDS,
   mintFileToken,
 } from '../lib/fileTokens'
-import { badRequest, conflict, notFound } from '../lib/functions'
+import { badRequest, conflict, notFound, rule } from '../lib/functions'
+import { ATTACHMENT_MAX, ATTACHMENTS_FULL } from '../lib/taskLimits'
 import { logActivity, signedDetail } from './activity'
 import { assertCanEdit } from './issues'
 import { attachmentLimitMb, newUuid } from './orgs'
@@ -111,6 +115,16 @@ async function attachmentCapMb(ctx: QueryCtx, orgId: string): Promise<number> {
   return attachmentLimitMb(await byId(ctx, 'organizations', orgId))
 }
 
+/** Refuses with ATTACHMENTS_FULL when task `issueId` already has
+ * ATTACHMENT_MAX attachment rows. One range of at most ATTACHMENT_MAX rows. */
+export async function assertAttachmentRoom(ctx: QueryCtx, issueId: string): Promise<void> {
+  const rows = await ctx.db
+    .query('issue_attachments')
+    .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
+    .take(ATTACHMENT_MAX)
+  if (rows.length >= ATTACHMENT_MAX) throw rule(ATTACHMENTS_FULL)
+}
+
 /** The refusal for a file larger than the organization allows. */
 const overCap = (cap: number): string => `attachment exceeds the organization limit of ${cap} MiB`
 
@@ -133,15 +147,9 @@ export function cleanAttachmentName(raw: string): string {
   return name
 }
 
-/* System fields and the index fields (organization and project) stay
- * internal; optional columns come back ABSENT. */
-const pub = ({
-  _id,
-  _creationTime,
-  org_id: _orgId,
-  project_id: _projectId,
-  ...row
-}: Doc<'issue_attachments'>) => row
+/* System fields and the organization stay internal; optional columns come
+ * back ABSENT. */
+const pub = ({ _id, _creationTime, org_id: _orgId, ...row }: Doc<'issue_attachments'>) => row
 
 export type AttachmentRow = ReturnType<typeof pub>
 
@@ -156,7 +164,8 @@ export type AttachResult =
  * Attaches the stored file `storage_id` to `issue` as `me`, with the
  * activity row the app writes ('attached a file to', or 'added an image to'
  * for an inline image), signed with `provenance` for a machine caller. The
- * row takes the task's organization and project. `name` is stored trimmed
+ * row takes the task's organization. A task with ATTACHMENT_MAX rows refuses
+ * it (assertAttachmentRoom). `name` is stored trimmed
  * and must have 1 to 255 characters, and the media type (`mime`, else the
  * stored file's) at most 255. The size comes from storage metadata. When
  * `declaredSize` is given, the stored file must have exactly that many
@@ -184,6 +193,7 @@ export async function attachFileCore(
   assertNewRowId(a.id)
   await assertCanEdit(ctx, me, issue.project_id)
   const name = cleanAttachmentName(a.name)
+  await assertAttachmentRoom(ctx, issue.id)
   if (await storageIdInUse(ctx, a.storage_id)) {
     // never delete here, the bytes belong to the EXISTING referent
     throw badRequest('this file is already attached')
@@ -210,7 +220,6 @@ export async function attachFileCore(
     {
       id: a.id,
       org_id: issue.org_id,
-      project_id: issue.project_id,
       issue_id: issue.id,
       name,
       size_bytes: meta.size, // server truth, NEVER a client number (0089)
@@ -287,7 +296,8 @@ const EXPIRED_TICKETS_PER_UPLOAD = 100
 
 /**
  * Starts an upload of a file of `size` bytes to `issue` for `me`. Checks
- * the write gate and the organization's cap against the declared size,
+ * the write gate, the task's room for one more attachment
+ * (assertAttachmentRoom) and the organization's cap against the declared size,
  * records the ticket that confirmAttachmentUpload requires and answers its
  * upload URL, which stores one file. `nowMs` is the request's clock. Deletes
  * some of the caller's expired tickets on the way.
@@ -305,6 +315,7 @@ export async function startAttachmentUpload(
 ): Promise<{ ticket: Doc<'attachment_uploads'>; uploadUrl: string }> {
   const { me, issue } = a
   await assertCanEdit(ctx, me, issue.project_id)
+  await assertAttachmentRoom(ctx, issue.id)
   const cap = await attachmentCapMb(ctx, issue.org_id)
   if (a.size > cap * 1024 * 1024) throw badRequest(overCap(cap))
   const expired = await ctx.db

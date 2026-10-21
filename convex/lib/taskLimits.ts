@@ -1,14 +1,17 @@
-/* The size limits of one task's family, followers and remaining hours,
- * shared by the server's model layer and the app, which disables the
- * controls that would pass them. No imports, so the app can import this file as it does
- * textLimits.ts.
+/* The size limits of one task's family, followers, attachments, links,
+ * labels and remaining hours, shared by the server's model layer and the
+ * app, which disables the controls that would pass them. No imports, so the
+ * app can import this file as it does textLimits.ts.
  *
- * A task has one level of subtasks: a subtask has no subtasks of its own.
- * Tasks stored before these rules keep their shape, and only new links,
- * creates and follows are refused. */
+ * A task has one level of subtasks: a subtask has no subtasks of its own. */
 
-/** The most subtasks one task may have, archived ones included, because a
- * restore from the archive brings them back without asking. */
+/** The most active (not archived) subtasks one task may have. Archived
+ * subtasks do not count, so a parent whose Done subtasks archive keeps
+ * taking new ones. A restore from the archive or from Deleted items that
+ * would pass it brings the task back as a top-level task instead
+ * (model/issues.ts unarchiveIssueCore, model/deletedItems.ts keptParent).
+ * A move to another project, which carries archived subtasks too, has its
+ * own bound (model/issues.ts MOVE_SUBTREE_MAX). */
 export const SUBTASK_MAX = 100
 
 /** The most followers one task may have. Following by hand, commenting and
@@ -25,8 +28,29 @@ export const PARENT_IS_SUBTASK =
 export const SUBTASK_WITH_SUBTASKS =
   'this task has subtasks, so it cannot become a subtask; a subtask cannot have subtasks of its own'
 
-/** The refusal of a parent that already has SUBTASK_MAX subtasks. */
-export const PARENT_FULL = `the parent task already has ${SUBTASK_MAX} subtasks, the most a task can have`
+/** The refusal of a parent that already has SUBTASK_MAX active subtasks. */
+export const PARENT_FULL = `the parent task already has ${SUBTASK_MAX} active subtasks, the most a task can have; archive or remove one of them first`
+
+/** The most attachment rows one task may have, files in its attachment
+ * list and images in its description together. */
+export const ATTACHMENT_MAX = 100
+
+/** The most links one task may have, counting the links where it is either
+ * end. */
+export const LINK_MAX = 100
+
+/** The most labels one task may carry. */
+export const LABEL_MAX = 20
+
+/** The refusal of an attachment to a task with ATTACHMENT_MAX of them. */
+export const ATTACHMENTS_FULL = `this task already has ${ATTACHMENT_MAX} attachments, images in its description included, the most a task can have; remove one first`
+
+/** The refusal of a link to task `key` once it has LINK_MAX links. */
+export const linksFull = (key: string): string =>
+  `${key} already has ${LINK_MAX} links, the most a task can have; remove one of its links first`
+
+/** The refusal of a label on a task with LABEL_MAX labels. */
+export const LABELS_FULL = `this task already has ${LABEL_MAX} labels, the most a task can have; remove one first`
 
 /** The refusal of a follow by hand on a task with FOLLOWER_MAX followers. */
 export const FOLLOWERS_FULL = `this task already has ${FOLLOWER_MAX} followers, the most a task can have`

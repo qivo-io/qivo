@@ -247,8 +247,6 @@ describe('project creation through the client store', () => {
         id,
         org_id: org,
         name: id,
-        stale_days: 14,
-        archive_days: 30,
         track_delay_default: false,
         created_at: NOW,
       })

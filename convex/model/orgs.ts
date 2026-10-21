@@ -335,20 +335,18 @@ export const newOrgDefaults = (now: string) => ({
   gravatar_avatars: false,
 })
 
-/* The organization's upload cap in MiB. Older org rows without one default
- * to the gateway's 20 MiB serving ceiling, which also caps every value. */
+/* The organization's upload cap in MiB, at most 20. The 20 MiB ceiling is a
+ * product and cost rule, not a technical limit: Qivo makes it simple to add
+ * images and PDF files to tasks and is not a storage service, so a larger
+ * file does not go onto Qivo. An org row without a value gets the ceiling. */
 export const attachmentLimitMb = (org: Pick<Doc<'organizations'>, 'max_attachment_mb'> | null) =>
   Math.min(org?.max_attachment_mb ?? 20, 20)
 
-/* The standard auto-archive threshold in days for Done tasks. Projects without
- * a legacy team setting use it (jobs.ts), and new teams store it. */
+/* The auto-archive threshold in days for Done tasks (jobs.ts). */
 export const DEFAULT_ARCHIVE_DAYS = 30
 
-/* New teams mark tasks stale after 120 days and auto-archive after 30 days.
- * Existing configured values are preserved; uploads use the org's cap. */
+/* A new team's settings: new projects track delay by default. */
 export const newTeamDefaults = (now: string) => ({
-  stale_days: 120,
-  archive_days: DEFAULT_ARCHIVE_DAYS,
   track_delay_default: true,
   created_at: now,
 })

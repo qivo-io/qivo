@@ -60,8 +60,6 @@ describe('removing someone who has work in the project', () => {
       id: 'crew',
       org_id: org,
       name: 'Crew',
-      stale_days: 14,
-      archive_days: 30,
       track_delay_default: false,
       created_at: NOW,
     })

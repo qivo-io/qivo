@@ -161,8 +161,6 @@ const plantTeam = (fx: Fx, orgId: string, name: string) =>
       id,
       org_id: orgId,
       name,
-      stale_days: 120,
-      archive_days: 30,
       track_delay_default: true,
       created_at: NOW,
     })
@@ -258,8 +256,6 @@ describe('creating and renaming teams', () => {
     expect(await teamRow(fx.t, mcp.id as string)).toMatchObject({
       org_id: fx.org.id,
       name: 'Optics',
-      stale_days: 120,
-      archive_days: 30,
       track_delay_default: true,
     })
     const restOut = await fx.t.mutation(internal.machine.teams.restCreateTeam, {

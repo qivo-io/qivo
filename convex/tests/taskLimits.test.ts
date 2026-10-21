@@ -18,13 +18,21 @@ import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import {
+  ATTACHMENT_MAX,
+  ATTACHMENTS_FULL,
   FOLLOWER_MAX,
   FOLLOWERS_FULL,
+  LABEL_MAX,
+  LABELS_FULL,
+  LINK_MAX,
+  linksFull,
   PARENT_FULL,
   PARENT_IS_SUBTASK,
   SUBTASK_MAX,
   SUBTASK_WITH_SUBTASKS,
 } from '../lib/taskLimits'
+import { ARCHIVED_DETACH } from '../model/deletedItems'
+import { MOVE_SUBTREE_MAX, MOVE_SUBTREE_TOO_LARGE } from '../model/issues'
 import { INLINE_TRIMS, ITEM_UNREAD_CAP, MENTION_MAX, notifyCommentInsert } from '../model/messages'
 import {
   as,
@@ -35,12 +43,13 @@ import {
   type OrgFixture,
   plantIssue,
   plantMessage,
+  plantProject,
   plantSubscription,
   type T,
-  TODAY,
   uuid,
   withOrg,
 } from './helpers.setup'
+import { deleteTask, itemFor } from './trash.setup'
 
 async function refused(p: Promise<unknown>, code: RefusalCode, sentence: string): Promise<void> {
   const e = await expectRefusal(p, code)
@@ -263,67 +272,437 @@ describe('one level of subtasks', () => {
     )
   })
 
-  it('keeps a legacy chain readable and editable, and lets it be taken apart', async () => {
+  it(`counts only active subtasks toward ${SUBTASK_MAX} and refuses the next active one`, async () => {
     const fx = await setup()
-    // a chain from before the one level of subtasks
-    const top = await task(fx, { title: 'Top' })
-    const mid = await task(fx, { parent_id: top.id, title: 'Mid' })
-    const leaf = await task(fx, { parent_id: mid.id, title: 'Leaf' })
-    const read = await fx.t.query(internal.machine.rest.getIssue, {
-      callerId: fx.agent.id,
-      access: 'read',
-      ref: key(leaf),
-      today: TODAY,
-    })
-    expect(read).toMatchObject({ parent_id: mid.id, has_hidden_parent: false })
-    const renamed = await fx.t.mutation(internal.machine.rest.updateIssue, {
-      callerId: fx.agent.id,
-      access: 'write',
-      keyName: 'limits',
-      ref: key(mid),
-      body: JSON.stringify({ title: 'Mid, renamed' }),
-    })
-    expect(renamed).toMatchObject({ title: 'Mid, renamed', parent_id: top.id })
-    // detaching always passes, and the detached middle keeps its subtask
-    await as(fx.t, fx.admin).mutation(api.issues.update, {
-      org_id: fx.org.id,
-      id: mid.id,
-      patch: { parent_id: null },
-    })
-    expect((await row(fx.t, mid.id)).parent_id).toBeUndefined()
-    expect((await row(fx.t, leaf.id)).parent_id).toBe(mid.id)
-  })
-
-  it(`counts archived subtasks toward ${SUBTASK_MAX} and refuses the next one`, async () => {
-    const fx = await setup()
-    const parent = await task(fx, { title: 'Full soon' })
-    await fx.t.run(async (ctx) => {
-      for (let i = 0; i < SUBTASK_MAX - 1; i++)
-        await ctx.db.insert('issues', {
-          id: uuid(),
-          org_id: fx.org.id,
-          project_id: fx.sub.id,
-          parent_id: parent.id,
-          num: 50_000 + i,
-          title: `Step ${i}`,
-          description: '',
-          status: 'todo',
-          priority: 'medium',
-          paused: false,
-          ...(i === 0 ? { archived_at: NOW } : {}),
-          created_at: NOW,
-          updated_at: NOW,
-        })
-    })
+    const parent = await task(fx, { title: 'Recurring' })
+    // a full archive of Done subtasks takes nothing from the limit
+    await plantSubtasks(fx, parent, SUBTASK_MAX, { archived_at: NOW })
     const kit = creates(fx, parent)
-    // the hundredth fits, the archived subtask included
     await kit.app()
+    await plantSubtasks(fx, parent, SUBTASK_MAX - 2)
+    // the hundredth active one fits
+    await kit.rest()
     for (const make of Object.values(kit)) await refused(make(), 'rule', PARENT_FULL)
     const lone = await task(fx)
     for (const change of Object.values(reparents(fx, lone, parent))) {
       await refused(change(), 'rule', PARENT_FULL)
     }
     expect(await row(fx.t, lone.id)).toEqual(lone)
+  })
+})
+
+/* Plants `n` subtasks of `parent` in TBED's first sub-project. */
+async function plantSubtasks(
+  fx: Fx,
+  parent: Doc<'issues'>,
+  n: number,
+  over: Partial<Doc<'issues'>> = {},
+): Promise<Doc<'issues'>[]> {
+  return await fx.t.run(async (ctx) => {
+    const out: Doc<'issues'>[] = []
+    const base = await ctx.db.query('issues').collect()
+    for (let i = 0; i < n; i++) {
+      const _id = await ctx.db.insert('issues', {
+        id: uuid(),
+        org_id: fx.org.id,
+        project_id: fx.sub.id,
+        parent_id: parent.id,
+        num: 50_000 + base.length + i,
+        title: `Step ${i}`,
+        description: '',
+        status: 'done',
+        priority: 'medium',
+        paused: false,
+        created_at: NOW,
+        updated_at: NOW,
+        ...over,
+      })
+      out.push((await ctx.db.get(_id)) as Doc<'issues'>)
+    }
+    return out
+  })
+}
+
+describe('restoring a subtask under a parent with the most active subtasks', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  /* A parent with SUBTASK_MAX active subtasks and one archived subtask. */
+  async function fullParent(fx: Fx) {
+    const parent = await task(fx, { title: 'Full' })
+    await plantSubtasks(fx, parent, SUBTASK_MAX)
+    const [old] = await plantSubtasks(fx, parent, 1, { archived_at: NOW, title: 'Old step' })
+    return { parent, old }
+  }
+
+  it('brings it back from the archive as a top-level task, in the app and over REST and MCP', async () => {
+    const fx = await setup()
+    const app = await fullParent(fx)
+    const answer = await as(fx.t, fx.admin).mutation(api.issues.unarchive, {
+      org_id: fx.org.id,
+      id: app.old.id,
+    })
+    expect(answer.left_parent).toBe(true)
+    const back = await row(fx.t, app.old.id)
+    expect([back.archived_at, back.parent_id]).toEqual([undefined, undefined])
+    const told = await fx.t.run((ctx) =>
+      ctx.db
+        .query('activity_events')
+        .filter((q) => q.eq(q.field('target_id'), app.old.id))
+        .collect(),
+    )
+    expect(told.map((e) => e.verb)).toEqual(['restored', 'detached'])
+    const rest = await fullParent(fx)
+    const restored = await fx.t.mutation(internal.machine.rest.updateIssue, {
+      callerId: fx.agent.id,
+      access: 'write',
+      keyName: 'limits',
+      ref: key(rest.old),
+      body: JSON.stringify({ archived: false }),
+    })
+    expect(restored).toMatchObject({ archived: false, parent_id: null })
+    const mcp = await fullParent(fx)
+    await fx.t.mutation(internal.machine.mcp.updateIssue, {
+      callerId: fx.agent.id,
+      access: 'write',
+      ref: key(mcp.old),
+      archived: false,
+    })
+    expect((await row(fx.t, mcp.old.id)).parent_id).toBeUndefined()
+  })
+
+  it('keeps the parent when it has room, archived subtasks aside', async () => {
+    const fx = await setup()
+    const parent = await task(fx, { title: 'Roomy' })
+    await plantSubtasks(fx, parent, SUBTASK_MAX - 1)
+    const [old] = await plantSubtasks(fx, parent, SUBTASK_MAX, { archived_at: NOW })
+    const answer = await as(fx.t, fx.admin).mutation(api.issues.unarchive, {
+      org_id: fx.org.id,
+      id: old.id,
+    })
+    expect(answer.left_parent).toBe(false)
+    expect((await row(fx.t, old.id)).parent_id).toBe(parent.id)
+  })
+
+  it('brings it back from Deleted items under a parent whose other subtasks are archived', async () => {
+    const fx = await setup()
+    const parent = await task(fx, { title: 'Archive heavy' })
+    const [child] = await plantSubtasks(fx, parent, 1, { status: 'todo', title: 'Deleted step' })
+    await deleteTask(fx.t, fx, child.id)
+    await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
+    await plantSubtasks(fx, parent, SUBTASK_MAX, { archived_at: NOW })
+    const item = await itemFor(fx.t, child.id)
+    await as(fx.t, fx.user).mutation(api.deletedItems.restore, {
+      org_id: fx.org.id,
+      ids: [item.id],
+    })
+    await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
+    expect((await row(fx.t, child.id)).parent_id).toBe(parent.id)
+  })
+})
+
+describe('a move that carries archived subtasks', () => {
+  it(`refuses past ${MOVE_SUBTREE_MAX} subtasks, archived ones included, with what to do`, async () => {
+    const fx = await setup()
+    const parent = await task(fx, { title: 'Long history' })
+    await plantSubtasks(fx, parent, MOVE_SUBTREE_MAX + 1, { archived_at: NOW })
+    const other = await plantProject(fx.t, { org_id: fx.org.id, type: 'meta' })
+    const dest = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      type: 'project',
+      parent_id: other.id,
+    })
+    await refused(
+      as(fx.t, fx.admin).mutation(api.issues.move, {
+        org_id: fx.org.id,
+        id: parent.id,
+        project_id: dest.id,
+      }),
+      'rule',
+      MOVE_SUBTREE_TOO_LARGE,
+    )
+  })
+})
+
+describe('deleting a task with archived subtasks', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => {
+    vi.useRealTimers()
+    ARCHIVED_DETACH.page = 100
+  })
+
+  it('detaches its archived subtasks in background steps', async () => {
+    ARCHIVED_DETACH.page = 2
+    const fx = await setup()
+    const parent = await task(fx, { title: 'Gone' })
+    const kids = await plantSubtasks(fx, parent, 5, { archived_at: NOW })
+    await deleteTask(fx.t, fx, parent.id)
+    await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
+    for (const kid of kids) expect((await row(fx.t, kid.id)).parent_id).toBeUndefined()
+  })
+})
+
+/* Links `hub` to each of `ends`, `hub` blocking them. */
+const plantLinks = (fx: Fx, hub: Doc<'issues'>, ends: readonly Doc<'issues'>[]) =>
+  fx.t.run(async (ctx) => {
+    for (const end of ends) {
+      await ctx.db.insert('issue_links', {
+        id: uuid(),
+        org_id: fx.org.id,
+        source_id: hub.id,
+        target_id: end.id,
+        type: 'blocks',
+        pair_key: hub.id < end.id ? `${hub.id}:${end.id}` : `${end.id}:${hub.id}`,
+        created_at: NOW,
+      })
+    }
+  })
+
+describe('the attachment, link and label limits', () => {
+  /* Plants `n` attachment rows on `issue`, each with stored bytes. */
+  const plantAttachments = (fx: Fx, issue: Doc<'issues'>, n: number) =>
+    fx.t.run(async (ctx) => {
+      for (let i = 0; i < n; i++)
+        await ctx.db.insert('issue_attachments', {
+          id: uuid(),
+          org_id: fx.org.id,
+          issue_id: issue.id,
+          name: `scan-${i}.png`,
+          size_bytes: 3,
+          storage_id: await ctx.storage.store(new Blob(['png'])),
+          inline: i % 2 === 0,
+          created_at: NOW,
+        })
+    })
+
+  it(`refuses an attachment past ${ATTACHMENT_MAX} before any bytes are sent, on every surface`, async () => {
+    const fx = await setup()
+    const issue = await task(fx, { title: 'Scans' })
+    await plantAttachments(fx, issue, ATTACHMENT_MAX - 1)
+    // the hundredth fits, description images counted
+    await as(fx.t, fx.admin).mutation(api.files.uploadUrl, {
+      org_id: fx.org.id,
+      issue_id: issue.id,
+    })
+    await plantAttachments(fx, issue, 1)
+    await refused(
+      as(fx.t, fx.admin).mutation(api.files.uploadUrl, { org_id: fx.org.id, issue_id: issue.id }),
+      'rule',
+      ATTACHMENTS_FULL,
+    )
+    const stored = await fx.t.run((ctx) => ctx.storage.store(new Blob(['late'])))
+    await refused(
+      as(fx.t, fx.admin).mutation(api.files.attach, {
+        org_id: fx.org.id,
+        id: uuid(),
+        issue_id: issue.id,
+        storage_id: stored,
+        name: 'late.txt',
+        inline: false,
+      }),
+      'rule',
+      ATTACHMENTS_FULL,
+    )
+    await refused(
+      fx.t.mutation(internal.machine.records.restStartUpload, {
+        callerId: fx.agent.id,
+        access: 'write',
+        ref: key(issue),
+        body: JSON.stringify({ name: 'wiring.pdf', size: 10 }),
+      }),
+      'rule',
+      ATTACHMENTS_FULL,
+    )
+    await refused(
+      fx.t.mutation(internal.machine.records.mcpStartUpload, {
+        callerId: fx.agent.id,
+        access: 'write',
+        ref: key(issue),
+        name: 'wiring.pdf',
+        size: 10,
+      }),
+      'rule',
+      ATTACHMENTS_FULL,
+    )
+    await refused(
+      fx.t.action(internal.machine.records.mcpAttachTextFile, {
+        callerId: fx.agent.id,
+        access: 'write',
+        ref: key(issue),
+        name: 'notes.txt',
+        text: 'notes',
+      }),
+      'rule',
+      ATTACHMENTS_FULL,
+    )
+    const files = await fx.t.run((ctx) =>
+      ctx.db
+        .query('issue_attachments')
+        .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+        .collect(),
+    )
+    expect(files).toHaveLength(ATTACHMENT_MAX)
+  })
+
+  it(`refuses a link to a task that is an end of ${LINK_MAX} links, naming it, on every surface`, async () => {
+    const fx = await setup()
+    const hub = await task(fx, { title: 'Hub' })
+    const ends = await plantSubtasks(fx, await task(fx), LINK_MAX - 1, { parent_id: undefined })
+    await fx.t.run(async (ctx) => {
+      for (const [i, end] of ends.entries()) {
+        // both directions count
+        const [source_id, target_id] = i % 2 ? [end.id, hub.id] : [hub.id, end.id]
+        await ctx.db.insert('issue_links', {
+          id: uuid(),
+          org_id: fx.org.id,
+          source_id,
+          target_id,
+          type: 'blocks',
+          pair_key:
+            source_id < target_id ? `${source_id}:${target_id}` : `${target_id}:${source_id}`,
+          created_at: NOW,
+        })
+      }
+    })
+    const one = await task(fx, { title: 'One more' })
+    // the hundredth fits
+    await as(fx.t, fx.admin).mutation(api.issues.addLink, {
+      org_id: fx.org.id,
+      id: uuid(),
+      source_id: one.id,
+      target_id: hub.id,
+      type: 'relates',
+    })
+    const late = await task(fx, { title: 'Too late' })
+    const sentence = linksFull(key(hub))
+    await refused(
+      as(fx.t, fx.admin).mutation(api.issues.addLink, {
+        org_id: fx.org.id,
+        id: uuid(),
+        source_id: hub.id,
+        target_id: late.id,
+        type: 'blocks',
+      }),
+      'rule',
+      sentence,
+    )
+    await refused(
+      fx.t.mutation(internal.machine.rest.addLink, {
+        callerId: fx.agent.id,
+        access: 'write',
+        keyName: 'limits',
+        ref: key(late),
+        body: JSON.stringify({ task: key(hub), kind: 'relates' }),
+      }),
+      'rule',
+      sentence,
+    )
+    await refused(
+      fx.t.mutation(internal.machine.mcp.setTaskLink, {
+        callerId: fx.agent.id,
+        access: 'write',
+        ref: key(late),
+        other: key(hub),
+        kind: 'blocked_by',
+        linked: true,
+      }),
+      'rule',
+      sentence,
+    )
+  })
+
+  it(`leaves out a restored link to a task that reached ${LINK_MAX} links meanwhile`, async () => {
+    vi.useFakeTimers()
+    try {
+      const fx = await setup()
+      const hub = await task(fx, { title: 'Hub' })
+      const gone = await task(fx, { title: 'Deleted' })
+      await plantLinks(fx, hub, [gone])
+      await deleteTask(fx.t, fx, gone.id)
+      await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
+      await plantLinks(
+        fx,
+        hub,
+        await plantSubtasks(fx, await task(fx), LINK_MAX, { parent_id: undefined }),
+      )
+      const item = await itemFor(fx.t, gone.id)
+      await as(fx.t, fx.user).mutation(api.deletedItems.restore, {
+        org_id: fx.org.id,
+        ids: [item.id],
+      })
+      await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
+      expect(await row(fx.t, gone.id)).not.toBeNull()
+      const links = await fx.t.run((ctx) =>
+        ctx.db
+          .query('issue_links')
+          .withIndex('by_source', (q) => q.eq('source_id', hub.id))
+          .collect(),
+      )
+      expect(links).toHaveLength(LINK_MAX)
+      expect(links.some((l) => l.target_id === gone.id)).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it(`refuses a label past ${LABEL_MAX}, and lets one update swap labels on a full task`, async () => {
+    const fx = await setup()
+    const issue = await task(fx, { title: 'Tagged' })
+    const labels = await fx.t.run(async (ctx) => {
+      const out: string[] = []
+      for (let i = 0; i < LABEL_MAX + 1; i++) {
+        const id = uuid()
+        await ctx.db.insert('labels', {
+          id,
+          org_id: fx.org.id,
+          name: `Tag ${i}`,
+          name_lower: `tag ${i}`,
+          color: '#4C9AFF',
+          created_at: NOW,
+        })
+        out.push(id)
+      }
+      for (const label_id of out.slice(0, LABEL_MAX - 1))
+        await ctx.db.insert('issue_labels', { org_id: fx.org.id, issue_id: issue.id, label_id })
+      return out
+    })
+    const toggle = (label_id: string, on: boolean) =>
+      as(fx.t, fx.admin).mutation(api.labels.toggle, {
+        org_id: fx.org.id,
+        issue_id: issue.id,
+        label_id,
+        on,
+      })
+    // the twentieth fits
+    await toggle(labels[LABEL_MAX - 1], true)
+    await refused(toggle(labels[LABEL_MAX], true), 'rule', LABELS_FULL)
+    const patch = (body: object) =>
+      fx.t.mutation(internal.machine.rest.updateIssue, {
+        callerId: fx.agent.id,
+        access: 'write',
+        keyName: 'limits',
+        ref: key(issue),
+        body: JSON.stringify(body),
+      })
+    await refused(patch({ add_labels: [labels[LABEL_MAX]] }), 'rule', LABELS_FULL)
+    await refused(
+      fx.t.mutation(internal.machine.mcp.updateIssue, {
+        callerId: fx.agent.id,
+        access: 'write',
+        ref: key(issue),
+        add_labels: [labels[LABEL_MAX]],
+      }),
+      'rule',
+      LABELS_FULL,
+    )
+    await patch({ remove_labels: [labels[0]], add_labels: [labels[LABEL_MAX]] })
+    const held = await fx.t.run((ctx) =>
+      ctx.db
+        .query('issue_labels')
+        .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+        .collect(),
+    )
+    expect(held.map((l) => l.label_id).sort()).toEqual(labels.slice(1).sort())
   })
 })
 
@@ -470,8 +849,6 @@ describe('the follower limit', () => {
         id: team,
         org_id: fx.org.id,
         name: 'Everyone',
-        stale_days: 14,
-        archive_days: 30,
         track_delay_default: false,
         created_at: NOW,
       })

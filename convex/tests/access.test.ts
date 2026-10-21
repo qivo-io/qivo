@@ -292,8 +292,6 @@ describe('projectSightForProfiles', () => {
         id: viewers,
         org_id: f.org.id,
         name: 'Viewers',
-        stale_days: 14,
-        archive_days: 30,
         track_delay_default: false,
         created_at: f.team.created_at,
       })
@@ -363,8 +361,6 @@ describe('canAccessProject', () => {
         id: sibTeam,
         org_id: f.org.id,
         name: 'Sibling team',
-        stale_days: 14,
-        archive_days: 30,
         track_delay_default: false,
         created_at: '2026-01-01T00:00:00.000Z',
       })

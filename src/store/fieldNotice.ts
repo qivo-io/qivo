@@ -66,8 +66,6 @@ const WORDS: Partial<Record<FieldChange['record'], Record<string, string>>> = {
   },
   team: {
     name: 'name',
-    stale_days: 'stale-task days',
-    archive_days: 'archive days',
     track_delay_default: 'default delay tracking',
   },
   label: { name: 'name', color: 'color' },

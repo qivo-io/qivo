@@ -232,44 +232,28 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
     expect((await issueRow(t, open.id))?.archived_at).toBeUndefined()
   })
 
-  it('a legacy team keeps its saved threshold, from the sub-project first, else its root', async () => {
+  it('ignores a retired team threshold, so every project archives after 30 days', async () => {
     const t = newT()
     const f = await withOrg(t)
     await t.run(async (ctx) => {
-      // the root keeps a legacy team saved at 90 days; f.sub2 has its own at 10
       await ctx.db.patch(f.team._id, { archive_days: 90 })
       await ctx.db.patch(f.meta._id, { team_id: f.team.id })
-      const quick = uuid()
-      await ctx.db.insert('teams', {
-        id: quick,
-        org_id: f.org.id,
-        name: 'Quick',
-        stale_days: 120,
-        archive_days: 10,
-        track_delay_default: true,
-        created_at: NOW,
-      })
-      await ctx.db.patch(f.sub2._id, { team_id: quick })
     })
-    const done = (project_id: string, days: number) =>
-      plantIssue(t, {
-        org_id: f.org.id,
-        project_id,
-        status: 'done',
-        done_at: ago(days),
-      })
-    // f.sub has no team of its own, so its root's 90 days apply
-    const rootKept = await done(f.sub.id, 40)
-    const rootDue = await done(f.sub.id, 91)
-    // f.sub2's own team (10 days) wins over the root's
-    const ownKept = await done(f.sub2.id, 9)
-    const ownDue = await done(f.sub2.id, 11)
-
-    expect(await runArchive(t)).toBe(2)
-    expect((await issueRow(t, rootKept.id))?.archived_at).toBeUndefined()
-    expect((await issueRow(t, rootDue.id))?.archived_at).toBeDefined()
-    expect((await issueRow(t, ownKept.id))?.archived_at).toBeUndefined()
-    expect((await issueRow(t, ownDue.id))?.archived_at).toBeDefined()
+    const kept = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'done',
+      done_at: ago(29),
+    })
+    const due = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'done',
+      done_at: ago(31),
+    })
+    expect(await runArchive(t)).toBe(1)
+    expect((await issueRow(t, kept.id))?.archived_at).toBeUndefined()
+    expect((await issueRow(t, due.id))?.archived_at).toBeDefined()
   })
 
   it('a Done task moved to another sub-project waits the full threshold from the move', async () => {

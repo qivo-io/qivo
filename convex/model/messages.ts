@@ -1024,8 +1024,7 @@ export async function snoozeMessages(
  *
  * While the archive stands, mark unread and snooze refuse the task
  * (refuseArchivedItems), so no inbox write reopens what the steps marked.
- * Mark read and remove still work on it. Messages stored before archiving
- * marked anything read are marked by internal/archivedReadsBackfill.ts. */
+ * Mark read and remove still work on it. */
 
 /** The most rows one archived-read step marks read. */
 export const ARCHIVED_READ_BATCH = 500

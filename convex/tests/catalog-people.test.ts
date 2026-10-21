@@ -940,11 +940,14 @@ describe('teams.create / teams.update', () => {
     expect(await teamById(t, id)).toMatchObject({
       org_id: f.org.id,
       name: 'Design',
-      stale_days: 120,
-      archive_days: 30,
       track_delay_default: true,
     })
-    expect((await teamById(t, id))?.max_attachment_mb).toBeUndefined()
+    const made = await teamById(t, id)
+    expect([made?.max_attachment_mb, made?.stale_days, made?.archive_days]).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ])
     expect(await activityFor(t, f.org.id)).toEqual([]) // teams never narrate
     await expectRefusal(
       as(t, f.user).mutation(api.teams.create, { org_id: f.org.id, id: uuid(), name: 'Coup' }),
@@ -957,32 +960,28 @@ describe('teams.create / teams.update', () => {
     )
   })
 
-  it('settings clamp to their bounds and narrate nothing; icon fields are gone', async () => {
+  it('settings narrate nothing; icon and day fields are gone', async () => {
     const t = newT()
     const f = await withOrg(t)
     // the team leader qualifies, not just the admin
     await as(t, f.user).mutation(api.teams.update, {
       org_id: f.org.id,
       id: f.team.id,
-      patch: {
-        name: 'HW',
-        stale_days: 0,
-        archive_days: 99999,
-        track_delay_default: true,
-      },
+      patch: { name: 'HW', track_delay_default: true },
     })
-    expect(await teamById(t, f.team.id)).toMatchObject({
-      name: 'HW',
-      stale_days: 1,
-      archive_days: 3650,
-      track_delay_default: true,
-    })
-    // a leftover no screen used, so the function no longer takes them
-    for (const patch of [{ icon: 'zap' }, { icon: null }, { icon_color: '#0366D6' }]) {
+    expect(await teamById(t, f.team.id)).toMatchObject({ name: 'HW', track_delay_default: true })
+    // leftovers no screen used, so the function no longer takes them
+    for (const patch of [
+      { icon: 'zap' },
+      { icon: null },
+      { icon_color: '#0366D6' },
+      { stale_days: 10 },
+      { archive_days: 10 },
+    ]) {
       await expect(
-        // @ts-expect-error the patch no longer takes icon fields
+        // @ts-expect-error the patch no longer takes icon or day fields
         as(t, f.admin).mutation(api.teams.update, { org_id: f.org.id, id: f.team.id, patch }),
-      ).rejects.toThrow(/Unexpected field `icon/)
+      ).rejects.toThrow(/Unexpected field `(icon|stale_days|archive_days)/)
     }
     expect((await teamById(t, f.team.id))?.icon).toBeUndefined()
     await expectRefusal(

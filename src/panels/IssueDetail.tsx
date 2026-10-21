@@ -69,6 +69,7 @@ import { remainingPatchFromInput, remainingValue } from '../lib/remaining'
 import { buildPath, issueLink } from '../lib/router'
 import { matchesAllWords } from '../lib/search'
 import { firstUnreadTs, mergeSpine, spineWindow, unreadMark } from '../lib/spine'
+import { attachmentBlock, labelBlock, linkBlock } from '../lib/taskCaps'
 import { markTaskFocus, restoreTaskFocus } from '../lib/taskFocus'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { useBottomSnap } from '../lib/useBottomSnap'
@@ -383,6 +384,8 @@ function AttachmentsSection({ it, canEdit }: { it: IssueVM; canEdit: boolean }) 
   useWindowDropGuard()
   const limitMb = Math.round(P.attachmentLimit(it.id) / 1048576)
   const list = it.attachments || []
+  // the per-task cap, files and description images together
+  const full = attachmentBlock(it.attachmentCount)
   // attach by uuid: on a just-created issue the derived key in the closure's
   // `it` can renumber while the INSERT is in flight, which would strand (or
   // mis-target) every file after the first
@@ -443,6 +446,7 @@ function AttachmentsSection({ it, canEdit }: { it: IssueVM; canEdit: boolean }) 
           onDrop={(e) => {
             e.preventDefault()
             setDrag(false)
+            // a full task refuses in the store, with its toast
             void addFiles(e.dataTransfer.files)
           }}
           style={{
@@ -455,13 +459,15 @@ function AttachmentsSection({ it, canEdit }: { it: IssueVM; canEdit: boolean }) 
           <Button
             type="button"
             onClick={() => inputRef.current?.click()}
-            className="[background:none] [border:none] [padding:0] [cursor:pointer] [color:var(--text-1)] [font-size:var(--fs-sm)] [font-family:var(--sans)] underline underline-offset-2"
+            disabled={!!full}
+            title={full}
+            className="[background:none] [border:none] [padding:0] [cursor:pointer] [color:var(--text-1)] [font-size:var(--fs-sm)] [font-family:var(--sans)] underline underline-offset-2 disabled:[cursor:not-allowed] disabled:[opacity:0.5]"
             variant="unstyled"
           >
             browse
           </Button>
           <div className="[font-size:var(--fs-xs)] [margin-top:3px]">
-            Max {limitMb} MiB per file
+            {full ? `${full}. Remove one to add another.` : `Max ${limitMb} MiB per file`}
           </div>
           <Input
             ref={inputRef}
@@ -503,9 +509,12 @@ export function LabelPickerPopup({
   const all = P.orgLabels(it.org)
   const ql = q.trim().toLowerCase()
   const matches = ql ? all.filter((l) => matchesAllWords(l.name, ql)) : all
+  // the per-task cap on labels: a full task can only take labels off
+  const full = labelBlock(it.labels || [])
   // creating one lands in the home org, so it is offered only there
   const canCreate =
     !!ql &&
+    !full &&
     it.org === P.homeOrg &&
     P.canWriteOrgLabels() &&
     !all.some((l) => l.name.toLowerCase() === ql)
@@ -542,6 +551,7 @@ export function LabelPickerPopup({
               // lists every label, so a second Enter after a create would
               // take the organization's only label off again.
               if (ql && matches.length === 1) {
+                if (full && !(it.labels || []).includes(matches[0].id)) return
                 P.toggleIssueLabel(it.id, matches[0].id)
                 setQ('')
               } else if (canCreate && matches.length === 0) create()
@@ -555,14 +565,18 @@ export function LabelPickerPopup({
       <div className="[display:flex] [flex-direction:column] [gap:2px] [max-height:240px] [overflow-y:auto] [padding:5px]">
         {matches.map((l) => {
           const on = (it.labels || []).includes(l.id)
+          const blocked = !on && !!full
           return (
             <Button
               type="button"
               key={l.id}
+              disabled={blocked}
+              title={blocked ? full : undefined}
               onClick={() => P.toggleIssueLabel(it.id, l.id)}
               className={cn(
                 'flex w-full cursor-pointer items-center gap-2 rounded-sm border-0 bg-transparent px-2 py-1.5 text-left text-base text-text-1 hover:bg-hover',
                 on && 'font-semibold',
+                blocked && 'cursor-not-allowed opacity-50',
               )}
               onMouseEnter={(e) => {
                 e.currentTarget.style.background = 'var(--hover)'
@@ -588,6 +602,11 @@ export function LabelPickerPopup({
         {matches.length === 0 && !canCreate && (
           <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [padding:4px_5px]">
             {ql ? 'No matching labels.' : 'No labels yet.'}
+          </div>
+        )}
+        {full && (
+          <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [padding:4px_5px]">
+            {full}. Remove one to add another.
           </div>
         )}
         {canCreate && (
@@ -702,6 +721,7 @@ function IssuePickerPopup({
               className={cn(
                 'flex w-full cursor-pointer items-center gap-2 rounded-sm border-0 bg-transparent px-2 py-1.5 text-left text-base text-text-1 hover:bg-hover',
                 on && 'font-semibold',
+                blocked && 'cursor-not-allowed opacity-50',
               )}
               onMouseEnter={(e) => {
                 e.currentTarget.style.background = 'var(--hover)'
@@ -1767,11 +1787,17 @@ function IssueDetail({
   const canLink = (otherId: string) => canLabel || P.canWrite(P.issueById[otherId]?.project)
   const linkable = (x: IssueVM) => sameOrg(x) && x.id !== it.id && canLink(x.id)
   const canLinkAny = !!it && (canLabel || P.issues.some(linkable))
+  // the per-task cap on links: a full task takes no new link, and a full
+  // task is offered only to take its link off
+  const noLink = it ? linkBlock(it.links || []) : undefined
   let linkCandidates = []
   if (it && linkAnchor) {
     // anything except the issue itself; already-linked issues show a check
     // and toggle off (link direction has no cycle concerns)
-    linkCandidates = P.issues.filter(linkable).sort(sameProjFirst)
+    const linked = (x: IssueVM) => (it.links || []).some((l) => l.id === x.id)
+    linkCandidates = P.issues
+      .filter((x) => linkable(x) && (linked(x) || !linkBlock(x.links || [])))
+      .sort(sameProjFirst)
   }
 
   // the discussion spine: this issue's comments and activity interleaved in
@@ -3248,8 +3274,8 @@ function IssueDetail({
                             size="icon"
                             className="task-heading-action"
                             aria-label="Link task"
-                            title={canLinkAny ? 'Link task' : roTip}
-                            disabled={!canLinkAny}
+                            title={canLinkAny ? noLink || 'Link task' : roTip}
+                            disabled={!canLinkAny || !!noLink}
                             onClick={() => openPickerUnder(linkSecRef, setLinkAnchor, 340)}
                           >
                             <Icon name="plus" size={16} />
@@ -3366,7 +3392,7 @@ function IssueDetail({
           createLabel="Create new linked task:"
           // the new task lands in this task's project, so only with edit access there
           onCreate={
-            canLabel
+            canLabel && !noLink
               ? (title) => {
                   const key = P.addIssue({ project: it.project, title })
                   if (key) P.addLink(it.id, linkType, key)

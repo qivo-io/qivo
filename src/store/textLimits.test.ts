@@ -59,8 +59,6 @@ describe('the text cap in the store', () => {
       id: 'team-a',
       org_id: snap.orgs[0].id,
       name: LEGACY_NAME,
-      stale_days: 14,
-      archive_days: 30,
       track_delay_default: false,
       created_at: NOW,
     })

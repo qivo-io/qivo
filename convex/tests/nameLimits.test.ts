@@ -131,7 +131,7 @@ describe('team names', () => {
     const f = await withOrg(t)
     const create = (name: string) =>
       as(t, f.admin).mutation(api.teams.create, { org_id: f.org.id, id: uuid(), name })
-    const update = (patch: { name?: string; stale_days?: number }) =>
+    const update = (patch: { name?: string; track_delay_default?: boolean }) =>
       as(t, f.user).mutation(api.teams.update, { org_id: f.org.id, id: f.team.id, patch })
     await create(AT_CAP)
     await create(EMOJI_AT_CAP)
@@ -143,9 +143,12 @@ describe('team names', () => {
     expect(names).not.toContain(OVER)
 
     await plantLegacyName(t, 'teams', f.team.id)
-    await update({ stale_days: 10 })
+    await update({ track_delay_default: false })
     await update({ name: LEGACY })
-    expect(await rowOf(t, 'teams', f.team.id)).toMatchObject({ name: LEGACY, stale_days: 10 })
+    expect(await rowOf(t, 'teams', f.team.id)).toMatchObject({
+      name: LEGACY,
+      track_delay_default: false,
+    })
     await expectRefusal(update({ name: LEGACY.slice(1) }), 'rule', sentence(TEAM_NAME_TOO_LONG))
     await update({ name: EMOJI_AT_CAP })
     expect((await rowOf(t, 'teams', f.team.id))?.name).toBe(EMOJI_AT_CAP)

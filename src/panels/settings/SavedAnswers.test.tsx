@@ -52,8 +52,6 @@ async function load(crewName = 'Crew', betaName = 'Beta', sensorName = 'Luma Sen
     id: 'crew',
     org_id: org,
     name: crewName,
-    stale_days: 14,
-    archive_days: 30,
     track_delay_default: false,
     created_at: NOW,
   })

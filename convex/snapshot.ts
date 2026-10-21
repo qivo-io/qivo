@@ -14,9 +14,9 @@
  * - up to three per visible project, archived ones included (grants, team
  *   grants, and the milestones of an active one);
  * - the relation rows (lib/snapshotRelations.ts). A view whose tables stay in
- *   bulk takes six ranges; a restricted or dense one is read task by task, up
- *   to 4 ranges per visible task, never more than 3 ranges above the rule
- *   this replaced and only while those reads fit the ranges the transaction
+ *   bulk takes three ranges; a restricted or dense one is read task by task,
+ *   up to 4 ranges per visible task, never more than the rule this replaced
+ *   and only while those reads fit the ranges the transaction
  *   has left, a dense table past that read in full. They are the seat's last
  *   reads, so the ranges left count everything else the seat reads;
  * - five per visible task restored so recently that its relation rows still
@@ -93,13 +93,6 @@ function relationRow<
   return row
 }
 
-/* An attachment as the app receives it. Its project only serves storage
- * totals (model/billing.ts storagePage). */
-function attachmentRow(doc: Doc<'issue_attachments'>) {
-  const { project_id: _project, ...row } = relationRow(doc)
-  return row
-}
-
 // Billing is admin-only; application counters and settings are shared. The
 // counters come from org_counters (model/orgs.ts countersOf).
 //
@@ -159,7 +152,7 @@ export const forMe = authedQuery({
     const labels: AppRow<'labels'>[] = []
     const issueLabels: RelationRow<'issue_labels'>[] = []
     const issueSubs: RelationRow<'issue_subscriptions'>[] = []
-    const attachments: ReturnType<typeof attachmentRow>[] = []
+    const attachments: RelationRow<'issue_attachments'>[] = []
     const milestones: AppRow<'milestones'>[] = []
     const orgLoad: OrgLoadRow[] = []
     const unreadDocs: Doc<'messages'>[] = []
@@ -337,7 +330,7 @@ export const forMe = authedQuery({
         for (const il of ils) issueLabels.push(relationRow(il))
         // attachments — active tasks only. This is the expensive storage row
         // that previously made every archive part of the initial boot.
-        for (const a of atts) attachments.push(attachmentRow(a))
+        for (const a of atts) attachments.push(relationRow(a))
       }
 
       // Hidden workload remains anonymized by orgLoadRows.

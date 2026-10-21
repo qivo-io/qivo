@@ -23,7 +23,7 @@ import {
   validatePolarProduct,
 } from './lib/polar'
 import { audit } from './model/admin'
-import { GB, isoNow, legacyPhase, storagePage } from './model/billing'
+import { GB, isoNow, storagePage } from './model/billing'
 import { syncOrgRemoval } from './model/orgRetention'
 import { newUuid } from './model/orgs'
 
@@ -67,9 +67,8 @@ const noticesRef = makeFunctionReference<'mutation', Record<string, never>, null
 const storageStepArgs = {
   period: v.id('billing_periods'),
   run: v.string(),
-  phase: v.union(v.literal('own'), v.literal('unscoped'), v.literal('tasks')),
   cursor: v.optional(v.string()),
-  // the page size after a step split its page, else the phase's STORAGE_PAGE size
+  // the page size after a step split its page, else STORAGE_PAGE.rows
   size: v.optional(v.number()),
   bytes: v.number(),
 }
@@ -300,7 +299,7 @@ async function startStorageSample(
     storage_run_at: isoNow(),
     storage_attempts: attempts,
   })
-  await ctx.scheduler.runAfter(0, storageStepRef, { period, run, phase: 'own', bytes: 0 })
+  await ctx.scheduler.runAfter(0, storageStepRef, { period, run, bytes: 0 })
 }
 
 /* Starts a stalled sample again, or stops it once it has started
@@ -394,10 +393,8 @@ export const restartStorage = internalMutation({
 /** One step of a period's storage sample. The renewal (apply) records the
  * period at once and starts the sample, so the renewal never reads the
  * organization's attachment rows. Each step counts one page of them
- * (model/billing.ts storagePage), first the organization's own rows and then
- * the rows stored before rows carried their organization, from their own
- * range or through the organization's tasks (legacyPhase), and schedules the
- * next step with the running total. It counts the rows stored before the
+ * (model/billing.ts storagePage) and schedules the next step with the
+ * running total. It counts the rows stored before the
  * renewal recorded the period, so a file stored later, or a restore's rows
  * written back, waits for the next period. The last step records the bytes and the
  * blocks over the plan's allowance for the period's seats. When there are
@@ -410,7 +407,7 @@ export const storageStep = internalMutation({
   handler: async (ctx, a): Promise<null> => {
     const period = await ctx.db.get(a.period)
     if (period === null || period.storage_run !== a.run) return null
-    const page = await storagePage(ctx, period.org_id, a.phase, {
+    const page = await storagePage(ctx, period.org_id, {
       cursor: a.cursor ?? null,
       size: a.size,
       before: period._creationTime,
@@ -420,8 +417,6 @@ export const storageStep = internalMutation({
     else {
       const bytes = a.bytes + page.bytes
       if (page.next !== null) next = { ...a, cursor: page.next, size: undefined, bytes }
-      else if (a.phase === 'own')
-        next = { ...a, phase: await legacyPhase(ctx), cursor: undefined, size: undefined, bytes }
       else return await finishStorageSample(ctx, period, bytes)
     }
     await ctx.db.patch(period._id, { storage_run_at: isoNow() })

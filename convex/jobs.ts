@@ -63,8 +63,7 @@ export const ARCHIVE_LIMITS = {
   /** Subscriber checks the task.updated events of one leg may make. Each
    * task in a project the leg has not met yet costs one check per
    * subscription of the organization (model/taskEvents.ts), and the checks
-   * set a leg's execution time, as in internal/subtaskFamilyBackfill.ts
-   * FAMILY_PAGE.checks. */
+   * set a leg's execution time. */
   checks: 400,
   /** The share of what is left of each of Convex's limits for one
    * transaction, once the leg's reads are done, that its archiving may use
@@ -105,12 +104,8 @@ const archiveOrgRef = makeFunctionReference<'mutation', ArchiveLeg, null>('jobs:
  *   - its OWN sub-project is live — "the nightly sweep leaves an archived
  *     project alone: its done tasks are already out of every client's sight,
  *     and archiving them would silently change what a restore brings back"
- *   - status 'done' with done_at at least archive_days old. A project that
- *     keeps a legacy team (its own, else its root's) uses that team's
- *     archive_days. Every other project, which includes every project created
- *     since projects stopped belonging to teams, uses DEFAULT_ARCHIVE_DAYS. A
- *     team id that no longer resolves counts as no team. A dangling parent
- *     drops the row rather than aborting the sweep.
+ *   - status 'done' with done_at at least DEFAULT_ARCHIVE_DAYS old. A
+ *     dangling parent drops the row rather than aborting the sweep.
  *   - "leaf-up: never drag an active child along — a done parent waits until
  *     its children have been archived themselves"
  *
@@ -140,24 +135,15 @@ const archiveOrgRef = makeFunctionReference<'mutation', ArchiveLeg, null>('jobs:
 /* Each live project's cutoff for this run. Its Done tasks with done_at at or
  * before the cutoff are due. A project that is archived, or whose root no
  * longer resolves, takes none and is left out. */
-function projectCutoffs(
-  projects: readonly Doc<'projects'>[],
-  teams: readonly Doc<'teams'>[],
-  now: string,
-): Map<string, string> {
-  const nowMs = Date.parse(now)
+function projectCutoffs(projects: readonly Doc<'projects'>[], now: string): Map<string, string> {
   const projectById = new Map(projects.map((p) => [p.id, p]))
-  const teamById = new Map(teams.map((t) => [t.id, t]))
+  const cutoff = new Date(Date.parse(now) - DEFAULT_ARCHIVE_DAYS * DAY).toISOString()
   const cutoffs = new Map<string, string>()
   for (const project of projects) {
     if (project.archived_at !== undefined) continue
     const root = project.parent_id !== undefined ? projectById.get(project.parent_id) : project
     if (root === undefined) continue // dangling parent — the SQL inner join drops the row
-    // New rows have no team. Old development rows may still keep one on the
-    // sub-project or its root, and its saved threshold still applies.
-    const legacyTeam = teamById.get(project.team_id ?? root.team_id ?? '')
-    const days = legacyTeam?.archive_days ?? DEFAULT_ARCHIVE_DAYS
-    cutoffs.set(project.id, new Date(nowMs - days * DAY).toISOString())
+    cutoffs.set(project.id, cutoff)
   }
   return cutoffs
 }
@@ -233,11 +219,7 @@ async function archiveLeg(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg |
     .query('projects')
     .withIndex('by_org', (q) => q.eq('org_id', a.org_id))
     .collect()
-  const teams = await ctx.db
-    .query('teams')
-    .withIndex('by_org', (q) => q.eq('org_id', a.org_id))
-    .collect()
-  const cutoffs = projectCutoffs(projects, teams, a.now)
+  const cutoffs = projectCutoffs(projects, a.now)
   // lexicographic order on ISO strings is time order
   const cutoff = a.cutoff ?? [...cutoffs.values()].sort().at(-1)
   // no live project, so nothing is due

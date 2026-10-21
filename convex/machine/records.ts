@@ -63,6 +63,7 @@ import {
   ATTACHMENT_TYPE_MAX,
   type AttachmentJson,
   type AttachResult,
+  assertAttachmentRoom,
   attachFileCore,
   attachmentJson,
   cleanAttachmentName,
@@ -327,11 +328,12 @@ async function textFileTarget(
 }
 
 /* attach_text_file's check before the text is stored, so a call it refuses
- * stores nothing. */
+ * stores nothing, a task with ATTACHMENT_MAX attachments included. */
 export const mcpCheckTextFile = internalMutation({
   args: vTextFile,
   handler: async (ctx, a): Promise<null> => {
-    await textFileTarget(ctx, a)
+    const { issue } = await textFileTarget(ctx, a)
+    await assertAttachmentRoom(ctx, issue.id)
     return null
   },
 })

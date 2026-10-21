@@ -500,9 +500,8 @@ export async function assertAssigneeRule(
   }
 }
 
-/* The tasks from `parentId` up, nearest first. A chain stored before the
- * one level of subtasks is read up to 20 tasks, and the seen set stops a
- * corrupt cycle. */
+/* The tasks from `parentId` up, nearest first. Under the one level of
+ * subtasks that is the parent alone; the seen set stops a corrupt cycle. */
 async function ancestorsFrom(
   ctx: QueryCtx,
   parentId: string | undefined,
@@ -510,7 +509,7 @@ async function ancestorsFrom(
   const chain: Doc<'issues'>[] = []
   const seen = new Set<string>()
   let cur = parentId
-  while (cur !== undefined && !seen.has(cur) && chain.length < 20) {
+  while (cur !== undefined && !seen.has(cur)) {
     seen.add(cur)
     const row = await byId(ctx, 'issues', cur)
     if (row === null) break
@@ -553,48 +552,34 @@ function chainSight(ctx: QueryCtx, chain: readonly Doc<'issues'>[], bulk?: BulkU
   }
 }
 
-/** How full a move or a parent change may let its transaction get while it
- * walks a task's subtasks or moves their attachment rows (lib/db.ts
- * usedMoreThan). Neither walk has a fixed bound: a move within one
- * top-level project, or a parent change, reads every subtask, and a task can
- * hold any number of attachments. The walk asks every `every` queries or
- * rows, and sooner once the rows since it last asked may hold `bytes`, so
- * that a few long descriptions cannot fill the rest of the 16 MiB read
- * limit between two checks. Past `room` the change is refused with
- * SUBTREE_TOO_LARGE rather than failing on one of Convex's limits for one
- * transaction. Tests lower these. */
+/** How full a change that walks a task's subtasks may let its transaction
+ * get (lib/db.ts usedMoreThan). Every walk has a fixed bound: at most
+ * SUBTASK_MAX active subtasks, and a move carries at most MOVE_SUBTREE_MAX
+ * subtasks. The room is the backstop for the rest, such as the sight checks
+ * of every person working on them or a write whose earlier work filled the
+ * transaction. The walk asks every `every` queries or rows, and sooner once
+ * the rows since it last asked may hold `bytes`. Past `room` the change is
+ * refused with SUBTREE_TOO_LARGE rather than failing on one of Convex's
+ * limits for one transaction. Tests lower these. */
 export const SUBTREE_ROOM = { room: 0.9, every: 64, bytes: 512 * 1024 }
 
-/** The refusal of a move or a parent change whose task and subtasks are too
- * large for one transaction (SUBTREE_ROOM). */
+/** The refusal of a change whose task and subtasks are too large for one
+ * transaction (SUBTREE_ROOM). */
 export const SUBTREE_TOO_LARGE =
   'this task and its subtasks are too large to change in one request; detach some subtasks first'
 
-/** The refusal of a new parent whose subtasks are too large to count in one
- * transaction (SUBTREE_ROOM, subtaskCount), such as a task stored before
- * TEXT_MAX whose subtasks hold very long descriptions. */
-export const PARENT_TOO_LARGE =
-  "the parent task's subtasks are too large to read in one request; choose another parent or shorten their descriptions"
-
-/** The refusal of an archive whose task and active subtasks are too large
- * for one transaction (SUBTREE_ROOM), such as a task stored before the one
- * level of subtasks with thousands of them. */
-export const ARCHIVE_TOO_LARGE =
-  'this task and its subtasks are too large to archive in one request; archive some subtasks first'
-
-/* Refuses with `sentence`, SUBTREE_TOO_LARGE by default, once the
- * transaction passed SUBTREE_ROOM's `room`. Run before each step of a change
- * whose cost has no fixed bound, such as one holder's sight check, and
- * through roomCheck for walks. */
-async function assertRoom(ctx: QueryCtx, sentence = SUBTREE_TOO_LARGE): Promise<void> {
-  if (await usedMoreThan(ctx, SUBTREE_ROOM.room)) throw rule(sentence)
+/* Refuses with SUBTREE_TOO_LARGE once the transaction passed SUBTREE_ROOM's
+ * `room`. Run before each step of a change whose cost has no fixed bound,
+ * such as one holder's sight check, and through roomCheck for walks. */
+async function assertRoom(ctx: QueryCtx): Promise<void> {
+  if (await usedMoreThan(ctx, SUBTREE_ROOM.room)) throw rule(SUBTREE_TOO_LARGE)
 }
 
 /* A check to run before each query and after each row of a walk under
- * SUBTREE_ROOM, given the row's size when it may be large (subtaskBytes). It
- * asks the transaction's use every `every` calls, or once the sizes since
- * it last asked reach `bytes` (assertRoom, refusing with `sentence`). */
-function roomCheck(ctx: QueryCtx, sentence = SUBTREE_TOO_LARGE): (bytes?: number) => Promise<void> {
+ * SUBTREE_ROOM, given the row's size (subtaskBytes). It asks the
+ * transaction's use every `every` calls, or once the sizes since it last
+ * asked reach `bytes` (assertRoom). */
+function roomCheck(ctx: QueryCtx): (bytes?: number) => Promise<void> {
   let calls = 0
   let pending = 0
   return async (bytes = 0) => {
@@ -602,7 +587,7 @@ function roomCheck(ctx: QueryCtx, sentence = SUBTREE_TOO_LARGE): (bytes?: number
     pending += bytes
     if (calls % SUBTREE_ROOM.every !== 0 && pending < SUBTREE_ROOM.bytes) return
     pending = 0
-    await assertRoom(ctx, sentence)
+    await assertRoom(ctx)
   }
 }
 
@@ -611,42 +596,35 @@ function roomCheck(ctx: QueryCtx, sentence = SUBTREE_TOO_LARGE): (bytes?: number
 const subtaskBytes = (task: Doc<'issues'>): number =>
   3 * (task.title.length + (task.description?.length ?? 0)) + 1024
 
-/* The people working on a task and its active subtasks at any depth: each
- * assignee, and each reviewer of a task that is no group (a group's
- * reviewer is dormant). `self` holds the task's own next values. `live`
- * tells which projects are live for the group test, by default as they are
- * now; a move passes them as they are once its subtasks land. Callers skip
- * switched-off people, who hold no new work. The walk reads every active
- * subtask, under SUBTREE_ROOM. */
+/* The active subtasks of the task `parentId`, one by_parent_archived range,
+ * at most SUBTASK_MAX rows. */
+const activeSubtasks = (ctx: QueryCtx, parentId: string) =>
+  ctx.db
+    .query('issues')
+    .withIndex('by_parent_archived', (q) =>
+      q.eq('parent_id', parentId).eq('archived_at', undefined),
+    )
+
+/* The people working on a task and its active subtasks: each assignee, and
+ * each reviewer of a task that is no group (a group's reviewer is dormant).
+ * `self` holds the task's own next values. Callers skip switched-off people,
+ * who hold no new work. A subtask has no subtasks of its own, so each one's
+ * reviewer counts, and the walk reads one range of at most SUBTASK_MAX
+ * active subtasks, under SUBTREE_ROOM. */
 async function holdersUnder(
   ctx: QueryCtx,
   rootId: string,
   self: { assignee_id?: string; reviewer_id?: string; group: boolean },
-  live: Liveness = projectLiveness(ctx),
 ): Promise<string[]> {
   const holders = new Set<string>()
   if (self.assignee_id !== undefined) holders.add(self.assignee_id)
   if (self.reviewer_id !== undefined && !self.group) holders.add(self.reviewer_id)
-  const seen = new Set<string>([rootId])
   const room = roomCheck(ctx)
-  let frontier = [rootId]
-  for (let depth = 0; frontier.length > 0 && depth < 20; depth++) {
-    const next: string[] = []
-    for (const id of frontier) {
-      await room()
-      const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', id))
-      for await (const c of kids) {
-        await room(subtaskBytes(c))
-        if (c.archived_at !== undefined || seen.has(c.id)) continue
-        seen.add(c.id)
-        next.push(c.id)
-        if (c.assignee_id !== undefined) holders.add(c.assignee_id)
-        if (c.reviewer_id !== undefined && !(await hasSubtasks(ctx, c, live))) {
-          holders.add(c.reviewer_id)
-        }
-      }
-    }
-    frontier = next
+  await room()
+  for await (const c of activeSubtasks(ctx, rootId)) {
+    await room(subtaskBytes(c))
+    if (c.assignee_id !== undefined) holders.add(c.assignee_id)
+    if (c.reviewer_id !== undefined) holders.add(c.reviewer_id)
   }
   return [...holders]
 }
@@ -862,8 +840,9 @@ export const SUBTASK_PROJECT_RULE =
 /** Why parentChainCheck refuses a parent, in the order it checks.
  * `parent_is_subtask` means the parent has a parent of its own,
  * `has_subtasks` that the child has subtasks, archived ones included, and
- * `parent_full` that the parent already has SUBTASK_MAX subtasks. Any of
- * them would break the one level of subtasks or its size. */
+ * `parent_full` that the parent already has SUBTASK_MAX active subtasks,
+ * whether the child is active or not. Any of them would break the one level of subtasks or
+ * its size. */
 export type ParentProblem =
   | 'self'
   | 'not_found'
@@ -873,24 +852,17 @@ export type ParentProblem =
   | 'has_subtasks'
   | 'parent_full'
 
-/** How many subtasks `parentId` has, archived ones included, counted up to
- * SUBTASK_MAX. The count reads the subtask rows under SUBTREE_ROOM, because
- * a legacy task can hold larger ones than TEXT_MAX allows today, and refuses
- * with PARENT_TOO_LARGE past it. A transaction already past the room when
- * the count starts refuses with SUBTREE_TOO_LARGE, as the earlier work of
- * the write filled it. */
+/** How many active subtasks `parentId` has, counted up to SUBTASK_MAX: one
+ * by_parent_archived range of at most SUBTASK_MAX rows, under SUBTREE_ROOM. */
 export async function subtaskCount(ctx: QueryCtx, parentId: string): Promise<number> {
-  // a transaction the earlier work of the write filled keeps that sentence
-  await assertRoom(ctx)
-  const room = roomCheck(ctx, PARENT_TOO_LARGE)
+  const room = roomCheck(ctx)
+  await room()
   let count = 0
-  const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', parentId))
-  for await (const kid of kids) {
+  for await (const kid of activeSubtasks(ctx, parentId)) {
     count += 1
     if (count >= SUBTASK_MAX) break
     await room(subtaskBytes(kid))
   }
-  await assertRoom(ctx, PARENT_TOO_LARGE)
   return count
 }
 
@@ -1629,6 +1601,8 @@ export async function updateIssueCore(
       assertParentActive(attachedTo, issue.archived_at)
     }
     w.parent_id = nextParent
+  } else if (toggle === 'restored' && (await restoreLeavesParent(ctx, issue))) {
+    w.parent_id = undefined // ctx.db.patch unsets it
   }
   // the task's project, read at most once and only by the guards that need it
   let project: Doc<'projects'> | undefined
@@ -1853,6 +1827,10 @@ export async function updateIssueCore(
     field_prints: changedPrints(TASK_FIELDS, issue, after),
   }
   await logActivity(ctx, event)
+  // a restore that left a full parent gets the row a detach writes
+  if (toggle === 'restored' && !('parent_id' in patch) && issue.parent_id !== after.parent_id) {
+    await logLeftParent(ctx, { me, before: issue, after, now })
+  }
   return after
 }
 
@@ -1872,7 +1850,7 @@ export async function updateIssueCore(
  * checks them again before any guard, so these guards only ever describe a
  * destination the caller can write. A machine update that also sets the
  * assignee or reviewer (MachineMove.later) is checked with the people the
- * task ends up with. The task's attachment rows take the new project too.
+ * task ends up with. Attachment rows name no project, so none is written.
  *
  * A subtask stays in its parent's top-level project. A move within the
  * task's top-level project changes nothing else. A move to another one
@@ -1881,10 +1859,9 @@ export async function updateIssueCore(
  * project or leave its parent in the same change, through the app's
  * `detachParent` or a machine update's later parent
  * (MachineMove.laterParent). The carried
- * subtasks are touched, take their attachment rows along and send a
- * task.updated event each. They get no message or activity row of their
- * own, because the task's one message and row tell the move, as the archive
- * cascade does. */
+ * subtasks are touched and send a task.updated event each. They get no
+ * message or activity row of their own, because the task's one message and
+ * row tell the move, as the archive cascade does. */
 
 export const MOVE_SUBTASK_RULE =
   "a subtask stays in its parent task's project; to move it to another project, detach it from its parent in the same change"
@@ -1892,37 +1869,13 @@ export const MOVE_SUBTREE_EDIT_RULE =
   'moving this task would move a subtask in a project you cannot edit; an organization admin can move it'
 export const MOVE_SUBTREE_HOLDER_RULE =
   'someone assigned to or reviewing a subtask of this task cannot edit that sub-project'
-/* The most subtasks, at any depth and archived ones included, that a task
- * moving to another top-level project may have. The move reads them all,
- * including any already in the destination's top-level project. */
+/* The most subtasks, archived ones included, that a task moving to another
+ * top-level project may have. The move reads them all, including any
+ * already in the destination's top-level project, and carries the rest.
+ * SUBTASK_MAX bounds only the active ones, so this bounds what the move
+ * reads and writes: SUBTASK_MAX active subtasks and as many archived. */
 export const MOVE_SUBTREE_MAX = 200
-export const MOVE_SUBTREE_TOO_LARGE = `this task has more than ${MOVE_SUBTREE_MAX} subtasks; detach some of them first, or move it within its project`
-
-/* Attachment rows carry their task's project for the storage totals
- * (model/billing.ts storageUsage), so they move with the task and with each
- * subtask a move carries, under SUBTREE_ROOM through `room`, the move's one
- * roomCheck. */
-async function moveAttachmentRows(
-  ctx: MutationCtx,
-  issueId: string,
-  projectId: string,
-  room: () => Promise<void>,
-): Promise<void> {
-  // read in full before the first patch, so the walk never meets a row it
-  // patched, each row under the room check
-  const files: Doc<'issue_attachments'>[] = []
-  const rows = ctx.db
-    .query('issue_attachments')
-    .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
-  for await (const file of rows) {
-    await room()
-    files.push(file)
-  }
-  for (const file of files) {
-    await room()
-    await ctx.db.patch(file._id, { project_id: projectId })
-  }
-}
+export const MOVE_SUBTREE_TOO_LARGE = `this task has more than ${MOVE_SUBTREE_MAX} subtasks, archived ones included, and a move to another project carries them all; restore some archived subtasks and remove them from this task first, or move it within its project`
 
 /* Per-call cache from a project id to its top-level project id, null for a
  * missing project. */
@@ -1938,36 +1891,21 @@ function topLevelCache(ctx: QueryCtx): (projectId: string) => Promise<string | n
   }
 }
 
-/* The subtasks of the task `rootId` at any depth, active or archived,
- * breadth first, each with its level below the task (1 for a child). A task
- * met twice, which only a corrupt cycle causes, is skipped. Callers bound
- * the walk and may stop it early. */
-async function* subtasksOf(
-  ctx: QueryCtx,
-  rootId: string,
-): AsyncGenerator<{ row: Doc<'issues'>; level: number }> {
-  const seen = new Set<string>([rootId])
-  let frontier = [rootId]
-  for (let level = 1; frontier.length > 0; level++) {
-    const next: string[] = []
-    for (const pid of frontier) {
-      const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', pid))
-      for await (const row of kids) {
-        if (seen.has(row.id)) continue
-        seen.add(row.id)
-        next.push(row.id)
-        yield { row, level }
-      }
-    }
-    frontier = next
-  }
-}
+/* The subtasks of the task `rootId`, active or archived, at most
+ * MOVE_SUBTREE_MAX + 1 of them, so a caller can tell a task with more than
+ * MOVE_SUBTREE_MAX. A subtask has no subtasks of its own, so one by_parent
+ * range holds them all. */
+const subtasksOf = (ctx: QueryCtx, rootId: string): Promise<Doc<'issues'>[]> =>
+  ctx.db
+    .query('issues')
+    .withIndex('by_parent', (q) => q.eq('parent_id', rootId))
+    .take(MOVE_SUBTREE_MAX + 1)
 
 /** Whether moving `issue` to `target` would carry subtasks along, for the
  * app's Move window, whose view holds no archived subtasks. A move within
- * the task's top-level project carries none. The walk stops at the first
- * subtask that would move. Past the bounds moveIssueCore refuses at, it
- * answers false, because such a move carries nothing. */
+ * the task's top-level project carries none. Past MOVE_SUBTREE_MAX, where
+ * moveIssueCore refuses, it answers false, because such a move carries
+ * nothing. */
 export async function subtasksWouldMove(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
@@ -1977,25 +1915,22 @@ export async function subtasksWouldMove(
   const dst = topLevelOf(target)
   if (source === null || topLevelOf(source) === dst) return false
   const topOf = topLevelCache(ctx)
-  let read = 0
-  for await (const { row, level } of subtasksOf(ctx, issue.id)) {
-    read += 1
-    if (level >= 20 || read > MOVE_SUBTREE_MAX) return false
+  const below = await subtasksOf(ctx, issue.id)
+  if (below.length > MOVE_SUBTREE_MAX) return false
+  for (const row of below) {
     if ((await topOf(row.project_id)) !== dst) return true
   }
   return false
 }
 
-/* The subtasks a move to `target` carries, which are the descendants of
- * `root`, at any depth and active or archived, whose project is outside the
- * target's top-level project. Before anything is written, each needs Edit
- * on its project, and an active one needs an assignee and a leaf reviewer
- * who can hold it at the target. A group's dormant reviewer who cannot is cleared
- * (`clearReviewer`), as for the moved task. Whether a subtask is a group is
- * read as it will be once the move lands, with `liveAfter`. Archived
- * subtasks keep their people unchecked, as an archived task's people are.
- * The walk reads every descendant and refuses past MOVE_SUBTREE_MAX of them
- * or 20 levels. */
+/* The subtasks a move to `target` carries, which are the subtasks of
+ * `root`, active or archived, whose project is outside the target's
+ * top-level project. Before anything is written, each needs Edit on its
+ * project, and an active one needs an assignee and a reviewer who can hold
+ * it at the target. A subtask has no subtasks of its own, so its reviewer is
+ * never a group's dormant one. Archived subtasks keep their people
+ * unchecked, as an archived task's people are. The walk reads every subtask
+ * and refuses past MOVE_SUBTREE_MAX of them. */
 async function subtreeToCarry(
   ctx: QueryCtx,
   a: {
@@ -2003,22 +1938,10 @@ async function subtreeToCarry(
     target: Doc<'projects'>
     actor: Doc<'profiles'>
     topOf: (projectId: string) => Promise<string | null>
-    liveAfter: Liveness
   },
-): Promise<{ row: Doc<'issues'>; clearReviewer: boolean; group: boolean }[]> {
-  const below: Doc<'issues'>[] = []
-  for await (const { row, level } of subtasksOf(ctx, a.root.id)) {
-    if (level >= 20) throw rule('task hierarchy too deep to move')
-    if (below.length >= MOVE_SUBTREE_MAX) throw rule(MOVE_SUBTREE_TOO_LARGE)
-    below.push(row)
-  }
-  // The walk read every subtask, so an active one is a group once it lands
-  // when one of its active subtasks among them lands in a live project
-  // (countsAsSubtask). Every carried task lands in the target.
-  const groups = new Set<string | undefined>()
-  for (const c of below) {
-    if (c.archived_at === undefined && (await a.liveAfter(c.project_id))) groups.add(c.parent_id)
-  }
+): Promise<Doc<'issues'>[]> {
+  const below = await subtasksOf(ctx, a.root.id)
+  if (below.length > MOVE_SUBTREE_MAX) throw rule(MOVE_SUBTREE_TOO_LARGE)
   const dst = topLevelOf(a.target)
   const edits = editableBy(ctx, a.actor)
   const holds = new Map<string, Promise<boolean>>()
@@ -2030,23 +1953,18 @@ async function subtreeToCarry(
     }
     return result
   }
-  const carried: { row: Doc<'issues'>; clearReviewer: boolean; group: boolean }[] = []
+  const carried: Doc<'issues'>[] = []
   for (const c of below) {
     if ((await a.topOf(c.project_id)) === dst) continue
     const editable = await edits(c.project_id)
     if (editable === null) throw rule(SUBTASK_BEING_DELETED)
     if (!editable) throw rule(MOVE_SUBTREE_EDIT_RULE)
-    let clearReviewer = false
     if (c.archived_at === undefined) {
-      if (c.assignee_id !== undefined && !(await canHold(c.assignee_id))) {
-        throw rule(MOVE_SUBTREE_HOLDER_RULE)
-      }
-      if (c.reviewer_id !== undefined && !(await canHold(c.reviewer_id))) {
-        if (!groups.has(c.id)) throw rule(MOVE_SUBTREE_HOLDER_RULE)
-        clearReviewer = true
+      for (const holder of [c.assignee_id, c.reviewer_id]) {
+        if (holder !== undefined && !(await canHold(holder))) throw rule(MOVE_SUBTREE_HOLDER_RULE)
       }
     }
-    carried.push({ row: c, clearReviewer, group: c.archived_at === undefined && groups.has(c.id) })
+    carried.push(c)
   }
   return carried
 }
@@ -2169,12 +2087,12 @@ export async function moveIssueCore(
   }
   // to another top-level project, the subtasks outside it come along
   const carried = crosses
-    ? await subtreeToCarry(ctx, { root: issue, target, actor: me, topOf, liveAfter })
+    ? await subtreeToCarry(ctx, { root: issue, target, actor: me, topOf })
     : []
   // whoever works on a subtask must still see this task once it moves, so
   // every active assignee or reviewer below it needs access to the
   // destination (the sentence names no one: some subtasks may be hidden)
-  for (const holder of await holdersUnder(ctx, issue.id, { group: true }, liveAfter)) {
+  for (const holder of await holdersUnder(ctx, issue.id, { group: true })) {
     await assertRoom(ctx)
     const profile = await byId(ctx, 'profiles', holder)
     if (!profile?.active) continue
@@ -2182,20 +2100,11 @@ export async function moveIssueCore(
   }
   const before = { ...issue }
   await ctx.db.patch(issue._id, w)
-  const room = roomCheck(ctx)
-  await moveAttachmentRows(ctx, issue.id, project_id, room)
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
-  for (const { row, clearReviewer, group } of carried) {
+  for (const row of carried) {
     await assertRoom(ctx)
     // a carried subtask's stamps change as the task's above
-    const patch: Partial<WithoutSystemFields<Doc<'issues'>>> = {
-      project_id,
-      updated_at: now,
-      ...movedStamps(row, now, group),
-    }
-    if (clearReviewer) patch.reviewer_id = undefined
-    await ctx.db.patch(row._id, patch)
-    await moveAttachmentRows(ctx, row.id, project_id, room)
+    await ctx.db.patch(row._id, { project_id, updated_at: now, ...movedStamps(row, now) })
     const landed = (await ctx.db.get(row._id)) as Doc<'issues'>
     await emitTaskEvent(ctx, { name: 'task.updated', issue: landed, before: row, actor: me, now })
   }
@@ -2207,7 +2116,7 @@ export async function moveIssueCore(
   // later write of this update gives it another, and each carried subtask's.
   // A later parent equal to the current one changes nothing, so that write
   // is skipped (lib/core.ts applyTaskUpdate) and this one clears the hours.
-  const regrouped = new Set(carried.map(({ row }) => row.parent_id))
+  const regrouped = new Set(carried.map((row) => row.parent_id))
   const laterParent = a.machine?.laterParent
   if (!detach && (laterParent === undefined || laterParent === issue.parent_id)) {
     regrouped.add(issue.parent_id)
@@ -2245,21 +2154,7 @@ export async function moveIssueCore(
   await logActivity(ctx, event)
   // leaving the parent gets the row a detach writes, as a machine update's
   // later parent step does
-  if (detach) {
-    const detached = await browserVerbDetail(ctx, { before, after, patch: { parent_id: null } })
-    await logActivity(ctx, {
-      org_id: issue.org_id,
-      actor_id: me.id,
-      verb: detached.verb,
-      target_type: 'issue',
-      target_id: issue.id,
-      label: after.title,
-      detail: detached.detail,
-      project_id: after.project_id,
-      ts: now,
-      named_task_nums: detached.named,
-    })
-  }
+  if (detach) await logLeftParent(ctx, { me, before, after, now })
   return after
 }
 
@@ -2310,13 +2205,12 @@ function editableBy(
   }
 }
 
-/* The descendant walk, shared with updateIssueCore's folded machine toggle:
- * stamps active descendants (touched, NEVER notified). An active descendant
- * in a project the actor cannot edit refuses the archive, because an active
- * task may never sit under an archived parent. The walk reads every
- * subtask, under SUBTREE_ROOM, and refuses with ARCHIVE_TOO_LARGE a tree
- * stored before the one level of subtasks that one transaction cannot
- * archive. Returns the ids it stamped. */
+/* The subtask walk, shared with updateIssueCore's folded machine toggle:
+ * stamps active subtasks (touched, NEVER notified). An active subtask in a
+ * project the actor cannot edit refuses the archive, because an active task
+ * may never sit under an archived parent. A subtask has no subtasks of its
+ * own, so the walk reads one range of at most SUBTASK_MAX active subtasks,
+ * under SUBTREE_ROOM. Returns the ids it stamped. */
 async function archiveSubtree(
   ctx: MutationCtx,
   rootId: string,
@@ -2324,33 +2218,23 @@ async function archiveSubtree(
   actor: Doc<'profiles'>,
 ): Promise<string[]> {
   const edits = editableBy(ctx, actor)
-  const room = roomCheck(ctx, ARCHIVE_TOO_LARGE)
-  const stamped: string[] = []
-  let frontier = [rootId]
-  const seen = new Set<string>([rootId])
-  for (let depth = 0; frontier.length > 0; depth++) {
-    if (depth >= 20) throw rule('task hierarchy too deep for the archive cascade')
-    const next: string[] = []
-    for (const pid of frontier) {
-      await room()
-      const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', pid))
-      for await (const c of kids) {
-        await room(subtaskBytes(c))
-        if (c.archived_at !== undefined || seen.has(c.id)) continue
-        seen.add(c.id)
-        const editable = await edits(c.project_id)
-        if (editable === null) throw rule(SUBTASK_BEING_DELETED)
-        if (!editable) throw rule(ARCHIVE_CASCADE_RULE)
-        await ctx.db.patch(c._id, { archived_at: now, updated_at: now })
-        const after = (await ctx.db.get(c._id)) as Doc<'issues'>
-        await emitTaskEvent(ctx, { name: 'task.updated', issue: after, before: c, actor, now })
-        next.push(c.id)
-        stamped.push(c.id)
-      }
-    }
-    frontier = next
+  const room = roomCheck(ctx)
+  await room()
+  // read in full before the first patch, which moves a row out of the range
+  const kids = await activeSubtasks(ctx, rootId).take(SUBTASK_MAX)
+  for (const c of kids) {
+    await room(subtaskBytes(c))
+    const editable = await edits(c.project_id)
+    if (editable === null) throw rule(SUBTASK_BEING_DELETED)
+    if (!editable) throw rule(ARCHIVE_CASCADE_RULE)
   }
-  return stamped
+  for (const c of kids) {
+    await room(subtaskBytes(c))
+    await ctx.db.patch(c._id, { archived_at: now, updated_at: now })
+    const after = (await ctx.db.get(c._id)) as Doc<'issues'>
+    await emitTaskEvent(ctx, { name: 'task.updated', issue: after, before: c, actor, now })
+  }
+  return kids.map((c) => c.id)
 }
 
 /* The 'archived' row names no subtask count, because subtasks can sit in
@@ -2370,18 +2254,12 @@ export async function archiveIssueCore(
   await assertCanEdit(ctx, me, issue.project_id)
   if (issue.archived_at !== undefined) return issue
   if (a.keepSubtasks === true) {
-    // read in full before the first detach, under the archive's room check
-    const room = roomCheck(ctx, ARCHIVE_TOO_LARGE)
-    const kids: Doc<'issues'>[] = []
-    const rows = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', issue.id))
-    for await (const kid of rows) {
-      await room(subtaskBytes(kid))
-      if (kid.archived_at === undefined) kids.push(kid)
-    }
+    // read in full before the first detach, which moves a row out of the range
+    const kids = await activeSubtasks(ctx, issue.id).take(SUBTASK_MAX)
     // the detaches change only tasks, so one preload serves them all
     const preload = newNotifyPreload()
     for (const kid of kids) {
-      await assertRoom(ctx, ARCHIVE_TOO_LARGE)
+      await assertRoom(ctx)
       await detachChild(ctx, kid, me, now, preload)
     }
   }
@@ -2433,10 +2311,9 @@ async function restoreAncestors(
   const restored: Doc<'issues'>[] = []
   let cur: Doc<'issues'> = a.row
   const seen = new Set<string>([a.row.id])
-  for (let depth = 0; cur.parent_id !== undefined; depth++) {
-    if (depth >= 20 || seen.has(cur.parent_id)) {
-      throw rule('task hierarchy too deep for the archive cascade')
-    }
+  // one level of subtasks: the chain is the parent alone, and the seen set
+  // stops a corrupt cycle
+  while (cur.parent_id !== undefined && !seen.has(cur.parent_id)) {
     const parent = await byId(ctx, 'issues', cur.parent_id)
     if (parent === null) break
     seen.add(parent.id)
@@ -2478,6 +2355,47 @@ async function restoreAncestors(
   return restored
 }
 
+/** Whether restoring the archived task `issue` from the archive brings it
+ * back as a top-level task, because its parent is active and already has
+ * SUBTASK_MAX active subtasks (lib/taskLimits.ts). A restore from Deleted
+ * items clears such a parent the same way (model/deletedItems.ts
+ * keptParent), so no restore refuses over it or passes the cap. An archived
+ * parent holds no active subtask, because an active task never sits under
+ * an archived one, so the restore brings it back too, as before. */
+async function restoreLeavesParent(ctx: QueryCtx, issue: Doc<'issues'>): Promise<boolean> {
+  if (issue.parent_id === undefined) return false
+  const parent = await byId(ctx, 'issues', issue.parent_id)
+  if (parent === null || parent.archived_at !== undefined) return false
+  return (await subtaskCount(ctx, parent.id)) >= SUBTASK_MAX
+}
+
+/* The activity row of a task that left its parent `before.parent_id` in
+ * another change, such as a move or a restore, as a detach writes it. */
+async function logLeftParent(
+  ctx: MutationCtx,
+  a: { me: Doc<'profiles'>; before: Doc<'issues'>; after: Doc<'issues'>; now: string },
+): Promise<void> {
+  const { me, before, after } = a
+  const detached = await browserVerbDetail(ctx, { before, after, patch: { parent_id: null } })
+  await logActivity(ctx, {
+    org_id: after.org_id,
+    actor_id: me.id,
+    verb: detached.verb,
+    target_type: 'issue',
+    target_id: after.id,
+    label: after.title,
+    detail: detached.detail,
+    project_id: after.project_id,
+    ts: a.now,
+    named_task_nums: detached.named,
+  })
+}
+
+/** Restores the archived task `issue` and the archived parent above it
+ * (restoreAncestors). A task whose active parent is full comes back as a
+ * top-level task (restoreLeavesParent), with a detach's activity row, and
+ * its followers read that it left its parent; the caller can tell by the
+ * returned row's parent_id. */
 export async function unarchiveIssueCore(
   ctx: MutationCtx,
   a: { me: Doc<'profiles'>; issue: Doc<'issues'>; now: string },
@@ -2486,8 +2404,10 @@ export async function unarchiveIssueCore(
   await assertCanEdit(ctx, me, issue.project_id)
   if (issue.archived_at === undefined) return issue
   const before = { ...issue }
+  const leaves = await restoreLeavesParent(ctx, issue)
   await ctx.db.patch(issue._id, {
     archived_at: undefined,
+    ...(leaves ? { parent_id: undefined } : {}),
     done_at: doneStampUpdate(issue, { status: issue.status, archived_at: undefined }, now),
     updated_at: now,
   })
@@ -2510,5 +2430,6 @@ export async function unarchiveIssueCore(
     named_task_nums: [],
   }
   await logActivity(ctx, event)
+  if (leaves) await logLeftParent(ctx, { me, before, after: rootAfter, now })
   return rootAfter
 }

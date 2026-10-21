@@ -10,15 +10,14 @@ import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { EventOwner } from '../lib/taskEvents'
-import { PARENT_FULL, SUBTASK_WITH_SUBTASKS } from '../lib/taskLimits'
+import { PARENT_FULL, SUBTASK_MAX, SUBTASK_WITH_SUBTASKS } from '../lib/taskLimits'
+import { TEXT_MAX } from '../lib/textLimits'
 import {
-  ARCHIVE_TOO_LARGE,
   MOVE_SUBTASK_RULE,
   MOVE_SUBTREE_EDIT_RULE,
   MOVE_SUBTREE_HOLDER_RULE,
   MOVE_SUBTREE_MAX,
   MOVE_SUBTREE_TOO_LARGE,
-  PARENT_TOO_LARGE,
   parentChainCheck,
   SUBTASK_PROJECT_RULE,
   SUBTREE_ROOM,
@@ -229,25 +228,21 @@ describe('moving a task within its top-level project', () => {
 describe('moving a task to another top-level project', () => {
   it('carries its subtasks, archived ones included, in one message and one activity row', async () => {
     const t = newT()
-    const { f, backend, frontend } = await scene(t)
+    const { f, backend } = await scene(t)
     await subscribeToUpdates(t, f)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const root = await plantIssue(t, { ...base, title: 'Release' })
     const kid = await plantIssue(t, { ...base, project_id: f.sub2.id, parent_id: root.id })
+    const sibling = await plantIssue(t, { ...base, parent_id: root.id })
     const old = await plantIssue(t, { ...base, parent_id: root.id, archived_at: ARCHIVED })
-    const grandkid = await plantIssue(t, { ...base, parent_id: kid.id })
-    const deep = await plantIssue(t, { ...base, parent_id: grandkid.id, archived_at: ARCHIVED })
-    // an older subtask already in Cloud stays in its sub-project
-    const settled = await plantIssue(t, { ...base, project_id: frontend.id, parent_id: kid.id })
     for (const id of [root.id, kid.id])
       await plantSubscription(t, { issue_id: id, profile_id: f.user.id })
     await appMove(t, f, root.id, backend.id)
-    for (const moved of [root, kid, old, grandkid, deep]) {
+    for (const moved of [root, kid, sibling, old]) {
       const after = await row(t, moved.id)
       expect(after.project_id).toBe(backend.id)
       expect([after.parent_id, after.archived_at]).toEqual([moved.parent_id, moved.archived_at])
     }
-    expect(await row(t, settled.id)).toEqual(settled)
     // the task's followers hear about the move once; the subtasks' do not
     expect((await messagesFor(t, f.user.id, root.id)).map((m) => m.detail)).toEqual([
       'Moved to Backend',
@@ -258,9 +253,7 @@ describe('moving a task to another top-level project', () => {
       [root.id, 'to the Backend sub-project (from Firmware) with its subtasks'],
     ])
     // one task.updated for the task and one for each subtask that moved
-    expect((await updateEvents(t)).sort()).toEqual(
-      [root.id, kid.id, old.id, grandkid.id, deep.id].sort(),
-    )
+    expect((await updateEvents(t)).sort()).toEqual([root.id, kid.id, sibling.id, old.id].sort())
   })
 
   /* Until 2026-10-16 a sub-project took a blank name. A move names it by
@@ -372,14 +365,19 @@ describe('moving a task to another top-level project', () => {
     })
     const holder = await expectRefusal(appMove(t, f, root.id, backend.id), 'rule')
     expect(holder.data.message).toBe(MOVE_SUBTREE_HOLDER_RULE)
-    // as a group's dormant reviewer the guest is cleared instead
+    // a subtask has no subtasks of its own, so its reviewer is checked too
     await t.run(async (ctx) => {
       await ctx.db.patch(inPcb._id, { assignee_id: undefined, reviewer_id: f.guest.id })
     })
-    await plantIssue(t, { ...base, parent_id: inPcb.id })
-    // more than the limit, archived subtasks included
+    const reviewer = await expectRefusal(appMove(t, f, root.id, backend.id), 'rule')
+    expect(reviewer.data.message).toBe(MOVE_SUBTREE_HOLDER_RULE)
     await t.run(async (ctx) => {
-      for (let i = 0; i < MOVE_SUBTREE_MAX - 1; i++) {
+      await ctx.db.patch(inPcb._id, { reviewer_id: undefined })
+    })
+    // more than the limit at one level, archived subtasks included: with
+    // inPcb, SUBTASK_MAX active ones and the rest archived
+    await t.run(async (ctx) => {
+      for (let i = 0; i < MOVE_SUBTREE_MAX; i++) {
         await ctx.db.insert('issues', {
           ...base,
           id: uuid(),
@@ -390,7 +388,7 @@ describe('moving a task to another top-level project', () => {
           priority: 'low',
           paused: false,
           parent_id: root.id,
-          archived_at: i % 2 ? ARCHIVED : undefined,
+          archived_at: i < SUBTASK_MAX - 1 ? undefined : ARCHIVED,
           created_at: ARCHIVED,
           updated_at: ARCHIVED,
         })
@@ -400,15 +398,20 @@ describe('moving a task to another top-level project', () => {
     const tooMany = await expectRefusal(appMove(t, f, root.id, backend.id), 'rule')
     expect(tooMany.data.message).toBe(MOVE_SUBTREE_TOO_LARGE)
     expect(await allIssues(t, f.org.id)).toEqual(crowded)
-    // at the limit the move lands, and the group's reviewer is cleared
-    const last = crowded.find((i) => i.title === `Step ${MOVE_SUBTREE_MAX - 2}`)!
+    // at the limit the move lands, every subtask with it
+    const last = crowded.find((i) => i.title === `Step ${MOVE_SUBTREE_MAX - 1}`)!
     await t.run(async (ctx) => {
       await ctx.db.delete(last._id)
     })
     await appMove(t, f, root.id, backend.id)
-    const moved = await row(t, inPcb.id)
-    expect(moved.project_id).toBe(backend.id)
-    expect(moved.reviewer_id).toBeUndefined()
+    const moved = (await allIssues(t, f.org.id)).filter((i) => i.project_id === backend.id)
+    expect(moved.map((i) => i.id).sort()).toEqual(
+      crowded
+        .filter((i) => i.id === root.id || (i.parent_id === root.id && i.id !== last.id))
+        .map((i) => i.id)
+        .sort(),
+    )
+    expect(moved).toHaveLength(MOVE_SUBTREE_MAX + 1)
   })
 })
 
@@ -478,7 +481,7 @@ describe('an older subtask whose parent the mover cannot see', () => {
   })
 })
 
-describe('a move or a parent change too large for one transaction', () => {
+describe('a move, archive or parent change too large for one transaction', () => {
   /* Runs `body` with SUBTREE_ROOM lowered so that `every`th read or row of
    * a walk, or the row that brings the sizes read to `bytes`, finds the
    * transaction full. */
@@ -502,69 +505,62 @@ describe('a move or a parent change too large for one transaction', () => {
     const { f, backend } = await scene(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const root = await plantIssue(t, base)
-    const kids = []
-    for (let i = 0; i < 3; i++) kids.push(await plantIssue(t, { ...base, parent_id: root.id }))
-    for (const kid of kids) await plantIssue(t, { ...base, parent_id: kid.id })
+    for (let i = 0; i < 3; i++) await plantIssue(t, { ...base, parent_id: root.id })
+    const carrier = await plantIssue(t, base)
+    const carried = await plantIssue(t, { ...base, parent_id: carrier.id })
     const other = await plantIssue(t, { ...base, project_id: f.sub2.id })
-    const lone = await plantIssue(t, base)
     const newKid = await plantIssue(t, base)
-    await t.run(async (ctx) => {
-      for (let i = 0; i < 4; i++)
-        await ctx.db.insert('issue_attachments', {
-          id: uuid(),
-          org_id: f.org.id,
-          project_id: f.sub.id,
-          issue_id: lone.id,
-          name: `notes ${i}.txt`,
-          size_bytes: 1,
-          storage_id: await ctx.storage.store(new Blob() as never),
-          inline: false,
-          created_at: f.org.created_at,
-        })
-    })
+    const archive = (id: string) =>
+      as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id, reason: 'On hold' })
     const before = await allIssues(t, f.org.id)
     await crowdedRoom(4, async () => {
-      // a move within TBED walks the four tasks under the root's three
-      // children for their holders, and a new subtask finds the transaction
-      // full before it counts the root's three children
+      // each walk of the root's three subtasks checks once before its range
+      // and once after each row, so the third row finds the transaction full
       for (const change of [
+        // a move within TBED, for the subtasks' holders
         () => appMove(t, f, root.id, f.sub2.id),
+        // a new subtask, for the count of the parent's subtasks
         () => appUpdate(t, f, newKid.id, { parent_id: root.id }),
-        // the task's four attachment rows
-        () => appMove(t, f, lone.id, backend.id),
+        // an archive, for the subtasks it archives with the task
+        () => archive(root.id),
+        // a move to another top-level project checks before each subtask it
+        // carries
+        () => appMove(t, f, carrier.id, backend.id),
       ]) {
         const r = await expectRefusal(change(), 'rule')
         expect(r.data.message).toBe(SUBTREE_TOO_LARGE)
       }
     })
     expect(await allIssues(t, f.org.id)).toEqual(before)
-    // with room to spare, all three pass
+    // with room to spare, all four pass
     await appMove(t, f, root.id, f.sub2.id)
     await appUpdate(t, f, newKid.id, { parent_id: root.id })
-    await appMove(t, f, lone.id, backend.id)
     expect((await row(t, newKid.id)).parent_id).toBe(root.id)
-    // the legacy root has subtasks, so it takes no parent itself
+    await appMove(t, f, carrier.id, backend.id)
+    for (const moved of [carrier, carried]) {
+      expect((await row(t, moved.id)).project_id).toBe(backend.id)
+    }
+    // the root has subtasks, so it takes no parent itself
     const r = await expectRefusal(appUpdate(t, f, root.id, { parent_id: other.id }), 'rule')
     expect(r.data.message).toBe(SUBTASK_WITH_SUBTASKS)
-    expect((await row(t, lone.id)).project_id).toBe(backend.id)
-    const moved = await t.run((ctx) =>
-      ctx.db
-        .query('issue_attachments')
-        .withIndex('by_issue', (q) => q.eq('issue_id', lone.id))
-        .collect(),
+    await archive(root.id)
+    const family = (await allIssues(t, f.org.id)).filter(
+      (i) => i.id === root.id || i.parent_id === root.id,
     )
-    expect(moved.map((file) => file.project_id)).toEqual(Array(4).fill(backend.id))
+    expect(family).toHaveLength(5)
+    for (const task of family) expect(task.archived_at).toBeDefined()
   })
 
-  it('refuses a walk that would pass a real limit, as it stands', async () => {
-    // a limit of 1,000 index ranges, and 1,200 subtasks under one task from
-    // before the subtask limits, each a range of the walk
-    const t = newT({ transactionLimits: { databaseQueries: 1000 } })
-    const { f } = await scene(t)
+  it('reads only the active subtasks under a real limit, however many are archived', async () => {
+    // a limit of 400 documents read, and a task with SUBTASK_MAX active
+    // subtasks and 1,000 archived ones: a walk that read the archived ones
+    // would fail on the limit
+    const t = newT({ transactionLimits: { documentsRead: 400 } })
+    const { f, backend } = await scene(t)
     const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
     await t.run(async (ctx) => {
-      for (let i = 0; i < 1200; i++)
+      for (let i = 0; i < SUBTASK_MAX + 1000; i++)
         await ctx.db.insert('issues', {
           id: uuid(),
           org_id: f.org.id,
@@ -576,27 +572,44 @@ describe('a move or a parent change too large for one transaction', () => {
           status: 'todo',
           priority: 'medium',
           paused: false,
+          archived_at: i < SUBTASK_MAX ? undefined : ARCHIVED,
           created_at: root.created_at,
           updated_at: root.updated_at,
         })
     })
-    const r = await expectRefusal(appMove(t, f, root.id, f.sub2.id), 'rule')
-    expect(r.data.message).toBe(SUBTREE_TOO_LARGE)
-    // archiving walks every subtask too, and refuses as plainly (#4)
-    const a = await expectRefusal(
-      as(t, f.admin).mutation(api.issues.archive, {
-        org_id: f.org.id,
-        id: root.id,
-        reason: 'On hold',
-      }),
-      'rule',
-    )
-    expect(a.data.message).toBe(ARCHIVE_TOO_LARGE)
+    const activeUnder = () =>
+      t.run(
+        async (ctx) =>
+          (
+            await ctx.db
+              .query('issues')
+              .withIndex('by_parent_archived', (q) =>
+                q.eq('parent_id', root.id).eq('archived_at', undefined),
+              )
+              .collect()
+          ).length,
+      )
+    // a move within TBED reads the active subtasks for their holders
+    await appMove(t, f, root.id, f.sub2.id)
+    expect((await row(t, root.id)).project_id).toBe(f.sub2.id)
     // a new subtask counts no further than the limit, and is refused there
     const p = await expectRefusal(appUpdate(t, f, other.id, { parent_id: root.id }), 'rule')
     expect(p.data.message).toBe(PARENT_FULL)
-    expect(await row(t, root.id)).toEqual(root)
     expect(await row(t, other.id)).toEqual(other)
+    // a move to another top-level project, which carries the archived ones
+    // too, stops reading past MOVE_SUBTREE_MAX
+    const m = await expectRefusal(appMove(t, f, root.id, backend.id), 'rule')
+    expect(m.data.message).toBe(MOVE_SUBTREE_TOO_LARGE)
+    expect((await row(t, root.id)).project_id).toBe(f.sub2.id)
+    // the archive takes the active subtasks with it
+    expect(await activeUnder()).toBe(SUBTASK_MAX)
+    await as(t, f.admin).mutation(api.issues.archive, {
+      org_id: f.org.id,
+      id: root.id,
+      reason: 'On hold',
+    })
+    expect((await row(t, root.id)).archived_at).toBeDefined()
+    expect(await activeUnder()).toBe(0)
   })
 
   it('checks sooner after a subtask with a long description', async () => {
@@ -631,20 +644,22 @@ describe('a move or a parent change too large for one transaction', () => {
 })
 
 describe('a parent whose subtasks are too large to count', () => {
-  it('refuses with its own sentence under a real read limit, and changes nothing', async () => {
-    // four legacy subtasks of 450 KB, read within a limit of 2 MB: the count
-    // passes the room on the fourth
-    const t = newT({ transactionLimits: { bytesRead: 2_000_000 } })
+  it('refuses with the plain sentence under a real read limit, and changes nothing', async () => {
+    // ten subtasks of about 60 KB, each description TEXT_MAX characters of
+    // three UTF-8 bytes, read within a limit of 580 KB: the count asks once
+    // the nine rows before it may hold SUBTREE_ROOM.bytes, and is past the
+    // room by then
+    const t = newT({ transactionLimits: { bytesRead: 580_000 } })
     const { f } = await scene(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const heavy = await plantIssue(t, base)
-    for (let i = 0; i < 4; i++)
-      await plantIssue(t, { ...base, parent_id: heavy.id, description: 'x'.repeat(450_000) })
+    for (let i = 0; i < 10; i++)
+      await plantIssue(t, { ...base, parent_id: heavy.id, description: '中'.repeat(TEXT_MAX) })
     const light = await plantIssue(t, base)
     await plantIssue(t, { ...base, parent_id: light.id })
     const other = await plantIssue(t, base)
     const r = await expectRefusal(appUpdate(t, f, other.id, { parent_id: heavy.id }), 'rule')
-    expect(r.data.message).toBe(PARENT_TOO_LARGE)
+    expect(r.data.message).toBe(SUBTREE_TOO_LARGE)
     expect(await row(t, other.id)).toEqual(other)
     await appUpdate(t, f, other.id, { parent_id: light.id })
     expect((await row(t, other.id)).parent_id).toBe(light.id)

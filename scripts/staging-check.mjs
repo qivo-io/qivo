@@ -4067,11 +4067,6 @@ async function factChecks() {
   }
   if (run.projects.N1) await billingPauseChecks()
   else skipProbe('billing-pause-leave', 'the second project could not be made')
-  say(
-    'NOTE',
-    'subtask-audit',
-    'the subtask audit and backfill (#144) are internal functions an operator runs; nothing to check over REST or MCP',
-  )
 }
 
 /* --------------------------------------------------------------- the run */
