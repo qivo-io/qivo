@@ -251,10 +251,7 @@ async function trimRows(
       .order('desc')
       .take(3)
   ).find((r) => r.read_at === undefined && r._id !== holder._id)
-  const outside =
-    prior?.dropped && !unread.some((r) => r._id === prior._id)
-      ? prior
-      : undefined
+  const outside = prior?.dropped && !unread.some((r) => r._id === prior._id) ? prior : undefined
   const first = unread[0]
   const newestOfKind = new Map<MessageKind, Pick<Doc<'messages'>, '_id' | 'kind'>>()
   for (const r of unread) newestOfKind.set(r.kind, r)
