@@ -91,7 +91,9 @@ if (!process.argv.includes('--serve'))
         report.failure = { ...running, message: `stopped by ${signal}` }
         writeFileSync(output, `${JSON.stringify(report, null, 2)}\n`)
       }
-      rmSync(temporary, { recursive: true, force: true })
+      // a build still writing into the folder can make one removal fail,
+      // so it is tried again before the process ends
+      rmSync(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
       process.exit(code)
     })
 // the timed phases, each with its script, layout and style time and the
