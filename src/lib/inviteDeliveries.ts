@@ -8,28 +8,25 @@ import { api } from '../../convex/_generated/api'
 import { convex } from './convex'
 import { DEMO_MODE } from './demoMode'
 
-export type InviteDelivery = FunctionReturnType<typeof api.invites.deliveries>[number]['state']
+type Row = FunctionReturnType<typeof api.invites.deliveries>[number]
+export type InviteDelivery = Row['state']
 
-const NONE: ReadonlyMap<string, InviteDelivery> = new Map()
-
-/** Each visible pending seat's newest invitation email state in `orgId`,
-    keyed by profile id. Org admins see every pending seat, others the sends
-    they caused. Empty while loading, on a refusal and in the demo. */
-export function useInviteDeliveries(
-  orgId: string | undefined,
-): ReadonlyMap<string, InviteDelivery> {
-  const [states, setStates] = useState(NONE)
+/** Each visible pending seat's newest invitation email in `orgId`, keyed by
+    profile id. Org admins see every pending seat, others the sends they
+    caused. Null while loading, after a refusal and in the demo. */
+export function useInviteDeliveries(orgId: string | undefined): ReadonlyMap<string, Row> | null {
+  const [rows, setRows] = useState<ReadonlyMap<string, Row> | null>(null)
   useEffect(() => {
-    setStates(NONE)
+    setRows(null)
     if (DEMO_MODE || !orgId) return
     return convex.onUpdate(
       api.invites.deliveries,
       { org_id: orgId },
-      (rows) => setStates(new Map(rows.map((row) => [row.profile_id, row.state]))),
-      () => setStates(NONE),
+      (next) => setRows(new Map(next.map((row) => [row.profile_id, row]))),
+      () => setRows(null),
     )
   }, [orgId])
-  return states
+  return rows
 }
 
 const JOIN_ANYWAY = 'They can still join by creating an account with this address.'

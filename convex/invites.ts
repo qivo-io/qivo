@@ -330,36 +330,40 @@ const deliveryOf = (row: SendRow): InviteDelivery =>
           ? 'uncertain'
           : 'unsent'
 
-/* How many of a seat's newest audit rows deliveries() reads for its newest
- * invitation email, as adminPeople does. */
-const DELIVERY_ROWS = 20
+/** One pending seat's invitation email, as deliveries() reports it. */
+export type InviteDeliveryRow = { profile_id: string; email: string; state: InviteDelivery }
 
 /** The newest invitation email to each pending seat's current address in
  * the caller's organization, so the app can say when one was not delivered.
  * An org admin sees every pending seat. Anyone else sees only the sends
  * their own change caused, such as a project lead's guest invitation. Seats
- * with no invitation email recorded are left out. */
+ * with no invitation email recorded are left out. Each seat reads only its
+ * invitation rows, newest first, so other audit entries cannot hide one. */
 export const deliveries = orgQuery({
   args: {},
-  handler: async (ctx): Promise<{ profile_id: string; state: InviteDelivery }[]> => {
+  handler: async (ctx): Promise<InviteDeliveryRow[]> => {
     if (isDemoDeployment()) return []
     const admin = ctx.me.org_role === 'admin'
     const pending = ctx.db
       .query('profiles')
       .withIndex('by_org_auth', (q) => q.eq('org_id', ctx.me.org_id).eq('auth_user_id', undefined))
-    const out: { profile_id: string; state: InviteDelivery }[] = []
+    const out: InviteDeliveryRow[] = []
     for await (const seat of pending) {
-      if (!isInvitation(seat, false)) continue
-      const rows = await ctx.db
+      if (!isInvitation(seat, false) || seat.email === undefined) continue
+      const sends = ctx.db
         .query('platform_audit_log')
-        .withIndex('by_target_profile', (q) => q.eq('target_profile_id', seat.id))
+        .withIndex('by_target_profile_action', (q) =>
+          q.eq('target_profile_id', seat.id).eq('action', 'invite_email'),
+        )
         .order('desc')
-        .take(DELIVERY_ROWS)
-      const newest = rows.find(
-        (row) => row.action === 'invite_email' && (row as SendRow).detail.email === seat.email,
-      ) as SendRow | undefined
+      let newest: SendRow | undefined
+      for await (const row of sends) {
+        if ((row as SendRow).detail.email !== seat.email) continue
+        newest = row as SendRow
+        break
+      }
       if (newest === undefined || (!admin && newest.detail.by !== ctx.me.id)) continue
-      out.push({ profile_id: seat.id, state: deliveryOf(newest) })
+      out.push({ profile_id: seat.id, email: seat.email, state: deliveryOf(newest) })
     }
     return out
   },

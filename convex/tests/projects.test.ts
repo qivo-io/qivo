@@ -1153,7 +1153,8 @@ describe('projects.inviteGuest', () => {
   it('an unknown address gets a guest seat and a grant on the selected sub-project', async () => {
     const t = newT()
     const f = await withOrg(t)
-    const pid = await invite(t, f, { project_id: f.sub.id })
+    const { id: pid, emailed } = await invite(t, f, { project_id: f.sub.id })
+    expect(emailed).toBe(true)
     const p = await t.run(async (ctx) =>
       ctx.db
         .query('profiles')
@@ -1183,7 +1184,7 @@ describe('projects.inviteGuest', () => {
     expect(grant?.level).toBe('user')
     // inviting twice UPDATES the level, mints no second seat
     const again = await invite(t, f, { project_id: f.sub.id, level: 'viewer' })
-    expect(again).toBe(pid)
+    expect(again).toEqual({ id: pid, emailed: false })
     const after = await t.run(async (ctx) => ({
       seats: await ctx.db
         .query('profiles')
@@ -1201,8 +1202,9 @@ describe('projects.inviteGuest', () => {
   it('a known address in the org gets the grant only; retention follows a sibling seat', async () => {
     const t = newT()
     const f = await withOrg(t)
-    const pid = await invite(t, f, { email: f.guest.email })
+    const { id: pid, emailed } = await invite(t, f, { email: f.guest.email })
     expect(pid).toBe(f.guest.id)
+    expect(emailed).toBe(false)
     // a sibling seat elsewhere carries retention 30 — the new guest copies it
     await t.run(async (ctx) => {
       await ctx.db.insert('profiles', {
@@ -1219,7 +1221,7 @@ describe('projects.inviteGuest', () => {
         created_at: '2025-01-01T00:00:00.000Z',
       })
     })
-    const bo = await invite(t, f, { email: 'bo@example.se' })
+    const { id: bo } = await invite(t, f, { email: 'bo@example.se' })
     const seat = await t.run(async (ctx) =>
       ctx.db
         .query('profiles')

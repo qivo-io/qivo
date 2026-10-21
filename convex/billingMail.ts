@@ -20,7 +20,9 @@ const readyRef = makeFunctionReference<'query', { key: string }, Delivery | null
   'billingMail:ready',
 )
 const sentRef = makeFunctionReference<'mutation', { key: string }, null>('billingMail:sent')
-const unsentRef = makeFunctionReference<'mutation', { key: string }, null>('billingMail:unsent')
+const unsentRef = makeFunctionReference<'mutation', { key: string; attempts: number }, null>(
+  'billingMail:unsent',
+)
 
 /** The hourly attempts after the first one, for a billing reminder and for
  * orgRemovals.ts's deletion notice. */
@@ -79,11 +81,13 @@ export const sent = internalMutation({
   },
 })
 /** Records in the operator's audit log that a billing reminder or a
- * deletion notice (orgRemovals.ts) was still not delivered after its last
- * hourly attempt, so the failure is not only a log line. */
+ * deletion notice (orgRemovals.ts) was never delivered: its last hourly
+ * attempt failed, or it stopped being due (a later reminder took over, the
+ * grant changed, the admin left) after `attempts` failed ones. The failure
+ * is then not only a log line. */
 export const unsent = internalMutation({
-  args: { key: v.string() },
-  handler: async (ctx, { key }) => {
+  args: { key: v.string(), attempts: v.number() },
+  handler: async (ctx, { key, attempts }) => {
     const notice = await ctx.db
       .query('billing_notices')
       .withIndex('by_key', (q) => q.eq('key', key))
@@ -94,7 +98,7 @@ export const unsent = internalMutation({
       action: 'notice_email_unsent',
       target_org_id: notice.org_id,
       target_profile_id: notice.profile_id,
-      detail: { kind: notice.kind, attempts: NOTICE_RETRIES + 1 },
+      detail: { kind: notice.kind, attempts },
     })
     return null
   },
@@ -104,7 +108,11 @@ export const send = internalAction({
   handler: async (ctx, args): Promise<null> => {
     if (!billingEnabled()) return null
     const delivery = await ctx.runQuery(readyRef, { key: args.notice_key })
-    if (!delivery) return null
+    if (!delivery) {
+      const failed = args.attempt ?? 0
+      if (failed > 0) await ctx.runMutation(unsentRef, { key: args.notice_key, attempts: failed })
+      return null
+    }
     if (
       await sendBillingReminder({
         ...delivery,
@@ -118,7 +126,7 @@ export const send = internalAction({
         ...args,
         attempt: (args.attempt ?? 0) + 1,
       })
-    else await ctx.runMutation(unsentRef, { key: args.notice_key })
+    else await ctx.runMutation(unsentRef, { key: args.notice_key, attempts: NOTICE_RETRIES + 1 })
     return null
   },
 })

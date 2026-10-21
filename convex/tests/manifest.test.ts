@@ -187,7 +187,7 @@ billingActions:reserveCheckout mutation internal {"type":"object","value":{"org_
 billingMail:ready query internal {"type":"object","value":{"key":{"fieldType":{"type":"string"},"optional":false}}}
 billingMail:send action internal {"type":"object","value":{"to":{"fieldType":{"type":"string"},"optional":false},"url":{"fieldType":{"type":"string"},"optional":false},"until":{"fieldType":{"type":"string"},"optional":false},"notice_key":{"fieldType":{"type":"string"},"optional":false},"attempt":{"fieldType":{"type":"number"},"optional":true}}}
 billingMail:sent mutation internal {"type":"object","value":{"key":{"fieldType":{"type":"string"},"optional":false}}}
-billingMail:unsent mutation internal {"type":"object","value":{"key":{"fieldType":{"type":"string"},"optional":false}}}
+billingMail:unsent mutation internal {"type":"object","value":{"key":{"fieldType":{"type":"string"},"optional":false},"attempts":{"fieldType":{"type":"number"},"optional":false}}}
 billingMetering:ingress mutation internal {"type":"object","value":{"shard":{"fieldType":{"type":"number"},"optional":false}}}
 billingMetering:oauthCall mutation internal {"type":"object","value":{"connection_id":{"fieldType":{"type":"string"},"optional":false}}}
 billingSync:apply mutation internal {"type":"object","value":{"payload":{"fieldType":{"type":"string"},"optional":false},"event_id":{"fieldType":{"type":"string"},"optional":true}}}

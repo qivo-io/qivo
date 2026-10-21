@@ -19,7 +19,7 @@
  * Auth sends only for an existing unconfirmed account. */
 
 import type { BetterAuthPlugin } from 'better-auth'
-import { APIError, createAuthMiddleware } from 'better-auth/api'
+import { APIError, createAuthMiddleware, isAPIError } from 'better-auth/api'
 import { authMailAvailable } from './mailConfig'
 
 /** How one authentication letter went: delivered to the provider, refused
@@ -117,7 +117,9 @@ export function authMailPlugin(
           handler: createAuthMiddleware(async (ctx) => {
             const path = ctx.path
             if (!isMailPath(path)) return
-            const refused = ctx.context.returned instanceof APIError
+            // isAPIError, not instanceof: a validation refusal is better-call's
+            // own APIError, which Better Auth's subclass does not match
+            const refused = isAPIError(ctx.context.returned)
             if (path === RESEND && !ctx.context.session) {
               // the callback sent nothing (auth.ts), whoever the address is
               throw APIError.from('UNAUTHORIZED', {

@@ -846,7 +846,12 @@ function ProjectSettingsFields({
                 </Button>
               </div>
               {emailed && (
-                <InviteOutcome orgId={proj.org} seat={emailed.seat} email={emailed.email} />
+                <InviteOutcome
+                  key={emailed.seat}
+                  orgId={proj.org}
+                  seat={emailed.seat}
+                  email={emailed.email}
+                />
               )}
             </SettingsGroup>
           )}

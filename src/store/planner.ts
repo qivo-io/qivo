@@ -5013,7 +5013,7 @@ export const PLANNER = {
      sentence (capitalized, like createOrg's). The new grant/seat arrives
      with the snapshot delivery — no refetch. Null on a refusal; otherwise
      `emailed` is the new seat that an invitation email goes to, or null when
-     the address already had a seat and nothing is mailed. */
+     the server found a seat for the address and mailed nothing. */
   inviteToProject: async (
     metaId: string,
     email: string,
@@ -5027,9 +5027,9 @@ export const PLANNER = {
     const seat = [...rows.profiles.values()].find((p) => p.org_id === org && p.email === address)
     const held =
       seat && rows.access.find((a) => a.project_id === metaId && a.profile_id === seat.id)
-    let pid: string
+    let invited: { id: string; emailed: boolean }
     try {
-      pid = await sendAwaited(
+      invited = await sendAwaited(
         api.projects.inviteGuest,
         {
           org_id: org,
@@ -5049,7 +5049,7 @@ export const PLANNER = {
       toast(msg.charAt(0).toUpperCase() + msg.slice(1))
       return null
     }
-    return { emailed: seat ? null : pid }
+    return { emailed: invited.emailed ? invited.id : null }
   },
   /* Who may create a top-level project follows the home org's setting, by
      the rule projects.create enforces (convex/lib/projectCreators.ts). It

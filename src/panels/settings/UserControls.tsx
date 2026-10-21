@@ -5,7 +5,7 @@ import { NativeSelect } from '@/components/ui/native-select'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { DEMO_MODE } from '../../lib/demoMode'
-import { inviteLabel, useInviteDeliveries } from '../../lib/inviteDeliveries'
+import { type InviteDelivery, inviteLabel, useInviteDeliveries } from '../../lib/inviteDeliveries'
 import { useFieldUnsaved, useUnsaved } from '../../lib/leaveGuard'
 import { projectRightBox } from '../../lib/projectCreators'
 import { useUpdateBlocker } from '../../lib/updateSafety'
@@ -126,7 +126,7 @@ export function UserName({ user, isSelf }: { user: UserVM; isSelf: boolean }) {
 /** A pending seat's marker. It says "invited", or that the invitation email
     did not go out, with the reason on hover (lib/inviteDeliveries). */
 export function InviteLabel({ user, className }: { user: UserVM; className?: string }) {
-  const state = useInviteDeliveries(user.org).get(user.id)
+  const state = useInviteDeliveries(user.org)?.get(user.id)?.state
   const label = inviteLabel(state)
   return (
     <HoverTooltip content={label.detail}>
@@ -146,7 +146,10 @@ export function InviteLabel({ user, className }: { user: UserVM; className?: str
 }
 
 /** Under an invite form: whether the invitation email to the seat just
-    created went out, live, in a full sentence. */
+    created went out, live, in a full sentence. Only the send to `email`
+    counts, so a correction made elsewhere is not reported as this one. When
+    the seat stops being pending (claimed or cancelled), the last result
+    seen stays. Key it by seat. */
 export function InviteOutcome({
   orgId,
   seat,
@@ -156,7 +159,20 @@ export function InviteOutcome({
   seat: string
   email: string
 }) {
-  const state = useInviteDeliveries(orgId).get(seat)
+  const rows = useInviteDeliveries(orgId)
+  const row = rows?.get(seat)
+  const current = row?.email === email.trim().toLowerCase() ? row.state : undefined
+  const [last, setLast] = useStateS<InviteDelivery>()
+  useEffectS(() => {
+    if (current !== undefined) setLast(current)
+  }, [current])
+  /* Nothing yet, or the seat's row is for another address: nothing to say.
+     A send in flight whose row then vanished has no outcome either. */
+  const state =
+    current ??
+    (last !== 'sending' ? last : undefined) ??
+    (rows && !row && !last ? 'sending' : undefined)
+  if (state === undefined) return null
   const label = inviteLabel(state)
   const text = label.detail
     ? `${email}: ${label.detail}`
@@ -165,7 +181,7 @@ export function InviteOutcome({
       : `Sending the invitation email to ${email}…`
   return (
     <div
-      data-invite-outcome={state ?? 'sending'}
+      data-invite-outcome={state}
       role="status"
       className={cn(
         '[font-size:var(--fs-sm)] [margin-top:8px]',

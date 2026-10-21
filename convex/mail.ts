@@ -496,13 +496,17 @@ export async function sendAuthLetter(input: {
   const configured = sender()
   if (configured === null) return 'unavailable'
   const linked = intent === 'verify' || intent === 'reset'
+  /* Unlike an invitation, a person reads this outcome at once, so any
+   * attempt that may have delivered the letter keeps it 'uncertain', even if
+   * a later attempt is refused (a token revoked meanwhile says nothing about
+   * the earlier request). */
   let ambiguous = false
   const ok = await postLetter(AUTH_LETTERS[intent](to, url), intent, {
     sender: configured,
     idempotencyKey: await sha256Hex(linked ? url : `${intent}:${crypto.randomUUID()}`),
     deadline: Date.now() + AUTH_SEND_BUDGET_MS,
     onFailure: (kind) => {
-      ambiguous = kind === 'ambiguous'
+      if (kind === 'ambiguous') ambiguous = true
     },
   })
   return ok ? 'sent' : ambiguous ? 'uncertain' : 'unsent'

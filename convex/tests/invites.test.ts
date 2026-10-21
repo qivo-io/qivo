@@ -122,7 +122,7 @@ describe('invitations from the app', () => {
       'Testbed Labs has invited you to join their organization as a guest. Sign in or create an account with guest.new@example.se to join:',
     ])
     // inviting the existing seat again only updates its access
-    await invite()
+    expect((await invite()).emailed).toBe(false)
     await flush(t)
     expect(letters()).toHaveLength(1)
   })
@@ -426,21 +426,24 @@ describe('whoever caused an app invitation sees whether it went out', () => {
     await as(t, f.admin).mutation(api.profiles.create, added)
     await flush(t)
     fetch.mockResolvedValue({ ok: true, json: async () => ({ message_id: 'm' }) })
-    const guest = await as(t, f.user).mutation(api.projects.inviteGuest, {
+    const { id: guest, emailed } = await as(t, f.user).mutation(api.projects.inviteGuest, {
       org_id: f.org.id,
       project_id: f.meta.id,
       email: 'guest.new@example.se',
       level: 'viewer',
     })
     await flush(t)
+    expect(emailed).toBe(true)
 
     expect(byId(await deliveries(f.admin))).toEqual(
       byId([
-        { profile_id: added.id, state: 'unsent' },
-        { profile_id: guest, state: 'sent' },
+        { profile_id: added.id, email: 'refused@example.se', state: 'unsent' },
+        { profile_id: guest, email: 'guest.new@example.se', state: 'sent' },
       ]),
     )
-    expect(await deliveries(f.user)).toEqual([{ profile_id: guest, state: 'sent' }])
+    expect(await deliveries(f.user)).toEqual([
+      { profile_id: guest, email: 'guest.new@example.se', state: 'sent' },
+    ])
     expect(await deliveries(f.viewer)).toEqual([])
   })
 
@@ -472,11 +475,23 @@ describe('whoever caused an app invitation sees whether it went out', () => {
     await plant(held, { email: held.email, sent: false, limited: true })
     await plant(uncertain, { email: uncertain.email, sent: false, settled: true, uncertain: true })
     await plant(readdressed, { email: 'old@example.se', sent: false, settled: true })
+    // an operator's later entries for the same seat do not hide its send
+    for (let i = 0; i < 25; i++)
+      await t.run((ctx) =>
+        ctx.db.insert('platform_audit_log', {
+          ts: `2099-01-01T00:00:${String(i).padStart(2, '0')}.000Z`,
+          actor_email: 'operator@example.se',
+          action: 'set_member_role',
+          target_org_id: f.org.id,
+          target_profile_id: held.id,
+          detail: {},
+        }),
+      )
     expect(byId(await as(t, f.admin).query(api.invites.deliveries, { org_id: f.org.id }))).toEqual(
       byId([
-        { profile_id: sending.id, state: 'sending' },
-        { profile_id: held.id, state: 'held' },
-        { profile_id: uncertain.id, state: 'uncertain' },
+        { profile_id: sending.id, email: sending.email, state: 'sending' },
+        { profile_id: held.id, email: held.email, state: 'held' },
+        { profile_id: uncertain.id, email: uncertain.email, state: 'uncertain' },
       ]),
     )
   })

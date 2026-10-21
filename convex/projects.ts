@@ -340,7 +340,8 @@ export const removalSummary = orgQuery({
 
 /* ------------------------------------------------------------ inviteGuest
  * P.inviteToProject → invite_project_guest (0082, final body 0096:330-373) —
- * awaited; returns the invitee's profile uuid, as the RPC did. A known
+ * awaited; returns the invitee's profile uuid, as the RPC did, and whether
+ * an invitation email was scheduled (`emailed`, for a new seat only). A known
  * address in the org gets the grant only (the same person is never given a
  * second seat); an unknown one gets a guest seat that stays "Invited" until
  * they sign in. The grant is an UPSERT on the ROOT meta — inviting twice
@@ -453,7 +454,7 @@ export const inviteGuest = orgMutation({
         invites: [{ profile_id: pid, email: em, by: ctx.me.id }],
       })
     }
-    return pid
+    return { id: pid, emailed: existing === null }
   },
 })
 

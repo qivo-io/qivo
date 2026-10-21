@@ -141,6 +141,18 @@ it('mails an existing sign-up address a note instead of a link, and an unknown r
   expect(letters()[1].text).toContain(`${APP}/app#signup`)
 })
 
+it('mails nothing for a reset request that fails validation', async () => {
+  const { t, provider, confirmed } = backend()
+  await confirmed('known@example.test')
+  const reset = await t.fetch('/api/auth/request-password-reset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: APP, 'better-auth-cookie': '' },
+    body: JSON.stringify({ email: 'known@example.test', redirectTo: null }),
+  })
+  expect(reset.status).toBe(400)
+  expect(provider).not.toHaveBeenCalled()
+})
+
 describe('a person is told when their email could not be sent', () => {
   it('refuses sign-up, reset and resend before anything is created while mail is off', async () => {
     const { post, signUp, provider } = backend(false)

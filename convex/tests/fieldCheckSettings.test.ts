@@ -141,7 +141,7 @@ describe('project access', () => {
         level,
         expected: { level: seen },
       })
-    expect(await invite('viewer', null)).toBe(fx.guest.id)
+    expect(await invite('viewer', null)).toEqual({ id: fx.guest.id, emailed: false })
     await fieldChanged(invite('user', null))
     const grants = await fx.t.run((ctx) =>
       ctx.db
@@ -177,7 +177,7 @@ describe('an invitation to an address whose seat is gone', () => {
       ),
     ).toBeNull()
     // one who saw no seat invites a new guest
-    expect(typeof (await invite(null))).toBe('string')
+    expect(await invite(null)).toMatchObject({ id: expect.any(String), emailed: true })
   })
 })
 

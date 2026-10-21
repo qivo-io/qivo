@@ -93,6 +93,23 @@ describe('authentication mail configuration', () => {
   )
 })
 
+describe('an authentication letter that may have gone out', () => {
+  it('stays uncertain when a refusal follows a server error', async () => {
+    vi.stubEnv('LETTERMINT_API_KEY', 'test-only-provider-token')
+    vi.stubEnv('MAIL_FROM', 'no-reply@qivo.io')
+    const answer = (status: number) => ({
+      ok: false,
+      status,
+      headers: { get: () => null },
+      json: async () => ({}),
+    })
+    const fetch = vi.fn().mockResolvedValueOnce(answer(500)).mockResolvedValueOnce(answer(401))
+    vi.stubGlobal('fetch', fetch)
+    expect(await send(letter)).toBe('uncertain')
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('the send endpoint', () => {
   const sendTo = async () => {
     vi.stubEnv('LETTERMINT_API_KEY', 'test-only-provider-token')

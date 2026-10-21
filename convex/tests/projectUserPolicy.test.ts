@@ -125,7 +125,7 @@ describe('named lead permission management', () => {
 
   it('invites to a sub-project stay on that sub-project', async () => {
     const { t, f } = await fixture()
-    const id = await as(t, f.user).mutation(api.projects.inviteGuest, {
+    const { id } = await as(t, f.user).mutation(api.projects.inviteGuest, {
       org_id: f.org.id,
       project_id: f.sub.id,
       email: 'invited@example.test',
