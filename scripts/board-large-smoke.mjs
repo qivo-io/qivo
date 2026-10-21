@@ -22,16 +22,20 @@ import { buildPage, serve } from './perf/page.mjs'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const at = process.argv.indexOf('--tasks')
 const tasks = at < 0 ? 10_000 : Number(process.argv[at + 1])
-// a Board of 300 cards or fewer mounts whole, and the checks below need slices
-if (!Number.isInteger(tasks) || tasks <= 300) {
-  console.error('[board-large] --tasks takes a whole number above 300')
+/* The checks below need a Board that mounts in slices (over 300 cards, and
+   the parents of the generated workspace are no cards of their own) with
+   cards still waiting in the first lane's To Do after its first screen:
+   500 tasks put 17 cards there, 2,000 about 68. */
+const LEAST_TASKS = 2000
+if (!Number.isInteger(tasks) || tasks < LEAST_TASKS) {
+  console.error(`[board-large] --tasks takes a whole number of ${LEAST_TASKS} or more`)
   process.exit(1)
 }
 const slow = { timeout: 120_000 }
 const log = (message) => console.log(`[board-large] ${message}`)
 // the most cards a first screen of 1000px and 500px more holds in each of
-// five status columns, at the least a card takes (MIN_CARD_PITCH)
-const FIRST_SCREEN_CARDS = 5 * Math.ceil(1500 / 70)
+// five status columns, at the least a card takes (MIN_CARD_PITCH, 63px)
+const FIRST_SCREEN_CARDS = 5 * Math.ceil(1500 / 63)
 const pending = () => !!document.querySelector('[data-board-mount="pending"]')
 
 const temporary = await mkdtemp(join(tmpdir(), 'qivo-board-large-'))
