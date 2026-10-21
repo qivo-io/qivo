@@ -114,11 +114,15 @@ describe('createMountScheduler', () => {
     await s.run()
     expect(slow.state.grown[2]).toBe(8)
     slow.unregister()
-    // free items: from the 8 it came down to, at most double per slice, to 512
+    // free items: from the 8 it came down to, slices grow as the averaged
+    // time per item falls, never more than double, up to 512
     const fast = s.list('fast', 100_000)
     await s.settle()
-    for (let n = 0; n < 8; n++) await s.run()
-    expect(fast.state.grown).toEqual([8, 16, 32, 64, 128, 256, 512, 512])
+    for (let n = 0; n < 40; n++) await s.run()
+    const grown = fast.state.grown
+    expect(grown[0]).toBe(8)
+    expect(grown.every((n, i) => i === 0 || n <= grown[i - 1] * 2)).toBe(true)
+    expect(grown.at(-1)).toBe(512)
   })
 
   it('does not take a slice that found few items left for a cheap one', async () => {

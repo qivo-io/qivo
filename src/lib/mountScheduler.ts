@@ -77,6 +77,8 @@ export function createMountScheduler({
   let observer: Observer | null = null
   let root: HTMLElement | null = null
   let size = FIRST_SLICE
+  // an item's mounting time, averaged over the slices so far
+  let perItem: number | null = null
   let scheduled = false
   // when the current frame started, as its frame callback saw it
   let frameStart = Number.NEGATIVE_INFINITY
@@ -154,16 +156,16 @@ export function createMountScheduler({
       }
     })
     const elapsed = now() - start
-    // The items this slice mounted, at the rate they took, size the next
-    // one; it at most doubles, so a slice that found few items left is not
-    // taken for a cheap one.
+    // The items this slice mounted, at the time they took, size the next
+    // one. The time per item is averaged over slices, so one slice that ran
+    // quickly, or found few items left, does not make the next one long; a
+    // slice at most doubles.
     const mounted = size - budget
-    if (mounted > 0)
-      size = Math.min(
-        MAX_SLICE,
-        size * 2,
-        Math.max(MIN_SLICE, Math.round((mounted * SLICE_MS) / Math.max(1, elapsed))),
-      )
+    if (mounted > 0) {
+      const sample = Math.max(1, elapsed) / mounted
+      perItem = perItem === null ? sample : perItem * 0.7 + sample * 0.3
+      size = Math.min(MAX_SLICE, size * 2, Math.max(MIN_SLICE, Math.round(SLICE_MS / perItem)))
+    }
     changed()
   }
 
