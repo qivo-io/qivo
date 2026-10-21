@@ -262,7 +262,6 @@ describe('organization export', () => {
       const attachmentId = uuid()
       await ctx.db.insert('issue_attachments', {
         org_id: task.org_id,
-        project_id: task.project_id,
         id: attachmentId,
         issue_id: task.id,
         name: 'evidence.txt',

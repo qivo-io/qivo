@@ -52,12 +52,12 @@ async function plantLabel(t: T, orgId: string, name: string): Promise<string> {
   return id
 }
 
-/* Assigns `labelId` to each task; `legacy` stores rows without an organization. */
-const label = (fx: Fx, labelId: string, tasks: Doc<'issues'>[], legacy = false) =>
+/* Assigns `labelId` to each task. */
+const label = (fx: Fx, labelId: string, tasks: Doc<'issues'>[]) =>
   fx.t.run(async (ctx) => {
     for (const task of tasks) {
       await ctx.db.insert('issue_labels', {
-        ...(legacy ? {} : { org_id: fx.org.id }),
+        org_id: fx.org.id,
         issue_id: task.id,
         label_id: labelId,
       })
@@ -167,7 +167,7 @@ async function mixed() {
   const starred = await plantLabel(t, fx.org.id, 'R&D*2')
   await label(fx, thermal, [bracket, stale])
   await label(fx, power, [bracket, lid])
-  await label(fx, legacy, [gasket], true)
+  await label(fx, legacy, [gasket])
   await label(fx, greek, [sign])
   await label(fx, starred, [sign, paste])
   return { fx, bracket, lid, gasket, sign, paste, stale, thermal }

@@ -105,7 +105,6 @@ async function fixture() {
     const id = uuid()
     await ctx.db.insert('issue_attachments', {
       org_id: issue.org_id,
-      project_id: issue.project_id,
       id,
       issue_id: issue.id,
       name: 'kept.txt',

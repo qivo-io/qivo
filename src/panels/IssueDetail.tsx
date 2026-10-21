@@ -721,7 +721,6 @@ function IssuePickerPopup({
               className={cn(
                 'flex w-full cursor-pointer items-center gap-2 rounded-sm border-0 bg-transparent px-2 py-1.5 text-left text-base text-text-1 hover:bg-hover',
                 on && 'font-semibold',
-                blocked && 'cursor-not-allowed opacity-50',
               )}
               onMouseEnter={(e) => {
                 e.currentTarget.style.background = 'var(--hover)'

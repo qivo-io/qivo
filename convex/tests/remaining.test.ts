@@ -229,7 +229,7 @@ describe('remaining time', () => {
     const base = { org_id: f.org.id, project_id: f.sub.id }
 
     const buried = await plantIssue(t, { ...base, status: 'done', done_at: NOW, archived_at: NOW })
-    const restored = await as(t, f.admin).mutation(api.issues.unarchive, {
+    const { issue: restored } = await as(t, f.admin).mutation(api.issues.unarchive, {
       org_id: f.org.id,
       id: buried.id,
     })
@@ -246,7 +246,7 @@ describe('remaining time', () => {
     expect(archived.archived_at).toBe(archived.updated_at)
 
     const plain = await plantIssue(t, { ...base, archived_at: NOW })
-    const back = await as(t, f.admin).mutation(api.issues.unarchive, {
+    const { issue: back } = await as(t, f.admin).mutation(api.issues.unarchive, {
       org_id: f.org.id,
       id: plain.id,
     })

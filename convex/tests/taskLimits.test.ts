@@ -51,6 +51,12 @@ import {
 } from './helpers.setup'
 import { deleteTask, itemFor } from './trash.setup'
 
+/* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
+ * declare it. */
+declare class Blob {
+  constructor(parts: string[])
+}
+
 async function refused(p: Promise<unknown>, code: RefusalCode, sentence: string): Promise<void> {
   const e = await expectRefusal(p, code)
   expect((e.data as Refusal).message).toBe(sentence)
@@ -469,7 +475,7 @@ describe('the attachment, link and label limits', () => {
           issue_id: issue.id,
           name: `scan-${i}.png`,
           size_bytes: 3,
-          storage_id: await ctx.storage.store(new Blob(['png'])),
+          storage_id: await ctx.storage.store(new Blob(['png']) as never),
           inline: i % 2 === 0,
           created_at: NOW,
         })
@@ -490,7 +496,7 @@ describe('the attachment, link and label limits', () => {
       'rule',
       ATTACHMENTS_FULL,
     )
-    const stored = await fx.t.run((ctx) => ctx.storage.store(new Blob(['late'])))
+    const stored = await fx.t.run((ctx) => ctx.storage.store(new Blob(['late']) as never))
     await refused(
       as(fx.t, fx.admin).mutation(api.files.attach, {
         org_id: fx.org.id,
