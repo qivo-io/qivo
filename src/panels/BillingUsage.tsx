@@ -1,5 +1,6 @@
 import { FieldHint, SettingsField, SettingsGroup, SettingsSection } from '@/components/settingsPage'
 import { billingBytes, billingDate, usageHints } from '@/lib/billingDisplay'
+import { projectName } from '@/lib/recordNames'
 import type { BillingUsage as BillingUsageData } from '../../convex/lib/billingTypes'
 
 /** The period line: a paid period's dates, a UTC calendar month, or the start
@@ -105,7 +106,10 @@ export function BillingUsage({
               .sort((a, b) => b.storage_bytes - a.storage_bytes)
               .map((project) => (
                 <div key={project.project_id} className="flex flex-wrap justify-between gap-2">
-                  <dt className="min-w-0 break-words text-sm">{project.name}</dt>
+                  {/* attachments belong to tasks, which live in sub-projects */}
+                  <dt className="min-w-0 break-words text-sm">
+                    {projectName({ name: project.name, type: 'project' })}
+                  </dt>
                   <dd className="text-sm text-text-2">{billingBytes(project.storage_bytes)}</dd>
                 </div>
               ))}

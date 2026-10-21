@@ -55,7 +55,7 @@ function placeOf(projectId: string): string {
   const project = P.project(projectId)
   if (!project) return ''
   const parent = project.parent ? P.project(project.parent) : undefined
-  return parent ? `${parent.name} › ${project.name}` : project.name
+  return parent ? `${P.projectName(parent)} › ${P.projectName(project)}` : P.projectName(project)
 }
 
 /** The Archived tasks page, opened on `initialProject` when it is a project
@@ -224,7 +224,8 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
 
   const searching = query !== ''
   const ended = list.nextCursor === null
-  const projectName = project ? P.project(project)?.name : undefined
+  const shown = project ? P.project(project) : undefined
+  const projectName = shown && P.projectName(shown)
   const reach = count(list.scanned)
 
   // the count line under the filters, once the first page is in

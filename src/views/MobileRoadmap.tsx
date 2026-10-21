@@ -64,11 +64,11 @@ export function MobileRoadmap({
       variant="unstyled"
       className="mobile-roadmap-row"
       onClick={() => actions.editMilestone(m.id)}
-      aria-label={`${P.canWrite(m.project) ? 'Edit' : 'View'} milestone ${m.name}`}
+      aria-label={`${P.canWrite(m.project) ? 'Edit' : 'View'} milestone ${P.milestoneLabel(m)}`}
     >
       <Icon name="diamond" size={16} color={P.MILESTONE_COLOR} />
       <span className="mobile-roadmap-row-body">
-        <strong>{m.name}</strong>
+        <strong>{P.milestoneLabel(m)}</strong>
         <span>{P.projectLabelOf(m.project)}</span>
         <span>
           {P.fmtDate(P.weekToDate(m.week))}, {P.weekNumLabel(m.week)}

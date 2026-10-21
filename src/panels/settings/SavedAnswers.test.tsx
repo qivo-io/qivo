@@ -41,10 +41,10 @@ let toast: ReturnType<typeof vi.fn<(message: string, tone?: string) => void>>
 let container: HTMLDivElement
 let root: Root
 
-/* Loads the store and pages. `crewName` and `betaName` name the Crew team
-   and the Beta milestone, so a test can store a name saved before names
-   were required. */
-async function load(crewName = 'Crew', betaName = 'Beta') {
+/* Loads the store and pages. `crewName`, `betaName` and `sensorName` name
+   the Crew team, the Beta milestone and the Luma Sensor project, so a test
+   can store a name saved before names were required. */
+async function load(crewName = 'Crew', betaName = 'Beta', sensorName = 'Luma Sensor') {
   vi.resetModules()
   const snap: Snapshot = plannerFixture()
   const org = snap.orgs[0].id
@@ -63,7 +63,7 @@ async function load(crewName = 'Crew', betaName = 'Beta') {
     type: 'meta',
     key: 'SEN',
     num: 2,
-    name: 'Luma Sensor',
+    name: sensorName,
     description: '',
     sort_order: 1,
     track_delay: true,
@@ -215,6 +215,32 @@ describe('a team saved with a blank name', () => {
     expect(toasts()).toContain(
       'Not saved. The name of a team was changed elsewhere. Your change was discarded.',
     )
+  })
+})
+
+describe('a project and milestone saved with a blank name', () => {
+  it('read as Unnamed project and Unnamed milestone in Settings and the milestone list', async () => {
+    await load('Crew', '', ' ')
+    await render(() => (
+      <pages.modals.MilestoneModal init={{ project: 'sensor' }} onClose={vi.fn()} />
+    ))
+    const row = document.querySelector('[data-milestone-row="beta"]')
+    expect(row?.textContent).toContain('Unnamed milestone')
+    expect(row?.querySelector('button')?.getAttribute('aria-label')).toBe('Edit Unnamed milestone')
+    expect(document.body.textContent).toContain('Unnamed project')
+    await render(() => (
+      <pages.project.OrgProjectsPage
+        setPage={vi.fn()}
+        onNewProject={vi.fn()}
+        onNewSubProject={vi.fn()}
+        onOpenArchivedTasks={vi.fn()}
+      />
+    ))
+    expect(document.querySelector('[data-project-row="sensor"]')?.textContent).toBe(
+      'Unnamed project',
+    )
+    await render(() => <pages.project.ProjectPage projectId="sensor" setPage={vi.fn()} />)
+    expect(document.querySelector('h1')?.textContent).toContain('Unnamed project')
   })
 })
 

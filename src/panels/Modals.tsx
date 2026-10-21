@@ -1812,7 +1812,9 @@ function ArchiveOrDeleteProjectModal({
             {listed.map((s) => (
               <div key={s.id} data-fate-subproject={s.id} className={fateRow}>
                 <Icon name="layers" size={14} className="self-center text-text-3" />
-                <span className="min-w-0 flex-1 truncate text-text-1">{s.name}</span>
+                <span className="min-w-0 flex-1 truncate text-text-1">
+                  {P.projectName({ name: s.name, type: 'project' })}
+                </span>
                 {s.archived && <span className="shrink-0 text-text-3">Archived</span>}
                 <span className="shrink-0 text-text-2">
                   {/* a count that stopped before this sub-project read none of it */}
@@ -1901,7 +1903,7 @@ function MilestoneModal({
   const list = project
     ? P.milestonesIn(project.id)
         .slice()
-        .sort((a, b) => a.week - b.week || a.name.localeCompare(b.name))
+        .sort((a, b) => a.week - b.week || P.milestoneLabel(a).localeCompare(P.milestoneLabel(b)))
     : []
   const next = list.find((m) => m.week >= P.TODAY_WEEK) ?? null
   const canAdd = canWrite && name.trim().length > 0 && !adding
@@ -1933,7 +1935,7 @@ function MilestoneModal({
       // a new milestone's name, typed and not added yet
       unsent={[!!name.trim() && 'milestone name']}
       // the shell's chip is set in mono for task keys; a project name is prose
-      badge={project && <span className="font-sans">{project.name}</span>}
+      badge={project && <span className="font-sans">{P.projectName(project)}</span>}
       onClose={onClose}
       width={600}
       footer={(close) => (
@@ -2038,8 +2040,8 @@ function MilestoneRowView({
       type="button"
       variant="ghost"
       size="icon-xs"
-      title={`Edit “${m.name}”`}
-      aria-label={`Edit ${m.name}`}
+      title={`Edit “${P.milestoneLabel(m)}”`}
+      aria-label={`Edit ${P.milestoneLabel(m)}`}
       onClick={onEdit}
       className="text-text-2 hover:text-text-1"
     >
@@ -2061,7 +2063,7 @@ function MilestoneRowView({
       <span
         className={cn('min-w-0 flex-1 truncate text-base', past ? 'text-text-2' : 'text-text-1')}
       >
-        {m.name}
+        {P.milestoneLabel(m)}
       </span>
       {mobile && edit}
       <span className={cn('flex items-center gap-3', mobile && 'basis-full pl-6')}>

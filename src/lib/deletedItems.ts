@@ -9,6 +9,7 @@
 import type { FunctionReturnType } from 'convex/server'
 import type { api } from '../../convex/_generated/api'
 import { dayInSentence, stretch, timeSpan } from './deletedTime'
+import { projectName } from './recordNames'
 
 export type DeletedList = FunctionReturnType<typeof api.deletedItems.list>
 export type DeletedRow = DeletedList['items'][number]
@@ -133,6 +134,37 @@ export function viaText(deleter: Deleter, form: 'row' | 'sentence' | 'short'): s
 export const isSubProject = (row: DeletedRow): boolean =>
   row.kind === 'project' && row.path.length > 0
 
+const topLevel = (name: string) => projectName({ name, type: 'meta' })
+const subProject = (name: string) => projectName({ name, type: 'project' })
+
+/* A task's place as shown: its top-level project, then its sub-project, or
+   its sub-project alone. */
+const taskPlace = (path: string[]): string[] =>
+  path.length === 2 ? [topLevel(path[0]), subProject(path[1])] : path.map(subProject)
+
+/** A row as the page shows it, with a project name saved blank before names
+    were required named "Unnamed project" or "Unnamed sub-project" in its
+    title and place (lib/recordNames.ts). Apply it to rows as they arrive. */
+export function shownRow(row: DeletedRow): DeletedRow {
+  if (row.kind === 'task') return { ...row, path: taskPlace(row.path) }
+  return {
+    ...row,
+    title: projectName({ name: row.title, type: isSubProject(row) ? 'project' : 'meta' }),
+    path: row.path.map(topLevel),
+  }
+}
+
+/** shownRow for a search hit. A project item's hit starts its place with
+    the parent of the item, empty for a top-level item, or with the item. */
+export function shownMatch(match: DeletedMatch): DeletedMatch {
+  if (match.item_kind === 'task') return { ...match, path: taskPlace(match.path) }
+  const [first, project] = match.path
+  if (project === undefined) return match
+  return first === ''
+    ? { ...match, path: ['', topLevel(project)] }
+    : { ...match, path: [topLevel(first), subProject(project)] }
+}
+
 /** What a row says a project item holds, after "project" or after its name:
     "with 2 sub-projects and 48 tasks", "and its 12 tasks" for a
     sub-project, or nothing for an empty one. */
@@ -173,7 +205,7 @@ export const itemName = (row: DeletedRow): string => (row.kind === 'task' ? row.
  * redacted row, which says so in its own words.
  */
 export function blockedText(blocked: BlockDetail, holder?: string): string | null {
-  const project = blocked.project ?? 'its project'
+  const project = blocked.project?.trim() || 'its project'
   switch (blocked.reason) {
     case 'view_only':
       return blocked.lead

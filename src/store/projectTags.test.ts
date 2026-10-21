@@ -121,11 +121,29 @@ describe('project labels in the store', () => {
 
   it('adds the number only where two shown projects share a name', async () => {
     const P = await boot([{ name: 'Test' }, { name: 'Test' }, { name: 'Roadmap' }])
-    expect(P.projectLabel({ id: 'p1', name: 'Test' })).toBe('Test #1')
+    expect(P.projectLabel({ id: 'p1', name: 'Test', type: 'meta' })).toBe('Test #1')
     expect(P.projectLabelOf('p2')).toBe('Test #2')
     expect(P.projectLabelOf('p3')).toBe('Roadmap')
     expect(P.projectTag('p3')).toBeNull()
     expect(P.projectLabelOf('missing')).toBe('')
+  })
+
+  /* Until 2026-10-16 a project took a blank name, and every read shows it
+     as stored. */
+  it('labels a blank name by its kind, numbered where two share it', async () => {
+    const P = await boot([
+      { name: '' },
+      { name: '  ', parent: 1 },
+      { name: '', parent: 1 },
+      { name: 'Firmware', parent: 1 },
+    ])
+    expect(P.projectLabelOf('p1')).toBe('Unnamed project')
+    expect(P.projectLabelOf('p2')).toBe('Unnamed sub-project #2')
+    expect(P.placeLabel({ project: P.project('p3')!, owner: P.project('p1') })).toBe(
+      'Unnamed project, Unnamed sub-project #3',
+    )
+    expect(P.projectName(P.project('p4')!)).toBe('Firmware')
+    expect(P.milestoneLabel({ name: ' ' })).toBe('Unnamed milestone')
   })
 
   it('names a sub-project after its project, with every shared name numbered', async () => {

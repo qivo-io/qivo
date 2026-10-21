@@ -287,14 +287,14 @@ export function ArchivedProjectsPage() {
         n.delete(r.id)
         return n
       })
-      if (ok) window.showToast?.(`Restored “${r.name}”`)
+      if (ok) window.showToast?.(`Restored “${P.projectName(r)}”`)
     })
   }
   // the window waits for the server, so a refusal leaves it open
   const del = async (r: ArchivedProjectVM, reason: string) => {
     if (!(await P.removeProject(r.id, reason))) return false
     setDeleting(null)
-    window.showToast?.(`Deleted “${r.name}”`)
+    window.showToast?.(`Deleted “${P.projectName(r)}”`)
     return true
   }
   return (
@@ -317,8 +317,8 @@ export function ArchivedProjectsPage() {
                       {r.type !== 'meta' && (
                         <span className="[margin-left:7px] [font-size:var(--fs-xs)] [font-weight:500] [color:var(--text-2)]">
                           sub-project
-                          {r.parentName && r.parent
-                            ? ` of ${P.projectLabel({ id: r.parent, name: r.parentName })}`
+                          {r.parentName !== null && r.parent
+                            ? ` of ${P.projectLabel({ id: r.parent, name: r.parentName, type: 'meta' })}`
                             : ''}
                         </span>
                       )}
@@ -340,8 +340,8 @@ export function ArchivedProjectsPage() {
                         disabled={busy.has(r.id)}
                         title={
                           r.type === 'meta' && kids.some((k) => k.withParent)
-                            ? `Restore “${r.name}” and the sub-projects archived with it`
-                            : `Restore “${r.name}”`
+                            ? `Restore “${P.projectName(r)}” and the sub-projects archived with it`
+                            : `Restore “${P.projectName(r)}”`
                         }
                         onClick={() => restore(r)}
                       >
@@ -370,7 +370,7 @@ export function ArchivedProjectsPage() {
                       <HoverTooltip
                         content={
                           k.withParent
-                            ? `Comes back when “${r.name}” is restored`
+                            ? `Comes back when “${P.projectName(r)}” is restored`
                             : 'Archived separately. Restore the project first, then restore this sub-project.'
                         }
                         key={k.id}
@@ -452,7 +452,7 @@ export function ProjectPage({
       if (P.refusePausedEdit()) return
       setRemoving(null)
       P.archiveProject(shown.id)
-      window.showToast?.(`Archived “${shown.name}”`)
+      window.showToast?.(`Archived “${P.projectName(shown)}”`)
       onProjectGone?.(shown.parent || null)
       setPage('projects-archived')
     }
@@ -465,7 +465,7 @@ export function ProjectPage({
         return false
       }
       setRemoving(null)
-      window.showToast?.(`Deleted “${shown.name}”`)
+      window.showToast?.(`Deleted “${P.projectName(shown)}”`)
       onProjectGone?.(parent)
       // a sub-project falls back to its project; a project back to the list it
       // was opened from (never to some other project the caller may not see)
@@ -565,13 +565,13 @@ function ProjectSettingsFields({
           reason: an archived or unreadable parent leaves `parentMeta` null, so
           the fallback is the list rather than a page that would not render. */}
       <BackLink
-        to={parentMeta ? parentMeta.name : 'Projects'}
+        to={parentMeta ? P.projectName(parentMeta) : 'Projects'}
         onClick={() => onBackPage(parentMeta ? `project:${parentMeta.id}` : 'projects')}
       />
       <PageTitle
         sub={isMeta ? undefined : 'Controlled by its own lead; permissions can be shared.'}
       >
-        {proj.name}
+        {P.projectName(proj)}
         <span className="[font-size:var(--fs-sm)] [font-weight:500] [color:var(--text-2)] [margin-left:10px]">
           {isMeta ? 'Project' : 'Sub-project'}
         </span>
@@ -733,7 +733,7 @@ function ProjectSettingsFields({
                 type="button"
                 key={sp.id}
                 onClick={() => setPage(`project:${sp.id}`)}
-                title={`Open settings for ${sp.name}`}
+                title={`Open settings for ${P.projectName(sp)}`}
                 className="[display:flex] [align-items:center] [gap:8px] [padding:8px] [border-radius:var(--r-md)] [text-align:left] [border:1px_solid_var(--border)] [background:var(--surface-1)] [color:var(--text-1)] [cursor:pointer] [transition:background-color_var(--dur-fast)_var(--ease-out),_border-color_var(--dur-fast)_var(--ease-out)] [font-family:var(--sans)]"
                 onMouseEnter={(e) => {
                   e.currentTarget.style.background = 'var(--hover)'
@@ -826,7 +826,9 @@ function ProjectSettingsFields({
                     const ok = await P.inviteToProject(proj.id, inviteEmail, grantRole)
                     setInviting(false)
                     if (ok) {
-                      window.showToast?.(`${inviteEmail.trim()} was added to “${proj.name}”`)
+                      window.showToast?.(
+                        `${inviteEmail.trim()} was added to “${P.projectName(proj)}”`,
+                      )
                       setInviteEmail('')
                     }
                   }}

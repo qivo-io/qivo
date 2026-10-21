@@ -465,7 +465,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
       // still how you find the item it changed. The project names are new
       // here because they are now ON the row: what you can read, you can find.
       const hay = [g.issueTitle, g.issueLabel, secondLine(g)]
-        .concat(place ? place.parts.map((p) => p.name) : [])
+        .concat(place ? place.parts.map((p) => P.projectName(p)) : [])
         .concat(
           g.items.map((m) => {
             const actor = m.actor ? P.user(m.actor) : null

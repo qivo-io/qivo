@@ -102,6 +102,7 @@ import { hasUnsaved, holdUnsaved, leaveDeliberately } from '../lib/leaveGuard'
 import { watchLocalDay } from '../lib/localDay'
 import { pauseSentence } from '../lib/noticeText'
 import { desktopNotify } from '../lib/notify'
+import { milestoneLabel, projectName, teamLabel } from '../lib/recordNames'
 import { matchesAllWords, taskSearchText } from '../lib/search'
 import { type SavePause, syncStatus } from '../lib/syncStatus'
 import type { ToastTone } from '../lib/toasts'
@@ -3101,7 +3102,11 @@ function rebuild(now = new Date()) {
         const level = levelOnProject(s, undefined, shapeOf) ?? (viaSubProject(s) ? 'viewer' : null)
         return level ? [shapeArchivedProject(s, meta, level === 'lead')] : []
       })
-      .sort((a, b) => (b.archivedAt || 0) - (a.archivedAt || 0) || a.name.localeCompare(b.name)),
+      .sort(
+        (a, b) =>
+          (b.archivedAt || 0) - (a.archivedAt || 0) ||
+          PLANNER.projectName(a).localeCompare(PLANNER.projectName(b)),
+      ),
   )
   P.projectTags = keep(P.projectTags, duplicateNameTags(P.projects, P.archivedProjects))
 
@@ -4241,11 +4246,13 @@ export const PLANNER = {
   /** "#4" when another project shown alongside this one has the same name. */
   projectTag: (id: string | null | undefined): string | null =>
     (id && PLANNER.projectTags.get(id)) || null,
+  projectName,
   /** A project's name for plain-text places such as select options, with its
       number when the name is shared ("Test #4"). */
-  projectLabel: (p: { id: string; name: string }): string => {
+  projectLabel: (p: { id: string; name: string; type: ProjectVM['type'] }): string => {
     const tag = PLANNER.projectTag(p.id)
-    return tag ? `${p.name} ${tag}` : p.name
+    const name = PLANNER.projectName(p)
+    return tag ? `${name} ${tag}` : name
   },
   /** projectLabel for a project id; '' when the project is not loaded. */
   projectLabelOf: (id: string | null | undefined): string => {
@@ -4268,9 +4275,8 @@ export const PLANNER = {
       : PLANNER.projectLabel(project),
   user: (id: string | null | undefined): UserVM | undefined => findUser(PLANNER.users, id),
   teamById: (id: string | null | undefined): TeamVM | undefined => findTeam(PLANNER.teams, id),
-  /** A team's name for display, or "Unnamed team" for a team saved with a
-      blank name before names were required. */
-  teamLabel: (t: { name: string }): string => t.name.trim() || 'Unnamed team',
+  teamLabel,
+  milestoneLabel,
   metaOf: (pid: string | null | undefined): ProjectVM | null => {
     const p = PLANNER.project(pid)
     if (!p) return null
@@ -4444,7 +4450,7 @@ export const PLANNER = {
       mine: false,
       only: null,
       id: p.id,
-      name: p.name,
+      name: PLANNER.projectName(p),
       proj: p as ProjectVM | null,
       isMeta,
       metas: meta ? [meta] : [],
@@ -4907,7 +4913,7 @@ export const PLANNER = {
   guestProjects: (profileId: string) =>
     PLANNER.projects
       .filter((p) => !!p.access?.[profileId])
-      .map((p) => ({ id: p.id, name: p.name, level: p.access?.[profileId] })),
+      .map((p) => ({ id: p.id, name: PLANNER.projectName(p), level: p.access?.[profileId] })),
   /* URL support (0081). An org-prefixed link names the organization by slug;
      these two turn that segment into the handle/project the app threads. */
   orgBySlug: (slug: string) =>
@@ -5556,7 +5562,11 @@ export const PLANNER = {
     return data.map((r) => ({
       issueUuid: r.issue_id || null,
       projectId: r.project_id || null,
-      projectName: r.project_name || null,
+      // a task lives in a sub-project
+      projectName:
+        r.project_name === null
+          ? null
+          : PLANNER.projectName({ name: r.project_name, type: 'project' }),
       start: isoToWeek(r.start_week),
       end: isoToWeek(r.end_week),
       remaining: r.remaining != null ? Number(r.remaining) : 0,
