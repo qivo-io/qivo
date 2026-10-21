@@ -8,7 +8,7 @@
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { byId, usedMoreThan } from './db'
-import { badRequest, rule } from './functions'
+import { badRequest } from './functions'
 import { type OrgProjectView, orgProjectView } from './visibility'
 import type { Shown } from './workingSet'
 
@@ -97,6 +97,10 @@ export const HISTORY_PAGE_MAX = 500
  * history ends or the read passes `room`. Tests may lower it. */
 export const HISTORY_ROOM = { room: 0.7 }
 
+/* The fewest rows one read of a page asks for, so a page a few rows short of
+ * HISTORY_PAGE_MAX reads on past rows it leaves out in batches. */
+const HISTORY_BATCH_MIN = 100
+
 /** The refusal of a REST or MCP page that ended before it found a row the
  * caller receives, because an empty answer would claim the history ends.
  * Only thousands of rows in a row that name projects or tasks the caller
@@ -134,8 +138,9 @@ export async function historyAnchor(
  * of the answer returns the next `n` rows, fewer only where the history
  * ends. Rows that share a _creationTime are passed by count, as
  * model/comments.ts newestComments passes comments; the ones that share the
- * anchor's are read once, whole, to find where it stands among them. */
-async function olderRows(
+ * anchor's are read once, whole, to find where it stands among them.
+ * Exported for the tests of those ties, which convex-test cannot make. */
+export async function olderRows(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
   before: Doc<'activity_events'> | undefined,
@@ -215,9 +220,9 @@ export type HistoryPage = {
  * until the read passes NAMED_TASK_ROOM. The page ends before a row naming a
  * task it had no room to look up, and before the read passes HISTORY_ROOM,
  * so it reads on past rows it leaves out but never past a row it could not
- * check. `next` says where the page before it starts, which is the page's
- * first row unless it read rows it left out. It refuses with HISTORY_HIDDEN
- * only when its very first row could not be checked.
+ * check. Its first row is checked whatever the room, so it always moves on.
+ * `next` says where the page before it starts, which is the page's first row
+ * unless it read rows it left out.
  */
 export async function taskHistoryPage(
   ctx: QueryCtx,
@@ -227,25 +232,26 @@ export async function taskHistoryPage(
 ): Promise<HistoryPage> {
   const read = await olderRows(ctx, issue, before)
   const admin = me.org_role === 'admin'
-  let sees: ((ev: Doc<'activity_events'>) => Promise<Sight>) | undefined
+  let sees: ((ev: Doc<'activity_events'>, anyRoom: boolean) => Promise<Sight>) | undefined
   const newest: Doc<'activity_events'>[] = []
   // the oldest row read so far, received or not
   let passed: Doc<'activity_events'> | undefined
-  const page = (earlier: boolean): HistoryPage => {
-    const rows = newest.reverse()
-    if (!earlier) return { rows, earlier }
-    if (passed === undefined) throw rule(HISTORY_HIDDEN)
-    return { rows, earlier, next: passed }
-  }
+  const page = (earlier: boolean): HistoryPage =>
+    earlier
+      ? { rows: newest.reverse(), earlier, next: passed }
+      : { rows: newest.reverse(), earlier }
   for (;;) {
-    // one row past the page tells whether the history goes on
-    const n = HISTORY_PAGE_MAX - newest.length + 1
+    // One row past the page tells whether the history goes on. A page short
+    // of a few rows still reads in batches, so rows it leaves out cost few reads.
+    const n = Math.max(HISTORY_PAGE_MAX - newest.length + 1, HISTORY_BATCH_MIN)
     const rows = await read(n)
     for (const ev of rows) {
       if (newest.length === HISTORY_PAGE_MAX) return page(true)
       sees ??= admin ? async () => 'yes' : await memberSight(ctx, me, issue)
-      const sight = await sees(ev)
-      // the next page checks it with room of its own
+      // The first row is checked whatever the room, so every page moves on.
+      // A later one the read has no room to check ends the page, and the
+      // next page checks it with room of its own.
+      const sight = await sees(ev, passed === undefined)
       if (sight === 'unchecked') return page(true)
       passed = ev
       if (sight === 'yes') newest.push(admin ? ev : withoutLegacySubtaskCount(ev))
@@ -275,18 +281,22 @@ export async function receivedRows(
 /* Whether member `me` receives a row about `issue` (memberSeesActivity),
  * with the organization's projects read once and each named task looked up
  * once, until the read passes NAMED_TASK_ROOM, past which a row naming a task
- * not looked up yet is 'unchecked'. */
+ * not looked up yet is 'unchecked'. With `anyRoom` it looks a row's tasks up
+ * whatever the room, at most two tasks, for the first row a page reads. */
 async function memberSight(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   issue: Doc<'issues'>,
-): Promise<(ev: Doc<'activity_events'>) => Promise<Sight>> {
+): Promise<(ev: Doc<'activity_events'>, anyRoom?: boolean) => Promise<Sight>> {
   const view = await orgProjectView(ctx, me)
   const projects = new Map<number, Promise<string | undefined>>()
-  const taskProject = async (num: number): Promise<string | undefined | typeof UNCHECKED> => {
+  const taskProject = async (
+    num: number,
+    anyRoom: boolean,
+  ): Promise<string | undefined | typeof UNCHECKED> => {
     let found = projects.get(num)
     if (found === undefined) {
-      if (await usedMoreThan(ctx, NAMED_TASK_ROOM.room)) return UNCHECKED
+      if (!anyRoom && (await usedMoreThan(ctx, NAMED_TASK_ROOM.room))) return UNCHECKED
       found = ctx.db
         .query('issues')
         .withIndex('by_org_num', (q) => q.eq('org_id', issue.org_id).eq('num', num))
@@ -296,6 +306,10 @@ async function memberSight(
     }
     return await found
   }
-  return (ev) =>
-    memberSeesActivity(ev, { view, inWorkingSet: (taskId) => taskId === issue.id, taskProject })
+  return (ev, anyRoom = false) =>
+    memberSeesActivity(ev, {
+      view,
+      inWorkingSet: (taskId) => taskId === issue.id,
+      taskProject: (num) => taskProject(num, anyRoom),
+    })
 }

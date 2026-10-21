@@ -1990,11 +1990,14 @@ function IssueDetail({
               ? [<UnreadDivider key="unread" />, row]
               : [row]
           })}
-          {P.commentsLoaded && P.commentsFailure === 'none' && spine.length === 0 && (
-            <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic]">
-              {actFilter === 'comments' ? 'No comments yet.' : 'No activity yet.'}
-            </div>
-          )}
+          {P.commentsLoaded &&
+            P.commentsFailure === 'none' &&
+            spine.length === 0 &&
+            earlier === 'none' && (
+              <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic]">
+                {actFilter === 'comments' ? 'No comments yet.' : 'No activity yet.'}
+              </div>
+            )}
           {mark.place === 'tail' && <UnreadDivider key="unread" place="tail" note={tailNote} />}
           {/* a failed thread never passes for an empty one. The comments
               that did load stay, and this row closes the thread. */}

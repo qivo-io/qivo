@@ -389,9 +389,72 @@ describe('earlier comments in the task window', { timeout: 20_000 }, () => {
     await deliver({ comments: range(1, 3), earlier: false, events: page(30), events_earlier: true })
     await deliver({ comments: range(1, 3), earlier: false, events: page(31), events_earlier: true })
     expect(thread().filter((r) => r === 'event')).toHaveLength(6)
-    // the next page is asked where the live page says the history goes on
+    // the next page is still asked before the oldest change the first page read
     await press('Show earlier activity')
-    expect(histories.map((h) => h.before)).toEqual(['event-31'])
+    expect(histories.map((h) => h.before)).toEqual(['event-30'])
+  })
+
+  it('keeps an earlier page that answers while the live page slides', async () => {
+    await load()
+    await open()
+    await showAll()
+    const page = (from: number) => Array.from({ length: 5 }, (_, i) => change(from + i))
+    await deliver({ comments: range(1, 3), earlier: false, events: page(30), events_earlier: true })
+    await press('Show earlier activity')
+    await deliver({ comments: range(1, 3), earlier: false, events: page(31), events_earlier: true })
+    await act(async () =>
+      histories[0].resolve({ events: [change(20), change(25)], earlier: false, next: null }),
+    )
+    expect(thread().filter((r) => r === 'event')).toHaveLength(8)
+    expect(control()).toBeNull()
+  })
+
+  it('keeps the loaded history when an empty live page is delivered again', async () => {
+    await load()
+    await open()
+    await showAll()
+    const empty = {
+      comments: range(1, 3),
+      earlier: false,
+      events: [],
+      events_earlier: true,
+      events_next: 'hidden-row',
+    }
+    await deliver(empty)
+    await press('Show earlier activity')
+    await act(async () => histories[0].resolve({ events: [change(2)], earlier: false, next: null }))
+    expect(thread().filter((r) => r === 'event')).toHaveLength(1)
+    // a comment re-runs the thread, which answers the same page
+    await deliver({ ...empty, comments: range(1, 4) })
+    expect(thread().filter((r) => r === 'event')).toHaveLength(1)
+    expect(control()).toBeNull()
+  })
+
+  it('keeps the loaded history when the live page reaches back into it', async () => {
+    await load()
+    await open()
+    await showAll()
+    const span = (from: number, n: number) => Array.from({ length: n }, (_, i) => change(from + i))
+    await deliver({
+      comments: range(1, 3),
+      earlier: false,
+      events: span(30, 3),
+      events_earlier: true,
+    })
+    await press('Show earlier activity')
+    await act(async () =>
+      histories[0].resolve({ events: span(20, 10), earlier: true, next: 'event-20' }),
+    )
+    // the live page now reads further back, into the page loaded
+    await deliver({
+      comments: range(1, 3),
+      earlier: false,
+      events: span(27, 6),
+      events_earlier: true,
+    })
+    expect(thread().filter((r) => r === 'event')).toHaveLength(13)
+    await press('Show earlier activity')
+    expect(histories.map((h) => h.before)).toEqual(['event-30', 'event-20'])
   })
 
   it('pages on past a page of changes the person does not receive', async () => {

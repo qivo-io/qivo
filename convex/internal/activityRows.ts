@@ -24,8 +24,10 @@
  *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
  *     development npx convex run internal/activityRows:run
  *
- * Remove this module and the schema's `seq` once every deployment has run it
- * and `check` answers 0 numbered and 0 unlisted rows. */
+ * Remove this module and the schema's `seq` once every deployment has run it.
+ * Counts are per page, so add them up over the calls of a run: after one, a
+ * deployment answers 0 numbered rows and as many unlisted rows as unparsed
+ * ones, the rows whose wording no writer produced. */
 
 import type { PaginationResult } from 'convex/server'
 import { v } from 'convex/values'
@@ -35,9 +37,10 @@ import { ISSUE_PREFIX } from '../lib/taskRefs'
 
 /* Rows per call, and the most bytes one call reads, as Convex counts a
  * document's size. A row's label and detail have no cap, so a page also
- * ends early on bytes, at most one row past them, which leaves room under
- * Convex's 16 MiB read limit. Tests lower them. */
-export const ACTIVITY_ROWS_PAGE = { rows: 4_000, bytes: 8 * 1024 * 1024 }
+ * ends early on bytes, at most one row past them. `run` patches the rows it
+ * read, and each patch reads its row again, so a call reads at most about
+ * twice this, well under Convex's 16 MiB read limit. Tests lower them. */
+export const ACTIVITY_ROWS_PAGE = { rows: 4_000, bytes: 4 * 1024 * 1024 }
 
 /* The task numbers a task row stored before named_task_nums existed names
  * by key, read from its text: a parent change written by model/issues.ts

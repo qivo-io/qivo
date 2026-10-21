@@ -320,12 +320,10 @@ let olderEvents: Row<'activity_events'>[] = []
 let historyStart = false
 let historyLoad: 'idle' | 'loading' | 'failed' = 'idle'
 /* The row the next earlier page of history is read before: the `next` of
-   the last page loaded, or of the live page while none is (null when the
-   history start is loaded). A page can skip rows the person does not
-   receive, so this can be a row the thread does not show. */
+   the last page loaded, or of the live page the history started from (null
+   when the history start is loaded). A page can skip rows the person does
+   not receive, so this can be a row the thread does not show. */
 let historyNext: string | null = null
-/* Whether olderEvents holds an earlier page, not only rows that slid out. */
-let olderPagesLoaded = false
 /* The watched thread's comments older than the live window, oldest first in
    thread order. They are earlier pages (P.loadEarlierComments) and comments
    that left the window as newer ones arrived. Server truth like
@@ -433,10 +431,13 @@ function receiveThread(
    earlier holds the whole history. A page whose first row the last one
    held slid forward as new rows arrived: the rows before that one left at
    its old end and move to olderEvents, so the history a reader loaded
-   stays. Any other page, one that no longer meets the last because more
-   rows arrived between two deliveries than it holds, or one that gained
-   rows at its old end because what the person sees changed, starts the
-   history over from the page. */
+   stays. A page whose first row is in olderEvents reaches back into what
+   was loaded, and one that again holds no row repeats the last. Neither
+   moves historyNext, which stays older than every row they hold. Any other
+   page, one that no longer meets the last because more rows arrived
+   between two deliveries than it holds, or one that gained rows at its old
+   end because what the person sees changed, starts the history over from
+   the page. */
 function receiveHistory(
   page: {
     events: Row<'activity_events'>[]
@@ -448,18 +449,18 @@ function receiveHistory(
   const prev = eventsSnap
   const restart = () => {
     olderEvents = []
-    olderPagesLoaded = false
     historyStart = !page.events_earlier
     historyNext = page.events_next ?? null
   }
   const head = page.events[0]
   const at = head ? prev.findIndex((r) => r.id === head.id) : -1
-  if (first || !page.events_earlier || at === -1) restart()
-  else {
+  const back = head ? olderEvents.findIndex((r) => r.id === head.id) : -1
+  if (first || !page.events_earlier) restart()
+  else if (at !== -1) {
     const known = new Set(olderEvents.map((r) => r.id))
     olderEvents = [...olderEvents, ...prev.slice(0, at).filter((r) => !known.has(r.id))]
-    if (!olderPagesLoaded) historyNext = page.events_next ?? null
-  }
+  } else if (back !== -1) olderEvents = olderEvents.slice(0, back)
+  else if (head !== undefined || prev.length > 0) restart()
   eventsSnap = page.events
 }
 
@@ -579,7 +580,6 @@ function subscribeThread(issueUuid: string, orgId: string) {
     eventsSnap = []
     olderComments = []
     olderEvents = []
-    olderPagesLoaded = false
     historyNext = null
     threadStart = true
     historyStart = true
@@ -6213,7 +6213,6 @@ export const PLANNER = {
     eventsSnap = []
     olderComments = []
     olderEvents = []
-    olderPagesLoaded = false
     historyNext = null
     acceptedCommentChanges.clear()
     threadStart = false
@@ -6344,7 +6343,6 @@ export const PLANNER = {
     if (historyNext === before) {
       const known = new Set([...olderEvents, ...eventsSnap].map((r) => r.id))
       olderEvents = [...anchor(page.events.filter((r) => !known.has(r.id))), ...olderEvents]
-      olderPagesLoaded = true
       historyNext = page.next
       if (!page.earlier) historyStart = true
     }
@@ -8555,7 +8553,6 @@ export function disposeDemoStore() {
   eventsSnap = []
   olderComments = []
   olderEvents = []
-  olderPagesLoaded = false
   historyNext = null
   acceptedCommentChanges.clear()
   threadStart = false

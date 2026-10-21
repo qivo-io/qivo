@@ -25,6 +25,7 @@ import {
   HISTORY_ROOM,
   historyAnchor,
   NAMED_TASK_ROOM,
+  olderRows,
   taskHistoryPage,
 } from '../lib/activityVisibility'
 import { type ActivityEntry, insertActivity, issueChanges, logActivity } from '../model/activity'
@@ -441,6 +442,84 @@ describe('per-subject history, kept whole and read a page at a time', () => {
     const rest = await page(first.rows[0].id)
     expect(rest.rows.map((row) => row.verb)).toEqual(['created', 'linked'])
     expect(rest.earlier).toBe(false)
+    // a page whose first row is the link checks it whatever the room
+    NAMED_TASK_ROOM.room = 0
+    let fromLink: Awaited<ReturnType<typeof page>>
+    try {
+      fromLink = await page(first.rows[0].id)
+    } finally {
+      NAMED_TASK_ROOM.room = room
+    }
+    expect(fromLink.rows.map((row) => row.verb)).toEqual(['created', 'linked'])
+    expect(fromLink.earlier).toBe(false)
+  })
+
+  it('reads rows that share a _creationTime once each, from any row among them', async () => {
+    // convex-test never repeats a _creationTime, so the index is a fake that
+    // orders rows as by_target does: _creationTime, then the document id
+    const rows = Array.from(
+      { length: 13 },
+      (_, n) =>
+        ({
+          _id: `r${String(n).padStart(2, '0')}`,
+          _creationTime: 1_000 + Math.floor(n / 3),
+          id: `row-${n}`,
+        }) as unknown as Doc<'activity_events'>,
+    )
+    const newestFirst = [...rows].reverse()
+    type Range = { eq?: number; lt?: number; lte?: number }
+    const builder = (range: Range) => ({
+      eq: (field: string, value: number | string) =>
+        builder(field === '_creationTime' ? { ...range, eq: value as number } : range),
+      lt: (_: string, value: number) => builder({ ...range, lt: value }),
+      lte: (_: string, value: number) => builder({ ...range, lte: value }),
+      range,
+    })
+    const ctx = {
+      db: {
+        query: () => ({
+          withIndex: (_: string, build: (q: ReturnType<typeof builder>) => { range: Range }) => {
+            const { eq, lt, lte } = build(builder({})).range
+            const hit = newestFirst.filter(
+              (r) =>
+                (eq === undefined || r._creationTime === eq) &&
+                (lt === undefined || r._creationTime < lt) &&
+                (lte === undefined || r._creationTime <= lte),
+            )
+            return {
+              order: () => ({
+                take: async (n: number) => hit.slice(0, n),
+                collect: async () => hit,
+              }),
+            }
+          },
+        }),
+      },
+    } as unknown as Parameters<typeof olderRows>[0]
+    const issue = { org_id: 'o', id: 't' } as Doc<'issues'>
+    const ids = newestFirst.map((r) => r.id)
+    for (const size of [1, 2, 3, 4, 5]) {
+      // in reads of `size` from the newest
+      const read = await olderRows(ctx, issue, undefined)
+      const seen: string[] = []
+      for (;;) {
+        const got = await read(size)
+        seen.push(...got.map((r) => r.id))
+        if (got.length < size) break
+      }
+      expect(seen, `reads of ${size}`).toEqual(ids)
+      // and from every row before it, as a page's `before`
+      for (const [i, before] of newestFirst.entries()) {
+        const from = await olderRows(ctx, issue, before)
+        const rest: string[] = []
+        for (;;) {
+          const got = await from(size)
+          rest.push(...got.map((r) => r.id))
+          if (got.length < size) break
+        }
+        expect(rest, `before ${before.id} in reads of ${size}`).toEqual(ids.slice(i + 1))
+      }
+    }
   })
 
   it('a Deleted items delete of a task with 200 subtasks stays within limits', async () => {
