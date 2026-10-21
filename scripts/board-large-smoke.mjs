@@ -24,9 +24,10 @@ const at = process.argv.indexOf('--tasks')
 const tasks = at < 0 ? 10_000 : Number(process.argv[at + 1])
 /* The checks below need a Board that mounts in slices (over 300 cards, and
    the parents of the generated workspace are no cards of their own) with
-   cards still waiting in the first lane's To Do after its first screen:
-   500 tasks put 17 cards there, 2,000 about 68. */
-const LEAST_TASKS = 2000
+   cards still waiting in the first lane's To Do when they start. Cells near
+   the view mount first, so at 2,000 tasks that cell is often whole by then;
+   3,000 tasks put about 100 cards there. */
+const LEAST_TASKS = 3000
 if (!Number.isInteger(tasks) || tasks < LEAST_TASKS) {
   console.error(`[board-large] --tasks takes a whole number of ${LEAST_TASKS} or more`)
   process.exit(1)
@@ -127,7 +128,8 @@ try {
   log(`the first commit held ${firstCommit} cards and the Board is busy`)
 
   // Tab from the last mounted card of a cell into its waiting space lands
-  // on the next card.
+  // on the next card's first control: a task's title, or a parent card's
+  // heading.
   const lane = page.locator('.board-lane').first()
   const todo = lane.locator('[data-board-cell][data-status="todo"]')
   const progress = lane.locator('[data-board-cell][data-status="progress"]')
@@ -135,18 +137,22 @@ try {
     if (!cell.querySelector('[data-board-pending]')) return -1
     const keys = cell.querySelectorAll('[data-focus-key]')
     keys[keys.length - 1].focus()
-    return cell.querySelectorAll('[data-card]').length
+    return cell.querySelectorAll('.board-card').length
   })
   assert.ok(before > 0, "The first lane's To Do must still wait for cards")
   await page.keyboard.press('Tab')
   assert.deepEqual(
-    await todo.evaluate((cell) => ({
-      index: [...cell.querySelectorAll('[data-card]')].indexOf(
-        document.activeElement?.closest('[data-card]'),
-      ),
-      key: document.activeElement?.getAttribute('data-focus-key'),
-    })),
-    { index: before, key: 'title' },
+    await todo.evaluate((cell) => {
+      const card = document.activeElement?.closest('.board-card')
+      const first = [...(card?.querySelectorAll('[data-focus-key]') ?? [])].find(
+        (element) => element.tabIndex >= 0,
+      )
+      return {
+        index: [...cell.querySelectorAll('.board-card')].indexOf(card),
+        first: !!first && first === document.activeElement,
+      }
+    }),
+    { index: before, first: true },
     'Tab into the waiting space must land on the next card',
   )
   log('Tab through the waiting space lands on the next card')
