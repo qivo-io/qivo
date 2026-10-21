@@ -33,15 +33,17 @@ const KEYED = {
   messages: (r: Snapshot['messages'][number]) => r.id,
 }
 /** The row sections kept as lists in delivery order, and their natural keys.
-    A hidden task's load row has no task id, so it is keyed by its owner and
-    its place among that owner's hidden rows. */
+    A hidden task's load row has no task id, so a load row is keyed by its
+    task or, hidden, by its owner, then its place among the rows of that key
+    (keysOf). */
 const LISTED = {
   teamMembers: (r: Snapshot['teamMembers'][number]) => `${r.team_id}:${r.profile_id}`,
   access: (r: Snapshot['access'][number]) => `${r.project_id}:${r.profile_id}`,
   teamAccess: (r: Snapshot['teamAccess'][number]) => `${r.project_id}:${r.team_id}`,
   issueLabels: (r: Snapshot['issueLabels'][number]) => `${r.issue_id}:${r.label_id}`,
   issueSubs: (r: Snapshot['issueSubs'][number]) => `${r.issue_id}:${r.profile_id}`,
-  orgLoad: (r: Snapshot['orgLoad'][number]) => r.issue_id ?? `#${r.owner_id}`,
+  orgLoad: (r: Snapshot['orgLoad'][number]) =>
+    r.issue_id === null ? `hidden:${r.owner_id}` : `task:${r.issue_id}`,
 }
 
 /** Whether two rows of a section have the same key, by its fields. Two
@@ -127,13 +129,15 @@ export function sameRow(a: object, b: object): boolean {
   return count === 0
 }
 
-/** The keys of `list` in order, read with `keyOf`. A hidden load row
-    (key `#owner`) takes its place among the owner's hidden rows. */
-function keysOf<R>(list: readonly R[], keyOf: (row: R) => string): string[] {
+/** The keys of `list` in order, read with `keyOf`. With `counted`, each
+    key also takes its place among the rows of that key, as an owner's
+    hidden load rows share one (orgLoad). Ids stay as they are otherwise,
+    whatever they hold. */
+function keysOf<R>(list: readonly R[], keyOf: (row: R) => string, counted: boolean): string[] {
+  if (!counted) return list.map(keyOf)
   const seen = new Map<string, number>()
   return list.map((row) => {
     const key = keyOf(row)
-    if (!key.startsWith('#')) return key
     const n = seen.get(key) ?? 0
     seen.set(key, n + 1)
     return `${key}#${n}`
@@ -210,7 +214,9 @@ export function createWorkspaceBase() {
     // keys' fields tell without building every key
     const same = SAME_KEY[name] as (a: object, b: object) => boolean
     const sameKeys = next.length === prev.length && next.every((row, i) => same(prev[i], row))
-    const keys = sameKeys ? state.keys : keysOf(next, keyOf as (row: object) => string)
+    const keys = sameKeys
+      ? state.keys
+      : keysOf(next, keyOf as (row: object) => string, name === 'orgLoad')
     let list: object[]
     let changed = false
     const added: string[] = []

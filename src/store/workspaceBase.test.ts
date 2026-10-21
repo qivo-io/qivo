@@ -157,4 +157,17 @@ describe('the workspace base', () => {
     base.apply()
     expect(base.flags('hiddenSubtaskParents')).toBe(off)
   })
+
+  it('keeps an id that starts with # as it is', () => {
+    const base = createWorkspaceBase()
+    // an id made before ids had to be uuids
+    const snap = snapshotOf(['#legacy-task', 'b'])
+    base.stage(structuredClone(snap))
+    base.apply()
+    expect(base.map('issues').get('#legacy-task')?.id).toBe('#legacy-task')
+    expect(base.stagedTask('#legacy-task')?.id).toBe('#legacy-task')
+    snap.issues[0].title = 'Renamed'
+    base.stage(structuredClone(snap))
+    expect([...(base.apply()?.issues?.keys() ?? [])]).toEqual(['#legacy-task'])
+  })
 })
