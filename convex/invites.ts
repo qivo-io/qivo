@@ -17,7 +17,7 @@
  * app's, whose rows carry channel 'app'.
  * adminPeople.orgDetail shows the newest one for the seat's current address. The
  * app's sends are capped per organization, because any org admin can trigger
- * them and they leave from the shared no-reply inbox. Past the cap, people
+ * them and they leave from the shared no-reply address. Past the cap, people
  * can still join by creating an account with the invited address. */
 
 import { type Infer, v } from 'convex/values'

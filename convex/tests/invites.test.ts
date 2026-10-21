@@ -25,8 +25,8 @@ const letters = (): Letter[] => fetch.mock.calls.map(([, init]) => JSON.parse(in
 
 beforeEach(() => {
   vi.useFakeTimers()
-  vi.stubEnv('AGENTMAIL_API_KEY', 'test-only-provider-key')
-  vi.stubEnv('AGENTMAIL_INBOX', 'no-reply@qivo.io')
+  vi.stubEnv('LETTERMINT_API_KEY', 'test-only-provider-token')
+  vi.stubEnv('MAIL_FROM', 'no-reply@qivo.io')
   fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ message_id: 'm' }) })
   vi.stubGlobal('fetch', fetch)
 })
@@ -393,7 +393,7 @@ describe('invitations from the app', () => {
   })
 
   it('records an unsent letter when mail is not configured', async () => {
-    vi.stubEnv('AGENTMAIL_API_KEY', '')
+    vi.stubEnv('LETTERMINT_API_KEY', '')
     const t = newAuthT()
     const f = await withOrg(t)
     await as(t, f.admin).mutation(api.profiles.create, person(f.org.id, 'anna@example.se'))

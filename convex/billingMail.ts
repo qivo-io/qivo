@@ -78,7 +78,13 @@ export const send = internalAction({
     if (!billingEnabled()) return null
     const delivery = await ctx.runQuery(readyRef, { key: args.notice_key })
     if (!delivery) return null
-    if (await sendBillingReminder({ ...delivery, notice_key: args.notice_key }))
+    if (
+      await sendBillingReminder({
+        ...delivery,
+        notice_key: args.notice_key,
+        attempt: args.attempt ?? 0,
+      })
+    )
       await ctx.runMutation(sentRef, { key: args.notice_key })
     else if ((args.attempt ?? 0) < 24)
       await ctx.scheduler.runAfter(60 * 60_000, sendRef, {

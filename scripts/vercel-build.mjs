@@ -88,6 +88,29 @@ function setPreviewSiteUrl(env) {
   }
 }
 
+/* One bare address, the rule of ADDR in convex/lib/mailConfig.ts, which
+ * the mail code applies to MAIL_FROM. vercel-build.test.mjs keeps the two in
+ * step, since this script cannot import TypeScript. */
+const ONE_ADDRESS =
+  /^[^\s@,;:<>"'\\]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i
+export const isOneAddress = (s) => s.length <= 254 && ONE_ADDRESS.test(s)
+
+/* Production sends sign-up, password reset, invitation, billing and deletion
+ * mail, so this refuses a production build, before any function is pushed,
+ * unless its backend has the Lettermint token and a MAIL_FROM of one address.
+ * Staging, previews and the demo send none. `read` returns one trimmed
+ * backend value, which is only tested and never printed. */
+export function requireProductionBackendEnv(env, read) {
+  if (env.QIVO_ENVIRONMENT !== 'production') return
+  const token = read('LETTERMINT_API_KEY')
+  const from = read('MAIL_FROM')
+  const missing = [!token && 'LETTERMINT_API_KEY', !from && 'MAIL_FROM'].filter(Boolean)
+  if (missing.length > 0)
+    throw new Error(`Set backend ${missing.join(' and ')} before releasing to production.`)
+  if (!isOneAddress(from))
+    throw new Error('Set backend MAIL_FROM to one bare address before releasing to production.')
+}
+
 /* The origin the website build writes into canonical links and the sitemap:
  * the branch preview's own host, or the stable environment's app origin,
  * which main() has just checked against the backend's SITE_URL. */
@@ -108,17 +131,20 @@ function main(env) {
   } else {
     if (deploymentName(env) !== env.QIVO_CONVEX_DEPLOYMENT)
       throw new Error('The injected Convex URL does not match the configured backend.')
+    // a missing variable prints nothing on stdout, so it reads as ''
+    const backendEnv = (name) =>
+      execFileSync('npx', ['convex', 'env', 'get', name], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim()
     for (const [name, expected] of [
       ['QIVO_ENVIRONMENT', env.QIVO_ENVIRONMENT],
       ['SITE_URL', env.QIVO_APP_ORIGIN],
     ]) {
-      const actual = execFileSync('npx', ['convex', 'env', 'get', name], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-      }).trim()
-      if (!expected || actual !== expected)
+      if (!expected || backendEnv(name) !== expected)
         throw new Error(`Backend ${name} does not match the build.`)
     }
+    requireProductionBackendEnv(env, backendEnv)
   }
   execFileSync('npm', ['run', 'build'], {
     stdio: 'inherit',

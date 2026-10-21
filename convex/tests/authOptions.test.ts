@@ -17,8 +17,8 @@ function mailerCtx() {
 }
 
 beforeEach(() => {
-  vi.stubEnv('AGENTMAIL_API_KEY', 'test-only-mail-key')
-  vi.stubEnv('AGENTMAIL_INBOX', 'sender@example.test')
+  vi.stubEnv('LETTERMINT_API_KEY', 'test-only-mail-token')
+  vi.stubEnv('MAIL_FROM', 'sender@example.test')
 })
 afterEach(() => vi.unstubAllEnvs())
 
