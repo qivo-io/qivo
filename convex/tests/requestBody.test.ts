@@ -315,8 +315,12 @@ describe('early answers', () => {
 })
 
 describe('discardBody', () => {
-  // discardBody reads only the request's body stream
-  const requestOf = (body: ReadableStream<Uint8Array>) => ({ body }) as unknown as Request
+  // discardBody reads only the request's body stream and Content-Length
+  const requestOf = (body: ReadableStream<Uint8Array>, length: number | null = null) =>
+    ({
+      body,
+      headers: { get: (name: string) => (name === 'Content-Length' ? length : null) },
+    }) as unknown as Request
 
   it('gives up on a body that stops arriving and cancels it', async () => {
     let cancelled = false
@@ -332,6 +336,24 @@ describe('discardBody', () => {
     await discardBody(requestOf(stalled), 50)
     expect(Date.now() - started).toBeLessThan(1_000)
     expect(cancelled).toBe(true)
+  })
+
+  it('cancels at once a body declared longer than it would read', async () => {
+    let pulls = 0
+    let cancelled = false
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1
+        controller.enqueue(new Uint8Array(64 * 1024))
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+    await discardBody(requestOf(endless, DISCARD_MAX_BYTES + 1), 60_000)
+    expect(cancelled).toBe(true)
+    // the stream fills its queue once before anyone reads
+    expect(pulls).toBeLessThan(3)
   })
 
   it('leaves a body that a reader still holds alone', async () => {

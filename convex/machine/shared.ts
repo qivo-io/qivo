@@ -264,13 +264,19 @@ export const DISCARD_MAX_BYTES = 32 * 1024 * 1024
  * connection or answer 502 in its place, so every REST, MCP and upload
  * answer waits for the body first, even one decided before reading it. It
  * stops after `waitMs` or DISCARD_MAX_BYTES, so a slow or endless upload
- * cannot hold the action, and such a client may then still see a reset. A
- * body a reader still holds (one cancelled after a timeout) is left alone.
+ * cannot hold the action, and such a client may then still see a reset. It
+ * does not start on a body declared longer than DISCARD_MAX_BYTES, which it
+ * could not finish, and leaves alone a body a reader still holds (one
+ * cancelled after a timeout).
  */
 export async function discardBody(request: Request, waitMs = DISCARD_MS): Promise<void> {
   const body = (request as Request & { body: BodyStream | null }).body
   if (body === null || body.locked) return
   const reader = body.getReader()
+  if (Number(request.headers.get('Content-Length')) > DISCARD_MAX_BYTES) {
+    await reader.cancel().catch(() => {})
+    return
+  }
   let timer: unknown
   const late = new Promise<void>((resolve) => {
     timer = setTimeout(resolve, waitMs)
