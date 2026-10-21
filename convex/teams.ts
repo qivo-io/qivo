@@ -7,7 +7,8 @@
  *   teams_update            is_org_admin OR is_team_leader(id) (0081:219-220)
  *   delete_team             0081:458-471 — 'team not found' /
  *                           'only organization admins can delete teams'
- *   teams_last_guard        0078 — 'cannot delete the last team' (model/orgs)
+ *   teams_last_guard        0078 — 'cannot delete the last team' (model/orgs,
+ *                           checked in model/teams.ts deleteTeamCore)
  *   tm_insert/update/delete admin-or-leader; grantee same org, never a guest
  *                           (0081:223-251); a leader is never a viewer
  *                           (0102:334-359 — WITH CHECK, no sentence: forbidden)
@@ -29,15 +30,12 @@ import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import { byId } from './lib/db'
-import { accessRemovalMutation, adminMutation, notFound, orgMutation, rule } from './lib/functions'
-import { deleteTeamDeep } from './model/cascade'
-import { DELETES } from './model/expected'
-import { assertNotLastTeam } from './model/orgs'
+import { accessRemovalMutation, adminMutation, notFound, orgMutation } from './lib/functions'
 import { vHeldTasks } from './model/projectAccess'
 import {
   addTeamMemberCore,
-  assertTeamExpected,
   createTeamCore,
+  deleteTeamCore,
   removeTeamMemberCore,
   setTeamLeaderCore,
   updateTeamCore,
@@ -87,21 +85,30 @@ export const update = orgMutation({
 })
 
 /* ------------------------------------------------------------- deleteDeep
- * P.removeTeam → rpc delete_team. Guard order is the SQL's: fence, admin
- * sentence, then the last-team trigger. The cascade (model/cascade) preserves
- * every project; legacy team_id values are cleared, and team
- * access grants are removed. Nothing re-homes, labels survive, and activity
- * rows keep their team_id. The deleted team's membership rows then reach
- * organization admins only. No narration (the old client wrote no event). */
+ * P.removeAccess for a deleted team → rpc delete_team. Guard order is the
+ * SQL's: fence, admin sentence, then the last-team trigger. The cascade
+ * (model/cascade) preserves every project; legacy team_id values are
+ * cleared, and team access grants are removed. Nothing re-homes, labels
+ * survive, and activity rows keep their team_id. The deleted team's
+ * membership rows then reach organization admins only. The open tasks the
+ * members can no longer see are settled by `on_held_tasks` (absent means
+ * 'leave') in the same write (model/teams.ts deleteTeamCore), so a refused
+ * reassignment or Viewer grant leaves the team as it was. The deletion
+ * writes no activity row (the old client wrote no event). */
 export const deleteDeep = orgMutation({
-  args: { id: v.string(), expected: v.optional(vTeamExpected) },
-  handler: async (ctx, { id, expected }) => {
-    const now = new Date().toISOString()
-    const team = await myTeam(ctx, id)
-    if (ctx.me.org_role !== 'admin') throw rule('only organization admins can delete teams')
-    await assertNotLastTeam(ctx, team)
-    await assertTeamExpected(ctx, ctx.me, team, expected, DELETES)
-    await deleteTeamDeep(ctx, { team, actor: ctx.me, now })
+  args: {
+    id: v.string(),
+    on_held_tasks: v.optional(vHeldTasks),
+    expected: v.optional(vTeamExpected),
+  },
+  handler: async (ctx, { id, on_held_tasks, expected }) => {
+    await deleteTeamCore(ctx, {
+      me: ctx.me,
+      team: await myTeam(ctx, id),
+      held: on_held_tasks ?? 'leave',
+      expected,
+      now: new Date().toISOString(),
+    })
     return null
   },
 })

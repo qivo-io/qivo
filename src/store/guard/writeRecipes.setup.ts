@@ -1067,10 +1067,10 @@ export const recipes: Recipe[] = [
   },
   {
     mutation: 'teams:deleteDeep',
-    mutator: 'removeTeam',
+    mutator: 'removeAtOnce',
     what: 'a deleted team',
     pause: 'P',
-    act: (P) => P.removeTeam('team-b'),
+    act: (P) => P.removeAccess({ kind: 'deleteTeam', teamId: 'team-b' }, { keep: true }, []),
     truth: (snap) => {
       snap.teams = [snap.teams[0]]
     },

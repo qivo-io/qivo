@@ -3651,13 +3651,14 @@ function removalRefusal(change: AccessRemoval): string | null {
   if (!block || !(block.readOnly || block.refused)) return null
   return change.kind === 'deleteTeam' || actorIn(orgId)?.orgRole !== 'admin' ? block.message : null
 }
-/* Removes a person's or a team's grant on one project, or a member from a
-   team, in one server write that settles the tasks it hides by `choice`
-   (projects.removeAccess, teams.removeMember), and paints the outcome at
-   once; a refusal takes the paint away again. With nobody losing sight of a
-   task, the access just goes. Resolves whether the server accepted it. */
+/* Removes a person's or a team's grant on one project, a member from a team,
+   or a whole team, in one server write that settles the tasks it hides by
+   `choice` (projects.removeAccess, teams.removeMember, teams.deleteDeep), and
+   paints the outcome at once; a refusal takes the paint away again. With
+   nobody losing sight of a task, the access just goes. Resolves whether the
+   server accepted it. */
 function removeAtOnce(
-  change: Extract<AccessRemoval, { kind: 'userGrant' | 'teamGrant' | 'teamMember' }>,
+  change: AccessRemoval,
   choice: { keep: true } | { to: string | null },
   items: Holder[],
   stays: string,
@@ -3709,10 +3710,15 @@ function removeAtOnce(
         rows.teamAccess = rows.teamAccess.filter(
           (a) => !(a.project_id === change.projectId && a.team_id === change.teamId),
         )
-      } else {
+      } else if (change.kind === 'teamMember') {
         rows.teamMembers = rows.teamMembers.filter(
           (m) => !(m.team_id === change.teamId && m.profile_id === change.userId),
         )
+      } else {
+        // the team's memberships and grants go with it; projects and work stay
+        rows.teamMembers = rows.teamMembers.filter((m) => m.team_id !== change.teamId)
+        rows.teamAccess = rows.teamAccess.filter((a) => a.team_id !== change.teamId)
+        rows.teams.delete(change.teamId)
       }
       for (const grant of grants.values()) {
         const has = rows.access.some(
@@ -3731,9 +3737,23 @@ function removeAtOnce(
     const settling = errData(error).reason === 'held_tasks'
     if (settling && typeof held === 'object') {
       toast(`${stays}, because not every task could be reassigned.`, 'error')
-    } else if (settling && held === 'keep_as_viewer' && change.kind === 'teamMember') {
+    } else if (
+      settling &&
+      held === 'keep_as_viewer' &&
+      (change.kind === 'teamMember' || change.kind === 'deleteTeam')
+    ) {
       toast(`${stays}, because not every Viewer grant could be saved.`, 'error')
     } else toastWriteError(error)
+  }
+  if (change.kind === 'deleteTeam') {
+    const team = rows.teams.get(change.teamId)
+    if (!team) return Promise.resolve(false)
+    return send(
+      api.teams.deleteDeep,
+      { org_id: orgId, id: change.teamId, on_held_tasks: held },
+      view,
+      { onError, over: overOf('teams', team, ['name']), notice: { deletes: true } },
+    )
   }
   return change.kind === 'teamMember'
     ? send(
@@ -4859,13 +4879,11 @@ export const PLANNER = {
   /* Apply the removal with the choice made in the removal window, for the
      `items` the person reviewed there: keep their holders as Viewers (a
      direct Viewer grant each on the listed projects), or hand every item to
-     `to` (null clears it). A person's or a team's grant, or a member leaving
-     a team, goes in one server write that settles the tasks too
-     (projects.removeAccess, teams.removeMember, the rules REST and MCP use),
-     so a refusal changes nothing. For a deleted team, the access goes once
-     the server has accepted every reassignment and every Viewer grant. If one
-     is refused the team stays, so nobody is left holding a task they cannot
-     see. Resolves whether the server accepted the removal. */
+     `to` (null clears it). A person's or a team's grant, a member leaving a
+     team, or a deleted team goes in one server write that settles the tasks
+     too (projects.removeAccess, teams.removeMember, teams.deleteDeep), so a
+     refusal changes nothing. Resolves whether the server accepted the
+     removal. */
   removeAccess: async (
     change: AccessRemoval,
     choice: { keep: true } | { to: string | null },
@@ -4884,52 +4902,15 @@ export const PLANNER = {
           : change.kind === 'teamMember'
             ? `${person} stays in the ${named}`
             : `The ${named} stays`
-    if (change.kind !== 'deleteTeam') return removeAtOnce(change, choice, items, stays)
-    // the server refuses to delete the last team: say so before anything is saved
-    if (team && !PLANNER.canDeleteTeam(change.teamId)) {
+    // the server refuses to delete the last team: say so before anything is sent
+    if (change.kind === 'deleteTeam' && team && !PLANNER.canDeleteTeam(change.teamId)) {
       toast(`The ${named} can't be deleted, because it is the organization's last team.`, 'error')
       return false
     }
-    if ('to' in choice) {
-      const to = choice.to
-      const saved = await Promise.all(
-        items.map((i) =>
-          PLANNER.updateIssue(
-            i.task.id,
-            i.role === 'assignee' ? { assignee: to } : { reviewer: to },
-          ),
-        ),
-      )
-      if (saved.includes(false)) {
-        // a read-only refusal has said why itself (noteReadOnlyRefusal)
-        if (!removalRefusal(change))
-          toast(`${stays}, because not every task could be reassigned.`, 'error')
-        return false
-      }
-    }
-    const people = [...new Set(items.map((i) => i.uid))]
-    const keep = 'keep' in choice && people.length > 0
-    // a Viewer grant on each project for each listed person who would
-    // otherwise not see it, saved before the team changes
-    const level = levelAfter(change)
-    if (keep) {
-      const projects = [...new Set(items.map((i) => keptOn(change, i.task)))]
-      const saved = await Promise.all(
-        projects.flatMap((pid) =>
-          people
-            .filter((uid) => !level(uid, pid))
-            .map((uid) => PLANNER.setProjectAccess(pid, uid, 'viewer')),
-        ),
-      )
-      if (saved.includes(false)) {
-        if (!removalRefusal(change))
-          toast(`${stays}, because not every Viewer grant could be saved.`, 'error')
-        return false
-      }
-    }
-    const deleted = await PLANNER.removeTeam(change.teamId)
-    if (deleted && team) toast(`Team “${PLANNER.teamLabel(team)}” deleted`, 'success')
-    return deleted
+    const removed = await removeAtOnce(change, choice, items, stays)
+    if (removed && change.kind === 'deleteTeam' && team)
+      toast(`Team “${PLANNER.teamLabel(team)}” deleted`, 'success')
+    return removed
   },
   /* Whether the access a removal takes away is still there: someone else may
      have removed it while the removal window was open. */
@@ -7495,29 +7476,6 @@ export const PLANNER = {
     )
   },
 
-  /* Resolves whether the server deleted the team; false for a missing team
-     or the last team of its organization, which the server refuses. */
-  removeTeam: (id: string): Promise<boolean> => {
-    if (!PLANNER.canDeleteTeam(id)) return Promise.resolve(false)
-    const team = rows.teams.get(id)
-    if (!team || refusePausedEdit()) return Promise.resolve(false)
-    // Projects are independent of teams. Deleting a team removes only its
-    // memberships and permission grants; project rows and their work remain.
-    // labels are org-wide since 0078 — deleting a team leaves them alone
-    const view: View = {
-      workspace: () => {
-        rows.issueLabels = rows.issueLabels.filter((il) => rows.issues.has(il.issue_id))
-        rows.issueSubs = rows.issueSubs.filter((s) => rows.issues.has(s.issue_id))
-        rows.teamMembers = rows.teamMembers.filter((m) => m.team_id !== id)
-        rows.teamAccess = rows.teamAccess.filter((a) => a.team_id !== id)
-        rows.teams.delete(id)
-      },
-    }
-    return send(api.teams.deleteDeep, { org_id: team.org_id, id }, view, {
-      over: overOf('teams', team, ['name']),
-      notice: { deletes: true },
-    })
-  },
   /** Whether a team exists and is not the last one in its organization.
       Other organizations' teams in this client do not count. */
   canDeleteTeam: (id: string): boolean => {

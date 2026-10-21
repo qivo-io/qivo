@@ -9,7 +9,8 @@
  *      nobody.
  *   4. Removing a member settles the open tasks they can no longer see
  *      (leave, keep_as_viewer, reassign_to) in one transaction, for REST,
- *      MCP and the app alike.
+ *      MCP and the app alike, and deleting a team in the app settles its
+ *      members' tasks the same way.
  *   5. The routes over HTTP with a personal token, which refuse a body field
  *      or an argument the change does not take. */
 /// <reference types="vite/client" />
@@ -713,6 +714,130 @@ describe('removing a member settles their open tasks', () => {
     await remove()
     expect(await membership(fx.t, fx.team.id, fx.emil.id)).toBeNull()
     expect(await grantsOf(fx.t, fx.emil.id)).toEqual([])
+    expect((await taskRow(fx.t, fx.open.id))?.assignee_id).toBe(fx.emil.id)
+  })
+})
+
+/* The app's deletion of Hardware as the admin. `held` is 'keep_as_viewer'
+ * or the user to hand the tasks to (null for nobody); absent leaves them. */
+function deleteHardware(fx: Fx, held?: string | null) {
+  return as(fx.t, fx.admin).mutation(api.teams.deleteDeep, {
+    org_id: fx.org.id,
+    id: fx.team.id,
+    ...(held === undefined
+      ? {}
+      : { on_held_tasks: held === 'keep_as_viewer' ? held : { reassign_to: held } }),
+  })
+}
+
+/* What deleting Hardware takes away: the team, its memberships and shares. */
+const hardwareLeft = (fx: Fx) =>
+  fx.t.run(async (ctx) => ({
+    team: await ctx.db
+      .query('teams')
+      .withIndex('by_uuid', (q) => q.eq('id', fx.team.id))
+      .unique(),
+    members: (
+      await ctx.db
+        .query('team_members')
+        .withIndex('by_team', (q) => q.eq('team_id', fx.team.id))
+        .collect()
+    ).length,
+    shares: (
+      await ctx.db
+        .query('project_team_access')
+        .withIndex('by_team', (q) => q.eq('team_id', fx.team.id))
+        .collect()
+    ).length,
+  }))
+
+describe("deleting a team settles its members' open tasks", () => {
+  it('leaves the tasks by default, and narrates nothing', async () => {
+    const fx = await setup()
+    await plantTeam(fx, fx.org.id, 'Design')
+    await deleteHardware(fx)
+    expect(await hardwareLeft(fx)).toEqual({ team: null, members: 0, shares: 0 })
+    expect((await taskRow(fx.t, fx.open.id))?.assignee_id).toBe(fx.emil.id)
+    expect(await grantsOf(fx.t, fx.emil.id)).toEqual([])
+    expect(await activityFor(fx.t, fx.org.id)).toEqual([])
+  })
+
+  it('keeps the members as Viewers of the project the team shared, in the same write', async () => {
+    const fx = await setup()
+    await plantTeam(fx, fx.org.id, 'Design')
+    await deleteHardware(fx, 'keep_as_viewer')
+    expect(await hardwareLeft(fx)).toEqual({ team: null, members: 0, shares: 0 })
+    // the team shared TBED, which showed the FW tasks
+    expect(await grantsOf(fx.t, fx.emil.id)).toEqual([[fx.meta.id, 'viewer']])
+    expect((await taskRow(fx.t, fx.open.id))?.assignee_id).toBe(fx.emil.id)
+    expect(
+      (await activityFor(fx.t, fx.org.id)).map((e) => [e.verb, e.target_id, e.detail]),
+    ).toEqual([['changed access on', fx.meta.id, undefined]])
+  })
+
+  it('keeps the Viewer grant on a sub-project the team shared itself, read before its shares go', async () => {
+    const fx = await setup()
+    await plantTeam(fx, fx.org.id, 'Design')
+    await fx.t.run(async (ctx) => {
+      await ctx.db.insert('project_team_access', {
+        project_id: fx.sub.id,
+        team_id: fx.team.id,
+        level: 'user',
+      })
+      const share = await ctx.db
+        .query('project_team_access')
+        .withIndex('by_project_team', (q) =>
+          q.eq('project_id', fx.meta.id).eq('team_id', fx.team.id),
+        )
+        .unique()
+      if (share !== null) await ctx.db.delete(share._id)
+    })
+    await deleteHardware(fx, 'keep_as_viewer')
+    expect(await grantsOf(fx.t, fx.emil.id)).toEqual([[fx.sub.id, 'viewer']])
+  })
+
+  it('hands the tasks over, or keeps the team and every task when one cannot be handed over', async () => {
+    const fx = await setup()
+    await plantTeam(fx, fx.org.id, 'Design')
+    await refused(
+      deleteHardware(fx, fx.viewer.id),
+      'rule',
+      'a task can only be assigned to an active user with Edit permission or higher on its project',
+    )
+    // nor to the member who loses sight of them
+    const e = await expectRefusal(deleteHardware(fx, fx.emil.id), 'rule')
+    expect((e.data as Refusal).reason).toBe('held_tasks')
+    expect(await hardwareLeft(fx)).toMatchObject({ members: 3, shares: 1 })
+    expect((await hardwareLeft(fx)).team).not.toBeNull()
+    expect((await taskRow(fx.t, fx.open.id))?.assignee_id).toBe(fx.emil.id)
+    expect((await taskRow(fx.t, fx.reviewing.id))?.reviewer_id).toBe(fx.emil.id)
+    await deleteHardware(fx, fx.pia.id)
+    expect(await hardwareLeft(fx)).toEqual({ team: null, members: 0, shares: 0 })
+    expect((await taskRow(fx.t, fx.open.id))?.assignee_id).toBe(fx.pia.id)
+    expect((await taskRow(fx.t, fx.reviewing.id))?.reviewer_id).toBe(fx.pia.id)
+    expect((await taskRow(fx.t, fx.done.id))?.assignee_id).toBe(fx.emil.id)
+    // Unassigned clears them instead
+    const fy = await setup()
+    await plantTeam(fy, fy.org.id, 'Design')
+    await deleteHardware(fy, null)
+    expect((await taskRow(fy.t, fy.open.id))?.assignee_id).toBeUndefined()
+  })
+
+  it('refuses the last team and anyone but an admin before anything is settled', async () => {
+    const fx = await setup()
+    await refused(deleteHardware(fx, fx.pia.id), 'rule', 'cannot delete the last team')
+    await plantTeam(fx, fx.org.id, 'Design')
+    // the fixture's user leads Hardware and TBED but is no organization admin
+    await refused(
+      as(fx.t, fx.user).mutation(api.teams.deleteDeep, {
+        org_id: fx.org.id,
+        id: fx.team.id,
+        on_held_tasks: { reassign_to: fx.pia.id },
+      }),
+      'rule',
+      'only organization admins can delete teams',
+    )
+    expect((await hardwareLeft(fx)).team).not.toBeNull()
     expect((await taskRow(fx.t, fx.open.id))?.assignee_id).toBe(fx.emil.id)
   })
 })

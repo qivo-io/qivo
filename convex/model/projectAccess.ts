@@ -16,8 +16,8 @@
  * not archived, whose active assignee, or whose reviewer when the task has no
  * subtasks, could see them before and cannot after. The caller chooses what
  * happens to them, and the removal and that choice land in one transaction or
- * not at all (removeAndSettle). Removing a team member (model/teams.ts)
- * settles the member's tasks through the same function. While billing or a
+ * not at all (removeAndSettle). Removing a team member and deleting a team
+ * (model/teams.ts) settle the members' tasks through the same function. While billing or a
  * pending deletion makes the organization read-only, an organization admin
  * can still remove access, in the app and over REST and MCP, but only by
  * leaving the tasks, because the other choices write more. */
@@ -387,9 +387,9 @@ async function removeAndFindLost(
   return { lost, orgProjects }
 }
 
-/* The people a removal can take access from: the person, or every member of
- * the team. */
-async function peopleOf(
+/** The people a removal can take access from: the person, or every member of
+ * the team in its organization. */
+export async function peopleOf(
   ctx: QueryCtx,
   subject: AccessSubject,
 ): Promise<Map<string, Doc<'profiles'>>> {
@@ -484,8 +484,8 @@ export type Settlement = Omit<AccessRemoval, 'removed'> & { viewer_grants: Doc<'
  * reassignTooLarge, which blames its size rather than the tasks. Any refusal
  * throws, so the removal and its settlement land together or not at all, and
  * one while settling the tasks carries HELD_TASKS_REFUSED. Project grant
- * removal and team member removal (model/teams.ts) both run through this, as
- * the app, REST and MCP do.
+ * removal, team member removal and team deletion (model/teams.ts) all run
+ * through this.
  *
  * An organization admin's removal passes the read-only gate of a billing
  * pause or a pending deletion (lib/functions.ts accessRemovalMutation,

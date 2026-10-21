@@ -477,14 +477,45 @@ describe('removing someone who has work in the project', () => {
     expect(P.levelOn(work, 'dan')).toBe('user')
     expect(P.levelOn('specs', 'dan')).toBe('viewer')
     expect(P.levelOn(work, 'ann')).toBe('viewer')
-    expect(P.levelOn('specs', 'ann')).toBe('viewer')
-    // one grant per write, so none can drop a grant someone else added
-    expect(requests.map((r) => [r.name, r.args.id, r.args.user_id, r.args.level])).toEqual([
-      ['projects:setAccess', work, 'ann', 'viewer'],
-      ['projects:setAccess', 'specs', 'ann', 'viewer'],
-      ['projects:setAccess', 'specs', 'dan', 'viewer'],
-      ['teams:deleteDeep', 'crew', undefined, undefined],
+    // each person keeps sight of the projects that hold their own tasks
+    expect(P.levelOn('specs', 'ann')).toBeNull()
+    expect(P.teams.map((t) => t.id)).not.toContain('crew')
+    // the server gives the Viewer grants and deletes the team in one write
+    expect(requests).toEqual([
+      {
+        name: 'teams:deleteDeep',
+        args: {
+          org_id: expect.any(String),
+          id: 'crew',
+          on_held_tasks: 'keep_as_viewer',
+          expected: { name: 'Crew' },
+        },
+      },
     ])
+  })
+
+  it('keeps the team and every task when the server refuses to settle them', async () => {
+    await load((snap, task) => {
+      inPlan(false)(snap, task)
+      snap.teams.push({ ...snap.teams[0], id: 'other', name: 'Other' })
+    })
+    refused.add('crew')
+    const all = P.accessRemoval(deleteCrew)
+    expect(await P.removeAccess(deleteCrew, { to: 'dan' }, all.items)).toBe(false)
+    expect(vm('t4').assignee).toBe('ann')
+    expect(P.teams.map((t) => t.id)).toContain('crew')
+    expect(window.showToast).toHaveBeenLastCalledWith(
+      'The Crew team stays, because not every task could be reassigned.',
+      'error',
+    )
+    expect(await P.removeAccess(deleteCrew, { keep: true }, all.items)).toBe(false)
+    expect(P.project('plan')?.access?.ann).toBeUndefined()
+    expect(P.user('ann')?.teams).toEqual(['crew'])
+    expect(window.showToast).toHaveBeenLastCalledWith(
+      'The Crew team stays, because not every Viewer grant could be saved.',
+      'error',
+    )
+    expect(requests.map((r) => r.name)).toEqual(['teams:deleteDeep', 'teams:deleteDeep'])
   })
 
   it('blames no Viewer grant when the server refuses a team deletion as read-only, and refuses the next one up front', async () => {
@@ -498,7 +529,7 @@ describe('removing someone who has work in the project', () => {
       reason: 'billing_required',
       message: 'This organization is read-only.',
     })
-    for (const id of [work, 'plan', 'specs']) refused.add(id)
+    refused.add('crew')
     const all = P.accessRemoval(deleteCrew)
     expect(P.startRemoval(deleteCrew)).toBe(true)
     expect(await P.removeAccess(deleteCrew, { keep: true }, all.items)).toBe(false)
@@ -510,7 +541,7 @@ describe('removing someone who has work in the project', () => {
     expect(P.startRemoval(deleteCrew)).toBe(false)
     expect(window.showToast).toHaveBeenLastCalledWith('This organization is read-only.', 'error')
     expect(P.teams.some((t) => t.id === 'crew')).toBe(true)
-    expect(requests.map((r) => r.name)).toEqual(['projects:setAccess'])
+    expect(requests.map((r) => r.name)).toEqual(['teams:deleteDeep'])
   })
 
   it('saves nothing when the team to delete is the last one', async () => {
@@ -581,15 +612,20 @@ describe('removing someone who has work in the project', () => {
     expect(P.removalPending(deleteCrew)).toBe(true)
   })
 
-  it('reassigns the tasks, then deletes the team', async () => {
+  it('reassigns the tasks and deletes the team in one server write', async () => {
     // the last team cannot be deleted
     await load((snap) => snap.teams.push({ ...snap.teams[0], id: 'other', name: 'Other' }))
     const all = P.accessRemoval(deleteCrew)
     expect(held(all)).toEqual([['t4', 'ann', 'assignee']])
-    expect(await P.removeAccess(deleteCrew, { to: 'dan' }, all.items)).toBe(true)
-    expect(requests.map((r) => r.name)).toEqual(['issues:update', 'teams:deleteDeep'])
+    const deleted = P.removeAccess(deleteCrew, { to: 'dan' }, all.items)
+    // painted at once
     expect(vm('t4').assignee).toBe('dan')
     expect(P.teams.map((t) => t.id)).not.toContain('crew')
+    expect(await deleted).toBe(true)
+    expect(requests.map((r) => [r.name, r.args.on_held_tasks])).toEqual([
+      ['teams:deleteDeep', { reassign_to: 'dan' }],
+    ])
+    expect(window.showToast).toHaveBeenLastCalledWith('Team “Crew” deleted', 'success')
   })
 
   it('asks an admin first, and removes at once with a notice for a leader without project authority', async () => {

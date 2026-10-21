@@ -2,8 +2,9 @@
  * (model/messages.ts):
  *
  *   1. An access removal that reassigns its held tasks
- *      (model/projectAccess.ts removeAndSettle) stays inside Convex's limits
- *      for one transaction up to REASSIGN_MAX tasks. Its followers hear from
+ *      (model/projectAccess.ts removeAndSettle), deleting a team included,
+ *      stays inside Convex's limits for one transaction up to REASSIGN_MAX
+ *      tasks. Its followers hear from
  *      background steps (NotifyPreload.deferFollowers), so their number costs
  *      the removal nothing. It refuses more tasks, or fewer that fill the
  *      transaction (REASSIGN_ROOM), without blaming the tasks, and suggests
@@ -172,6 +173,22 @@ const removeEmil = (fx: Crowd, to: string | null) =>
     on_held_tasks: { reassign_to: to },
   })
 
+/* The app's deletion of Hardware, handing its members' tasks to `to`. */
+const deleteHardware = (fx: Crowd, to: string | null) =>
+  as(fx.t, fx.admin).mutation(api.teams.deleteDeep, {
+    org_id: fx.org.id,
+    id: fx.team.id,
+    on_held_tasks: { reassign_to: to },
+  })
+
+const hardware = (fx: Crowd) =>
+  fx.t.run((ctx) =>
+    ctx.db
+      .query('teams')
+      .withIndex('by_uuid', (q) => q.eq('id', fx.team.id))
+      .unique(),
+  )
+
 const membership = (fx: Crowd) =>
   fx.t.run((ctx) =>
     ctx.db
@@ -232,6 +249,33 @@ describe('reassigning the tasks of an access removal', () => {
       on_held_tasks: 'leave',
     })
     expect(await membership(fx)).toBeNull()
+  })
+
+  it(`deletes a team and hands over ${REASSIGN_MAX} tasks inside one transaction's limits`, async () => {
+    const fx = await crowded(REASSIGN_MAX)
+    await deleteHardware(fx, fx.leo.id)
+    expect(await hardware(fx)).toBeNull()
+    // Leo takes every role a Hardware member held
+    const inHardware = new Set([
+      fx.emil.id,
+      ...fx.crowd.filter((_, i) => i % 2 === 0).map((p) => p.id),
+    ])
+    expect(await holders(fx)).toEqual(
+      fx.tasks.map((task) => [
+        inHardware.has(task.assignee_id ?? '') ? fx.leo.id : (task.assignee_id ?? null),
+        task.reviewer_id === undefined ? null : fx.leo.id,
+      ]),
+    )
+  })
+
+  it(`refuses to delete a team over ${REASSIGN_MAX} tasks, and changes nothing`, async () => {
+    const fx = await crowded(REASSIGN_MAX + 1)
+    const before = await holders(fx)
+    const e = await expectRefusal(deleteHardware(fx, fx.leo.id), 'rule')
+    expect((e.data as Refusal).message).toBe(reassignTooLarge(true))
+    expect(await hardware(fx)).not.toBeNull()
+    expect(await membership(fx)).not.toBeNull()
+    expect(await holders(fx)).toEqual(before)
   })
 
   it('refuses a project grant removal above the cap too, keeping the grant', async () => {

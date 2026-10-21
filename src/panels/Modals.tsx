@@ -1128,9 +1128,7 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
                 Reviewer roles move to the same person.
                 {/* the server's fixed cap; its room for one request cannot be
                     known here, so only the count is checked */}
-                {/* deleting a team saves each task on its own, so no cap */}
-                {!deleting &&
-                  count > REASSIGN_MAX &&
+                {count > REASSIGN_MAX &&
                   ` One removal reassigns at most ${REASSIGN_MAX} tasks, so ${canKeep ? `keep ${names.length === 1 ? `${names[0].split(' ')[0]} as a Viewer` : 'them as Viewers'} or ` : ''}reassign some of ${these} first.`}
               </span>
             </span>
