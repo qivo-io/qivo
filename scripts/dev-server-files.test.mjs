@@ -1,7 +1,15 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { createServer, loadConfigFromFile, resolveConfig } from 'vite'
+import { build, createServer, loadConfigFromFile, resolveConfig } from 'vite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { devServerFiles, refuseLinkedFiles } from './dev-server-files.mjs'
 
@@ -133,6 +141,35 @@ describe('dev server files', () => {
   it('serves sources, public files and links to allowed files', async () => {
     for (const url of ['/src/main.js', '/src/main', '/src/alias.js', '/src/alias', '/logo.txt'])
       expect([url, (await fetch(`${origin}${url}`)).status]).toEqual([url, 200])
+  })
+
+  it('refuses a build whose public directory links to a refused file', async () => {
+    const site = join(parent, 'site')
+    const output = join(parent, 'out')
+    mkdirSync(join(site, 'public', 'nested'), { recursive: true })
+    mkdirSync(join(site, 'dev-temp'))
+    writeFileSync(join(site, 'index.html'), '<p>site</p>')
+    writeFileSync(join(site, 'logo.txt'), 'logo')
+    writeFileSync(join(site, 'dev-temp', 'notes.txt'), 'SECRET')
+    symlinkSync(join(site, 'logo.txt'), join(site, 'public', 'logo.txt'))
+    const run = () =>
+      build({
+        configFile: false,
+        root: site,
+        logLevel: 'silent',
+        plugins: [refuseLinkedFiles()],
+        server: devServerFiles(site),
+        build: { outDir: output, emptyOutDir: true },
+      })
+    // a link to an allowed file is copied as before
+    await run()
+    expect(readFileSync(join(output, 'logo.txt'), 'utf8')).toBe('logo')
+    for (const link of ['public/nested/notes.txt', 'public/local']) {
+      const target = link.endsWith('local') ? 'dev-temp' : 'dev-temp/notes.txt'
+      symlinkSync(join(site, target), join(site, link))
+      await expect(run()).rejects.toThrow(`links to files the dev server refuses: ${link}`)
+      rmSync(join(site, link))
+    }
   })
 
   it('ignores writes into local directories but still watches the source', async () => {

@@ -1,5 +1,5 @@
-import { realpathSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs'
+import { join, relative } from 'node:path'
 import { isFileLoadingAllowed, normalizePath } from 'vite'
 
 /* Development only. The dev server serves every file under the checkout
@@ -103,6 +103,19 @@ function requestedFiles(config, url) {
   })
 }
 
+/** The paths under `directory`, following symlinks the way Vite copies the
+ * public directory into a build, each real directory once. */
+function linkedPaths(directory, seen = new Set()) {
+  const real = realpathSync.native(directory)
+  if (seen.has(real)) return []
+  seen.add(real)
+  return readdirSync(directory).flatMap((name) => {
+    const path = join(directory, name)
+    const isDirectory = statSync(path, { throwIfNoEntry: false })?.isDirectory()
+    return isDirectory ? [path, ...linkedPaths(path, seen)] : [path]
+  })
+}
+
 /**
  * Refuses dev server requests for a file whose real path the server.fs rules
  * refuse. Those rules match the requested path, so a symlink in an allowed
@@ -113,14 +126,26 @@ function requestedFiles(config, url) {
  * has added `.html` or `index.html`, at one realpath call per candidate
  * file. A module that Vite's resolver finds, such as `/src/link` for
  * `/src/link.js`, already resolves to its real path, which Vite checks.
+ *
+ * A build copies the public directory and the files its links point to, so
+ * a build fails while the public directory links to a refused file.
  */
 export function refuseLinkedFiles() {
   let config
   return {
     name: 'qivo-refuse-linked-files',
-    apply: 'serve',
     configResolved(resolved) {
       config = resolved
+    },
+    buildStart() {
+      const { command, publicDir, build } = config
+      if (command !== 'build' || !build.copyPublicDir || !publicDir || !existsSync(publicDir))
+        return
+      const refused = linkedPaths(publicDir).filter((path) => refusedRealPath(config, path))
+      if (refused.length > 0)
+        this.error(
+          `The public directory links to files the dev server refuses: ${refused.map((path) => relative(config.root, path)).join(', ')}`,
+        )
     },
     configureServer(server) {
       const refuse = (req, res, next) => {
