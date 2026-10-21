@@ -35,7 +35,7 @@ import {
   rootMetaOf,
 } from '../lib/access'
 import { assertOrgWritable } from '../lib/billingAccess'
-import { byId, usedMoreThan } from '../lib/db'
+import { usedMoreThan } from '../lib/db'
 import { GRANT_LEVELS, type GrantLevel, vGrantLevel } from '../lib/enums'
 import { badRequest, forbidden, type Refusal, rule } from '../lib/functions'
 import { liveIn } from '../lib/liveTasks'
@@ -388,20 +388,25 @@ async function removeAndFindLost(
 }
 
 /** The people a removal can take access from: the person, or every member of
- * the team in its organization. */
+ * the team in its organization. A team's members are matched against one read
+ * of the organization's profiles rather than read one at a time, so a large
+ * team costs two index ranges, not one per member. */
 export async function peopleOf(
   ctx: QueryCtx,
   subject: AccessSubject,
 ): Promise<Map<string, Doc<'profiles'>>> {
   if ('profile' in subject) return new Map([[subject.profile.id, subject.profile]])
-  const people = new Map<string, Doc<'profiles'>>()
-  const members = ctx.db
+  const members = new Set<string>()
+  const memberships = ctx.db
     .query('team_members')
     .withIndex('by_team', (q) => q.eq('team_id', subject.team.id))
-  for await (const m of members) {
-    const profile = await byId(ctx, 'profiles', m.profile_id)
-    if (profile !== null && profile.org_id === subject.team.org_id) people.set(profile.id, profile)
-  }
+  for await (const m of memberships) members.add(m.profile_id)
+  const people = new Map<string, Doc<'profiles'>>()
+  if (members.size === 0) return people
+  const profiles = ctx.db
+    .query('profiles')
+    .withIndex('by_org', (q) => q.eq('org_id', subject.team.org_id))
+  for await (const profile of profiles) if (members.has(profile.id)) people.set(profile.id, profile)
   return people
 }
 

@@ -18,12 +18,12 @@
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import type { QueryCtx } from '../_generated/server'
+import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { sha256hex } from '../machine/auth'
 import { HELD_TASKS_SHAPE } from '../model/projectAccess'
-import { TEAM_RUNS_RULE, teamsJson } from '../model/teams'
+import { deleteTeamCore, TEAM_RUNS_RULE, teamsJson } from '../model/teams'
 import {
   activityFor,
   as,
@@ -821,6 +821,43 @@ describe("deleting a team settles its members' open tasks", () => {
     await plantTeam(fy, fy.org.id, 'Design')
     await deleteHardware(fy, null)
     expect((await taskRow(fy.t, fy.open.id))?.assignee_id).toBeUndefined()
+  })
+
+  it('reads the organization profiles once, however many members the team has', async () => {
+    const fx = await setup()
+    await plantTeam(fx, fx.org.id, 'Design')
+    await fx.t.run(async (ctx) => {
+      for (const who of [fx.pia, fx.viewer]) {
+        await ctx.db.insert('team_members', {
+          team_id: fx.team.id,
+          profile_id: who.id,
+          is_leader: false,
+        })
+      }
+    })
+    const tables: string[] = []
+    await fx.t.run(async (ctx) => {
+      const db = new Proxy(ctx.db, {
+        get(target, prop) {
+          const value: unknown = Reflect.get(target, prop)
+          if (prop === 'query') {
+            return (table: 'profiles') => {
+              tables.push(table)
+              return target.query(table)
+            }
+          }
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      })
+      await deleteTeamCore({ ...ctx, db } as MutationCtx, {
+        me: fx.admin,
+        team: fx.team,
+        held: 'leave',
+        now: NOW,
+      })
+    })
+    expect(await hardwareLeft(fx)).toEqual({ team: null, members: 0, shares: 0 })
+    expect(tables.filter((t) => t === 'profiles')).toEqual(['profiles'])
   })
 
   it('refuses the last team and anyone but an admin before anything is settled', async () => {
