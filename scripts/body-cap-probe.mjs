@@ -7,6 +7,7 @@
  *
  * Exits 1 when any request answered something other than 401, or failed. */
 
+import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 
 const BODY_MAX = 1024 * 1024
@@ -116,4 +117,4 @@ async function main() {
   process.exit(clean ? 0 : 1)
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) await main()
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main()

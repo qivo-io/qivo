@@ -459,11 +459,13 @@ Request: a request body must be at most 1 MiB. Send less in one request."},
 "id": null}`. Such a request still counts as a call.
 
 Qivo answers every request only after its whole body has arrived, even when
-the answer does not depend on it, such as a `401` or this `413`. Qivo waits
-for at most 5 seconds and 32 MiB. A body that takes longer, which for a body
-just over the limit means an upload slower than about 2 Mbit/s, can end with
-the connection closed and no answer. Treat that like any network error, and
-check the body's size before you send it again.
+the answer does not depend on it, such as a `401` or this `413`. Once Qivo
+knows such an answer, it waits at most 5 seconds more for the rest of the
+body, and reads at most 32 MiB of it. If the rest takes longer, which for a
+body just over the limit means an upload slower than about 2 Mbit/s, the
+request can end with the connection closed and no answer. Treat that like
+any network error, and check the body's size before you send it again. A
+body Qivo does use, such as one within the limit, has no such deadline.
 
 MCP messages must be UTF-8. A body holding bytes that are not UTF-8, such as
 text a client encoded as Latin-1 or Windows-1252, is answered with HTTP

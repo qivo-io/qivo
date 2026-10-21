@@ -252,11 +252,13 @@ without keeping the body. Files never travel in these bodies; see
 [Attachments](#attachments).
 
 Qivo answers every request only after its whole body has arrived, even when
-the answer does not depend on it, such as a `401` or this `413`. Qivo waits
-for at most 5 seconds and 32 MiB. A body that takes longer, which for a body
-just over the limit means an upload slower than about 2 Mbit/s, can end with
-the connection closed and no answer. Treat that like any network error, and
-check the body's size before you send it again.
+the answer does not depend on it, such as a `401` or this `413`. Once Qivo
+knows such an answer, it waits at most 5 seconds more for the rest of the
+body, and reads at most 32 MiB of it. If the rest takes longer, which for a
+body just over the limit means an upload slower than about 2 Mbit/s, the
+request can end with the connection closed and no answer. Treat that like
+any network error, and check the body's size before you send it again. A
+body Qivo does use, such as one within the limit, has no such deadline.
 
 A request that takes a JSON body needs a JSON object. Anything else, such as
 invalid JSON, an array or a number, is a `400` (`request body must be
@@ -2033,8 +2035,9 @@ handlers, which stays busy until the whole file has arrived, for at most the
 5 minutes above. A 20 MiB file therefore needs about 70 KB/s or more. Many
 large uploads at once from one organization share the deployment's handlers
 with every other request, so send them a few at a time. A refusal, such as
-the `400` for a body of another size, waits for the body too, but only for
-5 seconds and 32 MiB, as for [every request](#request-limits-and-billing).
+the `400` for a body of another size, also waits for the rest of the body,
+but only 5 seconds more and 32 MiB, as for
+[every request](#request-limits-and-billing).
 A slower upload that is refused can end with the connection closed and no
 answer.
 
