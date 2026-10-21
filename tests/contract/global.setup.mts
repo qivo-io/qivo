@@ -32,19 +32,28 @@
  *      machine/auth.ts looks up). Each credential's name carries a random
  *      pass id, so the pass can delete what it minted by name even when it
  *      never learned a row's id, for example after a mint whose output could
- *      not be parsed.
+ *      not be parsed. A minted credential is pending, which machine/auth
+ *      refuses, until the pass activates both by name after both mints.
+ *      When only the vitest process is killed, its running `npx convex run`
+ *      child goes on and can finish after the next pass has revoked the
+ *      killed pass's names. A late mint then leaves a pending row and a late
+ *      activation finds nothing, so no credential of a killed pass becomes
+ *      usable after its revocation.
  *   3. Stash them for the suites in the private fixture directory, outside
  *      the checkout (contract/stash.mts). Setup refuses to start without
  *      that directory, and while another pass on the same deployment holds
  *      the lease beside the stash (only passes on this machine that use the
  *      same fixture directory share it). The pass holds that lease until its
  *      teardown ends, and the operating system drops it when the pass is
- *      killed. The pass id is stashed before the first mint, after
- *      a call that deletes nothing proves the deployment has the delete
- *      function. Before the reset it revokes the credentials an interrupted
+ *      killed. The pass id is stashed before the first mint. Before the reset it revokes the credentials an interrupted
  *      pass left in its stash, or in the stash older passes kept inside the
  *      checkout: by name when the stash holds a pass id, and by id for every
- *      id it holds. Then it removes that file.
+ *      id it holds. Then it removes that file. It also deletes every pass
+ *      credential created more than an hour ago: the pending rows of late
+ *      mints, and credentials of passes that no stash names any more. That
+ *      sweep runs before the reset and fails on a deployment that does not
+ *      mint pending credentials, so such a deployment gets no reset and no
+ *      credential.
  *   4. Teardown: delete every credential named for the pass via
  *      machine/testing:deleteNamedCredentials — a live qva_ key on a shared
  *      deployment is a standing capability — then remove the stash. A
@@ -97,21 +106,35 @@ type Kind = 'agent_key' | 'mcp_token'
 type Named = { profile_id: string; name: string }
 
 /**
- * The credentials pass `pass` mints, by kind: Nora's personal token and
- * Atlas's agent key, each named after the pass.
+ * The profile and the start of the name of every credential a pass mints,
+ * by kind: Nora's personal token and Atlas's agent key. Passes before the
+ * pass id used these names alone.
  */
-async function passCredentials(pass: string): Promise<Record<Kind, Named>> {
+async function passPrefixes(): Promise<Record<Kind, Named>> {
   return {
     mcp_token: {
       profile_id: await marketingId(NORTHSTAR, 'person:nora'),
-      name: `contract pass token ${pass}`,
+      name: 'contract pass token',
     },
     agent_key: {
       profile_id: await marketingId(NORTHSTAR, 'person:atlas'),
-      name: `contract pass key ${pass}`,
+      name: 'contract pass key',
     },
   }
 }
+
+/** The credentials pass `pass` mints, by kind, each named after the pass. */
+async function passCredentials(pass: string): Promise<Record<Kind, Named>> {
+  const { mcp_token, agent_key } = await passPrefixes()
+  return {
+    mcp_token: { ...mcp_token, name: `${mcp_token.name} ${pass}` },
+    agent_key: { ...agent_key, name: `${agent_key.name} ${pass}` },
+  }
+}
+
+/** How old a pass credential gets before any later pass deletes it. A pass
+ * takes minutes, so the sweep leaves a pass running elsewhere alone. */
+const STALE_MS = 60 * 60 * 1000
 
 /** Mints the `kind` credential `named` describes. Throws unless the output
  * names the new row's id. */
@@ -129,6 +152,37 @@ function mint(run: Run, kind: Kind, { profile_id, name }: Named): { id: string; 
   if (typeof out.id !== 'string')
     throw new Error('convex run machine/testing:mintCredential: no credential id in its output')
   return { id: out.id, secret }
+}
+
+/** Makes the pending credential `named` describes usable. Throws unless
+ * exactly one row was pending. */
+function activate(run: Run, named: Named): void {
+  const out = run('machine/testing:activateNamedCredentials', named)
+  if (out.activated !== 1)
+    throw new Error(
+      `convex run machine/testing:activateNamedCredentials: activated ${String(out.activated)} credentials of ${named.name}, not 1`,
+    )
+}
+
+/**
+ * Deletes every pass credential created more than STALE_MS ago, and returns
+ * how many rows went. The deployment answers only when it has
+ * machine/testing:deleteOldCredentials, which shipped with pending mints.
+ */
+async function deleteStale(run: Run): Promise<number> {
+  const created_before = new Date(Date.now() - STALE_MS).toISOString()
+  let deleted = 0
+  for (const { profile_id, name } of Object.values(await passPrefixes())) {
+    const out = run('machine/testing:deleteOldCredentials', {
+      profile_id,
+      name_prefix: name,
+      created_before,
+    })
+    if (typeof out.deleted !== 'number')
+      throw new Error('convex run machine/testing:deleteOldCredentials: no count in its output')
+    deleted += out.deleted
+  }
+  return deleted
 }
 
 /** Deletes the credentials `named` describes and returns how many rows went. */
@@ -226,6 +280,8 @@ async function leasedSetup(
 ): Promise<() => void> {
   await revokeLeftover(join(root, 'tests', 'contract', '.credentials.json'), deployment, run)
   await revokeLeftover(stash, deployment, run)
+  const stale = await deleteStale(run)
+  if (stale > 0) console.log(`[contract] deleted ${stale} pass credentials older than an hour`)
   console.log(
     `[contract] resetting Northstar Labs on ${siteUrl} (the shared development deployment the key names, where manual work in that organization is lost)`,
   )
@@ -277,13 +333,13 @@ async function leasedSetup(
   }
 
   try {
-    // fails before anything is minted on a deployment without the delete
-    deleteNamed(run, credentials.mcp_token)
     writeStash(stash, { siteUrl, orgId, pass })
     minting.push(credentials.mcp_token)
     const qvt = mint(run, 'mcp_token', credentials.mcp_token)
     minting.push(credentials.agent_key)
     const qva = mint(run, 'agent_key', credentials.agent_key)
+    activate(run, credentials.mcp_token)
+    activate(run, credentials.agent_key)
     writeStash(stash, {
       siteUrl,
       orgId,

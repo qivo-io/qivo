@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, join, posix, relative, resolve } from 'node:path'
 import { normalizePath } from 'vite'
 
@@ -36,9 +36,13 @@ const literalGlob = (path) => path.replace(/[\\()[\]{}*?!+@|]/g, '\\$&')
  * otherwise reload open pages on every write to the report. Turning off
  * followSymlinks instead would stop the watcher from following a link to an
  * allowed source too. A local directory that is itself a link counts under
- * its real path as well, when it exists as the server starts. The env files
- * at the checkout's root keep being watched wherever they link, because Vite
- * restarts the server when one changes.
+ * its real path as well. Each check looks for those links again, so a local
+ * directory created, removed or replaced by a link while the server runs
+ * counts from the next check on. That takes an lstat call per local
+ * directory, about 8 microseconds per check on Linux, and a realpath call
+ * for a directory that is a link. The env files at the checkout's root keep
+ * being watched wherever they link, because Vite restarts the server when
+ * one changes.
  */
 export function devServerFiles(root) {
   const checkouts = new Set(
@@ -50,19 +54,35 @@ export function devServerFiles(root) {
   const within = (file, directory) => file === directory || file.startsWith(`${directory}/`)
   // Vite's own watch rules ignore .git by the watched path only.
   const named = [...directories, ...[...checkouts].map((checkout) => `${checkout}/.git`)]
-  // A local directory that links elsewhere, unless it links to a directory
-  // holding this checkout, which would ignore every source.
-  const linked = named.flatMap((directory) => {
-    let real
-    try {
-      real = normalizePath(realpathSync.native(directory))
-    } catch {
-      return []
-    }
-    return [...checkouts].some((checkout) => within(checkout, real)) ? [] : [real]
-  })
-  const unwatched = [...new Set([...named, ...linked])]
-  const isUnwatched = (file) => unwatched.some((directory) => within(file, directory))
+  // Each named directory with its paths inside the checkout, any of which
+  // makes it lead elsewhere when it is a link, such as scripts/ for
+  // scripts/shots/.
+  const steps = [...checkouts].flatMap((checkout) =>
+    [...LOCAL, '.git'].map((name) => {
+      const parts = name.split('/')
+      return {
+        directory: `${checkout}/${name}`,
+        paths: parts.map((_, i) => `${checkout}/${parts.slice(0, i + 1).join('/')}`),
+      }
+    }),
+  )
+  const isLink = (path) => lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink() === true
+  // The real paths of the local directories that link elsewhere now, unless
+  // one links to a directory holding this checkout, which would ignore every
+  // source. One lstat call per path finds the links, so realpath runs only
+  // for a directory that is one.
+  const linked = () =>
+    steps.flatMap(({ directory, paths }) => {
+      if (!paths.some(isLink)) return []
+      let real
+      try {
+        real = normalizePath(realpathSync.native(directory))
+      } catch {
+        return []
+      }
+      return [...checkouts].some((checkout) => within(checkout, real)) ? [] : [real]
+    })
+  const inAny = (file, directories) => directories.some((directory) => within(file, directory))
   const isEnvFile = (file) =>
     checkouts.has(posix.dirname(file)) && posix.basename(file).startsWith('.env')
   return {
@@ -70,12 +90,14 @@ export function devServerFiles(root) {
       ignored: [
         (path) => {
           const file = normalizePath(path)
-          if (isUnwatched(file)) return true
+          if (inAny(file, named)) return true
           if (isEnvFile(file)) return false
+          const unwatched = [...named, ...linked()]
+          if (inAny(file, unwatched)) return true
           // A path that cannot be resolved, such as a deleted file, names
           // nothing the watcher could follow.
           try {
-            return isUnwatched(normalizePath(realpathSync.native(path)))
+            return inAny(normalizePath(realpathSync.native(path)), unwatched)
           } catch {
             return false
           }
