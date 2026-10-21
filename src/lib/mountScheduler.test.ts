@@ -49,7 +49,8 @@ function setup() {
     list,
     settle,
     run,
-    near: (spacer: Element, isIntersecting = true) => report?.([{ target: spacer, isIntersecting }]),
+    near: (spacer: Element, isIntersecting = true) =>
+      report?.([{ target: spacer, isIntersecting }]),
   }
 }
 
