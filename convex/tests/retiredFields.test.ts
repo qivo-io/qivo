@@ -108,8 +108,8 @@ describe('internal/retiredFields', () => {
     expect(after.attachments.map(({ id, size_bytes }) => [id, size_bytes])).toEqual(
       before.attachments.map(({ id, size_bytes }) => [id, size_bytes]),
     )
-    expect(after.stored.map(({ row }) => row.doc.id)).toEqual(
-      before.stored.map(({ row }) => row.doc.id),
+    expect(after.stored.map(({ row_id }) => row_id)).toEqual(
+      before.stored.map(({ row_id }) => row_id),
     )
     expect(await check()).toEqual({ teams: 0, attachments: 0, stored_attachments: 0 })
   })
