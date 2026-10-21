@@ -190,6 +190,10 @@ export function createMountScheduler({
 
   function setRoot(next: HTMLElement | null) {
     if (root === next) return
+    // the marks belong to the waiting lists, not to an element a new
+    // layout may leave in the page
+    root?.removeAttribute('data-board-mount')
+    root?.removeAttribute('aria-busy')
     observer?.disconnect()
     observer = null
     watched.clear()
@@ -281,12 +285,14 @@ export function useMountGuards(scheduler: MountScheduler) {
     scheduler.revive()
     const onKey = (event: KeyboardEvent) => {
       if (!scheduler.pending()) return
-      const key = event.key.toLowerCase()
+      // by character, and by physical key for layouts whose letters differ
+      const key = (letter: string) =>
+        event.key.toLowerCase() === letter || event.code === `Key${letter.toUpperCase()}`
       const command = event.ctrlKey || event.metaKey
       if (
         event.key === 'F3' ||
-        (command && (key === 'f' || key === 'g')) ||
-        (command && key === 'a' && !editable(event.target))
+        (command && (key('f') || key('g'))) ||
+        (command && key('a') && !editable(event.target))
       )
         scheduler.completeAll()
     }

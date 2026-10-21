@@ -165,6 +165,16 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
     expect(cards()).toHaveLength(500)
   })
 
+  it('mounts every card at once for Find on a layout whose F is another letter', async () => {
+    const board = await loadBoard(network, tasks(500))
+    await board.render(root)
+    await act(async () => {
+      // Ctrl+F on a Russian layout: the key reads а, the physical key is F
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'а', code: 'KeyF', ctrlKey: true }))
+    })
+    expect(cards()).toHaveLength(500)
+  })
+
   it('brings cards back in slices when a filter that matched nothing is cleared', async () => {
     const board = await loadBoard(network, tasks(500))
     await board.render(root)

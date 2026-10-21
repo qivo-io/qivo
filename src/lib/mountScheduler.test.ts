@@ -193,4 +193,20 @@ describe('createMountScheduler', () => {
     expect(s.tasks).toHaveLength(0)
     expect(frames).toHaveLength(1)
   })
+
+  it('leaves no marks on a root it no longer uses', async () => {
+    const s = setup()
+    s.scheduler.setRoot(s.root)
+    s.list('a', 100)
+    await s.settle()
+    expect(s.root.getAttribute('aria-busy')).toBe('true')
+    // another layout's pane takes over while cards still wait
+    const pane = document.createElement('div')
+    document.body.append(pane)
+    s.scheduler.setRoot(pane)
+    await s.settle()
+    expect(s.root.hasAttribute('aria-busy')).toBe(false)
+    expect(s.root.hasAttribute('data-board-mount')).toBe(false)
+    expect(pane.getAttribute('data-board-mount')).toBe('pending')
+  })
 })
