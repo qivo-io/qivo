@@ -62,10 +62,18 @@ const usable = (element: HTMLElement | null | undefined): element is HTMLElement
     the remembered cell, as long as that cell is still on the page; a lane
     key alone repeats across scopes. Scrolls into view only when `scroll` is
     set. With `mount` false it searches only what is mounted, as it must
-    inside a React commit. Returns whether focus moved. */
+    inside a React commit; with `exact` it takes only the remembered row,
+    in the same kind and cell, so a mounted copy of a parent heading in
+    another cell does not stand in for one that still waits to mount.
+    Returns whether focus moved. */
 export function restoreTaskFocus(
   mark: TaskFocusMark,
-  { scroll, nearby = true, mount = true }: { scroll: boolean; nearby?: boolean; mount?: boolean },
+  {
+    scroll,
+    nearby = true,
+    mount = true,
+    exact = false,
+  }: { scroll: boolean; nearby?: boolean; mount?: boolean; exact?: boolean },
 ) {
   if (mount) for (const register of mounts) register(mark)
   // Both kinds of row: a parent whose last subtask left becomes a card, and
@@ -85,6 +93,10 @@ export function restoreTaskFocus(
     return (kind(row) === mark.row ? 0 : 3) + place
   }
   rows.sort((a, b) => rank(a) - rank(b))
+  if (exact) {
+    const other = rows.findIndex((row) => rank(row) > 0)
+    if (other >= 0) rows.length = other
+  }
   /** The row's control `key`, or its first control. */
   const keyed = (row: HTMLElement, key?: string | null) =>
     [row, ...row.querySelectorAll<HTMLElement>('[data-focus-key]')].find((element) =>
@@ -163,7 +175,8 @@ export function useFollowTaskFocus(container: RefObject<HTMLElement | null>) {
     if (!current || !lost()) return
     const scroll = !lastInputWasPointer()
     // the card as it is mounted now, without mounting anything in the commit
-    if (restoreTaskFocus(current.mark, { scroll, nearby: false, mount: false })) return follow()
+    if (restoreTaskFocus(current.mark, { scroll, nearby: false, mount: false, exact: true }))
+      return follow()
     // Then once the commit is done, mounting the task's card if its cell
     // still waits for it. A mark that finds nothing now would find something
     // unrelated later.
