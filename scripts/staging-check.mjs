@@ -2758,8 +2758,10 @@ async function earlierThreadChecks(task, comments, created) {
     })
   else skip('thread-pages/ui/earlier-activity', 'REST did not answer the created row')
   // leave the task, so its thread is not open while the run changes it
-  await app.goto(`${cfg.appOrigin}/app/~/board/all`, { waitUntil: 'domcontentloaded' })
-  await app.waitForSelector('[data-all-nav]', { timeout: 60_000 })
+  await check('thread-pages/ui/leave', async () => {
+    await app.goto(`${cfg.appOrigin}/app/~/board/all`, { waitUntil: 'domcontentloaded' })
+    await app.waitForSelector('[data-all-nav]', { timeout: 60_000 })
+  })
 }
 
 /** 80 code points on project, sub-project, milestone, team, organization,

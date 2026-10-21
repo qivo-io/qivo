@@ -475,17 +475,17 @@ describe('thread pages', () => {
   })
   it('refuses a history with rows missing, repeated or out of order', () => {
     // the earlier page holds only the created row
-    expect(() => historyRows([all.slice(-500), all.slice(0, 1)], 511)).toThrow('rows across pages')
-    expect(() => historyRows([all.slice(-500), all.slice(0, 12)], 511)).toThrow(
-      'distinct rows across pages',
+    expect(() => historyRows([all.slice(-500), all.slice(0, 1)], 511)).toThrow(
+      /^rows across pages:/,
     )
-    expect(() => historyRows(pages(all.slice(1)), 510)).toThrow('the first row')
-    expect(() => historyRows([all.slice(-500)], 500)).toThrow('pages before the empty one')
-    expect(() =>
-      historyRows(
-        pages([...all.slice(0, 10), all[20], ...all.slice(10, 20), ...all.slice(21)]),
-        511,
-      ),
-    ).toThrow('pages overlap or skip')
+    expect(() => historyRows([all.slice(-500), all.slice(0, 12)], 511)).toThrow(
+      /^distinct rows across pages:/,
+    )
+    // a short newest page, though every row comes once
+    expect(() => historyRows([all.slice(-499), all.slice(0, 12)], 511)).toThrow(/^the newest page:/)
+    expect(() => historyRows(pages(all.slice(1)), 510)).toThrow(/^the first row:/)
+    expect(() => historyRows([all.slice(-500)], 500)).toThrow(/^pages before the empty one:/)
+    const swapped = [...all.slice(0, 10), all[20], ...all.slice(10, 20), ...all.slice(21)]
+    expect(() => historyRows(pages(swapped), 511)).toThrow(/^pages overlap or skip/)
   })
 })
