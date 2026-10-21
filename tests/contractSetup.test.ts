@@ -134,19 +134,20 @@ describe('contract pass setup', () => {
     expect(existsSync(join(fixtures, 'contract-brave-otter-123.credentials.json'))).toBe(false)
   })
 
-  it('removes the stash and tries every delete when one delete fails', async () => {
+  it('tries every delete and keeps the stash for the next pass when one fails', async () => {
     const run = runner(
       (fn, args) => fn === 'machine/testing:deleteCredential' && args.kind === 'mcp_token',
     )
     const teardown = await contractSetup({ env, run, reset: () => {} }, root)
     expect(() => teardown()).toThrow(AggregateError)
     expect(process.exitCode).toBe(1)
-    expect(existsSync(stash())).toBe(false)
     expect(deleted().map((args) => args.kind)).toEqual(['mcp_token', 'agent_key'])
+    expect(JSON.parse(readFileSync(stash(), 'utf8')).qvtId).toBe('id-mcp_token')
   })
 
   it('revokes what an interrupted pass left before the reset, and removes its stash', async () => {
-    const site = env.VITE_CONVEX_SITE_URL
+    // the same deployment, saved under its other accepted site form
+    const site = 'https://fine-goose-986.convex.site'
     writeFileSync(stash(), JSON.stringify({ siteUrl: site, qvaId: 'old-qva', qvtId: 'old-qvt' }))
     writeFileSync(legacy(), JSON.stringify({ siteUrl: 'https://other-1.convex.site', qvaId: 'x' }))
     await contractSetup({ env, run: runner(), reset: resetMarker }, root)

@@ -35,9 +35,10 @@
  *      that directory. Before the reset it revokes the credentials an
  *      interrupted pass left in its stash, or in the stash older passes
  *      kept inside the checkout, and removes that file.
- *   4. Teardown: remove the stash, then delete both minted credentials via
+ *   4. Teardown: delete both minted credentials via
  *      machine/testing:deleteCredential — a live qva_ key on a shared
- *      deployment is a standing capability. Tolerates already-deleted rows:
+ *      deployment is a standing capability — then remove the stash. A
+ *      failed delete keeps the stash, so the next pass revokes the rest. Tolerates already-deleted rows:
  *      mcp.test.mts's finale deletes the qvt token mid-suite to capture the
  *      revoked-token 401 live. A setup that fails after minting runs the
  *      same cleanup before it rethrows, because vitest runs no teardown
@@ -48,7 +49,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { marketingId } from '../../convex/internal/marketingDemoData'
-import { contractSiteUrl } from './site.mts'
+import { contractDeployment, contractSiteUrl } from './site.mts'
 import { ROOT, type Stash, stashPath, writeStash } from './stash.mts'
 
 const NORTHSTAR = 'northstar-labs'
@@ -101,18 +102,28 @@ function mint(
   return { id: out.id as string, secret }
 }
 
+/** Whether `site` is a convex.site origin of `deployment`, in any region. */
+function siteOf(site: unknown, deployment: string): boolean {
+  return (
+    typeof site === 'string' &&
+    URL.canParse(site) &&
+    new URL(site).hostname.split('.')[0] === deployment
+  )
+}
+
 /**
  * Revokes the credentials named by a stash an interrupted pass left at
- * `path`, when they belong to this pass's site, then removes the file. A
- * stash that cannot be read or names another site is removed unrevoked.
+ * `path`, when they belong to this pass's deployment, then removes the file.
+ * A stash that cannot be read or names another deployment is removed
+ * unrevoked, because this key cannot reach that deployment.
  */
-function revokeLeftover(path: string, siteUrl: string, run: Run): void {
+function revokeLeftover(path: string, deployment: string, run: Run): void {
   if (!existsSync(path)) return
   let left: Partial<Stash> = {}
   try {
     left = JSON.parse(readFileSync(path, 'utf8'))
   } catch {}
-  if (left.siteUrl === siteUrl) {
+  if (siteOf(left.siteUrl, deployment)) {
     const ids = [
       [left.qvaId, 'agent_key'],
       [left.qvtId, 'mcp_token'],
@@ -135,9 +146,10 @@ export async function contractSetup(
   root = ROOT,
 ): Promise<() => void> {
   const siteUrl = contractSiteUrl(env, envLocal(root))
+  const deployment = contractDeployment(env)
   const stash = stashPath(env, root)
-  revokeLeftover(join(root, 'tests', 'contract', '.credentials.json'), siteUrl, run)
-  revokeLeftover(stash, siteUrl, run)
+  revokeLeftover(join(root, 'tests', 'contract', '.credentials.json'), deployment, run)
+  revokeLeftover(stash, deployment, run)
   console.log(
     `[contract] resetting Northstar Labs on ${siteUrl} (the shared development deployment the key names, where manual work in that organization is lost)`,
   )
@@ -145,19 +157,21 @@ export async function contractSetup(
   const orgId = await marketingId(NORTHSTAR, 'org')
 
   const minted: { id: string; kind: Kind }[] = []
-  // Every step runs even when an earlier one fails, so no credential stays
-  // live. Both deletes tolerate already-deleted (the mcp finale kills the qvt
-  // mid-suite).
+  // Every delete runs even when an earlier one fails. Both tolerate
+  // already-deleted (the mcp finale kills the qvt mid-suite). The stash goes
+  // only once both succeed, so the next pass can revoke what remains.
   const teardown = () => {
     const failures: unknown[] = []
-    try {
-      rmSync(stash, { force: true })
-    } catch (error) {
-      failures.push(error)
-    }
     for (const { id, kind } of minted) {
       try {
         run('machine/testing:deleteCredential', { id, kind })
+      } catch (error) {
+        failures.push(error)
+      }
+    }
+    if (failures.length === 0) {
+      try {
+        rmSync(stash, { force: true })
       } catch (error) {
         failures.push(error)
       }
