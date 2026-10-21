@@ -14,11 +14,11 @@ vi.mock('../store/planner', () => ({
             email: null,
           }))
         : org === 'org-task'
-        ? [
-            { id: 'anna', name: 'Anna Fält', initials: 'AF', email: 'anna@qivo.test' },
-            { id: 'erik', name: 'Erik Holm', initials: 'EH', email: 'erik@qivo.test' },
-          ]
-        : [{ id: 'home', name: 'Anna Fält', initials: 'AF', email: 'anna@home.test' }],
+          ? [
+              { id: 'anna', name: 'Anna Fält', initials: 'AF', email: 'anna@qivo.test' },
+              { id: 'erik', name: 'Erik Holm', initials: 'EH', email: 'erik@qivo.test' },
+            ]
+          : [{ id: 'home', name: 'Anna Fält', initials: 'AF', email: 'anna@home.test' }],
   },
 }))
 

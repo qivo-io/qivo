@@ -1041,6 +1041,7 @@ function shownWorkspace() {
       P.readMessageCount,
       P.canMarkAllRead,
       P.canRemoveRead,
+      P.inboxCut,
       P.CURRENT_USER,
       P.contextVersion,
       // Roadmap's undo (P.roadmapUndo), which a task edit's answer ends
@@ -3401,6 +3402,9 @@ function rebuild(now = new Date()) {
   // examined, so they stay available while such rows may exist
   P.canMarkAllRead = P.unreadMessages > 0 || unexaminedUnread
   P.canRemoveRead = P.readMessageCount > 0 || unexaminedRead
+  // the snapshot delivers at most 500 messages, so the Inbox says when older
+  // ones exist that it does not list
+  P.inboxCut = hiddenReadMessages > 0 || unexaminedUnread || unexaminedRead
 
   P.CURRENT_USER = CURRENT_USER
   const context = [
@@ -4356,6 +4360,8 @@ export const PLANNER = {
   // whether the Inbox's Mark all as read and Remove all read have rows to act on
   canMarkAllRead: false,
   canRemoveRead: false,
+  // whether older messages exist than the Inbox lists (the snapshot's 500)
+  inboxCut: false,
   loaded: false,
 
   project: (id: string | null | undefined): ProjectVM | undefined =>

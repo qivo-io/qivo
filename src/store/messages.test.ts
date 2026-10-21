@@ -325,6 +325,16 @@ describe('bulk notification actions through the client store', () => {
     )
   })
 
+  it('says when older messages exist than the snapshot delivered', () => {
+    expect(P.inboxCut).toBe(false)
+    publish({ ...structuredClone(snap), readMessageCount: snap.readMessageCount + 5 })
+    expect(P.inboxCut).toBe(true)
+    publish({ ...structuredClone(snap), unreadTruncated: true })
+    expect(P.inboxCut).toBe(true)
+    publish(structuredClone(snap))
+    expect(P.inboxCut).toBe(false)
+  })
+
   it("counts an item's dropped updates on its unread rows, and reading the item ends the count", () => {
     const task = snap.messages[0].issue_id
     // a read row's count belongs to an unread run that already ended

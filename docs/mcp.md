@@ -1948,12 +1948,12 @@ bring them back. `messages` run oldest first, `kind` is
 is later. Snoozed items are left out unless `include_snoozed` is `true`. An
 item keeps at most 50 unread messages. When more arrive, Qivo drops the
 oldest unread ones but keeps the item's first unread message and the newest
-message of each `kind`, and counts what it dropped in the item's
-`dropped_count`. The count stays until the item is read, and the app's
-**Inbox** shows it as **N earlier updates on this task are not listed**. The
-task's comments and history still hold what those messages announced. On a
-task with many followers it does so moments
-after the arrival, so an item can briefly hold one more. A comment or a
+message of each `kind`. On a task with many followers it does so moments
+after the arrival, so an item can briefly hold one more. The item's
+`dropped_count` says how many it dropped, until the item is read, and the
+app's **Inbox** shows it as **N earlier updates on this task are not
+listed**. The task's comments and history still hold what those messages
+announced. A comment or a
 change on a task with more than 128 followers, such as a task from before
 the follower limit, reaches the first 128 at once and the rest moments
 later. The followers of the tasks a roadmap save or an access removal

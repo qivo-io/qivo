@@ -196,11 +196,13 @@ counter. Opening the row or the task marks its messages read and leaves only
 the latest message in the inbox. Further updates start the unread counter
 again on the same row. A row keeps at most 50 unread updates. Beyond that,
 Qivo drops the oldest ones but keeps the first unread update and the newest
-mention, comment and change, and the row says how many it dropped, such as
-**12 earlier updates on this task are not listed**. The task's comments and
-history still show what those updates were about. On a task with many subscribers it does so
-moments after the update arrives. The Inbox loads up to 500 messages, unread ones
-first.
+mention, comment and change. On a task with many subscribers it does so
+moments after the update arrives. The row says how many it dropped, such as
+**12 earlier updates on this task are not listed**, and the task's comments
+and history still show what those updates were about. The Inbox loads up to
+500 messages, unread ones first. When older ones exist, the list ends with
+**Older messages are not listed**, and **Mark all as read** and **Remove all
+read** reach them too.
 
 The Inbox badge counts tasks with unread updates and shows **99+** above 99.
 Read state follows you across devices. Sort by newest or oldest, or filter for unread,
