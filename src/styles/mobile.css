@@ -252,6 +252,10 @@
     /* a focused row stays painted whole, as Roadmap.css keeps its rows */
     content-visibility: visible;
   }
+  /* the rows' waiting space fills the section edge to edge, as rows do */
+  .mobile-task-group > .board-pending {
+    border-radius: 0;
+  }
   .mobile-task-row:hover {
     background: var(--hover);
   }

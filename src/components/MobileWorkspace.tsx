@@ -1,11 +1,14 @@
-import { memo, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { SYNC_LIMIT } from '../lib/boardGroups'
 import { StaticControlsContext, useLiveControls } from '../lib/liveControls'
+import { createMountScheduler, useMountGuards } from '../lib/mountScheduler'
 import { matchesAllWords } from '../lib/search'
-import { useFollowTaskFocus } from '../lib/taskFocus'
+import { registerTaskMount, useFollowTaskFocus } from '../lib/taskFocus'
 import { useLatest } from '../lib/useLatest'
 import { useMobile, useMobileBackLayer } from '../lib/useMobile'
 import { type IssueFilters, type IssueVM, P, type ScopeInfo } from '../store/planner'
 import type { StoreVersion } from '../store/updates'
+import { DeferredList } from './DeferredList'
 import {
   Avatar,
   Icon,
@@ -381,6 +384,16 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
   )
 }
 
+/* The phone list's geometry for mounting it in slices: a row's height
+   before it renders (mobile.css), the least a row takes, and a section's
+   heading with the gap above it. */
+const ROW_ESTIMATE_PX = 80
+const ROW_MIN_PX = 64
+const SECTION_HEAD_PX = 44 + 24
+const rowEstimate = () => ROW_ESTIMATE_PX
+const taskKey = (task: IssueVM) => task.id
+const pendingRows = (n: number) => `Loading ${n} more ${n === 1 ? 'task' : 'tasks'}`
+
 /** One task of the phone's task list. It renders again only when its task
     object or the store's context changes (P.contextVersion, which covers
     today's date and the names it reads), and mounts no tooltip roots until
@@ -490,6 +503,49 @@ export function MobileTaskList({
   const followFocus = useFollowTaskFocus(listRef)
   // App makes its actions again every render; the rows keep one identity
   const openIssue = useLatest((id: string) => actions.openIssue(id))
+  const shown = groups.filter((group) => group.tasks.length)
+
+  /* A list of more than SYNC_LIMIT tasks mounts the rows of its first
+     screen at once and the rest in slices, section by section. The counts
+     come from the first render of a scope and status choice. */
+  const [scheduler] = useState(createMountScheduler)
+  useMountGuards(scheduler)
+  useLayoutEffect(() => scheduler.setRoot(listRef.current), [scheduler])
+  const firstScreen = () => {
+    let remaining = window.innerHeight + 500
+    return new Map(
+      shown.map((group) => {
+        remaining -= SECTION_HEAD_PX
+        const rows = Math.min(group.tasks.length, Math.floor(Math.max(0, remaining) / ROW_MIN_PX))
+        remaining -= rows * ROW_MIN_PX
+        return [group.id, rows]
+      }),
+    )
+  }
+  const eagerKey = `${info.id}:${selectedStatus}:${filters.focus}`
+  const [eager, setEager] = useState(() => ({ key: eagerKey, counts: firstScreen() }))
+  if (eager.key !== eagerKey) setEager({ key: eagerKey, counts: firstScreen() })
+  const initialOf = (status: string) =>
+    count <= SYNC_LIMIT
+      ? Number.POSITIVE_INFINITY
+      : eager.key === eagerKey
+        ? (eager.counts.get(status) ?? 0)
+        : 0
+  // Focus that follows a task into a section whose rows still wait mounts
+  // the section through the task's row first (taskFocus.ts).
+  const latestShown = useLatest(() => shown)
+  useEffect(
+    () =>
+      registerTaskMount((mark) => {
+        for (const group of latestShown())
+          if (group.tasks.some((task) => task.id === mark.taskId))
+            scheduler.mountThrough(`phone:${group.id}`, mark.taskId)
+      }),
+    [latestShown, scheduler],
+  )
+  const renderRow = (task: IssueVM) => (
+    <MobileTaskRow key={task.id} task={task} context={P.contextVersion} onOpen={openIssue} />
+  )
   return (
     <div ref={listRef} className="mobile-task-list" {...followFocus}>
       <div className="mobile-task-tools">
@@ -552,27 +608,28 @@ export function MobileTaskList({
           </div>
         </DialogContent>
       </Dialog>
-      {groups
-        .filter((group) => group.tasks.length)
-        .map((group) => (
-          <section key={group.id} className="mobile-task-section">
-            <h2>
-              <StatusDot status={group.id} /> {group.name}
-              <span className="text-xs text-text-2">{group.tasks.length}</span>
-            </h2>
-            {/* the phone's Board cell for one status, as taskFocus reads it */}
-            <div className="mobile-task-group" data-board-cell="phone" data-status={group.id}>
-              {group.tasks.map((task) => (
-                <MobileTaskRow
-                  key={task.id}
-                  task={task}
-                  context={P.contextVersion}
-                  onOpen={openIssue}
-                />
-              ))}
-            </div>
-          </section>
-        ))}
+      {shown.map((group) => (
+        <section key={group.id} className="mobile-task-section">
+          <h2>
+            <StatusDot status={group.id} /> {group.name}
+            <span className="text-xs text-text-2">{group.tasks.length}</span>
+          </h2>
+          {/* the phone's Board cell for one status, as taskFocus reads it */}
+          <div className="mobile-task-group" data-board-cell="phone" data-status={group.id}>
+            <DeferredList
+              id={`phone:${group.id}`}
+              items={group.tasks}
+              keyOf={taskKey}
+              render={renderRow}
+              estimate={rowEstimate}
+              gap={0}
+              initial={initialOf(group.id)}
+              scheduler={scheduler}
+              label={pendingRows}
+            />
+          </div>
+        </section>
+      ))}
       {count === 0 && (
         <div className="mobile-task-empty">
           <Icon name="board" size={24} />
