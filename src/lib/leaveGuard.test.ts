@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest'
-import { createUnsentScope, hasUnsaved, holdUnsaved, installLeaveGuard } from './leaveGuard'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  createUnsentScope,
+  DISCARD_MS,
+  hasUnsaved,
+  holdUnsaved,
+  installLeaveGuard,
+} from './leaveGuard'
 
 /** Dispatches a cancelable beforeunload and answers whether it was stopped. */
 function leave(win: EventTarget) {
@@ -56,8 +62,28 @@ describe('unsent scopes', () => {
     page.discard()
     expect(note.held()).toEqual([])
     expect(note.discarded()).toBe(true)
+    // the close ends the leases, and is still the Discard's own
     release()
+    expect(note.discarded()).toBe(true)
+    const again = note.hold('note')
     expect(page.discarded()).toBe(false)
+    again()
+  })
+
+  it('ends a discard after DISCARD_MS', () => {
+    vi.useFakeTimers()
+    try {
+      const scope = createUnsentScope()
+      const release = scope.hold('note')
+      scope.discard()
+      release()
+      vi.advanceTimersByTime(DISCARD_MS - 1)
+      expect(scope.discarded()).toBe(true)
+      vi.advanceTimersByTime(1)
+      expect(scope.discarded()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('reports nothing after a discard until a new lease begins', () => {

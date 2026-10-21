@@ -1102,8 +1102,9 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     return () => {
       if (liveEditors.get(uuid) === entry) liveEditors.delete(uuid)
       // an unmount (modal closed, issue deleted remotely) drops any unsaved
-      // draft — say so, since only the Save button persists now
-      if (dirtyRef.current) toast('Unsaved description changes discarded')
+      // draft — say so, since only the Save button persists now, unless the
+      // person chose Discard in the close's question
+      if (dirtyRef.current && !draft.discarded()) toast('Unsaved description changes discarded')
       reapRef.current()
     }
     // by the task, so a handle that moves keeps the routing and the draft
@@ -1111,14 +1112,16 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
 
   // comment mode has no upload plumbing, but the same unmount contract: a
   // dirty draft (typed composer, half-edited comment) dies with the editor
-  // (modal closed, comment deleted remotely), so say so. A draft still being
-  // sent may yet be saved, so commit says so only after a refusal.
+  // (modal closed, comment deleted remotely), so say so, unless the person
+  // chose Discard in the close's question. A draft still being sent may yet
+  // be saved, so commit says so only after a refusal.
   useEffect(() => {
     if (!isComment) return
     closedRef.current = false
     return () => {
       closedRef.current = true
-      if (dirtyRef.current && !sendingRef.current) toast('Unsaved comment discarded')
+      if (dirtyRef.current && !sendingRef.current && !draft.discarded())
+        toast('Unsaved comment discarded')
     }
   }, [isComment])
 

@@ -42,12 +42,12 @@ export type UnsentScope = {
   hold: (what: string) => () => void
   /** Lets the close the person chose to discard go ahead, which can land a
       moment later, after a history step: the window, and every window
-      inside it, reports nothing for DISCARD_MS, or until its leases end or
-      a new one begins. A window that stays open after all asks again from
-      then on. */
+      inside it, reports nothing for DISCARD_MS, or until a new lease
+      begins. A window that stays open after all asks again from then on. */
   discard: () => void
   /** Whether a Discard on this window or one around it is letting a close
-      go ahead now. */
+      go ahead now, also while that close ends the window's leases, so an
+      editor that unmounts with it can tell its text went by Discard. */
   discarded: () => boolean
 }
 
@@ -69,7 +69,7 @@ export function createUnsentScope(parent: UnsentScope | null = null): UnsentScop
       discardedAt = null
       const outer = parent?.hold(what)
       return () => {
-        if (own.delete(lease) && !own.size) discardedAt = null
+        own.delete(lease)
         outer?.()
       }
     },
