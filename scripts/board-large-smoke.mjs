@@ -6,6 +6,7 @@
  * and back from the task window, Find on the last card, and that the page
  * logs no errors. Writes go to the page's synthetic transport only. */
 import assert from 'node:assert/strict'
+import { rmSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -20,13 +21,20 @@ const slow = { timeout: 120_000 }
 const log = (message) => console.log(`[board-large] ${message}`)
 
 const temporary = await mkdtemp(join(tmpdir(), 'qivo-board-large-'))
+// Ctrl-C or a stop skips the finally below, so remove the build here.
+for (const signal of ['SIGINT', 'SIGTERM'])
+  process.once(signal, () => {
+    rmSync(temporary, { recursive: true, force: true })
+    process.exit(130)
+  })
 let server
 let browser
 try {
   const outDir = join(temporary, 'dist')
   await buildPage(root, outDir, temporary)
   server = await serve(outDir)
-  browser = await chromium.launch({ headless: true })
+  // the handlers above stop the run; the browser goes with the process
+  browser = await chromium.launch({ headless: true, handleSIGINT: false, handleSIGTERM: false })
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
   page.setDefaultTimeout(30_000)
   const errors = []

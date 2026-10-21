@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { IssueVM } from '../store/planner'
-import { cell, dragEvent, loadBoard, taskRow } from './boardFixture.setup'
+import { BOARD_TEST_TIMEOUT, cell, dragEvent, loadBoard, taskRow } from './boardFixture.setup'
 
 /* Dragging a Board card on the real store. */
 
@@ -61,15 +61,14 @@ const crowded = () =>
     snap.issues.push(taskRow(snap, 'a', 'todo', 1))
     for (let n = 0; n < 20; n++) snap.issues.push(taskRow(snap, `p${n}`, 'progress', n + 2))
   })
-const over = (status: string) =>
-  act(async () => cell(status)?.dispatchEvent(dragEvent('dragover', '')))
+const over = (status: string) => act(async () => cell(status)?.dispatchEvent(dragEvent('dragover')))
 const highlighted = (status: string) => !!cell(status)?.style.outline.includes('dashed')
 
-describe('dragging a Board card', () => {
+describe('dragging a Board card', { timeout: BOARD_TEST_TIMEOUT }, () => {
   it('highlights the cell it is over without rendering any card', async () => {
     const board = await crowded()
     await board.render(root)
-    await act(async () => board.card('a')?.dispatchEvent(dragEvent('dragstart', 'a')))
+    await act(async () => board.card('a')?.dispatchEvent(dragEvent('dragstart')))
     portraits.rendered = []
     await over('progress')
     expect(portraits.rendered).toEqual([])
@@ -80,7 +79,7 @@ describe('dragging a Board card', () => {
   it('highlights only the last cell it was over', async () => {
     const board = await crowded()
     await board.render(root)
-    await act(async () => board.card('a')?.dispatchEvent(dragEvent('dragstart', 'a')))
+    await act(async () => board.card('a')?.dispatchEvent(dragEvent('dragstart')))
     await over('progress')
     // no dragleave between them, as a fast drag can deliver it
     await over('review')
@@ -93,6 +92,45 @@ describe('dragging a Board card', () => {
     expect(cell('todo')?.hasAttribute('data-drop-over')).toBe(false)
   })
 
+  it('clears the highlight when the drag drops or ends', async () => {
+    const board = await crowded()
+    await board.render(root)
+    const status = () => board.P.issues.find((it) => it.uuid === 'a')?.status
+    await act(async () => board.card('a')?.dispatchEvent(dragEvent('dragstart')))
+    await over('review')
+    await act(async () => board.card('a')?.dispatchEvent(dragEvent('dragend')))
+    expect(highlighted('review')).toBe(false)
+    expect(status()).toBe('todo')
+    await act(async () => board.card('a')?.dispatchEvent(dragEvent('dragstart')))
+    await over('progress')
+    await act(async () => cell('progress')?.dispatchEvent(dragEvent('drop')))
+    expect(status()).toBe('progress')
+    expect(highlighted('progress')).toBe(false)
+    expect(document.querySelector('[data-drop-over]')).toBeNull()
+  })
+
+  it('takes no drop from a drag that did not start on a card', async () => {
+    const board = await crowded()
+    await board.render(root)
+    const status = () => board.P.issues.find((it) => it.uuid === 'a')?.status
+    // the card's own drag ends where the Board never hears of it
+    await act(async () => board.card('a')?.dispatchEvent(dragEvent('dragstart')))
+    // a file dragged in from the desktop carries no task
+    const file = (type: string) => {
+      const event = new Event(type, { bubbles: true, cancelable: true })
+      Object.defineProperty(event, 'dataTransfer', {
+        value: { types: ['Files'], dropEffect: 'none', getData: () => '' },
+      })
+      return event
+    }
+    const offer = file('dragover')
+    await act(async () => cell('review')?.dispatchEvent(offer))
+    expect(offer.defaultPrevented).toBe(false)
+    expect(highlighted('review')).toBe(false)
+    await act(async () => cell('review')?.dispatchEvent(file('drop')))
+    expect(status()).toBe('todo')
+  })
+
   it('ends once the dragged card has left the page', async () => {
     const board = await loadBoard(network, (snap) => {
       snap.issues.push(taskRow(snap, 'a', 'todo', 1), taskRow(snap, 'b', 'todo', 2))
@@ -100,7 +138,7 @@ describe('dragging a Board card', () => {
     await board.render(root)
     const row = (uuid: string) => board.card(uuid)
     const { isUpdateBlocked } = await import('../lib/updateSafety')
-    await act(async () => row('a')?.dispatchEvent(dragEvent('dragstart', 'a')))
+    await act(async () => row('a')?.dispatchEvent(dragEvent('dragstart')))
     expect(isUpdateBlocked()).toBe(true)
     expect(row('a')?.classList.contains('opacity-40')).toBe(true)
     // another person moves the task, which replaces its row in In Progress;
@@ -121,12 +159,12 @@ describe('dragging a Board card', () => {
     await board.render(root)
     const row = (uuid: string) => board.card(uuid)
     const { isUpdateBlocked } = await import('../lib/updateSafety')
-    await act(async () => row('a')?.dispatchEvent(dragEvent('dragstart', 'a')))
+    await act(async () => row('a')?.dispatchEvent(dragEvent('dragstart')))
     board.snapshot.issues[0].title = 'Renamed elsewhere'
     await board.deliver()
     await act(async () => window.dispatchEvent(new Event('pointermove')))
     expect(isUpdateBlocked()).toBe(true)
-    await act(async () => row('a')?.dispatchEvent(dragEvent('dragend', 'a')))
+    await act(async () => row('a')?.dispatchEvent(dragEvent('dragend')))
     expect(isUpdateBlocked()).toBe(false)
   })
 })

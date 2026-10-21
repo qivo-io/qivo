@@ -2,7 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { loadBoard, taskRow } from './boardFixture.setup'
+import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
 
 /* Opening the Board on the real store renders it once. */
 
@@ -45,7 +45,7 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-describe('opening the Board', () => {
+describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT }, () => {
   it('renders it once', async () => {
     const board = await loadBoard(network, (snap) => {
       for (let n = 0; n < 50; n++)

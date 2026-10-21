@@ -548,9 +548,10 @@ async function runSample(origin, tasks, metrics) {
       })
     }),
   )
+  // until every card is back; the first card's time is boardFilterFirstCardMs
   phase('boardFilterClear')
   let firstCard = 0
-  metrics.boardFilterCompleteMs.push(
+  metrics.boardFilterClear.push(
     await timed(async () => {
       const start = await page.evaluate(() => performance.now())
       await filter.fill('', { timeout: timeout * 10 })
@@ -593,6 +594,7 @@ async function runSample(origin, tasks, metrics) {
 /** Runs one sample on the varied workspace: opens the Board right after
     startup, scrolls it and drags one card into the next status. */
 async function runVariedSample(origin, tasks, metrics) {
+  phase('variedStartup')
   const opened = await openPage(origin, tasks, metrics, '&shape=varied')
   const { context, page, errors, settle, timed } = opened
   await page.locator('[data-view-switch]').waitFor()
@@ -602,6 +604,7 @@ async function runVariedSample(origin, tasks, metrics) {
   // A drag from the first lane's To Do into its In Progress, the way
   // board-cards-smoke.mjs drives one, with only the dragover timed.
   const lane = page.locator('.board-lane').first()
+  phase('variedBoardDragStart')
   // the dragged task's own row, which the drop moves to In Progress
   const id = await lane
     .locator('[data-board-cell][data-status="todo"] [data-card][draggable="true"]')
@@ -624,6 +627,7 @@ async function runVariedSample(origin, tasks, metrics) {
       assert.equal(accepted, true, 'In Progress must accept the drag')
     }),
   )
+  phase('variedBoardDrop')
   const writes = await page.evaluate(() => window.__perf.writes)
   await target.dispatchEvent('drop', { dataTransfer: transfer })
   await page.waitForFunction((previous) => window.__perf.writes > previous, writes, {
@@ -649,7 +653,6 @@ const emptyMetrics = () =>
       'boardDomNodes',
       'boardHeapMb',
       'boardFilterFirstCardMs',
-      'boardFilterCompleteMs',
       'phoneBoardFirstCardMs',
     ].map((key) => [key, []]),
   )

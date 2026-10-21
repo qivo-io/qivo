@@ -1,5 +1,9 @@
 import { useSyncExternalStore } from 'react'
 
+/** The drag data type a Board card's drag carries, holding the task's id.
+    The Board accepts only drags that carry it. */
+export const BOARD_TASK_TYPE = 'application/x-qivo-board-task'
+
 /** The key of the one Board cell a drag would drop into, or null. Cells
     subscribe to their own key, so a drag moving between cells renders only
     the cell it left and the cell it entered, never the Board or its cards. */

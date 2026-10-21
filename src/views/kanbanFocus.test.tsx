@@ -2,7 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cell, loadBoard, taskRow } from './boardFixture.setup'
+import { BOARD_TEST_TIMEOUT, cell, loadBoard, taskRow } from './boardFixture.setup'
 
 /* Keyboard focus on a Board card follows the card when another person's
    change moves it to another cell. */
@@ -69,7 +69,7 @@ async function focusedOwner() {
   return { board, owner, moveA }
 }
 
-describe('focus on a Board card', () => {
+describe('focus on a Board card', { timeout: BOARD_TEST_TIMEOUT }, () => {
   it('follows the card to its new cell', async () => {
     const { owner, moveA } = await focusedOwner()
     await moveA()
@@ -86,5 +86,89 @@ describe('focus on a Board card', () => {
     await moveA()
     expect(cell('review')?.contains(owner()!)).toBe(true)
     expect(document.activeElement).toBe(document.body)
+  })
+
+  it('stays where wheel scrolling left it', async () => {
+    const { owner, moveA } = await focusedOwner()
+    await act(async () => window.dispatchEvent(new Event('wheel')))
+    await moveA()
+    expect(cell('review')?.contains(owner()!)).toBe(true)
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('stays off a Board behind a modal window', async () => {
+    const { moveA } = await focusedOwner()
+    container.setAttribute('inert', '')
+    await moveA()
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('forgets a card whose task went, so a card arriving later never takes focus', async () => {
+    const board = await loadBoard(network, (snap) => {
+      snap.issues.push(taskRow(snap, 'a', 'review', 1), taskRow(snap, 'b', 'todo', 2))
+    })
+    await board.render(root)
+    await act(async () =>
+      board.card('a')?.querySelector<HTMLElement>('[data-focus-key="owner"]')?.focus(),
+    )
+    // A is archived elsewhere: its cell is left empty
+    board.snapshot.issues = board.snapshot.issues.filter((issue) => issue.id !== 'a')
+    await board.deliver()
+    expect(document.activeElement).toBe(document.body)
+    board.snapshot.issues.find((issue) => issue.id === 'b')!.status = 'review'
+    await board.deliver()
+    expect(cell('review')?.contains(board.card('b'))).toBe(true)
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('follows the card when a keyboard owner pick moves it to another lane', async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        snap.profiles.push({
+          ...snap.profiles[0],
+          id: 'second',
+          auth_user_id: 'second-account',
+          name: 'Second Person',
+          initials: 'SP',
+        })
+        snap.issues.push(taskRow(snap, 'a', 'todo', 1), taskRow(snap, 'b', 'todo', 2))
+      },
+      { metaViz: 'assignees' },
+    )
+    await board.render(root)
+    const owner = () => board.card('a')?.querySelector<HTMLElement>('[data-focus-key="owner"]')
+    const lane = () => board.card('a')?.closest('[data-swimlane-panel]')
+    const before = lane()
+    await act(async () => owner()?.focus())
+    // Enter opens the picker; focus moves into its list, outside the Board
+    await act(async () => owner()?.click())
+    const pick = [...document.querySelectorAll<HTMLElement>('[cmdk-item]')].find((item) =>
+      item.textContent?.includes('Second Person'),
+    )
+    expect(pick).toBeDefined()
+    await act(async () => pick?.focus())
+    expect(container.querySelector('[data-scroll]')?.contains(document.activeElement)).toBe(false)
+    await act(async () => pick?.click())
+    expect(lane()).not.toBe(before)
+    expect(document.activeElement).toBe(owner())
+  })
+})
+
+describe('focus on a phone task row', { timeout: BOARD_TEST_TIMEOUT }, () => {
+  it('follows the row to its new status section', async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        snap.issues.push(taskRow(snap, 'a', 'todo', 1), taskRow(snap, 'b', 'todo', 2))
+      },
+      { phone: true },
+    )
+    await board.render(root)
+    await act(async () => board.card('a')?.focus())
+    board.snapshot.issues.find((issue) => issue.id === 'a')!.status = 'review'
+    await board.deliver()
+    expect(cell('review')?.contains(board.card('a'))).toBe(true)
+    expect(document.activeElement).toBe(board.card('a'))
   })
 })

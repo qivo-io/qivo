@@ -85,6 +85,11 @@ export async function checkoutOf(root, commit, temporary) {
     its origin and a function that stops the server. */
 export async function serve(outDir, host = '127.0.0.1') {
   const server = createServer(async (request, response) => {
+    // another device can send any request line once --host is set
+    if (!URL.canParse(request.url, 'http://localhost')) {
+      response.writeHead(400).end()
+      return
+    }
     const pathname = new URL(request.url, 'http://localhost').pathname
     const file = pathname.startsWith('/assets/')
       ? join(outDir, pathname)
@@ -102,7 +107,10 @@ export async function serve(outDir, host = '127.0.0.1') {
       response.writeHead(404).end()
     }
   })
-  await new Promise((resolve) => server.listen(0, host, resolve))
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, host, resolve)
+  })
   const name = host.includes(':') ? `[${host}]` : host
   return {
     origin: `http://${name}:${server.address().port}`,

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { markTaskFocus, restoreTaskFocus } from './taskFocus'
+import { markTaskFocus, registerTaskMount, restoreTaskFocus } from './taskFocus'
 
 /* Focus put back on a task's card after the Board drew it again, on DOM
    shaped like the Board's cells, cards and parent headings. */
@@ -61,21 +61,42 @@ describe('restoreTaskFocus', () => {
   it('falls back to the card in the same place only once the task is gone', () => {
     document.body.innerHTML = cell('todo', card('A') + card('B') + card('C'))
     const mark = markTaskFocus(control('data-card="B"', 'title'))!
-    document.body.innerHTML = cell('todo', card('A') + card('C'))
+    // the same cell element, without B
+    document.querySelector('[data-card="B"]')!.remove()
+    expect(restoreTaskFocus(mark, { scroll: false, nearby: false })).toBe(false)
     expect(restoreTaskFocus(mark, { scroll: false })).toBe(true)
     expect(focused()).toEqual({ task: { card: 'C' }, key: 'title' })
     expect(document.activeElement?.scrollIntoView).not.toHaveBeenCalled()
   })
 
-  it('leaves focus alone when nothing fits', () => {
+  it('never falls back into a cell drawn again, such as another scope with the same lane key', () => {
+    document.body.innerHTML = cell('todo', card('A') + card('B'))
+    const mark = markTaskFocus(control('data-card="B"', 'title'))!
+    document.body.innerHTML = cell('todo', card('X') + card('Y'))
+    expect(restoreTaskFocus(mark, { scroll: false })).toBe(false)
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('never focuses a card behind a modal window', () => {
     document.body.innerHTML = cell('todo', card('A'))
     const mark = markTaskFocus(control('data-card="A"', 'title'))!
-    document.body.innerHTML = cell('review', card('B'))
-    document.body.setAttribute('inert', '')
+    document.body.innerHTML = `<div inert>${cell('review', card('A'))}</div>`
+    expect(restoreTaskFocus(mark, { scroll: true })).toBe(false)
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('lets a registered view mount the card before it searches', () => {
+    document.body.innerHTML = cell('todo', card('A'))
+    const mark = markTaskFocus(control('data-card="A"', 'owner'))!
+    document.body.innerHTML = cell('review', '')
+    const unregister = registerTaskMount((asked) => {
+      document.querySelector('[data-status="review"]')!.innerHTML = card(asked.taskId)
+    })
     try {
-      expect(restoreTaskFocus(mark, { scroll: true })).toBe(false)
+      expect(restoreTaskFocus(mark, { scroll: false })).toBe(true)
+      expect(focused()).toEqual({ task: { card: 'A' }, key: 'owner' })
     } finally {
-      document.body.removeAttribute('inert')
+      unregister()
     }
   })
 })

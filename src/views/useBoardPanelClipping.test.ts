@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, createElement } from 'react'
+import { createPortal } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useBoardPanelClipping } from './useBoardPanelClipping'
@@ -54,7 +55,34 @@ function Pane() {
 /** Lets the mutation observer's callback run. */
 const observed = () => act(async () => await new Promise((resolve) => setTimeout(resolve, 0)))
 
+/* The pane, then the material portalled after it, as BoardPanelMaterial
+   portals it into #root, so the material's ref comes second. */
+function MaterialAfter({ host }: { host: HTMLElement }) {
+  const { paneRef, materialRef } = useBoardPanelClipping()
+  return createElement(
+    'div',
+    null,
+    createElement('div', { ref: paneRef, 'data-pane': '' }),
+    createPortal(createElement('div', { ref: materialRef, 'data-material': '' }), host),
+  )
+}
+
 describe('the Board panel clipping', () => {
+  it('paints the material whichever of the two mounts first', async () => {
+    const host = document.createElement('div')
+    document.body.append(host)
+    try {
+      await act(async () => root.render(createElement(MaterialAfter, { host })))
+      const material = host.querySelector<HTMLElement>('[data-material]')!
+      // painted in the commit: nothing to show, so the material is clipped away
+      expect(material.style.clipPath).toBe('inset(0 0 100% 0)')
+      await act(async () => root.render(null))
+      expect(material.style.clipPath).toBe('')
+    } finally {
+      host.remove()
+    }
+  })
+
   it('leaves the pane alone when a status cell gains a card', async () => {
     await act(async () => root.render(createElement(Pane)))
     const pane = container.querySelector<HTMLElement>('[data-pane]')!

@@ -1199,8 +1199,11 @@ function IssueDetail({
   // the task this window shows now, for work that finishes after a switch;
   // updated once a render commits, never during one
   const shownIssue = useRefID(issueId)
+  // the last task it showed, which closing (issueId null) keeps, for focus
+  const lastShown = useRefID(issueId)
   useLayoutEffectID(() => {
     shownIssue.current = issueId
+    if (issueId) lastShown.current = issueId
   }, [issueId])
   const [actFilter, setActFilter] = useStateID('comments') // comments ⇄ all
   // the description discloses only in the embedded pane; the floating window
@@ -1464,9 +1467,6 @@ function IssueDetail({
   // Keyed on being modal, not on the breakpoint, so a resize across it keeps
   // the setup (and the focus) of a window that stays modal.
   const modal = open && modalActive && (!embedded || mobile)
-  // the task the window shows now, for focus to return to when it closes
-  const shownTask = useRefID<string | null>(null)
-  shownTask.current = it?.id ?? null
   useEffectID(() => {
     if (!modal) return
     const frame = frameRef.current
@@ -1583,17 +1583,19 @@ function IssueDetail({
       } else {
         // The opener went with its card. This cleanup can run while React
         // still commits the close, so search once that commit is done and
-        // the Board shows the task where it is now.
-        const taskId = shownTask.current
+        // the Board shows the tasks where they are now: the opener's task,
+        // else the title of the task the window showed last, and only then
+        // the card that took the opener's place.
+        const shown = lastShown.current
         queueMicrotask(() => {
           const scroll = !lastInputWasPointer()
-          if (previousMark && restoreTaskFocus(previousMark, { scroll })) return
-          // else the title of the task's card, wherever it is now
-          if (taskId)
-            restoreTaskFocus(
-              { taskId, row: 'card', control: 'title', cell: null, status: null, index: -1 },
-              { scroll },
-            )
+          if (previousMark && restoreTaskFocus(previousMark, { scroll, nearby: false })) return
+          if (shown) {
+            const title = { taskId: shown, row: 'card', control: 'title' } as const
+            const anywhere = { cell: null, status: null, place: null, index: -1 }
+            if (restoreTaskFocus({ ...title, ...anywhere }, { scroll })) return
+          }
+          if (previousMark) restoreTaskFocus(previousMark, { scroll })
         })
       }
     }

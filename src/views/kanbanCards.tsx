@@ -6,6 +6,7 @@ import { HoverTooltip } from '@/components/ui/tooltip'
 import type { BoardCellGroup } from '@/lib/boardGroups'
 import { type IssueVM, P, type ProjectPlace } from '@/store/planner'
 import type { StoreVersion } from '@/store/updates'
+import { BOARD_TASK_TYPE } from './board/dropOver'
 
 type CardActions = {
   onOpen: (id: string) => void
@@ -147,6 +148,7 @@ function TaskRow({
         }
         e.dataTransfer.effectAllowed = 'move'
         e.dataTransfer.setData('text/plain', it.id)
+        e.dataTransfer.setData(BOARD_TASK_TYPE, it.id)
         onDragStart(it.id, e.currentTarget)
       }}
       onDragEnd={onDragEnd}

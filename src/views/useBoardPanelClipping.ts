@@ -81,18 +81,17 @@ function bodyPath(
 
 /* Clip hidden cards out of the pinned chrome, and paint all visible panel
    shapes through one fixed material surface below the workspace content.
-   `paneRef` is a stable callback ref that binds the pane and returns the
-   unbinding, so binding sets no state. It paints once synchronously, in the
-   commit, because the material stays hidden until it is clipped
-   (appearance.css). The material renders inside the pane's subtree, so its
-   ref is set before the pane's. */
+   `paneRef` and `materialRef` are stable callback refs. Once both elements
+   are there, in either order, the clipping binds without setting state, and
+   it unbinds when either goes. It paints once synchronously, in the commit,
+   because the material stays hidden until it is clipped (appearance.css). */
 export function useBoardPanelClipping() {
-  const materialRef = useRef<HTMLDivElement>(null)
+  const parts = useRef<{ pane?: HTMLDivElement; material?: HTMLDivElement; unbind?: () => void }>(
+    {},
+  )
 
-  const paneRef = useCallback((pane: HTMLDivElement) => {
-    const material = materialRef.current
-    if (!material) return () => {}
-
+  /** Binds the clipping of `pane` onto `material`; returns the unbinding. */
+  const bind = useCallback((pane: HTMLDivElement, material: HTMLDivElement) => {
     let frame = 0
     const painted = new Map<HTMLElement, Map<PaintProperty, StylePaint>>()
     const observed = new Set<Element>()
@@ -297,6 +296,37 @@ export function useBoardPanelClipping() {
       for (const [element, entry] of painted) restore(element, entry)
     }
   }, [])
+
+  const connect = useCallback(() => {
+    const { pane, material, unbind } = parts.current
+    if (pane && material && !unbind) parts.current.unbind = bind(pane, material)
+  }, [bind])
+  const disconnect = useCallback(() => {
+    parts.current.unbind?.()
+    parts.current.unbind = undefined
+  }, [])
+  const paneRef = useCallback(
+    (pane: HTMLDivElement) => {
+      parts.current.pane = pane
+      connect()
+      return () => {
+        disconnect()
+        parts.current.pane = undefined
+      }
+    },
+    [connect, disconnect],
+  )
+  const materialRef = useCallback(
+    (material: HTMLDivElement) => {
+      parts.current.material = material
+      connect()
+      return () => {
+        disconnect()
+        parts.current.material = undefined
+      }
+    },
+    [connect, disconnect],
+  )
 
   return { paneRef, materialRef }
 }

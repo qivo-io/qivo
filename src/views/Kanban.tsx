@@ -18,7 +18,7 @@ import {
 } from '../store/planner'
 import { BoardPanelMaterial } from './BoardPanelMaterial'
 import './Board.css'
-import { createDropOver, type DropOver, useDropOver } from './board/dropOver'
+import { BOARD_TASK_TYPE, createDropOver, type DropOver, useDropOver } from './board/dropOver'
 import { BoardCard } from './kanbanCards'
 import { useBoardPanelClipping } from './useBoardPanelClipping'
 
@@ -57,9 +57,16 @@ type CardDropTarget = {
    installs the listeners and returns their removal, so binding the pane sets
    no state and the Board renders once when it mounts. While `enabled` is
    false the listeners do nothing, and the first of them to see it drops any
-   snap or boundary in progress. */
+   snap or boundary in progress. The wheel listener, which cannot be passive,
+   is bound only while enabled, so a Board without the snap scrolls off the
+   main thread. */
 function useLaneWheelSnap(enabled: boolean) {
   const isEnabled = useLatest(() => enabled)
+  // binds or unbinds the bound pane's wheel listener to match `enabled`
+  const syncWheel = React.useRef<(() => void) | null>(null)
+  React.useLayoutEffect(() => {
+    syncWheel.current?.()
+  }, [enabled])
   return React.useCallback(
     (pane: HTMLDivElement) => {
       let wheelBoundary: { panel: HTMLElement; direction: number } | null = null
@@ -227,7 +234,15 @@ function useLaneWheelSnap(enabled: boolean) {
         )
         snapTo(top, direction)
       }
-      pane.addEventListener('wheel', onWheel, { passive: false })
+      let wheelBound = false
+      const sync = () => {
+        if (isEnabled() === wheelBound) return
+        wheelBound = !wheelBound
+        if (wheelBound) pane.addEventListener('wheel', onWheel, { passive: false })
+        else pane.removeEventListener('wheel', onWheel)
+      }
+      syncWheel.current = sync
+      sync()
       pane.addEventListener('scroll', onScroll, { passive: true })
       const onScrollEnd = () => {
         if (active()) clearBoundary()
@@ -236,6 +251,7 @@ function useLaneWheelSnap(enabled: boolean) {
       window.addEventListener('pointerdown', onOtherInput, { capture: true, passive: true })
       window.addEventListener('keydown', onOtherInput, { capture: true })
       return () => {
+        if (syncWheel.current === sync) syncWheel.current = null
         pane.removeEventListener('wheel', onWheel)
         pane.removeEventListener('scroll', onScroll)
         pane.removeEventListener('scrollend', onScrollEnd)
@@ -620,21 +636,23 @@ function Kanban({
       'assignee' in patch ? patch.assignee : 'reviewer' in patch ? patch.reviewer : null
     return person == null || P.taskAssigneesFor(task).some((u) => u.id === person) ? patch : null
   }
+  /* Writes the drop of task `id`, which the drag itself carries. A drop can
+     come from a synthetic drag, which never went through a card's own
+     `draggable`, so the right is checked again here. */
   const moveCard = (statusId: string, id: string, target: CardDropTarget) => {
-    const iid = id || dragId
-    // A drop can come from a synthetic drag or one that started outside the
-    // Board, neither of which went through a card's own `draggable`, so the
-    // right is checked again here.
-    const patch = dropPatchFor(iid, statusId, target)
+    const patch = id ? dropPatchFor(id, statusId, target) : null
     // One mutation keeps the owner change and status move atomic.
-    if (patch && Object.keys(patch).length) P.updateIssue(iid, patch)
+    if (patch && Object.keys(patch).length) P.updateIssue(id, patch)
     endDrag()
   }
   // Native drag previews can leave the board. Only advertise and accept a
-  // drop where the task already belongs (or an eligible person lane).
+  // drop where the task already belongs (or an eligible person lane), and
+  // only from a Board card's drag: a file or another page's drag never
+  // takes over a drag the Board still remembers.
   const cardDropHandlers = (key: string, statusId: string, target: CardDropTarget) => ({
     onDragOver: (e: React.DragEvent) => {
-      const patch = dragId ? dropPatchFor(dragId, statusId, target) : null
+      const ours = e.dataTransfer.types.includes(BOARD_TASK_TYPE)
+      const patch = dragId && ours ? dropPatchFor(dragId, statusId, target) : null
       if (patch) {
         e.preventDefault()
         e.dataTransfer.dropEffect = 'move'
@@ -652,7 +670,7 @@ function Kanban({
     },
     onDrop: (e: React.DragEvent) => {
       e.preventDefault()
-      moveCard(statusId, e.dataTransfer.getData('text/plain'), target)
+      moveCard(statusId, e.dataTransfer.getData(BOARD_TASK_TYPE), target)
     },
   })
   const defaultProject = subIds[0] || null

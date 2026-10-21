@@ -80,18 +80,24 @@ const task = (n) => ({
 const STATUSES = ['backlog', 'todo', 'progress', 'review', 'done']
 /** Task `n` of the varied workspace. Every 25th task is a parent of the
     three after it, every 7th has a due date (every other one past), every
-    31st is paused, every 13th has a 90-character title and every 11th has
-    no owner. */
+    31st is paused unless it is in Backlog or Done, every 13th has a
+    90-character title and every 11th has no owner. As the server keeps
+    them, parents have no remaining hours and no task in Backlog or Done is
+    paused. */
 const variedTask = (n) => {
   const row = task(n)
   row.status = STATUSES[n % STATUSES.length]
+  if (n % 25 === 0) {
+    delete row.remaining_hours
+    delete row.remaining_set_at
+  }
   const parent = n - (n % 25)
   if (n % 25 > 0 && n % 25 <= 3) {
     row.parent_id = id('4', parent)
     row.project_id = projects[parent % projects.length].id
   }
   if (n % 7 === 0) row.due_date = day((n / 7) % 2 ? -((n % 40) + 1) : (n % 40) + 1)
-  if (n % 31 === 0) row.paused = true
+  if (n % 31 === 0 && !['backlog', 'done'].includes(row.status)) row.paused = true
   if (n % 13 === 0)
     row.title =
       `${row.title} ${'with a longer description of the work it covers '.repeat(2)}`.slice(0, 90)

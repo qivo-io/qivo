@@ -15,10 +15,16 @@ type Network = {
   onUpdate: ReturnType<typeof vi.fn>
 }
 type Row = Snapshot['issues'][number]
-/** What renders beside the Board for the task it opened, given a close. */
-type Window = (opened: string | null, close: () => void) => ReactNode
+/** What renders beside the Board for the task it opened, given a close and
+    a way to open another task. */
+type Window = (opened: string | null, close: () => void, open: (id: string) => void) => ReactNode
 
 const AT = '2026-09-14T08:00:00.000Z'
+
+/** A test's budget on the Board: booting the store and drawing the Board
+    with a task window takes about three seconds alone, and more on a busy
+    shared machine than the default five allow. */
+export const BOARD_TEST_TIMEOUT = 20_000
 
 /** A task row in the fixture's one project, owned by its one person. */
 export function taskRow(snapshot: Snapshot, id: string, status: Row['status'], num: number): Row {
@@ -41,8 +47,13 @@ export function taskRow(snapshot: Snapshot, id: string, status: Row['status'], n
 }
 
 /** Boots a fresh store on the fixture with the tasks `prepare` adds, and
-    returns it with the Board and a way to deliver a changed snapshot. */
-export async function loadBoard(network: Network, prepare: (snapshot: Snapshot) => void) {
+    returns it with the Board and a way to deliver a changed snapshot. The
+    Board is drawn in the `metaViz` layout, or as the phone's task list. */
+export async function loadBoard(
+  network: Network,
+  prepare: (snapshot: Snapshot) => void,
+  { metaViz = 'swimlanes', phone = false } = {},
+) {
   vi.resetModules()
   const snapshot = plannerFixture()
   prepare(snapshot)
@@ -66,6 +77,7 @@ export async function loadBoard(network: Network, prepare: (snapshot: Snapshot) 
   const { usePlannerVersion } = await import('../store/usePlannerVersion')
   const { TooltipProvider } = await import('../components/ui/tooltip')
   const { Kanban } = await import('./Kanban')
+  const { MobileTaskList } = await import('../components/MobileWorkspace')
   const { P } = store
   const scope = snapshot.projects[0].id
   const filters = {
@@ -83,15 +95,15 @@ export async function loadBoard(network: Network, prepare: (snapshot: Snapshot) 
     const [opened, setOpened] = useState<string | null>(null)
     const info = P.scopeInfo(scope)
     if (!info) throw new Error('missing the scope')
+    const actions = { openIssue: setOpened as (...args: unknown[]) => void }
     return (
       <TooltipProvider>
-        <Kanban
-          info={info}
-          filters={filters}
-          tweaks={{ metaViz: 'swimlanes' }}
-          actions={{ openIssue: setOpened as (...args: unknown[]) => void }}
-        />
-        {window?.(opened, () => setOpened(null))}
+        {phone ? (
+          <MobileTaskList info={info} filters={filters} setFilters={() => {}} actions={actions} />
+        ) : (
+          <Kanban info={info} filters={filters} tweaks={{ metaViz }} actions={actions} />
+        )}
+        {window?.(opened, () => setOpened(null), setOpened)}
       </TooltipProvider>
     )
   }
@@ -111,14 +123,22 @@ export async function loadBoard(network: Network, prepare: (snapshot: Snapshot) 
   }
 }
 
-/** A drag event jsdom can carry, with a transfer that holds `id`. */
-export function dragEvent(type: string, id: string) {
+/* The data of the drag in progress. As in a browser, every event of one
+   drag carries the same transfer, from its dragstart on. */
+let dragData = new Map<string, string>()
+
+/** A drag event of `type` jsdom can carry. A dragstart begins a new drag. */
+export function dragEvent(type: string) {
+  if (type === 'dragstart') dragData = new Map()
+  const data = dragData
   const event = new Event(type, { bubbles: true, cancelable: true })
-  const data = new Map([['text/plain', id]])
   Object.defineProperty(event, 'dataTransfer', {
     value: {
       effectAllowed: 'all',
       dropEffect: 'none',
+      get types() {
+        return [...data.keys()]
+      },
       setData: (format: string, value: string) => data.set(format, value),
       getData: (format: string) => data.get(format) ?? '',
     },
