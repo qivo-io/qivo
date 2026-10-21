@@ -812,6 +812,160 @@ describe('values saved before their rule', () => {
     expect(moved.isError, JSON.stringify(moved)).toBeUndefined()
     expect(await week()).toBe('2026-03-09')
   })
+
+  /* Until 2026-10-19 the app took any string as the id of a new person,
+   * project or task, so a task's people, parent and project and a
+   * project's lead may name a row by an id that is not a uuid, and every
+   * read answers it as stored. */
+  it('compares an id that is not a uuid, as one made before ids had to be uuids', async () => {
+    const fx = await setup()
+    const admin = await adminAuth(fx, `qvt_${'legacyid'.repeat(6)}`)
+    const ann = 'Legacy-Ann'
+    await fx.t.run(async (ctx) => {
+      const { _id, _creationTime, auth_user_id, ...guest } = fx.guest
+      await ctx.db.insert('profiles', {
+        ...guest,
+        id: ann,
+        email: 'ann@testbed.test',
+        name: 'Ann',
+      })
+    })
+    const old = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      id: 'Project-Old',
+      key: 'OLD',
+      type: 'project',
+      parent_id: fx.meta.id,
+      lead_id: ann,
+    })
+    const [first, second] = await Promise.all(
+      ['Task-First', 'Task-Second'].map((id) =>
+        plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, id }),
+      ),
+    )
+    const row = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: old.id,
+      assignee_id: ann,
+      reviewer_id: ann,
+      parent_id: first.id,
+    })
+    const ref = `/v1/tasks/${key(row)}`
+    const read = JSON.parse((await send(fx, 'GET', ref)).text) as Record<string, unknown>
+    expect([read.assignee_id, read.reviewer_id, read.parent_id, read.project_id]).toEqual([
+      ann,
+      ann,
+      first.id,
+      old.id,
+    ])
+    const parentNow = (id: string) =>
+      fx.t.run(async (ctx) => {
+        const live = await byId(ctx, 'issues', row.id)
+        if (live) await ctx.db.patch(live._id, { parent_id: id })
+      })
+
+    // a stale one is a conflict, the parent included when both are shown
+    await parentNow(second.id)
+    expect(
+      await send(fx, 'PATCH', ref, {
+        parent: null,
+        expected: { parent_id: first.id, has_hidden_parent: false },
+      }),
+    ).toMatchObject({ status: 409 })
+    expect(
+      await send(fx, 'PATCH', ref, {
+        assignee_id: null,
+        expected: { assignee_id: 'Legacy-Bo' },
+      }),
+    ).toMatchObject({ status: 409 })
+    expect((await task(fx, row.id))?.assignee_id).toBe(ann)
+    await parentNow(first.id)
+
+    // the values as read compare, in any case
+    for (const [body, expected] of [
+      [{ assignee_id: null }, { assignee_id: read.assignee_id }],
+      [{ reviewer_id: null }, { reviewer_id: ann.toUpperCase() }],
+      [{ parent: null }, { parent_id: read.parent_id, has_hidden_parent: false }],
+      [{ project: 'TBED', sub_project: 'FW' }, { project_id: read.project_id }],
+    ]) {
+      expect(
+        await send(fx, 'PATCH', ref, { ...body, expected }),
+        JSON.stringify(body),
+      ).toMatchObject({ status: 200 })
+    }
+    const saved = await task(fx, row.id)
+    expect([saved?.assignee_id, saved?.reviewer_id, saved?.parent_id, saved?.project_id]).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      fx.sub.id,
+    ])
+    expect(
+      await send(
+        fx,
+        'PATCH',
+        '/v1/projects/OLD',
+        { lead_id: fx.admin.id, expected: { lead_id: ann } },
+        admin,
+      ),
+    ).toMatchObject({ status: 200 })
+
+    // over MCP alike
+    await fx.t.run(async (ctx) => {
+      const live = await byId(ctx, 'issues', row.id)
+      const project = await byId(ctx, 'projects', old.id)
+      if (live === null || project === null) throw new Error('fixture rows are missing')
+      await ctx.db.patch(live._id, {
+        assignee_id: ann,
+        parent_id: first.id,
+        project_id: old.id,
+      })
+      await ctx.db.patch(project._id, { lead_id: ann })
+    })
+    const update = (args: Record<string, unknown>) =>
+      tool(fx, 'update_task', { ref: key(row), ...args })
+    expect(
+      await update({
+        assignee_id: null,
+        expected: { assignee_id: 'Legacy-Bo' },
+      }),
+    ).toMatchObject({ isError: true })
+    for (const args of [
+      { assignee_id: null, expected: { assignee_id: ann } },
+      {
+        parent: null,
+        expected: { parent_id: first.id, has_hidden_parent: false },
+      },
+      { project: 'TBED', sub_project: 'FW', expected: { project_id: old.id } },
+    ]) {
+      const result = await update(args)
+      expect(result.isError, JSON.stringify(result)).toBeUndefined()
+    }
+    const lead = await tool(
+      fx,
+      'update_project',
+      { project: 'OLD', lead_id: fx.admin.id, expected: { lead_id: ann } },
+      admin,
+    )
+    expect(lead.isError, JSON.stringify(lead)).toBeUndefined()
+
+    // a value no id can be is still a 400
+    for (const [body, error] of [
+      [
+        { assignee_id: null, expected: { assignee_id: 7 } },
+        'expected.assignee_id must be a profile id or null',
+      ],
+      [
+        { project: 'TBED', sub_project: 'PCB', expected: { project_id: null } },
+        'expected.project_id must be a project id',
+      ],
+    ] as const) {
+      expect(await send(fx, 'PATCH', ref, body), error).toEqual({
+        status: 400,
+        text: JSON.stringify({ error }),
+      })
+    }
+  })
 })
 
 describe('expected on a create', () => {
@@ -875,6 +1029,77 @@ describe('a parent the caller cannot read', () => {
       })
       expect(probe.status, guess).toBe(200)
     }
+  })
+
+  it('still sees a parent it was shown that moved to one it is not, by its id in any case', async () => {
+    const fx = await setup()
+    const shown = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    const row = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      parent_id: shown.id,
+    })
+    const elsewhere = await plantProject(fx.t, { org_id: fx.org.id, key: 'HID' })
+    const away = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      key: 'HIDS',
+      type: 'project',
+      parent_id: elsewhere.id,
+    })
+    const hidden = (await plantIssue(fx.t, { org_id: fx.org.id, project_id: away.id })).id
+    await fx.t.run(async (ctx) => {
+      const live = await byId(ctx, 'issues', row.id)
+      if (live) await ctx.db.patch(live._id, { parent_id: hidden })
+    })
+    for (const seen of [shown.id, shown.id.toUpperCase()]) {
+      const probe = await send(fx, 'PATCH', `/v1/tasks/${key(row)}`, {
+        parent: null,
+        expected: { parent_id: seen, has_hidden_parent: false },
+      })
+      expect(probe.status, seen).toBe(409)
+    }
+  })
+})
+
+describe('parents made before ids had to be uuids', () => {
+  /* Tasks made until 2026-10-19 may have ids that are not uuids, and two
+   * of them may differ in case only. */
+  async function legacy() {
+    const fx = await setup()
+    const elsewhere = await plantProject(fx.t, { org_id: fx.org.id, key: 'HID' })
+    const away = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      key: 'HIDS',
+      type: 'project',
+      parent_id: elsewhere.id,
+    })
+    const plant = (id: string, project_id: string) =>
+      plantIssue(fx.t, { org_id: fx.org.id, project_id, id })
+    const shown = await plant('Task-A', fx.sub.id)
+    const twin = await plant('task-a', away.id)
+    const other = await plant('Task-B', away.id)
+    const row = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    const parentNow = (id: string) =>
+      fx.t.run(async (ctx) => {
+        const live = await byId(ctx, 'issues', row.id)
+        if (live) await ctx.db.patch(live._id, { parent_id: id })
+      })
+    const detach = (seen: string) =>
+      send(fx, 'PATCH', `/v1/tasks/${key(row)}`, {
+        parent: null,
+        expected: { parent_id: seen, has_hidden_parent: false },
+      })
+    return { shown, twin, other, parentNow, detach }
+  }
+
+  it('answers alike whichever hidden task is the parent, and matches one that stayed in any case', async () => {
+    const { shown, twin, other, parentNow, detach } = await legacy()
+    for (const hidden of [twin.id, other.id]) {
+      await parentNow(hidden)
+      expect((await detach(shown.id)).status, hidden).toBe(409)
+    }
+    await parentNow(shown.id)
+    expect((await detach(shown.id.toLowerCase())).status).toBe(200)
   })
 })
 

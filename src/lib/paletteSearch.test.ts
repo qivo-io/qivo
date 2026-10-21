@@ -85,4 +85,18 @@ describe('palette search', () => {
     expect(search('firm').projects.map((item) => item.project.id)).toEqual(['meta', 'sub'])
     expect(search(' \t ')).toEqual({ projects: [], issues: [] })
   })
+
+  it('finds a project by the name it shows, and names its parent so', () => {
+    const blank = [
+      { id: 'meta', name: '', type: 'meta' },
+      { id: 'sub', name: ' ', type: 'project', parent: 'meta' },
+    ]
+    const shown = (p: { name: string; type: string }) =>
+      p.name.trim() || (p.type === 'meta' ? 'Unnamed project' : 'Unnamed sub-project')
+    const found = createPaletteSearch(blank, [], () => true, shown)('unnamed sub')
+    expect(found.projects.map(({ project, sub }) => [project.id, sub])).toEqual([
+      ['sub', 'Unnamed project'],
+    ])
+    expect(createPaletteSearch(blank, [], () => true)('unnamed').projects).toEqual([])
+  })
 })

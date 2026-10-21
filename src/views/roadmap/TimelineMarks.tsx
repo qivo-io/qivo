@@ -307,7 +307,7 @@ export function MilestoneFlag({
     drag.current = null
   }
   return (
-    <HoverTooltip content={`${m.name}, ${P.weekLabel(week)}`}>
+    <HoverTooltip content={`${P.milestoneLabel(m)}, ${P.weekLabel(week)}`}>
       <div
         data-msflag={m.id}
         onPointerDown={onDown}
@@ -325,7 +325,7 @@ export function MilestoneFlag({
           className="[width:9px] [height:9px] [transform:rotate(45deg)] [border-radius:var(--r-2xs)] [flex-shrink:0] [box-shadow:var(--qivo-shadow-card)]"
         />
         <span className="min-w-0 line-clamp-2 [overflow-wrap:anywhere] [font-size:var(--fs-2xs)] [line-height:13px] [font-weight:600] [color:var(--text-2)]">
-          {m.name}
+          {P.milestoneLabel(m)}
         </span>
       </div>
     </HoverTooltip>

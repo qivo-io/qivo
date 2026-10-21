@@ -36,6 +36,7 @@ import {
 import { byId } from '../lib/db'
 import type { MessageKind } from '../lib/enums'
 import { badRequest, forbidden, rule } from '../lib/functions'
+import { projectName } from '../lib/recordNames'
 import { reviewerOwns, taskOwnerId } from '../lib/review'
 import { FOLLOWER_MAX, FOLLOWERS_FULL } from '../lib/taskLimits'
 import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
@@ -1868,7 +1869,7 @@ export async function notifyIssueUpdate(
   }
   if (after.paused !== before.paused) parts.push(after.paused ? 'Paused' : 'Resumed')
   if (after.project_id !== before.project_id) {
-    parts.push(`Moved to ${project?.name ?? 'another project'}`)
+    parts.push(`Moved to ${project ? projectName(project) : 'another project'}`)
   }
   // the new parent, for the attach line each reader reads from their side
   let parent: { id: string; project_id: string; key: string } | undefined

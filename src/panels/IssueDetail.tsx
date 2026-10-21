@@ -2112,7 +2112,7 @@ function IssueDetail({
               .map((p, i) => (
                 <React.Fragment key={p.id}>
                   {i > 0 && <Icon name="chevronRight" size={12} color="var(--text-3)" />}
-                  <HoverTooltip content={`Show ${p.name} on the board`}>
+                  <HoverTooltip content={`Show ${P.projectName(p)} on the board`}>
                     <a
                       href={buildPath({ scope: p.id, view: 'kanban' })}
                       data-task-crumb-project={p.id}
@@ -3358,7 +3358,7 @@ function IssueDetail({
             // the handle is a uuid for another organization's tasks — toasts
             // and every other human-facing string name the readable key
             window.showToast?.(
-              `Moved ${P.issueById[key]?.key || key} to ${t ? t.name : 'the sub-project'}`,
+              `Moved ${P.issueById[key]?.key || key} to ${t ? P.projectName(t) : 'the sub-project'}`,
             )
           }}
         />

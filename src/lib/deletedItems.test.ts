@@ -18,6 +18,8 @@ import {
   matchHasText,
   type Piece,
   placeText,
+  shownMatch,
+  shownRow,
   viaText,
 } from './deletedItems'
 
@@ -284,6 +286,71 @@ describe('search hits', () => {
     ])
     // a project item's hit names only the task, never the project
     expect(hitItem(hit)).toMatchObject({ id: 'p', kind: 'project', key: '', title: '', path: [] })
+  })
+})
+
+/* Until 2026-10-16 a project took a blank name, and the list answers the
+   name as it was stored. */
+describe('a project saved with a blank name', () => {
+  it('reads as an unnamed project or sub-project in a row and its place', () => {
+    const sub = shownRow(row('s', { kind: 'project', title: ' ', path: [''] }))
+    expect([sub.title, placeText(sub)]).toEqual([
+      'Unnamed sub-project',
+      'Sub-project in Unnamed project',
+    ])
+    expect(shownRow(row('m', { kind: 'project', title: '', path: [] })).title).toBe(
+      'Unnamed project',
+    )
+    const task = shownRow(row('t', { path: ['', 'Firmware'] }))
+    expect([task.title, placeText(task)]).toEqual(['Task t', 'Unnamed project › Firmware'])
+    expect(placeText(shownRow(row('u', { path: [''] })))).toBe('Unnamed sub-project')
+    // the restore note names the project as the row does
+    const blocked = shownRow(
+      row('b', {
+        kind: 'project',
+        title: '',
+        path: ['Luma'],
+        blocked: { reason: 'not_lead', project: '', lead: 'Lena' },
+      }),
+    )
+    expect(blocked.blocked && blockedText(blocked.blocked)).toBe(
+      'Unnamed sub-project has its own lead, Lena. Ask them or an organization admin to restore it.',
+    )
+    // a name that is not blank stays as stored
+    expect(shownRow(row('n')).path).toEqual(['Luma Sensor', 'Firmware'])
+  })
+
+  it('reads so in a search hit, which is a task in a sub-project', () => {
+    const hit = (item_kind: 'task' | 'project', path: string[]): DeletedMatch => ({
+      item_id: 'i',
+      item_kind,
+      org_id: 'org',
+      org_name: 'Northstar Labs',
+      key: 'QN-1',
+      title: 'Calibrate',
+      archived: false,
+      path,
+      deleted_at: at(14, 9),
+      deleter: CURSOR,
+      state: 'ready',
+      can_restore: true,
+    })
+    expect(shownMatch(hit('task', ['', ' '])).path).toEqual([
+      'Unnamed project',
+      'Unnamed sub-project',
+    ])
+    // a task of a deleted top-level project saved with a blank name
+    expect(shownMatch(hit('project', ['', ''])).path).toEqual([
+      'Unnamed project',
+      'Unnamed sub-project',
+    ])
+    expect(shownMatch(hit('project', ['Luma', ''])).path).toEqual(['Luma', 'Unnamed sub-project'])
+    expect(blockedText({ reason: 'view_only', project: ' ' })).toBe(
+      'You can only view its project now. Ask an organization admin to restore it.',
+    )
+    expect(blockedText({ reason: 'not_lead', project: '', lead: 'Lena' })).toBe(
+      'This project has its own lead, Lena. Ask them or an organization admin to restore it.',
+    )
   })
 })
 

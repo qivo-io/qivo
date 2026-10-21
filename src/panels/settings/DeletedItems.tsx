@@ -57,6 +57,8 @@ import {
   refusalText,
   restoreNoun,
   rowHasText,
+  shownMatch,
+  shownRow,
   stateText,
   viaText,
 } from '../../lib/deletedItems'
@@ -126,8 +128,9 @@ function useDeletedList(deletedBy: string | undefined, enabled: boolean) {
       deletedBy === undefined ? {} : { deleted_by: deletedBy },
       (answer) => {
         if (!active) return
-        latest.current = answer
-        setList(answer)
+        const shown = { ...answer, items: answer.items.map(shownRow) }
+        latest.current = shown
+        setList(shown)
       },
       (cause) => {
         console.error('[qivo] deleted items failed:', cause)
@@ -156,7 +159,7 @@ function useDeletedItem(id: string | undefined) {
       api.deletedItems.item,
       { id },
       (row) => {
-        if (active) setAnswer({ id, row })
+        if (active) setAnswer({ id, row: row && shownRow(row) })
       },
       (cause) => {
         console.error('[qivo] deleted item failed:', cause)
@@ -268,7 +271,7 @@ export function DeletedItemsPage() {
         api.deletedItems.matches,
         { text },
         (answer) => {
-          if (active) setFound({ text, matches: answer })
+          if (active) setFound({ text, matches: answer.map(shownMatch) })
         },
         (cause) => {
           console.error('[qivo] deleted items search failed:', cause)

@@ -41,7 +41,7 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
   // A rebuild keeps these lists while their data stays the same, and an
   // access change carried only by people or teams moves P.contextVersion.
   const search = useMemo(
-    () => createPaletteSearch(P.projects, P.issues, (id) => P.canSee(id)),
+    () => createPaletteSearch(P.projects, P.issues, (id) => P.canSee(id), P.projectName),
     [P.projects, P.issues, P.contextVersion],
   )
   const { projects, issues } = search(query)
@@ -133,7 +133,7 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
                 </span>
                 {sub && (
                   <span className="text-xs text-text-3">
-                    {project.parent ? P.projectLabel({ id: project.parent, name: sub }) : sub}
+                    {project.parent ? P.projectLabelOf(project.parent) : sub}
                   </span>
                 )}
               </CommandItem>

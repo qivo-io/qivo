@@ -136,7 +136,7 @@ export function MobileHeader({
                             actions.setScope(project.parent)
                           }}
                         >
-                          <Icon name="chevronLeft" size={16} /> {P.project(project.parent)?.name}
+                          <Icon name="chevronLeft" size={16} /> {P.projectLabelOf(project.parent)}
                         </MenuItem>
                       )}
                     </>
@@ -249,7 +249,7 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
   const query = mobile ? '' : search
   const projects = P.visibleProjects().filter((project) =>
     matchesAllWords(
-      `${project.name} ${P.orgs.find((org) => org.id === project.org)?.name || ''}`,
+      `${P.projectName(project)} ${P.orgs.find((org) => org.id === project.org)?.name || ''}`,
       query,
     ),
   )
@@ -309,7 +309,7 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
                   <Button
                     variant="ghost"
                     size="icon"
-                    aria-label={`${project.name} actions`}
+                    aria-label={`${P.projectName(project)} actions`}
                     onClick={toggle}
                   >
                     <Icon name="more" size={16} />

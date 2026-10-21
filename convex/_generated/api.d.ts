@@ -101,6 +101,7 @@ import type * as lib_projectCreators from "../lib/projectCreators.js";
 import type * as lib_projectGrants from "../lib/projectGrants.js";
 import type * as lib_projectKeys from "../lib/projectKeys.js";
 import type * as lib_projectLimits from "../lib/projectLimits.js";
+import type * as lib_recordNames from "../lib/recordNames.js";
 import type * as lib_review from "../lib/review.js";
 import type * as lib_search from "../lib/search.js";
 import type * as lib_snapshotRelations from "../lib/snapshotRelations.js";
@@ -284,6 +285,7 @@ declare const fullApi: ApiFromModules<{
   "lib/projectGrants": typeof lib_projectGrants;
   "lib/projectKeys": typeof lib_projectKeys;
   "lib/projectLimits": typeof lib_projectLimits;
+  "lib/recordNames": typeof lib_recordNames;
   "lib/review": typeof lib_review;
   "lib/search": typeof lib_search;
   "lib/snapshotRelations": typeof lib_snapshotRelations;

@@ -263,6 +263,28 @@ describe('moving a task to another top-level project', () => {
     )
   })
 
+  /* Until 2026-10-16 a sub-project took a blank name. A move names it by
+   * its label instead of nothing. */
+  it('names a sub-project saved with a blank name as Unnamed sub-project', async () => {
+    const t = newT()
+    const { f, backend } = await scene(t)
+    await subscribeToUpdates(t, f)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await plantSubscription(t, { issue_id: task.id, profile_id: f.user.id })
+    await t.run(async (ctx) => {
+      await ctx.db.patch(f.sub._id, { name: '' })
+      await ctx.db.patch(backend._id, { name: '  ' })
+    })
+    await appMove(t, f, task.id, backend.id)
+    expect((await messagesFor(t, f.user.id, task.id)).map((m) => m.detail)).toEqual([
+      'Moved to Unnamed sub-project',
+    ])
+    const rows = (await activityFor(t, f.org.id)).filter((e) => e.verb === 'moved')
+    expect(rows.map((e) => e.detail)).toEqual([
+      'to the Unnamed sub-project (from Unnamed sub-project)',
+    ])
+  })
+
   it('refuses a subtask that would stay under its parent, unless it leaves it in the app', async () => {
     const t = newT()
     const { f, backend } = await scene(t)

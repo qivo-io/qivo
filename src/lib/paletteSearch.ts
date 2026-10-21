@@ -3,11 +3,13 @@ import { compileSearchScore } from './search'
 type Project = { id: string; name: string; type: string; parent?: string | null }
 type Task = { id: string; key: string; title: string; project: string }
 
-/** A snapshot-scoped index. Visibility is resolved before retaining searchable text. */
+/** A snapshot-scoped index. Visibility is resolved before retaining searchable text.
+    `nameOf` gives a project's name as shown, so a project finds by its label. */
 export function createPaletteSearch<P extends Project, T extends Task>(
   projects: readonly P[],
   tasks: readonly T[],
   canSee: (projectId: string) => boolean,
+  nameOf: (project: NoInfer<P>) => string = (project) => project.name,
 ) {
   const byId = new Map(projects.map((project) => [project.id, project]))
   const visible = projects.filter((project) => {
@@ -15,12 +17,15 @@ export function createPaletteSearch<P extends Project, T extends Task>(
     return !!meta && canSee(meta.id)
   })
   const visibleIds = new Set(visible.map((project) => project.id))
-  const projectIndex = visible.map((project) => ({
-    project,
-    label: project.name,
-    sub: project.type === 'meta' ? undefined : byId.get(project.parent ?? '')?.name,
-    normalized: project.name.toLowerCase(),
-  }))
+  const projectIndex = visible.map((project) => {
+    const parent = project.type === 'meta' ? undefined : byId.get(project.parent ?? '')
+    return {
+      project,
+      label: nameOf(project),
+      sub: parent && nameOf(parent),
+      normalized: nameOf(project).toLowerCase(),
+    }
+  })
   const taskIndex = tasks
     .filter((task) => visibleIds.has(task.project))
     .map((issue) => ({ issue, normalized: `${issue.key} ${issue.title}`.toLowerCase() }))
