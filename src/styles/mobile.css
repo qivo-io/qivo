@@ -239,18 +239,12 @@
     cursor: pointer;
     text-align: left;
     color: var(--text-1);
-    /* Offscreen rows skip style and layout and stay findable. 80px is a row
-       with a one-line title and its rule at 390px (measured in Chromium: a
-       two-line row is 102.2px, and a title line 22.4px). */
-    content-visibility: auto;
-    contain-intrinsic-block-size: auto 80px;
   }
-  .mobile-task-row + .mobile-task-row {
+  /* A long list mounts in blocks (DeferredList.css); rows keep their rule
+     where one block meets the next. */
+  .mobile-task-row + .mobile-task-row,
+  .deferred-block + .deferred-block > .mobile-task-row:first-child {
     border-top: 1px solid var(--border);
-  }
-  .mobile-task-row:focus-visible {
-    /* a focused row stays painted whole, as Roadmap.css keeps its rows */
-    content-visibility: visible;
   }
   /* the rows' waiting space fills the section edge to edge, as rows do */
   .mobile-task-group > .board-pending {

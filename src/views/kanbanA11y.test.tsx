@@ -126,7 +126,7 @@ describe('the Board for a screen reader', { timeout: BOARD_TEST_TIMEOUT }, () =>
     expect(text).toContain('Medium priority')
   })
 
-  it('keeps the waiting space of a large Board an item of its list', async () => {
+  it('keeps the cards and waiting space of a large Board items of its list', async () => {
     const board = await loadBoard(network, (snap) => {
       for (let n = 0; n < 400; n++) snap.issues.push(taskRow(snap, `t${n}`, 'todo', n + 1))
     })
@@ -136,8 +136,16 @@ describe('the Board for a screen reader', { timeout: BOARD_TEST_TIMEOUT }, () =>
     expect(space?.getAttribute('aria-label')).toMatch(/^Loading \d+ more cards$/)
     expect(space?.parentElement?.getAttribute('role')).toBe('listitem')
     expect(space?.parentElement?.parentElement).toBe(todo)
+    // the cards sit in block boxes with no role of their own
+    const children = [...(todo?.children ?? [])]
     expect(
-      [...(todo?.children ?? [])].every((child) => child.getAttribute('role') === 'listitem'),
+      children.every(
+        (child) =>
+          child.getAttribute('role') === 'listitem' ||
+          (child.getAttribute('role') === 'none' &&
+            [...child.children].every((card) => card.getAttribute('role') === 'listitem')),
+      ),
     ).toBe(true)
+    expect(todo?.querySelectorAll('[role="none"] > [role="listitem"]').length).toBeGreaterThan(0)
   })
 })

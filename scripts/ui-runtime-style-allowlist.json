@@ -1,7 +1,7 @@
 {
   "src/components/DeferredList.tsx": {
-    "count": 1,
-    "reason": "the estimated height of a long list's items that have not mounted yet"
+    "count": 2,
+    "reason": "the estimated height of a long list's items that have not mounted or rendered yet, and its gap"
   },
   "src/components/descEditor.tsx": {
     "count": 1,
@@ -74,10 +74,6 @@
   "src/views/Roadmap.tsx": {
     "count": 21,
     "reason": "timeline coordinates, active utilization week geometry, transforms, measured widths, and persisted colors"
-  },
-  "src/views/kanbanCards.tsx": {
-    "count": 1,
-    "reason": "a card's estimated intrinsic height before it first renders"
   },
   "src/views/roadmap/PlanCard.tsx": {
     "count": 4,

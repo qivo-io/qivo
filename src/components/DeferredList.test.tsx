@@ -122,7 +122,23 @@ describe('DeferredList', () => {
     await show(items, 30)
     expect(nodes()).toHaveLength(30)
     expect(spacer()).toBeNull()
+    expect(container.querySelector('[data-deferred-block]')).toBeNull()
     expect(tasks).toHaveLength(0)
+  })
+
+  it('boxes the blocks of a list that mounts in slices, sized by their estimates', async () => {
+    const items = Array.from({ length: 700 }, (_, n) => ({ key: `k${n}` }))
+    await show(items, 10)
+    // past one block of 256 while items still wait
+    while (nodes().length < 280) await slice()
+    expect(spacer()).not.toBeNull()
+    const boxes = [...container.querySelectorAll<HTMLElement>('[data-deferred-block]')]
+    expect(boxes.length).toBeGreaterThanOrEqual(2)
+    // 256 items of 40px with the 255 gaps between them; a closed block keeps
+    // the size it last rendered at, the open one takes its estimate
+    expect(boxes[0].style.containIntrinsicBlockSize).toBe(`auto ${256 * 40 + 255 * 8}px`)
+    expect(boxes.at(-1)?.style.containIntrinsicBlockSize).toMatch(/^\d+px$/)
+    expect(boxes.every((box) => box.getAttribute('role') === 'none')).toBe(true)
   })
 
   it('stands in for the waiting items at their estimated height', async () => {

@@ -12,3 +12,19 @@
   outline: 2px solid var(--primary);
   outline-offset: -2px;
 }
+
+/* A block of items in a list that mounts in slices: the browser skips its
+   style and layout while it is offscreen, and its items stay findable and
+   in the accessibility tree. DeferredList sets its gap and its estimated
+   height. */
+.deferred-block {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  content-visibility: auto;
+}
+
+.deferred-block:focus-within {
+  /* Focus rings may extend beyond the block's paint containment. */
+  content-visibility: visible;
+}

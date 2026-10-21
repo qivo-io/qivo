@@ -811,7 +811,6 @@ function Kanban({
             key={group.key}
             group={group}
             place={place}
-            estimate={estimate(group)}
             onOpen={onOpenIssue}
             onDragStart={startDrag}
             onDragEnd={endDrag}

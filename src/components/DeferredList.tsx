@@ -40,17 +40,53 @@ type Props<T extends object> = {
   listRole?: boolean
 }
 
-type Block<T> = { id: number; items: T[] }
+type Block<T> = { id: number; items: T[]; start: number }
 
-function BlockView<T>({ items, render }: { items: readonly T[]; render: (item: T) => ReactNode }) {
-  return <>{items.map((item) => render(item))}</>
+/** How a block of a list that mounts in slices is drawn: its items'
+    estimated height with their gaps, and whether it still grows. */
+type BlockBox = { height: number; gap: number; open: boolean }
+
+/* A list that mounts in slices wraps each block in a box the browser skips
+   while it is offscreen (DeferredList.css), sized by its items' estimates
+   until it renders. One box per block keeps that skipping cheap: the
+   browser checks each such box on every frame, so a box per item would
+   cost a check per item. A block that still grows takes its estimate as
+   it is; a closed one keeps the size it last rendered at. A list its first
+   screen covers draws no boxes, the DOM of a plain list. */
+function BlockView<T>({
+  items,
+  render,
+  box,
+}: {
+  items: readonly T[]
+  render: (item: T) => ReactNode
+  box: BlockBox | null
+}) {
+  const nodes = items.map((item) => render(item))
+  if (!box) return <>{nodes}</>
+  return (
+    <div
+      data-deferred-block
+      role="none"
+      className="deferred-block"
+      style={{
+        gap: box.gap,
+        containIntrinsicBlockSize: box.open ? `${box.height}px` : `auto ${box.height}px`,
+      }}
+    >
+      {nodes}
+    </div>
+  )
 }
 
-/* A block renders again when the list's render or one of its items is new. */
+/* A block renders again when the list's render, its box or one of its
+   items is new. */
 const Block = memo(
   BlockView,
   (before, after) =>
     before.render === after.render &&
+    before.box?.height === after.box?.height &&
+    before.box?.open === after.box?.open &&
     before.items.length === after.items.length &&
     before.items.every((item, i) => item === after.items[i]),
 ) as typeof BlockView
@@ -169,7 +205,7 @@ export function DeferredList<T extends object>({
     const key = keyOf(item)
     let owner = owners.current.get(key)
     if (owner !== undefined && (!current || owner > current.id)) {
-      current = { id: owner, items: [] }
+      current = { id: owner, items: [], start: index }
       blocks.push(current)
     } else if (!current) {
       // a new item above every owned one joins the first owned block
@@ -177,6 +213,7 @@ export function DeferredList<T extends object>({
       current = {
         id: next ? (owners.current.get(keyOf(next)) ?? 0) : nextBlock.current++,
         items: [],
+        start: index,
       }
       blocks.push(current)
     } else if (
@@ -185,7 +222,7 @@ export function DeferredList<T extends object>({
       current.id === nextBlock.current - 1
     ) {
       // the last block is full: open the next one
-      current = { id: nextBlock.current++, items: [] }
+      current = { id: nextBlock.current++, items: [], start: index }
       blocks.push(current)
     }
     owner = current.id
@@ -203,19 +240,28 @@ export function DeferredList<T extends object>({
   }, [items, estimate, gap])
   const height = pending > 0 ? sums[items.length] - sums[mounted] - gap : 0
 
+  /** The items' elements in `parent`, inside their block boxes or not. */
+  const itemElements = (parent: Element, holder: Element) =>
+    [...parent.children].flatMap((child) =>
+      child === holder
+        ? []
+        : child.hasAttribute('data-deferred-block')
+          ? [...child.children]
+          : [child],
+    )
   const onFocus = (event: FocusEvent<HTMLButtonElement>) => {
     const holder = listRole ? event.currentTarget.parentElement : event.currentTarget
     const parent = holder?.parentElement
     if (!holder || !parent) return
-    const before = holder.previousElementSibling
+    const before = itemElements(parent, holder).at(-1)
     const from = event.relatedTarget
     const fromAbove =
       from instanceof Node &&
       !!(from.compareDocumentPosition(holder) & Node.DOCUMENT_POSITION_FOLLOWING)
     scheduler.completeList(id)
     if (lastInputWasPointer()) return
-    const first = before ? before.nextElementSibling : parent.firstElementChild
-    const item = fromAbove ? first : parent.lastElementChild
+    const after = itemElements(parent, holder)
+    const item = fromAbove ? after[before ? after.indexOf(before) + 1 : 0] : after.at(-1)
     if (!(item instanceof HTMLElement)) return
     const controls = [item, ...item.querySelectorAll<HTMLElement>('[data-focus-key]')].filter(
       (element) => element.dataset.focusKey !== undefined,
@@ -239,8 +285,21 @@ export function DeferredList<T extends object>({
   )
   return (
     <>
-      {blocks.map((block) => (
-        <Block key={block.id} items={block.items} render={node} />
+      {blocks.map((block, i) => (
+        <Block
+          key={block.id}
+          items={block.items}
+          render={node}
+          box={
+            capacity === Number.POSITIVE_INFINITY
+              ? null
+              : {
+                  height: sums[block.start + block.items.length] - sums[block.start] - gap,
+                  gap,
+                  open: pending > 0 && i === blocks.length - 1,
+                }
+          }
+        />
       ))}
       {waitingSpace && listRole ? (
         // biome-ignore lint/a11y/useSemanticElements: the list is a styled flex div that takes drops, not a <ul>

@@ -385,8 +385,10 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
 }
 
 /* The phone list's geometry for mounting it in slices: a row's height
-   before it renders (mobile.css), the least a row takes, and a section's
-   heading with the gap above it. */
+   before it renders, the least a row takes, and a section's heading with
+   the gap above it. 80px is a row with a one-line title and its rule at
+   390px (measured in Chromium: a two-line row is 102.2px, a title line
+   22.4px). */
 const ROW_ESTIMATE_PX = 80
 const ROW_MIN_PX = 64
 const SECTION_HEAD_PX = 44 + 24

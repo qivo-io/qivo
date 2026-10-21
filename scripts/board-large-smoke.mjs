@@ -105,11 +105,11 @@ try {
   assert.equal(await pane.getAttribute('aria-busy'), 'true', 'A mounting Board must be busy')
   assert.equal(
     await page
-      .locator('.board-card')
+      .locator('[data-deferred-block]')
       .first()
-      .evaluate((card) => getComputedStyle(card).contentVisibility),
+      .evaluate((block) => getComputedStyle(block).contentVisibility),
     'auto',
-    'Cards must skip layout offscreen',
+    'Blocks of cards must skip layout offscreen',
   )
   log(`the first commit held ${firstCommit} cards and the Board is busy`)
 
