@@ -147,6 +147,7 @@ import {
 } from '../model/links'
 import { newUuid, setPlannableHoursCore } from '../model/orgs'
 import { PLANNABLE_FIELDS } from '../model/people'
+import { assertRemainingShape, REMAINING_HOURS_MAX } from '../model/taskValues'
 import { teamsJson } from '../model/teams'
 import { authenticateSecret, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
 import { DISCUSSION_TOOLS } from './discussion'
@@ -633,7 +634,7 @@ export const TOOLS: McpTool[] = [
               {
                 type: 'number',
                 minimum: 0,
-                maximum: 99999.9,
+                maximum: REMAINING_HOURS_MAX,
               },
               {
                 type: 'null',
@@ -751,7 +752,7 @@ export const TOOLS: McpTool[] = [
               {
                 type: 'number',
                 minimum: 0,
-                maximum: 99999.9,
+                maximum: REMAINING_HOURS_MAX,
               },
               {
                 type: 'null',
@@ -1081,24 +1082,28 @@ function hasType(p: SchemaProp, x: unknown): boolean {
  * caps (TEXT_MAX) and of zod's string checks. */
 const CODE_POINT_ARGS: ReadonlySet<string> = new Set(['title', 'name'])
 
-/* Text arguments whose length the server checks itself, as `tool.argument`,
- * so the app, REST and MCP accept the same text. Their schemas keep
- * maxLength for clients, but validateArgs does not apply it. The server
- * caps a comment body and an archive reason after trimming them, and lets
- * an unchanged description saved before the cap through
- * (model/comments.ts, model/issues.ts cleanDescription, and the
- * archive_reason check of updateIssue below). */
-const SERVER_LENGTH_ARGS: ReadonlySet<string> = new Set([
+/* Arguments whose bounds the server checks itself, as `tool.argument`, so
+ * the app, REST and MCP accept the same values with the same sentence. Their
+ * schemas keep maxLength, minimum and maximum for clients, but validateArgs
+ * does not apply them. The server caps a comment body and an archive reason
+ * after trimming them, and lets an unchanged description saved before the
+ * cap through (model/comments.ts, model/issues.ts cleanDescription, and the
+ * archive_reason check of updateIssue below). It keeps remaining_hours from
+ * 0 to REMAINING_HOURS_MAX, letting unchanged hours stored above it through
+ * (model/taskValues.ts cleanRemaining). */
+const SERVER_BOUND_ARGS: ReadonlySet<string> = new Set([
   'add_comment.body',
   'update_comment.body',
   'update_task.description',
   'update_task.archive_reason',
+  'create_task.remaining_hours',
+  'update_task.remaining_hours',
 ])
 
-/* `p` without maxLength, in its anyOf alternatives too. */
-function withoutMaxLength(p: SchemaProp): SchemaProp {
-  const { maxLength: _max, ...rest } = p
-  return rest.anyOf === undefined ? rest : { ...rest, anyOf: rest.anyOf.map(withoutMaxLength) }
+/* `p` without maxLength, minimum and maximum, in its anyOf alternatives too. */
+function withoutBounds(p: SchemaProp): SchemaProp {
+  const { maxLength: _length, minimum: _min, maximum: _max, ...rest } = p
+  return rest.anyOf === undefined ? rest : { ...rest, anyOf: rest.anyOf.map(withoutBounds) }
 }
 
 /* The issue for a string holding an unpaired surrogate, which is not text
@@ -1228,7 +1233,7 @@ function validateArgs(tool: ToolDef, raw: unknown): string | null {
       }
       continue
     }
-    const checked = SERVER_LENGTH_ARGS.has(`${tool.name}.${key}`) ? withoutMaxLength(prop) : prop
+    const checked = SERVER_BOUND_ARGS.has(`${tool.name}.${key}`) ? withoutBounds(prop) : prop
     const msg = checkValue(checked, value, CODE_POINT_ARGS.has(key))
     if (msg !== null) problems.push(`${key}: ${msg}`)
   }
@@ -1883,6 +1888,7 @@ export const createIssue = internalMutation({
       throw badRequest('tasks are created active, so archive with update_task after creating')
     }
     const title = cleanTitle(a.title)
+    assertRemainingShape(a.remaining_hours)
     const { cat, readable, writable } = await catalogueFlags(ctx, me, a.access)
     const p = findProjectRef(cat, a.project)
     if (p === undefined || !readable(p.id)) {
@@ -2022,6 +2028,7 @@ export const updateIssue = internalMutation({
       updated.push('end_week')
     }
     if (a.remaining_hours !== undefined) {
+      assertRemainingShape(a.remaining_hours)
       patch.remaining_hours = a.remaining_hours
       updated.push('remaining_hours')
     }

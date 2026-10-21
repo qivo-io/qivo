@@ -17,7 +17,7 @@ import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, rule } from '../lib/functions'
 import { LABEL_NAME_MAX } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
-import { assertExpected, DELETES, type Fields, type Next, TEXT } from './expected'
+import { assertExpected, DELETES, type Fields, filledText, type Next } from './expected'
 import { assertCanEdit } from './issues'
 
 /** Refuses a caller who may not add labels to the organization's list. */
@@ -159,7 +159,8 @@ export async function createLabelCore(
 /** The keys of a label's `expected`, the color in the form every read
  * shows it (shownLabelColor). */
 export const LABEL_FIELDS: Fields<Doc<'labels'>> = {
-  name: { sends: 'name', type: TEXT, form: trimmedForm },
+  // labelName's rule
+  name: { sends: 'name', type: filledText(LABEL_NAME_MAX), form: trimmedForm },
   color: {
     sends: 'color',
     // the rule of the field itself (labelColor)

@@ -417,6 +417,222 @@ describe('typed values in expected', () => {
   })
 })
 
+describe('text values in expected', () => {
+  /* Each value differs from the stored one, so without the check of its
+   * field's rule the request would be answered as a conflict. */
+  it('refuses text its field would refuse with a 400 sentence, before any comparison', async () => {
+    const fx = await setup()
+    const row = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, title: 'One' })
+    const TITLE = 'expected.title must be a string that is not blank, of at most 80 characters'
+    for (const seen of ['', '   ', 'x'.repeat(81), '\u{1F680}'.repeat(81)]) {
+      const body = { title: 'Two', expected: { title: seen } }
+      expect(await send(fx, 'PATCH', `/v1/tasks/${row.id}`, body), seen).toEqual({
+        status: 400,
+        text: JSON.stringify({ error: TITLE }),
+      })
+      expect(await tool(fx, 'update_task', { ref: row.id, ...body }), seen).toMatchObject(
+        toolError(TITLE),
+      )
+    }
+    expect((await task(fx, row.id))?.title).toBe('One')
+    // 80 code points is a title, so it compares
+    expect(
+      await send(fx, 'PATCH', `/v1/tasks/${row.id}`, {
+        title: 'Two',
+        expected: { title: ` ${'\u{1F680}'.repeat(80)} ` },
+      }),
+    ).toMatchObject({ status: 409 })
+
+    const commented = await send(fx, 'POST', `/v1/tasks/${row.id}/comments`, { body: 'First' })
+    const comment = (JSON.parse(commented.text) as { id: string }).id
+    const milestone = uuid()
+    const label = uuid()
+    // only an organization admin reaches a label's or a project's body over REST
+    const ADMIN = `qvt_${'textadmn'.repeat(6)}`
+    const token_hash = await sha256hex(ADMIN)
+    await fx.t.run(async (ctx) => {
+      await ctx.db.insert('mcp_tokens', {
+        id: uuid(),
+        profile_id: fx.admin.id,
+        name: 'admin',
+        token_prefix: ADMIN.slice(0, 11),
+        token_hash,
+        access: 'write',
+        created_at: NOW,
+      })
+      await ctx.db.insert('milestones', {
+        id: milestone,
+        project_id: fx.meta.id,
+        name: 'Prototype',
+        week: '2026-06-01',
+        created_at: NOW,
+      })
+      await ctx.db.insert('labels', {
+        id: label,
+        org_id: fx.org.id,
+        name: 'Hardware',
+        name_lower: 'hardware',
+        color: '#336699',
+        created_at: NOW,
+      })
+    })
+    const NAME = 'expected.name must be a string that is not blank'
+    const other: [string, Record<string, unknown>, string, Record<string, unknown>, string][] = [
+      [
+        `/v1/comments/${comment}`,
+        { body: 'Second', expected: { body: ' ' } },
+        'update_comment',
+        { comment, body: 'Second', expected: { body: '' } },
+        'expected.body must be a string that is not blank',
+      ],
+      [
+        '/v1/projects/TBED',
+        { name: 'Testbed 2', expected: { name: '' } },
+        'update_project',
+        { project: 'TBED', name: 'Testbed 2', expected: { name: '\n' } },
+        NAME,
+      ],
+      [
+        `/v1/projects/TBED/milestones/${milestone}`,
+        { name: 'Pilot', expected: { name: '' } },
+        'set_milestone',
+        { project: 'TBED', milestone, name: 'Pilot', expected: { name: ' ' } },
+        NAME,
+      ],
+      [
+        `/v1/labels/${label}`,
+        { name: 'Firmware', expected: { name: 'x'.repeat(41) } },
+        'set_label',
+        { label, name: 'Firmware', expected: { name: '' } },
+        'expected.name must be a string that is not blank, of at most 40 characters',
+      ],
+      [
+        `/v1/teams/${fx.team.id}`,
+        { name: 'Firmware', expected: { name: '' } },
+        'set_team',
+        { team_id: fx.team.id, name: 'Firmware', expected: { name: '  ' } },
+        NAME,
+      ],
+    ]
+    for (const [path, body, name, args, error] of other) {
+      const admin = { Authorization: `Bearer ${ADMIN}` }
+      expect(await send(fx, 'PATCH', path, body, admin), `${path} ${error}`).toEqual({
+        status: 400,
+        text: JSON.stringify({ error }),
+      })
+      expect(await tool(fx, name, args), `${name} ${error}`).toMatchObject(toolError(error))
+    }
+  })
+
+  it('compares a name or description longer than its cap, which one saved before the cap reads as', async () => {
+    const fx = await setup()
+    const long = 'Hardware '.repeat(10).trim()
+    await fx.t.run(async (ctx) => {
+      const team = await byId(ctx, 'teams', fx.team.id)
+      if (team) await ctx.db.patch(team._id, { name: long })
+    })
+    const ADMIN = `qvt_${'longname'.repeat(6)}`
+    const token_hash = await sha256hex(ADMIN)
+    await fx.t.run((ctx) =>
+      ctx.db.insert('mcp_tokens', {
+        id: uuid(),
+        profile_id: fx.admin.id,
+        name: 'admin',
+        token_prefix: ADMIN.slice(0, 11),
+        token_hash,
+        access: 'write',
+        created_at: NOW,
+      }),
+    )
+    const path = `/v1/teams/${fx.team.id}`
+    const admin = { Authorization: `Bearer ${ADMIN}` }
+    expect(
+      await send(fx, 'PATCH', path, { name: 'Firmware', expected: { name: `${long}!` } }, admin),
+    ).toMatchObject({ status: 409 })
+    expect(
+      await send(fx, 'PATCH', path, { name: 'Firmware', expected: { name: long } }, admin),
+    ).toMatchObject({ status: 200 })
+
+    // a milestone or project name and a comment body saved before their
+    // caps compare too
+    const milestone = uuid()
+    const longer = `Prototype ${'validated '.repeat(9)}`.trim()
+    await fx.t.run(async (ctx) => {
+      await ctx.db.insert('milestones', {
+        id: milestone,
+        project_id: fx.meta.id,
+        name: longer,
+        week: '2026-06-01',
+        created_at: NOW,
+      })
+      await ctx.db.patch(fx.meta._id, { name: longer })
+    })
+    const milestonePath = `/v1/projects/TBED/milestones/${milestone}`
+    expect(
+      await send(fx, 'PATCH', milestonePath, { name: 'Pilot', expected: { name: longer } }, admin),
+    ).toMatchObject({ status: 200 })
+    expect(
+      await send(
+        fx,
+        'PATCH',
+        '/v1/projects/TBED',
+        { name: 'Testbed', expected: { name: longer } },
+        admin,
+      ),
+    ).toMatchObject({ status: 200 })
+    const row = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    const posted = await send(fx, 'POST', `/v1/tasks/${row.id}/comments`, { body: 'First' })
+    const comment = (JSON.parse(posted.text) as { id: string }).id
+    const body = 'x'.repeat(20_001)
+    await fx.t.run(async (ctx) => {
+      const stored = await byId(ctx, 'comments', comment)
+      if (stored) await ctx.db.patch(stored._id, { body })
+    })
+    expect(
+      await send(fx, 'PATCH', `/v1/comments/${comment}`, {
+        body: 'Short',
+        expected: { body: `${body}!` },
+      }),
+    ).toMatchObject({ status: 409 })
+    expect(
+      await send(fx, 'PATCH', `/v1/comments/${comment}`, { body: 'Short', expected: { body } }),
+    ).toMatchObject({ status: 200 })
+
+    // a project description saved before its 500-character cap, too
+    const legacy = 'legacy text '.repeat(50)
+    await fx.t.run((ctx) => ctx.db.patch(fx.meta._id, { description: legacy }))
+    const project = '/v1/projects/TBED'
+    expect(
+      await send(
+        fx,
+        'PATCH',
+        project,
+        { description: 'Short', expected: { description: `${legacy}!` } },
+        admin,
+      ),
+    ).toMatchObject({ status: 409 })
+    expect(
+      await send(
+        fx,
+        'PATCH',
+        project,
+        { description: 'Short', expected: { description: legacy } },
+        admin,
+      ),
+    ).toMatchObject({ status: 200 })
+  })
+
+  it('compares a well-formed id that names nobody, so a refusal tells no id exists', async () => {
+    const fx = await setup()
+    const row = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    const move = { project: 'TBED', sub_project: 'PCB' }
+    const sentence = `project of ${key(row)} changed since you read it, so nothing was saved; read ${key(row)} again and resend your change`
+    expect(
+      await send(fx, 'PATCH', `/v1/tasks/${row.id}`, { ...move, expected: { project_id: uuid() } }),
+    ).toEqual({ status: 409, text: JSON.stringify({ error: sentence }) })
+  })
+})
+
 describe('expected on a create', () => {
   it('refuses it with the sentence of the record, over REST and MCP', async () => {
     const fx = await setup()

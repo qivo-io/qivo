@@ -133,6 +133,21 @@ export const uuidOf = (what: string, nullable: boolean): KeyType => ({
     : { type: 'string', format: 'uuid' },
 })
 
+/** Text by the rule of a required text field: not blank once trimmed and,
+ * when `max` is given, at most `max` code points once trimmed (as cleanTitle
+ * and labelName count). A field that lets a value stored before its cap
+ * through, such as a name or a comment body, takes no `max` here, because a
+ * read answers that value and a stale read of it must compare. */
+export const filledText = (max?: number): KeyType => ({
+  ok: (v) =>
+    typeof v === 'string' && v.trim() !== '' && (max === undefined || [...v.trim()].length <= max),
+  says:
+    max === undefined
+      ? 'a string that is not blank'
+      : `a string that is not blank, of at most ${max} characters`,
+  schema: { type: 'string', minLength: 1, ...(max === undefined ? {} : { maxLength: max }) },
+})
+
 /** A calendar date written YYYY-MM-DD, by the rule of the date fields
  * themselves (model/taskValues.ts calendarDay), or also null when
  * `nullable`. */

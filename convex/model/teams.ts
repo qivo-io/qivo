@@ -31,7 +31,15 @@ import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, rule } from '../lib/functions'
 import { NAME_MAX, nameOverCap } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
-import { assertExpected, BOOLEAN, exact, type Fields, type Next, NUMBER, TEXT } from './expected'
+import {
+  assertExpected,
+  BOOLEAN,
+  exact,
+  type Fields,
+  filledText,
+  type Next,
+  NUMBER,
+} from './expected'
 import { newTeamDefaults } from './orgs'
 import {
   type AccessRemoval,
@@ -186,7 +194,8 @@ const clamp = (n: number, lo: number, hi: number) =>
 
 /** The keys of a team's `expected`. REST and MCP change only the name. */
 export const TEAM_FIELDS: Fields<Doc<'teams'>> = {
-  name: { sends: 'name', type: TEXT, form: trimmedForm },
+  // cleanTeamName's rule; a name saved before the cap reads back longer
+  name: { sends: 'name', type: filledText(), form: trimmedForm },
   stale_days: { sends: 'stale_days', type: NUMBER, form: exact },
   archive_days: { sends: 'archive_days', type: NUMBER, form: exact },
   track_delay_default: { sends: 'track_delay_default', type: BOOLEAN, form: exact },
