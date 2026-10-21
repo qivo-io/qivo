@@ -162,7 +162,6 @@ const board = ({ P, BoardCard, groupBoardCell }: Loaded) =>
       key={group.key}
       group={group}
       place={() => null}
-      dimmed={false}
       onOpen={noop}
       onDragStart={noop}
       onDragEnd={noop}

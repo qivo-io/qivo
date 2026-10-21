@@ -2,6 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { IssueVM } from '../store/planner'
 import { cell, dragEvent, loadBoard, taskRow } from './boardFixture.setup'
 
 /* Dragging a Board card on the real store. */
@@ -14,6 +15,15 @@ vi.mock('../lib/auth', () => ({
     getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }),
   },
   signOut: vi.fn(),
+}))
+// The owner's portrait renders once per task row, so it counts card renders.
+const portraits = vi.hoisted(() => ({ rendered: [] as string[] }))
+vi.mock('@/components/AssigneeAvatar', () => ({
+  AssigneeAvatar: ({ issue }: { issue: IssueVM }) => {
+    portraits.rendered.push(issue.uuid)
+    return null
+  },
+  OwnerPickList: () => null,
 }))
 
 let container: HTMLDivElement
@@ -45,7 +55,44 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
+/* A card in To Do and twenty in In Progress. */
+const crowded = () =>
+  loadBoard(network, (snap) => {
+    snap.issues.push(taskRow(snap, 'a', 'todo', 1))
+    for (let n = 0; n < 20; n++) snap.issues.push(taskRow(snap, `p${n}`, 'progress', n + 2))
+  })
+const over = (status: string) =>
+  act(async () => cell(status)?.dispatchEvent(dragEvent('dragover', '')))
+const highlighted = (status: string) => !!cell(status)?.style.outline.includes('dashed')
+
 describe('dragging a Board card', () => {
+  it('highlights the cell it is over without rendering any card', async () => {
+    const board = await crowded()
+    await board.render(root)
+    await act(async () => board.card('a')?.dispatchEvent(dragEvent('dragstart', 'a')))
+    portraits.rendered = []
+    await over('progress')
+    expect(portraits.rendered).toEqual([])
+    expect(highlighted('progress')).toBe(true)
+    expect(cell('progress')?.hasAttribute('data-drop-over')).toBe(true)
+  })
+
+  it('highlights only the last cell it was over', async () => {
+    const board = await crowded()
+    await board.render(root)
+    await act(async () => board.card('a')?.dispatchEvent(dragEvent('dragstart', 'a')))
+    await over('progress')
+    // no dragleave between them, as a fast drag can deliver it
+    await over('review')
+    expect(highlighted('progress')).toBe(false)
+    expect(highlighted('review')).toBe(true)
+    // back over its own cell: no destination, and the source is not one
+    await over('todo')
+    expect(highlighted('review')).toBe(false)
+    expect(highlighted('todo')).toBe(false)
+    expect(cell('todo')?.hasAttribute('data-drop-over')).toBe(false)
+  })
+
   it('ends once the dragged card has left the page', async () => {
     const board = await loadBoard(network, (snap) => {
       snap.issues.push(taskRow(snap, 'a', 'todo', 1), taskRow(snap, 'b', 'todo', 2))

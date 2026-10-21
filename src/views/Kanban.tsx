@@ -16,6 +16,8 @@ import {
   type ScopeInfo,
 } from '../store/planner'
 import { BoardPanelMaterial } from './BoardPanelMaterial'
+import './Board.css'
+import { createDropOver, type DropOver, useDropOver } from './board/dropOver'
 import { BoardCard } from './kanbanCards'
 import { useBoardPanelClipping } from './useBoardPanelClipping'
 
@@ -453,7 +455,9 @@ function Kanban({
   const onOpenIssue = useLatest(actions.openIssue)
   const [dragId, setDragId] = useStateK<string | null>(null)
   useUpdateBlocker(!!dragId)
-  const [dragOver, setDragOver] = useStateK(null)
+  // The cell the drag is over. Cells read it themselves, so a dragover
+  // renders neither the Board nor any card.
+  const [dropOver] = useStateK(createDropOver)
   // The dragged row. dragend reaches React only through it, so a delivery
   // that moves or removes the task while it is dragged replaces the row and
   // the drag would never end.
@@ -465,7 +469,7 @@ function Kanban({
   const endDrag = useLatest(() => {
     dragSource.current = null
     setDragId(null)
-    setDragOver(null)
+    dropOver.set(null)
   })
   // A native drag fires no pointer or key events, so the first one after a
   // drag whose row left the page ends it. That releases the update blocker
@@ -553,16 +557,12 @@ function Kanban({
 
   // Group only after scope, filters, lane and status have selected the cell.
   // Keep the surrounding column counts and empty-state geometry unchanged.
-  function renderCards(items, place: (it: IssueVM) => ProjectPlace | null, over: boolean) {
-    // Recede destination cards as a whole so the column reads as the target.
-    // Keep the source cell unchanged, including its dragged row's own opacity.
-    const dimmed = over && !items.some((it) => it.id === dragId)
+  function renderCards(items, place: (it: IssueVM) => ProjectPlace | null) {
     return groupBoardCell(items, P.issueById).map((group) => (
       <BoardCard
         key={group.key}
         group={group}
         place={place}
-        dimmed={dimmed}
         onOpen={onOpenIssue}
         onDragStart={startDrag}
         onDragEnd={endDrag}
@@ -609,16 +609,15 @@ function Kanban({
         e.preventDefault()
         e.dataTransfer.dropEffect = 'move'
         // Returning to the source is a harmless drop, not a new destination.
-        const nextOver = Object.keys(patch).length ? key : null
-        if (dragOver !== nextOver) setDragOver(nextOver)
+        dropOver.set(Object.keys(patch).length ? key : null)
       } else {
         e.dataTransfer.dropEffect = 'none'
-        if (dragOver !== null) setDragOver(null)
+        dropOver.set(null)
       }
     },
     onDragLeave: (e: React.DragEvent) => {
-      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
-        setDragOver((current) => (current === key ? null : current))
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null) && dropOver.get() === key) {
+        dropOver.set(null)
       }
     },
     onDrop: (e: React.DragEvent) => {
@@ -790,18 +789,15 @@ function Kanban({
                         const items = list.filter((i) => i.status === s.id).sort(byPrio)
                         const dkey = `${proj.id}:${s.id}`
                         return (
-                          <div
+                          <DropCell
                             key={s.id}
-                            data-board-cell={proj.id}
-                            data-status={s.id}
+                            variant="side"
+                            store={dropOver}
+                            dropKey={dkey}
+                            holdsDrag={items.some((it) => it.id === dragId)}
+                            laneId={proj.id}
+                            status={s.id}
                             {...cardDropHandlers(dkey, s.id, { projectIds: g.subIds })}
-                            style={{
-                              background:
-                                dragId && dragOver === dkey ? 'var(--accent-soft)' : 'transparent',
-                              outline:
-                                dragId && dragOver === dkey ? '2px dashed var(--primary)' : 'none',
-                            }}
-                            className="[padding:8px] [outline-offset:-3px] [transition:background_var(--dur-fast)_var(--ease-out)]"
                           >
                             <div className="[display:flex] [align-items:center] [gap:6px] [padding:4px_2px] [font-size:var(--fs-xs)] [color:var(--text-3)] [font-weight:600]">
                               <StatusDot status={s.id} size={12} />
@@ -810,13 +806,9 @@ function Kanban({
                             {/* the board's own header names the group; across all
                           projects that leaves the sub-project still to say */}
                             <div className="[display:flex] [flex-direction:column] [gap:8px] [min-height:8px]">
-                              {renderCards(
-                                items,
-                                (it) => (wide ? cardPlace(it, false) : null),
-                                !!dragId && dragOver === dkey,
-                              )}
+                              {renderCards(items, (it) => (wide ? cardPlace(it, false) : null))}
                             </div>
-                          </div>
+                          </DropCell>
                         )
                       })}
                     </div>
@@ -1019,21 +1011,21 @@ function Kanban({
                   >
                     {statuses.map((s, ci) => {
                       const laneKey = `${lane.key}:${s.id}`
+                      const items = lane.items.filter((i) => i.status === s.id).sort(byPrio)
                       return (
-                        <ColumnStackInline
+                        <DropCell
                           key={s.id}
+                          variant="lane"
+                          store={dropOver}
+                          dropKey={laneKey}
+                          holdsDrag={items.some((it) => it.id === dragId)}
                           laneId={lane.key}
                           status={s.id}
                           last={ci === statuses.length - 1}
-                          over={!!dragId && dragOver === laneKey}
                           {...cardDropHandlers(laneKey, s.id, lane)}
                         >
-                          {renderCards(
-                            lane.items.filter((i) => i.status === s.id).sort(byPrio),
-                            lanePlace,
-                            !!dragId && dragOver === laneKey,
-                          )}
-                        </ColumnStackInline>
+                          {renderCards(items, lanePlace)}
+                        </DropCell>
                       )
                     })}
                   </div>
@@ -1049,42 +1041,60 @@ function Kanban({
   )
 }
 
-function ColumnStackInline({
+/** A status cell that takes drops: a column of a lane, or a status of a
+    side-board. It reads from `store` whether the drag is over it, so only
+    the cell the drag leaves and the cell it enters render. Its cards recede
+    (Board.css) unless the cell holds the dragged card. */
+function DropCell({
   children,
+  variant,
+  store,
+  dropKey,
+  holdsDrag,
   laneId,
   status,
-  over,
-  last,
+  last = false,
   onDragOver,
   onDragLeave,
   onDrop,
 }: {
   children?: React.ReactNode
+  variant: 'lane' | 'side'
+  store: DropOver
+  dropKey: string
+  holdsDrag: boolean
   laneId: string
   status: string
-  over: boolean
-  last: boolean
+  last?: boolean
   onDragOver: React.DragEventHandler
   onDragLeave: React.DragEventHandler
   onDrop: React.DragEventHandler
 }) {
+  const over = useDropOver(store, dropKey)
   return (
     <div
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
-      // 12 at the top, not 9: a headless lane (pooled, or a scope that is one
-      // sub-project) has the grid as the clip wrapper's first child, so at 9
       data-board-cell={laneId}
       data-status={status}
-      // Keep the established inset under the bordered lid. The sticky foot
-      // supplies bottom padding; grouping changes only the cards inside.
+      data-drop-over={over && !holdsDrag ? '' : undefined}
+      // A lane's column keeps the established inset under the bordered lid.
+      // The sticky foot supplies bottom padding; grouping changes only the
+      // cards inside.
       style={{
-        borderRight: last ? 'none' : '1px solid var(--board-column-rule, var(--border))',
+        borderRight:
+          variant === 'lane' && !last
+            ? '1px solid var(--board-column-rule, var(--border))'
+            : undefined,
         background: over ? 'var(--accent-soft)' : 'transparent',
         outline: over ? '2px dashed var(--primary)' : 'none',
       }}
-      className="[display:flex] [flex-direction:column] [gap:8px] [padding:8px_8px_0] [min-height:60px] [outline-offset:-3px] [transition:background_var(--dur-fast)_var(--ease-out)]"
+      className={
+        variant === 'lane'
+          ? '[display:flex] [flex-direction:column] [gap:8px] [padding:8px_8px_0] [min-height:60px] [outline-offset:-3px] [transition:background_var(--dur-fast)_var(--ease-out)]'
+          : '[padding:8px] [outline-offset:-3px] [transition:background_var(--dur-fast)_var(--ease-out)]'
+      }
     >
       {children}
     </div>

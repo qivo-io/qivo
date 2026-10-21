@@ -202,7 +202,6 @@ function TaskRow({
 type BoardCardProps = CardActions & {
   group: BoardCellGroup<IssueVM>
   place: (issue: IssueVM) => ProjectPlace | null
-  dimmed: boolean
   /** P.contextVersion, for what the rows read besides their tasks. */
   context: StoreVersion
   /** The ids of the card's tasks that are stale now (P.isStale), joined.
@@ -214,7 +213,6 @@ type BoardCardProps = CardActions & {
 function BoardCardView({
   group,
   place,
-  dimmed,
   context: _context,
   stale: _stale,
   ...actions
@@ -229,7 +227,7 @@ function BoardCardView({
   return (
     <div
       data-parent-card={group.parent?.id}
-      className={`board-card overflow-hidden rounded-md border border-border bg-surface-1 shadow-card transition-opacity duration-150 motion-reduce:transition-none ${dimmed ? 'opacity-50' : 'opacity-100'}`}
+      className="board-card overflow-hidden rounded-md border border-border bg-surface-1 shadow-card transition-opacity duration-150 motion-reduce:transition-none"
     >
       {group.ancestors.map((ancestor) => (
         <TaskRow
@@ -295,7 +293,6 @@ const BoardCard = memo(BoardCardView, (before, after) => {
   const b = members(after.group)
   return (
     before.group.key === after.group.key &&
-    before.dimmed === after.dimmed &&
     before.context === after.context &&
     before.stale === after.stale &&
     before.onOpen === after.onOpen &&

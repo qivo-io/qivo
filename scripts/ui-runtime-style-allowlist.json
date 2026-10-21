@@ -52,7 +52,7 @@
     "reason": "toggle state geometry"
   },
   "src/views/Kanban.tsx": {
-    "count": 15,
+    "count": 14,
     "reason": "column templates, drag drop-target colors, sticky headers, lane frames and scroll geometry"
   },
   "src/views/LandscapeRoadmap.tsx": {
