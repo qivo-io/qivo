@@ -31,7 +31,7 @@ import {
   canManageProjectTeams,
   canManageProjectUsers,
   type OrgProjectLevels,
-  projectLevelsForOrg,
+  projectLevelsForPeople,
   rootMetaOf,
 } from '../lib/access'
 import { assertOrgWritable } from '../lib/billingAccess'
@@ -324,11 +324,11 @@ class RemovalFull extends Error {}
  * switched-off person holds no work, and a group's reviewer is dormant.
  *
  * The reads are bounded by what the app's snapshot reads, never by history.
- * Only the active tasks of `projects` are read (by_project_archived). Each
- * person holding one of them gets their sight worked out once before and once
- * after, for every project at a time (lib/access.ts projectLevelsForOrg, over
- * one read of the organization's projects). Only a reviewer who lost sight
- * costs a subtask lookup.
+ * Only the active tasks of `projects` are read (by_project_archived). The
+ * people holding them get their sight worked out once before and once after,
+ * for every project at a time and, when there are many of them, all together
+ * (lib/access.ts projectLevelsForPeople, over one read of the organization's
+ * projects). Only a reviewer who lost sight costs a subtask lookup.
  */
 async function removeAndFindLost(
   ctx: MutationCtx,
@@ -363,14 +363,9 @@ async function removeAndFindLost(
           .query('projects')
           .withIndex('by_org', (q) => q.eq('org_id', a.projects[0].org_id))
           .collect()
-  const sight = async (): Promise<Map<string, OrgProjectLevels>> => {
-    const out = new Map<string, OrgProjectLevels>()
-    for (const id of holders) {
-      const person = a.people.get(id)
-      if (person !== undefined) out.set(id, await projectLevelsForOrg(ctx, person, orgProjects))
-    }
-    return out
-  }
+  const holding = holders.flatMap((id) => a.people.get(id) ?? [])
+  const sight = (): Promise<Map<string, OrgProjectLevels>> =>
+    projectLevelsForPeople(ctx, holding, orgProjects)
   const before = await sight()
   await a.remove()
   // Convex reads this transaction's own writes, so sight is now as it will be

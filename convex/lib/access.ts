@@ -341,6 +341,71 @@ export async function projectLevelsForOrg(
   return levelsFrom(me, projects, grants, shares)
 }
 
+/** projectLevelsForOrg for each of `people`, by profile id, over
+ * `projects`, every project of one organization. Asked alone, a person costs
+ * about four index ranges: their grants, their memberships and each of their
+ * teams and its shares. Many people are answered together instead from every
+ * grant of the organization's projects and every member and share of its
+ * teams, one range for each project and two for each team however many
+ * people it answers, whichever reads fewer ranges. Removing a large team's
+ * access asked each of its members alone and passed Convex's 4,096. */
+export async function projectLevelsForPeople(
+  ctx: QueryCtx,
+  people: readonly Doc<'profiles'>[],
+  projects: readonly Doc<'projects'>[],
+): Promise<Map<string, OrgProjectLevels>> {
+  const out = new Map<string, OrgProjectLevels>()
+  if (people.length === 0 || projects.length === 0) return out
+  const orgId = projects[0].org_id
+  const teams = await ctx.db
+    .query('teams')
+    .withIndex('by_org', (q) => q.eq('org_id', orgId))
+    .collect()
+  if (people.length * 4 <= projects.length + 2 * teams.length) {
+    for (const person of people)
+      out.set(person.id, await projectLevelsForOrg(ctx, person, projects))
+    return out
+  }
+  type Level = Pick<Doc<'project_access'>, 'project_id' | 'level'>
+  const ids = new Set(people.map((p) => p.id))
+  const grantsOf = new Map<string, Level[]>()
+  const sharesOf = new Map<string, Level[]>()
+  const add = (to: Map<string, Level[]>, profileId: string, levels: Level[]) => {
+    const held = to.get(profileId)
+    if (held === undefined) to.set(profileId, [...levels])
+    else held.push(...levels)
+  }
+  for (const project of projects) {
+    const grants = ctx.db
+      .query('project_access')
+      .withIndex('by_project', (q) => q.eq('project_id', project.id))
+    for await (const grant of grants)
+      if (ids.has(grant.profile_id)) add(grantsOf, grant.profile_id, [grant])
+  }
+  for (const team of teams) {
+    const members: string[] = []
+    const memberships = ctx.db
+      .query('team_members')
+      .withIndex('by_team', (q) => q.eq('team_id', team.id))
+    for await (const m of memberships) if (ids.has(m.profile_id)) members.push(m.profile_id)
+    if (members.length === 0) continue
+    const shares = await ctx.db
+      .query('project_team_access')
+      .withIndex('by_team', (q) => q.eq('team_id', team.id))
+      .collect()
+    for (const profileId of members) add(sharesOf, profileId, shares)
+  }
+  for (const person of people) {
+    out.set(
+      person.id,
+      person.org_id === orgId
+        ? levelsFrom(person, projects, grantsOf.get(person.id) ?? [], sharesOf.get(person.id) ?? [])
+        : await projectLevelsForOrg(ctx, person, projects),
+    )
+  }
+  return out
+}
+
 /** The levels `me` holds on `projects`, the pure part of
  * projectLevelsForOrg. `grants` are `me`'s own grants and `shares` the
  * shares of the teams `me` belongs to (counted only for roles that receive
