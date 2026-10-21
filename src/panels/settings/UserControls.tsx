@@ -12,6 +12,7 @@ import {
   type InviteDeliveryRow,
   inviteLabel,
   useInviteDeliveries,
+  useRenderAt,
 } from '../../lib/inviteDeliveries'
 import { useFieldUnsaved, useUnsaved } from '../../lib/leaveGuard'
 import { projectRightBox } from '../../lib/projectCreators'
@@ -136,6 +137,7 @@ export function UserName({ user, isSelf }: { user: UserVM; isSelf: boolean }) {
 export function InviteLabel({ user, className }: { user: UserVM; className?: string }) {
   const row = useInviteDeliveries(user.org)?.get(user.id)
   const state = row?.state
+  useRenderAt(row?.free_at ? Date.parse(row.free_at) : 0)
   const label = inviteLabel(state, row?.free_at)
   return (
     <>
@@ -175,16 +177,7 @@ function SendAgain({
   const state = row?.state
   // a failed send waits for the hour too: it counts against the same cap
   const waitUntil = row?.free_at ? Date.parse(row.free_at) : 0
-  const [now, setNow] = useStateS(Date.now)
-  useEffectS(() => {
-    // a time already passed, such as one an answer brought late, counts now
-    if (waitUntil <= Date.now()) {
-      setNow(Date.now())
-      return
-    }
-    const timer = window.setTimeout(() => setNow(Date.now()), waitUntil - Date.now() + 500)
-    return () => window.clearTimeout(timer)
-  }, [waitUntil])
+  const now = useRenderAt(waitUntil)
   const [sending, setSending] = useStateS(false)
   if (state !== 'held' && state !== 'unsent') return null
   const waiting = waitUntil > now
@@ -246,8 +239,10 @@ export function InviteOutcome({
     current ??
     (last !== 'sending' ? last : undefined) ??
     (rows && !row && !last && !waited ? 'sending' : undefined)
+  const freeAt = current === 'held' ? row?.free_at : undefined
+  useRenderAt(freeAt ? Date.parse(freeAt) : 0)
   if (state === undefined) return null
-  const label = inviteLabel(state, current === 'held' ? row?.free_at : undefined)
+  const label = inviteLabel(state, freeAt)
   const text = label.detail
     ? `${email}: ${label.detail}`
     : state === 'sent'

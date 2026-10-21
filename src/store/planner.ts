@@ -6501,6 +6501,8 @@ export const PLANNER = {
           console.error('[qivo] team sync subscription failed:', err)
           entry.rows = []
           entry.complete = true
+          // the marks kept from before cover this part's people too
+          syncFallback = new Map()
           publish()
         },
       )

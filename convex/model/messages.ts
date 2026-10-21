@@ -226,17 +226,35 @@ const itemStart = (ctx: MutationCtx, a: { recipient_id: string; issue_id: string
  * rows newest first and stop at INBOX_LIMIT, so whenever they list an item
  * they hold that row, while its oldest rows are the first they leave out.
  * A trim adds the rows it deleted to the counts its rows carried, the
- * deleted ones included, and moves the total to the holder. This is
+ * deleted ones included, and to the count of the last holder, read on its
+ * own when the item is longer than `unread`, and moves the total to the
+ * holder. This is
  * separate from retention, and the nightly sweep still never deletes an
  * unread row. */
 async function trimRows(
   ctx: MutationCtx,
   unread: readonly Pick<Doc<'messages'>, '_id' | 'kind' | 'dropped'>[],
+  pair: { recipient_id: string; issue_id: string },
   holder: Pick<Doc<'messages'>, '_id' | 'dropped'>,
   arrival?: Id<'messages'>,
 ): Promise<void> {
   const excess = Math.min(unread.length - ITEM_UNREAD_CAP, ITEM_TRIM_STEP)
   if (excess <= 0) return
+  // The count's last holder is the newest unread row before this one. In an
+  // item longer than `unread` reaches, it lies past it, so it is read here.
+  const prior = (
+    await ctx.db
+      .query('messages')
+      .withIndex('by_recipient_issue', (q) =>
+        q.eq('recipient_id', pair.recipient_id).eq('issue_id', pair.issue_id),
+      )
+      .order('desc')
+      .take(3)
+  ).find((r) => r.read_at === undefined && r._id !== holder._id)
+  const outside =
+    prior?.dropped && !unread.some((r) => r._id === prior._id)
+      ? prior
+      : undefined
   const first = unread[0]
   const newestOfKind = new Map<MessageKind, Pick<Doc<'messages'>, '_id' | 'kind'>>()
   for (const r of unread) newestOfKind.set(r.kind, r)
@@ -244,6 +262,7 @@ async function trimRows(
   if (arrival !== undefined) kept.add(arrival)
   let total = unread.some((r) => r._id === holder._id) ? 0 : (holder.dropped ?? 0)
   for (const r of unread) total += r.dropped ?? 0
+  total += outside?.dropped ?? 0
   const gone = new Set<Id<'messages'>>()
   for (const r of unread) {
     if (gone.size === excess) break
@@ -257,6 +276,7 @@ async function trimRows(
     if (r._id !== holder._id && r.dropped && !gone.has(r._id))
       await ctx.db.patch(r._id, { dropped: undefined })
   }
+  if (outside !== undefined) await ctx.db.patch(outside._id, { dropped: undefined })
   await ctx.db.patch(holder._id, { dropped: total + gone.size })
 }
 
@@ -284,7 +304,7 @@ export async function trimUnreadMessages(
       .order('desc')
       .take(2)
   ).find((r) => r.read_at === undefined)
-  if (holder !== undefined) await trimRows(ctx, unread, holder)
+  if (holder !== undefined) await trimRows(ctx, unread, a, holder)
 }
 
 /* ---------------------------------------------------------------- preload
@@ -578,6 +598,7 @@ export async function postMessage(
     await trimRows(
       ctx,
       row.read_at === undefined ? [...unread, arrived].sort(oldestFirst) : unread,
+      pair,
       holder,
       inserted,
     )

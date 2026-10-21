@@ -68,8 +68,9 @@ const JOIN_ANYWAY = 'They can still join by creating an account with this addres
 
 /** What a pending seat says about its invitation email: a short label, the
     sentence behind it, and whether the email failed. A send held back by
-    the hourly cap says when it can go again, at `freeAt` (null: now, and
-    undefined: not known here). */
+    the hourly cap says when it can go again, at `freeAt` (null or past:
+    now, and undefined: not known here). A caller that stays on screen
+    renders again at that time (useRenderAt). */
 export function inviteLabel(
   state: InviteDelivery | undefined,
   freeAt?: string | null,
@@ -93,10 +94,10 @@ export function inviteLabel(
         text: 'invitation not sent',
         // the hour is still full only while freeAt lies ahead
         detail: `Invitation not sent. ${
-          freeAt
+          freeAt && Date.parse(freeAt) > Date.now()
             ? `This organization sent ${APP_SENDS_PER_ORG_HOUR} invitation emails in the last hour. Send it again after ${fmtTime(new Date(freeAt))}. `
             : `It was held back by the limit of ${APP_SENDS_PER_ORG_HOUR} invitation emails an hour. ${
-                freeAt === null ? 'Send it again now. ' : ''
+                freeAt === undefined ? '' : 'Send it again now. '
               }`
         }${JOIN_ANYWAY}`,
         failed: true,
@@ -110,4 +111,20 @@ export function inviteLabel(
     default:
       return { text: 'invited', failed: false }
   }
+}
+
+/** Renders the caller again at `at` (ms), when it lies ahead, such as the
+    time a held invitation can go again, so what it says follows the clock. */
+export function useRenderAt(at: number): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    // a time already passed, such as one an answer brought late, counts now
+    if (at <= Date.now()) {
+      setNow(Date.now())
+      return
+    }
+    const timer = setTimeout(() => setNow(Date.now()), at - Date.now() + 500)
+    return () => clearTimeout(timer)
+  }, [at])
+  return now
 }

@@ -948,6 +948,33 @@ describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', 
     expect(rows.reduce((n, m) => n + (m.dropped ?? 0), 0)).toBe(11)
   })
 
+  it('moves a count held past the rows a trim reads to the arrival', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // 150 unread rows from before the cap; the newest holds a count of 50
+    await t.run(async (ctx) => {
+      for (let n = 0; n < 150; n++) {
+        await ctx.db.insert('messages', {
+          id: uuid(),
+          org_id: f.org.id,
+          recipient_id: f.guest.id,
+          issue_id: issue.id,
+          issue_title: 'T',
+          kind: 'change',
+          detail: `legacy ${n}`,
+          created_at: new Date(Date.parse('2026-01-01T00:00:00.000Z') + n * 1000).toISOString(),
+          ...(n === 149 ? { dropped: 50 } : {}),
+        })
+      }
+    })
+    await arrive(t, f, { recipient: f.guest, issue }, ['change'], 1_000_000)
+    const rows = await messagesFor(t, f.guest.id, issue.id)
+    // the arrival holds the earlier 50 and the 50 this trim deleted
+    expect(rows.at(-1)?.dropped).toBe(100)
+    expect(rows.slice(0, -1).every((m) => !m.dropped)).toBe(true)
+  })
+
   it('keeps the newest row of a kind, not the oldest one', async () => {
     const t = newT()
     const f = await withOrg(t)

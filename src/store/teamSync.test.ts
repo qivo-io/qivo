@@ -552,6 +552,18 @@ describe('the Team sync store', () => {
     expect(P.lastComments.has(f.todo.id)).toBe(true)
   })
 
+  it('drops the marks kept from before when a part fails while another still loads', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    P.watchTeamSync(f.org, [f.aisha])
+    watches[0].next({ rows: [{ issue_id: f.todo.id, at: NOW }], complete: true })
+    // other people: two parts, the old marks stay until both answer
+    const people = Array.from({ length: SYNC_OWNERS_MAX + 1 }, () => crypto.randomUUID())
+    P.watchTeamSync(f.org, people)
+    expect(P.lastComments.has(f.todo.id)).toBe(true)
+    watches[1].fail(new Error('offline'))
+    expect(P.lastComments.size).toBe(0)
+  })
+
   it('blanks only the failed part, and keeps the marks of the others', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const people = Array.from({ length: SYNC_OWNERS_MAX + 1 }, () => crypto.randomUUID())
