@@ -56,6 +56,7 @@ function DueDate({ it, inButton = false }: { it: IssueVM; inButton?: boolean }) 
     >
       <span
         tabIndex={inButton ? -1 : 0}
+        data-focus-key="due"
         className={`inline-flex items-center gap-1 whitespace-nowrap !font-mono text-xs ${warning ? 'font-semibold text-danger' : 'text-text-3'}`}
       >
         <Icon name="calendar" size={11} />
@@ -75,6 +76,7 @@ function ParentHeading({ it, place }: { it: IssueVM; place: ProjectPlace | null 
       <Button
         type="button"
         variant="unstyled"
+        data-focus-key="parent"
         aria-label={`Parent: ${it.title}`}
         className="flex min-w-0 items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary"
       >
@@ -85,7 +87,7 @@ function ParentHeading({ it, place }: { it: IssueVM; place: ProjectPlace | null 
       </Button>
       <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-2">
         <HoverTooltip content={owner?.name || 'Unassigned'}>
-          <span className="inline-flex min-w-0 items-center gap-1.5">
+          <span data-focus-key="owner-name" className="inline-flex min-w-0 items-center gap-1.5">
             <AssigneeAvatar issue={it} compact />
             <span className="truncate">{owner?.name.split(' ')[0] || 'Unassigned'}</span>
           </span>
@@ -95,7 +97,7 @@ function ParentHeading({ it, place }: { it: IssueVM; place: ProjectPlace | null 
       </span>
       {place && (
         <HoverTooltip content={P.placeLabel(place)}>
-          <span className="truncate text-xs text-text-2">
+          <span data-focus-key="place" className="truncate text-xs text-text-2">
             <ProjectName {...place} />
           </span>
         </HoverTooltip>
@@ -163,6 +165,7 @@ function TaskRow({
             <Button
               type="button"
               variant="unstyled"
+              data-focus-key="title"
               aria-label={it.title}
               className="min-w-0 cursor-inherit text-left font-normal outline-none focus-visible:ring-2 focus-visible:ring-primary"
             >

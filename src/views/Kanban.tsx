@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { boardDropPatch, groupBoardAssignees, groupBoardCell } from '@/lib/boardGroups'
 import { Avatar, EmptyState, Icon, ProjectName, StatusDot } from '../components/qivo'
+import { useFollowTaskFocus } from '../lib/taskFocus'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { useLatest } from '../lib/useLatest'
 import {
@@ -537,6 +538,8 @@ function Kanban({
     },
     [bindSnap, bindClipping],
   )
+  // Keyboard focus stays on a task's card when a change moves the card.
+  const followFocus = useFollowTaskFocus(bodyRef)
 
   const scoped = P.scopedIssues(info)
   const scopedLeaves = scoped.filter((it) => !P.isGroup(it))
@@ -726,6 +729,7 @@ function Kanban({
       <div
         ref={scrollRef}
         data-scroll
+        {...followFocus}
         className="[flex:1] [overflow:auto] [scrollbar-gutter:stable]"
       >
         <BoardPanelMaterial materialRef={materialRef} />
@@ -954,6 +958,7 @@ function Kanban({
       <div
         ref={scrollRef}
         data-scroll
+        {...followFocus}
         onScroll={(event) => {
           if (
             headerRef.current &&

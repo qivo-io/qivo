@@ -69,6 +69,7 @@ import { remainingPatchFromInput, remainingValue } from '../lib/remaining'
 import { buildPath, issueLink } from '../lib/router'
 import { matchesAllWords } from '../lib/search'
 import { firstUnreadTs, mergeSpine, spineWindow, unreadMark } from '../lib/spine'
+import { markTaskFocus, restoreTaskFocus } from '../lib/taskFocus'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { useBottomSnap } from '../lib/useBottomSnap'
 import { useConfirmArm } from '../lib/useConfirmArm'
@@ -1463,6 +1464,9 @@ function IssueDetail({
   // Keyed on being modal, not on the breakpoint, so a resize across it keeps
   // the setup (and the focus) of a window that stays modal.
   const modal = open && modalActive && (!embedded || mobile)
+  // the task the window shows now, for focus to return to when it closes
+  const shownTask = useRefID<string | null>(null)
+  shownTask.current = it?.id ?? null
   useEffectID(() => {
     if (!modal) return
     const frame = frameRef.current
@@ -1470,6 +1474,9 @@ function IssueDetail({
     const dialog = frame.querySelector<HTMLElement>('[role="dialog"]')
     let previousFocus =
       document.activeElement instanceof HTMLElement ? document.activeElement : null
+    // Where in a task's card the opener was. Changing the task here can move
+    // its card, which replaces the opener.
+    let previousMark = markTaskFocus(previousFocus)
     const outside = new Map<HTMLElement, boolean>()
     const focusable = () =>
       Array.from(
@@ -1491,8 +1498,10 @@ function IssueDetail({
     // closes, or, inside the window, where focus stays.
     const settle = setTimeout(() => {
       const landed = document.activeElement
-      if (landed instanceof HTMLElement && landed !== document.body && !frame.contains(landed))
+      if (landed instanceof HTMLElement && landed !== document.body && !frame.contains(landed)) {
         previousFocus = landed
+        previousMark = markTaskFocus(landed)
+      }
       // The Inbox task lives inside main. Isolate sibling branches on the way
       // to body, rather than making its own ancestor inert. Menus and dialogs
       // created later in portals remain available above the task, and so do
@@ -1571,6 +1580,21 @@ function IssueDetail({
       for (const [element, wasInert] of outside) element.inert = wasInert
       if (previousFocus?.isConnected && !previousFocus.closest('[inert]')) {
         restoreFocus(previousFocus)
+      } else {
+        // The opener went with its card. This cleanup can run while React
+        // still commits the close, so search once that commit is done and
+        // the Board shows the task where it is now.
+        const taskId = shownTask.current
+        queueMicrotask(() => {
+          const scroll = !lastInputWasPointer()
+          if (previousMark && restoreTaskFocus(previousMark, { scroll })) return
+          // else the title of the task's card, wherever it is now
+          if (taskId)
+            restoreTaskFocus(
+              { taskId, row: 'card', control: 'title', cell: null, status: null, index: -1 },
+              { scroll },
+            )
+        })
       }
     }
     // `mobile` only picks the first focus target when the window opens

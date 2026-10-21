@@ -1,5 +1,5 @@
 import { getFunctionName } from 'convex/server'
-import { act, type ReactNode } from 'react'
+import { act, type ReactNode, useState } from 'react'
 import type { Root } from 'react-dom/client'
 import { vi } from 'vitest'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
@@ -15,6 +15,8 @@ type Network = {
   onUpdate: ReturnType<typeof vi.fn>
 }
 type Row = Snapshot['issues'][number]
+/** What renders beside the Board for the task it opened, given a close. */
+type Window = (opened: string | null, close: () => void) => ReactNode
 
 const AT = '2026-09-14T08:00:00.000Z'
 
@@ -74,16 +76,11 @@ export async function loadBoard(network: Network, prepare: (snapshot: Snapshot) 
     focus: false,
     search: '',
   }
-  /** The Board as App renders it, again on every store change. `extra`
-      renders beside it in the same root. */
-  function Screen({
-    openIssue,
-    extra,
-  }: {
-    openIssue: (id: string) => void
-    extra?: () => ReactNode
-  }) {
+  /** The Board as App renders it, again on every store change. `window`
+      renders beside it in the same root, with the task the Board opened. */
+  function Screen({ window }: { window?: Window }) {
     usePlannerVersion()
+    const [opened, setOpened] = useState<string | null>(null)
     const info = P.scopeInfo(scope)
     if (!info) throw new Error('missing the scope')
     return (
@@ -92,9 +89,9 @@ export async function loadBoard(network: Network, prepare: (snapshot: Snapshot) 
           info={info}
           filters={filters}
           tweaks={{ metaViz: 'swimlanes' }}
-          actions={{ openIssue: openIssue as (...args: unknown[]) => void }}
+          actions={{ openIssue: setOpened as (...args: unknown[]) => void }}
         />
-        {extra?.()}
+        {window?.(opened, () => setOpened(null))}
       </TooltipProvider>
     )
   }
@@ -109,8 +106,8 @@ export async function loadBoard(network: Network, prepare: (snapshot: Snapshot) 
       ),
     /** Delivers `snapshot` as it is now, as the server would after a change. */
     deliver: () => act(async () => deliver(snapshot)),
-    render: (root: Root, openIssue: (id: string) => void = () => {}, extra?: () => ReactNode) =>
-      act(async () => root.render(<Screen openIssue={openIssue} extra={extra} />)),
+    render: (root: Root, window?: Window) =>
+      act(async () => root.render(<Screen window={window} />)),
   }
 }
 

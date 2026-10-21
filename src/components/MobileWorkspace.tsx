@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { matchesAllWords } from '../lib/search'
+import { useFollowTaskFocus } from '../lib/taskFocus'
 import { useMobile, useMobileBackLayer } from '../lib/useMobile'
 import { type IssueFilters, P, type ScopeInfo } from '../store/planner'
 import {
@@ -421,8 +422,11 @@ export function MobileTaskList({
         ),
     }))
   const count = groups.reduce((sum, group) => sum + group.tasks.length, 0)
+  // Focus stays on a task's row when a change moves it to another section.
+  const listRef = useRef<HTMLDivElement>(null)
+  const followFocus = useFollowTaskFocus(listRef)
   return (
-    <div className="mobile-task-list">
+    <div ref={listRef} className="mobile-task-list" {...followFocus}>
       <div className="mobile-task-tools">
         <NativeSelect
           value={selectedStatus}
@@ -491,7 +495,8 @@ export function MobileTaskList({
               <StatusDot status={group.id} /> {group.name}
               <span className="text-xs text-text-2">{group.tasks.length}</span>
             </h2>
-            <div className="mobile-task-group">
+            {/* the phone's Board cell for one status, as taskFocus reads it */}
+            <div className="mobile-task-group" data-board-cell="phone" data-status={group.id}>
               {group.tasks.map((task) => {
                 const sub = P.project(task.project)
                 const project = P.metaOf(task.project)
@@ -501,6 +506,7 @@ export function MobileTaskList({
                     key={task.id}
                     variant="unstyled"
                     data-card={task.id}
+                    data-focus-key="row"
                     className="mobile-task-row"
                     onClick={() => actions.openIssue(task.id)}
                   >
