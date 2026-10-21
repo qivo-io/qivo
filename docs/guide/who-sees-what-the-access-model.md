@@ -27,9 +27,7 @@ grant, so they keep the tasks and can read the project. They can change only
 what another grant of their own still allows, such as a sub-project where they
 have User access, and the window names those projects.
 For a team, each person's grant is on each project the team shared that holds
-their own listed tasks. A sub-project shows its parent's own tasks, so a
-person who loses that view is listed too, and keeping them puts the grant on
-the sub-project. **Reassign** hands every listed task, reviewer roles included,
+their own listed tasks. **Reassign** hands every listed task, reviewer roles included,
 to one person who keeps User or Lead access to those tasks, or to
 **Unassigned**, and removes the access. Every removal, deleting a team
 included, saves the removal and the choice together. If a task cannot be
@@ -42,11 +40,11 @@ reassign some of the tasks first. The message says which of these you can
 choose, and the window says so before you save when it lists more than 120
 tasks. Keeping people as Viewers is refused the same way when their grants are
 too many to save at once; remove some of those people first, or reassign the
-tasks. Removing a team's access to a project is refused, whatever you choose,
-when more than 700 of its members work on open tasks there, or fewer whose
-access is too much to work out at once. Deleting such a team is refused the
-same way when you keep its people as Viewers or reassign their tasks. Remove
-some of the team's members first, then try again.
+tasks. Keeping people as Viewers or reassigning their tasks is refused when
+more than 700 of the team's members work on open tasks there; leave the tasks
+with them, or remove some of the team's members first. Any removal whose
+people and tasks are too many to check at once is refused too; remove fewer
+people at once, or reassign some of the tasks first.
 Removing a person's grant that is already Viewer offers only the reassignment.
 Done tasks keep their assignee and are not listed.
 

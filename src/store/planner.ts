@@ -3620,16 +3620,6 @@ function levelAfter(change: AccessRemoval) {
     return levelOnProject(projects(projectId), uid, projects)
   }
 }
-/* Whether a person sees a project's tasks once `change` has applied: their
-   level on it, or a parent shown for navigation to one of its sub-projects,
-   whose own tasks the snapshot sends too (visibleLevelOnProject). The server
-   works out who loses sight the same way (lib/access.ts levelsFrom). */
-function seesAfter(change: AccessRemoval) {
-  const level = levelAfter(change)
-  return (uid: string, p: ProjectVM) =>
-    !!level(uid, p.id) ||
-    (p.type === 'meta' && PLANNER.projects.some((c) => c.parent === p.id && !!level(uid, c.id)))
-}
 /* The people whose access `change` reduces. */
 function peopleLosing(change: AccessRemoval): Set<string> {
   if (change.kind === 'userGrant' || change.kind === 'teamMember') return new Set([change.userId])
@@ -3637,20 +3627,11 @@ function peopleLosing(change: AccessRemoval): Set<string> {
 }
 /* Where Keep as Viewer puts the Viewer grant that keeps `task` in sight: the
    project whose grant is removed, or the project the team shared that showed
-   the task (the task's own sub-project first, then its parent). A top-level
-   project the team did not share showed its own tasks only for navigation
-   to a sub-project it shared, the first by id, as the server picks it
-   (model/teams.ts viewerProjectFor). */
+   the task (the task's own sub-project first, then its parent). */
 function keptOn(change: AccessRemoval, task: IssueVM): string {
   if (change.kind === 'userGrant' || change.kind === 'teamGrant') return change.projectId
   const p = PLANNER.project(task.project)
-  if (!p || p.teamAccess?.[change.teamId]) return task.project
-  if (p.parent) return p.parent
-  const subs = PLANNER.projects
-    .filter((c) => c.parent === p.id && c.teamAccess?.[change.teamId])
-    .map((c) => c.id)
-    .sort()
-  return subs[0] ?? task.project
+  return p?.parent && !p.teamAccess?.[change.teamId] ? p.parent : task.project
 }
 /* The direct grant rows on a project, without the lead (projects.lead_id). */
 function grantsOn(projectId: string): Record<string, GrantLevel> {
@@ -4798,9 +4779,9 @@ export const PLANNER = {
      projects where Keep as Viewer would give them Viewer access. Done tasks
      keep their history and are not listed. Computed against the grants as
      they would be, so another grant that still covers someone keeps them off
-     the list, and so does a sub-project that still shows its parent. */
+     the list. */
   accessRemoval: (change: AccessRemoval): RemovalEffect => {
-    const sees = seesAfter(change)
+    const level = levelAfter(change)
     const losing = peopleLosing(change)
     const items: Holder[] = []
     for (const task of PLANNER.issues) {
@@ -4810,7 +4791,7 @@ export const PLANNER = {
         const uid = task[role]
         if (!uid || !losing.has(uid) || (role === 'reviewer' && PLANNER.isGroup(task))) continue
         if (!PLANNER.user(uid)?.active) continue
-        if (visibleLevelOnProject(tp, uid) && !sees(uid, tp)) items.push({ uid, task, role })
+        if (levelOnProject(tp, uid) && !level(uid, tp.id)) items.push({ uid, task, role })
       }
     }
     return {
@@ -4850,7 +4831,7 @@ export const PLANNER = {
     const inIt = places.length > 1 ? 'them' : 'it'
     // a deleted team's people each keep sight of the projects of their own tasks
     const canSee =
-      change.kind === 'deleteTeam' && places.length > 1
+      change.kind === 'deleteTeam' && places.length > 1 && people.length > 1
         ? 'can each see the projects that hold them'
         : `can see ${seen}`
     // a Viewer grant adds nothing to change, so what is left is the access
@@ -4880,9 +4861,10 @@ export const PLANNER = {
       (n) => `${n} others can still change parts of ${inIt}`,
     )
     const others = people.filter((uid) => !changers.some((c) => c.uid === uid))
+    // "the others" would be ambiguous after "2 others can still change"
     const rest = !others.length
       ? ''
-      : `, and ${others.length === 1 ? first(others[0]) : 'the others'} can't change anything in ${inIt}`
+      : `, and ${others.length === 1 ? first(others[0]) : changers.length > 3 ? `${others.length} more` : 'the others'} can't change anything in ${inIt}`
     // one of them may change another's task, never their own
     return `They keep their tasks and ${canSee}, but can't change the tasks they keep. ${still}${rest}.`
   },

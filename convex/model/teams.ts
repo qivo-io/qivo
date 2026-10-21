@@ -362,21 +362,22 @@ export async function setTeamLeaderCore(
   return { changed: true }
 }
 
-/* The projects whose tasks the team's grants reach (reachedProjects), each
- * once, with the projects the team shares by id. */
+/* The projects whose tasks the team's grants reach, each project shared with
+ * the team and, for a top-level one, its sub-projects, without archived ones
+ * and each once, with the ids of the projects the team shares. */
 async function teamReach(
   ctx: QueryCtx,
   team: Doc<'teams'>,
-): Promise<{ projects: Doc<'projects'>[]; shared: Map<string, Doc<'projects'>> }> {
+): Promise<{ projects: Doc<'projects'>[]; shared: Set<string> }> {
   const out = new Map<string, Doc<'projects'>>()
-  const shared = new Map<string, Doc<'projects'>>()
+  const shared = new Set<string>()
   const shares = ctx.db
     .query('project_team_access')
     .withIndex('by_team', (q) => q.eq('team_id', team.id))
   for await (const share of shares) {
     const project = await byId(ctx, 'projects', share.project_id)
     if (project === null || project.org_id !== team.org_id) continue
-    shared.set(project.id, project)
+    shared.add(project.id)
     for (const p of await reachedProjects(ctx, project)) out.set(p.id, p)
   }
   return { projects: [...out.values()], shared }
@@ -384,24 +385,16 @@ async function teamReach(
 
 /* Where keeping a member as Viewer puts the grant for a task in `project`:
  * the project the team shared that showed the task, the task's own
- * sub-project first, then its parent. A top-level project the team did not
- * share showed its own tasks only for navigation to a sub-project it shared,
- * so the grant goes on that sub-project, the first by id when there are
- * several. `shared` holds the projects the team shared before the removal
- * (teamReach). The app's removal window lists the same projects (planner.ts
- * keptOn). */
+ * sub-project first, then its parent. `shared` holds the ids of the projects
+ * the team shared before the removal (teamReach). The app's removal window
+ * lists the same projects. */
 async function viewerProjectFor(
   ctx: QueryCtx,
-  shared: ReadonlyMap<string, Doc<'projects'>>,
+  shared: ReadonlySet<string>,
   project: Doc<'projects'>,
 ): Promise<Doc<'projects'>> {
-  if (shared.has(project.id)) return project
-  if (project.parent_id !== undefined)
-    return (await byId(ctx, 'projects', project.parent_id)) ?? project
-  const subs = [...shared.values()].filter(
-    (p) => p.parent_id === project.id && p.archived_at === undefined,
-  )
-  return subs.sort((a, b) => (a.id < b.id ? -1 : 1))[0] ?? project
+  if (project.parent_id === undefined || shared.has(project.id)) return project
+  return (await byId(ctx, 'projects', project.parent_id)) ?? project
 }
 
 /**

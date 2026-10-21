@@ -1359,7 +1359,7 @@ else first`). With a level the result is `{project, user | team, level,
 changed}`.
 
 With `level: null` it removes the grant. Open tasks of the project and its
-sub-projects, and for a sub-project its parent's own tasks, that someone works on (as assignee, or reviewer of a task
+sub-projects that someone works on (as assignee, or reviewer of a task
 without subtasks) and can no longer see afterwards are settled by
 `on_held_tasks`:
 
@@ -1374,11 +1374,15 @@ The removal and its choice land together or not at all. One removal reassigns
 at most 120 tasks, and fewer when the change is too large for one call. Their
 followers' inbox messages arrive moments after the removal. A larger handover,
 or Viewer grants too many for one call, is refused and nothing changes. A
-team's removal is refused the same way, whatever `on_held_tasks` says, when
-more than 700 of its members hold open tasks in those projects, or fewer whose
-access is too much to work out in one call, with `a removal can take access from at most 700 people with open tasks at once,
-fewer when the change is too large for one request, so remove some of the
-team's members first`. The
+team's removal that keeps people as Viewers or reassigns their tasks is
+refused the same way when more than 700 of its members hold open tasks in
+those projects, with `a removal that keeps people as Viewers or reassigns their tasks can take
+access from at most 700 people with open tasks at once, so leave the tasks
+with them, or remove some of the team's members first`. Leaving the tasks has no such number.
+Any removal whose people and tasks are too many to check in one call is
+refused with `a removal can check only as many people and tasks as fit in one request, so
+remove fewer people at once, such as some of a team's members, or reassign
+some of the tasks first`. The
 result adds `stranded`,
 `kept_as_viewer` and `reassigned`; `stranded` and `reassigned` list `{id, key,
 title, user_id, role}`. `changed` is `false` when there was no grant to
@@ -1434,8 +1438,8 @@ person who is an organization admin or a leader of the team; an agent gets
   case nobody is added. The result is `{team, user, member: true, leader,
   changed}`, with `team` and `user` as `{id, name}`.
 - `member: false` removes the user, leadership included. Their open tasks in
-  the projects the team shares, in those projects' sub-projects, and in the
-  parent of a shared sub-project, that they can no longer see afterwards are settled by `on_held_tasks`, as for
+  the projects the team shares, and in those projects' sub-projects, that
+  they can no longer see afterwards are settled by `on_held_tasks`, as for
   `set_project_access`. `"leave"` (the default) lists them as `stranded`,
   `"keep_as_viewer"` gives the user a Viewer grant on the project the team
   shared that showed each task (the task's own sub-project when the team

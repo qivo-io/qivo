@@ -381,35 +381,6 @@ describe('removing someone who has work in the project', () => {
     expect(P.accessRemoval(leaving('dan')).items).toEqual([]) // his own grant still covers him
   })
 
-  it('lists no task of a parent that a sub-project still shows, as the server works it out', async () => {
-    await load((snap, task) => {
-      inPlan(false)(snap, task)
-      // Leo edits Plan and Specs; Plan stays shown through Specs once his Plan grant goes
-      snap.access = [
-        { project_id: 'plan', profile_id: 'leo', level: 'user' },
-        { project_id: 'specs', profile_id: 'leo', level: 'user' },
-      ]
-      snap.issues.push(task('own', 7, { project_id: 'plan', assignee_id: 'leo' }))
-    })
-    const leo = P.accessRemoval({ kind: 'userGrant', projectId: 'plan', userId: 'leo' })
-    expect(held(leo)).toEqual([
-      ['t1', 'leo', 'assignee'],
-      ['t2', 'leo', 'reviewer'],
-    ])
-  })
-
-  it("lists a parent's own task that the team's sub-project showed, and keeps that sub-project", async () => {
-    await load((snap, task) => {
-      inPlan(false)(snap, task)
-      // Crew shares Specs alone, which shows Plan and its own tasks
-      snap.teamAccess = [{ project_id: 'specs', team_id: 'crew', level: 'user' }]
-      snap.issues.push(task('own', 7, { project_id: 'plan', assignee_id: 'ann' }))
-    })
-    const ann = P.accessRemoval(leaving('ann'))
-    expect(held(ann)).toEqual([['own', 'ann', 'assignee']])
-    expect(ann.projects).toEqual(['specs'])
-  })
-
   /* inPlan with Work named, so the sentences read as the window shows them.
      `also` adds what each case needs. */
   const keeping = (also: (snap: Snapshot, task: Task) => void) => (snap: Snapshot, task: Task) => {
@@ -466,6 +437,22 @@ describe('removing someone who has work in the project', () => {
     )
     expect(keepText(crewGrant('plan'))).toBe(
       "They keep their tasks and can see the whole project, but can't change the tasks they keep. Ann can still change Specs and Dan can still change Work.",
+    )
+  })
+
+  it('names the projects one kept Viewer of a deleted team sees, without "each"', async () => {
+    // Crew shares Work and Specs themselves; Ann works in both
+    await load(
+      keeping((snap, task) => {
+        snap.teamAccess = [
+          { project_id: work, team_id: 'crew', level: 'user' },
+          { project_id: 'specs', team_id: 'crew', level: 'user' },
+        ]
+        snap.issues.push(task('spec', 8, { project_id: 'specs', assignee_id: 'ann' }))
+      }),
+    )
+    expect(keepText(deleteCrew)).toBe(
+      "Ann keeps the 2 tasks and can see Work and Specs, but can't change anything in them, including these tasks.",
     )
   })
 

@@ -23,7 +23,7 @@ import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { sha256hex } from '../machine/auth'
 import { LAST_TEAM_RULE } from '../model/orgs'
-import { HELD_TASKS_SHAPE, KEEP_TOO_LARGE, REMOVAL_TOO_LARGE } from '../model/projectAccess'
+import { HELD_TASKS_SHAPE, KEEP_TOO_LARGE, REMOVAL_FULL } from '../model/projectAccess'
 import { deleteTeamCore, TEAM_RUNS_RULE, teamsJson } from '../model/teams'
 import {
   activityFor,
@@ -603,56 +603,6 @@ describe('removing a member settles their open tasks', () => {
     expect((await taskRow(fx.t, there.id))?.assignee_id).toBe(fx.emil.id)
   })
 
-  it("settles a parent's own task that a shared sub-project showed, keeping that sub-project", async () => {
-    const fx = await setup()
-    // Hardware shares PCB alone, which shows TBED and its own tasks for navigation
-    await fx.t.run(async (ctx) => {
-      await ctx.db.insert('project_team_access', {
-        project_id: fx.sub2.id,
-        team_id: fx.team.id,
-        level: 'user',
-      })
-      const share = await ctx.db
-        .query('project_team_access')
-        .withIndex('by_project_team', (q) =>
-          q.eq('project_id', fx.meta.id).eq('team_id', fx.team.id),
-        )
-        .unique()
-      if (share !== null) await ctx.db.delete(share._id)
-    })
-    const parentTask = await plantIssue(fx.t, {
-      org_id: fx.org.id,
-      project_id: fx.meta.id,
-      assignee_id: fx.emil.id,
-    })
-    expect(await del(fx, fx.user, { on_held_tasks: 'keep_as_viewer' })).toMatchObject({
-      kept_as_viewer: [fx.emil.id],
-      stranded: [],
-    })
-    expect(await grantsOf(fx.t, fx.emil.id)).toEqual([[fx.sub2.id, 'viewer']])
-    expect((await taskRow(fx.t, parentTask.id))?.assignee_id).toBe(fx.emil.id)
-  })
-
-  it("lists a parent's own task when the grant on the sub-project that showed it goes", async () => {
-    const fx = await setup()
-    // Pia sees TBED only through her User grant on FW
-    const parentTask = await plantIssue(fx.t, {
-      org_id: fx.org.id,
-      project_id: fx.meta.id,
-      assignee_id: fx.pia.id,
-    })
-    const out = await fx.t.mutation(internal.machine.projects.restRemoveUserAccess, {
-      ...rest(fx.admin),
-      ref: 'FW',
-      subject: fx.pia.id,
-      body: '',
-    })
-    expect(out.stranded).toEqual([
-      holding(fx.reviewing, fx.pia.id, 'assignee'),
-      holding(parentTask, fx.pia.id, 'assignee'),
-    ])
-  })
-
   it('hands the tasks over, or changes nothing when one cannot be handed over', async () => {
     const fx = await setup()
     await refused(
@@ -983,7 +933,7 @@ describe("deleting a team settles its members' open tasks", () => {
       ),
       'rule',
     )
-    expect((e.data as Refusal).message).toBe(REMOVAL_TOO_LARGE)
+    expect((e.data as Refusal).message).toBe(REMOVAL_FULL)
     expect((e.data as Refusal).reason).toBeUndefined()
     expect(await hardwareLeft(fx)).toMatchObject({ members: 3, shares: 1 })
   })

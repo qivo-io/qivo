@@ -38,7 +38,7 @@ import { REASSIGN_MAX, REMOVAL_HOLDERS_MAX } from '../lib/projectGrants'
 import { SUBTASK_MAX } from '../lib/taskLimits'
 import { type BulkUpdate, holderKey, type IssuePatch, updateIssueCore } from '../model/issues'
 import { newNotifyPreload } from '../model/messages'
-import { REMOVAL_TOO_LARGE, reassignTooLarge } from '../model/projectAccess'
+import { REMOVAL_FULL, REMOVAL_TOO_LARGE, reassignTooLarge } from '../model/projectAccess'
 import {
   as,
   expectRefusal,
@@ -764,7 +764,7 @@ describe('a removal of many people', () => {
     expect(await state()).toMatchObject({ share: null, viewers: REMOVAL_HOLDERS_MAX })
   }, 120_000)
 
-  it(`refuses ${REMOVAL_HOLDERS_MAX + 1} people for their number in the app, REST and MCP, and changes nothing`, async () => {
+  it(`refuses to settle the tasks of ${REMOVAL_HOLDERS_MAX + 1} people in the app, REST and MCP, and changes nothing, but leaves them`, async () => {
     const { t, f, admin, state } = await manyHolders(REMOVAL_HOLDERS_MAX + 1)
     const refusals = [
       as(t, f.admin).mutation(api.teams.deleteDeep, {
@@ -777,7 +777,7 @@ describe('a removal of many people', () => {
         keyName: null,
         ref: 'TBED',
         subject: f.team.id,
-        body: '',
+        body: JSON.stringify({ on_held_tasks: 'keep_as_viewer' }),
       }),
       t.mutation(internal.machine.projects.mcpSetProjectAccess, {
         ...admin,
@@ -793,6 +793,16 @@ describe('a removal of many people', () => {
     }
     expect(await state()).toMatchObject({ share: { level: 'user' }, viewers: 0 })
     expect((await state()).team).not.toBeNull()
+    // leaving the tasks reads less, so only the room bounds it
+    const left = await t.mutation(internal.machine.projects.restRemoveTeamAccess, {
+      ...admin,
+      keyName: null,
+      ref: 'TBED',
+      subject: f.team.id,
+      body: '',
+    })
+    expect(left.stranded).toHaveLength(REMOVAL_HOLDERS_MAX + 1)
+    expect((await state()).share).toBeNull()
   }, 120_000)
 
   it('refuses fewer people whose sight would fill the transaction, before a read passes the limit', async () => {
@@ -811,7 +821,7 @@ describe('a removal of many people', () => {
       }),
       'rule',
     )
-    expect((e.data as Refusal).message).toBe(REMOVAL_TOO_LARGE)
+    expect((e.data as Refusal).message).toBe(REMOVAL_FULL)
     expect((await state()).share).toMatchObject({ level: 'user' })
   }, 60_000)
 
@@ -848,12 +858,41 @@ describe('a removal of many people', () => {
         }),
         'rule',
       )
-      expect((e.data as Refusal).message).toBe(REMOVAL_TOO_LARGE)
+      expect((e.data as Refusal).message).toBe(REMOVAL_FULL)
     } finally {
       LEVELS_READ.max = before
     }
     expect((await state()).share).toMatchObject({ level: 'user' })
   }, 120_000)
+})
+
+describe('working out sight for a removal', () => {
+  it("checks the room every 500 rows of one person's grants, not only before them", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the read counts rows, so 1,200 grant rows on one project will do
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 1200; i++)
+        await ctx.db.insert('project_access', {
+          project_id: f.hidden.id,
+          profile_id: f.agent.id,
+          level: 'viewer',
+        })
+    })
+    const checks = await t.run(async (ctx) => {
+      const projects = await ctx.db
+        .query('projects')
+        .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+        .collect()
+      let n = 0
+      await projectLevelsForPeople(ctx, [f.agent], projects, async () => {
+        n++
+      })
+      return n
+    })
+    // before the grants, after 500 and 1,000 of them, and before memberships
+    expect(checks).toBe(4)
+  })
 })
 
 describe('a bulk update', () => {

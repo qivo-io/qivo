@@ -597,8 +597,7 @@ it](#refusing-a-change-when-a-field-changed-since-you-read-it)).
 Removing access can hide open tasks from the people working on them. These
 are the tasks of the project and its sub-projects that are not Done, whose
 assignee, or reviewer on a task without subtasks, could see them before and
-cannot after. A grant on a sub-project also shows its parent's own tasks, so
-those count too. `DELETE` takes an optional JSON body whose `on_held_tasks` decides
+cannot after. `DELETE` takes an optional JSON body whose `on_held_tasks` decides
 what happens to them:
 
 - `"leave"` (the default, also for an empty body) removes the access and
@@ -630,13 +629,16 @@ Viewers or reassign some of the tasks first` (without the Viewer choice when
 you cannot give it) and nothing changes. Keeping people as Viewers is refused
 the same way when their grants do not fit in one request, with `a removal can
 keep only as many people as Viewers as fit in one request, so remove some of
-these people first or reassign the tasks`. A team's removal is refused before
-anything changes when more than 700 of its members hold open tasks in those
-projects, or fewer whose access is too much to work out in one request,
-whatever `on_held_tasks` says. That is a `400` with
-`a removal can take access from at most 700 people with open tasks at once,
-fewer when the change is too large for one request, so remove some of the
-team's members first`. The answer is
+these people first or reassign the tasks`. A team's removal that keeps people
+as Viewers or reassigns their tasks is a `400` when more than 700 of its
+members hold open tasks in those projects, with
+`a removal that keeps people as Viewers or reassigns their tasks can take
+access from at most 700 people with open tasks at once, so leave the tasks
+with them, or remove some of the team's members first`. Leaving the tasks has no such number. Any removal whose
+people and tasks are too many to check in one request is a `400` with
+`a removal can check only as many people and tasks as fit in one request, so
+remove fewer people at once, such as some of a team's members, or reassign
+some of the tasks first`. Nothing changes after either refusal. The answer is
 `{"project_id", "user" | "team", "removed", "stranded", "kept_as_viewer",
 "reassigned"}`, where `stranded` and `reassigned` list `{"id", "key",
 "title", "user_id", "role"}`, and `kept_as_viewer` the user uuids given a
@@ -739,16 +741,14 @@ and then nobody is added. `PUT` answers `{"team_id", "user": {"id", "name"},
 "leader", "changed"}`; a call that changes nothing answers `changed: false`.
 
 `DELETE` removes the member, leadership included. Their open tasks in the
-projects the team shares, in those projects' sub-projects, and in the parent
-of a shared sub-project, that they can no longer see afterwards are settled
-by `on_held_tasks`, as for [project access](#project-access):
+projects the team shares, and in those projects' sub-projects, that they can
+no longer see afterwards are settled by `on_held_tasks`, as for [project
+access](#project-access):
 
 - `"leave"` (the default, also for an empty body) lists them as `stranded`.
 - `"keep_as_viewer"` gives the person a Viewer grant on the project the team
   shared that showed each task, which is the task's own sub-project when the
-  team shares it and otherwise its top-level project. A top-level project's
-  own task that only a shared sub-project showed gets the grant on that
-  sub-project. This needs the right to manage that
+  team shares it and otherwise its top-level project. This needs the right to manage that
   project's users (an organization admin or its lead), so a team leader
   without it is refused with `no permission to manage users on this project`
   and can still leave the tasks.
