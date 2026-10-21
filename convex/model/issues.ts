@@ -1592,7 +1592,16 @@ export async function updateIssueCore(
         : 'restored'
   // -- guards, in trigger order: parent chain → archive-parent → user refs →
   //    remaining guard (which must raise BEFORE the stamp — 0072)
-  const nextParent = 'parent_id' in patch ? (patch.parent_id ?? undefined) : issue.parent_id
+  // a restore that leaves a full parent (restoreLeavesParent) makes the
+  // task top-level, so the guards below check it without that parent
+  const leavesParent =
+    !('parent_id' in patch) && toggle === 'restored' && (await restoreLeavesParent(ctx, issue))
+  const nextParent =
+    'parent_id' in patch
+      ? (patch.parent_id ?? undefined)
+      : leavesParent
+        ? undefined
+        : issue.parent_id
   // the new parent's row, for the clear-on-attach below
   let attachedTo: Doc<'issues'> | undefined
   if ('parent_id' in patch) {
@@ -1601,7 +1610,7 @@ export async function updateIssueCore(
       assertParentActive(attachedTo, issue.archived_at)
     }
     w.parent_id = nextParent
-  } else if (toggle === 'restored' && (await restoreLeavesParent(ctx, issue))) {
+  } else if (leavesParent) {
     w.parent_id = undefined // ctx.db.patch unsets it
   }
   // the task's project, read at most once and only by the guards that need it
@@ -2361,11 +2370,16 @@ async function restoreAncestors(
  * items clears such a parent the same way (model/deletedItems.ts
  * keptParent), so no restore refuses over it or passes the cap. An archived
  * parent holds no active subtask, because an active task never sits under
- * an archived one, so the restore brings it back too, as before. */
+ * an archived one, so the restore brings it back too, as before. A parent
+ * that is gone, as one in Deleted items is until the steps after its
+ * delete detach its archived subtasks (model/deletedItems.ts
+ * detachArchivedChildren), is left too, so no restored task keeps a parent
+ * that is not there. */
 async function restoreLeavesParent(ctx: QueryCtx, issue: Doc<'issues'>): Promise<boolean> {
   if (issue.parent_id === undefined) return false
   const parent = await byId(ctx, 'issues', issue.parent_id)
-  if (parent === null || parent.archived_at !== undefined) return false
+  if (parent === null) return true
+  if (parent.archived_at !== undefined) return false
   return (await subtaskCount(ctx, parent.id)) >= SUBTASK_MAX
 }
 

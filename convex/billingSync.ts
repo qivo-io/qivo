@@ -67,6 +67,10 @@ const noticesRef = makeFunctionReference<'mutation', Record<string, never>, null
 const storageStepArgs = {
   period: v.id('billing_periods'),
   run: v.string(),
+  // The phase a step queued by an earlier release still carries. 'own' was
+  // this paging; the other two read rows without org_id, of which none are
+  // left, so such a step only finishes the sample (storageStep).
+  phase: v.optional(v.union(v.literal('own'), v.literal('unscoped'), v.literal('tasks'))),
   cursor: v.optional(v.string()),
   // the page size after a step split its page, else STORAGE_PAGE.rows
   size: v.optional(v.number()),
@@ -407,6 +411,9 @@ export const storageStep = internalMutation({
   handler: async (ctx, a): Promise<null> => {
     const period = await ctx.db.get(a.period)
     if (period === null || period.storage_run !== a.run) return null
+    if (a.phase === 'unscoped' || a.phase === 'tasks') {
+      return await finishStorageSample(ctx, period, a.bytes)
+    }
     const page = await storagePage(ctx, period.org_id, {
       cursor: a.cursor ?? null,
       size: a.size,

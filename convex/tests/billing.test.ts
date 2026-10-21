@@ -733,6 +733,22 @@ describe('provider state, retries and billing snapshots', () => {
     expect(await storageEvents(t)).toMatchObject([{ units: 1, period_start: START }])
   })
 
+  it('finishes a sample whose step an earlier release queued for rows without org_id', async () => {
+    const { t, f } = await fixture()
+    await t.mutation(apply, { payload: remote(f.org.id), event_id: 'queued-period' })
+    const pending = await periodAt(t, START)
+    if (pending?.storage_run === undefined) throw new Error('expected a running sample')
+    // the step the earlier release scheduled after the organization's rows
+    await t.mutation(
+      makeFunctionReference<'mutation', Record<string, unknown>, null>('billingSync:storageStep'),
+      { period: pending._id, run: pending.storage_run, phase: 'unscoped', bytes: 7_000_000_000 },
+    )
+    expect(await periodAt(t, START)).toMatchObject({
+      storage_bytes: 7_000_000_000,
+      storage_blocks: 2,
+    })
+  })
+
   it('samples the bytes storageUsage counts, at any page size', async () => {
     const { t, f } = await fixture()
     const storage_id = await t.run((ctx) => ctx.storage.store(new Blob()))

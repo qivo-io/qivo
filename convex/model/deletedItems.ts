@@ -3741,24 +3741,27 @@ const detachArchivedRef = makeFunctionReference<
 >('deletedItems:detachArchived')
 
 /**
- * Detaches the children left under task `parent_id` after its delete
- * (moveTasksToTrash), a page per step, as the delete detaches its active
- * children: each becomes a top-level task, and its followers read that it
- * left its parent, told in background steps (NotifyPreload.deferFollowers).
- * These are its archived subtasks, which SUBTASK_MAX does not bound, so the
- * delete's own transaction leaves them to these steps. A child restored from
- * the archive in the meantime is detached too. Once a restore from Deleted
- * items has brought the parent back, the children left stay under it and
- * the steps stop.
+ * Detaches the archived subtasks left under task `parent_id` by its delete
+ * at `now` (moveTasksToTrash), a page per step, as the delete detaches its
+ * active children: each becomes a top-level task, and its followers read
+ * that it left its parent, told in background steps
+ * (NotifyPreload.deferFollowers). SUBTASK_MAX does not bound archived
+ * subtasks, so the delete's own transaction leaves them to these steps.
+ * Only subtasks archived by `now` go, so a restore of the parent from
+ * Deleted items in the meantime keeps a subtask archived under it later,
+ * and the steps go on until the ones the delete left are all detached. A
+ * subtask restored from the archive meanwhile has left its missing parent
+ * already (model/issues.ts restoreLeavesParent).
  */
 export async function detachArchivedChildren(
   ctx: MutationCtx,
   a: { parent_id: string; actor_id: string; now: string },
 ): Promise<void> {
-  if ((await byId(ctx, 'issues', a.parent_id)) !== null) return
   const kids = await ctx.db
     .query('issues')
-    .withIndex('by_parent', (q) => q.eq('parent_id', a.parent_id))
+    .withIndex('by_parent_archived', (q) =>
+      q.eq('parent_id', a.parent_id).gt('archived_at', '').lte('archived_at', a.now),
+    )
     .take(ARCHIVED_DETACH.page)
   const actor = (await byId(ctx, 'profiles', a.actor_id)) ?? undefined
   const preload: NotifyPreload = { ...newNotifyPreload(), deferFollowers: true }

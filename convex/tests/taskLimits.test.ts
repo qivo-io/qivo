@@ -41,6 +41,7 @@ import {
   NOW,
   newT,
   type OrgFixture,
+  plantHiddenSibling,
   plantIssue,
   plantMessage,
   plantProject,
@@ -375,6 +376,46 @@ describe('restoring a subtask under a parent with the most active subtasks', () 
       archived: false,
     })
     expect((await row(fx.t, mcp.old.id)).parent_id).toBeUndefined()
+  })
+
+  it('checks the people of a machine restore without the parent it leaves', async () => {
+    const fx = await setup()
+    // the parent sits in a sub-project the guest cannot see
+    const hidden = await plantHiddenSibling(fx.t, fx, fx.guest)
+    const parent = await task(fx, { project_id: hidden.id, title: 'Full elsewhere' })
+    await plantSubtasks(fx, parent, SUBTASK_MAX, { project_id: hidden.id })
+    const [old] = await plantSubtasks(fx, parent, 1, { archived_at: NOW, title: 'Old step' })
+    const restored = await fx.t.mutation(internal.machine.rest.updateIssue, {
+      callerId: fx.agent.id,
+      access: 'write',
+      keyName: 'limits',
+      ref: key(old),
+      body: JSON.stringify({ archived: false, assignee_id: fx.guest.id }),
+    })
+    expect(restored).toMatchObject({ archived: false, parent_id: null, assignee_id: fx.guest.id })
+  })
+
+  it('leaves a parent that is in Deleted items, and the steps after its delete detach the rest', async () => {
+    const fx = await setup()
+    const parent = await task(fx, { title: 'Deleted parent' })
+    const [first, second] = await plantSubtasks(fx, parent, 2, { archived_at: NOW })
+    await deleteTask(fx.t, fx, parent.id)
+    // restored before the steps after the delete ran
+    const answer = await as(fx.t, fx.admin).mutation(api.issues.unarchive, {
+      org_id: fx.org.id,
+      id: first.id,
+    })
+    expect(answer.left_parent).toBe(false)
+    expect((await row(fx.t, first.id)).parent_id).toBeUndefined()
+    // the parent comes back before the steps, and they still detach the
+    // subtask its delete left archived
+    await as(fx.t, fx.user).mutation(api.deletedItems.restore, {
+      org_id: fx.org.id,
+      ids: [(await itemFor(fx.t, parent.id)).id],
+    })
+    expect(await row(fx.t, parent.id)).not.toBeNull()
+    await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
+    expect((await row(fx.t, second.id)).parent_id).toBeUndefined()
   })
 
   it('keeps the parent when it has room, archived subtasks aside', async () => {

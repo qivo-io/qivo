@@ -460,10 +460,14 @@ export const unarchive = orgMutation({
     const issue = await myIssue(ctx, id)
     await assertWritable(ctx, issue.project_id)
     const after = await unarchiveIssueCore(ctx, { me: ctx.me, issue, now })
-    return {
-      issue: await pubFor(ctx, ctx.me, after),
-      left_parent: issue.parent_id !== undefined && after.parent_id === undefined,
-    }
+    // a parent that is gone (in Deleted items) was left as its delete
+    // leaves every subtask, so only a full one is worth telling
+    const parentId = issue.parent_id
+    const leftFull =
+      parentId !== undefined &&
+      after.parent_id === undefined &&
+      (await byId(ctx, 'issues', parentId)) !== null
+    return { issue: await pubFor(ctx, ctx.me, after), left_parent: leftFull }
   },
 })
 

@@ -81,7 +81,7 @@ Tasks have these fields:
 - **Labels**, a rich-text **description**, **attachments**, **comments**, a
   **parent**, **subtasks** and task **links**. A subtask stays in its
   parent's project, in any of its sub-projects. A task has one level of
-  subtasks, at most 100 of them
+  subtasks, at most 100 active ones, and archived subtasks do not count
   ([The details column](./the-task-window.md#the-details-column)). Links can mean “blocks”, “is
   blocked by” or “relates to” and may span projects and teams. You see a link
   only if you can access both tasks. Description
