@@ -7,7 +7,10 @@ import { hasOpenTooltip } from '@/lib/passEscapeOn'
    Editable users load this component lazily.
 
    Save/Mod-S commits; blur retains drafts and dirty unmount discards with a
-   toast. Escape closes popovers, then, once the person confirms the discard
+   toast, unless the person chose Discard. Escape inside the text is
+   ProseMirror's, which prevents its default, so it leaves the draft and the
+   window as they are. Escape on the editor's controls (toolbar, link pop,
+   buttons) closes popovers, then, once the person confirms the discard
    (DiscardPrompt), reverts dirty content and clears undo history so redo
    cannot resurrect reaped attachments, then reaches the modal only when
    clean. Toolbar mousedown preserves selection. Remote edits replace
@@ -367,7 +370,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   // the description or comment typed here and not sent yet. One on its way
   // is the store's to keep or report, so closing does not ask about it. It
   // counts in the window's question and in this editor's own, which Escape
-  // asks before it throws the draft away.
+  // on the editor's controls asks before it throws the draft away.
   const draft = useUnsentScope()
   useUnsaved(dirty && !sending, isComment ? 'comment' : 'description', draft)
   const sendingRef = useRef(false)
@@ -1210,6 +1213,9 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     reconcile() // a clean editor catches up with any echo held while focused
   }
 
+  /* Escape from the editor's controls. One pressed inside the text arrives
+     with its default prevented (ProseMirror takes Escape), so it ends here
+     and the draft and the window stay as they are. */
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key !== 'Escape' || e.defaultPrevented || hasOpenTooltip()) return
     const ed = editorRef.current

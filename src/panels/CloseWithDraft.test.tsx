@@ -264,6 +264,30 @@ describe('closing the task window with unsent text', { timeout: 30_000 }, () => 
     expect(onClose).not.toHaveBeenCalled()
   })
 
+  it('leaves the draft and the window alone on Escape inside the text', async () => {
+    await open()
+    const composer = await editorOf('Leave a comment')
+    await act(async () => composer.commands.insertContent('Drift is under 2%'))
+    const text = document.querySelector<HTMLElement>(
+      '[role="textbox"][aria-label="Leave a comment"]',
+    )
+    await act(async () => {
+      // ProseMirror reads keyCode, and takes Escape as its own
+      text?.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Escape',
+          keyCode: 27,
+          bubbles: true,
+          cancelable: true,
+        }),
+      )
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    })
+    expect(question()).toBeNull()
+    expect(composer.getText()).toBe('Drift is under 2%')
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
   it('asks before a description draft moves into or out of its own window', async () => {
     await open()
     const column = await editorOf('Task description')
