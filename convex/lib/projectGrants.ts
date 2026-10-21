@@ -18,6 +18,15 @@ import type { GrantLevel } from './enums'
  * window shows it. */
 export const REASSIGN_MAX = 120
 
+/** The most people with open tasks one access removal takes access from
+ * (model/projectAccess.ts removeAndSettle). The removal works out each such
+ * person's sight before and after, and keeping them as Viewers looks up each
+ * one's grant, which cost at most five index ranges a person when
+ * convex-test counted every query (tests/bulkReassign.test.ts). 700 people
+ * use about 3,500 of Convex's 4,096 and leave the rest for the removal's
+ * other reads. Only a team's removal or deletion reaches it. */
+export const REMOVAL_HOLDERS_MAX = 700
+
 /** Individual grants on one project, by profile id. */
 export type Grants = Record<string, GrantLevel>
 

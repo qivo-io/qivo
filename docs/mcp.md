@@ -1373,7 +1373,12 @@ without subtasks) and can no longer see afterwards are settled by
 The removal and its choice land together or not at all. One removal reassigns
 at most 120 tasks, and fewer when the change is too large for one call. Their
 followers' inbox messages arrive moments after the removal. A larger handover,
-or Viewer grants too many for one call, is refused and nothing changes. The
+or Viewer grants too many for one call, is refused and nothing changes. A
+team's removal is refused the same way, whatever `on_held_tasks` says, when
+more than 700 of its members hold open tasks in those projects, or fewer whose
+access is too much to work out in one call, with `a removal can take access from at most 700 people with open tasks at once,
+fewer when the change is too large for one request, so remove some of the
+team's members first`. The
 result adds `stranded`,
 `kept_as_viewer` and `reassigned`; `stranded` and `reassigned` list `{id, key,
 title, user_id, role}`. `changed` is `false` when there was no grant to

@@ -28,17 +28,17 @@
 /// <reference types="vite/client" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api } from '../_generated/api'
+import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { LEVELS_READ, projectLevelsForPeople } from '../lib/access'
 import { byId } from '../lib/db'
 import type { Refusal } from '../lib/functions'
-import { REASSIGN_MAX } from '../lib/projectGrants'
+import { REASSIGN_MAX, REMOVAL_HOLDERS_MAX } from '../lib/projectGrants'
 import { SUBTASK_MAX } from '../lib/taskLimits'
 import { type BulkUpdate, holderKey, type IssuePatch, updateIssueCore } from '../model/issues'
 import { newNotifyPreload } from '../model/messages'
-import { reassignTooLarge } from '../model/projectAccess'
+import { REMOVAL_TOO_LARGE, reassignTooLarge } from '../model/projectAccess'
 import {
   as,
   expectRefusal,
@@ -662,6 +662,158 @@ describe('reassigning the tasks of an access removal', () => {
     )
     expect(follows).toEqual([fx.emil.id, fx.leo.id, ...[1, 2, 3].map((k) => fx.crowd[k].id)].sort())
   })
+})
+
+/* withOrg with `n` more members of Hardware, which shares TBED at User, each
+ * assigned to one open task in Firmware, beside a second team, Platform.
+ * Under `limits` the deployment's limits apply. */
+async function manyHolders(n: number, limits: Parameters<typeof newT>[0] = {}) {
+  const t = newT({ transactionLimits: true, ...limits })
+  const f = await withOrg(t)
+  for (let from = 0; from < n; from += 100) {
+    await t.run(async (ctx) => {
+      if (from === 0) {
+        await ctx.db.insert('teams', {
+          id: uuid(),
+          org_id: f.org.id,
+          name: 'Platform',
+          stale_days: 14,
+          archive_days: 30,
+          track_delay_default: false,
+          created_at: NOW,
+        })
+        await ctx.db.insert('project_team_access', {
+          project_id: f.meta.id,
+          team_id: f.team.id,
+          level: 'user',
+        })
+      }
+      for (let i = from; i < Math.min(n, from + 100); i++) {
+        const id = uuid()
+        await ctx.db.insert('profiles', {
+          id,
+          org_id: f.org.id,
+          name: `m${i}`,
+          initials: 'MM',
+          color: '#7a7ad0',
+          org_role: 'user',
+          active: true,
+          kind: 'person',
+          plannable_hours: 40,
+          accepted_at: NOW,
+          created_at: NOW,
+        })
+        await ctx.db.insert('team_members', {
+          team_id: f.team.id,
+          profile_id: id,
+          is_leader: false,
+        })
+        await ctx.db.insert('issues', {
+          id: uuid(),
+          org_id: f.org.id,
+          project_id: f.sub.id,
+          num: 2000 + i,
+          title: `Task ${i}`,
+          description: '',
+          status: 'todo',
+          priority: 'medium',
+          paused: false,
+          assignee_id: id,
+          created_at: NOW,
+          updated_at: NOW,
+        })
+      }
+    })
+  }
+  const admin = { callerId: f.admin.id, access: 'write' as const }
+  const state = () =>
+    t.run(async (ctx) => ({
+      share: await ctx.db
+        .query('project_team_access')
+        .withIndex('by_project_team', (q) => q.eq('project_id', f.meta.id).eq('team_id', f.team.id))
+        .unique(),
+      viewers: (
+        await ctx.db
+          .query('project_access')
+          .withIndex('by_project', (q) => q.eq('project_id', f.meta.id))
+          .collect()
+      ).filter((g) => g.level === 'viewer').length,
+      team: await byId(ctx, 'teams', f.team.id),
+    }))
+  return { t, f, admin, state }
+}
+
+describe('a removal of many people', () => {
+  it(`takes access from ${REMOVAL_HOLDERS_MAX} people with open tasks inside one transaction's limits, the costliest way`, async () => {
+    const { t, f, state } = await manyHolders(REMOVAL_HOLDERS_MAX)
+    // each holder's teams read one at a time, as in an organization with
+    // more than LEVELS_READ memberships, and a Viewer grant each: five index
+    // ranges a holder
+    const before = LEVELS_READ.max
+    LEVELS_READ.max = 0
+    try {
+      await as(t, f.admin).mutation(api.projects.removeAccess, {
+        org_id: f.org.id,
+        id: f.meta.id,
+        team_id: f.team.id,
+        on_held_tasks: 'keep_as_viewer',
+      })
+    } finally {
+      LEVELS_READ.max = before
+    }
+    expect(await state()).toMatchObject({ share: null, viewers: REMOVAL_HOLDERS_MAX })
+  }, 120_000)
+
+  it(`refuses ${REMOVAL_HOLDERS_MAX + 1} people for their number in the app, REST and MCP, and changes nothing`, async () => {
+    const { t, f, admin, state } = await manyHolders(REMOVAL_HOLDERS_MAX + 1)
+    const refusals = [
+      as(t, f.admin).mutation(api.teams.deleteDeep, {
+        org_id: f.org.id,
+        id: f.team.id,
+        on_held_tasks: 'keep_as_viewer',
+      }),
+      t.mutation(internal.machine.projects.restRemoveTeamAccess, {
+        ...admin,
+        keyName: null,
+        ref: 'TBED',
+        subject: f.team.id,
+        body: '',
+      }),
+      t.mutation(internal.machine.projects.mcpSetProjectAccess, {
+        ...admin,
+        project: 'TBED',
+        team_id: f.team.id,
+        level: null,
+        on_held_tasks: { reassign_to: null },
+      }),
+    ]
+    for (const refusal of refusals) {
+      const e = await expectRefusal(refusal, 'rule')
+      expect((e.data as Refusal).message).toBe(REMOVAL_TOO_LARGE)
+    }
+    expect(await state()).toMatchObject({ share: { level: 'user' }, viewers: 0 })
+    expect((await state()).team).not.toBeNull()
+  }, 120_000)
+
+  it('refuses fewer people whose sight would fill the transaction, before a read passes the limit', async () => {
+    // 200 holders cost about 400 index ranges to work out who loses sight,
+    // past a limit of 300
+    const { t, f, admin, state } = await manyHolders(200, {
+      transactionLimits: { databaseQueries: 300 },
+    })
+    const e = await expectRefusal(
+      t.mutation(internal.machine.projects.restRemoveTeamAccess, {
+        ...admin,
+        keyName: null,
+        ref: 'TBED',
+        subject: f.team.id,
+        body: '',
+      }),
+      'rule',
+    )
+    expect((e.data as Refusal).message).toBe(REMOVAL_TOO_LARGE)
+    expect((await state()).share).toMatchObject({ level: 'user' })
+  }, 60_000)
 })
 
 describe('a bulk update', () => {

@@ -381,6 +381,99 @@ describe('removing someone who has work in the project', () => {
     expect(P.accessRemoval(leaving('dan')).items).toEqual([]) // his own grant still covers him
   })
 
+  it('lists no task of a parent that a sub-project still shows, as the server works it out', async () => {
+    await load((snap, task) => {
+      inPlan(false)(snap, task)
+      // Leo edits Plan and Specs; Plan stays shown through Specs once his Plan grant goes
+      snap.access = [
+        { project_id: 'plan', profile_id: 'leo', level: 'user' },
+        { project_id: 'specs', profile_id: 'leo', level: 'user' },
+      ]
+      snap.issues.push(task('own', 7, { project_id: 'plan', assignee_id: 'leo' }))
+    })
+    const leo = P.accessRemoval({ kind: 'userGrant', projectId: 'plan', userId: 'leo' })
+    expect(held(leo)).toEqual([
+      ['t1', 'leo', 'assignee'],
+      ['t2', 'leo', 'reviewer'],
+    ])
+  })
+
+  /* inPlan with Work named, so the sentences read as the window shows them.
+     `also` adds what each case needs. */
+  const keeping = (also: (snap: Snapshot, task: Task) => void) => (snap: Snapshot, task: Task) => {
+    inPlan(false)(snap, task)
+    snap.projects[0].name = 'Work'
+    also(snap, task)
+  }
+  const keepText = (change: Parameters<Planner['keepText']>[0]) =>
+    P.keepText(change, P.accessRemoval(change))
+
+  it('says a kept Viewer can change nothing in the project when that is so', async () => {
+    await load(keeping(() => {}))
+    expect(keepText(crewGrant('plan'))).toBe(
+      "Ann keeps the task and can see the whole project, but can't change anything in it, including this task.",
+    )
+  })
+
+  it('names the sub-project a kept Viewer still edits through their own User grant', async () => {
+    await load(
+      keeping((snap) =>
+        snap.access.push({ project_id: 'specs', profile_id: 'ann', level: 'user' }),
+      ),
+    )
+    expect(keepText(crewGrant('plan'))).toBe(
+      'Ann keeps the task and can see the whole project, but can change only Specs in it, not this task.',
+    )
+  })
+
+  it('says several kept Viewers can change nothing when none of them can', async () => {
+    await load(
+      keeping((snap) => {
+        snap.access = snap.access.filter((a) => a.profile_id !== 'leo')
+        snap.teamMembers.push({ team_id: 'crew', profile_id: 'leo', is_leader: false })
+      }),
+    )
+    expect(keepText(crewGrant('plan'))).toBe(
+      "They keep their tasks and can see the whole project, but can't change anything in it, including these tasks.",
+    )
+  })
+
+  it('names who of several kept Viewers still edits part of the project, and who does not', async () => {
+    // Dan works on a Specs task and keeps his own User grant on Work
+    const dans = (snap: Snapshot, task: Task) =>
+      snap.issues.push(task('spec', 8, { project_id: 'specs', assignee_id: 'dan' }))
+    await load(keeping(dans))
+    expect(keepText(crewGrant('plan'))).toBe(
+      "They keep their tasks and can see the whole project, but can't change these tasks. Dan can still change Work, and Ann can't change anything in it.",
+    )
+    await load(
+      keeping((snap, task) => {
+        dans(snap, task)
+        snap.access.push({ project_id: 'specs', profile_id: 'ann', level: 'user' })
+      }),
+    )
+    expect(keepText(crewGrant('plan'))).toBe(
+      "They keep their tasks and can see the whole project, but can't change these tasks. Ann can still change Specs and Dan can still change Work.",
+    )
+  })
+
+  it('names a kept Viewer who edits another listed project of a deleted team', async () => {
+    // Crew shares Work and Specs themselves; Dan edits Work, where Ann's task is
+    await load(
+      keeping((snap, task) => {
+        snap.teamAccess = [
+          { project_id: work, team_id: 'crew', level: 'user' },
+          { project_id: 'specs', team_id: 'crew', level: 'user' },
+        ]
+        snap.issues.push(task('spec', 8, { project_id: 'specs', assignee_id: 'dan' }))
+      }),
+    )
+    expect(P.accessRemoval(deleteCrew).projects).toEqual([work, 'specs'])
+    expect(keepText(deleteCrew)).toBe(
+      "They keep their tasks and can each see the projects that hold them, but can't change these tasks. Dan can still change Work, and Ann can't change anything in them.",
+    )
+  })
+
   it('offers people who keep the team when one member leaves, but not when it is deleted', async () => {
     await load(inPlan(true))
     const ann = P.accessRemoval(leaving('ann'))
@@ -549,7 +642,7 @@ describe('removing someone who has work in the project', () => {
     expect(requests).toEqual([])
     expect(vm('t4').assignee).toBe('ann')
     expect(window.showToast).toHaveBeenCalledWith(
-      "The Crew team can't be deleted, because it is the organization's last team.",
+      "The Crew team can't be deleted, because an organization needs at least one team. Create another team first.",
       'error',
     )
   })

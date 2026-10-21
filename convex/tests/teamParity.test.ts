@@ -22,7 +22,8 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { sha256hex } from '../machine/auth'
-import { HELD_TASKS_SHAPE, KEEP_TOO_LARGE } from '../model/projectAccess'
+import { LAST_TEAM_RULE } from '../model/orgs'
+import { HELD_TASKS_SHAPE, KEEP_TOO_LARGE, REMOVAL_TOO_LARGE } from '../model/projectAccess'
 import { deleteTeamCore, TEAM_RUNS_RULE, teamsJson } from '../model/teams'
 import {
   activityFor,
@@ -908,10 +909,16 @@ describe("deleting a team settles its members' open tasks", () => {
     expect(await grantsOf(fx.t, ola.id)).toEqual([[fx.sub2.id, 'viewer']])
   })
 
-  it('refuses Viewer grants that would fill the transaction, and keeps the team', async () => {
+  /* The room checks before Viewer grants when the setup's Hardware is
+   * deleted beside Design: Emil, its one holder, and Hardware's shares
+   * before, Emil alone after, and his task under review
+   * (model/projectAccess.ts removeAndFindLost). */
+  const SIGHT_CHECKS = 4
+
+  it('refuses a removal whose sight would fill the transaction, and keeps the team', async () => {
     const fx = await setup()
     await plantTeam(fx, fx.org.id, 'Design')
-    // the deployment reports the transaction nearly full before the first grant
+    // the deployment reports the transaction nearly full from the start
     const e = await expectRefusal(
       fx.t.run((ctx) =>
         deleteTeamCore(
@@ -919,6 +926,36 @@ describe("deleting a team settles its members' open tasks", () => {
             ...ctx,
             meta: {
               getTransactionMetrics: async () => ({ databaseQueries: { used: 99, remaining: 1 } }),
+            },
+          } as unknown as MutationCtx,
+          { me: fx.admin, team: fx.team, held: 'keep_as_viewer', now: NOW },
+        ),
+      ),
+      'rule',
+    )
+    expect((e.data as Refusal).message).toBe(REMOVAL_TOO_LARGE)
+    expect((e.data as Refusal).reason).toBeUndefined()
+    expect(await hardwareLeft(fx)).toMatchObject({ members: 3, shares: 1 })
+  })
+
+  it('refuses Viewer grants that would fill the transaction, and keeps the team', async () => {
+    const fx = await setup()
+    await plantTeam(fx, fx.org.id, 'Design')
+    // the deployment reports the transaction nearly full before the first
+    // grant, once Emil's sight has been worked out (SIGHT_CHECKS)
+    let checks = 0
+    const e = await expectRefusal(
+      fx.t.run((ctx) =>
+        deleteTeamCore(
+          {
+            ...ctx,
+            meta: {
+              getTransactionMetrics: async () => ({
+                databaseQueries:
+                  ++checks > SIGHT_CHECKS
+                    ? { used: 99, remaining: 1 }
+                    : { used: 0, remaining: 100 },
+              }),
             },
           } as unknown as MutationCtx,
           { me: fx.admin, team: fx.team, held: 'keep_as_viewer', now: NOW },
@@ -938,7 +975,7 @@ describe("deleting a team settles its members' open tasks", () => {
     await plantTeam(fx, fx.org.id, 'Design')
     // Emil's third task in FW needs the same grant on TBED as the first two
     await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, assignee_id: fx.emil.id })
-    // the transaction reads as full from the third check on
+    // the transaction reads as full from the third check after his sight on
     let checks = 0
     await fx.t.run((ctx) =>
       deleteTeamCore(
@@ -947,21 +984,23 @@ describe("deleting a team settles its members' open tasks", () => {
           meta: {
             getTransactionMetrics: async () => ({
               databaseQueries:
-                ++checks > 2 ? { used: 99, remaining: 1 } : { used: 0, remaining: 100 },
+                ++checks > SIGHT_CHECKS + 2
+                  ? { used: 99, remaining: 1 }
+                  : { used: 0, remaining: 100 },
             }),
           },
         } as unknown as MutationCtx,
         { me: fx.admin, team: fx.team, held: 'keep_as_viewer', now: NOW },
       ),
     )
-    expect(checks).toBe(2)
+    expect(checks).toBe(SIGHT_CHECKS + 2)
     expect(await grantsOf(fx.t, fx.emil.id)).toEqual([[fx.meta.id, 'viewer']])
   })
 
   it('refuses the last team and anyone but an admin before anything is settled', async () => {
     const fx = await setup()
     // handing the tasks to the Viewer would be refused with its own sentence
-    await refused(deleteHardware(fx, fx.viewer.id), 'rule', 'cannot delete the last team')
+    await refused(deleteHardware(fx, fx.viewer.id), 'rule', LAST_TEAM_RULE)
     await plantTeam(fx, fx.org.id, 'Design')
     // the fixture's user leads Hardware and TBED but is no organization admin
     await refused(

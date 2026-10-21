@@ -38,7 +38,8 @@ show a ticked checkbox that cannot be changed, because they can always create
 projects. Viewers, including **Viewer** agents, have none.
 
 You cannot remove or deactivate yourself, demote or deactivate the last admin,
-or delete the last team. Adding or reactivating a user requires no prepaid
+or delete the last team. An organization needs at least one team, so create
+another team before you delete the last one. Adding or reactivating a user requires no prepaid
 seat. The page lists **Guests** separately with their projects and roles. An
 active guest counts toward billing only without an active home membership ([Guest billing](./who-sees-what-the-access-model.md#people-outside-your-organization)).
 

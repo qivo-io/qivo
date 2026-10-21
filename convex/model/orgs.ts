@@ -488,6 +488,10 @@ export async function setPlannableHoursCore(
   return (await ctx.db.get(target._id)) as Doc<'profiles'>
 }
 
+/** The refusal of deleting an organization's last team, with the next step. */
+export const LAST_TEAM_RULE =
+  'an organization needs at least one team; create another team before deleting this one'
+
 /* teams_last_guard (0078:356-370): a team may only be deleted while another
  * team exists in its org. teams.deleteDeep calls it before the cascade. */
 export async function assertNotLastTeam(ctx: QueryCtx, team: Doc<'teams'>): Promise<void> {
@@ -495,7 +499,7 @@ export async function assertNotLastTeam(ctx: QueryCtx, team: Doc<'teams'>): Prom
   for await (const other of teams) {
     if (other.id !== team.id) return
   }
-  throw rule('cannot delete the last team')
+  throw rule(LAST_TEAM_RULE)
 }
 
 /* --------------------------------------------------------------- week labels

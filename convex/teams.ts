@@ -7,8 +7,8 @@
  *   teams_update            is_org_admin OR is_team_leader(id) (0081:219-220)
  *   delete_team             0081:458-471 — 'team not found' /
  *                           'only organization admins can delete teams'
- *   teams_last_guard        0078 — 'cannot delete the last team' (model/orgs,
- *                           checked in model/teams.ts deleteTeamCore)
+ *   teams_last_guard        0078 — LAST_TEAM_RULE (model/orgs, checked in
+ *                           model/teams.ts deleteTeamCore)
  *   tm_insert/update/delete admin-or-leader; grantee same org, never a guest
  *                           (0081:223-251); a leader is never a viewer
  *                           (0102:334-359 — WITH CHECK, no sentence: forbidden)

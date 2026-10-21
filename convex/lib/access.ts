@@ -355,11 +355,15 @@ export const LEVELS_READ = { max: 4000 }
  * teams and those memberships are at most LEVELS_READ rows, and otherwise
  * from one range a person. Each team's shares are read once for everyone.
  * Removing a large team's access asked each member alone, about four ranges
- * before the change and four after, and passed Convex's 4,096. */
+ * before the change and four after, and passed Convex's 4,096. `guard`, when
+ * given, runs before each team's memberships, each person and each team's
+ * shares are read, so a caller can stop before the reads fill the
+ * transaction (model/projectAccess.ts removeAndSettle). */
 export async function projectLevelsForPeople(
   ctx: QueryCtx,
   people: readonly Doc<'profiles'>[],
   projects: readonly Doc<'projects'>[],
+  guard: () => Promise<void> = async () => {},
 ): Promise<Map<string, OrgProjectLevels>> {
   const out = new Map<string, OrgProjectLevels>()
   if (people.length === 0 || projects.length === 0) return out
@@ -369,9 +373,11 @@ export async function projectLevelsForPeople(
     .withIndex('by_org', (q) => q.eq('org_id', orgId))
     .collect()
   const orgTeams = new Set(teams.map((t) => t.id))
-  const teamsOf = people.length > teams.length ? await teamsOfPeople(ctx, people, teams) : null
+  const teamsOf =
+    people.length > teams.length ? await teamsOfPeople(ctx, people, teams, guard) : null
   const sharesOfTeam = new Map<string, Doc<'project_team_access'>[]>()
   for (const person of people) {
+    await guard()
     if (person.org_id !== orgId) {
       out.set(person.id, await projectLevelsForOrg(ctx, person, projects))
       continue
@@ -394,6 +400,7 @@ export async function projectLevelsForPeople(
         if (!orgTeams.has(teamId)) continue
         let teamShares = sharesOfTeam.get(teamId)
         if (teamShares === undefined) {
+          await guard()
           teamShares = await ctx.db
             .query('project_team_access')
             .withIndex('by_team', (q) => q.eq('team_id', teamId))
@@ -414,11 +421,13 @@ async function teamsOfPeople(
   ctx: QueryCtx,
   people: readonly Doc<'profiles'>[],
   teams: readonly Doc<'teams'>[],
+  guard: () => Promise<void>,
 ): Promise<Map<string, string[]> | null> {
   const ids = new Set(people.map((p) => p.id))
   const out = new Map<string, string[]>()
   let rows = 0
   for (const team of teams) {
+    await guard()
     const memberships = ctx.db
       .query('team_members')
       .withIndex('by_team', (q) => q.eq('team_id', team.id))

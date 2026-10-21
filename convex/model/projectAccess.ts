@@ -39,7 +39,7 @@ import { usedMoreThan } from '../lib/db'
 import { GRANT_LEVELS, type GrantLevel, vGrantLevel } from '../lib/enums'
 import { badRequest, forbidden, type Refusal, rule } from '../lib/functions'
 import { liveIn } from '../lib/liveTasks'
-import { REASSIGN_MAX } from '../lib/projectGrants'
+import { REASSIGN_MAX, REMOVAL_HOLDERS_MAX } from '../lib/projectGrants'
 import { logActivity, signedDetail } from './activity'
 import { assertExpected, exact, type Fields, oneOf } from './expected'
 import { assertAssigneeRule, hasSubtasks, holderKey, updateIssueCore } from './issues'
@@ -292,8 +292,9 @@ export async function reachedProjects(
 type Lost = Holding & { project: Doc<'projects'> }
 
 /** The share of each of Convex's limits for one transaction that a removal
- * may have used before it reassigns another task or checks another webhook
- * subscription. The tasks' followers hear from background steps
+ * may have used before it reads another holder's sight, gives another Viewer
+ * grant, reassigns another task or checks another webhook subscription. The
+ * tasks' followers hear from background steps
  * (model/messages.ts NotifyPreload.deferFollowers), so they cost the removal
  * nothing, but a task update still checks each webhook subscription of the
  * organization (taskEvents.ts emitTaskEvent), and no fixed cost per task
@@ -316,11 +317,24 @@ export const reassignTooLarge = (canKeep: boolean): string =>
 export const KEEP_TOO_LARGE =
   'a removal can keep only as many people as Viewers as fit in one request, so remove some of these people first or reassign the tasks'
 
-/* Thrown by a reassignment's or a Viewer grant's guard once the transaction
- * has used more than REASSIGN_ROOM of a limit (lib/db.ts usedMoreThan), and
- * turned into reassignTooLarge or KEEP_TOO_LARGE by removeAndSettle. It is no
- * ConvexError, so settling passes it on without HELD_TASKS_REFUSED. */
+/** The refusal of a removal whose people are too many for one request: more
+ * than REMOVAL_HOLDERS_MAX of them hold open tasks in the projects it
+ * reaches, or fewer whose sight fills REASSIGN_ROOM of the transaction. Only
+ * a team's removal or deletion reaches it, so the next step is to remove
+ * some of the team's members first, one request each. */
+export const REMOVAL_TOO_LARGE = `a removal can take access from at most ${REMOVAL_HOLDERS_MAX} people with open tasks at once, fewer when the change is too large for one request, so remove some of the team's members first`
+
+/* Thrown by a removal's guard once the transaction has used more than
+ * REASSIGN_ROOM of a limit (lib/db.ts usedMoreThan), and turned into
+ * REMOVAL_TOO_LARGE, reassignTooLarge or KEEP_TOO_LARGE by removeAndSettle
+ * and removeAndFindLost. It is no ConvexError, so settling passes it on
+ * without HELD_TASKS_REFUSED. */
 class RemovalFull extends Error {}
+
+/* The guard each step of a removal runs before it reads or writes more. */
+async function assertRoom(ctx: QueryCtx): Promise<void> {
+  if (await usedMoreThan(ctx, REASSIGN_ROOM)) throw new RemovalFull()
+}
 
 /**
  * Runs `remove` and answers the open tasks in `projects` that someone in
@@ -333,7 +347,11 @@ class RemovalFull extends Error {}
  * people holding them get their sight worked out once before and once after,
  * for every project at a time and, when there are many of them, all together
  * (lib/access.ts projectLevelsForPeople, over one read of the organization's
- * projects). Only a reviewer who lost sight costs a subtask lookup.
+ * projects). Only a reviewer who lost sight costs a subtask lookup. More than
+ * REMOVAL_HOLDERS_MAX such people are refused before their sight is read,
+ * and the room (REASSIGN_ROOM) is checked before each one's reads and each
+ * subtask lookup, so a removal too large for one request is refused with
+ * REMOVAL_TOO_LARGE before a read passes Convex's limits.
  */
 async function removeAndFindLost(
   ctx: MutationCtx,
@@ -361,30 +379,39 @@ async function removeAndFindLost(
     }
   }
   const holders = [...new Set(candidates.map((h) => h.profile_id))]
-  const orgProjects =
-    holders.length === 0
-      ? []
-      : await ctx.db
-          .query('projects')
-          .withIndex('by_org', (q) => q.eq('org_id', a.projects[0].org_id))
-          .collect()
-  const holding = holders.flatMap((id) => a.people.get(id) ?? [])
-  const sight = (): Promise<Map<string, OrgProjectLevels>> =>
-    projectLevelsForPeople(ctx, holding, orgProjects)
-  const before = await sight()
-  await a.remove()
-  // Convex reads this transaction's own writes, so sight is now as it will be
-  const after = await sight()
-  const sees = (levels: Map<string, OrgProjectLevels>, h: Lost) =>
-    (levels.get(h.profile_id)?.levelOf(h.project) ?? null) !== null
-  const lost: Lost[] = []
-  const live = liveIn(new Map(orgProjects.map((p) => [p.id, p])))
-  for (const h of candidates) {
-    if (!sees(before, h) || sees(after, h)) continue
-    if (h.role === 'reviewer' && (await hasSubtasks(ctx, h.task, live))) continue
-    lost.push(h)
+  if (holders.length > REMOVAL_HOLDERS_MAX) throw rule(REMOVAL_TOO_LARGE)
+  try {
+    const orgProjects =
+      holders.length === 0
+        ? []
+        : await ctx.db
+            .query('projects')
+            .withIndex('by_org', (q) => q.eq('org_id', a.projects[0].org_id))
+            .collect()
+    const holding = holders.flatMap((id) => a.people.get(id) ?? [])
+    const sight = (): Promise<Map<string, OrgProjectLevels>> =>
+      projectLevelsForPeople(ctx, holding, orgProjects, () => assertRoom(ctx))
+    const before = await sight()
+    await a.remove()
+    // Convex reads this transaction's own writes, so sight is now as it will be
+    const after = await sight()
+    const sees = (levels: Map<string, OrgProjectLevels>, h: Lost) =>
+      (levels.get(h.profile_id)?.levelOf(h.project) ?? null) !== null
+    const lost: Lost[] = []
+    const live = liveIn(new Map(orgProjects.map((p) => [p.id, p])))
+    for (const h of candidates) {
+      if (!sees(before, h) || sees(after, h)) continue
+      if (h.role === 'reviewer') {
+        await assertRoom(ctx)
+        if (await hasSubtasks(ctx, h.task, live)) continue
+      }
+      lost.push(h)
+    }
+    return { lost, orgProjects }
+  } catch (e) {
+    // the number of people is at fault, not one of them
+    throw e instanceof RemovalFull ? rule(REMOVAL_TOO_LARGE) : e
   }
-  return { lost, orgProjects }
 }
 
 /** The people a removal can take access from: the person, or every member of
@@ -488,7 +515,9 @@ export type Settlement = Omit<AccessRemoval, 'removed'> & { viewer_grants: Doc<'
  * of the transaction before its last task, is refused with
  * reassignTooLarge, which blames its size rather than the tasks. Viewer
  * grants that fill REASSIGN_ROOM before the last one is saved are refused
- * the same way with KEEP_TOO_LARGE. Any refusal
+ * the same way with KEEP_TOO_LARGE. A removal whose people are too many to
+ * work out who loses sight is refused with REMOVAL_TOO_LARGE before it reads
+ * past Convex's limits (removeAndFindLost). Any refusal
  * throws, so the removal and its settlement land together or not at all, and
  * one while settling the tasks carries HELD_TASKS_REFUSED. Project grant
  * removal, team member removal and team deletion (model/teams.ts) all run
@@ -520,9 +549,7 @@ export async function removeAndSettle(
   const stranded = lost.map(({ project: _where, ...h }) => h)
   const result: Settlement = { stranded, kept_as_viewer: [], reassigned: [], viewer_grants: [] }
   // Each Viewer grant and each reassigned task first checks the room left
-  const full = async () => {
-    if (await usedMoreThan(ctx, REASSIGN_ROOM)) throw new RemovalFull()
-  }
+  const full = () => assertRoom(ctx)
   const keepAsViewers = async () => {
     await settling(async () => {
       if (a.keepRefusal !== undefined) throw rule(a.keepRefusal)

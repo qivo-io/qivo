@@ -1229,7 +1229,7 @@ describe('teams.deleteDeep', () => {
     await expectRefusal(
       as(t, f.admin).mutation(api.teams.deleteDeep, { org_id: f.org.id, id: f.team.id }),
       'rule',
-      /^cannot delete the last team$/,
+      /^an organization needs at least one team; create another team before deleting this one$/,
     )
     // a sibling team frees the guard; now build the inventory to destroy
     await as(t, f.admin).mutation(api.teams.create, {
