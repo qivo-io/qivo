@@ -86,6 +86,7 @@ function ModalShell({
   focusAfterClose,
   keepOnOutsideClick = false,
   savesAsYouGo = false,
+  busy = false,
   unsent = [],
   children,
 }: {
@@ -120,6 +121,9 @@ function ModalShell({
    * Estimate). They hold their own close-warning leases, so typing alone
    * does not count as unsaved until the dialog closes */
   savesAsYouGo?: boolean
+  /** refuses every close without asking, for a dialog waiting for the
+   * server; a phone keeps its Back step */
+  busy?: boolean
   /** names of the text the dialog's own fields hold unsent, such as "title",
    * with false for a field that holds none. Fields in the children hold
    * their own leases (useUnsaved) */
@@ -140,10 +144,10 @@ function ModalShell({
   // later, so this close stays open (a phone keeps its Back step) and
   // Discard closes through the layer again, past the then empty question.
   const close = () => {
-    if (cancelling.current || !scope.held().length) {
-      cancelling.current = false
-      return onClose()
-    }
+    const cancelled = cancelling.current
+    cancelling.current = false
+    if (busy) return false
+    if (cancelled || !scope.held().length) return onClose()
     closeOrAsk([scope], () => closeLayer())
     return false
   }
@@ -1553,8 +1557,10 @@ function ArchiveOrDeleteTaskModal({
       icon="inbox"
       title="Archive or delete task"
       badge={it.key}
-      onClose={saving ? () => false : onClose}
-      unsent={[!!reason.trim() && 'reason']}
+      onClose={onClose}
+      busy={saving}
+      // a reason on its way to the server goes with the change
+      unsent={[!saving && !!reason.trim() && 'reason']}
       onSubmit={submit}
       canSubmit={canSubmit}
       dangerSubmit={!archiving}
@@ -1778,8 +1784,9 @@ function ArchiveOrDeleteProjectModal({
     <ModalShell
       icon={deleteOnly ? 'warning' : 'archive'}
       title={deleteOnly ? `Delete “${P.projectLabel(project)}”?` : `Archive or delete ${noun}`}
-      onClose={saving ? () => false : onClose}
-      unsent={[!!reason.trim() && 'reason']}
+      onClose={onClose}
+      busy={saving}
+      unsent={[!saving && !!reason.trim() && 'reason']}
       onSubmit={submit}
       canSubmit={!!summary && !saving && (archiving || !reasonTooLong(reason))}
       dangerSubmit={!archiving}

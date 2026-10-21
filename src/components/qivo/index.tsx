@@ -91,6 +91,7 @@ import {
   useState,
 } from 'react'
 import { createPortal } from 'react-dom'
+import { questionOpen } from '@/components/DiscardPrompt'
 import { Avatar as UiAvatar } from '@/components/ui/avatar'
 import { Badge as UiBadge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -1063,6 +1064,8 @@ function AnchoredPop({
     const k = (e) => {
       if (e.key !== 'Escape' || hasOpenTooltip()) return
       if (popStack[popStack.length - 1] !== entry) return // a pop stacked on top owns Escape
+      // so does the discard question, which opens above every pop
+      if (questionOpen()) return
       e.stopImmediatePropagation()
       closeRef.current()
     }

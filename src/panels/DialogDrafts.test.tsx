@@ -92,7 +92,7 @@ async function type(label: string, value: string) {
     input.dispatchEvent(new Event('input', { bubbles: true }))
   })
 }
-/** Presses the button named `name`, then lets the close's one tick pass. */
+/** Presses the button named `name`, then lets the close's two ticks pass. */
 async function press(name: string) {
   const button = [...document.querySelectorAll('button')].find(
     (b) => b.textContent === name || b.getAttribute('aria-label') === name,
@@ -100,7 +100,7 @@ async function press(name: string) {
   if (!button) throw new Error(`missing ${name}`)
   await act(async () => {
     button.click()
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 10))
   })
 }
 async function pressEscape() {
@@ -108,7 +108,7 @@ async function pressEscape() {
     document.activeElement?.dispatchEvent(
       new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
     )
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 10))
   })
 }
 const question = () => document.querySelector('[data-discard-prompt] h2')?.textContent ?? null
@@ -141,6 +141,33 @@ describe('closing a dialog with typed text', { timeout: 20_000 }, () => {
     await press('Cancel')
     expect(question()).toBeNull()
     expect(onClose).toHaveBeenCalledTimes(2)
+  })
+
+  it('asks on a phone Back, keeps the Back step, and closes through it on Discard', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+    )
+    const onClose = vi.fn()
+    await render(<dialogs.NewIssueModal init={{}} onClose={onClose} onCreate={vi.fn()} />)
+    // the dialog's Back step is pushed after mounting
+    await act(async () => await Promise.resolve())
+    await type('Title', 'Calibrate the sensor')
+    const back = () =>
+      act(async () => {
+        history.back()
+        await vi.waitFor(() => {
+          if (question() === null && !onClose.mock.calls.length) throw new Error('waiting')
+        })
+      })
+    await back()
+    expect(question()).toBe('Discard your unsent title?')
+    await press('Keep editing')
+    expect(onClose).not.toHaveBeenCalled()
+    expect(history.state?.qivoLayer).toBeTruthy()
+    await back()
+    await press('Discard')
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
   })
 
   it('asks again after a Cancel the dialog refused', async () => {

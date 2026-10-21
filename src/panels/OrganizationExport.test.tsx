@@ -33,6 +33,7 @@ beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
   network.onUpdate.mockImplementation(() => () => {})
+  network.mutation.mockReset()
   network.mutation.mockResolvedValue(null)
   exporter.exportOrganization.mockClear()
   URL.createObjectURL = vi.fn(() => 'blob:export')

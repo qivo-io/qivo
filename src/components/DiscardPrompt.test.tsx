@@ -38,7 +38,7 @@ afterEach(async () => {
 })
 
 const prompt = () => document.querySelector('[data-discard-prompt]')
-/** Asks to close, and lets the one tick pass that a blur's save gets. */
+/** Asks to close, and lets the two ticks pass that a blur's save gets. */
 async function close(go: () => void) {
   let now = false
   await act(async () => {

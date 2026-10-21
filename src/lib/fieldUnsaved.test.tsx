@@ -2,6 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { closeOrAsk, DiscardPrompt } from '../components/DiscardPrompt'
 import { Input } from '../components/ui/input'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { createUnsentScope, hasUnsaved, UnsentScopeContext, useFieldUnsaved } from './leaveGuard'
@@ -75,6 +76,37 @@ describe('useFieldUnsaved', () => {
   it('drops the warning once the save went out', async () => {
     await typeAndLeave('12')
     expect(hasUnsaved()).toBe(false)
+  })
+
+  it('lets a close go without asking when the field holds its saved value again', async () => {
+    const page = createUnsentScope()
+    await act(async () =>
+      root.render(
+        <>
+          <UnsentScopeContext.Provider value={page}>
+            <Field what="plannable hours" />
+          </UnsentScopeContext.Provider>
+          <TooltipProvider>
+            <DiscardPrompt />
+          </TooltipProvider>
+        </>,
+      ),
+    )
+    const field = container.querySelector('input') as HTMLInputElement
+    await act(async () => {
+      field.focus()
+      field.value = '16'
+      field.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(page.held()).toEqual(['plannable hours'])
+    const go = vi.fn()
+    // the close leaves the field, whose blur ends the lease before the check
+    await act(async () => {
+      closeOrAsk([page], go)
+      vi.runAllTimers()
+    })
+    expect(go).toHaveBeenCalledTimes(1)
+    expect(document.querySelector('[data-discard-prompt]')).toBeNull()
   })
 
   it('names the field in the window it is in while a paused save keeps it', async () => {

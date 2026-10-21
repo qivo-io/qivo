@@ -1,4 +1,5 @@
 import { createContext, type FocusEvent, useContext, useLayoutEffect, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { useUpdateBlocker } from './updateSafety'
 
 /* The warning before the page closes or reloads with work that is not saved.
@@ -39,29 +40,35 @@ export type UnsentScope = {
   held: () => string[]
   /** Holds `what` until the answered function is called. */
   hold: (what: string) => () => void
-  /** Lets a close the person chose to discard go ahead: the window then
-      reports nothing until its leases end or a new one begins. */
+  /** Lets the close the person chose to discard go ahead, which can land a
+      moment later, after a history step: the window reports nothing for
+      DISCARD_MS, or until its leases end or a new one begins. A window that
+      stays open after all asks again from then on. */
   discard: () => void
 }
+
+/** How long a Discard lets the close it answered go ahead. */
+export const DISCARD_MS = 1500
 
 /** A window's scope, inside `parent` when the window opens in another. */
 export function createUnsentScope(parent: UnsentScope | null = null): UnsentScope {
   const own = new Map<symbol, string>()
-  let discarded = false
+  let discardedAt: number | null = null
+  const discarded = () => discardedAt !== null && Date.now() - discardedAt < DISCARD_MS
   return {
-    held: () => (discarded ? [] : [...new Set(own.values())]),
+    held: () => (discarded() ? [] : [...new Set(own.values())]),
     hold: (what) => {
       const lease = Symbol()
       own.set(lease, what)
-      discarded = false
+      discardedAt = null
       const outer = parent?.hold(what)
       return () => {
-        if (own.delete(lease) && !own.size) discarded = false
+        if (own.delete(lease) && !own.size) discardedAt = null
         outer?.()
       }
     },
     discard: () => {
-      if (own.size) discarded = true
+      if (own.size) discardedAt = Date.now()
     },
   }
 }
@@ -133,7 +140,8 @@ export function useTypedUnsaved(what: string | null = 'text') {
     field still shows another value than the saved one, because the save
     was refused and the draft stays. A new saved value remounts the field
     and ends the draft, and the lease with it. `what` names the field in a
-    window's question. */
+    window's question. The lease ends in the same task as the blur's check,
+    so a close that left the field (DiscardPrompt) already finds it gone. */
 export function useFieldUnsaved(paused: () => boolean, saved: string, what = 'text') {
   const { typed, reset } = useTypedUnsaved(what)
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new saved value is the trigger
@@ -148,7 +156,7 @@ export function useFieldUnsaved(paused: () => boolean, saved: string, what = 'te
           (field.type === 'number' &&
             field.value.trim() !== '' &&
             Number(field.value) === Number(field.defaultValue))
-        if (!paused() || same) reset()
+        if (!paused() || same) flushSync(reset)
       }, 0)
     },
   }

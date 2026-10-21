@@ -358,6 +358,7 @@ export function NewTokenDialog({
       icon="command"
       title="New token"
       onClose={close}
+      busy={busy}
       unsent={[!!name.trim() && 'token name']}
       onSubmit={() => void create()}
       canSubmit={canCreate}

@@ -5,6 +5,7 @@
    (docs/team-sync-brief.md, "Each row carries"). */
 import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { AssigneeAvatar, OwnerPickList } from '@/components/AssigneeAvatar'
+import { closeOrAsk, questionOpen } from '@/components/DiscardPrompt'
 import {
   AnchoredPop,
   Avatar,
@@ -21,7 +22,7 @@ import { PopoverContent, Popover as PopoverRoot, PopoverTrigger } from '@/compon
 import { Textarea } from '@/components/ui/textarea'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { planHint, RemainingInput, type Reviewed, ReviewTick } from '@/components/walk'
-import { useUnsaved } from '@/lib/leaveGuard'
+import { useUnsaved, useUnsentScope } from '@/lib/leaveGuard'
 import {
   bannerVerdict,
   dayLabel,
@@ -274,9 +275,25 @@ export function MentionCtl({
   // refusal, so reopening shows it again. A save or Cancel lets it go. A
   // kept note holds back an app update even while the window is closed.
   const [kept, setKept] = useState(false)
-  const close = useMobileBackLayer(open, () => setOpen(false))
   useUpdateBlocker((open || kept) && text.trim() !== '')
   useUnsaved((open || kept) && text.trim() !== '', 'note')
+  // A note neither sent nor kept is gone once the window closes, so a close
+  // asks first (DiscardPrompt), except the one Cancel or a saved note makes.
+  const noteWindow = useUnsentScope()
+  useUnsaved(open && !kept && text.trim() !== '', 'note', noteWindow)
+  const letGo = useRef(false)
+  const close = useMobileBackLayer(open, () => {
+    const meant = letGo.current
+    letGo.current = false
+    if (!meant && noteWindow.held().length) {
+      closeOrAsk([noteWindow], () => {
+        letGo.current = true
+        close()
+      })
+      return false
+    }
+    setOpen(false)
+  })
   const canWrite = P.canWrite(it.project)
   // the people who can see the task (a mention of anyone else notifies no
   // one), humans only, never the writer
@@ -296,12 +313,14 @@ export function MentionCtl({
       setSending(false)
       if (!saved) return
       setKept(false)
+      letGo.current = true
       close()
       onSent()
     })
   }
   const cancel = () => {
     setKept(false)
+    letGo.current = true
     close()
   }
   return (
@@ -336,6 +355,10 @@ export function MentionCtl({
       <PopoverContent
         align="end"
         sideOffset={6}
+        // the discard question takes focus without closing the note window
+        onFocusOutside={(event) => {
+          if (questionOpen()) event.preventDefault()
+        }}
         data-sync-mention-window={it.id}
         className="z-[120] w-[min(340px,calc(100vw-32px))] rounded-lg p-3 shadow-pop"
       >

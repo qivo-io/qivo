@@ -30,7 +30,7 @@ let root: Root
 let onClose: ReturnType<typeof vi.fn<() => void>>
 let close: () => Promise<void>
 
-async function open() {
+async function open({ embedded = false } = {}) {
   vi.resetModules()
   const snap: Snapshot = plannerFixture()
   snap.issues.push({
@@ -55,6 +55,7 @@ async function open() {
     return () => {}
   })
   network.query.mockResolvedValue(null)
+  network.mutation.mockReset()
   network.mutation.mockImplementation((ref) =>
     getFunctionName(ref).startsWith('comments:') ? new Promise(() => {}) : Promise.resolve(null),
   )
@@ -65,18 +66,24 @@ async function open() {
   const { createUnsentScope, UnsentScopeContext } = await import('../lib/leaveGuard')
   const scope = createUnsentScope()
   onClose = vi.fn<() => void>()
-  close = () =>
-    act(async () => {
+  // closes as App does, and waits for the answer: the window closed or asked
+  close = async () => {
+    const before = onClose.mock.calls.length
+    await act(async () => {
       closeOrAsk([scope], onClose)
-      await new Promise((resolve) => setTimeout(resolve, 0))
+      await vi.waitFor(() => {
+        if (question() === null && onClose.mock.calls.length === before)
+          throw new Error('no answer yet')
+      })
     })
+  }
   const task = store.P.issues.find((it) => it.uuid === 'task-a')
   if (!task) throw new Error('missing the task')
   await act(async () =>
     root.render(
       <TooltipProvider>
         <UnsentScopeContext.Provider value={scope}>
-          <IssueDetail issueId={task.id} onClose={close} onOpen={vi.fn()} />
+          <IssueDetail issueId={task.id} onClose={close} onOpen={vi.fn()} embedded={embedded} />
         </UnsentScopeContext.Provider>
         <DiscardPrompt />
       </TooltipProvider>,
@@ -121,11 +128,11 @@ function editorOf(label: string) {
   )
 }
 const question = () => document.querySelector('[data-discard-prompt] h2')?.textContent ?? null
-/** Presses `selector`, then lets a close's one tick pass. */
+/** Presses `selector`, then lets a close's two ticks pass. */
 const press = (selector: string) =>
   act(async () => {
     document.querySelector<HTMLElement>(selector)?.click()
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 10))
   })
 /** The titles sent to the server. */
 const renames = () =>
@@ -224,13 +231,13 @@ describe('closing the task window with unsent text', { timeout: 30_000 }, () => 
       .querySelector('[role="textbox"][aria-label="Leave a comment"]')
       ?.closest('.mdwrap')
       ?.querySelector<HTMLElement>('[aria-label="Formatting"]')
-    /** Escape inside the composer's controls, past the close's one tick. A
+    /** Escape inside the composer's controls, past the close's two ticks. A
         focused button would show its tooltip, which passes Escape on to the
         window instead. */
     const escapeOn = () =>
       act(async () => {
         toolbar?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-        await new Promise((resolve) => setTimeout(resolve, 0))
+        await new Promise((resolve) => setTimeout(resolve, 10))
       })
     await act(async () => composer.commands.insertContent('Drift is under 2%'))
     await escapeOn()
@@ -254,7 +261,6 @@ describe('closing the task window with unsent text', { timeout: 30_000 }, () => 
     expect(question()).toBe('Discard your unsent description?')
     await press('[data-discard-keep]')
     expect(document.querySelector('[data-focus-window]')).toBeNull()
-    await press('[data-discard-confirm]')
     await press('[data-desc-popout]')
     await press('[data-discard-confirm]')
     expect(document.querySelector('[data-focus-window="Description"]')).not.toBeNull()
@@ -267,12 +273,26 @@ describe('closing the task window with unsent text', { timeout: 30_000 }, () => 
       document.activeElement?.dispatchEvent(
         new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
       )
-      await new Promise((resolve) => setTimeout(resolve, 0))
+      await new Promise((resolve) => setTimeout(resolve, 10))
     })
     expect(question()).toBeNull()
     expect(document.querySelector('[data-focus-window="Description"]')).not.toBeNull()
     expect(lifted.getText()).toContain('Three times.')
     expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('asks before collapsing the Inbox pane description with a draft in it', async () => {
+    await open({ embedded: true })
+    await press('[data-desc-toggle]')
+    const description = await editorOf('Task description')
+    await act(async () => description.commands.insertContent(' Twice.'))
+    await press('[data-desc-toggle]')
+    expect(question()).toBe('Discard your unsent description?')
+    await press('[data-discard-keep]')
+    expect(description.getText()).toContain('Twice.')
+    await press('[data-desc-toggle]')
+    await press('[data-discard-confirm]')
+    expect(document.querySelector('[role="textbox"][aria-label="Task description"]')).toBeNull()
   })
 
   it('does not ask about a comment on its way to the server', async () => {

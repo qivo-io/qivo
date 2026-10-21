@@ -355,14 +355,18 @@ function flipped(set: Set<string>, id: string): Set<string> {
 export function TeamSync({
   place,
   onPlace,
+  onCorrect = onPlace,
   onClose,
   onOpenTask,
   onShowTask,
   onShowPerson,
 }: {
   place: SyncPlace
-  /** App stores it, saves the scope when it changed, and REPLACES the URL */
+  /** App stores it, saves the scope when it changed, and REPLACES the URL;
+      it asks first while the step holds unsent text */
   onPlace: (next: SyncPlace) => void
+  /** as onPlace, without asking, for a place the walk cannot show */
+  onCorrect?: (next: SyncPlace) => void
   /** Done on the last step: App returns to the scope and view underneath */
   onClose: () => void
   /** the task window over the page */
@@ -388,8 +392,8 @@ export function TeamSync({
   const [laterOpen, setLaterOpen] = useState(() => new Set<string>())
   // the step last shown, its index and scope, for a person who leaves mid-sitting
   const shown = useRef<{ step: string; idx: number; scope: string } | null>(null)
-  const onPlaceRef = useRef(onPlace)
-  onPlaceRef.current = onPlace
+  const onCorrectRef = useRef(onCorrect)
+  onCorrectRef.current = onCorrect
 
   const now = Date.now()
   const day: SyncDay = syncDay(now)
@@ -458,7 +462,7 @@ export function TeamSync({
     if (!P.loaded) return
     if (agents.some((u) => u.id === place.step)) setOpenAgents((s) => new Set(s).add(place.step))
     if (scopeKey !== place.scope || step !== place.step)
-      onPlaceRef.current({ scope: scopeKey, step })
+      onCorrectRef.current({ scope: scopeKey, step })
   }, [P.loaded, scopeKey, step, place.scope, place.step])
 
   const go = (next: string, nextScope = scopeKey) => {

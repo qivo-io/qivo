@@ -33,10 +33,10 @@ import './styles/mobile.css'
 import { announce } from './lib/announce'
 import { closedBy } from './lib/closingMoves'
 import { floatSlot } from './lib/floatStack'
-import { stepTo } from './lib/historyIndex'
 import { isLandscapeRoadmapOpen } from './lib/landscape'
 import { createUnsentScope, UnsentScopeContext } from './lib/leaveGuard'
 import { afterProjectSaved } from './lib/newProjectAccess'
+import { createPopRefusal } from './lib/popRefusal'
 import {
   ARCHIVED_TASKS_PAGE,
   buildPath,
@@ -853,6 +853,8 @@ function App() {
   hereRef.current = here
   // the text typed in the task window (with the Inbox) and in the page
   const [unsent] = useState(() => ({ task: createUnsentScope(), page: createUnsentScope() }))
+  // a refused Back or Forward (lib/popRefusal), for the popstate handler
+  const [refusal] = useState(() => createPopRefusal(closeOrAsk))
   /** Runs `go`, a user's move to the place `next` patches in, once the
       windows it closes hold no unsent text, or after the person chose
       Discard. Raw setters remain for moves the person did not ask for. */
@@ -932,6 +934,9 @@ function App() {
   // that free. Synchronize during the commit: a passive effect can run after
   // native Back has changed the URL and push the previous page back into history.
   useLayoutEffect(() => {
+    // the address is not the page's while it steps back over a refused Back
+    // or Forward, and a write now would move the entry it steps back to
+    if (refusal.stepping()) return
     const p = buildPath({
       scope,
       view,
@@ -976,14 +981,9 @@ function App() {
     if (org) rememberAddress(P.CURRENT_USER, seg, org.id)
   }, [addrMoved, scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync, rev])
   useEffect(() => {
-    // set while the page steps back over a Back or Forward it refused
-    let returning = false
-    const onPop = () => {
-      const step = stepTo(history.state)
-      if (returning) {
-        returning = false
-        return
-      }
+    const onPop = (event: PopStateEvent) => {
+      // the step back over a refused Back or Forward, which then asks
+      if (refusal.landed(event)) return
       // a Remaining number typed on Team sync and not yet committed: history
       // unmounts its box without a blur, so commit it before the page moves
       flushWalkInput('sync')
@@ -991,42 +991,7 @@ function App() {
       // legacy entry from earlier in this session's history
       const r = parsePath(location.pathname) || parseHash(location.hash)
       if (!r) return
-      /* Back or Forward that would close a window holding unsent text steps
-         back to the entry it left, so nothing moves, and asks. Discard takes
-         the same step again, which then moves. An entry without a position
-         (lib/historyIndex) gets the address it left pushed on top instead. */
       const was = hereRef.current
-      const nextSync = r.sync && P.homeOrg ? syncPlaceFor(r.sync, mobileRef.current) : null
-      const closing = closedBy(
-        was,
-        {
-          scope: r.scope ?? was.scope,
-          view: r.view ?? was.view,
-          openIssue: r.issue || null,
-          settingsPage: r.settings || null,
-          inboxOpen: !!r.inbox,
-          projectsOpen: !!r.projects,
-          sync: nextSync,
-        },
-        unsent,
-      )
-      if (closing.some((held) => held.held().length)) {
-        if (step) {
-          returning = true
-          history.go(-step)
-          closeOrAsk(closing, () => history.go(step))
-        } else {
-          history.pushState({ qivoPrevious: location.pathname }, '', buildPath(was))
-          closeOrAsk(closing, () => history.back())
-        }
-        return
-      }
-      /* A return belongs to the visit that opened its page. A pop that stays
-         on the page keeps it (Back through Settings' pages, a phone layer, a
-         task closing over the sync); one that leaves drops it, so a later
-         Exit or Done cannot restore a page from another visit. */
-      if (!r.settings) settingsReturn.current = NO_RETURN
-      if (!r.sync) syncReturn.current = NO_RETURN
       /* Issue URLs carry no scope: keep the current scope when the issue is
          inside it, else re-scope to the issue's own sub-project. One case
          must NOT keep it — `/app/<org>/<view>/tasks/<task>` IS the project-scope form
@@ -1040,8 +1005,7 @@ function App() {
          the router's own absent-scope-means-project-form reading.
          A Team sync address names its own scope, so the one underneath stays
          put, task or not. */
-      const preferred =
-        r.view && !r.scope && P.isWideScope(scopeRef.current) ? null : scopeRef.current
+      const preferred = r.view && !r.scope && P.isWideScope(was.scope) ? null : was.scope
       const sc = r.sync
         ? undefined
         : liveScope(r.scope)
@@ -1049,17 +1013,48 @@ function App() {
           : r.issue
             ? scopeForIssue(r.issue, preferred)
             : undefined
-      if (liveScope(sc)) setScope(sc)
-      if (r.view) setView(r.view)
-      // viewless issue links keep the current view; Settings, #/inbox and
-      // Team sync sit over/instead of the current view, so they must not
-      // reset it either
-      else if (!r.issue && !r.inbox && !r.settings && !r.projects && !r.sync) setView('overview')
-      setOpenIssue(r.issue || null)
-      setSettingsPage(r.settings || null)
-      setInboxOpen(!!r.inbox)
-      setProjectsOpen(!!r.projects)
-      setSync(nextSync)
+      const next = {
+        scope: liveScope(sc) ? sc : was.scope,
+        // viewless issue links keep the current view; Settings, #/inbox and
+        // Team sync sit over/instead of the current view, so they must not
+        // reset it either
+        view: r.view
+          ? r.view
+          : !r.issue && !r.inbox && !r.settings && !r.projects && !r.sync
+            ? 'overview'
+            : was.view,
+        openIssue: r.issue || null,
+        settingsPage: r.settings || null,
+        inboxOpen: !!r.inbox,
+        projectsOpen: !!r.projects,
+        sync: r.sync && P.homeOrg ? syncPlaceFor(r.sync, mobileRef.current) : null,
+      }
+      /* Back or Forward that would close a window holding unsent text steps
+         back to the entry it left, so nothing moves, and asks there
+         (lib/popRefusal). An entry without a position gets the address it
+         left pushed on top instead. */
+      const closing = closedBy(was, next, unsent)
+      if (closing.some((held) => held.held().length)) {
+        if (!refusal.refuse(event, closing)) {
+          event.stopImmediatePropagation()
+          history.pushState({ qivoPrevious: location.pathname }, '', buildPath(was))
+          closeOrAsk(closing, () => history.back())
+        }
+        return
+      }
+      /* A return belongs to the visit that opened its page. A pop that stays
+         on the page keeps it (Back through Settings' pages, a phone layer, a
+         task closing over the sync); one that leaves drops it, so a later
+         Exit or Done cannot restore a page from another visit. */
+      if (!r.settings) settingsReturn.current = NO_RETURN
+      if (!r.sync) syncReturn.current = NO_RETURN
+      setScope(next.scope)
+      setView(next.view)
+      setOpenIssue(next.openIssue)
+      setSettingsPage(next.settingsPage)
+      setInboxOpen(next.inboxOpen)
+      setProjectsOpen(next.projectsOpen)
+      setSync(next.sync)
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
@@ -1275,10 +1270,13 @@ function App() {
   // router's sync rule), and a new scope is the viewer's saved choice
   const placeSync = (next: SyncPlace) => {
     if (sync && next.scope === sync.scope && next.step === sync.step) return
-    move({ sync: next }, () => {
-      if (next.scope !== sync?.scope) P.saveUINow({ syncScope: next.scope })
-      setSync(next)
-    })
+    move({ sync: next }, () => correctSync(next))
+  }
+  // …and the page's own correction of a place it cannot show, unasked
+  const correctSync = (next: SyncPlace) => {
+    if (sync && next.scope === sync.scope && next.step === sync.step) return
+    if (next.scope !== sync?.scope) P.saveUINow({ syncScope: next.scope })
+    setSync(next)
   }
   // Done on the last step: back to the page it was opened from (the Inbox,
   // the Projects directory), else the scope and view underneath
@@ -1799,6 +1797,7 @@ function App() {
                     <TeamSync
                       place={sync}
                       onPlace={placeSync}
+                      onCorrect={correctSync}
                       onClose={closeSync}
                       onOpenTask={openTask}
                       onShowTask={showTaskOn}

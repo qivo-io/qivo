@@ -33,6 +33,7 @@ const CAP = 'this task has 400 comments, the most a task can have; start a new t
 let P: Planner
 let card: typeof import('./SyncCard')
 let safety: typeof import('../../lib/updateSafety')
+let prompt: typeof import('../../components/DiscardPrompt')
 let container: HTMLDivElement
 let root: Root
 let writes: Answer[]
@@ -75,6 +76,7 @@ async function load() {
   await store.initStore()
   card = await import('./SyncCard')
   safety = await import('../../lib/updateSafety')
+  prompt = await import('../../components/DiscardPrompt')
 }
 
 beforeEach(async () => {
@@ -115,6 +117,7 @@ async function write(text: string, onSent: () => void) {
     root.render(
       <TooltipProvider>
         <card.MentionCtl it={it} initial="aisha" onSent={onSent} />
+        <prompt.DiscardPrompt />
       </TooltipProvider>,
     ),
   )
@@ -141,8 +144,13 @@ function button(name: string) {
 const aisha = () => document.querySelector<HTMLButtonElement>('[data-sync-mention-person="aisha"]')
 /* The @ glyph opens a closed window and closes an open one. */
 async function toggle() {
-  await act(async () => document.querySelector<HTMLElement>('[data-sync-mention]')?.click())
+  await act(async () => {
+    document.querySelector<HTMLElement>('[data-sync-mention]')?.click()
+    // a close that asks answers two ticks later
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  })
 }
+const question = () => document.querySelector('[data-discard-prompt] h2')?.textContent ?? null
 
 describe('the Team sync @ window', () => {
   it('keeps the window and its note when the server refuses the comment', async () => {
@@ -202,6 +210,30 @@ describe('the Team sync @ window', () => {
     expect(safety.isUpdateBlocked()).toBe(false)
     await toggle()
     expect(note()?.value).toBe('')
+  })
+
+  it('asks before closing with a note that was neither sent nor kept', async () => {
+    await write('Can you check the soak report?', vi.fn())
+    await toggle()
+    expect(question()).toBe('Discard your unsent note?')
+    await act(async () => document.querySelector<HTMLElement>('[data-discard-keep]')?.click())
+    expect(windowOpen()).toBe(true)
+    expect(note()?.value).toBe('Can you check the soak report?')
+    await toggle()
+    await act(async () => document.querySelector<HTMLElement>('[data-discard-confirm]')?.click())
+    expect(windowOpen()).toBe(false)
+    await toggle()
+    expect(note()?.value).toBe('')
+    // Cancel lets a note go without asking
+    const field = note()
+    const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+    await act(async () => {
+      setValue?.call(field, 'Never mind')
+      field?.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => button('Cancel').click())
+    expect(question()).toBeNull()
+    expect(windowOpen()).toBe(false)
   })
 
   it('closes once the server saves the comment', async () => {
