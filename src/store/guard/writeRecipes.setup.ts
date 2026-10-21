@@ -257,6 +257,7 @@ export function thread(): Thread {
     earlier: false,
     events: [],
     events_earlier: false,
+    events_next: null,
   }
 }
 

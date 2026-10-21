@@ -24,6 +24,7 @@ import {
   HISTORY_PAGE_MAX,
   HISTORY_ROOM,
   historyAnchor,
+  NAMED_TASK_ROOM,
   taskHistoryPage,
 } from '../lib/activityVisibility'
 import { type ActivityEntry, insertActivity, issueChanges, logActivity } from '../model/activity'
@@ -342,7 +343,7 @@ describe('per-subject history, kept whole and read a page at a time', () => {
     }
   })
 
-  it('reads on past rows a member does not receive, and refuses rather than answer empty', async () => {
+  it('reads on past rows a member does not receive, and pages on where it stopped', async () => {
     const t = newT()
     const f = await withOrg(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -357,22 +358,89 @@ describe('per-subject history, kept whole and read a page at a time', () => {
           related_project_id: f.hidden.id,
         })
     })
-    const page = () => t.run((ctx) => taskHistoryPage(ctx, f.viewer, task))
+    const page = (before?: string) =>
+      t.run(async (ctx) =>
+        taskHistoryPage(
+          ctx,
+          f.viewer,
+          task,
+          before === undefined ? undefined : await historyAnchor(ctx, task, before),
+        ),
+      )
     const seen = await page()
     expect(seen.earlier).toBe(false)
     expect(seen.rows.map((row) => row.ts)).toEqual(
       Array.from({ length: 20 }, (_, i) => at(START - 3_600_000 + i)),
     )
     expect((await t.run((ctx) => taskHistoryPage(ctx, f.admin, task))).rows).toHaveLength(500)
-    // a read that fills up before it finds a row says so instead
+    // a read that fills up before it finds a row answers none and where to go on
     const room = HISTORY_ROOM.room
     HISTORY_ROOM.room = 0
+    let stopped: Awaited<ReturnType<typeof page>>
     try {
-      const e = await expectRefusal(page(), 'rule')
+      stopped = await page()
+      // REST and MCP cannot answer an empty page that is not the end
+      const rest = t.query(internal.machine.records.restTaskActivity, {
+        callerId: f.viewer.id,
+        access: 'read',
+        ref: task.id,
+      })
+      const e = await expectRefusal(rest, 'rule')
       expect(e.data.message).toBe(HISTORY_HIDDEN)
     } finally {
       HISTORY_ROOM.room = room
     }
+    expect(stopped.rows).toEqual([])
+    expect(stopped.earlier).toBe(true)
+    expect(stopped.next?.ts).toBe(at(START - 60_000 + 99))
+    const rest = await page(stopped.next?.id)
+    expect(rest.rows).toHaveLength(20)
+    expect(rest.earlier).toBe(false)
+  })
+
+  it('ends a page before a row it had no room to check, so the next page checks it', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const named = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // plain, a link to a task the viewer may read, plain, newest last
+    await t.run(async (ctx) => {
+      await insertActivity(ctx, entry(f.org.id, task.id, at(START)))
+      await insertActivity(ctx, {
+        org_id: f.org.id,
+        actor_id: undefined,
+        verb: 'linked',
+        target_type: 'issue',
+        target_id: task.id,
+        label: 'x',
+        ts: at(START + 1),
+        named_task_nums: [named.num],
+      })
+      await insertActivity(ctx, entry(f.org.id, task.id, at(START + 2)))
+    })
+    const page = (before?: string) =>
+      t.run(async (ctx) =>
+        taskHistoryPage(
+          ctx,
+          f.viewer,
+          task,
+          before === undefined ? undefined : await historyAnchor(ctx, task, before),
+        ),
+      )
+    const room = NAMED_TASK_ROOM.room
+    NAMED_TASK_ROOM.room = 0
+    let first: Awaited<ReturnType<typeof page>>
+    try {
+      first = await page()
+    } finally {
+      NAMED_TASK_ROOM.room = room
+    }
+    expect(first.rows.map((row) => row.ts)).toEqual([at(START + 2)])
+    expect(first.earlier).toBe(true)
+    // the link row is read again before the page's first row, with room
+    const rest = await page(first.rows[0].id)
+    expect(rest.rows.map((row) => row.verb)).toEqual(['created', 'linked'])
+    expect(rest.earlier).toBe(false)
   })
 
   it('a Deleted items delete of a task with 200 subtasks stays within limits', async () => {

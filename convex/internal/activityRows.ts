@@ -33,9 +33,11 @@ import type { Doc } from '../_generated/dataModel'
 import { internalMutation, internalQuery, type QueryCtx } from '../_generated/server'
 import { ISSUE_PREFIX } from '../lib/taskRefs'
 
-/* Rows per call. Rows are small, so a page stays far below Convex's read
- * and write limits. Tests lower it. */
-export const ACTIVITY_ROWS_PAGE = { rows: 4_000 }
+/* Rows per call, and the most bytes one call reads, as Convex counts a
+ * document's size. A row's label and detail have no cap, so a page also
+ * ends early on bytes, at most one row past them, which leaves room under
+ * Convex's 16 MiB read limit. Tests lower them. */
+export const ACTIVITY_ROWS_PAGE = { rows: 4_000, bytes: 8 * 1024 * 1024 }
 
 /* The task numbers a task row stored before named_task_nums existed names
  * by key, read from its text: a parent change written by model/issues.ts
@@ -100,9 +102,11 @@ const page = (
   ctx: QueryCtx,
   cursor: string | undefined,
 ): Promise<PaginationResult<Doc<'activity_events'>>> =>
-  ctx.db
-    .query('activity_events')
-    .paginate({ cursor: cursor ?? null, numItems: ACTIVITY_ROWS_PAGE.rows })
+  ctx.db.query('activity_events').paginate({
+    cursor: cursor ?? null,
+    numItems: ACTIVITY_ROWS_PAGE.rows,
+    maximumBytesRead: ACTIVITY_ROWS_PAGE.bytes,
+  })
 
 const counted = (rows: Doc<'activity_events'>[]): Counts => {
   const out: Counts = { scanned: rows.length, numbered: 0, unlisted: 0, unparsed: 0 }

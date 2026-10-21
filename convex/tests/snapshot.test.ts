@@ -1833,7 +1833,7 @@ describe('commentThread events', () => {
           issue_id: task.id,
           before: anchor,
         })
-        expect(before).toEqual({ events: [], earlier: false })
+        expect(before).toEqual({ events: [], earlier: false, next: null })
         expect(await rest(p, task.id)).toHaveLength(1)
         expect(await mcp(p, task.id)).toHaveLength(1)
       }
@@ -2096,17 +2096,14 @@ describe('commentThread events near the read limits', () => {
           created_at: new Date(Date.parse(NOW) + i).toISOString(),
         })
     })
-    const plain = rows.filter((row) => !row.names).map((row) => row.id)
-    /* The ids `got` holds: some of the newest link rows, since a page reads
-     * newest first, and every plain row. */
+    const all = rows.map((row) => row.id)
+    /* `got` is the newest rows, links among them, up to the link the read
+     * had no room to check, since a page reads newest first and ends there. */
     const fits = (got: string[]) => {
-      const links = got.filter((id) => !plain.includes(id))
-      const allLinks = rows.filter((row) => row.names).map((row) => row.id)
-      expect(links).toEqual(allLinks.slice(allLinks.length - links.length))
-      expect(links.length).toBeGreaterThan(0)
-      expect(links.length).toBeLessThan(allLinks.length)
-      expect(got.filter((id) => plain.includes(id))).toEqual(plain)
-      return links.length
+      expect(got).toEqual(all.slice(all.length - got.length))
+      expect(got.some((id) => rows.find((row) => row.id === id)?.names)).toBe(true)
+      expect(got.length).toBeLessThan(all.length)
+      return got.length
     }
     const page = await as(big, g.guest).query(api.snapshot.commentThread, {
       org_id: g.org.id,
@@ -2114,6 +2111,8 @@ describe('commentThread events near the read limits', () => {
     })
     expect(page.comments).toHaveLength(8)
     const inThread = fits(page.events.map((e) => e.id))
+    expect(page.events_earlier).toBe(true)
+    expect(page.events_next).toBe(page.events[0].id)
     const overRest = await big.query(internal.machine.records.restTaskActivity, {
       callerId: g.guest.id,
       access: 'read',
@@ -2130,6 +2129,19 @@ describe('commentThread events near the read limits', () => {
       }),
     ) as { id: string }[]
     expect(overMcp.map((row) => row.id)).toEqual(overRest.map((row) => row.id))
+    // paging back with before reaches every row, each page with room of its own
+    let read = overRest.map((row) => row.id)
+    for (let pages = 0; read.length < all.length && pages < 40; pages++) {
+      const older = await big.query(internal.machine.records.restTaskActivity, {
+        callerId: g.guest.id,
+        access: 'read',
+        ref: task.id,
+        before: read[0],
+      })
+      expect(older.length).toBeGreaterThan(0)
+      read = [...older.map((row) => row.id), ...read]
+    }
+    expect(read).toEqual(all)
     // admins look up no named task, so they receive every row
     const admin = await big.query(internal.machine.records.restTaskActivity, {
       callerId: g.admin.id,

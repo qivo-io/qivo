@@ -41,7 +41,9 @@ function withoutLegacySubtaskCount(ev: Doc<'activity_events'>): Doc<'activity_ev
  * names another task (a parent change or a link) also needs access to that
  * task where it is now; one naming a deleted task reaches admins only. Task
  * rows list the tasks they name in named_task_nums, and one without the list
- * fails closed. Rows about anything but a task never reach a member. */
+ * fails closed. Rows about anything but a task never reach a member. The
+ * answer is 'unchecked' for a row naming a task the read had no room to look
+ * up, which the member may or may not receive. */
 async function memberSeesActivity(
   ev: Doc<'activity_events'>,
   a: {
@@ -49,28 +51,37 @@ async function memberSeesActivity(
     /* whether the task is in the member's working set */
     inWorkingSet: Shown
     /* the current project of the org's task with this number, if any */
-    taskProject: (num: number) => Promise<string | undefined>
+    taskProject: (num: number) => Promise<string | undefined | typeof UNCHECKED>
   },
-): Promise<boolean> {
-  if (ev.target_type !== 'issue') return false
-  if (ev.related_project_id !== undefined && !a.view.accessible(ev.related_project_id)) return false
-  if (!a.inWorkingSet(ev.target_id)) return false
-  if (isUnrecordedProjectMove(ev)) return false
-  if (ev.project_id !== undefined && !a.view.accessible(ev.project_id)) return false
+): Promise<Sight> {
+  if (ev.target_type !== 'issue') return 'no'
+  if (ev.related_project_id !== undefined && !a.view.accessible(ev.related_project_id)) return 'no'
+  if (!a.inWorkingSet(ev.target_id)) return 'no'
+  if (isUnrecordedProjectMove(ev)) return 'no'
+  if (ev.project_id !== undefined && !a.view.accessible(ev.project_id)) return 'no'
   const named = ev.named_task_nums
-  if (named === undefined) return false
+  if (named === undefined) return 'no'
   for (const num of named) {
     const projectId = await a.taskProject(num)
-    if (projectId === undefined || !a.view.accessible(projectId)) return false
+    if (projectId === UNCHECKED) return 'unchecked'
+    if (projectId === undefined || !a.view.accessible(projectId)) return 'no'
   }
-  return true
+  return 'yes'
 }
+
+/* Whether a member receives a row: 'unchecked' when the read had no room to
+ * look up a task it names (memberSeesActivity). */
+type Sight = 'yes' | 'no' | 'unchecked'
+
+/* What a lookup the read had no room for answers. */
+const UNCHECKED = Symbol('unchecked')
 
 /** How full a member's history page may get while it looks up the
  * tasks its rows name (lib/db.ts usedMoreThan). Each lookup reads a whole
  * task, and a row can name two. Past `room`, a row naming a task not yet
- * looked up is left out, so the read fails closed instead of failing on
- * Convex's limits. The rest serves the caller: commentThread has read its
+ * looked up is not checked: a page ends before it, so the next page checks
+ * it with room of its own, and taskWriters leaves it out. The read so fails
+ * closed instead of failing on Convex's limits. The rest serves the caller: commentThread has read its
  * comments already, and REST and MCP read one profile per actor next
  * (machine/records.ts activityOut). Tests may lower it. */
 export const NAMED_TASK_ROOM = { room: 0.8 }
@@ -86,10 +97,10 @@ export const HISTORY_PAGE_MAX = 500
  * history ends or the read passes `room`. Tests may lower it. */
 export const HISTORY_ROOM = { room: 0.7 }
 
-/** The refusal for a member's page that passed HISTORY_ROOM before it found
- * one row the member receives, so an empty page never claims the history
- * ends. Only thousands of rows in a row naming projects or tasks the member
- * cannot see lead to it. */
+/** The refusal of a REST or MCP page that ended before it found a row the
+ * caller receives, because an empty answer would claim the history ends.
+ * Only thousands of rows in a row that name projects or tasks the caller
+ * cannot see lead to it. The app pages on with the page's `next` instead. */
 export const HISTORY_HIDDEN =
   "too many of this task's changes are hidden from you to read them at once; an organization admin can read them"
 
@@ -178,60 +189,70 @@ async function olderRows(
   }
 }
 
+/** One page of a task's history (taskHistoryPage). */
+export type HistoryPage = {
+  /** The rows the caller receives, oldest first in insertion order. */
+  rows: Doc<'activity_events'>[]
+  /** Whether the history holds rows before `next`. */
+  earlier: boolean
+  /** With `earlier`, the oldest row the page read, which the caller may not
+   * receive: the `before` of the page before this one. */
+  next?: Doc<'activity_events'>
+}
+
 /**
  * One page of the history of `issue` that `me` receives, the history the
  * task window shows beside its comments. It holds the newest
  * HISTORY_PAGE_MAX rows `me` receives, or with `before` the newest ones
  * before that row (historyAnchor), oldest first in insertion order, which
- * follows time, so the page's first row is the `before` of the page before
- * it. `earlier` says whether the history holds rows before the oldest row
- * the page read, which `me` may or may not receive. The caller has already resolved a task `me` can read (lib/core.ts
- * findIssue), which counts as the task being shown, as every machine read
- * counts the tasks it can read, archived ones included. Organization admins
- * receive every row; other members get the rows memberSeesActivity allows,
- * without legacy subtask counts. For members it also reads the
- * organization's projects and grants (lib/visibility.ts orgProjectView) and
- * one task for each distinct number the rows name, until the read passes
- * NAMED_TASK_ROOM; rows naming a task it could not look up are left out. A
- * member's page reads on past rows it leaves out until HISTORY_ROOM, and
- * refuses with HISTORY_HIDDEN when that leaves it empty with history left.
+ * follows time. The caller has already resolved a task `me` can read
+ * (lib/core.ts findIssue), which counts as the task being shown, as every
+ * machine read counts the tasks it can read, archived ones included.
+ * Organization admins receive every row; other members get the rows
+ * memberSeesActivity allows, without legacy subtask counts. For members it
+ * also reads the organization's projects and grants (lib/visibility.ts
+ * orgProjectView) and one task for each distinct number the rows name,
+ * until the read passes NAMED_TASK_ROOM. The page ends before a row naming a
+ * task it had no room to look up, and before the read passes HISTORY_ROOM,
+ * so it reads on past rows it leaves out but never past a row it could not
+ * check. `next` says where the page before it starts, which is the page's
+ * first row unless it read rows it left out. It refuses with HISTORY_HIDDEN
+ * only when its very first row could not be checked.
  */
 export async function taskHistoryPage(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   issue: Doc<'issues'>,
   before?: Doc<'activity_events'>,
-): Promise<{ rows: Doc<'activity_events'>[]; earlier: boolean }> {
+): Promise<HistoryPage> {
   const read = await olderRows(ctx, issue, before)
   const admin = me.org_role === 'admin'
-  let sees: ((ev: Doc<'activity_events'>) => Promise<boolean>) | undefined
+  let sees: ((ev: Doc<'activity_events'>) => Promise<Sight>) | undefined
   const newest: Doc<'activity_events'>[] = []
-  let earlier = false
+  // the oldest row read so far, received or not
+  let passed: Doc<'activity_events'> | undefined
+  const page = (earlier: boolean): HistoryPage => {
+    const rows = newest.reverse()
+    if (!earlier) return { rows, earlier }
+    if (passed === undefined) throw rule(HISTORY_HIDDEN)
+    return { rows, earlier, next: passed }
+  }
   for (;;) {
     // one row past the page tells whether the history goes on
     const n = HISTORY_PAGE_MAX - newest.length + 1
     const rows = await read(n)
-    let full = false
     for (const ev of rows) {
-      if (newest.length === HISTORY_PAGE_MAX) {
-        full = true
-        break
-      }
-      sees ??= admin ? async () => true : await memberSight(ctx, me, issue)
-      if (await sees(ev)) newest.push(admin ? ev : withoutLegacySubtaskCount(ev))
+      if (newest.length === HISTORY_PAGE_MAX) return page(true)
+      sees ??= admin ? async () => 'yes' : await memberSight(ctx, me, issue)
+      const sight = await sees(ev)
+      // the next page checks it with room of its own
+      if (sight === 'unchecked') return page(true)
+      passed = ev
+      if (sight === 'yes') newest.push(admin ? ev : withoutLegacySubtaskCount(ev))
     }
-    if (full) {
-      earlier = true
-      break
-    }
-    if (rows.length < n) break
-    if (!admin && (await usedMoreThan(ctx, HISTORY_ROOM.room))) {
-      if (newest.length === 0) throw rule(HISTORY_HIDDEN)
-      earlier = true
-      break
-    }
+    if (rows.length < n) return page(false)
+    if (!admin && (await usedMoreThan(ctx, HISTORY_ROOM.room))) return page(true)
   }
-  return { rows: newest.reverse(), earlier }
 }
 
 /** Which of `rows`, rows of the history of `issue`, `me` receives, in their
@@ -246,25 +267,26 @@ export async function receivedRows(
   if (me.org_role === 'admin' || rows.length === 0) return rows
   const sees = await memberSight(ctx, me, issue)
   const out: Doc<'activity_events'>[] = []
-  for (const ev of rows) if (await sees(ev)) out.push(ev)
+  // a row it had no room to check is left out
+  for (const ev of rows) if ((await sees(ev)) === 'yes') out.push(ev)
   return out
 }
 
 /* Whether member `me` receives a row about `issue` (memberSeesActivity),
  * with the organization's projects read once and each named task looked up
- * once, until the read passes NAMED_TASK_ROOM. */
+ * once, until the read passes NAMED_TASK_ROOM, past which a row naming a task
+ * not looked up yet is 'unchecked'. */
 async function memberSight(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   issue: Doc<'issues'>,
-): Promise<(ev: Doc<'activity_events'>) => Promise<boolean>> {
+): Promise<(ev: Doc<'activity_events'>) => Promise<Sight>> {
   const view = await orgProjectView(ctx, me)
   const projects = new Map<number, Promise<string | undefined>>()
-  const taskProject = async (num: number): Promise<string | undefined> => {
+  const taskProject = async (num: number): Promise<string | undefined | typeof UNCHECKED> => {
     let found = projects.get(num)
     if (found === undefined) {
-      // no room to look it up: unknown, so the row is left out
-      if (await usedMoreThan(ctx, NAMED_TASK_ROOM.room)) return undefined
+      if (await usedMoreThan(ctx, NAMED_TASK_ROOM.room)) return UNCHECKED
       found = ctx.db
         .query('issues')
         .withIndex('by_org_num', (q) => q.eq('org_id', issue.org_id).eq('num', num))

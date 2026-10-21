@@ -47,11 +47,16 @@ import {
   type QueryCtx,
 } from '../_generated/server'
 import { canSeeProject, hasProjectLevel } from '../lib/access'
-import { HISTORY_PAGE_MAX, historyAnchor, taskHistoryPage } from '../lib/activityVisibility'
+import {
+  HISTORY_HIDDEN,
+  HISTORY_PAGE_MAX,
+  historyAnchor,
+  taskHistoryPage,
+} from '../lib/activityVisibility'
 import { asMachineCaller, type Caller, findIssue, findProject, issueKey, UUID } from '../lib/core'
 import { byId } from '../lib/db'
 import { vCredentialAccess } from '../lib/enums'
-import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
+import { badRequest, forbidden, notFound, type Refusal, rule } from '../lib/functions'
 import { utcToday } from '../lib/machineDelay'
 import {
   ATTACHMENT_NAME_MAX,
@@ -489,7 +494,8 @@ type ActivityJson = {
 /* A page of the task's history the caller receives (lib/activityVisibility.ts
  * taskHistoryPage, the app's rule), the newest rows or those before the row
  * `before` names, oldest first, with actor names. An empty page means there
- * is no earlier history the caller receives. An actor whose profile is gone
+ * is no earlier history the caller receives, so a page that found none with
+ * history left refuses with HISTORY_HIDDEN. An actor whose profile is gone
  * reads as null, also on rows a profile removal has not cleared yet
  * (profileRemovals.ts clears older rows in the background). */
 async function activityOut(
@@ -499,7 +505,8 @@ async function activityOut(
   before: string | undefined,
 ): Promise<ActivityJson[]> {
   const anchor = before === undefined ? undefined : await historyAnchor(ctx, issue, before)
-  const { rows } = await taskHistoryPage(ctx, me, issue, anchor)
+  const { rows, earlier } = await taskHistoryPage(ctx, me, issue, anchor)
+  if (rows.length === 0 && earlier) throw rule(HISTORY_HIDDEN)
   const names = new Map<string, string | null>()
   const out: ActivityJson[] = []
   for (const ev of rows) {

@@ -454,8 +454,8 @@ const historyOut = (rows: Doc<'activity_events'>[]) =>
  * (model/comments.ts threadPage). The window reads further back with
  * commentsBefore. `events` holds the newest page of the task's history the
  * caller receives (lib/activityVisibility.ts taskHistoryPage), oldest first,
- * and `events_earlier` whether the history holds rows before it, which the
- * window reads with historyBefore. Both are empty for an archived task or a
+ * `events_earlier` whether the history holds rows before it, and
+ * `events_next` the row the window reads those before with historyBefore. Both are empty for an archived task or a
  * task in an archived project, which the app does not show. */
 export const commentThread = orgQuery({
   args: { issue_id: v.string() },
@@ -468,20 +468,22 @@ export const commentThread = orgQuery({
     // threadTask already refused a project the caller cannot see
     const history = inWorkingSet(issue, project, true)
       ? await taskHistoryPage(ctx, ctx.me, issue)
-      : { rows: [], earlier: false }
+      : { rows: [], earlier: false, next: undefined }
     return {
       comments: page.comments.map(rowOf),
       earlier: page.earlier,
       events: historyOut(history.rows),
       events_earlier: history.earlier,
+      events_next: history.next?.id ?? null,
     }
   },
 })
 
-/* The page of history "Show earlier comments" loads beside the comments. It
+/* The page of history "Show earlier activity" loads beside the comments. It
  * holds the newest HISTORY_PAGE_MAX rows the caller receives before the row
- * `before` (lib/activityVisibility.ts taskHistoryPage), oldest first, and
- * whether the history holds rows before them. The app reads it once rather
+ * `before` (lib/activityVisibility.ts taskHistoryPage), oldest first,
+ * whether the history holds rows before them, and `next`, the row to read
+ * those before. It can hold no row while `earlier` is set. The app reads it once rather
  * than subscribing. A `before` that is not a row of this task's history
  * refuses with BEFORE_NOT_A_CHANGE as a bad_request, and a task the window
  * shows no history for answers an empty page. */
@@ -490,9 +492,13 @@ export const historyBefore = orgQuery({
   handler: async (ctx, { issue_id, before }) => {
     const { issue, project } = await threadTask(ctx, issue_id)
     const anchor = await historyAnchor(ctx, issue, before)
-    if (!inWorkingSet(issue, project, true)) return { events: [], earlier: false }
+    if (!inWorkingSet(issue, project, true)) return { events: [], earlier: false, next: null }
     const history = await taskHistoryPage(ctx, ctx.me, issue, anchor)
-    return { events: historyOut(history.rows), earlier: history.earlier }
+    return {
+      events: historyOut(history.rows),
+      earlier: history.earlier,
+      next: history.next?.id ?? null,
+    }
   },
 })
 
