@@ -114,11 +114,27 @@ describe('createMountScheduler', () => {
     await s.run()
     expect(slow.state.grown[2]).toBe(8)
     slow.unregister()
-    // free items: from the 8 it came down to, eightfold per slice to 512 at most
+    // free items: from the 8 it came down to, at most double per slice, to 512
     const fast = s.list('fast', 100_000)
     await s.settle()
-    for (let n = 0; n < 5; n++) await s.run()
-    expect(fast.state.grown).toEqual([8, 64, 512, 512, 512])
+    for (let n = 0; n < 8; n++) await s.run()
+    expect(fast.state.grown).toEqual([8, 16, 32, 64, 128, 256, 512, 512])
+  })
+
+  it('does not take a slice that found few items left for a cheap one', async () => {
+    const s = setup()
+    s.scheduler.setRoot(s.root)
+    // 1ms an item: 32 take 32ms, then the last 2 take 2ms
+    const a = s.list('a', 34, 0, 1)
+    await s.settle()
+    await s.run()
+    await s.run()
+    expect(a.state.grown).toEqual([32, 2])
+    // two items in 2ms is the same rate: the next list starts at 8, not 32
+    const b = s.list('b', 1000, 0, 1)
+    await s.settle()
+    await s.run()
+    expect(b.state.grown).toEqual([8])
   })
 
   it('mounts one list or all of them at once', async () => {

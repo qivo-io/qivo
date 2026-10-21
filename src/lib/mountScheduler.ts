@@ -154,10 +154,16 @@ export function createMountScheduler({
       }
     })
     const elapsed = now() - start
-    size = Math.min(
-      MAX_SLICE,
-      Math.max(MIN_SLICE, Math.round((size * SLICE_MS) / Math.max(1, elapsed))),
-    )
+    // The items this slice mounted, at the rate they took, size the next
+    // one; it at most doubles, so a slice that found few items left is not
+    // taken for a cheap one.
+    const mounted = size - budget
+    if (mounted > 0)
+      size = Math.min(
+        MAX_SLICE,
+        size * 2,
+        Math.max(MIN_SLICE, Math.round((mounted * SLICE_MS) / Math.max(1, elapsed))),
+      )
     changed()
   }
 
