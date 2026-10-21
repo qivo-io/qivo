@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs'
 import { normalizePath } from 'vite'
 
 /* Development only. The dev server serves every file under the checkout
@@ -10,26 +11,39 @@ import { normalizePath } from 'vite'
    directories by their full paths, never a directory of that name on the
    way. */
 
+/** Ignored local directories: disposable files and fixture credentials,
+ * demo journals and review screenshots, Vercel's pulled settings, other
+ * agent sessions' checkouts with their own dev-temp/, and admin console
+ * screenshots. */
+const LOCAL = ['dev-temp', '.local', '.vercel', '.claude', 'scripts/shots']
+
 /** Escapes a literal path for Vite's picomatch globs. */
 const literalGlob = (path) => path.replace(/[\\()[\]{}*?!+@|]/g, '\\$&')
 
 /**
  * The server.watch and server.fs options for the checkout at `root`.
  *
- * The watcher rewrites a glob's backslashes to slashes before matching, which
+ * Vite resolves symlinks in its root, so the rules name the local
+ * directories under both the given and the resolved checkout path. The
+ * watcher rewrites a glob's backslashes to slashes before matching, which
  * breaks an escaped path, so the watch rule compares path prefixes instead.
  * server.fs.deny takes globs only and matches them without that rewrite.
  */
 export function devServerFiles(root) {
-  const checkout = normalizePath(root).replace(/\/$/, '')
-  const devTemp = `${checkout}/dev-temp`
+  const checkouts = new Set(
+    [root, realpathSync.native(root)].map((path) => normalizePath(path).replace(/\/$/, '')),
+  )
+  const directories = [...checkouts].flatMap((checkout) =>
+    LOCAL.map((name) => `${checkout}/${name}`),
+  )
   return {
-    // Writing into dev-temp/ must not reload the pages under test.
     watch: {
       ignored: [
         (path) => {
           const file = normalizePath(path)
-          return file === devTemp || file.startsWith(`${devTemp}/`)
+          return directories.some(
+            (directory) => file === directory || file.startsWith(`${directory}/`),
+          )
         },
       ],
     },
@@ -46,14 +60,9 @@ export function devServerFiles(root) {
         // left in tests/contract/.credentials.json.
         'credentials.json',
         '*.credentials.json',
-        '.credentials.json',
-        // Ignored local directories: disposable files and fixture
-        // credentials, demo journals and review screenshots, Vercel's pulled
-        // settings, and other agent sessions' checkouts with their own
-        // dev-temp/.
-        ...['dev-temp', '.local', '.vercel', '.claude'].flatMap((name) => {
-          const directory = literalGlob(`${checkout}/${name}`)
-          return [directory, `${directory}/**`]
+        ...directories.flatMap((directory) => {
+          const glob = literalGlob(directory)
+          return [glob, `${glob}/**`]
         }),
       ],
     },

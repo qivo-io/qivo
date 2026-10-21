@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -17,6 +18,7 @@ let root: string
 let fixtures: string
 let env: Record<string, string>
 let calls: { fn: string; args: { id?: string; kind?: string } }[]
+let exitCode: typeof process.exitCode
 
 beforeEach(() => {
   vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -24,16 +26,20 @@ beforeEach(() => {
   root = join(parent, 'checkout')
   fixtures = join(parent, 'fixtures')
   mkdirSync(join(root, 'tests', 'contract'), { recursive: true })
-  mkdirSync(fixtures, { mode: 0o700 })
+  mkdirSync(fixtures)
+  chmodSync(fixtures, 0o700)
   env = {
     CONVEX_DEPLOY_KEY: 'dev:fine-goose-986|test-key',
     VITE_CONVEX_SITE_URL: 'https://fine-goose-986.eu-west-1.convex.site',
     QIVO_FIXTURE_CREDENTIALS_DIR: fixtures,
   }
   calls = []
+  exitCode = process.exitCode
 })
 
 afterEach(() => {
+  // a failed teardown marks the process as failed on purpose
+  process.exitCode = exitCode
   vi.restoreAllMocks()
   rmSync(parent, { recursive: true, force: true })
 })
@@ -50,14 +56,13 @@ const runner =
 const deleted = () =>
   calls.filter((call) => call.fn === 'machine/testing:deleteCredential').map((call) => call.args)
 const stash = () => join(fixtures, 'contract-fine-goose-986.credentials.json')
+const legacy = () => join(root, 'tests', 'contract', '.credentials.json')
+const resetMarker = () => calls.push({ fn: 'reset', args: {} })
 
 describe('contract pass setup', () => {
   it('stashes the credentials privately outside the checkout and removes them at teardown', async () => {
-    const legacy = join(root, 'tests', 'contract', '.credentials.json')
-    writeFileSync(legacy, '{}')
     const teardown = await contractSetup({ env, run: runner(), reset: () => {} }, root)
 
-    expect(existsSync(legacy)).toBe(false)
     expect(statSync(stash()).mode & 0o777).toBe(0o600)
     const saved = JSON.parse(readFileSync(stash(), 'utf8'))
     expect(saved).toMatchObject({
@@ -79,9 +84,11 @@ describe('contract pass setup', () => {
   it('refuses before the reset without a private fixture directory outside the checkout', async () => {
     const reset = vi.fn()
     const inside = join(root, 'secrets')
-    mkdirSync(inside, { mode: 0o700 })
+    mkdirSync(inside)
+    chmodSync(inside, 0o700)
     const shared = join(parent, 'shared')
-    mkdirSync(shared, { mode: 0o755 })
+    mkdirSync(shared)
+    chmodSync(shared, 0o755)
     for (const directory of [undefined, 'relative', inside, shared]) {
       const without = { ...env, QIVO_FIXTURE_CREDENTIALS_DIR: directory }
       await expect(contractSetup({ env: without, run: runner(), reset }, root)).rejects.toThrow(
@@ -104,10 +111,13 @@ describe('contract pass setup', () => {
   })
 
   it('still deletes what it minted when the stash cannot be written or removed', async () => {
-    mkdirSync(join(stash(), 'blocked'), { recursive: true })
-    await expect(contractSetup({ env, run: runner(), reset: () => {} }, root)).rejects.toThrow(
-      AggregateError,
-    )
+    // the path turns into a directory once both credentials exist
+    const run = runner((_fn, args) => {
+      if (args.kind === 'agent_key' && !existsSync(stash()))
+        mkdirSync(join(stash(), 'blocked'), { recursive: true })
+      return false
+    })
+    await expect(contractSetup({ env, run, reset: () => {} }, root)).rejects.toThrow(AggregateError)
     expect(deleted().map((args) => args.kind)).toEqual(['mcp_token', 'agent_key'])
   })
 
@@ -130,7 +140,41 @@ describe('contract pass setup', () => {
     )
     const teardown = await contractSetup({ env, run, reset: () => {} }, root)
     expect(() => teardown()).toThrow(AggregateError)
+    expect(process.exitCode).toBe(1)
     expect(existsSync(stash())).toBe(false)
     expect(deleted().map((args) => args.kind)).toEqual(['mcp_token', 'agent_key'])
+  })
+
+  it('revokes what an interrupted pass left before the reset, and removes its stash', async () => {
+    const site = env.VITE_CONVEX_SITE_URL
+    writeFileSync(stash(), JSON.stringify({ siteUrl: site, qvaId: 'old-qva', qvtId: 'old-qvt' }))
+    writeFileSync(legacy(), JSON.stringify({ siteUrl: 'https://other-1.convex.site', qvaId: 'x' }))
+    await contractSetup({ env, run: runner(), reset: resetMarker }, root)
+    expect(existsSync(legacy())).toBe(false)
+    expect(calls.slice(0, 3)).toEqual([
+      { fn: 'machine/testing:deleteCredential', args: { id: 'old-qva', kind: 'agent_key' } },
+      { fn: 'machine/testing:deleteCredential', args: { id: 'old-qvt', kind: 'mcp_token' } },
+      { fn: 'reset', args: {} },
+    ])
+    expect(JSON.parse(readFileSync(stash(), 'utf8')).qvaId).toBe('id-agent_key')
+  })
+
+  it('keeps a leftover stash and stops before the reset when revoking it fails', async () => {
+    const left = JSON.stringify({ siteUrl: env.VITE_CONVEX_SITE_URL, qvaId: 'old-qva' })
+    writeFileSync(stash(), left)
+    const run = runner((fn) => fn === 'machine/testing:deleteCredential')
+    await expect(contractSetup({ env, run, reset: resetMarker }, root)).rejects.toThrow(
+      'machine/testing:deleteCredential failed',
+    )
+    expect(readFileSync(stash(), 'utf8')).toBe(left)
+    expect(calls.map((call) => call.fn)).toEqual(['machine/testing:deleteCredential'])
+  })
+
+  it('reads the fixture directory from .env.local when the environment has none', async () => {
+    writeFileSync(join(root, '.env.local'), `QIVO_FIXTURE_CREDENTIALS_DIR=${fixtures}\n`)
+    const { QIVO_FIXTURE_CREDENTIALS_DIR: _, ...exported } = env
+    const teardown = await contractSetup({ env: exported, run: runner(), reset: () => {} }, root)
+    expect(existsSync(stash())).toBe(true)
+    teardown()
   })
 })

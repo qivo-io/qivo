@@ -32,22 +32,24 @@
  *      machine/auth.ts looks up).
  *   3. Stash them for the suites in the private fixture directory, outside
  *      the checkout (contract/stash.mts). Setup refuses to start without
- *      that directory and removes a stash an older pass left inside the
- *      checkout.
+ *      that directory. Before the reset it revokes the credentials an
+ *      interrupted pass left in its stash, or in the stash older passes
+ *      kept inside the checkout, and removes that file.
  *   4. Teardown: remove the stash, then delete both minted credentials via
  *      machine/testing:deleteCredential — a live qva_ key on a shared
  *      deployment is a standing capability. Tolerates already-deleted rows:
  *      mcp.test.mts's finale deletes the qvt token mid-suite to capture the
  *      revoked-token 401 live. A setup that fails after minting runs the
  *      same cleanup before it rethrows, because vitest runs no teardown
- *      then. */
+ *      then. A teardown failure sets a failing exit code, which vitest
+ *      would otherwise only log. */
 import { execFileSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { marketingId } from '../../convex/internal/marketingDemoData'
 import { contractSiteUrl } from './site.mts'
-import { ROOT, stashPath, writeStash } from './stash.mts'
+import { ROOT, type Stash, stashPath, writeStash } from './stash.mts'
 
 const NORTHSTAR = 'northstar-labs'
 const ANCHOR = process.env.CONTRACT_ANCHOR ?? '2026-09-07'
@@ -100,6 +102,30 @@ function mint(
 }
 
 /**
+ * Revokes the credentials named by a stash an interrupted pass left at
+ * `path`, when they belong to this pass's site, then removes the file. A
+ * stash that cannot be read or names another site is removed unrevoked.
+ */
+function revokeLeftover(path: string, siteUrl: string, run: Run): void {
+  if (!existsSync(path)) return
+  let left: Partial<Stash> = {}
+  try {
+    left = JSON.parse(readFileSync(path, 'utf8'))
+  } catch {}
+  if (left.siteUrl === siteUrl) {
+    const ids = [
+      [left.qvaId, 'agent_key'],
+      [left.qvtId, 'mcp_token'],
+    ] as const
+    for (const [id, kind] of ids)
+      if (typeof id === 'string') run('machine/testing:deleteCredential', { id, kind })
+  } else {
+    console.log('[contract] removing a stash from another deployment without revoking it')
+  }
+  rmSync(path, { force: true })
+}
+
+/**
  * The setup with its side effects passed in, so tests can drive it without a
  * deployment. `reset` resets Northstar Labs and `run` runs a Convex function
  * on the deployment the key names. Returns the teardown.
@@ -110,7 +136,8 @@ export async function contractSetup(
 ): Promise<() => void> {
   const siteUrl = contractSiteUrl(env, envLocal(root))
   const stash = stashPath(env, root)
-  rmSync(join(root, 'tests', 'contract', '.credentials.json'), { force: true })
+  revokeLeftover(join(root, 'tests', 'contract', '.credentials.json'), siteUrl, run)
+  revokeLeftover(stash, siteUrl, run)
   console.log(
     `[contract] resetting Northstar Labs on ${siteUrl} (the shared development deployment the key names, where manual work in that organization is lost)`,
   )
@@ -135,8 +162,10 @@ export async function contractSetup(
         failures.push(error)
       }
     }
-    if (failures.length > 0)
+    if (failures.length > 0) {
+      process.exitCode = 1
       throw new AggregateError(failures, '[contract] teardown did not finish every step')
+    }
     console.log('[contract] minted credentials deleted')
   }
 
