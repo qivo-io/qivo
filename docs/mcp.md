@@ -236,6 +236,15 @@ shape is refused with `expected.date must be a date as YYYY-MM-DD` instead
 of `expected.date must be a calendar date as YYYY-MM-DD`, which these tools
 answered from 2026-10-20.
 
+Later, an id key of `expected`, such as `assignee_id`, `parent_id`,
+`project_id` or `lead_id`, took any string again and lost its `uuid` format.
+A person, project or task made until 2026-10-19 can have an id that is not a
+uuid, and from 2026-10-20 `update_task` and `update_project` refused such an
+id as read with `expected.assignee_id must be a profile uuid or null` and
+the like. A value that is not a string, or `null` where the field cannot be
+unset, is still refused, now with `expected.assignee_id must be a profile id
+or null` and the like.
+
 ## Access model: the credential is a user
 
 MCP authenticates as **one user**, with three connection options. **OAuth is
@@ -1096,11 +1105,14 @@ have no length limit, because a record saved before their caps reads back
 longer. The schema of `expected` in the tool list carries the date shape,
 the hour ranges, the color pattern and the text lengths, and Qivo also
 checks that a task date exists and that a title, a label name or a comment
-body is not blank. Every read answers values that follow these rules.
+body is not blank. An id takes any string, and its schema carries no `uuid`
+format, because a person, project or task made until 2026-10-19 may have an
+id that is not a uuid, and so may every field that names it. Every read
+answers values that follow these rules.
 
-An id key is checked for its shape only. A well-formed uuid that names no
-person, task or project is compared like any other value and can answer as
-a changed field. Qivo does not check that it exists, because a refusal that
+An id key is checked for its type only. An id that names no person, task or
+project is compared like any other value and can answer as a changed
+field. Qivo does not check that it exists, because a refusal that
 did would tell you which ids exist.
 
 Values compare in a normalized form, so formatting alone never refuses a

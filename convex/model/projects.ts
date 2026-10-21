@@ -45,9 +45,9 @@ import {
   type Fields,
   hoursOrNull,
   idForm,
+  idOf,
   TEXT,
   TEXT_OR_NULL,
-  uuidOf,
   type View,
 } from './expected'
 import { scheduleArchivedReads } from './messages'
@@ -481,7 +481,7 @@ export const PROJECT_FIELDS: Fields<Doc<'projects'>> = {
   },
   lead_id: {
     sends: 'lead_id',
-    type: uuidOf('profile', true),
+    type: idOf('profile', true),
     form: idForm,
     stored: async (project, read) =>
       read.view === 'machine'

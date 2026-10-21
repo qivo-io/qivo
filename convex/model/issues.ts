@@ -110,11 +110,11 @@ import {
   filledText,
   hoursOrNull,
   idForm,
+  idOf,
   oneOf,
   type Read,
   sentKeys,
   TEXT_OR_NULL,
-  uuidOf,
   type View,
   type Writers,
 } from './expected'
@@ -241,8 +241,8 @@ export const TASK_FIELDS: Fields<Doc<'issues'>> = {
   },
   status: { sends: 'status', type: oneOf(ISSUE_STATUSES), form: exact },
   priority: { sends: 'priority', type: oneOf(ISSUE_PRIORITIES), form: exact },
-  assignee_id: { sends: 'assignee_id', type: uuidOf('profile', true), form: idForm },
-  reviewer_id: { sends: 'reviewer_id', type: uuidOf('profile', true), form: idForm },
+  assignee_id: { sends: 'assignee_id', type: idOf('profile', true), form: idForm },
+  reviewer_id: { sends: 'reviewer_id', type: idOf('profile', true), form: idForm },
   start_week: { sends: 'start_week', type: dayOf(true), form: exact },
   end_week: { sends: 'end_week', type: dayOf(true), form: exact },
   due_date: { sends: 'due_date', type: dayOf(true), form: exact },
@@ -263,7 +263,7 @@ export const TASK_FIELDS: Fields<Doc<'issues'>> = {
   paused: { sends: 'paused', type: BOOLEAN, form: exact },
   parent_id: {
     sends: 'parent',
-    type: uuidOf('task', true),
+    type: idOf('task', true),
     form: idForm,
     pair: 'has_hidden_parent',
     shape: (expected) =>
@@ -275,16 +275,18 @@ export const TASK_FIELDS: Fields<Doc<'issues'>> = {
     // one hidden parent to another goes unseen: telling it would tell of
     // tasks the reader cannot see. For the same reason an id the reader is
     // not shown now counts as a hidden parent, so the answer never says
-    // whether a task the reader cannot see is the parent.
+    // whether a task the reader cannot see is the parent. Tasks are looked
+    // up by the id as stored or sent, because one made before 2026-10-19
+    // may have an id in another case (idOf).
     compare: async ({ row, read, expected, next }) => {
       const stored = idForm(row.parent_id)
       const seenId = idForm(expected.parent_id)
-      const hidden = async () => stored !== null && !(await parentShown(read, String(stored)))
+      const hidden = async () =>
+        row.parent_id !== undefined && !(await parentShown(read, row.parent_id))
       const seen =
         seenId !== null
-          ? (await parentShown(read, String(seenId)))
-            ? stored === seenId
-            : await hidden()
+          ? seenId === stored ||
+            (!(await parentShown(read, String(expected.parent_id))) && (await hidden()))
           : expected.has_hidden_parent === true
             ? await hidden()
             : stored === null
@@ -292,7 +294,7 @@ export const TASK_FIELDS: Fields<Doc<'issues'>> = {
     },
   },
   has_hidden_parent: { sends: 'parent', type: BOOLEAN, form: exact, pair: 'parent_id' },
-  project_id: { sends: 'project', type: uuidOf('project', false), form: idForm },
+  project_id: { sends: 'project', type: idOf('project', false), form: idForm },
 }
 
 /** The keys of a task's `expected` whose fields a REST body or MCP call

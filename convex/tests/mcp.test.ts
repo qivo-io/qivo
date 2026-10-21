@@ -133,8 +133,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = '9e715fdab1c648c49f67c4fa75165acdaa4980888bed7827fda6c1d03df69c1c'
-const SHA_TOOLS_MODERN = '2ad6cdf909fe65fcb84be8a600bfd631cb670a90224c62fd1630ce2d890330cc'
+const SHA_TOOLS_LEGACY = 'a976e6dac654a06af1f8b0b7d3f08d5f66683f96ccaa19ada93e2fab34e05f7e'
+const SHA_TOOLS_MODERN = '7e9c6fb85e5d20b004a4e9f87357aa9bd1a274354bae515d59376ae2a040e200'
 
 /* ----------------------------------------------------------------- fixture */
 

@@ -87,8 +87,6 @@ export const exact = (value: unknown): unknown => value ?? null
 export const idForm = (value: unknown): unknown =>
   typeof value === 'string' && value !== '' ? value.toLowerCase() : null
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
 const orNull = (schema: Record<string, unknown>) => ({ anyOf: [schema, { type: 'null' }] })
 
 export const TEXT: KeyType = {
@@ -124,13 +122,15 @@ export const oneOf = (values: readonly string[], nullable = false): KeyType => (
     ? orNull({ type: 'string', enum: [...values] })
     : { type: 'string', enum: [...values] },
 })
-/** A uuid naming `what`, or null when `nullable`. */
-export const uuidOf = (what: string, nullable: boolean): KeyType => ({
-  ok: (v) => (nullable && v === null) || (typeof v === 'string' && UUID.test(v)),
-  says: `a ${what} uuid${nullable ? ' or null' : ''}`,
-  schema: nullable
-    ? orNull({ type: 'string', format: 'uuid' })
-    : { type: 'string', format: 'uuid' },
+/** The id of a `what` as a read answers it, any string, or also null when
+ * `nullable`. Until 2026-10-19 the app took any string as the id of a new
+ * person, project or task (lib/db.ts assertNewRowId), so a stored id, and
+ * every field that names that row, may hold one that is not a uuid, and a
+ * stale read of it must compare. */
+export const idOf = (what: string, nullable: boolean): KeyType => ({
+  ok: (v) => (nullable && v === null) || typeof v === 'string',
+  says: `a ${what} id${nullable ? ' or null' : ''}`,
+  schema: nullable ? orNull({ type: 'string' }) : { type: 'string' },
 })
 
 /** Text by the rule of a required text field whose rule has held for every

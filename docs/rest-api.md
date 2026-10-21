@@ -2086,8 +2086,8 @@ with `expected applies only when changing an existing <record>`, such as
 
 A value has the type a read answers, which is a string for text and dates,
 a number for `remaining_hours`, `review_hours` and `plannable_hours`, a
-boolean for `paused`, `track_delay` and `has_hidden_parent`, a uuid for an
-id, and `null` where the field can be unset. `level` is `user`, `viewer` or `null`.
+boolean for `paused`, `track_delay` and `has_hidden_parent`, a string for
+an id, and `null` where the field can be unset. `level` is `user`, `viewer` or `null`.
 A value also follows the rule of its field, the one a write of that field
 follows. `start_week`, `end_week` and `due_date` are real calendar dates
 written `YYYY-MM-DD`, and a milestone's `date` is written `YYYY-MM-DD`.
@@ -2106,13 +2106,15 @@ characters until 2026-10-19. A milestone's `date` may name a day that does
 not exist, such as `2026-02-31`, because one saved until 2026-10-16 can. `remaining_hours` has no upper limit, because a task
 given more than 99999.9 hours before the cap reads them back. A comment's
 `body` and a task's or project's `description` have no length limit,
-because a record saved before their caps reads back longer. Every read
-answers values that follow these rules.
+because a record saved before their caps reads back longer. An id takes
+any string, because a person, project or task made until 2026-10-19 may
+have an id that is not a uuid, and so may every field that names it. Every
+read answers values that follow these rules.
 
-An id key is checked for its shape only. A well-formed uuid that names no
-person, task or project is compared like any other value and can answer
-`409`. Qivo does not check that it exists, because a refusal that did would
-tell you which ids exist.
+An id key is checked for its type only. An id that names no person, task or
+project is compared like any other value and can answer `409`. Qivo does
+not check that it exists, because a refusal that did would tell you which
+ids exist.
 Send each field as the read showed it:
 
 - **A task's parent.** Send `parent_id` and `has_hidden_parent` together, as
@@ -2156,7 +2158,8 @@ that breaks its field's rule is a `400`, never a `409`:
   milestone's), `expected.title must be a string that is not blank, of at
   most 80 characters`, `expected.name must be a string that is not blank, of
   at most 40 characters` (a label's), `expected.status must be one of backlog, todo, progress, review, done` or
-  `expected.assignee_id must be a profile uuid or null`.
+  `expected.assignee_id must be a profile id or null` (for a value that is
+  not a string or `null`).
 - `expected applies only when changing an existing <record>`, for
   `expected` on a request that creates a task, comment, project, milestone,
   label or team.
@@ -2176,7 +2179,11 @@ answer `409`, and a create that sent `expected` answered `unknown field
 milestone's `expected.date` naming a day that does not exist, on `PATCH`
 and `DELETE`, with `expected.date must be a calendar date as YYYY-MM-DD`.
 Both compare again, because records saved before their rules can read back
-that way.
+that way. From 2026-10-20 an id key, such as `expected.assignee_id`,
+`expected.parent_id`, `expected.project_id` or `expected.lead_id`, had to
+be a uuid, and other text was a `400` with `expected.assignee_id must be a
+profile uuid or null` and the like. It takes any string again for the same
+reason.
 
 A conflict is a `409` with one sentence in `error`. It names the fields by
 their request field, never their values, and names a person only where Qivo
