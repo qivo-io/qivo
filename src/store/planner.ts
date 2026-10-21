@@ -929,8 +929,9 @@ const emit = (section?: Parameters<typeof updates.emit>[0]) => {
 }
 
 /** What a workspace emit shows: the rows outside the inbox, every value
-    rebuild() derives from them, and whether a write waits, which Roadmap's
-    undo reads (P.roadmapUndo). The layers' paints show in the rows. */
+    rebuild() derives from them, Roadmap's undo history and whether a write
+    waits, which its undo reads too (P.roadmapUndo). The layers' paints show
+    in the rows. */
 function shownWorkspace() {
   const P = PLANNER
   return {
@@ -963,6 +964,9 @@ function shownWorkspace() {
       P.canRemoveRead,
       P.CURRENT_USER,
       P.contextVersion,
+      // Roadmap's undo (P.roadmapUndo), which a task edit's answer ends
+      roadmapVisit?.count ?? 0,
+      !roadmapVisit || roadmapVisit.disabled,
     ],
     waiting: layers.waiting(),
   }
@@ -1117,21 +1121,25 @@ function repaint(parts: { workspace?: boolean; thread?: boolean }) {
   }
 }
 
-/* The parts asked to repaint while together() runs its step. */
-let heldRepaint: { workspace: boolean; thread: boolean } | null = null
+/* The parts asked to repaint while together() runs its step, and whether
+   something outside the rows changed that a workspace emit shows (emit). */
+let heldRepaint: { workspace: boolean; thread: boolean; emit: boolean } | null = null
 
 /** Runs `step`, which settles several layers, and repaints what they asked
     for once at its end. React renders after each emit, so one repaint per
     layer would render the screen once for each. */
 function together(step: () => void) {
   if (heldRepaint) return step()
-  heldRepaint = { workspace: false, thread: false }
+  heldRepaint = { workspace: false, thread: false, emit: false }
   try {
     step()
   } finally {
     const parts = heldRepaint
     heldRepaint = null
-    if (parts.workspace || parts.thread) repaint(parts)
+    // a repaint shows the emit's change too, as one render
+    if (parts.workspace || parts.thread)
+      repaint({ workspace: parts.workspace || parts.emit, thread: parts.thread })
+    else if (parts.emit) emit()
   }
 }
 
@@ -1356,6 +1364,9 @@ function start<M extends FunctionReference<'mutation'>, T>(
   }
   const epoch = storeEpoch
   const releaseUpdate = beginUpdateBlock()
+  // an accepted task content write ends the Roadmap's undo history
+  const visit = roadmapVisit
+  const clearsHistory = !!visit && !visit.disabled && isTaskContentWrite(name)
   let sent: Promise<FunctionReturnType<M>>
   try {
     sent = dispatch(m, sentArgs, o.about)
@@ -1372,9 +1383,15 @@ function start<M extends FunctionReference<'mutation'>, T>(
           next = o.keep?.(result)
           o.onOk?.(result)
         })
-        guarded(() => settleAccepted(layer, next))
+        // the history's end and the settle show in one render
+        guarded(() =>
+          together(() => {
+            if (clearsHistory) clearRoadmapHistory(visit)
+            settleAccepted(layer, next)
+          }),
+        )
         guarded(() => o.onSettled?.())
-      }
+      } else if (clearsHistory) clearRoadmapHistory(visit)
       return answer(result)
     },
     (error) => {
@@ -1647,7 +1664,9 @@ function clearRoadmapHistory(visit: RoadmapVisit) {
   if (roadmapVisit !== visit || visit.disabled) return
   visit.count = 0
   visit.disabled = true
-  emit()
+  // inside together(), with the repaint at its end
+  if (heldRepaint) heldRepaint.emit = true
+  else emit()
 }
 
 function expireRoadmapHistory() {
@@ -2488,8 +2507,6 @@ function dispatch<M extends FunctionReference<'mutation'>>(
   if (isPausedWrite(name))
     return Promise.reject(new ConvexError({ code: 'paused', message: pausedText(name) }))
   const releaseUpdate = beginUpdateBlock()
-  const visit = roadmapVisit
-  const clearsHistory = visit && !visit.disabled && isTaskContentWrite(name)
   const change =
     about.background || BACKGROUND_WRITES.has(name) ? null : describeWrite(name, args, about.task)
   const scope = change && noteScope(args)
@@ -2510,7 +2527,6 @@ function dispatch<M extends FunctionReference<'mutation'>>(
         // that the interface already disposed.
         if (DEMO_MODE && epoch !== storeEpoch)
           throw new ConvexError({ code: 'forbidden', message: 'Your demo has expired.' })
-        if (clearsHistory) clearRoadmapHistory(visit)
         return result
       })
       .catch((error) => {
