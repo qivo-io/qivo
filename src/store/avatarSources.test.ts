@@ -41,7 +41,8 @@ function fixture(): Snapshot {
     org_role: 'admin',
     active: true,
     kind: 'person',
-    created_at: NOW.toISOString(),
+    // one after the other, so P.users lists One first
+    created_at: new Date(NOW.getTime() + index).toISOString(),
     avatar_storage_id: `storage-${index}` as Id<'_storage'>,
   }))
   return {

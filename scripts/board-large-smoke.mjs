@@ -42,7 +42,8 @@ try {
   page.on('console', (message) => {
     if (message.type() === 'error') errors.push(message.text())
   })
-  await page.goto(`${server.origin}/?tasks=${tasks}&latency=0`)
+  // a fast network: this checks the Board, not how long results take
+  await page.goto(`${server.origin}/?tasks=${tasks}&latency=0&mbps=10000`)
   await page.locator('[data-view-switch]').waitFor()
   await page
     .locator('[data-view-switch]')
@@ -55,7 +56,13 @@ try {
     null,
     slow,
   )
-  assert.equal(await page.locator('[data-card]').count(), tasks, 'The Board must show every task')
+  // every task but the parents, whose subtasks are their cards, as the
+  // stand-in server counts them
+  assert.equal(
+    await page.locator('[data-card]').count(),
+    await page.evaluate(() => window.__perf.cards),
+    'The Board must show every task',
+  )
   log(`opened with ${tasks} tasks`)
 
   const lane = page.locator('.board-lane').first()
@@ -103,6 +110,9 @@ try {
   await progress.scrollIntoViewIfNeeded()
   await first.dragTo(progress, { targetPosition: { x: 12, y: 12 } })
   await page.waitForFunction((id) => window.PLANNER.issueById[id]?.status === 'progress', id, slow)
+  // the server counts a write once its results reach the page, which a
+  // large workspace takes seconds to send; then no second write may follow
+  await page.waitForFunction((count) => window.__perf.writes > count, writes, slow)
   await page.waitForTimeout(500)
   assert.equal(
     await page.evaluate(() => window.__perf.writes),
