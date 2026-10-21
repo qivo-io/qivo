@@ -46,7 +46,7 @@ import { ConvexError, v } from 'convex/values'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { ActionCtx, QueryCtx } from '../_generated/server'
-import { httpAction, internalMutation, internalQuery } from '../_generated/server'
+import { internalMutation, internalQuery } from '../_generated/server'
 import { hasProjectLevel } from '../lib/access'
 import { archiveCursorText } from '../lib/archivedTasks'
 import {
@@ -162,6 +162,7 @@ import {
   runEntry,
 } from './registry'
 import {
+  answerAfterBody,
   hasLoneSurrogate,
   internalError,
   LONE_SURROGATE,
@@ -2307,7 +2308,7 @@ const scopeChallenge = (bodyText: string, scopes: string[]): Response | null => 
 
 /* 405 for every non-POST verb, BEFORE any auth or work (an old client
  * probing for the removed GET stream must not cost a function call). */
-const notAllowed = httpAction(async () => {
+const notAllowed = answerAfterBody(async () => {
   return new Response(
     JSON.stringify({ error: 'stateless MCP server, which takes JSON-RPC by POST only' }),
     {
@@ -2317,7 +2318,7 @@ const notAllowed = httpAction(async () => {
   )
 })
 
-const preflight = httpAction(async () => {
+const preflight = answerAfterBody(async () => {
   return new Response('ok', {
     status: 200,
     headers: withCors({ 'Content-Type': 'text/plain;charset=UTF-8' }),
@@ -2342,7 +2343,7 @@ const oauthOwner = (live: {
  * retryable 503, and
  * anything else a 500 with INTERNAL_ERROR, because its own text can hold a
  * stack trace. */
-const mcpPost = httpAction(async (ctx, request) => {
+const mcpPost = answerAfterBody(async (ctx, request) => {
   try {
     return await mcpResponse(ctx, request)
   } catch (e) {

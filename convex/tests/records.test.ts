@@ -852,6 +852,7 @@ describe('the REST upload', () => {
   it('reads exactly the declared bytes, and gives up on a body that stalls', async () => {
     // a request whose body sends `chunks` and then waits until it is cancelled
     let cancelled = false
+    let released = false
     const body = (...chunks: Uint8Array[]) =>
       ({
         headers: { get: () => null },
@@ -864,6 +865,9 @@ describe('the REST upload', () => {
             cancel: async () => {
               cancelled = true
             },
+            releaseLock: () => {
+              released = true
+            },
           }),
         },
       }) as unknown as Request
@@ -871,10 +875,13 @@ describe('the REST upload', () => {
       data: { code: 'bad_request', message: UPLOAD_TOO_SLOW },
     })
     expect(cancelled).toBe(true)
-    // a longer body is refused once it passes the size, without waiting
+    expect(released).toBe(false)
+    // a longer body is refused once it passes the size, without waiting, and
+    // its rest is left to the receiver's discardBody
     cancelled = false
     expect(await readExactly(body(new Uint8Array(3), new Uint8Array(2)), 4, 60_000)).toBeNull()
-    expect(cancelled).toBe(true)
+    expect(cancelled).toBe(false)
+    expect(released).toBe(true)
   })
 
   it('stores an empty file and answers a browser preflight', async () => {

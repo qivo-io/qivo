@@ -1,13 +1,15 @@
 /* The 1 MiB cap on REST and MCP request bodies (machine/shared.ts readBody).
  * A body over the cap answers 413 after authentication, before any routing or
  * work, so the call is still counted and an unauthenticated caller only ever
- * sees its 401. */
+ * sees its 401. Every answer goes out only after the body has arrived
+ * (machine/shared.ts answerAfterBody), so an early one is never lost to a
+ * reset connection. */
 
 import { describe, expect, it } from 'vitest'
 import type { Doc } from '../_generated/dataModel'
 import { LIMITS } from '../lib/limits'
 import { sha256hex } from '../machine/auth'
-import { BODY_MAX_BYTES } from '../machine/shared'
+import { BODY_MAX_BYTES, DISCARD_MAX_BYTES, discardBody } from '../machine/shared'
 import { NOW, newT, type OrgFixture, type T, uuid, withOrg } from './helpers.setup'
 
 const SECRET = `qva_${'3'.repeat(48)}`
@@ -151,7 +153,7 @@ describe('REST', () => {
     expect((await send(BODY_MAX_BYTES)).status).toBe(201)
   })
 
-  it('stops reading an endless chunked body once it passes the cap', async () => {
+  it('stops keeping an endless chunked body once it passes the cap, and answers after a bounded read', async () => {
     const t = newT()
     await wireOrg(t)
     let pulls = 0
@@ -170,9 +172,10 @@ describe('REST', () => {
       duplex: 'half',
     })
     expect(response.status).toBe(413)
-    // 16 reads fill the cap and the 17th passes it, plus what the stream
-    // queued ahead
-    expect(pulls).toBeLessThan(20)
+    // 17 reads pass the cap, then discardBody reads past DISCARD_MAX_BYTES,
+    // plus what the stream queued ahead
+    expect(pulls).toBeGreaterThan(DISCARD_MAX_BYTES / (64 * 1024))
+    expect(pulls).toBeLessThan((BODY_MAX_BYTES + DISCARD_MAX_BYTES) / (64 * 1024) + 5)
   })
 
   it('counts the bytes of a byte-order mark, which the decoded text drops', async () => {
@@ -247,5 +250,94 @@ describe('MCP', () => {
     await wireOrg(t)
     const response = await post(t, '/mcp', jsonOfSize(call(1), BODY_MAX_BYTES + 1), null)
     expect(response.status).toBe(401)
+  })
+})
+
+/* A body the test sends in two parts: the first at once, the rest when it
+ * calls `finish`. `read` says whether the handler took the last part. */
+function heldBody() {
+  let finish = () => {}
+  let read = false
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(64 * 1024).fill(32))
+      finish = () => {
+        controller.enqueue(new Uint8Array(BODY_MAX_BYTES).fill(32))
+        controller.close()
+      }
+    },
+    pull() {
+      read = true
+    },
+  })
+  return { body, finish: () => finish(), wasRead: () => read }
+}
+
+describe('early answers', () => {
+  const rest = `Bearer ${SECRET}`
+  // answers a REST, MCP, upload or curation request can get before its body
+  // is read: a missing credential, a declared size over the cap, a verb MCP
+  // does not take and an unknown upload URL
+  it.each([
+    ['REST 401', 'POST', '/v1/tasks', {}, 401],
+    ['REST 413', 'POST', '/v1/tasks', { 'Content-Length': String(BODY_MAX_BYTES + 1) }, 413],
+    ['webhook 401', 'POST', '/v1/webhooks', {}, 401],
+    ['MCP 401', 'POST', '/mcp', {}, 401],
+    ['MCP 413', 'POST', '/mcp', { 'Content-Length': String(BODY_MAX_BYTES + 1) }, 413],
+    ['MCP 405', 'DELETE', '/mcp', {}, 405],
+    ['upload 404', 'POST', '/attachment-uploads/missing?e=1&m=x&t=y', {}, 404],
+    ['curation 401', 'POST', '/v1/curation/images', {}, 401],
+  ] as const)('%s waits for the whole body', async (_name, method, path, headers, status) => {
+    const t = newT()
+    await wireOrg(t)
+    const held = heldBody()
+    let answered = false
+    const response = http(t, path, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(status === 401 ? {} : { Authorization: rest }),
+        ...headers,
+      },
+      body: held.body,
+      duplex: 'half',
+    }).then((answer) => {
+      answered = true
+      return answer
+    })
+    // long enough for every handler to decide its answer
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(answered).toBe(false)
+    held.finish()
+    expect((await response).status).toBe(status)
+    expect(held.wasRead()).toBe(true)
+  })
+})
+
+describe('discardBody', () => {
+  // discardBody reads only the request's body stream
+  const requestOf = (body: ReadableStream<Uint8Array>) => ({ body }) as unknown as Request
+
+  it('gives up on a body that stops arriving and cancels it', async () => {
+    let cancelled = false
+    const stalled = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(10))
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+    const started = Date.now()
+    await discardBody(requestOf(stalled), 50)
+    expect(Date.now() - started).toBeLessThan(1_000)
+    expect(cancelled).toBe(true)
+  })
+
+  it('leaves a body that a reader still holds alone', async () => {
+    const held = new ReadableStream<Uint8Array>()
+    held.getReader()
+    // without the check, getReader would throw on the locked stream
+    await expect(discardBody(requestOf(held), 50)).resolves.toBeUndefined()
   })
 })
