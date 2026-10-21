@@ -186,4 +186,14 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
     // each card asks for its one task's staleness once as it renders
     expect(stale.mock.calls.length).toBeLessThanOrEqual(256 + added)
   })
+
+  it('works out the height of only the cards a delivery changed', async () => {
+    const board = await loadBoard(network, tasks(500))
+    await board.render(root)
+    // a card's estimate asks for its delay; rendering a card asks again
+    const delay = vi.spyOn(board.P, 'delayColor')
+    board.snapshot.issues[200].title = 'Renamed elsewhere'
+    await board.deliver()
+    expect(delay.mock.calls.length).toBeLessThan(20)
+  })
 })

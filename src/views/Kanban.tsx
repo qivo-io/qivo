@@ -29,7 +29,7 @@ import {
 } from '../store/planner'
 import { BoardPanelMaterial } from './BoardPanelMaterial'
 import './Board.css'
-import { estimateBoardCard } from './board/cardEstimate'
+import { createEstimateCache } from './board/cardEstimate'
 import { BOARD_TASK_TYPE, createDropOver, type DropOver, useDropOver } from './board/dropOver'
 import { BoardCard } from './kanbanCards'
 import { useBoardPanelClipping } from './useBoardPanelClipping'
@@ -605,6 +605,7 @@ function Kanban({
   const bodyRef = React.useRef<HTMLDivElement | null>(null)
   // A large Board mounts its first screen at once and the rest in slices.
   const [scheduler] = useStateK(createMountScheduler)
+  const [estimates] = useStateK(createEstimateCache)
   useMountGuards(scheduler)
   // Binding sets no state, so mounting renders the Board once. React 19
   // calls the returned cleanup when the pane goes; StrictMode binds twice.
@@ -798,7 +799,8 @@ function Kanban({
     place: (it: IssueVM) => ProjectPlace | null,
     cardWidth: number,
   ) {
-    const estimate = (group: CardGroup) => estimateBoardCard(group, place, cardWidth)
+    // the place a card shows follows the scope and layout, which key them
+    const estimate = (group: CardGroup) => estimates(group, place, cardWidth, layoutKey)
     return (
       <DeferredList
         id={cell.key}
