@@ -44,6 +44,33 @@ type Props<T extends object> = {
 
 type Block<T> = { id: number; items: T[]; start: number }
 
+/** Which items keep the block they had: the longest run, in list order, of
+    owners that never decrease. Block ids rise down the list, so an item a
+    reorder moved across blocks breaks that order and only it changes
+    block; the items around it keep theirs. New items (no owner) keep none. */
+function keptOwners(owners: (number | undefined)[]) {
+  // patience sorting for the longest non-decreasing subsequence
+  const tails: number[] = []
+  const tailAt: number[] = []
+  const before = Array.from({ length: owners.length }, () => -1)
+  for (const [i, owner] of owners.entries()) {
+    if (owner === undefined) continue
+    let low = 0
+    let high = tails.length
+    while (low < high) {
+      const mid = (low + high) >> 1
+      if (tails[mid] <= owner) low = mid + 1
+      else high = mid
+    }
+    tails[low] = owner
+    tailAt[low] = i
+    before[i] = low > 0 ? tailAt[low - 1] : -1
+  }
+  const kept = Array.from({ length: owners.length }, () => false)
+  for (let i = tails.length ? tailAt[tails.length - 1] : -1; i >= 0; i = before[i]) kept[i] = true
+  return kept
+}
+
 /** How a block of a list that mounts in slices is drawn: its items'
     estimated height with their gaps, and whether it still grows. */
 type BlockBox = { height: number; gap: number; open: boolean }
@@ -124,9 +151,11 @@ export function DeferredList<T extends object>({
   const mountedOf = (current: typeof state, list: readonly T[]) => {
     const at =
       current.frontier === null ? -1 : list.findIndex((it) => keyOf(it) === current.frontier)
+    // Never fewer than were mounted (a reorder can move the frontier up),
+    // and the frontier still mounted when items arrive above it.
     const mounted = Math.min(
       list.length,
-      at >= 0 ? at + 1 : current.count,
+      Math.max(current.count, at + 1),
       current.count + MOST_AT_ONCE,
     )
     return Math.max(mounted, Math.min(initial, list.length))
@@ -208,34 +237,39 @@ export function DeferredList<T extends object>({
   const shown = items.slice(0, mounted)
   const capacity = initial >= items.length ? Number.POSITIVE_INFINITY : BLOCK_SIZE
   const assigned = new Map<string, number>()
+  const known = shown.map((item) => owners.current.get(keyOf(item)))
+  const kept = keptOwners(known)
+  // the block of the first kept item after each item, if any
+  const keptAfter: (number | undefined)[] = []
+  for (let i = shown.length - 1, next: number | undefined; i >= 0; i--) {
+    keptAfter[i] = next
+    if (kept[i]) next = known[i]
+  }
   let current: Block<T> | null = null
   for (const [index, item] of shown.entries()) {
     const key = keyOf(item)
-    let owner = owners.current.get(key)
-    if (owner !== undefined && (!current || owner > current.id)) {
+    const owner = kept[index] ? known[index] : undefined
+    if (owner !== undefined && (!current || owner !== current.id)) {
       current = { id: owner, items: [], start: index }
       blocks.push(current)
-    } else if (!current) {
-      // a new item above every owned one joins the first owned block
-      const next = shown.slice(index + 1).find((it) => owners.current.has(keyOf(it)))
-      current = {
-        id: next ? (owners.current.get(keyOf(next)) ?? 0) : nextBlock.current++,
-        items: [],
-        start: index,
-      }
+    } else if (owner === undefined && !current) {
+      // a new or moved item above every kept one joins the first kept block
+      current = { id: keptAfter[index] ?? nextBlock.current++, items: [], start: index }
       blocks.push(current)
     } else if (
       owner === undefined &&
+      current &&
       (current.items.length >= capacity || current.id < (sealedBelow.current ?? 0)) &&
-      current.id === nextBlock.current - 1
+      current.id === nextBlock.current - 1 &&
+      keptAfter[index] === undefined
     ) {
       // the last block is full or holds the first screen: open the next one
       current = { id: nextBlock.current++, items: [], start: index }
       blocks.push(current)
     }
-    owner = current.id
-    nextBlock.current = Math.max(nextBlock.current, owner + 1)
-    assigned.set(key, owner)
+    if (!current) continue
+    nextBlock.current = Math.max(nextBlock.current, current.id + 1)
+    assigned.set(key, current.id)
     current.items.push(item)
   }
   owners.current = assigned

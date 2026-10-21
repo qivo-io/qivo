@@ -66,12 +66,14 @@ const slice = () =>
     tasks.shift()?.()
   })
 
-/** A deterministic random source. */
+/** A deterministic random source (xorshift32, exact in 32-bit integers). */
 function random(seed: number) {
-  let state = seed
+  let state = seed | 0 || 1
   return (n: number) => {
-    state = (state * 1103515245 + 12345) % 2 ** 31
-    return state % n
+    state ^= state << 13
+    state ^= state >>> 17
+    state ^= state << 5
+    return (state >>> 0) % n
   }
 }
 
@@ -84,9 +86,11 @@ describe('DeferredList', () => {
       let next = 0
       let items: Item[] = Array.from({ length: 600 }, () => ({ key: `k${next++}` }))
       await show(items, 40)
+      const ops = [0, 0, 0, 0]
       for (let step = 0; step < 80; step++) {
         const before = new Map(nodes().map((node) => [node.dataset.k, node]))
         const op = pick(4)
+        ops[op]++
         let moved: string | null = null
         if (op === 0) await slice()
         else {
@@ -104,14 +108,18 @@ describe('DeferredList', () => {
         // the mounted items are the first ones, each once, in order
         expect(keys).toEqual(items.slice(0, keys.length).map(keyOf))
         expect(Number(spacer()?.dataset.boardPending ?? 0)).toBe(items.length - keys.length)
-        // a mounted item stays mounted while it is in the list
+        // a mounted item stays mounted while it is in the list, but one a
+        // reorder moved below the mounted ones
         const present = new Set(items.map(keyOf))
-        for (const key of before.keys()) if (present.has(key)) expect(keys).toContain(key)
+        for (const key of before.keys())
+          if (present.has(key) && key !== moved) expect(keys).toContain(key)
         // no mounted node changes, but the one a reorder moved
         for (const node of nodes())
           if (node.dataset.k !== moved && before.has(node.dataset.k))
             expect(before.get(node.dataset.k)).toBe(node)
       }
+      // every kind of change happened
+      expect(ops.every((count) => count >= 10)).toBe(true)
       while (tasks.length) await slice()
       expect(nodes().map((node) => node.dataset.k)).toEqual(items.map(keyOf))
       expect(spacer()).toBeNull()
@@ -127,6 +135,34 @@ describe('DeferredList', () => {
     await show([{ key: 'new' }, ...items], 10)
     for (const node of before) expect(node.isConnected).toBe(true)
     expect(nodes()[0].dataset.k).toBe('new')
+  })
+
+  it('keeps every card mounted when the last mounted one moves to the top', async () => {
+    const items = Array.from({ length: 600 }, (_, n) => ({ key: `k${n}` }))
+    await show(items, 12)
+    while (tasks.length) await slice()
+    expect(nodes()).toHaveLength(600)
+    await show([items[599], ...items.slice(0, 599)], 12)
+    expect(nodes()).toHaveLength(600)
+    expect(spacer()).toBeNull()
+  })
+
+  it('moves only the card a reorder takes across blocks', async () => {
+    const items = Array.from({ length: 600 }, (_, n) => ({ key: `k${n}` }))
+    await show(items, 12)
+    while (tasks.length) await slice()
+    const before = new Map(nodes().map((node) => [node.dataset.k, node]))
+    const boxes = container.querySelectorAll('[data-deferred-block]').length
+    await show([items[598], ...items.slice(0, 598), items[599]], 12)
+    const changed = nodes().filter((node) => before.get(node.dataset.k) !== node)
+    expect(changed.map((node) => node.dataset.k)).toEqual(['k598'])
+    // the blocks keep their size
+    expect(container.querySelectorAll('[data-deferred-block]').length).toBe(boxes)
+    expect(
+      Math.max(
+        ...[...container.querySelectorAll('[data-deferred-block]')].map((b) => b.children.length),
+      ),
+    ).toBeLessThanOrEqual(65)
   })
 
   it('renders a list its first screen covers whole, with no waiting space', async () => {
