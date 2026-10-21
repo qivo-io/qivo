@@ -937,6 +937,31 @@ describe("deleting a team settles its members' open tasks", () => {
     expect(await grantsOf(fx.t, fx.emil.id)).toEqual([])
   })
 
+  it('checks the room only for each new Viewer grant and project, not for each task', async () => {
+    const fx = await setup()
+    await plantTeam(fx, fx.org.id, 'Design')
+    // Emil's third task in FW needs the same grant on TBED as the first two
+    await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, assignee_id: fx.emil.id })
+    // the transaction reads as full from the third check on
+    let checks = 0
+    await fx.t.run((ctx) =>
+      deleteTeamCore(
+        {
+          ...ctx,
+          meta: {
+            getTransactionMetrics: async () => ({
+              databaseQueries:
+                ++checks > 2 ? { used: 99, remaining: 1 } : { used: 0, remaining: 100 },
+            }),
+          },
+        } as unknown as MutationCtx,
+        { me: fx.admin, team: fx.team, held: 'keep_as_viewer', now: NOW },
+      ),
+    )
+    expect(checks).toBe(2)
+    expect(await grantsOf(fx.t, fx.emil.id)).toEqual([[fx.meta.id, 'viewer']])
+  })
+
   it('refuses the last team and anyone but an admin before anything is settled', async () => {
     const fx = await setup()
     // handing the tasks to the Viewer would be refused with its own sentence

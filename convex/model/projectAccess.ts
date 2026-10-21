@@ -526,13 +526,20 @@ export async function removeAndSettle(
   const keepAsViewers = async () => {
     await settling(async () => {
       if (a.keepRefusal !== undefined) throw rule(a.keepRefusal)
+      // a task's project and a grant already worked out cost no more room
+      const placed = new Map<string, Doc<'projects'>>()
       const granted = new Set<string>()
       for (const h of lost) {
-        await full()
-        const where = await a.viewerOn(h.project)
+        let where = placed.get(h.project.id)
+        if (where === undefined) {
+          await full()
+          where = await a.viewerOn(h.project)
+          placed.set(h.project.id, where)
+        }
         const key = `${h.profile_id}:${where.id}`
         if (granted.has(key)) continue
         granted.add(key)
+        await full()
         if (!result.viewer_grants.some((p) => p.id === where.id)) {
           if (!(await canManageProjectUsers(ctx, me, where))) {
             throw forbidden('no permission to manage users on this project')
