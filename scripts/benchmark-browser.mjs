@@ -24,6 +24,7 @@
 // pages, on --host (127.0.0.1 by default), until it is stopped.
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
+import { rmSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -77,6 +78,14 @@ if (baselineRevision !== null) {
   }
 }
 const temporary = await mkdtemp(join(tmpdir(), 'qivo-browser-perf-'))
+// Ctrl-C or a stop skips the finally below, so a measuring run removes its
+// builds and the baseline checkout here. --serve waits for the signal itself.
+if (!process.argv.includes('--serve'))
+  for (const signal of ['SIGINT', 'SIGTERM'])
+    process.once(signal, () => {
+      rmSync(temporary, { recursive: true, force: true })
+      process.exit(130)
+    })
 // the timed phases, each with its script, layout and style time and the
 // number of App renders in it
 const PHASES = [
@@ -785,7 +794,8 @@ try {
     })
     process.exitCode = 0
   } else {
-    browser = await chromium.launch({ headless: true })
+    // the handlers above stop the run; the browser goes with the process
+    browser = await chromium.launch({ headless: true, handleSIGINT: false, handleSIGTERM: false })
     for (const tasks of sizes) {
       for (const target of targets) target.metrics = emptyMetrics()
       for (let sample = 0; sample < samples; sample++) {
