@@ -1,8 +1,11 @@
-import { useRef, useState } from 'react'
+import { memo, useRef, useState } from 'react'
+import { StaticControlsContext, useLiveControls } from '../lib/liveControls'
 import { matchesAllWords } from '../lib/search'
 import { useFollowTaskFocus } from '../lib/taskFocus'
+import { useLatest } from '../lib/useLatest'
 import { useMobile, useMobileBackLayer } from '../lib/useMobile'
-import { type IssueFilters, P, type ScopeInfo } from '../store/planner'
+import { type IssueFilters, type IssueVM, P, type ScopeInfo } from '../store/planner'
+import type { StoreVersion } from '../store/updates'
 import {
   Avatar,
   Icon,
@@ -378,6 +381,66 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
   )
 }
 
+/** One task of the phone's task list. It renders again only when its task
+    object or the store's context changes (P.contextVersion, which covers
+    today's date and the names it reads), and mounts no tooltip roots until
+    a mouse points at it or keyboard focus reaches it, so touch phones never
+    mount them. */
+const MobileTaskRow = memo(function MobileTaskRow({
+  task,
+  onOpen,
+}: {
+  task: IssueVM
+  context: StoreVersion
+  onOpen: (id: string) => void
+}) {
+  const root = useRef<HTMLButtonElement>(null)
+  const controls = useLiveControls(root)
+  const sub = P.project(task.project)
+  const project = P.metaOf(task.project)
+  const overdue = !!task.due && task.due < P.TODAY_ISO && !P.isDone(task)
+  return (
+    <Button
+      ref={root}
+      {...controls.rootProps}
+      variant="unstyled"
+      noTooltip
+      data-card={task.id}
+      data-focus-key="row"
+      className="mobile-task-row"
+      onClick={() => onOpen(task.id)}
+    >
+      <StaticControlsContext.Provider value={controls.value}>
+        <span className="min-w-0 flex-1">
+          <span className="mobile-task-title">
+            {P.isPaused(task) && <PausedMark size={14} />}
+            {task.title}
+          </span>
+          <span className="mobile-task-meta">
+            <span>
+              {project && P.projectLabel(project)}
+              {sub && `, ${P.projectLabel(sub)}`}
+            </span>
+          </span>
+          <span className="mobile-task-meta">
+            <PriorityIcon priority={task.priority} size={13} />
+            <span>{P.PRIORITIES[task.priority]?.name}</span>
+            {P.isGroup(task) && <span>Parent task</span>}
+            {task.due && (
+              <span className={overdue ? 'text-danger' : ''}>
+                {overdue ? 'Overdue, ' : 'Due '}
+                {P.fmtISO(task.due)}
+              </span>
+            )}
+          </span>
+        </span>
+        <Avatar id={task.owner} size={28} />
+        <Icon name="chevronRight" size={16} />
+      </StaticControlsContext.Provider>
+    </Button>
+  )
+})
+
 export function MobileTaskList({
   info,
   filters,
@@ -425,6 +488,8 @@ export function MobileTaskList({
   // Focus stays on a task's row when a change moves it to another section.
   const listRef = useRef<HTMLDivElement>(null)
   const followFocus = useFollowTaskFocus(listRef)
+  // App makes its actions again every render; the rows keep one identity
+  const openIssue = useLatest((id: string) => actions.openIssue(id))
   return (
     <div ref={listRef} className="mobile-task-list" {...followFocus}>
       <div className="mobile-task-tools">
@@ -497,48 +562,14 @@ export function MobileTaskList({
             </h2>
             {/* the phone's Board cell for one status, as taskFocus reads it */}
             <div className="mobile-task-group" data-board-cell="phone" data-status={group.id}>
-              {group.tasks.map((task) => {
-                const sub = P.project(task.project)
-                const project = P.metaOf(task.project)
-                const overdue = !!task.due && task.due < P.TODAY_ISO && !P.isDone(task)
-                return (
-                  <Button
-                    key={task.id}
-                    variant="unstyled"
-                    noTooltip
-                    data-card={task.id}
-                    data-focus-key="row"
-                    className="mobile-task-row"
-                    onClick={() => actions.openIssue(task.id)}
-                  >
-                    <span className="min-w-0 flex-1">
-                      <span className="mobile-task-title">
-                        {P.isPaused(task) && <PausedMark size={14} />}
-                        {task.title}
-                      </span>
-                      <span className="mobile-task-meta">
-                        <span>
-                          {project && P.projectLabel(project)}
-                          {sub && `, ${P.projectLabel(sub)}`}
-                        </span>
-                      </span>
-                      <span className="mobile-task-meta">
-                        <PriorityIcon priority={task.priority} size={13} />
-                        <span>{P.PRIORITIES[task.priority]?.name}</span>
-                        {P.isGroup(task) && <span>Parent task</span>}
-                        {task.due && (
-                          <span className={overdue ? 'text-danger' : ''}>
-                            {overdue ? 'Overdue, ' : 'Due '}
-                            {P.fmtISO(task.due)}
-                          </span>
-                        )}
-                      </span>
-                    </span>
-                    <Avatar id={task.owner} size={28} />
-                    <Icon name="chevronRight" size={16} />
-                  </Button>
-                )
-              })}
+              {group.tasks.map((task) => (
+                <MobileTaskRow
+                  key={task.id}
+                  task={task}
+                  context={P.contextVersion}
+                  onOpen={openIssue}
+                />
+              ))}
             </div>
           </section>
         ))}
