@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /* The line under the project invite form: what it says about the invitation
    email to the seat the form just created, as invites.deliveries changes. */
@@ -12,6 +12,12 @@ const network = vi.hoisted(() => ({
   push: (_rows: Row[] | null) => {},
 }))
 vi.mock('../../lib/convex', () => ({ convex: network }))
+
+// the component's module graph is large; load it once, outside the tests' time limit
+let InviteOutcome: typeof import('./UserControls').InviteOutcome
+beforeAll(async () => {
+  InviteOutcome = (await import('./UserControls')).InviteOutcome
+}, 60_000)
 
 let root: Root
 let host: HTMLDivElement
@@ -39,7 +45,6 @@ const row = (state: string, address = 'guest.new@example.test'): Row => ({
 })
 
 async function mount() {
-  const { InviteOutcome } = await import('./UserControls')
   act(() => root.render(<InviteOutcome orgId="org-1" seat={seat} email={email} />))
 }
 const push = (rows: Row[] | null) => act(() => network.push(rows))
