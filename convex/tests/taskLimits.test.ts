@@ -953,6 +953,14 @@ describe('the attachment, link and label limits', () => {
     ]) {
       await refused(write(), 'rule', IMAGE_NOT_ATTACHED)
     }
+    // an id the saved text only named in prose is still no image of this
+    // task when a later save shows it
+    await saveDescription(fx, issue, `Mentions att:${theirs}`)
+    await refused(
+      saveDescription(fx, issue, `Shows ![photo](att:${theirs})`),
+      'rule',
+      IMAGE_NOT_ATTACHED,
+    )
     // an id in prose or in code shows no image, so it is no reference
     const quoted = `See att:${theirs}, \`![photo](att:${theirs})\` and\n\`\`\`\n![photo](att:${theirs})\n\`\`\``
     await saveDescription(fx, issue, quoted)
