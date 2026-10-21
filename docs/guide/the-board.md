@@ -58,6 +58,7 @@ Siblings share a card within each status column and lane, under their
 parent's title. Siblings in different cells repeat the parent heading.
 Nested subtasks retain their ancestor names for context. Tasks without
 active subtasks outside these groups have individual cards.
+
 On very large boards, cards below the first screen appear in the first
 moments after the Board opens, in shaded space that keeps the Board's shape.
 Searching the page with Ctrl+F or ⌘F, or printing, loads them all first.
