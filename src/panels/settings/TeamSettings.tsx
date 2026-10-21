@@ -259,6 +259,9 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
             // Count home teams only; P.teams also contains foreign teams.
             const last = homeTeams.length <= 1
             const arm = confirm.armed === `t:${t.id}`
+            // a team saved before names were required can have a blank one,
+            // and an empty button has no height to click
+            const name = t.name.trim() || 'Unnamed team'
             return (
               <div
                 key={t.id}
@@ -268,11 +271,11 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
                 <Button
                   type="button"
                   onClick={() => setPage(`team:${t.id}`)}
-                  title={`Open ${t.name}`}
+                  title={`Open ${name}`}
                   className="[flex:1] [text-align:left] [background:none] [border:none] [padding:0] [cursor:pointer] [font-size:var(--fs-base)] [font-weight:600] [color:var(--text-1)] [font-family:var(--sans)]"
                   variant="unstyled"
                 >
-                  {t.name}
+                  {name}
                 </Button>
                 <span className="[font-size:var(--fs-xs)] [color:var(--text-2)] !font-mono">
                   {memberCount} member

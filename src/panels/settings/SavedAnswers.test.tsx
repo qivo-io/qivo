@@ -41,14 +41,14 @@ let toast: ReturnType<typeof vi.fn<(message: string, tone?: string) => void>>
 let container: HTMLDivElement
 let root: Root
 
-async function load() {
+async function load(crewName = 'Crew') {
   vi.resetModules()
   const snap: Snapshot = plannerFixture()
   const org = snap.orgs[0].id
   snap.teams.push({
     id: 'crew',
     org_id: org,
-    name: 'Crew',
+    name: crewName,
     stale_days: 14,
     archive_days: 30,
     track_delay_default: false,
@@ -181,6 +181,16 @@ async function answer(name: string, outcome: 'accept' | 'refuse') {
 }
 
 const toasts = () => toast.mock.calls.map(([message]) => message)
+
+describe('a team saved with a blank name', () => {
+  it('opens from the list by a label of its own', async () => {
+    await load('  ')
+    const setPage = vi.fn()
+    await render(() => <pages.teams.OrgTeamsPage setPage={setPage} />)
+    await act(async () => button('Unnamed team')?.click())
+    expect(setPage).toHaveBeenCalledWith('team:crew')
+  })
+})
 
 describe('create forms', () => {
   it('keeps a new team name until the server creates the team', async () => {
