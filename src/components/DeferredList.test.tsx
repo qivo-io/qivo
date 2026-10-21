@@ -79,53 +79,107 @@ function random(seed: number) {
 
 describe('DeferredList', () => {
   it('renders every item once, in order, and keeps mounted nodes through random changes', {
-    timeout: 120_000,
+    timeout: 180_000,
   }, async () => {
-    for (const seed of [7, 42]) {
+    for (let seed = 1; seed <= 12; seed++) {
       const pick = random(seed)
       let next = 0
-      let items: Item[] = Array.from({ length: 600 }, () => ({ key: `k${next++}` }))
-      await show(items, 40)
-      const ops = [0, 0, 0, 0]
-      for (let step = 0; step < 80; step++) {
+      let items: Item[] = Array.from({ length: 400 }, () => ({ key: `k${next++}` }))
+      await show(items, 30)
+      const ops = [0, 0, 0, 0, 0]
+      for (let step = 0; step < 60; step++) {
         const before = new Map(nodes().map((node) => [node.dataset.k, node]))
-        const op = pick(4)
+        const op = pick(5)
         ops[op]++
         let moved: string | null = null
+        // the items a filter hid and showed again in this step
+        let filtered: Set<string> | null = null
         if (op === 0) await slice()
-        else {
+        else if (op === 4) {
+          // a filter that keeps every third item, then cleared
+          const kept = items.filter((_, i) => i % 3 === 0)
+          filtered = new Set(items.filter((_, i) => i % 3 !== 0).map(keyOf))
+          await show(kept, 30)
+          await show(items, 30)
+        } else {
           items = [...items]
           if (op === 1) items.splice(pick(items.length + 1), 0, { key: `k${next++}` })
           else if (op === 2 && items.length > 1) items.splice(pick(items.length), 1)
-          else {
+          else if (op === 3) {
             const [item] = items.splice(pick(items.length), 1)
             items.splice(pick(items.length + 1), 0, item)
             moved = item.key
           }
-          await show(items, 40)
+          await show(items, 30)
         }
         const keys = nodes().map((node) => node.dataset.k)
         // the mounted items are the first ones, each once, in order
         expect(keys).toEqual(items.slice(0, keys.length).map(keyOf))
         expect(Number(spacer()?.dataset.boardPending ?? 0)).toBe(items.length - keys.length)
-        // a mounted item stays mounted while it is in the list, but one a
-        // reorder moved below the mounted ones
+        // A mounted item stays mounted while it is in the list, but one a
+        // reorder moved far below the mounted ones. Clearing a filter mounts
+        // at most 64 new items, so items it kept far down can wait again.
         const present = new Set(items.map(keyOf))
-        for (const key of before.keys())
-          if (present.has(key) && key !== moved) expect(keys).toContain(key)
-        // no mounted node changes, but the one a reorder moved
-        for (const node of nodes())
-          if (node.dataset.k !== moved && before.has(node.dataset.k))
-            expect(before.get(node.dataset.k)).toBe(node)
+        if (op !== 4)
+          for (const key of before.keys())
+            if (present.has(key) && key !== moved) expect(keys).toContain(key)
+        // no mounted node changes, but the one a reorder moved, or one beside
+        // it when a move by one place across a block's edge reads both ways
+        const changed = nodes().filter(
+          (node) =>
+            before.has(node.dataset.k) &&
+            !filtered?.has(node.dataset.k ?? '') &&
+            before.get(node.dataset.k) !== node,
+        )
+        expect(changed.filter((node) => node.dataset.k !== moved).length).toBeLessThanOrEqual(
+          moved ? 1 : 0,
+        )
+        // blocks keep their bound; an insert or a move joins the block it lands in
+        for (const box of container.querySelectorAll('[data-deferred-block]'))
+          expect(box.children.length).toBeLessThanOrEqual(64 + ops[1] + ops[3])
       }
       // every kind of change happened
-      expect(ops.every((count) => count >= 10)).toBe(true)
+      expect(ops.every((count) => count >= 5)).toBe(true)
       while (tasks.length) await slice()
       expect(nodes().map((node) => node.dataset.k)).toEqual(items.map(keyOf))
       expect(spacer()).toBeNull()
       await act(async () => root.unmount())
       root = createRoot(container)
     }
+  })
+
+  it('keeps every card mounted when a raised card is followed by an insert', async () => {
+    const items = Array.from({ length: 200 }, (_, n) => ({ key: `k${n}` }))
+    await show(items, 12)
+    while (tasks.length) await slice()
+    const raised = [items[199], ...items.slice(0, 199)]
+    await show(raised, 12)
+    await show([{ key: 'new' }, ...raised.slice(0, 150), { key: 'mid' }, ...raised.slice(150)], 12)
+    expect(nodes()).toHaveLength(202)
+    expect(spacer()).toBeNull()
+  })
+
+  it('brings filtered cards back in blocks of 64 at most', async () => {
+    const items = Array.from({ length: 1000 }, (_, n) => ({ key: `k${n}` }))
+    await show(items, 12)
+    while (tasks.length) await slice()
+    await show(items.slice(0, 100), 12)
+    await show(items, 12)
+    while (tasks.length) await slice()
+    expect(nodes()).toHaveLength(1000)
+    for (const box of container.querySelectorAll('[data-deferred-block]'))
+      expect(box.children.length).toBeLessThanOrEqual(64)
+  })
+
+  it('keeps its cards when its first screen changes size', async () => {
+    const items = Array.from({ length: 30 }, (_, n) => ({ key: `k${n}` }))
+    // a short cell on a large Board: its first screen holds all of it
+    await show(items, 30)
+    const before = nodes()
+    // one more card, then the Board falls to 300 cards or fewer
+    await show([...items, { key: 'k30' }], 30)
+    await show([...items, { key: 'k30' }], Number.POSITIVE_INFINITY)
+    for (const node of before) expect(node.isConnected).toBe(true)
   })
 
   it('keeps the first screen mounted when an item arrives above it before any slice', async () => {
@@ -167,7 +221,8 @@ describe('DeferredList', () => {
 
   it('renders a list its first screen covers whole, with no waiting space', async () => {
     const items = Array.from({ length: 30 }, (_, n) => ({ key: `k${n}` }))
-    await show(items, 30)
+    // a Board that renders whole gives every list an unbounded first screen
+    await show(items, Number.POSITIVE_INFINITY)
     expect(nodes()).toHaveLength(30)
     expect(spacer()).toBeNull()
     expect(container.querySelector('[data-deferred-block]')).toBeNull()

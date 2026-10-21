@@ -122,9 +122,9 @@ const Block = memo(
 
 /** A list that mounts its first `initial` items at once and the rest in
     the scheduler's slices, with a shaded space of their estimated height
-    in their place. A mounted item stays mounted: an insert above the
-    mounted boundary keeps the boundary item, and a list that shrinks below
-    what it had mounted mounts again in slices when it grows. Focus that
+    in their place. A mounted item stays mounted while it is in the list,
+    and a list that shrinks below what it had mounted mounts again in
+    slices when it grows. Focus that
     reaches the waiting space mounts the list and moves on, in the Tab
     direction, to the first or last control of the items that came in. With
     `initial` covering every item it renders them all and no space, the same
@@ -141,51 +141,45 @@ export function DeferredList<T extends object>({
   label,
   listRole = false,
 }: Props<T>) {
-  // the mounted count and the last mounted item's key, changed only by grow
-  // the first screen's last item is the first frontier, so an item that
-  // arrives above it before any slice leaves every mounted item mounted
-  const [state, setState] = useState<{ count: number; frontier: string | null }>(() => {
-    const count = Math.min(initial, items.length)
-    return { count, frontier: count ? keyOf(items[count - 1]) : null }
-  })
-  const mountedOf = (current: typeof state, list: readonly T[]) => {
-    const at =
-      current.frontier === null ? -1 : list.findIndex((it) => keyOf(it) === current.frontier)
-    // Never fewer than were mounted (a reorder can move the frontier up),
-    // and the frontier still mounted when items arrive above it.
-    const mounted = Math.min(
-      list.length,
-      Math.max(current.count, at + 1),
-      current.count + MOST_AT_ONCE,
-    )
-    return Math.max(mounted, Math.min(initial, list.length))
-  }
-  // Fewer items than were mounted: count only those, so a list that grows
-  // back mounts its first screen at once and the rest in slices.
-  if (items.length < state.count) {
-    setState({
-      count: items.length,
-      frontier: items.length ? keyOf(items[items.length - 1]) : null,
-    })
-  }
-  const mounted = mountedOf(state, items)
+  /* What is mounted follows what the last render mounted: every item it
+     mounted that is still in the list stays mounted, wherever a reorder,
+     delete or insert moved it, with at most MOST_AT_ONCE new ones; a
+     slice or a focus that needs an item asks for a longer prefix. A list
+     that loses items mounts only what is left, so it grows back in
+     slices. */
+  const mountedKeys = useRef(new Set<string>())
+  const lastMounted = useRef(0)
+  // a length a slice or mountThrough asked for, 0 once rendered
+  const [target, setTarget] = useState(0)
+  const floor = Math.min(initial, items.length)
+  const before = mountedKeys.current
+  // the prefix that holds every item the last render mounted
+  let stays = 0
+  if (before.size)
+    for (let i = items.length - 1; i >= 0; i--)
+      if (before.has(keyOf(items[i]))) {
+        stays = i + 1
+        break
+      }
+  const mounted = Math.min(
+    items.length,
+    Math.max(floor, Math.min(stays, before.size + MOST_AT_ONCE), target),
+  )
+  const shown = items.slice(0, mounted)
+  mountedKeys.current = new Set(shown.map(keyOf))
+  lastMounted.current = mounted
+  if (target && mounted >= target) setTarget(0)
   const pending = items.length - mounted
 
   const latest = useRef(items)
   const waiting = useRef(pending)
   const grow = useLatest((n: number) =>
-    setState((current) => {
-      const list = latest.current
-      const count = Math.min(list.length, mountedOf(current, list) + n)
-      return { count, frontier: count ? keyOf(list[count - 1]) : null }
-    }),
+    setTarget((asked) => Math.max(asked, Math.min(latest.current.length, lastMounted.current + n))),
   )
-  const mountThrough = useLatest((key: string) =>
-    setState((current) => {
-      const at = latest.current.findIndex((it) => keyOf(it) === key)
-      return at < mountedOf(current, latest.current) ? current : { count: at + 1, frontier: key }
-    }),
-  )
+  const mountThrough = useLatest((key: string) => {
+    const at = latest.current.findIndex((it) => keyOf(it) === key)
+    if (at >= lastMounted.current) setTarget((asked) => Math.max(asked, at + 1))
+  })
   const spacer = useRef<HTMLButtonElement>(null)
   useLayoutEffect(
     () =>
@@ -233,48 +227,72 @@ export function DeferredList<T extends object>({
      browser renders them whole; slices fill new blocks below them, which
      it skips while they are offscreen. */
   const sealedBelow = useRef<number | null>(null)
+  /* A list that mounts in slices boxes its blocks for good, and one its
+     first screen covers never does: a box that came and went would remount
+     every card in its block. */
+  const [boxed] = useState(() => initial !== Number.POSITIVE_INFINITY)
+  const capacity = boxed ? BLOCK_SIZE : Number.POSITIVE_INFINITY
   const blocks: Block<T>[] = []
-  const shown = items.slice(0, mounted)
-  const capacity = initial >= items.length ? Number.POSITIVE_INFINITY : BLOCK_SIZE
   const assigned = new Map<string, number>()
   const known = shown.map((item) => owners.current.get(keyOf(item)))
   const kept = keptOwners(known)
-  // the block of the first kept item after each item, if any
+  // how many kept items each block holds, and the first kept block after each item
+  const keptSize = new Map<number, number>()
   const keptAfter: (number | undefined)[] = []
   for (let i = shown.length - 1, next: number | undefined; i >= 0; i--) {
     keptAfter[i] = next
-    if (kept[i]) next = known[i]
+    const owner = known[i]
+    if (kept[i] && owner !== undefined) {
+      next = owner
+      keptSize.set(owner, (keptSize.get(owner) ?? 0) + 1)
+    }
+  }
+  /* A block between `low` and the kept block `high` (none: the end), or
+     null when no id is left between them. Ids rise down the list. */
+  const between = (low: number, high: number | undefined) => {
+    if (high === undefined) return nextBlock.current++
+    const id = (low + high) / 2
+    return id > low && id < high ? id : null
   }
   let current: Block<T> | null = null
   for (const [index, item] of shown.entries()) {
-    const key = keyOf(item)
     const owner = kept[index] ? known[index] : undefined
     if (owner !== undefined && (!current || owner !== current.id)) {
       current = { id: owner, items: [], start: index }
       blocks.push(current)
     } else if (owner === undefined && !current) {
-      // a new or moved item above every kept one joins the first kept block
-      current = { id: keptAfter[index] ?? nextBlock.current++, items: [], start: index }
+      // new or moved items above every kept one: the first kept block while
+      // it has room, else a block of their own above it
+      const next = keptAfter[index]
+      // the items above the first kept one, which all come before it
+      const run = known.findIndex((_, i) => kept[i])
+      const id =
+        next !== undefined && (keptSize.get(next) ?? 0) + run <= capacity
+          ? next
+          : next === undefined
+            ? nextBlock.current++
+            : next - 1
+      current = { id, items: [], start: index }
       blocks.push(current)
     } else if (
       owner === undefined &&
       current &&
-      (current.items.length >= capacity || current.id < (sealedBelow.current ?? 0)) &&
-      current.id === nextBlock.current - 1 &&
-      keptAfter[index] === undefined
+      (current.items.length >= capacity || current.id < (sealedBelow.current ?? 0))
     ) {
-      // the last block is full or holds the first screen: open the next one
-      current = { id: nextBlock.current++, items: [], start: index }
-      blocks.push(current)
+      // the block is full or holds the first screen: open the next one
+      const id = between(current.id, keptAfter[index])
+      if (id !== null) {
+        current = { id, items: [], start: index }
+        blocks.push(current)
+      }
     }
     if (!current) continue
-    nextBlock.current = Math.max(nextBlock.current, current.id + 1)
-    assigned.set(key, current.id)
+    nextBlock.current = Math.max(nextBlock.current, Math.floor(current.id) + 1)
+    assigned.set(keyOf(item), current.id)
     current.items.push(item)
   }
   owners.current = assigned
-  if (sealedBelow.current === null && capacity !== Number.POSITIVE_INFINITY)
-    sealedBelow.current = nextBlock.current
+  if (sealedBelow.current === null && boxed) sealedBelow.current = nextBlock.current
 
   // the waiting items' estimated heights, each with the gap before it
   const sums = useMemo(() => {
@@ -307,8 +325,9 @@ export function DeferredList<T extends object>({
     const after = itemElements(parent, holder)
     const item = fromAbove ? after[before ? after.indexOf(before) + 1 : 0] : after.at(-1)
     if (!(item instanceof HTMLElement)) return
+    // the item's tab stops, as Tab itself would reach them
     const controls = [item, ...item.querySelectorAll<HTMLElement>('[data-focus-key]')].filter(
-      (element) => element.dataset.focusKey !== undefined,
+      (element) => element.dataset.focusKey !== undefined && element.tabIndex >= 0,
     )
     controls[fromAbove ? 0 : controls.length - 1]?.focus()
   }
@@ -335,7 +354,7 @@ export function DeferredList<T extends object>({
           items={block.items}
           render={node}
           box={
-            capacity === Number.POSITIVE_INFINITY
+            !boxed
               ? null
               : {
                   height: sums[block.start + block.items.length] - sums[block.start] - gap,
