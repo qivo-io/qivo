@@ -675,6 +675,16 @@ describe('deleting a task with archived subtasks', () => {
       'rule',
       PARENT_DELETED_SINCE,
     )
+    // a task this update gives the parent was never its subtask, so it keeps it
+    const stranger = await task(fx, { title: 'Stranger', archived_at: NOW })
+    const joined = await fx.t.mutation(internal.machine.rest.updateIssue, {
+      callerId: fx.agent.id,
+      access: 'write',
+      keyName: 'limits',
+      ref: key(stranger),
+      body: JSON.stringify({ archived: false, parent: key(parent) }),
+    })
+    expect(joined).toMatchObject({ archived: false, parent_id: parent.id })
     await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
     for (const kid of [first, second, third]) {
       expect((await row(fx.t, kid.id)).parent_id).toBeUndefined()
@@ -943,6 +953,10 @@ describe('the attachment, link and label limits', () => {
     ]) {
       await refused(write(), 'rule', IMAGE_NOT_ATTACHED)
     }
+    // an id in prose or in code shows no image, so it is no reference
+    const quoted = `See att:${theirs}, \`![photo](att:${theirs})\` and\n\`\`\`\n![photo](att:${theirs})\n\`\`\``
+    await saveDescription(fx, issue, quoted)
+    expect((await row(fx.t, issue.id)).description).toBe(quoted)
     // a reference the saved text already has, such as one to an image
     // deleted since, stays through a save of other text
     await fx.t.run(async (ctx) => {
@@ -973,6 +987,30 @@ describe('the attachment, link and label limits', () => {
       expect(await attachment(fx, gone)).toBeNull()
       expect(await fx.t.run((ctx) => ctx.storage.getUrl(bytes!))).toBeNull()
       expect((await attachment(fx, back))?.dropped_at).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('deletes a dropped image of a task restored from Deleted items after its day', async () => {
+    vi.useFakeTimers()
+    try {
+      const fx = await setup()
+      const issue = await task(fx, { title: 'Deleted with a dropped image' })
+      const image = await plantImage(fx, issue)
+      await saveDescription(fx, issue, `![a](att:${image})`)
+      await saveDescription(fx, issue, 'Without it')
+      await deleteTask(fx.t, fx, issue.id)
+      // the step its drop scheduled runs while the image is in Deleted items
+      vi.advanceTimersByTime(DROPPED_KEEP_MS + 1)
+      await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
+      await as(fx.t, fx.user).mutation(api.deletedItems.restore, {
+        org_id: fx.org.id,
+        ids: [(await itemFor(fx.t, issue.id)).id],
+      })
+      await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
+      expect((await row(fx.t, issue.id)).description).toBe('Without it')
+      expect(await attachment(fx, image)).toBeNull()
     } finally {
       vi.useRealTimers()
     }

@@ -1488,6 +1488,26 @@ describe('a single-task read of an archived group', () => {
     expect(whole.subtasks.map((t) => t.id)).toEqual(few)
   })
 
+  it('lists the first subtask of a group whose read has no index range left for it', async () => {
+    const fx = await setup(newT({ transactionLimits: true }))
+    // a reserve of every range Convex allows leaves the walk none
+    Object.assign(TASK_READ_RESERVE, { ranges: 4096 })
+    const group = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      archived_at: day(9),
+      title: 'Group',
+    })
+    const kids = await plantMany(fx, 3, {
+      project_id: fx.sub.id,
+      archived_at: day(9),
+      parent_id: group.id,
+    })
+    const { rest } = await reads(fx, group.id)
+    expect(rest).toMatchObject({ is_group: true, has_more_subtasks: true })
+    expect(rest.subtasks.map((t) => t.id)).toEqual(kids.slice(0, 1))
+  })
+
   it('reads and archives a group of hundreds of long subtasks within the real limits', async () => {
     const fx = await setup(newT({ transactionLimits: true }))
     const group = await plantIssue(fx.t, {

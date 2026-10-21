@@ -92,11 +92,12 @@ import {
   SUBTASK_WITH_SUBTASKS,
 } from '../lib/taskLimits'
 import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
+import { imageRefs } from '../lib/imageRefs'
 import { DESCRIPTION_TOO_LONG, plainText, TEXT_MAX } from '../lib/textLimits'
 import { inWorkingSet } from '../lib/workingSet'
 import { issueChanges, logActivity, machineDetail, narratedChange } from './activity'
 import { scheduleMarkClears } from './archiveMarks'
-import { IMAGE_NOT_ATTACHED, imageRefs, settleDescriptionImages } from './descriptionImages'
+import { IMAGE_NOT_ATTACHED, settleDescriptionImages } from './descriptionImages'
 import {
   assertExpected,
   BOOLEAN,
@@ -1334,6 +1335,10 @@ export type MachineUpdate = MachineNarration & {
   /** The update names the task's current parent, so a restore under it
    * that is full is refused with PARENT_FULL rather than leaving it. */
   keepParent?: boolean
+  /** An earlier write of the same update gave the task its parent, so a
+   * pending detach of that parent's subtasks never concerned it
+   * (restoreLeavesParent). */
+  parentChosen?: boolean
 }
 export type MachineMove = MachineNarration & { later?: LaterPeople; laterParent?: string | null }
 
@@ -1622,7 +1627,7 @@ export async function updateIssueCore(
   // parent; a machine restore that names that parent is refused
   const leaves =
     !('parent_id' in patch) && toggle === 'restored'
-      ? await restoreLeavesParent(ctx, issue)
+      ? await restoreLeavesParent(ctx, issue, a.machine?.parentChosen === true)
       : undefined
   if (leaves !== undefined && a.machine?.keepParent === true) throw rule(leaves)
   const leavesParent = leaves !== undefined
@@ -2446,15 +2451,18 @@ export const PARENT_DELETED_SINCE =
  * subtasks (model/deletedItems.ts detachArchivedChildren), whether that
  * parent is gone, as one in Deleted items is, or came back from Deleted
  * items before the steps reached the task. So no restored task keeps a
- * parent that is not there, and no restore undoes what a delete began. */
+ * parent that is not there, and no restore undoes what a delete began. A
+ * parent the same machine update just gave the task (`chosen`) was not its
+ * parent at that delete, so only a full one is left. */
 async function restoreLeavesParent(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
+  chosen = false,
 ): Promise<string | undefined> {
   if (issue.parent_id === undefined) return undefined
   const parent = await byId(ctx, 'issues', issue.parent_id)
   if (parent === null) return PARENT_DELETED_SINCE
-  if (issue.archived_at !== undefined) {
+  if (issue.archived_at !== undefined && !chosen) {
     const detach = await ctx.db
       .query('archived_detaches')
       .withIndex('by_parent', (q) =>

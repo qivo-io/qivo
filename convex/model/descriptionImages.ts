@@ -30,6 +30,7 @@ import { makeFunctionReference } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import { rule } from '../lib/functions'
+import { imageRefs } from '../lib/imageRefs'
 import { ATTACHMENT_MAX, ATTACHMENTS_FULL } from '../lib/taskLimits'
 import { logActivity, signedDetail } from './activity'
 
@@ -55,13 +56,17 @@ export const IMAGE_NOT_ATTACHED =
 
 const reapRef = makeFunctionReference<'mutation', { id: string }, null>('files:reapDroppedImage')
 
-/* An attachment reference in a description, `att:` and a lowercase uuid,
- * as the app's editor writes it (src/lib/md.ts). */
-const IMAGE_REF = /att:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/g
-
-/** The attachment ids that `text` names as `att:<id>`. */
-export const imageRefs = (text: string): Set<string> =>
-  new Set(Array.from(text.matchAll(IMAGE_REF), (m) => m[1]))
+/** Schedules the step that deletes the image `id`, dropped at `droppedAt`,
+ * once DROPPED_KEEP_MS have passed since (reapDroppedImage), or at once
+ * when they have. */
+export async function scheduleImageReap(
+  ctx: MutationCtx,
+  id: string,
+  droppedAt: string,
+): Promise<void> {
+  const due = Math.max(0, Date.parse(droppedAt) + DROPPED_KEEP_MS - Date.now())
+  await ctx.scheduler.runAfter(due, reapRef, { id })
+}
 
 /* Deletes a dropped image with its bytes. The byte fence
  * (model/attachments.ts storageIdInUse) gives every file one referent, so
@@ -130,7 +135,7 @@ export async function settleDescriptionImages(
     if (!removed && nowMs - Date.parse(row.created_at) < ORPHAN_AFTER_MS) continue
     await ctx.db.patch(row._id, { dropped_at: now })
     dropped.set(row.id, now)
-    await ctx.scheduler.runAfter(DROPPED_KEEP_MS, reapRef, { id: row.id })
+    await scheduleImageReap(ctx, row.id, now)
     // an image no saved text showed leaves no history of its own
     if (removed) await log(row, 'removed an image from')
   }

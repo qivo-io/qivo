@@ -117,6 +117,7 @@ import { DELETE_REASON_MAX, TEXT_MAX } from '../lib/textLimits'
 import { insertActivity, logActivity } from './activity'
 import { storageIdInUse } from './attachments'
 import { estimateDocumentBytes } from './demoMetrics'
+import { scheduleImageReap } from './descriptionImages'
 import { assertCanEdit, clearParentRemaining, detachChild, sameTopLevel, TITLE_MAX } from './issues'
 import { linksFullAt } from './links'
 import {
@@ -2098,6 +2099,9 @@ async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
       uploaded_by: await keptProfile(run, r.doc.uploaded_by),
       task_archived: undefined,
     })
+    // the step its drop scheduled found it here, so a dropped image gets
+    // its step again, due when the drop's was (model/descriptionImages.ts)
+    if (r.doc.dropped_at !== undefined) await scheduleImageReap(run.ctx, r.doc.id, r.doc.dropped_at)
   } else throw new Error(`A restore cannot write a ${r.table} row back here`)
   await run.ctx.db.delete(row._id)
 }

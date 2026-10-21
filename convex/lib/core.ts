@@ -1417,7 +1417,9 @@ async function subtreeIndex(
     throw new Error('an archived task walks its subtree under a ceiling')
   }
   const index = new Map<string, Doc<'issues'>[]>()
-  const stopped: Walk = { children: index, whole: false, rootWhole: true }
+  // a walk that stops has read the root's own subtasks whole once their
+  // range is in the index, unless it stopped inside that range
+  const stopped = (): Walk => ({ children: index, whole: false, rootWhole: index.has(root.id) })
   const guard = ceiling === undefined ? null : ceilingGuard(ctx, ceiling)
   const seen = new Set<string>([root.id])
   let frontier = [root.id]
@@ -1426,7 +1428,7 @@ async function subtreeIndex(
     // a level that cannot be read whole ends the walk before its first read
     reads += frontier.length
     if (ceiling !== undefined) {
-      if (frontier.length > (await rangesLeft(ctx, ceiling))) return stopped
+      if (frontier.length > (await rangesLeft(ctx, ceiling))) return stopped()
     } else if (reads > SUBTREE_WALK.reads) {
       // the root's own subtasks are read first, so they are in the index
       return {
@@ -1437,9 +1439,7 @@ async function subtreeIndex(
     }
     const next: string[] = []
     for (const id of frontier) {
-      if (guard !== null && !(await guard.range())) {
-        return id === root.id ? { ...stopped, rootWhole: false } : stopped
-      }
+      if (guard !== null && !(await guard.range())) return stopped()
       const kids: Doc<'issues'>[] = []
       const read =
         root.archived_at === undefined
@@ -1452,9 +1452,9 @@ async function subtreeIndex(
       for await (const kid of read) {
         kids.push(kid)
         if (guard !== null && !(await guard.document())) {
-          if (id !== root.id) return stopped
+          if (id !== root.id) return stopped()
           index.set(id, kids)
-          return { ...stopped, rootWhole: false }
+          return { children: index, whole: false, rootWhole: false }
         }
       }
       index.set(id, kids)
@@ -2152,6 +2152,8 @@ export async function applyTaskUpdate(
   if ('assignee_id' in a.patch) later.assignee_id = a.patch.assignee_id
   if ('reviewer_id' in a.patch) later.reviewer_id = a.patch.reviewer_id
   let task = a.issue
+  // whether the parent step below gives the task a parent it did not have
+  let parentChosen = false
   if (a.destination !== undefined) {
     task = await moveIssueCore(ctx, {
       me,
@@ -2171,6 +2173,7 @@ export async function applyTaskUpdate(
       now,
       machine: { provenance, appGrammar: true, later },
     })
+    parentChosen = a.parent !== null
   }
   // one row write, one notify fan-out and one activity row for the fields
   // and the toggle (updateIssueCore's machine seam)
@@ -2185,6 +2188,7 @@ export async function applyTaskUpdate(
         archive: a.archive,
         // naming the current parent asks to keep it (model/issues.ts)
         keepParent: a.parent !== undefined && a.parent !== null && a.parent === task.parent_id,
+        parentChosen,
       },
     })
   }

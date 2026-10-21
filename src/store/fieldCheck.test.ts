@@ -343,6 +343,28 @@ describe('the field check in the store', () => {
     )
   })
 
+  it('runs keepDraft on a rule refusal too, so the refused draft stays unsaved', async () => {
+    const kept: unknown[] = []
+    void P.updateIssue(
+      key('task-1'),
+      { description: 'My text ![photo](att:0b7d6f4e-1c2a-4d3b-9e8f-7a6b5c4d3e2f)' },
+      {
+        keepDraft: (shown) => {
+          kept.push(shown)
+          return true
+        },
+      },
+    )
+    latest().reject(
+      new ConvexError({
+        code: 'rule',
+        message: 'the description shows an image that is not attached to this task',
+      }),
+    )
+    await settle()
+    expect(kept).toEqual(['The old text'])
+  })
+
   it("says a field rule the server refuses in the app's words", async () => {
     const refuse = (message: string) => new ConvexError({ code: 'rule', message })
     P.updateIssue(key('task-1'), { remaining: 120_000 })

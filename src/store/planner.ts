@@ -26,6 +26,7 @@ import { joinLists } from '../../convex/lib/arrayLimit'
 import { AVATAR_COLORS } from '../../convex/lib/avatarColors'
 import { BILLING_READ_ONLY, deletionReadOnly } from '../../convex/lib/billingAccess'
 import { descriptionForm, FIELD_CHANGED, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
+import { imageRefs } from '../../convex/lib/imageRefs'
 import type { FieldChange } from '../../convex/lib/functions'
 import { TOO_MANY_MENTIONS, tooManyMentions } from '../../convex/lib/mentions'
 import { roundTenths } from '../../convex/lib/numbers'
@@ -1406,7 +1407,9 @@ type SendOptions<R> = {
       editor that keeps the person's draft, with the value of the write's
       first `over` field now on screen. It answers false when the editor
       has moved on and keeps nothing, and true when it keeps the draft,
-      which the notice that shows after it then says. */
+      which the notice that shows after it then says. Any other refusal,
+      such as a description image the server refuses, runs it too, after
+      the toast, so the refused draft stays unsaved for another try. */
   keepDraft?: (shown: unknown) => boolean
 }
 
@@ -1555,6 +1558,10 @@ function start<M extends FunctionReference<'mutation'>, T>(
         } else {
           guarded(() => onError?.(error))
           guarded(() => settleRefused(layer))
+          // a refused draft stays, unsaved, rather than reading as saved
+          // and giving way to the stored text once its editor blurs
+          if (o.keepDraft && error instanceof ConvexError)
+            guarded(() => o.keepDraft?.(shownOf(o.over)))
         }
         guarded(() => o.onSettled?.())
       }
@@ -3967,10 +3974,6 @@ function patchIssueRow(uuid: string, db: IssueWirePatch, at: string) {
    (`created.num`) or else the next one free in its organization's counter,
    which it raises. A task created under a parent clears the parent's own
    hours, as the server does. */
-/* The attachment ids a description names as `att:<id>`. */
-const imageRefs = (text: string) =>
-  new Set(Array.from(text.matchAll(/att:([0-9a-f-]{36})/g), (m) => m[1]))
-
 /* Paints what the server's description save does to task `uuid`'s images
    (convex/model/descriptionImages.ts settleDescriptionImages): an inline
    image the new text takes out is dropped at `at`, so the attachment cap
