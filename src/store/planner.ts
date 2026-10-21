@@ -363,8 +363,8 @@ let threadSubscription = 0
    server's answer before it shows anyway. */
 const HELD_FAILURE_MS = 5000
 /* The last thread the comments subscription delivered, the anchor the
-   thread's rows are built from (buildThreadRows), as serverSnap is for the
-   rest. null = nothing delivered yet for the watched issue. It is the
+   thread's rows are built from (buildThreadRows), as the base
+   (store/workspaceBase.ts) is for the rest. null = nothing delivered yet for the watched issue. It is the
    thread's live window, its newest comments, oldest first in thread order. */
 let commentsSnap: Row<'comments'>[] | null = null
 /* The watched task's history from the same delivery as commentsSnap, its
@@ -1170,8 +1170,9 @@ export function textRefusal(kind: keyof typeof TEXT_TOO_LONG, text: string): str
 /* --- the write path ---------------------------------------------------------
    Every store write goes through send() or sendAwaited(), each with its own
    optimistic layer (store/layers.ts). The rows on screen are always built
-   the same way: the server's last snapshot delivery (serverSnap) and the
-   watched thread (commentsSnap, olderComments, eventsSnap), then every live
+   the same way: the server's rows of the last snapshot delivery painted
+   (the base, store/workspaceBase.ts, which a repaint brings up to the
+   newest delivery, rowMap.ts beginRepaint) and the watched thread (commentsSnap, olderComments, eventsSnap), then every live
    layer painted over them in order (repaint). So:
 
    - A refused write takes away only its own layer, and every other change
@@ -1195,7 +1196,7 @@ const layers = createLayers()
 /* Whether the newest snapshot result was a live good delivery. Convex hands
    a delivery that holds a write to the listeners before the write resolves,
    so a write accepted while this holds, with a delivery since it was sent,
-   is already in serverSnap. */
+   is already in the newest delivery. */
 let snapshotCurrent = false
 /* Live good deliveries counted since the store started, of the snapshot and
    of the watched thread. A layer remembers both when it is sent. */
@@ -1604,8 +1605,9 @@ function settleRefused(layer: Layer) {
    must be exactly the anchors with every live layer painted over them, and
    painting every layer once more with the clock an hour ahead must change
    nothing but server stamps, and write no time it read from the clock (the
-   paint rules in store/layers.ts). Skipped while a part is owed or before
-   the first load. Leaves the rows as they were. */
+   paint rules in store/layers.ts). Skipped while a part is owed, while a
+   delivery waits to be painted (its apply cannot be put back) or before the
+   first load. Leaves the rows as they were. */
 let checkingLayers = false
 /* Whether the test-only checks (checkLayers, checkTasks) are off, while a
    test measures what a step costs as it would outside tests. */
@@ -1617,7 +1619,8 @@ function checkLayers() {
     owed.workspace ||
     owed.thread ||
     !PLANNER.loaded ||
-    !serverSnap
+    !serverSnap ||
+    base.staging()
   )
     return
   checkingLayers = true
@@ -1671,8 +1674,8 @@ const SERVER_STAMPS = new Set([
   'archived_at',
   'sync_at',
 ])
-/* Snapshot fields that only feed a row section's set (buildRows), where
-   false means the same as absent. */
+/* Snapshot fields that only feed a row section's set (the base's flags,
+   store/workspaceBase.ts), where false means the same as absent. */
 const SET_FLAGS = new Set(['has_hidden_subtasks', 'has_hidden_parent'])
 
 /** Every row section and inbox counter in one canonical form: map entries,
@@ -1768,6 +1771,13 @@ export const __layerProbe = STRICT_LAYERS
       writeServerRow() {
         const issue = rows.issues.values().next().value
         if (issue) issue.title = `${issue.title}!`
+      },
+      /** Changes a task's view model behind the task index and rebuilds,
+          which the full-rebuild check (checkTasks) refuses. */
+      corruptTask() {
+        const task = tasks.issues()[0]
+        if (task) task.title = `${task.title}!`
+        rebuild()
       },
       /** Paints a layer that reads the clock, which emits. */
       paintClock() {
@@ -3104,9 +3114,10 @@ function rebuildComments() {
     !PLANNER.commentsLoaded || historyStart ? 'none' : historyLoad === 'idle' ? 'more' : historyLoad
 }
 
-/** Rebuilds every view model from the rows (rebuildChanged), or reshapes
-    the tasks from scratch with `full`, as a new day, a moved week grid or
-    another identity always does. */
+/** Rebuilds every view model from the rows. The tasks reshape only where
+    the rows changed since the last rebuild (store/taskIndex.ts update),
+    and from scratch (full) with `full`, a new day, a moved week grid,
+    another identity or a change too wide for one update. */
 function rebuild(now = new Date(), full = false) {
   const P = PLANNER
   const gridBefore = P.TIMELINE_START?.getTime()
@@ -3158,7 +3169,13 @@ function rebuild(now = new Date(), full = false) {
   P.users = keepItems(
     P.users,
     [...rows.profiles.values()]
-      .sort((a, b) => byStamp(a.created_at, a.id, b.created_at, b.id))
+      // people created together, as a seeded workspace's are, by name
+      .sort(
+        (a, b) =>
+          byStamp(a.created_at, '', b.created_at, '') ||
+          a.name.localeCompare(b.name) ||
+          byStamp('', a.id, '', b.id),
+      )
       .map((u) =>
         shapeUser(
           u,
@@ -8409,8 +8426,11 @@ export const PLANNER = {
    left. The last snapshot stays on screen and shared edits pause until a
    later snapshot arrives and reaches the screen. */
 
-/* The last snapshot the server delivered, never a later null: the anchor the
-   rows are built from, with every live layer painted over it (repaint). */
+/* The last snapshot the server delivered, never a later null, which the
+   store only asks whether there is one. Its rows are staged in the base
+   (store/workspaceBase.ts), which a repaint applies before it paints every
+   live layer over them, so they run ahead of the rows on screen until
+   then. */
 let serverSnap: Snapshot | null = null
 let snapUnsub: (() => void) | null = null
 let cancelDemoBoot: (() => void) | null = null

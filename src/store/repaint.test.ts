@@ -345,25 +345,31 @@ describe('view model identity across repaints', () => {
     expect(emits).toBe(shown + 1)
   })
 
-  it('lists people with the same creation time by id, in whatever order they arrive', () => {
-    const person = (id: string): Snapshot['profiles'][number] => ({
+  it('lists people with the same creation time by name, then id, in whatever order they arrive', () => {
+    const person = (id: string, name: string): Snapshot['profiles'][number] => ({
       ...snapshot.profiles[0],
       id,
       auth_user_id: `account-${id}`,
-      name: `Person ${id}`,
+      name,
     })
     deliverChange((snap) => {
-      snap.profiles.push(person('person-b'), person('person-a'))
+      snap.profiles.push(
+        person('person-d', 'Sam'),
+        person('person-a', 'Zed'),
+        person('person-c', 'Sam'),
+        person('person-b', 'Amy'),
+      )
     })
     const order = () =>
       P()
         .users.map((user) => user.id)
         .filter((id) => id.startsWith('person-'))
-    expect(order()).toEqual(['person-a', 'person-b'])
+    const expected = ['person-b', 'person-c', 'person-d', 'person-a']
+    expect(order()).toEqual(expected)
     deliverChange((snap) => {
       snap.profiles.reverse()
     })
-    expect(order()).toEqual(['person-a', 'person-b'])
+    expect(order()).toEqual(expected)
   })
 
   it('lists subtasks by number, in whatever order they arrive', () => {

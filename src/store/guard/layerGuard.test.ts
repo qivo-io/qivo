@@ -56,6 +56,7 @@ const PAINT_HELPERS = new Set([
   // the probes below break the rule on purpose
   'writeOutside',
   'writeServerRow',
+  'corruptTask',
 ])
 /** Whether call `node` is a Convex write: `.mutation(` or `.action(` on an
     object whose text names `convex`, however it is written (convex?.mutation,
@@ -269,6 +270,11 @@ describe('the store catches a paint that breaks the rules', () => {
   it('throws when a row changes outside a layer', async () => {
     const probe = await boot()
     expect(() => probe.writeOutside()).toThrow('rows changed outside a layer')
+  })
+
+  it('throws when the tasks kept up to date differ from a full rebuild', async () => {
+    const probe = await boot()
+    expect(() => probe.corruptTask()).toThrow('differ from a full rebuild')
   })
 
   it("throws when code writes into the server's rows outside a paint", async () => {

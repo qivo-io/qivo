@@ -86,4 +86,75 @@ describe('the workspace base', () => {
     base.stage(structuredClone(snap))
     expect(base.apply()).toEqual({})
   })
+
+  it('reports only what several deliveries before one apply changed in the end', () => {
+    const base = createWorkspaceBase()
+    const snap = snapshotOf(['a', 'b'])
+    base.stage(structuredClone(snap))
+    base.apply()
+    const a = base.map('issues').get('a')
+    // a renamed and back, c added and gone again, b renamed for good
+    const renamed = structuredClone(snap)
+    renamed.issues[0].title = 'Renamed'
+    renamed.issues[1].title = 'Renamed too'
+    renamed.issues.push({ ...renamed.issues[1], id: 'c', num: 3 })
+    base.stage(structuredClone(renamed))
+    const back = structuredClone(renamed)
+    back.issues[0].title = snap.issues[0].title
+    back.issues.pop()
+    base.stage(structuredClone(back))
+    const changes = base.apply()
+    expect([...(changes?.issues?.keys() ?? [])]).toEqual(['b'])
+    expect(base.map('issues').get('a')?.title).toBe(snap.issues[0].title)
+    expect(base.map('issues').has('c')).toBe(false)
+    expect(a?.title).toBe(snap.issues[0].title)
+  })
+
+  it("keys an owner's hidden load rows by their place, and keeps a new order across deliveries", () => {
+    const base = createWorkspaceBase()
+    const snap = snapshotOf(['a', 'b'])
+    const hidden = (remaining: number) => ({ ...snap.orgLoad[0], issue_id: null, remaining })
+    snap.orgLoad = [snap.orgLoad[0], hidden(1), hidden(2), snap.orgLoad[1]]
+    base.stage(structuredClone(snap))
+    base.apply()
+    // the first hidden row goes: the second takes its place
+    const fewer = structuredClone(snap)
+    fewer.orgLoad.splice(1, 1)
+    base.stage(structuredClone(fewer))
+    expect(base.apply()?.orgLoad).toBeDefined()
+    expect(base.list('orgLoad').map((row) => row.remaining)).toEqual([4, 2, 4])
+    // a new order staged twice before one apply is still a change
+    const moved = structuredClone(fewer)
+    moved.orgLoad.reverse()
+    base.stage(structuredClone(moved))
+    base.stage(structuredClone(moved))
+    expect(base.apply()?.orgLoad).toBeDefined()
+    expect(base.list('orgLoad').map((row) => row.issue_id)).toEqual(['b', null, 'a'])
+  })
+
+  it("gives a new flag set when a task's hidden subtasks come and go, and keeps the old one as it was", () => {
+    const base = createWorkspaceBase()
+    const snap = snapshotOf(['a', 'b'])
+    base.stage(structuredClone(snap))
+    base.apply()
+    const before = base.flags('hiddenSubtaskParents')
+    snap.issues[0].has_hidden_subtasks = true
+    base.stage(structuredClone(snap))
+    base.apply()
+    const on = base.flags('hiddenSubtaskParents')
+    expect([...on]).toEqual(['a'])
+    expect(on).not.toBe(before)
+    expect(before.size).toBe(0)
+    snap.issues[0].has_hidden_subtasks = false
+    base.stage(structuredClone(snap))
+    base.apply()
+    expect(base.flags('hiddenSubtaskParents').size).toBe(0)
+    expect([...on]).toEqual(['a'])
+    // a change that leaves the flags alone keeps the same set
+    const off = base.flags('hiddenSubtaskParents')
+    snap.issues[1].title = 'Renamed'
+    base.stage(structuredClone(snap))
+    base.apply()
+    expect(base.flags('hiddenSubtaskParents')).toBe(off)
+  })
 })

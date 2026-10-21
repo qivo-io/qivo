@@ -260,7 +260,8 @@ export function createWorkspaceRows(base: WorkspaceBase) {
       if (passes > 0) dirty.flags = true
       return own
     }
-    const server = base[name] as Set<string>
+    // outside a paint nothing may change it (store/layers.ts), as the rows
+    const server = base.flags(name) as Set<string>
     if (passes === 0) return server
     noteFlags(name, server)
     const copy = new Set(server)
@@ -338,9 +339,10 @@ export function createWorkspaceRows(base: WorkspaceBase) {
       for (const [name, own] of flagOverlay) noteFlags(name, own)
       flagOverlay.clear()
       const lists = new Map(LISTED_SECTIONS.map((name) => [name, base.list(name)]))
+      // the Sets an apply replaces when their tasks change
       const flagsBefore = {
-        hiddenSubtaskParents: new Set(base.hiddenSubtaskParents),
-        hiddenParentTasks: new Set(base.hiddenParentTasks),
+        hiddenSubtaskParents: base.flags('hiddenSubtaskParents'),
+        hiddenParentTasks: base.flags('hiddenParentTasks'),
       }
       const changes = base.apply()
       if (!changes) return null
@@ -355,9 +357,8 @@ export function createWorkspaceRows(base: WorkspaceBase) {
         }
         for (const [key, before] of changed) host.touch(name as KeyedName, key, before)
       }
-      if (changes.issues?.size)
-        for (const name of ['hiddenSubtaskParents', 'hiddenParentTasks'] as const)
-          if (!sameData(flagsBefore[name], base[name])) noteFlags(name, flagsBefore[name])
+      for (const name of ['hiddenSubtaskParents', 'hiddenParentTasks'] as const)
+        if (flagsBefore[name] !== base.flags(name)) noteFlags(name, flagsBefore[name])
       return changes
     },
 

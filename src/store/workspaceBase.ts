@@ -171,8 +171,12 @@ export function createWorkspaceBase() {
   // the applied rows: the keyed sections by key, every section as a list
   const maps = new Map<KeyedName, Map<string, object>>()
   const lists = new Map<SectionName, readonly object[]>()
-  const hiddenSubtaskParents = new Set<string>()
-  const hiddenParentTasks = new Set<string>()
+  // the tasks flagged has_hidden_subtasks and has_hidden_parent, each Set
+  // replaced, never changed, so one handed out keeps what it held
+  const flagged = {
+    hiddenSubtaskParents: new Set<string>() as ReadonlySet<string>,
+    hiddenParentTasks: new Set<string>() as ReadonlySet<string>,
+  }
   let scalars: Scalars | null = null
   let stagedScalars: Scalars | null = null
 
@@ -182,8 +186,8 @@ export function createWorkspaceBase() {
       lists.set(name, Object.freeze([]))
     }
     for (const name of KEYED_SECTIONS) maps.set(name, new Map())
-    hiddenSubtaskParents.clear()
-    hiddenParentTasks.clear()
+    flagged.hiddenSubtaskParents = new Set()
+    flagged.hiddenParentTasks = new Set()
     scalars = null
     stagedScalars = null
   }
@@ -295,14 +299,21 @@ export function createWorkspaceBase() {
           if (old === undefined ? now !== undefined : now === undefined || !sameRow(old, now))
             changed.set(key, old)
         }
-        if (name === 'issues')
+        if (name === 'issues' && changed.size) {
+          const next = {
+            hiddenSubtaskParents: new Set(flagged.hiddenSubtaskParents),
+            hiddenParentTasks: new Set(flagged.hiddenParentTasks),
+          }
           for (const key of changed.keys()) {
             const row = (map as Map<string, RowOf<'issues'>>).get(key)
-            if (row?.has_hidden_subtasks) hiddenSubtaskParents.add(key)
-            else hiddenSubtaskParents.delete(key)
-            if (row?.has_hidden_parent) hiddenParentTasks.add(key)
-            else hiddenParentTasks.delete(key)
+            if (row?.has_hidden_subtasks) next.hiddenSubtaskParents.add(key)
+            else next.hiddenSubtaskParents.delete(key)
+            if (row?.has_hidden_parent) next.hiddenParentTasks.add(key)
+            else next.hiddenParentTasks.delete(key)
           }
+          for (const flag of ['hiddenSubtaskParents', 'hiddenParentTasks'] as const)
+            if (!sameData(next[flag], flagged[flag])) flagged[flag] = next[flag]
+        }
         // a list that only changed its order changed too (orgLoad sums in
         // delivery order)
         if (changed.size || state.moved) changes[name] = changed
@@ -320,10 +331,13 @@ export function createWorkspaceBase() {
     list<S extends SectionName>(name: S): readonly RowOf<S>[] {
       return lists.get(name) as readonly RowOf<S>[]
     },
-    /** The tasks the applied delivery flags with has_hidden_subtasks. */
-    hiddenSubtaskParents: hiddenSubtaskParents as ReadonlySet<string>,
-    /** The tasks the applied delivery flags with has_hidden_parent. */
-    hiddenParentTasks: hiddenParentTasks as ReadonlySet<string>,
+    /** The tasks the applied delivery flags with has_hidden_subtasks
+        (hiddenSubtaskParents) or has_hidden_parent (hiddenParentTasks). A
+        Set handed out never changes; an apply that changes it gives a new
+        one. */
+    flags: (name: 'hiddenSubtaskParents' | 'hiddenParentTasks') => flagged[name],
+    /** Whether a delivery is staged that no apply took yet. */
+    staging: () => stagedScalars !== null,
     /** The applied delivery's values outside the sections, or null before
         the first. */
     scalars: (): Scalars | null => scalars,
