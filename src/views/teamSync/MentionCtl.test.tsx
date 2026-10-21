@@ -28,8 +28,8 @@ type Planner = typeof import('../../store/planner')['P']
 type Answer = { resolve: (value: null) => void; reject: (reason: unknown) => void }
 
 const NOW = '2026-09-14T08:00:00.000Z'
-// A `rule` refusal the server answers a post with (convex/lib/textLimits.ts).
-const RULE = 'a comment must be at most 20,000 characters'
+// A sample `rule` refusal of a post. The app toasts such a sentence as sent.
+const RULE = 'this sample rule refuses the comment; try again later'
 
 let P: Planner
 let card: typeof import('./SyncCard')
@@ -170,7 +170,7 @@ describe('the Team sync @ window', () => {
     expect(button('Cancel').disabled).toBe(true)
     await act(async () => writes[0].reject(new ConvexError({ code: 'rule', message: RULE })))
     expect(window.showToast).toHaveBeenCalledWith(
-      expect.stringContaining('A comment must be at most 20,000 characters'),
+      expect.stringContaining('This sample rule refuses the comment'),
       'error',
     )
     expect(windowOpen()).toBe(true)

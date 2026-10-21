@@ -32,8 +32,8 @@ type Answer = { resolve: (value: null) => void; reject: (reason: unknown) => voi
 
 const START = Date.parse('2026-09-14T08:00:00.000Z')
 const at = (minute: number) => new Date(START + minute * 60_000).toISOString()
-// A `rule` refusal the server answers a post with (convex/lib/textLimits.ts).
-const RULE = 'a comment must be at most 20,000 characters'
+// A sample `rule` refusal of a post. The app toasts such a sentence as sent.
+const RULE = 'this sample rule refuses the comment; try again later'
 
 let P: Planner
 let detail: Detail
@@ -221,7 +221,7 @@ describe('comment drafts in the task window', { timeout: 20_000 }, () => {
     expect(button('Discard changes').disabled).toBe(true)
     await act(async () => writes[0].answer.reject(new ConvexError({ code: 'rule', message: RULE })))
     expect(window.showToast).toHaveBeenCalledWith(
-      expect.stringContaining('A comment must be at most 20,000 characters'),
+      expect.stringContaining('This sample rule refuses the comment'),
       'error',
     )
     expect(thread()).toEqual(['Check 1', 'Check 2', 'Check 3'])
@@ -321,7 +321,7 @@ describe('comment drafts in the task window', { timeout: 20_000 }, () => {
     expect(window.showToast).not.toHaveBeenCalled()
     await act(async () => writes[0].answer.reject(new ConvexError({ code: 'rule', message: RULE })))
     expect(window.showToast).toHaveBeenCalledWith(
-      expect.stringContaining('A comment must be at most 20,000 characters'),
+      expect.stringContaining('This sample rule refuses the comment'),
       'error',
     )
     expect(window.showToast).toHaveBeenLastCalledWith('Unsaved comment discarded', 'error')

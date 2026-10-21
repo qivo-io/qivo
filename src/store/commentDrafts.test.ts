@@ -29,8 +29,8 @@ type Thread = {
 }
 
 const START = Date.parse('2026-09-14T08:00:00.000Z')
-// A `rule` refusal the server answers a post with (convex/lib/textLimits.ts).
-const RULE = 'a comment must be at most 20,000 characters'
+// A sample `rule` refusal of a post. The app toasts such a sentence as sent.
+const RULE = 'this sample rule refuses the comment; try again later'
 
 /* What a comment's writer learns from the store, and what the thread shows
    when its subscription fails. Writes and thread deliveries are answered by
@@ -190,7 +190,7 @@ describe('comment drafts and a failed thread in the store', () => {
       writes[0].answer.reject(new ConvexError({ code: 'rule', message: RULE }))
       expect(await saved).toBe(false)
       expect(toast).toHaveBeenCalledWith(
-        expect.stringContaining('A comment must be at most 20,000 characters'),
+        expect.stringContaining('This sample rule refuses the comment'),
         'error',
       )
       expect(bodies()).toEqual(['#1', '#2', '#3'])
