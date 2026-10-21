@@ -18,6 +18,7 @@ import {
   MOVE_SUBTREE_HOLDER_RULE,
   MOVE_SUBTREE_MAX,
   MOVE_SUBTREE_TOO_LARGE,
+  MOVE_TOO_LARGE,
   parentChainCheck,
   SUBTASK_PROJECT_RULE,
   SUBTREE_ROOM,
@@ -516,19 +517,19 @@ describe('a move, archive or parent change too large for one transaction', () =>
     await crowdedRoom(4, async () => {
       // each walk of the root's three subtasks checks once before its range
       // and once after each row, so the third row finds the transaction full
-      for (const change of [
+      for (const [change, sentence] of [
         // a move within TBED, for the subtasks' holders
-        () => appMove(t, f, root.id, f.sub2.id),
+        [() => appMove(t, f, root.id, f.sub2.id), MOVE_TOO_LARGE],
         // a new subtask, for the count of the parent's subtasks
-        () => appUpdate(t, f, newKid.id, { parent_id: root.id }),
+        [() => appUpdate(t, f, newKid.id, { parent_id: root.id }), SUBTREE_TOO_LARGE],
         // an archive, for the subtasks it archives with the task
-        () => archive(root.id),
+        [() => archive(root.id), SUBTREE_TOO_LARGE],
         // a move to another top-level project checks before each subtask it
         // carries
-        () => appMove(t, f, carrier.id, backend.id),
-      ]) {
+        [() => appMove(t, f, carrier.id, backend.id), MOVE_TOO_LARGE],
+      ] as const) {
         const r = await expectRefusal(change(), 'rule')
-        expect(r.data.message).toBe(SUBTREE_TOO_LARGE)
+        expect(r.data.message).toBe(sentence)
       }
     })
     expect(await allIssues(t, f.org.id)).toEqual(before)
@@ -629,7 +630,7 @@ describe('a move, archive or parent change too large for one transaction', () =>
       async () => {
         // a move walks the subtasks for their holders
         const r = await expectRefusal(appMove(t, f, long.id, f.sub2.id), 'rule')
-        expect(r.data.message).toBe(SUBTREE_TOO_LARGE)
+        expect(r.data.message).toBe(MOVE_TOO_LARGE)
         await appMove(t, f, short.id, f.sub2.id)
       },
       6 * 1024,

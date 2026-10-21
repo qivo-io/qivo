@@ -153,7 +153,11 @@ describe('the write gate inside the task cores', () => {
         now: NOW,
       })
       const archived = await archiveIssueCore(ctx, { me: f.guest, issue: renamed, now: NOW })
-      const restored = await unarchiveIssueCore(ctx, { me: f.guest, issue: archived, now: NOW })
+      const { after: restored } = await unarchiveIssueCore(ctx, {
+        me: f.guest,
+        issue: archived,
+        now: NOW,
+      })
       expect(restored.archived_at).toBeUndefined()
       const comment = await postComment(ctx, {
         issue: restored,

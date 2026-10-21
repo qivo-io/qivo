@@ -65,7 +65,7 @@ import {
   orgQuery,
   rule,
 } from './lib/functions'
-import { SUBTASK_MAX } from './lib/taskLimits'
+import { PARENT_FULL, SUBTASK_MAX } from './lib/taskLimits'
 import { ARCHIVED_SEARCH_MAX } from './lib/textLimits'
 import { postArchiveReason } from './model/comments'
 import { cleanReason, moveTasksToTrash } from './model/deletedItems'
@@ -81,7 +81,7 @@ import {
   updateIssueCore,
   vTaskExpected,
 } from './model/issues'
-import { addLinkCore, removeLinkCore, vTaskLinkKind } from './model/links'
+import { addLinkCore, removeLinkCore, storedLink, vTaskLinkKind } from './model/links'
 import { followTask, subscribeToIssue, unfollowTask } from './model/messages'
 
 type MeCtx = QueryCtx & { me: Doc<'profiles'> }
@@ -356,6 +356,40 @@ export const createParent = orgMutation({
   },
 })
 
+/* ---------------------------------------------------- create linked task
+ * P.createLinked, the Link picker's Create new linked task: a new task
+ * `new_id` titled `title` in task `id`'s sub-project, and the link `link_id`
+ * of `kind` as seen from task `id` between the two, in one transaction. A
+ * refused link, such as to a task whose LINK_MAX links include tasks the app
+ * cannot see, rolls the new task back too, so no unlinked task is left.
+ * Both writes run their usual cores and checks. Answers the new task. */
+export const createLinked = orgMutation({
+  args: {
+    id: v.string(),
+    new_id: v.string(),
+    link_id: v.string(),
+    title: v.string(),
+    kind: vTaskLinkKind,
+  },
+  handler: async (ctx, { id, new_id, link_id, title, kind }) => {
+    const now = new Date().toISOString()
+    const issue = await myIssue(ctx, id)
+    await assertWritable(ctx, issue.project_id)
+    const created = await createIssueCore(ctx, {
+      me: ctx.me,
+      args: { id: new_id, project_id: issue.project_id, title },
+      now,
+    })
+    await addLinkCore(ctx, {
+      me: ctx.me,
+      id: link_id,
+      ...storedLink(issue.id, kind, created.id),
+      now,
+    })
+    return await pubFor(ctx, ctx.me, created)
+  },
+})
+
 /* ------------------------------------------------------------------- move
  * P.moveIssue. REST and MCP move through the same moveIssueCore.
  * 'member' on BOTH ends, checked before moveIssueCore's guards as create
@@ -450,24 +484,29 @@ export const archive = orgMutation({
 /* -------------------------------------------------------------- unarchive
  * P.unarchiveIssue awaits it. A refusal toasts "Couldn't restore." and then
  * the refusal sentence. The snapshot pulls the restored rows back in
- * reactively. `left_parent` says the task came back as a top-level task,
- * because its parent already had SUBTASK_MAX active subtasks
- * (model/issues.ts unarchiveIssueCore), so the app can tell the person. */
+ * reactively. `left_parent` says the task came back as a top-level task
+ * beside a parent that is there (model/issues.ts unarchiveIssueCore), so the
+ * app can tell the person why: 'full' when the parent already had
+ * SUBTASK_MAX active subtasks, 'deleted' when the parent's delete after the
+ * task was archived still had to detach it, though the parent came back
+ * from Deleted items since. A parent that is gone (in Deleted items) was
+ * left as its delete leaves every subtask, so it answers false. */
 export const unarchive = orgMutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
     const now = new Date().toISOString()
     const issue = await myIssue(ctx, id)
     await assertWritable(ctx, issue.project_id)
-    const after = await unarchiveIssueCore(ctx, { me: ctx.me, issue, now })
-    // a parent that is gone (in Deleted items) was left as its delete
-    // leaves every subtask, so only a full one is worth telling
+    const { after, left } = await unarchiveIssueCore(ctx, { me: ctx.me, issue, now })
     const parentId = issue.parent_id
-    const leftFull =
-      parentId !== undefined &&
-      after.parent_id === undefined &&
-      (await byId(ctx, 'issues', parentId)) !== null
-    return { issue: await pubFor(ctx, ctx.me, after), left_parent: leftFull }
+    const shown =
+      left !== undefined && parentId !== undefined && (await byId(ctx, 'issues', parentId)) !== null
+    const left_parent: 'full' | 'deleted' | false = !shown
+      ? false
+      : left === PARENT_FULL
+        ? 'full'
+        : 'deleted'
+    return { issue: await pubFor(ctx, ctx.me, after), left_parent }
   },
 })
 

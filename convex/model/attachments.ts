@@ -19,7 +19,8 @@
  * read each row's project through its task (model/billing.ts storagePage),
  * so moving a task writes none of its rows. A task holds at most
  * ATTACHMENT_MAX rows, files and description images together
- * (lib/taskLimits.ts): an upload that would pass it is refused before any
+ * (lib/taskLimits.ts), less the description images a save took out
+ * (model/descriptionImages.ts): an upload that would pass it is refused before any
  * bytes are sent (startAttachmentUpload, files.ts uploadUrl, machine/records.ts
  * attach_text_file), and attachFileCore checks again. A file name has 1 to
  * 255 characters and a media type at most 255. That keeps every row small,
@@ -109,18 +110,19 @@ export async function storageIdInUse(ctx: QueryCtx, storageId: Id<'_storage'>): 
 }
 
 /* The issue's owning organization controls all attachments, including inline
- * images and projects without a team (attachmentLimitMb); legacy team caps
- * have no effect. */
+ * images and projects without a team (attachmentLimitMb). */
 async function attachmentCapMb(ctx: QueryCtx, orgId: string): Promise<number> {
   return attachmentLimitMb(await byId(ctx, 'organizations', orgId))
 }
 
 /** Refuses with ATTACHMENTS_FULL when task `issueId` already has
- * ATTACHMENT_MAX attachment rows. One range of at most ATTACHMENT_MAX rows. */
+ * ATTACHMENT_MAX attachment rows that count, which are those a description
+ * save has not dropped (model/descriptionImages.ts). One range of at most
+ * ATTACHMENT_MAX rows. */
 export async function assertAttachmentRoom(ctx: QueryCtx, issueId: string): Promise<void> {
   const rows = await ctx.db
     .query('issue_attachments')
-    .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
+    .withIndex('by_issue_dropped', (q) => q.eq('issue_id', issueId).eq('dropped_at', undefined))
     .take(ATTACHMENT_MAX)
   if (rows.length >= ATTACHMENT_MAX) throw rule(ATTACHMENTS_FULL)
 }
@@ -147,15 +149,9 @@ export function cleanAttachmentName(raw: string): string {
   return name
 }
 
-/* System fields, the organization and the retired project stay internal;
- * optional columns come back ABSENT. */
-const pub = ({
-  _id,
-  _creationTime,
-  org_id: _orgId,
-  project_id: _retired,
-  ...row
-}: Doc<'issue_attachments'>) => row
+/* System fields and the organization stay internal; optional columns come
+ * back ABSENT. */
+const pub = ({ _id, _creationTime, org_id: _orgId, ...row }: Doc<'issue_attachments'>) => row
 
 export type AttachmentRow = ReturnType<typeof pub>
 
@@ -589,7 +585,9 @@ export async function attachmentJson(
 
 /**
  * The attachments of `issue`, oldest first and inline images included, as
- * attachmentJson reads them for `reader`, all links sharing one expiry.
+ * attachmentJson reads them for `reader`, all links sharing one expiry. An
+ * image a description save dropped (model/descriptionImages.ts) is no
+ * longer the task's, so it is left out.
  */
 export async function taskAttachments(
   ctx: QueryCtx,
@@ -598,7 +596,7 @@ export async function taskAttachments(
 ): Promise<AttachmentJson[]> {
   const rows = await ctx.db
     .query('issue_attachments')
-    .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+    .withIndex('by_issue_dropped', (q) => q.eq('issue_id', issue.id).eq('dropped_at', undefined))
     .collect()
   rows.sort((x, y) => x.created_at.localeCompare(y.created_at) || x.id.localeCompare(y.id))
   const exp = linkExpiry()

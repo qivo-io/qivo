@@ -66,10 +66,10 @@ Website, docs and app changes all ship the same way.
    names a newer commit, run **Prepare release** again. Otherwise review the
    change there and publish the draft. **Production release** deploys it in
    about two minutes. Check `https://qivo.io/version.json` for the commit.
-6. If the release adds a one-time backfill or migration, such as
-   `internal/retiredFields`, run it on each hosted deployment once
-   that deployment serves the release, with the owner's approval for each
-   run, as the backfill's header says. Deployments never run it on their own.
+6. If the release adds a one-time backfill or migration, run it on each
+   hosted deployment once that deployment serves the release, with the
+   owner's approval for each run, as the backfill's header says. Deployments
+   never run it on their own.
 
 A release can also be created by hand in the GitHub interface. It must target
 a main commit that already passed staging, or production refuses it. That
@@ -360,12 +360,19 @@ before it ran. Deploy an earlier commit that still has the backfill, such as
 v0.1.21 (`ab0a802`), run `internal/orgCountersBackfill:start`, wait until its
 `remaining` query reports 0 on every page, and then deploy the later commit.
 
-Teams no longer get `stale_days` or `archive_days`, and
-`internal/retiredFields:clear` removes them, with the teams' retired
-`max_attachment_mb` and the attachments' retired `project_id`. Every commit
-before the one that added `internal/retiredFields` requires both team
-fields, so once a team is created or the clear runs, a rollback to such a
-commit fails to deploy. Roll forward instead.
+Releases before v0.1.40 require every team to have `stale_days` and
+`archive_days`, which no team has now, so a rollback to one of them fails to
+deploy. Roll forward instead. Later releases no longer accept those fields,
+a team's `max_attachment_mb` or an attachment's `project_id` at all, and
+v0.1.40 (`a09b44e`) is the last commit with `internal/retiredFields`. A
+backend that still holds any of them, such as a development backend that
+never ran the clear or data restored from an older backup, takes v0.1.40
+first, `internal/retiredFields:clear`, and then the later release.
+
+An image a description save took out keeps a `dropped_at` for a day, in
+Deleted items for as long as its task stays there. Releases before the one
+that added it do not accept that field, so a rollback past it fails to
+deploy while such an image exists. Roll forward instead.
 
 A frontend rollback changes the served application build. It does not roll
 back Convex code, schema changes, stored files or customer writes. A database

@@ -332,6 +332,25 @@ export const recipes: Recipe[] = [
     },
   },
   {
+    mutation: 'issues:createLinked',
+    mutator: 'createLinked',
+    what: 'a new linked task',
+    pause: 'P',
+    act: (P) => P.createLinked('QN-1', 'blocks', 'New linked task'),
+    answers: { 'issues:createLinked': () => ({ num: 4 }) },
+    truth: (snap, args) => {
+      created(snap, str(args.new_id), 4, { title: 'New linked task' })
+      snap.links.push({
+        id: str(args.link_id),
+        source_id: 'task-a',
+        target_id: str(args.new_id),
+        type: 'blocks',
+        pair_key: [str(args.new_id), 'task-a'].sort().join(':'),
+        created_at: SERVER,
+      })
+    },
+  },
+  {
     mutation: 'issues:move',
     mutator: 'moveIssue',
     what: 'a task moved to another sub-project',

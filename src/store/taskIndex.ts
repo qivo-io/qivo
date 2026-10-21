@@ -218,11 +218,15 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
     return rows.map(shapeAttachment)
   }
 
-  /** How many attachment rows task `uuid` has, description images
-      included. */
+  /** How many attachment rows task `uuid` has that count toward its cap,
+      description images included. An image a description save took out
+      (dropped_at) no longer counts (convex/model/descriptionImages.ts). */
   function attachmentCountOf(uuid: string): number | undefined {
     let count = 0
-    for (const id of attachmentsOf.get(uuid) ?? []) if (sources().attachments.has(id)) count++
+    for (const id of attachmentsOf.get(uuid) ?? []) {
+      const row = sources().attachments.peek(id)
+      if (row && row.dropped_at === undefined) count++
+    }
     return count || undefined
   }
 

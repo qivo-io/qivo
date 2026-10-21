@@ -147,6 +147,11 @@ under a parent with 100 active subtasks comes back without it. The tools
 take the same arguments, so a client holding the older catalogue keeps
 working, and the server answers such a call as described here.
 
+Description saves that settle their images changed the `delete_attachment`
+description from "Description images (`inline: true`) are left to the app."
+to "A description image (`inline: true`) goes when the description stops
+showing it." The tool takes the same arguments.
+
 Deleted items changed the `delete_task` description to "Move a task to
 Deleted items, where a person can restore it in the app." The tool takes the
 same arguments and answers the same way, so a client holding the older
@@ -1019,7 +1024,7 @@ tools that take no arguments, `get_me`, `list_teams`, `list_users` and
 | `set_team_member` | Add (`member: true`) or remove (`member: false`) one `user_id` in a team, and with `member: true` make or unmake them a leader (`leader`). People only, as an organization admin or a leader of the team. A removal settles the user's open tasks by `on_held_tasks` |
 | `list_users` | Every Qivo user in the organization, for general roster discovery. The row is `id`, `name`, `org_role`, `kind`, `active`, `plannable_hours` — no email address and no profile picture. Presence here does **not** prove access to a destination project; use `list_project_users` before writing `reporter_id`, `assignee_id` or `reviewer_id`. `plannable_hours` is the **whole** hours a week that user has for **planned project work** (the work week minus meetings and other overhead). It is what the planner divides by: plan someone at most that many hours in a week, shared across every project they work on (0092). It is **`null` for an agent** (0103), whose capacity is unbounded, never zero |
 | `list_project_users` | Users with access to `project` (number/key/uuid), and therefore valid non-null `reporter_id` values. On a parent project these are the people with access to the parent itself (organization admins, its lead and its individual or team grants); someone who reaches the parent only through one of its sub-projects is listed under that sub-project. It returns the `list_users` shape plus `assignable`: only active users with effective project Edit (`user`) or Lead access have `assignable: true` and are valid new `assignee_id` or `reviewer_id` selections. Inactive users and users with only View access remain valid reporters when they can see the project, because reporter is attribution rather than work or permission |
-| `get_task` | One task with full description and reporter, assignee and reviewer, `progress` for a group, `delay` and `last_comment_at`, plus its `labels`, `subtasks`, `links`, `following`, `followers`, `attachments` with download links and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
+| `get_task` | One task with full description and reporter, assignee and reviewer, `progress` for a group, `delay` and `last_comment_at`, plus its `labels`, `subtasks` (with `has_more_subtasks` when an archived task has more than one call lists), `links`, `following`, `followers`, `attachments` with download links and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
 | `list_comments` | The task's newest comments, oldest first, with author and edit attribution. `limit` (50 by default, at most 50) caps how many, and `before`, a comment's `id`, reads the comments posted before it. See [Comments, inbox and following](#comments-inbox-and-following) |
 | `add_comment` | Comment on a task **as yourself** (the credential's user is the pinned author); markdown body of at most 20,000 characters; returns the comment `id`, task reference as `task`, and `created_at`; leaves no activity row, because the comment is its own feed entry |
 | `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs. Another project's sub-project is a hard error; move a task later with `update_task`. `parent` (a task ref) makes it a subtask; you need Edit access on the parent's project, because the parent becomes a group, and the parent must be in the same top-level project, in any of its sub-projects. `start_week` and `end_week` plan it (week starts, both or neither), and `paused` holds it. Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` is capped at 80 characters and `description` at 20,000. Returns `id` and `key` |
@@ -1503,13 +1508,14 @@ boundary it can differ from the app, which uses the browser's time zone.
 `null` when it has none. Editing a comment does not change it, and deleting
 the newest one makes the one before it the newest.
 
-`get_task` adds seven fields, which name only tasks you can read:
+`get_task` adds eight fields, which name only tasks you can read:
 
 ```json
 {
   "group_remaining_hours": 6.5,
   "labels": [{ "id": "…uuid…", "name": "Hardware", "color": "#4C9AFF" }],
   "subtasks": [{ "id": "…uuid…", "key": "QN-4", "title": "…", "status": "todo" }],
+  "has_more_subtasks": false,
   "links": [{ "kind": "blocks", "id": "…uuid…", "key": "QN-9", "title": "…", "status": "backlog" }],
   "following": false,
   "followers": [{ "id": "…uuid…", "name": "Priya Patel" }],
@@ -1537,9 +1543,12 @@ An archived group can have more tasks under it than one request can read,
 such as thousands of subtasks or hundreds with very long descriptions.
 `get_task` then still lists its direct `subtasks`, but `start_week` and
 `end_week` are `null`, `progress` is `0` of `0` with `partial: true` and
-`group_remaining_hours` is `null`. When even its direct subtasks do not fit,
-the call is refused with `this task's subtasks are too large to read in one
-request`.
+`group_remaining_hours` is `null`. When even its direct subtasks do not all
+fit, `subtasks` lists those of the first ones that do which you can read,
+and `has_more_subtasks` is `true`. Find the rest with `list_tasks` and
+`archived: true` for the group's top-level project, which covers its
+sub-projects, where each one's `parent_id` names the group.
+`has_more_subtasks` is `false` on every other task.
 
 `list_tasks` returns active tasks as an array, oldest first by creation,
 with tasks created at the same moment ordered by number, so `offset` pages
@@ -1628,15 +1637,22 @@ items refuses the move for everyone, admins included, with `a subtask of
 this task is being moved to Deleted items; try again when that finishes`.
 The assignee and the reviewer of each active subtask must be able to work
 in the destination (otherwise `someone assigned to or reviewing a subtask of
-this task cannot edit that sub-project`); a group's own reviewer who cannot
+this task cannot edit that sub-project; give them Edit access there, or
+change who works on that subtask first`); a group's own reviewer who cannot
 is cleared. A task with more than 200 subtasks, archived ones included,
 cannot move to another top-level project (otherwise `this task has more than
 200 subtasks, archived ones included, and a move to another project carries
 them all; restore some archived subtasks and remove them from this task
-first, or move it within its project`). A change whose task and
-subtasks are too large for one call, such as when many subtasks hold very
-long descriptions, is refused with `this task and its subtasks are too
-large to change in one request; detach some subtasks first`. Each moved subtask sends `task.updated`, but only the task
+first, or move it within its project`). A move whose task and subtasks are
+too large for one call, such as about 120 or more subtasks whose
+descriptions hold 20,000 characters of a script that takes three bytes a
+character, such as Japanese, is refused with `this task and its subtasks
+are too large to move to another project in one request; remove some
+subtasks from this task first, restoring archived ones to do so, or move
+it within its project`. Any other change whose task and subtasks are too
+large for one call, such as an archive, a new parent or a restore, is
+refused with `this task and its subtasks are too large to change in one
+request; detach some subtasks first`. Each moved subtask sends `task.updated`, but only the task
 itself gets an activity row and an inbox message. A subtask moved to another
 top-level project must leave its parent in the same call, with `parent:
 null` or a new parent in the destination's top-level project; otherwise the
@@ -1653,7 +1669,12 @@ archive or remove one of them first` for a full parent. `parent: null`
 always detaches. Restoring a subtask (`archived: false`) whose parent
 already has 100 active subtasks brings it back as a top-level task: the
 task you read back has no parent, and its followers are told it left its
-parent. A parent in a project you cannot see counts as being in the subtask's own
+parent. So does restoring a subtask whose parent was deleted after the
+subtask was archived, even when the parent is back from Deleted items,
+because that delete takes every such subtask off the parent. Naming that
+parent as `parent` to keep it is refused with `this task's parent was
+deleted after this task was archived, so the task comes back as a top-level
+task; restore it without naming that parent`. A parent in a project you cannot see counts as being in the subtask's own
 top-level project, so moving such a subtask to another top-level project
 also needs `parent: null` or a new parent there.
 
@@ -1710,15 +1731,27 @@ it expires. Images open in the browser and other types download.
 `delete_attachment` deletes one file and writes a `removed an attachment
 from` activity row signed `via MCP`. Anyone with Edit access to the
 project may delete any file, not only their own. An id that is not a file of
-that task reads `attachment "<id>" not found on QN-<n>`. Description images
-stay with the app, so `delete_attachment` refuses one with `this image
-belongs to the task description; remove it by editing the description in
-the app`, and neither upload tool adds one.
+that task reads `attachment "<id>" not found on QN-<n>`. A description
+image goes when the description stops showing it, so `delete_attachment`
+refuses one with `this image belongs to the task description; remove it by
+taking it out of the description`, and neither upload tool adds one.
 When `update_task` rewrites a description, keep every `![alt](att:<id>)`
-reference whose image should stay. An image the description no longer names
-stays until someone next saves that task's description in the app. That
-save deletes the image at once if it was uploaded more than a day ago, so
-put a dropped reference back before then.
+reference whose image should stay. A description save, from the app or a
+tool, that takes out an image's last reference removes the image from the
+task at once: it no longer counts toward the 100 attachments and no longer
+appears in `attachments`. A save within a day that names it again brings it
+back, unless the task has 100 attachments by then, which is refused with
+the full-task sentence below. After a day the image is deleted, and a task
+keeps at most the 100 most recently removed images, so the oldest goes at
+once when a save removes more. An image that no saved description has named a day after its upload, such as one a
+closed browser tab left, is removed by the task's next description save.
+
+A description can only show images attached to its own task.
+`create_task` or `update_task` with a description that adds a reference to
+any other image, such as one copied from another task, or one deleted
+since, is refused with `the description shows an image that is not
+attached to this task, such as one from another task; remove it, or upload
+the image to this task`.
 
 Uploading a file takes three steps, the same as on REST:
 

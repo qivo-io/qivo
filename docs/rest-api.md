@@ -1178,16 +1178,22 @@ moved to Deleted items refuses the move for everyone, admins included, with
 when that finishes`. The assignee and the reviewer of
 each active subtask must be able to work in the
 destination (otherwise `400`, `someone assigned to or reviewing a subtask of
-this task cannot edit that sub-project`); a group's own reviewer who cannot
+this task cannot edit that sub-project; give them Edit access there, or
+change who works on that subtask first`); a group's own reviewer who cannot
 is cleared. A task with more than 200 subtasks, archived ones included,
 cannot move to another top-level project (otherwise `400`, `this task has
 more than 200 subtasks, archived ones included, and a move to another
 project carries them all; restore some archived subtasks and remove them
-from this task first, or move it within its project`). A change
-whose task and subtasks are too large for one request, such as when many
-subtasks hold very long descriptions, is a `400` with `this task and its
-subtasks are too large to change in one request; detach some subtasks
-first`. Each moved subtask
+from this task first, or move it within its project`). A move whose task and subtasks are
+too large for one request, such as about 120 or more subtasks whose
+descriptions hold 20,000 characters of a script that takes three bytes a
+character, such as Japanese, is a `400` with `this task and its subtasks
+are too large to move to another project in one request; remove some
+subtasks from this task first, restoring archived ones to do so, or move
+it within its project`. Any other change whose task and subtasks are too
+large for one request, such as an archive, a new parent or a restore, is a
+`400` with `this task and its subtasks are too large to change in one
+request; detach some subtasks first`. Each moved subtask
 sends `task.updated`, but only the task itself gets an activity row and an
 inbox message. A subtask moved to
 another top-level project must leave its parent in the same request, with
@@ -1344,7 +1350,13 @@ moved to Deleted items refuses the PATCH for everyone, admins included, with
 finishes` or `a parent of this task is being moved to Deleted items; try
 again when that finishes`. Restoring a subtask whose parent already has 100
 active subtasks brings it back as a top-level task: the answer's `parent_id`
-is `null`, and its followers are told it left its parent. Archived tasks
+is `null`, and its followers are told it left its parent. So does restoring
+a subtask whose parent was deleted after the subtask was archived, even when
+the parent is back from Deleted items, because that delete takes every such
+subtask off the parent. A PATCH that names that parent as `parent` to keep it
+is a `400` with `this task's parent was deleted after this task was
+archived, so the task comes back as a top-level task; restore it without
+naming that parent`. Archived tasks
 disappear from the default list
 (`?archived=true&project=<ref>` finds them, see [Archived tasks](#archived-tasks)),
 stop counting as workload, and in the app leave every normal view for
@@ -1390,13 +1402,14 @@ Task shape of a list row from `GET /v1/tasks`:
 ```
 
 `GET /v1/tasks/{ref}`, `POST /v1/tasks` and `PATCH /v1/tasks/{ref}` answer
-the single-task shape, which adds seven fields:
+the single-task shape, which adds eight fields:
 
 ```json
 {
   "group_remaining_hours": null,
   "labels": [{ "id": "…uuid…", "name": "Hardware", "color": "#4C9AFF" }],
   "subtasks": [{ "id": "…uuid…", "key": "QN-4", "title": "…", "status": "todo" }],
+  "has_more_subtasks": false,
   "links": [{ "kind": "blocked_by", "id": "…uuid…", "key": "QN-9", "title": "…", "status": "progress" }],
   "following": true,
   "followers": [{ "id": "…uuid…", "name": "Priya Patel" }],
@@ -1450,9 +1463,12 @@ such as thousands of subtasks or hundreds with very long descriptions. Its
 single-task shape then still lists its direct `subtasks`, but `start_week`
 and `end_week` are `null`, `progress` is `0` of `0` with `partial: true`
 and `group_remaining_hours` is `null`. When even its direct subtasks do not
-fit, a `GET` is a `400` with `this task's subtasks are too large to read in
-one request`. A `PATCH` that archives such a group is not refused for the
-size of its answer, which then lists the direct subtasks in this shape.
+all fit, `subtasks` lists those of the first ones that do which the caller
+can read, and `has_more_subtasks` is `true`. Find the rest in the archived
+list of the group's top-level project (`?archived=true&project=<ref>`),
+which covers its sub-projects, where each one's `parent_id` names the
+group. `has_more_subtasks` is `false` on every other task. The answer of a
+`PATCH`, such as one that archives such a group, takes the same shape.
 
 `delay` is the app's projected delay, the verdict its Roadmap and task
 window show:
@@ -1944,14 +1960,26 @@ file and answers `{ "deleted": true, "id": "…", "name": "wiring.pdf", "key":
 "QN-26" }`, writing a `removed an attachment from` activity row. An id that
 is not a file of that task is a `404` (`attachment not found`). A
 description image (`inline: true`) is a `400` (`this image belongs to the
-task description; remove it by editing the description in the app`).
+task description; remove it by taking it out of the description`).
 
-Description images stay with the app. The API neither uploads nor deletes
-them. When a `PATCH` rewrites a description, keep every `![alt](att:<id>)`
-reference whose image should stay. An image the description no longer names
-stays until someone next saves that task's description in the app. That
-save deletes the image at once if it was uploaded more than a day ago, so
-put a dropped reference back before then.
+The API uploads no description images; the app does. When a `PATCH`
+rewrites a description, keep every `![alt](att:<id>)`
+reference whose image should stay. A description save, from the app or the
+API, that takes out an image's last reference removes the image from the
+task at once: it no longer counts toward the 100 attachments and no longer
+appears in `attachments`. A save within a day that names it again brings it
+back, unless the task has 100 attachments by then, which is a `400` with the
+full-task sentence above. After a day the image is deleted, and a task
+keeps at most the 100 most recently removed images, so the oldest goes at
+once when a save removes more. An image that no
+saved description has named a day after its upload, such as one a closed
+browser tab left, is removed by the task's next description save.
+
+A description can only show images attached to its own task. A `PATCH` or
+`POST` whose description adds a reference to any other image, such as one
+copied from another task, or one deleted since, is a `400` with `the
+description shows an image that is not attached to this task, such as one
+from another task; remove it, or upload the image to this task`.
 
 ### Task activity
 

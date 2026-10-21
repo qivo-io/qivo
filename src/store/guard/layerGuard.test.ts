@@ -53,6 +53,7 @@ const PAINT_HELPERS = new Set([
   'markLoadedMessagesRead',
   'patchIssueRow',
   'clearParentHours',
+  'paintDescriptionImages',
   // the probes below break the rule on purpose
   'writeOutside',
   'writeServerRow',

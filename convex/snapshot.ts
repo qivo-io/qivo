@@ -334,7 +334,7 @@ export const forMe = authedQuery({
         for (const il of ils) issueLabels.push(relationRow(il))
         // attachments — active tasks only. This is the expensive storage row
         // that previously made every archive part of the initial boot.
-        for (const { project_id: _retired, ...a } of atts) attachments.push(relationRow(a))
+        for (const a of atts) attachments.push(relationRow(a))
       }
 
       // Hidden workload remains anonymized by orgLoadRows.

@@ -297,8 +297,6 @@ describe('reassigning the tasks of an access removal', () => {
             id: uuid(),
             org_id: f.org.id,
             name: 'Platform',
-            stale_days: 14,
-            archive_days: 30,
             track_delay_default: false,
             created_at: NOW,
           })
@@ -677,8 +675,6 @@ async function manyHolders(n: number, limits: Parameters<typeof newT>[0] = {}) {
           id: uuid(),
           org_id: f.org.id,
           name: 'Platform',
-          stale_days: 14,
-          archive_days: 30,
           track_delay_default: false,
           created_at: NOW,
         })
@@ -911,8 +907,6 @@ describe('a removal of many people', () => {
         id,
         org_id: f.org.id,
         name: 'Crowd',
-        stale_days: 14,
-        archive_days: 30,
         track_delay_default: false,
         created_at: NOW,
       })

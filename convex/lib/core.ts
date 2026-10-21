@@ -1375,14 +1375,11 @@ export const TASK_READ_RESERVE = {
   bytes: 4 * DOCUMENT_MAX_BYTES,
 }
 
-/** The refusal for a single-task read of an archived task whose own
- * subtasks alone do not fit in one request. */
-export const SUBTASKS_TOO_LARGE = "this task's subtasks are too large to read in one request"
-
-/* A subtree index and whether the walk read all of it. A walk that a
- * ceiling stopped holds the subtasks of each task whose read it finished,
- * the root's first. */
-type Walk = { children: ChildIndex; whole: boolean }
+/* A subtree index, whether the walk read all of it, and whether it read
+ * all of the root's own subtasks (`rootWhole`). A walk that a ceiling
+ * stopped holds the subtasks of each task whose read it finished, the
+ * root's first, or the root's subtasks it read before it stopped. */
+type Walk = { children: ChildIndex; whole: boolean; rootWhole: boolean }
 
 /* The subtasks a single-task read of `root` uses, indexed by parent. They
  * are the root's own and those of every task under it that counts toward
@@ -1408,7 +1405,8 @@ type Walk = { children: ChildIndex; whole: boolean }
  * nothing, as the readable flags and projectOf together give it). Once they
  * reach the ceiling, or
  * a level holds more tasks than the ceiling leaves ranges for, it stops,
- * with the subtasks of each task whose read it finished. */
+ * with the subtasks of each task whose read it finished, or the root's
+ * subtasks it read so far when it stops in the root's own read. */
 async function subtreeIndex(
   ctx: QueryCtx,
   root: Doc<'issues'>,
@@ -1419,7 +1417,9 @@ async function subtreeIndex(
     throw new Error('an archived task walks its subtree under a ceiling')
   }
   const index = new Map<string, Doc<'issues'>[]>()
-  const stopped: Walk = { children: index, whole: false }
+  // a walk that stops has read the root's own subtasks whole once their
+  // range is in the index, unless it stopped inside that range
+  const stopped = (): Walk => ({ children: index, whole: false, rootWhole: index.has(root.id) })
   const guard = ceiling === undefined ? null : ceilingGuard(ctx, ceiling)
   const seen = new Set<string>([root.id])
   let frontier = [root.id]
@@ -1428,17 +1428,18 @@ async function subtreeIndex(
     // a level that cannot be read whole ends the walk before its first read
     reads += frontier.length
     if (ceiling !== undefined) {
-      if (frontier.length > (await rangesLeft(ctx, ceiling))) return stopped
+      if (frontier.length > (await rangesLeft(ctx, ceiling))) return stopped()
     } else if (reads > SUBTREE_WALK.reads) {
       // the root's own subtasks are read first, so they are in the index
       return {
         children: await activeTasksUnder(ctx, root, index.get(root.id) ?? []),
         whole: true,
+        rootWhole: true,
       }
     }
     const next: string[] = []
     for (const id of frontier) {
-      if (guard !== null && !(await guard.range())) return stopped
+      if (guard !== null && !(await guard.range())) return stopped()
       const kids: Doc<'issues'>[] = []
       const read =
         root.archived_at === undefined
@@ -1450,7 +1451,11 @@ async function subtreeIndex(
           : ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', id))
       for await (const kid of read) {
         kids.push(kid)
-        if (guard !== null && !(await guard.document())) return stopped
+        if (guard !== null && !(await guard.document())) {
+          if (id !== root.id) return stopped()
+          index.set(id, kids)
+          return { children: index, whole: false, rootWhole: false }
+        }
       }
       index.set(id, kids)
       for (const kid of kids) {
@@ -1461,7 +1466,7 @@ async function subtreeIndex(
     }
     frontier = next
   }
-  return { children: index, whole: true }
+  return { children: index, whole: true, rootWhole: true }
 }
 
 /* The subtasks an active root's walk uses once it passes SUBTREE_WALK,
@@ -1493,36 +1498,56 @@ async function activeTasksUnder(
   return childIndexOf(active)
 }
 
-/* The subtree index of a single-task read of `root` (subtreeIndex), and
- * whether the group's facts went unread (Subtree.partial). An archived
- * task's walk takes what the request has left less TASK_READ_RESERVE. When
- * that stops it, the index keeps only the root's own subtasks, which it
- * reads first, so the read still lists them. A read of an archived task
- * whose own subtasks do not fit is refused with SUBTASKS_TOO_LARGE. A
- * write's answer (`write`), which a refusal would undo with the write,
- * reads them anyway, so only Convex's own limits can stop it, as before
- * the walk had a ceiling. */
+/* The subtree index of a single-task read of `root` (subtreeIndex),
+ * whether the group's facts went unread (Subtree.partial), and whether the
+ * root has subtasks the index leaves out (`more`). An archived task's walk
+ * takes what the request has left less TASK_READ_RESERVE, so no read of it,
+ * a write's answer included, passes Convex's limits however many long
+ * archived subtasks it has. When that stops the walk, the index keeps only
+ * the root's own subtasks, which it reads first, as many as fit. When not
+ * even one fit, it reads the first, within the reserve, so the read still
+ * tells a group from a leaf, and it reads one past the last listed, so
+ * `more` is set only when a subtask is left out. Active subtasks number at
+ * most SUBTASK_MAX, so an active task's read lists them all. */
 async function taskSubtree(
   ctx: QueryCtx,
   root: Doc<'issues'>,
   counts: GroupCounter,
-  write: boolean,
-): Promise<{ children: ChildIndex; partial: boolean }> {
+): Promise<{ children: ChildIndex; partial: boolean; more: boolean }> {
   if (root.archived_at === undefined) {
-    return { children: (await subtreeIndex(ctx, root, counts)).children, partial: false }
+    const { children } = await subtreeIndex(ctx, root, counts)
+    return { children, partial: false, more: false }
   }
   const room = roomOf(await ctx.meta.getTransactionMetrics(), TASK_READ_RESERVE)
   const walk = await subtreeIndex(ctx, root, counts, room)
-  if (walk.whole) return { children: walk.children, partial: false }
-  let kids = walk.children.get(root.id)
-  if (kids === undefined) {
-    if (!write) throw badRequest(SUBTASKS_TOO_LARGE)
-    kids = await ctx.db
+  if (walk.whole) return { children: walk.children, partial: false, more: false }
+  let kids = walk.children.get(root.id) ?? []
+  if (walk.rootWhole) return { children: new Map([[root.id, kids]]), partial: true, more: false }
+  // the first subtask in by_parent order that is not among `read`: the
+  // first of all when none was read, and past them all whether any is left
+  // out. Subtasks created at the same moment as the last one read are
+  // looked at too, past those already read.
+  const after = async (read: readonly Doc<'issues'>[]): Promise<Doc<'issues'> | null> => {
+    const last = read.at(-1)
+    // those read at the last one's moment, which the range starts with
+    const tied = read.filter((kid) => kid._creationTime === last?._creationTime)
+    const seen = new Set(tied.map((kid) => kid.id))
+    const rest = await ctx.db
       .query('issues')
-      .withIndex('by_parent', (q) => q.eq('parent_id', root.id))
-      .collect()
+      .withIndex('by_parent', (q) =>
+        last === undefined
+          ? q.eq('parent_id', root.id)
+          : q.eq('parent_id', root.id).gte('_creationTime', last._creationTime),
+      )
+      .take(tied.length + 1)
+    return rest.find((kid) => !seen.has(kid.id)) ?? null
   }
-  return { children: new Map([[root.id, kids]]), partial: true }
+  if (kids.length === 0) {
+    const first = await after([])
+    kids = first === null ? [] : [first]
+  }
+  const more = kids.length > 0 && (await after(kids)) !== null
+  return { children: new Map([[root.id, kids]]), partial: true, more }
 }
 
 /** Whether a task under a group counts toward the group's totals. */
@@ -1840,6 +1865,8 @@ export type TaskDetailJson = TaskFollowJson & {
   labels: ReturnType<typeof labelJson>[]
   /** the subtasks the caller can read, active ones for an active task */
   subtasks: TaskRefJson[]
+  /** whether an archived task has more subtasks than one read could list */
+  has_more_subtasks: boolean
   /** the links whose other task the caller can read, as seen from this one */
   links: (TaskRefJson & { kind: TaskLinkKind })[]
 }
@@ -1910,8 +1937,9 @@ export async function taskRelations(
  * `relations` taskOut read first. `isGroup`, `project`, `children` (its
  * subtreeIndex), `live`, `counts` (the groupCounter that walk used) and
  * `partial` (the subtree was too large to read) are what taskOut already
- * holds. The group total counts what groupCounter counts, as the plan weeks
- * do, and is null when the subtree went unread.
+ * holds, and `more` that the root has subtasks `children` leaves out. The
+ * group total counts what groupCounter counts, as the plan weeks do, and is
+ * null when the subtree went unread.
  */
 export async function taskDetail(
   ctx: QueryCtx,
@@ -1925,6 +1953,7 @@ export async function taskDetail(
     live: ProjectLive
     counts?: GroupCounter
     partial?: boolean
+    more?: boolean
     readable?: (projectId: string) => boolean
   },
 ): Promise<TaskDetailJson> {
@@ -1951,6 +1980,7 @@ export async function taskDetail(
     group_remaining_hours,
     labels,
     subtasks,
+    has_more_subtasks: o.more === true,
     links,
     following: followers.some((p) => p.id === me.id),
     followers: followers.map((p) => ({ id: p.id, name: p.name })),
@@ -1964,11 +1994,7 @@ export type TaskAttachmentsJson = { attachments: AttachmentJson[] }
 /** The request's UTC day (YYYY-MM-DD), which a single-task read judges the
  * task's delay by (the HTTP action's for a query, the mutation's own for a
  * REST write answer). */
-type Clock = {
-  today: string
-  /** the answer of a write, read in the write's own transaction (taskSubtree) */
-  write?: boolean
-}
+type Clock = { today: string }
 
 /** issueOut plus taskDetail and the attachments, the shape of every
  * single-task read. */
@@ -2005,7 +2031,7 @@ export async function taskOut(
   // one walk of the subtree serves the row's group facts and the detail,
   // and one counter its pruning and both totals
   const counts = groupCounter(ctx, opts.me, issue, project, readable, projectOf)
-  const { children, partial } = await taskSubtree(ctx, issue, counts, opts.write === true)
+  const { children, partial, more } = await taskSubtree(ctx, issue, counts)
   const live = await indexLiveness(ctx, issue, children, projectOf)
   const subtree = { project, children, live, counts, partial }
   const org = await byId(ctx, 'organizations', issue.org_id)
@@ -2020,6 +2046,7 @@ export async function taskOut(
       : await issueOut(ctx, issue, { ...opts, readable, projectOf, ...read, surface: 'mcp' })
   const detail = await taskDetail(ctx, opts.me, issue, relations, {
     ...subtree,
+    more,
     isGroup: row.is_group,
     readable,
   })
@@ -2143,6 +2170,8 @@ export async function applyTaskUpdate(
   if ('assignee_id' in a.patch) later.assignee_id = a.patch.assignee_id
   if ('reviewer_id' in a.patch) later.reviewer_id = a.patch.reviewer_id
   let task = a.issue
+  // whether the parent step below gives the task a parent it did not have
+  let parentChosen = false
   if (a.destination !== undefined) {
     task = await moveIssueCore(ctx, {
       me,
@@ -2162,6 +2191,7 @@ export async function applyTaskUpdate(
       now,
       machine: { provenance, appGrammar: true, later },
     })
+    parentChosen = a.parent !== null
   }
   // one row write, one notify fan-out and one activity row for the fields
   // and the toggle (updateIssueCore's machine seam)
@@ -2176,6 +2206,7 @@ export async function applyTaskUpdate(
         archive: a.archive,
         // naming the current parent asks to keep it (model/issues.ts)
         keepParent: a.parent !== undefined && a.parent !== null && a.parent === task.parent_id,
+        parentChosen,
       },
     })
   }

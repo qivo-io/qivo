@@ -31,8 +31,10 @@ export const SUBTASK_WITH_SUBTASKS =
 /** The refusal of a parent that already has SUBTASK_MAX active subtasks. */
 export const PARENT_FULL = `the parent task already has ${SUBTASK_MAX} active subtasks, the most a task can have; archive or remove one of them first`
 
-/** The most attachment rows one task may have, files in its attachment
- * list and images in its description together. */
+/** The most attachment rows that count on one task, files in its
+ * attachment list and images in its description together. A task also
+ * keeps up to DROPPED_IMAGES_MAX images a description save took out
+ * (model/descriptionImages.ts), which do not count. */
 export const ATTACHMENT_MAX = 100
 
 /** The most links one task may have, counting the links where it is either

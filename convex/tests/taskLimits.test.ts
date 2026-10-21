@@ -34,8 +34,16 @@ import {
   SUBTASK_MAX,
   SUBTASK_WITH_SUBTASKS,
 } from '../lib/taskLimits'
-import { ARCHIVED_DETACH } from '../model/deletedItems'
-import { MOVE_SUBTREE_MAX, MOVE_SUBTREE_TOO_LARGE } from '../model/issues'
+import { TEXT_MAX } from '../lib/textLimits'
+import { ARCHIVED_DETACH, STALLED_MS } from '../model/deletedItems'
+import { DROPPED_IMAGES_MAX, DROPPED_KEEP_MS, IMAGE_NOT_ATTACHED } from '../model/descriptionImages'
+import {
+  MOVE_SUBTREE_MAX,
+  MOVE_SUBTREE_TOO_LARGE,
+  MOVE_TOO_LARGE,
+  PARENT_DELETED_SINCE,
+  TITLE_MAX,
+} from '../model/issues'
 import { INLINE_TRIMS, ITEM_UNREAD_CAP, notifyCommentInsert } from '../model/messages'
 import {
   as,
@@ -352,7 +360,7 @@ describe('restoring a subtask under a parent with the most active subtasks', () 
       org_id: fx.org.id,
       id: app.old.id,
     })
-    expect(answer.left_parent).toBe(true)
+    expect(answer.left_parent).toBe('full')
     const back = await row(fx.t, app.old.id)
     expect([back.archived_at, back.parent_id]).toEqual([undefined, undefined])
     const told = await fx.t.run((ctx) =>
@@ -504,14 +512,98 @@ describe('a move that carries archived subtasks', () => {
       MOVE_SUBTREE_TOO_LARGE,
     )
   })
+
+  /* A sub-project in another top-level project, where the agent has Edit. */
+  const elsewhere = async (fx: Fx) => {
+    const other = await plantProject(fx.t, { org_id: fx.org.id, type: 'meta' })
+    await fx.t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: other.id,
+        profile_id: fx.agent.id,
+        level: 'user',
+      }),
+    )
+    return await plantProject(fx.t, { org_id: fx.org.id, type: 'project', parent_id: other.id })
+  }
+
+  /* Plants `n` subtasks of `parent` with the longest title and description,
+   * about 60 KB each, every other fifty archived, fifty per write. */
+  const plantLong = async (fx: Fx, parent: Doc<'issues'>, n: number) => {
+    const long = { description: 'あ'.repeat(TEXT_MAX), title: 'あ'.repeat(TITLE_MAX) }
+    const kids: Doc<'issues'>[] = []
+    for (let i = 0; i < n / 50; i++) {
+      const archived = i % 2 === 0 ? { archived_at: NOW } : {}
+      kids.push(...(await plantSubtasks(fx, parent, 50, { ...long, ...archived })))
+    }
+    return kids
+  }
+
+  it('moves a hundred subtasks with the longest descriptions within the real limits', async () => {
+    const fx = await setup(newT({ transactionLimits: true }))
+    const parent = await task(fx, { title: 'Long family' })
+    const kids = await plantLong(fx, parent, 100)
+    const dest = await elsewhere(fx)
+    const answer = await fx.t.mutation(internal.machine.rest.updateIssue, {
+      callerId: fx.agent.id,
+      access: 'write',
+      keyName: 'limits',
+      ref: key(parent),
+      body: JSON.stringify({ project: dest.id }),
+    })
+    expect(answer.project_id).toBe(dest.id)
+    for (const kid of kids) expect((await row(fx.t, kid.id)).project_id).toBe(dest.id)
+  }, 120_000)
+
+  it(`refuses a move of ${MOVE_SUBTREE_MAX} such subtasks with what to do, on every surface`, async () => {
+    const fx = await setup(newT({ transactionLimits: true }))
+    const parent = await task(fx, { title: 'Longer family' })
+    const kids = await plantLong(fx, parent, MOVE_SUBTREE_MAX)
+    const dest = await elsewhere(fx)
+    await refused(
+      as(fx.t, fx.admin).mutation(api.issues.move, {
+        org_id: fx.org.id,
+        id: parent.id,
+        project_id: dest.id,
+      }),
+      'rule',
+      MOVE_TOO_LARGE,
+    )
+    await refused(
+      fx.t.mutation(internal.machine.rest.updateIssue, {
+        callerId: fx.agent.id,
+        access: 'write',
+        keyName: 'limits',
+        ref: key(parent),
+        body: JSON.stringify({ project: dest.id }),
+      }),
+      'rule',
+      MOVE_TOO_LARGE,
+    )
+    await refused(
+      fx.t.mutation(internal.machine.mcp.updateIssue, {
+        callerId: fx.agent.id,
+        access: 'write',
+        ref: key(parent),
+        project: dest.id,
+      }),
+      'rule',
+      MOVE_TOO_LARGE,
+    )
+    for (const t of [parent, kids[0], kids[MOVE_SUBTREE_MAX - 1]]) {
+      expect((await row(fx.t, t.id)).project_id).toBe(fx.sub.id)
+    }
+  }, 120_000)
 })
 
 describe('deleting a task with archived subtasks', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => {
     vi.useRealTimers()
-    ARCHIVED_DETACH.page = 100
+    vi.restoreAllMocks()
+    Object.assign(ARCHIVED_DETACH, { page: 100, room: 0.5 })
   })
+
+  const detaches = (t: T) => t.run((ctx) => ctx.db.query('archived_detaches').collect())
 
   it('detaches its archived subtasks in background steps', async () => {
     ARCHIVED_DETACH.page = 2
@@ -521,6 +613,90 @@ describe('deleting a task with archived subtasks', () => {
     await deleteTask(fx.t, fx, parent.id)
     await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
     for (const kid of kids) expect((await row(fx.t, kid.id)).parent_id).toBeUndefined()
+    expect(await detaches(fx.t)).toEqual([])
+  })
+
+  it('resumes a step that failed halfway with a smaller page', async () => {
+    Object.assign(ARCHIVED_DETACH, { page: 4, room: 0.99 })
+    // each subtask's description takes about 60 KB, so four detaches pass
+    // the write limit and the step fails after its third
+    const fx = await setup(newT({ transactionLimits: { bytesWritten: 200_000 } }))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const parent = await task(fx, { title: 'Long subtasks' })
+    const kids: Doc<'issues'>[] = []
+    for (let i = 0; i < 5; i++) {
+      kids.push(
+        ...(await plantSubtasks(fx, parent, 1, {
+          archived_at: NOW,
+          description: 'あ'.repeat(TEXT_MAX),
+        })),
+      )
+    }
+    await deleteTask(fx.t, fx, parent.id)
+    await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
+    // the failed step committed nothing and left its job
+    expect((await detaches(fx.t)).map((job) => job.attempts)).toEqual([0])
+    for (const kid of kids) expect((await row(fx.t, kid.id)).parent_id).toBe(parent.id)
+    for (let round = 0; round < 10 && (await detaches(fx.t)).length > 0; round++) {
+      vi.advanceTimersByTime(STALLED_MS + 1)
+      await fx.t.mutation(internal.deletedItems.recover, {})
+      await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
+    }
+    expect(await detaches(fx.t)).toEqual([])
+    for (const kid of kids) expect((await row(fx.t, kid.id)).parent_id).toBeUndefined()
+  })
+
+  it('detaches a subtask restored from the archive after its parent came back', async () => {
+    const fx = await setup()
+    const parent = await task(fx, { title: 'Back again' })
+    const [first, second, third] = await plantSubtasks(fx, parent, 3, { archived_at: NOW })
+    await deleteTask(fx.t, fx, parent.id)
+    await as(fx.t, fx.user).mutation(api.deletedItems.restore, {
+      org_id: fx.org.id,
+      ids: [(await itemFor(fx.t, parent.id)).id],
+    })
+    // restored from the archive before the steps after the delete ran
+    const answer = await as(fx.t, fx.admin).mutation(api.issues.unarchive, {
+      org_id: fx.org.id,
+      id: first.id,
+    })
+    expect(answer.left_parent).toBe('deleted')
+    expect((await row(fx.t, first.id)).parent_id).toBeUndefined()
+    // a machine restore that names the parent to keep is refused
+    await refused(
+      fx.t.mutation(internal.machine.rest.updateIssue, {
+        callerId: fx.agent.id,
+        access: 'write',
+        keyName: 'limits',
+        ref: key(second),
+        body: JSON.stringify({ archived: false, parent: key(parent) }),
+      }),
+      'rule',
+      PARENT_DELETED_SINCE,
+    )
+    // a task this update gives the parent was never its subtask, so it keeps it
+    const stranger = await task(fx, { title: 'Stranger', archived_at: NOW })
+    const joined = await fx.t.mutation(internal.machine.rest.updateIssue, {
+      callerId: fx.agent.id,
+      access: 'write',
+      keyName: 'limits',
+      ref: key(stranger),
+      body: JSON.stringify({ archived: false, parent: key(parent) }),
+    })
+    expect(joined).toMatchObject({ archived: false, parent_id: parent.id })
+    await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
+    for (const kid of [first, second, third]) {
+      expect((await row(fx.t, kid.id)).parent_id).toBeUndefined()
+    }
+    // once the steps are done, a subtask archived under the parent later keeps it
+    const [later] = await plantSubtasks(fx, parent, 1, { archived_at: new Date().toISOString() })
+    const kept = await as(fx.t, fx.admin).mutation(api.issues.unarchive, {
+      org_id: fx.org.id,
+      id: later.id,
+    })
+    expect(kept.left_parent).toBe(false)
+    expect((await row(fx.t, later.id)).parent_id).toBe(parent.id)
   })
 })
 
@@ -624,6 +800,274 @@ describe('the attachment, link and label limits', () => {
         .collect(),
     )
     expect(files).toHaveLength(ATTACHMENT_MAX)
+  })
+
+  /* Plants a description image on `issue`, uploaded at `at`, or `n` files. */
+  const plantImage = (fx: Fx, issue: Doc<'issues'>, at = new Date().toISOString()) =>
+    fx.t.run(async (ctx) => {
+      const id = uuid()
+      await ctx.db.insert('issue_attachments', {
+        id,
+        org_id: fx.org.id,
+        issue_id: issue.id,
+        name: 'photo.png',
+        size_bytes: 3,
+        storage_id: await ctx.storage.store(new Blob(['png']) as never),
+        inline: true,
+        created_at: at,
+      })
+      return id
+    })
+  const plantFiles = (fx: Fx, issue: Doc<'issues'>, n: number) =>
+    fx.t.run(async (ctx) => {
+      const ids: string[] = []
+      for (let i = 0; i < n; i++) {
+        const id = uuid()
+        ids.push(id)
+        await ctx.db.insert('issue_attachments', {
+          id,
+          org_id: fx.org.id,
+          issue_id: issue.id,
+          name: `file-${i}.pdf`,
+          size_bytes: 3,
+          storage_id: await ctx.storage.store(new Blob(['pdf']) as never),
+          inline: false,
+          created_at: NOW,
+        })
+      }
+      return ids
+    })
+  const attachment = (fx: Fx, id: string) =>
+    fx.t.run((ctx) =>
+      ctx.db
+        .query('issue_attachments')
+        .withIndex('by_uuid', (q) => q.eq('id', id))
+        .unique(),
+    )
+  const saveDescription = (fx: Fx, issue: Doc<'issues'>, description: string) =>
+    as(fx.t, fx.admin).mutation(api.issues.update, {
+      org_id: fx.org.id,
+      id: issue.id,
+      patch: { description },
+    })
+
+  it('frees an image’s place when a save takes it out of the description, and brings it back', async () => {
+    const fx = await setup()
+    const issue = await task(fx, { title: 'Pictures' })
+    const image = await plantImage(fx, issue)
+    const shown = `Wiring ![photo](att:${image})`
+    await saveDescription(fx, issue, shown)
+    const files = await plantFiles(fx, issue, ATTACHMENT_MAX - 1)
+    const upload = () =>
+      as(fx.t, fx.admin).mutation(api.files.uploadUrl, { org_id: fx.org.id, issue_id: issue.id })
+    await refused(upload(), 'rule', ATTACHMENTS_FULL)
+    // the save that takes the image out frees its place at once
+    await saveDescription(fx, issue, 'Wiring')
+    expect((await attachment(fx, image))?.dropped_at).toBeDefined()
+    await upload()
+    vi.stubEnv('BETTER_AUTH_SECRET', 'task-limits-test-secret')
+    const read = await fx.t.query(internal.machine.rest.getIssue, {
+      today: NOW.slice(0, 10),
+      callerId: fx.agent.id,
+      access: 'read',
+      ref: key(issue),
+    })
+    vi.unstubAllEnvs()
+    expect(read.attachments.map((a) => a.id)).not.toContain(image)
+    // a file takes the place, so a save that shows the image again is refused
+    const [late] = await plantFiles(fx, issue, 1)
+    await refused(saveDescription(fx, issue, shown), 'rule', ATTACHMENTS_FULL)
+    await fx.t.run(async (ctx) => {
+      const row = await ctx.db
+        .query('issue_attachments')
+        .withIndex('by_uuid', (q) => q.eq('id', late))
+        .unique()
+      if (row !== null) await ctx.db.delete(row._id)
+    })
+    await saveDescription(fx, issue, shown)
+    expect((await attachment(fx, image))?.dropped_at).toBeUndefined()
+    await refused(upload(), 'rule', ATTACHMENTS_FULL)
+    expect(files).toHaveLength(ATTACHMENT_MAX - 1)
+  })
+
+  it('keeps an image no saved description names yet until a day after its upload', async () => {
+    const fx = await setup()
+    const issue = await task(fx, { title: 'Draft' })
+    // pasted into a draft just now, and left by a closed tab two days ago
+    const pasted = await plantImage(fx, issue)
+    const left = await plantImage(
+      fx,
+      issue,
+      new Date(Date.now() - 2 * DROPPED_KEEP_MS).toISOString(),
+    )
+    await saveDescription(fx, issue, 'Someone else saves other text')
+    expect((await attachment(fx, pasted))?.dropped_at).toBeUndefined()
+    expect((await attachment(fx, left))?.dropped_at).toBeDefined()
+    // the draft saves its image later
+    await saveDescription(fx, issue, `With the photo ![photo](att:${pasted})`)
+    expect((await attachment(fx, pasted))?.dropped_at).toBeUndefined()
+  })
+
+  it('refuses a description that adds an image of another task, on every surface', async () => {
+    const fx = await setup()
+    const issue = await task(fx, { title: 'Copy target' })
+    const theirs = await plantImage(fx, await task(fx, { title: 'Image owner' }))
+    const text = `Copied ![photo](att:${theirs})`
+    const machine = { callerId: fx.agent.id, access: 'write' as const }
+    for (const write of [
+      () => saveDescription(fx, issue, text),
+      () =>
+        as(fx.t, fx.admin).mutation(api.issues.create, {
+          org_id: fx.org.id,
+          id: uuid(),
+          project_id: fx.sub.id,
+          title: 'New',
+          description: text,
+        }),
+      () =>
+        fx.t.mutation(internal.machine.rest.updateIssue, {
+          ...machine,
+          keyName: 'limits',
+          ref: key(issue),
+          body: JSON.stringify({ description: text }),
+        }),
+      () =>
+        fx.t.mutation(internal.machine.rest.createIssue, {
+          ...machine,
+          keyName: 'limits',
+          body: JSON.stringify({ project: fx.sub.key, title: 'New', description: text }),
+        }),
+      () =>
+        fx.t.mutation(internal.machine.mcp.updateIssue, {
+          ...machine,
+          ref: key(issue),
+          description: text,
+        }),
+      () =>
+        fx.t.mutation(internal.machine.mcp.createIssue, {
+          ...machine,
+          project: fx.sub.key,
+          title: 'New',
+          description: text,
+        }),
+    ]) {
+      await refused(write(), 'rule', IMAGE_NOT_ATTACHED)
+    }
+    // an id the saved text only named in prose is still no image of this
+    // task when a later save shows it
+    await saveDescription(fx, issue, `Mentions att:${theirs}`)
+    await refused(
+      saveDescription(fx, issue, `Shows ![photo](att:${theirs})`),
+      'rule',
+      IMAGE_NOT_ATTACHED,
+    )
+    // an id in prose or in code shows no image, so it is no reference
+    const quoted = `See att:${theirs}, \`![photo](att:${theirs})\` and\n\`\`\`\n![photo](att:${theirs})\n\`\`\``
+    await saveDescription(fx, issue, quoted)
+    expect((await row(fx.t, issue.id)).description).toBe(quoted)
+    // a reference the saved text already has, such as one to an image
+    // deleted since, stays through a save of other text
+    await fx.t.run(async (ctx) => {
+      const row = await ctx.db
+        .query('issues')
+        .withIndex('by_uuid', (q) => q.eq('id', issue.id))
+        .unique()
+      if (row !== null) await ctx.db.patch(row._id, { description: text })
+    })
+    await saveDescription(fx, issue, `${text} and more`)
+    expect((await row(fx.t, issue.id)).description).toBe(`${text} and more`)
+  })
+
+  it('deletes a dropped image with its bytes a day later, unless a save brought it back', async () => {
+    vi.useFakeTimers()
+    try {
+      const fx = await setup()
+      const issue = await task(fx, { title: 'Undo' })
+      const [gone, back] = [await plantImage(fx, issue), await plantImage(fx, issue)]
+      const both = `![a](att:${gone}) ![b](att:${back})`
+      await saveDescription(fx, issue, both)
+      await saveDescription(fx, issue, 'Neither')
+      // an undo brings one back
+      await saveDescription(fx, issue, `![b](att:${back})`)
+      const bytes = (await attachment(fx, gone))?.storage_id
+      vi.advanceTimersByTime(DROPPED_KEEP_MS + 1)
+      await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
+      expect(await attachment(fx, gone)).toBeNull()
+      expect(await fx.t.run((ctx) => ctx.storage.getUrl(bytes!))).toBeNull()
+      expect((await attachment(fx, back))?.dropped_at).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('deletes overdue dropped images, and the oldest past the cap, on a description save', async () => {
+    const fx = await setup()
+    const issue = await task(fx, { title: 'Many drops' })
+    const minute = 60_000
+    // DROPPED_IMAGES_MAX dropped in the last hours, one older among them,
+    // and one dropped two days ago
+    const recent = await fx.t.run(async (ctx) => {
+      const ids: string[] = []
+      for (let i = 0; i <= DROPPED_IMAGES_MAX; i++) {
+        const id = uuid()
+        ids.push(id)
+        await ctx.db.insert('issue_attachments', {
+          id,
+          org_id: fx.org.id,
+          issue_id: issue.id,
+          name: `drop-${i}.png`,
+          size_bytes: 3,
+          storage_id: await ctx.storage.store(new Blob(['png']) as never),
+          inline: true,
+          created_at: NOW,
+          dropped_at: new Date(Date.now() - (i + 1) * minute).toISOString(),
+        })
+      }
+      return ids
+    })
+    const overdue = await plantImage(fx, issue)
+    await fx.t.run(async (ctx) => {
+      const row = await ctx.db
+        .query('issue_attachments')
+        .withIndex('by_uuid', (q) => q.eq('id', overdue))
+        .unique()
+      if (row !== null) {
+        await ctx.db.patch(row._id, {
+          dropped_at: new Date(Date.now() - 2 * DROPPED_KEEP_MS).toISOString(),
+        })
+      }
+    })
+    await saveDescription(fx, issue, 'Text without images')
+    expect(await attachment(fx, overdue)).toBeNull()
+    // the oldest of the recent ones goes, the newest DROPPED_IMAGES_MAX stay
+    expect(await attachment(fx, recent[DROPPED_IMAGES_MAX])).toBeNull()
+    for (const id of recent.slice(0, DROPPED_IMAGES_MAX)) {
+      expect((await attachment(fx, id))?.dropped_at).toBeDefined()
+    }
+  })
+
+  it('deletes a dropped image of a task restored from Deleted items after its day', async () => {
+    vi.useFakeTimers()
+    try {
+      const fx = await setup()
+      const issue = await task(fx, { title: 'Deleted with a dropped image' })
+      const image = await plantImage(fx, issue)
+      await saveDescription(fx, issue, `![a](att:${image})`)
+      await saveDescription(fx, issue, 'Without it')
+      await deleteTask(fx.t, fx, issue.id)
+      // the step its drop scheduled runs while the image is in Deleted items
+      vi.advanceTimersByTime(DROPPED_KEEP_MS + 1)
+      await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
+      await as(fx.t, fx.user).mutation(api.deletedItems.restore, {
+        org_id: fx.org.id,
+        ids: [(await itemFor(fx.t, issue.id)).id],
+      })
+      await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
+      expect((await row(fx.t, issue.id)).description).toBe('Without it')
+      expect(await attachment(fx, image)).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it(`refuses a link to a task that is an end of ${LINK_MAX} links, naming it, on every surface`, async () => {

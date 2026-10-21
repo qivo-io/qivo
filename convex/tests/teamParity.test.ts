@@ -1096,8 +1096,6 @@ describe("deleting a team settles its members' open tasks", () => {
         id: uuid(),
         org_id: f.org.id,
         name: 'Design',
-        stale_days: 14,
-        archive_days: 30,
         track_delay_default: false,
         created_at: NOW,
       })

@@ -171,14 +171,10 @@ describe('files.attach', () => {
     if ('refused' in result) throw new Error(`unexpected refusal: ${result.refused.message}`)
     const [row] = await attachmentRows(t)
     expect(row).toMatchObject({ org_id: fx.org.id, issue_id: issue.id })
-    expect(row).not.toHaveProperty('project_id')
     const snap = await as(t, fx.user).query(api.snapshot.forMe, {})
     const shown = snap?.attachments.find((a) => a.id === row.id)
     expect(shown).toMatchObject({ issue_id: issue.id, name: 'spec.pdf', size_bytes: 64 })
-    for (const answer of [result.attachment, shown]) {
-      expect(answer).not.toHaveProperty('org_id')
-      expect(answer).not.toHaveProperty('project_id')
-    }
+    for (const answer of [result.attachment, shown]) expect(answer).not.toHaveProperty('org_id')
   })
 
   it('trims the name and refuses an empty or longer name or media type before any write', async () => {
@@ -251,26 +247,6 @@ describe('files.attach', () => {
     expect(await storageExists(t, sid)).toBe(false)
     expect(await attachmentRows(t)).toEqual([])
     expect(await activityFor(t, fx.org.id)).toEqual([])
-  })
-
-  it('ignores legacy team caps in both directions', async () => {
-    const { t, fx, issue } = await setup()
-    await setOrgCap(t, fx, 2)
-    await t.run((ctx) => ctx.db.patch(fx.team._id, { max_attachment_mb: 1 }))
-    const allowed = await storeBlob(t, MiB + 1)
-    expect('attachment' in (await attachAs(t, fx, fx.user, issue, allowed))).toBe(true)
-
-    await setOrgCap(t, fx, 1)
-    await t.run((ctx) => ctx.db.patch(fx.team._id, { max_attachment_mb: 20 }))
-    const denied = await storeBlob(t, MiB + 1)
-    const result = await attachAs(t, fx, fx.user, issue, denied)
-    expect(result).toEqual({
-      refused: {
-        code: 'bad_request',
-        message: 'attachment exceeds the organization limit of 1 MiB',
-      },
-    })
-    expect(await storageExists(t, denied)).toBe(false)
   })
 
   it('applies the same organization cap to inline images and projects without a team', async () => {

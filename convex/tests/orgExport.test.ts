@@ -66,6 +66,8 @@ const EXCLUDED_TABLES = [
   'profile_removals',
   // Cleanup progress of a label that is already deleted.
   'label_removals',
+  // Progress of the steps that detach a deleted task's archived subtasks.
+  'archived_detaches',
   // An organization's deletion schedule and progress are operational state.
   'org_removals',
   // Personal callback destinations and encrypted secrets are not portable work.
@@ -398,10 +400,9 @@ describe('organization export', () => {
       storage_id: ids.storageId,
       inline: true,
     })
-    // its organization and project copy the task's for index reads, while a
-    // task keeps its own project
+    // its organization copies the task's for index reads, while a task
+    // keeps its own project
     expect(exported.issue_attachments[0]).not.toHaveProperty('org_id')
-    expect(exported.issue_attachments[0]).not.toHaveProperty('project_id')
     expect(exported.issues.find((row) => row.id === task.id)).toHaveProperty(
       'project_id',
       task.project_id,

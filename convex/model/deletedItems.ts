@@ -117,6 +117,7 @@ import { DELETE_REASON_MAX, TEXT_MAX } from '../lib/textLimits'
 import { insertActivity, logActivity } from './activity'
 import { storageIdInUse } from './attachments'
 import { estimateDocumentBytes } from './demoMetrics'
+import { scheduleImageReap } from './descriptionImages'
 import { assertCanEdit, clearParentRemaining, detachChild, sameTopLevel, TITLE_MAX } from './issues'
 import { linksFullAt } from './links'
 import {
@@ -2092,14 +2093,15 @@ async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
     if ((await keptProfile(run, r.doc.profile_id)) !== undefined)
       await db.insert('issue_subscriptions', { ...r.doc, task_archived: undefined })
   } else if (r.table === 'issue_attachments') {
-    // a copy stored before the project was retired leaves it behind
-    const { project_id: _retired, ...doc } = r.doc
     await db.insert('issue_attachments', {
-      ...doc,
+      ...r.doc,
       org_id,
       uploaded_by: await keptProfile(run, r.doc.uploaded_by),
       task_archived: undefined,
     })
+    // the step its drop scheduled found it here, so a dropped image gets
+    // its step again, due when the drop's was (model/descriptionImages.ts)
+    if (r.doc.dropped_at !== undefined) await scheduleImageReap(run.ctx, r.doc.id, r.doc.dropped_at)
   } else throw new Error(`A restore cannot write a ${r.table} row back here`)
   await run.ctx.db.delete(row._id)
 }
@@ -3745,50 +3747,109 @@ async function liveProject(ctx: QueryCtx, id: string): Promise<Doc<'projects'>> 
  * detaches, and the share of any of Convex's limits for one transaction it
  * may use before it leaves the rest to the next step. A child is a task
  * row, up to about 120 KB within TEXT_MAX, and each detach also notifies
- * and sends task.updated, whose costs have no fixed bound. Tests lower
+ * and sends task.updated, whose costs have no fixed bound. Each restart by
+ * recoverArchivedDetaches halves the page, down to one child. Tests lower
  * them. */
 export const ARCHIVED_DETACH = { page: 100, room: 0.5 }
 
 const detachArchivedRef = makeFunctionReference<
   'mutation',
-  { parent_id: string; actor_id: string; now: string },
+  { job_id: Id<'archived_detaches'> },
   null
 >('deletedItems:detachArchived')
 
+/* Records that the delete of task `parent_id` at `deleted_at` by `actor_id`
+ * left archived subtasks, and schedules the first step that detaches them
+ * (detachArchivedChildren). */
+async function startArchivedDetach(
+  ctx: MutationCtx,
+  a: { parent_id: string; actor_id: string; deleted_at: string },
+): Promise<void> {
+  const job_id = await ctx.db.insert('archived_detaches', {
+    ...a,
+    progress_at: new Date().toISOString(),
+    attempts: 0,
+  })
+  const scheduled_id = await ctx.scheduler.runAfter(0, detachArchivedRef, { job_id })
+  await ctx.db.patch(job_id, { scheduled_id })
+}
+
 /**
- * Detaches the archived subtasks left under task `parent_id` by its delete
- * at `now` (moveTasksToTrash), a page per step, as the delete detaches its
- * active children: each becomes a top-level task, and its followers read
- * that it left its parent, told in background steps
+ * One step of detaching the archived subtasks the delete of a task left,
+ * which the job `jobId` (archived_detaches) names, a page per step, as the
+ * delete detaches its active children: each becomes a top-level task, and
+ * its followers read that it left its parent, told in background steps
  * (NotifyPreload.deferFollowers). SUBTASK_MAX does not bound archived
  * subtasks, so the delete's own transaction leaves them to these steps.
- * Only subtasks archived by `now` go, so a restore of the parent from
+ * Only subtasks archived by the delete go, so a restore of the parent from
  * Deleted items in the meantime keeps a subtask archived under it later,
  * and the steps go on until the ones the delete left are all detached. A
- * subtask restored from the archive meanwhile has left its missing parent
- * already (model/issues.ts restoreLeavesParent).
+ * subtask restored from the archive meanwhile leaves its parent as these
+ * steps would have made it (model/issues.ts restoreLeavesParent). A step
+ * that leaves work saves its progress and schedules the next; the last one
+ * deletes the job. A step that fails or stops leaves the job for
+ * recoverArchivedDetaches.
  */
 export async function detachArchivedChildren(
   ctx: MutationCtx,
-  a: { parent_id: string; actor_id: string; now: string },
+  jobId: Id<'archived_detaches'>,
 ): Promise<void> {
+  const job = await ctx.db.get(jobId)
+  if (job === null) return
+  const page = Math.max(1, Math.floor(ARCHIVED_DETACH.page / 2 ** job.attempts))
   const kids = await ctx.db
     .query('issues')
     .withIndex('by_parent_archived', (q) =>
-      q.eq('parent_id', a.parent_id).gt('archived_at', '').lte('archived_at', a.now),
+      q.eq('parent_id', job.parent_id).gt('archived_at', '').lte('archived_at', job.deleted_at),
     )
-    .take(ARCHIVED_DETACH.page)
-  const actor = (await byId(ctx, 'profiles', a.actor_id)) ?? undefined
+    .take(page)
+  const actor = (await byId(ctx, 'profiles', job.actor_id)) ?? undefined
   const preload: NotifyPreload = { ...newNotifyPreload(), deferFollowers: true }
-  for (const [i, kid] of kids.entries()) {
+  let detached = 0
+  for (const kid of kids) {
     // a detached row leaves the range, so the next step needs no cursor
-    if (i > 0 && (await usedMoreThan(ctx, ARCHIVED_DETACH.room))) {
-      await ctx.scheduler.runAfter(0, detachArchivedRef, a)
-      return
-    }
-    await detachChild(ctx, kid, actor, a.now, preload)
+    if (detached > 0 && (await usedMoreThan(ctx, ARCHIVED_DETACH.room))) break
+    await detachChild(ctx, kid, actor, job.deleted_at, preload)
+    detached += 1
   }
-  if (kids.length === ARCHIVED_DETACH.page) await ctx.scheduler.runAfter(0, detachArchivedRef, a)
+  if (detached < kids.length || kids.length === page) {
+    const scheduled_id = await ctx.scheduler.runAfter(0, detachArchivedRef, { job_id: job._id })
+    await ctx.db.patch(job._id, {
+      progress_at: new Date().toISOString(),
+      scheduled_id,
+      attempts: 0,
+    })
+  } else await ctx.db.delete(job._id)
+}
+
+/** Restarts the detach steps (detachArchivedChildren) whose last step
+ * committed more than STALLED_MS ago and whose next step neither waits nor
+ * runs, because it failed or stopped. Each restart halves the step's page
+ * until a step commits, so a step too large for one transaction gets
+ * smaller; at one subtask a step keeps being restarted. */
+export async function recoverArchivedDetaches(ctx: MutationCtx): Promise<void> {
+  const now = Date.now()
+  const stalled = await ctx.db
+    .query('archived_detaches')
+    .withIndex('by_progress', (q) => q.lt('progress_at', new Date(now - STALLED_MS).toISOString()))
+    .take(RECOVER_SCAN)
+  let restarted = 0
+  for (const job of stalled) {
+    if (restarted === RECOVER_BATCH) break
+    const next = job.scheduled_id === undefined ? null : await ctx.db.system.get(job.scheduled_id)
+    if (next?.state.kind === 'pending' || next?.state.kind === 'inProgress') continue
+    restarted += 1
+    const scheduled_id = await ctx.scheduler.runAfter(0, detachArchivedRef, { job_id: job._id })
+    await ctx.db.patch(job._id, {
+      progress_at: new Date(now).toISOString(),
+      scheduled_id,
+      attempts: job.attempts + 1,
+    })
+    console.warn('Detaching the archived subtasks of a deleted task resumed', {
+      parent_id: job.parent_id,
+      attempts: job.attempts + 1,
+    })
+  }
 }
 
 /**
@@ -3897,11 +3958,7 @@ export async function moveTasksToTrash(
         .withIndex('by_parent_archived', (q) => q.eq('parent_id', task.id).gt('archived_at', ''))
         .first()
       if (archivedKid !== null) {
-        await ctx.scheduler.runAfter(0, detachArchivedRef, {
-          parent_id: task.id,
-          actor_id: actor.id,
-          now,
-        })
+        await startArchivedDetach(ctx, { parent_id: task.id, actor_id: actor.id, deleted_at: now })
       }
     }
     await emitTaskEvent(counted, { name: 'task.deleted', issue: task, actor, now })

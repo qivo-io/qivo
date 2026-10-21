@@ -3,7 +3,8 @@ import { HoverTooltip } from '@/components/ui/tooltip'
 import { hasOpenTooltip } from '@/lib/passEscapeOn'
 /* Rich editor for the lib/md dialect; viewers use Markdown. Load through
    parseMd -> astToDoc, save through docToAst -> astToMd and reparse to a fixed
-   point. updateIssue GC preserves images referenced by new or previous text.
+   point. The server's description saves settle images
+   (convex/model/descriptionImages.ts).
    Editable users load this component lazily.
 
    Save/Mod-S commits; blur retains drafts and dirty unmount discards with a
@@ -312,7 +313,12 @@ export type DescEditorHandle = {
     the save because someone changed the text first. The draft then stays,
     and the text the server keeps becomes its baseline once it shows, so a
     second Save deliberately replaces it. */
-export type DraftKeep = { seen: string; keepDraft: (shown: unknown) => boolean }
+export type DraftKeep = {
+  seen: string
+  keepDraft: (shown: unknown) => boolean
+  /** For any other refusal: the draft stays unsaved against `seen`. */
+  keepUnsaved: () => void
+}
 
 /** Comment mode: commit goes to onCommit (the store's add/updateComment),
     not the issue description. onCommit resolves whether the server saved
@@ -702,7 +708,8 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
         },
         transformPasted: (slice) => {
           // an att: image pasted from another issue would die with that
-          // issue's GC — strip it (uploading: placeholders are meaningless
+          // issue's image, and the server refuses it — strip it and say so
+          // (uploading: placeholders are meaningless
           // outside their source editor too); signed-URL srcs from a copy of
           // the rendered view normalize back to att: first. Comment mode owns
           // nothing: empty baseline, so every image reference strips.
@@ -759,7 +766,8 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   const reapSessionUploads = () => {
     // Draft-only uploads die with their draft (revert, unmount).
     // Ids that ever reached committed text are pruned at commit/reconcile
-    // time and belong to the store's description GC from then on — but a
+    // time and belong to the server's description saves from then on
+    // (convex/model/descriptionImages.ts) — but a
     // held echo can leave rawRef behind the store (finishUpload patches the
     // committed row mid-draft), so check BOTH texts before deleting anything.
     const it = issueKey !== null ? P.issueById[issueKey] : null
@@ -801,6 +809,17 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       committedDocRef.current = ed.schema.nodeFromJSON(astToDoc(parseMd(base)))
       refreshDirtyRef.current()
       return true
+    },
+    // a refusal for any other reason, such as an image the server refuses,
+    // puts back the baseline the save had moved, so the draft is unsaved
+    // again; a later change by someone else still refuses the next save
+    keepUnsaved: () => {
+      if (ed.isDestroyed) return
+      rebaseRef.current = false
+      rawRef.current = seen
+      canonRef.current = canonical(seen)
+      committedDocRef.current = ed.schema.nodeFromJSON(astToDoc(parseMd(seen)))
+      refreshDirtyRef.current()
     },
   })
 
@@ -892,21 +911,30 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       rebaseRef.current = false
       rawRef.current = text
       canonRef.current = text
-      // ids entering committed text are the store's from here on — its
-      // description GC decides their lifetime, never this editor's reap
+      // ids entering committed text are the server's from here on — its
+      // description saves decide their lifetime, never this editor's reap
+      const entering = sessionUploadsRef.current.filter((id) => text.includes(id))
       sessionUploadsRef.current = sessionUploadsRef.current.filter((id) => !text.includes(id))
       P.updateIssue(
         issueKey,
         { description: text || null },
-        { seen: { description: keep.seen }, keepDraft: keep.keepDraft },
+        {
+          seen: { description: keep.seen },
+          keepDraft: keep.keepDraft,
+          // a refused save leaves its uploads to this draft again, so a
+          // discard still deletes the ones no saved text took
+          keepUnsaved: () => {
+            sessionUploadsRef.current = [...new Set([...sessionUploadsRef.current, ...entering])]
+            keep.keepUnsaved()
+          },
+        },
       )
     }
-    // the save is the new baseline; undo may cross it freely — the store GC
-    // keeps the just-replaced text's images for one more save, so an att:
-    // node resurrected right away still has its attachment (undoing across
-    // OLDER saves can surface "Image unavailable" — acceptable, and visible
-    // for what it is). No state reset: it would also yank the caret to the
-    // doc start under a focused Mod-S.
+    // the save is the new baseline; undo may cross it freely — an image the
+    // save took out stays, uncounted, for a day, and a save that shows it
+    // again brings it back (convex/model/descriptionImages.ts), so an att:
+    // node an undo resurrects still has its attachment. No state reset: it
+    // would also yank the caret to the doc start under a focused Mod-S.
     committedDocRef.current = ed.state.doc
     refreshDirty()
   }

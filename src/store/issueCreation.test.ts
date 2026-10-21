@@ -289,6 +289,105 @@ describe('task creation through the client store', () => {
     expect(P.issueById[child].parent).toBeNull()
   })
 
+  /* Publishes one task, QN-1, and answers its create, so the store holds it
+     as the server does. */
+  const oneTask = async (over: Partial<Snapshot['issues'][number]> = {}) => {
+    const key = P.addIssue({ project: snap.projects[0].id, title: 'Task' })!
+    const uuid = P.issueById[key].uuid
+    snap.orgs[0].next_issue_num = 1
+    snap.issues = [
+      {
+        id: uuid,
+        org_id: snap.orgs[0].id,
+        project_id: snap.projects[0].id,
+        num: 1,
+        title: 'Task',
+        description: '',
+        status: 'backlog',
+        priority: 'low',
+        paused: false,
+        created_at: NOW,
+        updated_at: NOW,
+        has_hidden_subtasks: false,
+        has_hidden_parent: false,
+        ...over,
+      },
+    ]
+    publish(structuredClone(snap))
+    requests.splice(0)[0].resolve({ num: 1 })
+    await settled()
+    return { key, uuid }
+  }
+
+  it('creates a linked task and its link in one write, and takes both away on a refusal', async () => {
+    const { key, uuid } = await oneTask()
+    P.createLinked(key, 'blocked_by', 'Blocker')
+    const made = P.issues.find((task) => task.title === 'Blocker')
+    expect(made?.key).toBe(`${P.ISSUE_PREFIX}-2`)
+    expect(P.issueById[key].links).toEqual([
+      expect.objectContaining({ id: made?.id, type: 'blocked_by' }),
+    ])
+    expect(requests.map((r) => r.name)).toEqual(['issues:createLinked'])
+    expect(requests[0].args).toMatchObject({ id: uuid, kind: 'blocked_by', title: 'Blocker' })
+    requests[0].reject(
+      new ConvexError({
+        code: 'rule',
+        message:
+          'QN-1 already has 100 links, the most a task can have; remove one of its links first',
+      }),
+    )
+    await settled()
+    expect(P.issues.some((task) => task.title === 'Blocker')).toBe(false)
+    expect(P.issueById[key].links).toEqual([])
+    expect(showToast).toHaveBeenCalledWith(
+      expect.stringContaining('already has 100 links'),
+      'error',
+    )
+  })
+
+  it('frees the place of a description image at once when a save takes it out', async () => {
+    const image = crypto.randomUUID()
+    const { key, uuid } = await oneTask({ description: `![photo](att:${image})` })
+    snap.issues[0].description = `![photo](att:${image})`
+    snap.attachments = [
+      {
+        id: image,
+        issue_id: uuid,
+        name: 'photo.png',
+        size_bytes: 3,
+        storage_id: 'storage-photo' as never,
+        inline: true,
+        created_at: NOW,
+      },
+      // 99 files beside it fill the task
+      ...Array.from({ length: 99 }, (_, i) => ({
+        id: crypto.randomUUID(),
+        issue_id: uuid,
+        name: `file-${i}.pdf`,
+        size_bytes: 3,
+        storage_id: `storage-${i}` as never,
+        inline: false,
+        created_at: NOW,
+      })),
+    ]
+    publish(structuredClone(snap))
+    await settled()
+    expect(P.issueById[key].attachmentCount).toBe(100)
+    P.updateIssue(key, { description: 'No photo' })
+    expect(P.issueById[key].attachmentCount).toBe(99)
+    // a file uploads at once into the place the image left
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise(() => {})),
+    )
+    void P.addAttachment(key, new File(['notes'], 'notes.txt', { type: 'text/plain' }))
+    await vi.waitFor(() => expect(requests.map((r) => r.name)).toContain('files:uploadUrl'))
+    expect(showToast).not.toHaveBeenCalled()
+    // an undo that saves it again counts it again
+    P.updateIssue(key, { description: `![photo](att:${image})` })
+    expect(P.issueById[key].attachmentCount).toBe(100)
+  })
+
   it('notifies the caller once before rollback can reuse the preview number for another task', async () => {
     const onKeyFixed = vi.fn()
     P.watchHandles(onKeyFixed)

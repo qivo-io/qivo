@@ -102,13 +102,19 @@ create a task if no existing task matches. Attachments support drag-and-drop
 and follow the organization's per-file size limit ([Attachment limits](./organization-and-team-settings.md)).
 
 A task has at most 20 labels, 100 links and 100 attachments, with images in
-its description counted as attachments. At a limit the control is disabled
+its description counted as attachments while the description shows them.
+Taking an image out of the description and saving frees its place at once,
+and an undo that brings the image back within a day keeps it. A task keeps
+the 100 images most recently taken out this way. At a limit the
+control is disabled
 with a sentence such as **This task has 20 labels, the most a task can have**,
 and the label picker only takes labels off. A file you drop or paste on a
 full task is refused before it uploads. A link also needs room on the other
 task, so picking a task that has 100 links is refused with a sentence that
 names it. The window counts only the links whose other task you can see, so
 Qivo can also refuse a link when you make it, naming the task that is full.
+A new task you create from the **Linked tasks** picker is then not created
+either.
 
 Linked tasks show **Blocks**, **Blocked by** or **Relates to**. When the linked
 task is Done, the dependency labels become **Previously blocked** or
