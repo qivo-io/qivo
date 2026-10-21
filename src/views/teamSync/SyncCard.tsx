@@ -31,6 +31,7 @@ import {
   mentionBody,
   rowMarks,
   type SinceMark,
+  type SyncCardPlace,
   type SyncDay,
   waitingLabel,
 } from '@/lib/teamSync'
@@ -64,22 +65,23 @@ export type PageCtx = {
   setPrompt: (handle: string | null) => void
   onOpenTask: (handle: string) => void
   onShowTask: (view: 'kanban' | 'roadmap', handle: string) => void
-  /** each mounted card's scope of unsent text, by its task's uuid, which a
-      scope switch reads to ask only about the cards it takes away */
-  cards: Map<UnsentScope, string>
+  /** each mounted card's scope of unsent text, with its task and section's
+      person, which a scope switch reads to ask only about the cards it
+      takes away */
+  cards: Map<UnsentScope, SyncCardPlace>
 }
 
 /** The scope of the text typed in one card, inside the page's, registered
     in `ctx.cards` while the card is mounted. */
 function useCardScope(ctx: PageCtx, uuid: string) {
   const scope = useUnsentScope()
-  const { cards } = ctx
+  const { cards, owner } = ctx
   useLayoutEffect(() => {
-    cards.set(scope, uuid)
+    cards.set(scope, { task: uuid, owner })
     return () => {
       cards.delete(scope)
     }
-  }, [cards, scope, uuid])
+  }, [cards, scope, uuid, owner])
   return scope
 }
 

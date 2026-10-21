@@ -32,6 +32,7 @@ import {
   previousSync,
   resolveSyncScope,
   type ScopeWorld,
+  type SyncCardPlace,
   type SyncDay,
   type SyncGroupId,
   type SyncScope,
@@ -417,7 +418,7 @@ export function TeamSync({
   const [openAgents, setOpenAgents] = useState(() => new Set<string>())
   const [laterOpen, setLaterOpen] = useState(() => new Set<string>())
   // the scope of each card on the page, by task (PageCtx.cards)
-  const [cards] = useState(() => new Map<UnsentScope, string>())
+  const [cards] = useState(() => new Map<UnsentScope, SyncCardPlace>())
   // the step last shown, its index and scope, for a person who leaves mid-sitting
   const shown = useRef<{ step: string; idx: number; scope: string } | null>(null)
   const onCorrectRef = useRef(onCorrect)
