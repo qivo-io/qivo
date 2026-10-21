@@ -4,6 +4,13 @@
 //     [--baseline [revision]] [--root checkout] [--output file.json]
 //     [--fixture varied] [--serve [--host address]]
 //
+// The page loads a realistic workspace from a stand-in server in a Web Worker
+// (scripts/perf/server.mjs) and pays for every delivery what a real client
+// pays: the time its bytes take at --mbps, and decoding its JSON text
+// (scripts/perf/transport.mjs). Each phase also records the bytes delivered
+// in it (*WireBytes) and the script time spent decoding them (*DecodeMs);
+// the phase's own key is its elapsed time.
+//
 // --baseline also builds `revision` (by default the merge base of HEAD and
 // origin/main, as scripts/benchmark-backend.mjs picks it) with this
 // checkout's dependencies and transport, runs its samples in turn with the
@@ -81,6 +88,10 @@ const PHASES = [
   'remoteSettle',
   'refusalWithTen',
   'markAllRead',
+  'remoteCreate',
+  'remoteProjectRename',
+  'inboxMessage',
+  'remoteStamp',
   'boardNavigation',
   'boardComplete',
   'boardRemote',
@@ -101,8 +112,20 @@ const COMPARED = [
     'refusalWithTen',
     'markAllRead',
     'drag',
+    'remoteCreate',
+    'remoteProjectRename',
+    'inboxMessage',
+    'remoteStamp',
     ...PHASES.filter((phase) => /^(board|phone|varied)/.test(phase)),
   ].flatMap((phase) => [`${phase}ScriptDurationMs`, `${phase}AppRenders`]),
+  ...[
+    'remote',
+    'remoteCreate',
+    'remoteProjectRename',
+    'inboxMessage',
+    'remoteStamp',
+    'boardRemote',
+  ].map((phase) => `${phase}WireBytes`),
   // opening the Board from the click until every card is in
   'boardOpenToCompleteMs',
   'boardLongestSliceMs',
@@ -181,11 +204,15 @@ async function openPage(origin, tasks, metrics, query = '') {
       () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
     )
   const appRenders = () => page.evaluate(() => window.__perf.appRenders)
+  const wireBytes = () => page.evaluate(() => window.__perf.wireBytes)
+  const decodeMs = () => page.evaluate(() => window.__perf.decodeMs)
   /* Times `operation` as the running phase, with its script, layout and
-     style time and its App renders. */
+     style time, its App renders and the bytes delivered in it. */
   const timed = async (operation) => {
     const before = await cdp.send('Performance.getMetrics')
     const renders = await appRenders()
+    const bytes = await wireBytes()
+    const decoding = await decodeMs()
     const start = await page.evaluate(() => performance.now())
     await operation()
     await settle()
@@ -202,9 +229,13 @@ async function openPage(origin, tasks, metrics, query = '') {
     }
     metrics[`${running.phase}AppRenders`] ??= []
     metrics[`${running.phase}AppRenders`].push((await appRenders()) - renders)
+    metrics[`${running.phase}WireBytes`] ??= []
+    metrics[`${running.phase}WireBytes`].push((await wireBytes()) - bytes)
+    metrics[`${running.phase}DecodeMs`] ??= []
+    metrics[`${running.phase}DecodeMs`].push((await decodeMs()) - decoding)
     return elapsed
   }
-  await page.goto(`${origin}/?tasks=${tasks}&latency=${latency}${query}`)
+  await page.goto(`${origin}/?tasks=${tasks}&latency=${latency}&mbps=${bandwidth}${query}`)
   return { context, page, cdp, errors, settle, appRenders, timed }
 }
 
@@ -212,6 +243,11 @@ async function openPage(origin, tasks, metrics, query = '') {
    that mounts in slices marks its pending part with this attribute; one
    that mounts whole never sets it. */
 const boardComplete = () => !document.querySelector('[data-board-mount="pending"]')
+
+/** How many cards the Board shows: every task but the parents, whose
+    subtasks are their cards. */
+const boardCards = (page) =>
+  page.evaluate(() => window.PLANNER.issues.filter((it) => !window.PLANNER.isGroup(it)).length)
 
 /** The heap in use after a collection, in MiB, and the page's elements. */
 async function pageSize(page, cdp) {
@@ -482,18 +518,53 @@ async function runSample(origin, tasks, metrics) {
   phase('markAllRead')
   metrics.markAllRead.push(
     await timed(async () => {
-      await page.evaluate(() =>
-        Promise.race([
-          window.PLANNER.markAllMessagesRead(),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Mark all as read did not finish')), 15000),
-          ),
-        ]),
+      await page.evaluate(
+        (limit) =>
+          Promise.race([
+            window.PLANNER.markAllMessagesRead(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('Mark all as read did not finish')), limit),
+            ),
+          ]),
+        timeout,
       )
       await paintTimer()
     }),
   )
   assert.equal(await page.evaluate(() => window.PLANNER.unreadMessages), 0)
+  await noToasts()
+  // Other people's changes besides a rename, each one delivery: a new
+  // task, a renamed project, a new inbox message and a Team sync stamp.
+  phase('remoteCreate')
+  metrics.remoteCreate.push(
+    await timed(async () => {
+      await page.evaluate(() => window.__perf.deliverCreate())
+      await paintTimer()
+    }),
+  )
+  assert.equal(await page.evaluate(() => window.PLANNER.issues.length), tasks + 1)
+  phase('remoteProjectRename')
+  metrics.remoteProjectRename.push(
+    await timed(async () => {
+      await page.evaluate(() => window.__perf.deliverProjectRename())
+      await paintTimer()
+    }),
+  )
+  phase('inboxMessage')
+  metrics.inboxMessage.push(
+    await timed(async () => {
+      await page.evaluate(() => window.__perf.deliverMessage())
+      await paintTimer()
+    }),
+  )
+  assert.equal(await page.evaluate(() => window.PLANNER.unreadMessages), 1)
+  phase('remoteStamp')
+  metrics.remoteStamp.push(
+    await timed(async () => {
+      await page.evaluate(() => window.__perf.deliverStamp())
+      await paintTimer()
+    }),
+  )
   phase('offscreen focus')
   const lastTask = page.locator('[data-roadmap-task-open]').last()
   const lastId = await lastTask.getAttribute('data-roadmap-task-open')
@@ -518,7 +589,11 @@ async function runSample(origin, tasks, metrics) {
   const board = await openBoard(opened, metrics, 'board')
   metrics.boardOpenToCompleteMs.push(board.openToComplete)
   metrics.boardLongestSliceMs.push(board.longest)
-  assert.equal(await page.locator('[data-card]').count(), tasks, 'The Board must show every task')
+  assert.equal(
+    await page.locator('[data-card]').count(),
+    await boardCards(page),
+    'The Board must show every task',
+  )
   const boardSize = await pageSize(page, cdp)
   metrics.boardHeapMb.push(boardSize.heapMb)
   metrics.boardDomNodes.push(boardSize.domNodes)
@@ -564,7 +639,11 @@ async function runSample(origin, tasks, metrics) {
     }),
   )
   metrics.boardFilterFirstCardMs.push(firstCard)
-  assert.equal(await page.locator('[data-card]').count(), tasks, 'Clearing must bring every task')
+  assert.equal(
+    await page.locator('[data-card]').count(),
+    await boardCards(page),
+    'Clearing must bring every task',
+  )
   // A phone shows the task list in place of the Board.
   phase('phoneBoard')
   let phoneFirstCard = 0
@@ -583,7 +662,7 @@ async function runSample(origin, tasks, metrics) {
   metrics.phoneBoardFirstCardMs.push(phoneFirstCard)
   assert.equal(
     await page.locator('.mobile-task-list [data-card]').count(),
-    tasks,
+    await page.evaluate(() => window.PLANNER.issues.length),
     'The phone list must show every task',
   )
   await page.setViewportSize({ width: 1440, height: 1000 })
