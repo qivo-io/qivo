@@ -24,7 +24,7 @@
 // pages, on --host (127.0.0.1 by default), until it is stopped.
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { rmSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -79,12 +79,20 @@ if (baselineRevision !== null) {
 }
 const temporary = await mkdtemp(join(tmpdir(), 'qivo-browser-perf-'))
 // Ctrl-C or a stop skips the finally below, so a measuring run removes its
-// builds and the baseline checkout here. --serve waits for the signal itself.
+// builds and the baseline checkout here, and keeps the sizes it finished
+// with a note of where it stopped. --serve waits for the signal itself.
 if (!process.argv.includes('--serve'))
-  for (const signal of ['SIGINT', 'SIGTERM'])
+  for (const [signal, code] of [
+    ['SIGINT', 130],
+    ['SIGTERM', 143],
+  ])
     process.once(signal, () => {
+      if (running) {
+        report.failure = { ...running, message: `stopped by ${signal}` }
+        writeFileSync(output, `${JSON.stringify(report, null, 2)}\n`)
+      }
       rmSync(temporary, { recursive: true, force: true })
-      process.exit(130)
+      process.exit(code)
     })
 // the timed phases, each with its script, layout and style time and the
 // number of App renders in it

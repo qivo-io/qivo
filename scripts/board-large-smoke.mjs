@@ -22,6 +22,11 @@ import { buildPage, serve } from './perf/page.mjs'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const at = process.argv.indexOf('--tasks')
 const tasks = at < 0 ? 10_000 : Number(process.argv[at + 1])
+// a Board of 300 cards or fewer mounts whole, and the checks below need slices
+if (!Number.isInteger(tasks) || tasks <= 300) {
+  console.error('[board-large] --tasks takes a whole number above 300')
+  process.exit(1)
+}
 const slow = { timeout: 120_000 }
 const log = (message) => console.log(`[board-large] ${message}`)
 // the most cards a first screen of 1000px and 500px more holds in each of
@@ -31,10 +36,13 @@ const pending = () => !!document.querySelector('[data-board-mount="pending"]')
 
 const temporary = await mkdtemp(join(tmpdir(), 'qivo-board-large-'))
 // Ctrl-C or a stop skips the finally below, so remove the build here.
-for (const signal of ['SIGINT', 'SIGTERM'])
+for (const [signal, code] of [
+  ['SIGINT', 130],
+  ['SIGTERM', 143],
+])
   process.once(signal, () => {
     rmSync(temporary, { recursive: true, force: true })
-    process.exit(130)
+    process.exit(code)
   })
 let server
 let browser

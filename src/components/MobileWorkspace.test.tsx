@@ -56,6 +56,8 @@ beforeEach(() => {
     slices.push(() => callback(performance.now())),
   )
   window.showToast = vi.fn()
+  // jsdom scrolls nothing; a keyboard focus restore scrolls its row into view
+  Element.prototype.scrollIntoView = vi.fn()
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -112,5 +114,36 @@ describe('the phone task list', { timeout: BOARD_TEST_TIMEOUT }, () => {
     while (slices.length) await act(async () => slices.shift()?.())
     expect(rows()).toHaveLength(500)
     expect(list?.getAttribute('data-board-mount')).toBe('complete')
+  })
+
+  it('keeps focus on a row that moves into a section whose rows still wait', {
+    timeout: BOARD_TEST_TIMEOUT * 3,
+  }, async () => {
+    vi.stubGlobal('innerHeight', 400)
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        for (let n = 0; n < 500; n++)
+          snap.issues.push(taskRow(snap, `t${n}`, n % 2 ? 'todo' : 'done', n + 1))
+      },
+      { phone: true },
+    )
+    await board.render(root)
+    // To Do comes first; Done waits for slices that never run here
+    const row = document.querySelector<HTMLElement>('[data-status="todo"] .mobile-task-row')
+    const id = row?.getAttribute('data-card')
+    expect(document.querySelector('[data-status="done"] .mobile-task-row')).toBeNull()
+    await act(async () => row?.focus())
+    // the row names the task by its key, the snapshot by its uuid
+    const uuid = id ? board.P.issueById[id]?.uuid : undefined
+    const task = board.snapshot.issues.find((it) => it.id === uuid)
+    if (!task) throw new Error('missing the focused task')
+    task.status = 'done'
+    await board.deliver()
+    await act(async () => {})
+    expect(document.activeElement?.getAttribute('data-card')).toBe(id)
+    expect(document.activeElement?.closest('[data-status]')?.getAttribute('data-status')).toBe(
+      'done',
+    )
   })
 })

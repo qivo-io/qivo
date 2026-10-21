@@ -9,10 +9,10 @@
  * the same refusals: no deploy key, no staging, production or demo
  * environment, and loopback origins only. Seed Northstar first with
  * `marketing-demo.mjs seed --local`. The tasks are created as Nora, the
- * organization's admin, through issues:create and issues:createParent, eight
+ * organization's admin, through issues:create and issues:createParent, one
  * at a time, so every one passes the app's own checks. Their titles start
- * with "Board scale", and a second run adds only the ones still missing, up
- * to --tasks. The mix follows the benchmark's varied workspace: every
+ * with "Board scale" and their number, and a second run adds only the
+ * numbers still missing, up to --tasks. The mix follows the benchmark's varied workspace: every
  * status, a parent with three subtasks every 25th task, a due date every 7th
  * (every other one past), a pause every 31st, an 80-character title (the
  * most a title holds) every 13th and no owner every 11th. */
@@ -29,11 +29,10 @@ const ACTOR = 'nora@demo.qivo.io'
 const STATUSES = ['backlog', 'todo', 'progress', 'review', 'done']
 const PRIORITIES = ['medium', 'high', 'low', 'medium', 'urgent', 'low', 'medium']
 const WORDS = ['calibrate', 'review', 'ship', 'test', 'document']
-const AT_ONCE = 8
-/* The most seeded tasks. At about 10,000 tasks snapshot:forMe already runs
-   close to Convex's 1s limit on a local backend, so an organization much
-   larger would no longer load. */
-const MOST_TASKS = 12_000
+/* The most seeded tasks. At 10,000 tasks and their 400 parents
+   snapshot:forMe already runs close to Convex's 1s limit on a local
+   backend, so a larger organization would no longer load. */
+const MOST_TASKS = 10_000
 
 const ref = (name) => makeFunctionReference(name)
 
@@ -84,6 +83,35 @@ export function seededTask(n, org, project, owner) {
   }
 }
 
+/** The numbers of the seeded tasks in `issues`, from their titles. */
+export function seededNumbers(issues) {
+  const numbers = new Set()
+  for (const { title } of issues) {
+    const match = /^Board scale (?!parent)\S+ task (\d+)/.exec(title)
+    if (match) numbers.add(Number(match[1]) - 1)
+  }
+  return numbers
+}
+
+/** The tasks still to create for `tasks` seeded ones, given the `present`
+    numbers: one job per task, and one per family (every 25th task, its
+    parent and the three tasks after it), made in order. A family whose
+    first task exists is left as it is, so an interrupted family stays
+    partial rather than gaining a second parent. */
+export function planSeed(tasks, present) {
+  const list = []
+  let added = 0
+  for (let n = 0; n < tasks; n++) {
+    const family = n % 25 === 0 && n + 3 < tasks
+    if (!present.has(n)) {
+      list.push({ first: n, family })
+      added += family ? 4 : 1
+    }
+    if (family) n += 3
+  }
+  return { list, added }
+}
+
 /** Seeds the backend `args` name, writing progress through `log`. */
 export async function runBoardScaleSeed(args, { env = process.env, log = console.log } = {}) {
   const options = parseSeedArgs(args)
@@ -119,61 +147,48 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
       owners.get(issue.project_id).add(issue.assignee_id)
   const projects = [...owners.keys()]
   if (!projects.length) throw new DemoCliError('Northstar has no sub-projects to fill.')
-  // the seeded tasks already there, not counting the parents made for them
-  const done = issues.filter(
-    (issue) => issue.title.startsWith(PREFIX) && !issue.title.startsWith(`${PREFIX} parent`),
-  ).length
-  log(
-    `${done} seeded tasks found; adding ${Math.max(0, options.tasks - done)} in ${projects.length} sub-projects.`,
-  )
-
-  /* One job per task, and one per family of a parent and its three
-     subtasks, which must be made in order. */
-  const jobs = []
-  for (let n = done; n < options.tasks; n++) {
-    const project = projects[n % projects.length]
-    const people = [...owners.get(project)]
-    const task = seededTask(n, org, project, people.length ? people[n % people.length] : actor.id)
-    if (n % 25 !== 0 || n + 3 >= options.tasks) {
-      jobs.push([['issues:create', task]])
-      continue
-    }
-    const parent = crypto.randomUUID()
-    const family = [
-      ['issues:create', task],
-      [
-        'issues:createParent',
-        { id: task.id, org_id: org, parent_id: parent, title: `${PREFIX} parent ${n + 1}` },
-      ],
-    ]
-    for (let k = 1; k <= 3; k++)
-      family.push([
-        'issues:create',
-        { ...seededTask(n + k, org, project, task.assignee_id ?? actor.id), parent_id: parent },
-      ])
-    jobs.push(family)
-    n += 3
-  }
+  const jobs = planSeed(options.tasks, seededNumbers(issues))
+  log(`${jobs.added} seeded tasks to add in ${projects.length} sub-projects.`)
   let made = 0
-  let next = 0
-  let failure = null
-  const worker = async () => {
-    while (!failure && next < jobs.length) {
-      const job = jobs[next++]
-      for (const [name, fields] of job) {
-        try {
-          await client.mutation(ref(name), fields)
-        } catch (error) {
-          failure ??= `${name} refused task "${fields.title}": ${error.data?.message ?? error.message}`
-          return
-        }
-        if (name === 'issues:create' && ++made % 500 === 0) log(`${done + made} seeded tasks`)
+  for (const job of jobs.list) {
+    const project = projects[job.first % projects.length]
+    const people = [...owners.get(project)]
+    const owner = people.length ? people[job.first % people.length] : actor.id
+    const head = seededTask(job.first, org, project, owner)
+    const parent = crypto.randomUUID()
+    const calls = job.family
+      ? [
+          ['issues:create', head],
+          [
+            'issues:createParent',
+            {
+              id: head.id,
+              org_id: org,
+              parent_id: parent,
+              title: `${PREFIX} parent ${job.first + 1}`,
+            },
+          ],
+          ...[1, 2, 3].map((k) => [
+            'issues:create',
+            {
+              ...seededTask(job.first + k, org, project, head.assignee_id ?? actor.id),
+              parent_id: parent,
+            },
+          ]),
+        ]
+      : [['issues:create', head]]
+    for (const [name, fields] of calls) {
+      try {
+        await client.mutation(ref(name), fields)
+      } catch (error) {
+        throw new DemoCliError(
+          `${name} refused task "${fields.title}": ${error.data?.message ?? error.message}`,
+        )
       }
+      if (name === 'issues:create' && ++made % 500 === 0) log(`${made} seeded tasks added`)
     }
   }
-  await Promise.all(Array.from({ length: AT_ONCE }, worker))
-  if (failure) throw new DemoCliError(failure)
-  log(`Done: ${done + made} seeded tasks in Northstar on ${target.url}.`)
+  log(`Done: ${made} seeded tasks added in Northstar on ${target.url}.`)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

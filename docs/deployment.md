@@ -199,12 +199,13 @@ To check the Board at scale by hand, grow that local Northstar copy with
 `node scripts/board-scale-seed.mjs --local --deployment local-<name>-<port> --url <backend origin>`,
 which takes the same loopback origins, `QIVO_FIXTURE_LOCAL=true` and
 `QIVO_LOCAL_ADMIN_KEY` as the Northstar seed and refuses every other
-target. It adds 10,000 tasks by default as Nora, the organization's admin,
-through the app's own task mutations. `--tasks` sets another count, up to
-12,000, because a larger organization no longer loads. The tasks come in
-every status, with parents and subtasks, due dates, pauses, long titles and
-unowned tasks. Run it again to add only the tasks still missing. It writes
-to that local backend alone.
+target. It adds 10,000 tasks and a parent for every 25 of them, as Nora,
+the organization's admin, through the app's own task mutations, one at a
+time. `--tasks` sets a smaller count; a larger organization no longer
+loads. The tasks come in every status, with subtasks, due dates, pauses,
+long titles and unowned tasks. Run it again to add only the task numbers
+still missing; a family it stopped in the middle of stays as it is. It
+writes to that local backend alone.
 
 ## Production release
 
