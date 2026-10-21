@@ -49,7 +49,7 @@ const runner =
 
 const deleted = () =>
   calls.filter((call) => call.fn === 'machine/testing:deleteCredential').map((call) => call.args)
-const stash = () => join(fixtures, 'contract.credentials.json')
+const stash = () => join(fixtures, 'contract-fine-goose-986.credentials.json')
 
 describe('contract pass setup', () => {
   it('stashes the credentials privately outside the checkout and removes them at teardown', async () => {
@@ -101,6 +101,27 @@ describe('contract pass setup', () => {
     )
     expect(existsSync(stash())).toBe(false)
     expect(deleted()).toEqual([{ id: 'id-mcp_token', kind: 'mcp_token' }])
+  })
+
+  it('still deletes what it minted when the stash cannot be written or removed', async () => {
+    mkdirSync(join(stash(), 'blocked'), { recursive: true })
+    await expect(contractSetup({ env, run: runner(), reset: () => {} }, root)).rejects.toThrow(
+      AggregateError,
+    )
+    expect(deleted().map((args) => args.kind)).toEqual(['mcp_token', 'agent_key'])
+  })
+
+  it('keeps one stash per deployment', async () => {
+    const other = {
+      ...env,
+      CONVEX_DEPLOY_KEY: 'dev:brave-otter-123|test-key',
+      VITE_CONVEX_SITE_URL: 'https://brave-otter-123.convex.site',
+    }
+    await contractSetup({ env, run: runner(), reset: () => {} }, root)
+    const teardown = await contractSetup({ env: other, run: runner(), reset: () => {} }, root)
+    teardown()
+    expect(existsSync(stash())).toBe(true)
+    expect(existsSync(join(fixtures, 'contract-brave-otter-123.credentials.json'))).toBe(false)
   })
 
   it('removes the stash and tries every delete when one delete fails', async () => {

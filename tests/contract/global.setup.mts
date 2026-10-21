@@ -118,10 +118,16 @@ export async function contractSetup(
   const orgId = await marketingId(NORTHSTAR, 'org')
 
   const minted: { id: string; kind: Kind }[] = []
-  // both deletes tolerate already-deleted (the mcp finale kills the qvt mid-suite)
+  // Every step runs even when an earlier one fails, so no credential stays
+  // live. Both deletes tolerate already-deleted (the mcp finale kills the qvt
+  // mid-suite).
   const teardown = () => {
-    rmSync(stash, { force: true })
     const failures: unknown[] = []
+    try {
+      rmSync(stash, { force: true })
+    } catch (error) {
+      failures.push(error)
+    }
     for (const { id, kind } of minted) {
       try {
         run('machine/testing:deleteCredential', { id, kind })
@@ -130,7 +136,7 @@ export async function contractSetup(
       }
     }
     if (failures.length > 0)
-      throw new AggregateError(failures, '[contract] could not delete every minted credential')
+      throw new AggregateError(failures, '[contract] teardown did not finish every step')
     console.log('[contract] minted credentials deleted')
   }
 
