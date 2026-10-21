@@ -228,6 +228,7 @@ describe('personal tokens', () => {
       kind: 'mcp_token',
       key_prefix: 'qvt_seam000',
       name: 'Seam',
+      pending: true,
     } as const
     await expectRefusal(
       t.mutation(internal.machine.testing.mintCredential, { ...base, key_hash: hex() }),
@@ -255,6 +256,7 @@ describe('personal tokens', () => {
         key_hash: hex(),
         name: 'Seam key',
         access: 'write',
+        pending: true,
       }),
       'bad_request',
       /^an agent key takes no access or expiry/,
@@ -271,6 +273,7 @@ describe('personal tokens', () => {
         key_prefix: 'qvt_named00',
         key_hash: hex(),
         name,
+        pending: true,
         ...(kind === 'mcp_token' ? { access: 'write' as const } : {}),
       })
     const name = 'contract pass token 0123456789abcdef'
@@ -295,6 +298,131 @@ describe('personal tokens', () => {
       ...(await ctx.db.query('agent_keys').collect()),
     ])
     expect(left.map((row) => row.id).sort()).toEqual(kept.map((row) => row.id).sort())
+  })
+
+  it('the test seam mints pending credentials that a late mint or activation cannot make usable', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const testing = internal.machine.testing
+    const passes = [
+      { profile_id: f.user.id, kind: 'mcp_token', name: 'contract pass token 0123456789abcdef' },
+      { profile_id: f.agent.id, kind: 'agent_key', name: 'contract pass key 0123456789abcdef' },
+    ] as const
+    const mint = (pass: (typeof passes)[number], key_hash = hex()) =>
+      t.mutation(testing.mintCredential, {
+        ...pass,
+        key_prefix: 'qvt_pend000',
+        key_hash,
+        pending: true,
+        ...(pass.kind === 'mcp_token' ? { access: 'write' as const } : {}),
+      })
+    const lookup = (pass: (typeof passes)[number], hash: string) =>
+      t.query(internal.machine.auth.lookupCredential, {
+        hash,
+        isAgent: pass.kind === 'agent_key',
+        now: new Date().toISOString(),
+      })
+    const named = ({ profile_id, name }: (typeof passes)[number]) => ({ profile_id, name })
+    const activate = (pass: (typeof passes)[number]) =>
+      t.mutation(testing.activateNamedCredentials, named(pass))
+    for (const pass of passes) {
+      const hash = hex()
+      await mint(pass, hash)
+      expect(await lookup(pass, hash)).toMatchObject({ ok: false, why: 'revoked' })
+      expect(await activate(pass)).toEqual({ activated: 1 })
+      expect(await lookup(pass, hash)).toMatchObject({ ok: true })
+      // a killed pass whose mint lands after the next pass deleted its
+      // credentials by name: the late row stays pending
+      await t.mutation(testing.deleteNamedCredentials, named(pass))
+      const late = hex()
+      await mint(pass, late)
+      expect(await lookup(pass, late)).toMatchObject({ ok: false, why: 'revoked' })
+      expect(await lookup(pass, hash)).toMatchObject({ ok: false, why: 'unknown' })
+      // a killed pass whose activation lands after the next pass deleted the
+      // credentials it had minted: nothing is left to activate
+      await t.mutation(testing.deleteNamedCredentials, named(pass))
+      const minted = hex()
+      await mint(pass, minted)
+      await t.mutation(testing.deleteNamedCredentials, named(pass))
+      expect(await activate(pass)).toEqual({ activated: 0 })
+      expect(await lookup(pass, minted)).toMatchObject({ ok: false, why: 'unknown' })
+    }
+    // a token its owner revoked while it was pending stays revoked
+    const [token] = passes
+    const revoked = hex()
+    const { id } = await mint(token, revoked)
+    await new Promise((done) => setTimeout(done, 5))
+    expect(await as(t, f.user).mutation(api.tokens.revokeMcpToken, { id })).toBe(true)
+    expect(await activate(token)).toEqual({ activated: 0 })
+    expect(await lookup(token, revoked)).toMatchObject({ ok: false, why: 'revoked' })
+    await expectRefusal(
+      t.mutation(testing.activateNamedCredentials, { profile_id: f.user.id, name: ' ' }),
+      'bad_request',
+      /^a credential name is required/,
+    )
+  })
+
+  it('the test seam mints only for a caller that asks for a pending credential', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const args = {
+      profile_id: f.agent.id,
+      kind: 'agent_key',
+      key_prefix: 'qva_old0000',
+      key_hash: hex(),
+      name: 'contract pass key',
+    } as const
+    // an older contract pass, which expects a usable credential
+    await expect(
+      // @ts-expect-error an older contract pass sends no pending argument
+      t.mutation(internal.machine.testing.mintCredential, args),
+    ).rejects.toThrow(/pending/)
+    const keys = await t.run(async (ctx) => await ctx.db.query('agent_keys').collect())
+    expect(keys.filter((row) => row.name === args.name)).toEqual([])
+  })
+
+  it('the test seam deletes the credentials of one profile by name prefix and age', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const plant = (profile_id: string, name: string, created_at: string) =>
+      t.run(async (ctx) => {
+        const id = uuid()
+        await ctx.db.insert('mcp_tokens', {
+          id,
+          profile_id,
+          name,
+          token_prefix: 'qvt_old0000',
+          token_hash: hex(),
+          access: 'write',
+          created_at,
+        })
+        return id
+      })
+    const old = '2026-10-19T11:59:59.999Z'
+    const cutoff = '2026-10-19T12:00:00.000Z'
+    await plant(f.user.id, 'contract pass token', old)
+    await plant(f.user.id, 'contract pass token 0123456789abcdef', old)
+    const kept = [
+      await plant(f.user.id, 'contract pass token fedcba9876543210', cutoff),
+      await plant(f.user.id, 'Laptop', old),
+      await plant(f.admin.id, 'contract pass token 0123456789abcdef', old),
+    ]
+    const sweep = internal.machine.testing.deleteOldCredentials
+    const args = { profile_id: f.user.id, name_prefix: 'contract pass token' }
+    expect(await t.mutation(sweep, { ...args, created_before: cutoff })).toEqual({ deleted: 2 })
+    expect(await t.mutation(sweep, { ...args, created_before: cutoff })).toEqual({ deleted: 0 })
+    await expectRefusal(
+      t.mutation(sweep, { ...args, name_prefix: ' ', created_before: cutoff }),
+      'bad_request',
+      /^a name prefix is required/,
+    )
+    await expectRefusal(
+      t.mutation(sweep, { ...args, created_before: 'yesterday' }),
+      'bad_request',
+      /^created_before is a date-time/,
+    )
+    const left = await t.run(async (ctx) => await ctx.db.query('mcp_tokens').collect())
+    expect(left.map((row) => row.id).sort()).toEqual([...kept].sort())
   })
 
   it('lookup refuses an expired token like a revoked one and resolves each access', async () => {
@@ -678,6 +806,10 @@ const EXEMPT: Record<string, string> = {
     'deploy-key test seam that deletes minted credentials, refused on production',
   'machine/testing:deleteNamedCredentials':
     'deploy-key test seam that deletes minted credentials by name, refused on production',
+  'machine/testing:activateNamedCredentials':
+    'deploy-key test seam that activates pending minted credentials, refused on production',
+  'machine/testing:deleteOldCredentials':
+    'deploy-key test seam that deletes old minted credentials, refused on production',
   'machine/uploads:begin':
     'the upload URL takes no credential; its signed token names the ticket a write credential started',
   'machine/uploads:finish': 'the upload URL records the file of a ticket begin claimed',

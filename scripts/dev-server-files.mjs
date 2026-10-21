@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, join, posix, relative, resolve } from 'node:path'
 import { normalizePath } from 'vite'
 
@@ -36,33 +36,60 @@ const literalGlob = (path) => path.replace(/[\\()[\]{}*?!+@|]/g, '\\$&')
  * otherwise reload open pages on every write to the report. Turning off
  * followSymlinks instead would stop the watcher from following a link to an
  * allowed source too. A local directory that is itself a link counts under
- * its real path as well, when it exists as the server starts. The env files
- * at the checkout's root keep being watched wherever they link, because Vite
- * restarts the server when one changes.
+ * its real path as well. Each check looks for those links again, so a local
+ * directory created, removed or replaced by a link while the server runs
+ * counts from the next check on. That takes seven lstat calls per check,
+ * one per local directory, .git and scripts/, about 8 microseconds on
+ * Linux, and a realpath call for a directory that is a link. The watcher
+ * does not check the rule again before it reports a change to a path it
+ * already watches, so refuseLinkedFiles also drops the events of such a
+ * path once the rule ignores it. The env files at the checkout's root keep
+ * being watched wherever they link, because Vite restarts the server when
+ * one changes.
  */
 export function devServerFiles(root) {
-  const checkouts = new Set(
-    [root, realpathSync.native(root)].map((path) => normalizePath(path).replace(/\/$/, '')),
-  )
+  const resolved = normalizePath(realpathSync.native(root)).replace(/\/$/, '')
+  const checkouts = new Set([normalizePath(root).replace(/\/$/, ''), resolved])
   const directories = [...checkouts].flatMap((checkout) =>
     LOCAL.map((name) => `${checkout}/${name}`),
   )
   const within = (file, directory) => file === directory || file.startsWith(`${directory}/`)
   // Vite's own watch rules ignore .git by the watched path only.
   const named = [...directories, ...[...checkouts].map((checkout) => `${checkout}/.git`)]
-  // A local directory that links elsewhere, unless it links to a directory
-  // holding this checkout, which would ignore every source.
-  const linked = named.flatMap((directory) => {
-    let real
-    try {
-      real = normalizePath(realpathSync.native(directory))
-    } catch {
-      return []
+  // Each named directory with its paths inside the checkout, any of which
+  // makes it lead elsewhere when it is a link, such as scripts/ for
+  // scripts/shots/. The resolved checkout answers for the given one too.
+  const steps = [...LOCAL, '.git'].map((name) => {
+    const parts = name.split('/')
+    return {
+      directory: `${resolved}/${name}`,
+      paths: parts.map((_, i) => `${resolved}/${parts.slice(0, i + 1).join('/')}`),
     }
-    return [...checkouts].some((checkout) => within(checkout, real)) ? [] : [real]
   })
-  const unwatched = [...new Set([...named, ...linked])]
-  const isUnwatched = (file) => unwatched.some((directory) => within(file, directory))
+  // A path that cannot be read, such as one under a file, is no link.
+  const isLink = (path) => {
+    try {
+      return lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink() === true
+    } catch {
+      return false
+    }
+  }
+  // The real paths of the local directories that link elsewhere now, unless
+  // one links to a directory holding this checkout, which would ignore every
+  // source. One lstat call per path finds the links, so realpath runs only
+  // for a directory that is one.
+  const linked = () =>
+    steps.flatMap(({ directory, paths }) => {
+      if (!paths.some(isLink)) return []
+      let real
+      try {
+        real = normalizePath(realpathSync.native(directory))
+      } catch {
+        return []
+      }
+      return [...checkouts].some((checkout) => within(checkout, real)) ? [] : [real]
+    })
+  const inAny = (file, directories) => directories.some((directory) => within(file, directory))
   const isEnvFile = (file) =>
     checkouts.has(posix.dirname(file)) && posix.basename(file).startsWith('.env')
   return {
@@ -70,12 +97,14 @@ export function devServerFiles(root) {
       ignored: [
         (path) => {
           const file = normalizePath(path)
-          if (isUnwatched(file)) return true
+          if (inAny(file, named)) return true
           if (isEnvFile(file)) return false
+          const unwatched = [...named, ...linked()]
+          if (inAny(file, unwatched)) return true
           // A path that cannot be resolved, such as a deleted file, names
           // nothing the watcher could follow.
           try {
-            return isUnwatched(normalizePath(realpathSync.native(path)))
+            return inAny(normalizePath(realpathSync.native(path)), unwatched)
           } catch {
             return false
           }
@@ -192,6 +221,25 @@ function linkedPaths(directory, seen = new Set()) {
   })
 }
 
+/** The watcher events that name a path. */
+const PATH_EVENTS = new Set(['add', 'addDir', 'change', 'unlink', 'unlinkDir'])
+
+/**
+ * Makes `watcher` drop each event, and its `all` event, for a path one of
+ * the functions in `ignored` ignores at the time of the event.
+ */
+function dropIgnoredEvents(watcher, ignored) {
+  const rules = [ignored].flat().filter((rule) => typeof rule === 'function')
+  if (rules.length === 0) return
+  const emit = watcher.emit.bind(watcher)
+  watcher.emit = (event, ...args) => {
+    const [kind, path] = event === 'all' ? args : [event, args[0]]
+    if (PATH_EVENTS.has(kind) && typeof path === 'string' && rules.some((rule) => rule(path)))
+      return false
+    return emit(event, ...args)
+  }
+}
+
 /**
  * Refuses dev server requests for a file reached through a symlink to a place
  * the server.fs rules refuse. Those rules match the requested path, so a link
@@ -206,6 +254,13 @@ function linkedPaths(directory, seen = new Set()) {
  *
  * A build copies the public directory and the files its links point to, so
  * a build fails while the public directory links to a refused file.
+ *
+ * The watcher does not check server.watch.ignored again before it reports a
+ * change to a path it already watches, so a source that links to a file
+ * outside the checkout keeps reporting writes after a local directory
+ * becomes a link to that file's directory. The plugin drops every watcher
+ * event for a path the functions in server.watch.ignored ignore now, before
+ * Vite reloads anything.
  */
 export function refuseLinkedFiles() {
   let config
@@ -237,6 +292,7 @@ export function refuseLinkedFiles() {
         res.end('Restricted')
       }
       server.middlewares.use(refuse)
+      dropIgnoredEvents(server.watcher, config.server.watch?.ignored)
       return () => server.middlewares.use(refuse)
     },
     load(id) {

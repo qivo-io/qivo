@@ -3,18 +3,31 @@
  * authenticate a test anyway, so the contract scripts mint their own pair:
  * node mints `qva_…`/`qvt_…` + sha256 locally, then
  *   npx convex run machine/testing:mintCredential '{"profile_id":…, "kind":…,
- *     "key_prefix":…, "key_hash":…, "name":…, "access":…}'
+ *     "key_prefix":…, "key_hash":…, "name":…, "access":…, "pending":true}'
  * and drives <deployment>.convex.site. internalMutation = deploy-key-gated;
  * no public wrapper may ever reach this. Only the hash crosses the wire,
  * exactly like the real minting paths (convex/tokens.ts). A personal token
  * names its access ('read' or 'write') like convex/tokens.ts requires, and
  * may carry an expiry, a past one included, so suites can mint an expired
  * token. Agent keys take neither, because the agent's role decides their
- * access. */
+ * access.
+ *
+ * Every credential starts pending: the mint stores it revoked, with its
+ * revoked_at equal to its created_at, and machine/auth refuses it until
+ *   npx convex run machine/testing:activateNamedCredentials
+ *     '{"profile_id":…, "name":…}'
+ * makes it usable. The mint requires `pending: true`, so a caller that
+ * expects a usable credential fails at the mint instead of with 401s
+ * later. A contract pass whose process is killed while a call runs can
+ * leave that one call running after the next pass has deleted the killed
+ * pass's credentials by name. The pass starts each call only after the one
+ * before it returned, and activates only after both mints, so the call left
+ * is either a late mint, which leaves a pending row, or a late activation,
+ * which finds nothing. deleteOldCredentials sweeps such rows. */
 
 import { v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
-import { internalMutation } from '../_generated/server'
+import { internalMutation, type MutationCtx } from '../_generated/server'
 import { cleanTokenExpiry } from '../lib/access'
 import { byId, insertUnique } from '../lib/db'
 import { refuseProduction } from '../lib/deployment'
@@ -38,6 +51,8 @@ export const mintCredential = internalMutation({
     access: v.optional(vCredentialAccess),
     /** mcp_token only; any UTC date-time, so a test can mint an expired token */
     expires_at: v.optional(v.string()),
+    /** the caller knows the credential stays unusable until activated */
+    pending: v.literal(true),
   },
   handler: async (ctx, a): Promise<{ id: string; profile_id: string }> => {
     refuseProduction('machine/testing')
@@ -100,6 +115,7 @@ export const mintCredential = internalMutation({
           key_prefix: a.key_prefix,
           key_hash: a.key_hash,
           created_at: now,
+          revoked_at: now,
         },
         badRequest('that key already exists'),
       )
@@ -118,6 +134,7 @@ export const mintCredential = internalMutation({
           access: a.access,
           expires_at: expiry,
           created_at: now,
+          revoked_at: now,
         },
         badRequest('that token already exists'),
       )
@@ -146,6 +163,39 @@ export const deleteCredential = internalMutation({
   },
 })
 
+/** The agent keys and personal tokens of one profile. */
+async function profileCredentials(ctx: MutationCtx, profile_id: string) {
+  const [keys, tokens] = await Promise.all(
+    (['agent_keys', 'mcp_tokens'] as const).map((table) =>
+      ctx.db
+        .query(table)
+        .withIndex('by_profile', (q) => q.eq('profile_id', profile_id))
+        .collect(),
+    ),
+  )
+  return [...keys, ...tokens]
+}
+
+/* Makes the pending credentials of one profile with exactly that name
+ * usable: the rows whose revoked_at still equals their created_at. A row
+ * that is gone stays gone, and one whose revoked_at changed after its mint,
+ * as a person's own revoke writes it, stays revoked. An organization admin's
+ * revoke leaves a row that already reads as revoked unchanged, so it does
+ * not stop this activation. The contract pass activates within seconds of
+ * its mints and deletes its credentials when it ends. */
+export const activateNamedCredentials = internalMutation({
+  args: { profile_id: v.string(), name: v.string() },
+  handler: async (ctx, a): Promise<{ activated: number }> => {
+    refuseProduction('machine/testing')
+    if (a.name.trim() === '') throw badRequest('a credential name is required')
+    const pending = (await profileCredentials(ctx, a.profile_id)).filter(
+      (row) => row.name === a.name && row.revoked_at === row.created_at,
+    )
+    for (const row of pending) await ctx.db.patch(row._id, { revoked_at: undefined })
+    return { activated: pending.length }
+  },
+})
+
 /* Sweep twin: the contract pass names every credential it mints after the
  * pass, so it can delete them without their ids, for example after a mint
  * that succeeded but whose CLI output could not be parsed, or after a pass
@@ -156,16 +206,30 @@ export const deleteNamedCredentials = internalMutation({
   handler: async (ctx, a): Promise<{ deleted: number }> => {
     refuseProduction('machine/testing')
     if (a.name.trim() === '') throw badRequest('a credential name is required')
-    const [keys, tokens] = await Promise.all(
-      (['agent_keys', 'mcp_tokens'] as const).map((table) =>
-        ctx.db
-          .query(table)
-          .withIndex('by_profile', (q) => q.eq('profile_id', a.profile_id))
-          .collect(),
-      ),
-    )
-    const named = [...keys, ...tokens].filter((row) => row.name === a.name)
+    const named = (await profileCredentials(ctx, a.profile_id)).filter((row) => row.name === a.name)
     for (const row of named) await ctx.db.delete(row._id)
     return { deleted: named.length }
+  },
+})
+
+/* Age sweep: deletes every agent key and personal token of the profile
+ * whose name starts with `name_prefix` and that was created before
+ * `created_before`. The contract pass sweeps what no stash names any more:
+ * a pending row a killed pass's late mint left, a usable credential that a
+ * late mint left before mints were pending, and credentials from passes
+ * before their names carried a pass id. The cutoff keeps the credentials of
+ * a pass that runs elsewhere at the same time. */
+export const deleteOldCredentials = internalMutation({
+  args: { profile_id: v.string(), name_prefix: v.string(), created_before: v.string() },
+  handler: async (ctx, a): Promise<{ deleted: number }> => {
+    refuseProduction('machine/testing')
+    if (a.name_prefix.trim() === '') throw badRequest('a name prefix is required')
+    const before = Date.parse(a.created_before)
+    if (Number.isNaN(before)) throw badRequest('created_before is a date-time')
+    const old = (await profileCredentials(ctx, a.profile_id)).filter(
+      (row) => row.name.startsWith(a.name_prefix) && Date.parse(row.created_at) < before,
+    )
+    for (const row of old) await ctx.db.delete(row._id)
+    return { deleted: old.length }
   },
 })

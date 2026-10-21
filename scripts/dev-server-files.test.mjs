@@ -48,6 +48,8 @@ let root
 let server
 let origin
 const events = []
+/** The paths of the change events Vite's own reload listens to. */
+const changes = []
 
 /** Sends `path` exactly as written, which fetch would normalize first. */
 const raw = (path) =>
@@ -105,6 +107,7 @@ beforeAll(async () => {
     server: { host: '127.0.0.1', port: 0, ...devServerFiles(join(parent, 'link')) },
   })
   server.watcher.on('all', (_event, path) => events.push(path))
+  server.watcher.on('change', (path) => changes.push(path))
   await server.listen()
   origin = `http://127.0.0.1:${server.httpServer.address().port}`
 })
@@ -277,6 +280,38 @@ describe('dev server files', () => {
     expect(events.filter((path) => /screenshot|report|page/.test(path))).toEqual([])
   })
 
+  it('ignores writes through a local directory replaced by a link while the server runs', async () => {
+    // a source the watcher already watches links to a report outside the
+    // checkout
+    const target = join(parent, 'local-elsewhere')
+    const report = join(target, 'report.html')
+    mkdirSync(target)
+    writeFileSync(report, 'report')
+    const early = join(root, 'src', 'early-report.html')
+    symlinkSync(report, early)
+    await new Promise((done) => setTimeout(done, 300))
+    writeFileSync(report, '<p>watched</p>')
+    await expect.poll(() => changes.includes(early)).toBe(true)
+    // .local/ becomes a link to the report's directory. src/ stays as it
+    // is, because a change there makes the watcher look at the source again.
+    rmSync(join(root, '.local'), { recursive: true })
+    symlinkSync(target, join(root, '.local'))
+    await new Promise((done) => setTimeout(done, 300))
+    const before = events.length
+    const changesBefore = changes.length
+    writeFileSync(report, '<p>report</p>')
+    await new Promise((done) => setTimeout(done, 600))
+    // another source links to the report through .local/
+    symlinkSync(join(root, '.local', 'report.html'), join(root, 'src', 'local-report.html'))
+    await new Promise((done) => setTimeout(done, 300))
+    writeFileSync(report, '<p>report again</p>')
+    write('src/after-link.js')
+    await expect.poll(() => events.includes(join(root, 'src/after-link.js'))).toBe(true)
+    await new Promise((done) => setTimeout(done, 300))
+    const reports = (paths) => paths.filter((path) => /report|local-elsewhere/.test(path))
+    expect([reports(events.slice(before)), reports(changes.slice(changesBefore))]).toEqual([[], []])
+  })
+
   it('ignores a path whose real path is in a local directory', () => {
     const [ignored] = devServerFiles(join(parent, 'link')).watch.ignored
     symlinkSync(join(root, '.git'), join(root, 'src', 'git'))
@@ -321,6 +356,46 @@ describe('dev server files', () => {
     symlinkSync(parent, join(other, 'dev-temp'))
     const [around] = devServerFiles(other).watch.ignored
     expect(around(join(other, 'src', 'main.js'))).toBe(false)
+  })
+
+  it('follows local directories created, removed or replaced by a link after it starts', () => {
+    const other = join(parent, 'changing')
+    const elsewhere = join(parent, 'changing-elsewhere')
+    // scripts/ links here later, with a plain shots/ directory inside
+    const away = join(parent, 'changing-scripts')
+    mkdirSync(join(other, 'src'), { recursive: true })
+    mkdirSync(join(other, 'dev-temp'))
+    mkdirSync(join(other, 'scratch'))
+    mkdirSync(elsewhere)
+    mkdirSync(join(away, 'shots'), { recursive: true })
+    writeFileSync(join(elsewhere, 'report.html'), 'report')
+    writeFileSync(join(away, 'shots', 'admin.png'), 'shot')
+    writeFileSync(join(other, 'scratch', 'notes.md'), 'notes')
+    symlinkSync(join(other, 'dev-temp', 'report.html'), join(other, 'src', 'report.html'))
+    symlinkSync(join(other, 'scripts', 'shots', 'admin.png'), join(other, 'src', 'admin.png'))
+    const [ignored] = devServerFiles(other).watch.ignored
+    const report = join(other, 'src', 'report.html')
+    const shot = join(other, 'src', 'admin.png')
+    const notes = join(other, 'scratch', 'notes.md')
+    expect([ignored(report), ignored(shot), ignored(notes)]).toEqual([false, false, false])
+    // dev-temp/ replaced by a link, and scripts/ created as one
+    rmSync(join(other, 'dev-temp'), { recursive: true })
+    symlinkSync(elsewhere, join(other, 'dev-temp'))
+    symlinkSync(away, join(other, 'scripts'))
+    expect([ignored(report), ignored(shot)]).toEqual([true, true])
+    // a link into the checkout covers its target, until it is removed
+    rmSync(join(other, 'dev-temp'))
+    symlinkSync(join(other, 'scratch'), join(other, 'dev-temp'))
+    expect([ignored(notes), ignored(report)]).toEqual([true, false])
+    rmSync(join(other, 'dev-temp'))
+    expect(ignored(notes)).toBe(false)
+    // a local directory under a file is no link, and no check fails on it
+    rmSync(join(other, 'scripts'))
+    writeFileSync(join(other, 'scripts'), 'not a directory')
+    expect([ignored(notes), ignored(join(other, 'scripts', 'shots', 'x.png'))]).toEqual([
+      false,
+      true,
+    ])
   })
 
   it("matches only this checkout's directories, not one around it", () => {

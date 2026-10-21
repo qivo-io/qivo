@@ -21,10 +21,22 @@ let parent: string
 let root: string
 let fixtures: string
 let env: Record<string, string>
-type Args = { id?: string; kind?: string; profile_id?: string; name?: string }
+type Args = {
+  id?: string
+  kind?: string
+  profile_id?: string
+  name?: string
+  name_prefix?: string
+  created_before?: string
+  pending?: boolean
+}
 let calls: { fn: string; args: Args }[]
-/** The credential rows on the fake deployment. */
-let rows: Required<Pick<Args, 'id' | 'kind' | 'profile_id' | 'name'>>[]
+/** A credential row on the fake deployment. A pending row is not usable. */
+type Row = Required<Pick<Args, 'id' | 'kind' | 'profile_id' | 'name'>> & {
+  pending?: boolean
+  created_at?: string
+}
+let rows: Row[]
 let logged: string[]
 let exitCode: typeof process.exitCode
 
@@ -71,8 +83,33 @@ const runner =
     const { id, kind, profile_id, name } = call.args
     let out: Record<string, unknown> = {}
     if (fn === 'machine/testing:mintCredential') {
-      rows.push({ id: `id-${kind}`, kind: kind!, profile_id: profile_id!, name: name! })
+      rows.push({
+        id: `id-${kind}`,
+        kind: kind!,
+        profile_id: profile_id!,
+        name: name!,
+        pending: true,
+        created_at: new Date().toISOString(),
+      })
       out = { id: `id-${kind}` }
+    } else if (fn === 'machine/testing:activateNamedCredentials') {
+      const pending = rows.filter(
+        (row) => row.profile_id === profile_id && row.name === name && row.pending,
+      )
+      for (const row of pending) delete row.pending
+      out = { activated: pending.length }
+    } else if (fn === 'machine/testing:deleteOldCredentials') {
+      const before = rows.length
+      const { name_prefix, created_before } = call.args
+      rows = rows.filter(
+        (row) =>
+          !(
+            row.profile_id === profile_id &&
+            row.name.startsWith(name_prefix!) &&
+            (row.created_at ?? '') < created_before!
+          ),
+      )
+      out = { deleted: before - rows.length }
     } else if (fn === 'machine/testing:deleteCredential') {
       const before = rows.length
       rows = rows.filter((row) => !(row.id === id && row.kind === kind))
@@ -92,6 +129,14 @@ const named = () =>
     .map((call) => call.args.name)
 const minted = () =>
   calls.filter((call) => call.fn === 'machine/testing:mintCredential').map((call) => call.args)
+/** The calls before the reset, other than the sweep of old credentials. */
+const beforeReset = () =>
+  calls
+    .slice(
+      0,
+      calls.findIndex((call) => call.fn === 'reset'),
+    )
+    .filter((call) => call.fn !== 'machine/testing:deleteOldCredentials')
 const stash = () => join(fixtures, 'contract-fine-goose-986.credentials.json')
 const next = () => join(fixtures, 'contract-fine-goose-986.new.credentials.json')
 const legacy = () => join(root, 'tests', 'contract', '.credentials.json')
@@ -142,11 +187,26 @@ describe('contract pass setup', () => {
       `contract pass token ${saved.pass}`,
       `contract pass key ${saved.pass}`,
     ])
+    // each mint asks for a credential that stays unusable until activated
+    expect(minted().map((args) => args.pending)).toEqual([true, true])
+
+    // both credentials are usable, and were activated only after both mints
+    expect(rows.map((row) => [row.kind, row.pending])).toEqual([
+      ['mcp_token', undefined],
+      ['agent_key', undefined],
+    ])
+    expect(
+      calls.slice(-4).map((call) => [call.fn.replace('machine/testing:', ''), call.args.name]),
+    ).toEqual([
+      ['mintCredential', `contract pass token ${saved.pass}`],
+      ['mintCredential', `contract pass key ${saved.pass}`],
+      ['activateNamedCredentials', `contract pass token ${saved.pass}`],
+      ['activateNamedCredentials', `contract pass key ${saved.pass}`],
+    ])
 
     teardown()
     expect(existsSync(stash())).toBe(false)
-    // the call before the first mint, then one per credential
-    expect(named()).toEqual([minted()[0]!.name, ...minted().map((args) => args.name)])
+    expect(named()).toEqual(minted().map((args) => args.name))
     expect(rows).toEqual([])
     expect(logged.at(-1)).toBe('[contract] deleted 2 of the 2 credentials the pass tried to mint')
   })
@@ -221,10 +281,9 @@ setInterval(() => {}, 1 << 30)`,
     }
     await once(holder, 'exit')
     const teardown = await contractSetup({ env, run: runner(), reset: resetMarker }, root)
-    expect(calls.slice(0, 3).map((call) => call.args.name ?? call.fn)).toEqual([
+    expect(beforeReset().map((call) => call.args.name)).toEqual([
       `contract pass token ${pass}`,
       `contract pass key ${pass}`,
-      'reset',
     ])
     expect(rows.map((row) => row.id)).toEqual(['id-mcp_token', 'id-agent_key'])
     teardown()
@@ -308,16 +367,67 @@ setInterval(() => {}, 1 << 30)`,
     expect(rows).toEqual([])
   })
 
-  it('mints nothing and says so on a deployment without the delete by name', async () => {
-    const run = runner((fn) => fn === 'machine/testing:deleteNamedCredentials')
-    await expect(contractSetup({ env, run, reset: () => {} }, root)).rejects.toThrow(
-      'machine/testing:deleteNamedCredentials failed',
+  it('resets and mints nothing on a deployment that does not mint pending credentials', async () => {
+    const run = runner((fn) => fn === 'machine/testing:deleteOldCredentials')
+    await expect(contractSetup({ env, run, reset: resetMarker }, root)).rejects.toThrow(
+      'machine/testing:deleteOldCredentials failed',
     )
-    expect(minted()).toEqual([])
+    expect(calls.map((call) => call.fn)).toEqual(['machine/testing:deleteOldCredentials'])
     expect(existsSync(stash())).toBe(false)
-    expect(logged.at(-1)).toBe(
-      '[contract] the pass minted no credentials, so there was nothing to delete',
+  })
+
+  it('deletes what it minted when a credential is not pending to activate', async () => {
+    const fake = runner()
+    const run = (fn: string, args?: unknown) =>
+      fn === 'machine/testing:activateNamedCredentials' ? { activated: 0 } : fake(fn, args)
+    await expect(contractSetup({ env, run, reset: () => {} }, root)).rejects.toThrow(
+      /activateNamedCredentials: activated 0 credentials of contract pass token [0-9a-f]{16}, not 1/,
     )
+    expect([rows, existsSync(stash())]).toEqual([[], false])
+  })
+
+  it('deletes the pass credentials older than an hour before the reset, and no others', async () => {
+    const nora = await marketingId('northstar-labs', 'person:nora')
+    const atlas = await marketingId('northstar-labs', 'person:atlas')
+    const hour = 60 * 60 * 1000
+    const at = (ago: number) => new Date(Date.now() - ago).toISOString()
+    const row = (id: string, profile_id: string, name: string, created_at: string): Row => ({
+      id,
+      kind: profile_id === nora ? 'mcp_token' : 'agent_key',
+      profile_id,
+      name,
+      created_at,
+    })
+    rows = [
+      // a late mint's pending row, and a credential from before the pass id
+      {
+        ...row('late', nora, 'contract pass token 0123456789abcdef', at(hour + 1000)),
+        pending: true,
+      },
+      row('fixed', atlas, 'contract pass key', at(2 * hour)),
+      // a pass that may still run elsewhere, and credentials of people
+      row('recent', atlas, 'contract pass key fedcba9876543210', at(hour - 60_000)),
+      row('laptop', nora, 'Nora laptop', at(2 * hour)),
+      row('elsewhere', atlas, 'contract pass token 0123456789abcdef', at(2 * hour)),
+    ]
+    const teardown = await contractSetup({ env, run: runner(), reset: resetMarker }, root)
+    const sweeps = calls.slice(
+      0,
+      calls.findIndex((call) => call.fn === 'reset'),
+    )
+    expect(sweeps.map((call) => [call.fn, call.args.profile_id, call.args.name_prefix])).toEqual([
+      ['machine/testing:deleteOldCredentials', nora, 'contract pass token'],
+      ['machine/testing:deleteOldCredentials', atlas, 'contract pass key'],
+    ])
+    expect(rows.map((left) => left.id)).toEqual([
+      'recent',
+      'laptop',
+      'elsewhere',
+      'id-mcp_token',
+      'id-agent_key',
+    ])
+    expect(logged).toContain('[contract] deleted 2 pass credentials older than an hour')
+    teardown()
   })
 
   it('still deletes what it minted when the stash cannot be written or removed', async () => {
@@ -330,7 +440,7 @@ setInterval(() => {}, 1 << 30)`,
       return false
     })
     await expect(contractSetup({ env, run, reset: () => {} }, root)).rejects.toThrow(AggregateError)
-    expect(named()).toHaveLength(3)
+    expect(named()).toHaveLength(2)
     expect(rows).toEqual([])
   })
 
@@ -382,7 +492,7 @@ setInterval(() => {}, 1 << 30)`,
     // a failed teardown still gives the lease back
     expect(takenElsewhere()).toBe(true)
     expect(process.exitCode).toBe(1)
-    expect(named()).toHaveLength(3)
+    expect(named()).toHaveLength(2)
     expect(rows.map((row) => row.kind)).toEqual(['mcp_token'])
     expect(JSON.parse(readFileSync(stash(), 'utf8')).qvtId).toBe('id-mcp_token')
   })
@@ -399,7 +509,7 @@ setInterval(() => {}, 1 << 30)`,
     rows.push(own)
 
     const teardown = await contractSetup({ env, run: runner(), reset: resetMarker }, root)
-    expect(calls.slice(0, 3)).toEqual([
+    expect(beforeReset()).toEqual([
       {
         fn: 'machine/testing:deleteNamedCredentials',
         args: { profile_id: nora, name: `contract pass token ${pass}` },
@@ -408,7 +518,6 @@ setInterval(() => {}, 1 << 30)`,
         fn: 'machine/testing:deleteNamedCredentials',
         args: { profile_id: atlas, name: `contract pass key ${pass}` },
       },
-      { fn: 'reset', args: {} },
     ])
     expect(rows.filter((row) => row.id !== 'id-mcp_token' && row.id !== 'id-agent_key')).toEqual([
       own,
@@ -425,10 +534,9 @@ setInterval(() => {}, 1 << 30)`,
     writeFileSync(legacy(), JSON.stringify({ siteUrl: 'https://other-1.convex.site', qvaId: 'x' }))
     const teardown = await contractSetup({ env, run: runner(), reset: resetMarker }, root)
     expect(existsSync(legacy())).toBe(false)
-    expect(calls.slice(0, 3)).toEqual([
+    expect(beforeReset()).toEqual([
       { fn: 'machine/testing:deleteCredential', args: { id: 'old-qva', kind: 'agent_key' } },
       { fn: 'machine/testing:deleteCredential', args: { id: 'old-qvt', kind: 'mcp_token' } },
-      { fn: 'reset', args: {} },
     ])
     expect(JSON.parse(readFileSync(stash(), 'utf8')).qvaId).toBe('id-agent_key')
 
@@ -464,11 +572,7 @@ setInterval(() => {}, 1 << 30)`,
       writeFileSync(stash(), JSON.stringify(left))
       writeFileSync(next(), 'a replacement a failed write left')
       ;(await contractSetup({ env, run: runner(), reset: resetMarker }, root))()
-      const before = calls.slice(
-        0,
-        calls.findIndex((call) => call.fn === 'reset'),
-      )
-      expect([pass, before.map((call) => call.args.name ?? call.args.id)]).toEqual([
+      expect([pass, beforeReset().map((call) => call.args.name ?? call.args.id)]).toEqual([
         pass,
         pass === '0123456789abcdef'
           ? [`contract pass token ${pass}`, `contract pass key ${pass}`, 'old-qva', 'old-qvt']
