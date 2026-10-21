@@ -249,8 +249,6 @@ function exportRow(doc: Doc<OrgExportSection>, section: OrgExportSection): OrgEx
     delete row.org_id
     delete row.task_archived
   }
-  // retired, cleared by internal/retiredFields (schema.ts)
-  if (section === 'issue_attachments') delete row.project_id
   // A team's or project's legacy icon and its color: nothing writes or shows
   // them now, and a value stored before they were dropped has no length limit.
   if (section === 'teams' || section === 'projects') {

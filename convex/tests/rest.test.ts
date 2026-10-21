@@ -1090,6 +1090,7 @@ describe('POST /v1/tasks', () => {
       group_remaining_hours: null,
       labels: [],
       subtasks: [],
+      has_more_subtasks: false,
       links: [],
       // creating a task does not make the creator follow it
       following: false,

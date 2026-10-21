@@ -311,9 +311,10 @@ Useful field rules:
 - **Delete a file:** `delete_attachment` or
   `DELETE /v1/tasks/{ref}/attachments/{id}`, with User or Lead access to the
   project. Description images are left to the app. When you rewrite a
-  description, keep its `![alt](att:<id>)` references. The next time someone
-  saves that description in the app, the app deletes every image uploaded
-  more than a day ago that the description no longer names.
+  description, keep its `![alt](att:<id>)` references: a save that drops one
+  removes that image from the task, and it is deleted a day later unless a
+  save names it again. A description can only show images attached to its
+  own task.
 - **History:** `list_task_activity` or `GET /v1/tasks/{ref}/activity`
   answers who changed what, oldest first. Comments are in `list_comments`.
   It holds the task's newest 500 changes; pass the first row's `id` as

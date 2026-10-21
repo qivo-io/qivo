@@ -253,14 +253,12 @@ const issueSubscriptionsTable = defineTable({
   .index('by_profile_task_archived', ['profile_id', 'task_archived'])
   .index('by_issue_profile', ['issue_id', 'profile_id'])
 
-// A task holds at most ATTACHMENT_MAX rows (lib/taskLimits.ts). A row
-// names no project: storage totals read it through its task
+// A task holds at most ATTACHMENT_MAX rows (lib/taskLimits.ts) without a
+// dropped_at, and at most DROPPED_IMAGES_MAX with one (model/attachments.ts).
+// A row names no project: storage totals read it through its task
 // (model/billing.ts storagePage), so a move writes no attachment row.
 const issueAttachmentsTable = defineTable({
   org_id: v.string(),
-  // Retired: nothing writes or reads it. internal/retiredFields clears it,
-  // here and in deleted_rows; drop it once it has run on every deployment.
-  project_id: v.optional(v.string()),
   id: v.string(),
   issue_id: v.string(),
   name: v.string(),
@@ -271,6 +269,11 @@ const issueAttachmentsTable = defineTable({
   uploaded_by: v.optional(v.string()),
   created_at: v.string(),
   task_archived: taskArchived,
+  // When a description save took this image out of the description
+  // (model/attachments.ts settleDescriptionImages). It no longer counts
+  // toward ATTACHMENT_MAX, and a save that shows it again within a day
+  // brings it back; after that it is deleted with its bytes.
+  dropped_at: v.optional(v.string()),
 })
   .index('by_org_task_archived_issue', ['org_id', 'task_archived', 'issue_id'])
   // An organization's rows in the order they were stored. Archiving a task
@@ -280,6 +283,8 @@ const issueAttachmentsTable = defineTable({
   .index('by_org', ['org_id'])
   .index('by_uuid', ['id'])
   .index('by_issue', ['issue_id'])
+  // the rows that count toward ATTACHMENT_MAX are those without dropped_at
+  .index('by_issue_dropped', ['issue_id', 'dropped_at'])
   .index('by_storage', ['storage_id'])
   .index('by_uploaded_by', ['uploaded_by']) // removeProfile's SET NULL
 
@@ -743,11 +748,6 @@ export default defineSchema({
     // Legacy icon and its color, as on projects.
     icon: v.optional(v.string()),
     icon_color: v.optional(v.string()),
-    // Retired columns nothing reads or writes. internal/retiredFields
-    // clears them; drop them here once it has run on every deployment.
-    max_attachment_mb: v.optional(v.number()),
-    stale_days: v.optional(v.number()),
-    archive_days: v.optional(v.number()),
     track_delay_default: v.boolean(),
     created_at: v.string(),
   })
@@ -1030,6 +1030,26 @@ export default defineSchema({
   })
     .index('by_item_task', ['item_id', 'task_id'])
     .index('by_task', ['task_id']),
+
+  /* The archived subtasks a deleted task left, which background steps
+   * detach (model/deletedItems.ts detachArchivedChildren). The delete writes
+   * the row, each step that leaves work rewrites it and the last step
+   * deletes it, so recovery restarts a step that failed or stopped
+   * (recoverArchivedDetaches). A restore from the archive reads it too: a
+   * subtask archived by `deleted_at` leaves its parent even when the parent
+   * came back from Deleted items first (model/issues.ts restoreLeavesParent).
+   * It has no org_id: once the organization is deleted, the next step finds
+   * no subtasks and deletes the row, as label_removals finish on their own. */
+  archived_detaches: defineTable({
+    parent_id: v.string(), // the deleted task
+    actor_id: v.string(), // who deleted it, the detaches' actor
+    deleted_at: v.string(), // the delete's time; subtasks archived by then leave
+    progress_at: v.string(), // the last committed step
+    scheduled_id: v.optional(v.id('_scheduled_functions')), // the next step
+    attempts: v.number(), // restarts since the last committed step
+  })
+    .index('by_parent', ['parent_id', 'deleted_at'])
+    .index('by_progress', ['progress_at']),
 
   /* One original document of a deleted item, typed by its table. Only
    * model/deletedItems.ts storeRow inserts here, writing `table` and `row`

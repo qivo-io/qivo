@@ -942,12 +942,6 @@ describe('teams.create / teams.update', () => {
       name: 'Design',
       track_delay_default: true,
     })
-    const made = await teamById(t, id)
-    expect([made?.max_attachment_mb, made?.stale_days, made?.archive_days]).toEqual([
-      undefined,
-      undefined,
-      undefined,
-    ])
     expect(await activityFor(t, f.org.id)).toEqual([]) // teams never narrate
     await expectRefusal(
       as(t, f.user).mutation(api.teams.create, { org_id: f.org.id, id: uuid(), name: 'Coup' }),
@@ -1014,7 +1008,6 @@ describe('teams attachment cap removal', () => {
         patch: { max_attachment_mb: 1 },
       } as never),
     ).rejects.toThrow(/max_attachment_mb/)
-    expect((await teamById(t, f.team.id))?.max_attachment_mb).toBeUndefined()
   })
 })
 

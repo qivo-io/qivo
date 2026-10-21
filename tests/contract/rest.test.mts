@@ -87,6 +87,7 @@ const ISSUE_KEYS = [
   'group_remaining_hours',
   'labels',
   'subtasks',
+  'has_more_subtasks',
   'links',
   'following',
   'followers',

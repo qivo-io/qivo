@@ -287,12 +287,6 @@ describe('identity.createOrganization — the whole door', () => {
     expect(teams.length).toBe(1)
     const team = teams[0]
     expect(team.name).toBe('Nimbus Labs') // named exactly the ORG's name
-    // retired fields are never created
-    expect([team.max_attachment_mb, team.stale_days, team.archive_days]).toEqual([
-      undefined,
-      undefined,
-      undefined,
-    ])
     expect(team.track_delay_default).toBe(true)
 
     const members = await t.run((ctx) =>

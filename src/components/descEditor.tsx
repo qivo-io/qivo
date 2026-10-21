@@ -702,7 +702,8 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
         },
         transformPasted: (slice) => {
           // an att: image pasted from another issue would die with that
-          // issue's GC — strip it (uploading: placeholders are meaningless
+          // issue's image, and the server refuses it — strip it and say so
+          // (uploading: placeholders are meaningless
           // outside their source editor too); signed-URL srcs from a copy of
           // the rendered view normalize back to att: first. Comment mode owns
           // nothing: empty baseline, so every image reference strips.
@@ -759,7 +760,8 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   const reapSessionUploads = () => {
     // Draft-only uploads die with their draft (revert, unmount).
     // Ids that ever reached committed text are pruned at commit/reconcile
-    // time and belong to the store's description GC from then on — but a
+    // time and belong to the server's description saves from then on
+    // (convex/model/descriptionImages.ts) — but a
     // held echo can leave rawRef behind the store (finishUpload patches the
     // committed row mid-draft), so check BOTH texts before deleting anything.
     const it = issueKey !== null ? P.issueById[issueKey] : null
@@ -892,8 +894,8 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       rebaseRef.current = false
       rawRef.current = text
       canonRef.current = text
-      // ids entering committed text are the store's from here on — its
-      // description GC decides their lifetime, never this editor's reap
+      // ids entering committed text are the server's from here on — its
+      // description saves decide their lifetime, never this editor's reap
       sessionUploadsRef.current = sessionUploadsRef.current.filter((id) => !text.includes(id))
       P.updateIssue(
         issueKey,
@@ -901,12 +903,11 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
         { seen: { description: keep.seen }, keepDraft: keep.keepDraft },
       )
     }
-    // the save is the new baseline; undo may cross it freely — the store GC
-    // keeps the just-replaced text's images for one more save, so an att:
-    // node resurrected right away still has its attachment (undoing across
-    // OLDER saves can surface "Image unavailable" — acceptable, and visible
-    // for what it is). No state reset: it would also yank the caret to the
-    // doc start under a focused Mod-S.
+    // the save is the new baseline; undo may cross it freely — an image the
+    // save took out stays, uncounted, for a day, and a save that shows it
+    // again brings it back (convex/model/descriptionImages.ts), so an att:
+    // node an undo resurrects still has its attachment. No state reset: it
+    // would also yank the caret to the doc start under a focused Mod-S.
     committedDocRef.current = ed.state.doc
     refreshDirty()
   }

@@ -68,7 +68,6 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'issue_subscriptions', field: 'profile_id', target: 'profiles' },
   { table: 'issue_attachments', field: 'org_id', target: 'organizations' },
   { table: 'issue_attachments', field: 'issue_id', target: 'issues' },
-  { table: 'issue_attachments', field: 'project_id', target: 'projects' },
   { table: 'issue_attachments', field: 'uploaded_by', target: 'profiles' },
   { table: 'milestones', field: 'project_id', target: 'projects' },
   { table: 'activity_events', field: 'org_id', target: 'organizations' },
@@ -173,6 +172,12 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   // background cleanup deletes the row (labelRemovals.ts).
   'label_removals.label_id',
   'label_removals.scheduled_id',
+  // A pending detach names the deleted task, which is in Deleted items or
+  // back, and who deleted it, until its last step deletes the row
+  // (model/deletedItems.ts detachArchivedChildren).
+  'archived_detaches.parent_id',
+  'archived_detaches.actor_id',
+  'archived_detaches.scheduled_id',
   // The next step of an organization deletion (orgRemovals.ts).
   'org_removals.scheduled_id',
   // Binds a private local credentials file; not the id of a database row.

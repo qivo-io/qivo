@@ -284,11 +284,12 @@ describe('the single-task read names only tasks the caller can read', () => {
     const kept = { is_group: true, remaining_hours: 6, remaining_set_at: NOW }
     expect(await restGet(fx, `QN-${shelved.num}`)).toMatchObject(kept)
     expect(await mcp(fx, internal.machine.mcp.getIssue, { ref: shelved.id })).toMatchObject(kept)
-    expect(Object.keys(viaMcp).slice(-8)).toEqual([
+    expect(Object.keys(viaMcp).slice(-9)).toEqual([
       'url',
       'group_remaining_hours',
       'labels',
       'subtasks',
+      'has_more_subtasks',
       'links',
       'following',
       'followers',

@@ -25,12 +25,12 @@ import {
   LABEL_READS_RESERVE,
   LABEL_TASK_READS,
   PAGE_TOO_LARGE,
-  SUBTASKS_TOO_LARGE,
   SUBTREE_WALK,
   TASK_READ_RESERVE,
 } from '../lib/core'
 import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
+import { TEXT_MAX } from '../lib/textLimits'
 import {
   expectRefusal,
   NOW,
@@ -1357,9 +1357,9 @@ describe('a single-task read of an archived group', () => {
     expect((mcp.followers as unknown[]).length).toBe(60)
   })
 
-  it('archives a group whose answer does not fit after the cascade, and answers its subtasks', async () => {
+  it('archives a group whose answer does not fit after the cascade, and says it has more subtasks', async () => {
     // the cascade reads each subtask twice, which leaves the answer's walk
-    // no room before the root's own subtasks
+    // no room before the root's own subtasks, so it lists the first
     const fx = await setup(newT({ transactionLimits: { documentsRead: 800 } }))
     Object.assign(TASK_READ_RESERVE, { ranges: 16, documents: 500, bytes: 1 << 20 })
     const group = await plantIssue(fx.t, {
@@ -1380,12 +1380,18 @@ describe('a single-task read of an archived group', () => {
       progress: { done: 0, total: 0, percent: 0, partial: true },
     })
     expect(answer.archived_at).not.toBeNull()
-    expect(answer.subtasks.map((t) => t.id)).toEqual(kids)
+    expect(answer.has_more_subtasks).toBe(true)
+    expect(answer.subtasks.map((t) => t.id)).toEqual(kids.slice(0, answer.subtasks.length))
+    expect(answer.subtasks.length).toBeGreaterThan(0)
     const stored = await fx.t.run((ctx) => byId(ctx, 'issues', kids[99]))
     expect(stored?.archived_at).toBeDefined()
     // a read of the same group, which the cascade does not burden, is whole
     const { rest } = await reads(fx, group.id)
-    expect(rest).toMatchObject({ progress: { total: 100, partial: false } })
+    expect(rest).toMatchObject({
+      progress: { total: 100, partial: false },
+      has_more_subtasks: false,
+    })
+    expect(rest.subtasks).toHaveLength(100)
   })
 
   it('reads a group whose subtasks span 150 sub-projects without checking each one alone', async () => {
@@ -1445,7 +1451,7 @@ describe('a single-task read of an archived group', () => {
     expect((mcp.subtasks as unknown[]).length).toBe(150)
   })
 
-  it('refuses a group whose own subtasks do not fit in one request', async () => {
+  it('lists the first subtasks of a group whose own subtasks do not fit, and says there are more', async () => {
     const fx = await setup(newT({ transactionLimits: { documentsRead: 400 } }))
     Object.assign(TASK_READ_RESERVE, { ranges: 16, documents: 64, bytes: 1 << 20 })
     const group = await plantIssue(fx.t, {
@@ -1454,17 +1460,71 @@ describe('a single-task read of an archived group', () => {
       archived_at: day(9),
       title: 'Group',
     })
-    await plantMany(fx, 450, { project_id: fx.sub.id, archived_at: day(9), parent_id: group.id })
-    const args = { today: TODAY, callerId: fx.agent.id, access: 'read' as const, ref: group.id }
-    await refused(
-      fx.t.query(internal.machine.rest.getIssue, args),
-      'bad_request',
-      SUBTASKS_TOO_LARGE,
-    )
-    await refused(
-      fx.t.query(internal.machine.mcp.getIssue, args),
-      'bad_request',
-      SUBTASKS_TOO_LARGE,
-    )
+    const kids = await plantMany(fx, 450, {
+      project_id: fx.sub.id,
+      archived_at: day(9),
+      parent_id: group.id,
+    })
+    const { rest, mcp } = await reads(fx, group.id)
+    for (const read of [rest, mcp]) {
+      expect(read).toMatchObject({ is_group: true, has_more_subtasks: true })
+      const listed = (read.subtasks as { id: string }[]).map((t) => t.id)
+      expect(listed.length).toBeGreaterThan(0)
+      expect(listed).toEqual(kids.slice(0, listed.length))
+    }
+    // a group with none past what fits says so
+    const small = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      archived_at: day(9),
+    })
+    const few = await plantMany(fx, 3, {
+      project_id: fx.sub.id,
+      archived_at: day(9),
+      parent_id: small.id,
+    })
+    const { rest: whole } = await reads(fx, small.id)
+    expect(whole).toMatchObject({ has_more_subtasks: false })
+    expect(whole.subtasks.map((t) => t.id)).toEqual(few)
   })
+
+  it('reads and archives a group of hundreds of long subtasks within the real limits', async () => {
+    const fx = await setup(newT({ transactionLimits: true }))
+    const group = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      title: 'Long group',
+    })
+    // 100 active and 200 archived subtasks with the longest descriptions,
+    // about 60 KB each and 18 MB in all, written a hundred at a time
+    const long = 'あ'.repeat(TEXT_MAX)
+    await plantMany(fx, 100, { project_id: fx.sub.id, parent_id: group.id, description: long })
+    for (let i = 0; i < 2; i++) {
+      await plantMany(fx, 100, {
+        project_id: fx.sub.id,
+        parent_id: group.id,
+        archived_at: day(9),
+        description: long,
+      })
+    }
+    const answer = await fx.t.mutation(internal.machine.rest.updateIssue, {
+      callerId: fx.agent.id,
+      access: 'write',
+      keyName: 'archive test',
+      ref: group.id,
+      body: JSON.stringify({ archived: true }),
+    })
+    expect(answer).toMatchObject({ is_group: true, has_more_subtasks: true })
+    expect(answer.archived_at).not.toBeNull()
+    expect(answer.subtasks.length).toBeGreaterThan(0)
+    const { rest, mcp } = await reads(fx, group.id)
+    for (const read of [rest, mcp]) {
+      expect(read).toMatchObject({
+        is_group: true,
+        has_more_subtasks: true,
+        progress: { total: 0, partial: true },
+      })
+      expect((read.subtasks as unknown[]).length).toBeLessThan(300)
+    }
+  }, 120_000)
 })

@@ -107,7 +107,8 @@ const INLINE_STAYS =
 
 /**
  * The attachment `ref` (its uuid) of `issue`, which the caller can read,
- * else null. An attachment of another task reads like an unknown one.
+ * else null. An attachment of another task, and an image a description save
+ * dropped (model/descriptionImages.ts), read like an unknown one.
  */
 async function attachmentOf(
   ctx: QueryCtx,
@@ -116,7 +117,7 @@ async function attachmentOf(
 ): Promise<Doc<'issue_attachments'> | null> {
   if (!UUID.test(ref)) return null
   const att = await byId(ctx, 'issue_attachments', ref.toLowerCase())
-  return att !== null && att.issue_id === issue.id ? att : null
+  return att !== null && att.issue_id === issue.id && att.dropped_at === undefined ? att : null
 }
 
 /** Whether the caller holds Edit (or Lead) on the task's project. */

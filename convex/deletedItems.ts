@@ -43,6 +43,7 @@ import {
   PURGE_MAX,
   purgeItems,
   RESTORE_MAX,
+  recoverArchivedDetaches,
   recoverJobs,
   restoreItems,
   runStep,
@@ -152,21 +153,23 @@ export const step = internalMutation({
   },
 })
 
-/** One step of detaching the children a deleted task left behind
+/** One step of detaching the archived children a deleted task left behind
  * (model/deletedItems.ts detachArchivedChildren). */
 export const detachArchived = internalMutation({
-  args: { parent_id: v.string(), actor_id: v.string(), now: v.string() },
-  handler: async (ctx, a): Promise<null> => {
-    await detachArchivedChildren(ctx, a)
+  args: { job_id: v.id('archived_detaches') },
+  handler: async (ctx, { job_id }): Promise<null> => {
+    await detachArchivedChildren(ctx, job_id)
     return null
   },
 })
 
-/** Restarts stalled jobs (model/deletedItems.ts recoverJobs). */
+/** Restarts stalled jobs and detach steps (model/deletedItems.ts
+ * recoverJobs, recoverArchivedDetaches). */
 export const recover = internalMutation({
   args: {},
   handler: async (ctx): Promise<null> => {
     await recoverJobs(ctx)
+    await recoverArchivedDetaches(ctx)
     return null
   },
 })

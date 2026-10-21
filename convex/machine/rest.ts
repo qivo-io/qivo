@@ -747,7 +747,6 @@ export const createIssue = internalMutation({
       readable,
       project: target,
       today: now.slice(0, 10),
-      write: true,
     })
   },
 })
@@ -855,7 +854,6 @@ export const updateIssue = internalMutation({
       surface: 'rest',
       me,
       today: now.slice(0, 10),
-      write: true,
     })
   },
 })

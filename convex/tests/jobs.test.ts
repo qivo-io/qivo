@@ -232,30 +232,6 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
     expect((await issueRow(t, open.id))?.archived_at).toBeUndefined()
   })
 
-  it('ignores a retired team threshold, so every project archives after 30 days', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    await t.run(async (ctx) => {
-      await ctx.db.patch(f.team._id, { archive_days: 90 })
-      await ctx.db.patch(f.meta._id, { team_id: f.team.id })
-    })
-    const kept = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      status: 'done',
-      done_at: ago(29),
-    })
-    const due = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      status: 'done',
-      done_at: ago(31),
-    })
-    expect(await runArchive(t)).toBe(1)
-    expect((await issueRow(t, kept.id))?.archived_at).toBeUndefined()
-    expect((await issueRow(t, due.id))?.archived_at).toBeDefined()
-  })
-
   it('a Done task moved to another sub-project waits the full threshold from the move', async () => {
     const t = newT()
     const f = await withOrg(t)

@@ -719,12 +719,14 @@ const pendingRestoreIssueIds = new Set<string>()
 /* Draft-only uploads a discarded draft let go of while edits were paused
    (removeAttachment's deferWhilePaused). The pause would refuse their
    delete, so it waits for the snapshot to recover (reapPausedUploads). A
-   reload forgets them, and the description GC removes them later, as it
-   does a closed tab's leftovers. */
+   reload forgets them, and a later description save drops them a day after
+   their upload, as it does a closed tab's leftovers
+   (convex/model/descriptionImages.ts). */
 const reapAfterPause = new Set<string>()
 
 /* Deletes the uploads reapAfterPause holds once edits resume, except one a
-   description took meanwhile, which is the description GC's from then on. */
+   description took meanwhile, which the server's description saves settle
+   from then on. */
 function reapPausedUploads() {
   // one pause can end while the other still holds
   if (snapshotTrouble || savePause()) return
@@ -3965,6 +3967,28 @@ function patchIssueRow(uuid: string, db: IssueWirePatch, at: string) {
    (`created.num`) or else the next one free in its organization's counter,
    which it raises. A task created under a parent clears the parent's own
    hours, as the server does. */
+/* The attachment ids a description names as `att:<id>`. */
+const imageRefs = (text: string) =>
+  new Set(Array.from(text.matchAll(/att:([0-9a-f-]{36})/g), (m) => m[1]))
+
+/* Paints what the server's description save does to task `uuid`'s images
+   (convex/model/descriptionImages.ts settleDescriptionImages): an inline
+   image the new text takes out is dropped at `at`, so the attachment cap
+   frees its place at once, and a dropped one it shows again is back. The
+   server also drops images no saved text named for a day, which a delivery
+   brings. */
+function paintDescriptionImages(uuid: string, before: string, after: string, at: string) {
+  const was = imageRefs(before)
+  const now = imageRefs(after)
+  for (const a of rows.attachments.values()) {
+    if (a.issue_id !== uuid) continue
+    if (a.inline && a.dropped_at === undefined && was.has(a.id) && !now.has(a.id))
+      rows.attachments.set(a.id, { ...a, dropped_at: at })
+    else if (a.dropped_at !== undefined && now.has(a.id) && !was.has(a.id))
+      rows.attachments.set(a.id, { ...a, dropped_at: undefined })
+  }
+}
+
 function newTaskPaint(row: Row<'issues'>, created: { num: number | null }): Paint {
   return () => {
     const org = rows.orgs.get(row.org_id)
@@ -5626,7 +5650,7 @@ export const PLANNER = {
     const at = new Date().toISOString()
     // attaching a sub-issue clears the new parent's own hours (0066 mirror)
     const newParent = 'parent' in patch && patch.parent ? keyToUuid.get(patch.parent) : undefined
-    const prevDesc = String(row.description || '') // pre-patch, for the GC below
+    const prevDesc = String(row.description || '') // pre-patch, for the image paint below
     const seenRow: Record<string, unknown> = { ...row, ...opts.seen }
     const wire = mapIssuePatch(patch)
     // A field sent with the value the person saw changes nothing they
@@ -5655,6 +5679,9 @@ export const PLANNER = {
         patchIssueRow(uuid, paintDb, at)
         // a new visible parent or a detach replaces a hidden one
         if ('parent_id' in paintDb && rows.issues.has(uuid)) rows.hiddenParentTasks.delete(uuid)
+        if ('description' in paintDb) {
+          paintDescriptionImages(uuid, prevDesc, String(paintDb.description || ''), at)
+        }
       },
     }
     const planningOnly = Object.keys(wire).every((key) =>
@@ -5667,37 +5694,6 @@ export const PLANNER = {
         over,
         keepDraft: opts.keepDraft,
       })
-    // inline description images are hidden attachments; when neither the new
-    // text nor the text it just replaced references one any more, reap the
-    // row + bytes. Keeping the replaced text's refs for one more save gives
-    // undo-across-save a window: an att: node resurrected right after the
-    // save that dropped it still has its attachment (older resurrections can
-    // render "Image unavailable" — with no version history there is nothing
-    // left to preview, so nothing else holds a claim). The grace window
-    // covers uploads whose reference hasn't been committed anywhere yet:
-    // with the explicit Save bar a dirty draft (this user's other tab,
-    // another user's editor) can legitimately sit unsaved for hours, and
-    // reaping its pasted image would break that draft — and, once saved,
-    // the committed text — for good. A day comfortably outlives any live
-    // draft, and genuine orphans (crashed tabs) re-qualify on every later
-    // description save, so they still get cleaned up. Draft-only uploads
-    // are otherwise reaped by the editor's own discard paths, never by this
-    // GC. A refused removal takes back only its own paint, and the
-    // description update keeps or loses its own, which is safe either way:
-    // the cleanup only removes images neither text references.
-    // Known limit: references only count within their own issue, so an att:
-    // link hand-copied into another issue's description dies with the original.
-    if ('description' in patch) {
-      const refsOf = (text: string) => [...text.matchAll(/att:([0-9a-f-]{36})/g)].map((m) => m[1])
-      const referenced = new Set([...refsOf(String(patch.description || '')), ...refsOf(prevDesc)])
-      const graceCutoff = Date.now() - 24 * 60 * 60 * 1000
-      ;[...rows.attachments.values()]
-        .filter((a) => a.issue_id === uuid && a.inline && !referenced.has(a.id))
-        .forEach((a) => {
-          if (new Date(a.created_at).getTime() >= graceCutoff) return
-          PLANNER.removeAttachment(a.id)
-        })
-    }
     return saved
   },
 
@@ -5812,6 +5808,77 @@ export const PLANNER = {
           return view
         },
         ...(row ? { over: overOf('issues', row, ['parent_id']) } : {}),
+      },
+    )
+  },
+
+  /** The Link picker's Create new linked task: a new task titled `title` in
+      task `id`'s sub-project, linked to it with `type` as seen from task
+      `id`, in one server write (api.issues.createLinked), so a refused link
+      leaves no new task behind. The view's own link cap check toasts first;
+      the server also counts links to tasks this view does not hold. */
+  createLinked: (id: string, type: string, title: string): void => {
+    const it = PLANNER.issueById[id]
+    const orgRow = it ? rows.orgs.get(it.org) : undefined
+    if (!it || !orgRow || refusePausedEdit()) return
+    const full = linkBlock(it.links ?? [])
+    if (full) {
+      toast(`${full}.`)
+      return
+    }
+    const kind = type === 'blocks' || type === 'blocked_by' ? type : 'relates'
+    const taskId = crypto.randomUUID()
+    const at = new Date().toISOString()
+    const me = profileIn(it.org) || undefined
+    const task: Row<'issues'> = {
+      id: taskId,
+      project_id: it.project,
+      num: (orgRow.next_issue_num || 0) + 1,
+      org_id: it.org,
+      title: clampTitle(title),
+      description: '',
+      status: 'backlog',
+      priority: 'low',
+      reporter_id: me,
+      created_by: me,
+      paused: false,
+      status_at: at,
+      created_at: at,
+      updated_at: at,
+    }
+    const created = { num: null as number | null }
+    const paintTask = newTaskPaint(task, created)
+    // the stored form, as addLink and the server's storedLink canonicalize it
+    const [source, target] =
+      kind === 'blocked_by' || (kind === 'relates' && taskId < it.uuid)
+        ? [taskId, it.uuid]
+        : [it.uuid, taskId]
+    const link: Row<'issue_links'> = {
+      id: crypto.randomUUID(),
+      source_id: source,
+      target_id: target,
+      type: kind === 'relates' ? 'relates' : 'blocks',
+      pair_key: source < target ? `${source}:${target}` : `${target}:${source}`,
+      created_at: at,
+    }
+    const view: View = {
+      workspace: () => {
+        if (!rows.issues.has(it.uuid)) return
+        paintTask()
+        if (!rows.issues.has(taskId) || rows.links.has(link.id)) return
+        rows.links.set(link.id, { ...link })
+      },
+    }
+    void send(
+      api.issues.createLinked,
+      { org_id: it.org, id: it.uuid, new_id: taskId, link_id: link.id, title: task.title, kind },
+      view,
+      {
+        // the server's number for the new task, painted while no delivery holds it
+        keep: (answer) => {
+          created.num = answer.num
+          return view
+        },
       },
     )
   },
@@ -5990,8 +6057,8 @@ export const PLANNER = {
   /** Restore from Archived tasks. Awaited, never optimistic, because the
       row is not in the snapshot. The snapshot pulls the restored rows back
       in reactively, with no refetch. Resolves false on refusal (toasted).
-      A subtask whose parent is full comes back as a top-level task, which
-      is toasted too. */
+      A subtask whose parent is full, or whose parent's delete still has to
+      detach it, comes back as a top-level task, which is toasted too. */
   unarchiveIssue: async (
     issueUuid: string,
     title?: string,
@@ -6001,10 +6068,15 @@ export const PLANNER = {
     pendingRestoreIssueIds.add(issueUuid)
     try {
       const out = await sendAwaited(api.issues.unarchive, { org_id: org, id: issueUuid }, 'none')
-      // the parent was full (convex/lib/taskLimits.ts SUBTASK_MAX)
+      // the parent was full (convex/lib/taskLimits.ts SUBTASK_MAX), or was
+      // deleted after this task was archived and came back since
       if (out.left_parent) {
+        const why =
+          out.left_parent === 'full'
+            ? `its parent already has ${SUBTASK_MAX} active subtasks`
+            : 'its parent was deleted after this task was archived'
         toast(
-          `${title ? `"${title}"` : 'The task'} is back as a top-level task, because its parent already has ${SUBTASK_MAX} active subtasks.`,
+          `${title ? `"${title}"` : 'The task'} is back as a top-level task, because ${why}.`,
           'info',
         )
       }
@@ -6198,9 +6270,12 @@ export const PLANNER = {
       const file = await compressImage(input)
       row = rows.issues.get(uuid)
       if (!row) return null
-      // the per-task cap, before any bytes are sent (the server checks too)
+      // the per-task cap, before any bytes are sent (the server checks too);
+      // an image a description save took out no longer counts
       const full = attachmentBlock(
-        [...rows.attachments.values()].filter((a) => a.issue_id === uuid).length,
+        [...rows.attachments.values()].filter(
+          (a) => a.issue_id === uuid && a.dropped_at === undefined,
+        ).length,
       )
       if (full) {
         toast(`Couldn't upload "${file.name}". ${full}.`)

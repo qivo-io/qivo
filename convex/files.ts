@@ -76,6 +76,7 @@ import {
   demoFileExpiry,
   reserveDemoUpload,
 } from './model/demoUploads'
+import { reapDroppedImage as reapDropped } from './model/descriptionImages'
 import { assertProfileExpected } from './model/people'
 
 /* The byte-reference fence and the attach result live in the shared
@@ -185,6 +186,17 @@ export const removeAttachment = orgMutation({
     if (issue === null || issue.org_id !== ctx.me.org_id) throw notFound('attachment not found')
     await assertWritable(ctx, issue.project_id)
     await removeAttachmentCore(ctx, { me: ctx.me, attachment: att, issue, now })
+    return null
+  },
+})
+
+/* The step a description save schedules for each image it drops, which
+ * deletes it with its bytes unless a later save brought it back
+ * (model/descriptionImages.ts reapDroppedImage). */
+export const reapDroppedImage = internalMutation({
+  args: { id: v.string() },
+  handler: async (ctx, { id }): Promise<null> => {
+    await reapDropped(ctx, id)
     return null
   },
 })

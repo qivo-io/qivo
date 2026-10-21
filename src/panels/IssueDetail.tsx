@@ -3401,12 +3401,7 @@ function IssueDetail({
           createLabel="Create new linked task:"
           // the new task lands in this task's project, so only with edit access there
           onCreate={
-            canLabel && !noLink
-              ? (title) => {
-                  const key = P.addIssue({ project: it.project, title })
-                  if (key) P.addLink(it.id, linkType, key)
-                }
-              : undefined
+            canLabel && !noLink ? (title) => P.createLinked(it.id, linkType, title) : undefined
           }
         />
       )}
