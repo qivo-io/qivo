@@ -527,8 +527,10 @@ function ProjectSettingsFields({
   React.useEffect(() => P.watchWriteBlock(proj.org), [proj.org])
   const [inviteEmail, setInviteEmail] = useStateS('')
   const [inviting, setInviting] = useStateS(false)
-  // the seat the last invitation from this form emailed, for InviteOutcome
-  const [emailed, setEmailed] = useStateS<{ seat: string; email: string } | null>(null)
+  /* The seats this form's invitations emailed, newest last, for
+     InviteOutcome. Each stays until the window closes, so a later invitation
+     does not hide an earlier one's result. */
+  const [emailed, setEmailed] = useStateS<{ seat: string; email: string }[]>([])
   useUpdateBlocker(!!inviteEmail || inviting)
   useUnsaved(!!inviteEmail.trim(), 'email')
   // the review time typed and not yet saved (the field saves on blur)
@@ -832,11 +834,12 @@ function ProjectSettingsFields({
                       window.showToast?.(
                         `${inviteEmail.trim()} was added to “${P.projectName(proj)}”`,
                       )
-                      setEmailed(
-                        invited.emailed
-                          ? { seat: invited.emailed, email: inviteEmail.trim() }
-                          : null,
-                      )
+                      const seat = invited.emailed
+                      if (seat)
+                        setEmailed((all) => [
+                          ...all.filter((e) => e.seat !== seat),
+                          { seat, email: inviteEmail.trim() },
+                        ])
                       setInviteEmail('')
                     }
                   }}
@@ -845,14 +848,9 @@ function ProjectSettingsFields({
                   {inviting ? 'Inviting…' : 'Invite'}
                 </Button>
               </div>
-              {emailed && (
-                <InviteOutcome
-                  key={emailed.seat}
-                  orgId={proj.org}
-                  seat={emailed.seat}
-                  email={emailed.email}
-                />
-              )}
+              {emailed.map((e) => (
+                <InviteOutcome key={e.seat} orgId={proj.org} seat={e.seat} email={e.email} />
+              ))}
             </SettingsGroup>
           )}
           <FieldHint>
