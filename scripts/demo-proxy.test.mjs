@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { loadConfigFromFile } from 'vite'
+import { describe, expect, it, vi } from 'vitest'
 import { demoProxy, loopbackOrigin } from './demo-proxy.mjs'
 
 const local = {
@@ -66,5 +69,41 @@ describe('local demo preview proxy', () => {
       'https://localhost',
     ])
       expect(loopbackOrigin(value)).toBe(false)
+  })
+
+  /* Vite 8.3.4 bundles follow-redirects 1.16.0 in
+   * node_modules/vite/dist/node/chunks/node.js, unpatched for
+   * GHSA-8r9p-f939-6h3c (CVE-2026-111755, credential headers kept across a
+   * redirect) and GHSA-q3jh-wrc6-jgq8 (CVE-2026-111756, cross-origin
+   * credential stripping bypassed). Its proxy sends a route's requests
+   * through that copy only when the route sets followRedirects, so no route
+   * may set it until a Vite release bundles follow-redirects 1.16.1 or
+   * later. */
+  it('never lets a proxy route follow redirects', async () => {
+    const checkout = resolve(import.meta.dirname, '..')
+    for (const file of ['vite.config.ts', 'scripts/demo-proxy.mjs'])
+      expect([file, /followRedirects/.test(readFileSync(join(checkout, file), 'utf8'))]).toEqual([
+        file,
+        false,
+      ])
+    const proxies = []
+    for (const env of [local, { VITE_APP_MODE: 'normal' }]) {
+      for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value)
+      try {
+        const { config } = await loadConfigFromFile(
+          { command: 'serve', mode: 'development' },
+          join(checkout, 'vite.config.ts'),
+          checkout,
+          'silent',
+        )
+        proxies.push(config.server.proxy)
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    }
+    const [demo, normal] = proxies
+    expect(Object.keys(demo)).toHaveLength(2)
+    for (const route of Object.values(demo)) expect(route.followRedirects).toBeUndefined()
+    expect(normal).toBeUndefined()
   })
 })

@@ -824,7 +824,7 @@ describe('task events over stateless MCP', () => {
 
 /* ----------------------------------------------------------------- FINALE
  * ORDER-DEPENDENT: this must stay the LAST test in the file — it deletes the
- * suite's own qvt token (via the internal teardown fn) and replays one call
+ * suite's own qvt token (via machine/testing:deleteCredential) and replays one call
  * to capture exchange 44 live: the very same bearer that worked all suite
  * long now answers the person-leg collapse sentence. The globalSetup
  * teardown re-deletes tolerantly afterwards. */

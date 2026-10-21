@@ -29,28 +29,34 @@
  *      lookup would be ambiguous once any other organization on the
  *      deployment has an Atlas. Secrets are generated locally; only the
  *      sha256 crosses the wire (machine/testing.ts, the same hash contract
- *      machine/auth.ts looks up).
+ *      machine/auth.ts looks up). Each credential's name carries a random
+ *      pass id, so the pass can delete what it minted by name even when it
+ *      never learned a row's id, for example after a mint whose output could
+ *      not be parsed.
  *   3. Stash them for the suites in the private fixture directory, outside
  *      the checkout (contract/stash.mts). Setup refuses to start without
- *      that directory. Before the reset it revokes the credentials an
- *      interrupted pass left in its stash, or in the stash older passes
- *      kept inside the checkout, and removes that file.
- *   4. Teardown: delete both minted credentials via
- *      machine/testing:deleteCredential — a live qva_ key on a shared
+ *      that directory. The pass id is stashed before the first mint, after
+ *      a call that deletes nothing proves the deployment has the delete
+ *      function. Before the reset it revokes the credentials an interrupted
+ *      pass left in its stash, or in the stash older passes kept inside the
+ *      checkout: by name when the stash holds a pass id, and by id for every
+ *      id it holds. Then it removes that file.
+ *   4. Teardown: delete every credential named for the pass via
+ *      machine/testing:deleteNamedCredentials — a live qva_ key on a shared
  *      deployment is a standing capability — then remove the stash. A
- *      failed delete keeps the stash, so the next pass revokes the rest. Tolerates already-deleted rows:
- *      mcp.test.mts's finale deletes the qvt token mid-suite to capture the
- *      revoked-token 401 live. A setup that fails after minting runs the
- *      same cleanup before it rethrows, because vitest runs no teardown
- *      then. A teardown failure sets a failing exit code, which vitest
- *      would otherwise only log. */
+ *      failed delete keeps the stash, so the next pass revokes the rest.
+ *      Tolerates already-deleted rows: mcp.test.mts's finale deletes the qvt
+ *      token mid-suite to capture the revoked-token 401 live. A setup that
+ *      fails runs the same cleanup before it rethrows, because vitest runs
+ *      no teardown then. A teardown failure sets a failing exit code, which
+ *      vitest would otherwise only log. */
 import { execFileSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { marketingId } from '../../convex/internal/marketingDemoData'
 import { contractDeployment, contractSiteUrl } from './site.mts'
-import { ROOT, type Stash, stashPath, writeStash } from './stash.mts'
+import { nextStashPath, ROOT, type Stash, stashPath, writeStash } from './stash.mts'
 
 const NORTHSTAR = 'northstar-labs'
 const ANCHOR = process.env.CONTRACT_ANCHOR ?? '2026-09-07'
@@ -83,15 +89,32 @@ function envLocal(root: string): string | undefined {
 
 type Kind = 'agent_key' | 'mcp_token'
 
-function mint(
-  run: Run,
-  kind: Kind,
-  who: Record<string, string>,
-  name: string,
-): { id: string; secret: string } {
+/** The profile and name of one credential a pass mints. */
+type Named = { profile_id: string; name: string }
+
+/**
+ * The credentials pass `pass` mints, by kind: Nora's personal token and
+ * Atlas's agent key, each named after the pass.
+ */
+async function passCredentials(pass: string): Promise<Record<Kind, Named>> {
+  return {
+    mcp_token: {
+      profile_id: await marketingId(NORTHSTAR, 'person:nora'),
+      name: `contract pass token ${pass}`,
+    },
+    agent_key: {
+      profile_id: await marketingId(NORTHSTAR, 'person:atlas'),
+      name: `contract pass key ${pass}`,
+    },
+  }
+}
+
+/** Mints the `kind` credential `named` describes. Throws unless the output
+ * names the new row's id. */
+function mint(run: Run, kind: Kind, { profile_id, name }: Named): { id: string; secret: string } {
   const secret = (kind === 'agent_key' ? 'qva_' : 'qvt_') + randomBytes(24).toString('hex')
   const out = run('machine/testing:mintCredential', {
-    ...who,
+    profile_id,
     kind,
     key_prefix: secret.slice(0, 11),
     key_hash: sha256(secret),
@@ -99,7 +122,17 @@ function mint(
     // the suites write with the person token; an agent key's role decides
     ...(kind === 'mcp_token' ? { access: 'write' } : {}),
   })
-  return { id: out.id as string, secret }
+  if (typeof out.id !== 'string')
+    throw new Error('convex run machine/testing:mintCredential: no credential id in its output')
+  return { id: out.id, secret }
+}
+
+/** Deletes the credentials `named` describes and returns how many rows went. */
+function deleteNamed(run: Run, named: Named): number {
+  const out = run('machine/testing:deleteNamedCredentials', named)
+  if (typeof out.deleted !== 'number')
+    throw new Error('convex run machine/testing:deleteNamedCredentials: no count in its output')
+  return out.deleted
 }
 
 /** Whether `site` is a convex.site origin of `deployment`, in any region. */
@@ -111,29 +144,38 @@ function siteOf(site: unknown, deployment: string): boolean {
   )
 }
 
+/** The form of the random id every pass names its credentials after. */
+const PASS_ID = /^[0-9a-f]{16}$/
+
 /**
  * Revokes the credentials named by a stash an interrupted pass left at
- * `path`, when they belong to this pass's deployment, then removes the file.
- * A stash that cannot be read or names another deployment is removed
- * unrevoked, because this key cannot reach that deployment.
+ * `path`, when they belong to this pass's deployment, then removes the file
+ * and any replacement a failed write left beside it. A stash with a pass id
+ * is revoked by name, which also covers a credential whose id the pass never
+ * saved, and every id it holds is revoked as well. A stash that cannot be
+ * read or names another deployment is removed unrevoked, because this key
+ * cannot reach that deployment.
  */
-function revokeLeftover(path: string, deployment: string, run: Run): void {
+async function revokeLeftover(path: string, deployment: string, run: Run): Promise<void> {
   if (!existsSync(path)) return
-  let left: Partial<Stash> = {}
+  let left: Partial<Stash> | null = null
   try {
     left = JSON.parse(readFileSync(path, 'utf8'))
   } catch {}
-  if (siteOf(left.siteUrl, deployment)) {
+  if (!siteOf(left?.siteUrl, deployment)) {
+    console.log('[contract] removing a stash from another deployment without revoking it')
+  } else {
+    if (typeof left?.pass === 'string' && PASS_ID.test(left.pass))
+      for (const named of Object.values(await passCredentials(left.pass))) deleteNamed(run, named)
     const ids = [
-      [left.qvaId, 'agent_key'],
-      [left.qvtId, 'mcp_token'],
+      [left?.qvaId, 'agent_key'],
+      [left?.qvtId, 'mcp_token'],
     ] as const
     for (const [id, kind] of ids)
       if (typeof id === 'string') run('machine/testing:deleteCredential', { id, kind })
-  } else {
-    console.log('[contract] removing a stash from another deployment without revoking it')
   }
   rmSync(path, { force: true })
+  rmSync(nextStashPath(path), { force: true, recursive: true })
 }
 
 /**
@@ -148,51 +190,70 @@ export async function contractSetup(
   const siteUrl = contractSiteUrl(env, envLocal(root))
   const deployment = contractDeployment(env)
   const stash = stashPath(env, root)
-  revokeLeftover(join(root, 'tests', 'contract', '.credentials.json'), deployment, run)
-  revokeLeftover(stash, deployment, run)
+  await revokeLeftover(join(root, 'tests', 'contract', '.credentials.json'), deployment, run)
+  await revokeLeftover(stash, deployment, run)
   console.log(
     `[contract] resetting Northstar Labs on ${siteUrl} (the shared development deployment the key names, where manual work in that organization is lost)`,
   )
   reset()
   const orgId = await marketingId(NORTHSTAR, 'org')
+  const pass = randomBytes(8).toString('hex')
+  const credentials = await passCredentials(pass)
 
-  const minted: { id: string; kind: Kind }[] = []
+  // The credentials this pass has tried to mint. A mint can succeed on the
+  // server even when its output cannot be read, so each is deleted by name.
+  const minting: Named[] = []
   // Every delete runs even when an earlier one fails. Both tolerate
   // already-deleted (the mcp finale kills the qvt mid-suite). The stash goes
   // only once both succeed, so the next pass can revoke what remains.
   const teardown = () => {
     const failures: unknown[] = []
-    for (const { id, kind } of minted) {
+    let deleted = 0
+    for (const named of minting) {
       try {
-        run('machine/testing:deleteCredential', { id, kind })
+        deleted += deleteNamed(run, named)
       } catch (error) {
         failures.push(error)
       }
     }
     if (failures.length === 0) {
-      try {
-        rmSync(stash, { force: true })
-      } catch (error) {
-        failures.push(error)
+      // the stash, and a replacement that a failed write left behind
+      const removals = [
+        () => rmSync(stash, { force: true }),
+        () => rmSync(nextStashPath(stash), { force: true, recursive: true }),
+      ]
+      for (const remove of removals) {
+        try {
+          remove()
+        } catch (error) {
+          failures.push(error)
+        }
       }
     }
     if (failures.length > 0) {
       process.exitCode = 1
       throw new AggregateError(failures, '[contract] teardown did not finish every step')
     }
-    console.log('[contract] minted credentials deleted')
+    const rest = deleted < minting.length ? '; the rest were never created or already deleted' : ''
+    console.log(
+      minting.length === 0
+        ? '[contract] the pass minted no credentials, so there was nothing to delete'
+        : `[contract] deleted ${deleted} of the ${minting.length} credentials the pass tried to mint${rest}`,
+    )
   }
 
   try {
-    const nora = await marketingId(NORTHSTAR, 'person:nora')
-    const qvt = mint(run, 'mcp_token', { profile_id: nora }, 'contract pass token')
-    minted.push({ id: qvt.id, kind: 'mcp_token' })
-    const atlas = await marketingId(NORTHSTAR, 'person:atlas')
-    const qva = mint(run, 'agent_key', { profile_id: atlas }, 'contract pass key')
-    minted.push({ id: qva.id, kind: 'agent_key' })
+    // fails before anything is minted on a deployment without the delete
+    deleteNamed(run, credentials.mcp_token)
+    writeStash(stash, { siteUrl, orgId, pass })
+    minting.push(credentials.mcp_token)
+    const qvt = mint(run, 'mcp_token', credentials.mcp_token)
+    minting.push(credentials.agent_key)
+    const qva = mint(run, 'agent_key', credentials.agent_key)
     writeStash(stash, {
       siteUrl,
       orgId,
+      pass,
       qva: qva.secret,
       qvt: qvt.secret,
       qvaId: qva.id,

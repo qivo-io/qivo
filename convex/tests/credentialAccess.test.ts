@@ -261,6 +261,42 @@ describe('personal tokens', () => {
     )
   })
 
+  it('the test seam deletes the credentials of one profile with exactly one name', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const mint = (profile_id: string, kind: 'agent_key' | 'mcp_token', name: string) =>
+      t.mutation(internal.machine.testing.mintCredential, {
+        profile_id,
+        kind,
+        key_prefix: 'qvt_named00',
+        key_hash: hex(),
+        name,
+        ...(kind === 'mcp_token' ? { access: 'write' as const } : {}),
+      })
+    const name = 'contract pass token 0123456789abcdef'
+    await mint(f.user.id, 'mcp_token', name)
+    await mint(f.user.id, 'mcp_token', name)
+    await mint(f.agent.id, 'agent_key', name)
+    const kept = [
+      await mint(f.user.id, 'mcp_token', `${name}0`),
+      await mint(f.user.id, 'mcp_token', 'Laptop'),
+    ]
+    const sweep = internal.machine.testing.deleteNamedCredentials
+    expect(await t.mutation(sweep, { profile_id: f.user.id, name })).toEqual({ deleted: 2 })
+    expect(await t.mutation(sweep, { profile_id: f.user.id, name })).toEqual({ deleted: 0 })
+    expect(await t.mutation(sweep, { profile_id: f.agent.id, name })).toEqual({ deleted: 1 })
+    await expectRefusal(
+      t.mutation(sweep, { profile_id: f.user.id, name: ' ' }),
+      'bad_request',
+      /^a credential name is required/,
+    )
+    const left = await t.run(async (ctx) => [
+      ...(await ctx.db.query('mcp_tokens').collect()),
+      ...(await ctx.db.query('agent_keys').collect()),
+    ])
+    expect(left.map((row) => row.id).sort()).toEqual(kept.map((row) => row.id).sort())
+  })
+
   it('lookup refuses an expired token like a revoked one and resolves each access', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -640,6 +676,8 @@ const EXEMPT: Record<string, string> = {
     'deploy-key test seam that mints credentials, refused on production',
   'machine/testing:deleteCredential':
     'deploy-key test seam that deletes minted credentials, refused on production',
+  'machine/testing:deleteNamedCredentials':
+    'deploy-key test seam that deletes minted credentials by name, refused on production',
   'machine/uploads:begin':
     'the upload URL takes no credential; its signed token names the ticket a write credential started',
   'machine/uploads:finish': 'the upload URL records the file of a ticket begin claimed',
