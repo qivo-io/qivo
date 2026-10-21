@@ -133,10 +133,14 @@ describe('DeferredList', () => {
     while (nodes().length < 280) await slice()
     expect(spacer()).not.toBeNull()
     const boxes = [...container.querySelectorAll<HTMLElement>('[data-deferred-block]')]
-    expect(boxes.length).toBeGreaterThanOrEqual(2)
-    // 256 items of 40px with the 255 gaps between them; a closed block keeps
-    // the size it last rendered at, the open one takes its estimate
-    expect(boxes[0].style.containIntrinsicBlockSize).toBe(`auto ${256 * 40 + 255 * 8}px`)
+    // the first screen's 10 items keep a block of their own, which is on
+    // screen; slices fill the next blocks of 256 items. A closed block keeps
+    // the size it last rendered at, the open one takes its estimate.
+    expect(boxes.length).toBeGreaterThanOrEqual(3)
+    expect(boxes[0].children).toHaveLength(10)
+    expect(boxes[0].style.containIntrinsicBlockSize).toBe(`auto ${10 * 40 + 9 * 8}px`)
+    expect(boxes[1].children).toHaveLength(256)
+    expect(boxes[1].style.containIntrinsicBlockSize).toBe(`auto ${256 * 40 + 255 * 8}px`)
     expect(boxes.at(-1)?.style.containIntrinsicBlockSize).toMatch(/^\d+px$/)
     expect(boxes.every((box) => box.getAttribute('role') === 'none')).toBe(true)
   })

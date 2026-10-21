@@ -196,6 +196,10 @@ export function DeferredList<T extends object>({
   const node = made.current.node
   const owners = useRef(new Map<string, number>())
   const nextBlock = useRef(0)
+  /* Blocks below this id hold the first screen. They are on screen, so the
+     browser renders them whole; slices fill new blocks below them, which
+     it skips while they are offscreen. */
+  const sealedBelow = useRef<number | null>(null)
   const blocks: Block<T>[] = []
   const shown = items.slice(0, mounted)
   const capacity = initial >= items.length ? Number.POSITIVE_INFINITY : BLOCK_SIZE
@@ -218,10 +222,10 @@ export function DeferredList<T extends object>({
       blocks.push(current)
     } else if (
       owner === undefined &&
-      current.items.length >= capacity &&
+      (current.items.length >= capacity || current.id < (sealedBelow.current ?? 0)) &&
       current.id === nextBlock.current - 1
     ) {
-      // the last block is full: open the next one
+      // the last block is full or holds the first screen: open the next one
       current = { id: nextBlock.current++, items: [], start: index }
       blocks.push(current)
     }
@@ -231,6 +235,8 @@ export function DeferredList<T extends object>({
     current.items.push(item)
   }
   owners.current = assigned
+  if (sealedBelow.current === null && capacity !== Number.POSITIVE_INFINITY)
+    sealedBelow.current = nextBlock.current
 
   // the waiting items' estimated heights, each with the gap before it
   const sums = useMemo(() => {
