@@ -29,7 +29,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { LEVELS_READ } from '../lib/access'
+import type { QueryCtx } from '../_generated/server'
+import { LEVELS_READ, projectLevelsForPeople } from '../lib/access'
+import { byId } from '../lib/db'
 import type { Refusal } from '../lib/functions'
 import { REASSIGN_MAX } from '../lib/projectGrants'
 import { type BulkUpdate, holderKey, type IssuePatch, updateIssueCore } from '../model/issues'
@@ -361,8 +363,8 @@ describe('reassigning the tasks of an access removal', () => {
   }, 60_000)
 
   it('removes a team grant past many grants that concern none of its holders', async () => {
-    // 3,000 grants of other people on 30 other projects would be read whole
-    // if the 25 holders' sight were worked out together without a budget
+    // 3,000 grants of other people on 30 other projects: the holders' sight
+    // reads only their own grants, one index range each
     const t = newT({ transactionLimits: { documentsRead: 2500 } })
     const f = await withOrg(t)
     const others: Doc<'projects'>[] = []
@@ -414,6 +416,32 @@ describe('reassigning the tasks of an access removal', () => {
         }
       })
     }
+    const queries = await t.run(async (ctx) => {
+      let count = 0
+      const db = new Proxy(ctx.db, {
+        get(target, prop) {
+          const value: unknown = Reflect.get(target, prop)
+          if (prop === 'query') {
+            return (table: 'profiles') => {
+              count++
+              return target.query(table)
+            }
+          }
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      })
+      const projects = await ctx.db
+        .query('projects')
+        .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+        .collect()
+      const people = await Promise.all(
+        holders.map(async (id) => (await byId(ctx, 'profiles', id)) as Doc<'profiles'>),
+      )
+      await projectLevelsForPeople({ ...ctx, db } as QueryCtx, people, projects)
+      return count
+    })
+    // the teams, each holder's grants, Hardware's members and its shares
+    expect(queries).toBe(1 + holders.length + 1 + 1)
     const before = LEVELS_READ.max
     LEVELS_READ.max = 500
     try {

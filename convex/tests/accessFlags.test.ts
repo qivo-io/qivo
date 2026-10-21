@@ -123,7 +123,7 @@ describe('accessFlags', () => {
             ]
             const levels = (l: OrgProjectLevels | undefined) =>
               projects.map((p) => [p.id, l?.levelOf(p), l?.navigationOnly(p.id)])
-            // read together, then past the row budget one by one
+            // memberships read from the teams, then past the row budget person by person
             for (const max of [LEVELS_READ.max, 0]) {
               const before = LEVELS_READ.max
               LEVELS_READ.max = max
