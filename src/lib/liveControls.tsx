@@ -64,11 +64,18 @@ export function useLiveControls(root: RefObject<HTMLElement | null>) {
   const [statics] = useState<StaticControls>(() => ({
     activate: (wrap, pointer) => {
       const element = root.current
-      if (!element || handover.current) return
+      if (!element) return
+      const wrapAt = wrap ? [...element.querySelectorAll('[data-popover-wrap]')].indexOf(wrap) : -1
+      // Already going live, as a mouse that arrives renders the row later:
+      // a press that lands first still opens its popover.
+      if (handover.current) {
+        if (wrapAt >= 0) handover.current.wrap = wrapAt
+        return
+      }
       const active = document.activeElement
       handover.current = {
         focus: active && element.contains(active) ? markTaskFocus(active) : null,
-        wrap: wrap ? [...element.querySelectorAll('[data-popover-wrap]')].indexOf(wrap) : -1,
+        wrap: wrapAt,
         pointer,
       }
       setLive(true)

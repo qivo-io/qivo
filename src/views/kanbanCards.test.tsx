@@ -168,6 +168,20 @@ describe('static Board cards', { timeout: BOARD_TEST_TIMEOUT }, () => {
     ).toBe('true')
   })
 
+  it('open the owner picker when a press lands before the pointer made the card live', async () => {
+    const board = await loadBoard(network, twenty)
+    await board.render(root)
+    const owner = cards()[6].querySelector<HTMLElement>('[data-focus-key="owner"]')
+    // the mouse arrives and presses before React renders the live card
+    await act(async () => {
+      owner?.dispatchEvent(pointer('pointerover'))
+      owner?.click()
+    })
+    const dialog = document.querySelector('[role="dialog"]')
+    expect(dialog).not.toBeNull()
+    expect(dialog?.contains(document.activeElement)).toBe(true)
+  })
+
   it('render the same markup and tab stops static and live, for every card shape', async () => {
     const shapes = (readOnly: boolean) => async () => {
       const board = await loadBoard(network, (snap) => {
