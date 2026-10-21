@@ -17,6 +17,9 @@ describe('board-scale-seed', () => {
   it('refuses anything but a disposable local backend before it connects', async () => {
     expect(() => parseSeedArgs(['--url', 'http://127.0.0.1:3214'])).toThrow(/--local backend only/)
     expect(() => parseSeedArgs([...local, '--tasks', '0'])).toThrow(/--tasks/)
+    // an organization much larger no longer loads through snapshot:forMe
+    expect(() => parseSeedArgs([...local, '--tasks', '50000'])).toThrow(/1 to 12000/)
+    expect(parseSeedArgs([...local, '--tasks', '12000']).tasks).toBe(12_000)
     const refused = (args, extra = {}) =>
       runBoardScaleSeed(args, { env: { ...env, ...extra }, log: () => {} })
     await expect(

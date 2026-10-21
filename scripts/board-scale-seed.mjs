@@ -30,6 +30,10 @@ const STATUSES = ['backlog', 'todo', 'progress', 'review', 'done']
 const PRIORITIES = ['medium', 'high', 'low', 'medium', 'urgent', 'low', 'medium']
 const WORDS = ['calibrate', 'review', 'ship', 'test', 'document']
 const AT_ONCE = 8
+/* The most seeded tasks. At about 10,000 tasks snapshot:forMe already runs
+   close to Convex's 1s limit on a local backend, so an organization much
+   larger would no longer load. */
+const MOST_TASKS = 12_000
 
 const ref = (name) => makeFunctionReference(name)
 
@@ -53,8 +57,8 @@ export function parseSeedArgs(args) {
   }
   if (options.target !== 'local')
     throw new DemoCliError('board-scale-seed writes to a disposable --local backend only.')
-  if (!Number.isInteger(options.tasks) || options.tasks < 1 || options.tasks > 50_000)
-    throw new DemoCliError('--tasks takes a whole number from 1 to 50000.')
+  if (!Number.isInteger(options.tasks) || options.tasks < 1 || options.tasks > MOST_TASKS)
+    throw new DemoCliError(`--tasks takes a whole number from 1 to ${MOST_TASKS}.`)
   return options
 }
 
@@ -100,10 +104,12 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
     tokenIdentifier: `board-scale-seed|${actor.auth_user_id}`,
   })
   const snapshot = await client.query(ref('snapshot:forMe'), {})
-  const joined = (name) => [...snapshot[name], ...(snapshot.more?.[name] ?? []).flat()]
-  const issues = joined('issues')
   const org = snapshot.orgs.find((o) => o.id === actor.org_id)?.id
   if (!org) throw new DemoCliError('Nora cannot see Northstar; seed it again.')
+  // Northstar's own rows: the snapshot holds every organization Nora is in
+  const joined = (name) =>
+    [...snapshot[name], ...(snapshot.more?.[name] ?? []).flat()].filter((row) => row.org_id === org)
+  const issues = joined('issues')
   // the sub-projects that hold tasks, each with the owners its tasks have
   const owners = new Map()
   for (const project of joined('projects'))
