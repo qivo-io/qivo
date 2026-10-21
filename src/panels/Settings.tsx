@@ -23,6 +23,7 @@ import { OrgUsersPage } from './settings/UsersSettings'
 function SettingsScreen({
   page,
   setPage,
+  resetPage = setPage,
   onBackPage = setPage,
   onExit,
   onNewProject,
@@ -32,7 +33,11 @@ function SettingsScreen({
   onProjectGone,
 }: {
   page: string
+  /** the person's move to another page, which asks first while the page
+      holds unsent text */
   setPage: (page: string) => void
+  /** moves off a page that is no longer valid here, without asking */
+  resetPage?: (page: string) => void
   onBackPage?: (page: string) => void
   onExit: () => void
   onNewProject: () => void
@@ -59,8 +64,8 @@ function SettingsScreen({
 
   // The phone menu is an entry point, not a new desktop settings page.
   useEffectS(() => {
-    if (!narrow && page === 'menu') setPage('account')
-  }, [narrow, page, setPage])
+    if (!narrow && page === 'menu') resetPage('account')
+  }, [narrow, page, resetPage])
 
   // Each page mounts fresh (the content is keyed by page), so a control inside
   // a page that opens another one, such as the Users link under "Who can
@@ -90,22 +95,22 @@ function SettingsScreen({
   // keep the page valid for the current user
   useEffectS(() => {
     if (page === 'desktop' && !desktopSettings) {
-      setPage('account')
+      resetPage('account')
     } else if (page.indexOf('project:') === 0) {
       const pid = page.slice(8)
       const pr = P.project(pid)
       const meta = pr ? (pr.type === 'meta' ? pr : P.project(pr.parent)) : null
-      if (!(meta && P.canSee(meta.id)) && leavingProject.current !== pid) setPage('account')
+      if (!(meta && P.canSee(meta.id)) && leavingProject.current !== pid) resetPage('account')
     } else if (page.indexOf('team:') === 0) {
-      if (!P.isTeamLeader(page.slice(5))) setPage('account')
+      if (!P.isTeamLeader(page.slice(5))) resetPage('account')
     } else if (page.startsWith('user:')) {
-      if (!admin) setPage('account')
-      else if (!P.homeUsers().some((user) => user.id === page.slice(5))) setPage('org-users')
+      if (!admin) resetPage('account')
+      else if (!P.homeUsers().some((user) => user.id === page.slice(5))) resetPage('org-users')
     } else if (page === 'org-teams') {
       // the one org- page a team leader reaches without being an admin
-      if (!admin && !myTeams.length) setPage('account')
+      if (!admin && !myTeams.length) resetPage('account')
     } else if (page.indexOf('org-') === 0 && !admin) {
-      setPage('account')
+      resetPage('account')
     }
   })
 

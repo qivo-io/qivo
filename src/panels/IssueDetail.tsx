@@ -8,6 +8,7 @@
 import React, {
   type ReactNode,
   Suspense,
+  useContext as useContextID,
   useEffect as useEffectID,
   useLayoutEffect as useLayoutEffectID,
   useRef as useRefID,
@@ -21,6 +22,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { HoverTooltip, hasOpenTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { usePlannerVersion } from '@/store/usePlannerVersion'
+import { closeOrAsk, questionOpen } from '../components/DiscardPrompt'
 import type { DescEditorHandle } from '../components/descEditor'
 import { IssueSubscribers } from '../components/IssueSubscribers'
 import { Markdown } from '../components/markdown'
@@ -49,7 +51,13 @@ import { DELAY_MARK } from '../lib/delay'
 import { roomBeside, useFloatInsets } from '../lib/floatStack'
 import { lastInputWasPointer, restoreFocus } from '../lib/focusVisibility'
 import { lazyFromModule } from '../lib/lazyModule'
-import { useFieldUnsaved, useUnsaved } from '../lib/leaveGuard'
+import {
+  type UnsentScope,
+  UnsentScopeContext,
+  useFieldUnsaved,
+  useUnsaved,
+  useUnsentScope,
+} from '../lib/leaveGuard'
 import {
   parentBlock,
   parentCandidatesFor,
@@ -228,16 +236,23 @@ function SectionHead({
 function FocusWindow({
   name,
   onClose,
+  scope,
   children,
 }: {
   name: string
+  /** asks first while `scope` holds unsent text (DiscardPrompt) */
   onClose: () => void
+  /** the text typed in this window, which closing it throws away: the
+      section's editors mount again in the column behind */
+  scope: UnsentScope
   children?: React.ReactNode
 }) {
   useEffectID(() => {
     const h = (e) => {
       if (e.key !== 'Escape') return
       if (e.defaultPrevented) return
+      // the discard question, which opens above this window, owns the key
+      if (questionOpen()) return
       // an open tooltip closes first and passes the Escape on, read then
       if (hasOpenTooltip()) return
       if (
@@ -280,7 +295,7 @@ function FocusWindow({
         className="animate-in fade-in zoom-in-95 [width:980px] [max-width:88vw] [height:calc(84vh-var(--float-inset-y))] [display:flex] [flex-direction:column] [background:var(--background)] [border:1px_solid_var(--border)] [border-radius:var(--r-lg)] [box-shadow:var(--qivo-shadow-pop)] [overflow:hidden]"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        {children}
+        <UnsentScopeContext.Provider value={scope}>{children}</UnsentScopeContext.Provider>
       </div>
       {/* The backdrop stands beside the window, under it, rather than around
           it, so the window's own blur still reaches the page (appearance.css).
@@ -1186,6 +1201,23 @@ function IssueDetail({
   // one at a time: they are two views of the same column, and stacking them
   // would put a scrim over a scrim for nothing.
   const [focus, setFocus] = useStateID(null as null | 'desc' | 'activity')
+  // The text typed in each half, in the column and in its window. Moving a
+  // half between the two mounts its editors afresh, so a move that would
+  // drop typed text asks first (DiscardPrompt).
+  const descColumn = useUnsentScope()
+  const activityColumn = useUnsentScope()
+  const focusWindow = useUnsentScope()
+  const openFocus = (which: 'desc' | 'activity') =>
+    closeOrAsk([which === 'desc' ? descColumn : activityColumn], () => setFocus(which))
+  const closeFocus = () => closeOrAsk([focusWindow], () => setFocus(null))
+  // the window this one counts its unsent text in (App's task window)
+  const windowScope = useContextID(UnsentScopeContext)
+  /** Closes the window after its task was archived or deleted, without the
+      question: what was typed for the task goes with it. */
+  const closeGone = () => {
+    windowScope?.discard()
+    onClose()
+  }
   const [editingComment, setEditingComment] = useStateID<string | null>(null) // comment id being edited in place
   const winNarrow = useNarrow()
   const narrow = (!embedded || mobile) && winNarrow
@@ -1300,7 +1332,7 @@ function IssueDetail({
 
   const it = issueId ? P.issueById[issueId] : null
   useUpdateBlocker(editTitle && !!it && titleDraft !== it.title)
-  useUnsaved(editTitle && !!it && titleDraft !== it.title)
+  useUnsaved(editTitle && !!it && titleDraft !== it.title, 'title')
   // a kept title draft: the rename that refused its save becomes the title
   // the next save sends as seen, once the screen shows it
   const shownTitle = it?.title
@@ -1310,7 +1342,11 @@ function IssueDetail({
     setTitleSeen(shownTitle)
   }, [shownTitle, titleSeen])
   // remaining hours typed and not yet saved (the field saves on blur)
-  const remainingUnsaved = useFieldUnsaved(P.editsPaused, `${it?.id}:${it?.remaining ?? ''}`)
+  const remainingUnsaved = useFieldUnsaved(
+    P.editsPaused,
+    `${it?.id}:${it?.remaining ?? ''}`,
+    'remaining hours',
+  )
   // point the store's one-thread comment cache at this issue; release it when
   // the modal closes (uuid null) or the component unmounts
   const watchUuid = it ? it.uuid : null
@@ -1990,7 +2026,7 @@ function IssueDetail({
       size="icon"
       {...{ [hook]: '' }}
       className="w-control-sm h-control-sm [flex-shrink:0]"
-      onClick={() => setFocus(which)}
+      onClick={() => openFocus(which)}
       aria-label={`Open ${what} in a window`}
       title={`Open ${what} in a window`}
     >
@@ -2236,7 +2272,7 @@ function IssueDetail({
         size="icon"
         data-focus-close
         className="w-control-sm h-control-sm"
-        onClick={() => setFocus(null)}
+        onClick={closeFocus}
         aria-label="Close (esc)"
         title="Close (esc)"
       >
@@ -2598,7 +2634,12 @@ function IssueDetail({
                           type="button"
                           data-desc-toggle
                           aria-expanded={descOpen}
-                          onClick={() => setDescOpen((v) => !v)}
+                          onClick={() =>
+                            descOpen
+                              ? // collapsing drops the editor and any draft in it
+                                closeOrAsk([descColumn], () => setDescOpen(false))
+                              : setDescOpen(true)
+                          }
                           className="flex h-8 items-center gap-2 text-left border-none bg-transparent px-2 py-0 -mx-2 rounded-sm cursor-pointer text-text-3"
                           onMouseEnter={(e) => {
                             e.currentTarget.style.background = 'var(--hover)'
@@ -2630,7 +2671,11 @@ function IssueDetail({
                     )}
                     {/* not while it is in a window of its own — one field, one
                   draft; the pane behind the scrim is nobody's view */}
-                    {(!descOpen && !mobile) || focus === 'desc' ? null : descBody(true)}
+                    {(!descOpen && !mobile) || focus === 'desc' ? null : (
+                      <UnsentScopeContext.Provider value={descColumn}>
+                        {descBody(true)}
+                      </UnsentScopeContext.Provider>
+                    )}
                   </div>
 
                   <div className="task-activity-head flex items-center gap-2 px-5 pt-6 pb-2 shrink-0">
@@ -2650,7 +2695,9 @@ function IssueDetail({
                   {focus === 'activity' ? (
                     <div className="[flex:1] [min-height:0]" />
                   ) : (
-                    spineScroller('0 20px 20px')
+                    <UnsentScopeContext.Provider value={activityColumn}>
+                      {spineScroller('0 20px 20px')}
+                    </UnsentScopeContext.Provider>
                   )}
                 </div>
 
@@ -3188,7 +3235,7 @@ function IssueDetail({
           own heading exactly as the column draws it — minus the pop-out
           button, which is what got you here. */}
       {it && focus === 'desc' && (
-        <FocusWindow name="Description" onClose={() => setFocus(null)}>
+        <FocusWindow name="Description" onClose={closeFocus} scope={focusWindow}>
           {windowHead({ chrome: focusChrome, live: false, padBottom: 10 })}
           <div className="[flex:1] [min-height:0] [display:flex] [flex-direction:column] [padding:0_20px_20px]">
             <SectionHead icon="page" label="Description" />
@@ -3197,7 +3244,7 @@ function IssueDetail({
         </FocusWindow>
       )}
       {it && focus === 'activity' && (
-        <FocusWindow name="Activity" onClose={() => setFocus(null)}>
+        <FocusWindow name="Activity" onClose={closeFocus} scope={focusWindow}>
           {windowHead({ chrome: focusChrome, live: false, padBottom: 4 })}
           <div className="task-activity-head flex items-center gap-2 px-5 py-2 shrink-0">
             <Icon name="comment" size={16} color="var(--text-3)" />
@@ -3324,7 +3371,9 @@ function IssueDetail({
             // the person may have gone to another task meanwhile: leave that one open
             if (shownIssue.current === opened) {
               setFateOpen(false)
-              onClose() // the task left the board, so the window has nothing to show
+              // the task left the board, so the window has nothing to show,
+              // and text typed for it has nowhere to go
+              closeGone()
             }
             window.showToast?.(`Archived ${shown}`)
             return true
@@ -3336,7 +3385,7 @@ function IssueDetail({
             if (!deleted) return false
             if (shownIssue.current === opened) {
               setFateOpen(false)
-              onClose()
+              closeGone()
             }
             const n = subtasks.length
             window.showToast?.(

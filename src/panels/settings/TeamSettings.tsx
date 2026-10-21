@@ -222,7 +222,7 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
   // a create in flight: Add waits for the server's answer
   const [adding, setAdding] = useStateS(false)
   useUpdateBlocker(!!teamName)
-  useUnsaved(!!teamName.trim())
+  useUnsaved(!!teamName.trim(), 'team name')
   const confirm = useConfirmArm<string>()
   // deleting a team whose members would lose sight of their tasks asks first
   const [removal, setRemoval] = useStateS<AccessRemoval | null>(null)

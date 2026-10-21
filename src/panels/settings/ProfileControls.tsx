@@ -138,7 +138,7 @@ export function NameField({ me }: { me: Pick<UserVM, 'name'> }) {
   const next = v.replace(/\s+/g, ' ').trim()
   const dirty = next !== me.name
   useUpdateBlocker(dirty || busy)
-  useUnsaved(dirty)
+  useUnsaved(dirty, 'name')
   const save = async () => {
     if (busy || !dirty) return
     setBusy(true)

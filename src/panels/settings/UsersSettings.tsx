@@ -44,7 +44,7 @@ function AgentKeyPanel({
   const [busy, setBusy] = useStateS(false)
   const confirm = useConfirmArm<string>()
   useUpdateBlocker(!!name || !!fresh || busy)
-  useUnsaved(!!name.trim())
+  useUnsaved(!!name.trim(), 'name')
   const mine = (keys || []).filter((k) => k.agentId === agent.id)
   const mint = async () => {
     // a paused create keeps the typed name and says why
@@ -201,7 +201,8 @@ export function OrgUsersPage({
   const [openKeys, setOpenKeys] = useStateS<string | null>(null)
   const [freshAgent, setFreshAgent] = useStateS<{ name: string; secret: string } | null>(null)
   useUpdateBlocker(!!addName || !!addEmail || addRole !== 'user' || !!freshAgent)
-  useUnsaved(!!addName.trim() || !!addEmail.trim())
+  useUnsaved(!!addName.trim(), 'name')
+  useUnsaved(!!addEmail.trim(), 'email')
   // the roster is the HOME organization's users; the blended snapshot also
   // holds foreign profiles (mine, in orgs that shared a project with me) and
   // this organization's own guests, both listed elsewhere

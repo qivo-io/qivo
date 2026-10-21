@@ -197,6 +197,8 @@ describe('security headers', () => {
     expect(route(config, host, '/assets/index-abc123.js').headers['cache-control']).toBe(
       'public, max-age=31536000, immutable',
     )
+    // the update check must always reach the server
+    expect(route(config, host, '/version.json').headers['cache-control']).toBe('no-store')
   })
 })
 

@@ -7,7 +7,7 @@
    Server rules expose only the viewer's messages and allow read/snooze/delete
    actions; notification content remains server-owned. */
 import { CheckCheck, ListX, Minus, Plus } from 'lucide-react'
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useContext, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { DropdownChevron } from '@/components/ui/select'
@@ -18,6 +18,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { closeOrAsk } from '../components/DiscardPrompt'
 import {
   AnchoredPop,
   Icon,
@@ -28,6 +29,7 @@ import {
   Seg,
 } from '../components/qivo'
 import { fmtDateTime } from '../lib/dates'
+import { UnsentScopeContext, useUnsentScope } from '../lib/leaveGuard'
 import { notificationPermission, requestNotificationPermission } from '../lib/notify'
 import { matchesAllWords } from '../lib/search'
 import { fmtSnoozeUntil, SNOOZE_STEP_MAX, SNOOZE_UNIT_MS, type SnoozeUnit } from '../lib/snooze'
@@ -409,6 +411,10 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
      the point: it is a second frame on the pane's task, so navigating inside
      it moves the pane too and closing it puts you back where you were. */
   const [poppedOut, setPoppedOut] = useState(false)
+  // the text typed in the pane and its pop-out, and in the pop-out alone,
+  // so closing either asks first (DiscardPrompt)
+  const taskScope = useContext(UnsentScopeContext)
+  const popScope = useUnsentScope()
   const showTask = (handle: string | null) => {
     setDeadItem(null)
     openTask(handle || null)
@@ -480,7 +486,9 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   // mark computed after it would show nothing at all. The task window is
   // mounted by the render this click schedules — far too late to ask — so the
   // answer is handed to it.
-  const select = (g: MessageGroupVM) => {
+  const select = (g: MessageGroupVM) =>
+    closeOrAsk([g.issueKey !== openIssue && taskScope], () => selectNow(g))
+  const selectNow = (g: MessageGroupVM) => {
     queueScrollTop.current = listScrollRef.current?.scrollTop || 0
     setFrozen({ uuid: g.issueUuid, ts: firstUnreadTs(P.messages, g.issueUuid) })
     // a sleeping row is a reminder that returns unread; looking does not read it
@@ -891,16 +899,18 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
           PANE's, so following a subtask in here moves both and there is never
           a second task to come back to. */}
       {paneIssue && poppedOut && (
-        <IssueDetail
-          issueId={paneIssue.id}
-          holdThread
-          unreadTs={undefined} // the pane already consumed this visit's New mark
-          onPopOut={undefined} // this IS the pop-out
-          onShowOnBoard={showOnBoard}
-          onClose={() => setPoppedOut(false)}
-          onOpen={showTask}
-          onPlanOnRoadmap={onPlanOnRoadmap}
-        />
+        <UnsentScopeContext.Provider value={popScope}>
+          <IssueDetail
+            issueId={paneIssue.id}
+            holdThread
+            unreadTs={undefined} // the pane already consumed this visit's New mark
+            onPopOut={undefined} // this IS the pop-out
+            onShowOnBoard={showOnBoard}
+            onClose={() => closeOrAsk([popScope], () => setPoppedOut(false))}
+            onOpen={showTask}
+            onPlanOnRoadmap={onPlanOnRoadmap}
+          />
+        </UnsentScopeContext.Provider>
       )}
     </div>
   )

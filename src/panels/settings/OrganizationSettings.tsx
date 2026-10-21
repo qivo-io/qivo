@@ -34,7 +34,7 @@ function OrgAddressField() {
   const next = v.trim()
   const dirty = next !== current
   useUpdateBlocker(dirty || busy)
-  useUnsaved(dirty)
+  useUnsaved(dirty, 'address')
   const save = async () => {
     if (busy || !dirty) return
     setBusy(true)
@@ -172,8 +172,16 @@ function ProjectCreatorsField({ setPage }: { setPage: (page: string) => void }) 
 export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void }) {
   const canManage = P.isAdmin()
   // numbers typed and not yet saved (the fields save on blur)
-  const attachmentUnsaved = useFieldUnsaved(P.editsPaused, `${P.org.maxAttachmentMb}`)
-  const plannableUnsaved = useFieldUnsaved(P.editsPaused, `${P.org.defaultPlannableHours}`)
+  const attachmentUnsaved = useFieldUnsaved(
+    P.editsPaused,
+    `${P.org.maxAttachmentMb}`,
+    'attachment size',
+  )
+  const plannableUnsaved = useFieldUnsaved(
+    P.editsPaused,
+    `${P.org.defaultPlannableHours}`,
+    'plannable hours',
+  )
   return (
     <>
       <PageTitle>Organization</PageTitle>

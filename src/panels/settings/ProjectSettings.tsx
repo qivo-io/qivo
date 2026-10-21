@@ -527,9 +527,13 @@ function ProjectSettingsFields({
   const [inviteEmail, setInviteEmail] = useStateS('')
   const [inviting, setInviting] = useStateS(false)
   useUpdateBlocker(!!inviteEmail || inviting)
-  useUnsaved(!!inviteEmail.trim())
+  useUnsaved(!!inviteEmail.trim(), 'email')
   // the review time typed and not yet saved (the field saves on blur)
-  const reviewUnsaved = useFieldUnsaved(P.editsPaused, `${proj.id}:${proj.reviewHours ?? ''}`)
+  const reviewUnsaved = useFieldUnsaved(
+    P.editsPaused,
+    `${proj.id}:${proj.reviewHours ?? ''}`,
+    'review hours',
+  )
   const accessHeading = React.useRef<HTMLDivElement>(null)
   const isMeta = proj.type === 'meta'
   const parentMeta = proj.parent ? P.project(proj.parent) : null

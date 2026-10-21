@@ -21,12 +21,13 @@ import { REASSIGN_MAX } from '../../convex/lib/projectGrants'
 import { projectKeyBase, projectKeyCandidate } from '../../convex/lib/projectKeys'
 import { PROJECT_DESCRIPTION_MAX } from '../../convex/lib/projectLimits'
 import { DELETE_REASON_MAX, NAME_MAX, TEXT_MAX } from '../../convex/lib/textLimits'
+import { closeOrAsk } from '../components/DiscardPrompt'
 import { ProjectAccessSelect } from '../components/ProjectAccessSelect'
 import { Avatar, DateSelect, FieldSelect, Icon } from '../components/qivo'
 import { relativeWeek, weekToISO } from '../lib/dates'
 import { restoreFocus } from '../lib/focusVisibility'
 import { isLandscapeRoadmapOpen } from '../lib/landscape'
-import { useTypedUnsaved, useUnsaved } from '../lib/leaveGuard'
+import { UnsentScopeContext, useTypedUnsaved, useUnsaved, useUnsentScope } from '../lib/leaveGuard'
 import {
   type AccessDraft,
   afterAccessChange,
@@ -85,6 +86,8 @@ function ModalShell({
   focusAfterClose,
   keepOnOutsideClick = false,
   savesAsYouGo = false,
+  busy = false,
+  unsent = [],
   children,
 }: {
   icon: string
@@ -106,7 +109,9 @@ function ModalShell({
    * polite live region from the start, so a line that appears as the form
    * changes is announced */
   footerLeft?: ReactNodeM
-  footer?: ReactNodeM
+  /** replaces the Cancel/submit pair; a function gets the shell's close, which
+   * asks first while the dialog holds unsent text */
+  footer?: ReactNodeM | ((close: () => void) => ReactNodeM)
   focusAfterClose?: () => HTMLElement | null
   /** ignore clicks outside the dialog, for content an accidental close would
    * lose for good (a secret shown once). Close, Escape and the footer still
@@ -116,16 +121,44 @@ function ModalShell({
    * Estimate). They hold their own close-warning leases, so typing alone
    * does not count as unsaved until the dialog closes */
   savesAsYouGo?: boolean
+  /** refuses every close without asking, for a dialog waiting for the
+   * server; a phone keeps its Back step */
+  busy?: boolean
+  /** names of the text the dialog's own fields hold unsent, such as "title",
+   * with false for a field that holds none. Fields in the children hold
+   * their own leases (useUnsaved) */
+  unsent?: readonly (string | false)[]
   children?: ReactNodeM
 }) {
   // A create/edit dialog also holds non-text draft choices and staged files.
   // Keep its entire editing session intact until it is submitted or closed.
   useUpdateBlocker(true)
-  // text typed into the dialog is lost if the page closes before it is sent
-  const unsaved = useTypedUnsaved()
+  // text typed into the dialog is lost if the page closes before it is sent.
+  // Closing the dialog itself asks only about the fields' own leases, which
+  // know when their text matches what is saved (DiscardPrompt).
+  const unsaved = useTypedUnsaved(null)
   const typed = savesAsYouGo ? undefined : unsaved.typed
+  const scope = useUnsentScope()
   const mobile = useMobile()
-  const closeLayer = useMobileBackLayer(true, onClose, mobile || isLandscapeRoadmapOpen())
+  // Every close asks first while a field holds unsent text. The answer comes
+  // later, so this close stays open (a phone keeps its Back step) and
+  // Discard closes through the layer again, past the then empty question.
+  const close = () => {
+    const cancelled = cancelling.current
+    cancelling.current = false
+    if (busy) return false
+    if (cancelled || !scope.held().length) return onClose()
+    closeOrAsk([scope], () => closeLayer())
+    return false
+  }
+  const closeLayer = useMobileBackLayer(true, close, mobile || isLandscapeRoadmapOpen())
+  // Cancel is the person's own choice to drop what they typed, for the one
+  // close it starts; a dialog that refuses that close asks again later
+  const cancelling = useRefM(false)
+  const cancel = () => {
+    cancelling.current = true
+    closeLayer()
+  }
   const returnFocusRef = useRefM<HTMLElement | null>(
     typeof document === 'undefined' ? null : (document.activeElement as HTMLElement | null),
   )
@@ -209,12 +242,21 @@ function ModalShell({
         {/* the 24px bottom is INSIDE the scroller on purpose: with no rule and
             no band under it, a body scrolled to its end has to come to rest
             clear of the buttons rather than butting into them */}
-        <div className="overflow-y-auto px-5 pt-6 pb-6">{children}</div>
+        <div className="overflow-y-auto px-5 pt-6 pb-6">
+          <UnsentScopeContext.Provider value={scope}>
+            {unsent.map((what) => what && <HoldUnsent key={what} what={what} />)}
+            {children}
+          </UnsentScopeContext.Provider>
+        </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2 px-5 pt-0 pb-5">
           {/* a custom footer replaces the Cancel/submit pair — for windows
               that paginate rather than submit (the Update Estimate walk) */}
           {footer !== undefined ? (
-            footer
+            typeof footer === 'function' ? (
+              footer(closeLayer)
+            ) : (
+              footer
+            )
           ) : (
             <>
               {/* footerLeft takes the room left of the buttons and wraps
@@ -225,7 +267,7 @@ function ModalShell({
               >
                 {footerLeft}
               </div>
-              <Button type="button" variant="ghost" onClick={closeLayer} className="text-text-1">
+              <Button type="button" variant="ghost" onClick={cancel} className="text-text-1">
                 Cancel
               </Button>
               <Button
@@ -245,6 +287,12 @@ function ModalShell({
       </DialogContent>
     </Dialog>
   )
+}
+
+/** Holds a lease on `what` while it is mounted, inside the dialog's scope. */
+function HoldUnsent({ what }: { what: string }) {
+  useUnsaved(true, what)
+  return null
 }
 
 /* ---------- New issue ---------- */
@@ -348,6 +396,7 @@ function NewIssueModal({
       icon="layers"
       title="New task"
       onClose={onClose}
+      unsent={[!!title.trim() && 'title']}
       onSubmit={submit}
       canSubmit={canSave}
       submitLabel="Create"
@@ -536,6 +585,7 @@ function NewProjectModal({
       icon="layers"
       title="New project"
       onClose={onClose}
+      unsent={[!!name.trim() && 'name', !!desc.trim() && 'description']}
       onSubmit={submit}
       canSubmit={canSave}
       submitLabel="Create project"
@@ -651,6 +701,7 @@ function NewSubProjectModal({
       icon="layers"
       title="New sub-project"
       onClose={onClose}
+      unsent={[!!name.trim() && 'name']}
       onSubmit={submit}
       canSubmit={canSave}
       submitLabel="Create sub-project"
@@ -1506,7 +1557,10 @@ function ArchiveOrDeleteTaskModal({
       icon="inbox"
       title="Archive or delete task"
       badge={it.key}
-      onClose={saving ? () => false : onClose}
+      onClose={onClose}
+      busy={saving}
+      // a reason on its way to the server goes with the change
+      unsent={[!saving && !!reason.trim() && 'reason']}
       onSubmit={submit}
       canSubmit={canSubmit}
       dangerSubmit={!archiving}
@@ -1730,7 +1784,9 @@ function ArchiveOrDeleteProjectModal({
     <ModalShell
       icon={deleteOnly ? 'warning' : 'archive'}
       title={deleteOnly ? `Delete “${P.projectLabel(project)}”?` : `Archive or delete ${noun}`}
-      onClose={saving ? () => false : onClose}
+      onClose={onClose}
+      busy={saving}
+      unsent={[!saving && !!reason.trim() && 'reason']}
       onSubmit={submit}
       canSubmit={!!summary && !saving && (archiving || !reasonTooLong(reason))}
       dangerSubmit={!archiving}
@@ -1856,8 +1912,6 @@ function MilestoneModal({
   const [initialDate] = useStateM(() => (init.week == null ? null : weekToISO(init.week)))
   const [name, setName] = useStateM('')
   const [date, setDate] = useStateM(() => initialDate ?? weekToISO(P.TODAY_WEEK))
-  // a new milestone's name, typed and not added yet
-  useUnsaved(!!name.trim())
   // a create in flight: Add waits for the server's answer
   const [adding, setAdding] = useStateM(false)
   // the draft as it is now, so an answer can tell whether it changed since
@@ -1896,18 +1950,20 @@ function MilestoneModal({
       icon="diamond"
       title="Milestones"
       savesAsYouGo
+      // a new milestone's name, typed and not added yet
+      unsent={[!!name.trim() && 'milestone name']}
       // the shell's chip is set in mono for task keys; a project name is prose
       badge={project && <span className="font-sans">{project.name}</span>}
       onClose={onClose}
       width={600}
-      footer={
+      footer={(close) => (
         <>
           <div className="flex-1" />
-          <Button type="button" onClick={onClose} className="font-semibold">
+          <Button type="button" onClick={close} className="font-semibold">
             Done
           </Button>
         </>
-      }
+      )}
     >
       {!project ? (
         <div className="text-base text-text-2">Open a project to add a milestone.</div>
@@ -2076,7 +2132,7 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
   }, [m.name, m.week])
   const [name, setName] = useStateM(m.name)
   // a rename typed and not saved yet
-  useUnsaved(name.trim() !== m.name)
+  useUnsaved(name.trim() !== m.name, 'milestone name')
   const [date, setDate] = useStateM(() => weekToISO(m.week))
   const week = exactWeekForDate(date)
   // a save in flight: the editor stays open, its fields read-only, until
@@ -2241,6 +2297,7 @@ function CreateOrgModal({ onClose }: { onClose: () => void }) {
       icon="people"
       title="Create your organization"
       onClose={onClose}
+      unsent={[!!name.trim() && 'organization name']}
       onSubmit={submit}
       canSubmit={canSave}
       submitLabel={busy ? 'Creating…' : 'Create'}
