@@ -328,7 +328,7 @@ describe('personal tokens', () => {
     for (const pass of passes) {
       const hash = hex()
       await mint(pass, hash)
-      expect(await lookup(pass, hash)).toMatchObject({ ok: false, why: 'revoked' })
+      expect(await lookup(pass, hash)).toMatchObject({ ok: false, why: 'unknown' })
       expect(await activate(pass)).toEqual({ activated: 1 })
       expect(await lookup(pass, hash)).toMatchObject({ ok: true })
       // a killed pass whose mint lands after the next pass deleted its
@@ -336,7 +336,7 @@ describe('personal tokens', () => {
       await t.mutation(testing.deleteNamedCredentials, named(pass))
       const late = hex()
       await mint(pass, late)
-      expect(await lookup(pass, late)).toMatchObject({ ok: false, why: 'revoked' })
+      expect(await lookup(pass, late)).toMatchObject({ ok: false, why: 'unknown' })
       expect(await lookup(pass, hash)).toMatchObject({ ok: false, why: 'unknown' })
       // a killed pass whose activation lands after the next pass deleted the
       // credentials it had minted: nothing is left to activate
@@ -347,19 +347,155 @@ describe('personal tokens', () => {
       expect(await activate(pass)).toEqual({ activated: 0 })
       expect(await lookup(pass, minted)).toMatchObject({ ok: false, why: 'unknown' })
     }
-    // a token its owner revoked while it was pending stays revoked
-    const [token] = passes
-    const revoked = hex()
-    const { id } = await mint(token, revoked)
-    await new Promise((done) => setTimeout(done, 5))
-    expect(await as(t, f.user).mutation(api.tokens.revokeMcpToken, { id })).toBe(true)
-    expect(await activate(token)).toEqual({ activated: 0 })
-    expect(await lookup(token, revoked)).toMatchObject({ ok: false, why: 'revoked' })
     await expectRefusal(
       t.mutation(testing.activateNamedCredentials, { profile_id: f.user.id, name: ' ' }),
       'bad_request',
       /^a credential name is required/,
     )
+  })
+
+  it('the test seam never activates a pending credential that any revoke path stamped', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const testing = internal.machine.testing
+    const token = {
+      profile_id: f.user.id,
+      kind: 'mcp_token',
+      name: 'contract pass token 0',
+    } as const
+    const key = { profile_id: f.agent.id, kind: 'agent_key', name: 'contract pass key 0' } as const
+    const mint = async (pass: typeof token | typeof key) => {
+      const hash = hex()
+      const { id } = await t.mutation(testing.mintCredential, {
+        ...pass,
+        key_prefix: 'qvt_pend000',
+        key_hash: hash,
+        pending: true,
+        ...(pass.kind === 'mcp_token' ? { access: 'write' as const } : {}),
+      })
+      return { id, hash }
+    }
+    const named = ({ profile_id, name }: typeof token | typeof key) => ({ profile_id, name })
+    const revokes = [
+      [token, (id: string) => as(t, f.user).mutation(api.tokens.revokeMcpToken, { id })],
+      [
+        key,
+        (id: string) =>
+          as(t, f.admin).mutation(api.tokens.revokeAgentKey, { org_id: f.org.id, id }),
+      ],
+      [
+        token,
+        (id: string) =>
+          as(t, f.admin).mutation(api.apiAccess.revoke, {
+            org_id: f.org.id,
+            table: 'mcp_tokens',
+            id,
+          }),
+      ],
+      [
+        key,
+        (id: string) =>
+          as(t, f.admin).mutation(api.apiAccess.revoke, {
+            org_id: f.org.id,
+            table: 'agent_keys',
+            id,
+          }),
+      ],
+    ] as const
+    for (const [pass, revoke] of revokes) {
+      const { id, hash } = await mint(pass)
+      expect(await revoke(id)).toBe(true)
+      expect(await t.mutation(testing.activateNamedCredentials, named(pass))).toEqual({
+        activated: 0,
+      })
+      const lookup = await t.query(internal.machine.auth.lookupCredential, {
+        hash,
+        isAgent: pass.kind === 'agent_key',
+        now: new Date().toISOString(),
+      })
+      expect(lookup).toMatchObject({ ok: false })
+      await t.mutation(testing.deleteNamedCredentials, named(pass))
+    }
+    // a revoke that leaves the other pending row of the same name alone
+    const kept = await mint(token)
+    const revoked = await mint(token)
+    await as(t, f.admin).mutation(api.apiAccess.revoke, {
+      org_id: f.org.id,
+      table: 'mcp_tokens',
+      id: revoked.id,
+    })
+    expect(await t.mutation(testing.activateNamedCredentials, named(token))).toEqual({
+      activated: 1,
+    })
+    const now = new Date().toISOString()
+    expect(
+      await t.query(internal.machine.auth.lookupCredential, {
+        hash: kept.hash,
+        isAgent: false,
+        now,
+      }),
+    ).toMatchObject({ ok: true })
+    expect(
+      await t.query(internal.machine.auth.lookupCredential, {
+        hash: revoked.hash,
+        isAgent: false,
+        now,
+      }),
+    ).toMatchObject({ ok: false, why: 'unknown' })
+  })
+
+  it('the test seam keeps one credential per hash across its pending and usable forms', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const testing = internal.machine.testing
+    const kinds = [
+      { kind: 'mcp_token', profile_id: f.user.id, refusal: /^that token already exists/ },
+      { kind: 'agent_key', profile_id: f.agent.id, refusal: /^that key already exists/ },
+    ] as const
+    for (const { kind, profile_id, refusal } of kinds) {
+      const named = { profile_id, name: `contract pass ${kind} 0` }
+      const mint = (key_hash: string) =>
+        t.mutation(testing.mintCredential, {
+          ...named,
+          kind,
+          key_prefix: 'qvt_pend000',
+          key_hash,
+          pending: true,
+          ...(kind === 'mcp_token' ? { access: 'read' as const } : {}),
+        })
+      const hash = hex()
+      await mint(hash)
+      // the same hash again while it is pending, and once it is usable
+      await expectRefusal(mint(hash), 'bad_request', refusal)
+      expect(await t.mutation(testing.activateNamedCredentials, named)).toEqual({ activated: 1 })
+      await expectRefusal(mint(hash), 'bad_request', refusal)
+      // a usable row that took the plain hash after the mint refuses activation
+      const other = hex()
+      await mint(other)
+      await t.run(async (ctx) => {
+        const row = { id: uuid(), name: 'Laptop', created_at: NOW }
+        if (kind === 'mcp_token')
+          await ctx.db.insert('mcp_tokens', {
+            ...row,
+            profile_id: f.admin.id,
+            token_prefix: 'qvt_laptop0',
+            token_hash: other,
+            access: 'read',
+          })
+        else
+          await ctx.db.insert('agent_keys', {
+            ...row,
+            profile_id: f.agent.id,
+            key_prefix: 'qva_laptop0',
+            key_hash: other,
+          })
+      })
+      await expectRefusal(
+        t.mutation(testing.activateNamedCredentials, named),
+        'bad_request',
+        /^another credential already holds that hash/,
+      )
+    }
   })
 
   it('the test seam mints only for a caller that asks for a pending credential', async () => {

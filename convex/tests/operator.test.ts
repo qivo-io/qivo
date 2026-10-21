@@ -108,10 +108,26 @@ describe('legacy fixture retirement', () => {
     const tasks = await t.run((ctx) => ctx.db.query('issues').collect())
     expect(tasks.length).toBeGreaterThan(0)
     expect(await retire(t)).toMatchObject({ dry_run: true, accounts: 7, profiles: 8 })
+    // a pending contract credential of a fixture seat stays retired
+    const pending = await t.mutation(internal.machine.testing.mintCredential, {
+      email: 'nora@demo.qivo.io',
+      kind: 'mcp_token',
+      key_prefix: 'qvt_pend000',
+      key_hash: 'c'.repeat(64),
+      name: 'contract pass token 0',
+      access: 'write',
+      pending: true,
+    })
     await retire(t, false)
     expect(await t.run((ctx) => ctx.db.query('issues').collect())).toEqual(tasks)
     expect(await t.run((ctx) => ctx.db.get(customer.user._id))).toEqual(customer.user)
     expect(await findUser(t, 'nora@demo.qivo.io')).toMatchObject({ banned: true })
+    expect(
+      await t.mutation(internal.machine.testing.activateNamedCredentials, {
+        profile_id: pending.profile_id,
+        name: 'contract pass token 0',
+      }),
+    ).toEqual({ activated: 0 })
     await retire(t, false)
     expect(await t.run((ctx) => ctx.db.query('issues').collect())).toEqual(tasks)
   })
