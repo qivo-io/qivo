@@ -1052,8 +1052,9 @@ describe('sweepReadMessages — retention follows the person', () => {
       snoozed_until: new Date(Date.now() + 7 * 86_400_000).toISOString(),
     })
     // its scheduled wake never ran (the stamp is in the past): the sweep is
-    // the fallback that brings it back — unread, with the wake stamp
-    const overdueIssue = uuid()
+    // the fallback that brings it back — unread, with the wake stamp. Only a
+    // live task's item comes back unread.
+    const overdueIssue = (await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })).id
     const overdue = await plantMessage(t, {
       ...base,
       issue_id: overdueIssue,
@@ -1325,7 +1326,9 @@ describe('sweepReadMessages — retention follows the person', () => {
     })
     // full items whose wakes were lost, their rows interleaved in creation
     // order, so the first overdue rows of the range belong to every item
-    const items = Array.from({ length: 25 }, () => uuid())
+    const items: string[] = []
+    for (let i = 0; i < 25; i++)
+      items.push((await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })).id)
     for (let n = 0; n <= ITEM_UNREAD_CAP; n++) {
       await t.run(async (ctx) => {
         for (const issue_id of items) {
