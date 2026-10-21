@@ -116,8 +116,9 @@ const Block = memo(
     before.render === after.render &&
     before.box?.height === after.box?.height &&
     before.box?.open === after.box?.open &&
-    before.items.length === after.items.length &&
-    before.items.every((item, i) => item === after.items[i]),
+    (before.items === after.items ||
+      (before.items.length === after.items.length &&
+        before.items.every((item, i) => item === after.items[i]))),
 ) as typeof BlockView
 
 /** A list that mounts its first `initial` items at once and the rest in
@@ -149,13 +150,22 @@ export function DeferredList<T extends object>({
      slices. */
   const mountedKeys = useRef(new Set<string>())
   const lastMounted = useRef(0)
+  /* The last render's list and blocks. While the list stays the same
+     array, a render can only mount more of it: a slice. It then works on
+     the items it adds alone, as work on every mounted item in each slice
+     would grow with the list and leave the slices little time to mount. */
+  const last = useRef<{ items: T[]; initial: number; mounted: number; blocks: Block<T>[] } | null>(
+    null,
+  )
+  const grown =
+    last.current?.items === items && last.current.initial === initial ? last.current : null
   // a length a slice or mountThrough asked for, 0 once rendered
   const [target, setTarget] = useState(0)
   const floor = Math.min(initial, items.length)
   const before = mountedKeys.current
   // the prefix that holds every item the last render mounted
-  let stays = 0
-  if (before.size)
+  let stays = grown ? grown.mounted : 0
+  if (!grown && before.size)
     for (let i = items.length - 1; i >= 0; i--)
       if (before.has(keyOf(items[i]))) {
         stays = i + 1
@@ -165,8 +175,8 @@ export function DeferredList<T extends object>({
     items.length,
     Math.max(floor, Math.min(stays, before.size + MOST_AT_ONCE), target),
   )
-  const shown = items.slice(0, mounted)
-  mountedKeys.current = new Set(shown.map(keyOf))
+  if (grown) for (let i = grown.mounted; i < mounted; i++) before.add(keyOf(items[i]))
+  else mountedKeys.current = new Set(items.slice(0, mounted).map(keyOf))
   lastMounted.current = mounted
   if (target && mounted >= target) setTarget(0)
   const pending = items.length - mounted
@@ -237,21 +247,6 @@ export function DeferredList<T extends object>({
   const plain = (id: number) => plainIds.current?.has(id) ?? false
   const capacity = (id: number) =>
     plain(id) ? (sliced ? 0 : Number.POSITIVE_INFINITY) : BLOCK_SIZE
-  const blocks: Block<T>[] = []
-  const assigned = new Map<string, number>()
-  const known = shown.map((item) => owners.current.get(keyOf(item)))
-  const kept = keptOwners(known)
-  // how many kept items each block holds, and the first kept block after each item
-  const keptSize = new Map<number, number>()
-  const keptAfter: (number | undefined)[] = []
-  for (let i = shown.length - 1, next: number | undefined; i >= 0; i--) {
-    keptAfter[i] = next
-    const owner = known[i]
-    if (kept[i] && owner !== undefined) {
-      next = owner
-      keptSize.set(owner, (keptSize.get(owner) ?? 0) + 1)
-    }
-  }
   /* A block between `low` and the kept block `high` (none: the end), or
      null when no id is left between them. Ids rise down the list. */
   const between = (low: number, high: number | undefined) => {
@@ -259,44 +254,91 @@ export function DeferredList<T extends object>({
     const id = (low + high) / 2
     return id > low && id < high ? id : null
   }
-  let current: Block<T> | null = null
-  for (const [index, item] of shown.entries()) {
-    const owner = kept[index] ? known[index] : undefined
-    if (owner !== undefined && (!current || owner !== current.id)) {
-      current = { id: owner, items: [], start: index }
-      blocks.push(current)
-    } else if (owner === undefined && !current) {
-      // new or moved items above every kept one: the first kept block while
-      // it has room, else a block of their own above it
-      const next = keptAfter[index]
-      // the items above the first kept one, which all come before it
-      const run = known.findIndex((_, i) => kept[i])
-      const id =
-        next !== undefined && (keptSize.get(next) ?? 0) + run <= capacity(next)
-          ? next
-          : next === undefined
-            ? nextBlock.current++
-            : next - 1
-      current = { id, items: [], start: index }
-      blocks.push(current)
-    } else if (
-      owner === undefined &&
-      current &&
-      (current.items.length >= capacity(current.id) || current.id < (sealedBelow.current ?? 0))
-    ) {
-      // the block is full or holds the first screen: open the next one
-      const id = between(current.id, keptAfter[index])
-      if (id !== null) {
-        current = { id, items: [], start: index }
-        blocks.push(current)
+  /** Blocks for the mounted items `shown`, each kept in the block that
+      held it where it can be. */
+  const allocate = (shown: T[]) => {
+    const blocks: Block<T>[] = []
+    const assigned = new Map<string, number>()
+    const known = shown.map((item) => owners.current.get(keyOf(item)))
+    const kept = keptOwners(known)
+    // how many kept items each block holds, and the first kept block after each item
+    const keptSize = new Map<number, number>()
+    const keptAfter: (number | undefined)[] = []
+    for (let i = shown.length - 1, next: number | undefined; i >= 0; i--) {
+      keptAfter[i] = next
+      const owner = known[i]
+      if (kept[i] && owner !== undefined) {
+        next = owner
+        keptSize.set(owner, (keptSize.get(owner) ?? 0) + 1)
       }
     }
-    if (!current) continue
-    nextBlock.current = Math.max(nextBlock.current, Math.floor(current.id) + 1)
-    assigned.set(keyOf(item), current.id)
-    current.items.push(item)
+    let current: Block<T> | null = null
+    for (const [index, item] of shown.entries()) {
+      const owner = kept[index] ? known[index] : undefined
+      if (owner !== undefined && (!current || owner !== current.id)) {
+        current = { id: owner, items: [], start: index }
+        blocks.push(current)
+      } else if (owner === undefined && !current) {
+        // new or moved items above every kept one: the first kept block while
+        // it has room, else a block of their own above it
+        const next = keptAfter[index]
+        // the items above the first kept one, which all come before it
+        const run = known.findIndex((_, i) => kept[i])
+        const id =
+          next !== undefined && (keptSize.get(next) ?? 0) + run <= capacity(next)
+            ? next
+            : next === undefined
+              ? nextBlock.current++
+              : next - 1
+        current = { id, items: [], start: index }
+        blocks.push(current)
+      } else if (
+        owner === undefined &&
+        current &&
+        (current.items.length >= capacity(current.id) || current.id < (sealedBelow.current ?? 0))
+      ) {
+        // the block is full or holds the first screen: open the next one
+        const id = between(current.id, keptAfter[index])
+        if (id !== null) {
+          current = { id, items: [], start: index }
+          blocks.push(current)
+        }
+      }
+      if (!current) continue
+      nextBlock.current = Math.max(nextBlock.current, Math.floor(current.id) + 1)
+      assigned.set(keyOf(item), current.id)
+      current.items.push(item)
+    }
+    owners.current = assigned
+    return blocks
   }
-  owners.current = assigned
+  /** The last render's blocks, with the items mounted since at their end. */
+  const extend = (previous: Block<T>[], from: number) => {
+    const blocks = [...previous]
+    let current = blocks.at(-1)
+    let fresh = false
+    for (let index = from; index < mounted; index++) {
+      if (
+        !current ||
+        current.items.length >= capacity(current.id) ||
+        current.id < (sealedBelow.current ?? 0)
+      ) {
+        current = { id: nextBlock.current++, items: [], start: index }
+        blocks.push(current)
+        fresh = true
+      } else if (!fresh) {
+        // the growing block gets a new array, so the blocks before it keep theirs
+        current = { ...current, items: [...current.items] }
+        blocks[blocks.length - 1] = current
+        fresh = true
+      }
+      owners.current.set(keyOf(items[index]), current.id)
+      current.items.push(items[index])
+    }
+    return blocks
+  }
+  const blocks = grown ? extend(grown.blocks, grown.mounted) : allocate(items.slice(0, mounted))
+  last.current = { items, initial, mounted, blocks }
   plainIds.current ??= new Set(sliced ? [] : blocks.map((block) => block.id))
   if (sealedBelow.current === null && sliced) sealedBelow.current = nextBlock.current
 

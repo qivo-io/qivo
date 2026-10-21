@@ -205,6 +205,39 @@ describe('DeferredList', () => {
       expect(box.children.length).toBeLessThanOrEqual(64)
   })
 
+  it('works in a slice on the items it adds, not on every item it holds', async () => {
+    const items = Array.from({ length: 3000 }, (_, n) => ({ key: `k${n}` }))
+    let calls = 0
+    const counted = (item: Item) => {
+      calls++
+      return item.key
+    }
+    await act(async () =>
+      root.render(
+        <DeferredList
+          id="list"
+          items={items}
+          keyOf={counted}
+          render={renderItem}
+          estimate={estimate}
+          gap={8}
+          initial={12}
+          scheduler={scheduler}
+          label={label}
+        />,
+      ),
+    )
+    while (nodes().length < 2000) await slice()
+    const before = nodes().length
+    calls = 0
+    while (nodes().length === before) await slice()
+    expect(calls).toBeLessThanOrEqual(2 * (nodes().length - before))
+    while (tasks.length) await slice()
+    expect(nodes().map((node) => node.dataset.k)).toEqual(items.map((item) => item.key))
+    for (const box of container.querySelectorAll('[data-deferred-block]'))
+      expect(box.children.length).toBeLessThanOrEqual(64)
+  })
+
   it('keeps its cards when its first screen changes size', async () => {
     const items = Array.from({ length: 30 }, (_, n) => ({ key: `k${n}` }))
     // a short cell on a large Board: its first screen holds all of it
