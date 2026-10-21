@@ -19,7 +19,9 @@
  *     '{"profile_id":…, "name":…}'
  * stores the plain hash. A pending row is not revoked, so every revoke path
  * stamps it like any other credential, and activation skips a row that
- * carries a revoked_at. No production code needs to know the pending state.
+ * carries a revoked_at. No production code needs to know the pending state,
+ * so listings and the organization export show a pending row as an active
+ * credential whose secret machine/auth still refuses.
  * The mint requires `pending: true`, so a caller that expects a usable
  * credential fails at the mint instead of with 401s later. A contract pass
  * whose process is killed while a call runs can leave that one call
