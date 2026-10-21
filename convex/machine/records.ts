@@ -11,7 +11,7 @@
  * Each action is one shared function that holds the app's rule.
  * model/attachments.ts lists attachments with download links, removes them
  * and runs the REST upload's start and confirm, and the app's files.ts runs
- * the same attach and remove. lib/activityVisibility.ts taskActivity is the
+ * the same attach and remove. lib/activityVisibility.ts taskHistoryPage is the
  * app's activity rule, and planning.ts workloadCore is the app's org load
  * with its anonymization. The internal functions below are thin per-surface
  * wrappers named `mcp*` and `rest*`. Each starts from asMachineCaller, which
