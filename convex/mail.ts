@@ -1,21 +1,22 @@
 /* Qivo transactional mail goes through Lettermint's sending API for
- * verification, password resets, billing reminders, deletion notices and
- * organization invitations. MAIL_FROM supplies From; customer replies go to
+ * verification, password resets, the two account notes that keep sign-up and
+ * reset answers alike for every address, billing reminders, deletion notices
+ * and organization invitations. MAIL_FROM supplies From; customer replies go to
  * support. No inbound mail is processed here.
  *
  * LETTERMINT_API_KEY (a project API token) and MAIL_FROM belong only in the
  * selected Convex deployment. Never log tokens, recipients or auth URLs. Local
  * auth-link logging requires an explicit loopback development opt-in. */
 
-import { v } from 'convex/values'
-import { internalAction } from './_generated/server'
-import { address, localAuthEmailLogging, mailFrom, requireAuthMailDelivery } from './lib/mailConfig'
+import type { AuthMailOutcome } from './lib/authMail'
+import { address, localAuthEmailLogging, mailFrom, mailSendUrl } from './lib/mailConfig'
 import { cutName } from './lib/textLimits'
 
 /* Web-platform globals the Convex isolate provides; convex/tsconfig's lib is
  * ESNext only, which does not declare them (same move as model/orgs). */
 declare const crypto: {
   subtle: { digest(algorithm: 'SHA-256', data: Uint8Array): Promise<ArrayBuffer> }
+  randomUUID(): string
 }
 declare class TextEncoder {
   encode(input: string): Uint8Array
@@ -42,11 +43,12 @@ declare function fetch(
   },
 ): Promise<SendResponse>
 
-const SEND_URL = 'https://api.lettermint.co/v1/send'
 const REPLY_TO = 'support@qivo.io'
 
 const SEND_TIMEOUT_MS = 10_000
 const SEND_ATTEMPTS = 3
+// how long a sign-up, sign-in or reset request waits for its letter
+const AUTH_SEND_BUDGET_MS = 20_000
 // the longest Retry-After a send waits out before it gives up
 const MAX_RETRY_WAIT_MS = 30_000
 
@@ -105,6 +107,59 @@ If it was not you, you can ignore this message. Your password is unchanged.`,
     ) +
     '\n<p style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#6a737d;max-width:36em">If it was not you, you can ignore this message. Your password is unchanged.</p>',
 })
+
+/* Sent instead of a confirmation link when someone signs up with an address
+ * that already has an account. Every sign-up then sends one letter, so the
+ * answer, and any failure to send, looks the same for every address. */
+const existingLetter = (to: string, url: string): Letter => ({
+  to,
+  subject: 'Your Qivo account',
+  text: `Hi,
+
+Someone tried to create a Qivo account with this email address, which already has one. If that was you, sign in instead:
+${url}
+
+If you have forgotten your password, choose Forgot password on the sign-in page. If it was not you, you can ignore this message.`,
+  html:
+    shell(
+      [
+        'Hi,',
+        'Someone tried to create a Qivo account with this email address, which already has one. If that was you, sign in instead.',
+      ],
+      { href: url, label: 'Sign in' },
+    ) +
+    '\n<p style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#6a737d;max-width:36em">If you have forgotten your password, choose Forgot password on the sign-in page. If it was not you, you can ignore this message.</p>',
+})
+
+/* Sent instead of a reset link when no account uses the address, for the
+ * same reason as existingLetter. */
+const unknownLetter = (to: string, url: string): Letter => ({
+  to,
+  subject: 'Your Qivo password reset request',
+  text: `Hi,
+
+Someone asked to reset the password for a Qivo account with this email address, but no account uses it. If that was you, you may have signed up with another address. You can also create an account:
+${url}
+
+If it was not you, you can ignore this message.`,
+  html:
+    shell(
+      [
+        'Hi,',
+        'Someone asked to reset the password for a Qivo account with this email address, but no account uses it. If that was you, you may have signed up with another address. You can also create an account.',
+      ],
+      { href: url, label: 'Create an account' },
+    ) +
+    '\n<p style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#6a737d;max-width:36em">If it was not you, you can ignore this message.</p>',
+})
+
+const AUTH_LETTERS = {
+  verify: verifyLetter,
+  reset: resetLetter,
+  existing: existingLetter,
+  unknown: unknownLetter,
+}
+export type AuthLetterIntent = keyof typeof AUTH_LETTERS
 
 // ------------------------------------------------------------------- sender
 
@@ -210,7 +265,7 @@ async function postLetter(
       return false
     }
     try {
-      const res = await fetch(SEND_URL, {
+      const res = await fetch(mailSendUrl(), {
         method: 'POST',
         headers: {
           'x-lettermint-token': cfg.sender.token,
@@ -418,33 +473,37 @@ ${input.url}`,
   })
 }
 
-// ------------------------------------------------------------------- action
+// --------------------------------------------------------------- auth mail
 
-export const send = internalAction({
-  args: {
-    to: v.string(),
-    intent: v.union(v.literal('verify'), v.literal('reset')),
-    url: v.string(),
-  },
-  handler: async (_ctx, { to, intent, url }) => {
-    if (process.env.APP_MODE === 'demo') return
-    requireAuthMailDelivery()
-    if (!process.env.LETTERMINT_API_KEY) {
-      if (!localAuthEmailLogging()) throw new Error('Local auth-link logging is disabled')
-      console.log(`[mail] local-development intent=${intent} url=${url}`)
-      return
-    }
-    // requireAuthMailDelivery checked the token and MAIL_FROM
-    const configured = sender()
-    if (configured === null) throw new Error('Authentication email is unavailable.')
-    const letter = intent === 'verify' ? verifyLetter(to, url) : resetLetter(to, url)
-    if (
-      !(await postLetter(letter, intent, {
-        sender: configured,
-        idempotencyKey: await sha256Hex(url),
-      }))
-    ) {
-      throw new Error('Authentication email delivery failed')
-    }
-  },
-})
+/** Sends one authentication letter while its request waits, and says how it
+ * went. 'unavailable' means mail is not configured (or this is the demo), so
+ * no request reached the provider. Without a token, an explicit local
+ * development opt-in logs the link instead and counts as sent. A verify or
+ * reset letter's key is its link, which holds a fresh token, and the two
+ * account notes get a fresh key each. */
+export async function sendAuthLetter(input: {
+  intent: AuthLetterIntent
+  to: string
+  url: string
+}): Promise<AuthMailOutcome> {
+  const { intent, to, url } = input
+  if (process.env.APP_MODE === 'demo') return 'unavailable'
+  if (!process.env.LETTERMINT_API_KEY) {
+    if (!localAuthEmailLogging()) return 'unavailable'
+    console.log(`[mail] local-development intent=${intent} url=${url}`)
+    return 'sent'
+  }
+  const configured = sender()
+  if (configured === null) return 'unavailable'
+  const linked = intent === 'verify' || intent === 'reset'
+  let ambiguous = false
+  const ok = await postLetter(AUTH_LETTERS[intent](to, url), intent, {
+    sender: configured,
+    idempotencyKey: await sha256Hex(linked ? url : `${intent}:${crypto.randomUUID()}`),
+    deadline: Date.now() + AUTH_SEND_BUDGET_MS,
+    onFailure: (kind) => {
+      ambiguous = kind === 'ambiguous'
+    },
+  })
+  return ok ? 'sent' : ambiguous ? 'uncertain' : 'unsent'
+}

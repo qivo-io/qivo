@@ -1,6 +1,5 @@
 import type { GenericCtx } from '@convex-dev/better-auth'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { internal } from '../_generated/api'
 import type { DataModel } from '../_generated/dataModel'
 import { appOrigins, createAuthOptions, tokenPayload } from '../auth'
 
@@ -8,19 +7,24 @@ import { appOrigins, createAuthOptions, tokenPayload } from '../auth'
  * inside a callback — so reading a flag needs no context at all. */
 const noCtx = {} as GenericCtx<DataModel>
 
-/* What the mail callbacks actually run against: requireRunMutationCtx admits
- * anything carrying runMutation, and the callbacks only reach the scheduler. */
-function mailerCtx() {
-  const runAfter = vi.fn()
-  const ctx = { runMutation: vi.fn(), scheduler: { runAfter } } as unknown as GenericCtx<DataModel>
-  return { ctx, runAfter }
+/* The provider's answer to every send, so a callback's letter can be read. */
+function provider() {
+  const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ message_id: 'm' }) })
+  vi.stubGlobal('fetch', fetch)
+  const sent = () => fetch.mock.calls.map(([, init]) => JSON.parse(init.body))
+  return { fetch, sent }
 }
 
 beforeEach(() => {
   vi.stubEnv('LETTERMINT_API_KEY', 'test-only-mail-token')
   vi.stubEnv('MAIL_FROM', 'sender@example.test')
+  vi.spyOn(console, 'log').mockImplementation(() => {})
 })
-afterEach(() => vi.unstubAllEnvs())
+afterEach(() => {
+  vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
 
 describe('email verification is mailed on every path that needs it', () => {
   it('mails on registration (both OAuth and password) and re-mails on an unverified sign-in', () => {
@@ -35,9 +39,9 @@ describe('email verification is mailed on every path that needs it', () => {
     expect(options.emailAndPassword?.requireEmailVerification).toBe(true)
   })
 
-  it('the verification callback schedules the verify letter with the link it was handed', async () => {
-    const { ctx, runAfter } = mailerCtx()
-    const options = createAuthOptions(ctx)
+  it('the verification callback sends the verify letter with the link it was handed', async () => {
+    const { sent } = provider()
+    const options = createAuthOptions(noCtx)
     const url = 'https://example.convex.site/api/auth/verify-email?token=t&callbackURL=%2Fapp'
 
     await options.emailVerification!.sendVerificationEmail!({
@@ -46,17 +50,17 @@ describe('email verification is mailed on every path that needs it', () => {
       token: 't',
     } as never)
 
-    expect(runAfter).toHaveBeenCalledTimes(1)
-    expect(runAfter).toHaveBeenCalledWith(0, internal.mail.send, {
-      to: 'ana@example.com',
-      intent: 'verify',
-      url,
+    expect(sent()).toHaveLength(1)
+    expect(sent()[0]).toMatchObject({
+      to: ['ana@example.com'],
+      subject: 'Confirm your email address on Qivo',
     })
+    expect(sent()[0].text).toContain(url)
   })
 
   it('the reset callback is a different letter — the two are not crossed', async () => {
-    const { ctx, runAfter } = mailerCtx()
-    const options = createAuthOptions(ctx)
+    const { sent } = provider()
+    const options = createAuthOptions(noCtx)
 
     await options.emailAndPassword!.sendResetPassword!({
       user: { email: 'ana@example.com' },
@@ -64,11 +68,28 @@ describe('email verification is mailed on every path that needs it', () => {
       token: 't',
     } as never)
 
-    expect(runAfter).toHaveBeenCalledWith(0, internal.mail.send, {
-      to: 'ana@example.com',
-      intent: 'reset',
-      url: 'https://example.convex.site/reset',
+    expect(sent()[0]).toMatchObject({
+      to: ['ana@example.com'],
+      subject: 'Reset your Qivo password',
     })
+    expect(sent()[0].text).toContain('https://example.convex.site/reset')
+  })
+
+  it('the recovery capture keeps the link and mails nothing, without the mail hooks', async () => {
+    const { fetch } = provider()
+    const captured: { url: string | null } = { url: null }
+    const options = createAuthOptions(noCtx, { recovery: captured })
+
+    await options.emailAndPassword!.sendResetPassword!({
+      user: { email: 'ana@example.com' },
+      url: 'https://example.convex.site/reset',
+      token: 't',
+    } as never)
+
+    expect(captured.url).toBe('https://example.convex.site/reset')
+    expect(fetch).not.toHaveBeenCalled()
+    expect(options.plugins.map((p) => p.id)).not.toContain('qivo-auth-mail')
+    expect(createAuthOptions(noCtx).plugins.map((p) => p.id)).toContain('qivo-auth-mail')
   })
 })
 

@@ -126,7 +126,12 @@ organization admins see everything deleted in the organization
 
 Choose **Create an account** on the pricing or sign-in page to sign up. Email
 confirmation links expire after one hour; **Confirm your email address** can
-send another. Google sign-in supplies a verified email address; Microsoft
+send another, and so does signing in with an unconfirmed address. When Qivo
+cannot send a confirmation or reset email, the page says so and what to do
+instead of saying a link is on its way. Signing up with an address that
+already has an account emails that address a note to sign in, and a password
+reset for an address with no account emails a note saying so, so the answer
+looks the same for every address. Google sign-in supplies a verified email address; Microsoft
 sign-in still requires confirmation. A confirmed address claims its pending
 invitations. Without an invitation, Qivo offers to create an organization with
 you as its first admin. When billing is enabled, a new unpaid organization
@@ -265,7 +270,9 @@ nobody else is in the organization. An account belongs to one home
 organization, so an address that already belongs to another organization can
 only join as a guest. Qivo Admin does not invite guests. Org admins and
 project leads invite them from project settings. The operator audit log
-records the invitations, email attempts and role changes made in Qivo Admin.
+records the invitations, email attempts and role changes made in Qivo Admin,
+and each billing reminder or deletion notice still not delivered after a day
+of hourly attempts.
 Qivo deletes audit entries after 90 days. A pending person whose last
 invitation email is older than that then shows only **Invited**, without
 whether or when it was sent and without **Copy sign-up link**. **Resend
@@ -340,6 +347,6 @@ There is no automatic provider import or scheduled refill.
 ## Contact support
 
 For help with Qivo, email [support@qivo.io](mailto:support@qivo.io).
-Account verification, password resets and billing reminders are sent from
-no-reply@qivo.io. Replies go to the support inbox. Qivo does not currently
+Account verification, password resets, invitations, billing reminders and
+deletion notices are sent from no-reply@qivo.io. Replies go to the support inbox. Qivo does not currently
 accept task updates by email.
