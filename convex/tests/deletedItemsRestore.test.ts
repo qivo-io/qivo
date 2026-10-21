@@ -1121,7 +1121,7 @@ describe('restoring a task item', () => {
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
     const sub = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
     await comment(t, sub)
-    await plantHistory(t, sub, { numbered: 2, legacy: 1 })
+    await plantHistory(t, sub, { listed: 2, unlisted: 1 })
     const file = await attach(t, sub, 5)
     const neighbour = await plantIssue(t, { org_id, project_id: f.sub2.id })
     await deleteTask(t, f, root.id, { subtask_ids: [sub.id] })
@@ -1164,7 +1164,7 @@ describe('restoring a task item', () => {
     const root2 = await plantIssue(t, { org_id, project_id: f.sub.id })
     const lost = await plantIssue(t, { org_id, project_id: third.id, parent_id: root2.id })
     const lostFile = await attach(t, lost)
-    await plantHistory(t, lost, { numbered: 2, legacy: 1 })
+    await plantHistory(t, lost, { listed: 2, unlisted: 1 })
     await deleteTask(t, f, root2.id, { subtask_ids: [lost.id] })
     await deleteProject(t, f, third.id)
     const thirdItem = await itemFor(t, third.id)
@@ -1301,14 +1301,14 @@ describe('notices, activity and events', () => {
     const f = await withOrg(t)
     const org_id = f.org.id
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
-    await plantHistory(t, root, { numbered: 3 })
+    await plantHistory(t, root, { listed: 3 })
     await deleteTask(t, f, root.id)
     // 600 rows about two other tasks while the task sits in Deleted items
     const others = [
       await plantIssue(t, { org_id, project_id: f.sub.id }),
       await plantIssue(t, { org_id, project_id: f.sub2.id }),
     ]
-    for (const other of others) await plantHistory(t, other, { numbered: 300 })
+    for (const other of others) await plantHistory(t, other, { listed: 300 })
     await restore(t, f.user, [(await itemFor(t, root.id)).id])
     await runSteps(t)
 
@@ -2876,7 +2876,7 @@ describe('restore calls', () => {
     const sub = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
     await comment(t, sub)
     const file = await attach(t, sub)
-    await plantHistory(t, sub, { numbered: 2, legacy: 1 })
+    await plantHistory(t, sub, { listed: 2, unlisted: 1 })
     const other = await plantIssue(t, { org_id, project_id: f.sub.id })
     await t.run((ctx) =>
       ctx.db.insert('issue_links', {

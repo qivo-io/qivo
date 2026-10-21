@@ -24,7 +24,6 @@ import { ConvexError } from 'convex/values'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
-import { namedTaskNums } from '../internal/activityRows'
 import { verifyFileToken } from '../lib/fileTokens'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { weekGrid, weeksSpreadSoFar } from '../lib/workload'
@@ -1457,11 +1456,8 @@ describe('task activity', () => {
           project_id: issue.project_id,
           ...row,
         }
-        // each with the list of tasks its text names, as the app writes it
-        await ctx.db.insert('activity_events', {
-          named_task_nums: namedTaskNums(doc) ?? undefined,
-          ...doc,
-        })
+        // naming no task unless it brings its own list, as the app writes it
+        await ctx.db.insert('activity_events', { named_task_nums: [], ...doc })
       }
     })
   }
@@ -1475,7 +1471,11 @@ describe('task activity', () => {
       // moved here from a project the agent cannot access
       { verb: 'moved', detail: 'to the Firmware sub-project', related_project_id: fx.hiddenSub.id },
       // names a task the agent cannot see
-      { verb: 'linked', detail: `(blocks QN-${elsewhere.num}), via MCP` },
+      {
+        verb: 'linked',
+        detail: `(blocks QN-${elsewhere.num}), via MCP`,
+        named_task_nums: [elsewhere.num],
+      },
       // filed while the task was in a project the agent cannot access
       { verb: 'changed', detail: '(title “a” → “b”)', project_id: fx.hiddenSub.id },
       { verb: 'archived', detail: 'with 2 subtasks' },

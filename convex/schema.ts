@@ -1214,10 +1214,6 @@ export default defineSchema({
     // owning team. Like related_project_id it may outlive its team. Only
     // task rows reach clients, so these rows are read in the export only.
     team_id: v.optional(v.string()),
-    // Unused. Rows written before October 2026 numbered their subject's
-    // history here. internal/activityRows.ts run removes it from them, and
-    // the field goes once every deployment has run it.
-    seq: v.optional(v.number()),
     // On task rows, the QN numbers of the other tasks the detail names, in
     // text order, [] when none. The visibility rule reads it instead of the
     // text, and a task row without it reaches organization admins only

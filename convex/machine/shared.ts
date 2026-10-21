@@ -92,8 +92,8 @@ export const MCP_PROVENANCE = 'via MCP'
  * organization admins and to the person who deleted
  * (model/deletedItemsList.ts). The name is written as plain text
  * (lib/textLimits.ts plainText), as an activity diff's free text is, so it
- * can neither add a status or reviewer clause that the app's feed reader
- * finds (src/lib/teamSync.ts) nor break the signature namedTaskNums reads. */
+ * cannot add a status or reviewer clause that the app's feed reader finds
+ * (src/lib/teamSync.ts). */
 export const restProvenance = (keyName: string | null): string =>
   keyName === null ? 'via the REST API' : `via the REST API (${cutName(plainText(keyName))})`
 

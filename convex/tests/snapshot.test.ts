@@ -14,7 +14,6 @@ import type { WithoutSystemFields } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { namedTaskNums } from '../internal/activityRows'
 import { byId } from '../lib/db'
 import { INBOX_LIMIT, loadInbox } from '../lib/inbox'
 import { insertActivity } from '../model/activity'
@@ -1269,44 +1268,42 @@ describe('task history visibility', () => {
     expect(await seenRows(f.admin)).toEqual(all)
   })
 
-  it('a relation row in the wording before or after October 2026 reaches the same people once listed', async () => {
+  it('a relation row reaches the people who can read every task its list names', async () => {
     const member = await seatOn(f.sub.id)
     const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const hiddenTask = await plantIssue(t, { org_id: f.org.id, project_id: hiddenSub.id })
     const ids = await t.run(async (ctx) => {
       const on = { project_id: f.sub.id, target_id: issueVis.id }
       const rows = {
-        oldLink: ev({ ...on, verb: 'linked', detail: `— blocks QN-${other.num} — via MCP` }),
-        newLink: ev({ ...on, verb: 'linked', detail: `(blocks QN-${other.num}), via MCP` }),
-        oldDetach: ev({
+        link: ev({
           ...on,
-          verb: 'detached',
-          detail: `from QN-${other.num} — via the REST API (CI key)`,
+          verb: 'linked',
+          detail: `(blocks QN-${other.num}), via MCP`,
+          named_task_nums: [other.num],
         }),
-        newDetach: ev({
+        detach: ev({
           ...on,
           verb: 'detached',
           detail: `from QN-${other.num}, via the REST API (CI key)`,
+          named_task_nums: [other.num],
         }),
         // the other end is a task the member cannot read
-        oldHidden: ev({ ...on, verb: 'linked', detail: `— relates to QN-${hiddenTask.num}` }),
-        newHidden: ev({ ...on, verb: 'linked', detail: `(relates to QN-${hiddenTask.num})` }),
+        hidden: ev({
+          ...on,
+          verb: 'linked',
+          detail: `(relates to QN-${hiddenTask.num})`,
+          named_task_nums: [hiddenTask.num],
+        }),
       }
       for (const row of Object.values(rows)) await ctx.db.insert('activity_events', row)
       return rows
     })
-    // stored without a list, they reach admins only until the migration lists
-    // the tasks their text names (internal/activityRows.ts)
-    expect(await seen(member)).toEqual([])
-    await t.mutation(internal.internal.activityRows.run, {})
     expect(await seen(f.admin)).toEqual(
       Object.values(ids)
         .map((r) => r.id)
         .sort(),
     )
-    expect(await seen(member)).toEqual(
-      [ids.oldLink, ids.newLink, ids.oldDetach, ids.newDetach].map((r) => r.id).sort(),
-    )
+    expect(await seen(member)).toEqual([ids.link.id, ids.detach.id].sort())
   })
 })
 
@@ -1717,14 +1714,14 @@ describe('commentThread events', () => {
     project_id: f.sub.id,
     ...extra,
   })
-  /* Raw rows, one second apart in this order, each with the list of tasks
-   * its text names unless it brings its own. */
+  /* Raw rows, one second apart in this order. A task row names no task
+   * unless it brings its own list, as the app writes it. */
   const plantRows = (rows: ReturnType<typeof ev>[]) =>
     t.run(async (ctx) => {
       const base = Date.parse(NOW)
       for (const [i, row] of rows.entries())
         await ctx.db.insert('activity_events', {
-          named_task_nums: namedTaskNums(row) ?? undefined,
+          named_task_nums: row.target_type === 'issue' ? [] : undefined,
           ...row,
           ts: new Date(base + i * 1000).toISOString(),
         })

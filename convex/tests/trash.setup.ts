@@ -107,13 +107,13 @@ export const storedIssue = async (t: T, id: string) => {
 }
 export const liveTask = (t: T, id: string) => t.run((ctx) => byId(ctx, 'issues', id))
 
-/** `numbered` activity rows about `task` written as the app writes them
- * (plantActivity), then `legacy` rows inserted raw, filed under the task's
- * project at NOW. */
+/** `listed` activity rows about `task` written as the app writes them
+ * (plantActivity), then `unlisted` rows inserted raw without
+ * named_task_nums, filed under the task's project at NOW. */
 export async function plantHistory(
   t: T,
   task: Doc<'issues'>,
-  { numbered, legacy = 0 }: { numbered: number; legacy?: number },
+  { listed, unlisted = 0 }: { listed: number; unlisted?: number },
 ): Promise<void> {
   const row = {
     org_id: task.org_id,
@@ -126,7 +126,7 @@ export async function plantHistory(
   }
   await plantActivity(
     t,
-    ...Array.from({ length: numbered }, (_, i) => ({
+    ...Array.from({ length: listed }, (_, i) => ({
       ...row,
       target_type: 'issue' as const,
       detail: `(remaining unset → ${i + 1} h)`,
@@ -134,13 +134,13 @@ export async function plantHistory(
     })),
   )
   await t.run(async (ctx) => {
-    for (let i = 0; i < legacy; i++)
+    for (let i = 0; i < unlisted; i++)
       // a row stored before named_task_nums, so it has no list
       await ctx.db.insert('activity_events', { ...row, id: uuid(), target_type: 'issue' })
   })
 }
 
-/** The activity rows about task `taskId`, legacy rows included, in the
+/** The activity rows about task `taskId`, unlisted rows included, in the
  * order they were written. */
 export const historyOf = (t: T, taskId: string) =>
   t.run(async (ctx) =>
