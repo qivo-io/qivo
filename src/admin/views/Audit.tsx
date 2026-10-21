@@ -1,5 +1,7 @@
 /* Audit log: what platform operators have done in the last 90 days. Older
- * entries are deleted nightly (convex/auditRetention.ts). */
+ * entries are deleted nightly (convex/auditRetention.ts). The newest 200
+ * load first; when more exist the page says so, its search and filters
+ * cover the loaded entries, and Load older entries adds the next 200. */
 import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -57,6 +59,9 @@ const ACTION_LABEL: Record<string, string> = {
 
 export function Audit() {
   const [rows, setRows] = useState<AuditRow[] | null>(null)
+  // the cursor of the next older page, null when every entry is loaded
+  const [next, setNext] = useState<string | null>(null)
+  const [loadingOlder, setLoadingOlder] = useState(false)
   const [orgNames, setOrgNames] = useState<Record<string, string>>({})
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
@@ -72,7 +77,9 @@ export function Audit() {
     setError('')
     auditLog()
       .then((audit) => {
-        if (active) setRows(audit)
+        if (!active) return
+        setRows(audit.rows)
+        setNext(audit.next)
       })
       .catch((cause: unknown) => {
         if (active) setError(cause instanceof Error ? cause.message : 'Could not load audit log.')
@@ -123,6 +130,19 @@ export function Audit() {
       .sort((a, b) => (sort === 'newest' ? b.ts.localeCompare(a.ts) : a.ts.localeCompare(b.ts)))
   }, [action, organization, orgNames, rows, search, sort])
   const hasFilters = !!search || action !== 'all' || organization !== 'all'
+  const loadOlder = () => {
+    if (next === null || loadingOlder) return
+    setLoadingOlder(true)
+    auditLog(next)
+      .then((audit) => {
+        setRows((current) => [...(current ?? []), ...audit.rows])
+        setNext(audit.next)
+      })
+      .catch((cause: unknown) =>
+        setError(cause instanceof Error ? cause.message : 'Could not load older entries.'),
+      )
+      .finally(() => setLoadingOlder(false))
+  }
   const clearFilters = () => {
     setSearch('')
     setAction('all')
@@ -201,6 +221,8 @@ export function Audit() {
           <p role="status" className="text-sm text-text-2">
             {filtered.length.toLocaleString()} entr{filtered.length === 1 ? 'y' : 'ies'}
             {hasFilters ? ' matching your filters' : ''}
+            {next !== null &&
+              `. Showing the newest ${(rows ?? []).length.toLocaleString()}; search and filters cover these.`}
           </p>
           {filtered.length === 0 ? (
             <AdminEmptyState
@@ -261,6 +283,17 @@ export function Audit() {
                 </TableBody>
               </Table>
             </Card>
+          )}
+          {next !== null && (
+            <Button
+              type="button"
+              variant="outline"
+              data-audit-older
+              disabled={loadingOlder}
+              onClick={loadOlder}
+            >
+              {loadingOlder ? 'Loading…' : 'Load older entries'}
+            </Button>
           )}
         </>
       )}

@@ -105,7 +105,9 @@ saved yet. If Qivo closes before it can ask, after a crash for example, the next
 names the tasks with changes it could not confirm, so you can check them. For
 that, your browser keeps a note of each change until the server answers. The note
 holds the task's number and what kind of change it was, never what you typed.
-Signing out clears it.
+Signing out clears it. Qivo reports a note however old it is, unless it
+belongs to an organization you no longer belong to; such a note is dropped
+after 30 days, because Qivo can no longer show you those tasks.
 
 Closing a window or dialog that holds text you haven't sent, such as a comment,
 a description edit or a new task's title, asks first. So does opening another

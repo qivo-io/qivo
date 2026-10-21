@@ -73,8 +73,13 @@ export async function listUsers(
   } while (cursor !== null && wanted())
   return rows
 }
-export const auditLog = (limit = 200): Promise<AuditRow[]> =>
-  convex.query(api.admin.auditLog, { limit }).catch(mapError)
+/** A page of the audit log, newest first, from `cursor` (the `next` of the
+    page before, null for the newest); `next` is null on the last page. */
+export const auditLog = (
+  cursor: string | null = null,
+  limit = 200,
+): Promise<{ rows: AuditRow[]; next: string | null }> =>
+  convex.query(api.admin.auditLog, { cursor, limit }).catch(mapError)
 export const orgDetail = (orgId: string): Promise<OrgDetail> =>
   runAction(api.adminPeople.orgDetail, { org_id: orgId }).catch(mapError)
 export const platformStats = (): Promise<PlatformStats> =>

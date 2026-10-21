@@ -110,8 +110,10 @@ const rowOf = async (t: T, who: Doc<'profiles'>, id: string) =>
   (await rowsOf(t, who)).find((r) => r.id === id)
 const item = (t: T, who: Doc<'profiles'>, id: string) =>
   as(t, who).query(api.deletedItems.item, { id })
-const matches = (t: T, who: Doc<'profiles'>, text: string) =>
+const search = (t: T, who: Doc<'profiles'>, text: string) =>
   as(t, who).query(api.deletedItems.matches, { text })
+const matches = async (t: T, who: Doc<'profiles'>, text: string) =>
+  (await search(t, who, text)).matches
 const restore = (t: T, who: Doc<'profiles'>, ids: string[]) =>
   as(t, who).mutation(api.deletedItems.restore, { org_id: who.org_id, ids })
 const purge = (t: T, who: Doc<'profiles'>, ids: string[]) =>
@@ -1386,14 +1388,34 @@ describe('searching for deleted tasks', () => {
     const f = await withOrg(t)
     const lena = await person(t, f.org.id, 'Lena')
     await plantLedProjects(t, lena, 4, 'Survey the north gate')
-    const all = await matches(t, lena, 'survey')
-    expect(all).toHaveLength(4)
+    const all = await search(t, lena, 'survey')
+    expect(all.matches).toHaveLength(4)
+    expect(all.capped).toBe(false)
     // 20 ranges read the search, Lena's sight and some of the items
     LIST.call = { ...DEFAULT_LIST.call, ranges: 20 }
-    const few = await matches(t, lena, 'survey')
-    expect(few.length).toBeGreaterThan(0)
-    expect(few.length).toBeLessThan(4)
-    expect(few).toEqual(all.slice(0, few.length))
+    const few = await search(t, lena, 'survey')
+    expect(few.matches.length).toBeGreaterThan(0)
+    expect(few.matches.length).toBeLessThan(4)
+    expect(few.matches).toEqual(all.matches.slice(0, few.matches.length))
+    // and says that more may match
+    expect(few.capped).toBe(true)
+  })
+
+  it(`says when more match than the ${MATCHES.max} it answers`, async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const lena = await person(t, f.org.id, 'Lena')
+    await plantLedProjects(t, lena, 3, 'Survey the north gate')
+    const max = MATCHES.max
+    try {
+      MATCHES.max = 3
+      expect(await search(t, lena, 'survey')).toMatchObject({ capped: false })
+      MATCHES.max = 2
+      const cut = await search(t, lena, 'survey')
+      expect([cut.matches.length, cut.capped]).toEqual([2, true])
+    } finally {
+      MATCHES.max = max
+    }
   })
 })
 

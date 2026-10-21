@@ -1893,7 +1893,9 @@ follow. A task has at most 100 followers. Following one that has 100 is
 refused with `this task already has 100 followers, the most a task can
 have`, and a comment or a mention there adds no follower, though the
 mention still notifies. A new assignee or reviewer still becomes a follower.
-A comment or description reaches at most 100 mentioned people.
+A comment or description can mention at most 100 distinct people. A tool
+call whose text mentions more is refused with `a text can mention at most
+100 people; remove some mentions and save again` and saves nothing.
 
 `list_inbox` answers your inbox as the app's **Inbox** shows it, one item per
 task, latest activity first:
@@ -1904,6 +1906,7 @@ task, latest activity first:
     {
       "task": { "id": "…uuid…", "key": "QN-3", "title": "Fix hinge tolerance", "status": "progress" },
       "unread_count": 1,
+      "dropped_count": 0,
       "latest_at": "2026-10-14T09:12:03.000Z",
       "snoozed_until": null,
       "messages": [
@@ -1945,7 +1948,11 @@ bring them back. `messages` run oldest first, `kind` is
 is later. Snoozed items are left out unless `include_snoozed` is `true`. An
 item keeps at most 50 unread messages. When more arrive, Qivo drops the
 oldest unread ones but keeps the item's first unread message and the newest
-message of each `kind`. On a task with many followers it does so moments
+message of each `kind`, and counts what it dropped in the item's
+`dropped_count`. The count stays until the item is read, and the app's
+**Inbox** shows it as **N earlier updates on this task are not listed**. The
+task's comments and history still hold what those messages announced. On a
+task with many followers it does so moments
 after the arrival, so an item can briefly hold one more. A comment or a
 change on a task with more than 128 followers, such as a task from before
 the follower limit, reaches the first 128 at once and the rest moments

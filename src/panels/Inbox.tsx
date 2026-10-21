@@ -161,6 +161,13 @@ function itemPlace(g: MessageGroupVM) {
   return parts.length ? { meta, parts } : null
 }
 
+/** The line an inbox row shows when the server's item cap deleted `n` of
+    its earlier unread updates. */
+const droppedLine = (n: number) =>
+  n === 1
+    ? '1 earlier update on this task is not listed'
+    : `${n.toLocaleString('en-US')} earlier updates on this task are not listed`
+
 function MessageRow({
   g,
   selected,
@@ -280,6 +287,16 @@ function MessageRow({
               : secondLine(g)}
           </div>
           <div className="inbox-message-preview">{secondLine(g)}</div>
+          {/* an item keeps at most 50 unread updates (convex/model/messages.ts
+            ITEM_UNREAD_CAP); say how many older ones it no longer lists */}
+          {g.dropped > 0 && (
+            <div
+              data-msg-dropped={g.dropped}
+              className="[margin-top:3px] [font-size:var(--fs-xs)] [color:var(--text-3)]"
+            >
+              {droppedLine(g.dropped)}
+            </div>
+          )}
         </div>
         {!g.read && (
           <span

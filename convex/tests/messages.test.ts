@@ -919,9 +919,11 @@ describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', 
 
     const kept = await details(t, f.guest, issue)
     expect(kept).toHaveLength(ITEM_UNREAD_CAP)
-    // the ten oldest changes after the protected three are the ones dropped
+    // the ten oldest changes after the protected three are the ones dropped,
+    // and the oldest unread row counts them
     expect(kept).toEqual([...arrivals(0, 2), ...arrivals(13, 59)])
     const rows = await messagesFor(t, f.guest.id, issue.id)
+    expect(rows.map((m) => m.dropped ?? 0)).toEqual([10, ...Array(ITEM_UNREAD_CAP - 1).fill(0)])
     expect(new Set(rows.map((m) => m.kind))).toEqual(new Set(['change', 'comment', 'mention']))
     expect(rows.every((m) => m.read_at === undefined)).toBe(true)
     // another item of the same recipient, and the same task in someone else's
@@ -995,6 +997,7 @@ describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', 
     kept = await details(t, f.admin, issue)
     expect(kept).toHaveLength(ITEM_UNREAD_CAP)
     expect(kept).toEqual([...legacy(0, 1), ...legacy(360, 399), ...Array(8).fill('New comment')])
+    expect((await messagesFor(t, f.admin.id, issue.id))[0].dropped).toBe(400 + 8 - ITEM_UNREAD_CAP)
   })
 
   it('an item at the cap keeps every message', async () => {
@@ -1038,6 +1041,8 @@ describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', 
     // the oldest unread (60), the only comment (61) and mention (62) stay;
     // the oldest other row (73) makes way for the arrival
     expect(rows.map((m) => m.detail)).toEqual([...arrivals(60, 62), ...arrivals(74, 120)])
+    // the read 59 took its count along; the new run counts its own 11
+    expect(rows[0].dropped).toBe(11)
   })
 })
 

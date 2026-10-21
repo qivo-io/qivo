@@ -380,6 +380,9 @@ export const shapeMessage = (
     // return is one server event, so every device shows it at once)
     snoozedUntil: m.snoozed_until ? new Date(m.snoozed_until).getTime() : null,
     wokeAt: m.woke_at ? new Date(m.woke_at).getTime() : null,
+    // how many older unread messages of the item the server's item cap
+    // deleted (convex/schema.ts messages.dropped)
+    dropped: m.dropped ?? 0,
   }
 }
 export type MessageVM = ReturnType<typeof shapeMessage>
@@ -387,8 +390,10 @@ export type MessageVM = ReturnType<typeof shapeMessage>
 /* inbox ITEMS (0109) — the unit the inbox actually lists: one per TASK (the
    (recipient, task) pair itself, so a task cannot occupy two rows even in
    principle). The item wears its NEWEST message; `count` is what is IN the
-   item, `unreadCount` what has happened since you last looked; `kinds` is
-   the union, so the kind filter still finds a mention behind a change. */
+   item, `unreadCount` what has happened since you last looked, `dropped`
+   how many earlier unread updates the server's 50-per-item cap took out of
+   it; `kinds` is the union, so the kind filter still finds a mention behind
+   a change. */
 export const shapeMessageGroup = (issueUuid: string, newestFirst: MessageVM[]) => {
   const items = [...newestFirst].reverse() // oldest → newest, as they happened
   // asked of the whole item rather than taken off the end: the list sort is
@@ -396,6 +401,8 @@ export const shapeMessageGroup = (issueUuid: string, newestFirst: MessageVM[]) =
   // way round (see isNewer)
   const latest = items.reduce((a, b) => (isNewer(a.createdAt, a.id, b.createdAt, b.id) ? b : a))
   const unread = items.reduce((n, m) => n + (m.read ? 0 : 1), 0)
+  // the earlier updates the item cap deleted, counted on its unread rows
+  const dropped = items.reduce((n, m) => n + (m.read ? 0 : m.dropped), 0)
   // the server stamps every row of the item alike; the newest row is the
   // authority, and an arrival (which carries no stamp) is what wakes it
   const snoozedUntil = latest.snoozedUntil
@@ -407,6 +414,7 @@ export const shapeMessageGroup = (issueUuid: string, newestFirst: MessageVM[]) =
     items,
     count: items.length,
     unreadCount: unread,
+    dropped,
     read: unread === 0,
     kinds: [...new Set(items.map((m) => m.kind))],
     snoozed: snoozedUntil !== null,

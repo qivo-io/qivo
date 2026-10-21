@@ -81,6 +81,7 @@ import type * as lib_inbox from "../lib/inbox.js";
 import type * as lib_liveTasks from "../lib/liveTasks.js";
 import type * as lib_machineDelay from "../lib/machineDelay.js";
 import type * as lib_mailConfig from "../lib/mailConfig.js";
+import type * as lib_mentions from "../lib/mentions.js";
 import type * as lib_numbers from "../lib/numbers.js";
 import type * as lib_oauth from "../lib/oauth.js";
 import type * as lib_oauthAdapter from "../lib/oauthAdapter.js";
@@ -260,6 +261,7 @@ declare const fullApi: ApiFromModules<{
   "lib/liveTasks": typeof lib_liveTasks;
   "lib/machineDelay": typeof lib_machineDelay;
   "lib/mailConfig": typeof lib_mailConfig;
+  "lib/mentions": typeof lib_mentions;
   "lib/numbers": typeof lib_numbers;
   "lib/oauth": typeof lib_oauth;
   "lib/oauthAdapter": typeof lib_oauthAdapter;

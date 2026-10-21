@@ -82,6 +82,7 @@ import {
 import { descriptionForm, printOf, trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { countsAsSubtask, type Liveness, projectLiveness } from '../lib/liveTasks'
+import { TOO_MANY_MENTIONS, tooManyMentions } from '../lib/mentions'
 import { projectName } from '../lib/recordNames'
 import { reviewStamp } from '../lib/review'
 import {
@@ -196,12 +197,15 @@ export function cleanTitle(raw: unknown): string {
 }
 
 /** Answers the description to store, which is the text as sent, untrimmed,
- * or '' for null or absent. Refuses text longer than TEXT_MAX unless it
- * equals `current`, the task's stored description, so a task saved before
- * the cap keeps its text through writes that send it back unchanged. */
+ * or '' for null or absent. Refuses text longer than TEXT_MAX, or text that
+ * mentions more than MENTION_MAX people, unless it equals `current`, the
+ * task's stored description, so a task saved before the cap keeps its text
+ * through writes that send it back unchanged. */
 export function cleanDescription(raw: string | null | undefined, current?: string): string {
   const text = raw ?? ''
-  if (text !== current && text.length > TEXT_MAX) throw rule(DESCRIPTION_TOO_LONG)
+  if (text === current) return text
+  if (text.length > TEXT_MAX) throw rule(DESCRIPTION_TOO_LONG)
+  if (tooManyMentions(text)) throw rule(TOO_MANY_MENTIONS)
   return text
 }
 

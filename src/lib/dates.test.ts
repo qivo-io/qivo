@@ -19,11 +19,13 @@ import {
   TODAY_POS,
   TODAY_WEEK,
   WEEKS,
+  WIN_WEEKS_MAX,
   weekNumberOf,
   weekStartOf,
   weekToDate,
   weekToISO,
   winLabel,
+  winWeeks,
 } from './dates'
 
 describe('week grid', () => {
@@ -192,12 +194,20 @@ describe('roadmap view window', () => {
       start: { mode: 'weeks', value: 6 },
       end: { mode: 'weeks', value: -2 },
     })
-    expect(back).toEqual({ w0: TODAY_WEEK - 2, w1: TODAY_WEEK + 6 })
-    const huge = resolveWin({
+    expect(back).toEqual({ w0: TODAY_WEEK - 2, w1: TODAY_WEEK + 6, capped: false })
+    const most = { start: { mode: 'weeks', value: 0 }, end: { mode: 'weeks', value: 259 } } as const
+    expect(winWeeks(most)).toBe(WIN_WEEKS_MAX)
+    expect(resolveWin(most).capped).toBe(false)
+    const huge = {
       start: { mode: 'weeks', value: 0 },
       end: { mode: 'weeks', value: 9999 },
+    } as const
+    expect(winWeeks(huge)).toBe(10_000)
+    expect(resolveWin(huge)).toEqual({
+      w0: TODAY_WEEK,
+      w1: TODAY_WEEK + WIN_WEEKS_MAX - 1,
+      capped: true,
     })
-    expect(huge.w1 - huge.w0).toBe(259)
   })
 
   it('shiftWin pans both endpoint kinds by whole weeks', () => {

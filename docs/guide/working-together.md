@@ -174,7 +174,9 @@ followers, the most a task can have**. A subscriber can still unsubscribe,
 and a comment or a mention no longer subscribes anyone, though mentioned
 people still receive their message. A new assignee or reviewer is still
 subscribed, so the people working on a task always hear about it. A comment
-or description reaches at most 100 mentioned people. Tasks that had more
+or description can mention at most 100 people. Qivo refuses to save one that
+mentions more, keeps your draft and says **A text can mention at most 100
+people; remove some mentions and save again.** Tasks that had more
 subscribers before this limit keep them. On such a task, a comment or a
 change reaches the first subscribers at once and the rest a few seconds
 later. Changes saved for many tasks at once, from the Roadmap, by
@@ -194,7 +196,9 @@ counter. Opening the row or the task marks its messages read and leaves only
 the latest message in the inbox. Further updates start the unread counter
 again on the same row. A row keeps at most 50 unread updates. Beyond that,
 Qivo drops the oldest ones but keeps the first unread update and the newest
-mention, comment and change. On a task with many subscribers it does so
+mention, comment and change, and the row says how many it dropped, such as
+**12 earlier updates on this task are not listed**. The task's comments and
+history still show what those updates were about. On a task with many subscribers it does so
 moments after the update arrives. The Inbox loads up to 500 messages, unread ones
 first.
 

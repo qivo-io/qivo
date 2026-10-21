@@ -697,7 +697,7 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
       name: 'deletedItems.matches (a foreign task title)',
       ref: () => 'Elsewhere ledger',
       call: (ref) => as(t, f.admin).query(api.deletedItems.matches, { text: ref }),
-      value: [],
+      value: { matches: [], capped: false },
     },
     {
       name: 'deletedItems.restore',

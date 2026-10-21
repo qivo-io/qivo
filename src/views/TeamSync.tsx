@@ -50,7 +50,7 @@ import { useMobile } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
 import { type IssueVM, P, type UserVM } from '@/store/planner'
 import { usePlannerVersion } from '@/store/usePlannerVersion'
-import { SYNC_OWNERS_MAX, syncSince } from '../../convex/lib/teamSync'
+import { syncSince } from '../../convex/lib/teamSync'
 import { DoneItem, LoadChip, type PageCtx, SyncCard, WaitingItem } from './teamSync/SyncCard'
 import { TeamOpening } from './teamSync/TeamOpening'
 import { useOverviewPanelClipping } from './useOverviewPanelClipping'
@@ -375,6 +375,15 @@ function flipped(set: Set<string>, id: string): Set<string> {
   return n
 }
 
+/** The notice for cards without a since-last-sync mark, because `names`
+    hold more open tasks than one latest-comment read covers. */
+const marksCutLine = (names: string[]) =>
+  `Some cards show no mark for what changed since the last sync, because ${
+    names.length === 1
+      ? `${names[0]} holds`
+      : `${names.slice(0, -1).join(', ')} and ${names.at(-1)} hold`
+  } more open tasks than Qivo checks at once.`
+
 export function TeamSync({
   place,
   onPlace,
@@ -466,7 +475,12 @@ export function TeamSync({
   const syncOwners = [
     ...new Set([...cardOwners(step), ...cardOwners(steps[idx - 1]), ...cardOwners(steps[idx + 1])]),
   ]
-  const ownerKey = syncOwners.slice(0, SYNC_OWNERS_MAX).join(',')
+  const ownerKey = syncOwners.join(',')
+  // the people on this step whose open tasks are too many for one
+  // latest-comment read, so some of their cards lack a mark (P.watchTeamSync)
+  const marksCut = cardOwners(step)
+    .filter((id) => P.lastCommentsCut.includes(id))
+    .map((id) => P.user(id)?.name ?? 'Someone')
   useEffect(() => {
     P.watchTeamSync(P.homeOrg || null, ownerKey ? ownerKey.split(',') : [])
   }, [P.homeOrg, ownerKey])
@@ -659,6 +673,11 @@ export function TeamSync({
               />
             </div>
             {body}
+            {marksCut.length > 0 && (
+              <p data-sync-marks-cut className="mt-4 text-sm text-text-3">
+                {marksCutLine(marksCut)}
+              </p>
+            )}
             <div className="mt-6 flex items-center gap-2 border-t border-border pt-4">
               <WalkFooter
                 hook="sync"

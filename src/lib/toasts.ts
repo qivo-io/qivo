@@ -36,8 +36,12 @@ export const TOASTS_SHOWN = 3
 
 /** The toasts after `toast` arrives. One with the `key` of a toast on
     screen replaces that toast's text in place. Otherwise it goes last, and
-    the oldest toasts that are not sticky give way so at most TOASTS_SHOWN
-    show, or only the sticky ones and the new one when they are more. */
+    older toasts that are not sticky make room so at most TOASTS_SHOWN show,
+    or only the sticky ones and the new one when they are more. Successes
+    and notices give way first, oldest first. An error, a refusal or failure
+    the person must read, never just disappears: when only errors are left
+    to give way, the oldest one's text moves into the next error, or into
+    the new toast when that is an error, and otherwise it stays. */
 export function withToast(list: readonly Toast[], toast: Toast): Toast[] {
   const at = toast.key === undefined ? -1 : list.findIndex((t) => t.key === toast.key)
   if (at >= 0)
@@ -47,6 +51,24 @@ export function withToast(list: readonly Toast[], toast: Toast): Toast[] {
   const stuck = list.filter((t) => t.sticky)
   const passing = list.filter((t) => !t.sticky)
   const room = Math.max(0, TOASTS_SHOWN - 1 - stuck.length)
-  const kept = new Set([...stuck, ...passing.slice(passing.length - room)])
-  return [...list.filter((t) => kept.has(t)), toast]
+  let last = toast
+  while (passing.length > room) {
+    const quiet = passing.findIndex((t) => t.tone !== 'error')
+    if (quiet >= 0) {
+      passing.splice(quiet, 1)
+      continue
+    }
+    const [oldest, next] = passing
+    if (next !== undefined) passing.splice(0, 2, { ...next, text: `${oldest.text}\n${next.text}` })
+    else if (last.tone === 'error') {
+      passing.shift()
+      last = { ...last, text: `${oldest.text}\n${last.text}` }
+    } else break
+  }
+  const kept = new Map(passing.map((t) => [t.id, t]))
+  const shown = list.flatMap((t) => {
+    const now = t.sticky ? t : kept.get(t.id)
+    return now ? [now] : []
+  })
+  return [...shown, last]
 }

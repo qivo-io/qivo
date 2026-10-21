@@ -29,6 +29,10 @@ Use the controls on the timeline to change it:
 - The calendar button in the **Task** header offers a month, two months, a
   quarter, half a year or a year. **Custom range…** lets you set each end
   separately as **Relative weeks**, which move with today, or an **Exact date**.
+  The Roadmap shows at most 260 weeks, about five years. **Custom range…**
+  refuses a wider range and says so. A range that grows wider later, such as
+  an exact start with a relative end as the weeks pass, shows its first 260
+  weeks, and the header says **First 260 of N weeks**.
 - **Save this as my default** saves the current range for your account. The
   Roadmap opens on it, and **Default window** or the reset button returns to it.
   The reset button appears only when the view differs from your default.

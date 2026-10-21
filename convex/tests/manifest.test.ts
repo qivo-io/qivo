@@ -92,7 +92,7 @@ const actual = rows.map((r) => `${r.module}:${r.name} ${r.kind} ${r.vis} ${r.arg
 
 const MANIFEST = `
 admin:addOperator mutation internal {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false},"note":{"fieldType":{"type":"string"},"optional":true}}}
-admin:auditLog query public {"type":"object","value":{"limit":{"fieldType":{"type":"number"},"optional":true}}}
+admin:auditLog query public {"type":"object","value":{"limit":{"fieldType":{"type":"number"},"optional":true},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true}}}
 admin:isOperator query public {"type":"object","value":{}}
 admin:promoteOrgAdmin mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false}}}
 admin:removeOperator mutation internal {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false}}}

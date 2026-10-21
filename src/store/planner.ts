@@ -24,6 +24,7 @@ import { AVATAR_COLORS } from '../../convex/lib/avatarColors'
 import { BILLING_READ_ONLY, deletionReadOnly } from '../../convex/lib/billingAccess'
 import { descriptionForm, FIELD_CHANGED, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
 import type { FieldChange } from '../../convex/lib/functions'
+import { TOO_MANY_MENTIONS, tooManyMentions } from '../../convex/lib/mentions'
 import { roundTenths } from '../../convex/lib/numbers'
 import {
   canCreateProjects,
@@ -34,7 +35,7 @@ import { creatorGrant, grantsAfterHandover } from '../../convex/lib/projectGrant
 import { milestoneLabel, projectName, teamLabel } from '../../convex/lib/recordNames'
 import { resolveReviewHours, reviewStamp } from '../../convex/lib/review'
 import { REMAINING_HOURS_MAX, REMAINING_HOURS_RULE, SUBTASK_MAX } from '../../convex/lib/taskLimits'
-import { firstSittingDay, nextSyncStamp } from '../../convex/lib/teamSync'
+import { firstSittingDay, nextSyncStamp, SYNC_OWNERS_MAX } from '../../convex/lib/teamSync'
 import {
   COMMENT_TOO_LONG,
   DESCRIPTION_TOO_LONG,
@@ -288,8 +289,23 @@ const committedByOwner = new Map<string, Map<number, number>>()
    in the order asked), or '' for none. */
 let watchedSyncOrg: string | null = null
 let watchedSyncOwners = ''
-let syncUnsub: (() => void) | null = null
 let syncWatchEpoch = 0
+/* One latest-comment subscription for some of the watched people, and its
+   last answer (null until it arrives). */
+type SyncPart = {
+  owners: string[]
+  unsub: () => void
+  rows: { issue_id: string; at: string | null }[] | null
+  complete: boolean
+}
+let syncParts: SyncPart[] = []
+/* The marks known before the watched people last changed, shown until every
+   part has answered, so stepping through the walk does not blank them. */
+let syncFallback = new Map<string, number | null>()
+const stopSyncParts = () => {
+  for (const part of syncParts) part.unsub()
+  syncParts = []
+}
 
 /* The issue whose comments are subscribed (uuid), or null. Set by the issue
    modal via watchComments, which owns the second Convex subscription. */
@@ -1082,6 +1098,16 @@ function toast(msg: string, tone: ToastTone = 'error') {
 export const TEXT_TOO_LONG = {
   description: `Description too long to save. The limit is ${TEXT_MAX_LABEL} characters, including formatting.`,
   comment: `Comment too long to save. The limit is ${TEXT_MAX_LABEL} characters, including formatting.`,
+}
+
+/** The save-time refusal of a description or comment `text` the server would
+    refuse, for its length (TEXT_TOO_LONG) or for mentioning more people than
+    MENTION_MAX (lib/mentions.ts), or null when it may be sent. The editor
+    and the store guards below share it, so a refused draft is kept. */
+export function textRefusal(kind: keyof typeof TEXT_TOO_LONG, text: string): string | null {
+  if (text.length > TEXT_MAX) return TEXT_TOO_LONG[kind]
+  if (tooManyMentions(text)) return asSentence(TOO_MANY_MENTIONS)
+  return null
 }
 
 /* --- the write path ---------------------------------------------------------
@@ -4320,6 +4346,9 @@ export const PLANNER = {
   // null when it has none, for the open, visible tasks the last answer
   // covered; a task with no entry is not known yet
   lastComments: new Map<string, number | null>(),
+  // the watched people whose latest-comment answer stayed cut short by the
+  // server's budgets even when asked alone, so some of their cards lack marks
+  lastCommentsCut: [] as string[],
   messages: [] as MessageVM[],
   messageGroups: [] as MessageGroupVM[],
   unreadMessages: 0, // own inbox (0074), folded per task (0088)
@@ -5463,13 +5492,14 @@ export const PLANNER = {
     const row = uuid ? rows.issues.get(uuid) : null
     if (!row || !uuid || !patch || !Object.keys(patch).length) return Promise.resolve(false)
     if (refusePausedEdit()) return Promise.resolve(false)
-    // text over the server's cap is refused before the paint, so a draft is
-    // never lost to a refusal; a task saved before the cap may send its
+    // text the server would refuse is refused before the paint, so a draft
+    // is never lost to a refusal; a task saved before the cap may send its
     // stored text back unchanged, as the server allows
     if ('description' in patch) {
       const text = patch.description ?? ''
-      if (text !== row.description && text.length > TEXT_MAX) {
-        toast(TEXT_TOO_LONG.description)
+      const refusal = text === row.description ? null : textRefusal('description', text)
+      if (refusal) {
+        toast(refusal)
         return Promise.resolve(false)
       }
     }
@@ -6369,45 +6399,97 @@ export const PLANNER = {
      commented on (api.teamSync.lastComments), for its "untouched" and
      "changed" marks. Subscribed only while the page is open, and only for
      `ownerIds`, the people whose cards it shows or shows next, most needed
-     first. An answer cut short by the server's caps covers the first ones.
-     The page calls this with the home organization whenever they change,
-     and with null on unmount. No owners means no subscription. Every delivery
-     replaces the map wholesale. A new organization empties it; new owners
-     in the same one keep it until their answer arrives, so stepping through
-     the walk does not blank the marks. Nothing here is optimistic, so no
-     paint gate is needed. */
+     first. The server takes SYNC_OWNERS_MAX people a call and cuts an answer
+     short past its task and byte budgets, so the people are asked in parts
+     of SYNC_OWNERS_MAX, and a part whose answer comes back cut short is
+     asked again as two halves, down to one person. Someone whose own answer
+     is still cut short is listed in P.lastCommentsCut, which the page names
+     so no card lacks its mark without a word. The page calls this with the
+     home organization whenever they change, and with null on unmount. No
+     owners means no subscription. A new organization empties the marks; new
+     owners in the same one keep the old marks until every part has
+     answered, so stepping through the walk does not blank them. Nothing here
+     is optimistic, so no paint gate is needed. */
   watchTeamSync: (orgId: string | null, ownerIds: readonly string[] = []) => {
     const owners = orgId ? [...new Set(ownerIds)] : []
     const key = owners.join(',')
     if (watchedSyncOrg === orgId && watchedSyncOwners === key) return
     const watchEpoch = ++syncWatchEpoch
-    syncUnsub?.()
-    syncUnsub = null
+    syncFallback = PLANNER.lastComments
+    stopSyncParts()
     watchedSyncOwners = key
     if (watchedSyncOrg !== orgId) {
       watchedSyncOrg = orgId
+      syncFallback = new Map()
       PLANNER.lastComments = new Map()
+      PLANNER.lastCommentsCut = []
       emit('teamSync')
     }
     if (!orgId || !owners.length) return
-    syncUnsub = convex.onUpdate(
-      api.teamSync.lastComments,
-      { org_id: orgId, owner_ids: owners },
-      (answer) => {
-        if (syncWatchEpoch !== watchEpoch) return
-        PLANNER.lastComments = new Map(
-          answer.rows.map((row) => [row.issue_id, row.at === null ? null : Date.parse(row.at)]),
-        )
-        emit('teamSync')
-      },
-      (err) => {
-        if (syncWatchEpoch !== watchEpoch) return
-        // fail closed to "nothing known", so no card claims untouched
-        console.error('[qivo] team sync subscription failed:', err)
-        PLANNER.lastComments = new Map()
-        emit('teamSync')
-      },
-    )
+    const publish = () => {
+      const answered = syncParts.every((part) => part.rows !== null)
+      const marks = new Map(answered ? [] : syncFallback)
+      for (const part of syncParts) {
+        for (const row of part.rows ?? []) {
+          marks.set(row.issue_id, row.at === null ? null : Date.parse(row.at))
+        }
+      }
+      PLANNER.lastComments = marks
+      PLANNER.lastCommentsCut = syncParts
+        .filter((part) => part.rows !== null && !part.complete)
+        .flatMap((part) => part.owners)
+      emit('teamSync')
+    }
+    const watch = (part: string[], at: number) => {
+      // a stop asked before onUpdate returns (an answer delivered at once)
+      // ends the subscription as soon as it exists
+      let stopped = false
+      let unsub: (() => void) | undefined
+      const entry: SyncPart = {
+        owners: part,
+        unsub: () => {
+          stopped = true
+          unsub?.()
+        },
+        rows: null,
+        complete: true,
+      }
+      syncParts.splice(at, 0, entry)
+      unsub = convex.onUpdate(
+        api.teamSync.lastComments,
+        { org_id: orgId, owner_ids: part },
+        (answer) => {
+          if (syncWatchEpoch !== watchEpoch || !syncParts.includes(entry)) return
+          if (!answer.complete && part.length > 1) {
+            // cut short: ask again in halves, in the same place in the order
+            const i = syncParts.indexOf(entry)
+            entry.unsub()
+            syncParts.splice(i, 1)
+            const half = Math.ceil(part.length / 2)
+            watch(part.slice(0, half), i)
+            watch(part.slice(half), i + 1)
+            return
+          }
+          entry.rows = answer.rows
+          entry.complete = answer.complete
+          publish()
+        },
+        (err) => {
+          if (syncWatchEpoch !== watchEpoch || !syncParts.includes(entry)) return
+          // fail closed to "nothing known", so no card claims untouched
+          console.error('[qivo] team sync subscription failed:', err)
+          stopSyncParts()
+          syncFallback = new Map()
+          PLANNER.lastComments = new Map()
+          PLANNER.lastCommentsCut = []
+          emit('teamSync')
+        },
+      )
+      if (stopped) unsub()
+    }
+    for (let i = 0; i < owners.length; i += SYNC_OWNERS_MAX) {
+      watch(owners.slice(i, i + SYNC_OWNERS_MAX), syncParts.length)
+    }
   },
 
   /** Record that a change was just made on `profileId` through the Team
@@ -6453,8 +6535,9 @@ export const PLANNER = {
 
   /** Post a comment (issue uuid — modal-side, like addAttachment). Resolves
       whether the server saved it, so the caller keeps the draft until it
-      did. A body over TEXT_MAX after trimming, or any comment while edits
-      are paused, is refused here with a toast, before the optimistic row.
+      did. A body the server would refuse after trimming (textRefusal), or
+      any comment while edits are paused, is refused here with a toast,
+      before the optimistic row.
       A server refusal, such as lost access, is toasted and its row
       taken away before the promise resolves false. */
   addComment: (issueUuid: string, body: string): Promise<boolean> => {
@@ -6462,8 +6545,9 @@ export const PLANNER = {
     if (!row) return Promise.resolve(false)
     const text = (body || '').trim()
     if (!text) return Promise.resolve(false)
-    if (text.length > TEXT_MAX) {
-      toast(TEXT_TOO_LONG.comment)
+    const refusal = textRefusal('comment', text)
+    if (refusal) {
+      toast(refusal)
       return Promise.resolve(false)
     }
     if (refusePausedEdit()) return Promise.resolve(false)
@@ -6491,8 +6575,8 @@ export const PLANNER = {
   /** Replaces a comment's body with `body`, trimmed, and stamps the edit.
       Resolves whether the server saved it, so the editor keeps the draft
       until it did; the same text resolves true without a write, and a
-      missing comment or a blank body false. A body over TEXT_MAX is refused
-      here with a toast, before the paint. */
+      missing comment or a blank body false. A body the server would refuse
+      (textRefusal) is refused here with a toast, before the paint. */
   updateComment: (
     id: string,
     body: string,
@@ -6502,8 +6586,9 @@ export const PLANNER = {
     const text = (body || '').trim()
     if (!rec || !text) return Promise.resolve(false)
     if (rec.body === text) return Promise.resolve(true)
-    if (text.length > TEXT_MAX) {
-      toast(TEXT_TOO_LONG.comment)
+    const refusal = textRefusal('comment', text)
+    if (refusal) {
+      toast(refusal)
       return Promise.resolve(false)
     }
     if (refusePausedEdit()) return Promise.resolve(false)
@@ -8549,11 +8634,13 @@ export function disposeDemoStore() {
   historyStart = false
   earlierLoad = 'idle'
   historyLoad = 'idle'
-  syncUnsub?.()
-  syncUnsub = null
+  ++syncWatchEpoch
+  stopSyncParts()
+  syncFallback = new Map()
   watchedSyncOrg = null
   watchedSyncOwners = ''
   PLANNER.lastComments = new Map()
+  PLANNER.lastCommentsCut = []
   pendingRestoreIssueIds.clear()
   serverSnap = null
   layers.clear()

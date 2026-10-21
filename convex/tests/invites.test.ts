@@ -349,7 +349,7 @@ describe('invitations from the app', () => {
     expect(detail.members.find((m) => m.profile_id === added.id)?.invite).toMatchObject({
       sent: true,
     })
-    expect((await op.query(api.admin.auditLog, {})).map((r) => r.action)).not.toContain(
+    expect((await op.query(api.admin.auditLog, {})).rows.map((r) => r.action)).not.toContain(
       'invite_email',
     )
     // many newer app emails never push an operator action out of the listing
@@ -372,9 +372,10 @@ describe('invitations from the app', () => {
         })
       }
     })
-    expect((await op.query(api.admin.auditLog, { limit: 5 })).map((r) => r.action)).toEqual([
-      'create_org',
-    ])
+    expect(await op.query(api.admin.auditLog, { limit: 5 })).toMatchObject({
+      rows: [{ action: 'create_org' }],
+      next: null,
+    })
   })
 
   it('sends and records nothing on a public demo deployment', async () => {

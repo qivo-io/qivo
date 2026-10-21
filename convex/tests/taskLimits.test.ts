@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { Refusal, RefusalCode } from '../lib/functions'
+import { MENTION_MAX, TOO_MANY_MENTIONS } from '../lib/mentions'
 import {
   ATTACHMENT_MAX,
   ATTACHMENTS_FULL,
@@ -35,7 +36,7 @@ import {
 } from '../lib/taskLimits'
 import { ARCHIVED_DETACH } from '../model/deletedItems'
 import { MOVE_SUBTREE_MAX, MOVE_SUBTREE_TOO_LARGE } from '../model/issues'
-import { INLINE_TRIMS, ITEM_UNREAD_CAP, MENTION_MAX, notifyCommentInsert } from '../model/messages'
+import { INLINE_TRIMS, ITEM_UNREAD_CAP, notifyCommentInsert } from '../model/messages'
 import {
   as,
   expectRefusal,
@@ -1059,34 +1060,106 @@ describe('a comment on a task with many followers', () => {
 /* ------------------------------------------------------------- 4. mentions */
 
 describe('mentions', () => {
-  it(`reach at most ${MENTION_MAX} people, and an edit re-notifies no one who stayed mentioned`, async () => {
+  const at = (p: Doc<'profiles'>) => `@[${p.name}](user:${p.id})`
+
+  it(`reach all of ${MENTION_MAX} people, and a text that mentions more is refused on every surface`, async () => {
     const fx = await setup()
     const issue = await task(fx)
-    const people = await plantFollowers(fx, await task(fx), MENTION_MAX + 2)
-    const at = (p: Doc<'profiles'>) => `@[${p.name}](user:${p.id})`
-    const body = people.map(at).join(' ')
+    const people = await plantFollowers(fx, await task(fx), MENTION_MAX + 1)
+    const full = people.slice(0, MENTION_MAX).map(at).join(' ')
+    // a repeated mention, one in a code span and a plain link count no one more
+    const over = `${people.map(at).join(' ')}`
+    const fine = `${full} ${at(people[0])} \`${at(people[MENTION_MAX])}\` [x](user:${people[MENTION_MAX].id})`
     await as(fx.t, fx.user).mutation(api.comments.create, {
       org_id: fx.org.id,
       id: uuid(),
       issue_id: issue.id,
-      body,
+      body: fine,
     })
-    const mentioned = async (p: Doc<'profiles'>) =>
-      (await messagesFor(fx.t, p.id, issue.id)).filter((m) => m.kind === 'mention').length
+    const mentioned = async (p: Doc<'profiles'>, on = issue) =>
+      (await messagesFor(fx.t, p.id, on.id)).filter((m) => m.kind === 'mention').length
     expect(await mentioned(people[MENTION_MAX - 1])).toBe(1)
     expect(await mentioned(people[MENTION_MAX])).toBe(0)
-    // a description that names them all; dropping the first mention moves
-    // the 101st into the first 100, and they hear nothing new
-    const described = await task(fx, { description: body })
+
+    const comment = (await fx.t.run((ctx) => ctx.db.query('comments').collect()))[0]
+    const described = await task(fx)
+    const writes = {
+      appComment: () =>
+        as(fx.t, fx.user).mutation(api.comments.create, {
+          org_id: fx.org.id,
+          id: uuid(),
+          issue_id: issue.id,
+          body: over,
+        }),
+      appEdit: () =>
+        as(fx.t, fx.user).mutation(api.comments.update, {
+          org_id: fx.org.id,
+          id: comment.id,
+          body: over,
+        }),
+      appCreate: () =>
+        as(fx.t, fx.admin).mutation(api.issues.create, {
+          org_id: fx.org.id,
+          id: uuid(),
+          project_id: fx.sub.id,
+          title: 'Crowded',
+          description: over,
+        }),
+      appUpdate: () =>
+        as(fx.t, fx.admin).mutation(api.issues.update, {
+          org_id: fx.org.id,
+          id: described.id,
+          patch: { description: over },
+        }),
+      restComment: () =>
+        fx.t.mutation(internal.machine.rest.addComment, {
+          callerId: fx.agent.id,
+          access: 'write',
+          ref: key(issue),
+          body: JSON.stringify({ body: over }),
+        }),
+      restUpdate: () =>
+        fx.t.mutation(internal.machine.rest.updateIssue, {
+          callerId: fx.agent.id,
+          access: 'write',
+          keyName: 'limits',
+          ref: key(described),
+          body: JSON.stringify({ description: over }),
+        }),
+      mcpComment: () =>
+        fx.t.mutation(internal.machine.mcp.addComment, {
+          callerId: fx.agent.id,
+          access: 'write',
+          ref: key(issue),
+          body: over,
+        }),
+      mcpCreate: () =>
+        fx.t.mutation(internal.machine.mcp.createIssue, {
+          callerId: fx.agent.id,
+          access: 'write',
+          project: fx.sub.key,
+          title: 'Crowded',
+          description: over,
+        }),
+    }
+    for (const write of Object.values(writes)) await refused(write(), 'rule', TOO_MANY_MENTIONS)
+    // nothing saved and nobody heard
+    expect((await row(fx.t, described.id)).description).toBe(described.description)
+    expect(await mentioned(people[MENTION_MAX])).toBe(0)
+    expect(await mentioned(people[0], described)).toBe(0)
+  })
+
+  it('re-notify no one who stayed mentioned when an edit drops another', async () => {
+    const fx = await setup()
+    const people = await plantFollowers(fx, await task(fx), MENTION_MAX)
+    const described = await task(fx, { description: people.map(at).join(' ') })
     await as(fx.t, fx.admin).mutation(api.issues.update, {
       org_id: fx.org.id,
       id: described.id,
       patch: { description: people.slice(1).map(at).join(' ') },
     })
     expect(
-      (await messagesFor(fx.t, people[MENTION_MAX].id, described.id)).filter(
-        (m) => m.kind === 'mention',
-      ),
+      (await messagesFor(fx.t, people[1].id, described.id)).filter((m) => m.kind === 'mention'),
     ).toEqual([])
   })
 })

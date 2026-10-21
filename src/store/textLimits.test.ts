@@ -1,5 +1,6 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MENTION_MAX } from '../../convex/lib/mentions'
 import { NAME_MAX, TEXT_MAX } from '../../convex/lib/textLimits'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 import type { Row } from './rows'
@@ -21,6 +22,13 @@ const LEGACY = 'b'.repeat(25_000)
 // a name stored before NAME_MAX, and that name shortened but still too long
 const LEGACY_NAME = 'n'.repeat(NAME_MAX + 20)
 const SHORTENED = 'n'.repeat(NAME_MAX + 15)
+// a text that mentions `n` distinct people
+const mentions = (n: number) =>
+  Array.from(
+    { length: n },
+    (_, i) => `@[P${i}](user:00000000-0000-4000-8000-${String(i).padStart(12, '0')})`,
+  ).join(' ')
+const TOO_MANY = 'A text can mention at most 100 people; remove some mentions and save again.'
 
 /* The store refuses text over the server's cap before it paints or sends,
  * so a refused draft is never replaced by a rollback. One task, saved before
@@ -181,5 +189,23 @@ describe('the text cap in the store', () => {
     P.updateComment('comment-a', AT_CAP)
     expect(P.comments.map((c) => c.body)).toEqual([AT_CAP])
     expect(sent).toEqual(['comments:update'])
+  })
+
+  it(`refuses a text that mentions more than ${MENTION_MAX} people before painting or sending`, async () => {
+    const { P } = store
+    const key = task()?.id ?? ''
+    expect(await P.updateIssue(key, { description: mentions(MENTION_MAX + 1) })).toBe(false)
+    P.watchComments('task-a')
+    publishComments([])
+    expect(await P.addComment('task-a', mentions(MENTION_MAX + 1))).toBe(false)
+    expect(toast.mock.calls).toEqual([
+      [TOO_MANY, 'error'],
+      [TOO_MANY, 'error'],
+    ])
+    expect(task()?.description).toBe(LEGACY)
+    expect(sent).toEqual([])
+    void P.updateIssue(key, { description: mentions(MENTION_MAX) })
+    void P.addComment('task-a', mentions(MENTION_MAX))
+    expect(sent).toEqual(['issues:update', 'comments:create'])
   })
 })

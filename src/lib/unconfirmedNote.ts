@@ -18,8 +18,13 @@ type Stored = UnconfirmedChange & { id: string; at: number }
 
 const PREFIX = 'qivo.unconfirmed.v1:'
 const LOCK_PREFIX = 'qivo-page:'
-/** Notes older than this are dropped unread, such as those of an
-    organization the person has left. */
+/** How long a note waits. A page waits seconds for the server's answers,
+    so notes older than this belong to a page that is gone, and collect
+    reports them even when the browser cannot tell which pages are open.
+    Notes of a seat the person no longer holds, such as one in an
+    organization they left, are dropped once this old: those tasks can no
+    longer be shown to them, and a note left by someone else who used this
+    browser is theirs to read until then. */
 const KEEP_MS = 30 * 24 * 60 * 60 * 1000
 
 type Dependencies = {
@@ -93,10 +98,11 @@ export function createUnconfirmedNote(deps: Dependencies) {
 
     /** Answers the changes that pages which have closed noted in `scopes`,
         each with its scope, and clears those notes, so each is told once.
-        When the browser cannot tell which pages are open, it reports none,
-        because the page that wrote a note may still be waiting for its
-        answer. Notes older than KEEP_MS go unread in every scope, such as
-        those of an organization the person has left. */
+        When the browser cannot tell which pages are open, it reports only a
+        page whose notes are all older than KEEP_MS, because a page that
+        wrote a newer note may still be waiting for its answer. Notes in
+        other scopes stay until they are older than KEEP_MS, and then go
+        unread (KEEP_MS says why). */
     async collect(scopes: Iterable<string>): Promise<(UnconfirmedChange & { scope: string })[]> {
       const live = await deps.livePages()
       const wanted = new Set(scopes)
@@ -113,15 +119,16 @@ export function createUnconfirmedNote(deps: Dependencies) {
         } catch {
           // A note that cannot be read says nothing.
         }
-        const kept = entries.filter(
-          (entry) => typeof entry?.what === 'string' && now() - Number(entry.at) < KEEP_MS,
-        )
-        if (kept.length && (!wanted.has(scope) || !live || live.has(page))) continue
+        const kept = entries.filter((entry) => typeof entry?.what === 'string')
+        const fresh = kept.some((entry) => now() - Number(entry.at) < KEEP_MS)
+        const gone = live ? !live.has(page) : !fresh
+        if (wanted.has(scope) ? !gone : fresh) continue
         try {
           deps.storage().removeItem(key)
         } catch {
           // The note stays, and the next start reads it again.
         }
+        if (!wanted.has(scope)) continue
         for (const entry of kept)
           found.push({
             task: typeof entry.task === 'string' ? entry.task : null,

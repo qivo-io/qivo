@@ -68,7 +68,7 @@ import type { MdBlock, MdInline } from '../lib/md'
 import { MAX_PARSE, parseMd, sanitizeHref } from '../lib/md'
 import { astToMd } from '../lib/mdSerialize'
 import { beginUpdateBlock, useUpdateBlocker } from '../lib/updateSafety'
-import { P, TEXT_TOO_LONG } from '../store/planner'
+import { P, textRefusal } from '../store/planner'
 import type { PMNode } from './descDoc'
 import { astToDoc, docToAst } from './descDoc'
 import { copyImage, downloadImage, openImageFull, toast } from './imgActions'
@@ -812,10 +812,11 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       if (sendingRef.current) return // one commit at a time
       const text = serialize(ed)
       if (!text.trim()) return // an empty comment isn't a thing — Discard is the way out
-      if (text.trim().length > TEXT_MAX) {
-        // the server's cap, on the trimmed text the store sends; refusing
+      const refusal = textRefusal('comment', text.trim())
+      if (refusal) {
+        // the server's caps, on the trimmed text the store sends; refusing
         // here keeps the draft and the edit mode
-        toast(TEXT_TOO_LONG.comment)
+        toast(refusal)
         return
       }
       // while edits are paused (snapshot trouble) the draft and edit mode stay
@@ -874,10 +875,11 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     const text = serialize(ed)
     if (text !== canonRef.current) {
       // no-op otherwise (undo-back-to-original too)
-      if (text.length > TEXT_MAX) {
-        // the server's cap. Returning before the baseline moves keeps the
+      const refusal = textRefusal('description', text)
+      if (refusal) {
+        // the server's caps. Returning before the baseline moves keeps the
         // draft dirty, with the Save bar up, as a refused comment does
-        toast(TEXT_TOO_LONG.description)
+        toast(refusal)
         return
       }
       // A paused save would roll back to the stale text and, once the editor

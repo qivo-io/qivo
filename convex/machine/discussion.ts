@@ -68,6 +68,7 @@ import {
 } from '../model/expected'
 import {
   followTask,
+  ITEM_UNREAD_CAP,
   itemMessages,
   markAllMessagesRead,
   markMessagesRead,
@@ -133,6 +134,9 @@ type InboxItemJson = {
   /** the task as it is now */
   task: TaskRefJson
   unread_count: number
+  /** how many earlier unread messages the item no longer holds, because an
+   * item keeps at most ITEM_UNREAD_CAP unread ones (model/messages.ts) */
+  dropped_count: number
   /** the newest message's instant, or the end of a snooze when later */
   latest_at: string
   snoozed_until: string | null
@@ -235,8 +239,10 @@ async function inboxItems(
     // every row of an item carries the same stamp; the newest decides
     const snoozed_until = latest.snoozed_until ?? null
     if (snoozed_until !== null && !o.includeSnoozed) continue
-    const unread_count = list.filter((m) => m.read_at === undefined).length
+    const unread = list.filter((m) => m.read_at === undefined)
+    const unread_count = unread.length
     if (o.unreadOnly && unread_count === 0) continue
+    const dropped_count = unread.reduce((n, m) => n + (m.dropped ?? 0), 0)
     let latest_at = latest.created_at
     for (const m of list) {
       if (m.woke_at !== undefined && m.woke_at > latest_at) latest_at = m.woke_at
@@ -244,6 +250,7 @@ async function inboxItems(
     items.push({
       task: taskRefOf(task),
       unread_count,
+      dropped_count,
       latest_at,
       snoozed_until,
       messages: list.map((m) => ({
@@ -786,7 +793,7 @@ export const DISCUSSION_TOOLS: McpTool[] = [
     def: {
       name: 'list_inbox',
       title: 'List inbox',
-      description: `Your inbox as the app shows it: \`items\`, one per active task you can read, with its unread count and messages (oldest first), latest activity first. \`unread_only\` keeps items with unread messages. Snoozed items are left out unless \`include_snoozed\`. \`limit\` (50 by default) and \`offset\` page through the items. One call lists up to ${INBOX_LIMIT} unread messages (newest first) and ${INBOX_LIMIT} read ones (most recently read first), looking at no more than ${2 * INBOX_LIMIT} of each, counting messages about tasks it does not list; \`truncated: true\` means some were not looked at. Mark items read to shrink the inbox.`,
+      description: `Your inbox as the app shows it: \`items\`, one per active task you can read, with its unread count, its messages (oldest first) and \`dropped_count\`, how many earlier unread messages it no longer holds because an item keeps at most ${ITEM_UNREAD_CAP} unread, latest activity first. \`unread_only\` keeps items with unread messages. Snoozed items are left out unless \`include_snoozed\`. \`limit\` (50 by default) and \`offset\` page through the items. One call lists up to ${INBOX_LIMIT} unread messages (newest first) and ${INBOX_LIMIT} read ones (most recently read first), looking at no more than ${2 * INBOX_LIMIT} of each, counting messages about tasks it does not list; \`truncated: true\` means some were not looked at. Mark items read to shrink the inbox.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',

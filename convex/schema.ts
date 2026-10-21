@@ -1254,6 +1254,11 @@ export default defineSchema({
     // Stamped by the wake, so clients can float and announce the returned
     // item; the next arrival's own created_at outranks it.
     woke_at: v.optional(v.string()),
+    // How many older unread messages of this item the item cap deleted
+    // (model/messages.ts trimRows), kept on the item's oldest unread row,
+    // which the cap never deletes. The app, REST and MCP show the sum over
+    // an item's unread rows, so nobody loses an update without a word.
+    dropped: v.optional(v.number()),
   })
     .index('by_uuid', ['id'])
     .index('by_recipient', ['recipient_id'])

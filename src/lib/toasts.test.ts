@@ -47,4 +47,33 @@ describe('withToast', () => {
       [2, 'toast 2'],
     ])
   })
+
+  it('lets successes and notices give way before an error', () => {
+    let list = withToast([], { id: 1, text: 'Not saved.', tone: 'error' })
+    for (const id of [2, 3]) list = withToast(list, plain(id))
+    list = withToast(list, { id: 4, text: 'Moved.', tone: 'info' })
+    expect(list.map((t) => t.id)).toEqual([1, 3, 4])
+  })
+
+  it('moves the oldest error into the next one when only errors can give way', () => {
+    const error = (id: number): Toast => ({ id, text: `error ${id}`, tone: 'error' })
+    let list: Toast[] = []
+    for (const id of [1, 2, 3, 4]) list = withToast(list, error(id))
+    expect(list.map((t) => [t.id, t.text])).toEqual([
+      [2, 'error 1\nerror 2'],
+      [3, 'error 3'],
+      [4, 'error 4'],
+    ])
+    // two sticky notices leave room for the new toast alone: an error moves
+    // into a new error, and stays beside a new success
+    const sticky = (id: number): Toast => ({ id, text: `notice ${id}`, sticky: true })
+    list = withToast(withToast([sticky(1), sticky(2)], error(3)), error(4))
+    expect(list.map((t) => [t.id, t.text])).toEqual([
+      [1, 'notice 1'],
+      [2, 'notice 2'],
+      [4, 'error 3\nerror 4'],
+    ])
+    list = withToast(list, plain(5))
+    expect(list.map((t) => t.id)).toEqual([1, 2, 4, 5])
+  })
 })

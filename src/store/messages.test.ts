@@ -325,6 +325,18 @@ describe('bulk notification actions through the client store', () => {
     )
   })
 
+  it("counts an item's dropped updates on its unread rows, and reading the item ends the count", () => {
+    const task = snap.messages[0].issue_id
+    // a read row's count belongs to an unread run that already ended
+    snap.messages[0] = { ...snap.messages[0], dropped: 5 }
+    snap.messages[1] = { ...snap.messages[1], dropped: 7 }
+    publish(structuredClone(snap))
+    const group = () => P.messageGroups.find((g) => g.id === task)
+    expect(group()?.dropped).toBe(7)
+    P.markMessagesRead(group()?.ids ?? [])
+    expect(group()?.dropped).toBe(0)
+  })
+
   it('does not continue a batch or restore notifications after the demo store is disposed', async () => {
     vi.resetModules()
     vi.stubEnv('VITE_APP_MODE', 'demo')

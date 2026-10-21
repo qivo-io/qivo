@@ -332,7 +332,10 @@ Useful field rules:
 - **Edit or delete a comment:** `update_comment` or `delete_comment` with the
   comment's `id` from `list_comments`, or REST `PATCH` and `DELETE
   /v1/comments/{id}`. Only the comment's author or a lead of the task's
-  project may. An edit that adds a mention notifies that person.
+  project may. An edit that adds a mention notifies that person. A
+  description or comment can mention at most 100 people; more is refused
+  with `a text can mention at most 100 people; remove some mentions and save
+  again`.
 - **Follow a task:** `set_following` with `ref` and `following`, or REST `PUT`
   (follow) and `DELETE` (stop) on `/v1/tasks/{ref}/following`. Followers get
   the task's updates in their inbox. `get_task` shows `following` and
@@ -351,7 +354,8 @@ Useful field rules:
   to shrink the inbox. The app's Inbox loads up to 500 of them, unread
   first. An item keeps at most 50 unread messages, dropping the oldest
   except its first unread one and the newest of each kind, on a busy task
-  moments after an arrival. Archiving a task
+  moments after an arrival. Its `dropped_count` says how many it dropped
+  until the item is read. Archiving a task
   or project marks the messages about its tasks read for everyone, and
   messages about an archived task arrive read.
 - **Clear your inbox:** `update_inbox` with `action` (`read`, `unread`,

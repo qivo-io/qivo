@@ -110,23 +110,28 @@ export type AdminAuditRow = {
   detail: unknown
 }
 
-/* admin_audit_log (0015:231-245): newest first, limit clamped to 1..1000
- * (default 200). The table has no app uuid — _id serves as the row key the
- * console's list needs. */
+/* admin_audit_log (0015:231-245): newest first, a page of `limit` rows
+ * clamped to 1..1000 (default 200), from `cursor`, the `next` of the page
+ * before (null or absent for the newest). `next` is null on the last page,
+ * so the console can say that older entries exist and load them. The table
+ * has no app uuid — _id serves as the row key the console's list needs. */
 export const auditLog = platformQuery({
-  args: { limit: v.optional(v.number()) },
-  handler: async (ctx, { limit }): Promise<AdminAuditRow[]> => {
+  args: { limit: v.optional(v.number()), cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: async (
+    ctx,
+    { limit, cursor },
+  ): Promise<{ rows: AdminAuditRow[]; next: string | null }> => {
     const clamped = Math.min(Math.max(limit ?? 200, 1), 1000)
     // The app's own invitation emails carry channel 'app' (invites.ts). They
     // are delivery records, shown on an organization's page
     // (adminPeople.ts orgDetail), so the listing reads only
     // the rows without a channel.
-    const rows = await ctx.db
+    const page = await ctx.db
       .query('platform_audit_log')
       .withIndex('by_channel_ts', (q) => q.eq('channel', undefined))
       .order('desc')
-      .take(clamped)
-    return rows.map((r) => ({
+      .paginate({ cursor: cursor ?? null, numItems: clamped })
+    const rows = page.page.map((r) => ({
       id: r._id,
       ts: r.ts,
       actor_email: r.actor_email,
@@ -135,6 +140,7 @@ export const auditLog = platformQuery({
       target_profile_id: r.target_profile_id ?? null,
       detail: r.detail as unknown,
     }))
+    return { rows, next: page.isDone ? null : page.continueCursor }
   },
 })
 

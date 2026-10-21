@@ -430,6 +430,7 @@ const pageMcp = async (fx: Fx, args: Record<string, unknown> = {}, callerId = fx
     items: {
       task: { id: string; key: string; title: string }
       unread_count: number
+      dropped_count: number
       latest_at: string
       snoozed_until: string | null
       messages: { id: string; detail: string; read_at: string | null }[]
@@ -466,6 +467,7 @@ describe('reading the inbox', () => {
       {
         task: { id: fx.task.id, key: key(fx.task), title: 'Visible', status: 'todo' },
         unread_count: 1,
+        dropped_count: 0,
         latest_at: '2026-01-03T00:00:00.000Z',
         snoozed_until: null,
         messages: [
@@ -497,6 +499,30 @@ describe('reading the inbox', () => {
     expect(
       await fx.t.query(internal.machine.discussion.restListInbox, { callerId: fx.agent.id, ...R }),
     ).toEqual({ items, truncated: false })
+  })
+
+  it(`says how many earlier unread messages an item past ${ITEM_UNREAD_CAP} dropped, until it is read`, async () => {
+    const fx = await setup()
+    await plantSubscription(fx.t, { issue_id: fx.task.id, profile_id: fx.agent.id })
+    const comment = () =>
+      as(fx.t, fx.user).mutation(api.comments.create, {
+        org_id: fx.org.id,
+        id: uuid(),
+        issue_id: fx.task.id,
+        body: 'news',
+      })
+    for (let n = 0; n < ITEM_UNREAD_CAP + 3; n++) await comment()
+    const [item] = await listMcp(fx)
+    expect([item.unread_count, item.dropped_count]).toEqual([ITEM_UNREAD_CAP, 3])
+    const rest = await fx.t.query(internal.machine.discussion.restListInbox, {
+      callerId: fx.agent.id,
+      ...R,
+    })
+    expect(rest.items[0].dropped_count).toBe(3)
+    // reading the item ends the unread run and its count
+    await updateMcp(fx, { action: 'read', tasks: [key(fx.task)] })
+    await comment()
+    expect((await listMcp(fx))[0].dropped_count).toBe(0)
   })
 
   it('filters unread and snoozed items, orders by latest activity and pages', async () => {

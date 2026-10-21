@@ -273,6 +273,28 @@ describe('promoteOrgAdmin — the lockout rescue', () => {
 
 /* ------------------------------------------------------------ removeOperator */
 
+describe('auditLog pages the operator actions', () => {
+  it('answers the newest first and a cursor while older entries exist', async () => {
+    const t = newAuthT()
+    const op = await withOperator(t)
+    await t.run(async (ctx) => {
+      for (const n of [1, 2, 3]) {
+        await ctx.db.insert('platform_audit_log', {
+          ts: `2026-10-0${n}T00:00:00.000Z`,
+          actor_email: op.email,
+          action: 'create_org',
+          detail: { n },
+        })
+      }
+    })
+    const first = await op.asOp.query(api.admin.auditLog, { limit: 2 })
+    expect(first.rows.map((r) => r.detail)).toEqual([{ n: 3 }, { n: 2 }])
+    expect(first.next).not.toBeNull()
+    const rest = await op.asOp.query(api.admin.auditLog, { limit: 2, cursor: first.next })
+    expect(rest).toMatchObject({ rows: [{ detail: { n: 1 } }], next: null })
+  })
+})
+
 describe('removeOperator — the CLI-only demotion', () => {
   it('demotes one of two operators: only that row and that role change, and it audits', async () => {
     const t = newAuthT()
