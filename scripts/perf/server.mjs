@@ -734,11 +734,14 @@ async function write(data, turn) {
     }
   }
   try {
-    const value = await mutate(data.name, data.args)
-    // as Convex answers a write only once the results before it are in,
-    // a write that changed nothing waits for the ones still on their way
+    const result = mutate(data.name, data.args)
+    // as Convex answers a write once the results that hold it are in: the
+    // ones it queued and those before it, which a write that changed
+    // nothing waits for too, but not those of later writes
+    const barrier = lastDelivery
+    const value = await result
     await turn
-    await lastDelivery
+    await barrier
     post({ type: 'answer', id: data.id, value })
   } catch (error) {
     await turn

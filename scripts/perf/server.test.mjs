@@ -108,4 +108,28 @@ describe('the benchmark server', () => {
     await send({ type: 'scenario', id: 'comments', name: 'deliverComments', args: [] })
     expect(posted.find((m) => m.id === 'comments').failure).toContain('one open comment thread')
   })
+
+  it("answers a write once its own results are in, not a later write's", async () => {
+    const { posted, send } = await server('tasks=20&latency=0&mbps=1')
+    await send({ type: 'subscribe', id: 's', name: 'snapshot:forMe', args: {} })
+    await vi.waitFor(() => expect(posted.some((m) => m.type === 'result')).toBe(true), 30_000)
+    posted.length = 0
+    const task = '00000004-0000-4000-8000-000000000001'
+    const first = send({
+      type: 'mutation',
+      id: 'first',
+      name: 'issues:update',
+      args: { id: task, patch: { title: 'First' } },
+    })
+    // the second write comes while the first one's result is on its way
+    const second = send({
+      type: 'mutation',
+      id: 'second',
+      name: 'issues:update',
+      args: { id: task, patch: { title: 'Second' } },
+    })
+    await Promise.all([first, second])
+    const order = posted.filter((m) => m.type !== 'state').map((m) => m.id ?? m.type)
+    expect(order).toEqual(['result', 'first', 'result', 'second'])
+  }, 60_000)
 })
