@@ -483,7 +483,7 @@ describe('assertNotLastTeam — teams_last_guard (0078)', () => {
     await expectRefusal(
       t.run((ctx) => assertNotLastTeam(ctx, team)),
       'rule',
-      /^cannot delete the last team$/,
+      /^an organization needs at least one team; create another team before deleting this one$/,
     )
     await plantTeam(t, org.id)
     await t.run((ctx) => assertNotLastTeam(ctx, team))

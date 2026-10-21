@@ -22,8 +22,17 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { sha256hex } from '../machine/auth'
-import { HELD_TASKS_SHAPE, KEEP_TOO_LARGE } from '../model/projectAccess'
-import { deleteTeamCore, TEAM_RUNS_RULE, teamsJson } from '../model/teams'
+import { deleteTeamDeep } from '../model/cascade'
+import { LAST_TEAM_RULE } from '../model/orgs'
+import { HELD_TASKS_SHAPE, KEEP_TOO_LARGE, REMOVAL_FULL } from '../model/projectAccess'
+import {
+  deleteTeamCore,
+  TEAM_DELETE_ROWS_MAX,
+  TEAM_DELETE_ROWS_MAX_LABEL,
+  TEAM_RUNS_RULE,
+  TEAM_TOO_LARGE,
+  teamsJson,
+} from '../model/teams'
 import {
   activityFor,
   as,
@@ -908,10 +917,57 @@ describe("deleting a team settles its members' open tasks", () => {
     expect(await grantsOf(fx.t, ola.id)).toEqual([[fx.sub2.id, 'viewer']])
   })
 
-  it('refuses Viewer grants that would fill the transaction, and keeps the team', async () => {
+  /* How many room checks deleting the setup's Hardware with keep_as_viewer
+   * makes before its Viewer grants: every read that finds who loses sight and
+   * the deletion itself (model/projectAccess.ts removeAndFindLost,
+   * model/cascade.ts deleteTeamDeep). Counted in a run stopped, and rolled
+   * back, at the first grant, which checks twice first: for its project and
+   * for the grant. */
+  async function sightChecks(fx: Fx): Promise<number> {
+    let checks = 0
+    let atGrant = -1
+    await fx.t
+      .run(async (ctx) => {
+        const db = new Proxy(ctx.db, {
+          get(target, prop) {
+            const value: unknown = Reflect.get(target, prop)
+            if (prop === 'insert') {
+              return (...args: unknown[]) => {
+                if (args[0] === 'project_access') {
+                  atGrant = checks
+                  throw new Error('first grant')
+                }
+                return Reflect.apply(target.insert, target, args)
+              }
+            }
+            return typeof value === 'function' ? value.bind(target) : value
+          },
+        })
+        await deleteTeamCore(
+          {
+            ...ctx,
+            db,
+            meta: {
+              getTransactionMetrics: async () => {
+                checks++
+                return { databaseQueries: { used: 0, remaining: 100 } }
+              },
+            },
+          } as unknown as MutationCtx,
+          { me: fx.admin, team: fx.team, held: 'keep_as_viewer', now: NOW },
+        )
+      })
+      .catch((e: unknown) => {
+        if (!String(e).includes('first grant')) throw e
+      })
+    expect((await hardwareLeft(fx)).team).not.toBeNull()
+    return atGrant - 2
+  }
+
+  it('refuses a removal whose sight would fill the transaction, and keeps the team', async () => {
     const fx = await setup()
     await plantTeam(fx, fx.org.id, 'Design')
-    // the deployment reports the transaction nearly full before the first grant
+    // the deployment reports the transaction nearly full from the start
     const e = await expectRefusal(
       fx.t.run((ctx) =>
         deleteTeamCore(
@@ -919,6 +975,35 @@ describe("deleting a team settles its members' open tasks", () => {
             ...ctx,
             meta: {
               getTransactionMetrics: async () => ({ databaseQueries: { used: 99, remaining: 1 } }),
+            },
+          } as unknown as MutationCtx,
+          { me: fx.admin, team: fx.team, held: 'keep_as_viewer', now: NOW },
+        ),
+      ),
+      'rule',
+    )
+    expect((e.data as Refusal).message).toBe(REMOVAL_FULL)
+    expect((e.data as Refusal).reason).toBeUndefined()
+    expect(await hardwareLeft(fx)).toMatchObject({ members: 3, shares: 1 })
+  })
+
+  it('refuses Viewer grants that would fill the transaction, and keeps the team', async () => {
+    const fx = await setup()
+    await plantTeam(fx, fx.org.id, 'Design')
+    // the deployment reports the transaction nearly full before the first
+    // grant, once Emil's sight has been worked out
+    const sight = await sightChecks(fx)
+    let checks = 0
+    const e = await expectRefusal(
+      fx.t.run((ctx) =>
+        deleteTeamCore(
+          {
+            ...ctx,
+            meta: {
+              getTransactionMetrics: async () => ({
+                databaseQueries:
+                  ++checks > sight ? { used: 99, remaining: 1 } : { used: 0, remaining: 100 },
+              }),
             },
           } as unknown as MutationCtx,
           { me: fx.admin, team: fx.team, held: 'keep_as_viewer', now: NOW },
@@ -938,7 +1023,8 @@ describe("deleting a team settles its members' open tasks", () => {
     await plantTeam(fx, fx.org.id, 'Design')
     // Emil's third task in FW needs the same grant on TBED as the first two
     await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, assignee_id: fx.emil.id })
-    // the transaction reads as full from the third check on
+    // the transaction reads as full from the third check after his sight on
+    const sight = await sightChecks(fx)
     let checks = 0
     await fx.t.run((ctx) =>
       deleteTeamCore(
@@ -947,21 +1033,134 @@ describe("deleting a team settles its members' open tasks", () => {
           meta: {
             getTransactionMetrics: async () => ({
               databaseQueries:
-                ++checks > 2 ? { used: 99, remaining: 1 } : { used: 0, remaining: 100 },
+                ++checks > sight + 2 ? { used: 99, remaining: 1 } : { used: 0, remaining: 100 },
             }),
           },
         } as unknown as MutationCtx,
         { me: fx.admin, team: fx.team, held: 'keep_as_viewer', now: NOW },
       ),
     )
-    expect(checks).toBe(2)
+    expect(checks).toBe(sight + 2)
     expect(await grantsOf(fx.t, fx.emil.id)).toEqual([[fx.meta.id, 'viewer']])
+  })
+
+  it(`deletes a team with ${TEAM_DELETE_ROWS_MAX} memberships and shares, and refuses one more before reading anything else`, async () => {
+    const fx = await setup()
+    await plantTeam(fx, fx.org.id, 'Design')
+    // Hardware has three members and one share; profiles need not exist
+    const plant = (n: number) =>
+      fx.t.run(async (ctx) => {
+        for (let i = 0; i < n; i++)
+          await ctx.db.insert('team_members', {
+            team_id: fx.team.id,
+            profile_id: uuid(),
+            is_leader: false,
+          })
+      })
+    // one row past the bound: 3 + (MAX - 3) memberships and the share
+    await plant(TEAM_DELETE_ROWS_MAX - 3)
+    const e = await expectRefusal(deleteHardware(fx, 'keep_as_viewer'), 'rule')
+    expect((e.data as Refusal).message).toBe(TEAM_TOO_LARGE)
+    expect(TEAM_DELETE_ROWS_MAX_LABEL).toBe(TEAM_DELETE_ROWS_MAX.toLocaleString('en-US'))
+    await refused(
+      as(fx.t, fx.admin).mutation(api.teams.deleteDeep, {
+        org_id: fx.org.id,
+        id: fx.team.id,
+        on_held_tasks: 'leave',
+      }),
+      'rule',
+      TEAM_TOO_LARGE,
+    )
+    expect(await hardwareLeft(fx)).toMatchObject({ members: TEAM_DELETE_ROWS_MAX, shares: 1 })
+    // at the bound it fits
+    await fx.t.run(async (ctx) => {
+      const one = await ctx.db
+        .query('team_members')
+        .withIndex('by_team', (q) => q.eq('team_id', fx.team.id))
+        .first()
+      if (one !== null) await ctx.db.delete(one._id)
+    })
+    await as(fx.t, fx.admin).mutation(api.teams.deleteDeep, {
+      org_id: fx.org.id,
+      id: fx.team.id,
+      on_held_tasks: 'leave',
+    })
+    expect(await hardwareLeft(fx)).toMatchObject({ team: null, members: 0, shares: 0 })
+  }, 60_000)
+
+  it('reads a legacy owned project once, however long its old description', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    await t.run(async (ctx) => {
+      await ctx.db.insert('teams', {
+        id: uuid(),
+        org_id: f.org.id,
+        name: 'Design',
+        stale_days: 14,
+        archive_days: 30,
+        track_delay_default: false,
+        created_at: NOW,
+      })
+    })
+    // eight projects stored before the description cap, 900 KiB each: read
+    // twice they pass Convex's 16 MiB
+    for (let i = 0; i < 8; i++)
+      await t.run((ctx) =>
+        ctx.db.insert('projects', {
+          id: uuid(),
+          org_id: f.org.id,
+          type: 'meta',
+          key: `OLD${i}`,
+          name: `Old ${i}`,
+          description: 'x'.repeat(900 * 1024),
+          sort_order: 10 + i,
+          num: 10 + i,
+          track_delay: false,
+          created_at: NOW,
+          team_id: f.team.id,
+        }),
+      )
+    await as(t, f.admin).mutation(api.teams.deleteDeep, {
+      org_id: f.org.id,
+      id: f.team.id,
+      on_held_tasks: 'leave',
+    })
+    const owned = await t.run((ctx) =>
+      ctx.db
+        .query('projects')
+        .withIndex('by_team', (q) => q.eq('team_id', f.team.id))
+        .collect(),
+    )
+    expect(owned).toEqual([])
+  }, 60_000)
+
+  it('checks the room every 100 rows while a deletion that settles tasks deletes them', async () => {
+    const fx = await setup()
+    let checks = 0
+    await fx.t.run(async (ctx) => {
+      for (let i = 0; i < 250; i++)
+        await ctx.db.insert('team_members', {
+          team_id: fx.team.id,
+          profile_id: uuid(),
+          is_leader: false,
+        })
+      await deleteTeamDeep(ctx, {
+        team: fx.team,
+        actor: fx.admin,
+        now: NOW,
+        guard: async () => {
+          checks++
+        },
+      })
+    })
+    // 254 rows: three members, one share and 250 more
+    expect(checks).toBe(3)
   })
 
   it('refuses the last team and anyone but an admin before anything is settled', async () => {
     const fx = await setup()
     // handing the tasks to the Viewer would be refused with its own sentence
-    await refused(deleteHardware(fx, fx.viewer.id), 'rule', 'cannot delete the last team')
+    await refused(deleteHardware(fx, fx.viewer.id), 'rule', LAST_TEAM_RULE)
     await plantTeam(fx, fx.org.id, 'Design')
     // the fixture's user leads Hardware and TBED but is no organization admin
     await refused(

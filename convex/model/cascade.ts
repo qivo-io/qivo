@@ -39,25 +39,57 @@ async function deleteProfileRateLimit(ctx: MutationCtx, profileId: string): Prom
  * admins can delete teams', the last-team guard — live in the callers
  * (teams.deleteDeep, model/teams.ts deleteTeamCore), which also settle the
  * members' open tasks and narrate no deletion (the old client wrote no
- * event). */
+ * event). A deployment counts each row it changes as one of Convex's 4,096
+ * reads, so the callers bound the rows first (model/teams.ts
+ * TEAM_DELETE_ROWS_MAX). `guard`, when given, runs before every
+ * TEAM_DELETE_GUARD_ROWS rows, so a deletion that shares its transaction with
+ * other reads can stop before it fills it. `owned`, when given, is the
+ * team's legacy owned projects as the caller already read them, so a large
+ * old description is not read twice. */
 export async function deleteTeamDeep(
   ctx: MutationCtx,
-  a: { team: Doc<'teams'>; actor: Doc<'profiles'>; now: string },
+  a: {
+    team: Doc<'teams'>
+    actor: Doc<'profiles'>
+    now: string
+    guard?: () => Promise<void>
+    owned?: readonly Doc<'projects'>[]
+  },
 ): Promise<void> {
   const { team } = a
-  const legacyOwnedProjects = await ctx.db
-    .query('projects')
-    .withIndex('by_team', (q) => q.eq('team_id', team.id))
-    .collect()
-  for (const project of legacyOwnedProjects) await ctx.db.patch(project._id, { team_id: undefined })
+  let rows = 0
+  const next = async () => {
+    if (a.guard !== undefined && rows++ % TEAM_DELETE_GUARD_ROWS === 0) await a.guard()
+  }
+  const legacyOwnedProjects =
+    a.owned ??
+    (await ctx.db
+      .query('projects')
+      .withIndex('by_team', (q) => q.eq('team_id', team.id))
+      .collect())
+  for (const project of legacyOwnedProjects) {
+    await next()
+    await ctx.db.patch(project._id, { team_id: undefined })
+  }
   const shared = ctx.db
     .query('project_team_access')
     .withIndex('by_team', (q) => q.eq('team_id', team.id))
-  for await (const grant of shared) await ctx.db.delete(grant._id)
+  for await (const grant of shared) {
+    await next()
+    await ctx.db.delete(grant._id)
+  }
   const members = ctx.db.query('team_members').withIndex('by_team', (q) => q.eq('team_id', team.id))
-  for await (const tm of members) await ctx.db.delete(tm._id)
+  for await (const tm of members) {
+    await next()
+    await ctx.db.delete(tm._id)
+  }
   await ctx.db.delete(team._id)
 }
+
+/* How many rows deleteTeamDeep changes between two runs of its guard: well
+ * under the 5% of Convex's 4,096 reads a removal keeps
+ * (model/projectAccess.ts REASSIGN_ROOM). */
+const TEAM_DELETE_GUARD_ROWS = 100
 
 /* The four task fields that name a profile, each with its own index. A
  * removal clears them in this order, so the fields that route work go

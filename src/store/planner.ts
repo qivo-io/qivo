@@ -4800,6 +4800,74 @@ export const PLANNER = {
       projects: [...new Set(items.map((i) => keptOn(change, i.task)))],
     }
   },
+  /* What Keep as Viewer leaves the people of `removal` able to do, for the
+     removal window: they keep their tasks and see the listed projects, and
+     can't change those tasks. Someone who can still change a listed project
+     or one of its sub-projects is named with those projects, from their
+     access once the change and the Viewer grants apply (levelAfter), so the
+     window never says they can't change anything there. */
+  keepText: (change: AccessRemoval, removal: RemovalEffect): string => {
+    const { people, items } = removal
+    const first = (uid: string) => (PLANNER.user(uid)?.name || 'Someone').split(' ')[0]
+    // one row per role, but a task held twice counts once
+    const count = new Set(items.map((i) => i.task.id)).size
+    // "the task" and "this task" read better than "the 1 task"
+    const theTasks = count === 1 ? 'the task' : `the ${count} tasks`
+    const these = count === 1 ? 'this task' : 'these tasks'
+    const places = removal.projects.flatMap((id) => PLANNER.project(id) || [])
+    // a project removal names its own project; a team change names where it reached
+    const project =
+      change.kind === 'userGrant' || change.kind === 'teamGrant'
+        ? PLANNER.project(change.projectId)
+        : null
+    const seen = project
+      ? project.type === 'meta'
+        ? 'the whole project'
+        : 'the whole sub-project'
+      : andList(
+          places.map((p) => PLANNER.projectLabel(p)),
+          (n) => `${n} other projects`,
+        )
+    const inIt = places.length > 1 ? 'them' : 'it'
+    // a deleted team's people each keep sight of the projects of their own tasks
+    const canSee =
+      change.kind === 'deleteTeam' && places.length > 1 && people.length > 1
+        ? 'can each see the projects that hold them'
+        : `can see ${seen}`
+    // a Viewer grant adds nothing to change, so what is left is the access
+    // the change leaves, on the listed projects and their sub-projects
+    const level = levelAfter(change)
+    const listed = new Set(places.map((p) => p.id))
+    const shown = PLANNER.projects.filter(
+      (p) => listed.has(p.id) || (!!p.parent && listed.has(p.parent)),
+    )
+    const changers = people.flatMap((uid) => {
+      const labels = shown
+        .filter((p) => ['user', 'lead'].includes(level(uid, p.id) ?? ''))
+        .map((p) => PLANNER.projectLabel(p))
+      return labels.length ? [{ uid, labels }] : []
+    })
+    const projectList = (labels: string[]) => andList(labels, (n) => `${n} other projects`)
+    if (people.length === 1) {
+      const who = first(people[0])
+      return changers.length
+        ? `${who} keeps ${theTasks} and ${canSee}, but can change only ${projectList(changers[0].labels)} in ${inIt}, not ${these}.`
+        : `${who} keeps ${theTasks} and ${canSee}, but can't change anything in ${inIt}, including ${these}.`
+    }
+    if (!changers.length)
+      return `They keep their tasks and ${canSee}, but can't change anything in ${inIt}, including ${these}.`
+    const still = andList(
+      changers.map((c) => `${first(c.uid)} can still change ${projectList(c.labels)}`),
+      (n) => `${n} others can still change parts of ${inIt}`,
+    )
+    const others = people.filter((uid) => !changers.some((c) => c.uid === uid))
+    // "the others" would be ambiguous after "2 others can still change"
+    const rest = !others.length
+      ? ''
+      : `, and ${others.length === 1 ? first(others[0]) : changers.length > 3 ? `${others.length} more` : 'the others'} can't change anything in ${inIt}`
+    // one of them may change another's task, never their own
+    return `They keep their tasks and ${canSee}, but can't change the tasks they keep. ${still}${rest}.`
+  },
   /* Whether I can carry out either choice of the removal window: give every
      listed person Viewer access to each of `projects`, and edit every listed
      task. A team leader without that project authority removes a member
@@ -4941,7 +5009,10 @@ export const PLANNER = {
             : `The ${named} stays`
     // the server refuses to delete the last team: say so before anything is sent
     if (change.kind === 'deleteTeam' && team && !PLANNER.canDeleteTeam(change.teamId)) {
-      toast(`The ${named} can't be deleted, because it is the organization's last team.`, 'error')
+      toast(
+        `The ${named} can't be deleted, because an organization needs at least one team. Create another team first.`,
+        'error',
+      )
       return false
     }
     const removed = await removeAtOnce(change, choice, items, stays)

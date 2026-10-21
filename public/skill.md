@@ -400,9 +400,12 @@ Useful field rules:
   `leave` (default) lists the open tasks they lose sight of, `keep_as_viewer`
   keeps them as Viewers, and `{"reassign_to": user id or null}` hands those
   tasks over, at most 120 in one removal and fewer when the change is too
-  large for one request; their followers hear moments later. Confirm the
-  choice with the user when it is not clear. A misspelled `on_held_tasks` is
-  refused, on MCP and on these REST routes.
+  large for one request; their followers hear moments later. Keeping or
+  reassigning is refused while more than 700 of a team's members hold open
+  tasks there, and any removal too large to check in one request is refused;
+  leave the tasks or remove some members first.
+  Confirm the choice with the user when it is not clear. A misspelled
+  `on_held_tasks` is refused, on MCP and on these REST routes.
 - **Milestones:** they live on the top-level project; naming a sub-project
   adds them there. `date` is `YYYY-MM-DD`. `get_project` lists them.
 

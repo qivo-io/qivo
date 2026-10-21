@@ -49,12 +49,50 @@ import {
 import { assertNotLastTeam, newTeamDefaults } from './orgs'
 import {
   type AccessRemoval,
+  assertRoom,
   type HeldTasks,
   narrateAccess,
   peopleOf,
   reachedProjects,
   removeAndSettle,
+  withinRoom,
 } from './projectAccess'
+
+/** The most memberships, project shares and legacy owned projects a team
+ * deletion changes (model/cascade.ts deleteTeamDeep). A deployment counts
+ * each changed row as one of Convex's 4,096 reads: a local backend read
+ * 3,062 ranges deleting a team with 3,000 memberships, and refused one with
+ * 5,000. */
+export const TEAM_DELETE_ROWS_MAX = 3000
+
+/** TEAM_DELETE_ROWS_MAX as people read it, written out because the Convex
+ * runtime has no Intl (as lib/textLimits.ts TEXT_MAX_LABEL). */
+export const TEAM_DELETE_ROWS_MAX_LABEL = '3,000'
+
+/** The refusal of a team deletion with more than TEAM_DELETE_ROWS_MAX rows. */
+export const TEAM_TOO_LARGE = `deleting a team can remove at most ${TEAM_DELETE_ROWS_MAX_LABEL} of its memberships and project shares at once, so remove some of its members or project shares first`
+
+/* Refuses a team deletion that changes more than TEAM_DELETE_ROWS_MAX rows,
+ * read before anything else so the refusal itself fits. Answers the team's
+ * legacy owned projects it read, for deleteTeamDeep. */
+async function assertTeamFits(ctx: QueryCtx, team: Doc<'teams'>): Promise<Doc<'projects'>[]> {
+  const over = TEAM_DELETE_ROWS_MAX + 1
+  const memberships = await ctx.db
+    .query('team_members')
+    .withIndex('by_team', (q) => q.eq('team_id', team.id))
+    .take(over)
+  const shares = await ctx.db
+    .query('project_team_access')
+    .withIndex('by_team', (q) => q.eq('team_id', team.id))
+    .take(over)
+  const owned = await ctx.db
+    .query('projects')
+    .withIndex('by_team', (q) => q.eq('team_id', team.id))
+    .take(over)
+  if (memberships.length + shares.length + owned.length > TEAM_DELETE_ROWS_MAX)
+    throw rule(TEAM_TOO_LARGE)
+  return owned
+}
 
 export const TEAM_RUNS_RULE = 'requires an organization admin or a leader of this team'
 
@@ -364,7 +402,8 @@ export async function setTeamLeaderCore(
 
 /* The projects whose tasks the team's grants reach, each project shared with
  * the team and, for a top-level one, its sub-projects, without archived ones
- * and each once, with the ids of the projects the team shares. */
+ * and each once, with the ids of the projects the team shares. It checks the
+ * room before each share, so call it within withinRoom. */
 async function teamReach(
   ctx: QueryCtx,
   team: Doc<'teams'>,
@@ -375,6 +414,7 @@ async function teamReach(
     .query('project_team_access')
     .withIndex('by_team', (q) => q.eq('team_id', team.id))
   for await (const share of shares) {
+    await assertRoom(ctx)
     const project = await byId(ctx, 'projects', share.project_id)
     if (project === null || project.org_id !== team.org_id) continue
     shared.add(project.id)
@@ -429,7 +469,7 @@ export async function removeTeamMemberCore(
   const member = await byId(ctx, 'profiles', a.profileId)
   const people = new Map<string, Doc<'profiles'>>()
   if (member !== null && member.org_id === team.org_id) people.set(member.id, member)
-  const reach = await teamReach(ctx, team)
+  const reach = await withinRoom(() => teamReach(ctx, team))
   const settled = await removeAndSettle(ctx, {
     me,
     people,
@@ -469,7 +509,10 @@ export async function removeTeamMemberCore(
  * people a Viewer grant on each project the team shared that showed their own
  * tasks, as removing a member does. `reassign_to` hands the tasks over by the
  * task update rules, at most REASSIGN_MAX of them (reassignTooLarge). Only an
- * organization admin deletes a team, and never the organization's last one.
+ * organization admin deletes a team, and never the organization's last one,
+ * nor one with more than TEAM_DELETE_ROWS_MAX memberships and project shares
+ * (TEAM_TOO_LARGE). A deletion that settles tasks checks the room as it
+ * deletes too, since the holders' sight shares its transaction.
  * `expected` refuses the delete over a field someone else changed since it was
  * read. The caller refuses a read-only organization (teams.deleteDeep is an
  * orgMutation). The deletion writes no activity row; each Viewer grant writes
@@ -489,13 +532,15 @@ export async function deleteTeamCore(
   if (me.org_role !== 'admin') throw rule('only organization admins can delete teams')
   await assertNotLastTeam(ctx, team)
   await assertTeamExpected(ctx, me, team, a.expected, DELETES)
-  const remove = () => deleteTeamDeep(ctx, { team, actor: me, now })
-  if (a.held === 'leave') return remove()
+  const owned = await assertTeamFits(ctx, team)
+  if (a.held === 'leave') return deleteTeamDeep(ctx, { team, actor: me, now, owned })
+  const remove = () =>
+    deleteTeamDeep(ctx, { team, actor: me, now, owned, guard: () => assertRoom(ctx) })
   // the shares go with the team, so where a Viewer grant goes is read first
-  const reach = await teamReach(ctx, team)
+  const reach = await withinRoom(() => teamReach(ctx, team))
   const settled = await removeAndSettle(ctx, {
     me,
-    people: await peopleOf(ctx, { team }),
+    people: await withinRoom(() => peopleOf(ctx, { team })),
     projects: reach.projects,
     remove,
     held: a.held,

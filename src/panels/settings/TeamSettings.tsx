@@ -290,14 +290,14 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
                     style={{ opacity: last ? 0.35 : 1, color: arm ? 'var(--danger)' : undefined }}
                     aria-label={
                       last
-                        ? "The last team can't be deleted"
+                        ? "The last team can't be deleted. Create another team first."
                         : arm
                           ? 'Click again to delete this team'
                           : 'Delete team'
                     }
                     title={
                       last
-                        ? "The last team can't be deleted"
+                        ? "The last team can't be deleted. Create another team first."
                         : arm
                           ? 'Click again to delete this team'
                           : 'Delete team'

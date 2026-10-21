@@ -242,7 +242,7 @@ describe('last team + delete authority — teams.deleteDeep (0078/0081)', () => 
     await expectRefusal(
       as(t, f.admin).mutation(api.teams.deleteDeep, { org_id: f.org.id, id: f.team.id }),
       'rule',
-      /^cannot delete the last team$/,
+      /^an organization needs at least one team; create another team before deleting this one$/,
     )
     // the team leader is not an org admin — the SQL's own sentence
     await expectRefusal(
@@ -366,7 +366,7 @@ describe('teams.deleteDeep names its cascade — the Northstar Labs dataset', ()
     await expectRefusal(
       asNora.mutation(api.teams.deleteDeep, { org_id: org.id, id: cloudLaunch }),
       'rule',
-      /^cannot delete the last team$/,
+      /^an organization needs at least one team; create another team before deleting this one$/,
     )
   })
 })

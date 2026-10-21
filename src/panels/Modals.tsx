@@ -943,28 +943,10 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
   const teamName = `the ${teamNoun(team?.name)}`
   const person = 'userId' in change ? P.user(change.userId)?.name || 'Someone' : ''
   const places = projects.flatMap((id) => P.project(id) || [])
-  // a project removal names its own project; a team change names where it reached
-  const project =
-    change.kind === 'userGrant' || change.kind === 'teamGrant' ? P.project(change.projectId) : null
   const shown = places.length > 3 ? places.slice(0, 2) : places
   const more = places.length - shown.length
-  const seen = project
-    ? project.type === 'meta'
-      ? 'the whole project'
-      : 'the whole sub-project'
-    : andList(
-        places.map((p) => P.projectLabel(p)),
-        (n) => `${n} other projects`,
-      )
-  const inIt = places.length > 1 ? 'them' : 'it'
   const deleting = change.kind === 'deleteTeam'
-  // a deleted team's people each keep sight of the projects of their own tasks
-  const theyCanSee =
-    deleting && places.length > 1 ? 'can each see the projects that hold them' : `can see ${seen}`
-  const keepText =
-    names.length === 1
-      ? `${names[0].split(' ')[0]} keeps ${theTasks} and can see ${seen}, but can't change anything in ${inIt}, including ${these}.`
-      : `They keep their tasks and ${theyCanSee}, but can't change anything in ${inIt}, including ${these}.`
+  const keepText = P.keepText(change, { people, items, projects })
   const title =
     change.kind === 'userGrant'
       ? `Remove ${person}?`

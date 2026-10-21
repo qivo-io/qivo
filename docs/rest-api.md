@@ -603,8 +603,9 @@ what happens to them:
 - `"leave"` (the default, also for an empty body) removes the access and
   lists those tasks as `stranded`. They keep their assignee and reviewer.
 - `"keep_as_viewer"` gives each of those people a Viewer grant on the
-  project, so they keep the tasks and can read the project but not change
-  it. Removing a person's grant that is already Viewer with this choice is
+  project, so they keep the tasks and can read the project. They can change
+  only what another grant of their own still allows, such as a sub-project
+  where they have User access. Removing a person's grant that is already Viewer with this choice is
   refused, because it would change nothing.
 - `{"reassign_to": "<user uuid>"}` hands every one of those tasks, in the role
   that person had, to that user, and `{"reassign_to": null}` leaves them
@@ -628,7 +629,16 @@ Viewers or reassign some of the tasks first` (without the Viewer choice when
 you cannot give it) and nothing changes. Keeping people as Viewers is refused
 the same way when their grants do not fit in one request, with `a removal can
 keep only as many people as Viewers as fit in one request, so remove some of
-these people first or reassign the tasks`. The answer is
+these people first or reassign the tasks`. A team's removal that keeps people
+as Viewers or reassigns their tasks is a `400` when more than 700 of its
+members hold open tasks in those projects, with
+`a removal that keeps people as Viewers or reassigns their tasks can take
+access from at most 700 people with open tasks at once, so leave the tasks
+with them, or remove some of the team's members first`. Leaving the tasks has no such number. Any removal whose
+people and tasks are too many to check in one request is a `400` with
+`a removal can check only as many people and tasks as fit in one request, so
+remove fewer people at once, such as some of a team's members, or reassign
+some of the tasks first`. Nothing changes after either refusal. The answer is
 `{"project_id", "user" | "team", "removed", "stranded", "kept_as_viewer",
 "reassigned"}`, where `stranded` and `reassigned` list `{"id", "key",
 "title", "user_id", "role"}`, and `kept_as_viewer` the user uuids given a
