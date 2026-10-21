@@ -209,10 +209,10 @@ const taskRow = (n, uid, project, parent) => {
 const perProject = Math.max(1, Math.ceil(count / projects.length))
 /** Task `n` of the varied workspace. Every 25th task is a parent of the
     three after it, every 7th has a due date (every other one past), every
-    31st is paused unless it is in Backlog or Done, every 13th has a
-    90-character title and every 11th has no owner. As the server keeps
-    them, parents have no remaining hours and no task in Backlog or Done is
-    paused. */
+    31st is paused unless it is in Backlog or Done, every 13th has an
+    80-character title (TITLE_MAX, the longest the server keeps) and every
+    11th has no owner. As the server keeps them, parents have no remaining
+    hours and no task in Backlog or Done is paused. */
 const variedTask = (n) => {
   const parent = n - (n % 25)
   const child = n % 25 > 0 && n % 25 <= 3
@@ -232,7 +232,7 @@ const variedTask = (n) => {
   if (n % 7 === 0) row.due_date = day((n / 7) % 2 ? -((n % 40) + 1) : (n % 40) + 1)
   if (n % 13 === 0)
     row.title =
-      `${row.title} ${'with a longer description of the work it covers '.repeat(2)}`.slice(0, 90)
+      `${row.title} ${'with a longer description of the work it covers '.repeat(2)}`.slice(0, 80)
   if (n % 11 === 0) delete row.assignee_id
   return row
 }
