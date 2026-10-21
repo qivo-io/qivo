@@ -15,7 +15,8 @@ export type OwnerField = 'assignee' | 'reviewer'
 /** The roster behind every owner control, as a filterable list: the task
  * window's eligibility rule (active, Edit or Lead on the task's project,
  * never a Viewer), with "Unassigned" or "No reviewer" first. Picking writes
- * `field` when the pick changes it, then calls `onPick`. Without `field` it
+ * `field` when the pick changes it, then calls `onPick` once the server
+ * saves it. Without `field` it
  * writes the live task's owner field, re-read at the pick: a status move
  * while the list was open can hand the task between assignee and reviewer.
  * `onClose` runs on every accepted pick, changed or not, and is handed the
@@ -63,11 +64,12 @@ export function OwnerPickList({
                 if (!task) return
                 const f = field ?? task.ownerField
                 if ((task[f] || null) === user.id) return
-                P.updateIssue(
+                void P.updateIssue(
                   issue.id,
                   f === 'reviewer' ? { reviewer: user.id } : { assignee: user.id },
-                )
-                onPick?.(user.id)
+                ).then((saved) => {
+                  if (saved) onPick?.(user.id)
+                })
               })
             }}
             // the chosen person reads like a chosen dropdown row (deviation #326)
@@ -91,7 +93,7 @@ export function OwnerPickList({
  * a face never reassigns work the portrait did not show.
  * `field` pins the edited field instead (the sync's "Needs an owner" assigns
  * a task whose reviewer owns it; "Needs a reviewer" names a reviewer on a
- * task its assignee owns). `onPick` runs after a write. `variant` picks the
+ * task its assignee owns). `onPick` runs once the write is saved. `variant` picks the
  * trigger: the board's bare portrait, a 20px portrait with a chevron (a sync
  * row), or a select-look "Assign" / "Reviewer" button (the sync's opening).
  * Without write access the portrait variant is the plain portrait and the

@@ -184,8 +184,10 @@ function StatusCtl({ it, ctx, canWrite }: { it: IssueVM; ctx: PageCtx; canWrite:
           icon: <StatusDot status={s.id} />,
         }))}
         onChange={(v) => {
-          P.updateIssue(it.id, { status: v })
-          ctx.touched(it)
+          // the row counts as touched once the server saves the move
+          void P.updateIssue(it.id, { status: v }).then((saved) => {
+            if (saved) ctx.touched(it)
+          })
           if (v === 'review' && !it.reviewer) ctx.setPrompt(it.id)
         }}
         action={{
@@ -198,8 +200,9 @@ function StatusCtl({ it, ctx, canWrite }: { it: IssueVM; ctx: PageCtx; canWrite:
             />
           ),
           onSelect: () => {
-            P.updateIssue(it.id, { paused: !it.paused })
-            ctx.touched(it)
+            void P.updateIssue(it.id, { paused: !it.paused }).then((saved) => {
+              if (saved) ctx.touched(it)
+            })
           },
         }}
       />
