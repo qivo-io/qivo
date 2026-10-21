@@ -34,7 +34,7 @@ import { announce } from './lib/announce'
 import { closedBy, dropRefusedTask } from './lib/closingMoves'
 import { floatSlot } from './lib/floatStack'
 import { isLandscapeRoadmapOpen } from './lib/landscape'
-import { createUnsentScope, UnsentScopeContext } from './lib/leaveGuard'
+import { createUnsentScope, type UnsentScope, UnsentScopeContext } from './lib/leaveGuard'
 import { afterProjectSaved } from './lib/newProjectAccess'
 import { createPopRefusal } from './lib/popRefusal'
 import {
@@ -1268,9 +1268,11 @@ function App() {
   /* ---- Team sync's hand-offs (the TeamSync props) ---- */
   // a step or a scope from the page; the address follows in place (the
   // router's sync rule), and a new scope is the viewer's saved choice
-  const placeSync = (next: SyncPlace) => {
+  const placeSync = (next: SyncPlace, closes?: UnsentScope[]) => {
     if (sync && next.scope === sync.scope && next.step === sync.step) return
-    move({ sync: next }, () => correctSync(next))
+    // a scope switch names the cards it takes away; the others keep their text
+    if (closes) closeOrAsk(closes, () => correctSync(next))
+    else move({ sync: next }, () => correctSync(next))
   }
   // …and the page's own correction of a place it cannot show, unasked
   const correctSync = (next: SyncPlace) => {

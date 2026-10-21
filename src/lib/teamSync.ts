@@ -639,3 +639,15 @@ export function mentionBody(user: Pick<UserVM, 'id' | 'name'>, text: string): st
     })
   return astToMd([{ t: 'p', children }])
 }
+
+/** The cards a scope switch takes off the page at `step`, of `cards` (each
+    card's scope by its task's uuid): every card when the new walk `next`
+    has no such step, else the cards whose task it no longer holds. */
+export function cardsClosedBy<S>(
+  cards: ReadonlyMap<S, string>,
+  step: string,
+  next: { steps: readonly string[]; rows: readonly { uuid: string }[] },
+): S[] {
+  const kept = new Set(next.steps.includes(step) ? next.rows.map((it) => it.uuid) : [])
+  return [...cards].filter(([, uuid]) => !kept.has(uuid)).map(([card]) => card)
+}

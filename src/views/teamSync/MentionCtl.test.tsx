@@ -5,6 +5,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../../components/ui/tooltip'
+import type { UnsentScope } from '../../lib/leaveGuard'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 
 /* The Team sync @ window on the real store. Its note is a comment, so the
@@ -109,14 +110,18 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-/* Opens the @ window on the task, with Aisha picked, and writes `text`. */
-async function write(text: string, onSent: () => void) {
+/* Opens the @ window on the task, with Aisha picked, and writes `text`.
+   `page` is the scope of the page the card sits on. */
+async function write(text: string, onSent: () => void, page?: UnsentScope) {
   const it = P.issues.find((i) => i.uuid === 'task-a')
   if (!it) throw new Error('missing the task')
+  const { UnsentScopeContext } = await import('../../lib/leaveGuard')
   await act(async () =>
     root.render(
       <TooltipProvider>
-        <card.MentionCtl it={it} initial="aisha" onSent={onSent} />
+        <UnsentScopeContext.Provider value={page ?? null}>
+          <card.MentionCtl it={it} initial="aisha" onSent={onSent} />
+        </UnsentScopeContext.Provider>
         <prompt.DiscardPrompt />
       </TooltipProvider>,
     ),
@@ -194,6 +199,21 @@ describe('the Team sync @ window', () => {
     await toggle()
     expect(note()?.value).toBe('')
     expect(onSent).not.toHaveBeenCalled()
+  })
+
+  it('lets a kept note go when the person discards the page around it', async () => {
+    const { createUnsentScope } = await import('../../lib/leaveGuard')
+    const page = createUnsentScope()
+    await write('Can you check the soak report?', vi.fn(), page)
+    await act(async () => send()?.click())
+    await toggle()
+    await act(async () => writes[0].reject(new ConvexError({ code: 'rule', message: CAP })))
+    expect(page.held()).toEqual(['note'])
+    // Discard on a question about the page, while the card stays on it
+    await act(async () => page.discard())
+    expect(safety.isUpdateBlocked()).toBe(false)
+    await toggle()
+    expect(note()?.value).toBe('')
   })
 
   it('shows the note being sent when the window opens again, and closes once it is saved', async () => {

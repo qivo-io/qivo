@@ -70,6 +70,24 @@ describe('unsent scopes', () => {
     again()
   })
 
+  it('runs onDiscard for the leases a Discard throws away, also from the window around', () => {
+    const page = createUnsentScope()
+    const card = createUnsentScope(page)
+    const other = createUnsentScope(page)
+    const cleared: string[] = []
+    const note = card.hold('note', () => cleared.push('note'))
+    const title = other.hold('title', () => cleared.push('title'))
+    card.discard()
+    expect(cleared).toEqual(['note'])
+    page.discard()
+    expect(cleared).toEqual(['note', 'note', 'title'])
+    note()
+    title()
+    // a scope without leases has nothing to throw away
+    page.discard()
+    expect(cleared).toHaveLength(3)
+  })
+
   it('ends a discard after DISCARD_MS', () => {
     vi.useFakeTimers()
     try {

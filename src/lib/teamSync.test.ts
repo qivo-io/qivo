@@ -12,6 +12,7 @@ import {
   type BlockerIssue,
   bannerVerdict,
   blockersOf,
+  cardsClosedBy,
   dayLabel,
   doneSince,
   loadFigure,
@@ -161,6 +162,31 @@ describe('sync scope', () => {
       expect(ids(scopeProjectIds(s, world))).toEqual(['S1', 'S3'])
     }
     expect(resolveSyncScope({ kind: 'team', id: 'T1' }, world)).toEqual({ kind: 'team', id: 'T1' })
+  })
+})
+
+describe('cardsClosedBy', () => {
+  const cards = new Map([
+    ['card a', 'task-a'],
+    ['card b', 'task-b'],
+  ])
+  const walk = (steps: string[], ...tasks: string[]) => ({
+    steps,
+    rows: tasks.map((uuid) => ({ uuid })),
+  })
+
+  it('keeps the cards whose task the new scope still walks on the same step', () => {
+    expect(cardsClosedBy(cards, 'aisha', walk(['team', 'aisha'], 'task-a', 'task-c'))).toEqual([
+      'card b',
+    ])
+    expect(cardsClosedBy(cards, 'aisha', walk(['team', 'aisha'], 'task-a', 'task-b'))).toEqual([])
+  })
+
+  it('closes every card when the new scope does not walk the step', () => {
+    expect(cardsClosedBy(cards, 'aisha', walk(['team', 'emil'], 'task-a', 'task-b'))).toEqual([
+      'card a',
+      'card b',
+    ])
   })
 })
 
