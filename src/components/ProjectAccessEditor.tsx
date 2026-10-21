@@ -81,6 +81,8 @@ export function ProjectAccessEditor({
           {teamIds.map((teamId) => {
             const team = P.teamById(teamId)
             const name = team ? P.teamLabel(team) : 'Unavailable team'
+            // a fallback label already ends in "team"
+            const named = team?.name.trim() ? `${name} team` : name
             return (
               <div
                 key={teamId}
@@ -104,8 +106,8 @@ export function ProjectAccessEditor({
                   variant="ghost"
                   size="icon"
                   className="h-control-sm w-control-sm shrink-0"
-                  aria-label={`Remove ${name} team access`}
-                  title={`Remove ${name} team access`}
+                  aria-label={`Remove ${named} access`}
+                  title={`Remove ${named} access`}
                   disabled={!canManageTeams}
                   onClick={() => onTeamChange(teamId, null)}
                 >
