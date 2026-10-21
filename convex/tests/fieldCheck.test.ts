@@ -442,7 +442,7 @@ describe('who changed it', () => {
 })
 
 describe('labels on a task', () => {
-  it('sets a label on once however often on:true is sent, and flips without on', async () => {
+  it('sets a label on once however often on:true is sent, and off with on:false', async () => {
     const fx = await setup()
     const row = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
     const label = uuid()
@@ -452,12 +452,12 @@ describe('labels on a task', () => {
       name: 'Urgent',
       color: '#d04040',
     })
-    const toggle = (on?: boolean) =>
+    const toggle = (on: boolean) =>
       as(fx.t, fx.user).mutation(api.labels.toggle, {
         org_id: fx.org.id,
         issue_id: row.id,
         label_id: label,
-        ...(on === undefined ? {} : { on }),
+        on,
       })
     const pairs = () =>
       fx.t.run((ctx) =>
@@ -472,7 +472,7 @@ describe('labels on a task', () => {
     await toggle(true)
     expect(await pairs()).toHaveLength(1)
     expect((await taskRows()).map((e) => e.verb)).toEqual(['labeled'])
-    await toggle()
+    await toggle(false)
     expect(await pairs()).toHaveLength(0)
     expect((await taskRows()).map((e) => e.verb)).toEqual(['labeled', 'removed a label from'])
   })

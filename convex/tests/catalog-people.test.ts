@@ -1251,6 +1251,7 @@ describe('teams.deleteDeep', () => {
       org_id: f.org.id,
       issue_id: issue.id,
       label_id: labelId,
+      on: true,
     })
     await as(t, f.admin).mutation(api.projects.addMilestone, {
       org_id: f.org.id,

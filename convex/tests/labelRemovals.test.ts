@@ -197,6 +197,7 @@ describe('a label on more tasks than one delete removes', () => {
         org_id: f.org.id,
         issue_id: tasks[0],
         label_id: bug.id,
+        on: true,
       }),
       'rule',
       'label and task must belong to the same organization',
