@@ -100,7 +100,7 @@ import {
   projectLevelsForOrg,
 } from '../lib/access'
 import { deletionBegun, orgWriteBlock } from '../lib/billingAccess'
-import { byId, LARGE_ROWS_PER_READ } from '../lib/db'
+import { byId, LARGE_ROWS_PER_READ, usedMoreThan } from '../lib/db'
 import { demoForOrg, isDemoDeployment, uncountedWriter } from '../lib/demo'
 import {
   type AccessLevel,
@@ -484,7 +484,7 @@ export async function storeRow(
 
 /** One kind of row that travels with a task or a project, read through the
  * same index as the hard deletes (model/cascade.ts), so rows with archive
- * marks and legacy rows without org_id are included. */
+ * marks are included. */
 type Relation = {
   /** Up to `n` rows from the start of the range. */
   read: (ctx: QueryCtx, ownerId: string, n: number) => Promise<LiveRow[]>
@@ -2080,14 +2080,16 @@ async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
   } else if (r.table === 'issue_subscriptions') {
     if ((await keptProfile(run, r.doc.profile_id)) !== undefined)
       await db.insert('issue_subscriptions', { ...r.doc, task_archived: undefined })
-  } else if (r.table === 'issue_attachments')
+  } else if (r.table === 'issue_attachments') {
+    // a copy stored before the project was retired leaves it behind
+    const { project_id: _retired, ...doc } = r.doc
     await db.insert('issue_attachments', {
-      ...r.doc,
+      ...doc,
       org_id,
       uploaded_by: await keptProfile(run, r.doc.uploaded_by),
       task_archived: undefined,
     })
-  else throw new Error(`A restore cannot write a ${r.table} row back here`)
+  } else throw new Error(`A restore cannot write a ${r.table} row back here`)
   await run.ctx.db.delete(row._id)
 }
 
@@ -2119,7 +2121,7 @@ const restoreLinks = (run: Run): Promise<boolean> =>
  * its reveal, so nobody sees the link before then, and a restore that fails
  * takes it back with its task (move_drain). An end in another item that is
  * ready or moving: the link moves to that item, owned by that end.
- * Otherwise it is dropped, and so is a link whose live end is an end of
+ * Otherwise it is dropped, and so is a link one of whose ends is an end of
  * LINK_MAX links already (model/links.ts linksFullAt). A link never moves to an item that restores,
  * because that item's own restore_links would hand it straight back, and
  * two items restoring together would trade their links for ever. */
@@ -2143,10 +2145,8 @@ async function placeLinkBy(
   link: Stored<'issue_links'>,
 ): Promise<void> {
   let away: { item: Item; end: string } | null = null
-  const live: string[] = []
   for (const end of [link.source_id, link.target_id]) {
     const where = await whereIsTask(read, end)
-    if (where.where === 'live') live.push(end)
     const kept =
       where.where === 'live'
         ? sameReference(where.issue, run.item)
@@ -2170,11 +2170,12 @@ async function placeLinkBy(
     .query('issue_links')
     .withIndex('by_pair', (q) => q.eq('pair_key', link.pair_key))
     .first()
-  // a live task that reached LINK_MAX while this one was deleted takes no
-  // more (lib/taskLimits.ts), so the link stays out, as one to a task
-  // deleted for good does
+  // an end that reached LINK_MAX while this link was in Deleted items takes
+  // no more (lib/taskLimits.ts), so the link stays out, as one to a task
+  // deleted for good does. An end of this item counts the links written
+  // back before this one.
   let full = false
-  for (const end of live) full ||= await linksFullAt(read, end)
+  for (const end of [link.source_id, link.target_id]) full ||= await linksFullAt(read, end)
   if (taken === null && !full)
     await uncountedWriter(run.ctx.db).insert('issue_links', {
       ...link,
@@ -3730,9 +3731,12 @@ async function liveProject(ctx: QueryCtx, id: string): Promise<Doc<'projects'>> 
 }
 
 /** How many children of a deleted task one step of detachArchivedChildren
- * detaches. A child is a task row, up to about 120 KB within TEXT_MAX, so a
- * step reads at most about 12 MB. Tests lower it. */
-export const ARCHIVED_DETACH = { page: 100 }
+ * detaches, and the share of any of Convex's limits for one transaction it
+ * may use before it leaves the rest to the next step. A child is a task
+ * row, up to about 120 KB within TEXT_MAX, and each detach also notifies
+ * and sends task.updated, whose costs have no fixed bound. Tests lower
+ * them. */
+export const ARCHIVED_DETACH = { page: 100, room: 0.5 }
 
 const detachArchivedRef = makeFunctionReference<
   'mutation',
@@ -3765,7 +3769,14 @@ export async function detachArchivedChildren(
     .take(ARCHIVED_DETACH.page)
   const actor = (await byId(ctx, 'profiles', a.actor_id)) ?? undefined
   const preload: NotifyPreload = { ...newNotifyPreload(), deferFollowers: true }
-  for (const kid of kids) await detachChild(ctx, kid, actor, a.now, preload)
+  for (const [i, kid] of kids.entries()) {
+    // a detached row leaves the range, so the next step needs no cursor
+    if (i > 0 && (await usedMoreThan(ctx, ARCHIVED_DETACH.room))) {
+      await ctx.scheduler.runAfter(0, detachArchivedRef, a)
+      return
+    }
+    await detachChild(ctx, kid, actor, a.now, preload)
+  }
   if (kids.length === ARCHIVED_DETACH.page) await ctx.scheduler.runAfter(0, detachArchivedRef, a)
 }
 

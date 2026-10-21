@@ -388,6 +388,7 @@ export const recipes: Recipe[] = [
     what: 'a restored task',
     pause: 'P',
     act: (P) => P.unarchiveIssue('task-z', 'Old task', 'work'),
+    answers: { 'issues:unarchive': () => ({ issue: { id: 'task-z' }, left_parent: false }) },
   },
   {
     mutation: 'issues:addLink',

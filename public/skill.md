@@ -107,8 +107,8 @@ Use the current task names; former endpoint and tool names are not aliases.
 Refresh cached MCP discovery or reconnect if the client still has an older
 tool catalogue. Use deletion only when the user asks to delete a task;
 archiving retains the task and its history. A delete moves the task, with its
-comments, files, links and labels, to Deleted items, and its subtasks stay as
-top-level tasks. Agents cannot restore it. A person can restore it in the
+comments, files, links and labels, to Deleted items, and its subtasks become
+top-level tasks, archived ones a moment after the delete. Agents cannot restore it. A person can restore it in the
 app within 30 days, after which it is deleted for good with its history.
 Deleted items names
 the credential that deleted the task.

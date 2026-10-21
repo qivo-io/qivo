@@ -237,8 +237,8 @@ describe('a group’s progress is the app task window’s Progress', () => {
   })
 
   /* Valid writes keep one level of subtasks (assertParentChain). The walk
-   * still stops on stored data that breaks that, a cycle or a chain past 20
-   * tasks, and says the progress is partial. */
+   * still stops on a cycle, which only broken data can hold, and says the
+   * progress is partial. */
   it('is partial on a parent cycle', async () => {
     const fx = await setup()
     // two tasks parented to each other, so each is the other's group

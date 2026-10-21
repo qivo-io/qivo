@@ -67,7 +67,7 @@ Website, docs and app changes all ship the same way.
    change there and publish the draft. **Production release** deploys it in
    about two minutes. Check `https://qivo.io/version.json` for the commit.
 6. If the release adds a one-time backfill or migration, such as
-   `internal/teamLegacyFields`, run it on each hosted deployment once
+   `internal/retiredFields`, run it on each hosted deployment once
    that deployment serves the release, with the owner's approval for each
    run, as the backfill's header says. Deployments never run it on their own.
 
@@ -355,6 +355,13 @@ development backend that never ran the backfill, or data from a backup taken
 before it ran. Deploy an earlier commit that still has the backfill, such as
 v0.1.21 (`ab0a802`), run `internal/orgCountersBackfill:start`, wait until its
 `remaining` query reports 0 on every page, and then deploy the later commit.
+
+Teams no longer get `stale_days` or `archive_days`, and
+`internal/retiredFields:clear` removes them, with the teams' retired
+`max_attachment_mb` and the attachments' retired `project_id`. Every commit
+before the one that added `internal/retiredFields` requires both team
+fields, so once a team is created or the clear runs, a rollback to such a
+commit fails to deploy. Roll forward instead.
 
 A frontend rollback changes the served application build. It does not roll
 back Convex code, schema changes, stored files or customer writes. A database

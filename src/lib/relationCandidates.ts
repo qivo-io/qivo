@@ -9,8 +9,10 @@
    A task has one level of subtasks, at most SUBTASK_MAX active ones
    (convex/lib/taskLimits.ts), so neither picker offers a link the server
    would refuse: no subtask as a parent, no task with subtasks as a subtask
-   and no parent that is full. Archived subtasks count for neither side, as
-   on the server. The view counts the active subtasks it shows, so a task
+   and no parent that is full. Archived subtasks do not count toward a full
+   parent, as on the server, though the server still refuses a parent for a
+   task whose only subtasks are archived. The view counts the active
+   subtasks it shows, so a task
    whose other active subtasks are hidden from the reader, or sit in an
    archived sub-project, can still be refused, with the server's sentence. */
 

@@ -258,6 +258,9 @@ const issueSubscriptionsTable = defineTable({
 // (model/billing.ts storagePage), so a move writes no attachment row.
 const issueAttachmentsTable = defineTable({
   org_id: v.string(),
+  // Retired: nothing writes or reads it. internal/retiredFields clears it,
+  // here and in deleted_rows; drop it once it has run on every deployment.
+  project_id: v.optional(v.string()),
   id: v.string(),
   issue_id: v.string(),
   name: v.string(),
@@ -740,7 +743,7 @@ export default defineSchema({
     // Legacy icon and its color, as on projects.
     icon: v.optional(v.string()),
     icon_color: v.optional(v.string()),
-    // Retired columns nothing reads or writes. internal/teamLegacyFields
+    // Retired columns nothing reads or writes. internal/retiredFields
     // clears them; drop them here once it has run on every deployment.
     max_attachment_mb: v.optional(v.number()),
     stale_days: v.optional(v.number()),

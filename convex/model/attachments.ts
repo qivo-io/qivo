@@ -147,9 +147,15 @@ export function cleanAttachmentName(raw: string): string {
   return name
 }
 
-/* System fields and the organization stay internal; optional columns come
- * back ABSENT. */
-const pub = ({ _id, _creationTime, org_id: _orgId, ...row }: Doc<'issue_attachments'>) => row
+/* System fields, the organization and the retired project stay internal;
+ * optional columns come back ABSENT. */
+const pub = ({
+  _id,
+  _creationTime,
+  org_id: _orgId,
+  project_id: _retired,
+  ...row
+}: Doc<'issue_attachments'>) => row
 
 export type AttachmentRow = ReturnType<typeof pub>
 

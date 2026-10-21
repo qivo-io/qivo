@@ -1312,6 +1312,9 @@ export type MachineUpdate = MachineNarration & {
   archive?: boolean
   appGrammar?: boolean
   later?: LaterPeople
+  /** The update names the task's current parent, so a restore under it
+   * that is full is refused with PARENT_FULL rather than leaving it. */
+  keepParent?: boolean
 }
 export type MachineMove = MachineNarration & { later?: LaterPeople; laterParent?: string | null }
 
@@ -1596,6 +1599,7 @@ export async function updateIssueCore(
   // task top-level, so the guards below check it without that parent
   const leavesParent =
     !('parent_id' in patch) && toggle === 'restored' && (await restoreLeavesParent(ctx, issue))
+  if (leavesParent && a.machine?.keepParent === true) throw rule(PARENT_FULL)
   const nextParent =
     'parent_id' in patch
       ? (patch.parent_id ?? undefined)
@@ -1838,7 +1842,7 @@ export async function updateIssueCore(
   await logActivity(ctx, event)
   // a restore that left a full parent gets the row a detach writes
   if (toggle === 'restored' && !('parent_id' in patch) && issue.parent_id !== after.parent_id) {
-    await logLeftParent(ctx, { me, before: issue, after, now })
+    await logLeftParent(ctx, { me, before: issue, after, now, provenance: a.machine?.provenance })
   }
   return after
 }
@@ -1983,9 +1987,8 @@ async function subtreeToCarry(
  * status stamp clears (ctx.db.patch unsets it), and a review hand-off
  * (review_at) or a Done time (done_at) the task carries restarts at the
  * move. A moved Done task therefore waits the full auto-archive threshold
- * again (jobs.ts). A task that lands as a group keeps its hand-off for the
- * write that clears it with its hours (clearParentRemaining), so the move
- * does not restart it first. The remaining-hours measurement
+ * again (jobs.ts). A task that lands as a group loses its hand-off with its
+ * hours in the move's own patch (moveIssueCore). The remaining-hours measurement
  * (remaining_set_at) stays on purpose: it is the planning anchor
  * (lib/delay.ts, lib/workload.ts), so restarting it would move the task's
  * forecast and load with no change in the work. The accepted cost is that
@@ -1993,10 +1996,10 @@ async function subtreeToCarry(
  * project, which can be the time it entered review there. created_at and
  * archived_at stay too: the archive time is the archive state, whose change
  * the history and inbox narrate. */
-function movedStamps(task: Doc<'issues'>, now: string, group = false) {
+function movedStamps(task: Doc<'issues'>, now: string) {
   return {
     status_at: undefined,
-    ...(task.review_at !== undefined && !group ? { review_at: now } : {}),
+    ...(task.review_at !== undefined ? { review_at: now } : {}),
     ...(task.done_at !== undefined ? { done_at: now } : {}),
   }
 }
@@ -2163,7 +2166,9 @@ export async function moveIssueCore(
   await logActivity(ctx, event)
   // leaving the parent gets the row a detach writes, as a machine update's
   // later parent step does
-  if (detach) await logLeftParent(ctx, { me, before, after, now })
+  if (detach) {
+    await logLeftParent(ctx, { me, before, after, now, provenance: a.machine?.provenance })
+  }
   return after
 }
 
@@ -2384,10 +2389,17 @@ async function restoreLeavesParent(ctx: QueryCtx, issue: Doc<'issues'>): Promise
 }
 
 /* The activity row of a task that left its parent `before.parent_id` in
- * another change, such as a move or a restore, as a detach writes it. */
+ * another change, such as a move or a restore, as a detach writes it,
+ * signed with `provenance` for a machine caller. */
 async function logLeftParent(
   ctx: MutationCtx,
-  a: { me: Doc<'profiles'>; before: Doc<'issues'>; after: Doc<'issues'>; now: string },
+  a: {
+    me: Doc<'profiles'>
+    before: Doc<'issues'>
+    after: Doc<'issues'>
+    now: string
+    provenance?: string
+  },
 ): Promise<void> {
   const { me, before, after } = a
   const detached = await browserVerbDetail(ctx, { before, after, patch: { parent_id: null } })
@@ -2398,7 +2410,8 @@ async function logLeftParent(
     target_type: 'issue',
     target_id: after.id,
     label: after.title,
-    detail: detached.detail,
+    detail:
+      a.provenance === undefined ? detached.detail : machineDetail(detached.detail, a.provenance),
     project_id: after.project_id,
     ts: a.now,
     named_task_nums: detached.named,

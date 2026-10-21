@@ -3,8 +3,10 @@
  *
  *   1. One level of subtasks: no subtask as a parent, no parent for a task
  *      with subtasks, archived ones included, and at most SUBTASK_MAX
- *      subtasks. Shapes stored before the rules stay readable and can be
- *      taken apart.
+ *      active subtasks. A restore under a full parent brings the task back
+ *      as a top-level task, and a move carries at most MOVE_SUBTREE_MAX
+ *      subtasks. At most ATTACHMENT_MAX attachments, LINK_MAX links and
+ *      LABEL_MAX labels per task, on every write path.
  *   2. At most FOLLOWER_MAX followers: a follow by hand is refused there, a
  *      comment or a mention adds no follower but still goes through, and a
  *      new assignee or reviewer still follows.
@@ -376,6 +378,38 @@ describe('restoring a subtask under a parent with the most active subtasks', () 
       archived: false,
     })
     expect((await row(fx.t, mcp.old.id)).parent_id).toBeUndefined()
+  })
+
+  it('signs the detach row of a machine restore, and refuses one that names the full parent', async () => {
+    const fx = await setup()
+    const { old } = await fullParent(fx)
+    await fx.t.mutation(internal.machine.rest.updateIssue, {
+      callerId: fx.agent.id,
+      access: 'write',
+      keyName: 'limits',
+      ref: key(old),
+      body: JSON.stringify({ archived: false }),
+    })
+    const rows = await fx.t.run((ctx) =>
+      ctx.db
+        .query('activity_events')
+        .filter((q) => q.eq(q.field('target_id'), old.id))
+        .collect(),
+    )
+    expect(rows.find((e) => e.verb === 'detached')?.detail).toMatch(/via the REST API \(limits\)$/)
+    const named = await fullParent(fx)
+    await refused(
+      fx.t.mutation(internal.machine.mcp.updateIssue, {
+        callerId: fx.agent.id,
+        access: 'write',
+        ref: key(named.old),
+        archived: false,
+        parent: key(named.parent),
+      }),
+      'rule',
+      PARENT_FULL,
+    )
+    expect(await row(fx.t, named.old.id)).toEqual(named.old)
   })
 
   it('checks the people of a machine restore without the parent it leaves', async () => {

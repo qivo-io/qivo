@@ -1578,10 +1578,10 @@ function groupCounter(
  * groupCounter counts. It holds the calculated plan weeks (the app's
  * groupSpan) and how many of its leaves are done (the app's groupProgress).
  * `partial` is the app's "Completion unknown". It is set when a subtask that
- * makes a task a group does not count for the reader (hidden from it), when
- * the walk meets a task twice (a cycle), or when it stops at 20 levels in a
- * chain stored before the one level of subtasks. A subtask in an archived project under a task in
- * an active one makes it no group, so it leaves nothing unknown. */
+ * makes a task a group does not count for the reader (hidden from it), or
+ * when the walk meets a task twice (a cycle). A subtask in an archived
+ * project under a task in an active one makes it no group, so it leaves
+ * nothing unknown. */
 export type GroupFacts = {
   start_week: string | null
   end_week: string | null
@@ -2171,7 +2171,12 @@ export async function applyTaskUpdate(
       issue: task,
       patch: a.patch,
       now,
-      machine: { provenance, archive: a.archive },
+      machine: {
+        provenance,
+        archive: a.archive,
+        // naming the current parent asks to keep it (model/issues.ts)
+        keepParent: a.parent !== undefined && a.parent !== null && a.parent === task.parent_id,
+      },
     })
   }
   // removals first, so a task at LABEL_MAX can swap labels in one update

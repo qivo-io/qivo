@@ -1174,8 +1174,8 @@ cannot move to another top-level project (otherwise `400`, `this task has
 more than 200 subtasks, archived ones included, and a move to another
 project carries them all; restore some archived subtasks and remove them
 from this task first, or move it within its project`). A change
-whose task and subtasks are too large for one request, which only very long
-descriptions on many subtasks can cause, is a `400` with `this task and its
+whose task and subtasks are too large for one request, such as when many
+subtasks hold very long descriptions, is a `400` with `this task and its
 subtasks are too large to change in one request; detach some subtasks
 first`. Each moved subtask
 sends `task.updated`, but only the task itself gets an activity row and an
@@ -1333,7 +1333,7 @@ moved to Deleted items refuses the PATCH for everyone, admins included, with
 `a subtask of this task is being moved to Deleted items; try again when that
 finishes` or `a parent of this task is being moved to Deleted items; try
 again when that finishes`. Restoring a subtask whose parent already has 100
-active subtasks brings it back as a top-level task: the answer's `parent`
+active subtasks brings it back as a top-level task: the answer's `parent_id`
 is `null`, and its followers are told it left its parent. Archived tasks
 disappear from the default list
 (`?archived=true&project=<ref>` finds them, see [Archived tasks](#archived-tasks)),
@@ -1474,7 +1474,8 @@ the newest one makes the one before it the newest.
 `DELETE` moves the task to **Deleted items**, as deleting it in the app does,
 and returns `{ "deleted": true, "id": "…", "key": "QN-3" }`. Its comments,
 attachments, links, labels and follows go with it, its inbox messages are
-deleted, and its subtasks stay as top-level tasks. From then on the task
+deleted, and its active subtasks become top-level tasks at once and its
+archived ones a moment later. From then on the task
 answers `404` like an unknown one, while its number, uuid and files stay
 reserved. A person can restore it in the app under **Settings → Projects →
 Deleted items**, and the API has no restore. A nightly job deletes it for
