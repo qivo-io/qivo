@@ -602,11 +602,16 @@ async function runVariedSample(origin, tasks, metrics) {
   // A drag from the first lane's To Do into its In Progress, the way
   // board-cards-smoke.mjs drives one, with only the dragover timed.
   const lane = page.locator('.board-lane').first()
-  const source = lane.locator('[data-board-cell][data-status="todo"] [data-card][draggable="true"]')
+  // the dragged task's own row, which the drop moves to In Progress
+  const id = await lane
+    .locator('[data-board-cell][data-status="todo"] [data-card][draggable="true"]')
+    .first()
+    .getAttribute('data-card')
+  const source = page.locator(`[data-card="${id}"]`)
   const target = lane.locator('[data-board-cell][data-status="progress"]')
-  await source.first().scrollIntoViewIfNeeded()
+  await source.scrollIntoViewIfNeeded()
   const transfer = await page.evaluateHandle(() => new DataTransfer())
-  await source.first().dispatchEvent('dragstart', { dataTransfer: transfer })
+  await source.dispatchEvent('dragstart', { dataTransfer: transfer })
   await settle()
   phase('variedBoardDragOver')
   metrics.variedBoardDragOver.push(
@@ -624,7 +629,7 @@ async function runVariedSample(origin, tasks, metrics) {
   await page.waitForFunction((previous) => window.__perf.writes > previous, writes, {
     timeout: timeout * 10,
   })
-  await source.first().dispatchEvent('dragend', { dataTransfer: transfer })
+  await source.dispatchEvent('dragend', { dataTransfer: transfer })
   await transfer.dispose()
   assert.deepEqual(errors, [], `Browser errors at ${tasks} varied tasks`)
   await context.close()

@@ -52,24 +52,28 @@ export function registerTaskMount(mount: (mark: TaskFocusMark) => void) {
 const usable = (element: HTMLElement | null | undefined): element is HTMLElement =>
   !!element?.isConnected && !element.closest('[inert]')
 
-/** Focuses the control `mark` names, wherever its task's card is now, or
-    the nearest thing to it: another control of that row, then the card now
-    at the remembered place in the remembered cell. Scrolls it into view only
-    when `scroll` is set. Returns whether focus moved. */
+/** Focuses the control `mark` names, wherever its task is now, or the
+    nearest thing to it: another control of the task's row, then, only when
+    the task is no longer shown, the card now at the remembered place in the
+    remembered cell. Scrolls it into view only when `scroll` is set. Returns
+    whether focus moved. */
 export function restoreTaskFocus(mark: TaskFocusMark, { scroll }: { scroll: boolean }) {
   for (const mount of mounts) mount(mark)
-  // Attribute values are compared, not put in selectors, so any id works.
-  const attribute = mark.row === 'card' ? 'data-card' : 'data-parent-heading'
-  const rows = [...document.querySelectorAll<HTMLElement>(`[${attribute}]`)].filter(
-    (row) => row.getAttribute(attribute) === mark.taskId && usable(row),
+  // Both kinds of row: a parent whose last subtask left becomes a card, and
+  // a card that gains a subtask becomes a parent heading. Attribute values
+  // are compared, not put in selectors, so any id works.
+  const rows = [...document.querySelectorAll<HTMLElement>(ROWS)].filter(
+    (row) => (row.dataset.card ?? row.dataset.parentHeading) === mark.taskId && usable(row),
   )
-  const cellOf = (row: HTMLElement) => row.closest<HTMLElement>('[data-board-cell]')
-  // A parent heading repeats in every cell that holds one of its children:
-  // prefer the remembered cell, then the remembered lane.
+  const kind = (row: HTMLElement) => (row.dataset.card !== undefined ? 'card' : 'parent')
+  // Prefer the remembered kind of row, then, because a parent heading repeats
+  // in every cell that holds one of its children, the remembered cell and
+  // then the remembered lane.
   const rank = (row: HTMLElement) => {
-    const cell = cellOf(row)
-    if (cell?.dataset.boardCell !== mark.cell) return 2
-    return cell?.dataset.status === mark.status ? 0 : 1
+    const cell = row.closest<HTMLElement>('[data-board-cell]')
+    const place =
+      cell?.dataset.boardCell !== mark.cell ? 2 : cell?.dataset.status === mark.status ? 0 : 1
+    return (kind(row) === mark.row ? 0 : 3) + place
   }
   rows.sort((a, b) => rank(a) - rank(b))
   /** The row's control `key`, or its first control. */
@@ -79,7 +83,7 @@ export function restoreTaskFocus(mark: TaskFocusMark, { scroll }: { scroll: bool
     )
   let target = mark.control ? rows.map((row) => keyed(row, mark.control)).find(usable) : undefined
   target ??= rows.map((row) => keyed(row)).find(usable)
-  if (!target && mark.cell !== null && mark.status !== null) {
+  if (!target && !rows.length && mark.cell !== null && mark.status !== null) {
     const cell = [...document.querySelectorAll<HTMLElement>('[data-board-cell]')].find(
       (element) =>
         element.dataset.boardCell === mark.cell && element.dataset.status === mark.status,
