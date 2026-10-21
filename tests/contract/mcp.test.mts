@@ -21,23 +21,13 @@
 
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, test } from 'vitest'
 import { SHA_TOOLS_LEGACY, SHA_TOOLS_MODERN } from './pins.mts'
+import { readStash } from './stash.mts'
 
-type Stash = {
-  siteUrl: string
-  orgId: string
-  qva: string
-  qvt: string
-  qvaId: string
-  qvtId: string
-}
-const stash: Stash = JSON.parse(
-  readFileSync(new URL('./.credentials.json', import.meta.url), 'utf8'),
-)
+const stash = readStash()
 // global.setup.mts checked this site against the deploy key
 const BASE = stash.siteUrl
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')

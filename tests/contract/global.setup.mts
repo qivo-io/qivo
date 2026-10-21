@@ -30,31 +30,38 @@
  *      deployment has an Atlas. Secrets are generated locally; only the
  *      sha256 crosses the wire (machine/testing.ts, the same hash contract
  *      machine/auth.ts looks up).
- *   3. Stash tests/contract/.credentials.json (gitignored) — the tests read
- *      it with fs; no vitest `provide` plumbing (version-proof).
+ *   3. Stash them for the suites in the private fixture directory, outside
+ *      the checkout (contract/stash.mts). Setup refuses to start without
+ *      that directory. Before the reset it revokes the credentials an
+ *      interrupted pass left in its stash, or in the stash older passes
+ *      kept inside the checkout, and removes that file.
  *   4. Teardown: delete both minted credentials via
  *      machine/testing:deleteCredential — a live qva_ key on a shared
- *      deployment is a standing capability. Tolerates already-deleted rows:
+ *      deployment is a standing capability — then remove the stash. A
+ *      failed delete keeps the stash, so the next pass revokes the rest. Tolerates already-deleted rows:
  *      mcp.test.mts's finale deletes the qvt token mid-suite to capture the
- *      revoked-token 401 live. */
+ *      revoked-token 401 live. A setup that fails after minting runs the
+ *      same cleanup before it rethrows, because vitest runs no teardown
+ *      then. A teardown failure sets a failing exit code, which vitest
+ *      would otherwise only log. */
 import { execFileSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 import { marketingId } from '../../convex/internal/marketingDemoData'
-import { contractSiteUrl } from './site.mts'
+import { contractDeployment, contractSiteUrl } from './site.mts'
+import { ROOT, type Stash, stashPath, writeStash } from './stash.mts'
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
-const STASH = resolve(ROOT, 'tests', 'contract', '.credentials.json')
 const NORTHSTAR = 'northstar-labs'
 const ANCHOR = process.env.CONTRACT_ANCHOR ?? '2026-09-07'
 
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex')
 
+type Run = (fn: string, args?: unknown) => Record<string, unknown>
+
 /* `npx convex run` prints the function's return value as (pretty) JSON on
  * stdout, sometimes after CLI chatter — parse the outermost object. */
-function convexRun(fn: string, args?: unknown): Record<string, unknown> {
+const convexRun: Run = (fn, args) => {
   const argv = ['convex', 'run', fn]
   if (args !== undefined) argv.push(JSON.stringify(args))
   const out = execFileSync('npx', argv, {
@@ -69,16 +76,21 @@ function convexRun(fn: string, args?: unknown): Record<string, unknown> {
 }
 
 /** The .env.local text, or undefined when the checkout has none. */
-function envLocal(): string | undefined {
-  const file = resolve(ROOT, '.env.local')
+function envLocal(root: string): string | undefined {
+  const file = join(root, '.env.local')
   return existsSync(file) ? readFileSync(file, 'utf8') : undefined
 }
 
-type Minted = { id: string; secret: string }
+type Kind = 'agent_key' | 'mcp_token'
 
-function mint(kind: 'agent_key' | 'mcp_token', who: Record<string, string>, name: string): Minted {
+function mint(
+  run: Run,
+  kind: Kind,
+  who: Record<string, string>,
+  name: string,
+): { id: string; secret: string } {
   const secret = (kind === 'agent_key' ? 'qva_' : 'qvt_') + randomBytes(24).toString('hex')
-  const out = convexRun('machine/testing:mintCredential', {
+  const out = run('machine/testing:mintCredential', {
     ...who,
     kind,
     key_prefix: secret.slice(0, 11),
@@ -90,44 +102,133 @@ function mint(kind: 'agent_key' | 'mcp_token', who: Record<string, string>, name
   return { id: out.id as string, secret }
 }
 
-export default async function setup(): Promise<() => void> {
-  const siteUrl = contractSiteUrl(process.env, envLocal())
+/** Whether `site` is a convex.site origin of `deployment`, in any region. */
+function siteOf(site: unknown, deployment: string): boolean {
+  return (
+    typeof site === 'string' &&
+    URL.canParse(site) &&
+    new URL(site).hostname.split('.')[0] === deployment
+  )
+}
+
+/**
+ * Revokes the credentials named by a stash an interrupted pass left at
+ * `path`, when they belong to this pass's deployment, then removes the file.
+ * A stash that cannot be read or names another deployment is removed
+ * unrevoked, because this key cannot reach that deployment.
+ */
+function revokeLeftover(path: string, deployment: string, run: Run): void {
+  if (!existsSync(path)) return
+  let left: Partial<Stash> = {}
+  try {
+    left = JSON.parse(readFileSync(path, 'utf8'))
+  } catch {}
+  if (siteOf(left.siteUrl, deployment)) {
+    const ids = [
+      [left.qvaId, 'agent_key'],
+      [left.qvtId, 'mcp_token'],
+    ] as const
+    for (const [id, kind] of ids)
+      if (typeof id === 'string') run('machine/testing:deleteCredential', { id, kind })
+  } else {
+    console.log('[contract] removing a stash from another deployment without revoking it')
+  }
+  rmSync(path, { force: true })
+}
+
+/**
+ * The setup with its side effects passed in, so tests can drive it without a
+ * deployment. `reset` resets Northstar Labs and `run` runs a Convex function
+ * on the deployment the key names. Returns the teardown.
+ */
+export async function contractSetup(
+  { env, run, reset }: { env: Record<string, string | undefined>; run: Run; reset: () => void },
+  root = ROOT,
+): Promise<() => void> {
+  const siteUrl = contractSiteUrl(env, envLocal(root))
+  const deployment = contractDeployment(env)
+  const stash = stashPath(env, root)
+  revokeLeftover(join(root, 'tests', 'contract', '.credentials.json'), deployment, run)
+  revokeLeftover(stash, deployment, run)
   console.log(
     `[contract] resetting Northstar Labs on ${siteUrl} (the shared development deployment the key names, where manual work in that organization is lost)`,
   )
-  // exits non-zero on any refusal (missing key, wrong deployment, bad anchor);
-  // prints paths, never secrets
-  execFileSync(
-    'node',
-    ['scripts/marketing-demo.mjs', 'reset', '--dev', '--anchor', ANCHOR, '--confirm', NORTHSTAR],
-    { cwd: ROOT, stdio: ['ignore', 'inherit', 'inherit'] },
-  )
+  reset()
   const orgId = await marketingId(NORTHSTAR, 'org')
 
-  const qvt = mint(
-    'mcp_token',
-    { profile_id: await marketingId(NORTHSTAR, 'person:nora') },
-    'contract pass token',
-  )
-  const qva = mint(
-    'agent_key',
-    { profile_id: await marketingId(NORTHSTAR, 'person:atlas') },
-    'contract pass key',
-  )
-
-  writeFileSync(
-    STASH,
-    JSON.stringify(
-      { siteUrl, orgId, qva: qva.secret, qvt: qvt.secret, qvaId: qva.id, qvtId: qvt.id },
-      null,
-      2,
-    ),
-  )
-
-  return () => {
-    // both tolerate already-deleted (the mcp finale kills the qvt mid-suite)
-    convexRun('machine/testing:deleteCredential', { id: qva.id, kind: 'agent_key' })
-    convexRun('machine/testing:deleteCredential', { id: qvt.id, kind: 'mcp_token' })
+  const minted: { id: string; kind: Kind }[] = []
+  // Every delete runs even when an earlier one fails. Both tolerate
+  // already-deleted (the mcp finale kills the qvt mid-suite). The stash goes
+  // only once both succeed, so the next pass can revoke what remains.
+  const teardown = () => {
+    const failures: unknown[] = []
+    for (const { id, kind } of minted) {
+      try {
+        run('machine/testing:deleteCredential', { id, kind })
+      } catch (error) {
+        failures.push(error)
+      }
+    }
+    if (failures.length === 0) {
+      try {
+        rmSync(stash, { force: true })
+      } catch (error) {
+        failures.push(error)
+      }
+    }
+    if (failures.length > 0) {
+      process.exitCode = 1
+      throw new AggregateError(failures, '[contract] teardown did not finish every step')
+    }
     console.log('[contract] minted credentials deleted')
   }
+
+  try {
+    const nora = await marketingId(NORTHSTAR, 'person:nora')
+    const qvt = mint(run, 'mcp_token', { profile_id: nora }, 'contract pass token')
+    minted.push({ id: qvt.id, kind: 'mcp_token' })
+    const atlas = await marketingId(NORTHSTAR, 'person:atlas')
+    const qva = mint(run, 'agent_key', { profile_id: atlas }, 'contract pass key')
+    minted.push({ id: qva.id, kind: 'agent_key' })
+    writeStash(stash, {
+      siteUrl,
+      orgId,
+      qva: qva.secret,
+      qvt: qvt.secret,
+      qvaId: qva.id,
+      qvtId: qvt.id,
+    })
+  } catch (error) {
+    // vitest runs no teardown for a failed setup
+    try {
+      teardown()
+    } catch (cleanup) {
+      throw new AggregateError([error, cleanup], '[contract] setup failed')
+    }
+    throw error
+  }
+  return teardown
+}
+
+export default function setup(): Promise<() => void> {
+  return contractSetup({
+    env: process.env,
+    run: convexRun,
+    // exits non-zero on any refusal (missing key, wrong deployment, bad
+    // anchor); prints paths, never secrets
+    reset: () =>
+      execFileSync(
+        'node',
+        [
+          'scripts/marketing-demo.mjs',
+          'reset',
+          '--dev',
+          '--anchor',
+          ANCHOR,
+          '--confirm',
+          NORTHSTAR,
+        ],
+        { cwd: ROOT, stdio: ['ignore', 'inherit', 'inherit'] },
+      ),
+  })
 }

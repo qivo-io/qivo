@@ -19,20 +19,10 @@
  * and real OCC on issue numbering. Refusal sentences are byte-pinned from
  * convex/machine/{auth,rest}.ts. */
 
-import { readFileSync } from 'node:fs'
 import { afterAll, describe, expect, test } from 'vitest'
+import { readStash } from './stash.mts'
 
-type Stash = {
-  siteUrl: string
-  orgId: string
-  qva: string
-  qvt: string
-  qvaId: string
-  qvtId: string
-}
-const stash: Stash = JSON.parse(
-  readFileSync(new URL('./.credentials.json', import.meta.url), 'utf8'),
-)
+const stash = readStash()
 // global.setup.mts checked this site against the deploy key
 const BASE = stash.siteUrl
 
