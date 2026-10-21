@@ -1,11 +1,22 @@
 /* Kanban board: status columns × project or owner swimlanes, with compact sibling
    groups, individual task drag-and-drop, quick add and real empty states. */
 import React, { useState as useStateK } from 'react'
+import { DeferredList } from '@/components/DeferredList'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
-import { boardDropPatch, groupBoardAssignees, groupBoardCell } from '@/lib/boardGroups'
+import {
+  type BoardCellGroup,
+  boardDropPatch,
+  CARD_GAP,
+  eagerCounts,
+  groupBoardAssignees,
+  groupBoardCell,
+  SYNC_LIMIT,
+  sideEagerCounts,
+} from '@/lib/boardGroups'
+import { createMountScheduler, useMountGuards } from '@/lib/mountScheduler'
 import { Avatar, EmptyState, Icon, ProjectName, StatusDot } from '../components/qivo'
-import { useFollowTaskFocus } from '../lib/taskFocus'
+import { registerTaskMount, useFollowTaskFocus } from '../lib/taskFocus'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { useLatest } from '../lib/useLatest'
 import {
@@ -55,6 +66,17 @@ const CELL_CHROME_X = 8 * 2 + 1
 /* The Board pane's width when it was last bound, for the cards' height
    estimates. Before the first Board, the window less the sidebar. */
 let lastBoardWidth: number | null = null
+
+/* The first screen a Board mounts at once reaches this far below the
+   window's height. */
+const FIRST_SCREEN_EXTRA_PX = 500
+
+type CardGroup = BoardCellGroup<IssueVM>
+const groupKey = (group: CardGroup) => group.key
+const pendingLabel = (n: number) => `Loading ${n} more ${n === 1 ? 'card' : 'cards'}`
+
+/** One status cell's tasks and cards, with the id its list mounts under. */
+type BoardCellCards = { key: string; items: IssueVM[]; groups: CardGroup[] }
 
 type CardDropTarget = {
   projectIds?: string[]
@@ -581,6 +603,9 @@ function Kanban({
   const { paneRef: bindClipping, materialRef } = useBoardPanelClipping()
   const headerRef = React.useRef<HTMLDivElement>(null)
   const bodyRef = React.useRef<HTMLDivElement | null>(null)
+  // A large Board mounts its first screen at once and the rest in slices.
+  const [scheduler] = useStateK(createMountScheduler)
+  useMountGuards(scheduler)
   // Binding sets no state, so mounting renders the Board once. React 19
   // calls the returned cleanup when the pane goes; StrictMode binds twice.
   const scrollRef = React.useCallback(
@@ -589,13 +614,14 @@ function Kanban({
       lastBoardWidth = pane.clientWidth || lastBoardWidth
       const unbindSnap = bindSnap(pane)
       const unbindClipping = bindClipping(pane)
+      scheduler.setRoot(pane)
       return () => {
         unbindClipping()
         unbindSnap()
         if (bodyRef.current === pane) bodyRef.current = null
       }
     },
-    [bindSnap, bindClipping],
+    [bindSnap, bindClipping, scheduler],
   )
   // Keyboard focus stays on a task's card when a change moves the card.
   const followFocus = useFollowTaskFocus(bodyRef)
@@ -643,31 +669,158 @@ function Kanban({
      all projects). Lanes and side-boards name their own group, so they ask for
      the short form. */
   const cardPlace = (it: IssueVM, withOwner: boolean) => P.projectPlace(it.project, withOwner)
+  // the board's own header names the group; across all projects that leaves
+  // the sub-project still to say
+  const sidePlace = (it: IssueVM) => (wide ? cardPlace(it, false) : null)
 
+  const minColumnWidth = MIN_COLUMN_W
+  // the width a card takes in a lane's cell and in a side-board
+  const laneCardWidth =
+    Math.max(
+      minColumnWidth,
+      ((lastBoardWidth ?? window.innerWidth - 280) - CANVAS_PAD_X * 2 - 2) / statuses.length,
+    ) - CELL_CHROME_X
+  const sideCardWidth = SIDE_BOARD_W - 2 - 8 * 2
+
+  // ---- the layout's cells, worked out before anything renders -----------
   // Group only after scope, filters, lane and status have selected the cell.
   // Keep the surrounding column counts and empty-state geometry unchanged.
-  function renderCards(
-    items: IssueVM[],
+  const sideBoards = grouped && tweaks.metaViz === 'sideboards'
+  const swimlanes = grouped && tweaks.metaViz === 'swimlanes'
+  const cellOf = (key: string, items: IssueVM[]): BoardCellCards => ({
+    key,
+    items,
+    groups: groupBoardCell(items, P.issueById),
+  })
+  // side-boards: each group its own mini board
+  const boards = sideBoards
+    ? info.groups.flatMap((g) => {
+        const gset = new Set(g.subIds)
+        const list = visible.filter((i) => gset.has(i.project))
+        if (!holdsScoped(g.subIds) || (clearable && list.length === 0)) return []
+        const cells = statuses.map((s) =>
+          cellOf(`${g.proj.id}:${s.id}`, list.filter((i) => i.status === s.id).sort(byPrio)),
+        )
+        return [{ g, cells }]
+      })
+    : []
+  // swimlanes and pooled: one shared grid
+  type Lane = {
+    key: string
+    proj: ProjectVM | null
+    projectIds?: string[]
+    owner?: string | null
+    items: IssueVM[]
+  }
+  let lanes: Lane[] = sideBoards
+    ? []
+    : byAssignee
+      ? groupBoardAssignees(scopedLeaves, visible, (id) => P.user(id)?.name || 'Unknown user')
+          .map((lane) => ({ ...lane, proj: null }))
+          .filter((lane) => !(clearable && lane.items.length === 0))
+      : swimlanes
+        ? info.groups
+            .filter((g) => holdsScoped(g.subIds))
+            .map((g) => {
+              const gset = new Set(g.subIds)
+              return {
+                key: g.proj.id,
+                proj: g.proj,
+                projectIds: g.subIds,
+                items: visible.filter((i) => gset.has(i.project)),
+              }
+            })
+            .filter((l) => !(clearable && l.items.length === 0))
+        : [{ key: 'pool', proj: null, items: visible }]
+  // all swimlanes filtered away: keep one unlabeled empty lane so the status
+  // columns still render their (empty) stacks
+  if (!sideBoards && lanes.length === 0) lanes = [{ key: 'pool', proj: null, items: [] }]
+  const headed = (lane: Lane) => !!lane.proj || lane.owner !== undefined
+  const laneCells = lanes.map((lane) =>
+    statuses.map((s) =>
+      cellOf(`${lane.key}:${s.id}`, lane.items.filter((i) => i.status === s.id).sort(byPrio)),
+    ),
+  )
+  const rows = sideBoards ? boards.map((board) => board.cells) : laneCells
+  const cells = rows.flat()
+
+  /* How many cards each cell mounts at once: all of them on a Board of
+     SYNC_LIMIT cards or fewer, else the cards that fit in the first screen.
+     The counts come from a scope and layout's first render, so the cards a
+     change brings in later mount in slices. */
+  const firstScreen = () => {
+    const budget = window.innerHeight + FIRST_SCREEN_EXTRA_PX
+    const sizes = rows.map((row) => row.map((cell) => cell.groups.length))
+    const counts = sideBoards
+      ? sideEagerCounts(sizes, budget, window.innerWidth)
+      : eagerCounts(
+          lanes.map((lane, i) => ({ headed: headed(lane), cells: sizes[i] })),
+          budget,
+        )
+    return new Map(rows.flatMap((row, i) => row.map((cell, j) => [cell.key, counts[i][j]])))
+  }
+  const layoutKey = `${info.id}:${tweaks.metaViz}`
+  const [eager, setEager] = useStateK(() => ({ key: layoutKey, counts: firstScreen() }))
+  if (eager.key !== layoutKey) setEager({ key: layoutKey, counts: firstScreen() })
+  const sync = cells.reduce((total, cell) => total + cell.groups.length, 0) <= SYNC_LIMIT
+  const initialOf = (key: string) =>
+    sync ? Number.POSITIVE_INFINITY : eager.key === layoutKey ? (eager.counts.get(key) ?? 0) : 0
+
+  // Focus that follows a task into a cell whose cards still wait mounts
+  // that cell through the task's card first (taskFocus.ts).
+  const latestCells = useLatest(() => cells)
+  React.useEffect(
+    () =>
+      registerTaskMount((mark) => {
+        for (const cell of latestCells())
+          for (const group of cell.groups)
+            if (
+              group.issues.some((it) => it.id === mark.taskId) ||
+              group.parent?.id === mark.taskId ||
+              group.ancestors.some((it) => it.id === mark.taskId)
+            )
+              scheduler.mountThrough(cell.key, group.key)
+      }),
+    [latestCells, scheduler],
+  )
+
+  /** A cell's cards, mounting under the cell's key in slices past its first
+      screen. Staleness is read only for the cards that mount. */
+  function cardList(
+    cell: BoardCellCards,
     place: (it: IssueVM) => ProjectPlace | null,
     cardWidth: number,
   ) {
-    return groupBoardCell(items, P.issueById).map((group) => (
-      <BoardCard
-        key={group.key}
-        group={group}
-        place={place}
-        estimate={estimateBoardCard(group, place, cardWidth)}
-        onOpen={onOpenIssue}
-        onDragStart={startDrag}
-        onDragEnd={endDrag}
-        dragId={dragId}
-        context={P.contextVersion}
-        stale={group.issues
-          .filter((it) => P.isStale(it))
-          .map((it) => it.id)
-          .join()}
+    const estimate = (group: CardGroup) => estimateBoardCard(group, place, cardWidth)
+    return (
+      <DeferredList
+        id={cell.key}
+        items={cell.groups}
+        keyOf={groupKey}
+        render={(group: CardGroup) => (
+          <BoardCard
+            key={group.key}
+            group={group}
+            place={place}
+            estimate={estimate(group)}
+            onOpen={onOpenIssue}
+            onDragStart={startDrag}
+            onDragEnd={endDrag}
+            dragId={dragId}
+            context={P.contextVersion}
+            stale={group.issues
+              .filter((it) => P.isStale(it))
+              .map((it) => it.id)
+              .join()}
+          />
+        )}
+        estimate={estimate}
+        gap={CARD_GAP}
+        initial={initialOf(cell.key)}
+        scheduler={scheduler}
+        label={pendingLabel}
       />
-    ))
+    )
   }
 
   /* What dropping the task into this status cell writes (boardDropPatch),
@@ -778,19 +931,10 @@ function Kanban({
   // with an inline note — a full-screen empty state would hide the board.
   // Gated on the CLEARABLE filters: the note's only action is Clear.
   const noMatches = visible.length === 0 && clearable
-
-  const minColumnWidth = MIN_COLUMN_W
-  // the width a card takes in a lane's cell and in a side-board
-  const laneCardWidth =
-    Math.max(
-      minColumnWidth,
-      ((lastBoardWidth ?? window.innerWidth - 280) - CANVAS_PAD_X * 2 - 2) / statuses.length,
-    ) - CELL_CHROME_X
-  const sideCardWidth = SIDE_BOARD_W - 2 - 8 * 2
   const gridCols = `repeat(${statuses.length}, minmax(${minColumnWidth}px, 1fr))`
 
   // ---- side-boards layout (each group its own mini board) ----------------
-  if (grouped && tweaks.metaViz === 'sideboards') {
+  if (sideBoards) {
     return (
       /* The canvas padding is on the div INSIDE the scroller, not on the
          scroller — measured, and it is not cosmetic: a scroll container's own
@@ -811,11 +955,8 @@ function Kanban({
             filter leaves nothing — say so instead of a blank pane */}
           {noMatches && <NoMatchNote onClear={actions.clearFilters} />}
           <div className="[position:relative] [display:flex] [align-items:flex-start] [gap:var(--panel-gap)]">
-            {info.groups.map((g) => {
+            {boards.map(({ g, cells: boardCells }) => {
               const proj = g.proj
-              const gset = new Set(g.subIds)
-              const list = visible.filter((i) => gset.has(i.project))
-              if (!holdsScoped(g.subIds) || (clearable && list.length === 0)) return null
               return (
                 /* Built like a swimlane, for the same reason: a box whose edges
                  scroll past the pane's is not a box. This layout is a row of
@@ -889,9 +1030,10 @@ function Kanban({
                       }}
                       className="board-lane-body [background:var(--surface-1)]"
                     >
-                      {statuses.map((s) => {
-                        const items = list.filter((i) => i.status === s.id).sort(byPrio)
-                        const dkey = `${proj.id}:${s.id}`
+                      {statuses.map((s, si) => {
+                        const cell = boardCells[si]
+                        const items = cell.items
+                        const dkey = cell.key
                         return (
                           <DropCell
                             key={s.id}
@@ -907,14 +1049,8 @@ function Kanban({
                               <StatusDot status={s.id} size={12} />
                               {s.name} <span className="[font-weight:400]">{items.length}</span>
                             </div>
-                            {/* the board's own header names the group; across all
-                          projects that leaves the sub-project still to say */}
                             <div className="[display:flex] [flex-direction:column] [gap:8px] [min-height:8px]">
-                              {renderCards(
-                                items,
-                                (it) => (wide ? cardPlace(it, false) : null),
-                                sideCardWidth,
-                              )}
+                              {cardList(cell, sidePlace, sideCardWidth)}
                             </div>
                           </DropCell>
                         )
@@ -932,36 +1068,6 @@ function Kanban({
   }
 
   // ---- swimlanes / pooled layout (shared grid) ---------------------------
-  const swimlanes = grouped && tweaks.metaViz === 'swimlanes'
-  type Lane = {
-    key: string
-    proj: ProjectVM | null
-    projectIds?: string[]
-    owner?: string | null
-    items: IssueVM[]
-  }
-  let lanes: Lane[] = byAssignee
-    ? groupBoardAssignees(scopedLeaves, visible, (id) => P.user(id)?.name || 'Unknown user')
-        .map((lane) => ({ ...lane, proj: null }))
-        .filter((lane) => !(clearable && lane.items.length === 0))
-    : swimlanes
-      ? info.groups
-          .filter((g) => holdsScoped(g.subIds))
-          .map((g) => {
-            const gset = new Set(g.subIds)
-            return {
-              key: g.proj.id,
-              proj: g.proj,
-              projectIds: g.subIds,
-              items: visible.filter((i) => gset.has(i.project)),
-            }
-          })
-          .filter((l) => !(clearable && l.items.length === 0))
-      : [{ key: 'pool', proj: null, items: visible }]
-  // all swimlanes filtered away: keep one unlabeled empty lane so the status
-  // columns still render their (empty) stacks
-  if (lanes.length === 0) lanes = [{ key: 'pool', proj: null, items: [] }]
-  const headed = (lane: Lane) => !!lane.proj || lane.owner !== undefined
   // A sub-project heading already names the card's home; a project heading
   // still owes the sub-project. Pooled and assignee lanes owe both when wide.
   const lanePlace = (it: IssueVM) =>
@@ -1065,7 +1171,7 @@ function Kanban({
             }}
             className="[display:grid] [align-items:start] [gap:var(--panel-gap)]"
           >
-            {lanes.map((lane) => (
+            {lanes.map((lane, li) => (
               /* The box's corners live on this wrapper, not on either of the two
              elements that draw its sides.
 
@@ -1119,8 +1225,9 @@ function Kanban({
                     className="board-lane-body [display:grid] [background:var(--surface-1)]"
                   >
                     {statuses.map((s, ci) => {
-                      const laneKey = `${lane.key}:${s.id}`
-                      const items = lane.items.filter((i) => i.status === s.id).sort(byPrio)
+                      const cell = laneCells[li][ci]
+                      const laneKey = cell.key
+                      const items = cell.items
                       return (
                         <DropCell
                           key={s.id}
@@ -1133,7 +1240,7 @@ function Kanban({
                           last={ci === statuses.length - 1}
                           {...cardDropHandlers(laneKey, s.id, lane)}
                         >
-                          {renderCards(items, lanePlace, laneCardWidth)}
+                          {cardList(cell, lanePlace, laneCardWidth)}
                         </DropCell>
                       )
                     })}

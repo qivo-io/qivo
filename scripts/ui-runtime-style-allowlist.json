@@ -1,4 +1,8 @@
 {
+  "src/components/DeferredList.tsx": {
+    "count": 1,
+    "reason": "the estimated height of a long list's items that have not mounted yet"
+  },
   "src/components/descEditor.tsx": {
     "count": 1,
     "reason": "selection-anchored link-popover coordinates clamped to the viewport"

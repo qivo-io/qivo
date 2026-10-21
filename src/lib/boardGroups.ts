@@ -241,3 +241,51 @@ export function estimateCardHeight<T extends BoardCellIssue & { title: string }>
   for (const issue of group.issues) height += task(issue, chrome)
   return Math.ceil(height)
 }
+
+/** A Board at or under this many cards renders them all at once, as it
+    always has. Every demo and smoke Board is under it. */
+export const SYNC_LIMIT = 300
+
+/* Lane geometry for eagerCounts, measured with the card constants above:
+   an assignee lane's heading is 46px (a project lane's 50px, so the walk
+   errs toward more cards), a cell's top padding 8px, and the lane's foot
+   24px with the 8px --panel-gap after it. A side-board's heading is 50px
+   and each status takes 25.4px for its row and 16px of cell padding. */
+const LANE_HEAD_PX = 46
+const CELL_TOP_PX = 8
+const LANE_END_PX = 24 + 8
+const SIDE_HEAD_PX = 50
+const SIDE_STATUS_PX = 25.4 + 16
+const SIDE_PITCH_PX = 248 + 8
+const SIDE_START_PX = 20
+
+/** How many cards each cell of the swimlane or pooled Board mounts in its
+    first render: the cells' cards that fit in `budgetPx` from the top,
+    lane by lane, counting each card at its least height. `lanes` gives
+    each lane's heading and its cells' card counts. */
+export function eagerCounts(lanes: { headed: boolean; cells: number[] }[], budgetPx: number) {
+  let remaining = budgetPx
+  return lanes.map(({ headed, cells }) => {
+    if (remaining <= 0) return cells.map(() => 0)
+    if (headed) remaining -= LANE_HEAD_PX
+    const room = Math.max(0, remaining - CELL_TOP_PX)
+    const counts = cells.map((count) => Math.min(count, Math.floor(room / MIN_CARD_PITCH)))
+    remaining -= CELL_TOP_PX + Math.max(0, ...counts) * MIN_CARD_PITCH + LANE_END_PX
+    return counts
+  })
+}
+
+/** eagerCounts for side-by-side boards: each board walks its own statuses
+    from the top, and a board that starts beyond `viewWidth` mounts none. */
+export function sideEagerCounts(boards: number[][], budgetPx: number, viewWidth: number) {
+  return boards.map((cells, index) => {
+    if (SIDE_START_PX + index * SIDE_PITCH_PX >= viewWidth) return cells.map(() => 0)
+    let remaining = budgetPx - SIDE_HEAD_PX
+    return cells.map((count) => {
+      remaining -= SIDE_STATUS_PX
+      const eager = Math.min(count, Math.floor(Math.max(0, remaining) / MIN_CARD_PITCH))
+      remaining -= eager * MIN_CARD_PITCH
+      return eager
+    })
+  })
+}

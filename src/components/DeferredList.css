@@ -1,0 +1,14 @@
+/* The space of the items a DeferredList has not mounted yet, the cards of a
+   large Board or the rows of the phone's list: a plain block in the cards'
+   fill, with no text and no motion. A focus ring shows where Tab reached it. */
+.board-pending {
+  display: block;
+  width: 100%;
+  flex-shrink: 0;
+  border-radius: var(--r-md);
+  background: var(--board-card-fill, var(--surface-2));
+}
+.board-pending:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}

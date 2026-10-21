@@ -88,20 +88,33 @@ export async function loadBoard(
     focus: false,
     search: '',
   }
+  let setSearch: (text: string) => void = () => {}
   /** The Board as App renders it, again on every store change. `window`
       renders beside it in the same root, with the task the Board opened. */
   function Screen({ window }: { window?: Window }) {
     usePlannerVersion()
     const [opened, setOpened] = useState<string | null>(null)
+    const [search, typeSearch] = useState('')
+    setSearch = typeSearch
     const info = P.scopeInfo(scope)
     if (!info) throw new Error('missing the scope')
     const actions = { openIssue: setOpened as (...args: unknown[]) => void }
     return (
       <TooltipProvider>
         {phone ? (
-          <MobileTaskList info={info} filters={filters} setFilters={() => {}} actions={actions} />
+          <MobileTaskList
+            info={info}
+            filters={{ ...filters, search }}
+            setFilters={() => {}}
+            actions={actions}
+          />
         ) : (
-          <Kanban info={info} filters={filters} tweaks={{ metaViz }} actions={actions} />
+          <Kanban
+            info={info}
+            filters={{ ...filters, search }}
+            tweaks={{ metaViz }}
+            actions={actions}
+          />
         )}
         {window?.(opened, () => setOpened(null), setOpened)}
       </TooltipProvider>
@@ -116,6 +129,8 @@ export async function loadBoard(
       document.querySelector<HTMLElement>(
         `[data-card="${P.issues.find((it) => it.uuid === uuid)?.id}"]`,
       ),
+    /** Types `text` into the Board's search filter. */
+    search: (text: string) => act(async () => setSearch(text)),
     /** Delivers `snapshot` as it is now, as the server would after a change. */
     deliver: () => act(async () => deliver(snapshot)),
     render: (root: Root, window?: Window) =>
