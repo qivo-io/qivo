@@ -398,6 +398,18 @@ describe('removing someone who has work in the project', () => {
     ])
   })
 
+  it("lists a parent's own task that the team's sub-project showed, and keeps that sub-project", async () => {
+    await load((snap, task) => {
+      inPlan(false)(snap, task)
+      // Crew shares Specs alone, which shows Plan and its own tasks
+      snap.teamAccess = [{ project_id: 'specs', team_id: 'crew', level: 'user' }]
+      snap.issues.push(task('own', 7, { project_id: 'plan', assignee_id: 'ann' }))
+    })
+    const ann = P.accessRemoval(leaving('ann'))
+    expect(held(ann)).toEqual([['own', 'ann', 'assignee']])
+    expect(ann.projects).toEqual(['specs'])
+  })
+
   /* inPlan with Work named, so the sentences read as the window shows them.
      `also` adds what each case needs. */
   const keeping = (also: (snap: Snapshot, task: Task) => void) => (snap: Snapshot, task: Task) => {
@@ -444,7 +456,7 @@ describe('removing someone who has work in the project', () => {
       snap.issues.push(task('spec', 8, { project_id: 'specs', assignee_id: 'dan' }))
     await load(keeping(dans))
     expect(keepText(crewGrant('plan'))).toBe(
-      "They keep their tasks and can see the whole project, but can't change these tasks. Dan can still change Work, and Ann can't change anything in it.",
+      "They keep their tasks and can see the whole project, but can't change the tasks they keep. Dan can still change Work, and Ann can't change anything in it.",
     )
     await load(
       keeping((snap, task) => {
@@ -453,7 +465,7 @@ describe('removing someone who has work in the project', () => {
       }),
     )
     expect(keepText(crewGrant('plan'))).toBe(
-      "They keep their tasks and can see the whole project, but can't change these tasks. Ann can still change Specs and Dan can still change Work.",
+      "They keep their tasks and can see the whole project, but can't change the tasks they keep. Ann can still change Specs and Dan can still change Work.",
     )
   })
 
@@ -470,7 +482,7 @@ describe('removing someone who has work in the project', () => {
     )
     expect(P.accessRemoval(deleteCrew).projects).toEqual([work, 'specs'])
     expect(keepText(deleteCrew)).toBe(
-      "They keep their tasks and can each see the projects that hold them, but can't change these tasks. Dan can still change Work, and Ann can't change anything in them.",
+      "They keep their tasks and can each see the projects that hold them, but can't change the tasks they keep. Dan can still change Work, and Ann can't change anything in them.",
     )
   })
 

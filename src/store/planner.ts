@@ -3637,11 +3637,20 @@ function peopleLosing(change: AccessRemoval): Set<string> {
 }
 /* Where Keep as Viewer puts the Viewer grant that keeps `task` in sight: the
    project whose grant is removed, or the project the team shared that showed
-   the task (the task's own sub-project first, then its parent). */
+   the task (the task's own sub-project first, then its parent). A top-level
+   project the team did not share showed its own tasks only for navigation
+   to a sub-project it shared, the first by id, as the server picks it
+   (model/teams.ts viewerProjectFor). */
 function keptOn(change: AccessRemoval, task: IssueVM): string {
   if (change.kind === 'userGrant' || change.kind === 'teamGrant') return change.projectId
   const p = PLANNER.project(task.project)
-  return p?.parent && !p.teamAccess?.[change.teamId] ? p.parent : task.project
+  if (!p || p.teamAccess?.[change.teamId]) return task.project
+  if (p.parent) return p.parent
+  const subs = PLANNER.projects
+    .filter((c) => c.parent === p.id && c.teamAccess?.[change.teamId])
+    .map((c) => c.id)
+    .sort()
+  return subs[0] ?? task.project
 }
 /* The direct grant rows on a project, without the lead (projects.lead_id). */
 function grantsOn(projectId: string): Record<string, GrantLevel> {
@@ -4874,7 +4883,8 @@ export const PLANNER = {
     const rest = !others.length
       ? ''
       : `, and ${others.length === 1 ? first(others[0]) : 'the others'} can't change anything in ${inIt}`
-    return `They keep their tasks and ${canSee}, but can't change ${these}. ${still}${rest}.`
+    // one of them may change another's task, never their own
+    return `They keep their tasks and ${canSee}, but can't change the tasks they keep. ${still}${rest}.`
   },
   /* Whether I can carry out either choice of the removal window: give every
      listed person Viewer access to each of `projects`, and edit every listed

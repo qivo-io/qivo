@@ -356,9 +356,9 @@ export const LEVELS_READ = { max: 4000 }
  * from one range a person. Each team's shares are read once for everyone.
  * Removing a large team's access asked each member alone, about four ranges
  * before the change and four after, and passed Convex's 4,096. `guard`, when
- * given, runs before each team's memberships, each person and each team's
- * shares are read, so a caller can stop before the reads fill the
- * transaction (model/projectAccess.ts removeAndSettle). */
+ * given, runs before each read and after every GUARD_ROWS rows of it, so a
+ * caller can stop before the reads fill the transaction
+ * (model/projectAccess.ts removeAndSettle). */
 export async function projectLevelsForPeople(
   ctx: QueryCtx,
   people: readonly Doc<'profiles'>[],
@@ -377,40 +377,60 @@ export async function projectLevelsForPeople(
     people.length > teams.length ? await teamsOfPeople(ctx, people, teams, guard) : null
   const sharesOfTeam = new Map<string, Doc<'project_team_access'>[]>()
   for (const person of people) {
-    await guard()
     if (person.org_id !== orgId) {
+      await guard()
       out.set(person.id, await projectLevelsForOrg(ctx, person, projects))
       continue
     }
-    const grants = await ctx.db
-      .query('project_access')
-      .withIndex('by_profile', (q) => q.eq('profile_id', person.id))
-      .collect()
+    const grants = await guardedRows(
+      ctx.db.query('project_access').withIndex('by_profile', (q) => q.eq('profile_id', person.id)),
+      guard,
+    )
     const shares: Doc<'project_team_access'>[] = []
     if (receivesTeamAccess(person)) {
       const mine = teamsOf
         ? (teamsOf.get(person.id) ?? [])
         : (
-            await ctx.db
-              .query('team_members')
-              .withIndex('by_profile', (q) => q.eq('profile_id', person.id))
-              .collect()
+            await guardedRows(
+              ctx.db
+                .query('team_members')
+                .withIndex('by_profile', (q) => q.eq('profile_id', person.id)),
+              guard,
+            )
           ).map((m) => m.team_id)
       for (const teamId of mine) {
         if (!orgTeams.has(teamId)) continue
         let teamShares = sharesOfTeam.get(teamId)
         if (teamShares === undefined) {
-          await guard()
-          teamShares = await ctx.db
-            .query('project_team_access')
-            .withIndex('by_team', (q) => q.eq('team_id', teamId))
-            .collect()
+          teamShares = await guardedRows(
+            ctx.db
+              .query('project_team_access')
+              .withIndex('by_team', (q) => q.eq('team_id', teamId)),
+            guard,
+          )
           sharesOfTeam.set(teamId, teamShares)
         }
         shares.push(...teamShares)
       }
     }
     out.set(person.id, levelsFrom(person, projects, grants, shares))
+  }
+  return out
+}
+
+/* How many rows projectLevelsForPeople reads between two runs of its guard:
+ * well under the 5% of Convex's 32,000 documents a removal keeps
+ * (model/projectAccess.ts REASSIGN_ROOM). */
+const GUARD_ROWS = 500
+
+/* Every row of `rows`, running `guard` before the first and after every
+ * GUARD_ROWS more. */
+async function guardedRows<T>(rows: AsyncIterable<T>, guard: () => Promise<void>): Promise<T[]> {
+  const out: T[] = []
+  await guard()
+  for await (const row of rows) {
+    out.push(row)
+    if (out.length % GUARD_ROWS === 0) await guard()
   }
   return out
 }
@@ -433,6 +453,7 @@ async function teamsOfPeople(
       .withIndex('by_team', (q) => q.eq('team_id', team.id))
     for await (const { profile_id } of memberships) {
       if (++rows > LEVELS_READ.max) return null
+      if (rows % GUARD_ROWS === 0) await guard()
       if (ids.has(profile_id)) out.set(profile_id, [...(out.get(profile_id) ?? []), team.id])
     }
   }

@@ -1359,7 +1359,7 @@ else first`). With a level the result is `{project, user | team, level,
 changed}`.
 
 With `level: null` it removes the grant. Open tasks of the project and its
-sub-projects that someone works on (as assignee, or reviewer of a task
+sub-projects, and for a sub-project its parent's own tasks, that someone works on (as assignee, or reviewer of a task
 without subtasks) and can no longer see afterwards are settled by
 `on_held_tasks`:
 
@@ -1434,8 +1434,8 @@ person who is an organization admin or a leader of the team; an agent gets
   case nobody is added. The result is `{team, user, member: true, leader,
   changed}`, with `team` and `user` as `{id, name}`.
 - `member: false` removes the user, leadership included. Their open tasks in
-  the projects the team shares, and in those projects' sub-projects, that
-  they can no longer see afterwards are settled by `on_held_tasks`, as for
+  the projects the team shares, in those projects' sub-projects, and in the
+  parent of a shared sub-project, that they can no longer see afterwards are settled by `on_held_tasks`, as for
   `set_project_access`. `"leave"` (the default) lists them as `stranded`,
   `"keep_as_viewer"` gives the user a Viewer grant on the project the team
   shared that showed each task (the task's own sub-project when the team

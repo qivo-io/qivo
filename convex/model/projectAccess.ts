@@ -35,7 +35,7 @@ import {
   rootMetaOf,
 } from '../lib/access'
 import { assertOrgWritable } from '../lib/billingAccess'
-import { usedMoreThan } from '../lib/db'
+import { byId, usedMoreThan } from '../lib/db'
 import { GRANT_LEVELS, type GrantLevel, vGrantLevel } from '../lib/enums'
 import { badRequest, forbidden, type Refusal, rule } from '../lib/functions'
 import { liveIn } from '../lib/liveTasks'
@@ -271,7 +271,9 @@ export async function setProjectGrantCore(
 
 /** The projects whose tasks a grant on `project` reaches: itself and, for a
  * top-level project, its sub-projects, leaving out archived ones as the
- * app's working set does. */
+ * app's working set does. A grant on a sub-project also shows its parent for
+ * navigation, and with it the parent's own tasks (lib/workingSet.ts), so the
+ * parent is reached too. */
 export async function reachedProjects(
   ctx: QueryCtx,
   project: Doc<'projects'>,
@@ -283,6 +285,10 @@ export async function reachedProjects(
       .query('projects')
       .withIndex('by_parent', (q) => q.eq('parent_id', project.id))
     for await (const sub of subs) if (sub.archived_at === undefined) out.push(sub)
+  } else if (project.parent_id !== undefined) {
+    const parent = await byId(ctx, 'projects', project.parent_id)
+    if (parent !== null && parent.org_id === project.org_id && parent.archived_at === undefined)
+      out.push(parent)
   }
   return out
 }

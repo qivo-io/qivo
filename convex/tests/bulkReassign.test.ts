@@ -814,6 +814,46 @@ describe('a removal of many people', () => {
     expect((e.data as Refusal).message).toBe(REMOVAL_TOO_LARGE)
     expect((await state()).share).toMatchObject({ level: 'user' })
   }, 60_000)
+
+  it("refuses before one team's memberships read past the documents left", async () => {
+    // under a limit of 12,000 documents the removal keeps 600 in reserve, and
+    // a third team's 12,000 memberships would pass it in one read
+    const { t, f, admin, state } = await manyHolders(30, {
+      transactionLimits: { documentsRead: 12_000 },
+    })
+    await t.run(async (ctx) => {
+      const id = uuid()
+      await ctx.db.insert('teams', {
+        id,
+        org_id: f.org.id,
+        name: 'Crowd',
+        stale_days: 14,
+        archive_days: 30,
+        track_delay_default: false,
+        created_at: NOW,
+      })
+      for (let i = 0; i < 12_000; i++)
+        await ctx.db.insert('team_members', { team_id: id, profile_id: uuid(), is_leader: false })
+    })
+    const before = LEVELS_READ.max
+    LEVELS_READ.max = 20_000
+    try {
+      const e = await expectRefusal(
+        t.mutation(internal.machine.projects.restRemoveTeamAccess, {
+          ...admin,
+          keyName: null,
+          ref: 'TBED',
+          subject: f.team.id,
+          body: '',
+        }),
+        'rule',
+      )
+      expect((e.data as Refusal).message).toBe(REMOVAL_TOO_LARGE)
+    } finally {
+      LEVELS_READ.max = before
+    }
+    expect((await state()).share).toMatchObject({ level: 'user' })
+  }, 120_000)
 })
 
 describe('a bulk update', () => {
