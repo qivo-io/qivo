@@ -1,5 +1,6 @@
 import { realpathSync } from 'node:fs'
-import { normalizePath } from 'vite'
+import { join } from 'node:path'
+import { isFileLoadingAllowed, normalizePath } from 'vite'
 
 /* Development only. The dev server serves every file under the checkout
    unless server.fs.deny refuses it, and reloads open pages when a watched
@@ -65,6 +66,72 @@ export function devServerFiles(root) {
           return [glob, `${glob}/**`]
         }),
       ],
+    },
+  }
+}
+
+/**
+ * The real path of `file` when the server's file rules refuse it, else
+ * undefined. A path that does not exist names nothing to serve. Any other
+ * error refuses the path itself.
+ */
+function refusedRealPath(config, file) {
+  let real
+  try {
+    real = normalizePath(realpathSync.native(file))
+  } catch (error) {
+    return error.code === 'ENOENT' || error.code === 'ENOTDIR' ? undefined : file
+  }
+  return isFileLoadingAllowed(config, real) ? undefined : real
+}
+
+/** The files a request URL can name: an /@fs/ path, or a path under the
+ * root or the public directory, decoded the ways Vite's middlewares do. */
+function requestedFiles(config, url) {
+  const path = url.split(/[?#]/, 1)[0]
+  const decoded = new Set([path])
+  for (const decode of [decodeURI, decodeURIComponent]) {
+    try {
+      decoded.add(decode(path))
+    } catch {}
+  }
+  return [...decoded].flatMap((name) => {
+    if (name.startsWith('/@fs/')) return [name.slice('/@fs'.length)]
+    const files = [join(config.root, name)]
+    if (config.publicDir) files.push(join(config.publicDir, name))
+    return files
+  })
+}
+
+/**
+ * Refuses dev server requests for a file whose real path the server.fs rules
+ * refuse. Those rules match the requested path, so a symlink in an allowed
+ * directory to a file in dev-temp/, the fixture credentials directory or any
+ * other refused place would otherwise be served.
+ *
+ * The check runs before Vite serves files, and again after the HTML fallback
+ * has added `.html` or `index.html`, at one realpath call per candidate
+ * file. A module that Vite's resolver finds, such as `/src/link` for
+ * `/src/link.js`, already resolves to its real path, which Vite checks.
+ */
+export function refuseLinkedFiles() {
+  let config
+  return {
+    name: 'qivo-refuse-linked-files',
+    apply: 'serve',
+    configResolved(resolved) {
+      config = resolved
+    },
+    configureServer(server) {
+      const refuse = (req, res, next) => {
+        const files = requestedFiles(config, req.url ?? '/')
+        if (!files.some((file) => refusedRealPath(config, file))) return next()
+        config.logger.warn(`Refused ${req.url}: its real path is not served`)
+        res.statusCode = 403
+        res.end('Restricted')
+      }
+      server.middlewares.use(refuse)
+      return () => server.middlewares.use(refuse)
     },
   }
 }

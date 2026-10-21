@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { createServer, loadConfigFromFile, resolveConfig } from 'vite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { devServerFiles } from './dev-server-files.mjs'
+import { devServerFiles, refuseLinkedFiles } from './dev-server-files.mjs'
 
 const denied = [
   'dev-temp/notes.txt',
@@ -17,6 +17,19 @@ const denied = [
   'scripts/shots/admin-04-users.png',
   '.git',
 ]
+
+/** Symlinks in served directories, each to a refused file: in a local
+ * directory, a credential file and a fixture directory outside the checkout. */
+const links = {
+  'src/notes.txt': 'dev-temp/notes.txt',
+  'src/module.js': 'dev-temp/module.js',
+  'src/local': 'dev-temp',
+  'src/project.json': '.vercel/project.json',
+  'src/env.txt': '.env',
+  'src/page.html': 'dev-temp/page.html',
+  'public/notes.txt': 'dev-temp/notes.txt',
+  'src/stash.json': '../fixtures/contract.credentials.json',
+}
 
 let parent
 let root
@@ -34,7 +47,17 @@ beforeAll(async () => {
   parent = realpathSync.native(mkdtempSync(join(tmpdir(), 'qivo (copy) [x] +y @z {a,b} !')))
   root = join(parent, 'checkout')
   write('src/main.js', 'export const value = 1\n')
+  write('public/logo.txt')
   for (const path of denied) write(path)
+  write('.env', 'SECRET')
+  for (const path of ['dev-temp/notes.txt', '.vercel/project.json', 'dev-temp/page.html'])
+    write(path, 'SECRET')
+  write('dev-temp/module.js', 'export const secret = "SECRET"\n')
+  write('../fixtures/contract.credentials.json', 'SECRET')
+  for (const [link, target] of Object.entries(links))
+    symlinkSync(join(root, target), join(root, link))
+  // A link to an allowed file is served as before.
+  symlinkSync(join(root, 'src/main.js'), join(root, 'src/alias.js'))
   // Vite resolves symlinks in its root, so the rules come from a link to the
   // checkout while the server runs on the checkout itself.
   symlinkSync(root, join(parent, 'link'))
@@ -43,6 +66,8 @@ beforeAll(async () => {
     root,
     cacheDir: join(parent, '.vite'),
     logLevel: 'silent',
+    appType: 'mpa',
+    plugins: [refuseLinkedFiles()],
     server: { host: '127.0.0.1', port: 0, ...devServerFiles(join(parent, 'link')) },
   })
   server.watcher.on('all', (_event, path) => events.push(path))
@@ -62,6 +87,52 @@ describe('dev server files', () => {
       for (const url of [`/${path}`, `/${path}?raw`, `/@fs${root}/${path}`])
         expect([url, (await fetch(`${origin}${url}`)).status]).toEqual([url, 403])
     }
+  })
+
+  it('refuses a symlink to a refused file however it is requested', async () => {
+    const requests = [
+      // the file under its link, with the queries that read it raw
+      ...['?raw', '?import', '?url', '?inline', ''].map((query) => `/src/notes.txt${query}`),
+      '/src/project.json',
+      '/src/env.txt',
+      '/src/stash.json',
+      `/@fs${root}/src/notes.txt`,
+      '/src/%6Eotes.txt',
+      '/src//notes.txt',
+      // through a linked directory
+      '/src/local/notes.txt',
+      '/src/local%2Fnotes.txt',
+      // the public directory, served at the root
+      '/notes.txt',
+    ]
+    for (const url of requests) {
+      const response = await fetch(`${origin}${url}`)
+      expect([url, response.status, (await response.text()).includes('SECRET')]).toEqual([
+        url,
+        403,
+        false,
+      ])
+    }
+    // Vite resolves a module it finds through its resolver to the real path
+    // and checks that itself.
+    for (const url of ['/src/module', '/src/local/module', '/@id//src/module.js']) {
+      const response = await fetch(`${origin}${url}`)
+      expect([url, response.ok, (await response.text()).includes('SECRET')]).toEqual([
+        url,
+        false,
+        false,
+      ])
+    }
+    // a page the HTML fallback finds by its name
+    for (const url of ['/src/page', '/src/page.html']) {
+      const response = await fetch(`${origin}${url}`, { headers: { accept: 'text/html' } })
+      expect([url, response.status]).toEqual([url, 403])
+    }
+  })
+
+  it('serves sources, public files and links to allowed files', async () => {
+    for (const url of ['/src/main.js', '/src/main', '/src/alias.js', '/src/alias', '/logo.txt'])
+      expect([url, (await fetch(`${origin}${url}`)).status]).toEqual([url, 200])
   })
 
   it('ignores writes into local directories but still watches the source', async () => {
@@ -103,5 +174,6 @@ describe('dev server files', () => {
     expect(ignored(join(checkout, 'dev-temp', 'shot.png'))).toBe(true)
     expect(ignored(join(checkout, 'src', 'main.tsx'))).toBe(false)
     expect(config.server.fs.deny).toEqual(devServerFiles(checkout).fs.deny)
+    expect(config.plugins.flat().map((plugin) => plugin?.name)).toContain(refuseLinkedFiles().name)
   })
 })

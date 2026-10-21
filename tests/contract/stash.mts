@@ -16,6 +16,8 @@ export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 export type Stash = {
   siteUrl: string
   orgId: string
+  /** The id every credential the pass mints carries in its name. */
+  pass: string
   qva: string
   qvt: string
   qvaId: string
@@ -43,8 +45,12 @@ export function stashPath(env: Record<string, string | undefined>, root = ROOT):
   return join(directory, `contract-${deployment}.credentials.json`)
 }
 
-/** Writes a new stash that only this user can read, replacing any old one. */
-export function writeStash(path: string, stash: Stash): void {
+/** Writes a new stash that only this user can read, replacing any old one.
+ * The pass writes its id alone before it mints anything. */
+export function writeStash(
+  path: string,
+  stash: Pick<Stash, 'siteUrl' | 'orgId' | 'pass'> & Partial<Stash>,
+): void {
   rmSync(path, { force: true })
   writeFileSync(path, JSON.stringify(stash, null, 2), { mode: 0o600, flag: 'wx' })
 }

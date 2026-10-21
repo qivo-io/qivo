@@ -144,3 +144,27 @@ export const deleteCredential = internalMutation({
     return { deleted: true }
   },
 })
+
+/* Sweep twin: the contract pass names every credential it mints after the
+ * pass, so it can delete them without their ids, for example after a mint
+ * that succeeded but whose CLI output could not be parsed, or after a pass
+ * that was killed before it saved the ids. Deletes every agent key and
+ * personal token of the profile with exactly that name. */
+export const deleteNamedCredentials = internalMutation({
+  args: { profile_id: v.string(), name: v.string() },
+  handler: async (ctx, a): Promise<{ deleted: number }> => {
+    refuseProduction('machine/testing')
+    if (a.name.trim() === '') throw badRequest('a credential name is required')
+    const [keys, tokens] = await Promise.all(
+      (['agent_keys', 'mcp_tokens'] as const).map((table) =>
+        ctx.db
+          .query(table)
+          .withIndex('by_profile', (q) => q.eq('profile_id', a.profile_id))
+          .collect(),
+      ),
+    )
+    const named = [...keys, ...tokens].filter((row) => row.name === a.name)
+    for (const row of named) await ctx.db.delete(row._id)
+    return { deleted: named.length }
+  },
+})

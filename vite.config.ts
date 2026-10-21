@@ -5,7 +5,7 @@ import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { type Connect, defineConfig, loadEnv } from 'vite'
 import { demoProxy } from './scripts/demo-proxy.mjs'
-import { devServerFiles } from './scripts/dev-server-files.mjs'
+import { devServerFiles, refuseLinkedFiles } from './scripts/dev-server-files.mjs'
 
 /* Match the app and operator console rewrites in vercel.json. The website at
    `/` is built by website/scripts/build.mjs after `vite build`, so the dev
@@ -73,6 +73,9 @@ export default defineConfig(({ mode, command }) => {
           })
         },
       },
+      // server.fs.deny matches the requested path. This refuses a symlink to
+      // a refused file too.
+      refuseLinkedFiles(),
       react(),
       tailwindcss(),
       {
