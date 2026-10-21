@@ -18,7 +18,7 @@ import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, rule } from '../lib/functions'
 import { issueKey } from '../lib/taskRefs'
-import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
+import { COMMENT_TOO_LONG, TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
 import { assertRoomForComment, noteCommentAdded, noteCommentRemoved } from './commentCounts'
 import { assertExpected, DELETES, type Fields, filledText, type Next, type View } from './expected'
 import { assertCanEdit } from './issues'
@@ -26,9 +26,8 @@ import { notifyCommentInsert, notifyCommentUpdate } from './messages'
 import { newUuid } from './orgs'
 
 /* Both caps count the trimmed text, which is what is stored. They are `rule`
- * refusals, so the app shows the sentence (model/issues.ts
+ * refusals, so the app shows the sentence (lib/textLimits.ts
  * DESCRIPTION_TOO_LONG says why). */
-export const COMMENT_TOO_LONG = `a comment must be at most ${TEXT_MAX_LABEL} characters`
 export const ARCHIVE_REASON_TOO_LONG = `an archive reason must be at most ${TEXT_MAX_LABEL} characters`
 
 type NewComment = {

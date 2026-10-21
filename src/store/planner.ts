@@ -32,8 +32,16 @@ import {
 } from '../../convex/lib/projectCreators'
 import { creatorGrant, grantsAfterHandover } from '../../convex/lib/projectGrants'
 import { resolveReviewHours, reviewStamp } from '../../convex/lib/review'
+import { REMAINING_HOURS_MAX, REMAINING_HOURS_RULE } from '../../convex/lib/taskLimits'
 import { firstSittingDay, nextSyncStamp } from '../../convex/lib/teamSync'
-import { NAME_MAX, nameOverCap, TEXT_MAX, TEXT_MAX_LABEL } from '../../convex/lib/textLimits'
+import {
+  COMMENT_TOO_LONG,
+  DESCRIPTION_TOO_LONG,
+  NAME_MAX,
+  nameOverCap,
+  TEXT_MAX,
+  TEXT_MAX_LABEL,
+} from '../../convex/lib/textLimits'
 import { armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
 import { avatarCacheScope, createAvatarImageCache } from '../lib/avatarImageCache'
 import { createAvatarSources } from '../lib/avatarSources'
@@ -1737,11 +1745,22 @@ const errData = (e: unknown): ErrData => (e instanceof ConvexError ? (e.data as 
    name the reason, and for a pending deletion its date, so they show verbatim. */
 const readOnly = (d: ErrData) =>
   d.reason === 'billing_required' || d.reason === 'deletion_scheduled'
-/** Capitalizes a refusal message and ends it with a period unless it already
-    ends in `.`, `!` or `?`. Server messages are often lowercase fragments,
-    and a toast joins them with a sentence of its own. */
+/** The app's words for the field rules a person can meet in it, which the
+    server says in the API's terms (REST and MCP keep them as they are). */
+const APP_RULE_WORDS = new Map([
+  [
+    REMAINING_HOURS_RULE,
+    `Remaining time must be between 0 and ${REMAINING_HOURS_MAX.toLocaleString('en-US')} hours.`,
+  ],
+  [DESCRIPTION_TOO_LONG, TEXT_TOO_LONG.description],
+  [COMMENT_TOO_LONG, TEXT_TOO_LONG.comment],
+])
+/** A refusal message as the app shows it: its own words for a field rule
+    (APP_RULE_WORDS), else the message capitalized and ending with a period
+    unless it already ends in `.`, `!` or `?`. Server messages are often
+    lowercase fragments, and a toast joins them with a sentence of its own. */
 const asSentence = (m: string) =>
-  m.charAt(0).toUpperCase() + m.slice(1) + (/[.!?]$/.test(m) ? '' : '.')
+  APP_RULE_WORDS.get(m) ?? m.charAt(0).toUpperCase() + m.slice(1) + (/[.!?]$/.test(m) ? '' : '.')
 
 /* --- snapshot health ---------------------------------------------------------
    The live snapshot (snapshot.forMe) can stop loading mid-session, after a

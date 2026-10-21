@@ -90,7 +90,7 @@ import {
   SUBTASK_WITH_SUBTASKS,
 } from '../lib/taskLimits'
 import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
-import { plainText, TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
+import { DESCRIPTION_TOO_LONG, plainText, TEXT_MAX } from '../lib/textLimits'
 import { inWorkingSet } from '../lib/workingSet'
 import {
   issueChanges,
@@ -199,10 +199,6 @@ export function cleanTitle(raw: unknown): string {
     throw badRequest(`title must be at most ${TITLE_MAX} characters`)
   return title
 }
-
-/* A `rule`, so the app shows the sentence to a tab that skipped its own
- * check (one loaded before the cap); REST answers it as a 400 either way. */
-export const DESCRIPTION_TOO_LONG = `description must be at most ${TEXT_MAX_LABEL} characters`
 
 /** Answers the description to store, which is the text as sent, untrimmed,
  * or '' for null or absent. Refuses text longer than TEXT_MAX unless it

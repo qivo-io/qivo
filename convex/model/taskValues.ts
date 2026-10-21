@@ -1,5 +1,6 @@
 import { badRequest, rule } from '../lib/functions'
 import { roundTenths } from '../lib/numbers'
+import { REMAINING_HOURS_MAX, REMAINING_HOURS_RULE } from '../lib/taskLimits'
 
 type TaskDateField = 'start_week' | 'end_week' | 'due_date'
 
@@ -53,15 +54,7 @@ export function assertWeekPair(start: string | undefined, end: string | undefine
 
 export { roundTenths } from '../lib/numbers'
 
-/** The most remaining hours a task takes, the range of the numeric(6,1)
- * column the hours came from. The app, REST and MCP refuse more with
- * REMAINING_HOURS_RULE (cleanRemaining), and MCP's task schemas publish it as
- * `maximum`. */
-export const REMAINING_HOURS_MAX = 99_999.9
-
-/** The refusal of remaining hours outside 0..REMAINING_HOURS_MAX. A `rule`,
- * so the app shows the sentence; REST answers it as a 400 either way. */
-export const REMAINING_HOURS_RULE = `remaining_hours must be a number of hours from 0 to ${REMAINING_HOURS_MAX}, or null`
+export { REMAINING_HOURS_MAX, REMAINING_HOURS_RULE }
 
 /** Refuses remaining hours no task can hold, anything but a finite number
  * of at least 0 or null, with REMAINING_HOURS_RULE. These are cleanRemaining's
