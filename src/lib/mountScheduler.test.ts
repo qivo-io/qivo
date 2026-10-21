@@ -172,24 +172,24 @@ describe('createMountScheduler', () => {
     expect(a.state.mounted).toBe(8)
   })
 
-  it('runs slices within 8ms of a frame, then waits for the next frame', async () => {
+  it('runs slices within 24ms of a frame, then waits for the next frame', async () => {
     const frames: (() => void)[] = []
     const s = setup({ frames })
     s.scheduler.setRoot(s.root)
-    // 0.5ms an item: a first slice of 8 takes 4ms
-    const a = s.list('a', 10_000, 0, 0.5)
+    // 2ms an item: a first slice of 8 takes 16ms, the next of 4 takes 8ms
+    const a = s.list('a', 10_000, 0, 2)
     await s.settle()
     // the first slice waits for a frame
     expect(s.tasks).toHaveLength(0)
     expect(frames).toHaveLength(1)
     frames.shift()?.()
     await s.run()
-    // 4ms into the frame: the next slice follows at once
+    // 16ms into the frame: the next slice follows at once
     expect(s.tasks).toHaveLength(1)
     expect(frames).toHaveLength(0)
     await s.run()
-    // past 8ms of the frame: the next slice waits for the next frame
-    expect(a.state.grown.reduce((x, y) => x + y, 0) * 0.5).toBeGreaterThan(8)
+    // 24ms into the frame: the next slice waits for the next frame
+    expect(a.state.grown.reduce((x, y) => x + y, 0) * 2).toBeGreaterThanOrEqual(24)
     expect(s.tasks).toHaveLength(0)
     expect(frames).toHaveLength(1)
   })
