@@ -31,7 +31,16 @@ import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, rule } from '../lib/functions'
 import { NAME_MAX, nameOverCap } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
-import { assertExpected, BOOLEAN, exact, type Fields, type Next, NUMBER, TEXT } from './expected'
+import {
+  assertExpected,
+  BOOLEAN,
+  exact,
+  type Fields,
+  type Next,
+  NUMBER,
+  namedRecord,
+  TEXT,
+} from './expected'
 import { newTeamDefaults } from './orgs'
 import {
   type AccessRemoval,
@@ -220,7 +229,7 @@ export async function assertTeamExpected(
     fields: TEAM_FIELDS,
     record: 'team',
     id: team.id,
-    label: `team "${team.name}"`,
+    label: namedRecord('team', team.name, team.id),
     row: team,
     expected,
     next,

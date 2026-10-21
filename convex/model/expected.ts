@@ -233,6 +233,12 @@ export function refuseCreateExpected(body: Readonly<Record<string, unknown>>, re
   if (Object.hasOwn(body, 'expected')) throw badRequest(createExpectedSentence(record))
 }
 
+/** How a refusal names a `kind` of record called `name`, such as
+ * `team "Hardware"`, or by `id` when the name is blank, as one saved before
+ * names were required can be. */
+export const namedRecord = (kind: string, name: string, id: string): string =>
+  name.trim() === '' ? `${kind} ${id}` : `${kind} "${name.trim()}"`
+
 /** Joins words as people list them: "a", "a and b", "a, b and c". */
 export const listed = (words: readonly string[]): string =>
   words.length <= 1

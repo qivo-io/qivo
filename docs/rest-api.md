@@ -2193,7 +2193,9 @@ anyone. `it` becomes `them` for several fields, listed as `status and
 remaining_hours` or `title, status and parent`. `<record>` is the task's key,
 such as `QN-12`, `comment <id> on QN-12`, `project ENC`, `milestone
 "Prototype validated"`, `label "Hardware"`, `team "Hardware"`, `the access of
-Emil Strand to project PCB` or `user "Priya Patel"`. For example:
+Emil Strand to project PCB` or `user "Priya Patel"`. A team or milestone
+whose name is blank, as one saved before 2026-10-15 can be, reads as `team
+<id>` or `milestone <id>`. For example:
 
 ```json
 { "error": "Aisha Rahman changed status of QN-12 since you read it, so nothing was saved; read QN-12 again and resend your change" }

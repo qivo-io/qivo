@@ -682,6 +682,21 @@ describe('values saved before their rule', () => {
       ).toMatchObject({ status: 409 })
     }
     expect(await names()).toEqual(['  ', '', ''])
+    // a blank name gives the sentence nothing to quote, so it names the id
+    expect(
+      await send(
+        fx,
+        'PATCH',
+        teamPath,
+        { name: 'Firmware', expected: { name: 'Hardware' } },
+        admin,
+      ),
+    ).toEqual({
+      status: 409,
+      text: JSON.stringify({
+        error: `name of team ${fx.team.id} changed since you read it, so nothing was saved; read team ${fx.team.id} again and resend your change`,
+      }),
+    })
 
     // REST, blank as read or with spaces
     for (const [path, name, seen] of [

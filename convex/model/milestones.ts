@@ -26,6 +26,7 @@ import {
   exact,
   type Fields,
   type Next,
+  namedRecord,
   TEXT,
   type View,
 } from './expected'
@@ -208,7 +209,7 @@ export async function assertMilestoneExpected(
     fields: a.view === 'app' ? MILESTONE_FIELDS : MILESTONE_MACHINE_FIELDS,
     record: 'milestone',
     id: a.milestone.id,
-    label: `milestone "${a.milestone.name}"`,
+    label: namedRecord('milestone', a.milestone.name, a.milestone.id),
     row: a.milestone,
     expected: a.expected,
     next: a.next,
