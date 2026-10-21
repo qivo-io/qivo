@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useRef } from 'react'
 
 type PaintBounds = {
   element: HTMLElement
@@ -80,14 +80,18 @@ function bodyPath(
 }
 
 /* Clip hidden cards out of the pinned chrome, and paint all visible panel
-   shapes through one fixed material surface below the workspace content. */
+   shapes through one fixed material surface below the workspace content.
+   `paneRef` is a stable callback ref that binds the pane and returns the
+   unbinding, so binding sets no state. It paints once synchronously, in the
+   commit, because the material stays hidden until it is clipped
+   (appearance.css). The material renders inside the pane's subtree, so its
+   ref is set before the pane's. */
 export function useBoardPanelClipping() {
-  const [pane, setPane] = useState<HTMLDivElement | null>(null)
   const materialRef = useRef<HTMLDivElement>(null)
 
-  useLayoutEffect(() => {
+  const paneRef = useCallback((pane: HTMLDivElement) => {
     const material = materialRef.current
-    if (!pane || !material) return
+    if (!material) return () => {}
 
     let frame = 0
     const painted = new Map<HTMLElement, Map<PaintProperty, StylePaint>>()
@@ -259,7 +263,16 @@ export function useBoardPanelClipping() {
     }
     // Groups can appear or disappear after filters, scope changes or live
     // updates. Attribute changes are excluded so our own clips do not loop.
-    const mutationObserver = new MutationObserver(() => {
+    // Changes inside a status cell (cards) never add or remove a lane part;
+    // the lane body's ResizeObserver covers the height they change.
+    const mutationObserver = new MutationObserver((records) => {
+      if (
+        records.every(
+          (record) =>
+            record.target instanceof Element && record.target.closest('[data-board-cell]'),
+        )
+      )
+        return
       syncObserved()
       schedule()
     })
@@ -283,7 +296,7 @@ export function useBoardPanelClipping() {
       resizeObserver.disconnect()
       for (const [element, entry] of painted) restore(element, entry)
     }
-  }, [pane])
+  }, [])
 
-  return { paneRef: setPane, materialRef }
+  return { paneRef, materialRef }
 }

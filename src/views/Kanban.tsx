@@ -52,178 +52,198 @@ type CardDropTarget = {
 
 /* Enter the next lane at its heading and the previous lane at its last tasks
    once the current lane has been read in the scroll direction. Leave scrolling
-   inside a tall lane to the browser. */
+   inside a tall lane to the browser. Returns a stable `bind(pane)` that
+   installs the listeners and returns their removal, so binding the pane sets
+   no state and the Board renders once when it mounts. While `enabled` is
+   false the listeners do nothing, and the first of them to see it drops any
+   snap or boundary in progress. */
 function useLaneWheelSnap(enabled: boolean) {
-  const [pane, setPane] = React.useState<HTMLDivElement | null>(null)
-  React.useEffect(() => {
-    if (!enabled || !pane) return
-    let wheelBoundary: { panel: HTMLElement; direction: number } | null = null
-    let pendingSnap: {
-      from: number
-      top: number
-      direction: number
-      lastTop: number
-      lastMovementAt: number
-    } | null = null
-    const clearBoundary = () => {
-      wheelBoundary = null
-    }
-    const snapTo = (top: number, direction: number, from = pane.scrollTop) => {
-      const max = pane.scrollHeight - pane.clientHeight
-      top = Math.max(0, Math.min(max, top))
-      from = Math.max(0, Math.min(max, from))
-      pendingSnap = {
-        from,
-        top,
-        direction,
-        lastTop: pane.scrollTop,
-        lastMovementAt: performance.now(),
+  const isEnabled = useLatest(() => enabled)
+  return React.useCallback(
+    (pane: HTMLDivElement) => {
+      let wheelBoundary: { panel: HTMLElement; direction: number } | null = null
+      let pendingSnap: {
+        from: number
+        top: number
+        direction: number
+        lastTop: number
+        lastMovementAt: number
+      } | null = null
+      const clearBoundary = () => {
+        wheelBoundary = null
       }
-      pane.scrollTo({
-        top,
-        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
-      })
-    }
-    const onOtherInput = () => {
-      clearBoundary()
-      if (pendingSnap) {
+      /* False while disabled, after dropping what a disabled snap leaves. */
+      const active = () => {
+        if (isEnabled()) return true
+        wheelBoundary = null
         pendingSnap = null
-        pane.scrollTo({ top: pane.scrollTop, behavior: 'instant' })
+        return false
       }
-    }
-    const onScroll = () => {
-      if (wheelBoundary) {
-        const { panel, direction } = wheelBoundary
-        if (!pane.contains(panel)) {
-          clearBoundary()
-        } else {
-          const bounds = pane.getBoundingClientRect()
-          const rect = panel.getBoundingClientRect()
-          const heading =
-            rect.top - bounds.top - Number.parseFloat(getComputedStyle(pane).scrollPaddingTop)
-          const offset =
-            direction > 0
-              ? Math.max(heading, rect.bottom - bounds.top - pane.clientHeight)
-              : heading
-          // Native wheel animation can carry even a modest tick past an edge.
-          // Stop at the edge actually crossed, without accumulating or holding
-          // ticks inside the lane. Keep the boundary until another input so an
-          // animated wheel's remaining movement cannot skip the final row.
-          if (direction * offset < -1) {
-            pane.scrollTo({ top: pane.scrollTop + offset, behavior: 'instant' })
+      const snapTo = (top: number, direction: number, from = pane.scrollTop) => {
+        const max = pane.scrollHeight - pane.clientHeight
+        top = Math.max(0, Math.min(max, top))
+        from = Math.max(0, Math.min(max, from))
+        pendingSnap = {
+          from,
+          top,
+          direction,
+          lastTop: pane.scrollTop,
+          lastMovementAt: performance.now(),
+        }
+        pane.scrollTo({
+          top,
+          behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+            ? 'auto'
+            : 'smooth',
+        })
+      }
+      const onOtherInput = () => {
+        if (!active()) return
+        clearBoundary()
+        if (pendingSnap) {
+          pendingSnap = null
+          pane.scrollTo({ top: pane.scrollTop, behavior: 'instant' })
+        }
+      }
+      const onScroll = () => {
+        if (!active()) return
+        if (wheelBoundary) {
+          const { panel, direction } = wheelBoundary
+          if (!pane.contains(panel)) {
+            clearBoundary()
+          } else {
+            const bounds = pane.getBoundingClientRect()
+            const rect = panel.getBoundingClientRect()
+            const heading =
+              rect.top - bounds.top - Number.parseFloat(getComputedStyle(pane).scrollPaddingTop)
+            const offset =
+              direction > 0
+                ? Math.max(heading, rect.bottom - bounds.top - pane.clientHeight)
+                : heading
+            // Native wheel animation can carry even a modest tick past an edge.
+            // Stop at the edge actually crossed, without accumulating or holding
+            // ticks inside the lane. Keep the boundary until another input so an
+            // animated wheel's remaining movement cannot skip the final row.
+            if (direction * offset < -1) {
+              pane.scrollTo({ top: pane.scrollTop + offset, behavior: 'instant' })
+            }
           }
         }
+        if (!pendingSnap) return
+        if (pendingSnap.direction * (pane.scrollTop - pendingSnap.top) >= -1) {
+          pendingSnap = null
+        } else if (pane.scrollTop !== pendingSnap.lastTop) {
+          pendingSnap.lastTop = pane.scrollTop
+          pendingSnap.lastMovementAt = performance.now()
+        }
       }
-      if (!pendingSnap) return
-      if (pendingSnap.direction * (pane.scrollTop - pendingSnap.top) >= -1) {
-        pendingSnap = null
-      } else if (pane.scrollTop !== pendingSnap.lastTop) {
-        pendingSnap.lastTop = pane.scrollTop
-        pendingSnap.lastMovementAt = performance.now()
-      }
-    }
-    const onWheel = (event: WheelEvent) => {
-      clearBoundary()
-      if (
-        event.defaultPrevented ||
-        event.ctrlKey ||
-        event.metaKey ||
-        event.shiftKey ||
-        Math.abs(event.deltaX) >= Math.abs(event.deltaY)
-      )
-        return
-      const direction = Math.sign(event.deltaY)
-      const now = performance.now()
-      const bounds = pane.getBoundingClientRect()
-      const snapTop = bounds.top + Number.parseFloat(getComputedStyle(pane).scrollPaddingTop)
-      if (pendingSnap) {
-        const arrived = pendingSnap.direction * (pane.scrollTop - pendingSnap.top) >= -1
-        // Protect only a moving snap. Refreshing a timeout on each wheel
-        // event would swallow steady mouse ticks forever after arrival.
-        // Actual movement also bounds the wait if a resize or interruption
-        // makes the original target unreachable.
-        const moving = now - pendingSnap.lastMovementAt < 180
-        if (direction === pendingSnap.direction && !arrived && moving) {
-          event.preventDefault()
+      const onWheel = (event: WheelEvent) => {
+        if (!active()) return
+        clearBoundary()
+        if (
+          event.defaultPrevented ||
+          event.ctrlKey ||
+          event.metaKey ||
+          event.shiftKey ||
+          Math.abs(event.deltaX) >= Math.abs(event.deltaY)
+        )
           return
+        const direction = Math.sign(event.deltaY)
+        const now = performance.now()
+        const bounds = pane.getBoundingClientRect()
+        const snapTop = bounds.top + Number.parseFloat(getComputedStyle(pane).scrollPaddingTop)
+        if (pendingSnap) {
+          const arrived = pendingSnap.direction * (pane.scrollTop - pendingSnap.top) >= -1
+          // Protect only a moving snap. Refreshing a timeout on each wheel
+          // event would swallow steady mouse ticks forever after arrival.
+          // Actual movement also bounds the wait if a resize or interruption
+          // makes the original target unreachable.
+          const moving = now - pendingSnap.lastMovementAt < 180
+          if (direction === pendingSnap.direction && !arrived && moving) {
+            event.preventDefault()
+            return
+          }
+          if (direction !== pendingSnap.direction && !arrived && moving) {
+            event.preventDefault()
+            const { from, top } = pendingSnap
+            pane.scrollTo({ top: pane.scrollTop, behavior: 'instant' })
+            // Reverse between the same readable edges, even when one wheel tick
+            // could not cover the distance already travelled. Swapping endpoints
+            // also keeps repeated reversals aimed at those edges.
+            snapTo(from, direction, top)
+            return
+          }
+          // Native wheel scrolling does not reliably cancel a smooth scrollTo.
+          // Stop an unfinished snap before reading geometry in the new direction.
+          if (!arrived) pane.scrollTo({ top: pane.scrollTop, behavior: 'instant' })
+          pendingSnap = null
         }
-        if (direction !== pendingSnap.direction && !arrived && moving) {
-          event.preventDefault()
-          const { from, top } = pendingSnap
-          pane.scrollTo({ top: pane.scrollTop, behavior: 'instant' })
-          // Reverse between the same readable edges, even when one wheel tick
-          // could not cover the distance already travelled. Swapping endpoints
-          // also keeps repeated reversals aimed at those edges.
-          snapTo(from, direction, top)
-          return
-        }
-        // Native wheel scrolling does not reliably cancel a smooth scrollTo.
-        // Stop an unfinished snap before reading geometry in the new direction.
-        if (!arrived) pane.scrollTo({ top: pane.scrollTop, behavior: 'instant' })
-        pendingSnap = null
-      }
-      const panels = Array.from(pane.querySelectorAll<HTMLElement>('[data-swimlane-panel]'))
-      const current = panels.findIndex((panel) => {
-        const rect = panel.getBoundingClientRect()
-        if (direction < 0) {
-          // Keep the lane being left active throughout the upward transition.
-          // Native wheel motion can carry its heading past the pin line before
-          // the next event, into the gap or over the preceding panel. That
-          // preceding lane is ready to read only when its bottom (or its
-          // heading, if it fits) reaches the corresponding viewport edge.
-          const heading = rect.top - snapTop
-          const bottom = rect.bottom - bounds.top - pane.clientHeight
-          return Math.max(heading, bottom) >= -1
-        }
-        return rect.top <= snapTop + 1 && rect.bottom > snapTop
-      })
-      const next = current + direction
-      if (current < 0) return
-      const currentBounds = panels[current].getBoundingClientRect()
-      if (direction > 0) {
-        // The natural panel bottom includes the sticky foot's height. Once
-        // it fits, the final task row is fully visible above the foot.
-        if (currentBounds.bottom > bounds.top + pane.clientHeight + 1) {
+        const panels = Array.from(pane.querySelectorAll<HTMLElement>('[data-swimlane-panel]'))
+        const current = panels.findIndex((panel) => {
+          const rect = panel.getBoundingClientRect()
+          if (direction < 0) {
+            // Keep the lane being left active throughout the upward transition.
+            // Native wheel motion can carry its heading past the pin line before
+            // the next event, into the gap or over the preceding panel. That
+            // preceding lane is ready to read only when its bottom (or its
+            // heading, if it fits) reaches the corresponding viewport edge.
+            const heading = rect.top - snapTop
+            const bottom = rect.bottom - bounds.top - pane.clientHeight
+            return Math.max(heading, bottom) >= -1
+          }
+          return rect.top <= snapTop + 1 && rect.bottom > snapTop
+        })
+        const next = current + direction
+        if (current < 0) return
+        const currentBounds = panels[current].getBoundingClientRect()
+        if (direction > 0) {
+          // The natural panel bottom includes the sticky foot's height. Once
+          // it fits, the final task row is fully visible above the foot.
+          if (currentBounds.bottom > bounds.top + pane.clientHeight + 1) {
+            wheelBoundary = { panel: panels[current], direction }
+            return
+          }
+        } else if (currentBounds.top < snapTop - 1) {
+          // A sticky heading can stay pinned while earlier task rows are off
+          // screen. Scroll back through those rows before leaving this lane.
           wheelBoundary = { panel: panels[current], direction }
           return
         }
-      } else if (currentBounds.top < snapTop - 1) {
-        // A sticky heading can stay pinned while earlier task rows are off
-        // screen. Scroll back through those rows before leaving this lane.
-        wheelBoundary = { panel: panels[current], direction }
-        return
+        if (next < 0 || next >= panels.length) return
+        event.preventDefault()
+        const destination = panels[next].getBoundingClientRect()
+        const headingOffset = destination.top - snapTop
+        // Read a tall preceding lane from its bottom instead of skipping its
+        // lower tasks. A short lane fits in full at its heading. clientHeight
+        // keeps the bottom above any horizontal scrollbar.
+        const offset =
+          direction > 0
+            ? headingOffset
+            : Math.max(headingOffset, destination.bottom - (bounds.top + pane.clientHeight))
+        const top = Math.max(
+          0,
+          Math.min(pane.scrollHeight - pane.clientHeight, pane.scrollTop + offset),
+        )
+        snapTo(top, direction)
       }
-      if (next < 0 || next >= panels.length) return
-      event.preventDefault()
-      const destination = panels[next].getBoundingClientRect()
-      const headingOffset = destination.top - snapTop
-      // Read a tall preceding lane from its bottom instead of skipping its
-      // lower tasks. A short lane fits in full at its heading. clientHeight
-      // keeps the bottom above any horizontal scrollbar.
-      const offset =
-        direction > 0
-          ? headingOffset
-          : Math.max(headingOffset, destination.bottom - (bounds.top + pane.clientHeight))
-      const top = Math.max(
-        0,
-        Math.min(pane.scrollHeight - pane.clientHeight, pane.scrollTop + offset),
-      )
-      snapTo(top, direction)
-    }
-    pane.addEventListener('wheel', onWheel, { passive: false })
-    pane.addEventListener('scroll', onScroll, { passive: true })
-    pane.addEventListener('scrollend', clearBoundary, { passive: true })
-    window.addEventListener('pointerdown', onOtherInput, { capture: true, passive: true })
-    window.addEventListener('keydown', onOtherInput, { capture: true })
-    return () => {
-      pane.removeEventListener('wheel', onWheel)
-      pane.removeEventListener('scroll', onScroll)
-      pane.removeEventListener('scrollend', clearBoundary)
-      window.removeEventListener('pointerdown', onOtherInput, true)
-      window.removeEventListener('keydown', onOtherInput, true)
-    }
-  }, [enabled, pane])
-  return setPane
+      pane.addEventListener('wheel', onWheel, { passive: false })
+      pane.addEventListener('scroll', onScroll, { passive: true })
+      const onScrollEnd = () => {
+        if (active()) clearBoundary()
+      }
+      pane.addEventListener('scrollend', onScrollEnd, { passive: true })
+      window.addEventListener('pointerdown', onOtherInput, { capture: true, passive: true })
+      window.addEventListener('keydown', onOtherInput, { capture: true })
+      return () => {
+        pane.removeEventListener('wheel', onWheel)
+        pane.removeEventListener('scroll', onScroll)
+        pane.removeEventListener('scrollend', onScrollEnd)
+        window.removeEventListener('pointerdown', onOtherInput, true)
+        window.removeEventListener('keydown', onOtherInput, true)
+      }
+    },
+    [isEnabled],
+  )
 }
 
 /* The Overview's card, whole — for the panels one element can draw by itself
@@ -496,19 +516,26 @@ function Kanban({
   const grouped = wide || info.isMeta
   const byAssignee = tweaks.metaViz === 'assignees'
   const subIds = info.subIds
-  const snapRef = useLaneWheelSnap(
+  const bindSnap = useLaneWheelSnap(
     (byAssignee || (grouped && tweaks.metaViz === 'swimlanes')) && !dragId,
   )
-  const { paneRef: clippingRef, materialRef } = useBoardPanelClipping()
+  const { paneRef: bindClipping, materialRef } = useBoardPanelClipping()
   const headerRef = React.useRef<HTMLDivElement>(null)
-  const bodyRef = React.useRef<HTMLDivElement>(null)
+  const bodyRef = React.useRef<HTMLDivElement | null>(null)
+  // Binding sets no state, so mounting renders the Board once. React 19
+  // calls the returned cleanup when the pane goes; StrictMode binds twice.
   const scrollRef = React.useCallback(
-    (pane: HTMLDivElement | null) => {
+    (pane: HTMLDivElement) => {
       bodyRef.current = pane
-      snapRef(pane)
-      clippingRef(pane)
+      const unbindSnap = bindSnap(pane)
+      const unbindClipping = bindClipping(pane)
+      return () => {
+        unbindClipping()
+        unbindSnap()
+        if (bodyRef.current === pane) bodyRef.current = null
+      }
     },
-    [snapRef, clippingRef],
+    [bindSnap, bindClipping],
   )
 
   const scoped = P.scopedIssues(info)
