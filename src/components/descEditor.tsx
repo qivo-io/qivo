@@ -913,6 +913,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       canonRef.current = text
       // ids entering committed text are the server's from here on — its
       // description saves decide their lifetime, never this editor's reap
+      const entering = sessionUploadsRef.current.filter((id) => text.includes(id))
       sessionUploadsRef.current = sessionUploadsRef.current.filter((id) => !text.includes(id))
       P.updateIssue(
         issueKey,
@@ -920,7 +921,12 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
         {
           seen: { description: keep.seen },
           keepDraft: keep.keepDraft,
-          keepUnsaved: keep.keepUnsaved,
+          // a refused save leaves its uploads to this draft again, so a
+          // discard still deletes the ones no saved text took
+          keepUnsaved: () => {
+            sessionUploadsRef.current = [...new Set([...sessionUploadsRef.current, ...entering])]
+            keep.keepUnsaved()
+          },
         },
       )
     }

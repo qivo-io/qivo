@@ -1523,22 +1523,28 @@ async function taskSubtree(
   if (walk.whole) return { children: walk.children, partial: false, more: false }
   let kids = walk.children.get(root.id) ?? []
   if (walk.rootWhole) return { children: new Map([[root.id, kids]]), partial: true, more: false }
-  // the subtask after the last one read, in by_parent order: the first
-  // when none was read, and one past them all says whether any is left out
-  const after = (last: Doc<'issues'> | undefined) =>
-    ctx.db
+  // the first subtask in by_parent order that is not among `read`: the
+  // first of all when none was read, and past them all whether any is left
+  // out. Subtasks created at the same moment as the last one read are
+  // looked at too, past those already read.
+  const after = async (read: readonly Doc<'issues'>[]): Promise<Doc<'issues'> | null> => {
+    const last = read.at(-1)
+    const seen = new Set(read.map((kid) => kid.id))
+    const rest = ctx.db
       .query('issues')
       .withIndex('by_parent', (q) =>
         last === undefined
           ? q.eq('parent_id', root.id)
-          : q.eq('parent_id', root.id).gt('_creationTime', last._creationTime),
+          : q.eq('parent_id', root.id).gte('_creationTime', last._creationTime),
       )
-      .first()
+    for await (const kid of rest) if (!seen.has(kid.id)) return kid
+    return null
+  }
   if (kids.length === 0) {
-    const first = await after(undefined)
+    const first = await after([])
     kids = first === null ? [] : [first]
   }
-  const more = kids.length > 0 && (await after(kids[kids.length - 1])) !== null
+  const more = kids.length > 0 && (await after(kids)) !== null
   return { children: new Map([[root.id, kids]]), partial: true, more }
 }
 

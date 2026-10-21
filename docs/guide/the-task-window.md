@@ -104,7 +104,8 @@ and follow the organization's per-file size limit ([Attachment limits](./organiz
 A task has at most 20 labels, 100 links and 100 attachments, with images in
 its description counted as attachments while the description shows them.
 Taking an image out of the description and saving frees its place at once,
-and an undo that brings the image back within a day keeps it. At a limit the
+and an undo that brings the image back within a day keeps it. A task keeps
+the 100 images most recently taken out this way. At a limit the
 control is disabled
 with a sentence such as **This task has 20 labels, the most a task can have**,
 and the label picker only takes labels off. A file you drop or paste on a

@@ -314,7 +314,7 @@ Useful field rules:
   and only the app uploads one. When you rewrite a
   description, keep its `![alt](att:<id>)` references: a save that drops one
   removes that image from the task, and it is deleted a day later unless a
-  save names it again. A description can only show images attached to its
+  save names it again (a task keeps the 100 most recently removed). A description can only show images attached to its
   own task.
 - **History:** `list_task_activity` or `GET /v1/tasks/{ref}/activity`
   answers who changed what, oldest first. Comments are in `list_comments`.
