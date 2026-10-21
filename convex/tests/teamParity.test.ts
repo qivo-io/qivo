@@ -730,6 +730,32 @@ function deleteHardware(fx: Fx, held?: string | null) {
   })
 }
 
+/* deleteTeamCore deleting Hardware as the admin, with the tables it queried. */
+async function deleteCounting(fx: Fx, held: 'leave' | 'keep_as_viewer'): Promise<string[]> {
+  const tables: string[] = []
+  await fx.t.run(async (ctx) => {
+    const db = new Proxy(ctx.db, {
+      get(target, prop) {
+        const value: unknown = Reflect.get(target, prop)
+        if (prop === 'query') {
+          return (table: 'profiles') => {
+            tables.push(table)
+            return target.query(table)
+          }
+        }
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    await deleteTeamCore({ ...ctx, db } as MutationCtx, {
+      me: fx.admin,
+      team: fx.team,
+      held,
+      now: NOW,
+    })
+  })
+  return tables
+}
+
 /* What deleting Hardware takes away: the team, its memberships and shares. */
 const hardwareLeft = (fx: Fx) =>
   fx.t.run(async (ctx) => ({
@@ -835,41 +861,68 @@ describe("deleting a team settles its members' open tasks", () => {
         })
       }
     })
-    const tables: string[] = []
-    await fx.t.run(async (ctx) => {
-      const db = new Proxy(ctx.db, {
-        get(target, prop) {
-          const value: unknown = Reflect.get(target, prop)
-          if (prop === 'query') {
-            return (table: 'profiles') => {
-              tables.push(table)
-              return target.query(table)
-            }
-          }
-          return typeof value === 'function' ? value.bind(target) : value
-        },
-      })
-      await deleteTeamCore({ ...ctx, db } as MutationCtx, {
-        me: fx.admin,
-        team: fx.team,
-        held: 'leave',
-        now: NOW,
-      })
-    })
+    const tables = await deleteCounting(fx, 'keep_as_viewer')
     expect(await hardwareLeft(fx)).toEqual({ team: null, members: 0, shares: 0 })
+    expect(await grantsOf(fx.t, fx.emil.id)).toEqual([[fx.meta.id, 'viewer']])
     expect(tables.filter((t) => t === 'profiles')).toEqual(['profiles'])
+  })
+
+  it('deletes without reading tasks or people when the tasks stay with their holders', async () => {
+    const fx = await setup()
+    await plantTeam(fx, fx.org.id, 'Design')
+    const tables = await deleteCounting(fx, 'leave')
+    expect(await hardwareLeft(fx)).toEqual({ team: null, members: 0, shares: 0 })
+    expect(tables.filter((t) => t === 'issues' || t === 'profiles')).toEqual([])
+  })
+
+  it('keeps each member as a Viewer of the shared projects that hold their own tasks', async () => {
+    const fx = await setup()
+    await plantTeam(fx, fx.org.id, 'Design')
+    const ola = await plantSeat(fx.t, {
+      org_id: fx.org.id,
+      name: 'ola',
+      email: 'ola@testbed.test',
+      auth_user_id: `auth_ola_${fx.org.id}`,
+      accepted_at: NOW,
+    })
+    // Hardware shares FW and PCB themselves rather than TBED
+    await fx.t.run(async (ctx) => {
+      await ctx.db.insert('team_members', {
+        team_id: fx.team.id,
+        profile_id: ola.id,
+        is_leader: false,
+      })
+      for (const project_id of [fx.sub.id, fx.sub2.id])
+        await ctx.db.insert('project_team_access', {
+          project_id,
+          team_id: fx.team.id,
+          level: 'user',
+        })
+      const share = await ctx.db
+        .query('project_team_access')
+        .withIndex('by_project_team', (q) =>
+          q.eq('project_id', fx.meta.id).eq('team_id', fx.team.id),
+        )
+        .unique()
+      if (share !== null) await ctx.db.delete(share._id)
+    })
+    await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub2.id, assignee_id: ola.id })
+    await deleteHardware(fx, 'keep_as_viewer')
+    expect(await grantsOf(fx.t, fx.emil.id)).toEqual([[fx.sub.id, 'viewer']])
+    expect(await grantsOf(fx.t, ola.id)).toEqual([[fx.sub2.id, 'viewer']])
   })
 
   it('refuses the last team and anyone but an admin before anything is settled', async () => {
     const fx = await setup()
-    await refused(deleteHardware(fx, fx.pia.id), 'rule', 'cannot delete the last team')
+    // handing the tasks to the Viewer would be refused with its own sentence
+    await refused(deleteHardware(fx, fx.viewer.id), 'rule', 'cannot delete the last team')
     await plantTeam(fx, fx.org.id, 'Design')
     // the fixture's user leads Hardware and TBED but is no organization admin
     await refused(
       as(fx.t, fx.user).mutation(api.teams.deleteDeep, {
         org_id: fx.org.id,
         id: fx.team.id,
-        on_held_tasks: { reassign_to: fx.pia.id },
+        on_held_tasks: { reassign_to: fx.viewer.id },
       }),
       'rule',
       'only organization admins can delete teams',

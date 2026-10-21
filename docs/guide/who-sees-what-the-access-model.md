@@ -24,8 +24,8 @@ sub-projects. Removing a member from a team, or deleting a team, asks the same
 way for every project the team shares. The window lists those tasks and
 offers two choices. **Keep as Viewer** gives each of those people a Viewer
 grant, so they keep the tasks and can read the project but cannot change it.
-For a team, the grant is on each project the team shared that holds the
-listed tasks. **Reassign** hands every listed task, reviewer roles included,
+For a team, each person's grant is on each project the team shared that holds
+their own listed tasks. **Reassign** hands every listed task, reviewer roles included,
 to one person who keeps User or Lead access to those tasks, or to
 **Unassigned**, and removes the access. Every removal, deleting a team
 included, saves the removal and the choice together. If a task cannot be

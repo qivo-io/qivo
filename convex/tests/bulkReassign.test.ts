@@ -273,6 +273,8 @@ describe('reassigning the tasks of an access removal', () => {
     const before = await holders(fx)
     const e = await expectRefusal(deleteHardware(fx, fx.leo.id), 'rule')
     expect((e.data as Refusal).message).toBe(reassignTooLarge(true))
+    // the app quotes the sentence rather than blaming the tasks
+    expect((e.data as Refusal).reason).toBeUndefined()
     expect(await hardware(fx)).not.toBeNull()
     expect(await membership(fx)).not.toBeNull()
     expect(await holders(fx)).toEqual(before)

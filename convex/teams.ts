@@ -17,9 +17,10 @@
  *                           membership (lib/access canChangeAccess)
  *
  * Narration is asymmetric BY DESIGN: create/update/delete write NO
- * activity; the membership verbs write three ('added'/'removed'/'made'/
- * 'demoted' against the USER, hung on the team branch) — exactly what the old
- * client logged.
+ * activity of their own; the membership verbs write three ('added'/'removed'/
+ * 'made'/'demoted' against the USER, hung on the team branch) — exactly what
+ * the old client logged. A deletion that keeps members as Viewers or hands
+ * their tasks over narrates those writes as other removals do.
  *
  * Settings clamps mirror the old client's write path (bc022c2:3098-3126).
  * The SQL CHECKs behind them (0011/0018/0044/0070) raised bare 23514s — no

@@ -957,11 +957,14 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
         (n) => `${n} other projects`,
       )
   const inIt = places.length > 1 ? 'them' : 'it'
+  const deleting = change.kind === 'deleteTeam'
+  // a deleted team's people each keep sight of the projects of their own tasks
+  const theyCanSee =
+    deleting && places.length > 1 ? 'can each see the projects that hold them' : `can see ${seen}`
   const keepText =
     names.length === 1
       ? `${names[0].split(' ')[0]} keeps ${theTasks} and can see ${seen}, but can't change anything in ${inIt}, including ${these}.`
-      : `They keep their tasks and can see ${seen}, but can't change anything in ${inIt}, including ${these}.`
-  const deleting = change.kind === 'deleteTeam'
+      : `They keep their tasks and ${theyCanSee}, but can't change anything in ${inIt}, including ${these}.`
   const title =
     change.kind === 'userGrant'
       ? `Remove ${person}?`

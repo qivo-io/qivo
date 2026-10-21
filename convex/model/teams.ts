@@ -491,14 +491,16 @@ export async function removeTeamMemberCore(
  * Deletes the team (model/cascade.ts deleteTeamDeep) and settles, by `held`,
  * the open tasks its members can no longer see once its grants are gone
  * (model/projectAccess.ts removeAndSettle), in one transaction or not at all.
- * 'keep_as_viewer' gives each of them a Viewer grant on each project the team
- * shared that showed those tasks, as removing a member does. `reassign_to`
- * hands the tasks over by the task update rules, at most REASSIGN_MAX of them
- * (reassignTooLarge). Only an organization admin deletes a team, and never
- * the organization's last one. `expected` refuses the delete over a field
- * someone else changed since it was read. The caller refuses a read-only
- * organization (teams.deleteDeep is an orgMutation). The deletion writes no
- * activity row; each Viewer grant writes `changed access on` for its project.
+ * 'leave' settles nothing and answers no list, so it deletes the team without
+ * working out who loses sight of what. 'keep_as_viewer' gives each of those
+ * people a Viewer grant on each project the team shared that showed their own
+ * tasks, as removing a member does. `reassign_to` hands the tasks over by the
+ * task update rules, at most REASSIGN_MAX of them (reassignTooLarge). Only an
+ * organization admin deletes a team, and never the organization's last one.
+ * `expected` refuses the delete over a field someone else changed since it was
+ * read. The caller refuses a read-only organization (teams.deleteDeep is an
+ * orgMutation). The deletion writes no activity row; each Viewer grant writes
+ * `changed access on` for its project, and each handed-over task its update.
  */
 export async function deleteTeamCore(
   ctx: MutationCtx,
@@ -509,23 +511,23 @@ export async function deleteTeamCore(
     expected?: Readonly<Record<string, unknown>>
     now: string
   },
-): Promise<AccessRemoval> {
+): Promise<void> {
   const { me, team, now } = a
   if (me.org_role !== 'admin') throw rule('only organization admins can delete teams')
   await assertNotLastTeam(ctx, team)
   await assertTeamExpected(ctx, me, team, a.expected, DELETES)
+  const remove = () => deleteTeamDeep(ctx, { team, actor: me, now })
+  if (a.held === 'leave') return remove()
   // the shares go with the team, so where a Viewer grant goes is read first
   const reach = await teamReach(ctx, team)
   const settled = await removeAndSettle(ctx, {
     me,
     people: await peopleOf(ctx, { team }),
     projects: reach.projects,
-    remove: () => deleteTeamDeep(ctx, { team, actor: me, now }),
+    remove,
     held: a.held,
     viewerOn: (project) => viewerProjectFor(ctx, reach.shared, project),
     now,
   })
   for (const project of settled.viewer_grants) await narrateAccess(ctx, { me, project, now })
-  const { viewer_grants: _granted, ...settlement } = settled
-  return { removed: true, ...settlement }
 }
