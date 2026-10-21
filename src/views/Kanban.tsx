@@ -451,13 +451,36 @@ function Kanban({
 }) {
   // App makes its actions again every render; the cards keep one identity
   const onOpenIssue = useLatest(actions.openIssue)
-  const [dragId, setDragId] = useStateK(null)
+  const [dragId, setDragId] = useStateK<string | null>(null)
   useUpdateBlocker(!!dragId)
   const [dragOver, setDragOver] = useStateK(null)
+  // The dragged row. dragend reaches React only through it, so a delivery
+  // that moves or removes the task while it is dragged replaces the row and
+  // the drag would never end.
+  const dragSource = React.useRef<HTMLElement | null>(null)
+  const startDrag = useLatest((id: string, source: HTMLElement) => {
+    dragSource.current = source
+    setDragId(id)
+  })
   const endDrag = useLatest(() => {
+    dragSource.current = null
     setDragId(null)
     setDragOver(null)
   })
+  // A native drag fires no pointer or key events, so the first one after a
+  // drag whose row left the page ends it. That releases the update blocker
+  // and the wheel snap.
+  React.useEffect(() => {
+    if (!dragId) return
+    const orphaned = () => {
+      if (dragSource.current?.isConnected === false) endDrag()
+    }
+    const events = ['pointermove', 'pointerdown', 'keydown'] as const
+    for (const name of events) window.addEventListener(name, orphaned, true)
+    return () => {
+      for (const name of events) window.removeEventListener(name, orphaned, true)
+    }
+  }, [dragId, endDrag])
 
   // `wide` = a scope that names no project (All projects, My view); `mine` is
   // the one that also narrows to my own tasks
@@ -541,7 +564,7 @@ function Kanban({
         place={place}
         dimmed={dimmed}
         onOpen={onOpenIssue}
-        onDragStart={setDragId}
+        onDragStart={startDrag}
         onDragEnd={endDrag}
         dragId={dragId}
         context={P.contextVersion}
@@ -569,13 +592,13 @@ function Kanban({
   }
   const moveCard = (statusId: string, id: string, target: CardDropTarget) => {
     const iid = id || dragId
-    // a drop can also arrive from a keyboard/HTML5 path that never went
-    // through the card's own `draggable`, so the right is re-checked here
+    // A drop can come from a synthetic drag or one that started outside the
+    // Board, neither of which went through a card's own `draggable`, so the
+    // right is checked again here.
     const patch = dropPatchFor(iid, statusId, target)
     // One mutation keeps the owner change and status move atomic.
     if (patch && Object.keys(patch).length) P.updateIssue(iid, patch)
-    setDragId(null)
-    setDragOver(null)
+    endDrag()
   }
   // Native drag previews can leave the board. Only advertise and accept a
   // drop where the task already belongs (or an eligible person lane).

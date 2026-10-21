@@ -9,7 +9,8 @@ import type { StoreVersion } from '@/store/updates'
 
 type CardActions = {
   onOpen: (id: string) => void
-  onDragStart: (id: string) => void
+  /** `source` is the dragged row, which the Board watches for leaving the page. */
+  onDragStart: (id: string, source: HTMLElement) => void
   onDragEnd: () => void
   dragId: string | null
 }
@@ -144,7 +145,7 @@ function TaskRow({
         }
         e.dataTransfer.effectAllowed = 'move'
         e.dataTransfer.setData('text/plain', it.id)
-        onDragStart(it.id)
+        onDragStart(it.id, e.currentTarget)
       }}
       onDragEnd={onDragEnd}
       onMouseEnter={() => setHovered(true)}

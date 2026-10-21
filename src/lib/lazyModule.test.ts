@@ -281,7 +281,8 @@ describe('background loading', () => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const path = rel ? `${rel}/${entry.name}` : entry.name
         if (entry.isDirectory()) walk(join(dir, entry.name), path)
-        else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
+        // test files and the fixtures they share (*.setup.ts) never ship
+        else if (/\.tsx?$/.test(entry.name) && !/\.(test|setup)\.tsx?$/.test(entry.name)) {
           const text = readFileSync(join(dir, entry.name), 'utf8')
           if (/\blazy\(\s*\(\)|(?<!typeof )\bimport\(\s*['"]/.test(text) && !allowed.has(path))
             found.push(path)
