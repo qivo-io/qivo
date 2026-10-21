@@ -211,4 +211,16 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
     await board.deliver()
     expect(delay.mock.calls.length).toBeLessThan(20)
   })
+
+  it('keeps the cards it sized when a change moves only the store context', async () => {
+    const board = await loadBoard(network, tasks(500))
+    await board.render(root)
+    const delay = vi.spyOn(board.P, 'delayColor')
+    // a person's new name renders every mounted card again, and sizes none
+    board.snapshot.profiles[0].name = 'Planner Renamed'
+    await board.deliver()
+    expect(document.querySelector('[aria-label$=": Planner Renamed"]')).not.toBeNull()
+    expect(delay.mock.calls.length).toBeLessThan(cards().length * 4)
+    expect(delay.mock.calls.length).toBeLessThan(100)
+  })
 })
