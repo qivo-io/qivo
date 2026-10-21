@@ -1048,6 +1048,52 @@ describe("deleting a team settles its members' open tasks", () => {
     expect(await hardwareLeft(fx)).toMatchObject({ team: null, members: 0, shares: 0 })
   }, 60_000)
 
+  it('reads a legacy owned project once, however long its old description', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    await t.run(async (ctx) => {
+      await ctx.db.insert('teams', {
+        id: uuid(),
+        org_id: f.org.id,
+        name: 'Design',
+        stale_days: 14,
+        archive_days: 30,
+        track_delay_default: false,
+        created_at: NOW,
+      })
+    })
+    // eight projects stored before the description cap, 900 KiB each: read
+    // twice they pass Convex's 16 MiB
+    for (let i = 0; i < 8; i++)
+      await t.run((ctx) =>
+        ctx.db.insert('projects', {
+          id: uuid(),
+          org_id: f.org.id,
+          type: 'meta',
+          key: `OLD${i}`,
+          name: `Old ${i}`,
+          description: 'x'.repeat(900 * 1024),
+          sort_order: 10 + i,
+          num: 10 + i,
+          track_delay: false,
+          created_at: NOW,
+          team_id: f.team.id,
+        }),
+      )
+    await as(t, f.admin).mutation(api.teams.deleteDeep, {
+      org_id: f.org.id,
+      id: f.team.id,
+      on_held_tasks: 'leave',
+    })
+    const owned = await t.run((ctx) =>
+      ctx.db
+        .query('projects')
+        .withIndex('by_team', (q) => q.eq('team_id', f.team.id))
+        .collect(),
+    )
+    expect(owned).toEqual([])
+  }, 60_000)
+
   it('checks the room every 100 rows while a deletion that settles tasks deletes them', async () => {
     const fx = await setup()
     let checks = 0

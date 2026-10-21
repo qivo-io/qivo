@@ -68,8 +68,9 @@ export const TEAM_DELETE_ROWS_MAX = 3000
 export const TEAM_TOO_LARGE = `deleting a team can remove at most ${TEAM_DELETE_ROWS_MAX.toLocaleString('en-US')} of its memberships and project shares at once, so remove some of its members or project shares first`
 
 /* Refuses a team deletion that changes more than TEAM_DELETE_ROWS_MAX rows,
- * read before anything else so the refusal itself fits. */
-async function assertTeamFits(ctx: QueryCtx, team: Doc<'teams'>): Promise<void> {
+ * read before anything else so the refusal itself fits. Answers the team's
+ * legacy owned projects it read, for deleteTeamDeep. */
+async function assertTeamFits(ctx: QueryCtx, team: Doc<'teams'>): Promise<Doc<'projects'>[]> {
   const over = TEAM_DELETE_ROWS_MAX + 1
   const memberships = await ctx.db
     .query('team_members')
@@ -85,6 +86,7 @@ async function assertTeamFits(ctx: QueryCtx, team: Doc<'teams'>): Promise<void> 
     .take(over)
   if (memberships.length + shares.length + owned.length > TEAM_DELETE_ROWS_MAX)
     throw rule(TEAM_TOO_LARGE)
+  return owned
 }
 
 export const TEAM_RUNS_RULE = 'requires an organization admin or a leader of this team'
@@ -523,9 +525,10 @@ export async function deleteTeamCore(
   if (me.org_role !== 'admin') throw rule('only organization admins can delete teams')
   await assertNotLastTeam(ctx, team)
   await assertTeamExpected(ctx, me, team, a.expected, DELETES)
-  await assertTeamFits(ctx, team)
-  if (a.held === 'leave') return deleteTeamDeep(ctx, { team, actor: me, now })
-  const remove = () => deleteTeamDeep(ctx, { team, actor: me, now, guard: () => assertRoom(ctx) })
+  const owned = await assertTeamFits(ctx, team)
+  if (a.held === 'leave') return deleteTeamDeep(ctx, { team, actor: me, now, owned })
+  const remove = () =>
+    deleteTeamDeep(ctx, { team, actor: me, now, owned, guard: () => assertRoom(ctx) })
   // the shares go with the team, so where a Viewer grant goes is read first
   const reach = await teamReach(ctx, team)
   const settled = await removeAndSettle(ctx, {

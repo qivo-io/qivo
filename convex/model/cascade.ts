@@ -43,7 +43,9 @@ async function deleteProfileRateLimit(ctx: MutationCtx, profileId: string): Prom
  * reads, so the callers bound the rows first (model/teams.ts
  * TEAM_DELETE_ROWS_MAX). `guard`, when given, runs before every
  * TEAM_DELETE_GUARD_ROWS rows, so a deletion that shares its transaction with
- * other reads can stop before it fills it. */
+ * other reads can stop before it fills it. `owned`, when given, is the
+ * team's legacy owned projects as the caller already read them, so a large
+ * old description is not read twice. */
 export async function deleteTeamDeep(
   ctx: MutationCtx,
   a: {
@@ -51,6 +53,7 @@ export async function deleteTeamDeep(
     actor: Doc<'profiles'>
     now: string
     guard?: () => Promise<void>
+    owned?: readonly Doc<'projects'>[]
   },
 ): Promise<void> {
   const { team } = a
@@ -58,10 +61,12 @@ export async function deleteTeamDeep(
   const next = async () => {
     if (a.guard !== undefined && rows++ % TEAM_DELETE_GUARD_ROWS === 0) await a.guard()
   }
-  const legacyOwnedProjects = await ctx.db
-    .query('projects')
-    .withIndex('by_team', (q) => q.eq('team_id', team.id))
-    .collect()
+  const legacyOwnedProjects =
+    a.owned ??
+    (await ctx.db
+      .query('projects')
+      .withIndex('by_team', (q) => q.eq('team_id', team.id))
+      .collect())
   for (const project of legacyOwnedProjects) {
     await next()
     await ctx.db.patch(project._id, { team_id: undefined })
