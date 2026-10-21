@@ -278,20 +278,32 @@ describe('dev server files', () => {
   })
 
   it('ignores writes through a local directory replaced by a link while the server runs', async () => {
-    // .local/ becomes a link to a directory outside the checkout, and a
-    // source links to a report in it
+    // a source the watcher already watches links to a report outside the
+    // checkout
     const target = join(parent, 'local-elsewhere')
+    const report = join(target, 'report.html')
     mkdirSync(target)
-    writeFileSync(join(target, 'report.html'), 'report')
+    writeFileSync(report, 'report')
+    symlinkSync(report, join(root, 'src', 'early-report.html'))
+    await new Promise((done) => setTimeout(done, 300))
+    writeFileSync(report, '<p>watched</p>')
+    await expect.poll(() => events.includes(join(root, 'src/early-report.html'))).toBe(true)
+    // .local/ becomes a link to the report's directory. src/ stays as it
+    // is, because a change there makes the watcher look at the source again.
     rmSync(join(root, '.local'), { recursive: true })
     symlinkSync(target, join(root, '.local'))
+    await new Promise((done) => setTimeout(done, 300))
+    const before = events.length
+    writeFileSync(report, '<p>report</p>')
+    await new Promise((done) => setTimeout(done, 600))
+    // another source links to the report through .local/
     symlinkSync(join(root, '.local', 'report.html'), join(root, 'src', 'local-report.html'))
     await new Promise((done) => setTimeout(done, 300))
-    writeFileSync(join(target, 'report.html'), '<p>report</p>')
+    writeFileSync(report, '<p>report again</p>')
     write('src/after-link.js')
     await expect.poll(() => events.includes(join(root, 'src/after-link.js'))).toBe(true)
     await new Promise((done) => setTimeout(done, 300))
-    expect(events.filter((path) => /local-report|local-elsewhere/.test(path))).toEqual([])
+    expect(events.slice(before).filter((path) => /report|local-elsewhere/.test(path))).toEqual([])
   })
 
   it('ignores a path whose real path is in a local directory', () => {
@@ -371,6 +383,13 @@ describe('dev server files', () => {
     rmSync(join(other, 'dev-temp'))
     expect(ignored(notes)).toBe(false)
     rmSync(join(parent, 'shots'))
+    // a local directory under a file is no link, and no check fails on it
+    rmSync(join(other, 'scripts'))
+    writeFileSync(join(other, 'scripts'), 'not a directory')
+    expect([ignored(notes), ignored(join(other, 'scripts', 'shots', 'x.png'))]).toEqual([
+      false,
+      true,
+    ])
   })
 
   it("matches only this checkout's directories, not one around it", () => {
