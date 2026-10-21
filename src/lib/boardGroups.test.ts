@@ -4,8 +4,10 @@ import {
   type BoardCellGroup,
   type BoardCellIssue,
   boardDropPatch,
+  estimateCardHeight,
   groupBoardAssignees,
   groupBoardCell,
+  MIN_CARD_PITCH,
 } from './boardGroups'
 
 describe('groupBoardAssignees', () => {
@@ -327,5 +329,49 @@ describe('groupBoardCell', () => {
     expect(groups[0].issues[0]).toBe(child)
     expect(all).toEqual([child, parent])
     expect(groupBoardCell([], byId)).toEqual([])
+  })
+})
+
+describe('estimateCardHeight', () => {
+  type Task = BoardCellIssue & { title: string; late?: boolean; placed?: boolean }
+  const task = (id: string, title = 'Testbed signed firmware task 12', more: Partial<Task> = {}) =>
+    ({ id, uuid: id, title, ...more }) as Task
+  const card = (issues: Task[], parent: Task | null = null, ancestors: Task[] = []) => ({
+    key: issues[0]?.id ?? parent?.id ?? 'card',
+    parent,
+    ancestors,
+    issues,
+  })
+  const shown = { banner: (it: Task) => !!it.late, placed: (it: Task) => !!it.placed }
+  const height = (group: BoardCellGroup<Task>, width = 203) =>
+    estimateCardHeight(group, width, shown)
+
+  it('matches the measured plain card, and the pitch is its height and gap', () => {
+    // 81.17px measured for a two-line title at 203px (see the constants)
+    expect(height(card([task('a')]))).toBe(82)
+    expect(height(card([task('a', 'Short')]))).toBe(MIN_CARD_PITCH - 8 + 1)
+  })
+
+  it('never falls for a longer title, a banner, a place, more rows or a narrower card', () => {
+    const base = card([task('a')], task('p'), [task('g')])
+    const before = height(base)
+    const grown = [
+      card([task('a', 'A long title '.repeat(6))], task('p'), [task('g')]),
+      card([task('a', undefined, { late: true })], task('p'), [task('g')]),
+      card([task('a')], task('p', undefined, { placed: true }), [task('g')]),
+      card([task('a'), task('b')], task('p'), [task('g')]),
+      card([task('a')], task('p'), [task('g'), task('h')]),
+    ]
+    for (const group of grown) expect(height(group)).toBeGreaterThan(before)
+    expect(height(base, 150)).toBeGreaterThan(before)
+    for (let width = 400; width > 60; width -= 7)
+      expect(height(base, width - 7)).toBeGreaterThanOrEqual(height(base, width))
+  })
+
+  it('caps a title at six lines', () => {
+    const long = height(card([task('a', 'word '.repeat(200))]))
+    expect(height(card([task('a', 'word '.repeat(400))]))).toBe(long)
+    // the two-line card and four more 18.9px lines
+    expect(long).toBe(Math.ceil(81.17 + 4 * 18.9))
   })
 })

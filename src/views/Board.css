@@ -4,3 +4,14 @@
 [data-drop-over] .board-card {
   opacity: 0.5;
 }
+
+/* Offscreen cards skip style and layout, and stay findable and in the
+   accessibility tree. Each card carries its estimated height. */
+.board-card {
+  content-visibility: auto;
+}
+
+.board-card:focus-within {
+  /* Focus rings may extend beyond the card's paint containment. */
+  content-visibility: visible;
+}

@@ -176,3 +176,68 @@ export function groupBoardCell<T extends BoardCellIssue>(
 
   return [...groups.values()]
 }
+
+/* Card geometry for estimateCardHeight, measured in Chromium (Playwright,
+   1440 x 1000) on the benchmark's varied workspace at 500 tasks: each row's
+   getBoundingClientRect height by shape, with the title's line count from
+   its height over its line height. Rows: 8px padding above and below; a
+   task title line is 18.9px, then an 8px gap and a 17.4px meta line; a
+   parent title line is 19.6px, then an 8px gap and the 18px portrait line;
+   the delay banner is 25.4px; a place line adds its 8px gap and 17.4px.
+   TITLE_CHAR_PX is the width of a title character with its share of word
+   wrapping: 8px predicted 538 of 540 titles' lines exactly and 2 one line
+   high (the font's mean glyph is 6.8px). A task title is 54px narrower than
+   its card (borders, padding, portrait and gap), a child's another 12px for
+   the rail, a parent title 18px. */
+const ROW_PAD = 8
+const TITLE_LINE = 18.9
+const META = 8 + 17.4
+const PARENT_LINE = 19.6
+const PARENT_META = 8 + 18
+const BANNER = 25.4
+const PLACE_LINE = 8 + 17.4
+const TITLE_CHAR_PX = 8
+const TASK_CHROME_PX = 54
+const CHILD_CHROME_PX = TASK_CHROME_PX + 12
+const PARENT_CHROME_PX = 18
+const CARD_BORDER = 2
+/** The gap between cards in a cell. */
+export const CARD_GAP = 8
+/** The least a card and the gap after it take: one plain row of one line. */
+export const MIN_CARD_PITCH = Math.floor(CARD_BORDER + 2 * ROW_PAD + TITLE_LINE + META + CARD_GAP)
+
+/** The lines a title of `length` characters takes in `width` pixels. */
+const titleLines = (length: number, width: number) =>
+  Math.min(6, Math.max(1, Math.ceil((length * TITLE_CHAR_PX) / Math.max(1, width))))
+
+/** The height in pixels a card of `group` takes `cardWidth` pixels wide,
+    for a card that has not rendered yet. `banner` says whether a task row
+    shows the delay banner, `placed` whether a heading shows its place line.
+    It never falls for a longer title, a banner, more rows or a narrower
+    card. */
+export function estimateCardHeight<T extends BoardCellIssue & { title: string }>(
+  group: BoardCellGroup<T>,
+  cardWidth: number,
+  { banner, placed }: { banner: (issue: T) => boolean; placed: (issue: T) => boolean },
+) {
+  const heading = (issue: T) =>
+    2 * ROW_PAD +
+    PARENT_LINE * titleLines(issue.title.length, cardWidth - PARENT_CHROME_PX) +
+    PARENT_META +
+    (placed(issue) ? PLACE_LINE : 0)
+  const task = (issue: T, chrome: number) =>
+    (banner(issue) ? BANNER : 0) +
+    2 * ROW_PAD +
+    TITLE_LINE * titleLines(issue.title.length, cardWidth - chrome) +
+    META
+  let height = CARD_BORDER
+  for (const ancestor of group.ancestors) height += heading(ancestor)
+  if (group.parent) {
+    height += heading(group.parent)
+    // the children's bottom padding and the rule between two children
+    if (group.issues.length) height += ROW_PAD + group.issues.length - 1
+  }
+  const chrome = group.parent ? CHILD_CHROME_PX : TASK_CHROME_PX
+  for (const issue of group.issues) height += task(issue, chrome)
+  return Math.ceil(height)
+}

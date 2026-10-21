@@ -162,6 +162,7 @@ const board = ({ P, BoardCard, groupBoardCell }: Loaded) =>
       key={group.key}
       group={group}
       place={() => null}
+      estimate={80}
       onOpen={noop}
       onDragStart={noop}
       onDragEnd={noop}

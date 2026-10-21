@@ -18,6 +18,7 @@ import {
 } from '../store/planner'
 import { BoardPanelMaterial } from './BoardPanelMaterial'
 import './Board.css'
+import { estimateBoardCard } from './board/cardEstimate'
 import { BOARD_TASK_TYPE, createDropOver, type DropOver, useDropOver } from './board/dropOver'
 import { BoardCard } from './kanbanCards'
 import { useBoardPanelClipping } from './useBoardPanelClipping'
@@ -44,6 +45,16 @@ const FRAME = '1px solid var(--border)'
 /* The foot supplies natural bottom padding. When pinned, its transparent
    border lets body content continue through to the panel's rounded edge. */
 const FOOT_H = PANEL_R * 2
+
+/* The narrowest a status column gets, and a side-board's width. */
+const MIN_COLUMN_W = 220
+const SIDE_BOARD_W = 248
+/* A cell's padding and rule, inside its column. */
+const CELL_CHROME_X = 8 * 2 + 1
+
+/* The Board pane's width when it was last bound, for the cards' height
+   estimates. Before the first Board, the window less the sidebar. */
+let lastBoardWidth: number | null = null
 
 type CardDropTarget = {
   projectIds?: string[]
@@ -76,6 +87,8 @@ function useLaneWheelSnap(enabled: boolean) {
         direction: number
         lastTop: number
         lastMovementAt: number
+        /** the lane the snap enters, null for a reversal between edges */
+        panel: HTMLElement | null
       } | null = null
       const clearBoundary = () => {
         wheelBoundary = null
@@ -87,7 +100,38 @@ function useLaneWheelSnap(enabled: boolean) {
         pendingSnap = null
         return false
       }
-      const snapTo = (top: number, direction: number, from = pane.scrollTop) => {
+      /* How far `panel`'s edge is from where a snap in `direction` puts
+         it: going down its heading at the snap line, going up its bottom at
+         the pane's foot, or its heading if the lane fits. */
+      const offsetTo = (panel: HTMLElement, direction: number) => {
+        const bounds = pane.getBoundingClientRect()
+        const snapTop = bounds.top + Number.parseFloat(getComputedStyle(pane).scrollPaddingTop)
+        const destination = panel.getBoundingClientRect()
+        const headingOffset = destination.top - snapTop
+        // Read a tall preceding lane from its bottom instead of skipping its
+        // lower tasks. A short lane fits in full at its heading. clientHeight
+        // keeps the bottom above any horizontal scrollbar.
+        return direction > 0
+          ? headingOffset
+          : Math.max(headingOffset, destination.bottom - (bounds.top + pane.clientHeight))
+      }
+      /* Ends the snap in progress. Cards that render during it can take
+         another height than their estimate, which moves the lane, so it
+         lands on the lane's edge again with one instant scroll. */
+      const settleSnap = () => {
+        const snap = pendingSnap
+        pendingSnap = null
+        if (!snap?.panel || !pane.contains(snap.panel)) return
+        const offset = offsetTo(snap.panel, snap.direction)
+        if (Math.abs(offset) > 1)
+          pane.scrollTo({ top: pane.scrollTop + offset, behavior: 'instant' })
+      }
+      const snapTo = (
+        top: number,
+        direction: number,
+        from = pane.scrollTop,
+        panel: HTMLElement | null = null,
+      ) => {
         const max = pane.scrollHeight - pane.clientHeight
         top = Math.max(0, Math.min(max, top))
         from = Math.max(0, Math.min(max, from))
@@ -97,6 +141,7 @@ function useLaneWheelSnap(enabled: boolean) {
           direction,
           lastTop: pane.scrollTop,
           lastMovementAt: performance.now(),
+          panel,
         }
         pane.scrollTo({
           top,
@@ -139,7 +184,7 @@ function useLaneWheelSnap(enabled: boolean) {
         }
         if (!pendingSnap) return
         if (pendingSnap.direction * (pane.scrollTop - pendingSnap.top) >= -1) {
-          pendingSnap = null
+          settleSnap()
         } else if (pane.scrollTop !== pendingSnap.lastTop) {
           pendingSnap.lastTop = pane.scrollTop
           pendingSnap.lastMovementAt = performance.now()
@@ -219,20 +264,14 @@ function useLaneWheelSnap(enabled: boolean) {
         }
         if (next < 0 || next >= panels.length) return
         event.preventDefault()
-        const destination = panels[next].getBoundingClientRect()
-        const headingOffset = destination.top - snapTop
-        // Read a tall preceding lane from its bottom instead of skipping its
-        // lower tasks. A short lane fits in full at its heading. clientHeight
-        // keeps the bottom above any horizontal scrollbar.
-        const offset =
-          direction > 0
-            ? headingOffset
-            : Math.max(headingOffset, destination.bottom - (bounds.top + pane.clientHeight))
         const top = Math.max(
           0,
-          Math.min(pane.scrollHeight - pane.clientHeight, pane.scrollTop + offset),
+          Math.min(
+            pane.scrollHeight - pane.clientHeight,
+            pane.scrollTop + offsetTo(panels[next], direction),
+          ),
         )
-        snapTo(top, direction)
+        snapTo(top, direction, pane.scrollTop, panels[next])
       }
       let wheelBound = false
       const sync = () => {
@@ -245,7 +284,10 @@ function useLaneWheelSnap(enabled: boolean) {
       sync()
       pane.addEventListener('scroll', onScroll, { passive: true })
       const onScrollEnd = () => {
-        if (active()) clearBoundary()
+        if (!active()) return
+        clearBoundary()
+        // a snap whose target moved while it ran never arrives
+        if (pendingSnap) settleSnap()
       }
       pane.addEventListener('scrollend', onScrollEnd, { passive: true })
       window.addEventListener('pointerdown', onOtherInput, { capture: true, passive: true })
@@ -544,6 +586,7 @@ function Kanban({
   const scrollRef = React.useCallback(
     (pane: HTMLDivElement) => {
       bodyRef.current = pane
+      lastBoardWidth = pane.clientWidth || lastBoardWidth
       const unbindSnap = bindSnap(pane)
       const unbindClipping = bindClipping(pane)
       return () => {
@@ -603,12 +646,17 @@ function Kanban({
 
   // Group only after scope, filters, lane and status have selected the cell.
   // Keep the surrounding column counts and empty-state geometry unchanged.
-  function renderCards(items, place: (it: IssueVM) => ProjectPlace | null) {
+  function renderCards(
+    items: IssueVM[],
+    place: (it: IssueVM) => ProjectPlace | null,
+    cardWidth: number,
+  ) {
     return groupBoardCell(items, P.issueById).map((group) => (
       <BoardCard
         key={group.key}
         group={group}
         place={place}
+        estimate={estimateBoardCard(group, place, cardWidth)}
         onOpen={onOpenIssue}
         onDragStart={startDrag}
         onDragEnd={endDrag}
@@ -731,7 +779,14 @@ function Kanban({
   // Gated on the CLEARABLE filters: the note's only action is Clear.
   const noMatches = visible.length === 0 && clearable
 
-  const minColumnWidth = 220
+  const minColumnWidth = MIN_COLUMN_W
+  // the width a card takes in a lane's cell and in a side-board
+  const laneCardWidth =
+    Math.max(
+      minColumnWidth,
+      ((lastBoardWidth ?? window.innerWidth - 280) - CANVAS_PAD_X * 2 - 2) / statuses.length,
+    ) - CELL_CHROME_X
+  const sideCardWidth = SIDE_BOARD_W - 2 - 8 * 2
   const gridCols = `repeat(${statuses.length}, minmax(${minColumnWidth}px, 1fr))`
 
   // ---- side-boards layout (each group its own mini board) ----------------
@@ -855,7 +910,11 @@ function Kanban({
                             {/* the board's own header names the group; across all
                           projects that leaves the sub-project still to say */}
                             <div className="[display:flex] [flex-direction:column] [gap:8px] [min-height:8px]">
-                              {renderCards(items, (it) => (wide ? cardPlace(it, false) : null))}
+                              {renderCards(
+                                items,
+                                (it) => (wide ? cardPlace(it, false) : null),
+                                sideCardWidth,
+                              )}
                             </div>
                           </DropCell>
                         )
@@ -1074,7 +1133,7 @@ function Kanban({
                           last={ci === statuses.length - 1}
                           {...cardDropHandlers(laneKey, s.id, lane)}
                         >
-                          {renderCards(items, lanePlace)}
+                          {renderCards(items, lanePlace, laneCardWidth)}
                         </DropCell>
                       )
                     })}

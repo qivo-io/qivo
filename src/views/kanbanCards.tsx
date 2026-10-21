@@ -7,6 +7,7 @@ import type { BoardCellGroup } from '@/lib/boardGroups'
 import { StaticControlsContext, useLiveControls } from '@/lib/liveControls'
 import { type IssueVM, P, type ProjectPlace } from '@/store/planner'
 import type { StoreVersion } from '@/store/updates'
+import { parentPlaceOf } from './board/cardEstimate'
 import { BOARD_TASK_TYPE } from './board/dropOver'
 
 type CardActions = {
@@ -207,6 +208,8 @@ function TaskRow({
 type BoardCardProps = CardActions & {
   group: BoardCellGroup<IssueVM>
   place: (issue: IssueVM) => ProjectPlace | null
+  /** The card's height before it first renders (board/cardEstimate.ts). */
+  estimate: number
   /** P.contextVersion, for what the rows read besides their tasks. */
   context: StoreVersion
   /** The ids of the card's tasks that are stale now (P.isStale), joined.
@@ -218,17 +221,12 @@ type BoardCardProps = CardActions & {
 function BoardCardView({
   group,
   place,
+  estimate,
   context: _context,
   stale: _stale,
   ...actions
 }: BoardCardProps) {
-  // Repeated child project labels already name this shared project. Keep the
-  // parent's label when it has no local children or belongs to another project.
-  const parentPlace =
-    group.parent &&
-    !(group.issues.length > 0 && group.issues.every((it) => it.project === group.parent.project))
-      ? place(group.parent)
-      : null
+  const parentPlace = parentPlaceOf(group, place)
   // The card mounts no tooltip or popover roots until it is used.
   const root = useRef<HTMLDivElement>(null)
   const controls = useLiveControls(root)
@@ -237,6 +235,9 @@ function BoardCardView({
       ref={root}
       {...controls.rootProps}
       data-parent-card={group.parent?.id}
+      // Offscreen cards skip layout (Board.css) at this height until they
+      // first render; `auto` then keeps the size they really had.
+      style={{ containIntrinsicBlockSize: `auto ${estimate}px` }}
       className="board-card overflow-hidden rounded-md border border-border bg-surface-1 shadow-card transition-opacity duration-150 motion-reduce:transition-none"
     >
       <StaticControlsContext.Provider value={controls.value}>
@@ -299,7 +300,8 @@ const ownDrag = (props: BoardCardProps) =>
    are the same objects (P.issues keeps a task's object while it, its delay
    and its family stay the same), in the same places, with the same context,
    drag and stale tasks, renders the same, so it skips. Kanban keeps the
-   callbacks' identity. */
+   callbacks' identity. `estimate` is left out: it only sizes a card that
+   has not rendered yet, and a resize must not render every card again. */
 const BoardCard = memo(BoardCardView, (before, after) => {
   const a = members(before.group)
   const b = members(after.group)
