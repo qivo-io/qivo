@@ -4,9 +4,11 @@ import { flushSync } from 'react-dom'
 /* Mounts long lists in short slices after their first screen. Each list
    (a DeferredList) registers how many of its items still wait to mount and
    how to mount more. One slice is one posted task: it mounts about 8ms of
-   items, lists near the view first, then in document order, and the
-   browser renders between slices. The scheduler marks its root while
-   anything waits, without a React render. */
+   items, lists near the view first, then in document order. Slices follow
+   each other within about 8ms of a frame's start, then wait for the next
+   frame, so the browser renders between them and a frame holds at most a
+   little more than one slice. The scheduler marks its root while anything
+   waits, without a React render. */
 
 /** A list the scheduler mounts. `pending` is how many of its items still
     wait; `grow(n)` mounts the next `n` of them and `mountThrough(key)` the
@@ -27,8 +29,10 @@ type ObserverFactory = (
 ) => Observer
 
 type Options = {
-  /** runs a task after the browser has had a chance to render */
+  /** runs a task soon, without the clamping nested timers get */
   post?: (task: () => void) => void
+  /** runs a callback at the start of the next frame */
+  frame?: (callback: () => void) => void
   now?: () => number
   /** commits the React updates `grow` makes inside it before returning */
   flush?: (work: () => void) => void
@@ -61,6 +65,7 @@ const defaultObserver: ObserverFactory | null =
     `setRoot`, register its lists, and dispose of it when the view goes. */
 export function createMountScheduler({
   post = postMessageTask,
+  frame = (callback) => requestAnimationFrame(() => callback()),
   now = () => performance.now(),
   flush = flushSync,
   observer: factory = defaultObserver,
@@ -73,6 +78,8 @@ export function createMountScheduler({
   let root: HTMLElement | null = null
   let size = FIRST_SLICE
   let scheduled = false
+  // when the current frame started, as its frame callback saw it
+  let frameStart = Number.NEGATIVE_INFINITY
   let disposed = false
 
   const pendingLists = () => [...lists.values()].filter((list) => list.pending() > 0)
@@ -114,7 +121,12 @@ export function createMountScheduler({
   const schedule = () => {
     if (scheduled || disposed || !root || !pendingLists().length) return
     scheduled = true
-    post(slice)
+    if (now() - frameStart < SLICE_MS) post(slice)
+    else
+      frame(() => {
+        frameStart = now()
+        post(slice)
+      })
   }
 
   /* Near lists first, then the rest in document order. */

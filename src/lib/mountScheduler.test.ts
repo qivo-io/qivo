@@ -2,13 +2,15 @@
 import { describe, expect, it } from 'vitest'
 import { createMountScheduler, type DeferredMount } from './mountScheduler'
 
-/* The scheduler with its tasks, clock and observer in the test's hands. */
-function setup() {
+/* The scheduler with its tasks, frames, clock and observer in the test's
+   hands. Frames start at once unless `frames` collects them. */
+function setup({ frames }: { frames?: (() => void)[] } = {}) {
   const tasks: (() => void)[] = []
   let time = 0
   let report: ((entries: { target: Element; isIntersecting: boolean }[]) => void) | null = null
   const scheduler = createMountScheduler({
     post: (task) => tasks.push(task),
+    frame: (callback) => (frames ? frames.push(callback) : callback()),
     now: () => time,
     flush: (work) => work(),
     observer: (receive) => {
@@ -46,6 +48,10 @@ function setup() {
     scheduler,
     root,
     tasks,
+    /** Moves the clock on by `ms`. */
+    wait: (ms: number) => {
+      time += ms
+    },
     list,
     settle,
     run,
@@ -146,5 +152,27 @@ describe('createMountScheduler', () => {
     await s.settle()
     await s.run()
     expect(a.state.mounted).toBe(32)
+  })
+
+  it('runs slices within 8ms of a frame, then waits for the next frame', async () => {
+    const frames: (() => void)[] = []
+    const s = setup({ frames })
+    s.scheduler.setRoot(s.root)
+    // 0.1ms an item: a first slice of 32 takes 3.2ms
+    const a = s.list('a', 10_000, 0, 0.1)
+    await s.settle()
+    // the first slice waits for a frame
+    expect(s.tasks).toHaveLength(0)
+    expect(frames).toHaveLength(1)
+    frames.shift()?.()
+    await s.run()
+    // 3.2ms into the frame: the next slice follows at once
+    expect(s.tasks).toHaveLength(1)
+    expect(frames).toHaveLength(0)
+    await s.run()
+    // past 8ms of the frame: the next slice waits for the next frame
+    expect(a.state.grown.reduce((x, y) => x + y, 0) * 0.1).toBeGreaterThan(8)
+    expect(s.tasks).toHaveLength(0)
+    expect(frames).toHaveLength(1)
   })
 })

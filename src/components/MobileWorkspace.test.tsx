@@ -51,6 +51,10 @@ beforeEach(() => {
       port2 = { postMessage: () => slices.push(() => this.port1.onmessage?.()) }
     },
   )
+  // the slices wait for frames, which the same queue runs
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) =>
+    slices.push(() => callback(performance.now())),
+  )
   window.showToast = vi.fn()
   container = document.createElement('div')
   document.body.append(container)

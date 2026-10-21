@@ -117,6 +117,15 @@ describe('DeferredList', () => {
     }
   })
 
+  it('keeps the first screen mounted when an item arrives above it before any slice', async () => {
+    const items = Array.from({ length: 100 }, (_, n) => ({ key: `k${n}` }))
+    await show(items, 10)
+    const before = nodes()
+    await show([{ key: 'new' }, ...items], 10)
+    for (const node of before) expect(node.isConnected).toBe(true)
+    expect(nodes()[0].dataset.k).toBe('new')
+  })
+
   it('renders a list its first screen covers whole, with no waiting space', async () => {
     const items = Array.from({ length: 30 }, (_, n) => ({ key: `k${n}` }))
     await show(items, 30)

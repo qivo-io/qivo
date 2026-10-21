@@ -49,6 +49,10 @@ beforeEach(() => {
       port2 = { postMessage: () => slices.push(() => this.port1.onmessage?.()) }
     },
   )
+  // the slices wait for frames, which the same queue runs
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) =>
+    slices.push(() => callback(performance.now())),
+  )
   // the first screen: 400px and 500px more
   vi.stubGlobal('innerHeight', 400)
   window.showToast = vi.fn()
@@ -180,7 +184,8 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
     while (cards().length < 600) await slice()
     const stale = vi.spyOn(board.P, 'isStale')
     const before = cards().length
-    await slice()
+    // the next slice, after any frame it waits for
+    while (cards().length === before) await slice()
     const added = cards().length - before
     expect(added).toBeGreaterThan(0)
     // each card asks for its one task's staleness once as it renders

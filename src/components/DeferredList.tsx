@@ -113,10 +113,12 @@ export function DeferredList<T extends object>({
   listRole = false,
 }: Props<T>) {
   // the mounted count and the last mounted item's key, changed only by grow
-  const [state, setState] = useState<{ count: number; frontier: string | null }>(() => ({
-    count: Math.min(initial, items.length),
-    frontier: null,
-  }))
+  // the first screen's last item is the first frontier, so an item that
+  // arrives above it before any slice leaves every mounted item mounted
+  const [state, setState] = useState<{ count: number; frontier: string | null }>(() => {
+    const count = Math.min(initial, items.length)
+    return { count, frontier: count ? keyOf(items[count - 1]) : null }
+  })
   const mountedOf = (current: typeof state, list: readonly T[]) => {
     const at =
       current.frontier === null ? -1 : list.findIndex((it) => keyOf(it) === current.frontier)
