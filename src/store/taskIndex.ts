@@ -607,22 +607,24 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
       const byId: Record<string, IssueVM> = { ...issueById }
       const shaped = new Map<string, IssueVM>()
       const before = new Map<string, IssueVM | undefined>()
-      let membership = false
+      // tasks came or went, or one's number changed (a create's preview
+      // number), so the order by number must be taken again
+      let reorder = false
       for (const uuid of dirty) {
         const prev = byUuid.get(uuid)
         before.set(uuid, prev)
         if (prev && byId[prev.id] === prev) delete byId[prev.id]
         const row = from.issues.peek(uuid)
         if (!row) {
-          if (prev) membership = true
+          if (prev) reorder = true
           byUuid.delete(uuid)
           partial.delete(uuid)
           delay.delete(uuid)
           fileOwner(uuid, undefined)
           continue
         }
-        if (!prev) membership = true
         const it = shape(row)
+        if (!prev || prev.key !== it.key) reorder = true
         shaped.set(uuid, it)
         byUuid.set(uuid, it)
       }
@@ -642,7 +644,7 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
         const prev = before.get(uuid)
         if (!prev || !sameData(prev, it)) changed.add(uuid)
       }
-      if (!changed.size && !membership) {
+      if (!changed.size && !reorder) {
         // nothing a view reads changed: every task keeps its object
         for (const [uuid, prev] of before) if (prev) byUuid.set(uuid, prev)
         return moved
@@ -667,7 +669,7 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
         byUuid.set(uuid, prev)
         byId[prev.id] = prev
       }
-      issues = membership
+      issues = reorder
         ? sortTasks([...byUuid.values()])
         : issues.map((it) => byUuid.get(it.uuid) as IssueVM)
       issueById = byId
