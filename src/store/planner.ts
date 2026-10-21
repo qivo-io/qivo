@@ -5011,18 +5011,25 @@ export const PLANNER = {
   /* Invite someone to ONE project by email (0082). Awaited: the server
      decides known-vs-new guest, and a refusal is toasted with its own
      sentence (capitalized, like createOrg's). The new grant/seat arrives
-     with the snapshot delivery — no refetch. */
-  inviteToProject: async (metaId: string, email: string, level = 'user'): Promise<boolean> => {
+     with the snapshot delivery — no refetch. Null on a refusal; otherwise
+     `emailed` is the new seat that an invitation email goes to, or null when
+     the server found a seat for the address and mailed nothing. */
+  inviteToProject: async (
+    metaId: string,
+    email: string,
+    level = 'user',
+  ): Promise<{ emailed: string | null } | null> => {
     const org = orgOfProject(metaId)
-    if (!org) return false
+    if (!org) return null
     // a seat the address already names: the level it holds on screen, so a
     // change made meanwhile is not overwritten unseen
     const address = email.trim().toLowerCase()
     const seat = [...rows.profiles.values()].find((p) => p.org_id === org && p.email === address)
     const held =
       seat && rows.access.find((a) => a.project_id === metaId && a.profile_id === seat.id)
+    let invited: { id: string; emailed: boolean }
     try {
-      await sendAwaited(
+      invited = await sendAwaited(
         api.projects.inviteGuest,
         {
           org_id: org,
@@ -5036,13 +5043,13 @@ export const PLANNER = {
     } catch (e) {
       if (errData(e).reason === FIELD_CHANGED) {
         noticeFieldChanged(e)
-        return false
+        return null
       }
       const msg = errData(e).message || "couldn't send the invitation"
       toast(msg.charAt(0).toUpperCase() + msg.slice(1))
-      return false
+      return null
     }
-    return true
+    return { emailed: invited.emailed ? invited.id : null }
   },
   /* Who may create a top-level project follows the home org's setting, by
      the rule projects.create enforces (convex/lib/projectCreators.ts). It

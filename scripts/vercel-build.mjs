@@ -60,7 +60,7 @@ export function ignoredTheTarget(output) {
   return /Ignoring `--prod`, `--preview-name`, or `--deployment-name` flags/.test(output)
 }
 
-function setPreviewSiteUrl(env) {
+function setPreviewSiteUrl(env, run) {
   const siteUrl = previewSiteUrl(env)
   const name = deploymentName(env)
   if (name === null) {
@@ -75,11 +75,10 @@ function setPreviewSiteUrl(env) {
      from build-time input and go straight into argv here. Output is captured
      rather than inherited so the ignore-warning can be read, then re-printed
      so the build log still shows everything. */
-  const out = execFileSync(
-    'npx',
-    ['convex', 'env', 'set', 'SITE_URL', siteUrl, '--deployment', name],
-    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
-  )
+  const out = run('npx', ['convex', 'env', 'set', 'SITE_URL', siteUrl, '--deployment', name], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
   process.stdout.write(out)
   if (ignoredTheTarget(out)) {
     throw new Error(
@@ -118,12 +117,14 @@ export function websiteOrigin(env) {
   return isPreviewDeployKey(env.CONVEX_DEPLOY_KEY) ? previewSiteUrl(env) : env.QIVO_APP_ORIGIN
 }
 
-function main(env) {
+/* The build command. `run` is execFileSync, and `receipt` writes
+ * dist/version.json; the tests pass their own to see which commands run. */
+export function main(env, { run = execFileSync, receipt = writeDeploymentReceipt } = {}) {
   if (isPreviewDeployKey(env.CONVEX_DEPLOY_KEY)) {
     if (env.QIVO_ENVIRONMENT !== 'preview')
       throw new Error('Preview environment identity required.')
-    setPreviewSiteUrl(env)
-    execFileSync(
+    setPreviewSiteUrl(env, run)
+    run(
       'npx',
       ['convex', 'env', 'set', 'QIVO_ENVIRONMENT', 'preview', '--deployment', deploymentName(env)],
       { stdio: 'inherit' },
@@ -133,7 +134,7 @@ function main(env) {
       throw new Error('The injected Convex URL does not match the configured backend.')
     // a missing variable prints nothing on stdout, so it reads as ''
     const backendEnv = (name) =>
-      execFileSync('npx', ['convex', 'env', 'get', name], {
+      run('npx', ['convex', 'env', 'get', name], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
       }).trim()
@@ -146,11 +147,11 @@ function main(env) {
     }
     requireProductionBackendEnv(env, backendEnv)
   }
-  execFileSync('npm', ['run', 'build'], {
+  run('npm', ['run', 'build'], {
     stdio: 'inherit',
     env: { ...env, SITE_ORIGIN: websiteOrigin(env) },
   })
-  writeDeploymentReceipt(env)
+  receipt(env)
 }
 
 // import for the tests, run only as the build command

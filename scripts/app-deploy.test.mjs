@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
-import { assertAppTarget } from './app-deploy.mjs'
+import { describe, expect, it, vi } from 'vitest'
+import { assertAppTarget, deploy } from './app-deploy.mjs'
 
 describe('Node.js version', () => {
   const read = (file) => JSON.parse(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'))
@@ -43,5 +43,33 @@ describe('backend deployment boundary', () => {
     expect(() => assertAppTarget(preview)).not.toThrow()
     expect(() => assertAppTarget({ ...preview, QIVO_ENVIRONMENT: 'production' })).toThrow()
     expect(() => assertAppTarget({ ...stable, QIVO_ENVIRONMENT: 'preview' })).toThrow()
+  })
+})
+
+describe('the deploy runs the build that guards production', () => {
+  it('Vercel runs app-deploy.mjs, which deploys with vercel-build.mjs as the build command', () => {
+    const vercel = JSON.parse(readFileSync(new URL('../vercel.json', import.meta.url), 'utf8'))
+    expect(vercel.buildCommand).toContain('node scripts/app-deploy.mjs')
+    const run = vi.fn()
+    deploy(
+      {
+        QIVO_ENVIRONMENT: 'production',
+        QIVO_APP_ORIGIN: 'https://qivo.io',
+        QIVO_CONVEX_DEPLOYMENT: 'fixture-cloud-123',
+        CONVEX_DEPLOY_KEY: 'prod:fixture-cloud-123|test-only',
+      },
+      run,
+    )
+    expect(run).toHaveBeenCalledOnce()
+    expect(run.mock.calls[0].slice(0, 2)).toEqual([
+      'npx',
+      ['convex', 'deploy', '--cmd', 'node scripts/vercel-build.mjs'],
+    ])
+  })
+
+  it('pushes nothing for a target it refuses', () => {
+    const run = vi.fn()
+    expect(() => deploy({ QIVO_ENVIRONMENT: 'production' }, run)).toThrow()
+    expect(run).not.toHaveBeenCalled()
   })
 })

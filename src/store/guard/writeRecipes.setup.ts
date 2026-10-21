@@ -789,6 +789,7 @@ export const recipes: Recipe[] = [
     mutator: 'inviteToProject',
     what: 'a guest invitation',
     pause: 'P',
+    answers: { 'projects:inviteGuest': () => ({ id: 'guest-1', emailed: true }) },
     act: (P) => P.inviteToProject('plan', 'guest@example.test'),
   },
   {

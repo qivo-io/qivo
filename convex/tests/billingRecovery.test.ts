@@ -390,6 +390,73 @@ describe('billing recovery', () => {
     expect(await t.query(ready, { key })).toBeNull()
   })
 
+  it('records a reminder still unsent after its last hourly attempt for the operator', async () => {
+    const { t, f, sub } = await fixture()
+    const key = `${sub.id}:${UNTIL}:${f.admin.id}:seven_days`
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sub._id, { complimentary_until: UNTIL })
+      await ctx.db.insert('billing_notices', {
+        key,
+        org_id: f.org.id,
+        profile_id: f.admin.id,
+        kind: 'seven_days',
+        created_at: NOW,
+      })
+    })
+    vi.stubEnv('LETTERMINT_API_KEY', '')
+    const unsent = () =>
+      t.run(async (ctx) =>
+        (await ctx.db.query('platform_audit_log').collect()).filter(
+          (row) => row.action === 'notice_email_unsent',
+        ),
+      )
+    const input = { to: 'x', url: 'x', until: UNTIL, notice_key: key }
+    await t.action(internal.billingMail.send, { ...input, attempt: 23 })
+    expect(await unsent()).toEqual([])
+    await t.action(internal.billingMail.send, { ...input, attempt: 24 })
+    expect(
+      (await unsent()).map((row) => [row.target_org_id, row.target_profile_id, row.detail]),
+    ).toEqual([
+      [f.org.id, f.admin.id, { kind: 'seven_days', attempts: 25, reason: 'out_of_attempts' }],
+    ])
+    // a notice delivered meanwhile is not reported
+    await t.mutation(internal.billingMail.sent, { key })
+    await t.mutation(internal.billingMail.unsent, { key, attempts: 3 })
+    expect(await unsent()).toHaveLength(1)
+  })
+
+  it('records a reminder that failed and then stopped being due, but not one never tried', async () => {
+    const { t, f, sub } = await fixture()
+    const key = `${sub.id}:${UNTIL}:${f.admin.id}:one_day`
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sub._id, { complimentary_until: UNTIL })
+      await ctx.db.insert('billing_notices', {
+        key,
+        org_id: f.org.id,
+        profile_id: f.admin.id,
+        kind: 'one_day',
+        created_at: NOW,
+      })
+    })
+    vi.stubEnv('LETTERMINT_API_KEY', '')
+    const unsent = () =>
+      t.run(async (ctx) =>
+        (await ctx.db.query('platform_audit_log').collect()).filter(
+          (row) => row.action === 'notice_email_unsent',
+        ),
+      )
+    const input = { to: 'x', url: 'x', until: UNTIL, notice_key: key }
+    // the grant has expired by the time the retries run, so the expired
+    // reminder takes over and this one is no longer due
+    vi.setSystemTime('2026-09-25T13:00:00.000Z')
+    await t.action(internal.billingMail.send, { ...input, attempt: 0 })
+    expect(await unsent()).toEqual([])
+    await t.action(internal.billingMail.send, { ...input, attempt: 7 })
+    expect((await unsent()).map((row) => row.detail)).toEqual([
+      { kind: 'one_day', attempts: 7, reason: 'no_longer_due' },
+    ])
+  })
+
   it('discards obsolete reminder thresholds and revoked recipients', async () => {
     const { t, f, sub } = await fixture()
     const key = `${sub.id}:${UNTIL}:${f.admin.id}:seven_days`

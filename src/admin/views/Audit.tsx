@@ -29,6 +29,7 @@ const ACTION_LABEL: Record<string, string> = {
   create_org: 'Created organization',
   invite_member: 'Invited member',
   invite_email: 'Invitation email',
+  notice_email_unsent: 'Billing or deletion email not confirmed delivered',
   cancel_invite: 'Cancelled invitation',
   set_member_role: 'Changed member role',
   promote_org_admin: 'Promoted member to org admin',

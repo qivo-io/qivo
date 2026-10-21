@@ -1,13 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { internal } from '../_generated/api'
-import { sendBillingReminder, sendDeletionNotice, sendInviteEmail } from '../mail'
-import { newT } from './helpers.setup'
+import { sendAuthLetter, sendBillingReminder, sendDeletionNotice, sendInviteEmail } from '../mail'
 
 const letter = {
   to: 'recipient@example.test',
   intent: 'reset' as const,
   url: 'https://backend.example.test/reset?token=test-only-token',
 }
+const send = sendAuthLetter
 
 beforeEach(() => {
   vi.stubEnv('LETTERMINT_API_KEY', '')
@@ -24,14 +23,12 @@ afterEach(() => {
 })
 
 describe('authentication mail configuration', () => {
-  it('fails without disclosing an auth link when hosted mail is missing, even with local logging enabled', async () => {
+  it('is unavailable without disclosing an auth link when hosted mail is missing, even with local logging enabled', async () => {
     for (const environment of ['production', 'preview', 'staging']) {
       vi.stubEnv('QIVO_ENVIRONMENT', environment)
       vi.stubEnv('SITE_URL', 'https://app.example.test')
       vi.stubEnv('QIVO_ALLOW_LOCAL_AUTH_EMAIL_LOG', 'true')
-      await expect(newT().action(internal.mail.send, letter)).rejects.toThrow(
-        /Authentication email is unavailable/,
-      )
+      expect(await send(letter)).toBe('unavailable')
     }
     expect(console.log).not.toHaveBeenCalled()
   })
@@ -39,12 +36,12 @@ describe('authentication mail configuration', () => {
   it('requires both a loopback origin and explicit opt-in for local auth links', async () => {
     vi.stubEnv('QIVO_ENVIRONMENT', 'development')
     vi.stubEnv('SITE_URL', 'http://localhost:5199')
-    await expect(newT().action(internal.mail.send, letter)).rejects.toThrow(/unavailable/)
+    expect(await send(letter)).toBe('unavailable')
     vi.stubEnv('QIVO_ALLOW_LOCAL_AUTH_EMAIL_LOG', 'true')
     vi.stubEnv('SITE_URL', 'https://shared.example.test')
-    await expect(newT().action(internal.mail.send, letter)).rejects.toThrow(/unavailable/)
+    expect(await send(letter)).toBe('unavailable')
     vi.stubEnv('SITE_URL', 'http://localhost:5199')
-    await newT().action(internal.mail.send, letter)
+    expect(await send(letter)).toBe('sent')
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining(letter.url))
     expect(JSON.stringify(vi.mocked(console.log).mock.calls)).not.toContain(letter.to)
   })
@@ -52,12 +49,12 @@ describe('authentication mail configuration', () => {
   it('refuses a partial provider configuration and never falls back to logging', async () => {
     vi.stubEnv('LETTERMINT_API_KEY', 'test-only-provider-token')
     vi.stubEnv('QIVO_ALLOW_LOCAL_AUTH_EMAIL_LOG', 'true')
-    await expect(newT().action(internal.mail.send, letter)).rejects.toThrow(/MAIL_FROM/)
+    expect(await send(letter)).toBe('unavailable')
     // a sender that is not one bare address cannot reach the From header
     vi.stubEnv('MAIL_FROM', 'Qivo <no-reply@qivo.io>, other@example.test')
     const fetch = vi.fn()
     vi.stubGlobal('fetch', fetch)
-    await expect(newT().action(internal.mail.send, letter)).rejects.toThrow(/MAIL_FROM/)
+    expect(await send(letter)).toBe('unavailable')
     expect(fetch).not.toHaveBeenCalled()
     expect(console.log).not.toHaveBeenCalled()
   })
@@ -72,7 +69,7 @@ describe('authentication mail configuration', () => {
         .fn()
         .mockResolvedValue({ ok: true, json: async () => ({ message_id: 'test-message' }) })
       vi.stubGlobal('fetch', fetch)
-      await newT().action(internal.mail.send, { ...letter, intent })
+      expect(await send({ ...letter, intent })).toBe('sent')
       expect(fetch).toHaveBeenCalledOnce()
       expect(fetch.mock.calls[0][0]).toBe('https://api.lettermint.co/v1/send')
       expect(fetch.mock.calls[0][1].headers['x-lettermint-token']).toBe('test-only-provider-token')
@@ -94,6 +91,60 @@ describe('authentication mail configuration', () => {
       expect(logs).not.toContain('test-only-provider-token')
     },
   )
+})
+
+describe('an authentication letter that may have gone out', () => {
+  it('stays uncertain when a refusal follows a server error', async () => {
+    vi.stubEnv('LETTERMINT_API_KEY', 'test-only-provider-token')
+    vi.stubEnv('MAIL_FROM', 'no-reply@qivo.io')
+    const answer = (status: number) => ({
+      ok: false,
+      status,
+      headers: { get: () => null },
+      json: async () => ({}),
+    })
+    const fetch = vi.fn().mockResolvedValueOnce(answer(500)).mockResolvedValueOnce(answer(401))
+    vi.stubGlobal('fetch', fetch)
+    expect(await send(letter)).toBe('uncertain')
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('the send endpoint', () => {
+  const sendTo = async () => {
+    vi.stubEnv('LETTERMINT_API_KEY', 'test-only-provider-token')
+    vi.stubEnv('MAIL_FROM', 'no-reply@qivo.io')
+    const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ message_id: 'm' }) })
+    vi.stubGlobal('fetch', fetch)
+    await send(letter)
+    return fetch.mock.calls[0][0]
+  }
+
+  it('reaches a loopback stub only from a local development backend', async () => {
+    vi.stubEnv('QIVO_ENVIRONMENT', 'development')
+    vi.stubEnv('SITE_URL', 'http://localhost:5199')
+    vi.stubEnv('LETTERMINT_SEND_URL', 'http://127.0.0.1:4010/v1/send')
+    expect(await sendTo()).toBe('http://127.0.0.1:4010/v1/send')
+  })
+
+  it('ignores the stub anywhere else, and a stub that is not on this machine', async () => {
+    vi.stubEnv('LETTERMINT_SEND_URL', 'http://127.0.0.1:4010/v1/send')
+    for (const [environment, site] of [
+      ['production', 'https://qivo.io'],
+      ['staging', 'https://preview.qivo.io'],
+      ['development', 'https://shared.example.test'],
+    ]) {
+      vi.stubEnv('QIVO_ENVIRONMENT', environment)
+      vi.stubEnv('SITE_URL', site)
+      expect(await sendTo()).toBe('https://api.lettermint.co/v1/send')
+    }
+    vi.stubEnv('QIVO_ENVIRONMENT', 'development')
+    vi.stubEnv('SITE_URL', 'http://localhost:5199')
+    for (const stub of ['https://stub.example.test/v1/send', 'not a url']) {
+      vi.stubEnv('LETTERMINT_SEND_URL', stub)
+      expect(await sendTo()).toBe('https://api.lettermint.co/v1/send')
+    }
+  })
 })
 
 describe('invitation mail', () => {
@@ -327,9 +378,7 @@ describe('shared transactional transport', () => {
     vi.stubGlobal('fetch', fetch)
     expect(await sendBillingReminder(billing)).toBe(false)
     expect(await sendDeletionNotice(deletion)).toBe(false)
-    await expect(newT().action(internal.mail.send, letter)).rejects.toThrow(
-      'Authentication email delivery failed',
-    )
+    expect(await send(letter)).toBe('unsent')
     expect(fetch).toHaveBeenCalledTimes(3)
   })
 
@@ -354,7 +403,7 @@ describe('shared transactional transport', () => {
     vi.stubEnv('MAIL_FROM', 'no-reply@qivo.io')
     const fetch = vi.fn()
     vi.stubGlobal('fetch', fetch)
-    await newT().action(internal.mail.send, letter)
+    expect(await send(letter)).toBe('unavailable')
     expect(await sendBillingReminder(billing)).toBe(false)
     expect(fetch).not.toHaveBeenCalled()
   })
@@ -375,9 +424,7 @@ describe('shared transactional transport', () => {
       json: async () => ({ message: letter.url, errors: { to: [letter.to] } }),
     })
     vi.stubGlobal('fetch', fetch)
-    await expect(newT().action(internal.mail.send, letter)).rejects.toThrow(
-      'Authentication email delivery failed',
-    )
+    expect(await send(letter)).toBe('unsent')
     expect(fetch).toHaveBeenCalledOnce()
     const errors = JSON.stringify(vi.mocked(console.error).mock.calls)
     expect(errors).not.toContain(letter.url)

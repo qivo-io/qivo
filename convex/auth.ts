@@ -1,3 +1,4 @@
+import { getCurrentAuthContext } from '@better-auth/core/context'
 import { type AuthFunctions, createClient, type GenericCtx } from '@convex-dev/better-auth'
 import { convex, crossDomain } from '@convex-dev/better-auth/plugins'
 import { requireRunMutationCtx } from '@convex-dev/better-auth/utils'
@@ -16,6 +17,7 @@ import {
   SESSION_REQUEST_FIELDS,
   USER_PROFILE_FIELDS,
 } from './lib/authData'
+import { type AuthMailState, authMailPlugin, RESEND, recordAuthMail } from './lib/authMail'
 import {
   clampDemoSession,
   DEMO_TTL_MS,
@@ -26,9 +28,9 @@ import {
   requireDemoDeployment,
 } from './lib/demo'
 import { deploymentEnvironment } from './lib/deployment'
-import { requireAuthMailDelivery } from './lib/mailConfig'
 import { oauthAdapter } from './lib/oauthAdapter'
 import { oauthHooks, qivoOAuthProvider, registerOAuthCode } from './lib/oauthProvider'
+import { type AuthLetterIntent, sendAuthLetter } from './mail'
 
 /* SITE_URL = the APP origin (http://localhost:5199 in dev, https://qivo.io in
  * prod) — NOT the convex.site URL. baseURL is the auto-provided CONVEX_SITE_URL.
@@ -99,6 +101,16 @@ export const appOrigins = (opts?: { schemaOnly?: boolean }): string[] => {
  * or answer with an empty token, and nothing in Qivo calls them. */
 const PROVIDER_TOKEN_PATHS = ['/get-access-token', '/refresh-token', '/account-info']
 
+/* The endpoint a mail callback runs in, or null outside one (a direct call). */
+const currentEndpoint = () => getCurrentAuthContext().catch(() => null)
+
+/* A provider sign-in that registers a login whose address the provider did
+ * not confirm. Its first confirmation link is sent by the app's confirm
+ * screen (AuthGate), where a failed send can be shown, rather than here,
+ * where the redirect back to the app could not carry it. */
+const registersThroughProvider = (path: string | undefined) =>
+  path === '/sign-in/social' || path?.startsWith('/callback/') === true
+
 /** The user claims the Convex plugin puts in a token by default: every user
     field but its id and image. */
 const userClaims = (user: Record<string, unknown>) =>
@@ -153,8 +165,16 @@ export const authComponent = createClient<DataModel, typeof authSchema>(componen
 
 /* Split from createAuth so betterAuth/adapter.ts (createApi) and the schema
  * generator can consume the options. registerRoutes calls createAuth({}), so
- * ctx must only be dereferenced inside callbacks and the lazy adapter. */
-export const createAuthOptions = (ctx: GenericCtx<DataModel>, opts?: { schemaOnly?: boolean }) => {
+ * ctx must only be dereferenced inside callbacks and the lazy adapter.
+ *
+ * Every authentication letter is sent while its request waits, and `mail`
+ * holds how it went for lib/authMail.ts to report. One options object serves
+ * one request: registerRoutes and every action build a fresh instance.
+ * `recovery` is the operator's recovery-link capture (createCaptureAuth). */
+export const createAuthOptions = (
+  ctx: GenericCtx<DataModel>,
+  opts?: { schemaOnly?: boolean; recovery?: { url: string | null } },
+) => {
   const siteUrl = opts?.schemaOnly ? SCHEMA_ONLY_ORIGIN : requireSiteUrl()
   const environment = opts?.schemaOnly ? undefined : deploymentEnvironment()
   if (environment && environment !== 'development' && !siteUrl.startsWith('https://')) {
@@ -164,6 +184,10 @@ export const createAuthOptions = (ctx: GenericCtx<DataModel>, opts?: { schemaOnl
   if (environment === 'demo' && !demo)
     throw new Error('The demo environment requires APP_MODE=demo')
   if (demo) requireDemoDeployment()
+  const mail: AuthMailState = { outcome: null }
+  const deliver = async (intent: AuthLetterIntent, to: string, url: string) =>
+    recordAuthMail(mail, await sendAuthLetter({ intent, to, url }))
+  const recovery = opts?.recovery
   return {
     baseURL: process.env.CONVEX_SITE_URL,
     /* crossDomain does not feed ctx.trustedOrigins — must be explicit or
@@ -259,33 +283,35 @@ export const createAuthOptions = (ctx: GenericCtx<DataModel>, opts?: { schemaOnl
       enabled: !demo,
       requireEmailVerification: true,
       sendResetPassword: async ({ user, url }) => {
-        requireAuthMailDelivery()
-        // The operator recovery-link flow replaces this callback wholesale —
-        // see createCaptureAuth below; the browser's "Forgot password?" mails.
-        await requireRunMutationCtx(ctx).scheduler.runAfter(0, internal.mail.send, {
-          to: user.email,
-          intent: 'reset',
-          url,
-        })
+        // The operator's recovery link is returned, never mailed.
+        if (recovery) recovery.url = url
+        else await deliver('reset', user.email, url)
+      },
+      /* A sign-up for an address that already has an account mails that
+       * account a note instead of a link, so every sign-up sends one letter
+       * (lib/authMail.ts). */
+      onExistingUserSignUp: async ({ user }) => {
+        await deliver('existing', user.email, `${siteUrl}/app`)
       },
     },
     emailVerification: {
       /* A confirmation link nobody can re-request is a dead end, and the token
-       * lives an hour. sendOnSignUp covers BOTH registrations: an OAuth one
-       * (Microsoft does not verify its mutable email claim, so Entra logins
-       * arrive unverified) and a password one, where it now stands in for the
-       * `?? requireEmailVerification` fallback better-auth reads otherwise.
-       * sendOnSignIn mails a fresh link when an unverified password login
-       * tries again — better-auth never re-sends on its own. */
+       * lives an hour. sendOnSignUp mails a password registration's link,
+       * standing in for the `?? requireEmailVerification` fallback
+       * better-auth reads otherwise. A provider registration (Microsoft does
+       * not verify its mutable email claim, so Entra logins arrive
+       * unverified) also reaches the callback, which leaves that first link
+       * to the app's confirm screen. sendOnSignIn mails a fresh link when an
+       * unverified password login tries again — better-auth never re-sends
+       * on its own. */
       sendOnSignUp: !demo,
       sendOnSignIn: !demo,
       sendVerificationEmail: async ({ user, url }) => {
-        requireAuthMailDelivery()
-        await requireRunMutationCtx(ctx).scheduler.runAfter(0, internal.mail.send, {
-          to: user.email,
-          intent: 'verify',
-          url,
-        })
+        const endpoint = await currentEndpoint()
+        if (registersThroughProvider(endpoint?.path)) return
+        // a resend without a session is refused for every address (lib/authMail.ts)
+        if (endpoint?.path === RESEND && !endpoint.context.session) return
+        await deliver('verify', user.email, url)
       },
     },
     /* Each provider joins only once its OAuth app is registered and its env
@@ -329,6 +355,9 @@ export const createAuthOptions = (ctx: GenericCtx<DataModel>, opts?: { schemaOnl
       }),
       ...(!demo ? [qivoOAuthProvider(ctx, siteUrl, opts?.schemaOnly)] : []),
       crossDomain({ siteUrl }),
+      ...(recovery
+        ? []
+        : [authMailPlugin(mail, (email) => deliver('unknown', email, `${siteUrl}/app#signup`))]),
       admin(),
       anonymous({ emailDomainName: 'demo.qivo.invalid', generateName: () => 'Nora' }),
     ],
@@ -339,22 +368,12 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => betterAuth(createAuthO
 
 /* Operator recovery-link capture (adminAuth.ts): a SECOND Better Auth
  * instance over the same options whose sendResetPassword writes the minted
- * URL into the caller's ref instead of scheduling mail. requestPasswordReset
- * awaits the callback inline (better-auth runs it in-transaction, nothing
- * defers), so the action reads the ref right after the call returns — no
- * table, no read-back, and the console's "it is not stored anywhere" stays
- * literally true. The normal flow above is untouched: two instances, one
- * options base, zero flags. An email with no login never invokes the
- * callback (anti-enumeration), so a still-null ref means user-not-found. */
-export const createCaptureAuth = (ctx: GenericCtx<DataModel>, captured: { url: string | null }) => {
-  const opts = createAuthOptions(ctx)
-  return betterAuth({
-    ...opts,
-    emailAndPassword: {
-      ...opts.emailAndPassword,
-      sendResetPassword: async ({ url }) => {
-        captured.url = url
-      },
-    },
-  })
-}
+ * URL into the caller's ref instead of mailing it, and which has no mail
+ * hooks, so it works while mail is off and mails nobody about an unknown
+ * address. requestPasswordReset awaits the callback inline, so the action
+ * reads the ref right after the call returns: no table, no read-back, and the
+ * console's "it is not stored anywhere" stays literally true. An email with
+ * no login never invokes the callback (anti-enumeration), so a still-null ref
+ * means user-not-found. */
+export const createCaptureAuth = (ctx: GenericCtx<DataModel>, captured: { url: string | null }) =>
+  betterAuth(createAuthOptions(ctx, { recovery: captured }))

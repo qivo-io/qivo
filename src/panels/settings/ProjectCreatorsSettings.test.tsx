@@ -71,8 +71,9 @@ async function load(setting: Setting) {
   requests = []
   // the Users page lists agent keys on mount
   network.query.mockResolvedValue([])
-  network.onUpdate.mockImplementation((_ref, _args, next) => {
-    next(structuredClone(snap))
+  // pending seats ask for their invitation emails (invites.deliveries)
+  network.onUpdate.mockImplementation((ref, _args, next) => {
+    next(getFunctionName(ref) === 'invites:deliveries' ? [] : structuredClone(snap))
     return () => {}
   })
   network.mutation.mockImplementation((ref, args) => {

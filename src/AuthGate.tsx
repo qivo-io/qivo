@@ -172,10 +172,8 @@ export function AuthGate() {
   const [bootFailed, setBootFailed] = useState(false)
   /* Who the session belongs to, read once from getSession. A ref, not state:
      load() consults it in the same tick the mount effect writes it, and a
-     setState would still read the old value there. `mailed` records that
-     sign-up ALREADY sent the first link (sendOnSignUp), which is what keeps
-     the confirm screen from mailing a duplicate seconds later. */
-  const account = useRef<{ email: string; verified: boolean; mailed: boolean } | null>(null)
+     setState would still read the old value there. */
+  const account = useRef<{ email: string; verified: boolean } | null>(null)
   const autoSent = useRef(false)
   /* The marketing site now offers Sign in and Create account side by side, and
      they land on the same screen — the fragment is the only thing that tells
@@ -230,21 +228,10 @@ export function AuthGate() {
      established it — the OAuth landing, a sign-up, or a sign-in. Every entry
      point must record it, because load() decides between the confirm screen
      and the organization form from exactly this. */
-  type SessionUser =
-    | { email?: string; emailVerified?: boolean; createdAt?: string | Date }
-    | null
-    | undefined
+  type SessionUser = { email?: string; emailVerified?: boolean } | null | undefined
   function rememberAccount(user: SessionUser) {
     if (!user) return
-    const born = user.createdAt ? new Date(user.createdAt as string).getTime() : NaN
-    account.current = {
-      email: user.email || '',
-      verified: user.emailVerified !== false,
-      /* Sign-up mails the first link itself (sendOnSignUp), so an account
-         minted moments ago already has one in flight and the confirm screen
-         must not send a second. Anything older arrived with nothing. */
-      mailed: Number.isFinite(born) && Date.now() - born < 2 * 60 * 1000,
-    }
+    account.current = { email: user.email || '', verified: user.emailVerified !== false }
   }
 
   function showError(message: string, at: 'form' | 'oauth', detail = '') {
@@ -302,12 +289,15 @@ export function AuthGate() {
           )
         }
       }
-      /* Seatless AND unconfirmed stops at the confirm screen; seatless alone
-         is the organization form. Checked in this order and only here, so a
-         login that DOES hold a seat is never gated on verification — the
-         break-glass rescue (adminAuth) claims a seat without one. */
+      /* Seatless AND unconfirmed stops at the confirm screen, also on the way
+         to an assistant connection: that screen sends a provider login's
+         first link, and its link returns to the connection. Seatless alone
+         is the organization form, or the connection. Checked in this order
+         and only here, so a login that DOES hold a seat is never gated on
+         verification — the break-glass rescue (adminAuth) claims a seat
+         without one. */
       const unverified = account.current !== null && !account.current.verified
-      setPhase(connection || ok ? 'ready' : unverified ? 'unverified' : 'noProfile')
+      setPhase(ok ? 'ready' : unverified ? 'unverified' : connection ? 'ready' : 'noProfile')
     } catch (e) {
       if (attempt !== loadAttempt.current) return
       // The raw text, request id included, is for support, not for the card.
@@ -597,10 +587,11 @@ export function AuthGate() {
     setMode('in')
   }
 
-  /* Better Auth mails a confirmation link on the REGISTRATION and never
-     again, so every returning unconfirmed login would otherwise sit in front
-     of a link that has expired (an hour) with no way to ask for another. This
-     is that way: on arrival when nothing is in flight, and on the button. */
+  /* The confirm screen sends the link itself, on arrival and on the button.
+     A provider registration does not mail one (convex/auth.ts), so that a
+     failed send is said here, where the person is, and a returning
+     unconfirmed login would otherwise sit in front of a link that has expired
+     (an hour) with no way to ask for another. */
   async function sendVerification(manual: boolean) {
     const addr = account.current?.email || ''
     if (!addr) return
@@ -627,11 +618,6 @@ export function AuthGate() {
   useEffect(() => {
     if (phase !== 'unverified' || autoSent.current) return
     autoSent.current = true
-    // the registration's own link is still fresh — say so, don't duplicate it
-    if (account.current?.mailed) {
-      setNote('Confirmation email sent. Check your inbox.')
-      return
-    }
     void sendVerification(false)
   }, [phase])
 

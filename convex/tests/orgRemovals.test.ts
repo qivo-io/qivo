@@ -454,6 +454,30 @@ describe('cancelling a subscription', () => {
     },
   )
 
+  it('records a deletion notice still unsent after its last hourly attempt for the operator', async () => {
+    const { t, f } = await billed()
+    await applied(t, remote(f.org.id, { cancel_at_period_end: true }))
+    vi.setSystemTime(ended - 8 * DAY)
+    await exportNow(t, f)
+    await periodOver(t, f.org.id)
+    const [notice] = await deletionNotices(t)
+    vi.stubEnv('LETTERMINT_API_KEY', '')
+    const unsent = () =>
+      t.run(async (ctx) =>
+        (await ctx.db.query('platform_audit_log').collect()).filter(
+          (row) => row.action === 'notice_email_unsent',
+        ),
+      )
+    await t.action(internal.orgRemovals.sendNotice, { notice_key: notice.key, attempt: 23 })
+    expect(await unsent()).toEqual([])
+    await t.action(internal.orgRemovals.sendNotice, { notice_key: notice.key, attempt: 24 })
+    expect(
+      (await unsent()).map((row) => [row.target_org_id, row.target_profile_id, row.detail]),
+    ).toEqual([
+      [f.org.id, f.admin.id, { kind: notice.kind, attempts: 25, reason: 'out_of_attempts' }],
+    ])
+  })
+
   it('stops the deletion when a new subscription starts', async () => {
     const { t, f } = await billed()
     await applied(t, remote(f.org.id, { status: 'canceled', ended_at: NOW }))

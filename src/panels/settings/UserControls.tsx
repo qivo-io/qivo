@@ -5,6 +5,7 @@ import { NativeSelect } from '@/components/ui/native-select'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { DEMO_MODE } from '../../lib/demoMode'
+import { type InviteDelivery, inviteLabel, useInviteDeliveries } from '../../lib/inviteDeliveries'
 import { useFieldUnsaved, useUnsaved } from '../../lib/leaveGuard'
 import { projectRightBox } from '../../lib/projectCreators'
 import { useUpdateBlocker } from '../../lib/updateSafety'
@@ -122,6 +123,84 @@ export function UserName({ user, isSelf }: { user: UserVM; isSelf: boolean }) {
   )
 }
 
+/** A pending seat's marker. It says "invited", or that the invitation email
+    did not go out, with the reason on hover (lib/inviteDeliveries). */
+export function InviteLabel({ user, className }: { user: UserVM; className?: string }) {
+  const state = useInviteDeliveries(user.org)?.get(user.id)?.state
+  const label = inviteLabel(state)
+  return (
+    <HoverTooltip content={label.detail}>
+      <span
+        data-invite-for={user.id}
+        data-invite-state={state ?? 'none'}
+        className={cn(
+          '[font-weight:700] [font-size:var(--fs-xs)]',
+          label.failed ? '[color:var(--danger)]' : '[color:var(--warn)]',
+          className,
+        )}
+      >
+        {label.text}
+      </span>
+    </HoverTooltip>
+  )
+}
+
+const NO_ROW_WAIT_MS = 2 * 60_000
+
+/** Under an invite form: whether the invitation email to the seat just
+    created went out, live, in a full sentence. Only the send to `email`
+    counts, so a correction made elsewhere is not reported as this one. When
+    the seat stops being pending (claimed or cancelled), the last result
+    seen stays. Key it by seat. */
+export function InviteOutcome({
+  orgId,
+  seat,
+  email,
+}: {
+  orgId: string
+  seat: string
+  email: string
+}) {
+  const rows = useInviteDeliveries(orgId)
+  const row = rows?.get(seat)
+  const current = row?.email === email.trim().toLowerCase() ? row.state : undefined
+  const [last, setLast] = useStateS<InviteDelivery>()
+  useEffectS(() => {
+    if (current !== undefined) setLast(current)
+  }, [current])
+  // a send that has not even been reserved after this long is not coming
+  const [waited, setWaited] = useStateS(false)
+  useEffectS(() => {
+    const timer = setTimeout(() => setWaited(true), NO_ROW_WAIT_MS)
+    return () => clearTimeout(timer)
+  }, [])
+  /* Nothing yet, or the seat's row is for another address: nothing to say.
+     A send in flight whose row then vanished has no outcome either. */
+  const state =
+    current ??
+    (last !== 'sending' ? last : undefined) ??
+    (rows && !row && !last && !waited ? 'sending' : undefined)
+  if (state === undefined) return null
+  const label = inviteLabel(state)
+  const text = label.detail
+    ? `${email}: ${label.detail}`
+    : state === 'sent'
+      ? `Invitation email sent to ${email}.`
+      : `Sending the invitation email to ${email}…`
+  return (
+    <div
+      data-invite-outcome={state}
+      role="status"
+      className={cn(
+        '[font-size:var(--fs-sm)] [margin-top:8px]',
+        label.failed ? '[color:var(--danger)]' : '[color:var(--text-2)]',
+      )}
+    >
+      {text}
+    </div>
+  )
+}
+
 // Only unclaimed invitations can change email. Claimed seats retain the
 // login address; empty, invalid or refused edits restore the saved value.
 export function UserEmail({ user }: { user: UserVM }) {
@@ -147,11 +226,7 @@ export function UserEmail({ user }: { user: UserVM }) {
         className="[padding-left:6px] [font-size:var(--fs-xs)] [color:var(--text-2)] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]"
       >
         {DEMO_MODE ? 'Fictional teammate' : user.email || 'no email address'}
-        {user.pending && (
-          <span className="[color:var(--warn)] [font-weight:700] [margin-left:6px] [font-size:var(--fs-xs)]">
-            invited
-          </span>
-        )}
+        {user.pending && <InviteLabel user={user} className="[margin-left:6px]" />}
       </div>
     )
   }
@@ -176,9 +251,7 @@ export function UserEmail({ user }: { user: UserVM }) {
         }}
         className="h-control-xs min-w-0 flex-1 border-transparent bg-transparent px-[5px] py-0 font-sans text-sm text-text-1 hover:border-border focus:bg-hover"
       />
-      <span className="[color:var(--warn)] [font-weight:700] [font-size:var(--fs-xs)] [flex-shrink:0]">
-        invited
-      </span>
+      <InviteLabel user={user} className="[flex-shrink:0]" />
     </div>
   )
 }

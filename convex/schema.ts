@@ -1532,5 +1532,7 @@ export default defineSchema({
     // A pending seat's latest invite email, and the caps on the app's
     // invitation email per seat and per organization (invites.ts).
     .index('by_target_profile', ['target_profile_id', 'ts'])
+    // A pending seat's newest invite email, past its other entries (invites.ts).
+    .index('by_target_profile_action', ['target_profile_id', 'action', 'ts'])
     .index('by_target_org', ['target_org_id', 'ts']),
 })

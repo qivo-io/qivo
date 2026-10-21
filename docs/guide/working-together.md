@@ -2,7 +2,9 @@
 
 Each person has a name and email address. An admin adds them in
 **Settings → Organization → Users**, and Qivo emails them an invitation. Their
-seat shows **invited** until they sign in with that email address. Admins can
+seat shows **invited** until they sign in with that email address, or
+**invitation not sent** or **invitation may not have arrived** when the email
+did not go out; hover it for the reason. Admins can
 correct the email before sign-in, which sends a new invitation; afterward it
 is read-only. An organization can send up to 50 invitation emails an hour.
 Beyond that, people can still join by creating an account with the invited

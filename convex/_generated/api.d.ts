@@ -64,6 +64,7 @@ import type * as lib_archiveCursorSeal from "../lib/archiveCursorSeal.js";
 import type * as lib_archivedTasks from "../lib/archivedTasks.js";
 import type * as lib_arrayLimit from "../lib/arrayLimit.js";
 import type * as lib_authData from "../lib/authData.js";
+import type * as lib_authMail from "../lib/authMail.js";
 import type * as lib_avatarColors from "../lib/avatarColors.js";
 import type * as lib_backgroundPreviews from "../lib/backgroundPreviews.js";
 import type * as lib_billableUsers from "../lib/billableUsers.js";
@@ -247,6 +248,7 @@ declare const fullApi: ApiFromModules<{
   "lib/archivedTasks": typeof lib_archivedTasks;
   "lib/arrayLimit": typeof lib_arrayLimit;
   "lib/authData": typeof lib_authData;
+  "lib/authMail": typeof lib_authMail;
   "lib/avatarColors": typeof lib_avatarColors;
   "lib/backgroundPreviews": typeof lib_backgroundPreviews;
   "lib/billableUsers": typeof lib_billableUsers;
