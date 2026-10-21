@@ -337,12 +337,32 @@ export const REMOVAL_FULL =
 class RemovalFull extends Error {}
 
 /** The guard each step of a removal runs before it reads or writes more. Its
- * refusal is turned into REMOVAL_FULL when it stops the removal itself
- * (`remove`, as model/teams.ts deleteTeamCore passes it), and into the
- * settlement's own refusal when it stops a Viewer grant or a handover. */
+ * refusal is turned into REMOVAL_FULL when it stops the reads that find who
+ * loses sight or the removal itself (withinRoom), and into the settlement's
+ * own refusal when it stops a Viewer grant or a handover. */
 export async function assertRoom(ctx: QueryCtx): Promise<void> {
   if (await usedMoreThan(ctx, REASSIGN_ROOM)) throw new RemovalFull()
 }
+
+/** Runs `step`, a part of a removal that checks the room with assertRoom, and
+ * refuses with REMOVAL_FULL once the transaction is full: the size of the
+ * removal is at fault, not one of its people. */
+export async function withinRoom<T>(step: () => Promise<T>): Promise<T> {
+  try {
+    return await step()
+  } catch (e) {
+    throw e instanceof RemovalFull ? rule(REMOVAL_FULL) : e
+  }
+}
+
+/* How many tasks the scan for held work reads between two room checks: ten
+ * descriptions at their cap (lib/textLimits.ts TEXT_MAX) stay well under the
+ * 5% of Convex's 16 MiB a removal keeps. */
+const TASK_GUARD_ROWS = 10
+
+/* How many small rows (projects, memberships, profiles) a removal reads
+ * between two room checks. */
+const ROW_GUARD_ROWS = 500
 
 /**
  * Runs `remove` and answers the open tasks in `projects` that someone in
@@ -359,9 +379,9 @@ export async function assertRoom(ctx: QueryCtx): Promise<void> {
  * removal that keeps people as Viewers or reassigns their tasks is refused
  * with REMOVAL_TOO_LARGE before their sight is read when more than
  * REMOVAL_HOLDERS_MAX people hold such tasks. The room (REASSIGN_ROOM) is
- * checked before and during each read and before each subtask lookup, so
- * any removal too large for one request is refused with REMOVAL_FULL before
- * a read passes Convex's limits.
+ * checked before and during each read, the task scan included, and before
+ * each subtask lookup, so any removal too large for one request is refused
+ * with REMOVAL_FULL before a read passes Convex's limits.
  */
 async function removeAndFindLost(
   ctx: MutationCtx,
@@ -372,33 +392,39 @@ async function removeAndFindLost(
     held: HeldTasks
   },
 ): Promise<{ lost: Lost[]; orgProjects: Doc<'projects'>[] }> {
-  const candidates: Lost[] = []
-  for (const project of a.projects) {
-    const tasks = ctx.db
-      .query('issues')
-      .withIndex('by_project_archived', (q) =>
-        q.eq('project_id', project.id).eq('archived_at', undefined),
-      )
-    for await (const task of tasks) {
-      if (task.status === 'done') continue
-      for (const role of ['assignee', 'reviewer'] as const) {
-        const holder = role === 'assignee' ? task.assignee_id : task.reviewer_id
-        if (holder !== undefined && a.people.get(holder)?.active) {
-          candidates.push({ task, project, profile_id: holder, role })
+  return withinRoom(async () => {
+    const candidates: Lost[] = []
+    let read = 0
+    for (const project of a.projects) {
+      await assertRoom(ctx)
+      const tasks = ctx.db
+        .query('issues')
+        .withIndex('by_project_archived', (q) =>
+          q.eq('project_id', project.id).eq('archived_at', undefined),
+        )
+      for await (const task of tasks) {
+        if (++read % TASK_GUARD_ROWS === 0) await assertRoom(ctx)
+        if (task.status === 'done') continue
+        for (const role of ['assignee', 'reviewer'] as const) {
+          const holder = role === 'assignee' ? task.assignee_id : task.reviewer_id
+          if (holder !== undefined && a.people.get(holder)?.active) {
+            candidates.push({ task, project, profile_id: holder, role })
+          }
         }
       }
     }
-  }
-  const holders = [...new Set(candidates.map((h) => h.profile_id))]
-  if (a.held !== 'leave' && holders.length > REMOVAL_HOLDERS_MAX) throw rule(REMOVAL_TOO_LARGE)
-  try {
-    const orgProjects =
-      holders.length === 0
-        ? []
-        : await ctx.db
-            .query('projects')
-            .withIndex('by_org', (q) => q.eq('org_id', a.projects[0].org_id))
-            .collect()
+    const holders = [...new Set(candidates.map((h) => h.profile_id))]
+    if (a.held !== 'leave' && holders.length > REMOVAL_HOLDERS_MAX) throw rule(REMOVAL_TOO_LARGE)
+    const orgProjects: Doc<'projects'>[] = []
+    if (holders.length > 0) {
+      await assertRoom(ctx)
+      const rows = ctx.db
+        .query('projects')
+        .withIndex('by_org', (q) => q.eq('org_id', a.projects[0].org_id))
+      for await (const p of rows) {
+        if (orgProjects.push(p) % ROW_GUARD_ROWS === 0) await assertRoom(ctx)
+      }
+    }
     const holding = holders.flatMap((id) => a.people.get(id) ?? [])
     const sight = (): Promise<Map<string, OrgProjectLevels>> =>
       projectLevelsForPeople(ctx, holding, orgProjects, () => assertRoom(ctx))
@@ -419,16 +445,14 @@ async function removeAndFindLost(
       lost.push(h)
     }
     return { lost, orgProjects }
-  } catch (e) {
-    // the size of the removal is at fault, not one of its people
-    throw e instanceof RemovalFull ? rule(REMOVAL_FULL) : e
-  }
+  })
 }
 
 /** The people a removal can take access from: the person, or every member of
  * the team in its organization. A team's members are matched against one read
  * of the organization's profiles rather than read one at a time, so a large
- * team costs two index ranges, not one per member. */
+ * team costs two index ranges, not one per member. It checks the room as it
+ * reads, so call it within withinRoom. */
 export async function peopleOf(
   ctx: QueryCtx,
   subject: AccessSubject,
@@ -438,13 +462,20 @@ export async function peopleOf(
   const memberships = ctx.db
     .query('team_members')
     .withIndex('by_team', (q) => q.eq('team_id', subject.team.id))
-  for await (const m of memberships) members.add(m.profile_id)
+  await assertRoom(ctx)
+  for await (const m of memberships) {
+    if (members.add(m.profile_id).size % ROW_GUARD_ROWS === 0) await assertRoom(ctx)
+  }
   const people = new Map<string, Doc<'profiles'>>()
   if (members.size === 0) return people
   const profiles = ctx.db
     .query('profiles')
     .withIndex('by_org', (q) => q.eq('org_id', subject.team.org_id))
-  for await (const profile of profiles) if (members.has(profile.id)) people.set(profile.id, profile)
+  let read = 0
+  for await (const profile of profiles) {
+    if (++read % ROW_GUARD_ROWS === 0) await assertRoom(ctx)
+    if (members.has(profile.id)) people.set(profile.id, profile)
+  }
   return people
 }
 
@@ -683,7 +714,7 @@ export async function removeProjectGrantCore(
   if (row === null) return { removed: false, stranded: [], kept_as_viewer: [], reassigned: [] }
   const settled = await removeAndSettle(ctx, {
     me,
-    people: await peopleOf(ctx, subject),
+    people: await withinRoom(() => peopleOf(ctx, subject)),
     projects: await reachedProjects(ctx, project),
     remove: () => ctx.db.delete(row._id),
     held: a.held,

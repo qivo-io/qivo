@@ -55,6 +55,7 @@ import {
   peopleOf,
   reachedProjects,
   removeAndSettle,
+  withinRoom,
 } from './projectAccess'
 
 /** The most memberships, project shares and legacy owned projects a team
@@ -64,8 +65,12 @@ import {
  * 5,000. */
 export const TEAM_DELETE_ROWS_MAX = 3000
 
+/** TEAM_DELETE_ROWS_MAX as people read it, written out because the Convex
+ * runtime has no Intl (as lib/textLimits.ts TEXT_MAX_LABEL). */
+export const TEAM_DELETE_ROWS_MAX_LABEL = '3,000'
+
 /** The refusal of a team deletion with more than TEAM_DELETE_ROWS_MAX rows. */
-export const TEAM_TOO_LARGE = `deleting a team can remove at most ${TEAM_DELETE_ROWS_MAX.toLocaleString('en-US')} of its memberships and project shares at once, so remove some of its members or project shares first`
+export const TEAM_TOO_LARGE = `deleting a team can remove at most ${TEAM_DELETE_ROWS_MAX_LABEL} of its memberships and project shares at once, so remove some of its members or project shares first`
 
 /* Refuses a team deletion that changes more than TEAM_DELETE_ROWS_MAX rows,
  * read before anything else so the refusal itself fits. Answers the team's
@@ -397,7 +402,8 @@ export async function setTeamLeaderCore(
 
 /* The projects whose tasks the team's grants reach, each project shared with
  * the team and, for a top-level one, its sub-projects, without archived ones
- * and each once, with the ids of the projects the team shares. */
+ * and each once, with the ids of the projects the team shares. It checks the
+ * room before each share, so call it within withinRoom. */
 async function teamReach(
   ctx: QueryCtx,
   team: Doc<'teams'>,
@@ -408,6 +414,7 @@ async function teamReach(
     .query('project_team_access')
     .withIndex('by_team', (q) => q.eq('team_id', team.id))
   for await (const share of shares) {
+    await assertRoom(ctx)
     const project = await byId(ctx, 'projects', share.project_id)
     if (project === null || project.org_id !== team.org_id) continue
     shared.add(project.id)
@@ -462,7 +469,7 @@ export async function removeTeamMemberCore(
   const member = await byId(ctx, 'profiles', a.profileId)
   const people = new Map<string, Doc<'profiles'>>()
   if (member !== null && member.org_id === team.org_id) people.set(member.id, member)
-  const reach = await teamReach(ctx, team)
+  const reach = await withinRoom(() => teamReach(ctx, team))
   const settled = await removeAndSettle(ctx, {
     me,
     people,
@@ -530,10 +537,10 @@ export async function deleteTeamCore(
   const remove = () =>
     deleteTeamDeep(ctx, { team, actor: me, now, owned, guard: () => assertRoom(ctx) })
   // the shares go with the team, so where a Viewer grant goes is read first
-  const reach = await teamReach(ctx, team)
+  const reach = await withinRoom(() => teamReach(ctx, team))
   const settled = await removeAndSettle(ctx, {
     me,
-    people: await peopleOf(ctx, { team }),
+    people: await withinRoom(() => peopleOf(ctx, { team })),
     projects: reach.projects,
     remove,
     held: a.held,

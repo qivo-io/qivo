@@ -825,6 +825,80 @@ describe('a removal of many people', () => {
     expect((await state()).share).toMatchObject({ level: 'user' })
   }, 60_000)
 
+  it('refuses before the scan for held tasks reads past the documents left', async () => {
+    // 2,500 open tasks nobody in the team holds, under a limit of 2,000 documents
+    const { t, f, admin, state } = await manyHolders(5, {
+      transactionLimits: { documentsRead: 2000 },
+    })
+    for (let from = 0; from < 2500; from += 500)
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 500; i++)
+          await ctx.db.insert('issues', {
+            id: uuid(),
+            org_id: f.org.id,
+            project_id: f.sub2.id,
+            num: 9000 + i,
+            title: `Other ${i}`,
+            description: '',
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            assignee_id: f.viewer.id,
+            created_at: NOW,
+            updated_at: NOW,
+          })
+      })
+    const e = await expectRefusal(
+      t.mutation(internal.machine.projects.restRemoveTeamAccess, {
+        ...admin,
+        keyName: null,
+        ref: 'TBED',
+        subject: f.team.id,
+        body: '',
+      }),
+      'rule',
+    )
+    expect((e.data as Refusal).message).toBe(REMOVAL_FULL)
+    expect((await state()).share).toMatchObject({ level: 'user' })
+  }, 60_000)
+
+  it("refuses before a team's shares read past the index ranges left", async () => {
+    // 300 shared projects cost two ranges each to reach, past a limit of 500
+    const { t, f, state } = await manyHolders(5, { transactionLimits: { databaseQueries: 500 } })
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 300; i++) {
+        const id = uuid()
+        await ctx.db.insert('projects', {
+          id,
+          org_id: f.org.id,
+          type: 'meta',
+          key: `S${i}`,
+          name: `Shared ${i}`,
+          description: '',
+          sort_order: 100 + i,
+          num: 100 + i,
+          track_delay: false,
+          created_at: NOW,
+        })
+        await ctx.db.insert('project_team_access', {
+          project_id: id,
+          team_id: f.team.id,
+          level: 'viewer',
+        })
+      }
+    })
+    const e = await expectRefusal(
+      as(t, f.admin).mutation(api.teams.deleteDeep, {
+        org_id: f.org.id,
+        id: f.team.id,
+        on_held_tasks: 'keep_as_viewer',
+      }),
+      'rule',
+    )
+    expect((e.data as Refusal).message).toBe(REMOVAL_FULL)
+    expect((await state()).team).not.toBeNull()
+  }, 60_000)
+
   it("refuses before one team's memberships read past the documents left", async () => {
     // under a limit of 12,000 documents the removal keeps 600 in reserve, and
     // a third team's 12,000 memberships would pass it in one read

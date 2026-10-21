@@ -28,6 +28,7 @@ import { HELD_TASKS_SHAPE, KEEP_TOO_LARGE, REMOVAL_FULL } from '../model/project
 import {
   deleteTeamCore,
   TEAM_DELETE_ROWS_MAX,
+  TEAM_DELETE_ROWS_MAX_LABEL,
   TEAM_RUNS_RULE,
   TEAM_TOO_LARGE,
   teamsJson,
@@ -916,12 +917,52 @@ describe("deleting a team settles its members' open tasks", () => {
     expect(await grantsOf(fx.t, ola.id)).toEqual([[fx.sub2.id, 'viewer']])
   })
 
-  /* The room checks before Viewer grants when the setup's Hardware is
-   * deleted beside Design: Emil's grants, memberships and Hardware's shares
-   * before, the deletion's first row (model/cascade.ts deleteTeamDeep), his
-   * grants and memberships after, and his task under review
-   * (model/projectAccess.ts removeAndFindLost). */
-  const SIGHT_CHECKS = 7
+  /* How many room checks deleting the setup's Hardware with keep_as_viewer
+   * makes before its Viewer grants: every read that finds who loses sight and
+   * the deletion itself (model/projectAccess.ts removeAndFindLost,
+   * model/cascade.ts deleteTeamDeep). Counted in a run stopped, and rolled
+   * back, at the first grant, which checks twice first: for its project and
+   * for the grant. */
+  async function sightChecks(fx: Fx): Promise<number> {
+    let checks = 0
+    let atGrant = -1
+    await fx.t
+      .run(async (ctx) => {
+        const db = new Proxy(ctx.db, {
+          get(target, prop) {
+            const value: unknown = Reflect.get(target, prop)
+            if (prop === 'insert') {
+              return (...args: unknown[]) => {
+                if (args[0] === 'project_access') {
+                  atGrant = checks
+                  throw new Error('first grant')
+                }
+                return Reflect.apply(target.insert, target, args)
+              }
+            }
+            return typeof value === 'function' ? value.bind(target) : value
+          },
+        })
+        await deleteTeamCore(
+          {
+            ...ctx,
+            db,
+            meta: {
+              getTransactionMetrics: async () => {
+                checks++
+                return { databaseQueries: { used: 0, remaining: 100 } }
+              },
+            },
+          } as unknown as MutationCtx,
+          { me: fx.admin, team: fx.team, held: 'keep_as_viewer', now: NOW },
+        )
+      })
+      .catch((e: unknown) => {
+        if (!String(e).includes('first grant')) throw e
+      })
+    expect((await hardwareLeft(fx)).team).not.toBeNull()
+    return atGrant - 2
+  }
 
   it('refuses a removal whose sight would fill the transaction, and keeps the team', async () => {
     const fx = await setup()
@@ -950,7 +991,8 @@ describe("deleting a team settles its members' open tasks", () => {
     const fx = await setup()
     await plantTeam(fx, fx.org.id, 'Design')
     // the deployment reports the transaction nearly full before the first
-    // grant, once Emil's sight has been worked out (SIGHT_CHECKS)
+    // grant, once Emil's sight has been worked out
+    const sight = await sightChecks(fx)
     let checks = 0
     const e = await expectRefusal(
       fx.t.run((ctx) =>
@@ -960,9 +1002,7 @@ describe("deleting a team settles its members' open tasks", () => {
             meta: {
               getTransactionMetrics: async () => ({
                 databaseQueries:
-                  ++checks > SIGHT_CHECKS
-                    ? { used: 99, remaining: 1 }
-                    : { used: 0, remaining: 100 },
+                  ++checks > sight ? { used: 99, remaining: 1 } : { used: 0, remaining: 100 },
               }),
             },
           } as unknown as MutationCtx,
@@ -984,6 +1024,7 @@ describe("deleting a team settles its members' open tasks", () => {
     // Emil's third task in FW needs the same grant on TBED as the first two
     await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, assignee_id: fx.emil.id })
     // the transaction reads as full from the third check after his sight on
+    const sight = await sightChecks(fx)
     let checks = 0
     await fx.t.run((ctx) =>
       deleteTeamCore(
@@ -992,16 +1033,14 @@ describe("deleting a team settles its members' open tasks", () => {
           meta: {
             getTransactionMetrics: async () => ({
               databaseQueries:
-                ++checks > SIGHT_CHECKS + 2
-                  ? { used: 99, remaining: 1 }
-                  : { used: 0, remaining: 100 },
+                ++checks > sight + 2 ? { used: 99, remaining: 1 } : { used: 0, remaining: 100 },
             }),
           },
         } as unknown as MutationCtx,
         { me: fx.admin, team: fx.team, held: 'keep_as_viewer', now: NOW },
       ),
     )
-    expect(checks).toBe(SIGHT_CHECKS + 2)
+    expect(checks).toBe(sight + 2)
     expect(await grantsOf(fx.t, fx.emil.id)).toEqual([[fx.meta.id, 'viewer']])
   })
 
@@ -1022,6 +1061,7 @@ describe("deleting a team settles its members' open tasks", () => {
     await plant(TEAM_DELETE_ROWS_MAX - 3)
     const e = await expectRefusal(deleteHardware(fx, 'keep_as_viewer'), 'rule')
     expect((e.data as Refusal).message).toBe(TEAM_TOO_LARGE)
+    expect(TEAM_DELETE_ROWS_MAX_LABEL).toBe(TEAM_DELETE_ROWS_MAX.toLocaleString('en-US'))
     await refused(
       as(fx.t, fx.admin).mutation(api.teams.deleteDeep, {
         org_id: fx.org.id,
