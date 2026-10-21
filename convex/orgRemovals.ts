@@ -29,6 +29,7 @@ import {
   internalQuery,
   type MutationCtx,
 } from './_generated/server'
+import { NOTICE_RETRIES } from './billingMail'
 import { subscriptionPayload } from './billingSync'
 import {
   assertOrgAvailable,
@@ -121,6 +122,9 @@ const noticeReadyRef = makeFunctionReference<'query', { key: string }, Delivery 
 )
 const noticeSentRef = makeFunctionReference<'mutation', { key: string }, null>(
   'orgRemovals:noticeSent',
+)
+const noticeUnsentRef = makeFunctionReference<'mutation', { key: string }, null>(
+  'billingMail:unsent',
 )
 const sendNoticeRef = makeFunctionReference<
   'action',
@@ -591,7 +595,8 @@ export const noticeSent = internalMutation({
 })
 
 /** Delivers one admin's deletion email, retrying hourly for a day while
- * mail is unavailable. Each hourly attempt sends under its own idempotency
+ * mail is unavailable, then records the failure for the operator
+ * (billingMail.unsent). Each hourly attempt sends under its own idempotency
  * key (mail.ts noticeKey). */
 export const sendNotice = internalAction({
   args: { notice_key: v.string(), attempt: v.optional(v.number()) },
@@ -606,11 +611,12 @@ export const sendNotice = internalAction({
       })
     )
       await ctx.runMutation(noticeSentRef, { key: args.notice_key })
-    else if ((args.attempt ?? 0) < 24)
+    else if ((args.attempt ?? 0) < NOTICE_RETRIES)
       await ctx.scheduler.runAfter(60 * 60_000, sendNoticeRef, {
         ...args,
         attempt: (args.attempt ?? 0) + 1,
       })
+    else await ctx.runMutation(noticeUnsentRef, { key: args.notice_key })
     return null
   },
 })

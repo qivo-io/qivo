@@ -4,6 +4,7 @@ import { internalAction, internalMutation, internalQuery } from './_generated/se
 import { billingEnabled, subscriptionFor } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { sendBillingReminder } from './mail'
+import { audit } from './model/admin'
 
 const input = {
   to: v.string(),
@@ -19,6 +20,11 @@ const readyRef = makeFunctionReference<'query', { key: string }, Delivery | null
   'billingMail:ready',
 )
 const sentRef = makeFunctionReference<'mutation', { key: string }, null>('billingMail:sent')
+const unsentRef = makeFunctionReference<'mutation', { key: string }, null>('billingMail:unsent')
+
+/** The hourly attempts after the first one, for a billing reminder and for
+ * orgRemovals.ts's deletion notice. */
+export const NOTICE_RETRIES = 24
 
 export const ready = internalQuery({
   args: { key: v.string() },
@@ -72,6 +78,27 @@ export const sent = internalMutation({
     return null
   },
 })
+/** Records in the operator's audit log that a billing reminder or a
+ * deletion notice (orgRemovals.ts) was still not delivered after its last
+ * hourly attempt, so the failure is not only a log line. */
+export const unsent = internalMutation({
+  args: { key: v.string() },
+  handler: async (ctx, { key }) => {
+    const notice = await ctx.db
+      .query('billing_notices')
+      .withIndex('by_key', (q) => q.eq('key', key))
+      .unique()
+    if (!notice || notice.sent_at) return null
+    await audit(ctx, {
+      actor_email: 'system',
+      action: 'notice_email_unsent',
+      target_org_id: notice.org_id,
+      target_profile_id: notice.profile_id,
+      detail: { kind: notice.kind, attempts: NOTICE_RETRIES + 1 },
+    })
+    return null
+  },
+})
 export const send = internalAction({
   args: input,
   handler: async (ctx, args): Promise<null> => {
@@ -86,11 +113,12 @@ export const send = internalAction({
       })
     )
       await ctx.runMutation(sentRef, { key: args.notice_key })
-    else if ((args.attempt ?? 0) < 24)
+    else if ((args.attempt ?? 0) < NOTICE_RETRIES)
       await ctx.scheduler.runAfter(60 * 60_000, sendRef, {
         ...args,
         attempt: (args.attempt ?? 0) + 1,
       })
+    else await ctx.runMutation(unsentRef, { key: args.notice_key })
     return null
   },
 })

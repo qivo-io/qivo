@@ -450,7 +450,7 @@ export const inviteGuest = orgMutation({
       await markBillingMembershipChanged(ctx, ctx.me.org_id, [em])
       // A new guest seat is an invitation; email it once this mutation commits.
       await ctx.scheduler.runAfter(0, internal.invites.sendFromApp, {
-        invites: [{ profile_id: pid, email: em }],
+        invites: [{ profile_id: pid, email: em, by: ctx.me.id }],
       })
     }
     return pid

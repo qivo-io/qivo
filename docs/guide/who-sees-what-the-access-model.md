@@ -144,7 +144,9 @@ note. As the parent's lead, you keep **User** access to the sub-project.
 ## People outside your organization
 
 Invite a guest by email in project settings, choosing **Viewer** or **User**.
-Qivo emails them an invitation to join your organization as a guest.
+Qivo emails them an invitation to join your organization as a guest, and
+the form then says whether the email went out. If it could not be sent, they
+can still join by creating an account with that address.
 An organization admin or the named project lead can later make them **Lead**.
 Guests receive access to that project and its sub-projects, subject to their
 role.

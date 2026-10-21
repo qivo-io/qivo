@@ -209,7 +209,7 @@ export const create = adminMutation({
     // A person's seat is an invitation; email it once this mutation commits.
     if (!isAgent && email !== undefined) {
       await ctx.scheduler.runAfter(0, internal.invites.sendFromApp, {
-        invites: [{ profile_id: args.id, email }],
+        invites: [{ profile_id: args.id, email, by: ctx.me.id }],
       })
     }
     return null
@@ -408,7 +408,7 @@ async function updateProfile(
   // keeps 90 days, holds a delivered invitation to that address.
   if (upd.email !== undefined) {
     await ctx.scheduler.runAfter(0, internal.invites.sendFromApp, {
-      invites: [{ profile_id: row.id, email: upd.email }],
+      invites: [{ profile_id: row.id, email: upd.email, by: ctx.me.id }],
     })
   } else if (
     upd.active === true &&
@@ -417,7 +417,7 @@ async function updateProfile(
     row.email !== undefined
   ) {
     await ctx.scheduler.runAfter(0, internal.invites.sendFromApp, {
-      invites: [{ profile_id: row.id, email: row.email, unless_sent: true }],
+      invites: [{ profile_id: row.id, email: row.email, unless_sent: true, by: ctx.me.id }],
     })
   }
   return null

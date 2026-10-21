@@ -29,6 +29,7 @@ import type { AccessLevel, AccessRemoval, ArchivedProjectVM, ProjectVM } from '.
 import { P } from '../../store/planner'
 import { AccessRemovalModal, ArchiveOrDeleteProjectModal } from '../Modals'
 import { BackLink, DemoCapabilityNotice, TextField, Toggle } from './controls'
+import { InviteOutcome } from './UserControls'
 
 // Show home projects first, then foreign organizations. Remember one expanded
 // project for this browser session; access settings determine visibility.
@@ -526,6 +527,8 @@ function ProjectSettingsFields({
   React.useEffect(() => P.watchWriteBlock(proj.org), [proj.org])
   const [inviteEmail, setInviteEmail] = useStateS('')
   const [inviting, setInviting] = useStateS(false)
+  // the seat the last invitation from this form emailed, for InviteOutcome
+  const [emailed, setEmailed] = useStateS<{ seat: string; email: string } | null>(null)
   useUpdateBlocker(!!inviteEmail || inviting)
   useUnsaved(!!inviteEmail.trim(), 'email')
   // the review time typed and not yet saved (the field saves on blur)
@@ -823,11 +826,16 @@ function ProjectSettingsFields({
                   onClick={async () => {
                     if (!canInvite) return
                     setInviting(true)
-                    const ok = await P.inviteToProject(proj.id, inviteEmail, grantRole)
+                    const invited = await P.inviteToProject(proj.id, inviteEmail, grantRole)
                     setInviting(false)
-                    if (ok) {
+                    if (invited) {
                       window.showToast?.(
                         `${inviteEmail.trim()} was added to “${P.projectName(proj)}”`,
+                      )
+                      setEmailed(
+                        invited.emailed
+                          ? { seat: invited.emailed, email: inviteEmail.trim() }
+                          : null,
                       )
                       setInviteEmail('')
                     }
@@ -837,6 +845,9 @@ function ProjectSettingsFields({
                   {inviting ? 'Inviting…' : 'Invite'}
                 </Button>
               </div>
+              {emailed && (
+                <InviteOutcome orgId={proj.org} seat={emailed.seat} email={emailed.email} />
+              )}
             </SettingsGroup>
           )}
           <FieldHint>

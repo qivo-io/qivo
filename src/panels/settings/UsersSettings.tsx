@@ -15,6 +15,7 @@ import { P } from '../../store/planner'
 import { BackLink, DemoCapabilityNotice } from './controls'
 import { AvatarPicker } from './ProfileControls'
 import {
+  InviteLabel,
   PlannableHoursInput,
   ProjectRightCell,
   ProjectRightHeader,
@@ -541,9 +542,7 @@ export function OrgUsersPage({
                   <div className="[flex:1] [min-width:0]">
                     <div className="[font-size:var(--fs-base)] [font-weight:600] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
                       {g.email || g.name}
-                      {g.pending && (
-                        <span className="[color:var(--text-2)] [font-weight:500]">, invited</span>
-                      )}
+                      {g.pending && <InviteLabel user={g} className="[margin-left:6px]" />}
                     </div>
                     <div className="[font-size:var(--fs-xs)] [color:var(--text-2)] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
                       {on.length

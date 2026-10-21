@@ -74,7 +74,7 @@ describe('invitations from the app', () => {
       [
         'system',
         added.id,
-        { email: 'anna.l@example.se', sent: true, resend: false, settled: true },
+        { email: 'anna.l@example.se', sent: true, resend: false, settled: true, by: f.admin.id },
       ],
     ])
   })
@@ -402,5 +402,82 @@ describe('invitations from the app', () => {
     expect((await inviteRows(t)).map((r) => [r.detail.sent, r.detail.settled])).toEqual([
       [false, true],
     ])
+  })
+})
+
+describe('whoever caused an app invitation sees whether it went out', () => {
+  const byId = (rows: { profile_id: string }[]) =>
+    [...rows].sort((a, b) => a.profile_id.localeCompare(b.profile_id))
+
+  it('shows an org admin every pending seat and a project lead only the guests they invited', async () => {
+    const t = newAuthT()
+    // f.user leads f.meta and is not an org admin
+    const f = await withOrg(t)
+    const deliveries = (who: typeof f.admin) =>
+      as(t, who).query(api.invites.deliveries, { org_id: f.org.id })
+    // a final refusal, such as a suppressed recipient
+    fetch.mockResolvedValue({
+      ok: false,
+      status: 422,
+      headers: { get: () => null },
+      json: async () => ({}),
+    })
+    const added = person(f.org.id, 'refused@example.se')
+    await as(t, f.admin).mutation(api.profiles.create, added)
+    await flush(t)
+    fetch.mockResolvedValue({ ok: true, json: async () => ({ message_id: 'm' }) })
+    const guest = await as(t, f.user).mutation(api.projects.inviteGuest, {
+      org_id: f.org.id,
+      project_id: f.meta.id,
+      email: 'guest.new@example.se',
+      level: 'viewer',
+    })
+    await flush(t)
+
+    expect(byId(await deliveries(f.admin))).toEqual(
+      byId([
+        { profile_id: added.id, state: 'unsent' },
+        { profile_id: guest, state: 'sent' },
+      ]),
+    )
+    expect(await deliveries(f.user)).toEqual([{ profile_id: guest, state: 'sent' }])
+    expect(await deliveries(f.viewer)).toEqual([])
+  })
+
+  it('tells a send in flight, a held-back one and an uncertain one apart, for the current address only', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const seats = await Promise.all(
+      ['sending', 'held', 'uncertain', 'readdressed'].map(async (name) => {
+        const seat = person(f.org.id, `${name}@example.se`)
+        await as(t, f.admin).mutation(api.profiles.create, seat)
+        return seat
+      }),
+    )
+    // the scheduled sends never run here, so only the planted rows count
+    const plant = (seat: { id: string }, detail: Record<string, unknown>) =>
+      t.run((ctx) =>
+        ctx.db.insert('platform_audit_log', {
+          ts: NOW,
+          actor_email: 'system',
+          action: 'invite_email',
+          channel: 'app',
+          target_org_id: f.org.id,
+          target_profile_id: seat.id,
+          detail: { resend: false, by: f.admin.id, ...detail },
+        }),
+      )
+    const [sending, held, uncertain, readdressed] = seats
+    await plant(sending, { email: sending.email, sent: false })
+    await plant(held, { email: held.email, sent: false, limited: true })
+    await plant(uncertain, { email: uncertain.email, sent: false, settled: true, uncertain: true })
+    await plant(readdressed, { email: 'old@example.se', sent: false, settled: true })
+    expect(byId(await as(t, f.admin).query(api.invites.deliveries, { org_id: f.org.id }))).toEqual(
+      byId([
+        { profile_id: sending.id, state: 'sending' },
+        { profile_id: held.id, state: 'held' },
+        { profile_id: uncertain.id, state: 'uncertain' },
+      ]),
+    )
   })
 })

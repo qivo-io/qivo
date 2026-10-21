@@ -15,10 +15,12 @@
  * Every attempt is recorded as an 'invite_email' platform audit row before it
  * is sent, with the operator as actor for console sends and 'system' for the
  * app's, whose rows carry channel 'app'.
- * adminPeople.orgDetail shows the newest one for the seat's current address. The
- * app's sends are capped per organization, because any org admin can trigger
- * them and they leave from the shared no-reply address. Past the cap, people
- * can still join by creating an account with the invited address. */
+ * adminPeople.orgDetail shows the newest one for the seat's current address,
+ * and deliveries() shows it in the app, so whoever caused an app send sees
+ * whether it went out. The app's sends are capped per organization, because
+ * any org admin can trigger them and they leave from the shared no-reply
+ * address. Past the cap, people can still join by creating an account with
+ * the invited address. */
 
 import { type Infer, v } from 'convex/values'
 import { components, internal } from './_generated/api'
@@ -27,7 +29,7 @@ import type { ActionCtx, QueryCtx } from './_generated/server'
 import { internalAction, internalMutation, internalQuery } from './_generated/server'
 import { byId } from './lib/db'
 import { isDemoDeployment } from './lib/demo'
-import { notFound } from './lib/functions'
+import { notFound, orgQuery } from './lib/functions'
 import { sendInviteEmail } from './mail'
 import { audit } from './model/admin'
 import { newUuid } from './model/orgs'
@@ -38,11 +40,13 @@ export type InviteResult = { profile_id: string; email: string; sent: boolean }
 /* One seat to email. The app schedules the address it saw, so a send that a
  * later correction superseded is skipped, and a reactivation sends only if
  * the audit log, which keeps 90 days, holds no delivered email to that
- * address (unless_sent). */
+ * address (unless_sent). `by` is the profile whose change caused an app send,
+ * which deliveries() lets see the outcome. */
 const vInvite = v.object({
   profile_id: v.string(),
   email: v.optional(v.string()),
   unless_sent: v.optional(v.boolean()),
+  by: v.optional(v.string()),
 })
 export type ScheduledInvite = Infer<typeof vInvite>
 
@@ -62,6 +66,7 @@ type InviteTarget = {
   email: string
   has_account: boolean
   as_guest: boolean
+  by?: string
 }
 
 type SendRow = {
@@ -71,6 +76,7 @@ type SendRow = {
     limited?: unknown
     settled?: unknown
     uncertain?: unknown
+    by?: unknown
   }
 }
 
@@ -156,6 +162,7 @@ export const targets = internalQuery({
         as_guest:
           seat.org_role === 'guest' ||
           (await homeElsewhere(ctx, email, seat.org_id, seat)) !== null,
+        ...(invite.by !== undefined ? { by: invite.by } : {}),
       })
     }
     return out
@@ -178,6 +185,7 @@ export const reserve = internalMutation({
     resend: v.boolean(),
     actor: vActor,
     app: v.boolean(),
+    by: v.optional(v.string()),
   },
   handler: async (ctx, a): Promise<{ row: Id<'platform_audit_log'> | null; allowed: boolean }> => {
     const seat = await byId(ctx, 'profiles', a.profile_id)
@@ -202,6 +210,7 @@ export const reserve = internalMutation({
         sent: false,
         resend: a.resend,
         ...(allowed ? {} : { limited: true }),
+        ...(a.by !== undefined ? { by: a.by } : {}),
       },
     })
     return { row, allowed }
@@ -268,6 +277,7 @@ export async function sendInvites(
       resend: opts.resend,
       actor,
       app,
+      ...(app && target.by !== undefined ? { by: target.by } : {}),
     })
     if (row === null) {
       if (opts.strict) throw notFound('invitation not found')
@@ -303,6 +313,57 @@ export async function sendInvites(
   // A seat that changed between targets() and reserve() leaves a gap.
   return results.filter((r): r is InviteResult => r !== undefined)
 }
+
+/** How a seat's newest invitation email went: in flight, delivered, refused
+ * or never reached the provider ('unsent'), possibly delivered ('uncertain'),
+ * or held back by the hourly cap ('held'). */
+export type InviteDelivery = 'sending' | 'sent' | 'unsent' | 'uncertain' | 'held'
+
+const deliveryOf = (row: SendRow): InviteDelivery =>
+  row.detail.limited === true
+    ? 'held'
+    : row.detail.settled !== true
+      ? 'sending'
+      : row.detail.sent === true
+        ? 'sent'
+        : row.detail.uncertain === true
+          ? 'uncertain'
+          : 'unsent'
+
+/* How many of a seat's newest audit rows deliveries() reads for its newest
+ * invitation email, as adminPeople does. */
+const DELIVERY_ROWS = 20
+
+/** The newest invitation email to each pending seat's current address in
+ * the caller's organization, so the app can say when one was not delivered.
+ * An org admin sees every pending seat. Anyone else sees only the sends
+ * their own change caused, such as a project lead's guest invitation. Seats
+ * with no invitation email recorded are left out. */
+export const deliveries = orgQuery({
+  args: {},
+  handler: async (ctx): Promise<{ profile_id: string; state: InviteDelivery }[]> => {
+    if (isDemoDeployment()) return []
+    const admin = ctx.me.org_role === 'admin'
+    const pending = ctx.db
+      .query('profiles')
+      .withIndex('by_org_auth', (q) => q.eq('org_id', ctx.me.org_id).eq('auth_user_id', undefined))
+    const out: { profile_id: string; state: InviteDelivery }[] = []
+    for await (const seat of pending) {
+      if (!isInvitation(seat, false)) continue
+      const rows = await ctx.db
+        .query('platform_audit_log')
+        .withIndex('by_target_profile', (q) => q.eq('target_profile_id', seat.id))
+        .order('desc')
+        .take(DELIVERY_ROWS)
+      const newest = rows.find(
+        (row) => row.action === 'invite_email' && (row as SendRow).detail.email === seat.email,
+      ) as SendRow | undefined
+      if (newest === undefined || (!admin && newest.detail.by !== ctx.me.id)) continue
+      out.push({ profile_id: seat.id, state: deliveryOf(newest) })
+    }
+    return out
+  },
+})
 
 /* The app's invitations, scheduled by the mutation that created, corrected
  * or reactivated the seat once it commits. A public demo sends and records
