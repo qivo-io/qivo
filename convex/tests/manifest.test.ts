@@ -247,8 +247,6 @@ identity:claimMySeats mutation public {"type":"object","value":{}}
 identity:claimSeatsInternal mutation internal {"type":"object","value":{"userId":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"emailVerified":{"fieldType":{"type":"boolean"},"optional":false}}}
 identity:createOrganization mutation public {"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false}}}
 identity:whoami query public {"type":"object","value":{}}
-internal/activityRows:check query internal {"type":"object","value":{"cursor":{"fieldType":{"type":"string"},"optional":true}}}
-internal/activityRows:run mutation internal {"type":"object","value":{"cursor":{"fieldType":{"type":"string"},"optional":true}}}
 internal/demoCleanup:purge mutation internal {"type":"object","value":{"demo_id":{"fieldType":{"type":"string"},"optional":false}}}
 internal/demoCleanup:recover mutation internal {"type":"object","value":{}}
 internal/demoMetrics:sample mutation internal {"type":"object","value":{}}

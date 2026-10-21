@@ -313,7 +313,7 @@ describe('organization export', () => {
         label: task.title,
         project_id: f.sub.id,
       })
-      // newer rows, numbered, a task row and a row about a person
+      // rows written as the app writes them, a task row and a row about a person
       await insertActivity(ctx, {
         org_id: f.org.id,
         actor_id: f.admin.id,

@@ -188,14 +188,13 @@ describe('per-subject history, kept whole and read a page at a time', () => {
         .collect(),
     )
 
-  it('keeps every row of a subject past 500, in insertion order, and numbers none', async () => {
+  it('keeps every row of a subject past 500, in insertion order', async () => {
     const t = newT()
     const f = await withOrg(t)
     await write(t, f.org.id, 'task-b', 2)
     await write(t, f.org.id, 'task-a', 600)
     const kept = await stored(t, f.org.id, 'task-a')
     expect(kept.map((row) => row.ts)).toEqual(Array.from({ length: 600 }, (_, i) => at(START + i)))
-    expect(kept.filter((row) => row.seq !== undefined)).toEqual([])
     expect(await stored(t, f.org.id, 'task-b')).toHaveLength(2)
   })
 
@@ -772,7 +771,6 @@ describe('browser verbs — the feed contract (evIcon substring-matches these)',
       'deleted',
     ])
     expect(rows.map((row) => row.named_task_nums)).toEqual(rows.map(() => []))
-    expect(rows.filter((row) => 'seq' in row)).toEqual([])
   })
 
   it('lifecycle verbs: created, moved (source-keyed), linked, archived, restored, deleted — and history survives its subjects', async () => {
@@ -936,11 +934,9 @@ describe('which task rows a member receives, in the task window and over REST', 
     const ids = await plant([
       { detail: `(blocks QN-${visible.num})` },
       { verb: 'renamed', detail: 'from “Old”' },
-      // a row from before numbering, which the migration has not reached
-      { verb: 'renamed', detail: 'from “Older”', seq: 4 },
       { verb: 'renamed', detail: 'from “Oldest”', named_task_nums: [] },
     ])
-    expect(await seen(f.guest)).toEqual([ids[3]])
+    expect(await seen(f.guest)).toEqual([ids[2]])
     expect(await seen(f.admin)).toEqual(ids)
   })
 

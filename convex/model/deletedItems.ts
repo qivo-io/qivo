@@ -791,9 +791,9 @@ function childrenOutside(ctx: QueryCtx, parentId: string, ids: string[]) {
   })
 }
 
-/** Deletes task `taskId`'s activity rows, legacy rows included, within the
- * step's budget, or with `upTo` only the rows written at or before it. True
- * once none is left. */
+/** Deletes task `taskId`'s activity rows, rows without a list included,
+ * within the step's budget, or with `upTo` only the rows written at or
+ * before it. True once none is left. */
 const purgeHistory = (run: Run, taskId: string, upTo?: string): Promise<boolean> =>
   drain(
     run.budget,

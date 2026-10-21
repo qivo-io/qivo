@@ -39,7 +39,6 @@ import type * as demoVisitor from "../demoVisitor.js";
 import type * as files from "../files.js";
 import type * as http from "../http.js";
 import type * as identity from "../identity.js";
-import type * as internal_activityRows from "../internal/activityRows.js";
 import type * as internal_demoCleanup from "../internal/demoCleanup.js";
 import type * as internal_demoMetrics from "../internal/demoMetrics.js";
 import type * as internal_demoTest from "../internal/demoTest.js";
@@ -219,7 +218,6 @@ declare const fullApi: ApiFromModules<{
   files: typeof files;
   http: typeof http;
   identity: typeof identity;
-  "internal/activityRows": typeof internal_activityRows;
   "internal/demoCleanup": typeof internal_demoCleanup;
   "internal/demoMetrics": typeof internal_demoMetrics;
   "internal/demoTest": typeof internal_demoTest;

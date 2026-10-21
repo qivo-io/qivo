@@ -157,8 +157,7 @@ export async function addLinkCore(
     { id, org_id: source.org_id, source_id, target_id, type, pair_key: key, created_at: now },
     badRequest('a link with this id already exists'),
   )
-  // the stored number decides visibility for this row; namedTaskNums reads
-  // this wording only on rows stored before named_task_nums existed
+  // the stored number decides visibility for this row, not its wording
   const named = `(${type === 'blocks' ? 'blocks' : 'relates to'} ${issueKey(target.num)})`
   await logActivity(ctx, {
     org_id: source.org_id,

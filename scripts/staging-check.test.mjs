@@ -1,16 +1,20 @@
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { HISTORY_PAGE_MAX } from '../convex/lib/activityVisibility'
+import { LABEL_MAX } from '../convex/lib/taskLimits'
 import {
   ACCESS_PUT_FIELDS,
   HELD_TASKS_FIELDS,
   MEMBER_PUT_FIELDS,
 } from '../convex/machine/bodyFields'
+import { COMMENT_PAGE_MAX } from '../convex/model/comments'
 import {
   addDays,
   deleteOutcome,
   evaluate,
   hasTag,
+  historyRows,
   isSiteOf,
   pace,
   parseArgs,
@@ -22,6 +26,8 @@ import {
   send,
   syncsWith,
   TAG_ANY,
+  TASK_LABEL_MAX,
+  THREAD_PAGE,
   WAITS,
   WRITE_CONFLICT,
   weekOf,
@@ -34,6 +40,10 @@ describe('staging check REST contract', () => {
       heldTasks: [...HELD_TASKS_FIELDS],
       memberPut: [...MEMBER_PUT_FIELDS],
     })
+  })
+  it('fills a task to the page sizes of its thread', () => {
+    expect(THREAD_PAGE).toEqual({ comments: COMMENT_PAGE_MAX, history: HISTORY_PAGE_MAX })
+    expect(TASK_LABEL_MAX).toBe(LABEL_MAX)
   })
 })
 
@@ -449,5 +459,33 @@ describe('attachment delete answers', () => {
       [{ status: 200, isError: true, text: `attachment "${id}" not found on QN-8` }, 'mcp'],
     ])
       expect(outcome(r, surface)).toMatch(/^HTTP /)
+  })
+})
+
+describe('thread pages', () => {
+  // 511 rows, oldest first, one second apart, paged newest first like REST
+  const all = Array.from({ length: 511 }, (_, i) => ({
+    id: `r${i}`,
+    verb: i === 0 ? 'created' : 'labeled',
+    created_at: new Date(Date.UTC(2026, 9, 21, 12, 0, i)).toISOString(),
+  }))
+  const pages = (rows) => [rows.slice(-500), rows.slice(0, -500)]
+  it('takes the whole history in a full page and the rest', () => {
+    expect(historyRows(pages(all), 511).map((r) => r.id)).toEqual(all.map((r) => r.id))
+  })
+  it('refuses a history with rows missing, repeated or out of order', () => {
+    // the earlier page holds only the created row
+    expect(() => historyRows([all.slice(-500), all.slice(0, 1)], 511)).toThrow(
+      /^rows across pages:/,
+    )
+    expect(() => historyRows([all.slice(-500), all.slice(0, 12)], 511)).toThrow(
+      /^distinct rows across pages:/,
+    )
+    // a short newest page, though every row comes once
+    expect(() => historyRows([all.slice(-499), all.slice(0, 12)], 511)).toThrow(/^the newest page:/)
+    expect(() => historyRows(pages(all.slice(1)), 510)).toThrow(/^the first row:/)
+    expect(() => historyRows([all.slice(-500)], 500)).toThrow(/^pages before the empty one:/)
+    const swapped = [...all.slice(0, 10), all[20], ...all.slice(10, 20), ...all.slice(21)]
+    expect(() => historyRows(pages(swapped), 511)).toThrow(/^pages overlap or skip/)
   })
 })

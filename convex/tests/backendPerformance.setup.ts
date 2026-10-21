@@ -88,7 +88,7 @@ export async function benchmarkBackend(baseline: Baseline) {
           })
         }
       }
-      // raw rows stand for activity stored before numbering
+      // task rows that name no task, as the app writes them
       for (let i = 0; i < 500; i++) {
         await ctx.db.insert('activity_events', {
           id: `benchmark-event-${i}`,
@@ -100,6 +100,7 @@ export async function benchmarkBackend(baseline: Baseline) {
           target_id: `benchmark-task-${i % count}`,
           label: 'Task',
           project_id: f.sub.id,
+          named_task_nums: [],
         })
       }
     })

@@ -13,11 +13,15 @@
  * them at the per-file limit, checks that an upload URL stores one file, checks
  * the text, name and request size limits, unknown arguments, comment paging,
  * the archived task lists, task progress, last comment times, delay and
- * project completion, and the live group rule. It opens the Settings page
+ * project completion, and the live group rule. It fills one task with a
+ * little more than a page of comments and of history, pages that history
+ * over REST and MCP, and in the browser presses Show earlier comments and
+ * Show earlier activity in its task window. It opens the Settings page
  * Archived tasks in the browser. Every task, comment, grant and file lives
- * in projects the run creates and names with its run tag. It revokes every credential in the app, checks that the next
- * call is refused, and removes everything it made, also after a failure
- * (try/finally, and --cleanup for a later sweep).
+ * in projects the run creates and names with its run tag. It revokes every
+ * credential in the app, checks that the next call is refused, and removes
+ * everything it made, also after a failure (try/finally, and --cleanup for
+ * a later sweep).
  *
  * The billing pause checks need an organization whose billing pauses
  * editing. Staging runs without billing, so they report SKIP there. A local
@@ -83,6 +87,13 @@ export const STAGING_APP_ORIGIN = 'https://preview.qivo.io'
 const PRODUCTION_HOSTS = new Set(['qivo.io', 'www.qivo.io', 'demo.qivo.io', 'api.qivo.io'])
 /** The longest REST or MCP request body (convex/machine/shared.ts BODY_MAX_BYTES). */
 const BODY_MAX = 1024 * 1024
+/** The comments and history rows one page of a task's thread holds
+ *  (convex/model/comments.ts COMMENT_PAGE_MAX and
+ *  convex/lib/activityVisibility.ts HISTORY_PAGE_MAX). The task window opens
+ *  with one page of each, and REST and MCP answer one a call. */
+export const THREAD_PAGE = { comments: 50, history: 500 }
+/** The most labels one task carries (convex/lib/taskLimits.ts LABEL_MAX). */
+export const TASK_LABEL_MAX = 20
 
 /** Checks that need a condition the run cannot create everywhere, which
  *  report SKIP without it, or FAIL when --require names them. */
@@ -2579,6 +2590,180 @@ async function commentPageChecks() {
   })
 }
 
+/* ---------------------------------------------------------- thread pages */
+
+/** Fills one task with a page and a little more of comments and of history,
+ *  then reads its history back over REST and MCP with `before` down to the
+ *  empty page, and in the task window uses Show earlier comments and Show
+ *  earlier activity until the first comment and the created row appear. */
+async function threadPageChecks() {
+  const w = run.creds.writeToken
+  let task
+  const comments = []
+  let changes = 0
+  const made = await check('thread-pages/setup', async () => {
+    task = await restOk(w, 'POST', '/tasks', {
+      project: run.projects.A.id,
+      title: `${run.tag} thread pages`,
+    })
+    run.created.push(task)
+    const count = THREAD_PAGE.comments + 10
+    for (let n = 1; n <= count; n++)
+      comments.push(
+        (await restOk(w, 'POST', `/tasks/${task.key}/comments`, { body: `${run.tag} thread ${n}` }))
+          .id,
+      )
+    // Each label a PATCH adds or removes writes its own history row, so
+    // putting all of them on and taking them off again fills the history
+    // with few requests.
+    const labels = (await readList(w, '/labels')).slice(0, TASK_LABEL_MAX).map((l) => l.id)
+    expect(labels.length > 0, 'the organization has no labels to put on the task')
+    const rounds = Math.ceil((THREAD_PAGE.history + 10) / (2 * labels.length))
+    for (let i = 0; i < rounds; i++) {
+      await restOk(w, 'PATCH', `/tasks/${task.key}`, { add_labels: labels })
+      await restOk(w, 'PATCH', `/tasks/${task.key}`, { remove_labels: labels })
+    }
+    changes = 1 + rounds * 2 * labels.length
+    return `${task.key} with ${count} comments and ${changes} changes`
+  })
+  if (!made) {
+    for (const id of ['rest', 'mcp', 'ui/earlier-comments', 'ui/earlier-activity'])
+      skip(`thread-pages/${id}`, 'the task could not be filled')
+    return
+  }
+  // every page, newest first, until the empty one
+  const walk = async (read) => {
+    const pages = []
+    let before
+    for (let i = 0; i < 5; i++) {
+      const page = await read(before)
+      if (page.length === 0) return pages
+      pages.push(page)
+      before = page[0].id
+    }
+    fail('paging did not end')
+  }
+  /** The created row's id and the row count of the history `read` pages. */
+  const history = async (read) => {
+    const rows = historyRows(await walk(read), changes)
+    return { created: rows[0].id, count: rows.length }
+  }
+  let created
+  await check('thread-pages/rest', async () => {
+    const r = await history((before) =>
+      restOk(w, 'GET', `/tasks/${task.key}/activity${before ? `?before=${before}` : ''}`),
+    )
+    created = r.created
+    return `${r.count} rows in 2 pages`
+  })
+  await check('thread-pages/mcp', async () => {
+    const r = await history((before) =>
+      toolOk(w, 'list_task_activity', { ref: task.key, ...(before ? { before } : {}) }),
+    )
+    if (created) eq(r.created, created, 'the created row REST answered')
+    return `${r.count} rows in 2 pages`
+  })
+  await earlierThreadChecks(task, comments, created)
+}
+
+/** The rows of a task's history, oldest first, from `pages`, the pages
+ *  REST or MCP answered newest first with `before` down to the empty one.
+ *  A task with `total` rows, a page and a little more, must answer a full
+ *  page and then the rest, every row once, starting with the created row. */
+export function historyRows(pages, total) {
+  eq(pages.length, 2, 'pages before the empty one')
+  eq(pages[0].length, THREAD_PAGE.history, 'the newest page')
+  const rows = pages.toReversed().flat()
+  eq(new Set(rows.map((r) => r.id)).size, rows.length, 'distinct rows across pages')
+  eq(rows.length, total, 'rows across pages')
+  eq(rows[0].verb, 'created', 'the first row')
+  for (let i = 1; i < rows.length; i++)
+    expect(rows[i - 1].created_at <= rows[i].created_at, 'pages overlap or skip')
+  return rows
+}
+
+/** The task window opens at the newest page of comments and of history.
+ *  Under Comments, Show earlier comments loads the rest of the comments,
+ *  and under All, Show earlier activity loads the rest of the thread, each
+ *  until the control goes. Each check opens the task afresh, so one can
+ *  fail without the other. `comments` are the task's comment ids, oldest
+ *  first, and `created` the id of its created row. */
+async function earlierThreadChecks(task, comments, created) {
+  const more = app.locator('[data-earlier-comments="more"] button')
+  /** The ids the thread shows in the attribute `name`, top to bottom. */
+  const shown = (name) =>
+    app.locator(`[${name}]`).evaluateAll((els, n) => els.map((el) => el.getAttribute(n)), name)
+  const rowCount = async () =>
+    (await shown('data-comment')).length + (await shown('data-event')).length
+  /** Presses `more` until it goes, at most `most` times, and answers the
+   *  number of presses. */
+  const pressUntilGone = async (most, label) => {
+    let clicks = 0
+    while ((await more.count()) > 0) {
+      expect(clicks < most, `${label} did not go after ${clicks} presses`)
+      const before = await rowCount()
+      await more.click()
+      clicks++
+      expect(
+        await until(async () => (await rowCount()) > before, 20_000),
+        `${label} loaded nothing after ${clicks} presses`,
+      )
+      // the control returns once the page is in, or goes for good
+      await app.locator('[data-earlier-comments="loading"]').waitFor({ state: 'detached' })
+    }
+    return clicks
+  }
+  /** Opens the task window under Comments and waits for its first page. */
+  const open = async () => {
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${task.key.toLowerCase()}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    await app.locator('[data-comment]').first().waitFor({ timeout: 45_000 })
+  }
+  await check('thread-pages/ui/earlier-comments', async () => {
+    await open()
+    await more.waitFor({ timeout: 20_000 })
+    eq((await more.textContent())?.trim(), 'Show earlier comments', 'the control under Comments')
+    eq((await shown('data-comment')).length, THREAD_PAGE.comments, 'comments the task opens with')
+    expect(
+      !(await shown('data-comment')).includes(comments[0]),
+      'the first comment is already shown',
+    )
+    const clicks = await pressUntilGone(2, 'Show earlier comments')
+    same(
+      (await shown('data-comment')).toSorted(),
+      comments.toSorted(),
+      'the comments after Show earlier comments',
+    )
+    eq((await shown('data-comment'))[0], comments[0], 'the first comment shown')
+    return `${THREAD_PAGE.comments} at first, then ${clicks} press to the first comment`
+  })
+  if (created)
+    await check('thread-pages/ui/earlier-activity', async () => {
+      await open()
+      await app.getByRole('radio', { name: 'All', exact: true }).click()
+      await more.waitFor({ timeout: 20_000 })
+      eq((await more.textContent())?.trim(), 'Show earlier activity', 'the control under All')
+      expect(!(await shown('data-event')).includes(created), 'the created row is already shown')
+      // a page of history, then the comments older than the oldest loaded one
+      const clicks = await pressUntilGone(3, 'Show earlier activity')
+      const first = await app
+        .locator('[data-spine-feed]')
+        .locator('[data-comment], [data-event]')
+        .first()
+        .getAttribute('data-event')
+      eq(first, created, 'the first row under All')
+      expect((await shown('data-comment')).includes(comments[0]), 'the first comment under All')
+      return `${clicks} presses to the created row`
+    })
+  else skip('thread-pages/ui/earlier-activity', 'REST did not answer the created row')
+  // leave the task, so its thread is not open while the run changes it
+  await check('thread-pages/ui/leave', async () => {
+    await app.goto(`${cfg.appOrigin}/app/~/board/all`, { waitUntil: 'domcontentloaded' })
+    await app.waitForSelector('[data-all-nav]', { timeout: 60_000 })
+  })
+}
+
 /** 80 code points on project, sub-project, milestone, team, organization,
  *  agent key and personal token names (#127). Creates the run's team. */
 async function nameCapChecks() {
@@ -4376,6 +4561,7 @@ async function main() {
   // limits and rules that merged
   await textCapChecks()
   await commentPageChecks()
+  await threadPageChecks()
   await nameCapChecks()
   await bodyCapChecks()
   await unknownArgumentChecks()

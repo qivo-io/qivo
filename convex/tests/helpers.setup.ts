@@ -767,9 +767,9 @@ export async function drainActivity(t: T): Promise<void> {
 }
 
 /** Plants activity rows the way the app writes them (model/activity.ts
- * insertActivity), so each gets its subject's next seq and, on a task row,
- * named_task_nums. Rows in one call are written one after another. A test
- * that stands for rows stored before numbering inserts them raw instead. */
+ * insertActivity), so a task row gets named_task_nums. Rows in one call are
+ * written one after another. A test that stands for a row stored without
+ * the list inserts it raw instead. */
 export const plantActivity = (t: T, ...entries: ActivityEntry[]): Promise<void> =>
   t.run(async (ctx) => {
     for (const entry of entries) await insertActivity(ctx, entry)

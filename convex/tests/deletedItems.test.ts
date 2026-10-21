@@ -391,7 +391,7 @@ describe('moving a task to Deleted items', () => {
             created_at: NOW,
           })
       })
-    await plantHistory(t, huge, { numbered: 3 })
+    await plantHistory(t, huge, { listed: 3 })
 
     await deleteTask(t, f, huge.id)
     await runSteps(t)
@@ -444,7 +444,7 @@ describe('moving a task to Deleted items', () => {
     const org_id = f.org.id
     // a task that release deleted for good, whose history its job kept
     const gone = await plantIssue(t, { org_id, project_id: f.sub.id })
-    await plantHistory(t, gone, { numbered: 3 })
+    await plantHistory(t, gone, { listed: 3 })
     await t.run((ctx) => ctx.db.delete(gone._id))
     const task = await plantIssue(t, { org_id, project_id: f.sub.id })
     for (let i = 0; i < 3; i++) await comment(t, task)
@@ -1341,8 +1341,8 @@ describe('purging', () => {
     const from = await plantIssue(t, { org_id, project_id: f.sub2.id })
     const planted = await plantRows(t, f, task, { to, from })
     for (let i = 0; i < 5; i++) await comment(t, task)
-    await plantHistory(t, task, { numbered: 5, legacy: 2 })
-    await plantHistory(t, to, { numbered: 2 })
+    await plantHistory(t, task, { listed: 5, unlisted: 2 })
+    await plantHistory(t, to, { listed: 2 })
     await deleteTask(t, f, task.id)
     const item = await itemFor(t, task.id)
     const rows = (await storedRows(t, item.id)).length
@@ -1380,7 +1380,7 @@ describe('purging', () => {
     const t = newT()
     const f = await withOrg(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    await plantHistory(t, task, { numbered: 2, legacy: 1 })
+    await plantHistory(t, task, { listed: 2, unlisted: 1 })
     await deleteTask(t, f, task.id)
     const item = await itemFor(t, task.id)
     const history = (await historyOf(t, task.id)).length
@@ -1430,10 +1430,10 @@ describe('purging', () => {
     const kept = await plantIssue(t, { org_id, project_id: f.sub2.id })
     const keptFile = await attach(t, kept)
     const own = await plantIssue(t, { org_id, project_id: f.sub.id })
-    await plantHistory(t, own, { numbered: 2, legacy: 1 })
+    await plantHistory(t, own, { listed: 2, unlisted: 1 })
     // a task with rows filed under Firmware that moved to Skunkworks since
     const movedOut = await plantIssue(t, { org_id, project_id: f.sub.id })
-    await plantHistory(t, movedOut, { numbered: 1, legacy: 1 })
+    await plantHistory(t, movedOut, { listed: 1, unlisted: 1 })
     await t.run((ctx) => ctx.db.patch(movedOut._id, { project_id: f.hidden.id }))
     // a sub-project deleted before its parent is an item of its own
     await deleteProject(t, f, f.sub2.id)
@@ -1479,17 +1479,17 @@ describe('purging', () => {
     const t = newT()
     const f = await withOrg(t)
     const org_id = f.org.id
-    // three tasks with 400 rows each from before numbering, filed under
+    // three tasks with 400 rows each stored without a list, filed under
     // Firmware, that moved to Skunkworks since
     const movedOut: Doc<'issues'>[] = []
     for (let i = 0; i < 3; i++) {
       const task = await plantIssue(t, { org_id, project_id: f.sub.id })
-      await plantHistory(t, task, { numbered: 0, legacy: 400 })
+      await plantHistory(t, task, { listed: 0, unlisted: 400 })
       await t.run((ctx) => ctx.db.patch(task._id, { project_id: f.hidden.id }))
       movedOut.push(task)
     }
     const elsewhere = await plantIssue(t, { org_id, project_id: f.sub2.id })
-    await plantHistory(t, elsewhere, { numbered: 2 })
+    await plantHistory(t, elsewhere, { listed: 2 })
     await deleteProject(t, f, f.sub.id)
     const item = await itemFor(t, f.sub.id)
     expect(item.state).toBe('ready')
@@ -1596,9 +1596,9 @@ describe('purging', () => {
     const stranded = await plantIssue(t, { org_id, project_id: f.sub2.id })
     const strandedFile = await attach(t, stranded)
     await comment(t, stranded)
-    await plantHistory(t, stranded, { numbered: 2, legacy: 1 })
+    await plantHistory(t, stranded, { listed: 2, unlisted: 1 })
     const child = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: stranded.id })
-    await plantHistory(t, child, { numbered: 1 })
+    await plantHistory(t, child, { listed: 1 })
     for (let i = 0; i < 3; i++) await plantIssue(t, { org_id, project_id: f.sub2.id })
     Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
     await deleteProject(t, f, f.sub2.id)
@@ -1671,9 +1671,9 @@ describe('purging', () => {
     const f = await withOrg(t)
     const org_id = f.org.id
     const task = await plantIssue(t, { org_id, project_id: f.sub.id })
-    await plantHistory(t, task, { numbered: 3, legacy: 2 })
+    await plantHistory(t, task, { listed: 3, unlisted: 2 })
     const other = await plantIssue(t, { org_id, project_id: f.sub.id })
-    await plantHistory(t, other, { numbered: 1 })
+    await plantHistory(t, other, { listed: 1 })
     await deleteTask(t, f, task.id)
     const item = await itemFor(t, task.id)
     await t.run(async (ctx) => {
@@ -1700,7 +1700,7 @@ describe('purging', () => {
     const f = await withOrg(t)
     const org_id = f.org.id
     const task = await plantIssue(t, { org_id, project_id: f.sub.id })
-    await plantHistory(t, task, { numbered: 2 })
+    await plantHistory(t, task, { listed: 2 })
     await deleteTask(t, f, task.id)
     const item = await itemFor(t, task.id)
     await t.run(async (ctx) => {
@@ -1742,7 +1742,7 @@ describe('purging', () => {
     const f = await withOrg(t)
     const org_id = f.org.id
     const task = await plantIssue(t, { org_id, project_id: f.sub.id })
-    await plantHistory(t, task, { numbered: 2 })
+    await plantHistory(t, task, { listed: 2 })
     await deleteTask(t, f, task.id)
     const item = await itemFor(t, task.id)
     await t.run(async (ctx) => {
