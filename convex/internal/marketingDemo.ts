@@ -14,6 +14,7 @@ import { refuseProduction } from '../lib/deployment'
 import type { StoredTable } from '../lib/enums'
 import { badRequest, conflict, require, rule } from '../lib/functions'
 import { DEFAULT_MESSAGE_RETENTION_DAYS, LIMITS, MIB } from '../lib/limits'
+import { pendingRemoval } from '../model/cascade'
 import { SAMPLE_AVATARS, type SampleAvatar, writeNorthstarWork } from '../model/demoSeed'
 import { wipeWorkStep } from '../model/orgDeletion'
 import { assertSlugAvailable, insertOrgRows, newOrgDefaults, setCounters } from '../model/orgs'
@@ -219,7 +220,10 @@ export const provision = internalMutation({
     await assertSlugAvailable(ctx, KEY)
     const humans = MARKETING_DEMO.people.filter((p) => p.kind === 'person')
     for (const person of MARKETING_DEMO.people) {
-      require((await byId(ctx, 'profiles', await id(`person:${person.key}`))) === null, conflict(
+      const profileId = await id(`person:${person.key}`)
+      // a removed profile keeps its id until its background cleanup ends
+      require((await byId(ctx, 'profiles', profileId)) === null &&
+        (await pendingRemoval(ctx, profileId)) === null, conflict(
         'marketing demo: a reserved profile id is already in use',
         'demo_id_collision',
       ))
@@ -387,6 +391,17 @@ export const apply = internalMutation({
         .first()
       return row !== null && row.org_id !== org.id
     }
+    // The organization of a live comment's task or a live milestone's
+    // project, which can be in Deleted items while a delete's steps have not
+    // moved that comment or milestone yet.
+    const ownerOrg = async (table: 'issues' | 'projects', rowId: string) =>
+      (await byId(ctx, table, rowId))?.org_id ??
+      (
+        await ctx.db
+          .query('deleted_rows')
+          .withIndex('by_row', (q) => q.eq('table', table).eq('row_id', rowId))
+          .first()
+      )?.org_id
     for (const project of MARKETING_DEMO.projects) {
       const projectId = await id(`project:${project.key}`)
       const existing = await byId(ctx, 'projects', projectId)
@@ -424,10 +439,9 @@ export const apply = internalMutation({
     for (const comment of MARKETING_DEMO.comments) {
       const commentId = await id(`comment:${comment.key}`)
       const existing = await byId(ctx, 'comments', commentId)
-      const issue = existing ? await byId(ctx, 'issues', existing.issue_id) : null
       require(existing === null
         ? !(await trashedElsewhere('comments', commentId))
-        : issue?.org_id === org.id, conflict(
+        : (await ownerOrg('issues', existing.issue_id)) === org.id, conflict(
         'marketing demo: reserved comment id belongs to another organization',
         'demo_id_collision',
       ))
@@ -435,10 +449,9 @@ export const apply = internalMutation({
     for (const milestone of MARKETING_DEMO.milestones) {
       const milestoneId = await id(`milestone:${milestone.key}`)
       const existing = await byId(ctx, 'milestones', milestoneId)
-      const project = existing ? await byId(ctx, 'projects', existing.project_id) : null
       require(existing === null
         ? !(await trashedElsewhere('milestones', milestoneId))
-        : project?.org_id === org.id, conflict(
+        : (await ownerOrg('projects', existing.project_id)) === org.id, conflict(
         'marketing demo: reserved milestone id belongs to another organization',
         'demo_id_collision',
       ))

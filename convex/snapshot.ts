@@ -176,20 +176,6 @@ export const forMe = authedQuery({
 
       orgs.push(orgRowFor(org, await countersOf(ctx, org), isAdmin))
 
-      // All org members see teams and their membership.
-      const orgTeams = await ctx.db
-        .query('teams')
-        .withIndex('by_org', (q) => q.eq('org_id', orgId))
-        .collect()
-      for (const team of orgTeams) {
-        teams.push(iconFree(team))
-        const members = await ctx.db
-          .query('team_members')
-          .withIndex('by_team', (q) => q.eq('team_id', team.id))
-          .collect()
-        for (const m of members) teamMembers.push(rowOf(m))
-      }
-
       // Include inactive, agent and unclaimed profiles in the org roster.
       // Clients paint the avatar color as a CSS background, so an older
       // non-hex value goes out as gray.
@@ -201,6 +187,23 @@ export const forMe = authedQuery({
       for (const p of orgProfiles) {
         profiles.push({ ...rowOf(p), color: shownAvatarColor(p.color) })
         orgProfileIds.add(p.id)
+      }
+
+      // All org members see teams and their membership. A removed person's
+      // memberships and grants can outlive their profile row for a moment
+      // (model/cascade.ts removeProfile), so only rows of profiles sent
+      // above go out.
+      const orgTeams = await ctx.db
+        .query('teams')
+        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .collect()
+      for (const team of orgTeams) {
+        teams.push(iconFree(team))
+        const members = await ctx.db
+          .query('team_members')
+          .withIndex('by_team', (q) => q.eq('team_id', team.id))
+          .collect()
+        for (const m of members) if (orgProfileIds.has(m.profile_id)) teamMembers.push(rowOf(m))
       }
 
       // Archived project metadata remains available for navigation. Every
@@ -247,7 +250,7 @@ export const forMe = authedQuery({
             .withIndex('by_project', (q) => q.eq('project_id', p.id))
             .collect(),
         ])
-        for (const g of grants) access.push(rowOf(g))
+        for (const g of grants) if (orgProfileIds.has(g.profile_id)) access.push(rowOf(g))
         for (const g of teamGrants) teamAccess.push(rowOf(g))
 
         if (p.archived_at === undefined) {

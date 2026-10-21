@@ -45,8 +45,8 @@ describe('messages.snooze — the item, stamped alike, unread, woken by the serv
   it('stamps every row of the pair from one id, marks the item unread and leaves other pairs alone', async () => {
     const t = newT()
     const f = await withOrg(t)
-    const issueA = uuid()
-    const issueB = uuid()
+    const issueA = (await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })).id
+    const issueB = (await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })).id
     const base = { org_id: f.org.id, recipient_id: f.guest.id }
     const READ = '2026-01-02T00:00:00.000Z'
     const a1 = await plantMessage(t, { ...base, issue_id: issueA, read_at: READ })
@@ -91,7 +91,7 @@ describe('messages.snooze — the item, stamped alike, unread, woken by the serv
   it('a wake scheduled for a superseded snooze does nothing; the current one wakes', async () => {
     const t = newT()
     const f = await withOrg(t)
-    const issue_id = uuid()
+    const issue_id = (await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })).id
     const m = await plantMessage(t, { org_id: f.org.id, recipient_id: f.guest.id, issue_id })
     const first = inAnHour()
     const second = new Date(Date.now() + 2 * HOUR).toISOString()
@@ -193,6 +193,46 @@ describe('messages.snooze — the item, stamped alike, unread, woken by the serv
 
     await t.finishAllScheduledFunctions(() => vi.runAllTimers())
     for (const m of await messagesFor(t, f.guest.id, issue.id)) expect(m.woke_at).toBeUndefined()
+  })
+})
+
+describe('a wake about a task in Deleted items', () => {
+  it('keeps its messages read, for the task or for its project', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const kept = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const deleted = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const inProject = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    await as(t, f.user).mutation(api.issues.deleteDeep, { org_id: f.org.id, id: deleted.id })
+    await as(t, f.user).mutation(api.projects.deleteDeep, { org_id: f.org.id, id: f.sub2.id })
+    // snoozed rows a delete's steps have not reached yet
+    const until = inAnHour()
+    for (const issue of [kept, deleted, inProject])
+      for (const day of ['01', '02'])
+        await plantMessage(t, {
+          org_id: f.org.id,
+          recipient_id: f.guest.id,
+          issue_id: issue.id,
+          created_at: `2026-01-${day}T00:00:00.000Z`,
+          read_at: '2026-01-03T00:00:00.000Z',
+          snoozed_until: until,
+        })
+
+    for (const issue of [kept, deleted, inProject])
+      await t.run((ctx) =>
+        wakeSnoozedItem(ctx, { recipient_id: f.guest.id, issue_id: issue.id, until }, 'now'),
+      )
+    const live = await messagesFor(t, f.guest.id, kept.id)
+    expect(live.map((m) => [m.read_at, m.woke_at])).toEqual([
+      [undefined, 'now'],
+      [undefined, 'now'],
+    ])
+    for (const issue of [deleted, inProject]) {
+      const rows = await messagesFor(t, f.guest.id, issue.id)
+      expect(rows).toHaveLength(1) // the newest, as after a mark read
+      expect(rows[0].read_at).toBeDefined()
+      expect(rows[0].snoozed_until).toBeUndefined()
+    }
   })
 })
 

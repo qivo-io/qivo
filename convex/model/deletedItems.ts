@@ -11,16 +11,18 @@
  * row at once (moveTasksToTrash); the tasks' messages, comments, label
  * assignments, follows, attachments and links follow in the same
  * transaction when they fit, otherwise in steps. A project item's user
- * transaction stores the project rows (moveProjectToTrash), which hides
- * every task in them, and steps then move each task: relation rows,
- * messages, children outside the item's projects, then the task row. While an item drains, its leftover
- * rows name a task or project that is absent, so readers skip them.
+ * transaction stores the project rows (moveProjectToTrash), at most
+ * LIMITS.projectDeleteSubProjects.max + 1, which hides every task, milestone and grant
+ * in them, and steps then move the milestones and grants, and each task:
+ * relation rows, messages, children outside the item's projects, then the
+ * task row. While an item drains, its leftover rows name a task or project
+ * that is absent, so readers skip them.
  *
  * Fill first, reveal last (restoreItems). A restore mirrors the move: steps
- * write the rows back while what they name is still absent, and one
- * transaction at the end, the reveal, writes the item's root rows (a task
- * item's tasks; a project item's projects, milestones and grants), so the
- * work appears complete in one delivery. A project item's tasks whose
+ * write the rows back while what they name is still absent, a project
+ * item's milestones and grants among them, and one transaction at the end,
+ * the reveal, writes the item's root rows (a task item's tasks; a project
+ * item's projects), so the work appears complete in one delivery. A project item's tasks whose
  * parent is outside it go back without that parent and get it after the
  * reveal, by the state then (attachParents). That happens in the reveal's
  * own transaction when they fit in what its budget has left, otherwise in
@@ -110,7 +112,7 @@ import {
   type StoredTable,
   type TrashPhase,
 } from '../lib/enums'
-import { notFound } from '../lib/functions'
+import { notFound, rule } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
 import { cutText, LIMITS, TEXT_MAX } from '../lib/limits'
 import { countsAsSubtask } from '../lib/liveTasks'
@@ -600,25 +602,6 @@ async function holdsRows(ctx: QueryCtx, relations: Relation[], ownerId: string):
   return false
 }
 
-/** Clears every row of `relations` owned by `ownerId` in one transaction,
- * with no budget: for the user's own transaction, as bounded as today's
- * hard delete. `clear` must take each row out of its range. */
-async function clearAll(
-  ctx: QueryCtx,
-  relations: Relation[],
-  ownerId: string,
-  clear: (live: LiveRow) => Promise<void>,
-): Promise<void> {
-  const PAGE = 256
-  for (const relation of relations) {
-    for (;;) {
-      const rows = await relation.read(ctx, ownerId, PAGE)
-      for (const row of rows) await clear(row)
-      if (rows.length < PAGE) break
-    }
-  }
-}
-
 /* ------------------------------------------------------------------- runs */
 
 /** Reads the restore and visibility rules repeat, kept for one transaction:
@@ -641,6 +624,10 @@ export type Memo = {
   teamsOf: Map<string, Promise<Set<string>>>
   /** a person's live grant and team shares on a live parent, keyed `parent:profile` */
   parentAccess: Map<string, Promise<LevelGrants>>
+  /** a person's live grants, by profile (liveGrantsOf) */
+  grantsOf: Map<string, Promise<Doc<'project_access'>[]>>
+  /** a team's live shares, by team (liveSharesOf) */
+  sharesOf: Map<string, Promise<Doc<'project_team_access'>[]>>
   /** whether the organization is read-only, by organization (orgReadOnly) */
   readOnly: Map<string, Promise<boolean>>
   /** the item holding a stored project, by project */
@@ -665,6 +652,8 @@ export const newMemo = (): Memo => ({
   live: new Map(),
   teamsOf: new Map(),
   parentAccess: new Map(),
+  grantsOf: new Map(),
+  sharesOf: new Map(),
   readOnly: new Map(),
   heldBy: new Map(),
   hierarchy: new Map(),
@@ -1061,8 +1050,9 @@ async function isEdge(
   return false
 }
 
-/* Every task left in the item's projects, after any milestone or grant that
- * reached a project after the user's transaction stored its rows. */
+/* Each of the item's projects' milestones, grants and team grants, then
+ * every task left in it. The user's transaction stored only the project
+ * rows, which hide the rest. */
 async function moveProjectTasks(run: Run): Promise<boolean> {
   for (const id of itemProjectIds(run.item)) {
     if (!(await clearProjectRows(run, id, 'keep'))) return false
@@ -1339,6 +1329,11 @@ async function purgeLeft(run: Run): Promise<boolean> {
  * its own (revealTasks). */
 const REVEAL_RANGES_PER_TASK = 20
 
+/* The index ranges a reveal reads per project of a project item: the
+ * conflict check's key and uuid reads, its lead and legacy team, and the
+ * stored row it deletes. */
+const REVEAL_RANGES_PER_PROJECT = 5
+
 /** Why an item cannot be restored now (design 5.3). The item's state while
  * it is not ready; read_only while billing or a pending deletion makes the
  * organization read-only (orgReadOnly); then the blocked
@@ -1371,8 +1366,13 @@ export type RestoreResult = {
 /** An item a reveal brought back, for the activity row. */
 type Revealed = { item: Item; tasks: number }
 
-/** The relation rows a restore writes back before its links and reveal. */
+/** The rows a restore writes back before its links and reveal: a project
+ * item's milestones, grants and team grants, and the relation rows of the
+ * item's tasks. */
 const RESTORED_ROWS = [
+  'milestones',
+  'project_access',
+  'project_team_access',
   'comments',
   'issue_labels',
   'issue_subscriptions',
@@ -1467,9 +1467,10 @@ async function cleanShare(
   return sameReference(await teamOf(s, g.team_id), s.item) ? g : null
 }
 
-/** A project item's projects as its reveal writes them back, with their
- * grants and shares, and a sub-project item's live parent: what levels
- * inside the item are computed over while it is in Deleted items. */
+/** A project item's projects as its reveal writes them back, with the
+ * grants and shares it stores as they are, and a sub-project item's live
+ * parent: what levels inside the item are computed over while it is in
+ * Deleted items. */
 type Hierarchy = {
   root: Stored<'projects'> | undefined
   projects: Stored<'projects'>[]
@@ -1483,16 +1484,10 @@ function hierarchyOf(s: Scope): Promise<Hierarchy> {
     const projects: Stored<'projects'>[] = []
     for (const row of await storedOf(s, 'projects'))
       projects.push(await cleanProject(s, docOf(row, 'projects')))
-    const grants: Stored<'project_access'>[] = []
-    for (const row of await storedOf(s, 'project_access')) {
-      const grant = await cleanGrant(s, docOf(row, 'project_access'))
-      if (grant !== null) grants.push(grant)
-    }
-    const shares: Stored<'project_team_access'>[] = []
-    for (const row of await storedOf(s, 'project_team_access')) {
-      const share = await cleanShare(s, docOf(row, 'project_team_access'))
-      if (share !== null) shares.push(share)
-    }
+    const grants = (await storedOf(s, 'project_access')).map((row) => docOf(row, 'project_access'))
+    const shares = (await storedOf(s, 'project_team_access')).map((row) =>
+      docOf(row, 'project_team_access'),
+    )
     const { parent_project_id } = s.item
     return {
       root: projects.find((p) => p.id === s.item.target_id),
@@ -1507,15 +1502,34 @@ function hierarchyOf(s: Scope): Promise<Hierarchy> {
 
 /** `profile`'s levels on a project item's projects while they are in
  * Deleted items (design 6.1): lib/access.ts levelsFrom over the projects as
- * the reveal writes them back, the profile's stored grants, the stored
- * shares of the teams it belongs to now, and the live grants and shares on
- * a sub-project item's parent. */
+ * the reveal writes them back, the profile's grants and the shares of the
+ * teams it belongs to now, each as the reveal would keep it, and the live
+ * grants and shares on a sub-project item's parent. A project item's grants
+ * and shares are stored, or still live while its move takes them, or live
+ * again once its restore wrote them back before the reveal (restoreRows),
+ * so both places are read. Live rows on the item's projects can only be
+ * those, because its projects are absent. */
 function storedLevels(s: Scope, profile: Doc<'profiles'>): Promise<OrgProjectLevels> {
   return memoRead(s.memo.levels, `${s.item.id}:${profile.id}`, async () => {
     const h = await hierarchyOf(s)
     const teams = await teamsOf(s, profile)
-    const grants: LevelGrants['grants'] = h.grants.filter((g) => g.profile_id === profile.id)
-    const shares: LevelGrants['shares'] = h.shares.filter((g) => teams.has(g.team_id))
+    const ids = new Set(itemProjectIds(s.item))
+    const grants: LevelGrants['grants'] = []
+    for (const g of [
+      ...h.grants.filter((g) => g.profile_id === profile.id),
+      ...(await liveGrantsOf(s, profile.id)).filter((g) => ids.has(g.project_id)),
+    ]) {
+      const grant = await cleanGrant(s, g)
+      if (grant !== null) grants.push(grant)
+    }
+    const shares: LevelGrants['shares'] = []
+    const live: Stored<'project_team_access'>[] = []
+    for (const teamId of teams)
+      for (const g of await liveSharesOf(s, teamId)) if (ids.has(g.project_id)) live.push(g)
+    for (const g of [...h.shares.filter((g) => teams.has(g.team_id)), ...live]) {
+      const share = await cleanShare(s, g)
+      if (share !== null) shares.push(share)
+    }
     if (h.parent === null) return levelsFrom(profile, h.projects, grants, shares)
     const parent = await parentAccess(s, h.parent, profile)
     return levelsFrom(
@@ -1544,6 +1558,24 @@ const teamsOf = (s: Scope, profile: Doc<'profiles'>) =>
       if ((await teamOf(s, m.team_id))?.org_id === profile.org_id) teams.add(m.team_id)
     return teams
   })
+
+/** Every live grant of profile `profileId`. */
+const liveGrantsOf = (s: Scope, profileId: string) =>
+  memoRead(s.memo.grantsOf, profileId, () =>
+    s.ctx.db
+      .query('project_access')
+      .withIndex('by_profile', (q) => q.eq('profile_id', profileId))
+      .collect(),
+  )
+
+/** Every live share of team `teamId`. */
+const liveSharesOf = (s: Scope, teamId: string) =>
+  memoRead(s.memo.sharesOf, teamId, () =>
+    s.ctx.db
+      .query('project_team_access')
+      .withIndex('by_team', (q) => q.eq('team_id', teamId))
+      .collect(),
+  )
 
 /** `profile`'s own grant and its teams' shares on live project `parent`. */
 const parentAccess = (s: Scope, parent: Doc<'projects'>, profile: Doc<'profiles'>) =>
@@ -2046,8 +2078,11 @@ async function dropStored(ctx: MutationCtx, row: Doc<'deleted_rows'>): Promise<v
   await ctx.db.delete(row._id)
 }
 
-/* The rows that travel with the item's tasks, while those tasks are still
- * absent from issues, so readers skip them (design 5.1). They go back in
+/* A project item's own rows besides its projects, while those projects are
+ * still absent, and the rows that travel with the item's tasks, while those
+ * tasks are still absent from issues, so readers skip them (design 5.1). A
+ * grant or team grant whose profile or team fails the reference predicate
+ * stays out (cleanGrant, cleanShare). The relation rows go back in
  * their original order per task: a move stores a task's rows in the order
  * of the index it reads them by, which for comments and attachments is
  * their creation order, and this reads them back in the order stored. */
@@ -2077,7 +2112,14 @@ async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
   const { org_id } = run.item
   const r = row.row
   const db = uncountedWriter(run.ctx.db)
-  if (r.table === 'comments')
+  if (r.table === 'milestones') await db.insert('milestones', r.doc)
+  else if (r.table === 'project_access') {
+    const grant = await cleanGrant(run, r.doc)
+    if (grant !== null) await db.insert('project_access', grant)
+  } else if (r.table === 'project_team_access') {
+    const share = await cleanShare(run, r.doc)
+    if (share !== null) await db.insert('project_team_access', share)
+  } else if (r.table === 'comments')
     await db.insert('comments', {
       ...r.doc,
       author: await keptProfile(run, r.doc.author),
@@ -2392,29 +2434,22 @@ async function sendBack(run: Run, reason: RestoreBlock): Promise<JobState> {
   return { phase: 'move_drain', tally: run.state.tally }
 }
 
-/* A project item's own rows as the hierarchy cleans them: its projects,
- * then their milestones, grants and team shares. */
+/* A project item's projects as the hierarchy cleans them, at most
+ * LIMITS.projectDeleteSubProjects.max + 1. Their milestones, grants and team shares
+ * went back before (restoreRows), so the projects show with them. Each
+ * counts against the rows and bytes of the budget, so a later item of the
+ * same restore call waits for a step when they leave no room for its
+ * reveal (revealFits). The attach after it still checks its first parent
+ * whole when nothing moved before the reveal. */
 async function revealProjects(run: Run): Promise<void> {
-  const db = uncountedWriter(run.ctx.db)
-  for (const table of [
-    'projects',
-    'milestones',
-    'project_access',
-    'project_team_access',
-  ] as const) {
-    for (const row of await storedOf(run, table)) {
-      const r = row.row
-      if (r.table === 'projects') await db.insert('projects', await cleanProject(run, r.doc))
-      else if (r.table === 'milestones') await db.insert('milestones', r.doc)
-      else if (r.table === 'project_access') {
-        const grant = await cleanGrant(run, r.doc)
-        if (grant !== null) await db.insert('project_access', grant)
-      } else if (r.table === 'project_team_access') {
-        const share = await cleanShare(run, r.doc)
-        if (share !== null) await db.insert('project_team_access', share)
-      }
-      await run.ctx.db.delete(row._id)
-    }
+  for (const row of await storedOf(run, 'projects')) {
+    await uncountedWriter(run.ctx.db).insert(
+      'projects',
+      await cleanProject(run, docOf(row, 'projects')),
+    )
+    await run.ctx.db.delete(row._id)
+    run.budget.rows -= 1
+    run.budget.bytes -= estimateDocumentBytes(row)
   }
 }
 
@@ -3073,6 +3108,9 @@ export async function restoreItems(
       alone: (a.bulk !== true && ordered.length === 1) || undefined,
     }
     const next = await work(counted, budget, restoring, state, txn)
+    // the next item's phases and reveal stop on what this one spent, even
+    // when it only revealed projects
+    budget.moved = true
     if (next !== null) await saveJob(ctx, restoring, next, null)
     const failed = txn.failed.get(item.id)
     if (failed === undefined) result.restored.push(item.id)
@@ -3137,7 +3175,7 @@ async function actorOf(
 
 /** Whether what is left of `run`'s budget holds its reveal, which writes a
  * task item's stored tasks back in one transaction whatever their number,
- * and, for a project item, the attach of every task that waits for its
+ * or a project item's projects, and, for a project item, the attach of every task that waits for its
  * parent (attachParents), so that a small item comes back whole in one
  * transaction. It counts tasks, not the bytes their parents and subtasks
  * hold. An attach that spends the bytes left stops there, as any step
@@ -3152,7 +3190,12 @@ async function revealFits(run: Run): Promise<boolean> {
   const stored = run.state.tally?.tasks ?? 0
   const waiting = run.item.kind === 'project' ? (await waitingParents(run, b.tasks + 1)).length : 0
   const tasks = stored + waiting
-  return tasks <= b.tasks && tasks <= b.rows && tasks * REVEAL_RANGES_PER_TASK <= b.ranges
+  const projects = run.item.kind === 'project' ? run.item.projects.length : 0
+  return (
+    tasks <= b.tasks &&
+    tasks + projects <= b.rows &&
+    tasks * REVEAL_RANGES_PER_TASK + projects * REVEAL_RANGES_PER_PROJECT <= b.ranges
+  )
 }
 
 /** Runs `item`'s phases from `state` with `budget`, which `ctx` is metered
@@ -3577,8 +3620,8 @@ async function clearLiveRows(ctx: MutationCtx, taskId: string, budget: Teardown)
  * deletedItems:purgeOrg. Items go first with their jobs and the parents
  * their restores wait to attach, so a step still scheduled finds nothing to
  * do. Then each stored task goes with the rows a move or restore left of it
- * in the live tables, and each stored row, a project after the tasks still
- * live under it. An attachment's bytes go with its row unless another row,
+ * in the live tables, and each stored row, a project after the milestones,
+ * grants and tasks still live under it. An attachment's bytes go with its row unless another row,
  * live or stored, still names them (releaseFile).
  * Nothing is narrated or detached, and the stored tasks' history stays,
  * because the caller deletes the rest of the organization's work, its
@@ -3643,6 +3686,18 @@ export async function clearOrgTrash(
         .take(n),
     async (row) => {
       if (row.table === 'projects') {
+        // the milestones and grants a move had not stored yet
+        for (const relation of PROJECT_ROWS) {
+          const cleared = await clearPages(
+            budget,
+            (n) => relation.read(ctx, row.owner_id, n),
+            async (live) => {
+              await ctx.db.delete(live.doc._id)
+              return true
+            },
+          )
+          if (!cleared) return false
+        }
         const stranded = await clearPages(
           budget,
           (n) =>
@@ -4002,10 +4057,11 @@ function cutToCaps(task: Doc<'issues'>): Doc<'issues'> {
 /**
  * Moves `project` with its sub-projects, archived ones included, and every
  * task in them to Deleted items as one project item. The caller checks Lead
- * and writes the 'deleted' activity row. This transaction stores the
- * project rows with their milestones, grants and team grants, which hides
- * the projects and so every task in them; the tasks then move within the
- * same budget and in steps (clearTask). Tasks of the item emit no
+ * and writes the 'deleted' activity row. A project with more than
+ * LIMITS.projectDeleteSubProjects.max sub-projects is refused. This transaction stores
+ * the project rows, which hides the projects and so every task, milestone,
+ * grant and team grant in them; those then move within the same budget and
+ * in steps (moveEdges, moveProjectTasks). Tasks of the item emit no
  * task.deleted; children in surviving projects are detached with
  * task.updated. Returns the item.
  */
@@ -4019,7 +4075,9 @@ export async function moveProjectToTrash(
   const subs = await counted.db
     .query('projects')
     .withIndex('by_parent', (q) => q.eq('parent_id', project.id))
-    .collect()
+    .take(LIMITS.projectDeleteSubProjects.max + 1)
+  if (subs.length > LIMITS.projectDeleteSubProjects.max)
+    throw rule(LIMITS.projectDeleteSubProjects.refusal)
   const parent =
     project.parent_id === undefined ? null : await byId(counted, 'projects', project.parent_id)
   const doomed = [project, ...subs]
@@ -4044,12 +4102,10 @@ export async function moveProjectToTrash(
     counts: { tasks: 0, archived_tasks: 0, subtasks: 0, sub_projects: subs.length },
   })
   const tally = emptyTally(item)
-  const keep = async (live: LiveRow, ownerId: string) => {
-    if (!(await storeRow(counted, item, live, ownerId))) tally.dropped_rows += 1
-  }
   for (const p of doomed) {
-    await clearAll(counted, PROJECT_ROWS, p.id, (row) => keep(row, p.id))
-    await keep({ table: 'projects', doc: p }, p.id)
+    if (!(await storeRow(counted, item, { table: 'projects', doc: p }, p.id)))
+      tally.dropped_rows += 1
+    charge(budget, p)
   }
   await startJob(ctx, item, { phase: 'move_edges', tally }, budget)
   return item

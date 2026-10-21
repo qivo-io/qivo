@@ -71,6 +71,7 @@ export type CredentialAccess = (typeof CREDENTIAL_ACCESS)[number]
 /* The background steps of a profile removal, in the order they run
  * (profileRemovals.ts). Stored on profile_removals only, never on the wire. */
 export const REMOVAL_PHASES = [
+  'access',
   'tasks',
   'activity',
   'comments',

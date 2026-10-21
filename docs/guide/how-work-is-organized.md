@@ -164,7 +164,9 @@ sub-projects and 48 tasks, including 9 archived tasks.** Its button names the
 count, such as **Delete project and 48 tasks**. An optional reason is shown
 in Deleted items. **Delete** on the Archived projects page opens the same
 window without the Archive choice. Deleting a project removes the inbox
-messages about its tasks.
+messages about its tasks. A project with more than 200 sub-projects, archived
+ones included, cannot be deleted at once. Delete some of its sub-projects
+first, then the project.
 
 ## Deleted items
 

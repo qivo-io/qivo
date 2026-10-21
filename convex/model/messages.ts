@@ -103,7 +103,12 @@ export async function wakeSnoozedItem(
   if (rows.length === 0) return 0
   const issue = await byId(ctx, 'issues', a.issue_id)
   const project = issue === null ? null : await byId(ctx, 'projects', issue.project_id)
-  if (issue?.archived_at === undefined && project?.archived_at === undefined) {
+  if (
+    issue !== null &&
+    project !== null &&
+    issue.archived_at === undefined &&
+    project.archived_at === undefined
+  ) {
     for (const r of rows) {
       await ctx.db.patch(r._id, { snoozed_until: undefined, read_at: undefined, woke_at: now })
     }
@@ -113,7 +118,10 @@ export async function wakeSnoozedItem(
   // so such an item only loses its snooze and does not return. Its rows are
   // read now, so it keeps only its newest row, as pruneReadMessages leaves
   // an item after a mark read. A row the prune would drop is deleted
-  // without a patch first, since Convex counts every write.
+  // without a patch first, since Convex counts every write. A task in
+  // Deleted items, or one whose project is there, is treated the same way:
+  // its messages are deleted with it (model/deletedItems.ts), so they never
+  // come back unread meanwhile.
   const waking = new Set(rows.map((r) => r._id))
   const newest = item.reduce((best, r) => (oldestFirst(best, r) < 0 ? r : best))
   let written = 0
@@ -1348,10 +1356,12 @@ async function mentionedIn(
  * tasks with many followers passed its 1 s. A task gains no followers past
  * LIMITS.followers.max now, besides owners who still follow. A follower whose item
  * holds snoozed rows also costs one write for each row the notice wakes
- * (postMessage), so a step stops once it has made `stepRoom` database calls
- * and leaves the rest to the next. An inline fan-out has no such stop.
- * Tests lower these. */
-export const FOLLOWER_FANOUT = { inline: 128, step: 256, stepRoom: 2000 }
+ * (postMessage), up to ITEM_UNREAD_CAP + 1, so a step stops once it has made
+ * `stepRoom` database calls and leaves the rest to the next. The writing
+ * transaction stops at `inlineRoom`, less, because the write itself came
+ * first, and hands the rest to a step the same way; the people it mentions
+ * count toward the same room (tellMentioned). Tests lower these. */
+export const FOLLOWER_FANOUT = { inline: 128, step: 256, stepRoom: 2000, inlineRoom: 1000 }
 
 /** What a fan-out tells every follower, before each reader's own lines. A
  * change carries its parts, its assignment and reviewer lines with the
@@ -1465,12 +1475,12 @@ async function tellFollowers(
     visibility: RecipientSight
     trims: ItemTrims
     guard?: () => Promise<void>
-    room?: () => boolean
+    room: () => boolean
   },
 ): Promise<number> {
   let handled = 0
   for (const s of subs) {
-    if (handled > 0 && cx.room?.() === false) break
+    if (handled > 0 && !cx.room()) break
     handled += 1
     await cx.guard?.()
     const recipient = await orgProfile(ctx, cx.profiles, notice.org_id, s.profile_id)
@@ -1585,6 +1595,149 @@ function counting(ctx: MutationCtx, used: { calls: number }): MutationCtx {
   return { ...ctx, db }
 }
 
+/** The room a writing transaction gives its notices: `ctx` counting its
+ * database calls, and `room`, true while they are fewer than
+ * FOLLOWER_FANOUT.inlineRoom. A write's mentions and its follower fan-out
+ * share one. */
+function inlineRoom(ctx: MutationCtx): { ctx: MutationCtx; room: () => boolean } {
+  const used = { calls: 0 }
+  return { ctx: counting(ctx, used), room: () => used.calls < FOLLOWER_FANOUT.inlineRoom }
+}
+
+/** The arguments of a background step that tells people a write mentioned
+ * them (messages.ts notifyMentions): `body` for each of `recipients`, about
+ * task document `task`, whose project was `project_id` when written. */
+export const vMentionStep = {
+  org_id: v.string(),
+  issue_id: v.string(),
+  task: v.id('issues'),
+  project_id: v.string(),
+  actor_id: v.optional(v.string()),
+  now: v.string(),
+  body: v.string(),
+  recipients: v.array(v.string()),
+}
+const mentionStep = v.object(vMentionStep)
+type MentionStep = Infer<typeof mentionStep>
+
+const notifyMentionsRef = makeFunctionReference<'mutation', MentionStep, null>(
+  'messages:notifyMentions',
+)
+
+/** Subscribes each of `mentioned` to `issue`, as a mention does (FollowCap
+ * 'skip'), and tells them `body`: in this transaction while `room` answers
+ * true, and the rest from one background step (notifyMentionsStep). A
+ * mentioned person whose item holds snoozed rows costs a write for each row
+ * the notice wakes, so a text that mentions up to MENTION_MAX such people
+ * would pass the transaction's limits. `guard` is a bulk writer's
+ * (NotifyPreload), run before each. */
+async function tellMentioned(
+  ctx: MutationCtx,
+  a: {
+    issue: Doc<'issues'>
+    project: Doc<'projects'> | null
+    actor_id: string | undefined
+    now: string
+    body: string
+    mentioned: readonly Doc<'profiles'>[]
+    visibility: RecipientSight
+    trims: ItemTrims
+    room: () => boolean
+    guard?: () => Promise<void>
+  },
+): Promise<void> {
+  const { issue, project } = a
+  const later: string[] = []
+  for (const m of a.mentioned) {
+    await a.guard?.()
+    await subscribeToIssue(ctx, {
+      issue_id: issue.id,
+      profile: m,
+      org_id: issue.org_id,
+      project,
+      now: a.now,
+      cap: 'skip',
+      visibility: a.visibility,
+    })
+    if (!a.room()) {
+      later.push(m.id)
+      continue
+    }
+    await postMessage(ctx, {
+      org_id: issue.org_id,
+      recipient_id: m.id,
+      issue_id: issue.id,
+      kind: 'mention',
+      body: a.body,
+      actor_id: a.actor_id,
+      now: a.now,
+      issue,
+      project: project ?? undefined,
+      recipient: m,
+      visibility: a.visibility,
+      trims: a.trims,
+    })
+  }
+  if (later.length > 0)
+    await ctx.scheduler.runAfter(0, notifyMentionsRef, {
+      org_id: issue.org_id,
+      issue_id: issue.id,
+      task: issue._id,
+      project_id: issue.project_id,
+      actor_id: a.actor_id,
+      now: a.now,
+      body: a.body,
+      recipients: later,
+    })
+}
+
+/** One background step of tellMentioned: tells `recipients` in order about
+ * the task as it is now, until its database calls reach
+ * FOLLOWER_FANOUT.stepRoom, and schedules the next step with the rest. As
+ * for followers (notifyFollowersStep), a reader must see the task's project
+ * when it was written and now, and a task deleted meanwhile tells nobody. */
+export async function notifyMentionsStep(step: MutationCtx, a: MentionStep): Promise<void> {
+  const used = { calls: 0 }
+  const ctx = counting(step, used)
+  const issue = await ctx.db.get(a.task)
+  if (issue === null || issue.id !== a.issue_id || issue.org_id !== a.org_id) return
+  const project = await byId(ctx, 'projects', issue.project_id)
+  if (project === null) return
+  const then = a.project_id === project.id ? project : await byId(ctx, 'projects', a.project_id)
+  if (then === null) return
+  const profiles: ProfileCache = new Map()
+  const visibility: RecipientSight = new Map()
+  const trims = newItemTrims()
+  let handled = 0
+  for (const id of a.recipients) {
+    if (handled > 0 && used.calls >= FOLLOWER_FANOUT.stepRoom) break
+    handled += 1
+    const recipient = await orgProfile(ctx, profiles, a.org_id, id)
+    if (recipient === undefined) continue
+    if (then !== project && !(await recipientCanSee(ctx, recipient, then, visibility))) continue
+    await postMessage(ctx, {
+      org_id: a.org_id,
+      recipient_id: id,
+      issue_id: issue.id,
+      kind: 'mention',
+      body: a.body,
+      actor_id: a.actor_id,
+      now: a.now,
+      issue,
+      project,
+      recipient,
+      visibility,
+      trims,
+    })
+  }
+  if (handled < a.recipients.length)
+    await ctx.scheduler.runAfter(0, notifyMentionsRef, {
+      ...a,
+      recipients: a.recipients.slice(handled),
+    })
+  await scheduleItemTrims(ctx, issue.id, trims)
+}
+
 /** Tells the followers of `issue`, in `project`, one change line, `parts`
  * joined: the first FOLLOWER_FANOUT.inline in this transaction and the rest
  * in background steps. A restore from Deleted items says 'Restored' this
@@ -1602,8 +1755,9 @@ export async function notifyFollowersOfChange(
   const { issue, project } = a
   const trims = newItemTrims()
   const subs = await followersFrom(ctx, issue.id, undefined, FOLLOWER_FANOUT.inline + 1)
+  const notices = inlineRoom(ctx)
   await fanOut(
-    ctx,
+    notices.ctx,
     {
       org_id: issue.org_id,
       issue_id: issue.id,
@@ -1616,7 +1770,16 @@ export async function notifyFollowersOfChange(
     },
     subs,
     FOLLOWER_FANOUT.inline,
-    { issue, project, also: [], parent: [], profiles: new Map(), visibility: new Map(), trims },
+    {
+      issue,
+      project,
+      also: [],
+      parent: [],
+      profiles: new Map(),
+      visibility: new Map(),
+      trims,
+      room: notices.room,
+    },
   )
   await scheduleItemTrims(ctx, issue.id, trims)
 }
@@ -1646,31 +1809,18 @@ export async function notifyIssueInsert(
   const visibility: RecipientSight = preload?.visibility ?? new Map()
   const trims = newItemTrims()
   const mentioned = await mentionedIn(ctx, issue.description, profiles, issue.org_id)
-  for (const m of mentioned) {
-    await subscribeToIssue(ctx, {
-      issue_id: issue.id,
-      profile: m,
-      org_id: issue.org_id,
-      project,
-      now,
-      cap: 'skip',
-      visibility,
-    })
-    await postMessage(ctx, {
-      org_id: issue.org_id,
-      recipient_id: m.id,
-      issue_id: issue.id,
-      kind: 'mention',
-      body: 'Mentioned you in the description',
-      actor_id: actor.id,
-      now,
-      issue,
-      project: project ?? undefined,
-      recipient: m,
-      visibility,
-      trims,
-    })
-  }
+  const notices = inlineRoom(ctx)
+  await tellMentioned(notices.ctx, {
+    issue,
+    project,
+    actor_id: actor.id,
+    now,
+    body: 'Mentioned you in the description',
+    mentioned,
+    visibility,
+    trims,
+    room: notices.room,
+  })
   if (issue.assignee_id !== undefined) {
     const assignee = await orgProfile(ctx, profiles, issue.org_id, issue.assignee_id)
     // a missing profile is skipped (the org fence would drop both writes),
@@ -1815,32 +1965,20 @@ export async function notifyIssueUpdate(
       : (await mentionedIn(ctx, after.description, profiles, after.org_id)).filter(
           (p) => !oldMentions.includes(p.id),
         )
-  for (const m of newMentions) {
-    await preload?.guard?.()
-    await subscribeToIssue(ctx, {
-      issue_id: after.id,
-      profile: m,
-      org_id: after.org_id,
-      project,
-      now,
-      cap: 'skip',
-      visibility,
-    })
-    await postMessage(ctx, {
-      org_id: after.org_id,
-      recipient_id: m.id,
-      issue_id: after.id,
-      kind: 'mention',
-      body: 'Mentioned you in the description',
-      actor_id: actor?.id,
-      now,
-      issue: after,
-      project: project ?? undefined,
-      recipient: m,
-      visibility,
-      trims,
-    })
-  }
+  // mentions and followers share the room the write leaves its notices
+  const notices = inlineRoom(ctx)
+  await tellMentioned(notices.ctx, {
+    issue: after,
+    project,
+    actor_id: actor?.id,
+    now,
+    body: 'Mentioned you in the description',
+    mentioned: newMentions,
+    visibility,
+    trims,
+    room: notices.room,
+    guard: preload?.guard,
+  })
 
   // a new assignee starts following; the old one keeps following — being
   // taken off a task is news you want (0114:228-229)
@@ -2000,7 +2138,7 @@ export async function notifyIssueUpdate(
     ...(parent === undefined ? {} : { parent }),
   }
   await fanOut(
-    ctx,
+    notices.ctx,
     {
       org_id: after.org_id,
       issue_id: after.id,
@@ -2022,6 +2160,7 @@ export async function notifyIssueUpdate(
       visibility,
       trims,
       guard: preload?.guard,
+      room: notices.room,
     },
   )
   await scheduleItemTrims(ctx, after.id, trims)
@@ -2053,31 +2192,19 @@ export async function notifyCommentInsert(
   const visibility: RecipientSight = preload?.visibility ?? new Map()
   const trims = newItemTrims()
   const mentioned = await mentionedIn(ctx, comment.body, profiles, issue.org_id)
-  for (const m of mentioned) {
-    await subscribeToIssue(ctx, {
-      issue_id: issue.id,
-      profile: m,
-      org_id: issue.org_id,
-      project,
-      now,
-      cap: 'skip',
-      visibility,
-    })
-    await postMessage(ctx, {
-      org_id: issue.org_id,
-      recipient_id: m.id,
-      issue_id: issue.id,
-      kind: 'mention',
-      body: 'Mentioned you in a comment',
-      actor_id: actor.id,
-      now,
-      issue,
-      project: project ?? undefined,
-      recipient: m,
-      visibility,
-      trims,
-    })
-  }
+  // mentions and followers share the room the write leaves its notices
+  const notices = inlineRoom(ctx)
+  await tellMentioned(notices.ctx, {
+    issue,
+    project,
+    actor_id: actor.id,
+    now,
+    body: 'Mentioned you in a comment',
+    mentioned,
+    visibility,
+    trims,
+    room: notices.room,
+  })
   await subscribeToIssue(ctx, {
     issue_id: issue.id,
     profile: actor,
@@ -2089,7 +2216,7 @@ export async function notifyCommentInsert(
   })
   const subs = await followersFrom(ctx, issue.id, undefined, FOLLOWER_FANOUT.inline + 1)
   await fanOut(
-    ctx,
+    notices.ctx,
     {
       org_id: issue.org_id,
       issue_id: issue.id,
@@ -2102,7 +2229,7 @@ export async function notifyCommentInsert(
     },
     subs,
     FOLLOWER_FANOUT.inline,
-    { issue, project, also: [], parent: [], profiles, visibility, trims },
+    { issue, project, also: [], parent: [], profiles, visibility, trims, room: notices.room },
   )
   await scheduleItemTrims(ctx, issue.id, trims)
 }
@@ -2129,28 +2256,17 @@ export async function notifyCommentUpdate(
     (p) => !oldMentions.includes(p.id),
   )
   const trims = newItemTrims()
-  for (const m of added) {
-    await subscribeToIssue(ctx, {
-      issue_id: issue.id,
-      profile: m,
-      org_id: issue.org_id,
-      project,
-      now,
-      cap: 'skip',
-    })
-    await postMessage(ctx, {
-      org_id: issue.org_id,
-      recipient_id: m.id,
-      issue_id: issue.id,
-      kind: 'mention',
-      body: 'Mentioned you in a comment',
-      actor_id: actor.id,
-      now,
-      issue,
-      project: project ?? undefined,
-      recipient: m,
-      trims,
-    })
-  }
+  const notices = inlineRoom(ctx)
+  await tellMentioned(notices.ctx, {
+    issue,
+    project,
+    actor_id: actor.id,
+    now,
+    body: 'Mentioned you in a comment',
+    mentioned: added,
+    visibility: new Map(),
+    trims,
+    room: notices.room,
+  })
   await scheduleItemTrims(ctx, issue.id, trims)
 }

@@ -181,7 +181,8 @@ mentions more, keeps your draft and says **A text can mention at most 100
 people. Remove some mentions and save again.** A task can pass 100
 subscribers through its assignee and reviewer. On such a task, a comment or a
 change reaches the first subscribers at once and the rest a few seconds
-later. Changes saved for many tasks at once, from the Roadmap, by
+later. The same holds when many of the people it mentions or notifies have
+snoozed a long thread about the task, because each message wakes theirs. Changes saved for many tasks at once, from the Roadmap, by
 reassigning tasks when someone loses access or by detaching the subtasks of
 a deleted task, reach every subscriber a few seconds after the save.
 

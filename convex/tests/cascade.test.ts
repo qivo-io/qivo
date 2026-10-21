@@ -681,7 +681,7 @@ describe('removeProfile', () => {
     )
     expect((await messagesFor(t, f.user.id)).length).toBe(2)
     expect(await pendingJobs(t)).toMatchObject([
-      { profile_id: f.user.id, removed_at: NOW2, phase: 'tasks' },
+      { profile_id: f.user.id, removed_at: NOW2, phase: 'access' },
     ])
 
     await t.finishAllScheduledFunctions(vi.runAllTimers)

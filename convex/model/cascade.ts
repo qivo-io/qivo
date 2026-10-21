@@ -16,6 +16,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { LARGE_ROWS_PER_READ } from '../lib/db'
 import { REMOVAL_PHASES } from '../lib/enums'
 import { require, rule } from '../lib/functions'
+import { LIMITS } from '../lib/limits'
 import { hasPendingCheckout } from './billing'
 import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
@@ -151,8 +152,9 @@ export async function clearHolder(
 }
 
 /** What one part of a removal may clear. removeProfile spends one budget on
- * open tasks, and each background step (profileRemovals.ts) spends one. A
- * mutable object, so tests can lower it. */
+ * open tasks and the bytes of another on access rows, and each background
+ * step (profileRemovals.ts) spends one. A mutable object, so tests can lower
+ * it. */
 export const REMOVAL_BUDGET = { rows: 256, bytes: 4 * 1024 * 1024 }
 
 /** The most OAuth connections removeProfile revokes itself. The background
@@ -202,6 +204,46 @@ const removalStepRef = makeFunctionReference<'mutation', { profile_id: string },
   'profileRemovals:step',
 )
 
+/** The most access rows (ACCESS_RANGES) removeProfile deletes itself; the
+ * profile removal access phase deletes the rest. A mutable object, so tests
+ * can lower it. */
+export const ACCESS_FIRST_PASS = { rows: 512 }
+
+type AccessTable = 'agent_keys' | 'mcp_tokens' | 'team_members' | 'project_access' | 'user_prefs'
+
+/* The rows that give a profile access or hold its own settings, each read
+ * through its by_profile index, in the order a removal deletes them. Rows
+ * left after the profile row is gone grant nothing, because every reader
+ * asks with a live profile or drops ids without one:
+ * - agent_keys, mcp_tokens: machine/auth.ts lookupCredential refuses a
+ *   credential whose profile is gone, and the lists read through live
+ *   seats (tokens.ts, apiAccess.ts).
+ * - team_members, project_access: lib/access.ts asks by a resolved
+ *   profile, and the snapshot sends only rows whose profile it sends.
+ * - user_prefs: only the person's own seats read them (prefs.ts).
+ * Each read takes what the budget has left at once. A read starts at the
+ * beginning of its range again, and the rows this transaction deleted
+ * there still cost the database to pass over, so a few rows at a time
+ * would pass over the same deleted rows again and again. */
+export const ACCESS_RANGES: ((
+  ctx: QueryCtx,
+  profileId: string,
+) => {
+  take(n: number): Promise<Doc<AccessTable>[]>
+  first(): Promise<Doc<AccessTable> | null>
+})[] = [
+  (ctx, profileId) =>
+    ctx.db.query('agent_keys').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
+  (ctx, profileId) =>
+    ctx.db.query('mcp_tokens').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
+  (ctx, profileId) =>
+    ctx.db.query('team_members').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
+  (ctx, profileId) =>
+    ctx.db.query('project_access').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
+  (ctx, profileId) =>
+    ctx.db.query('user_prefs').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
+]
+
 /** The activity rows this transaction clears; the profile removal activity
  * phase clears the rest. */
 const ACTED_ROWS_FIRST_PASS = 500
@@ -214,21 +256,23 @@ const ACTED_ROWS_FIRST_PASS = 500
  *
  * The work is split so that removal stays within one transaction's limits
  * however much work and history the profile holds. This transaction ends
- * access. It deletes the profile row and avatar bytes, memberships, grants,
- * preferences, own agent keys, MCP tokens and the rate-limit row, and
- * revokes the OAuth connections as 'deleted', so the person's own list
- * hides them at once. Every session, credential and OAuth path requires the
- * profile row, so access fails closed here. It also clears the profile from
- * project leads, its newest ACTED_ROWS_FIRST_PASS activity rows and as
- * many open tasks as REMOVAL_BUDGET allows, assignee and reviewer fields
- * first. That is every
- * open task unless the profile holds hundreds. Then it inserts the
- * profile_removals row and schedules the first background step
- * (profileRemovals.ts), which clears the open tasks left over, archived
- * tasks, its older activity rows, comments,
- * messages, subscriptions, attachments, agent keys it created and the
- * revoked connections in bounded steps. Readers already show an id that no
- * longer resolves as "Someone" or "Unknown user" until then.
+ * access. It deletes the profile row and avatar bytes and the rate-limit
+ * row, clears the profile from every project it leads (refusing past
+ * LIMITS.removalLeads.max), and revokes the OAuth connections as 'deleted', so
+ * the person's own list hides them at once. Every session, credential and
+ * OAuth path requires the profile row, so access fails closed here. It
+ * deletes the first ACCESS_FIRST_PASS.rows of its own agent keys, MCP
+ * tokens, memberships, grants and preferences (ACCESS_RANGES, which says why
+ * the rest grant nothing), and clears its newest ACTED_ROWS_FIRST_PASS
+ * activity rows and as many open tasks as REMOVAL_BUDGET allows, assignee
+ * and reviewer fields first. That is every row unless the profile holds
+ * hundreds. Then it inserts the profile_removals row and schedules the first
+ * background step (profileRemovals.ts), which deletes the access rows left
+ * over and clears the open tasks left over, archived tasks, its older
+ * activity rows, comments, messages, subscriptions, attachments, agent keys
+ * it created and the revoked connections in bounded steps. Readers already
+ * show an id that no longer resolves as "Someone" or "Unknown user" until
+ * then.
  *
  * Three FK behaviors, spelled out:
  * - SET NULL + touch: issues.assignee_id (0001:94), issues.reviewer_id,
@@ -255,6 +299,28 @@ export async function removeProfile(
   a: { profile: Doc<'profiles'>; now: string },
 ): Promise<void> {
   const { profile, now } = a
+  // SET NULL, no touch. A project's lead controls it, and several paths
+  // compare the stored lead with the one a client last saw, so every lead
+  // goes in this transaction, up to LIMITS.removalLeads.max.
+  const led = await ctx.db
+    .query('projects')
+    .withIndex('by_lead', (q) => q.eq('lead_id', profile.id))
+    .take(LIMITS.removalLeads.max + 1)
+  if (led.length > LIMITS.removalLeads.max) throw rule(LIMITS.removalLeads.refusal)
+  for (const p of led) await ctx.db.patch(p._id, { lead_id: undefined })
+  // DELETE, credentials first, within ACCESS_FIRST_PASS.rows rows. Every
+  // reader of the rest ends with the profile row deleted below (ACCESS_RANGES),
+  // and the profile removal access phase deletes them.
+  const access: RemovalBudget = { rows: ACCESS_FIRST_PASS.rows, bytes: REMOVAL_BUDGET.bytes }
+  for (const range of ACCESS_RANGES) {
+    const cleared = await sweep(
+      access,
+      (n) => range(ctx, profile.id).take(n),
+      (row) => ctx.db.delete(row._id),
+      Number.POSITIVE_INFINITY,
+    )
+    if (!cleared) break
+  }
   // SET NULL + touch on open tasks within one budget, in TASK_HOLDERS order.
   // Each clear reads and writes the whole task, and a task the profile
   // created and reports is cleared once per field, so an unbounded pass
@@ -269,12 +335,6 @@ export async function removeProfile(
     )
     if (!cleared) break
   }
-  // SET NULL, no touch
-  const led = await ctx.db
-    .query('projects')
-    .withIndex('by_lead', (q) => q.eq('lead_id', profile.id))
-    .collect()
-  for (const p of led) await ctx.db.patch(p._id, { lead_id: undefined })
   // The newest rows first. A busy agent can have thousands more; the
   // profile removal activity phase clears them.
   const acted = await ctx.db
@@ -283,27 +343,6 @@ export async function removeProfile(
     .order('desc')
     .take(ACTED_ROWS_FIRST_PASS)
   for (const e of acted) await ctx.db.patch(e._id, { actor_id: undefined })
-  // DELETE
-  const memberships = ctx.db
-    .query('team_members')
-    .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
-  for await (const tm of memberships) await ctx.db.delete(tm._id)
-  const grants = ctx.db
-    .query('project_access')
-    .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
-  for await (const g of grants) await ctx.db.delete(g._id)
-  const prefs = ctx.db
-    .query('user_prefs')
-    .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
-  for await (const up of prefs) await ctx.db.delete(up._id)
-  const ownKeys = ctx.db
-    .query('agent_keys')
-    .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
-  for await (const k of ownKeys) await ctx.db.delete(k._id)
-  const tokens = ctx.db
-    .query('mcp_tokens')
-    .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
-  for await (const t of tokens) await ctx.db.delete(t._id)
   // The background step deletes the connections with their replay hashes.
   // Every OAuth path already refuses once the profile row is gone, so this
   // only hides the newest connections from the person's own list at once;
@@ -357,8 +396,8 @@ export async function removeProfile(
  * it after 90 days). Neither are activity_retention or comment_counts rows an
  * earlier release left, tables the schema no longer lists. Pending profile_removals rows
  * are also left alone. Their background steps still delete the removed
- * profiles' inboxes and OAuth connections, which this sweep only reaches
- * through live profiles. Deleted items go first, whatever state they are in,
+ * profiles' keys, tokens, preferences, inboxes and OAuth connections, which
+ * this sweep only reaches through live profiles. Deleted items go first, whatever state they are in,
  * with the rows they still kept in the live tables and their bytes
  * (model/deletedItems.ts clearOrgTrash); tasks a moving project left behind
  * are then gone too. No narration: nothing is left to read it. */

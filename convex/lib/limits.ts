@@ -337,6 +337,28 @@ export const LIMITS = {
       'deleting a team can remove at most 3,000 of its memberships and project shares at once. Remove some of its members or project shares first.',
     on: ['app'],
   },
+  // The delete hides the project and every sub-project in one transaction,
+  // and its restore brings them back in one (model/deletedItems.ts).
+  projectDeleteSubProjects: {
+    label: 'Sub-projects one project deletion takes',
+    group: 'tasks',
+    max: 200,
+    unit: 'sub-projects, archived ones included',
+    refusal:
+      'a project with more than 200 sub-projects, archived ones included, cannot be deleted at once. Delete some of its sub-projects first, then delete the project.',
+    on: ['app'],
+  },
+  // A removal clears the person as the lead of each project in the
+  // transaction that ends their access (model/cascade.ts removeProfile).
+  removalLeads: {
+    label: 'Projects a removed person may lead',
+    group: 'tasks',
+    max: 1_000,
+    unit: 'projects',
+    refusal:
+      'this person leads more than 1,000 projects and cannot be removed at once. Give some of those projects another lead first, or make the person Inactive to end their access now.',
+    on: ['app', 'operator'],
+  },
   inboxShown: {
     label: 'Inbox messages the app shows',
     group: 'tasks',
