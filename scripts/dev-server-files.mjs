@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { isAbsolute, join, relative } from 'node:path'
 import { isFileLoadingAllowed, normalizePath } from 'vite'
 
 /* Development only. The dev server serves every file under the checkout
@@ -85,8 +85,12 @@ function refusedRealPath(config, file) {
   return isFileLoadingAllowed(config, real) ? undefined : real
 }
 
-/** The files a request URL can name: an /@fs/ path, or a path under the
- * root or the public directory, decoded the ways Vite's middlewares do. */
+/** A Windows drive, which an /@fs/ path may start with. */
+const VOLUME = /^[A-Z]:/i
+
+/** The files a request URL can name, decoded the ways Vite's middlewares do:
+ * an /@fs/ path, or a path under the root or the public directory together
+ * with the `index` file Vite's static server tries for it. */
 function requestedFiles(config, url) {
   const path = url.split(/[?#]/, 1)[0]
   const decoded = new Set([path])
@@ -96,10 +100,15 @@ function requestedFiles(config, url) {
     } catch {}
   }
   return [...decoded].flatMap((name) => {
-    if (name.startsWith('/@fs/')) return [name.slice('/@fs'.length)]
-    const files = [join(config.root, name)]
-    if (config.publicDir) files.push(join(config.publicDir, name))
-    return files
+    if (name.startsWith('/@fs/')) {
+      const file = name.slice('/@fs/'.length)
+      return [VOLUME.test(file) ? file : `/${file}`]
+    }
+    const directories = [config.root, config.publicDir].filter(Boolean)
+    return directories.flatMap((directory) => [
+      join(directory, name),
+      join(directory, name, 'index'),
+    ])
   })
 }
 
@@ -124,8 +133,9 @@ function linkedPaths(directory, seen = new Set()) {
  *
  * The check runs before Vite serves files, and again after the HTML fallback
  * has added `.html` or `index.html`, at one realpath call per candidate
- * file. A module that Vite's resolver finds, such as `/src/link` for
- * `/src/link.js`, already resolves to its real path, which Vite checks.
+ * file. A module Vite's resolver found, such as `/@id//@fs/<path>?raw`, is
+ * checked again when it loads, and refused with the error Vite answers 403
+ * for.
  *
  * A build copies the public directory and the files its links point to, so
  * a build fails while the public directory links to a refused file.
@@ -134,6 +144,8 @@ export function refuseLinkedFiles() {
   let config
   return {
     name: 'qivo-refuse-linked-files',
+    // Loads modules before Vite's own loaders read the file.
+    enforce: 'pre',
     configResolved(resolved) {
       config = resolved
     },
@@ -157,6 +169,14 @@ export function refuseLinkedFiles() {
       }
       server.middlewares.use(refuse)
       return () => server.middlewares.use(refuse)
+    },
+    load(id) {
+      const file = id.split('?', 1)[0]
+      if (config.command !== 'serve' || id[0] === '\0' || !isAbsolute(file)) return
+      const real = refusedRealPath(config, file)
+      if (real === undefined) return
+      // Vite's transform middleware answers this error with its 403.
+      throw Object.assign(new Error(`Denied ID ${real}`), { code: 'ERR_DENIED_ID', id: real })
     },
   }
 }

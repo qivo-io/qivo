@@ -4,7 +4,7 @@
  * names, outside the checkout, so no dev server can serve it. The with-dev
  * helper exports it; like the reset, the pass otherwise reads it from
  * .env.local. Hermetic tests in tests/contractSetup.test.ts. */
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseEnv } from 'node:util'
@@ -45,14 +45,20 @@ export function stashPath(env: Record<string, string | undefined>, root = ROOT):
   return join(directory, `contract-${deployment}.credentials.json`)
 }
 
-/** Writes a new stash that only this user can read, replacing any old one.
- * The pass writes its id alone before it mints anything. */
+/**
+ * Writes a new stash that only this user can read, replacing any old one.
+ * The pass writes its id alone before it mints anything. The new file is
+ * written beside the old one and renamed over it, so a failed or interrupted
+ * write leaves the old stash, and with it the pass id, in place.
+ */
 export function writeStash(
   path: string,
   stash: Pick<Stash, 'siteUrl' | 'orgId' | 'pass'> & Partial<Stash>,
 ): void {
-  rmSync(path, { force: true })
-  writeFileSync(path, JSON.stringify(stash, null, 2), { mode: 0o600, flag: 'wx' })
+  const next = `${path}.new`
+  rmSync(next, { force: true })
+  writeFileSync(next, JSON.stringify(stash, null, 2), { mode: 0o600, flag: 'wx' })
+  renameSync(next, path)
 }
 
 /** The stash the global setup wrote for this pass. */

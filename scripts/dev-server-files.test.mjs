@@ -35,6 +35,8 @@ const links = {
   'src/project.json': '.vercel/project.json',
   'src/env.txt': '.env',
   'src/page.html': 'dev-temp/page.html',
+  'src/style.css': 'dev-temp/style.css',
+  'src/folder/index': 'dev-temp/notes.txt',
   'public/notes.txt': 'dev-temp/notes.txt',
   'src/stash.json': '../fixtures/contract.credentials.json',
 }
@@ -61,6 +63,8 @@ beforeAll(async () => {
   for (const path of ['dev-temp/notes.txt', '.vercel/project.json', 'dev-temp/page.html'])
     write(path, 'SECRET')
   write('dev-temp/module.js', 'export const secret = "SECRET"\n')
+  write('dev-temp/style.css', '.secret { content: "SECRET" }\n')
+  mkdirSync(join(root, 'src/folder'))
   write('../fixtures/contract.credentials.json', 'SECRET')
   for (const [link, target] of Object.entries(links))
     symlinkSync(join(root, target), join(root, link))
@@ -112,6 +116,15 @@ describe('dev server files', () => {
       '/src/local%2Fnotes.txt',
       // the public directory, served at the root
       '/notes.txt',
+      // the index file the static server tries for a directory
+      '/src/folder',
+      '/src/folder/',
+      // modules found by Vite's resolver, checked when they load
+      `/@id//@fs${root}/src/notes.txt?raw&import`,
+      `/@id//@fs${root}/src/style.css`,
+      `/@id//@fs${root}/src/style.css?inline`,
+      '/src/module',
+      '/src/local/module',
     ]
     for (const url of requests) {
       const response = await fetch(`${origin}${url}`)
@@ -121,18 +134,8 @@ describe('dev server files', () => {
         false,
       ])
     }
-    // Vite resolves a module it finds through its resolver to the real path
-    // and checks that itself.
-    for (const url of ['/src/module', '/src/local/module', '/@id//src/module.js']) {
-      const response = await fetch(`${origin}${url}`)
-      expect([url, response.ok, (await response.text()).includes('SECRET')]).toEqual([
-        url,
-        false,
-        false,
-      ])
-    }
-    // a page the HTML fallback finds by its name
-    for (const url of ['/src/page', '/src/page.html']) {
+    // a page the HTML fallback or the static server finds by its name
+    for (const url of ['/src/page', '/src/page.html', '/src/folder']) {
       const response = await fetch(`${origin}${url}`, { headers: { accept: 'text/html' } })
       expect([url, response.status]).toEqual([url, 403])
     }

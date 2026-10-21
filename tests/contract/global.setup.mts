@@ -212,6 +212,8 @@ export async function contractSetup(
     if (failures.length === 0) {
       try {
         rmSync(stash, { force: true })
+        // a replacement that a failed write left behind
+        rmSync(`${stash}.new`, { force: true, recursive: true })
       } catch (error) {
         failures.push(error)
       }

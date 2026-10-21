@@ -182,6 +182,16 @@ describe('contract pass setup', () => {
     }
   })
 
+  it('removes a replacement stash that a failed write left behind', async () => {
+    const run = runner((fn, args) => {
+      if (fn === 'machine/testing:mintCredential' && args.kind === 'agent_key')
+        mkdirSync(join(`${stash()}.new`, 'blocked'), { recursive: true })
+      return false
+    })
+    await expect(contractSetup({ env, run, reset: () => {} }, root)).rejects.toThrow()
+    expect([existsSync(stash()), existsSync(`${stash()}.new`), rows]).toEqual([false, false, []])
+  })
+
   it('deletes a credential whose mint output names no id', async () => {
     const fake = runner()
     const run = (fn: string, args?: unknown) => {
@@ -217,6 +227,23 @@ describe('contract pass setup', () => {
     await expect(contractSetup({ env, run, reset: () => {} }, root)).rejects.toThrow(AggregateError)
     expect(named()).toHaveLength(2)
     expect(rows).toEqual([])
+  })
+
+  it('keeps the pass id stashed when the full stash cannot replace it', async () => {
+    // the full stash cannot be written, and the cleanup that follows fails
+    const run = runner((fn, args) => {
+      if (fn === 'machine/testing:mintCredential' && args.kind === 'agent_key')
+        mkdirSync(join(`${stash()}.new`, 'blocked'), { recursive: true })
+      return fn === 'machine/testing:deleteNamedCredentials'
+    })
+    await expect(contractSetup({ env, run, reset: () => {} }, root)).rejects.toThrow(AggregateError)
+    expect(existsSync(`${stash()}.new`)).toBe(true)
+    const left = JSON.parse(readFileSync(stash(), 'utf8'))
+    expect(left.pass).toMatch(/^[0-9a-f]{16}$/)
+    expect(minted().map((args) => args.name)).toEqual([
+      `contract pass token ${left.pass}`,
+      `contract pass key ${left.pass}`,
+    ])
   })
 
   it('keeps one stash per deployment', async () => {
