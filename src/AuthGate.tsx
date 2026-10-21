@@ -289,12 +289,15 @@ export function AuthGate() {
           )
         }
       }
-      /* Seatless AND unconfirmed stops at the confirm screen; seatless alone
-         is the organization form. Checked in this order and only here, so a
-         login that DOES hold a seat is never gated on verification — the
-         break-glass rescue (adminAuth) claims a seat without one. */
+      /* Seatless AND unconfirmed stops at the confirm screen, also on the way
+         to an assistant connection: that screen sends a provider login's
+         first link, and its link returns to the connection. Seatless alone
+         is the organization form, or the connection. Checked in this order
+         and only here, so a login that DOES hold a seat is never gated on
+         verification — the break-glass rescue (adminAuth) claims a seat
+         without one. */
       const unverified = account.current !== null && !account.current.verified
-      setPhase(connection || ok ? 'ready' : unverified ? 'unverified' : 'noProfile')
+      setPhase(ok ? 'ready' : unverified ? 'unverified' : connection ? 'ready' : 'noProfile')
     } catch (e) {
       if (attempt !== loadAttempt.current) return
       // The raw text, request id included, is for support, not for the card.

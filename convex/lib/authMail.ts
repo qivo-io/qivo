@@ -20,7 +20,7 @@
 
 import type { BetterAuthPlugin } from 'better-auth'
 import { APIError, createAuthMiddleware, isAPIError } from 'better-auth/api'
-import { authMailAvailable } from './mailConfig'
+import { address, authMailAvailable } from './mailConfig'
 
 /** How one authentication letter went: delivered to the provider, refused
  * (nothing was sent), uncertain (a timeout or server error after which it may
@@ -106,8 +106,17 @@ export function authMailPlugin(
         {
           matcher: (ctx) => ctx.path === SIGN_UP || ctx.path === RESET || ctx.path === RESEND,
           handler: createAuthMiddleware(async (ctx) => {
-            if (isMailPath(ctx.path) && !authMailAvailable())
-              throw authMailRefusal(ctx.path, 'unavailable')
+            if (!isMailPath(ctx.path)) return
+            if (!authMailAvailable()) throw authMailRefusal(ctx.path, 'unavailable')
+            /* An address Better Auth accepts but the sender never mails (see
+             * address) would leave an account no letter can confirm. The
+             * refusal depends on the typed address alone. */
+            const email = (ctx.body as { email?: unknown } | undefined)?.email
+            if (typeof email === 'string' && address(email.trim().toLowerCase()) === null)
+              throw APIError.from('BAD_REQUEST', {
+                code: 'UNMAILABLE_EMAIL',
+                message: 'Qivo cannot send email to that address. Use another one.',
+              })
           }),
         },
       ],

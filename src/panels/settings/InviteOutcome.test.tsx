@@ -54,7 +54,7 @@ describe('the outcome of an invitation from the project form', () => {
     expect(said()).toBe(`Sending the invitation email to ${email}…`)
     push([row('unsent')])
     expect(said()).toBe(
-      `${email}: The invitation email could not be sent. They can still join by creating an account with this address.`,
+      `${email}: The invitation email could not be sent. Check the address. They can join later by creating an account with it, once Qivo can email them.`,
     )
   })
 
@@ -70,6 +70,19 @@ describe('the outcome of an invitation from the project form', () => {
     await mount()
     push([row('sent', 'corrected@example.test')])
     expect(said()).toBeNull()
+  })
+
+  it('stops saying Sending when no send is recorded within two minutes', async () => {
+    vi.useFakeTimers()
+    try {
+      await mount()
+      push([])
+      expect(said()).toBe(`Sending the invitation email to ${email}…`)
+      act(() => vi.advanceTimersByTime(2 * 60_000 + 1))
+      expect(said()).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('does not claim a send is still in flight when its row vanished or the query failed', async () => {

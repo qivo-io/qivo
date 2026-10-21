@@ -473,7 +473,9 @@ describe('cancelling a subscription', () => {
     await t.action(internal.orgRemovals.sendNotice, { notice_key: notice.key, attempt: 24 })
     expect(
       (await unsent()).map((row) => [row.target_org_id, row.target_profile_id, row.detail]),
-    ).toEqual([[f.org.id, f.admin.id, { kind: notice.kind, attempts: 25 }]])
+    ).toEqual([
+      [f.org.id, f.admin.id, { kind: notice.kind, attempts: 25, reason: 'out_of_attempts' }],
+    ])
   })
 
   it('stops the deletion when a new subscription starts', async () => {

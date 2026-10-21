@@ -319,11 +319,18 @@ export async function sendInvites(
  * or held back by the hourly cap ('held'). */
 export type InviteDelivery = 'sending' | 'sent' | 'unsent' | 'uncertain' | 'held'
 
-const deliveryOf = (row: SendRow): InviteDelivery =>
+/* A send still unsettled this long after it was reserved will not settle:
+ * its action died between reserve() and settle(). It is reported as
+ * uncertain, since the letter may have gone out. The batch budget is a minute. */
+const STALE_SEND_MS = 5 * 60_000
+
+const deliveryOf = (row: SendRow & { ts: string }, now: number): InviteDelivery =>
   row.detail.limited === true
     ? 'held'
     : row.detail.settled !== true
-      ? 'sending'
+      ? now - Date.parse(row.ts) > STALE_SEND_MS
+        ? 'uncertain'
+        : 'sending'
       : row.detail.sent === true
         ? 'sent'
         : row.detail.uncertain === true
@@ -356,14 +363,14 @@ export const deliveries = orgQuery({
           q.eq('target_profile_id', seat.id).eq('action', 'invite_email'),
         )
         .order('desc')
-      let newest: SendRow | undefined
+      let newest: (SendRow & { ts: string }) | undefined
       for await (const row of sends) {
         if ((row as SendRow).detail.email !== seat.email) continue
-        newest = row as SendRow
+        newest = row as SendRow & { ts: string }
         break
       }
       if (newest === undefined || (!admin && newest.detail.by !== ctx.me.id)) continue
-      out.push({ profile_id: seat.id, email: seat.email, state: deliveryOf(newest) })
+      out.push({ profile_id: seat.id, email: seat.email, state: deliveryOf(newest, Date.now()) })
     }
     return out
   },

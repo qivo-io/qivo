@@ -416,7 +416,9 @@ describe('billing recovery', () => {
     await t.action(internal.billingMail.send, { ...input, attempt: 24 })
     expect(
       (await unsent()).map((row) => [row.target_org_id, row.target_profile_id, row.detail]),
-    ).toEqual([[f.org.id, f.admin.id, { kind: 'seven_days', attempts: 25 }]])
+    ).toEqual([
+      [f.org.id, f.admin.id, { kind: 'seven_days', attempts: 25, reason: 'out_of_attempts' }],
+    ])
     // a notice delivered meanwhile is not reported
     await t.mutation(internal.billingMail.sent, { key })
     await t.mutation(internal.billingMail.unsent, { key, attempts: 3 })
@@ -450,7 +452,9 @@ describe('billing recovery', () => {
     await t.action(internal.billingMail.send, { ...input, attempt: 0 })
     expect(await unsent()).toEqual([])
     await t.action(internal.billingMail.send, { ...input, attempt: 7 })
-    expect((await unsent()).map((row) => row.detail)).toEqual([{ kind: 'one_day', attempts: 7 }])
+    expect((await unsent()).map((row) => row.detail)).toEqual([
+      { kind: 'one_day', attempts: 7, reason: 'no_longer_due' },
+    ])
   })
 
   it('discards obsolete reminder thresholds and revoked recipients', async () => {

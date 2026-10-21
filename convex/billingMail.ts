@@ -88,6 +88,7 @@ export const sent = internalMutation({
 export const unsent = internalMutation({
   args: { key: v.string(), attempts: v.number() },
   handler: async (ctx, { key, attempts }) => {
+    const reason = attempts > NOTICE_RETRIES ? 'out_of_attempts' : 'no_longer_due'
     const notice = await ctx.db
       .query('billing_notices')
       .withIndex('by_key', (q) => q.eq('key', key))
@@ -98,7 +99,7 @@ export const unsent = internalMutation({
       action: 'notice_email_unsent',
       target_org_id: notice.org_id,
       target_profile_id: notice.profile_id,
-      detail: { kind: notice.kind, attempts },
+      detail: { kind: notice.kind, attempts, reason },
     })
     return null
   },

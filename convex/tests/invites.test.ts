@@ -36,6 +36,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+const isoNow = () => new Date().toISOString()
 const flush = (t: T) => t.finishAllScheduledFunctions(() => vi.runAllTimers())
 
 const person = (orgId: string, email: string, extra: Record<string, unknown> = {}) => ({
@@ -451,17 +452,17 @@ describe('whoever caused an app invitation sees whether it went out', () => {
     const t = newAuthT()
     const f = await withOrg(t)
     const seats = await Promise.all(
-      ['sending', 'held', 'uncertain', 'readdressed'].map(async (name) => {
+      ['sending', 'held', 'uncertain', 'readdressed', 'stuck'].map(async (name) => {
         const seat = person(f.org.id, `${name}@example.se`)
         await as(t, f.admin).mutation(api.profiles.create, seat)
         return seat
       }),
     )
     // the scheduled sends never run here, so only the planted rows count
-    const plant = (seat: { id: string }, detail: Record<string, unknown>) =>
+    const plant = (seat: { id: string }, detail: Record<string, unknown>, ts = isoNow()) =>
       t.run((ctx) =>
         ctx.db.insert('platform_audit_log', {
-          ts: NOW,
+          ts,
           actor_email: 'system',
           action: 'invite_email',
           channel: 'app',
@@ -470,11 +471,17 @@ describe('whoever caused an app invitation sees whether it went out', () => {
           detail: { resend: false, by: f.admin.id, ...detail },
         }),
       )
-    const [sending, held, uncertain, readdressed] = seats
+    const [sending, held, uncertain, readdressed, stuck] = seats
     await plant(sending, { email: sending.email, sent: false })
     await plant(held, { email: held.email, sent: false, limited: true })
     await plant(uncertain, { email: uncertain.email, sent: false, settled: true, uncertain: true })
     await plant(readdressed, { email: 'old@example.se', sent: false, settled: true })
+    // reserved ten minutes ago and never settled: its action died
+    await plant(
+      stuck,
+      { email: stuck.email, sent: false },
+      new Date(Date.now() - 10 * 60_000).toISOString(),
+    )
     // an operator's later entries for the same seat do not hide its send
     for (let i = 0; i < 25; i++)
       await t.run((ctx) =>
@@ -492,6 +499,7 @@ describe('whoever caused an app invitation sees whether it went out', () => {
         { profile_id: sending.id, email: sending.email, state: 'sending' },
         { profile_id: held.id, email: held.email, state: 'held' },
         { profile_id: uncertain.id, email: uncertain.email, state: 'uncertain' },
+        { profile_id: stuck.id, email: stuck.email, state: 'uncertain' },
       ]),
     )
   })

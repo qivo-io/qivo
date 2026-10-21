@@ -28,11 +28,11 @@ afterEach(() => {
 })
 
 describe('email verification is mailed on every path that needs it', () => {
-  it('mails on registration (both OAuth and password) and re-mails on an unverified sign-in', () => {
+  it('mails on a password registration and re-mails on an unverified sign-in', () => {
     const options = createAuthOptions(noCtx)
 
-    // the OAuth register branch reads sendOnSignUp; without it a Microsoft
-    // login lands unverified with no link ever sent
+    // the password register branch reads sendOnSignUp; a provider
+    // registration's first link comes from the app's confirm screen
     expect(options.emailVerification?.sendOnSignUp).toBe(true)
     // better-auth sends once, on the registration — a lost link is only
     // recoverable because an unverified sign-in mints a fresh one

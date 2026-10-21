@@ -44,7 +44,8 @@ export function inviteLabel(state: InviteDelivery | undefined): {
     case 'unsent':
       return {
         text: 'invitation not sent',
-        detail: `The invitation email could not be sent. ${JOIN_ANYWAY}`,
+        detail:
+          'The invitation email could not be sent. Check the address. They can join later by creating an account with it, once Qivo can email them.',
         failed: true,
       }
     case 'held':

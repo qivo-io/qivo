@@ -296,12 +296,14 @@ export const createAuthOptions = (
     },
     emailVerification: {
       /* A confirmation link nobody can re-request is a dead end, and the token
-       * lives an hour. sendOnSignUp covers BOTH registrations: an OAuth one
-       * (Microsoft does not verify its mutable email claim, so Entra logins
-       * arrive unverified) and a password one, where it now stands in for the
-       * `?? requireEmailVerification` fallback better-auth reads otherwise.
-       * sendOnSignIn mails a fresh link when an unverified password login
-       * tries again — better-auth never re-sends on its own. */
+       * lives an hour. sendOnSignUp mails a password registration's link,
+       * standing in for the `?? requireEmailVerification` fallback
+       * better-auth reads otherwise. A provider registration (Microsoft does
+       * not verify its mutable email claim, so Entra logins arrive
+       * unverified) also reaches the callback, which leaves that first link
+       * to the app's confirm screen. sendOnSignIn mails a fresh link when an
+       * unverified password login tries again — better-auth never re-sends
+       * on its own. */
       sendOnSignUp: !demo,
       sendOnSignIn: !demo,
       sendVerificationEmail: async ({ user, url }) => {

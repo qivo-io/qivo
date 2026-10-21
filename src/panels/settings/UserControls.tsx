@@ -145,6 +145,8 @@ export function InviteLabel({ user, className }: { user: UserVM; className?: str
   )
 }
 
+const NO_ROW_WAIT_MS = 2 * 60_000
+
 /** Under an invite form: whether the invitation email to the seat just
     created went out, live, in a full sentence. Only the send to `email`
     counts, so a correction made elsewhere is not reported as this one. When
@@ -166,12 +168,18 @@ export function InviteOutcome({
   useEffectS(() => {
     if (current !== undefined) setLast(current)
   }, [current])
+  // a send that has not even been reserved after this long is not coming
+  const [waited, setWaited] = useStateS(false)
+  useEffectS(() => {
+    const timer = setTimeout(() => setWaited(true), NO_ROW_WAIT_MS)
+    return () => clearTimeout(timer)
+  }, [])
   /* Nothing yet, or the seat's row is for another address: nothing to say.
      A send in flight whose row then vanished has no outcome either. */
   const state =
     current ??
     (last !== 'sending' ? last : undefined) ??
-    (rows && !row && !last ? 'sending' : undefined)
+    (rows && !row && !last && !waited ? 'sending' : undefined)
   if (state === undefined) return null
   const label = inviteLabel(state)
   const text = label.detail
