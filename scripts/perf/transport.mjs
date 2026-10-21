@@ -6,6 +6,9 @@ import { ConvexError } from 'convex/values'
 const parameters = new URLSearchParams(location.search)
 const count = Number(parameters.get('tasks') || 100)
 const latency = Number(parameters.get('latency') || 100)
+// shape=varied mixes statuses, parents, due dates, pauses, long titles and
+// unassigned tasks into the workspace; without it every task looks alike
+const varied = parameters.get('shape') === 'varied'
 const fixtureTime = new Date()
 const now = fixtureTime.toISOString()
 const day = (offset) => {
@@ -41,7 +44,7 @@ const meta = {
   name: 'Testbed program',
   description: '',
   sort_order: 0,
-  track_delay: false,
+  track_delay: varied,
   created_at: now,
 }
 const projects = Array.from({ length: 10 }, (_, n) => ({
@@ -54,6 +57,47 @@ const projects = Array.from({ length: 10 }, (_, n) => ({
   name: `Testbed project ${n + 1}`,
   sort_order: n,
 }))
+/** Task `n` of the default workspace: every task alike. */
+const task = (n) => ({
+  id: id('4', n),
+  org_id: org,
+  project_id: projects[n % projects.length].id,
+  num: n + 1,
+  title: `Testbed ${n % 2 ? 'firmware signed' : 'signed firmware'} task ${n + 1}`,
+  description: '',
+  status: 'todo',
+  priority: 'medium',
+  assignee_id: profiles[n % profiles.length].id,
+  remaining_hours: 4,
+  remaining_set_at: now,
+  paused: false,
+  created_at: now,
+  updated_at: now,
+  start_week: day(n % 21),
+  end_week: day((n % 21) + 7),
+  has_hidden_subtasks: false,
+})
+const STATUSES = ['backlog', 'todo', 'progress', 'review', 'done']
+/** Task `n` of the varied workspace. Every 25th task is a parent of the
+    three after it, every 7th has a due date (every other one past), every
+    31st is paused, every 13th has a 90-character title and every 11th has
+    no owner. */
+const variedTask = (n) => {
+  const row = task(n)
+  row.status = STATUSES[n % STATUSES.length]
+  const parent = n - (n % 25)
+  if (n % 25 > 0 && n % 25 <= 3) {
+    row.parent_id = id('4', parent)
+    row.project_id = projects[parent % projects.length].id
+  }
+  if (n % 7 === 0) row.due_date = day((n / 7) % 2 ? -((n % 40) + 1) : (n % 40) + 1)
+  if (n % 31 === 0) row.paused = true
+  if (n % 13 === 0)
+    row.title =
+      `${row.title} ${'with a longer description of the work it covers '.repeat(2)}`.slice(0, 90)
+  if (n % 11 === 0) delete row.assignee_id
+  return row
+}
 const snapshot = {
   auth_user_id: 'perf-account',
   myProfileIds: [profiles[0].id],
@@ -73,25 +117,7 @@ const snapshot = {
   ],
   profiles,
   projects: [meta, ...projects],
-  issues: Array.from({ length: count }, (_, n) => ({
-    id: id('4', n),
-    org_id: org,
-    project_id: projects[n % projects.length].id,
-    num: n + 1,
-    title: `Testbed ${n % 2 ? 'firmware signed' : 'signed firmware'} task ${n + 1}`,
-    description: '',
-    status: 'todo',
-    priority: 'medium',
-    assignee_id: profiles[n % profiles.length].id,
-    remaining_hours: 4,
-    remaining_set_at: now,
-    paused: false,
-    created_at: now,
-    updated_at: now,
-    start_week: day(n % 21),
-    end_week: day((n % 21) + 7),
-    has_hidden_subtasks: false,
-  })),
+  issues: Array.from({ length: count }, (_, n) => (varied ? variedTask(n) : task(n))),
   teams: [],
   teamMembers: [],
   access: [],
@@ -313,6 +339,12 @@ window.__perf = {
   /* Another person renames task `n`, which every listener receives. */
   deliverRemote(n) {
     snapshot.issues[n].title = `Renamed elsewhere ${Date.now()}`
+    emit('snapshot:forMe')
+  },
+  /* Another person moves task `n` to `status`, for checks by hand. */
+  moveRemote(n, status) {
+    snapshot.issues[n].status = status
+    snapshot.issues[n].updated_at = new Date().toISOString()
     emit('snapshot:forMe')
   },
   deliverComments() {

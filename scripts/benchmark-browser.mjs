@@ -2,6 +2,7 @@
 //
 //   node scripts/benchmark-browser.mjs [--sizes 100,1000,10000] [--samples 5]
 //     [--baseline [revision]] [--root checkout] [--output file.json]
+//     [--fixture varied] [--serve [--host address]]
 //
 // --baseline also builds `revision` (by default the merge base of HEAD and
 // origin/main, as scripts/benchmark-backend.mjs picks it) with this
@@ -9,19 +10,21 @@
 // checkout's, and prints both medians side by side. Taking turns puts both
 // under the same machine load, which moves single numbers a lot. The App
 // render counts (*AppRenders) do not depend on load at all.
+//
+// --fixture varied also opens a second page per sample on the varied
+// workspace (scripts/perf/transport.mjs, shape=varied) and measures opening,
+// scrolling and one drag over its Board. --serve only builds and serves the
+// pages, on --host (127.0.0.1 by default), until it is stopped.
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
-import { createServer } from 'node:http'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, extname, join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import tailwindcss from '@tailwindcss/vite'
-import react from '@vitejs/plugin-react'
 import { chromium } from 'playwright'
-import { build } from 'vite'
 import { BaselineError, resolveBaseline } from './benchmark-backend.mjs'
+import { buildPage, checkoutOf, serve } from './perf/page.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const option = (name, fallback) => {
@@ -39,6 +42,8 @@ const timeout = Number(option('timeout', '15000'))
 // unread messages the bulk-read scenario adds just before it runs, so the
 // earlier scenarios load the same workspace as before it existed
 const messages = Number(option('messages', '500'))
+const host = option('host', '127.0.0.1')
+const varied = option('fixture', 'default') === 'varied'
 // --baseline, with the revision when one follows it
 const baselineAt = process.argv.indexOf('--baseline')
 const baselineRevision =
@@ -63,12 +68,6 @@ if (baselineRevision !== null) {
   }
 }
 const temporary = await mkdtemp(join(tmpdir(), 'qivo-browser-perf-'))
-const entry = join(here, 'perf/entry.tsx')
-const transport = join(here, 'perf/transport.mjs')
-await writeFile(
-  join(temporary, 'index.html'),
-  `<html><body><div id="root"></div><script type="module" src="${entry}"></script></body></html>`,
-)
 // the timed phases, each with its script, layout and style time and the
 // number of App renders in it
 const PHASES = [
@@ -83,18 +82,33 @@ const PHASES = [
   'refusalWithTen',
   'markAllRead',
   'boardNavigation',
+  'boardComplete',
   'boardRemote',
+  'boardScroll',
+  'boardFilter',
+  'boardFilterClear',
+  'phoneBoard',
+  ...(varied
+    ? ['variedBoardNavigation', 'variedBoardComplete', 'variedBoardScroll', 'variedBoardDragOver']
+    : []),
 ]
 // the medians --baseline prints side by side
 const COMPARED = [
-  'remote',
-  'remoteWhilePending',
-  'remoteSettle',
-  'refusalWithTen',
-  'markAllRead',
-  'drag',
-  'boardRemote',
-].flatMap((phase) => [`${phase}ScriptDurationMs`, `${phase}AppRenders`])
+  ...[
+    'remote',
+    'remoteWhilePending',
+    'remoteSettle',
+    'refusalWithTen',
+    'markAllRead',
+    'drag',
+    ...PHASES.filter((phase) => /^(board|phone|varied)/.test(phase)),
+  ].flatMap((phase) => [`${phase}ScriptDurationMs`, `${phase}AppRenders`]),
+  // opening the Board from the click until every card is in
+  'boardOpenToCompleteMs',
+  'boardLongestSliceMs',
+  'boardDomNodes',
+  'boardHeapMb',
+]
 let browser
 const servers = []
 let running
@@ -126,98 +140,16 @@ const summary = (values) => {
 const summarized = (tasks, metrics) => ({
   tasks,
   metrics: Object.fromEntries(
-    Object.entries(metrics).map(([key, values]) => [key, summary(values)]),
+    Object.entries(metrics)
+      .filter(([, values]) => values.length)
+      .map(([key, values]) => [key, summary(values)]),
   ),
 })
 
-/** Builds the benchmark page from the checkout at `source` into `outDir`. */
-async function buildPage(source, outDir) {
-  await build({
-    configFile: false,
-    root: temporary,
-    logLevel: 'warn',
-    define: {
-      __QIVO_BUILD_ID__: '"benchmark"',
-      'import.meta.env.VITE_CONVEX_URL': '"https://benchmark.invalid"',
-      'import.meta.env.VITE_CONVEX_SITE_URL': '"https://benchmark.invalid"',
-    },
-    plugins: [
-      {
-        name: 'benchmark-transport',
-        enforce: 'pre',
-        resolveId(id, importer) {
-          if (!importer) return
-          const path = id.startsWith('@perf/')
-            ? resolve(source, 'src', id.slice(6))
-            : id.startsWith('@/')
-              ? resolve(source, 'src', id.slice(2))
-              : id.startsWith('.')
-                ? resolve(dirname(importer), id)
-                : id
-          if (
-            [join(source, 'src/lib/convex'), join(source, 'src/lib/auth')].includes(
-              path.replace(/\.ts$/, ''),
-            )
-          )
-            return transport
-        },
-        transform(code, id) {
-          if (id === join(source, 'src/styles/app.css'))
-            return `${code}\n@source ${JSON.stringify(join(source, 'src'))};\n`
-          if (id === join(source, 'src/App.tsx'))
-            return code.replace('function App() {', 'function App() { window.__perf.appRenders++;')
-        },
-      },
-      react(),
-      tailwindcss(),
-    ],
-    resolve: { alias: { '@perf': join(source, 'src'), '@': join(source, 'src') } },
-    build: { outDir, emptyOutDir: true, chunkSizeWarningLimit: 2000 },
-  })
-}
-
-/** The source of `commit` in a folder of its own, with this checkout's
-    dependencies. */
-async function checkoutOf(commit) {
-  const folder = join(temporary, `baseline-${commit.slice(0, 12)}`)
-  await mkdir(folder)
-  const archive = join(temporary, 'baseline.tar')
-  await promisify(execFile)('git', ['archive', '-o', archive, commit, 'src', 'convex', 'scripts'], {
-    cwd: root,
-  })
-  await promisify(execFile)('tar', ['-xf', archive, '-C', folder])
-  await symlink(join(root, 'node_modules'), join(folder, 'node_modules'))
-  return folder
-}
-
-/** Serves the page built into `outDir` and resolves its origin. */
-async function serve(outDir) {
-  const server = createServer(async (request, response) => {
-    const pathname = new URL(request.url, 'http://localhost').pathname
-    const file = pathname.startsWith('/assets/')
-      ? join(outDir, pathname)
-      : join(outDir, 'index.html')
-    try {
-      const content = await readFile(file)
-      response.setHeader(
-        'Content-Type',
-        { '.js': 'application/javascript', '.css': 'text/css', '.html': 'text/html' }[
-          extname(file)
-        ] || 'application/octet-stream',
-      )
-      response.end(content)
-    } catch {
-      response.writeHead(404).end()
-    }
-  })
-  servers.push(server)
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
-  return `http://127.0.0.1:${server.address().port}`
-}
-
-/** Runs one sample of every scenario on the page at `origin` with `tasks`
-    tasks, adding its numbers to `metrics`. */
-async function runSample(origin, tasks, metrics) {
+/** Opens the benchmark page at `origin` with `tasks` tasks and the extra
+    `query`, throttled and on the slow network. Its `timed` adds the running
+    phase's numbers to `metrics`. */
+async function openPage(origin, tasks, metrics, query = '') {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
   const page = await context.newPage()
   page.setDefaultTimeout(timeout)
@@ -272,7 +204,116 @@ async function runSample(origin, tasks, metrics) {
     metrics[`${running.phase}AppRenders`].push((await appRenders()) - renders)
     return elapsed
   }
-  await page.goto(`${origin}/?tasks=${tasks}&latency=${latency}`)
+  await page.goto(`${origin}/?tasks=${tasks}&latency=${latency}${query}`)
+  return { context, page, cdp, errors, settle, appRenders, timed }
+}
+
+/* The Board counts as complete when nothing on it waits to mount. A Board
+   that mounts in slices marks its pending part with this attribute; one
+   that mounts whole never sets it. */
+const boardComplete = () => !document.querySelector('[data-board-mount="pending"]')
+
+/** The heap in use after a collection, in MiB, and the page's elements. */
+async function pageSize(page, cdp) {
+  await cdp.send('HeapProfiler.collectGarbage')
+  const performanceMetrics = await cdp.send('Performance.getMetrics')
+  return {
+    heapMb:
+      performanceMetrics.metrics.find((metric) => metric.name === 'JSHeapUsedSize').value / 1048576,
+    domNodes: await page.locator('*').count(),
+  }
+}
+
+/** Opens the Board from another view as `prefix`Navigation, until its first
+    card shows, and `prefix`Complete, until every card is in. Returns their
+    sum and the longest animation frame that started after the first card
+    showed (0 when it all happened in one). */
+async function openBoard({ page, timed }, metrics, prefix) {
+  await page.evaluate(() => {
+    const state = { firstCardAt: null, frames: [] }
+    window.__boardOpen = state
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) state.frames.push(entry)
+    }).observe({ type: 'long-animation-frame', buffered: false })
+    const seen = new MutationObserver(() => {
+      if (!document.querySelector('[data-card]')) return
+      state.firstCardAt = performance.now()
+      seen.disconnect()
+    })
+    seen.observe(document.body, { childList: true, subtree: true })
+  })
+  phase(`${prefix}Navigation`)
+  const navigation = await timed(async () => {
+    await page
+      .locator('[data-view-switch]')
+      .getByRole('radio', { name: 'Board', exact: true })
+      .click({ timeout: timeout * 10 })
+    await page
+      .locator('[data-card]')
+      .first()
+      .waitFor({ timeout: timeout * 10 })
+  })
+  metrics[`${prefix}Navigation`].push(navigation)
+  phase(`${prefix}Complete`)
+  const complete = await timed(() =>
+    page.waitForFunction(boardComplete, null, { timeout: timeout * 10 }),
+  )
+  metrics[`${prefix}Complete`].push(complete)
+  const longest = await page.evaluate(() => {
+    const { firstCardAt, frames } = window.__boardOpen
+    delete window.__boardOpen
+    return Math.max(
+      0,
+      ...frames
+        .filter((frame) => firstCardAt !== null && frame.startTime >= firstCardAt)
+        .map((frame) => frame.duration),
+    )
+  })
+  return { openToComplete: navigation + complete, longest }
+}
+
+/** Scrolls the Board's pane down by half its height every animation frame
+    for 60 frames, then back to the top, as `name`. Programmatic scrolling
+    keeps the lane wheel snap out of it. Records the longest frame as
+    `name`LongestFrameMs. */
+async function scrollBoard({ page, timed }, metrics, name) {
+  phase(name)
+  let longest = 0
+  metrics[name].push(
+    await timed(async () => {
+      longest = await page.evaluate(
+        () =>
+          new Promise((resolve) => {
+            const pane = document.querySelector('[data-workspace-view="kanban"] [data-scroll]')
+            if (!pane) throw new Error('The Board has no scrolling pane')
+            let frames = 0
+            let last = performance.now()
+            let longestFrame = 0
+            const step = (now) => {
+              longestFrame = Math.max(longestFrame, now - last)
+              last = now
+              if (frames++ === 60) {
+                pane.scrollTop = 0
+                resolve(longestFrame)
+                return
+              }
+              pane.scrollTop += pane.clientHeight / 2
+              requestAnimationFrame(step)
+            }
+            requestAnimationFrame(step)
+          }),
+      )
+    }),
+  )
+  metrics[`${name}LongestFrameMs`] ??= []
+  metrics[`${name}LongestFrameMs`].push(longest)
+}
+
+/** Runs one sample of every scenario on the page at `origin` with `tasks`
+    tasks, adding its numbers to `metrics`. */
+async function runSample(origin, tasks, metrics) {
+  const opened = await openPage(origin, tasks, metrics)
+  const { context, page, cdp, errors, settle, appRenders, timed } = opened
   await page.locator('[data-view-switch]').waitFor()
   await settle()
   metrics.startup.push(await page.evaluate(() => performance.now()))
@@ -363,12 +404,9 @@ async function runSample(origin, tasks, metrics) {
     }),
   )
   metrics.commentAppRenders.push((await appRenders()) - renders)
-  await cdp.send('HeapProfiler.collectGarbage')
-  const performanceMetrics = await cdp.send('Performance.getMetrics')
-  metrics.heapMb.push(
-    performanceMetrics.metrics.find((metric) => metric.name === 'JSHeapUsedSize').value / 1048576,
-  )
-  metrics.domNodes.push(await page.locator('*').count())
+  const roadmapSize = await pageSize(page, cdp)
+  metrics.heapMb.push(roadmapSize.heapMb)
+  metrics.domNodes.push(roadmapSize.domNodes)
   await page.locator('[data-task-close]').click()
   await settle()
   const paintTimer = () => page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)))
@@ -477,20 +515,13 @@ async function runSample(origin, tasks, metrics) {
   // The Board renders every card, so a delivery there repaints them all
   // unless the cards skip the tasks that did not change. Opening it can take
   // a baseline far longer than any other step.
-  phase('boardNavigation')
-  metrics.boardNavigation.push(
-    await timed(async () => {
-      await page
-        .locator('[data-view-switch]')
-        .getByRole('radio', { name: 'Board', exact: true })
-        .click({ timeout: timeout * 10 })
-      await page
-        .locator('[data-card]')
-        .first()
-        .waitFor({ timeout: timeout * 10 })
-    }),
-  )
+  const board = await openBoard(opened, metrics, 'board')
+  metrics.boardOpenToCompleteMs.push(board.openToComplete)
+  metrics.boardLongestSliceMs.push(board.longest)
   assert.equal(await page.locator('[data-card]').count(), tasks, 'The Board must show every task')
+  const boardSize = await pageSize(page, cdp)
+  metrics.boardHeapMb.push(boardSize.heapMb)
+  metrics.boardDomNodes.push(boardSize.domNodes)
   phase('boardRemote')
   metrics.boardRemote.push(
     await timed(async () => {
@@ -504,14 +535,118 @@ async function runSample(origin, tasks, metrics) {
     1,
     'The Board must show the remote rename',
   )
+  await scrollBoard(opened, metrics, 'boardScroll')
+  // A filter that matches nothing, then clearing it, which brings every card
+  // back.
+  const filter = page.getByPlaceholder('Filter tasks…', { exact: true })
+  phase('boardFilter')
+  metrics.boardFilter.push(
+    await timed(async () => {
+      await filter.fill('no-such-task-zz', { timeout: timeout * 10 })
+      await page.waitForFunction(() => !document.querySelector('[data-card]'), null, {
+        timeout: timeout * 10,
+      })
+    }),
+  )
+  phase('boardFilterClear')
+  let firstCard = 0
+  metrics.boardFilterCompleteMs.push(
+    await timed(async () => {
+      const start = await page.evaluate(() => performance.now())
+      await filter.fill('', { timeout: timeout * 10 })
+      await page
+        .locator('[data-card]')
+        .first()
+        .waitFor({ timeout: timeout * 10 })
+      firstCard = (await page.evaluate(() => performance.now())) - start
+      await page.waitForFunction(boardComplete, null, { timeout: timeout * 10 })
+    }),
+  )
+  metrics.boardFilterFirstCardMs.push(firstCard)
+  assert.equal(await page.locator('[data-card]').count(), tasks, 'Clearing must bring every task')
+  // A phone shows the task list in place of the Board.
+  phase('phoneBoard')
+  let phoneFirstCard = 0
+  metrics.phoneBoard.push(
+    await timed(async () => {
+      const start = await page.evaluate(() => performance.now())
+      await page.setViewportSize({ width: 390, height: 844 })
+      await page
+        .locator('.mobile-task-list [data-card]')
+        .first()
+        .waitFor({ timeout: timeout * 10 })
+      phoneFirstCard = (await page.evaluate(() => performance.now())) - start
+      await page.waitForFunction(boardComplete, null, { timeout: timeout * 10 })
+    }),
+  )
+  metrics.phoneBoardFirstCardMs.push(phoneFirstCard)
+  assert.equal(
+    await page.locator('.mobile-task-list [data-card]').count(),
+    tasks,
+    'The phone list must show every task',
+  )
+  await page.setViewportSize({ width: 1440, height: 1000 })
   assert.deepEqual(errors, [], `Browser errors at ${tasks} tasks`)
+  await context.close()
+}
+
+/** Runs one sample on the varied workspace: opens the Board right after
+    startup, scrolls it and drags one card into the next status. */
+async function runVariedSample(origin, tasks, metrics) {
+  const opened = await openPage(origin, tasks, metrics, '&shape=varied')
+  const { context, page, errors, settle, timed } = opened
+  await page.locator('[data-view-switch]').waitFor()
+  await settle()
+  await openBoard(opened, metrics, 'variedBoard')
+  await scrollBoard(opened, metrics, 'variedBoardScroll')
+  // A drag from the first lane's To Do into its In Progress, the way
+  // board-cards-smoke.mjs drives one, with only the dragover timed.
+  const lane = page.locator('.board-lane').first()
+  const source = lane.locator('[data-board-cell][data-status="todo"] [data-card][draggable="true"]')
+  const target = lane.locator('[data-board-cell][data-status="progress"]')
+  await source.first().scrollIntoViewIfNeeded()
+  const transfer = await page.evaluateHandle(() => new DataTransfer())
+  await source.first().dispatchEvent('dragstart', { dataTransfer: transfer })
+  await settle()
+  phase('variedBoardDragOver')
+  metrics.variedBoardDragOver.push(
+    await timed(async () => {
+      const accepted = await target.evaluate((element, dataTransfer) => {
+        const event = new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer })
+        element.dispatchEvent(event)
+        return event.defaultPrevented
+      }, transfer)
+      assert.equal(accepted, true, 'In Progress must accept the drag')
+    }),
+  )
+  const writes = await page.evaluate(() => window.__perf.writes)
+  await target.dispatchEvent('drop', { dataTransfer: transfer })
+  await page.waitForFunction((previous) => window.__perf.writes > previous, writes, {
+    timeout: timeout * 10,
+  })
+  await source.first().dispatchEvent('dragend', { dataTransfer: transfer })
+  await transfer.dispose()
+  assert.deepEqual(errors, [], `Browser errors at ${tasks} varied tasks`)
   await context.close()
 }
 
 /** Empty metric lists for one size. */
 const emptyMetrics = () =>
   Object.fromEntries(
-    [...PHASES, 'startup', 'commentAppRenders', 'heapMb', 'domNodes'].map((key) => [key, []]),
+    [
+      ...PHASES,
+      'startup',
+      'commentAppRenders',
+      'heapMb',
+      'domNodes',
+      'boardOpenToCompleteMs',
+      'boardLongestSliceMs',
+      'boardDomNodes',
+      'boardHeapMb',
+      'boardFilterFirstCardMs',
+      'boardFilterCompleteMs',
+      'phoneBoardFirstCardMs',
+    ].map((key) => [key, []]),
   )
 
 /** The medians of `scenarios` against the baseline's, one row per size and
@@ -539,21 +674,27 @@ try {
     report.baseline = { commit: baseline.commit, chosen: baseline.chosen, scenarios: [] }
     targets.push({
       label: 'baseline',
-      source: await checkoutOf(baseline.commit),
+      source: await checkoutOf(root, baseline.commit, temporary),
       scenarios: report.baseline.scenarios,
     })
   }
   for (const target of targets) {
     const outDir = join(temporary, `dist-${target.label}`)
-    await buildPage(target.source, outDir)
-    target.origin = await serve(outDir)
+    await buildPage(target.source, outDir, temporary)
+    const server = await serve(outDir, process.argv.includes('--serve') ? host : '127.0.0.1')
+    servers.push(server)
+    target.origin = server.origin
   }
   if (process.argv.includes('--serve')) {
     for (const target of targets)
       console.log(
-        `Benchmark workspace (${target.label}): ${target.origin}/?tasks=${sizes[0]}&latency=${latency}`,
+        `Benchmark workspace (${target.label}): ${target.origin}/?tasks=${sizes[0]}&latency=${latency}${varied ? '&shape=varied' : ''}`,
       )
-    await new Promise((resolve) => process.once('SIGINT', resolve))
+    // a supervised service stops with SIGTERM
+    await new Promise((resolve) => {
+      process.once('SIGINT', resolve)
+      process.once('SIGTERM', resolve)
+    })
     process.exitCode = 0
   } else {
     browser = await chromium.launch({ headless: true })
@@ -564,6 +705,7 @@ try {
         for (const target of targets) {
           running = { label: target.label, tasks, sample: sample + 1, phase: 'startup' }
           await runSample(target.origin, tasks, target.metrics)
+          if (varied) await runVariedSample(target.origin, tasks, target.metrics)
           console.log(`${target.label}, ${tasks} tasks: sample ${sample + 1}/${samples}`)
         }
       }
@@ -573,7 +715,7 @@ try {
     console.log(JSON.stringify(report, null, 2))
     if (report.baseline) {
       console.log(
-        `Baseline ${report.baseline.commit.slice(0, 12)} (${report.baseline.chosen}), medians of ${samples} samples taken in turns, script time in ms at ${cpu}x CPU throttling:`,
+        `Baseline ${report.baseline.commit.slice(0, 12)} (${report.baseline.chosen}), medians of ${samples} samples taken in turns at ${cpu}x CPU throttling, times in ms, heap in MiB:`,
       )
       console.table(comparison(report.scenarios, report.baseline.scenarios))
     }
@@ -595,6 +737,6 @@ try {
   throw error
 } finally {
   await browser?.close()
-  for (const server of servers) await new Promise((resolve) => server.close(resolve))
+  for (const server of servers) await server.close()
   await rm(temporary, { recursive: true, force: true })
 }
