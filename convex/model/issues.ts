@@ -132,7 +132,7 @@ import { emitTaskEvent } from './taskEvents'
 import { assertWeekPair, cleanRemaining, cleanTaskDate, roundTenths } from './taskValues'
 
 export { ISSUE_PREFIX } from '../lib/taskRefs'
-export { assertWeekPair, cleanRemaining } from './taskValues'
+export { assertRemainingShape, assertWeekPair, cleanRemaining } from './taskValues'
 /* char_length in the DB CHECK (0061), so codepoints here too. */
 export const TITLE_MAX = 80
 

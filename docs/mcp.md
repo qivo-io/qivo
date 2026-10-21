@@ -213,12 +213,15 @@ time `remaining_hours` got one limit on every interface, 0 to 99999.9 hours.
 The schemas of `create_task` and `update_task` already said so, but REST and
 the app took any finite nonnegative number, so a task given more over REST
 could not be sent back through `update_task`. The server now checks the
-range on all three, and `create_task` and `update_task` refuse a value
-outside it, `1e309` included, with REST's `remaining_hours must be a number
-of hours from 0 to 99999.9, or null` instead of a schema message such as
-`Input validation error: … remaining_hours: Too big: expected number to be
-<=99999.9`. A task given more before the cap reads them back, and
-`update_task` takes them unchanged or lower.
+range on all three, and `create_task` and `update_task` refuse a number
+outside it, `1e309` and negative numbers included, with REST's
+`remaining_hours must be a number of hours from 0 to 99999.9, or null`
+instead of a schema message such as `Input validation error: …
+remaining_hours: Too big: expected number to be <=99999.9`. A value that is
+neither a number nor `null` still gets the schema message. A task given
+more before the cap reads them back, and `update_task` takes them
+unchanged or any value from 0 to 99999.9. Any other value above the cap is
+refused, a lower one included.
 
 ## Access model: the credential is a user
 
@@ -2144,10 +2147,13 @@ layer looks like the object not existing, matching the app.
 - **Numbers are numbers.** `remaining_hours` is a finite JSON number from
   0 that rounds to at most 99999.9, rounded to one decimal place (or `null`
   to clear), the same limit REST and the app use. So `99999.94` saves
-  `99999.9`. Any other value, numeric overflow such as
-  `1e309` included, is refused with `remaining_hours must be a number of
-  hours from 0 to 99999.9, or null`. A task given more before the cap reads
-  them back, and `update_task` takes them unchanged or lower. Task dates are real calendar days in `YYYY-MM-DD`
+  `99999.9`. Any other number, numeric overflow such as `1e309` included,
+  is refused with `remaining_hours must be a number of hours from 0 to
+  99999.9, or null`, before anything is compared. A task given more before
+  the cap reads them back, and `update_task` takes them unchanged or any
+  value from 0 to 99999.9; any other value above the cap is refused, a lower
+  one included. Sent unchanged with a stale `expected`, they answer as a
+  changed field. Task dates are real calendar days in `YYYY-MM-DD`
   form (or `null` to clear), so impossible dates are refused instead of
   rolling into the next month. Timestamps are full ISO strings.
   `plannable_hours` is integer-or-null — for an agent it is `null` (0103),

@@ -1236,13 +1236,16 @@ denote week starts and the end week is included: on a Monday-based calendar,
 setting, `organization.week_start` in `GET /v1/me`, before calculating week
 dates. `remaining_hours` accepts numbers from 0 that round to at most
 99999.9, rounded to one decimal place, or `null` to clear. So `99999.94`
-saves `99999.9`, and `99999.95` is refused. Any other value, numeric overflow such as
-`1e309` included, is a `400` with `remaining_hours must be a number of hours
-from 0 to 99999.9, or null`, the sentence MCP gives too. A task given more
-than 99999.9 hours before the cap was added in October 2026 reads them back
-as stored, and a PATCH may send them back unchanged or lower them; any other
-value above the cap is refused. Until then REST took any finite nonnegative
-number. `remaining_hours` was named
+saves `99999.9`, and `99999.95` is refused. Any other value, numeric
+overflow such as `1e309` included, is a `400` with `remaining_hours must be
+a number of hours from 0 to 99999.9, or null`. MCP gives the same sentence
+for any such number. A task given more than 99999.9 hours before the cap was
+added in October 2026 reads them back as stored. A PATCH may send them back
+unchanged or set any value from 0 to 99999.9, and any other value above the
+cap is refused, a lower one included. Sent unchanged with a stale
+`expected`, they answer `409` like any changed field. Until then REST took
+any finite nonnegative number and refused other values with
+`remaining_hours must be a non-negative number or null`. `remaining_hours` was named
 `estimate_hours` until 2026-07-17 (0063; the field now means hours of work
 *left*). The old name is no longer recognized, so a request still sending
 `estimate_hours` is refused as an unknown field. Update callers.
@@ -2130,8 +2133,8 @@ treats `""` as `null`. A comment body is trimmed. `remaining_hours` and
 colors.
 
 A malformed `expected` is a `400`, and nothing is saved. Qivo answers it
-before it compares anything, so a date, an hour count or a label color that
-breaks its field's rule is a `400`, never a `409`:
+before it compares anything, so a date, an hour count, a label color or text
+that breaks its field's rule is a `400`, never a `409`:
 
 - `expected must be an object of the fields as you last read them`, for
   `null`, an array or any other value that is not an object.

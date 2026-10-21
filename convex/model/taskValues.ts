@@ -1,4 +1,4 @@
-import { badRequest } from '../lib/functions'
+import { badRequest, rule } from '../lib/functions'
 import { roundTenths } from '../lib/numbers'
 
 type TaskDateField = 'start_week' | 'end_week' | 'due_date'
@@ -59,21 +59,32 @@ export { roundTenths } from '../lib/numbers'
  * `maximum`. */
 export const REMAINING_HOURS_MAX = 99_999.9
 
-/** The refusal of remaining hours outside 0..REMAINING_HOURS_MAX. */
+/** The refusal of remaining hours outside 0..REMAINING_HOURS_MAX. A `rule`,
+ * so the app shows the sentence; REST answers it as a 400 either way. */
 export const REMAINING_HOURS_RULE = `remaining_hours must be a number of hours from 0 to ${REMAINING_HOURS_MAX}, or null`
+
+/** Refuses remaining hours no task can hold, anything but a finite number
+ * of at least 0 or null, with REMAINING_HOURS_RULE. These are cleanRemaining's
+ * checks that need no stored row. REST and MCP run it first, so such a value
+ * is refused before anything is looked up or compared. */
+export function assertRemainingShape(value: unknown): asserts value is number | null | undefined {
+  if (value == null) return
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw rule(REMAINING_HOURS_RULE)
+  }
+}
 
 /** Estimates are finite hours from 0, stored to one decimal place, that
  * round to at most REMAINING_HOURS_MAX; null clears them. The cap applies to
  * the rounded hours, because the app rounds what a person types before it
  * sends it. More than the cap passes when it rounds to `current`, the task's
  * stored hours, so a task given more before the cap keeps them through
- * writes that send them back unchanged. */
+ * writes that send them back unchanged. The cores run it after the field
+ * check, so a stale resend of such hours answers as a changed field. */
 export function cleanRemaining(value: unknown, current?: number): number | undefined {
+  assertRemainingShape(value)
   if (value == null) return undefined
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-    throw badRequest(REMAINING_HOURS_RULE)
-  }
   const hours = roundTenths(value)
-  if (hours > REMAINING_HOURS_MAX && hours !== current) throw badRequest(REMAINING_HOURS_RULE)
+  if (hours > REMAINING_HOURS_MAX && hours !== current) throw rule(REMAINING_HOURS_RULE)
   return hours
 }

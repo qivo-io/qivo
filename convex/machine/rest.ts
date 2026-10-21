@@ -146,7 +146,7 @@ import {
 } from '../model/links'
 import { newUuid, PLANNABLE_HOURS_RIGHTS, setPlannableHoursCore } from '../model/orgs'
 import { PLANNABLE_FIELDS } from '../model/people'
-import { cleanRemaining, cleanTaskDate } from '../model/taskValues'
+import { assertRemainingShape, cleanTaskDate } from '../model/taskValues'
 import { authenticateSecret, restAuth401, sha256hex } from './auth'
 import { DISCUSSION_ROUTES } from './discussion'
 import { PROJECT_ROUTES, projectDetailJson } from './projects'
@@ -271,14 +271,10 @@ const TASK_UPDATE_FIELDS = [
 ] as const
 
 /* Validates + maps a request body onto issue columns (rest:267-302, sentences
- * verbatim). `forCreate` also requires title; `current` is the task a PATCH
- * changes, whose stored hours pass cleanRemaining's cap unchanged. The
- * caller has refused unknown fields already. */
-function issueFields(
-  b: Record<string, unknown>,
-  forCreate: boolean,
-  current?: Doc<'issues'>,
-): Record<string, unknown> {
+ * verbatim). `forCreate` also requires title. remaining_hours gets the checks
+ * that need no stored row here; the core applies the cap (cleanRemaining)
+ * after the field check. The caller has refused unknown fields already. */
+function issueFields(b: Record<string, unknown>, forCreate: boolean): Record<string, unknown> {
   const f: Record<string, unknown> = {}
   if ('title' in b) f.title = cleanTitle(b.title)
   else if (forCreate) throw badRequest('title is required')
@@ -306,7 +302,8 @@ function issueFields(
     }
   }
   if ('remaining_hours' in b) {
-    f.remaining_hours = cleanRemaining(b.remaining_hours, current?.remaining_hours) ?? null
+    assertRemainingShape(b.remaining_hours)
+    f.remaining_hours = b.remaining_hours ?? null
   }
   if ('paused' in b) {
     if (typeof b.paused !== 'boolean') throw badRequest('paused must be a boolean')
@@ -787,7 +784,7 @@ export const updateIssue = internalMutation({
     if ('reporter_id' in b) throw badRequest(REPORTER_IMMUTABLE_SENTENCE)
     refuseReadOnlyFields(b)
     refuseUnknownFields(b, TASK_UPDATE_FIELDS)
-    const fields = issueFields(b, false, issue)
+    const fields = issueFields(b, false)
     const expected = parseExpected(TASK_FIELDS, b.expected, taskSentKeys(b))
     // a group's dates come from its subtasks, so any date key on one is
     // refused, null and unchanged values included

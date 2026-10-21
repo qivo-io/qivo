@@ -553,6 +553,51 @@ describe('text values in expected', () => {
       await send(fx, 'PATCH', path, { name: 'Firmware', expected: { name: long } }, admin),
     ).toMatchObject({ status: 200 })
 
+    // a milestone or project name and a comment body saved before their
+    // caps compare too
+    const milestone = uuid()
+    const longer = `Prototype ${'validated '.repeat(9)}`.trim()
+    await fx.t.run(async (ctx) => {
+      await ctx.db.insert('milestones', {
+        id: milestone,
+        project_id: fx.meta.id,
+        name: longer,
+        week: '2026-06-01',
+        created_at: NOW,
+      })
+      await ctx.db.patch(fx.meta._id, { name: longer })
+    })
+    const milestonePath = `/v1/projects/TBED/milestones/${milestone}`
+    expect(
+      await send(fx, 'PATCH', milestonePath, { name: 'Pilot', expected: { name: longer } }, admin),
+    ).toMatchObject({ status: 200 })
+    expect(
+      await send(
+        fx,
+        'PATCH',
+        '/v1/projects/TBED',
+        { name: 'Testbed', expected: { name: longer } },
+        admin,
+      ),
+    ).toMatchObject({ status: 200 })
+    const row = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    const posted = await send(fx, 'POST', `/v1/tasks/${row.id}/comments`, { body: 'First' })
+    const comment = (JSON.parse(posted.text) as { id: string }).id
+    const body = 'x'.repeat(20_001)
+    await fx.t.run(async (ctx) => {
+      const stored = await byId(ctx, 'comments', comment)
+      if (stored) await ctx.db.patch(stored._id, { body })
+    })
+    expect(
+      await send(fx, 'PATCH', `/v1/comments/${comment}`, {
+        body: 'Short',
+        expected: { body: `${body}!` },
+      }),
+    ).toMatchObject({ status: 409 })
+    expect(
+      await send(fx, 'PATCH', `/v1/comments/${comment}`, { body: 'Short', expected: { body } }),
+    ).toMatchObject({ status: 200 })
+
     // a project description saved before its 500-character cap, too
     const legacy = 'legacy text '.repeat(50)
     await fx.t.run((ctx) => ctx.db.patch(fx.meta._id, { description: legacy }))

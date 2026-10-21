@@ -188,10 +188,7 @@ describe('remaining time', () => {
       'remaining_hours cannot be set on a task with subtasks, because it is the sum of their remaining time',
     )
     const childless = await plantIssue(t, { ...base })
-    const neg = await expectRefusal(
-      updateAs(t, f, childless.id, { remaining_hours: -1 }),
-      'bad_request',
-    )
+    const neg = await expectRefusal(updateAs(t, f, childless.id, { remaining_hours: -1 }), 'rule')
     expect(neg.data.message).toBe(REMAINING_HOURS_RULE)
   })
 

@@ -47,7 +47,9 @@ Tasks have these fields:
   notification. The reporter cannot be changed or cleared afterward, except
   when their profile is removed from the organization. Moving the task or
   losing project access does not change it.
-- **Remaining**. Nonnegative hours of work left, saved to one decimal place.
+- **Remaining**. Hours of work left, from 0 to 99999.9, saved to one decimal
+  place. A task given more before this limit keeps its hours until someone
+  changes them.
   Qivo uses the time of the estimate, or the planned start if later, to
   project progress ([Delay status](./will-it-be-ready-in-time-the-delay-status.md)). Empty means unestimated and displays “—”; **0**
   means no work remains. Gaining a first subtask clears the parent's own

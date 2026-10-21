@@ -147,7 +147,7 @@ import {
 } from '../model/links'
 import { newUuid, setPlannableHoursCore } from '../model/orgs'
 import { PLANNABLE_FIELDS } from '../model/people'
-import { REMAINING_HOURS_MAX } from '../model/taskValues'
+import { assertRemainingShape, REMAINING_HOURS_MAX } from '../model/taskValues'
 import { teamsJson } from '../model/teams'
 import { authenticateSecret, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
 import { DISCUSSION_TOOLS } from './discussion'
@@ -1888,6 +1888,7 @@ export const createIssue = internalMutation({
       throw badRequest('tasks are created active, so archive with update_task after creating')
     }
     const title = cleanTitle(a.title)
+    assertRemainingShape(a.remaining_hours)
     const { cat, readable, writable } = await catalogueFlags(ctx, me, a.access)
     const p = findProjectRef(cat, a.project)
     if (p === undefined || !readable(p.id)) {
@@ -2027,6 +2028,7 @@ export const updateIssue = internalMutation({
       updated.push('end_week')
     }
     if (a.remaining_hours !== undefined) {
+      assertRemainingShape(a.remaining_hours)
       patch.remaining_hours = a.remaining_hours
       updated.push('remaining_hours')
     }

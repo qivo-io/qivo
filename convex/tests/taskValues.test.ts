@@ -134,7 +134,7 @@ describe('task value guards', () => {
           title: 'Refused hours',
           remaining_hours: invalid,
         }),
-        'bad_request',
+        'rule',
         /^remaining_hours must be a number of hours from 0 to 99999\.9, or null$/,
       )
       expect(await taskRow(t, id)).toBeNull()
@@ -144,7 +144,7 @@ describe('task value guards', () => {
           id: row.id,
           patch: { remaining_hours: invalid },
         }),
-        'bad_request',
+        'rule',
         /^remaining_hours must be a number of hours from 0 to 99999\.9, or null$/,
       )
     }
@@ -370,9 +370,25 @@ describe('hours stored above the cap', () => {
     })
     await expectRefusal(
       app(150_001),
-      'bad_request',
+      'rule',
       /^remaining_hours must be a number of hours from 0 to 99999\.9, or null$/,
     )
+    // lower, but still above the cap, is any other value too
+    expect((await rest('PATCH', `/v1/tasks/${row.id}`, { remaining_hours: 140_000 })).status).toBe(
+      400,
+    )
+    expect(
+      (await tool('update_task', { ref: row.id, remaining_hours: 140_000 })).content[0].text,
+    ).toBe(REMAINING_HOURS_RULE)
+    await expectRefusal(app(140_000), 'rule')
+    // the roadmap's plan changes follow the same rule
+    const roadmap = (remaining_hours: number) =>
+      as(t, org.admin).mutation(api.roadmap.change, {
+        session_id: uuid(),
+        operations: [{ kind: 'task', id: row.id, patch: { remaining_hours } }],
+      })
+    await expectRefusal(roadmap(150_001), 'rule')
+    expect(await roadmap(150_000)).toEqual({ count: 0 })
     expect((await taskRow(t, row.id))?.remaining_hours).toBe(150_000)
 
     // and each surface lowers them
@@ -392,5 +408,45 @@ describe('hours stored above the cap', () => {
     expect((await rest('PATCH', `/v1/tasks/${row.id}`, { remaining_hours: 150_000 })).status).toBe(
       400,
     )
+    // but sent with the stale read of it, it answers as a changed field
+    const resend = { remaining_hours: 150_000, expected: { remaining_hours: 150_000 } }
+    expect((await rest('PATCH', `/v1/tasks/${row.id}`, resend)).status).toBe(409)
+    expect((await tool('update_task', { ref: row.id, ...resend })).content[0].text).toBe(
+      // the app's last write names who changed it
+      `admin changed remaining_hours of QN-${row.num} since you read it, so nothing was saved; read QN-${row.num} again and resend your change`,
+    )
+    await expectRefusal(
+      as(t, org.admin).mutation(api.issues.update, {
+        org_id: org.org.id,
+        id: row.id,
+        patch: { remaining_hours: 150_000 },
+        expected: { remaining_hours: 150_000 },
+      }),
+      'conflict',
+    )
+    await expectRefusal(
+      as(t, org.admin).mutation(api.roadmap.change, {
+        session_id: uuid(),
+        operations: [
+          {
+            kind: 'task',
+            id: row.id,
+            patch: { remaining_hours: 150_000 },
+            expected: { remaining_hours: 150_000 },
+          },
+        ],
+      }),
+      'conflict',
+    )
+    // a value no task can hold is refused before the comparison, on both
+    const negative = { remaining_hours: -1, expected: { remaining_hours: 150_000 } }
+    expect(await rest('PATCH', `/v1/tasks/${row.id}`, negative)).toEqual({
+      status: 400,
+      json: { error: REMAINING_HOURS_RULE },
+    })
+    expect((await tool('update_task', { ref: row.id, ...negative })).content[0].text).toBe(
+      REMAINING_HOURS_RULE,
+    )
+    expect((await taskRow(t, row.id))?.remaining_hours).toBe(8)
   })
 })

@@ -15,6 +15,7 @@ import { logActivity } from './model/activity'
 import { changedPrints, DELETES } from './model/expected'
 import {
   assertOwnRemaining,
+  assertRemainingShape,
   assertTaskExpected,
   assertWeekPair,
   type BulkUpdate,
@@ -310,8 +311,7 @@ export const change = authedMutation({
         if (!row) throw notFound('task not found')
         const { me } = await writer(ctx, row.project_id)
         const patch = { ...op.patch }
-        if ('remaining_hours' in patch)
-          patch.remaining_hours = cleanRemaining(patch.remaining_hours, row.remaining_hours) ?? null
+        assertRemainingShape(patch.remaining_hours)
         if ('start_week' in patch || 'end_week' in patch) {
           // A group takes its dates from its subtasks. Refused before the
           // no-op skip, so a group's date operation never passes silently.
@@ -329,6 +329,9 @@ export const change = authedMutation({
           expected: op.expected,
           next: patch,
         })
+        // the cap after the field check, so stale hours answer as changed
+        if ('remaining_hours' in patch)
+          patch.remaining_hours = cleanRemaining(patch.remaining_hours, row.remaining_hours) ?? null
         if (
           Object.entries(patch).every(
             ([field, value]) => (row[field as keyof typeof patch] ?? null) === value,
