@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useRef } from 'react'
 
 type PaintBounds = {
   element: HTMLElement
@@ -80,15 +80,18 @@ function bodyPath(
 }
 
 /* Clip hidden cards out of the pinned chrome, and paint all visible panel
-   shapes through one fixed material surface below the workspace content. */
+   shapes through one fixed material surface below the workspace content.
+   `paneRef` and `materialRef` are stable callback refs. Once both elements
+   are there, in either order, the clipping binds without setting state, and
+   it unbinds when either goes. It paints once synchronously, in the commit,
+   because the material stays hidden until it is clipped (appearance.css). */
 export function useBoardPanelClipping() {
-  const [pane, setPane] = useState<HTMLDivElement | null>(null)
-  const materialRef = useRef<HTMLDivElement>(null)
+  const parts = useRef<{ pane?: HTMLDivElement; material?: HTMLDivElement; unbind?: () => void }>(
+    {},
+  )
 
-  useLayoutEffect(() => {
-    const material = materialRef.current
-    if (!pane || !material) return
-
+  /** Binds the clipping of `pane` onto `material`; returns the unbinding. */
+  const bind = useCallback((pane: HTMLDivElement, material: HTMLDivElement) => {
     let frame = 0
     const painted = new Map<HTMLElement, Map<PaintProperty, StylePaint>>()
     const observed = new Set<Element>()
@@ -259,7 +262,16 @@ export function useBoardPanelClipping() {
     }
     // Groups can appear or disappear after filters, scope changes or live
     // updates. Attribute changes are excluded so our own clips do not loop.
-    const mutationObserver = new MutationObserver(() => {
+    // Changes inside a status cell (cards) never add or remove a lane part;
+    // the lane body's ResizeObserver covers the height they change.
+    const mutationObserver = new MutationObserver((records) => {
+      if (
+        records.every(
+          (record) =>
+            record.target instanceof Element && record.target.closest('[data-board-cell]'),
+        )
+      )
+        return
       syncObserved()
       schedule()
     })
@@ -283,7 +295,38 @@ export function useBoardPanelClipping() {
       resizeObserver.disconnect()
       for (const [element, entry] of painted) restore(element, entry)
     }
-  }, [pane])
+  }, [])
 
-  return { paneRef: setPane, materialRef }
+  const connect = useCallback(() => {
+    const { pane, material, unbind } = parts.current
+    if (pane && material && !unbind) parts.current.unbind = bind(pane, material)
+  }, [bind])
+  const disconnect = useCallback(() => {
+    parts.current.unbind?.()
+    parts.current.unbind = undefined
+  }, [])
+  const paneRef = useCallback(
+    (pane: HTMLDivElement) => {
+      parts.current.pane = pane
+      connect()
+      return () => {
+        disconnect()
+        parts.current.pane = undefined
+      }
+    },
+    [connect, disconnect],
+  )
+  const materialRef = useCallback(
+    (material: HTMLDivElement) => {
+      parts.current.material = material
+      connect()
+      return () => {
+        disconnect()
+        parts.current.material = undefined
+      }
+    },
+    [connect, disconnect],
+  )
+
+  return { paneRef, materialRef }
 }

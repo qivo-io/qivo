@@ -1,15 +1,35 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useSyncExternalStore } from 'react'
+
+/* One media query list for the phone breakpoint, and one listener on it,
+   however many components ask. Every writable Board card asks through its
+   owner picker. The list is made on first use and made again when
+   window.matchMedia is another function, as tests stub it. */
+let phone: { matchMedia: typeof window.matchMedia; list: MediaQueryList } | null = null
+const phoneListeners = new Set<() => void>()
+const phoneChanged = () => {
+  for (const listener of phoneListeners) listener()
+}
+function phoneQuery() {
+  if (phone?.matchMedia !== window.matchMedia) {
+    if (phoneListeners.size) phone?.list.removeEventListener('change', phoneChanged)
+    phone = { matchMedia: window.matchMedia, list: window.matchMedia('(max-width: 760px)') }
+    if (phoneListeners.size) phone.list.addEventListener('change', phoneChanged)
+  }
+  return phone.list
+}
+function subscribePhone(listener: () => void) {
+  const list = phoneQuery()
+  if (!phoneListeners.size) list.addEventListener('change', phoneChanged)
+  phoneListeners.add(listener)
+  return () => {
+    phoneListeners.delete(listener)
+    if (!phoneListeners.size) phone?.list.removeEventListener('change', phoneChanged)
+  }
+}
 
 /** Keep phone navigation and its full-page layers on the same breakpoint. */
 export function useMobile() {
-  const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 760px)').matches)
-  useEffect(() => {
-    const media = window.matchMedia('(max-width: 760px)')
-    const change = () => setMobile(media.matches)
-    media.addEventListener('change', change)
-    return () => media.removeEventListener('change', change)
-  }, [])
-  return mobile
+  return useSyncExternalStore(subscribePhone, () => phoneQuery().matches)
 }
 
 /** Give a phone overlay one Back step without changing its underlying URL.

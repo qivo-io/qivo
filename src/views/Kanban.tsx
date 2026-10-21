@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { boardDropPatch, groupBoardAssignees, groupBoardCell } from '@/lib/boardGroups'
 import { Avatar, EmptyState, Icon, ProjectName, StatusDot } from '../components/qivo'
+import { useFollowTaskFocus } from '../lib/taskFocus'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { useLatest } from '../lib/useLatest'
 import {
@@ -16,6 +17,8 @@ import {
   type ScopeInfo,
 } from '../store/planner'
 import { BoardPanelMaterial } from './BoardPanelMaterial'
+import './Board.css'
+import { BOARD_TASK_TYPE, createDropOver, type DropOver, useDropOver } from './board/dropOver'
 import { BoardCard } from './kanbanCards'
 import { useBoardPanelClipping } from './useBoardPanelClipping'
 
@@ -50,178 +53,214 @@ type CardDropTarget = {
 
 /* Enter the next lane at its heading and the previous lane at its last tasks
    once the current lane has been read in the scroll direction. Leave scrolling
-   inside a tall lane to the browser. */
+   inside a tall lane to the browser. Returns a stable `bind(pane)` that
+   installs the listeners and returns their removal, so binding the pane sets
+   no state and the Board renders once when it mounts. While `enabled` is
+   false the listeners do nothing, and the first of them to see it drops any
+   snap or boundary in progress. The wheel listener, which cannot be passive,
+   is bound only while enabled, so a Board without the snap scrolls off the
+   main thread. */
 function useLaneWheelSnap(enabled: boolean) {
-  const [pane, setPane] = React.useState<HTMLDivElement | null>(null)
-  React.useEffect(() => {
-    if (!enabled || !pane) return
-    let wheelBoundary: { panel: HTMLElement; direction: number } | null = null
-    let pendingSnap: {
-      from: number
-      top: number
-      direction: number
-      lastTop: number
-      lastMovementAt: number
-    } | null = null
-    const clearBoundary = () => {
-      wheelBoundary = null
-    }
-    const snapTo = (top: number, direction: number, from = pane.scrollTop) => {
-      const max = pane.scrollHeight - pane.clientHeight
-      top = Math.max(0, Math.min(max, top))
-      from = Math.max(0, Math.min(max, from))
-      pendingSnap = {
-        from,
-        top,
-        direction,
-        lastTop: pane.scrollTop,
-        lastMovementAt: performance.now(),
+  const isEnabled = useLatest(() => enabled)
+  // binds or unbinds the bound pane's wheel listener to match `enabled`
+  const syncWheel = React.useRef<(() => void) | null>(null)
+  React.useLayoutEffect(() => {
+    syncWheel.current?.()
+  }, [enabled])
+  return React.useCallback(
+    (pane: HTMLDivElement) => {
+      let wheelBoundary: { panel: HTMLElement; direction: number } | null = null
+      let pendingSnap: {
+        from: number
+        top: number
+        direction: number
+        lastTop: number
+        lastMovementAt: number
+      } | null = null
+      const clearBoundary = () => {
+        wheelBoundary = null
       }
-      pane.scrollTo({
-        top,
-        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
-      })
-    }
-    const onOtherInput = () => {
-      clearBoundary()
-      if (pendingSnap) {
+      /* False while disabled, after dropping what a disabled snap leaves. */
+      const active = () => {
+        if (isEnabled()) return true
+        wheelBoundary = null
         pendingSnap = null
-        pane.scrollTo({ top: pane.scrollTop, behavior: 'instant' })
+        return false
       }
-    }
-    const onScroll = () => {
-      if (wheelBoundary) {
-        const { panel, direction } = wheelBoundary
-        if (!pane.contains(panel)) {
-          clearBoundary()
-        } else {
-          const bounds = pane.getBoundingClientRect()
-          const rect = panel.getBoundingClientRect()
-          const heading =
-            rect.top - bounds.top - Number.parseFloat(getComputedStyle(pane).scrollPaddingTop)
-          const offset =
-            direction > 0
-              ? Math.max(heading, rect.bottom - bounds.top - pane.clientHeight)
-              : heading
-          // Native wheel animation can carry even a modest tick past an edge.
-          // Stop at the edge actually crossed, without accumulating or holding
-          // ticks inside the lane. Keep the boundary until another input so an
-          // animated wheel's remaining movement cannot skip the final row.
-          if (direction * offset < -1) {
-            pane.scrollTo({ top: pane.scrollTop + offset, behavior: 'instant' })
+      const snapTo = (top: number, direction: number, from = pane.scrollTop) => {
+        const max = pane.scrollHeight - pane.clientHeight
+        top = Math.max(0, Math.min(max, top))
+        from = Math.max(0, Math.min(max, from))
+        pendingSnap = {
+          from,
+          top,
+          direction,
+          lastTop: pane.scrollTop,
+          lastMovementAt: performance.now(),
+        }
+        pane.scrollTo({
+          top,
+          behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+            ? 'auto'
+            : 'smooth',
+        })
+      }
+      const onOtherInput = () => {
+        if (!active()) return
+        clearBoundary()
+        if (pendingSnap) {
+          pendingSnap = null
+          pane.scrollTo({ top: pane.scrollTop, behavior: 'instant' })
+        }
+      }
+      const onScroll = () => {
+        if (!active()) return
+        if (wheelBoundary) {
+          const { panel, direction } = wheelBoundary
+          if (!pane.contains(panel)) {
+            clearBoundary()
+          } else {
+            const bounds = pane.getBoundingClientRect()
+            const rect = panel.getBoundingClientRect()
+            const heading =
+              rect.top - bounds.top - Number.parseFloat(getComputedStyle(pane).scrollPaddingTop)
+            const offset =
+              direction > 0
+                ? Math.max(heading, rect.bottom - bounds.top - pane.clientHeight)
+                : heading
+            // Native wheel animation can carry even a modest tick past an edge.
+            // Stop at the edge actually crossed, without accumulating or holding
+            // ticks inside the lane. Keep the boundary until another input so an
+            // animated wheel's remaining movement cannot skip the final row.
+            if (direction * offset < -1) {
+              pane.scrollTo({ top: pane.scrollTop + offset, behavior: 'instant' })
+            }
           }
         }
+        if (!pendingSnap) return
+        if (pendingSnap.direction * (pane.scrollTop - pendingSnap.top) >= -1) {
+          pendingSnap = null
+        } else if (pane.scrollTop !== pendingSnap.lastTop) {
+          pendingSnap.lastTop = pane.scrollTop
+          pendingSnap.lastMovementAt = performance.now()
+        }
       }
-      if (!pendingSnap) return
-      if (pendingSnap.direction * (pane.scrollTop - pendingSnap.top) >= -1) {
-        pendingSnap = null
-      } else if (pane.scrollTop !== pendingSnap.lastTop) {
-        pendingSnap.lastTop = pane.scrollTop
-        pendingSnap.lastMovementAt = performance.now()
-      }
-    }
-    const onWheel = (event: WheelEvent) => {
-      clearBoundary()
-      if (
-        event.defaultPrevented ||
-        event.ctrlKey ||
-        event.metaKey ||
-        event.shiftKey ||
-        Math.abs(event.deltaX) >= Math.abs(event.deltaY)
-      )
-        return
-      const direction = Math.sign(event.deltaY)
-      const now = performance.now()
-      const bounds = pane.getBoundingClientRect()
-      const snapTop = bounds.top + Number.parseFloat(getComputedStyle(pane).scrollPaddingTop)
-      if (pendingSnap) {
-        const arrived = pendingSnap.direction * (pane.scrollTop - pendingSnap.top) >= -1
-        // Protect only a moving snap. Refreshing a timeout on each wheel
-        // event would swallow steady mouse ticks forever after arrival.
-        // Actual movement also bounds the wait if a resize or interruption
-        // makes the original target unreachable.
-        const moving = now - pendingSnap.lastMovementAt < 180
-        if (direction === pendingSnap.direction && !arrived && moving) {
-          event.preventDefault()
+      const onWheel = (event: WheelEvent) => {
+        if (!active()) return
+        clearBoundary()
+        if (
+          event.defaultPrevented ||
+          event.ctrlKey ||
+          event.metaKey ||
+          event.shiftKey ||
+          Math.abs(event.deltaX) >= Math.abs(event.deltaY)
+        )
           return
+        const direction = Math.sign(event.deltaY)
+        const now = performance.now()
+        const bounds = pane.getBoundingClientRect()
+        const snapTop = bounds.top + Number.parseFloat(getComputedStyle(pane).scrollPaddingTop)
+        if (pendingSnap) {
+          const arrived = pendingSnap.direction * (pane.scrollTop - pendingSnap.top) >= -1
+          // Protect only a moving snap. Refreshing a timeout on each wheel
+          // event would swallow steady mouse ticks forever after arrival.
+          // Actual movement also bounds the wait if a resize or interruption
+          // makes the original target unreachable.
+          const moving = now - pendingSnap.lastMovementAt < 180
+          if (direction === pendingSnap.direction && !arrived && moving) {
+            event.preventDefault()
+            return
+          }
+          if (direction !== pendingSnap.direction && !arrived && moving) {
+            event.preventDefault()
+            const { from, top } = pendingSnap
+            pane.scrollTo({ top: pane.scrollTop, behavior: 'instant' })
+            // Reverse between the same readable edges, even when one wheel tick
+            // could not cover the distance already travelled. Swapping endpoints
+            // also keeps repeated reversals aimed at those edges.
+            snapTo(from, direction, top)
+            return
+          }
+          // Native wheel scrolling does not reliably cancel a smooth scrollTo.
+          // Stop an unfinished snap before reading geometry in the new direction.
+          if (!arrived) pane.scrollTo({ top: pane.scrollTop, behavior: 'instant' })
+          pendingSnap = null
         }
-        if (direction !== pendingSnap.direction && !arrived && moving) {
-          event.preventDefault()
-          const { from, top } = pendingSnap
-          pane.scrollTo({ top: pane.scrollTop, behavior: 'instant' })
-          // Reverse between the same readable edges, even when one wheel tick
-          // could not cover the distance already travelled. Swapping endpoints
-          // also keeps repeated reversals aimed at those edges.
-          snapTo(from, direction, top)
-          return
-        }
-        // Native wheel scrolling does not reliably cancel a smooth scrollTo.
-        // Stop an unfinished snap before reading geometry in the new direction.
-        if (!arrived) pane.scrollTo({ top: pane.scrollTop, behavior: 'instant' })
-        pendingSnap = null
-      }
-      const panels = Array.from(pane.querySelectorAll<HTMLElement>('[data-swimlane-panel]'))
-      const current = panels.findIndex((panel) => {
-        const rect = panel.getBoundingClientRect()
-        if (direction < 0) {
-          // Keep the lane being left active throughout the upward transition.
-          // Native wheel motion can carry its heading past the pin line before
-          // the next event, into the gap or over the preceding panel. That
-          // preceding lane is ready to read only when its bottom (or its
-          // heading, if it fits) reaches the corresponding viewport edge.
-          const heading = rect.top - snapTop
-          const bottom = rect.bottom - bounds.top - pane.clientHeight
-          return Math.max(heading, bottom) >= -1
-        }
-        return rect.top <= snapTop + 1 && rect.bottom > snapTop
-      })
-      const next = current + direction
-      if (current < 0) return
-      const currentBounds = panels[current].getBoundingClientRect()
-      if (direction > 0) {
-        // The natural panel bottom includes the sticky foot's height. Once
-        // it fits, the final task row is fully visible above the foot.
-        if (currentBounds.bottom > bounds.top + pane.clientHeight + 1) {
+        const panels = Array.from(pane.querySelectorAll<HTMLElement>('[data-swimlane-panel]'))
+        const current = panels.findIndex((panel) => {
+          const rect = panel.getBoundingClientRect()
+          if (direction < 0) {
+            // Keep the lane being left active throughout the upward transition.
+            // Native wheel motion can carry its heading past the pin line before
+            // the next event, into the gap or over the preceding panel. That
+            // preceding lane is ready to read only when its bottom (or its
+            // heading, if it fits) reaches the corresponding viewport edge.
+            const heading = rect.top - snapTop
+            const bottom = rect.bottom - bounds.top - pane.clientHeight
+            return Math.max(heading, bottom) >= -1
+          }
+          return rect.top <= snapTop + 1 && rect.bottom > snapTop
+        })
+        const next = current + direction
+        if (current < 0) return
+        const currentBounds = panels[current].getBoundingClientRect()
+        if (direction > 0) {
+          // The natural panel bottom includes the sticky foot's height. Once
+          // it fits, the final task row is fully visible above the foot.
+          if (currentBounds.bottom > bounds.top + pane.clientHeight + 1) {
+            wheelBoundary = { panel: panels[current], direction }
+            return
+          }
+        } else if (currentBounds.top < snapTop - 1) {
+          // A sticky heading can stay pinned while earlier task rows are off
+          // screen. Scroll back through those rows before leaving this lane.
           wheelBoundary = { panel: panels[current], direction }
           return
         }
-      } else if (currentBounds.top < snapTop - 1) {
-        // A sticky heading can stay pinned while earlier task rows are off
-        // screen. Scroll back through those rows before leaving this lane.
-        wheelBoundary = { panel: panels[current], direction }
-        return
+        if (next < 0 || next >= panels.length) return
+        event.preventDefault()
+        const destination = panels[next].getBoundingClientRect()
+        const headingOffset = destination.top - snapTop
+        // Read a tall preceding lane from its bottom instead of skipping its
+        // lower tasks. A short lane fits in full at its heading. clientHeight
+        // keeps the bottom above any horizontal scrollbar.
+        const offset =
+          direction > 0
+            ? headingOffset
+            : Math.max(headingOffset, destination.bottom - (bounds.top + pane.clientHeight))
+        const top = Math.max(
+          0,
+          Math.min(pane.scrollHeight - pane.clientHeight, pane.scrollTop + offset),
+        )
+        snapTo(top, direction)
       }
-      if (next < 0 || next >= panels.length) return
-      event.preventDefault()
-      const destination = panels[next].getBoundingClientRect()
-      const headingOffset = destination.top - snapTop
-      // Read a tall preceding lane from its bottom instead of skipping its
-      // lower tasks. A short lane fits in full at its heading. clientHeight
-      // keeps the bottom above any horizontal scrollbar.
-      const offset =
-        direction > 0
-          ? headingOffset
-          : Math.max(headingOffset, destination.bottom - (bounds.top + pane.clientHeight))
-      const top = Math.max(
-        0,
-        Math.min(pane.scrollHeight - pane.clientHeight, pane.scrollTop + offset),
-      )
-      snapTo(top, direction)
-    }
-    pane.addEventListener('wheel', onWheel, { passive: false })
-    pane.addEventListener('scroll', onScroll, { passive: true })
-    pane.addEventListener('scrollend', clearBoundary, { passive: true })
-    window.addEventListener('pointerdown', onOtherInput, { capture: true, passive: true })
-    window.addEventListener('keydown', onOtherInput, { capture: true })
-    return () => {
-      pane.removeEventListener('wheel', onWheel)
-      pane.removeEventListener('scroll', onScroll)
-      pane.removeEventListener('scrollend', clearBoundary)
-      window.removeEventListener('pointerdown', onOtherInput, true)
-      window.removeEventListener('keydown', onOtherInput, true)
-    }
-  }, [enabled, pane])
-  return setPane
+      let wheelBound = false
+      const sync = () => {
+        if (isEnabled() === wheelBound) return
+        wheelBound = !wheelBound
+        if (wheelBound) pane.addEventListener('wheel', onWheel, { passive: false })
+        else pane.removeEventListener('wheel', onWheel)
+      }
+      syncWheel.current = sync
+      sync()
+      pane.addEventListener('scroll', onScroll, { passive: true })
+      const onScrollEnd = () => {
+        if (active()) clearBoundary()
+      }
+      pane.addEventListener('scrollend', onScrollEnd, { passive: true })
+      window.addEventListener('pointerdown', onOtherInput, { capture: true, passive: true })
+      window.addEventListener('keydown', onOtherInput, { capture: true })
+      return () => {
+        if (syncWheel.current === sync) syncWheel.current = null
+        pane.removeEventListener('wheel', onWheel)
+        pane.removeEventListener('scroll', onScroll)
+        pane.removeEventListener('scrollend', onScrollEnd)
+        window.removeEventListener('pointerdown', onOtherInput, true)
+        window.removeEventListener('keydown', onOtherInput, true)
+      }
+    },
+    [isEnabled],
+  )
 }
 
 /* The Overview's card, whole — for the panels one element can draw by itself
@@ -451,13 +490,38 @@ function Kanban({
 }) {
   // App makes its actions again every render; the cards keep one identity
   const onOpenIssue = useLatest(actions.openIssue)
-  const [dragId, setDragId] = useStateK(null)
+  const [dragId, setDragId] = useStateK<string | null>(null)
   useUpdateBlocker(!!dragId)
-  const [dragOver, setDragOver] = useStateK(null)
-  const endDrag = useLatest(() => {
-    setDragId(null)
-    setDragOver(null)
+  // The cell the drag is over. Cells read it themselves, so a dragover
+  // renders neither the Board nor any card.
+  const [dropOver] = useStateK(createDropOver)
+  // The dragged row. dragend reaches React only through it, so a delivery
+  // that moves or removes the task while it is dragged replaces the row and
+  // the drag would never end.
+  const dragSource = React.useRef<HTMLElement | null>(null)
+  const startDrag = useLatest((id: string, source: HTMLElement) => {
+    dragSource.current = source
+    setDragId(id)
   })
+  const endDrag = useLatest(() => {
+    dragSource.current = null
+    setDragId(null)
+    dropOver.set(null)
+  })
+  // A native drag fires no pointer or key events, so the first one after a
+  // drag whose row left the page ends it. That releases the update blocker
+  // and the wheel snap.
+  React.useEffect(() => {
+    if (!dragId) return
+    const orphaned = () => {
+      if (dragSource.current?.isConnected === false) endDrag()
+    }
+    const events = ['pointermove', 'pointerdown', 'keydown'] as const
+    for (const name of events) window.addEventListener(name, orphaned, true)
+    return () => {
+      for (const name of events) window.removeEventListener(name, orphaned, true)
+    }
+  }, [dragId, endDrag])
 
   // `wide` = a scope that names no project (All projects, My view); `mine` is
   // the one that also narrows to my own tasks
@@ -469,20 +533,29 @@ function Kanban({
   const grouped = wide || info.isMeta
   const byAssignee = tweaks.metaViz === 'assignees'
   const subIds = info.subIds
-  const snapRef = useLaneWheelSnap(
+  const bindSnap = useLaneWheelSnap(
     (byAssignee || (grouped && tweaks.metaViz === 'swimlanes')) && !dragId,
   )
-  const { paneRef: clippingRef, materialRef } = useBoardPanelClipping()
+  const { paneRef: bindClipping, materialRef } = useBoardPanelClipping()
   const headerRef = React.useRef<HTMLDivElement>(null)
-  const bodyRef = React.useRef<HTMLDivElement>(null)
+  const bodyRef = React.useRef<HTMLDivElement | null>(null)
+  // Binding sets no state, so mounting renders the Board once. React 19
+  // calls the returned cleanup when the pane goes; StrictMode binds twice.
   const scrollRef = React.useCallback(
-    (pane: HTMLDivElement | null) => {
+    (pane: HTMLDivElement) => {
       bodyRef.current = pane
-      snapRef(pane)
-      clippingRef(pane)
+      const unbindSnap = bindSnap(pane)
+      const unbindClipping = bindClipping(pane)
+      return () => {
+        unbindClipping()
+        unbindSnap()
+        if (bodyRef.current === pane) bodyRef.current = null
+      }
     },
-    [snapRef, clippingRef],
+    [bindSnap, bindClipping],
   )
+  // Keyboard focus stays on a task's card when a change moves the card.
+  const followFocus = useFollowTaskFocus(bodyRef)
 
   const scoped = P.scopedIssues(info)
   const scopedLeaves = scoped.filter((it) => !P.isGroup(it))
@@ -530,18 +603,14 @@ function Kanban({
 
   // Group only after scope, filters, lane and status have selected the cell.
   // Keep the surrounding column counts and empty-state geometry unchanged.
-  function renderCards(items, place: (it: IssueVM) => ProjectPlace | null, over: boolean) {
-    // Recede destination cards as a whole so the column reads as the target.
-    // Keep the source cell unchanged, including its dragged row's own opacity.
-    const dimmed = over && !items.some((it) => it.id === dragId)
+  function renderCards(items, place: (it: IssueVM) => ProjectPlace | null) {
     return groupBoardCell(items, P.issueById).map((group) => (
       <BoardCard
         key={group.key}
         group={group}
         place={place}
-        dimmed={dimmed}
         onOpen={onOpenIssue}
-        onDragStart={setDragId}
+        onDragStart={startDrag}
         onDragEnd={endDrag}
         dragId={dragId}
         context={P.contextVersion}
@@ -567,40 +636,41 @@ function Kanban({
       'assignee' in patch ? patch.assignee : 'reviewer' in patch ? patch.reviewer : null
     return person == null || P.taskAssigneesFor(task).some((u) => u.id === person) ? patch : null
   }
+  /* Writes the drop of task `id`, which the drag itself carries. A drop can
+     come from a synthetic drag, which never went through a card's own
+     `draggable`, so the right is checked again here. */
   const moveCard = (statusId: string, id: string, target: CardDropTarget) => {
-    const iid = id || dragId
-    // a drop can also arrive from a keyboard/HTML5 path that never went
-    // through the card's own `draggable`, so the right is re-checked here
-    const patch = dropPatchFor(iid, statusId, target)
+    const patch = id ? dropPatchFor(id, statusId, target) : null
     // One mutation keeps the owner change and status move atomic.
-    if (patch && Object.keys(patch).length) P.updateIssue(iid, patch)
-    setDragId(null)
-    setDragOver(null)
+    if (patch && Object.keys(patch).length) P.updateIssue(id, patch)
+    endDrag()
   }
   // Native drag previews can leave the board. Only advertise and accept a
-  // drop where the task already belongs (or an eligible person lane).
+  // drop where the task already belongs (or an eligible person lane), and
+  // only from a Board card's drag: a file or another page's drag never
+  // takes over a drag the Board still remembers.
   const cardDropHandlers = (key: string, statusId: string, target: CardDropTarget) => ({
     onDragOver: (e: React.DragEvent) => {
-      const patch = dragId ? dropPatchFor(dragId, statusId, target) : null
+      const ours = e.dataTransfer.types.includes(BOARD_TASK_TYPE)
+      const patch = dragId && ours ? dropPatchFor(dragId, statusId, target) : null
       if (patch) {
         e.preventDefault()
         e.dataTransfer.dropEffect = 'move'
         // Returning to the source is a harmless drop, not a new destination.
-        const nextOver = Object.keys(patch).length ? key : null
-        if (dragOver !== nextOver) setDragOver(nextOver)
+        dropOver.set(Object.keys(patch).length ? key : null)
       } else {
         e.dataTransfer.dropEffect = 'none'
-        if (dragOver !== null) setDragOver(null)
+        dropOver.set(null)
       }
     },
     onDragLeave: (e: React.DragEvent) => {
-      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
-        setDragOver((current) => (current === key ? null : current))
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null) && dropOver.get() === key) {
+        dropOver.set(null)
       }
     },
     onDrop: (e: React.DragEvent) => {
       e.preventDefault()
-      moveCard(statusId, e.dataTransfer.getData('text/plain'), target)
+      moveCard(statusId, e.dataTransfer.getData(BOARD_TASK_TYPE), target)
     },
   })
   const defaultProject = subIds[0] || null
@@ -677,6 +747,7 @@ function Kanban({
       <div
         ref={scrollRef}
         data-scroll
+        {...followFocus}
         className="[flex:1] [overflow:auto] [scrollbar-gutter:stable]"
       >
         <BoardPanelMaterial materialRef={materialRef} />
@@ -767,18 +838,15 @@ function Kanban({
                         const items = list.filter((i) => i.status === s.id).sort(byPrio)
                         const dkey = `${proj.id}:${s.id}`
                         return (
-                          <div
+                          <DropCell
                             key={s.id}
-                            data-board-cell={proj.id}
-                            data-status={s.id}
+                            variant="side"
+                            store={dropOver}
+                            dropKey={dkey}
+                            holdsDrag={items.some((it) => it.id === dragId)}
+                            laneId={proj.id}
+                            status={s.id}
                             {...cardDropHandlers(dkey, s.id, { projectIds: g.subIds })}
-                            style={{
-                              background:
-                                dragId && dragOver === dkey ? 'var(--accent-soft)' : 'transparent',
-                              outline:
-                                dragId && dragOver === dkey ? '2px dashed var(--primary)' : 'none',
-                            }}
-                            className="[padding:8px] [outline-offset:-3px] [transition:background_var(--dur-fast)_var(--ease-out)]"
                           >
                             <div className="[display:flex] [align-items:center] [gap:6px] [padding:4px_2px] [font-size:var(--fs-xs)] [color:var(--text-3)] [font-weight:600]">
                               <StatusDot status={s.id} size={12} />
@@ -787,13 +855,9 @@ function Kanban({
                             {/* the board's own header names the group; across all
                           projects that leaves the sub-project still to say */}
                             <div className="[display:flex] [flex-direction:column] [gap:8px] [min-height:8px]">
-                              {renderCards(
-                                items,
-                                (it) => (wide ? cardPlace(it, false) : null),
-                                !!dragId && dragOver === dkey,
-                              )}
+                              {renderCards(items, (it) => (wide ? cardPlace(it, false) : null))}
                             </div>
-                          </div>
+                          </DropCell>
                         )
                       })}
                     </div>
@@ -912,6 +976,7 @@ function Kanban({
       <div
         ref={scrollRef}
         data-scroll
+        {...followFocus}
         onScroll={(event) => {
           if (
             headerRef.current &&
@@ -996,21 +1061,21 @@ function Kanban({
                   >
                     {statuses.map((s, ci) => {
                       const laneKey = `${lane.key}:${s.id}`
+                      const items = lane.items.filter((i) => i.status === s.id).sort(byPrio)
                       return (
-                        <ColumnStackInline
+                        <DropCell
                           key={s.id}
+                          variant="lane"
+                          store={dropOver}
+                          dropKey={laneKey}
+                          holdsDrag={items.some((it) => it.id === dragId)}
                           laneId={lane.key}
                           status={s.id}
                           last={ci === statuses.length - 1}
-                          over={!!dragId && dragOver === laneKey}
                           {...cardDropHandlers(laneKey, s.id, lane)}
                         >
-                          {renderCards(
-                            lane.items.filter((i) => i.status === s.id).sort(byPrio),
-                            lanePlace,
-                            !!dragId && dragOver === laneKey,
-                          )}
-                        </ColumnStackInline>
+                          {renderCards(items, lanePlace)}
+                        </DropCell>
                       )
                     })}
                   </div>
@@ -1026,42 +1091,60 @@ function Kanban({
   )
 }
 
-function ColumnStackInline({
+/** A status cell that takes drops: a column of a lane, or a status of a
+    side-board. It reads from `store` whether the drag is over it, so only
+    the cell the drag leaves and the cell it enters render. Its cards recede
+    (Board.css) unless the cell holds the dragged card. */
+function DropCell({
   children,
+  variant,
+  store,
+  dropKey,
+  holdsDrag,
   laneId,
   status,
-  over,
-  last,
+  last = false,
   onDragOver,
   onDragLeave,
   onDrop,
 }: {
   children?: React.ReactNode
+  variant: 'lane' | 'side'
+  store: DropOver
+  dropKey: string
+  holdsDrag: boolean
   laneId: string
   status: string
-  over: boolean
-  last: boolean
+  last?: boolean
   onDragOver: React.DragEventHandler
   onDragLeave: React.DragEventHandler
   onDrop: React.DragEventHandler
 }) {
+  const over = useDropOver(store, dropKey)
   return (
     <div
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
-      // 12 at the top, not 9: a headless lane (pooled, or a scope that is one
-      // sub-project) has the grid as the clip wrapper's first child, so at 9
       data-board-cell={laneId}
       data-status={status}
-      // Keep the established inset under the bordered lid. The sticky foot
-      // supplies bottom padding; grouping changes only the cards inside.
+      data-drop-over={over && !holdsDrag ? '' : undefined}
+      // A lane's column keeps the established inset under the bordered lid.
+      // The sticky foot supplies bottom padding; grouping changes only the
+      // cards inside.
       style={{
-        borderRight: last ? 'none' : '1px solid var(--board-column-rule, var(--border))',
+        borderRight:
+          variant === 'lane' && !last
+            ? '1px solid var(--board-column-rule, var(--border))'
+            : undefined,
         background: over ? 'var(--accent-soft)' : 'transparent',
         outline: over ? '2px dashed var(--primary)' : 'none',
       }}
-      className="[display:flex] [flex-direction:column] [gap:8px] [padding:8px_8px_0] [min-height:60px] [outline-offset:-3px] [transition:background_var(--dur-fast)_var(--ease-out)]"
+      className={
+        variant === 'lane'
+          ? '[display:flex] [flex-direction:column] [gap:8px] [padding:8px_8px_0] [min-height:60px] [outline-offset:-3px] [transition:background_var(--dur-fast)_var(--ease-out)]'
+          : '[padding:8px] [outline-offset:-3px] [transition:background_var(--dur-fast)_var(--ease-out)]'
+      }
     >
       {children}
     </div>

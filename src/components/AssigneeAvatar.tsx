@@ -177,6 +177,7 @@ export function AssigneeAvatar({
             data-field-trigger={variant === 'portrait' ? undefined : ''}
             data-assignee-edit={issue.id}
             data-owner-field={shown}
+            data-focus-key="owner"
             aria-label={`Change ${shown} for ${issue.title}: ${name}`}
             title={canWrite ? `Change ${shown} · ${name}` : 'Read-only project access'}
             disabled={!canWrite}
