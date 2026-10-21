@@ -36,8 +36,10 @@ async function deleteProfileRateLimit(ctx: MutationCtx, profileId: string): Prom
  * org-level and SURVIVE (0010/0078). Activity rows survive and keep their
  * team_id, unlike 0001:156's SET NULL. Membership rows reach no client;
  * organization admins read them in the export. Guards — 'team not found', 'only organization
- * admins can delete teams', the last-team guard — live in the caller
- * (teams.deleteDeep), which narrates nothing (the old client wrote no event). */
+ * admins can delete teams', the last-team guard — live in the callers
+ * (teams.deleteDeep, model/teams.ts deleteTeamCore), which also settle the
+ * members' open tasks and narrate no deletion (the old client wrote no
+ * event). */
 export async function deleteTeamDeep(
   ctx: MutationCtx,
   a: { team: Doc<'teams'>; actor: Doc<'profiles'>; now: string },

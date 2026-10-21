@@ -24,20 +24,21 @@ sub-projects. Removing a member from a team, or deleting a team, asks the same
 way for every project the team shares. The window lists those tasks and
 offers two choices. **Keep as Viewer** gives each of those people a Viewer
 grant, so they keep the tasks and can read the project but cannot change it.
-For a team, the grant is on each project the team shared that holds the
-listed tasks. **Reassign** hands every listed task, reviewer roles included,
+For a team, each person's grant is on each project the team shared that holds
+their own listed tasks. **Reassign** hands every listed task, reviewer roles included,
 to one person who keeps User or Lead access to those tasks, or to
-**Unassigned**, and removes the access. Removing a person's or a team's grant,
-or a member from a team, saves the removal and the choice together. If a task
-cannot be reassigned or a Viewer grant cannot be given, nothing changes and
-the window lists the tasks again. Such a removal reassigns at most 120 tasks,
-and fewer when the change is too large to save at once. Their followers hear
-of it a few seconds later. With more than 120, keep the people as
-Viewers and hand the tasks over later, or reassign some of the tasks first.
-The message says which of these you can choose, and the window says so
-before you save when it lists more than 120 tasks. Deleting a team saves each
-task and Viewer grant first; if one cannot be saved, the team stays, tasks
-already saved keep their new assignee, and the window lists what remains.
+**Unassigned**, and removes the access. Every removal, deleting a team
+included, saves the removal and the choice together. If a task cannot be
+reassigned or a Viewer grant cannot be given, nothing changes, the team stays
+when you were deleting it, and the window lists the tasks again. Such a
+removal reassigns at most 120 tasks, and fewer when the change is too large
+to save at once. Their followers hear of it a few seconds later. With more
+than 120, keep the people as Viewers and hand the tasks over later, or
+reassign some of the tasks first. The message says which of these you can
+choose, and the window says so before you save when it lists more than 120
+tasks. Keeping people as Viewers is refused the same way when their grants are
+too many to save at once; remove some of those people first, or reassign the
+tasks.
 Removing a person's grant that is already Viewer offers only the reassignment.
 Done tasks keep their assignee and are not listed.
 

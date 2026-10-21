@@ -287,11 +287,13 @@ describe('the reassign cap in the removal window', () => {
     expect(reassignCard()).not.toContain('at most')
   })
 
-  it('says nothing of the cap when deleting a team, which saves each task on its own', async () => {
+  it('says so when deleting a team, which settles its tasks in the same write', async () => {
     await load({ tasks: 121, viaTeam: true })
     await open({ kind: 'deleteTeam', teamId: 'crew' })
     expect(document.querySelector('[data-access-removal]')?.textContent).toContain('121 tasks')
-    expect(reassignCard()).not.toContain('at most')
+    expect(reassignCard()).toContain(
+      'One removal reassigns at most 120 tasks, so keep Leo as a Viewer or reassign some of these tasks first.',
+    )
   })
 
   it('offers only reassigning some tasks first when the grant is already Viewer', async () => {

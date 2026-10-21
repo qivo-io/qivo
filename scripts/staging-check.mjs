@@ -1413,7 +1413,12 @@ async function sweep(tag, label) {
               timeout: 30_000,
             })
             expect(
-              await evaluate(app, (id) => window.PLANNER.removeTeam(id), team.id),
+              await evaluate(
+                app,
+                (id) =>
+                  window.PLANNER.removeAccess({ kind: 'deleteTeam', teamId: id }, { to: null }, []),
+                team.id,
+              ),
               'the app could not delete it',
             )
             note(`team ${team.name}`)
@@ -4400,7 +4405,14 @@ async function main() {
       await app.waitForFunction((id) => window.PLANNER.canDeleteTeam(id), run.team.id, {
         timeout: 30_000,
       })
-      expect(await evaluate(app, (id) => window.PLANNER.removeTeam(id), run.team.id), 'refused')
+      expect(
+        await evaluate(
+          app,
+          (id) => window.PLANNER.removeAccess({ kind: 'deleteTeam', teamId: id }, { to: null }, []),
+          run.team.id,
+        ),
+        'refused',
+      )
       eq((await rest(c.writeToken, 'GET', `/teams/${run.team.id}`)).status, 404, 'the team')
     })
   await check('cleanup/rest/no-tagged-tasks', async () => {

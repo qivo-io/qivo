@@ -14,7 +14,11 @@ import {
   canManageProjectUsers,
   canSeeProject,
   hasProjectLevel,
+  LEVELS_READ,
   machineAccess,
+  type OrgProjectLevels,
+  projectLevelsForOrg,
+  projectLevelsForPeople,
 } from '../lib/access'
 import { type AccessFlag, accessFlags, loadCatalogue } from '../lib/core'
 import { type CredentialAccess, ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
@@ -92,6 +96,52 @@ describe('accessFlags', () => {
       '{"read":true,"write":false}',
       '{"read":true,"write":true}',
     ])
+  }, 60_000)
+
+  it('answers many people together as projectLevelsForOrg answers each alone, for every role, kind and grant shape', async () => {
+    for (const [name, plant] of SHAPES) {
+      const t = newT()
+      const f = await withOrg(t)
+      const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+      await t.run((ctx) => plant(ctx, f, subject))
+      await t.run(async (ctx) => {
+        const projects = await ctx.db
+          .query('projects')
+          .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+          .collect()
+        for (const org_role of ORG_ROLES) {
+          for (const kind of PROFILE_KINDS) {
+            // enough people that they are read together, one of another organization
+            const people = [
+              { ...subject, org_role, kind },
+              f.admin,
+              f.user,
+              f.viewer,
+              f.guest,
+              f.agent,
+              f.otherAdmin,
+            ]
+            const levels = (l: OrgProjectLevels | undefined) =>
+              projects.map((p) => [p.id, l?.levelOf(p), l?.navigationOnly(p.id)])
+            // memberships read from the teams, then past the row budget person by person
+            for (const max of [LEVELS_READ.max, 0]) {
+              const before = LEVELS_READ.max
+              LEVELS_READ.max = max
+              const together = await projectLevelsForPeople(ctx, people, projects).finally(() => {
+                LEVELS_READ.max = before
+              })
+              for (const me of people) {
+                const alone = await projectLevelsForOrg(ctx, me, projects)
+                expect(
+                  levels(together.get(me.id)),
+                  `${name}: ${me.name} as ${me.org_role} ${me.kind}, budget ${max}`,
+                ).toEqual(levels(alone))
+              }
+            }
+          }
+        }
+      })
+    }
   }, 60_000)
 
   it('hides a project outside a top-level meta from everyone, in lists and single reads and writes', async () => {

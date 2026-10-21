@@ -2,8 +2,9 @@
  * (model/messages.ts):
  *
  *   1. An access removal that reassigns its held tasks
- *      (model/projectAccess.ts removeAndSettle) stays inside Convex's limits
- *      for one transaction up to REASSIGN_MAX tasks. Its followers hear from
+ *      (model/projectAccess.ts removeAndSettle), deleting a team included,
+ *      stays inside Convex's limits for one transaction up to REASSIGN_MAX
+ *      tasks. Its followers hear from
  *      background steps (NotifyPreload.deferFollowers), so their number costs
  *      the removal nothing. It refuses more tasks, or fewer that fill the
  *      transaction (REASSIGN_ROOM), without blaming the tasks, and suggests
@@ -28,6 +29,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import type { QueryCtx } from '../_generated/server'
+import { LEVELS_READ, projectLevelsForPeople } from '../lib/access'
+import { byId } from '../lib/db'
 import type { Refusal } from '../lib/functions'
 import { REASSIGN_MAX } from '../lib/projectGrants'
 import { type BulkUpdate, holderKey, type IssuePatch, updateIssueCore } from '../model/issues'
@@ -41,6 +45,7 @@ import {
   newT,
   type OrgFixture,
   plantIssue,
+  plantProject,
   plantSeat,
   plantSubscription,
   type T,
@@ -172,6 +177,22 @@ const removeEmil = (fx: Crowd, to: string | null) =>
     on_held_tasks: { reassign_to: to },
   })
 
+/* The app's deletion of Hardware, handing its members' tasks to `to`. */
+const deleteHardware = (fx: Crowd, to: string | null) =>
+  as(fx.t, fx.admin).mutation(api.teams.deleteDeep, {
+    org_id: fx.org.id,
+    id: fx.team.id,
+    on_held_tasks: { reassign_to: to },
+  })
+
+const hardware = (fx: Crowd) =>
+  fx.t.run((ctx) =>
+    ctx.db
+      .query('teams')
+      .withIndex('by_uuid', (q) => q.eq('id', fx.team.id))
+      .unique(),
+  )
+
 const membership = (fx: Crowd) =>
   fx.t.run((ctx) =>
     ctx.db
@@ -233,6 +254,214 @@ describe('reassigning the tasks of an access removal', () => {
     })
     expect(await membership(fx)).toBeNull()
   })
+
+  it(`deletes a team and hands over ${REASSIGN_MAX} tasks inside one transaction's limits`, async () => {
+    const fx = await crowded(REASSIGN_MAX)
+    await deleteHardware(fx, fx.leo.id)
+    expect(await hardware(fx)).toBeNull()
+    // Leo takes every role a Hardware member held
+    const inHardware = new Set([
+      fx.emil.id,
+      ...fx.crowd.filter((_, i) => i % 2 === 0).map((p) => p.id),
+    ])
+    expect(await holders(fx)).toEqual(
+      fx.tasks.map((task) => [
+        inHardware.has(task.assignee_id ?? '') ? fx.leo.id : (task.assignee_id ?? null),
+        task.reviewer_id === undefined ? null : fx.leo.id,
+      ]),
+    )
+  })
+
+  it(`refuses to delete a team over ${REASSIGN_MAX} tasks, and changes nothing`, async () => {
+    const fx = await crowded(REASSIGN_MAX + 1)
+    const before = await holders(fx)
+    const e = await expectRefusal(deleteHardware(fx, fx.leo.id), 'rule')
+    expect((e.data as Refusal).message).toBe(reassignTooLarge(true))
+    // the app quotes the sentence rather than blaming the tasks
+    expect((e.data as Refusal).reason).toBeUndefined()
+    expect(await hardware(fx)).not.toBeNull()
+    expect(await membership(fx)).not.toBeNull()
+    expect(await holders(fx)).toEqual(before)
+  })
+
+  it("keeps 600 members of a deleted team as Viewers inside one transaction's limits", async () => {
+    // asked one at a time, each member's sight cost four index ranges before
+    // the deletion and four after, 4,800 in all
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const members: string[] = []
+    for (let from = 0; from < 600; from += 100) {
+      await t.run(async (ctx) => {
+        if (from === 0) {
+          await ctx.db.insert('teams', {
+            id: uuid(),
+            org_id: f.org.id,
+            name: 'Platform',
+            stale_days: 14,
+            archive_days: 30,
+            track_delay_default: false,
+            created_at: NOW,
+          })
+          await ctx.db.insert('project_team_access', {
+            project_id: f.meta.id,
+            team_id: f.team.id,
+            level: 'user',
+          })
+        }
+        for (let i = from; i < from + 100; i++) {
+          const id = uuid()
+          await ctx.db.insert('profiles', {
+            id,
+            org_id: f.org.id,
+            name: `m${i}`,
+            initials: 'MM',
+            color: '#7a7ad0',
+            org_role: 'user',
+            active: true,
+            kind: 'person',
+            plannable_hours: 40,
+            accepted_at: NOW,
+            created_at: NOW,
+          })
+          await ctx.db.insert('team_members', {
+            team_id: f.team.id,
+            profile_id: id,
+            is_leader: false,
+          })
+          await ctx.db.insert('issues', {
+            id: uuid(),
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            num: 2000 + i,
+            title: `Task ${i}`,
+            description: '',
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            assignee_id: id,
+            created_at: NOW,
+            updated_at: NOW,
+          })
+          members.push(id)
+        }
+      })
+    }
+    await as(t, f.admin).mutation(api.teams.deleteDeep, {
+      org_id: f.org.id,
+      id: f.team.id,
+      on_held_tasks: 'keep_as_viewer',
+    })
+    const viewers = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query('project_access')
+          .withIndex('by_project', (q) => q.eq('project_id', f.meta.id))
+          .collect()
+      ).filter((g) => g.level === 'viewer' && members.includes(g.profile_id)),
+    )
+    expect(viewers).toHaveLength(600)
+  }, 60_000)
+
+  it('removes a team grant past many grants that concern none of its holders', async () => {
+    // 3,000 grants of other people on 30 other projects: the holders' sight
+    // reads only their own grants, one index range each
+    const t = newT({ transactionLimits: { documentsRead: 2500 } })
+    const f = await withOrg(t)
+    const others: Doc<'projects'>[] = []
+    for (let i = 0; i < 30; i++) others.push(await plantProject(t, { org_id: f.org.id }))
+    const profile = (name: string) => ({
+      id: uuid(),
+      org_id: f.org.id,
+      name,
+      initials: 'PP',
+      color: '#7a7ad0',
+      org_role: 'user' as const,
+      active: true,
+      kind: 'person' as const,
+      plannable_hours: 40,
+      accepted_at: NOW,
+      created_at: NOW,
+    })
+    const holders: string[] = []
+    await t.run(async (ctx) => {
+      await ctx.db.insert('project_team_access', {
+        project_id: f.meta.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+      for (let i = 0; i < 25; i++) {
+        const member = profile(`h${i}`)
+        await ctx.db.insert('profiles', member)
+        await ctx.db.insert('team_members', {
+          team_id: f.team.id,
+          profile_id: member.id,
+          is_leader: false,
+        })
+        holders.push(member.id)
+      }
+    })
+    for (const assignee_id of holders)
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, assignee_id })
+    for (let from = 0; from < 100; from += 25) {
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 25; i++) {
+          const other = profile(`o${i}`)
+          await ctx.db.insert('profiles', other)
+          for (const project of others)
+            await ctx.db.insert('project_access', {
+              project_id: project.id,
+              profile_id: other.id,
+              level: 'viewer',
+            })
+        }
+      })
+    }
+    const queries = await t.run(async (ctx) => {
+      let count = 0
+      const db = new Proxy(ctx.db, {
+        get(target, prop) {
+          const value: unknown = Reflect.get(target, prop)
+          if (prop === 'query') {
+            return (table: 'profiles') => {
+              count++
+              return target.query(table)
+            }
+          }
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      })
+      const projects = await ctx.db
+        .query('projects')
+        .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+        .collect()
+      const people = await Promise.all(
+        holders.map(async (id) => (await byId(ctx, 'profiles', id)) as Doc<'profiles'>),
+      )
+      await projectLevelsForPeople({ ...ctx, db } as QueryCtx, people, projects)
+      return count
+    })
+    // the teams, each holder's grants, Hardware's members and its shares
+    expect(queries).toBe(1 + holders.length + 1 + 1)
+    const before = LEVELS_READ.max
+    LEVELS_READ.max = 500
+    try {
+      await as(t, f.admin).mutation(api.projects.removeAccess, {
+        org_id: f.org.id,
+        id: f.meta.id,
+        team_id: f.team.id,
+        on_held_tasks: 'leave',
+      })
+    } finally {
+      LEVELS_READ.max = before
+    }
+    const grant = await t.run((ctx) =>
+      ctx.db
+        .query('project_team_access')
+        .withIndex('by_project_team', (q) => q.eq('project_id', f.meta.id).eq('team_id', f.team.id))
+        .unique(),
+    )
+    expect(grant).toBeNull()
+  }, 60_000)
 
   it('refuses a project grant removal above the cap too, keeping the grant', async () => {
     const fx = await crowded(REASSIGN_MAX + 1)

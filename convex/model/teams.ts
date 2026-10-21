@@ -6,15 +6,19 @@
  *   only people create teams.
  * - Renaming a team and its other settings: an organization admin or a
  *   leader of that team (assertRunsTeam).
+ * - Deleting a team: organization admins only, and never the organization's
+ *   last team (deleteTeamCore).
  * - Adding and removing members and making or unmaking leaders change who
  *   sees the projects shared with the team, so they also need a person
  *   (lib/access.ts canChangeAccess), never an agent. Only a person with an
  *   organization staff role leads a team (canLeadTeams).
  *
- * Removing a member can hide open tasks from them. As with a project grant
- * (model/projectAccess.ts), the caller chooses what happens to those tasks
- * with on_held_tasks, and removeAndSettle applies the removal and the choice
- * in one transaction or not at all.
+ * Removing a member or deleting a team can hide open tasks from the people
+ * working on them. As with a project grant (model/projectAccess.ts), the
+ * caller chooses what happens to those tasks with on_held_tasks, and
+ * removeAndSettle applies the removal and the choice in one transaction or
+ * not at all. Deleting a team stays in the app (docs/mcp.md, Stays in the
+ * app).
  *
  * Narration follows the app: creating and changing a team write no activity
  * row; adding, removing, making and demoting a member write one against the
@@ -31,9 +35,11 @@ import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, rule } from '../lib/functions'
 import { NAME_MAX, nameOverCap } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
+import { deleteTeamDeep } from './cascade'
 import {
   assertExpected,
   BOOLEAN,
+  DELETES,
   exact,
   type Fields,
   type Next,
@@ -41,11 +47,12 @@ import {
   namedRecord,
   TEXT,
 } from './expected'
-import { newTeamDefaults } from './orgs'
+import { assertNotLastTeam, newTeamDefaults } from './orgs'
 import {
   type AccessRemoval,
   type HeldTasks,
   narrateAccess,
+  peopleOf,
   reachedProjects,
   removeAndSettle,
 } from './projectAccess'
@@ -382,37 +389,38 @@ export async function setTeamLeaderCore(
   return { changed: true }
 }
 
-/* The projects whose tasks the team's grants reach: each project shared with
+/* The projects whose tasks the team's grants reach, each project shared with
  * the team and, for a top-level one, its sub-projects, without archived ones
- * and each once. */
-async function teamReach(ctx: QueryCtx, team: Doc<'teams'>): Promise<Doc<'projects'>[]> {
+ * and each once, with the ids of the projects the team shares. */
+async function teamReach(
+  ctx: QueryCtx,
+  team: Doc<'teams'>,
+): Promise<{ projects: Doc<'projects'>[]; shared: Set<string> }> {
   const out = new Map<string, Doc<'projects'>>()
+  const shared = new Set<string>()
   const shares = ctx.db
     .query('project_team_access')
     .withIndex('by_team', (q) => q.eq('team_id', team.id))
   for await (const share of shares) {
     const project = await byId(ctx, 'projects', share.project_id)
     if (project === null || project.org_id !== team.org_id) continue
+    shared.add(project.id)
     for (const p of await reachedProjects(ctx, project)) out.set(p.id, p)
   }
-  return [...out.values()]
+  return { projects: [...out.values()], shared }
 }
 
 /* Where keeping a member as Viewer puts the grant for a task in `project`:
  * the project the team shared that showed the task, the task's own
- * sub-project first, then its parent. The app's removal window lists the
- * same projects. */
+ * sub-project first, then its parent. `shared` holds the ids of the projects
+ * the team shared before the removal (teamReach). The app's removal window
+ * lists the same projects. */
 async function viewerProjectFor(
   ctx: QueryCtx,
-  team: Doc<'teams'>,
+  shared: ReadonlySet<string>,
   project: Doc<'projects'>,
 ): Promise<Doc<'projects'>> {
-  if (project.parent_id === undefined) return project
-  const share = await ctx.db
-    .query('project_team_access')
-    .withIndex('by_project_team', (q) => q.eq('project_id', project.id).eq('team_id', team.id))
-    .unique()
-  if (share !== null) return project
+  if (project.parent_id === undefined || shared.has(project.id)) return project
   return (await byId(ctx, 'projects', project.parent_id)) ?? project
 }
 
@@ -448,13 +456,14 @@ export async function removeTeamMemberCore(
   const member = await byId(ctx, 'profiles', a.profileId)
   const people = new Map<string, Doc<'profiles'>>()
   if (member !== null && member.org_id === team.org_id) people.set(member.id, member)
+  const reach = await teamReach(ctx, team)
   const settled = await removeAndSettle(ctx, {
     me,
     people,
-    projects: await teamReach(ctx, team),
+    projects: reach.projects,
     remove: () => ctx.db.delete(row._id),
     held: a.held,
-    viewerOn: (project) => viewerProjectFor(ctx, team, project),
+    viewerOn: (project) => viewerProjectFor(ctx, reach.shared, project),
     now,
     provenance: a.provenance,
   })
@@ -476,4 +485,49 @@ export async function removeTeamMemberCore(
   }
   const { viewer_grants: _granted, ...settlement } = settled
   return { removed: true, ...settlement }
+}
+
+/**
+ * Deletes the team (model/cascade.ts deleteTeamDeep) and settles, by `held`,
+ * the open tasks its members can no longer see once its grants are gone
+ * (model/projectAccess.ts removeAndSettle), in one transaction or not at all.
+ * 'leave' settles nothing and answers no list, so it deletes the team without
+ * working out who loses sight of what. 'keep_as_viewer' gives each of those
+ * people a Viewer grant on each project the team shared that showed their own
+ * tasks, as removing a member does. `reassign_to` hands the tasks over by the
+ * task update rules, at most REASSIGN_MAX of them (reassignTooLarge). Only an
+ * organization admin deletes a team, and never the organization's last one.
+ * `expected` refuses the delete over a field someone else changed since it was
+ * read. The caller refuses a read-only organization (teams.deleteDeep is an
+ * orgMutation). The deletion writes no activity row; each Viewer grant writes
+ * `changed access on` for its project, and each handed-over task its update.
+ */
+export async function deleteTeamCore(
+  ctx: MutationCtx,
+  a: {
+    me: Doc<'profiles'>
+    team: Doc<'teams'>
+    held: HeldTasks
+    expected?: Readonly<Record<string, unknown>>
+    now: string
+  },
+): Promise<void> {
+  const { me, team, now } = a
+  if (me.org_role !== 'admin') throw rule('only organization admins can delete teams')
+  await assertNotLastTeam(ctx, team)
+  await assertTeamExpected(ctx, me, team, a.expected, DELETES)
+  const remove = () => deleteTeamDeep(ctx, { team, actor: me, now })
+  if (a.held === 'leave') return remove()
+  // the shares go with the team, so where a Viewer grant goes is read first
+  const reach = await teamReach(ctx, team)
+  const settled = await removeAndSettle(ctx, {
+    me,
+    people: await peopleOf(ctx, { team }),
+    projects: reach.projects,
+    remove,
+    held: a.held,
+    viewerOn: (project) => viewerProjectFor(ctx, reach.shared, project),
+    now,
+  })
+  for (const project of settled.viewer_grants) await narrateAccess(ctx, { me, project, now })
 }
