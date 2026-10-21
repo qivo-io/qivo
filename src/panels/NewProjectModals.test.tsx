@@ -50,8 +50,6 @@ function fixture(myRole: Profile['org_role'], crewName: string) {
     id: 'crew',
     org_id: org,
     name: crewName,
-    stale_days: 14,
-    archive_days: 30,
     track_delay_default: false,
     created_at: NOW,
   })

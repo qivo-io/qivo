@@ -33,7 +33,7 @@ import {
 import { creatorGrant, grantsAfterHandover } from '../../convex/lib/projectGrants'
 import { milestoneLabel, projectName, teamLabel } from '../../convex/lib/recordNames'
 import { resolveReviewHours, reviewStamp } from '../../convex/lib/review'
-import { REMAINING_HOURS_MAX, REMAINING_HOURS_RULE } from '../../convex/lib/taskLimits'
+import { REMAINING_HOURS_MAX, REMAINING_HOURS_RULE, SUBTASK_MAX } from '../../convex/lib/taskLimits'
 import { firstSittingDay, nextSyncStamp } from '../../convex/lib/teamSync'
 import {
   COMMENT_TOO_LONG,
@@ -105,6 +105,7 @@ import { pauseSentence } from '../lib/noticeText'
 import { desktopNotify } from '../lib/notify'
 import { matchesAllWords, taskSearchText } from '../lib/search'
 import { type SavePause, syncStatus } from '../lib/syncStatus'
+import { attachmentBlock, labelBlock, linkBlock } from '../lib/taskCaps'
 import type { ToastTone } from '../lib/toasts'
 import { type UnconfirmedChange, unconfirmedNote, unconfirmedText } from '../lib/unconfirmedNote'
 import { beginUpdateBlock } from '../lib/updateSafety'
@@ -3232,9 +3233,11 @@ function rebuild(now = new Date()) {
   })
 
   const attByIssue = new Map<string, AttachmentVM[]>() // issue uuid -> attachment views
+  const attachmentCounts = new Map<string, number>() // issue uuid -> rows, inline included
   ;[...rows.attachments.values()]
     .sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
     .forEach((a) => {
+      attachmentCounts.set(a.issue_id, (attachmentCounts.get(a.issue_id) ?? 0) + 1)
       if (a.inline) return // description images live in the markdown, not the attachments list
       const l = attByIssue.get(a.issue_id) || []
       l.push(shapeAttachment(a))
@@ -3246,6 +3249,7 @@ function rebuild(now = new Date()) {
     childKeys,
     labelsByIssue,
     attByIssue,
+    attachmentCounts,
     subscribedIssues,
     uuidToKey,
     uuidToDisplayKey,
@@ -4111,8 +4115,6 @@ export type OrgPatch = Partial<{
 }>
 export type TeamPatch = Partial<{
   name: string
-  staleDays: number | string
-  archiveDays: number | string
   trackDelayDefault: boolean
 }>
 export type NewUserInput = {
@@ -5880,16 +5882,25 @@ export const PLANNER = {
 
   /** Restore from Archived tasks. Awaited, never optimistic, because the
       row is not in the snapshot. The snapshot pulls the restored rows back
-      in reactively, with no refetch. Resolves false on refusal (toasted). */
+      in reactively, with no refetch. Resolves false on refusal (toasted).
+      A subtask whose parent is full comes back as a top-level task, which
+      is toasted too. */
   unarchiveIssue: async (
     issueUuid: string,
-    _title?: string,
+    title?: string,
     projectId?: string,
   ): Promise<boolean> => {
     const org = orgOfProject(projectId) || HOME_ORG
     pendingRestoreIssueIds.add(issueUuid)
     try {
-      await sendAwaited(api.issues.unarchive, { org_id: org, id: issueUuid }, 'none')
+      const out = await sendAwaited(api.issues.unarchive, { org_id: org, id: issueUuid }, 'none')
+      // the parent was full (convex/lib/taskLimits.ts SUBTASK_MAX)
+      if (out.left_parent) {
+        toast(
+          `${title ? `"${title}"` : 'The task'} is back as a top-level task, because its parent already has ${SUBTASK_MAX} active subtasks.`,
+          'info',
+        )
+      }
     } catch (e) {
       pendingRestoreIssueIds.delete(issueUuid)
       console.error('[qivo] restore failed:', e)
@@ -5952,6 +5963,14 @@ export const PLANNER = {
     if (already || refusePausedEdit()) return
     const src = rows.issues.get(a)
     if (!src) return
+    // the per-task cap on links, as this view counts them (the server checks too)
+    const full =
+      linkBlock(PLANNER.issueById[srcId]?.links ?? []) ||
+      linkBlock(PLANNER.issueById[dstId]?.links ?? [], PLANNER.issueById[dstId]?.key)
+    if (full) {
+      toast(`${full}.`)
+      return
+    }
     // canonical storage stays client-side: blocks is directed source→target,
     // blocked_by flips, relates is ordered by uuid — the wire carries the
     // stored enum, never 'blocked_by' (issues.ts expects it canonicalized)
@@ -6072,6 +6091,14 @@ export const PLANNER = {
       const file = await compressImage(input)
       row = rows.issues.get(uuid)
       if (!row) return null
+      // the per-task cap, before any bytes are sent (the server checks too)
+      const full = attachmentBlock(
+        [...rows.attachments.values()].filter((a) => a.issue_id === uuid).length,
+      )
+      if (full) {
+        toast(`Couldn't upload "${file.name}". ${full}.`)
+        return null
+      }
       const limit = PLANNER.attachmentLimit(issueKey)
       if (file.size > limit) {
         toast(
@@ -7401,8 +7428,6 @@ export const PLANNER = {
       id: uuid,
       org_id: org.id,
       name,
-      stale_days: 120,
-      archive_days: 30,
       track_delay_default: true,
       created_at: new Date().toISOString(),
     }
@@ -7425,11 +7450,6 @@ export const PLANNER = {
       return Promise.resolve(false)
     const wire: FunctionArgs<typeof api.teams.update>['patch'] = {}
     if ('name' in patch) wire.name = patch.name
-    // whole days, within the server check [1, 3650]
-    if ('staleDays' in patch)
-      wire.stale_days = Math.max(1, Math.min(3650, Math.round(Number(patch.staleDays) || 0)))
-    if ('archiveDays' in patch)
-      wire.archive_days = Math.max(1, Math.min(3650, Math.round(Number(patch.archiveDays) || 0)))
     if ('trackDelayDefault' in patch) wire.track_delay_default = !!patch.trackDelayDefault
     if (!Object.keys(wire).length) return Promise.resolve(true)
     const view: View = {
@@ -8160,6 +8180,11 @@ export const PLANNER = {
     // the state asked for travels with the write (`on`), so the paint and
     // the server set it, and a repeat changes nothing
     const on = !rows.issueLabels.some((il) => il.issue_id === uuid && il.label_id === labelId)
+    const full = on && labelBlock(rows.issueLabels.filter((il) => il.issue_id === uuid))
+    if (full) {
+      toast(`${full}.`)
+      return
+    }
     const view: View = {
       workspace: () => {
         if (!rows.issues.has(uuid) || !rows.labels.has(labelId)) return

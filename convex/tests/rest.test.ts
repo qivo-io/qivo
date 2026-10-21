@@ -868,8 +868,11 @@ describe('GET /v1/tasks', () => {
         issue_id: bracket.id,
         label_id: await label('Thermal'),
       })
-      // an assignment stored before rows carried their organization
-      await ctx.db.insert('issue_labels', { issue_id: lid.id, label_id: await label('Legacy') })
+      await ctx.db.insert('issue_labels', {
+        org_id: f.org.id,
+        issue_id: lid.id,
+        label_id: await label('Legacy'),
+      })
     })
     const ids = async (search: string) =>
       (

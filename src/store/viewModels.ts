@@ -112,8 +112,6 @@ export const shapeTeam = (t: Row<'teams'>) => ({
   id: t.id,
   name: t.name,
   org: t.org_id,
-  staleDays: t.stale_days,
-  archiveDays: t.archive_days,
   trackDelayDefault: t.track_delay_default !== false,
 })
 export type TeamVM = ReturnType<typeof shapeTeam>
@@ -231,6 +229,8 @@ type IssueShapeCtx = {
   childKeys: Map<string, string[]>
   labelsByIssue: Map<string, string[]>
   attByIssue: Map<string, AttachmentVM[]>
+  /** every attachment row of a task, description images included, by uuid */
+  attachmentCounts: Map<string, number>
   subscribedIssues: Set<string>
 }
 export const shapeIssue = (i: Row<'issues'>, ctx: IssueShapeCtx) => {
@@ -296,6 +296,8 @@ export const shapeIssue = (i: Row<'issues'>, ctx: IssueShapeCtx) => {
     paused: i.paused,
     labels: ctx.labelsByIssue.get(i.id) || [],
     attachments: ctx.attByIssue.get(i.id) || [],
+    // what the per-task cap counts (src/lib/taskCaps.ts attachmentBlock)
+    attachmentCount: ctx.attachmentCounts.get(i.id) ?? 0,
     // am I following this task? (0114) — read off the snapshot rather than
     // fetched per open, so the two task windows the inbox can have on ONE
     // task (the pane and its pop-out) can never disagree about the eye

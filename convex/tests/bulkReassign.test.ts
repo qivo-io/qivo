@@ -11,8 +11,9 @@
  *      keeping the people as Viewers only to a remover who could.
  *   2. The preload and the passed checks (model/issues.ts BulkUpdate) change
  *      nothing a follower reads or follows.
- *   3. Deleting a task with many direct subtasks detaches and announces them
- *      all inside those limits (model/deletedItems.ts moveTasksToTrash).
+ *   3. Deleting a task with SUBTASK_MAX active subtasks detaches and
+ *      announces them all inside those limits, and its archived subtasks in
+ *      background steps (model/deletedItems.ts moveTasksToTrash).
  *
  * convex-test enforces the deployment's limits with transactionLimits: true
  * and counts every index range a function reads, where a deployment counts a
@@ -34,6 +35,7 @@ import { LEVELS_READ, projectLevelsForPeople } from '../lib/access'
 import { byId } from '../lib/db'
 import type { Refusal } from '../lib/functions'
 import { REASSIGN_MAX } from '../lib/projectGrants'
+import { SUBTASK_MAX } from '../lib/taskLimits'
 import { type BulkUpdate, holderKey, type IssuePatch, updateIssueCore } from '../model/issues'
 import { newNotifyPreload } from '../model/messages'
 import { reassignTooLarge } from '../model/projectAccess'
@@ -82,8 +84,6 @@ async function crowded(
       id: platform,
       org_id: f.org.id,
       name: 'Platform',
-      stale_days: 14,
-      archive_days: 30,
       track_delay_default: false,
       created_at: NOW,
     })
@@ -601,8 +601,6 @@ describe('reassigning the tasks of an access removal', () => {
           id,
           org_id: fx.org.id,
           name: `Team ${i}`,
-          stale_days: 14,
-          archive_days: 30,
           track_delay_default: false,
           created_at: NOW,
         })
@@ -764,7 +762,16 @@ describe('a bulk update', () => {
 })
 
 describe('deleting a task with many subtasks', () => {
-  it('detaches 300 subtasks inside one transaction, and tells their followers', async () => {
+  // the archived subtasks leave in background steps
+  // (model/deletedItems.ts detachArchivedChildren)
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it(`detaches ${SUBTASK_MAX} active subtasks inside one transaction and 200 archived ones after, and tells their followers`, async () => {
     const fx = await crowded(0)
     const parent = await plantIssue(fx.t, {
       org_id: fx.org.id,
@@ -775,7 +782,7 @@ describe('deleting a task with many subtasks', () => {
     const followers = (i: number) => [1, 2].map((k) => fx.crowd[(i * 2 + k) % CROWD])
     const kids = await fx.t.run(async (ctx) => {
       const ids: string[] = []
-      for (let i = 0; i < 300; i++) {
+      for (let i = 0; i < SUBTASK_MAX + 200; i++) {
         const id = uuid()
         await ctx.db.insert('issues', {
           id,
@@ -788,6 +795,8 @@ describe('deleting a task with many subtasks', () => {
           priority: 'medium',
           paused: false,
           parent_id: parent.id,
+          // past the active ones, archived subtasks have no bound
+          ...(i < SUBTASK_MAX ? {} : { archived_at: NOW }),
           created_at: NOW,
           updated_at: NOW,
         })
@@ -801,15 +810,22 @@ describe('deleting a task with many subtasks', () => {
       }
       return ids
     })
+    const subtaskRows = () =>
+      fx.t.run((ctx) =>
+        ctx.db
+          .query('issues')
+          .withIndex('by_project', (q) => q.eq('project_id', fx.sub.id))
+          .collect(),
+      )
     await as(fx.t, fx.user).mutation(api.issues.deleteDeep, { org_id: fx.org.id, id: parent.id })
-    const { rows, messages } = await fx.t.run(async (ctx) => ({
-      rows: await ctx.db
-        .query('issues')
-        .withIndex('by_project', (q) => q.eq('project_id', fx.sub.id))
-        .collect(),
-      messages: await ctx.db.query('messages').collect(),
-    }))
-    expect(rows.filter((r) => r.parent_id === undefined)).toHaveLength(300)
+    // the delete's own transaction detaches the active ones
+    const detached = (await subtaskRows()).filter((r) => r.parent_id === undefined)
+    expect(detached.map((r) => r.id).sort()).toEqual(kids.slice(0, SUBTASK_MAX).sort())
+    await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
+    expect((await subtaskRows()).filter((r) => r.parent_id === undefined)).toHaveLength(
+      SUBTASK_MAX + 200,
+    )
+    const messages = await fx.t.run((ctx) => ctx.db.query('messages').collect())
     const told = new Map<string, string[]>()
     for (const m of messages) {
       expect(m.detail).toBe('Detached from its parent')

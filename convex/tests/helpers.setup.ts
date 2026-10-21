@@ -374,8 +374,6 @@ export async function withOrg(t: T) {
       id: uuid(),
       org_id: orgId,
       name: 'Hardware',
-      stale_days: 14,
-      archive_days: 30,
       track_delay_default: false,
       created_at: NOW,
     })

@@ -143,7 +143,7 @@ const issuesTable = defineTable({
   // same rule as the assignee (same org, active, never a viewer, Edit+);
   // owns the task while it is In Review (lib/review.ts)
   reviewer_id: v.optional(v.string()),
-  parent_id: v.optional(v.string()), // no self-parent, cycle walk ≤20, same org
+  parent_id: v.optional(v.string()), // no self-parent, same org, one level of subtasks (lib/taskLimits.ts)
   // (start absent) = (end absent), start <= end; dormant while the task has
   // active subtasks, whose leaves give its dates
   start_week: v.optional(v.string()),
@@ -205,8 +205,9 @@ const issuesTable = defineTable({
   .index('by_created_by_archived', ['created_by', 'archived_at'])
   .index('by_reporter_archived', ['reporter_id', 'archived_at'])
 
+// A task is an end of at most LINK_MAX links (lib/taskLimits.ts).
 const issueLinksTable = defineTable({
-  org_id: v.optional(v.string()),
+  org_id: v.string(),
   id: v.string(),
   source_id: v.string(), // source <> target; 'relates' stored with source < target
   target_id: v.string(),
@@ -226,8 +227,9 @@ const issueLinksTable = defineTable({
   .index('by_target', ['target_id'])
   .index('by_pair', ['pair_key'])
 
+// A task carries at most LABEL_MAX labels (lib/taskLimits.ts).
 const issueLabelsTable = defineTable({
-  org_id: v.optional(v.string()),
+  org_id: v.string(),
   issue_id: v.string(), // label and issue must share an org
   label_id: v.string(),
   task_archived: taskArchived,
@@ -251,16 +253,13 @@ const issueSubscriptionsTable = defineTable({
   .index('by_profile_task_archived', ['profile_id', 'task_archived'])
   .index('by_issue_profile', ['issue_id', 'profile_id'])
 
+// A task holds at most ATTACHMENT_MAX rows (lib/taskLimits.ts). A row
+// names no project: storage totals read it through its task
+// (model/billing.ts storagePage), so a move writes no attachment row.
 const issueAttachmentsTable = defineTable({
-  org_id: v.optional(v.string()),
-  // The task's project. attachFileCore and moveIssueCore keep it equal to
-  // issues.project_id, so storage totals group by project without reading
-  // tasks (model/billing.ts storageUsage). Any new code that changes a
-  // task's project or writes attachment rows back must set it too, as a
-  // restore from Deleted items does (model/deletedItems.ts writeRowBack).
-  // Rows stored before it existed lack it until
-  // internal/attachmentScopeBackfill fills them, and readers use the task's
-  // project meanwhile.
+  org_id: v.string(),
+  // Retired: nothing writes or reads it. internal/retiredFields clears it,
+  // here and in deleted_rows; drop it once it has run on every deployment.
   project_id: v.optional(v.string()),
   id: v.string(),
   issue_id: v.string(),
@@ -744,11 +743,11 @@ export default defineSchema({
     // Legacy icon and its color, as on projects.
     icon: v.optional(v.string()),
     icon_color: v.optional(v.string()),
-    // Ignored legacy column: optional so existing demo rows remain valid.
-    // Only organizations.max_attachment_mb controls uploads; no team setter.
+    // Retired columns nothing reads or writes. internal/retiredFields
+    // clears them; drop them here once it has run on every deployment.
     max_attachment_mb: v.optional(v.number()),
-    stale_days: v.number(),
-    archive_days: v.number(),
+    stale_days: v.optional(v.number()),
+    archive_days: v.optional(v.number()),
     track_delay_default: v.boolean(),
     created_at: v.string(),
   })

@@ -1078,16 +1078,12 @@ access to the parent task`. The new task's project still comes from
 `project` and `sub_project`. A subtask may live in another sub-project than
 its parent, but not in another top-level project. Such a parent answers
 `400` with `a subtask must be in the same project as its parent task, in any
-of its sub-projects`. A task has one level of subtasks, at most 100 of them,
-archived ones included. A parent that is a subtask itself answers `400` with
-`the parent task is a subtask, and a subtask cannot have subtasks of its own`,
-and a parent with 100 subtasks `400` with `the parent task already has 100
-subtasks, the most a task can have`. A parent whose subtasks are too large to
-count in one request, such as a task from before the description limit whose
-subtasks have very long descriptions, answers `400` with `the parent task's
-subtasks are too large to read in one request; choose another parent or
-shorten their descriptions`. Tasks nested deeper, or with more subtasks,
-before these limits keep their shape and read as before.
+of its sub-projects`. A task has one level of subtasks, at most 100 active
+ones; archived subtasks do not count. A parent that is a subtask itself
+answers `400` with `the parent task is a subtask, and a subtask cannot have
+subtasks of its own`, and a parent with 100 active subtasks `400` with `the
+parent task already has 100 active subtasks, the most a task can have;
+archive or remove one of them first`.
 
 Tasks have Reporter, Assignee and Reviewer. The reporter identifies the Qivo
 user who reported the work and is fixed when the task is created. Omitting
@@ -1162,24 +1158,26 @@ A moved task keeps its number, its labels, its links and its subtasks.
 Naming the current sub-project changes nothing.
 
 A move within the task's top-level project moves only the task. A move to a
-sub-project of another top-level project also moves every subtask, at any
-depth and archived ones included, that is not already in that top-level
+sub-project of another top-level project also moves every subtask,
+archived ones included, that is not already in that top-level
 project. The caller needs Edit access on each of their projects (otherwise
 `400`, `moving this task would move a subtask in a project you cannot edit;
 an organization admin can move it`). A subtask in a project that is being
 moved to Deleted items refuses the move for everyone, admins included, with
 `400` `a subtask of this task is being moved to Deleted items; try again
 when that finishes`. The assignee and the reviewer of
-each active subtask without subtasks of its own must be able to work in the
+each active subtask must be able to work in the
 destination (otherwise `400`, `someone assigned to or reviewing a subtask of
 this task cannot edit that sub-project`); a group's own reviewer who cannot
-is cleared. A task with more than 200 subtasks, counting every depth and
-archived ones, cannot move to another top-level project (otherwise `400`,
-`this task has more than 200 subtasks; detach some of them first, or move it
-within its project`). A move or a parent change whose task and subtasks are
-too large for one request, such as one with thousands of subtasks or
-attachments, is a `400` with `this task and its subtasks are too large to
-change in one request; detach some subtasks first`. Each moved subtask
+is cleared. A task with more than 200 subtasks, archived ones included,
+cannot move to another top-level project (otherwise `400`, `this task has
+more than 200 subtasks, archived ones included, and a move to another
+project carries them all; restore some archived subtasks and remove them
+from this task first, or move it within its project`). A change
+whose task and subtasks are too large for one request, such as when many
+subtasks hold very long descriptions, is a `400` with `this task and its
+subtasks are too large to change in one request; detach some subtasks
+first`. Each moved subtask
 sends `task.updated`, but only the task itself gets an activity row and an
 inbox message. A subtask moved to
 another top-level project must leave its parent in the same request, with
@@ -1206,7 +1204,11 @@ included, counts in place of the current one.
 names (any case) from `GET /v1/labels`. A task's labels change one label at
 a time, never as a replacement list. Adding a label the task already has, or
 removing one it does not have, changes nothing. An unknown label is a `400`
-(`label "<ref>" not found`), and so is a label in both lists.
+(`label "<ref>" not found`), and so is a label in both lists. A task carries
+at most 20 labels. `remove_labels` applies before `add_labels`, so one PATCH
+can swap labels on a full task, and a label past 20 is a `400` (`this task
+already has 20 labels, the most a task can have; remove one first`) that
+changes nothing.
 
 **Order.** One PATCH may combine all of this. It applies the move first,
 then the parent, then the other fields with the archive toggle, then the
@@ -1330,15 +1332,14 @@ it`, and nothing changes. A subtask or parent in a project that is being
 moved to Deleted items refuses the PATCH for everyone, admins included, with
 `a subtask of this task is being moved to Deleted items; try again when that
 finishes` or `a parent of this task is being moved to Deleted items; try
-again when that finishes`. A task whose subtasks, from before the one level
-of subtasks, are too many to archive in one request is a `400` with `this
-task and its subtasks are too large to archive in one request; archive some
-subtasks first`. Archived tasks disappear from the default list
+again when that finishes`. Restoring a subtask whose parent already has 100
+active subtasks brings it back as a top-level task: the answer's `parent_id`
+is `null`, and its followers are told it left its parent. Archived tasks
+disappear from the default list
 (`?archived=true&project=<ref>` finds them, see [Archived tasks](#archived-tasks)),
 stop counting as workload, and in the app leave every normal view for
 the Archived tasks page. A nightly sweep archives tasks that have been `done` for
-30 days, or for a legacy team archive setting's number of days where an older
-project kept one. Restoring a still-`done` task **restarts its auto-archive
+30 days. Restoring a still-`done` task **restarts its auto-archive
 clock** (0071), so a restore holds for the full threshold rather than being
 re-swept the next night. A move to another sub-project restarts it too, for
 the task and each subtask that moves with it. `archived` matching the current state is
@@ -1473,7 +1474,8 @@ the newest one makes the one before it the newest.
 `DELETE` moves the task to **Deleted items**, as deleting it in the app does,
 and returns `{ "deleted": true, "id": "…", "key": "QN-3" }`. Its comments,
 attachments, links, labels and follows go with it, its inbox messages are
-deleted, and its subtasks stay as top-level tasks. From then on the task
+deleted, and its active subtasks become top-level tasks at once and its
+archived ones a moment later. From then on the task
 answers `404` like an unknown one, while its number, uuid and files stay
 reserved. A person can restore it in the app under **Settings → Projects →
 Deleted items**, and the API has no restore. A nightly job deletes it for
@@ -1500,7 +1502,9 @@ without Edit access on either answer `403`. `POST` answers `201` with the
 link as seen from `{ref}`, in the single-task `links` shape. Sending the
 same link again changes nothing, while a different link between the same
 two tasks is a `400` (`these tasks are already linked`). Remove it first. A
-task cannot be linked to itself. `DELETE` answers `{ "removed": true |
+task cannot be linked to itself. A task is an end of at most 100 links, and
+a new link to a task that has 100 is a `400` naming it (`QN-9 already has
+100 links, the most a task can have; remove one of its links first`). `DELETE` answers `{ "removed": true |
 false, "kind": "…", "id": "…", "key": "QN-9", "title": "…", "status": "…" }`
 naming the other task; `removed` is `false` when no link of that kind
 existed. Adding a link writes a `linked` activity row against the blocking
@@ -1853,10 +1857,16 @@ Uploading takes three requests:
 1. `POST /v1/tasks/{ref}/attachments` with `{ "name": "wiring.pdf",
    "content_type": "application/pdf", "size": 48213 }`. `name` is 1 to 255
    characters after trimming, `content_type` is optional, and `size` is the
-   exact number of bytes. It needs Edit access to the task's project, and a
-   `size` over the organization's per-file limit (`max_attachment_mb` in
-   `GET /v1/me`) is a `400` (`attachment exceeds the organization limit of
-   20 MiB`). It answers `201` with `{ "ticket": "…uuid…", "upload_url":
+   exact number of bytes. It needs Edit access to the task's project. A
+   task holds at most 100 attachments, images in its description included,
+   so a full task is a `400` before any bytes are sent (`this task already
+   has 100 attachments, images in its description included, the most a task
+   can have; remove one first`), and the confirm in step 3 checks it again.
+   A `size` over the organization's per-file limit (`max_attachment_mb` in
+   `GET /v1/me`, at most 20 MiB) is a `400` (`attachment exceeds the
+   organization limit of 20 MiB`). The 20 MiB ceiling is Qivo's product
+   rule: attachments are for images, PDF files and similar documents, and
+   Qivo is not a file store. It answers `201` with `{ "ticket": "…uuid…", "upload_url":
    "…", "expires_at": "…" }`.
 2. `POST` the file's bytes, exactly `size` of them, to `upload_url`, with
    the file's type as `Content-Type` and no Authorization header. It

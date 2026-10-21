@@ -159,8 +159,6 @@ const plantTeams = (t: T, f: OrgFixture, n: number) =>
         id,
         org_id: f.org.id,
         name: `Team ${i}`,
-        stale_days: 14,
-        archive_days: 30,
         track_delay_default: false,
         created_at: NOW,
       })
@@ -563,46 +561,6 @@ describe('restoring a task item', () => {
     expect(back?.parent_id).toBe(parent.id)
   })
 
-  it('restores subtasks stored before the subtask rule without their parent in another top-level project', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    const org_id = f.org.id
-    // planted as data from before the rule: subtasks in sub-projects of
-    // Skunkworks under tasks in Firmware, all of which the user may edit
-    const elsewhere = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
-    const doomed = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
-    // inside one task item: the subtask comes back without its parent, and
-    // its own subtask, in the same top-level project, keeps it
-    const root = await plantIssue(t, { org_id, project_id: f.sub.id })
-    const legacy = await plantIssue(t, { org_id, project_id: elsewhere.id, parent_id: root.id })
-    const below = await plantIssue(t, { org_id, project_id: elsewhere.id, parent_id: legacy.id })
-    await deleteTask(t, f, root.id, { subtask_ids: [legacy.id, below.id] })
-    const item = await itemFor(t, root.id)
-    expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
-    expect((await liveTask(t, root.id))?.parent_id).toBeUndefined()
-    expect((await liveTask(t, legacy.id))?.parent_id).toBeUndefined()
-    expect((await liveTask(t, below.id))?.parent_id).toBe(legacy.id)
-
-    // handed to the item of its own deleted sub-project, it comes back with
-    // that project without its parent
-    const root2 = await plantIssue(t, { org_id, project_id: f.sub.id })
-    const split = await plantIssue(t, { org_id, project_id: doomed.id, parent_id: root2.id })
-    await deleteTask(t, f, root2.id, { subtask_ids: [split.id] })
-    await deleteProject(t, f, doomed.id)
-    const projectItem = await itemFor(t, doomed.id)
-    expect((await restore(t, f.user, [(await itemFor(t, root2.id)).id])).restored).toHaveLength(1)
-    expect((await storedTasks(t, projectItem.id)).map((x) => x.task_id)).toEqual([split.id])
-    expect((await restore(t, f.user, [projectItem.id])).restored).toEqual([projectItem.id])
-    await runSteps(t)
-    expect(await itemById(t, projectItem.id)).toBeNull()
-    expect(await liveTask(t, root2.id)).not.toBeNull()
-    const back = await liveTask(t, split.id)
-    expect(back?.project_id).toBe(doomed.id)
-    expect(back?.parent_id).toBeUndefined()
-    expect(await waitingParents(t)).toEqual([])
-    await assertNoDanglingRefs(t, 'after subtasks from before the rule came back')
-  })
-
   it('keeps a parent only while it is a top-level task, as a reparent requires', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -634,7 +592,7 @@ describe('restoring a task item', () => {
     expect(refused.data.message).toBe(PARENT_IS_SUBTASK)
   })
 
-  it(`keeps a parent with ${SUBTASK_MAX - 1} subtasks and none with ${SUBTASK_MAX}, archived ones included`, async () => {
+  it(`keeps a parent with ${SUBTASK_MAX - 1} active subtasks and none with ${SUBTASK_MAX}, archived ones aside`, async () => {
     const t = newT()
     const f = await withOrg(t)
     const org_id = f.org.id
@@ -644,10 +602,10 @@ describe('restoring a task item', () => {
       await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id }),
     ]
     for (const task of [first, second]) await deleteTask(t, f, task.id)
-    // the parent gets 99 subtasks while they are in Deleted items, 10 of
-    // them archived
-    await plantSubtasks(t, f, parent.id, SUBTASK_MAX - 1, 10)
-    // the first comes back as the hundredth
+    // the parent gets 99 active subtasks while they are in Deleted items,
+    // and 10 archived ones, which do not count
+    await plantSubtasks(t, f, parent.id, SUBTASK_MAX - 1 + 10, 10)
+    // the first comes back as the hundredth active one
     await restore(t, f.user, [(await itemFor(t, first.id)).id])
     expect((await liveTask(t, first.id))?.parent_id).toBe(parent.id)
     // the second finds the parent full and comes back top-level
@@ -664,14 +622,14 @@ describe('restoring a task item', () => {
     expect(refused.data.message).toBe(PARENT_FULL)
 
     // two items restored in one call count the reveal before them: only one
-    // of them becomes the hundredth subtask of a parent with 99
+    // of them becomes the hundredth active subtask of a parent with 99
     const other = await plantIssue(t, { org_id, project_id: f.sub.id })
     const pair = [
       await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: other.id }),
       await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: other.id }),
     ]
     for (const task of pair) await deleteTask(t, f, task.id)
-    await plantSubtasks(t, f, other.id, SUBTASK_MAX - 1)
+    await plantSubtasks(t, f, other.id, SUBTASK_MAX - 1 + 5, 5)
     const items = [await itemFor(t, pair[0].id), await itemFor(t, pair[1].id)]
     expect(
       (
@@ -796,22 +754,21 @@ describe('restoring a task item', () => {
     })
   })
 
-  it('brings a task back with its 150 subtasks and their people, without its parent outside, within the real limits', async () => {
-    // a subtask with 150 subtasks of its own, a legacy shape from before
-    // the one level of subtasks and SUBTASK_MAX. A subtask cannot have
-    // subtasks, so the task comes back top-level with all of them
+  it(`brings a task back with its ${SUBTASK_MAX} subtasks and their people, within the real limits`, async () => {
+    // the most active subtasks a task can have, each with a person of its
+    // own whose sight the reveal checks
     const t = newT({ transactionLimits: true })
     chargeFilteredReads()
     const f = await withOrg(t)
     const org_id = f.org.id
     const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
-    const root = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: epic.id })
-    const people = await plantPeople(t, f, 150)
+    const root = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    const people = await plantPeople(t, f, SUBTASK_MAX)
     const subtasks = await plantAssigned(t, f, root.id, people)
     await deleteTask(t, f, root.id, { subtask_ids: subtasks })
     await runSteps(t)
     const item = await itemFor(t, root.id)
-    expect(item).toMatchObject({ state: 'ready', counts: { tasks: 151 } })
+    expect(item).toMatchObject({ state: 'ready', counts: { tasks: SUBTASK_MAX + 1 } })
 
     const result = await as(t, f.user).mutation(api.deletedItems.restore, {
       org_id,
@@ -822,7 +779,7 @@ describe('restoring a task item', () => {
     expect(await itemById(t, item.id)).toBeNull()
     expect((await liveTask(t, root.id))?.parent_id).toBeUndefined()
     expect(await assignedUnder(t, root.id)).toEqual(pairs(subtasks, people))
-    // a reparent refuses that parent for the same reason
+    // a task with subtasks takes no parent
     const refused = await expectRefusal(
       as(t, f.user).mutation(api.issues.update, {
         org_id,
@@ -1165,8 +1122,7 @@ describe('restoring a task item', () => {
     const sub = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
     await comment(t, sub)
     await plantHistory(t, sub, { numbered: 2, legacy: 1 })
-    // stored before attachment rows carried their project
-    const file = await attach(t, sub, 5, null)
+    const file = await attach(t, sub, 5)
     const neighbour = await plantIssue(t, { org_id, project_id: f.sub2.id })
     await deleteTask(t, f, root.id, { subtask_ids: [sub.id] })
     const subHistory = (await historyOf(t, sub.id)).map((e) => e.id)
@@ -1194,13 +1150,13 @@ describe('restoring a task item', () => {
     // and its history with it
     expect((await historyOf(t, sub.id)).map((e) => e.id)).toEqual(subHistory)
 
-    // the project brings it back under its parent, its file in its project
+    // the project brings it back under its parent, with its file
     await restore(t, f.user, [projectItem.id])
     expect((await liveTask(t, sub.id))?.parent_id).toBe(root.id)
     expect(await blobExists(t, file.storage_id)).toBe(true)
-    expect((await t.run((ctx) => byId(ctx, 'issue_attachments', file.id)))?.project_id).toBe(
-      f.sub2.id,
-    )
+    expect(await t.run((ctx) => byId(ctx, 'issue_attachments', file.id))).toMatchObject({
+      issue_id: sub.id,
+    })
     await assertNoDanglingRefs(t, 'after a subtask came back with its project')
 
     // a project purged for good takes the subtask with it
@@ -3044,8 +3000,8 @@ describe('the storage files bill', () => {
       projects: Object.fromEntries(usage.projects.map((p) => [p.project_id, p.storage_bytes])),
     }
   }
-  /** The size and project (null for none) of each live attachment row of
-   * `taskId`, smallest first. */
+  /** The size of each live attachment row of `taskId`, smallest first. A
+   * row names no project; storageUsage bills it under its task's. */
   const filesOf = (t: T, taskId: string) =>
     t.run(async (ctx) =>
       (
@@ -3054,41 +3010,28 @@ describe('the storage files bill', () => {
           .withIndex('by_issue', (q) => q.eq('issue_id', taskId))
           .collect()
       )
-        .map((row) => [row.size_bytes, row.project_id ?? null] as const)
-        .sort(([a], [b]) => a - b),
+        .map((row) => row.size_bytes)
+        .sort((a, b) => a - b),
     )
 
-  it("bills a task's files again under its project once it comes back, whatever project its rows named", async () => {
+  it("bills a task's files again under its project once it comes back", async () => {
     const t = newT()
     const f = await withOrg(t)
     const org_id = f.org.id
     const task = await plantIssue(t, { org_id, project_id: f.sub.id })
-    await attach(t, task, 11)
-    // stored before attachment rows carried their project
-    await attach(t, task, 13, null)
-    // a project gone stale, as the scope backfill finds some
-    await attach(t, task, 17, f.sub2.id)
+    for (const size of [11, 13, 17]) await attach(t, task, size)
     const other = await plantIssue(t, { org_id, project_id: f.sub2.id })
     await attach(t, other, 5)
-    expect(await billed(t, org_id)).toEqual({
-      bytes: 46,
-      projects: { [f.sub.id]: 24, [f.sub2.id]: 22 },
-    })
+    const before = { bytes: 46, projects: { [f.sub.id]: 41, [f.sub2.id]: 5 } }
+    expect(await billed(t, org_id)).toEqual(before)
 
     await deleteTask(t, f, task.id)
     expect(await filesOf(t, task.id)).toEqual([])
     expect(await billed(t, org_id)).toEqual({ bytes: 5, projects: { [f.sub2.id]: 5 } })
 
     await restore(t, f.user, [(await itemFor(t, task.id)).id])
-    expect(await filesOf(t, task.id)).toEqual([
-      [11, f.sub.id],
-      [13, f.sub.id],
-      [17, f.sub.id],
-    ])
-    expect(await billed(t, org_id)).toEqual({
-      bytes: 46,
-      projects: { [f.sub.id]: 41, [f.sub2.id]: 5 },
-    })
+    expect(await filesOf(t, task.id)).toEqual([11, 13, 17])
+    expect(await billed(t, org_id)).toEqual(before)
     await assertNoDanglingRefs(t, 'after the files of a task came back')
   })
 
@@ -3100,7 +3043,7 @@ describe('the storage files bill', () => {
     await attach(t, inSub, 11)
     const inSub2 = await plantIssue(t, { org_id, project_id: f.sub2.id })
     await attach(t, inSub2, 3)
-    await attach(t, inSub2, 7, null)
+    await attach(t, inSub2, 7)
     const elsewhere = await plantIssue(t, { org_id, project_id: f.hidden.id })
     await attach(t, elsewhere, 5)
     const before = { bytes: 26, projects: { [f.sub.id]: 11, [f.sub2.id]: 10, [f.hidden.id]: 5 } }
@@ -3129,16 +3072,13 @@ describe('the storage files bill', () => {
       expect(await billed(t, org_id)).toEqual(away)
     })
     expect(sawFilesBack).toBe(true)
-    expect(await filesOf(t, inSub.id)).toEqual([[11, f.sub.id]])
-    expect(await filesOf(t, inSub2.id)).toEqual([
-      [3, f.sub2.id],
-      [7, f.sub2.id],
-    ])
+    expect(await filesOf(t, inSub.id)).toEqual([11])
+    expect(await filesOf(t, inSub2.id)).toEqual([3, 7])
     expect(await billed(t, org_id)).toEqual(before)
     await assertNoDanglingRefs(t, 'after the files of a project came back')
   })
 
-  it('gives the files of a subtask a split hands over after the fill its project', async () => {
+  it('bills the files of a subtask a split hands over after the fill under its project', async () => {
     const t = newT()
     const f = await withOrg(t)
     const org_id = f.org.id
@@ -3166,7 +3106,7 @@ describe('the storage files bill', () => {
     TRASH_BUDGET.tasks = 1
     await stepThrough(t, projectItem.id)
     expect((await liveTask(t, sub.id))?.parent_id).toBe(root.id)
-    expect(await filesOf(t, sub.id)).toEqual([[7, f.sub2.id]])
+    expect(await filesOf(t, sub.id)).toEqual([7])
     expect((await billed(t, org_id)).projects[f.sub2.id]).toBe(7)
     await assertNoDanglingRefs(t, 'after a split subtask and its file came back')
   })

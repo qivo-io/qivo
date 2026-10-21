@@ -15,6 +15,7 @@ import { canManageOrgLabels, canWriteOrgLabels } from '../lib/access'
 import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, rule } from '../lib/functions'
+import { LABEL_MAX, LABELS_FULL } from '../lib/taskLimits'
 import { LABEL_NAME_MAX } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
 import { assertExpected, DELETES, type Fields, filledText, type Next } from './expected'
@@ -332,7 +333,8 @@ export async function deleteLabelCore(
  * changed anything. A change writes the task's 'labeled' or 'removed a label
  * from' activity row, signed with `provenance` for a machine caller; asking
  * for the current state writes nothing. Refuses an actor without Edit on the
- * task's project and a label of another organization.
+ * task's project, a label of another organization and a new label on a task
+ * that carries LABEL_MAX already (LABELS_FULL).
  */
 export async function setTaskLabel(
   ctx: MutationCtx,
@@ -356,12 +358,18 @@ export async function setTaskLabel(
     .unique()
   if ((pair !== null) === a.on) return false
   if (pair !== null) await ctx.db.delete(pair._id)
-  else
+  else {
+    const held = await ctx.db
+      .query('issue_labels')
+      .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+      .take(LABEL_MAX)
+    if (held.length >= LABEL_MAX) throw rule(LABELS_FULL)
     await ctx.db.insert('issue_labels', {
       org_id: issue.org_id,
       issue_id: issue.id,
       label_id: label.id,
     })
+  }
   const named = `“${label.name}”`
   await logActivity(ctx, {
     org_id: issue.org_id,

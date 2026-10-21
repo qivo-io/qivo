@@ -229,8 +229,6 @@ describe('view model identity across repaints', () => {
         id: 'team-1',
         org_id: snap.orgs[0].id,
         name: 'Field',
-        stale_days: 7,
-        archive_days: 30,
         track_delay_default: true,
         created_at: AT,
       })

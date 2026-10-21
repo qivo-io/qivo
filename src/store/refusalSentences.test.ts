@@ -87,6 +87,23 @@ describe('refusal sentences in restore and upload toasts', () => {
     )
   })
 
+  it('tells, as a notice, that a restored subtask left a full parent', async () => {
+    answers['issues:unarchive'] = () =>
+      Promise.resolve({ issue: { id: 'task-archived' }, left_parent: true })
+    expect(await P.unarchiveIssue('task-archived', 'Old task', snap.projects[0].id)).toBe(true)
+    expect(showToast).toHaveBeenCalledExactlyOnceWith(
+      '"Old task" is back as a top-level task, because its parent already has 100 active subtasks.',
+      'info',
+    )
+  })
+
+  it('says nothing more when a restored task kept its parent', async () => {
+    answers['issues:unarchive'] = () =>
+      Promise.resolve({ issue: { id: 'task-archived' }, left_parent: false })
+    expect(await P.unarchiveIssue('task-archived', 'Old task', snap.projects[0].id)).toBe(true)
+    expect(showToast).not.toHaveBeenCalled()
+  })
+
   it('adds no second period to a project restore refusal that has one', async () => {
     answers['projects:unarchive'] = refuse('rule', 'Ask a project lead to restore it.')
     expect(await P.unarchiveProject(snap.projects[0].id)).toBe(false)

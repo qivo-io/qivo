@@ -15,9 +15,7 @@ import { forbidden, orgAction, orgQuery, require } from './lib/functions'
 import {
   billingSummary,
   billingUsageHead,
-  legacyPhase,
   type StoragePage,
-  type StoragePhase,
   type StorageProject,
   storagePage,
 } from './model/billing'
@@ -43,18 +41,11 @@ export const usageHead = internalQuery({
 export const storageNowPage = internalQuery({
   args: {
     org_id: v.string(),
-    phase: v.union(v.literal('own'), v.literal('unscoped'), v.literal('tasks')),
     cursor: v.union(v.string(), v.null()),
     size: v.optional(v.number()),
   },
-  handler: async (ctx, { org_id, phase, cursor, size }): Promise<StoragePage> =>
-    await storagePage(ctx, org_id, phase, { cursor, size, before: Number.MAX_SAFE_INTEGER }),
-})
-
-/** The phase that reads the rows stored without org_id (legacyPhase). */
-export const storageLegacyPhase = internalQuery({
-  args: {},
-  handler: async (ctx): Promise<StoragePhase> => await legacyPhase(ctx),
+  handler: async (ctx, { org_id, cursor, size }): Promise<StoragePage> =>
+    await storagePage(ctx, org_id, { cursor, size, before: Number.MAX_SAFE_INTEGER }),
 })
 
 /** The admin Billing page's usage report (model/billing.ts
@@ -71,32 +62,27 @@ export const usageReport = orgAction({
     const head = await ctx.runQuery(internal.billing.usageHead, { org_id })
     const projects = new Map<string, StorageProject>()
     let bytes = 0
-    let phase: StoragePhase | null = 'own'
-    while (phase !== null) {
-      let cursor: string | null = null
-      let size: number | undefined
-      for (;;) {
-        const page: StoragePage = await ctx.runQuery(internal.billing.storageNowPage, {
-          org_id,
-          phase,
-          cursor,
-          size,
-        })
-        if ('split' in page) {
-          size = page.split
-          continue
-        }
-        bytes += page.bytes
-        for (const counted of page.projects) {
-          const total = projects.get(counted.project_id)
-          if (total === undefined) projects.set(counted.project_id, { ...counted })
-          else total.storage_bytes += counted.storage_bytes
-        }
-        if (page.next === null) break
-        cursor = page.next
-        size = undefined
+    let cursor: string | null = null
+    let size: number | undefined
+    for (;;) {
+      const page: StoragePage = await ctx.runQuery(internal.billing.storageNowPage, {
+        org_id,
+        cursor,
+        size,
+      })
+      if ('split' in page) {
+        size = page.split
+        continue
       }
-      phase = phase === 'own' ? await ctx.runQuery(internal.billing.storageLegacyPhase, {}) : null
+      bytes += page.bytes
+      for (const counted of page.projects) {
+        const total = projects.get(counted.project_id)
+        if (total === undefined) projects.set(counted.project_id, { ...counted })
+        else total.storage_bytes += counted.storage_bytes
+      }
+      if (page.next === null) break
+      cursor = page.next
+      size = undefined
     }
     return {
       ...head,

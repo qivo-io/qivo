@@ -64,6 +64,7 @@ import {
 import { clearAccountAppearance } from './model/appearance'
 import {
   type AttachResult,
+  assertAttachmentRoom,
   attachFileCore,
   removeAttachmentCore,
   storageIdInUse,
@@ -109,6 +110,8 @@ export const uploadUrl = orgMutation({
   handler: async (ctx, { issue_id }) => {
     const issue = await myIssue(ctx, issue_id)
     await assertWritable(ctx, issue.project_id)
+    // a full task is refused before any bytes are sent
+    await assertAttachmentRoom(ctx, issue.id)
     if (isDemoDeployment())
       return demoUploadUrl(ctx, ctx.authUserId, 'attachment', issue_id, DEMO_FILE_BYTES)
     return await ctx.storage.generateUploadUrl()

@@ -1390,9 +1390,11 @@ type Walk = { children: ChildIndex; whole: boolean }
  * only the root's subtasks, and the totals' walks enter only tasks that
  * count and need each one's subtasks to tell a leaf from a group, so a
  * branch that cannot count is never read below its top. It reads one level
- * at a time and stops at 20 levels, which only a chain stored before the one
- * level of subtasks reaches. Each task a
- * level enters takes one by_parent read. An active root's walk that would
+ * at a time, and the seen set stops a corrupt cycle. Each task a level
+ * enters takes one read. An active root's walk reads only active subtasks
+ * (by_parent_archived), because an active group counts nothing else and
+ * lists nothing else, so each read holds at most SUBTASK_MAX tasks however
+ * many archived subtasks have gathered. An active root's walk that would
  * pass SUBTREE_WALK reads reads the organization's active tasks once
  * instead, as soon as a level shows it. It enters only active tasks, and
  * each decision about one needs only its active subtasks (isGroupIn), so
@@ -1422,7 +1424,7 @@ async function subtreeIndex(
   const seen = new Set<string>([root.id])
   let frontier = [root.id]
   let reads = 0
-  for (let depth = 0; frontier.length > 0 && depth <= 20; depth++) {
+  while (frontier.length > 0) {
     // a level that cannot be read whole ends the walk before its first read
     reads += frontier.length
     if (ceiling !== undefined) {
@@ -1438,7 +1440,14 @@ async function subtreeIndex(
     for (const id of frontier) {
       if (guard !== null && !(await guard.range())) return stopped
       const kids: Doc<'issues'>[] = []
-      const read = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', id))
+      const read =
+        root.archived_at === undefined
+          ? ctx.db
+              .query('issues')
+              .withIndex('by_parent_archived', (q) =>
+                q.eq('parent_id', id).eq('archived_at', undefined),
+              )
+          : ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', id))
       for await (const kid of read) {
         kids.push(kid)
         if (guard !== null && !(await guard.document())) return stopped
@@ -1569,10 +1578,10 @@ function groupCounter(
  * groupCounter counts. It holds the calculated plan weeks (the app's
  * groupSpan) and how many of its leaves are done (the app's groupProgress).
  * `partial` is the app's "Completion unknown". It is set when a subtask that
- * makes a task a group does not count for the reader (hidden from it), when
- * the walk meets a task twice (a cycle), or when it stops at 20 levels in a
- * chain stored before the one level of subtasks. A subtask in an archived project under a task in
- * an active one makes it no group, so it leaves nothing unknown. */
+ * makes a task a group does not count for the reader (hidden from it), or
+ * when the walk meets a task twice (a cycle). A subtask in an archived
+ * project under a task in an active one makes it no group, so it leaves
+ * nothing unknown. */
 export type GroupFacts = {
   start_week: string | null
   end_week: string | null
@@ -1615,8 +1624,9 @@ async function groupFacts(
   let partial = false
   const seen = new Set<string>([group.id])
   let frontier: Doc<'issues'>[] = [group]
-  // a chain stored before the one level of subtasks is read to 20 levels
-  for (let depth = 0; frontier.length > 0 && depth <= 20; depth++) {
+  // one level of subtasks, so the walk ends a level below the group; the
+  // seen set stops a corrupt cycle
+  while (frontier.length > 0) {
     const next: Doc<'issues'>[] = []
     for (const task of frontier) {
       if (task !== group && !isGroupIn(children, task, live)) {
@@ -1644,7 +1654,6 @@ async function groupFacts(
     }
     frontier = next
   }
-  if (frontier.length > 0) partial = true
   return { start_week: start ?? null, end_week: end ?? null, done, total, partial }
 }
 
@@ -2162,12 +2171,18 @@ export async function applyTaskUpdate(
       issue: task,
       patch: a.patch,
       now,
-      machine: { provenance, archive: a.archive },
+      machine: {
+        provenance,
+        archive: a.archive,
+        // naming the current parent asks to keep it (model/issues.ts)
+        keepParent: a.parent !== undefined && a.parent !== null && a.parent === task.parent_id,
+      },
     })
   }
+  // removals first, so a task at LABEL_MAX can swap labels in one update
   for (const [list, on] of [
-    [a.labels.add, true],
     [a.labels.remove, false],
+    [a.labels.add, true],
   ] as const) {
     for (const label of list) {
       await setTaskLabel(ctx, { me, issue: task, label, on, now, provenance })
@@ -2230,12 +2245,9 @@ export const NO_TASKS: CompletionJson = { done: 0, total: 0, percent: 0 }
  *
  * Reads the active tasks of the project's family only, its top-level project
  * and that project's active sub-projects (lib/liveTasks.ts liveTasksOf),
- * because a subtask stays in its parent's top-level project. A subtask
- * stored in another family before that rule, which
- * internal/subtaskFamilyBackfill finds, is not read, so its parent counts
- * as a task without subtasks. That can change only the counts, never which
- * projects are counted, and in an update_project mutation the read
- * conflicts only with writes to the family's tasks.
+ * because a subtask stays in its parent's top-level project. In an
+ * update_project mutation the read conflicts only with writes to the
+ * family's tasks.
  */
 export async function projectCompletion(
   ctx: QueryCtx,

@@ -140,6 +140,13 @@ arguments. A tool that takes no arguments (`get_me`, `list_teams`,
 `list_users` and `list_labels`) still ignores what it is sent, because some
 clients send a placeholder argument to such tools.
 
+The per-task limits changed the `create_task` and `update_task`
+descriptions. `create_task` now says a task has at most 100 active
+subtasks, archived ones aside, and `update_task` that a subtask restored
+under a parent with 100 active subtasks comes back without it. The tools
+take the same arguments, so a client holding the older catalogue keeps
+working, and the server answers such a call as described here.
+
 Deleted items changed the `delete_task` description to "Move a task to
 Deleted items, where a person can restore it in the app." The tool takes the
 same arguments and answers the same way, so a client holding the older
@@ -1016,9 +1023,9 @@ tools that take no arguments, `get_me`, `list_teams`, `list_users` and
 | `list_comments` | The task's newest comments, oldest first, with author and edit attribution. `limit` (50 by default, at most 50) caps how many, and `before`, a comment's `id`, reads the comments posted before it. See [Comments, inbox and following](#comments-inbox-and-following) |
 | `add_comment` | Comment on a task **as yourself** (the credential's user is the pinned author); markdown body of at most 20,000 characters; returns the comment `id`, task reference as `task`, and `created_at`; leaves no activity row, because the comment is its own feed entry |
 | `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs. Another project's sub-project is a hard error; move a task later with `update_task`. `parent` (a task ref) makes it a subtask; you need Edit access on the parent's project, because the parent becomes a group, and the parent must be in the same top-level project, in any of its sub-projects. `start_week` and `end_week` plan it (week starts, both or neither), and `paused` holds it. Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` is capped at 80 characters and `description` at 20,000. Returns `id` and `key` |
-| `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain) and `archive_reason`, posted as your comment when the call archives the task. It also moves the task (`project`, `sub_project`; to another top-level project its subtasks move along, and a subtask must leave its parent in the same call), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. A subtask or parent in a project being moved to Deleted items refuses the toggle for everyone, admins included, with `a subtask of this task is being moved to Deleted items; try again when that finishes` or `a parent of this task is being moved to Deleted items; try again when that finishes`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` is capped at 80 characters, `description` at 20,000 and `archive_reason` at 500. The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time. `expected` holds what you last read of the fields the call changes, keyed as `get_task` reads them, with `parent_id` and `has_hidden_parent` for `parent` and `project_id` for a move. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
-| `delete_task` | Move a task to Deleted items with its comments, attachments, links, labels and follows; its subtasks stay as top-level tasks and its inbox messages are deleted. A person can restore it in the app for 30 days, and no tool restores. Answers `{deleted: true, key}` |
-| `set_task_link` | Add (`linked: true`) or remove (`linked: false`) the link between `ref` and `other`, with `kind` `blocks`, `blocked_by` or `relates` as seen from `ref`. Two tasks share at most one link. It needs read access to both tasks and Edit access on either, the app's rule. Adding the link that exists, or removing one that does not, changes nothing; `changed` in the result says whether the call did. A different link between the same tasks is refused with `these tasks are already linked`. `get_task` lists the links |
+| `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain, and a subtask whose parent already has 100 active subtasks comes back without it) and `archive_reason`, posted as your comment when the call archives the task. It also moves the task (`project`, `sub_project`; to another top-level project its subtasks move along, and a subtask must leave its parent in the same call), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. A subtask or parent in a project being moved to Deleted items refuses the toggle for everyone, admins included, with `a subtask of this task is being moved to Deleted items; try again when that finishes` or `a parent of this task is being moved to Deleted items; try again when that finishes`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` is capped at 80 characters, `description` at 20,000 and `archive_reason` at 500. The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time. `expected` holds what you last read of the fields the call changes, keyed as `get_task` reads them, with `parent_id` and `has_hidden_parent` for `parent` and `project_id` for a move. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
+| `delete_task` | Move a task to Deleted items with its comments, attachments, links, labels and follows; its active subtasks become top-level tasks, its archived ones a moment later, and its inbox messages are deleted. A person can restore it in the app for 30 days, and no tool restores. Answers `{deleted: true, key}` |
+| `set_task_link` | Add (`linked: true`) or remove (`linked: false`) the link between `ref` and `other`, with `kind` `blocks`, `blocked_by` or `relates` as seen from `ref`. Two tasks share at most one link. It needs read access to both tasks and Edit access on either, the app's rule. Adding the link that exists, or removing one that does not, changes nothing; `changed` in the result says whether the call did. A different link between the same tasks is refused with `these tasks are already linked`. A task is an end of at most 100 links, and a new link to a full task is refused naming it, such as `QN-9 already has 100 links, the most a task can have; remove one of its links first`. `get_task` lists the links |
 | `list_labels` | The organization's labels as `id`, `name` and `color`, ordered by name |
 | `set_label` | Without `label`, create a label from `name` (at most 40 characters) and `color` (`#` and six hex digits); this needs an organization admin, or a user (person or agent) with the User role and Edit access to a top-level project. With `label` (an id or name), rename or recolor that label; only organization admins may, as on the app's Labels settings page, and `expected` holds the `name` and `color` you last read of the fields it changes. Returns the label with `created`. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `delete_attachment` | Delete a file attached to the task `ref`; `attachment` is an id from `get_task`'s `attachments`. It needs Edit access to the task's project, as in the app, and leaves description images (`inline: true`) to the app. See [Attachments](#attachments) |
@@ -1603,45 +1610,41 @@ checked against the destination. A moved task keeps its key, labels, links
 and subtasks.
 
 A move within the task's top-level project moves only the task. A move to a
-sub-project of another top-level project also moves every subtask, at any
-depth and archived ones included, that is not already in that top-level
+sub-project of another top-level project also moves every subtask,
+archived ones included, that is not already in that top-level
 project. You need Edit access on each of their projects (otherwise `moving
 this task would move a subtask in a project you cannot edit; an organization
 admin can move it`). A subtask in a project that is being moved to Deleted
 items refuses the move for everyone, admins included, with `a subtask of
 this task is being moved to Deleted items; try again when that finishes`.
-The assignee and the reviewer of each active subtask
-without subtasks of its own must be able to work in the destination
-(otherwise `someone assigned to or reviewing a subtask of this task cannot
-edit that sub-project`); a group's own reviewer who cannot is cleared. A
-task with more than 200 subtasks, counting every depth and archived ones,
+The assignee and the reviewer of each active subtask must be able to work
+in the destination (otherwise `someone assigned to or reviewing a subtask of
+this task cannot edit that sub-project`); a group's own reviewer who cannot
+is cleared. A task with more than 200 subtasks, archived ones included,
 cannot move to another top-level project (otherwise `this task has more than
-200 subtasks; detach some of them first, or move it within its project`). A
-move or a parent change whose task and subtasks are too large for one call,
-such as one with thousands of subtasks or attachments, is refused with `this
-task and its subtasks are too large to change in one request; detach some
-subtasks first`. Each moved subtask sends `task.updated`, but only the task
+200 subtasks, archived ones included, and a move to another project carries
+them all; restore some archived subtasks and remove them from this task
+first, or move it within its project`). A change whose task and
+subtasks are too large for one call, such as when many subtasks hold very
+long descriptions, is refused with `this task and its subtasks are too
+large to change in one request; detach some subtasks first`. Each moved subtask sends `task.updated`, but only the task
 itself gets an activity row and an inbox message. A subtask moved to another
 top-level project must leave its parent in the same call, with `parent:
 null` or a new parent in the destination's top-level project; otherwise the
 call is refused with `a subtask stays in its parent task's project; to move
 it to another project, detach it from its parent in the same change`.
 
-A task has one level of subtasks, at most 100 of them, archived ones
-included. `parent` is refused with `the parent task is a subtask, and a
-subtask cannot have subtasks of its own` for a parent that is a subtask,
-with `this task has subtasks, so it cannot become a subtask; a subtask cannot
-have subtasks of its own` for a task with subtasks, and with `the parent task
-already has 100 subtasks, the most a task can have` for a full parent. A
-parent whose subtasks are too large to count in one call, such as a task
-from before the description limit whose subtasks have very long
-descriptions, is refused with `the parent task's subtasks are too large to
-read in one request; choose another parent or shorten their descriptions`.
-`parent: null` always detaches. Tasks nested deeper, or with more subtasks,
-before these limits keep their shape. Archiving such a task with too many
-subtasks for one call is refused with `this task and its subtasks are too
-large to archive in one request; archive some subtasks first`. A
-parent in a project you cannot see counts as being in the subtask's own
+A task has one level of subtasks, at most 100 active ones; archived
+subtasks do not count. `parent` is refused with `the parent task is a
+subtask, and a subtask cannot have subtasks of its own` for a parent that is
+a subtask, with `this task has subtasks, so it cannot become a subtask; a
+subtask cannot have subtasks of its own` for a task with subtasks, and with
+`the parent task already has 100 active subtasks, the most a task can have;
+archive or remove one of them first` for a full parent. `parent: null`
+always detaches. Restoring a subtask (`archived: false`) whose parent
+already has 100 active subtasks brings it back as a top-level task: the
+task you read back has no parent, and its followers are told it left its
+parent. A parent in a project you cannot see counts as being in the subtask's own
 top-level project, so moving such a subtask to another top-level project
 also needs `parent: null` or a new parent there.
 
@@ -1661,7 +1664,10 @@ call, null included, counts in place of the current one.
 `add_labels` and `remove_labels` take label ids or names in any case from
 `list_labels`. Labels change one at a time, never as a replacement list, and
 asking for a label the task already has, or removing one it lacks, changes
-nothing. An unknown label, or one in both lists, is refused.
+nothing. An unknown label, or one in both lists, is refused. A task carries
+at most 20 labels. `remove_labels` applies before `add_labels`, so one call
+can swap labels on a full task, and a label past 20 is refused with `this
+task already has 20 labels, the most a task can have; remove one first`.
 
 One call may combine all of it. It applies the move, then the parent, then
 the other fields with the archive toggle, then the labels, then
@@ -1709,10 +1715,16 @@ Uploading a file takes three steps, the same as on REST:
 
 1. `start_attachment_upload` with the task `ref`, the file's `name` (1 to
    255 characters after trimming), its exact `size` in bytes and optionally
-   its `content_type`. It needs Edit access to the task's project, and a
-   `size` over the organization's per-file limit (`max_attachment_mb` in
-   `get_me`) is refused with `attachment exceeds the organization limit of
-   20 MiB`. It answers `{ "ticket": "…uuid…", "upload_url": "…",
+   its `content_type`. It needs Edit access to the task's project. A task
+   holds at most 100 attachments, images in its description included, so a
+   full task is refused before any bytes are sent, with `this task already
+   has 100 attachments, images in its description included, the most a task
+   can have; remove one first`, and the confirm checks it again. A `size`
+   over the organization's per-file limit (`max_attachment_mb` in `get_me`,
+   at most 20 MiB) is refused with `attachment exceeds the organization limit
+   of 20 MiB`. The 20 MiB ceiling is Qivo's product rule: attachments are
+   for images, PDF files and similar documents, and Qivo is not a file
+   store. It answers `{ "ticket": "…uuid…", "upload_url": "…",
    "expires_at": "…" }`.
 2. `POST` the file's bytes, exactly `size` of them, to `upload_url`, with
    the file's type as `Content-Type` and no Authorization header, for example
@@ -1754,7 +1766,8 @@ requests cannot upload files, but they can still attach text they write
 with `attach_text_file`. It takes the task `ref`, a file `name`, the `text`
 and an optional `content_type` (`text/plain; charset=utf-8` by default) and
 stores the text as a UTF-8 file in one call. The text may hold at most 256
-KiB once encoded, and the organization's per-file limit applies too. Longer
+KiB once encoded, and the organization's per-file limit and the 100
+attachments per task apply too, both checked before the text is stored. Longer
 text is refused with `text must be at most 256 KiB (262144 bytes) as UTF-8`.
 The request body limit of 1 MiB counts the text as JSON escapes it, so text
 made mostly of control characters, which JSON writes as six bytes each, can
@@ -2101,8 +2114,7 @@ Archived tasks (0070) are a separate axis from `status`: they leave the
 default `list_tasks` result (`archived: true` with `project` pages them, see
 [Task results](#task-results)), stop counting as workload, and in the app live
 on the Archived tasks page. A nightly sweep archives tasks that have been `done`
-for 30 days, or for a legacy team archive setting's number of days where an
-older project kept one. Restoring a still-`done` task restarts its
+for 30 days. Restoring a still-`done` task restarts its
 auto-archive clock (0071), so a restore holds for the full threshold. A move
 to another sub-project restarts it too, for the task and each subtask that
 moves with it.

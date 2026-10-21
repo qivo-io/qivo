@@ -183,7 +183,12 @@ const plantLabel = (t: T, org_id: string, name: string, color: string) =>
 
 const plantLink = (t: T, source_id: string, target_id: string, type: 'blocks' | 'relates') =>
   t.run(async (ctx) => {
+    const source = await ctx.db
+      .query('issues')
+      .withIndex('by_uuid', (q) => q.eq('id', source_id))
+      .unique()
     await ctx.db.insert('issue_links', {
+      org_id: source?.org_id ?? '',
       id: uuid(),
       source_id,
       target_id,

@@ -80,8 +80,6 @@ async function load({
         id,
         org_id: org,
         name: id === 'crew' ? 'Crew' : 'Bench',
-        stale_days: 14,
-        archive_days: 30,
         track_delay_default: false,
         created_at: AT,
       })

@@ -27,8 +27,6 @@ export async function newTeam(ctx: MutationCtx, orgId: string): Promise<string> 
     id,
     org_id: orgId,
     name: 'Second',
-    stale_days: 14,
-    archive_days: 30,
     track_delay_default: false,
     created_at: NOW,
   })

@@ -54,8 +54,6 @@ function fixture(): Snapshot {
       id,
       org_id: org,
       name,
-      stale_days: 14,
-      archive_days: 30,
       track_delay_default: false,
       created_at: NOW,
     })

@@ -14,6 +14,11 @@ limit, including for guest uploads. Lowering it leaves existing files intact.
 It does not set a combined storage quota. Only organization admins can change it.
 A file name can have up to 255 characters.
 
+Attachments are for images, PDF files and similar documents that belong
+with a task. Qivo is not a file store, so 20 MiB is the most any
+organization can choose, and a task holds at most 100 attachments,
+description images included.
+
 ## Who can create projects
 
 **Who can create new projects?** in **Settings → Organization → General →

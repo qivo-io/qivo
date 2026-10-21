@@ -21,6 +21,7 @@ import {
   NOW,
   newT,
   type OrgFixture,
+  plantHiddenSibling,
   plantIssue,
   plantProject,
   type T,
@@ -376,27 +377,27 @@ describe('issue scheduling and hierarchy', () => {
   it('archive refuses to change a subtask in a project the caller cannot edit', async () => {
     const t = newT()
     const f = await withOrg(t)
-    // f.guest holds User on f.meta and nothing on f.hidden
-    const hiddenSub = await plantProject(t, {
-      org_id: f.org.id,
-      type: 'project',
-      parent_id: f.hidden.id,
-    })
+    // a sub-project of TBED that f.guest cannot see, while they edit FW and PCB
+    const hiddenSub = await plantHiddenSibling(t, f, f.guest)
     const asGuest = as(t, f.guest)
     const archive = (id: string) => asGuest.mutation(api.issues.archive, { org_id: f.org.id, id })
     const ARCHIVE_RULE =
       /^archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it$/
 
-    // a hidden active subtask, directly or deeper, refuses the archive whole
+    // a hidden active subtask refuses the archive whole
     const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const mid = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, parent_id: root.id })
-    const deep = await plantIssue(t, {
+    const editable = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub2.id,
+      parent_id: root.id,
+    })
+    const hidden = await plantIssue(t, {
       org_id: f.org.id,
       project_id: hiddenSub.id,
-      parent_id: mid.id,
+      parent_id: root.id,
     })
     await expectRefusal(archive(root.id), 'rule', ARCHIVE_RULE)
-    for (const id of [root.id, mid.id, deep.id]) {
+    for (const id of [root.id, editable.id, hidden.id]) {
       expect((await issueRow(t, id)).archived_at).toBeUndefined()
     }
     // so does a visible subtask the caller can only read
@@ -410,11 +411,13 @@ describe('issue scheduling and hierarchy', () => {
     await expectRefusal(archive(root.id), 'rule', ARCHIVE_RULE)
     // an archived hidden subtask is not changed, so it does not block
     await t.run(async (ctx) => {
-      const row = await ctx.db.get(deep._id)
+      const row = await ctx.db.get(hidden._id)
       await ctx.db.patch(row!._id, { archived_at: NOW })
     })
     await archive(root.id)
-    expect((await issueRow(t, mid.id)).archived_at).toBe((await issueRow(t, root.id)).archived_at)
+    expect((await issueRow(t, editable.id)).archived_at).toBe(
+      (await issueRow(t, root.id)).archived_at,
+    )
     // an admin's cascade reaches every project
     const adminRoot = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const adminKid = await plantIssue(t, {

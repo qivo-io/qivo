@@ -183,76 +183,6 @@ describe('snapshot bulk relation reads', () => {
         expect(row).not.toHaveProperty('org_id')
       }
     }
-    const scoped = await read(t, f.admin)
-    const legacyRows = await t.run(async (ctx) => {
-      const ids = []
-      for (const table of ['issue_links', 'issue_labels', 'issue_attachments'] as const) {
-        const row = (await (table === 'issue_links'
-          ? ctx.db
-              .query(table)
-              .withIndex('by_org_task_archived_source', (q) =>
-                q.eq('org_id', f.org.id).eq('task_archived', undefined),
-              )
-          : ctx.db
-              .query(table)
-              .withIndex('by_org_task_archived_issue', (q) =>
-                q.eq('org_id', f.org.id).eq('task_archived', undefined),
-              )
-        ).first())!
-        ids.push(row._id)
-        await ctx.db.patch(row._id, { org_id: undefined })
-      }
-      return ids
-    })
-    // the view's own rows without org_id join the bulk reads, and more of
-    // them than RELATION_READ.legacy send a table task by task
-    const legacy = await read(t, f.admin)
-    expect(sameDelivery(legacy.snapshot)).toEqual(sameDelivery(scoped.snapshot))
-    expect(legacy.metrics.databaseQueries.used).toBe(scoped.metrics.databaseQueries.used)
-    const overflow = await readWith(t, f.admin, { ...DEFAULT_READ, legacy: 0 })
-    expect(sameDelivery(overflow.snapshot)).toEqual(sameDelivery(scoped.snapshot))
-    expect(overflow.metrics.databaseQueries.used).toBeGreaterThan(
-      scoped.metrics.databaseQueries.used,
-    )
-    await t.run(async (ctx) => {
-      for (const id of legacyRows) await ctx.db.patch(id, { org_id: f.org.id })
-      // A marked row without org_id belongs to an archived task, which no
-      // view reads, so the bulk read stays.
-      await ctx.db.insert('issue_labels', {
-        issue_id: 'foreign-archived',
-        label_id: 'legacy-archived',
-        task_archived: true,
-      })
-    })
-    const markedLegacy = await read(t, f.admin)
-    expect(sameDelivery(markedLegacy.snapshot)).toEqual(sameDelivery(scoped.snapshot))
-    expect(markedLegacy.metrics.databaseQueries.used).toBe(scoped.metrics.databaseQueries.used)
-    await t.run(async (ctx) => {
-      // Rows without org_id of another organization's tasks, or of tasks
-      // that are gone, stay out of the view and keep the bulk reads.
-      await ctx.db.insert('issue_labels', { issue_id: 'foreign', label_id: 'legacy-secret' })
-      await ctx.db.insert('issue_links', {
-        id: 'foreign-link',
-        source_id: 'foreign',
-        target_id: 'foreign-peer',
-        type: 'blocks',
-        pair_key: 'foreign:foreign-peer',
-        created_at: NOW,
-      })
-      const storage_id = await ctx.storage.store(new Blob() as never)
-      await ctx.db.insert('issue_attachments', {
-        id: 'foreign-file',
-        issue_id: 'foreign',
-        storage_id,
-        name: 'secret',
-        size_bytes: 0,
-        inline: false,
-        created_at: NOW,
-      })
-    })
-    const foreignLegacy = await read(t, f.admin)
-    expect(sameDelivery(foreignLegacy.snapshot)).toEqual(sameDelivery(scoped.snapshot))
-    expect(foreignLegacy.metrics.databaseQueries.used).toBe(scoped.metrics.databaseQueries.used)
   })
 
   it('read a small view of a larger organization task by task, and a larger one in bulk', async () => {
@@ -290,10 +220,10 @@ describe('snapshot bulk relation reads', () => {
     const small = await read(t, f.admin)
     expect(small.snapshot!.issueLabels.map((row) => row.label_id)).toEqual(labels)
     // without ranges to spend task by task the table is read in full: its
-    // probe and full read replace the capped read and 32 ranges task by task
+    // full read replaces the capped read and 32 ranges task by task
     const large = await readWith(t, f.admin, ALL_BULK)
     expect(large.snapshot!.issueLabels.map((row) => row.label_id)).toEqual(labels)
-    expect(small.metrics.databaseQueries.used - large.metrics.databaseQueries.used).toBe(31)
+    expect(small.metrics.databaseQueries.used - large.metrics.databaseQueries.used).toBe(32)
   })
 })
 
@@ -356,8 +286,6 @@ async function plantHistory(t: T) {
         id: team,
         org_id: f.org.id,
         name: team,
-        stale_days: 14,
-        archive_days: 30,
         track_delay_default: false,
         created_at: NOW,
       })
@@ -631,7 +559,7 @@ describe('the relation reads of a snapshot that has used most of its ranges', ()
   /* The labels of 40 visible tasks, all live so the tables decide, read
    * with `left` ranges left, and the ranges the relation reads used. The
    * labels are over their cap, so task by task they cost 40 ranges, and the
-   * table reads take up to 6 more. */
+   * table reads take up to 3 more. */
   async function readLeaving(left: number) {
     const t = newT({ transactionLimits: true })
     const f = await plantDense(t, { total: 40, visible: 40, labels: 5, links: 0 })
@@ -657,15 +585,15 @@ describe('the relation reads of a snapshot that has used most of its ranges', ()
   }
 
   it('reads a dense table task by task while those reads and the table reads fit', async () => {
-    const { labels, used } = await readLeaving(46)
+    const { labels, used } = await readLeaving(43)
     expect(labels).toBe(200)
     expect(used).toBeGreaterThanOrEqual(40)
-    expect(used).toBeLessThanOrEqual(46)
+    expect(used).toBeLessThanOrEqual(43)
   })
 
   it('reads a dense table in full when task by task would pass the ranges left', async () => {
-    const { labels, used } = await readLeaving(45)
+    const { labels, used } = await readLeaving(42)
     expect(labels).toBe(200)
-    expect(used).toBeLessThanOrEqual(6)
+    expect(used).toBeLessThanOrEqual(3)
   })
 })

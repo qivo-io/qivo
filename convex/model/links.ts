@@ -16,6 +16,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { assertNewRowId, insertUnique } from '../lib/db'
 import type { LinkType } from '../lib/enums'
 import { badRequest, forbidden, notFound, rule } from '../lib/functions'
+import { LINK_MAX, linksFull } from '../lib/taskLimits'
 import { issueKey } from '../lib/taskRefs'
 import { logActivity, signedDetail } from './activity'
 import { assertExpected, DELETES, exact, type Fields, oneOf } from './expected'
@@ -84,13 +85,30 @@ export async function linksOf(ctx: QueryCtx, taskId: string): Promise<Doc<'issue
   return [...byId.values()]
 }
 
+/** Whether task `taskId` is an end of LINK_MAX links already: at most
+ * LINK_MAX rows from each of its two ranges. A pair has one link, and a task
+ * is never linked to itself, so no link is in both. */
+export async function linksFullAt(ctx: QueryCtx, taskId: string): Promise<boolean> {
+  const asSource = await ctx.db
+    .query('issue_links')
+    .withIndex('by_source', (q) => q.eq('source_id', taskId))
+    .take(LINK_MAX)
+  if (asSource.length >= LINK_MAX) return true
+  const asTarget = await ctx.db
+    .query('issue_links')
+    .withIndex('by_target', (q) => q.eq('target_id', taskId))
+    .take(LINK_MAX - asSource.length)
+  return asSource.length + asTarget.length >= LINK_MAX
+}
+
 /**
  * Links two tasks as stored (source, target, type), stamped `now`. `id` is
  * the app's client-made id; machine callers omit it. An id that is not a
  * lowercase UUID is refused first (lib/db.ts assertNewRowId). The same link
  * again is a no-op that writes nothing and answers `added: false`; a
  * different link between the same tasks, or an `id` another link already
- * has, is refused.
+ * has, is refused, and so is a new link to a task that is an end of
+ * LINK_MAX links already (linksFull).
  * `provenance` signs a machine write's activity row. Refuses a self link, a
  * task the actor cannot see (in the organization sentence, so no answer
  * describes it) and an actor without Edit on either task.
@@ -126,6 +144,9 @@ export async function addLinkCore(
       existing.source_id === source_id && existing.target_id === target_id && existing.type === type
     if (same) return { link: existing, added: false }
     throw badRequest('these tasks are already linked')
+  }
+  for (const end of [source, target]) {
+    if (await linksFullAt(ctx, end.id)) throw rule(linksFull(issueKey(end.num)))
   }
   const id = a.id ?? newUuid()
   const docId = await insertUnique(

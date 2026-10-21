@@ -81,7 +81,7 @@ Tasks have these fields:
 - **Labels**, a rich-text **description**, **attachments**, **comments**, a
   **parent**, **subtasks** and task **links**. A subtask stays in its
   parent's project, in any of its sub-projects. A task has one level of
-  subtasks, at most 100 of them
+  subtasks, at most 100 active ones, and archived subtasks do not count
   ([The details column](./the-task-window.md#the-details-column)). Links can mean “blocks”, “is
   blocked by” or “relates to” and may span projects and teams. You see a link
   only if you can access both tasks. Description
@@ -214,13 +214,16 @@ rows and choose a button such as **Restore 3 selected**. A window lists where
 they go before anything changes. Restored work keeps its keys, such as
 `QN-142`, because Qivo never reuses a number
 ([Permanent task IDs](#permanent-task-ids)). Labels deleted since then are
-gone, and so are links to work deleted for good. A subtask deleted on its own
+gone, and so are links to work deleted for good and links to a task that has
+reached 100 links since. A subtask deleted on its own
 returns under its parent when the parent still exists, is not a subtask
-itself and has fewer than 100 subtasks, the restored task has no subtasks,
+itself and has fewer than 100 active subtasks, the restored task has no subtasks,
 you can edit the parent, and everyone assigned to or reviewing the subtask
-can still see the parent's project. Otherwise, or when the parent's
+can still see the parent's project. An archived subtask does not count
+toward the 100. Otherwise, or when the parent's
 subtasks are too large to count during the restore, it returns as a
-top-level task and keeps its people and its subtasks. Work that was archived when it was
+top-level task and keeps its people and its subtasks, as a subtask restored
+from the archive under a full parent does. Work that was archived when it was
 deleted returns archived. A restored Done task restarts its auto-archive
 clock. A task restored on its own sends its followers a **Restored** update.
 Restoring several items at once, or a project, sends none, and inbox

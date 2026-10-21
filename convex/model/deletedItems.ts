@@ -100,7 +100,7 @@ import {
   projectLevelsForOrg,
 } from '../lib/access'
 import { deletionBegun, orgWriteBlock } from '../lib/billingAccess'
-import { byId, LARGE_ROWS_PER_READ } from '../lib/db'
+import { byId, LARGE_ROWS_PER_READ, usedMoreThan } from '../lib/db'
 import { demoForOrg, isDemoDeployment, uncountedWriter } from '../lib/demo'
 import {
   type AccessLevel,
@@ -118,6 +118,7 @@ import { insertActivity, logActivity } from './activity'
 import { storageIdInUse } from './attachments'
 import { estimateDocumentBytes } from './demoMetrics'
 import { assertCanEdit, clearParentRemaining, detachChild, sameTopLevel } from './issues'
+import { linksFullAt } from './links'
 import {
   type NotifyPreload,
   newNotifyPreload,
@@ -483,7 +484,7 @@ export async function storeRow(
 
 /** One kind of row that travels with a task or a project, read through the
  * same index as the hard deletes (model/cascade.ts), so rows with archive
- * marks and legacy rows without org_id are included. */
+ * marks are included. */
 type Relation = {
   /** Up to `n` rows from the start of the range. */
   read: (ctx: QueryCtx, ownerId: string, n: number) => Promise<LiveRow[]>
@@ -652,9 +653,6 @@ export type Memo = {
   /** whether a task belongs to the project item a step restores, by task
    * (inThisItem); its answer holds for the whole step */
   inItem: Map<string, Promise<boolean>>
-  /** the project a task of the item a step restores goes back to, by task
-   * (restoredProject) */
-  restoredProjects: Map<string, Promise<string | undefined>>
 }
 
 export const newMemo = (): Memo => ({
@@ -672,7 +670,6 @@ export const newMemo = (): Memo => ({
   levels: new Map(),
   holders: new Map(),
   inItem: new Map(),
-  restoredProjects: new Map(),
 })
 
 /** One item as the restore rules read it (design 5.2, 5.3), in a query or
@@ -2066,10 +2063,7 @@ async function restoreRows(run: Run): Promise<boolean> {
  * where the table has it (design 5.2): a comment keeps its author and
  * editor, an attachment its uploader, only while they pass the reference
  * predicate; a follow and a label assignment stay only while their profile
- * or label passes it. An attachment takes the project its task goes back
- * to (restoredProject), whatever project the stored row named, so the
- * storage totals count it there once that project is live
- * (model/billing.ts storageUsage). Deletes the stored row. */
+ * or label passes it. Deletes the stored row. */
 async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
   const { org_id } = run.item
   const r = row.row
@@ -2086,43 +2080,17 @@ async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
   } else if (r.table === 'issue_subscriptions') {
     if ((await keptProfile(run, r.doc.profile_id)) !== undefined)
       await db.insert('issue_subscriptions', { ...r.doc, task_archived: undefined })
-  } else if (r.table === 'issue_attachments')
+  } else if (r.table === 'issue_attachments') {
+    // a copy stored before the project was retired leaves it behind
+    const { project_id: _retired, ...doc } = r.doc
     await db.insert('issue_attachments', {
-      ...r.doc,
+      ...doc,
       org_id,
-      project_id: await restoredProject(run, row.owner_id),
       uploaded_by: await keptProfile(run, r.doc.uploaded_by),
       task_archived: undefined,
     })
-  else throw new Error(`A restore cannot write a ${r.table} row back here`)
+  } else throw new Error(`A restore cannot write a ${r.table} row back here`)
   await run.ctx.db.delete(row._id)
-}
-
-/** The project task `taskId` of the restoring item goes back to, read
- * once per step. Rows stored before attachments carried their project
- * have none, so this is where a restored attachment gets it. A task of the
- * item has its deleted_tasks row until the restore writes the task, which
- * usually comes after the task's relation rows. A project item can meet a
- * task's rows after it wrote the task, when a split (splitOff) hands it a
- * subtask past restore_rows and restore_tasks writes that subtask before
- * the reveal sends the item back for its rows. That task is live under one
- * of the item's projects, and answers that project. Any other task answers
- * undefined, and a row without a project counts in its task's, as
- * storageUsage reads it, so it never counts in a project its task is not
- * in. */
-function restoredProject(run: Run, taskId: string): Promise<string | undefined> {
-  return memoRead(run.memo.restoredProjects, taskId, async () => {
-    const light = await run.ctx.db
-      .query('deleted_tasks')
-      .withIndex('by_task', (q) => q.eq('task_id', taskId))
-      .collect()
-    const stored = light.find((row) => row.item_id === run.item.id)
-    if (stored !== undefined) return stored.project_id
-    const written = await byId(run.ctx, 'issues', taskId)
-    if (written === null) return undefined
-    chargeRead(run.budget, written)
-    return itemProjectIds(run.item).includes(written.project_id) ? written.project_id : undefined
-  })
 }
 
 /* The item's links, after the rows above and before a project item's
@@ -2153,7 +2121,8 @@ const restoreLinks = (run: Run): Promise<boolean> =>
  * its reveal, so nobody sees the link before then, and a restore that fails
  * takes it back with its task (move_drain). An end in another item that is
  * ready or moving: the link moves to that item, owned by that end.
- * Otherwise it is dropped. A link never moves to an item that restores,
+ * Otherwise it is dropped, and so is a link one of whose ends is an end of
+ * LINK_MAX links already (model/links.ts linksFullAt). A link never moves to an item that restores,
  * because that item's own restore_links would hand it straight back, and
  * two items restoring together would trade their links for ever. */
 async function placeLink(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
@@ -2201,7 +2170,13 @@ async function placeLinkBy(
     .query('issue_links')
     .withIndex('by_pair', (q) => q.eq('pair_key', link.pair_key))
     .first()
-  if (taken === null)
+  // an end that reached LINK_MAX while this link was in Deleted items takes
+  // no more (lib/taskLimits.ts), so the link stays out, as one to a task
+  // deleted for good does. An end of this item counts the links written
+  // back before this one.
+  let full = false
+  for (const end of [link.source_id, link.target_id]) full ||= await linksFullAt(read, end)
+  if (taken === null && !full)
     await uncountedWriter(run.ctx.db).insert('issue_links', {
       ...link,
       org_id: run.item.org_id,
@@ -2638,7 +2613,9 @@ type Kept = { id: string; grouped: boolean } | undefined | 'later'
  * project since the delete fails it, as can a subtask stored before the
  * rule. The one level of subtasks (lib/taskLimits.ts) also clears a
  * parent that is a subtask itself, the parent of a task that comes back
- * with subtasks, and a parent that already has SUBTASK_MAX subtasks. An
+ * with subtasks, and, for an active task, a parent that already has
+ * SUBTASK_MAX active subtasks, as a restore from the archive does
+ * (model/issues.ts unarchiveIssueCore). An
  * active parent stays when the restorer may change it; an archived one only
  * for an archived task.
  * `grouped`: the attach makes the parent a group (lib/liveTasks.ts
@@ -2682,12 +2659,13 @@ async function keptParent(
   // nor a task with subtasks under one
   const workers = await workersOf(run, task, children)
   if (workers === null) return undefined
-  const subtasks = await liveSubtasks(run, reads, outside.parent.id)
+  // only an active task counts toward the parent's SUBTASK_MAX
+  const subtasks = taskActive ? await liveSubtasks(run, reads, outside.parent.id) : 0
   if (subtasks === 'later') return 'later'
   if (subtasks >= SUBTASK_MAX) return undefined
   const sees = await allSee(run, reads, task, workers, outside.parent.project_id)
   if (sees === 'later') return 'later'
-  if (sees) reads.subtasks.set(outside.parent.id, subtasks + 1)
+  if (sees && taskActive) reads.subtasks.set(outside.parent.id, subtasks + 1)
   // the attach makes the parent a group only when the task counts for it
   const grouped = countsAsSubtask(
     { archived: !active, projectLive: outside.project.archived_at === undefined },
@@ -2697,18 +2675,17 @@ async function keptParent(
 }
 
 /** The most bytes one count of a parent's subtasks (liveSubtasks) reads.
- * A subtask within TEXT_MAX stores up to about 120 KB, and one stored
- * before that cap almost 1 MiB, so a parent's 100 subtasks can pass what a
- * step can read. A count past it stops, counts the parent as full, with a
- * warning, and its task comes back without it. Someone with Edit can still
- * give the task that parent by hand. A mutable object, so tests can lower
- * it. */
+ * A subtask within TEXT_MAX stores up to about 120 KB, so a parent's 100
+ * active subtasks can pass what a step can read. A count past it stops,
+ * counts the parent as full, with a warning, and its task comes back
+ * without it. Someone with Edit can still give the task that parent by
+ * hand. A mutable object, so tests can lower it. */
 export const COUNT_READ = { bytes: 8 * 1024 * 1024 }
 
-/** How many subtasks live task `parentId` has, archived ones included,
- * counted up to SUBTASK_MAX, with the ones the step gave it, or SUBTASK_MAX
- * for a count past COUNT_READ. Read once per step and charged to its
- * budget; 'later' when the step's reads are spent before it is read. */
+/** How many active subtasks live task `parentId` has, counted up to
+ * SUBTASK_MAX, with the ones the step gave it, or SUBTASK_MAX for a count
+ * past COUNT_READ. Read once per step and charged to its budget; 'later'
+ * when the step's reads are spent before it is read. */
 async function liveSubtasks(
   run: Run,
   reads: ParentReads,
@@ -2719,7 +2696,11 @@ async function liveSubtasks(
   if (readsSpent(run.budget)) return 'later'
   let count = 0
   let bytes = 0
-  const kids = run.ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', parentId))
+  const kids = run.ctx.db
+    .query('issues')
+    .withIndex('by_parent_archived', (q) =>
+      q.eq('parent_id', parentId).eq('archived_at', undefined),
+    )
   for await (const kid of kids) {
     count += 1
     bytes += chargeRead(run.budget, kid)
@@ -2799,9 +2780,10 @@ async function allSee(
  * subtasks are its children among the tasks the reveal writes (`children`)
  * and, for a project item, the tasks under it in issues, which restore_tasks
  * wrote back or, after the reveal, anyone attached. Only the first one
- * found is read, and charged to the step's budget. A task item's tasks have
- * no other children, because its delete detached every live child outside
- * it and nothing can attach to a task in Deleted items.
+ * found is read, and charged to the step's budget. A task item's tasks are
+ * read too: its delete detached every active child outside it, but its
+ * archived children leave in steps after the delete
+ * (detachArchivedChildren), which a quick restore can overtake.
  */
 async function workersOf(
   run: Run,
@@ -2809,15 +2791,13 @@ async function workersOf(
   children: StoredChildren,
 ): Promise<Set<string> | null> {
   if ((children.get(task.id) ?? []).length > 0) return null
-  if (run.item.kind === 'project') {
-    const kid = await run.ctx.db
-      .query('issues')
-      .withIndex('by_parent', (q) => q.eq('parent_id', task.id))
-      .first()
-    if (kid !== null) {
-      chargeRead(run.budget, kid)
-      return null
-    }
+  const kid = await run.ctx.db
+    .query('issues')
+    .withIndex('by_parent', (q) => q.eq('parent_id', task.id))
+    .first()
+  if (kid !== null) {
+    chargeRead(run.budget, kid)
+    return null
   }
   const people = new Set<string>()
   if (task.assignee_id !== undefined) people.add(task.assignee_id)
@@ -3750,14 +3730,65 @@ async function liveProject(ctx: QueryCtx, id: string): Promise<Doc<'projects'>> 
   return project
 }
 
+/** How many children of a deleted task one step of detachArchivedChildren
+ * detaches, and the share of any of Convex's limits for one transaction it
+ * may use before it leaves the rest to the next step. A child is a task
+ * row, up to about 120 KB within TEXT_MAX, and each detach also notifies
+ * and sends task.updated, whose costs have no fixed bound. Tests lower
+ * them. */
+export const ARCHIVED_DETACH = { page: 100, room: 0.5 }
+
+const detachArchivedRef = makeFunctionReference<
+  'mutation',
+  { parent_id: string; actor_id: string; now: string },
+  null
+>('deletedItems:detachArchived')
+
 /**
- * Moves task `root` and the chosen `subtasks` (deletion order, deepest
- * first) to Deleted items as one task item, as the app's, REST and MCP
+ * Detaches the archived subtasks left under task `parent_id` by its delete
+ * at `now` (moveTasksToTrash), a page per step, as the delete detaches its
+ * active children: each becomes a top-level task, and its followers read
+ * that it left its parent, told in background steps
+ * (NotifyPreload.deferFollowers). SUBTASK_MAX does not bound archived
+ * subtasks, so the delete's own transaction leaves them to these steps.
+ * Only subtasks archived by `now` go, so a restore of the parent from
+ * Deleted items in the meantime keeps a subtask archived under it later,
+ * and the steps go on until the ones the delete left are all detached. A
+ * subtask restored from the archive meanwhile has left its missing parent
+ * already (model/issues.ts restoreLeavesParent).
+ */
+export async function detachArchivedChildren(
+  ctx: MutationCtx,
+  a: { parent_id: string; actor_id: string; now: string },
+): Promise<void> {
+  const kids = await ctx.db
+    .query('issues')
+    .withIndex('by_parent_archived', (q) =>
+      q.eq('parent_id', a.parent_id).gt('archived_at', '').lte('archived_at', a.now),
+    )
+    .take(ARCHIVED_DETACH.page)
+  const actor = (await byId(ctx, 'profiles', a.actor_id)) ?? undefined
+  const preload: NotifyPreload = { ...newNotifyPreload(), deferFollowers: true }
+  for (const [i, kid] of kids.entries()) {
+    // a detached row leaves the range, so the next step needs no cursor
+    if (i > 0 && (await usedMoreThan(ctx, ARCHIVED_DETACH.room))) {
+      await ctx.scheduler.runAfter(0, detachArchivedRef, a)
+      return
+    }
+    await detachChild(ctx, kid, actor, a.now, preload)
+  }
+  if (kids.length === ARCHIVED_DETACH.page) await ctx.scheduler.runAfter(0, detachArchivedRef, a)
+}
+
+/**
+ * Moves task `root` and the chosen `subtasks`, its direct subtasks,
+ * to Deleted items as one task item, as the app's, REST and MCP
  * deletes do. The callers check access and the subtask choice; each task's
  * Edit check is repeated here as defense in depth (model/issues.ts
  * assertCanEdit). In this transaction, for each task: its messages are
- * deleted, its live children outside the item are detached (the SET NULL's
- * touch, 'Detached from its parent' and task.updated), task.deleted is
+ * deleted, its active children outside the item are detached (the SET NULL's
+ * touch, 'Detached from its parent' and task.updated), and its archived
+ * ones in steps just after (detachArchivedChildren), task.deleted is
  * emitted, the task row is stored and the 'deleted' activity row written as
  * before, its detail the machine `provenance`. A child
  * inside the item keeps its parent, and a task that still waits for its
@@ -3828,14 +3859,33 @@ export async function moveTasksToTrash(
       .query('messages')
       .withIndex('by_issue_read', (q) => q.eq('issue_id', task.id))
     for await (const message of messages) await counted.db.delete(message._id)
-    const kids = await counted.db
-      .query('issues')
-      .withIndex('by_parent', (q) => q.eq('parent_id', task.id))
-      .collect()
-    for (const kid of kids) {
-      if (doomed.has(kid.id)) continue
-      preload ??= newNotifyPreload()
-      await detachChild(counted, kid, actor, now, preload)
+    // A subtask has no subtasks of its own, so only a top-level task has
+    // children to leave behind. The active ones, at most SUBTASK_MAX, are
+    // detached here, and the archived ones, which have no bound, in
+    // background steps.
+    if (task.parent_id === undefined) {
+      const kids = await counted.db
+        .query('issues')
+        .withIndex('by_parent_archived', (q) =>
+          q.eq('parent_id', task.id).eq('archived_at', undefined),
+        )
+        .take(SUBTASK_MAX)
+      for (const kid of kids) {
+        if (doomed.has(kid.id)) continue
+        preload ??= newNotifyPreload()
+        await detachChild(counted, kid, actor, now, preload)
+      }
+      const archivedKid = await counted.db
+        .query('issues')
+        .withIndex('by_parent_archived', (q) => q.eq('parent_id', task.id).gt('archived_at', ''))
+        .first()
+      if (archivedKid !== null) {
+        await ctx.scheduler.runAfter(0, detachArchivedRef, {
+          parent_id: task.id,
+          actor_id: actor.id,
+          now,
+        })
+      }
     }
     await emitTaskEvent(counted, { name: 'task.deleted', issue: task, actor, now })
     if (dropped.has(task.id)) {

@@ -260,11 +260,11 @@ describe('moving a task to Deleted items', () => {
     const org_id = f.org.id
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
     const a = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
-    const aa = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: a.id })
+    const b = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: root.id })
     const kept = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: root.id })
     await plantSubscription(t, { issue_id: kept.id, profile_id: f.guest.id })
 
-    await deleteTask(t, f, root.id, { subtask_ids: [a.id, aa.id] })
+    await deleteTask(t, f, root.id, { subtask_ids: [a.id, b.id] })
 
     const item = await itemFor(t, root.id)
     expect(item.counts).toEqual({ tasks: 3, archived_tasks: 0, subtasks: 2, sub_projects: 0 })
@@ -274,7 +274,7 @@ describe('moving a task to Deleted items', () => {
     ])
     expect((await storedIssue(t, root.id))?.parent_id).toBeUndefined()
     expect((await storedIssue(t, a.id))?.parent_id).toBe(root.id)
-    expect((await storedIssue(t, aa.id))?.parent_id).toBe(a.id)
+    expect((await storedIssue(t, b.id))?.parent_id).toBe(root.id)
     expect(await storedTasks(t, item.id)).toHaveLength(3)
     // the child left behind is detached, touched and announced
     const left = await liveTask(t, kept.id)
@@ -1854,7 +1854,6 @@ describe("an organization's deletion", () => {
     await t.run((ctx) =>
       ctx.db.insert('issue_attachments', {
         org_id: f.otherOrg.id,
-        project_id: f.otherProject.id,
         id: uuid(),
         issue_id: keeper.id,
         name: 'shared.txt',

@@ -64,8 +64,6 @@ async function plantTeam(
     const _id = await ctx.db.insert('teams', {
       id: uuid(),
       name: 'Planted crew',
-      stale_days: 14,
-      archive_days: 30,
       track_delay_default: false,
       created_at: NOW,
       ...team,

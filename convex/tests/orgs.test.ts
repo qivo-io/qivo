@@ -287,9 +287,12 @@ describe('identity.createOrganization — the whole door', () => {
     expect(teams.length).toBe(1)
     const team = teams[0]
     expect(team.name).toBe('Nimbus Labs') // named exactly the ORG's name
-    expect(team.max_attachment_mb).toBeUndefined() // legacy field is never created
-    expect(team.stale_days).toBe(120)
-    expect(team.archive_days).toBe(30)
+    // retired fields are never created
+    expect([team.max_attachment_mb, team.stale_days, team.archive_days]).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ])
     expect(team.track_delay_default).toBe(true)
 
     const members = await t.run((ctx) =>
@@ -428,8 +431,6 @@ const plantTeam = (on: T, org_id: string): Promise<Doc<'teams'>> =>
       id: uuid(),
       org_id,
       name: 'Planted',
-      stale_days: 120,
-      archive_days: 30,
       track_delay_default: true,
       created_at: NOW,
     })

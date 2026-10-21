@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import { SUBTASKS_CHANGED } from '../issues'
 import {
@@ -6,23 +6,25 @@ import {
   as,
   expectRefusal,
   newT,
+  plantHiddenSibling,
   plantIssue,
   plantProject,
   withOrg,
 } from './helpers.setup'
 
 /* Deleting a task with the subtasks the delete window listed moves them to
- * Deleted items as one item. The guest edits the Testbed platform (Firmware
- * and Board rev), only views Pilot, and cannot see Skunkworks. */
+ * Deleted items as one item. A task has one level of subtasks, all in its
+ * top-level project, Testbed platform. The guest edits its Firmware and
+ * Board rev, only views a third sub-project, and cannot see a fourth. */
 async function tree() {
   const t = newT()
   const f = await withOrg(t)
   const org_id = f.org.id
-  const pilot = await plantProject(t, { org_id, name: 'Pilot' })
-  const pilotSub = await plantProject(t, { org_id, type: 'project', parent_id: pilot.id })
+  const hiddenSub = await plantHiddenSibling(t, f, f.guest)
+  const viewSub = await plantProject(t, { org_id, type: 'project', parent_id: f.meta.id })
   await t.run(async (ctx) => {
     await ctx.db.insert('project_access', {
-      project_id: pilot.id,
+      project_id: viewSub.id,
       profile_id: f.guest.id,
       level: 'viewer',
     })
@@ -31,12 +33,11 @@ async function tree() {
     plantIssue(t, { org_id, project_id, parent_id, ...extra })
   const root = await task(f.sub.id)
   const a = await task(f.sub2.id, root.id) // editable
-  const aa = await task(f.sub.id, a.id) // editable, one level down
-  const ab = await task(pilotSub.id, a.id) // view only, under a deleted subtask
-  const b = await task(pilotSub.id, root.id) // view only
-  const ba = await task(f.sub.id, b.id) // editable, but under a kept subtask
-  const c = await task(f.hidden.id, root.id) // cannot be seen
+  const a2 = await task(f.sub.id, root.id) // editable
+  const b = await task(viewSub.id, root.id) // view only
+  const c = await task(hiddenSub.id, root.id) // cannot be seen
   const d = await task(f.sub.id, root.id, { archived_at: '2026-01-02T00:00:00.000Z' })
+  const e = await task(f.sub.id, root.id) // editable, not chosen
   // a live task's parent, or the item a stored one waits in with its parent
   const read = (id: string) =>
     t.run(async (ctx) => {
@@ -53,42 +54,51 @@ async function tree() {
       return { item: stored.item_id, parent: stored.row.doc.parent_id ?? null }
     })
   const items = () => t.run((ctx) => ctx.db.query('deleted_items').collect())
-  return { t, f, root, a, aa, ab, b, ba, c, d, read, items }
+  return { t, f, root, a, a2, b, c, d, e, read, items }
 }
 
 describe('deleting a task with its subtasks', () => {
-  it('moves the chosen subtasks with the task, under their parents, and leaves every other one as a top-level task', async () => {
-    const { t, f, root, a, aa, ab, b, ba, c, d, read, items } = await tree()
+  // the deleted task's archived subtasks leave it in background steps
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('moves the chosen subtasks with the task, under it, and leaves every other one as a top-level task', async () => {
+    const { t, f, root, a, a2, b, c, d, e, read, items } = await tree()
     await as(t, f.guest).mutation(api.issues.deleteDeep, {
       org_id: f.org.id,
       id: root.id,
-      subtask_ids: [a.id, aa.id],
+      subtask_ids: [a.id, a2.id],
     })
+    // the archived subtask is still under the deleted task until the steps run
+    expect(await read(d.id)).toEqual({ parent: root.id })
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
     const [item] = await items()
     expect(item).toMatchObject({
       target_id: root.id,
       state: 'ready',
       counts: { tasks: 3, subtasks: 2 },
     })
-    // one item, and the chosen subtasks keep their parents in it
+    // one item, and the chosen subtasks keep their parent in it
     expect(await read(root.id)).toEqual({ item: item.id, parent: null })
     expect(await read(a.id)).toEqual({ item: item.id, parent: root.id })
-    expect(await read(aa.id)).toEqual({ item: item.id, parent: a.id })
-    // view only, unseen, archived: detached from the deleted task above
-    for (const kept of [ab, b, c, d]) expect(await read(kept.id)).toEqual({ parent: null })
-    // a kept subtask keeps its own subtasks
-    expect(await read(ba.id)).toEqual({ parent: b.id })
-    // deepest first, so no subtask about to go is detached (and announced) first
+    expect(await read(a2.id)).toEqual({ item: item.id, parent: root.id })
+    // view only, unseen, archived, not chosen: detached from the deleted task
+    for (const kept of [b, c, d, e]) expect(await read(kept.id)).toEqual({ parent: null })
+    // the subtasks go first, then the task
     const deleted = (await activityFor(t, f.org.id))
-      .filter((e) => e.verb === 'deleted')
-      .map((e) => e.target_id)
-    expect(deleted).toEqual([aa.id, a.id, root.id])
+      .filter((row) => row.verb === 'deleted')
+      .map((row) => row.target_id)
+    expect(deleted).toEqual([a.id, a2.id, root.id])
   })
 
   it('refuses, deleting nothing, when a listed subtask is not one it may delete', async () => {
-    const { t, f, root, a, aa, b, ba, c, d, read, items } = await tree()
-    for (const listed of [b, c, d, ba, aa]) {
-      // view only, unseen, archived, under a kept subtask, or its parent not listed
+    const { t, f, root, a, b, c, d, read, items } = await tree()
+    for (const listed of [b, c, d]) {
+      // view only, unseen or archived
       await expectRefusal(
         as(t, f.guest).mutation(api.issues.deleteDeep, {
           org_id: f.org.id,
@@ -118,13 +128,12 @@ describe('deleting a task with its subtasks', () => {
   })
 
   it('without subtasks moves only the task, as before', async () => {
-    const { t, f, root, a, aa, b, read, items } = await tree()
+    const { t, f, root, a, b, read, items } = await tree()
     await as(t, f.guest).mutation(api.issues.deleteDeep, { org_id: f.org.id, id: root.id })
     const [item] = await items()
     expect(item).toMatchObject({ target_id: root.id, counts: { tasks: 1, subtasks: 0 } })
     expect(await read(root.id)).toEqual({ item: item.id, parent: null })
     expect(await read(a.id)).toEqual({ parent: null })
     expect(await read(b.id)).toEqual({ parent: null })
-    expect(await read(aa.id)).toEqual({ parent: a.id })
   })
 })

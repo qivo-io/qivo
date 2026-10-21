@@ -1,7 +1,6 @@
 /* The personal data Better Auth would keep on its own rows that Qivo never
- * reads. auth.ts's databaseHooks stop it at every write, and
- * internal/authDataBackfill clears what rows stored before that hold. Both
- * read the field lists here, so they cannot drift apart. The schema keeps
+ * reads. auth.ts's databaseHooks stop it at every write, reading the field
+ * lists here. The schema keeps
  * every field (convex/betterAuth/schema.generated.ts), because Convex
  * validates existing documents on deploy.
  *

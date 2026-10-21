@@ -249,8 +249,7 @@ function exportRow(doc: Doc<OrgExportSection>, section: OrgExportSection): OrgEx
     delete row.org_id
     delete row.task_archived
   }
-  // An attachment's project copies its task's for the storage totals. Other
-  // sections' project_id is their own data.
+  // retired, cleared by internal/retiredFields (schema.ts)
   if (section === 'issue_attachments') delete row.project_id
   // A team's or project's legacy icon and its color: nothing writes or shows
   // them now, and a value stored before they were dropped has no length limit.

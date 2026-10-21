@@ -73,8 +73,6 @@ const plantMembership = (on: T, org_id: string, profile_id: string, is_leader = 
       id: team_id,
       org_id,
       name: 'Crew',
-      stale_days: 14,
-      archive_days: 30,
       track_delay_default: false,
       created_at: NOW,
     })
