@@ -27,7 +27,7 @@ const NOW = '2026-09-14T08:00:00.000Z'
 let container: HTMLDivElement
 let root: Root
 let writes: Answer[]
-let onCommit: ReturnType<typeof vi.fn>
+let onCommit: ReturnType<typeof vi.fn<() => void>>
 
 beforeEach(async () => {
   vi.resetModules()
@@ -69,7 +69,7 @@ beforeEach(async () => {
   const { TooltipProvider } = await import('./ui/tooltip')
   const task = store.P.issues.find((i) => i.uuid === 'task-a')
   if (!task) throw new Error('missing the task')
-  onCommit = vi.fn()
+  onCommit = vi.fn<() => void>()
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
