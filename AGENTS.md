@@ -96,6 +96,8 @@ the output of `git merge-base origin/main HEAD` after `git fetch origin`.
    and report it.
 
 If a step fails, times out or cannot run, stop before step 7 and report it.
+A change that touches only lockfiles follows the README's lockfile rule for
+step 5 instead, because neither CLI can review it.
 A commit added after the pull request opens, other than a rebase without
 conflict edits, gets step 1 on its own diff, and the fixes, before the merge.
 A pull request opened another way, for example by Dependabot or from a fork,
