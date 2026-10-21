@@ -109,7 +109,9 @@ describe('the Board panel clipping', () => {
     const query = vi.spyOn(pane, 'querySelectorAll')
     const lane = vi.spyOn(pane.querySelector<HTMLElement>('.board-lane')!, 'getBoundingClientRect')
     pane.dispatchEvent(new Event('scroll'))
-    await act(async () => await new Promise((resolve) => requestAnimationFrame(resolve)))
+    await act(
+      async () => await new Promise((resolve) => requestAnimationFrame(() => resolve(null))),
+    )
     expect(lane).toHaveBeenCalled()
     expect(query).not.toHaveBeenCalled()
   })

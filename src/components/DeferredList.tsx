@@ -43,7 +43,7 @@ type Props<T extends object> = {
 type Block<T> = { id: number; items: T[] }
 
 function BlockView<T>({ items, render }: { items: readonly T[]; render: (item: T) => ReactNode }) {
-  return items.map((item) => render(item))
+  return <>{items.map((item) => render(item))}</>
 }
 
 /* A block renders again when the list's render or one of its items is new. */
