@@ -320,8 +320,8 @@ export async function removeProfile(
  * and roadmap_history (per login, cleared with the login), demo_sessions
  * (internal/demoCleanup owns the public demo's lifecycle) and the platform
  * audit log (history survives its subjects until auditRetention.ts deletes
- * it after 90 days). Neither are activity_retention rows an earlier release
- * left, a table the schema no longer lists. Pending profile_removals rows
+ * it after 90 days). Neither are activity_retention or comment_counts rows an
+ * earlier release left, tables the schema no longer lists. Pending profile_removals rows
  * are also left alone. Their background steps still delete the removed
  * profiles' inboxes and OAuth connections, which this sweep only reaches
  * through live profiles. Deleted items go first, whatever state they are in,
