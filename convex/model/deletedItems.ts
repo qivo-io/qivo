@@ -167,7 +167,7 @@ type Item = Doc<'deleted_items'>
 type Job = Doc<'deleted_item_jobs'>
 type Tally = NonNullable<Job['tally']>
 /** Where a job is: what a step reads first and saves last. */
-type JobState = Pick<Job, 'phase' | 'cursor' | 'tally' | 'alone'>
+type JobState = Pick<Job, 'phase' | 'cursor' | 'tally' | 'alone' | 'purge_history'>
 export type Via = NonNullable<Item['via']>
 
 /** A live document of one of the stored tables, tagged with its table. */
@@ -852,18 +852,16 @@ async function idTaken(run: Run, taskId: string): Promise<boolean> {
  * the item's projects (childrenOutside), on a purge its history
  * (purgeHistory), then the task row. True once the task row is gone.
  * A task left half done stays hidden, because its project is absent, and
- * the next step picks it up. A task too large to store is purged instead.
- * A task that a restore wrote back without its parent, and that still waits
+ * the next step picks it up. A task too large to store goes in cut to the
+ * caps (fitToStore). A task that a restore wrote back without its parent, and that still waits
  * for it, is stored with that parent again (takeParent). Tasks of a deleted
  * project emit no task.deleted. */
 async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boolean> {
-  const live = { table: 'issues', doc: task } as const
-  const how = mode === 'keep' && tooLarge(run.item, live, task.id) ? 'purge' : mode
   for (const relation of TASK_ROWS) {
     const done = await drain(
       run.budget,
       (n) => relation.read(run.ctx, task.id, n),
-      (row) => clearRow(run, row, task.id, how),
+      (row) => clearRow(run, row, task.id, mode),
       relation.perRead,
     )
     if (!done) return false
@@ -881,19 +879,11 @@ async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boo
   }
   // a task deleted for good loses its history; before takeParent, which
   // deletes the deleted_item_parents row a later step would need
-  if (how === 'purge' && !(await purgeHistory(run, task.id))) return false
+  if (mode === 'purge' && !(await purgeHistory(run, task.id))) return false
   const parent_id = await takeParent(run.ctx, task, run.item)
-  if (how === 'keep') await storeTask(run.ctx, run.item, tallyOf(run), { ...task, parent_id })
-  else {
-    if (mode === 'keep') {
-      console.error('A deleted item dropped a task too large to store', {
-        item_id: run.item.id,
-        task_id: task.id,
-      })
-      tallyOf(run).dropped_rows += 1
-    }
-    await run.ctx.db.delete(task._id)
-  }
+  if (mode === 'keep')
+    await storeTask(run.ctx, run.item, tallyOf(run), fitToStore(run.item, { ...task, parent_id }))
+  else await run.ctx.db.delete(task._id)
   run.budget.tasks -= 1
   charge(run.budget, task)
   return true
@@ -1082,9 +1072,18 @@ async function moveProjectTasks(run: Run): Promise<boolean> {
 
 /* A task item's stored tasks: for each, its messages, which are deleted,
  * then the rows that travel with it. Messages go first, because the inbox
- * walk still passes over them while they wait (lib/inbox.ts). */
-const moveDrain = (run: Run): Promise<boolean> =>
-  eachStoredTask(run, async ({ task_id }) => {
+ * walk still passes over them while they wait (lib/inbox.ts). First the
+ * history of each task in purge_history, which only the release before
+ * set: its move deleted a task too large to store for good. Only the rows
+ * written up to the deletion go, because a new task may take the freed id. */
+const moveDrain = async (run: Run): Promise<boolean> => {
+  const purge = run.state.purge_history ?? []
+  while (purge.length > 0) {
+    if (!(await purgeHistory(run, purge[0], run.item.deleted_at))) return false
+    purge.shift()
+  }
+  run.state.purge_history = undefined
+  return await eachStoredTask(run, async ({ task_id }) => {
     if (!(await dropMessages(run, task_id))) return false
     for (const relation of TASK_ROWS) {
       const done = await drain(
@@ -1097,6 +1096,7 @@ const moveDrain = (run: Run): Promise<boolean> =>
     }
     return true
   })
+}
 
 /** The phase to go back to when a range the move drains holds a row again,
  * else null, or move_finish while the check has more to read. Once a task
@@ -3180,6 +3180,7 @@ async function work(
       cursor: state.cursor,
       tally: state.tally,
       alone: state.alone,
+      purge_history: state.purge_history,
     },
     budget,
     actor: await actorOf(ctx, item, state.phase, txn),
@@ -3254,6 +3255,7 @@ async function saveJob(
     cursor: state.cursor,
     tally: state.tally,
     alone: state.alone,
+    purge_history: state.purge_history,
     progress_at: new Date().toISOString(),
     scheduled_id,
     attempts: 0,
@@ -3922,6 +3924,9 @@ export async function moveTasksToTrash(
       named_task_nums: [],
     })
   }
+  // the work above counts as progress, so a budget it has spent, the bytes
+  // of large tasks included, stops the drain at once and leaves it to steps
+  budget.moved = true
   await startJob(ctx, item, { phase: 'move_drain', tally }, budget)
   return item
 }

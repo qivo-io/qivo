@@ -1002,9 +1002,10 @@ export default defineSchema({
     // a restore whose call held this task item alone and was not part of a
     // bulk restore: its reveal sends the Restored notice (model/deletedItems.ts)
     alone: v.optional(v.boolean()),
-    // written by the release before, whose task item moves deleted a task too
-    // large to store for good; nothing writes or reads it now. It stays
-    // optional so a job that release saved still validates.
+    // the tasks a task item's move deleted for good because they were too
+    // large to store, whose history its steps still delete (move_drain).
+    // Only the release before set it; a move now stores such a task cut
+    // to the caps.
     purge_history: v.optional(v.array(v.string())),
   })
     .index('by_item', ['item_id'])

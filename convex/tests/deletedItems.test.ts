@@ -415,6 +415,74 @@ describe('moving a task to Deleted items', () => {
     })
   }, 120_000)
 
+  it("leaves the subtasks' rows to steps once the tasks it read have spent the delete's bytes", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // 100 subtasks of 20,000 three-byte characters pass the 4 MiB a step reads
+    const ids = await plantChildren(t, root, f.sub.id, SUBTASK_MAX, '中'.repeat(TEXT_MAX))
+    const notes = await t.run(async (ctx) => {
+      const out: string[] = []
+      for (const issue_id of ids) {
+        const id = uuid()
+        await ctx.db.insert('comments', { id, issue_id, body: 'Checked', created_at: NOW })
+        out.push(id)
+      }
+      return out
+    })
+    await deleteTask(t, f, root.id, { subtask_ids: ids })
+    expect((await itemFor(t, root.id)).state).toBe('moving')
+    for (const id of notes) expect(await commentStored(t, id)).toBe(false)
+    await runSteps(t)
+    expect((await itemFor(t, root.id)).state).toBe('ready')
+    for (const id of notes) expect(await commentStored(t, id)).toBe(true)
+  }, 120_000)
+
+  it('deletes the history a job of the release before still names in purge_history', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    // a task that release deleted for good, whose history its job kept
+    const gone = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await plantHistory(t, gone, { numbered: 3 })
+    await t.run((ctx) => ctx.db.delete(gone._id))
+    const task = await plantIssue(t, { org_id, project_id: f.sub.id })
+    for (let i = 0; i < 3; i++) await comment(t, task)
+    TRASH_BUDGET.rows = 1
+    await deleteTask(t, f, task.id)
+    const item = await itemFor(t, task.id)
+    await t.run(async (ctx) => {
+      const job = await ctx.db
+        .query('deleted_item_jobs')
+        .withIndex('by_item', (q) => q.eq('item_id', item.id))
+        .unique()
+      if (job === null) throw new Error('the move left no job')
+      await ctx.db.patch(job._id, { purge_history: [gone.id] })
+    })
+    Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
+    await runSteps(t)
+    expect(await itemFor(t, task.id)).toMatchObject({ state: 'ready' })
+    expect(await historyOf(t, gone.id)).toEqual([])
+    expect(await jobFor(t, item.id)).toBeNull()
+  })
+
+  it('stores a task too large to store cut to the caps when its project is deleted', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const t = newT()
+    const f = await withOrg(t)
+    const huge = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub2.id,
+      description: 'x'.repeat(STORED_ROW_MAX_BYTES),
+    })
+    await deleteProject(t, f, f.sub2.id)
+    await runSteps(t)
+    const item = await itemFor(t, f.sub2.id)
+    expect(item).toMatchObject({ state: 'ready', counts: { tasks: 1 } })
+    expect(item.dropped_rows).toBeUndefined()
+    expect((await storedIssue(t, huge.id))?.description).toBe('x'.repeat(TEXT_MAX))
+  })
+
   it('counts and lists a subtask too large to store, which goes in cut to the caps', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const t = newT()
