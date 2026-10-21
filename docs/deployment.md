@@ -105,7 +105,11 @@ Northstar fixture admin with a password, creates two personal tokens, a
 Standard and a Viewer agent with their keys, and two OAuth connections on the
 consent screen, one with **Allow changes** and one without. With each it
 checks reads, writes, refusals, attachments, activity attribution and
-revocation, and the text, name, comment and request size limits. Its uploads
+revocation, and the text, name, comment and request size limits. It fills
+one task with 60 comments and about 510 changes, one page and a little more
+of each, reads its history over REST and MCP back to the first change, and
+in the task window presses **Show earlier comments** and **Show earlier
+activity** until the first comment and the created row appear. Its uploads
 check that an upload URL stores one file, and one upload is a file at the
 organization's per-file limit (20 MiB by default), sent through a REST upload
 ticket, confirmed, downloaded and deleted again, which shows whether the

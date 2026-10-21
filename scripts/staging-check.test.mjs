@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { HISTORY_PAGE_MAX } from '../convex/lib/activityVisibility'
+import { LABEL_MAX } from '../convex/lib/taskLimits'
 import {
   ACCESS_PUT_FIELDS,
   HELD_TASKS_FIELDS,
   MEMBER_PUT_FIELDS,
 } from '../convex/machine/bodyFields'
+import { COMMENT_PAGE_MAX } from '../convex/model/comments'
 import {
   addDays,
   deleteOutcome,
@@ -22,6 +25,8 @@ import {
   send,
   syncsWith,
   TAG_ANY,
+  TASK_LABEL_MAX,
+  THREAD_PAGE,
   WAITS,
   WRITE_CONFLICT,
   weekOf,
@@ -34,6 +39,10 @@ describe('staging check REST contract', () => {
       heldTasks: [...HELD_TASKS_FIELDS],
       memberPut: [...MEMBER_PUT_FIELDS],
     })
+  })
+  it('fills a task to the page sizes of its thread', () => {
+    expect(THREAD_PAGE).toEqual({ comments: COMMENT_PAGE_MAX, history: HISTORY_PAGE_MAX })
+    expect(TASK_LABEL_MAX).toBe(LABEL_MAX)
   })
 })
 
