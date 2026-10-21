@@ -2130,9 +2130,10 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
   useEffectM(() => {
     if (rebase.current) takeStored()
   }, [m.name, m.week])
-  const [name, setName] = useStateM(m.name)
+  // trimmed, as a name saved before names were trimmed can hold spaces
+  const [name, setName] = useStateM(m.name.trim())
   // a rename typed and not saved yet
-  useUnsaved(name.trim() !== m.name, 'milestone name')
+  useUnsaved(name.trim() !== m.name.trim(), 'milestone name')
   const [date, setDate] = useStateM(() => weekToISO(m.week))
   const week = exactWeekForDate(date)
   // a save in flight: the editor stays open, its fields read-only, until

@@ -80,7 +80,9 @@ export function ProjectAccessEditor({
         <div className="space-y-1.5">
           {teamIds.map((teamId) => {
             const team = P.teamById(teamId)
-            const name = team?.name || 'Unavailable team'
+            const name = team ? P.teamLabel(team) : 'Unavailable team'
+            // a fallback label already ends in "team"
+            const named = team?.name.trim() ? `${name} team` : name
             return (
               <div
                 key={teamId}
@@ -104,8 +106,8 @@ export function ProjectAccessEditor({
                   variant="ghost"
                   size="icon"
                   className="h-control-sm w-control-sm shrink-0"
-                  aria-label={`Remove ${name} team access`}
-                  title={`Remove ${name} team access`}
+                  aria-label={`Remove ${named} access`}
+                  title={`Remove ${named} access`}
                   disabled={!canManageTeams}
                   onClick={() => onTeamChange(teamId, null)}
                 >
@@ -211,7 +213,7 @@ export function ProjectAccessEditor({
             <optgroup label="Teams">
               {addableTeams.map((team) => (
                 <option key={team.id} value={`team:${team.id}`}>
-                  {team.name}
+                  {P.teamLabel(team)}
                 </option>
               ))}
             </optgroup>

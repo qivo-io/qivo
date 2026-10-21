@@ -25,7 +25,7 @@ import type { QueryCtx } from '../_generated/server'
 import { byId } from '../lib/db'
 import { FIELD_CHANGED, printOf } from '../lib/fieldPrints'
 import { badRequest, type FieldChange, type Refusal } from '../lib/functions'
-import { DATE_PATTERN, isCalendarDay } from './taskValues'
+import { DATE_PATTERN, dateShaped, isCalendarDay } from './taskValues'
 
 export { FIELD_CHANGED }
 
@@ -133,11 +133,13 @@ export const uuidOf = (what: string, nullable: boolean): KeyType => ({
     : { type: 'string', format: 'uuid' },
 })
 
-/** Text by the rule of a required text field: not blank once trimmed and,
- * when `max` is given, at most `max` code points once trimmed (as cleanTitle
- * and labelName count). A field that lets a value stored before its cap
- * through, such as a name or a comment body, takes no `max` here, because a
- * read answers that value and a stale read of it must compare. */
+/** Text by the rule of a required text field whose rule has held for every
+ * stored row: not blank once trimmed and, when `max` is given, at most `max`
+ * code points once trimmed (as cleanTitle and labelName count). A field that
+ * lets a value stored before its cap through, such as a comment body, takes
+ * no `max` here, because a read answers that value and a stale read of it
+ * must compare. A field that could be stored blank takes TEXT instead, such
+ * as a team, project or milestone name (model/teams.ts TEAM_FIELDS). */
 export const filledText = (max?: number): KeyType => ({
   ok: (v) =>
     typeof v === 'string' && v.trim() !== '' && (max === undefined || [...v.trim()].length <= max),
@@ -158,6 +160,16 @@ export const dayOf = (nullable: boolean): KeyType => ({
     ? orNull({ type: 'string', pattern: DATE_PATTERN })
     : { type: 'string', pattern: DATE_PATTERN },
 })
+/** A date written YYYY-MM-DD, whether or not the day exists, for a date
+ * field that stored such text before its calendar rule. A read answers the
+ * stored text, so a stale read of it must compare (model/milestones.ts
+ * MILESTONE_MACHINE_FIELDS). */
+export const DAY_SHAPED: KeyType = {
+  ok: dateShaped,
+  says: 'a date as YYYY-MM-DD',
+  schema: { type: 'string', pattern: DATE_PATTERN },
+}
+
 /** A number of hours the field itself accepts: finite, at least `min`, at
  * most `max` when given, whole when `whole`, or null. `says` is the rule in
  * words. */
@@ -220,6 +232,12 @@ export const createExpectedSentence = (record: string) =>
 export function refuseCreateExpected(body: Readonly<Record<string, unknown>>, record: string) {
   if (Object.hasOwn(body, 'expected')) throw badRequest(createExpectedSentence(record))
 }
+
+/** How a refusal names a `kind` of record called `name`, such as
+ * `team "Hardware"`, or by `id` when the name is blank, as one saved before
+ * names were required can be. */
+export const namedRecord = (kind: string, name: string, id: string): string =>
+  name.trim() === '' ? `${kind} ${id}` : `${kind} "${name.trim()}"`
 
 /** Joins words as people list them: "a", "a and b", "a, b and c". */
 export const listed = (words: readonly string[]): string =>

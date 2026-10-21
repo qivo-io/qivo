@@ -43,7 +43,6 @@ import {
   BOOLEAN,
   exact,
   type Fields,
-  filledText,
   hoursOrNull,
   idForm,
   TEXT,
@@ -463,8 +462,9 @@ export const ACCESS_MAP_REMOVES =
 /** The keys of a project's `expected`. REST and MCP read a project with no
  * lead of its own as led by its parent's lead, and cannot change the key. */
 export const PROJECT_FIELDS: Fields<Doc<'projects'>> = {
-  // cleanProjectName's rule; a name saved before the cap reads back longer
-  name: { sends: 'name', type: filledText(), form: trimmedForm },
+  // any text: a project took a blank name until 2026-10-16 and a longer one
+  // until 2026-10-19, and a read answers it as stored
+  name: { sends: 'name', type: TEXT, form: trimmedForm },
   // a description saved before PROJECT_DESCRIPTION_MAX reads back longer
   description: { sends: 'description', type: TEXT_OR_NULL, form: descriptionForm },
   key: { sends: 'key', type: TEXT, form: exact },

@@ -36,9 +36,10 @@ import {
   BOOLEAN,
   exact,
   type Fields,
-  filledText,
   type Next,
   NUMBER,
+  namedRecord,
+  TEXT,
 } from './expected'
 import { newTeamDefaults } from './orgs'
 import {
@@ -194,8 +195,9 @@ const clamp = (n: number, lo: number, hi: number) =>
 
 /** The keys of a team's `expected`. REST and MCP change only the name. */
 export const TEAM_FIELDS: Fields<Doc<'teams'>> = {
-  // cleanTeamName's rule; a name saved before the cap reads back longer
-  name: { sends: 'name', type: filledText(), form: trimmedForm },
+  // any text: a team took a blank name until 2026-10-16 and a longer one
+  // until 2026-10-19, and a read answers it as stored
+  name: { sends: 'name', type: TEXT, form: trimmedForm },
   stale_days: { sends: 'stale_days', type: NUMBER, form: exact },
   archive_days: { sends: 'archive_days', type: NUMBER, form: exact },
   track_delay_default: { sends: 'track_delay_default', type: BOOLEAN, form: exact },
@@ -227,7 +229,7 @@ export async function assertTeamExpected(
     fields: TEAM_FIELDS,
     record: 'team',
     id: team.id,
-    label: `team "${team.name}"`,
+    label: namedRecord('team', team.name, team.id),
     row: team,
     expected,
     next,

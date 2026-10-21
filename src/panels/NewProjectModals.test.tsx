@@ -32,7 +32,7 @@ let snap: Snapshot
 let container: HTMLDivElement
 let root: Root
 
-function fixture(myRole: Profile['org_role']) {
+function fixture(myRole: Profile['org_role'], crewName: string) {
   const next = plannerFixture()
   const org = next.orgs[0].id
   const me = next.profiles[0]
@@ -49,7 +49,7 @@ function fixture(myRole: Profile['org_role']) {
   next.teams.push({
     id: 'crew',
     org_id: org,
-    name: 'Crew',
+    name: crewName,
     stale_days: 14,
     archive_days: 30,
     track_delay_default: false,
@@ -72,9 +72,10 @@ function fixture(myRole: Profile['org_role']) {
   return next
 }
 
-async function load(myRole: Profile['org_role']) {
+/* Loads the store as `myRole`, with the Crew team named `crewName`. */
+async function load(myRole: Profile['org_role'], crewName = 'Crew') {
   vi.resetModules()
-  snap = fixture(myRole)
+  snap = fixture(myRole, crewName)
   network.query.mockResolvedValue(null)
   network.onUpdate.mockImplementation((_ref, _args, next) => {
     next(structuredClone(snap))
@@ -143,6 +144,25 @@ async function click(selector: string) {
 
 const note = () => document.querySelector('[data-footer-note]')
 const accessField = () => find('[data-new-project-access]').textContent
+
+describe('a team saved with a blank name', () => {
+  it('is found in the access picker by the label it shows', async () => {
+    await load('user', '  ')
+    await render(<dialogs.NewProjectModal onClose={vi.fn()} onCreate={vi.fn()} />)
+    await click('[data-new-project-access]')
+    const search = find<HTMLInputElement>('[data-project-access-search]')
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+        search,
+        'unnamed',
+      )
+      search.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(find('[data-project-access-team-option="crew"]').getAttribute('aria-label')).toBe(
+      'Unnamed team',
+    )
+  })
+})
 
 describe('New project for a standard user', () => {
   beforeEach(() => load('user'))

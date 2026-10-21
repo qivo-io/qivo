@@ -2057,7 +2057,10 @@ const refusedLines = new Map<number, FieldNoticeLine>()
 const fieldLookup = {
   record(change: FieldChange, seenName?: string): string {
     const task = (id: string | undefined) => (id && uuidToKey.get(id)) || 'a task'
-    const named = (name: string | undefined, fallback: string) => seenName ?? name ?? fallback
+    // a name saved blank before names were required names nothing
+    const shown = (name: string | undefined) => name?.trim() || undefined
+    const named = (name: string | undefined, fallback: string) =>
+      shown(seenName) ?? shown(name) ?? fallback
     switch (change.record) {
       case 'task':
         return task(change.id)
@@ -2066,21 +2069,22 @@ const fieldLookup = {
         return comment ? `this comment on ${task(comment.issue_id)}` : 'this comment'
       }
       case 'milestone': {
-        const name = seenName ?? rows.milestones.get(change.id)?.name
+        const name = shown(seenName) ?? shown(rows.milestones.get(change.id)?.name)
         return name ? `milestone “${name}”` : 'a milestone'
       }
       case 'project':
         return named(rows.projects.get(change.id)?.name, 'a project')
       case 'grant': {
         const who =
-          rows.profiles.get(change.of ?? '')?.name ?? rows.teams.get(change.of ?? '')?.name
-        const where = rows.projects.get(change.id)?.name
+          shown(rows.profiles.get(change.of ?? '')?.name) ??
+          shown(rows.teams.get(change.of ?? '')?.name)
+        const where = shown(rows.projects.get(change.id)?.name)
         return who && where ? `${who}'s access to ${where}` : 'an access level'
       }
       case 'team':
         return named(rows.teams.get(change.id)?.name, 'a team')
       case 'label': {
-        const name = seenName ?? rows.labels.get(change.id)?.name
+        const name = shown(seenName) ?? shown(rows.labels.get(change.id)?.name)
         return name ? `label “${name}”` : 'a label'
       }
       case 'profile':
@@ -4228,6 +4232,9 @@ export const PLANNER = {
       : PLANNER.projectLabel(project),
   user: (id: string | null | undefined): UserVM | undefined => findUser(PLANNER.users, id),
   teamById: (id: string | null | undefined): TeamVM | undefined => findTeam(PLANNER.teams, id),
+  /** A team's name for display, or "Unnamed team" for a team saved with a
+      blank name before names were required. */
+  teamLabel: (t: { name: string }): string => t.name.trim() || 'Unnamed team',
   metaOf: (pid: string | null | undefined): ProjectVM | null => {
     const p = PLANNER.project(pid)
     if (!p) return null
@@ -4813,7 +4820,7 @@ export const PLANNER = {
       }
     }
     const deleted = await PLANNER.removeTeam(change.teamId)
-    if (deleted && team) toast(`Team “${team.name}” deleted`, 'success')
+    if (deleted && team) toast(`Team “${PLANNER.teamLabel(team)}” deleted`, 'success')
     return deleted
   },
   /* Whether the access a removal takes away is still there: someone else may

@@ -6,8 +6,8 @@ type TaskDateField = 'start_week' | 'end_week' | 'due_date'
 /** The shape of a date, YYYY-MM-DD, as a JSON Schema pattern. */
 export const DATE_PATTERN = '^\\d{4}-\\d{2}-\\d{2}$'
 
-/* Whether `value` is written YYYY-MM-DD. */
-const dateShaped = (value: unknown): value is string =>
+/** Whether `value` is written YYYY-MM-DD, whether or not the day exists. */
+export const dateShaped = (value: unknown): value is string =>
   typeof value === 'string' && new RegExp(DATE_PATTERN).test(value)
 
 /* Whether YYYY-MM-DD text `value` names a day that exists. */

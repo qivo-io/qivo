@@ -21,12 +21,12 @@ import { NAME_MAX, nameOverCap } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
 import {
   assertExpected,
+  DAY_SHAPED,
   DELETES,
-  dayOf,
   exact,
   type Fields,
-  filledText,
   type Next,
+  namedRecord,
   TEXT,
   type View,
 } from './expected'
@@ -170,8 +170,9 @@ export async function addMilestoneCore(
 /** The keys of a milestone's `expected` in the app, which reads its day as
  * `week`. */
 export const MILESTONE_FIELDS: Fields<Doc<'milestones'>> = {
-  // cleanMilestoneName's rule; a name saved before the cap reads back longer
-  name: { sends: 'name', type: filledText(), form: trimmedForm },
+  // any text: a milestone took a blank name until 2026-10-16 and a longer
+  // one until 2026-10-19, and a read answers it as stored
+  name: { sends: 'name', type: TEXT, form: trimmedForm },
   week: { sends: 'week', type: TEXT, form: exact },
 }
 
@@ -179,7 +180,9 @@ export const MILESTONE_FIELDS: Fields<Doc<'milestones'>> = {
  * day as `date`. */
 export const MILESTONE_MACHINE_FIELDS: Fields<Doc<'milestones'>> = {
   name: MILESTONE_FIELDS.name,
-  date: { sends: 'date', type: dayOf(false), form: exact, stored: (m) => m.week },
+  // the shape only: until 2026-10-16 a milestone took a day that does not
+  // exist, such as 2026-02-31, and a read answers it as stored
+  date: { sends: 'date', type: DAY_SHAPED, form: exact, stored: (m) => m.week },
 }
 
 /** The app's `expected` for a milestone edit or delete. */
@@ -206,7 +209,7 @@ export async function assertMilestoneExpected(
     fields: a.view === 'app' ? MILESTONE_FIELDS : MILESTONE_MACHINE_FIELDS,
     record: 'milestone',
     id: a.milestone.id,
-    label: `milestone "${a.milestone.name}"`,
+    label: namedRecord('milestone', a.milestone.name, a.milestone.id),
     row: a.milestone,
     expected: a.expected,
     next: a.next,

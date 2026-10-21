@@ -30,7 +30,8 @@ export function TeamPage({
   onBackPage?: (page: string) => void
 }) {
   // A removed team shows an empty name until the settings shell redirects.
-  const teamName = P.teamById(teamId)?.name || ''
+  const team = P.teamById(teamId)
+  const teamName = team?.name || ''
   const ws = teamId // the update calls below all take the team id
   const canManage = P.isTeamLeader(teamId) // team leader or org admin
   const confirm = useConfirmArm<string>()
@@ -48,7 +49,7 @@ export function TeamPage({
   return (
     <>
       <BackLink to="Teams" onClick={() => onBackPage('org-teams')} />
-      <PageTitle>{teamName || 'Team'}</PageTitle>
+      <PageTitle>{team ? P.teamLabel(team) : 'Team'}</PageTitle>
       <SettingsSection
         title="Team"
         description={
@@ -259,6 +260,8 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
             // Count home teams only; P.teams also contains foreign teams.
             const last = homeTeams.length <= 1
             const arm = confirm.armed === `t:${t.id}`
+            // an empty button has no height to click (P.teamLabel)
+            const name = P.teamLabel(t)
             return (
               <div
                 key={t.id}
@@ -268,11 +271,11 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
                 <Button
                   type="button"
                   onClick={() => setPage(`team:${t.id}`)}
-                  title={`Open ${t.name}`}
+                  title={`Open ${name}`}
                   className="[flex:1] [text-align:left] [background:none] [border:none] [padding:0] [cursor:pointer] [font-size:var(--fs-base)] [font-weight:600] [color:var(--text-1)] [font-family:var(--sans)]"
                   variant="unstyled"
                 >
-                  {t.name}
+                  {name}
                 </Button>
                 <span className="[font-size:var(--fs-xs)] [color:var(--text-2)] !font-mono">
                   {memberCount} member
