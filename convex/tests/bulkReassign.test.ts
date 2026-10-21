@@ -771,7 +771,7 @@ describe('deleting a task with many subtasks', () => {
     vi.useRealTimers()
   })
 
-  it(`detaches ${SUBTASK_MAX} active subtasks inside one transaction and 200 archived ones after, and tells their followers`, async () => {
+  it(`detaches ${SUBTASK_MAX} active subtasks inside one transaction and 200 archived ones after, and tells their followers from steps`, async () => {
     const fx = await crowded(0)
     const parent = await plantIssue(fx.t, {
       org_id: fx.org.id,
@@ -821,6 +821,8 @@ describe('deleting a task with many subtasks', () => {
     // the delete's own transaction detaches the active ones
     const detached = (await subtaskRows()).filter((r) => r.parent_id === undefined)
     expect(detached.map((r) => r.id).sort()).toEqual(kids.slice(0, SUBTASK_MAX).sort())
+    // and leaves every follower to background steps
+    expect(await fx.t.run((ctx) => ctx.db.query('messages').collect())).toEqual([])
     await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
     expect((await subtaskRows()).filter((r) => r.parent_id === undefined)).toHaveLength(
       SUBTASK_MAX + 200,
@@ -838,5 +840,5 @@ describe('deleting a task with many subtasks', () => {
           .sort(),
       )
     })
-  })
+  }, 120_000)
 })

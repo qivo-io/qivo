@@ -266,7 +266,7 @@ export async function trimUnreadMessages(
  *   - the detach loop of a task delete (model/deletedItems.ts
  *     moveTasksToTrash), the app's, REST's and MCP's delete, which reads it
  *     at the first detach of a transaction that changes only tasks, their
- *     rows and activity;
+ *     rows and activity, and defers the followers;
  *   - the reassign loop of an access removal (projectAccess.ts
  *     removeAndSettle), which builds it after the access is gone;
  *   - a roadmap save or undo (roadmap.ts), which changes only tasks,
@@ -286,9 +286,10 @@ export type NotifyPreload = {
    * passes Convex's limits (projectAccess.ts removeAndSettle). */
   guard?: () => Promise<void>
   /* Set by a bulk save that changes many tasks at once (a roadmap save or
-   * undo, an access removal's reassignments): notifyIssueUpdate leaves every
-   * follower notice to background steps (FOLLOWER_FANOUT), so a save of
-   * many tasks with many followers stays within one transaction. Those
+   * undo, an access removal's reassignments, a task delete's detaches):
+   * notifyIssueUpdate leaves every follower notice to background steps
+   * (FOLLOWER_FANOUT), so a save of many tasks with many followers stays
+   * within one transaction. Those
    * notices arrive moments later. Mentions and new owners' follows stay in
    * the save. */
   deferFollowers?: true
@@ -1306,9 +1307,12 @@ async function mentionedIn(
  * millisecond, so a task followed by some thousands of people before
  * FOLLOWER_MAX existed passed Convex's 4,096 ranges, and a bulk save of
  * tasks with many followers passed its 1 s. A task gains no followers past
- * FOLLOWER_MAX now, besides owners who still follow, so its followers fit
- * inline. Tests lower these. */
-export const FOLLOWER_FANOUT = { inline: 128, step: 256 }
+ * FOLLOWER_MAX now, besides owners who still follow. A follower whose item
+ * holds snoozed rows also costs one write for each row the notice wakes
+ * (postMessage), so a step stops once it has made `stepRoom` database calls
+ * and leaves the rest to the next. An inline fan-out has no such stop.
+ * Tests lower these. */
+export const FOLLOWER_FANOUT = { inline: 128, step: 256, stepRoom: 2000 }
 
 /** What a fan-out tells every follower, before each reader's own lines. A
  * change carries its parts, its assignment and reviewer lines with the
@@ -1406,7 +1410,9 @@ async function followerLine(
  * can no longer see the project. `cx` holds what the caller read already,
  * and a bulk writer's guard, run before each follower. A reader must also
  * see each of `cx.also`, and reads the new parent's key only when they see
- * each of `cx.parent`; an empty `cx.parent` keeps it anonymous. */
+ * each of `cx.parent`; an empty `cx.parent` keeps it anonymous. Once
+ * `cx.room` answers false it stops, after the first follower, and returns
+ * how many of `subs` it handled. */
 async function tellFollowers(
   ctx: MutationCtx,
   notice: FollowerNotice,
@@ -1420,9 +1426,13 @@ async function tellFollowers(
     visibility: RecipientSight
     trims: ItemTrims
     guard?: () => Promise<void>
+    room?: () => boolean
   },
-): Promise<void> {
+): Promise<number> {
+  let handled = 0
   for (const s of subs) {
+    if (handled > 0 && cx.room?.() === false) break
+    handled += 1
     await cx.guard?.()
     const recipient = await orgProfile(ctx, cx.profiles, notice.org_id, s.profile_id)
     const seesAll = async (projects: readonly Doc<'projects'>[]) => {
@@ -1453,10 +1463,12 @@ async function tellFollowers(
       trims: cx.trims,
     })
   }
+  return handled
 }
 
 /* Tells the first `inline` of `subs`, read with followersFrom from the
- * start and one more, and schedules a background step for the rest. */
+ * start and one more, and schedules a background step for the rest, from
+ * the last follower handled when `cx.room` stopped it early. */
 async function fanOut(
   ctx: MutationCtx,
   notice: FollowerNotice,
@@ -1465,9 +1477,9 @@ async function fanOut(
   cx: Parameters<typeof tellFollowers>[3],
 ): Promise<void> {
   const now = subs.slice(0, inline)
-  await tellFollowers(ctx, notice, now, cx)
-  if (subs.length <= inline) return
-  const after = now.at(-1)?.profile_id
+  const handled = await tellFollowers(ctx, notice, now, cx)
+  if (handled === now.length && subs.length <= inline) return
+  const after = now[handled - 1]?.profile_id
   await ctx.scheduler.runAfter(
     0,
     notifyFollowersRef,
@@ -1481,8 +1493,11 @@ async function fanOut(
  * both the task's project when it was written and its project now, so a
  * move meanwhile tells nobody what they could not see, and reads the new
  * parent's key only when they see its project then and now. Anything gone
- * that the notice names tells nobody, or keeps the parent anonymous. */
-export async function notifyFollowersStep(ctx: MutationCtx, a: FollowerStep): Promise<void> {
+ * that the notice names tells nobody, or keeps the parent anonymous. The
+ * step stops early once its database calls reach FOLLOWER_FANOUT.stepRoom. */
+export async function notifyFollowersStep(step: MutationCtx, a: FollowerStep): Promise<void> {
+  const used = { calls: 0 }
+  const ctx = counting(step, used)
   const { after, ...notice } = a
   const issue = await ctx.db.get(notice.task)
   if (issue === null || issue.id !== notice.issue_id || issue.org_id !== notice.org_id) return
@@ -1509,8 +1524,26 @@ export async function notifyFollowersStep(ctx: MutationCtx, a: FollowerStep): Pr
     profiles: new Map(),
     visibility: new Map(),
     trims,
+    room: () => used.calls < FOLLOWER_FANOUT.stepRoom,
   })
   await scheduleItemTrims(ctx, issue.id, trims)
+}
+
+/** `ctx` whose database calls each add one to `used.calls`. A read uses an
+ * index range, and a write reads its row first, so the count follows the
+ * ranges a transaction spends, writes included. */
+function counting(ctx: MutationCtx, used: { calls: number }): MutationCtx {
+  const db = new Proxy(ctx.db, {
+    get(target, key, receiver) {
+      const value: unknown = Reflect.get(target, key, receiver)
+      if (typeof value !== 'function') return value
+      return (...args: unknown[]) => {
+        used.calls += 1
+        return value.apply(target, args)
+      }
+    },
+  })
+  return { ...ctx, db }
 }
 
 /** Tells the followers of `issue`, in `project`, one change line, `parts`

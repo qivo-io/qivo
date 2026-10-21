@@ -213,7 +213,9 @@ comments, attachments, links and labels. To restore several, select their
 rows and choose a button such as **Restore 3 selected**. A window lists where
 they go before anything changes. Restored work keeps its keys, such as
 `QN-142`, because Qivo never reuses a number
-([Permanent task IDs](#permanent-task-ids)). Labels deleted since then are
+([Permanent task IDs](#permanent-task-ids)). A task saved before the current
+length limits comes back with its title cut to 80 characters and its
+description to 20,000. Labels deleted since then are
 gone, and so are links to work deleted for good and links to a task that has
 reached 100 links since. A subtask deleted on its own
 returns under its parent when the parent still exists, is not a subtask

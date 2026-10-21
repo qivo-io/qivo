@@ -1049,7 +1049,10 @@ export async function clearParentRemaining(
  * touch, and its followers read 'Detached from its parent' with
  * task.updated, as the SQL schema's SET NULL did. The child's
  * project needs no Edit: only the link to the parent goes, as a delete has
- * always detached such children. */
+ * always detached such children. The child is not read again, because its
+ * new state is `child` with the patch applied: a delete detaches up to
+ * SUBTASK_MAX children, whose descriptions a second read would count twice
+ * against the transaction's 16 MiB. */
 export async function detachChild(
   ctx: MutationCtx,
   child: Doc<'issues'>,
@@ -1058,8 +1061,8 @@ export async function detachChild(
   preload?: NotifyPreload,
 ): Promise<void> {
   await ctx.db.patch(child._id, { parent_id: undefined, updated_at: now })
-  const after = await ctx.db.get(child._id)
-  if (after === null) return
+  const { parent_id: _parentId, ...rest } = child
+  const after: Doc<'issues'> = { ...rest, updated_at: now }
   await notifyIssueUpdate(ctx, { before: child, after, actor, now, preload })
 }
 

@@ -8,12 +8,12 @@
  * purge them for good.
  *
  * Hide first, then drain. A task item's user transaction stores every task
- * row at once (moveTasksToTrash); the tasks' comments, label assignments,
- * follows, attachments and links follow in the same transaction when they
- * fit, otherwise in steps. A project item's user transaction stores the
- * project rows (moveProjectToTrash), which hides every task in them, and
- * steps then move each task: relation rows, messages, children outside the
- * item's projects, then the task row. While an item drains, its leftover
+ * row at once (moveTasksToTrash); the tasks' messages, comments, label
+ * assignments, follows, attachments and links follow in the same
+ * transaction when they fit, otherwise in steps. A project item's user
+ * transaction stores the project rows (moveProjectToTrash), which hides
+ * every task in them, and steps then move each task: relation rows,
+ * messages, children outside the item's projects, then the task row. While an item drains, its leftover
  * rows name a task or project that is absent, so readers skip them.
  *
  * Fill first, reveal last (restoreItems). A restore mirrors the move: steps
@@ -113,11 +113,11 @@ import {
 import { notFound, rule } from '../lib/functions'
 import { countsAsSubtask } from '../lib/liveTasks'
 import { SUBTASK_MAX } from '../lib/taskLimits'
-import { DELETE_REASON_MAX } from '../lib/textLimits'
+import { DELETE_REASON_MAX, TEXT_MAX } from '../lib/textLimits'
 import { insertActivity, logActivity } from './activity'
 import { storageIdInUse } from './attachments'
 import { estimateDocumentBytes } from './demoMetrics'
-import { assertCanEdit, clearParentRemaining, detachChild, sameTopLevel } from './issues'
+import { assertCanEdit, clearParentRemaining, detachChild, sameTopLevel, TITLE_MAX } from './issues'
 import { linksFullAt } from './links'
 import {
   type NotifyPreload,
@@ -167,7 +167,7 @@ type Item = Doc<'deleted_items'>
 type Job = Doc<'deleted_item_jobs'>
 type Tally = NonNullable<Job['tally']>
 /** Where a job is: what a step reads first and saves last. */
-type JobState = Pick<Job, 'phase' | 'cursor' | 'tally' | 'alone' | 'purge_history'>
+type JobState = Pick<Job, 'phase' | 'cursor' | 'tally' | 'alone'>
 export type Via = NonNullable<Item['via']>
 
 /** A live document of one of the stored tables, tagged with its table. */
@@ -809,6 +809,31 @@ const purgeHistory = (run: Run, taskId: string, upTo?: string): Promise<boolean>
     LARGE_ROWS_PER_READ,
   )
 
+/** Deletes the inbox messages about task `taskId` within the step's
+ * budget. True once none is left. Messages are not stored, so a restore
+ * never brings them back. Nothing posts about a task while it is absent
+ * (notifyFollowersStep reads the task first) and a stored task keeps its id
+ * reserved, so the range only shrinks. Until it is empty the inbox hides
+ * what is left, because the task is absent (lib/inbox.ts). */
+const dropMessages = (run: Run, taskId: string): Promise<boolean> =>
+  drain(
+    run.budget,
+    (n) =>
+      run.ctx.db
+        .query('messages')
+        .withIndex('by_issue_read', (q) => q.eq('issue_id', taskId))
+        .take(n),
+    (message) => run.ctx.db.delete(message._id),
+    ALL,
+  )
+
+/** Whether any message about task `taskId` is left. */
+const holdsMessages = async (run: Run, taskId: string): Promise<boolean> =>
+  (await run.ctx.db
+    .query('messages')
+    .withIndex('by_issue_read', (q) => q.eq('issue_id', taskId))
+    .first()) !== null
+
 /** Whether another task now holds the id of task `taskId` of this item: a
  * live task, or one another item stores. Only a purge the release before
  * left part done can free such an id, by deleting the stored task row
@@ -843,17 +868,7 @@ async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boo
     )
     if (!done) return false
   }
-  const messagesDone = await drain(
-    run.budget,
-    (n) =>
-      run.ctx.db
-        .query('messages')
-        .withIndex('by_issue_read', (q) => q.eq('issue_id', task.id))
-        .take(n),
-    (message) => run.ctx.db.delete(message._id),
-    ALL,
-  )
-  if (!messagesDone) return false
+  if (!(await dropMessages(run, task.id))) return false
   const preload = await preloadOf(run)
   for (const children of childrenOutside(run.ctx, task.id, itemProjectIds(run.item))) {
     const detached = await drain(
@@ -1065,18 +1080,12 @@ async function moveProjectTasks(run: Run): Promise<boolean> {
   return true
 }
 
-/* A task item's stored tasks: the rows that travel with each. First the
- * history of each task the move deleted for good because it was too large
- * to store (purge_history), only the rows written up to the deletion,
- * because a new task may take the id it freed. */
-const moveDrain = async (run: Run): Promise<boolean> => {
-  const purge = run.state.purge_history ?? []
-  while (purge.length > 0) {
-    if (!(await purgeHistory(run, purge[0], run.item.deleted_at))) return false
-    purge.shift()
-  }
-  run.state.purge_history = undefined
-  return await eachStoredTask(run, async ({ task_id }) => {
+/* A task item's stored tasks: for each, its messages, which are deleted,
+ * then the rows that travel with it. Messages go first, because the inbox
+ * walk still passes over them while they wait (lib/inbox.ts). */
+const moveDrain = (run: Run): Promise<boolean> =>
+  eachStoredTask(run, async ({ task_id }) => {
+    if (!(await dropMessages(run, task_id))) return false
     for (const relation of TASK_ROWS) {
       const done = await drain(
         run.budget,
@@ -1088,7 +1097,6 @@ const moveDrain = async (run: Run): Promise<boolean> => {
     }
     return true
   })
-}
 
 /** The phase to go back to when a range the move drains holds a row again,
  * else null, or move_finish while the check has more to read. Once a task
@@ -1096,15 +1104,15 @@ const moveDrain = async (run: Run): Promise<boolean> => {
  * ranges are its projects' tasks and rows. A failed restore also wrote rows
  * of tasks it left stored back; its move drains those first (move_drain),
  * and the finish does not read them again, because that would read each of
- * the item's tasks in one transaction. A task item's check reads the rows of
- * each stored task, a few ranges each, so it walks them with the job's
+ * the item's tasks in one transaction. A task item's check reads the
+ * messages and rows of each stored task, a few ranges each, so it walks them with the job's
  * cursor within the step's budget, as move_drain does, and goes on in the
  * next step when the budget runs out. */
 async function moveLeft(run: Run): Promise<TrashPhase | null> {
   if (run.item.kind === 'task') {
     let held = false
     const done = await eachStoredTask(run, async ({ task_id }) => {
-      held = await holdsRows(run.ctx, TASK_ROWS, task_id)
+      held = (await holdsMessages(run, task_id)) || (await holdsRows(run.ctx, TASK_ROWS, task_id))
       return !held
     })
     if (held) return 'move_drain'
@@ -1184,10 +1192,13 @@ async function purgeDependents(run: Run): Promise<boolean> {
  * project rows under its absent projects; they are deleted as the hard
  * delete would have. A task item can leave rows of its stored tasks, and so
  * can a project item that got stuck during or after a restore (restore_by
- * set). */
+ * set). A task item stuck before its move drained them can leave messages
+ * too. */
 async function purgeLive(run: Run): Promise<boolean> {
   if (run.item.kind === 'task' || run.item.restore_by !== undefined) {
     const done = await eachStoredTask(run, async ({ task_id }) => {
+      // a move that got stuck can leave messages, before the id is freed
+      if (!(await dropMessages(run, task_id))) return false
       for (const relation of TASK_ROWS) {
         const drained = await drain(
           run.budget,
@@ -3169,7 +3180,6 @@ async function work(
       cursor: state.cursor,
       tally: state.tally,
       alone: state.alone,
-      purge_history: state.purge_history,
     },
     budget,
     actor: await actorOf(ctx, item, state.phase, txn),
@@ -3244,7 +3254,6 @@ async function saveJob(
     cursor: state.cursor,
     tally: state.tally,
     alone: state.alone,
-    purge_history: state.purge_history,
     progress_at: new Date().toISOString(),
     scheduled_id,
     attempts: 0,
@@ -3785,47 +3794,42 @@ export async function detachArchivedChildren(
  * to Deleted items as one task item, as the app's, REST and MCP
  * deletes do. The callers check access and the subtask choice; each task's
  * Edit check is repeated here as defense in depth (model/issues.ts
- * assertCanEdit). In this transaction, for each task: its messages are
- * deleted, its active children outside the item are detached (the SET NULL's
- * touch, 'Detached from its parent' and task.updated), and its archived
- * ones in steps just after (detachArchivedChildren), task.deleted is
- * emitted, the task row is stored and the 'deleted' activity row written as
- * before, its detail the machine `provenance`. A child
- * inside the item keeps its parent, and a task that still waits for its
- * parent after a project item's restore is stored with it (takeParent).
- * The tasks are then hidden; their other rows follow within the same
- * budget, and steps take the rest. A task too large to store is deleted
- * for good with its rows instead, and its history follows the same way,
- * first (moveDrain); the item neither counts it nor lists its project, so
- * nobody needs access there to restore the rest. Returns the item.
+ * assertCanEdit). In this transaction, for each task: its active children
+ * outside the item are detached (the SET NULL's touch and task.updated, and
+ * 'Detached from its parent' for their followers from background steps,
+ * NotifyPreload.deferFollowers), and its archived ones in steps just after
+ * (detachArchivedChildren), task.deleted is emitted, the task row is stored
+ * and the 'deleted' activity row written as before, its detail the machine
+ * `provenance`. A child inside the item keeps its parent, and a task that
+ * still waits for its parent after a project item's restore is stored with
+ * it (takeParent). `children` are the root's active children when the
+ * caller read them in this transaction, so they are not read twice. The
+ * tasks are then hidden; their messages and other rows follow within the
+ * same budget, and steps take the rest (moveDrain). A task too large to
+ * store goes in cut to the caps (fitToStore). Returns the item.
  */
 export async function moveTasksToTrash(
   ctx: MutationCtx,
-  a: Deletion & { root: Doc<'issues'>; subtasks: Doc<'issues'>[]; provenance?: string },
+  a: Deletion & {
+    root: Doc<'issues'>
+    children?: Doc<'issues'>[]
+    subtasks: Doc<'issues'>[]
+    provenance?: string
+  },
 ): Promise<Item> {
   const { actor, root, now } = a
   const budget = budgetFor(1)
   const counted = metered(ctx, budget)
   const tasks = [...a.subtasks, root]
+  // the caller read them, and the steps' reads come on top
+  for (const task of tasks) chargeRead(budget, task)
   const doomed = new Set(tasks.map((task) => task.id))
   const id = newUuid()
-  // the size check needs the item's id and organization, which the stored
-  // rows carry
-  const dropped = new Set(
-    tasks
-      .filter((task) =>
-        tooLarge({ id, org_id: actor.org_id }, { table: 'issues', doc: task }, task.id),
-      )
-      .map((task) => task.id),
-  )
-  const stored = tasks.filter((task) => !dropped.has(task.id))
   const project = await liveProject(counted, root.project_id)
   const top =
     project.parent_id === undefined ? null : await byId(counted, 'projects', project.parent_id)
-  // the root's project even when the root itself was too large: the item
-  // sits there
   const projects: Item['projects'] = []
-  for (const task of [root, ...a.subtasks.filter((s) => !dropped.has(s.id))]) {
+  for (const task of [root, ...a.subtasks]) {
     if (projects.some((p) => p.id === task.project_id)) continue
     const p = task.project_id === project.id ? project : await liveProject(counted, task.project_id)
     projects.push({ id: p.id, name: p.name, key: p.key, type: p.type, tasks: 0, archived_tasks: 0 })
@@ -3834,7 +3838,10 @@ export async function moveTasksToTrash(
     kind: 'task',
     target_id: root.id,
     num: root.num,
-    name: root.title,
+    // as the root is stored, without logging the cut a second time
+    name: tooLarge({ id, org_id: actor.org_id }, { table: 'issues', doc: root }, root.id)
+      ? cutToCaps(root).title
+      : root.title,
     status: root.status,
     archived: root.archived_at !== undefined,
     project_id: project.id,
@@ -3842,37 +3849,45 @@ export async function moveTasksToTrash(
     path: top === null ? [project.name] : [top.name, project.name],
     projects,
     counts: {
-      tasks: stored.length,
-      archived_tasks: stored.filter((task) => task.archived_at !== undefined).length,
-      subtasks: stored.filter((task) => task.id !== root.id).length,
+      tasks: tasks.length,
+      archived_tasks: tasks.filter((task) => task.archived_at !== undefined).length,
+      subtasks: a.subtasks.length,
       sub_projects: 0,
     },
   })
   const tally = emptyTally(item)
   // This transaction changes no profile, project, grant or team, so one
   // preload, read at the first detach, serves every detach notice
-  // (NotifyPreload). Without it each notice reads every profile again.
+  // (NotifyPreload). Without it each notice reads every profile again. It
+  // leaves the followers to background steps, because up to SUBTASK_MAX
+  // children with FOLLOWER_FANOUT.inline followers each would pass the
+  // transaction's limits.
   let preload: NotifyPreload | undefined
+  // the tasks of a family share few projects, so each is checked once
+  const editable = new Set<string>()
   for (const task of tasks) {
-    await assertCanEdit(counted, actor, task.project_id)
-    const messages = counted.db
-      .query('messages')
-      .withIndex('by_issue_read', (q) => q.eq('issue_id', task.id))
-    for await (const message of messages) await counted.db.delete(message._id)
+    if (!editable.has(task.project_id)) {
+      await assertCanEdit(counted, actor, task.project_id)
+      editable.add(task.project_id)
+    }
     // A subtask has no subtasks of its own, so only a top-level task has
     // children to leave behind. The active ones, at most SUBTASK_MAX, are
     // detached here, and the archived ones, which have no bound, in
     // background steps.
     if (task.parent_id === undefined) {
-      const kids = await counted.db
-        .query('issues')
-        .withIndex('by_parent_archived', (q) =>
-          q.eq('parent_id', task.id).eq('archived_at', undefined),
-        )
-        .take(SUBTASK_MAX)
+      const kids =
+        task === root && a.children !== undefined
+          ? a.children
+          : await counted.db
+              .query('issues')
+              .withIndex('by_parent_archived', (q) =>
+                q.eq('parent_id', task.id).eq('archived_at', undefined),
+              )
+              .take(SUBTASK_MAX)
       for (const kid of kids) {
+        chargeRead(budget, kid)
         if (doomed.has(kid.id)) continue
-        preload ??= newNotifyPreload()
+        preload ??= { ...newNotifyPreload(), deferFollowers: true }
         await detachChild(counted, kid, actor, now, preload)
       }
       const archivedKid = await counted.db
@@ -3888,22 +3903,12 @@ export async function moveTasksToTrash(
       }
     }
     await emitTaskEvent(counted, { name: 'task.deleted', issue: task, actor, now })
-    if (dropped.has(task.id)) {
-      // deleted as before, with every row that would have travelled with it
-      console.error('A deleted item dropped a task too large to store', {
-        item_id: item.id,
-        task_id: task.id,
-      })
-      await clearAll(counted, TASK_ROWS, task.id, (row) => discard(counted, row))
-      await counted.db.delete(task._id)
-      tally.dropped_rows += 1
-    } else
-      await storeTask(counted, item, tally, {
-        ...task,
-        parent_id: await takeParent(counted, task, item),
-      })
-    // a task deleted for good keeps no history, so it gets no 'deleted' row
-    if (dropped.has(task.id)) continue
+    await storeTask(
+      counted,
+      item,
+      tally,
+      fitToStore(item, { ...task, parent_id: await takeParent(counted, task, item) }),
+    )
     await insertActivity(counted, {
       org_id: task.org_id,
       actor_id: actor.id,
@@ -3917,11 +3922,35 @@ export async function moveTasksToTrash(
       named_task_nums: [],
     })
   }
-  // the history of each task too large to store goes first, within this
-  // budget and then in steps (moveDrain)
-  const purge_history = dropped.size > 0 ? [...dropped] : undefined
-  await startJob(ctx, item, { phase: 'move_drain', tally, purge_history }, budget)
+  await startJob(ctx, item, { phase: 'move_drain', tally }, budget)
   return item
+}
+
+/** `task` as a task item stores it. Only a task stored before the caps can
+ * be too large to store (STORED_ROW_MAX_BYTES), because an 80-character
+ * title and a TEXT_MAX description are at most about 120 KB as
+ * estimateDocumentBytes counts them. Such a task goes in with its title and
+ * description cut to TITLE_MAX and TEXT_MAX, so its rows and messages follow
+ * in steps and it comes back as the others do, and that is logged with the
+ * item id. */
+function fitToStore(item: Pick<Item, 'id' | 'org_id'>, task: Doc<'issues'>): Doc<'issues'> {
+  if (!tooLarge(item, { table: 'issues', doc: task }, task.id)) return task
+  console.error('A deleted item cut a task too large to store', {
+    item_id: item.id,
+    task_id: task.id,
+  })
+  return cutToCaps(task)
+}
+
+/** `task` with its title cut to TITLE_MAX code points and its description
+ * to TEXT_MAX UTF-16 units, neither cut splitting a surrogate pair. */
+function cutToCaps(task: Doc<'issues'>): Doc<'issues'> {
+  const units = task.description.slice(0, TEXT_MAX)
+  return {
+    ...task,
+    title: [...task.title].slice(0, TITLE_MAX).join(''),
+    description: /[\uD800-\uDBFF]$/.test(units) ? units.slice(0, -1) : units,
+  }
 }
 
 /**

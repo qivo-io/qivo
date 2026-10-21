@@ -112,6 +112,53 @@ describe('the follower notices of a task followed before the cap', () => {
   })
 })
 
+describe('a step whose followers hold many snoozed rows', () => {
+  it('stops on its room and tells the rest in the next step, within the limits', async () => {
+    // convex-test counts no range for a write, which reads its row first,
+    // so the writes stand in for those ranges
+    const t = newT({ transactionLimits: { documentsWritten: 4096 } })
+    const f = await withOrg(t)
+    const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const kept = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: parent.id,
+    })
+    const followers = await plantFollowers(t, f, kept, 100)
+    // each item holds 50 snoozed rows, one write each to wake
+    for (let from = 0; from < followers.length; from += 40)
+      await t.run(async (ctx) => {
+        for (const recipient_id of followers.slice(from, from + 40))
+          for (let i = 0; i < 50; i++)
+            await ctx.db.insert('messages', {
+              id: uuid(),
+              org_id: f.org.id,
+              recipient_id,
+              issue_id: kept.id,
+              issue_title: kept.title,
+              kind: 'change',
+              detail: `Status update ${i + 1}`,
+              created_at: NOW,
+              snoozed_until: '2026-12-01T09:00:00.000Z',
+            })
+      })
+
+    // the delete detaches the kept subtask and leaves its followers to steps
+    await deleteTask(t, f, parent.id)
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+
+    const rows = await t.run((ctx) =>
+      ctx.db
+        .query('messages')
+        .withIndex('by_issue_read', (q) => q.eq('issue_id', kept.id))
+        .collect(),
+    )
+    const detached = rows.filter((m) => m.detail === 'Detached from its parent')
+    expect(detached.map((m) => m.recipient_id).sort()).toEqual([...followers].sort())
+    expect(rows.filter((m) => m.snoozed_until !== undefined)).toEqual([])
+  }, 120_000)
+})
+
 describe('a restore from Deleted items', () => {
   it("tells the task's followers past the first in steps", async () => {
     Object.assign(FOLLOWER_FANOUT, { inline: 2, step: 2 })
