@@ -29,6 +29,16 @@ const literalGlob = (path) => path.replace(/[\\()[\]{}*?!+@|]/g, '\\$&')
  * watcher rewrites a glob's backslashes to slashes before matching, which
  * breaks an escaped path, so the watch rule compares path prefixes instead.
  * server.fs.deny takes globs only and matches them without that rewrite.
+ *
+ * The watcher follows symlinks, so the watch rule also ignores a path whose
+ * real path is in a local directory or the checkout's .git, at one realpath
+ * call per check. A link such as src/x.html to dev-temp/report.html would
+ * otherwise reload open pages on every write to the report. Turning off
+ * followSymlinks instead would stop the watcher from following a link to an
+ * allowed source too. A local directory that is itself a link counts under
+ * its real path as well, when it exists as the server starts. The env files
+ * at the checkout's root keep being watched wherever they link, because Vite
+ * restarts the server when one changes.
  */
 export function devServerFiles(root) {
   const checkouts = new Set(
@@ -37,14 +47,38 @@ export function devServerFiles(root) {
   const directories = [...checkouts].flatMap((checkout) =>
     LOCAL.map((name) => `${checkout}/${name}`),
   )
+  const within = (file, directory) => file === directory || file.startsWith(`${directory}/`)
+  // Vite's own watch rules ignore .git by the watched path only.
+  const named = [...directories, ...[...checkouts].map((checkout) => `${checkout}/.git`)]
+  // A local directory that links elsewhere, unless it links to a directory
+  // holding this checkout, which would ignore every source.
+  const linked = named.flatMap((directory) => {
+    let real
+    try {
+      real = normalizePath(realpathSync.native(directory))
+    } catch {
+      return []
+    }
+    return [...checkouts].some((checkout) => within(checkout, real)) ? [] : [real]
+  })
+  const unwatched = [...new Set([...named, ...linked])]
+  const isUnwatched = (file) => unwatched.some((directory) => within(file, directory))
+  const isEnvFile = (file) =>
+    checkouts.has(posix.dirname(file)) && posix.basename(file).startsWith('.env')
   return {
     watch: {
       ignored: [
         (path) => {
           const file = normalizePath(path)
-          return directories.some(
-            (directory) => file === directory || file.startsWith(`${directory}/`),
-          )
+          if (isUnwatched(file)) return true
+          if (isEnvFile(file)) return false
+          // A path that cannot be resolved, such as a deleted file, names
+          // nothing the watcher could follow.
+          try {
+            return isUnwatched(normalizePath(realpathSync.native(path)))
+          } catch {
+            return false
+          }
         },
       ],
     },

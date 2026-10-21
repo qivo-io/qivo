@@ -9,7 +9,8 @@
  * (manual edits and saved views there are lost by design; logins, portraits and keys survive) and mints test credentials that the
  * teardown deletes, together with their stash in the private fixture
  * directory (tests/contract/stash.mts). Never run this while `npm run dev` work or the smoke is
- * in flight. */
+ * in flight. The setup refuses to start while another pass on this machine that uses the same
+ * fixture directory runs against the deployment. It cannot see passes elsewhere. */
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({

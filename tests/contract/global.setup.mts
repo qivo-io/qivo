@@ -35,7 +35,11 @@
  *      not be parsed.
  *   3. Stash them for the suites in the private fixture directory, outside
  *      the checkout (contract/stash.mts). Setup refuses to start without
- *      that directory. The pass id is stashed before the first mint, after
+ *      that directory, and while another pass on the same deployment holds
+ *      the lease beside the stash (only passes on this machine that use the
+ *      same fixture directory share it). The pass holds that lease until its
+ *      teardown ends, and the operating system drops it when the pass is
+ *      killed. The pass id is stashed before the first mint, after
  *      a call that deletes nothing proves the deployment has the delete
  *      function. Before the reset it revokes the credentials an interrupted
  *      pass left in its stash, or in the stash older passes kept inside the
@@ -56,7 +60,7 @@ import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { marketingId } from '../../convex/internal/marketingDemoData'
 import { contractDeployment, contractSiteUrl } from './site.mts'
-import { nextStashPath, ROOT, type Stash, stashPath, writeStash } from './stash.mts'
+import { nextStashPath, ROOT, type Stash, stashPath, takeLease, writeStash } from './stash.mts'
 
 const NORTHSTAR = 'northstar-labs'
 const ANCHOR = process.env.CONTRACT_ANCHOR ?? '2026-09-07'
@@ -178,18 +182,48 @@ async function revokeLeftover(path: string, deployment: string, run: Run): Promi
   rmSync(nextStashPath(path), { force: true, recursive: true })
 }
 
+type Effects = { run: Run; reset: () => void }
+
 /**
  * The setup with its side effects passed in, so tests can drive it without a
  * deployment. `reset` resets Northstar Labs and `run` runs a Convex function
  * on the deployment the key names. Returns the teardown.
+ *
+ * The pass holds the deployment's lease from before it revokes a leftover
+ * stash until its teardown ends, so it never revokes the credentials of a
+ * running pass that shares its fixture directory. A setup that fails gives
+ * the lease back.
  */
 export async function contractSetup(
-  { env, run, reset }: { env: Record<string, string | undefined>; run: Run; reset: () => void },
+  { env, run, reset }: Effects & { env: Record<string, string | undefined> },
   root = ROOT,
 ): Promise<() => void> {
   const siteUrl = contractSiteUrl(env, envLocal(root))
   const deployment = contractDeployment(env)
   const stash = stashPath(env, root)
+  const release = takeLease(stash, deployment)
+  let teardown: () => void
+  try {
+    teardown = await leasedSetup({ run, reset }, { siteUrl, deployment, stash }, root)
+  } catch (error) {
+    release()
+    throw error
+  }
+  return () => {
+    try {
+      teardown()
+    } finally {
+      release()
+    }
+  }
+}
+
+/** The setup that runs under the lease. Returns the teardown. */
+async function leasedSetup(
+  { run, reset }: Effects,
+  { siteUrl, deployment, stash }: { siteUrl: string; deployment: string; stash: string },
+  root: string,
+): Promise<() => void> {
   await revokeLeftover(join(root, 'tests', 'contract', '.credentials.json'), deployment, run)
   await revokeLeftover(stash, deployment, run)
   console.log(
