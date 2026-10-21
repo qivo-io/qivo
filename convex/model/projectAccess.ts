@@ -336,8 +336,11 @@ export const REMOVAL_FULL =
  * without HELD_TASKS_REFUSED. */
 class RemovalFull extends Error {}
 
-/* The guard each step of a removal runs before it reads or writes more. */
-async function assertRoom(ctx: QueryCtx): Promise<void> {
+/** The guard each step of a removal runs before it reads or writes more. Its
+ * refusal is turned into REMOVAL_FULL when it stops the removal itself
+ * (`remove`, as model/teams.ts deleteTeamCore passes it), and into the
+ * settlement's own refusal when it stops a Viewer grant or a handover. */
+export async function assertRoom(ctx: QueryCtx): Promise<void> {
   if (await usedMoreThan(ctx, REASSIGN_ROOM)) throw new RemovalFull()
 }
 

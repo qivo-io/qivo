@@ -22,9 +22,16 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { sha256hex } from '../machine/auth'
+import { deleteTeamDeep } from '../model/cascade'
 import { LAST_TEAM_RULE } from '../model/orgs'
 import { HELD_TASKS_SHAPE, KEEP_TOO_LARGE, REMOVAL_FULL } from '../model/projectAccess'
-import { deleteTeamCore, TEAM_RUNS_RULE, teamsJson } from '../model/teams'
+import {
+  deleteTeamCore,
+  TEAM_DELETE_ROWS_MAX,
+  TEAM_RUNS_RULE,
+  TEAM_TOO_LARGE,
+  teamsJson,
+} from '../model/teams'
 import {
   activityFor,
   as,
@@ -911,9 +918,10 @@ describe("deleting a team settles its members' open tasks", () => {
 
   /* The room checks before Viewer grants when the setup's Hardware is
    * deleted beside Design: Emil's grants, memberships and Hardware's shares
-   * before, his grants and memberships after, and his task under review
+   * before, the deletion's first row (model/cascade.ts deleteTeamDeep), his
+   * grants and memberships after, and his task under review
    * (model/projectAccess.ts removeAndFindLost). */
-  const SIGHT_CHECKS = 6
+  const SIGHT_CHECKS = 7
 
   it('refuses a removal whose sight would fill the transaction, and keeps the team', async () => {
     const fx = await setup()
@@ -995,6 +1003,72 @@ describe("deleting a team settles its members' open tasks", () => {
     )
     expect(checks).toBe(SIGHT_CHECKS + 2)
     expect(await grantsOf(fx.t, fx.emil.id)).toEqual([[fx.meta.id, 'viewer']])
+  })
+
+  it(`deletes a team with ${TEAM_DELETE_ROWS_MAX} memberships and shares, and refuses one more before reading anything else`, async () => {
+    const fx = await setup()
+    await plantTeam(fx, fx.org.id, 'Design')
+    // Hardware has three members and one share; profiles need not exist
+    const plant = (n: number) =>
+      fx.t.run(async (ctx) => {
+        for (let i = 0; i < n; i++)
+          await ctx.db.insert('team_members', {
+            team_id: fx.team.id,
+            profile_id: uuid(),
+            is_leader: false,
+          })
+      })
+    // one row past the bound: 3 + (MAX - 3) memberships and the share
+    await plant(TEAM_DELETE_ROWS_MAX - 3)
+    const e = await expectRefusal(deleteHardware(fx, 'keep_as_viewer'), 'rule')
+    expect((e.data as Refusal).message).toBe(TEAM_TOO_LARGE)
+    await refused(
+      as(fx.t, fx.admin).mutation(api.teams.deleteDeep, {
+        org_id: fx.org.id,
+        id: fx.team.id,
+        on_held_tasks: 'leave',
+      }),
+      'rule',
+      TEAM_TOO_LARGE,
+    )
+    expect(await hardwareLeft(fx)).toMatchObject({ members: TEAM_DELETE_ROWS_MAX, shares: 1 })
+    // at the bound it fits
+    await fx.t.run(async (ctx) => {
+      const one = await ctx.db
+        .query('team_members')
+        .withIndex('by_team', (q) => q.eq('team_id', fx.team.id))
+        .first()
+      if (one !== null) await ctx.db.delete(one._id)
+    })
+    await as(fx.t, fx.admin).mutation(api.teams.deleteDeep, {
+      org_id: fx.org.id,
+      id: fx.team.id,
+      on_held_tasks: 'leave',
+    })
+    expect(await hardwareLeft(fx)).toMatchObject({ team: null, members: 0, shares: 0 })
+  }, 60_000)
+
+  it('checks the room every 100 rows while a deletion that settles tasks deletes them', async () => {
+    const fx = await setup()
+    let checks = 0
+    await fx.t.run(async (ctx) => {
+      for (let i = 0; i < 250; i++)
+        await ctx.db.insert('team_members', {
+          team_id: fx.team.id,
+          profile_id: uuid(),
+          is_leader: false,
+        })
+      await deleteTeamDeep(ctx, {
+        team: fx.team,
+        actor: fx.admin,
+        now: NOW,
+        guard: async () => {
+          checks++
+        },
+      })
+    })
+    // 254 rows: three members, one share and 250 more
+    expect(checks).toBe(3)
   })
 
   it('refuses the last team and anyone but an admin before anything is settled', async () => {
