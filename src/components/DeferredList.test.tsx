@@ -171,6 +171,25 @@ describe('DeferredList', () => {
       expect(box.children.length).toBeLessThanOrEqual(64)
   })
 
+  it('puts what a list that opened whole gains later into bounded boxes', async () => {
+    const items = Array.from({ length: 500 }, (_, n) => ({ key: `k${n}` }))
+    // a narrow filter: the Board opens whole
+    await show(items.slice(0, 30), Number.POSITIVE_INFINITY)
+    const first = nodes()
+    // the filter is cleared, and the Board now mounts in slices
+    await show(items, 12)
+    while (tasks.length) await slice()
+    expect(nodes()).toHaveLength(500)
+    for (const node of first) expect(node.isConnected).toBe(true)
+    // the first 30 stay plain; the rest fill boxed blocks of 64 at most
+    expect(first.every((node) => !node.parentElement?.hasAttribute('data-deferred-block'))).toBe(
+      true,
+    )
+    const boxes = [...container.querySelectorAll('[data-deferred-block]')]
+    expect(boxes.length).toBeGreaterThanOrEqual(470 / 64)
+    for (const box of boxes) expect(box.children.length).toBeLessThanOrEqual(64)
+  })
+
   it('keeps its cards when its first screen changes size', async () => {
     const items = Array.from({ length: 30 }, (_, n) => ({ key: `k${n}` }))
     // a short cell on a large Board: its first screen holds all of it

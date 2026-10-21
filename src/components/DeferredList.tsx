@@ -227,11 +227,16 @@ export function DeferredList<T extends object>({
      browser renders them whole; slices fill new blocks below them, which
      it skips while they are offscreen. */
   const sealedBelow = useRef<number | null>(null)
-  /* A list that mounts in slices boxes its blocks for good, and one its
-     first screen covers never does: a box that came and went would remount
-     every card in its block. */
-  const [boxed] = useState(() => initial !== Number.POSITIVE_INFINITY)
-  const capacity = boxed ? BLOCK_SIZE : Number.POSITIVE_INFINITY
+  /* Blocks below this id are plain: the blocks of a list that rendered
+     whole the first time. A block is boxed or plain for good, as a box
+     that came and went would remount every card in it. A plain block
+     takes any number of items while the list renders whole; once it mounts
+     in slices, new items go to new boxed blocks of BLOCK_SIZE. */
+  const plainBelow = useRef<number | null>(null)
+  const sliced = initial !== Number.POSITIVE_INFINITY
+  const plain = (id: number) => id < (plainBelow.current ?? 0)
+  const capacity = (id: number) =>
+    plain(id) ? (sliced ? 0 : Number.POSITIVE_INFINITY) : BLOCK_SIZE
   const blocks: Block<T>[] = []
   const assigned = new Map<string, number>()
   const known = shown.map((item) => owners.current.get(keyOf(item)))
@@ -267,7 +272,7 @@ export function DeferredList<T extends object>({
       // the items above the first kept one, which all come before it
       const run = known.findIndex((_, i) => kept[i])
       const id =
-        next !== undefined && (keptSize.get(next) ?? 0) + run <= capacity
+        next !== undefined && (keptSize.get(next) ?? 0) + run <= capacity(next)
           ? next
           : next === undefined
             ? nextBlock.current++
@@ -277,7 +282,7 @@ export function DeferredList<T extends object>({
     } else if (
       owner === undefined &&
       current &&
-      (current.items.length >= capacity || current.id < (sealedBelow.current ?? 0))
+      (current.items.length >= capacity(current.id) || current.id < (sealedBelow.current ?? 0))
     ) {
       // the block is full or holds the first screen: open the next one
       const id = between(current.id, keptAfter[index])
@@ -292,7 +297,8 @@ export function DeferredList<T extends object>({
     current.items.push(item)
   }
   owners.current = assigned
-  if (sealedBelow.current === null && boxed) sealedBelow.current = nextBlock.current
+  if (plainBelow.current === null) plainBelow.current = sliced ? 0 : nextBlock.current
+  if (sealedBelow.current === null && sliced) sealedBelow.current = nextBlock.current
 
   // the waiting items' estimated heights, each with the gap before it
   const sums = useMemo(() => {
@@ -354,7 +360,7 @@ export function DeferredList<T extends object>({
           items={block.items}
           render={node}
           box={
-            !boxed
+            plain(block.id)
               ? null
               : {
                   height: sums[block.start + block.items.length] - sums[block.start] - gap,
