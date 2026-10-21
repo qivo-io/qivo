@@ -29,6 +29,13 @@ const literalGlob = (path) => path.replace(/[\\()[\]{}*?!+@|]/g, '\\$&')
  * watcher rewrites a glob's backslashes to slashes before matching, which
  * breaks an escaped path, so the watch rule compares path prefixes instead.
  * server.fs.deny takes globs only and matches them without that rewrite.
+ *
+ * The watcher follows symlinks, so the watch rule also ignores a path whose
+ * real path is in a local directory or the checkout's .git, at one realpath
+ * call per check. A link such as src/x.html to dev-temp/report.html would
+ * otherwise reload open pages on every write to the report. Turning off
+ * followSymlinks instead would stop the watcher from following a link to an
+ * allowed source too.
  */
 export function devServerFiles(root) {
   const checkouts = new Set(
@@ -37,14 +44,22 @@ export function devServerFiles(root) {
   const directories = [...checkouts].flatMap((checkout) =>
     LOCAL.map((name) => `${checkout}/${name}`),
   )
+  // Vite's own watch rules ignore .git by the watched path only.
+  const unwatched = [...directories, ...[...checkouts].map((checkout) => `${checkout}/.git`)]
+  const isUnwatched = (file) =>
+    unwatched.some((directory) => file === directory || file.startsWith(`${directory}/`))
   return {
     watch: {
       ignored: [
         (path) => {
-          const file = normalizePath(path)
-          return directories.some(
-            (directory) => file === directory || file.startsWith(`${directory}/`),
-          )
+          if (isUnwatched(normalizePath(path))) return true
+          // A path that cannot be resolved, such as a deleted file, names
+          // nothing the watcher could follow.
+          try {
+            return isUnwatched(normalizePath(realpathSync.native(path)))
+          } catch {
+            return false
+          }
         },
       ],
     },

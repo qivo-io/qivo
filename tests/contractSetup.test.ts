@@ -1,3 +1,5 @@
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import {
   chmodSync,
   existsSync,
@@ -10,6 +12,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { marketingId } from '../convex/internal/marketingDemoData'
 import { contractSetup } from './contract/global.setup.mts'
@@ -123,10 +126,74 @@ describe('contract pass setup', () => {
   })
 
   it('names each pass differently', async () => {
-    await contractSetup({ env, run: runner(), reset: () => {} }, root)
-    await contractSetup({ env, run: runner(), reset: () => {} }, root)
+    ;(await contractSetup({ env, run: runner(), reset: () => {} }, root))()
+    ;(await contractSetup({ env, run: runner(), reset: () => {} }, root))()
     const names = minted().map((args) => args.name)
     expect(new Set(names).size).toBe(4)
+  })
+
+  it('refuses to start while another pass on the deployment runs, and starts after it ends', async () => {
+    const teardown = await contractSetup({ env, run: runner(), reset: () => {} }, root)
+    const running = readFileSync(stash(), 'utf8')
+    const before = calls.length
+    const reset = vi.fn()
+    await expect(contractSetup({ env, run: runner(), reset }, root)).rejects.toThrow(
+      `contract setup: another contract pass (process ${process.pid}, started ${new Date(performance.timeOrigin).toISOString()}) is running against fine-goose-986. Let it finish or stop it, then start this pass again.`,
+    )
+    // the running pass keeps its stash and its credentials
+    expect([calls.length - before, readFileSync(stash(), 'utf8'), rows.length]).toEqual([
+      0,
+      running,
+      2,
+    ])
+    expect(reset).not.toHaveBeenCalled()
+    teardown()
+    ;(await contractSetup({ env, run: runner(), reset }, root))()
+    expect(reset).toHaveBeenCalledOnce()
+  })
+
+  it("revokes a pass's stash once its process is gone, and not before", async () => {
+    // a pass in another process, killed after it minted and stashed its token
+    const nora = await marketingId('northstar-labs', 'person:nora')
+    const pass = '0123456789abcdef'
+    const left = JSON.stringify({ siteUrl: env.VITE_CONVEX_SITE_URL, orgId: 'org', pass })
+    writeFileSync(stash(), left)
+    rows = [{ id: 'old', kind: 'mcp_token', profile_id: nora, name: `contract pass token ${pass}` }]
+    const module = pathToFileURL(join(import.meta.dirname, 'contract', 'stash.mts')).href
+    const holder = spawn(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `import { takeLease } from ${JSON.stringify(module)}
+takeLease(${JSON.stringify(stash())}, 'fine-goose-986')
+console.log('held')
+setInterval(() => {}, 1 << 30)`,
+      ],
+      { stdio: ['ignore', 'pipe', 'inherit'] },
+    )
+    try {
+      await new Promise((done, fail) => {
+        holder.stdout.once('data', done)
+        holder.once('exit', fail)
+      })
+      await expect(contractSetup({ env, run: runner(), reset: resetMarker }, root)).rejects.toThrow(
+        `another contract pass (process ${holder.pid}, started `,
+      )
+      expect([calls, readFileSync(stash(), 'utf8'), rows.length]).toEqual([[], left, 1])
+    } finally {
+      holder.kill('SIGKILL')
+    }
+    await once(holder, 'exit')
+    const teardown = await contractSetup({ env, run: runner(), reset: resetMarker }, root)
+    expect(calls.slice(0, 3).map((call) => call.args.name ?? call.fn)).toEqual([
+      `contract pass token ${pass}`,
+      `contract pass key ${pass}`,
+      'reset',
+    ])
+    expect(rows.map((row) => row.id)).toEqual(['id-mcp_token', 'id-agent_key'])
+    teardown()
+    expect(rows).toEqual([])
   })
 
   it('refuses before the reset without a private fixture directory outside the checkout', async () => {
@@ -257,11 +324,13 @@ describe('contract pass setup', () => {
       CONVEX_DEPLOY_KEY: 'dev:brave-otter-123|test-key',
       VITE_CONVEX_SITE_URL: 'https://brave-otter-123.convex.site',
     }
-    await contractSetup({ env, run: runner(), reset: () => {} }, root)
+    // passes on different deployments run side by side
+    const running = await contractSetup({ env, run: runner(), reset: () => {} }, root)
     const teardown = await contractSetup({ env: other, run: runner(), reset: () => {} }, root)
     teardown()
     expect(existsSync(stash())).toBe(true)
     expect(existsSync(join(fixtures, 'contract-brave-otter-123.credentials.json'))).toBe(false)
+    running()
   })
 
   it('tries every delete and keeps the stash for the next pass when one fails', async () => {
@@ -353,7 +422,7 @@ describe('contract pass setup', () => {
       const left = { siteUrl: env.VITE_CONVEX_SITE_URL, pass, qvaId: 'old-qva', qvtId: 'old-qvt' }
       writeFileSync(stash(), JSON.stringify(left))
       writeFileSync(next(), 'a replacement a failed write left')
-      await contractSetup({ env, run: runner(), reset: resetMarker }, root)
+      ;(await contractSetup({ env, run: runner(), reset: resetMarker }, root))()
       const before = calls.slice(
         0,
         calls.findIndex((call) => call.fn === 'reset'),

@@ -263,10 +263,39 @@ describe('dev server files', () => {
   it('ignores writes into local directories but still watches the source', async () => {
     write('dev-temp/screenshot.html')
     write('.claude/worktrees/other/dev-temp/report.html')
+    // through links into dev-temp/: the file src/page.html, the directory
+    // src/local, and a directory linked while the server runs
+    mkdirSync(join(root, 'dev-temp', 'later'))
+    symlinkSync(join(root, 'dev-temp', 'later'), join(root, 'src', 'later-report'))
+    await new Promise((done) => setTimeout(done, 300))
+    write('dev-temp/page.html', '<p>report</p>')
+    write('dev-temp/linked/linked-report.html')
+    write('dev-temp/later/later-report.html')
     write('src/later.js')
     await expect.poll(() => events.includes(join(root, 'src/later.js'))).toBe(true)
     await new Promise((done) => setTimeout(done, 300))
-    expect(events.filter((path) => /screenshot|report/.test(path))).toEqual([])
+    expect(events.filter((path) => /screenshot|report|page/.test(path))).toEqual([])
+  })
+
+  it('ignores a path whose real path is in a local directory', () => {
+    const [ignored] = devServerFiles(join(parent, 'link')).watch.ignored
+    symlinkSync(join(root, '.git'), join(root, 'src', 'git'))
+    for (const path of [
+      'src/local',
+      'src/local/notes.txt',
+      'src/notes.txt',
+      'src/project.json',
+      'src/git',
+    ])
+      expect([path, ignored(join(root, path))]).toEqual([path, true])
+    // the checkout itself through a link, a link to a source, and a path
+    // that does not exist
+    for (const path of [
+      join(parent, 'link', 'src', 'main.js'),
+      join(root, 'src', 'alias.js'),
+      join(root, 'src', 'gone.js'),
+    ])
+      expect([path, ignored(path)]).toEqual([path, false])
   })
 
   it("matches only this checkout's directories, not one around it", () => {

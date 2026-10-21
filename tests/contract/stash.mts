@@ -3,9 +3,20 @@
  * The file lives in the private fixture directory QIVO_FIXTURE_CREDENTIALS_DIR
  * names, outside the checkout, so no dev server can serve it. The with-dev
  * helper exports it; like the reset, the pass otherwise reads it from
- * .env.local. Hermetic tests in tests/contractSetup.test.ts. */
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+ * .env.local. A lease beside the stash keeps a second pass on the same
+ * deployment from starting while one runs. Hermetic tests in
+ * tests/contractSetup.test.ts. */
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 import { parseEnv } from 'node:util'
 import { fixtureDirectory } from '../../scripts/marketing-demo.mjs'
@@ -65,6 +76,61 @@ export function writeStash(
   rmSync(next, { force: true })
   writeFileSync(next, JSON.stringify(stash, null, 2), { mode: 0o600, flag: 'wx' })
   renameSync(next, path)
+}
+
+/** SQLite's answer when another connection holds the lock. */
+const SQLITE_BUSY = 5
+
+/**
+ * Takes the lease that lets one contract pass at a time use the stash at
+ * `stash`, and returns the function that gives it back. Throws, naming the
+ * process that holds it, while another pass on `deployment` runs.
+ *
+ * The lease is an exclusive SQLite lock on a file beside the stash. The
+ * operating system drops it when its process ends, even when the process is
+ * killed, so a stash found under the lease belongs to a pass that is gone,
+ * and two passes that start together cannot both take it. The lock file is
+ * never removed: a pass could otherwise lock a file another pass removed,
+ * while a third locks a new one. The holder file only names the process for
+ * the refusal.
+ */
+export function takeLease(stash: string, deployment: string): () => void {
+  const base = stash.replace(/\.credentials\.json$/, '')
+  const lock = `${base}.lease`
+  const holder = `${base}.lease.json`
+  closeSync(openSync(lock, 'a', 0o600))
+  const db = new DatabaseSync(lock, { timeout: 0 })
+  try {
+    db.exec('BEGIN EXCLUSIVE')
+  } catch (error) {
+    db.close()
+    if ((error as { errcode?: unknown }).errcode !== SQLITE_BUSY) throw error
+    let by = ''
+    try {
+      const { pid, started } = JSON.parse(readFileSync(holder, 'utf8'))
+      by = ` (process ${pid}, started ${started})`
+    } catch {}
+    throw new Error(
+      `contract setup: another contract pass${by} is running against ${deployment}. Let it finish or stop it, then start this pass again.`,
+    )
+  }
+  const started = new Date(performance.timeOrigin).toISOString()
+  try {
+    writeFileSync(holder, JSON.stringify({ pid: process.pid, started }), { mode: 0o600 })
+  } catch (error) {
+    db.close()
+    throw error
+  }
+  let held = true
+  return () => {
+    if (!held) return
+    held = false
+    try {
+      rmSync(holder, { force: true })
+    } finally {
+      db.close()
+    }
+  }
 }
 
 /** The stash the global setup wrote for this pass. */
