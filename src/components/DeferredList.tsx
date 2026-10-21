@@ -15,8 +15,10 @@ import './DeferredList.css'
 
 /* The most items a slice adds to one block before it opens the next. A
    slice renders only the block that grows, so its cost does not grow with
-   the items already mounted. */
-const BLOCK_SIZE = 256
+   the items already mounted. A block is also what the browser lays out
+   when it comes into view (DeferredList.css), so a small one keeps that
+   frame short. */
+const BLOCK_SIZE = 64
 /* The most items a render mounts at once when items arrive above the
    mounted boundary, as when a filter is cleared. */
 const MOST_AT_ONCE = 64

@@ -189,7 +189,7 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
     const added = cards().length - before
     expect(added).toBeGreaterThan(0)
     // each card asks for its one task's staleness once as it renders
-    expect(stale.mock.calls.length).toBeLessThanOrEqual(256 + added)
+    expect(stale.mock.calls.length).toBeLessThanOrEqual(64 + added)
   })
 
   it('works out the height of only the cards a delivery changed', async () => {
