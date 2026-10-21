@@ -10,6 +10,7 @@ type Project = TaggableProject
 const project = (over: Partial<Project> & Pick<Project, 'id' | 'name' | 'num'>): Project => ({
   org: 'org-a',
   parent: undefined,
+  type: over.parent === undefined ? 'meta' : 'project',
   ...over,
 })
 
@@ -53,6 +54,16 @@ describe('duplicateNameTags', () => {
       project({ id: 's3', name: 'Design', num: 7, parent: 'p2' }),
     ])
     expect(Object.fromEntries(tags)).toEqual({ s1: '#5', s2: '#6' })
+  })
+
+  it('compares a blank name as the label it shows', () => {
+    const tags = duplicateNameTags([
+      project({ id: 'blank', name: ' ', num: 1 }),
+      project({ id: 'named', name: 'Unnamed project', num: 2 }),
+      project({ id: 'sub', name: '', num: 3, parent: 'blank' }),
+      project({ id: 'sub2', name: 'unnamed  sub-project', num: 4, parent: 'blank' }),
+    ])
+    expect(Object.fromEntries(tags)).toEqual({ blank: '#1', named: '#2', sub: '#3', sub2: '#4' })
   })
 
   it('leaves projects of different organizations and different lists apart', () => {

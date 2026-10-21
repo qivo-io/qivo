@@ -154,16 +154,12 @@ export function shownRow(row: DeletedRow): DeletedRow {
   }
 }
 
-/** shownRow for a search hit. A project item's hit starts its place with
-    the parent of the item, empty for a top-level item, or with the item. */
-export function shownMatch(match: DeletedMatch): DeletedMatch {
-  if (match.item_kind === 'task') return { ...match, path: taskPlace(match.path) }
-  const [first, project] = match.path
-  if (project === undefined) return match
-  return first === ''
-    ? { ...match, path: ['', topLevel(project)] }
-    : { ...match, path: [topLevel(first), subProject(project)] }
-}
+/** shownRow for a search hit. A hit is a task, so its place is a task's,
+    whatever kind of item it comes back with. */
+export const shownMatch = (match: DeletedMatch): DeletedMatch => ({
+  ...match,
+  path: taskPlace(match.path),
+})
 
 /** What a row says a project item holds, after "project" or after its name:
     "with 2 sub-projects and 48 tasks", "and its 12 tasks" for a

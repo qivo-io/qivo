@@ -275,18 +275,22 @@ export const TASK_FIELDS: Fields<Doc<'issues'>> = {
     // one hidden parent to another goes unseen: telling it would tell of
     // tasks the reader cannot see. For the same reason an id the reader is
     // not shown now counts as a hidden parent, so the answer never says
-    // whether a task the reader cannot see is the parent. Tasks are looked
-    // up by the id as stored or sent, because one made before 2026-10-19
-    // may have an id in another case (idOf).
+    // whether a task the reader cannot see is the parent. A stored parent is
+    // looked up by its id as stored, and a seen one as sent or lowercased,
+    // because a task made before 2026-10-19 may have an id in another case
+    // (idOf) and ids compare in any case.
     compare: async ({ row, read, expected, next }) => {
       const stored = idForm(row.parent_id)
       const seenId = idForm(expected.parent_id)
+      const sent = String(expected.parent_id)
       const hidden = async () =>
         row.parent_id !== undefined && !(await parentShown(read, row.parent_id))
+      const seenShown = async () =>
+        (await parentShown(read, sent)) ||
+        (sent !== seenId && (await parentShown(read, String(seenId))))
       const seen =
         seenId !== null
-          ? seenId === stored ||
-            (!(await parentShown(read, String(expected.parent_id))) && (await hidden()))
+          ? seenId === stored || (!(await seenShown()) && (await hidden()))
           : expected.has_hidden_parent === true
             ? await hidden()
             : stored === null

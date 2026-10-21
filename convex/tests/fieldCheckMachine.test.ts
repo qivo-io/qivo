@@ -1030,6 +1030,35 @@ describe('a parent the caller cannot read', () => {
       expect(probe.status, guess).toBe(200)
     }
   })
+
+  it('still sees a parent it was shown that moved to one it is not, by its id in any case', async () => {
+    const fx = await setup()
+    const shown = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    const row = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      parent_id: shown.id,
+    })
+    const elsewhere = await plantProject(fx.t, { org_id: fx.org.id, key: 'HID' })
+    const away = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      key: 'HIDS',
+      type: 'project',
+      parent_id: elsewhere.id,
+    })
+    const hidden = (await plantIssue(fx.t, { org_id: fx.org.id, project_id: away.id })).id
+    await fx.t.run(async (ctx) => {
+      const live = await byId(ctx, 'issues', row.id)
+      if (live) await ctx.db.patch(live._id, { parent_id: hidden })
+    })
+    for (const seen of [shown.id, shown.id.toUpperCase()]) {
+      const probe = await send(fx, 'PATCH', `/v1/tasks/${key(row)}`, {
+        parent: null,
+        expected: { parent_id: seen, has_hidden_parent: false },
+      })
+      expect(probe.status, seen).toBe(409)
+    }
+  })
 })
 
 describe('the tool list', () => {

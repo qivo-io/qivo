@@ -308,7 +308,7 @@ describe('a project saved with a blank name', () => {
     expect(shownRow(row('n')).path).toEqual(['Luma Sensor', 'Firmware'])
   })
 
-  it('reads so in a search hit, where an empty first place of a project item is no parent', () => {
+  it('reads so in a search hit, which is a task in a sub-project', () => {
     const hit = (item_kind: 'task' | 'project', path: string[]): DeletedMatch => ({
       item_id: 'i',
       item_kind,
@@ -327,7 +327,11 @@ describe('a project saved with a blank name', () => {
       'Unnamed project',
       'Unnamed sub-project',
     ])
-    expect(shownMatch(hit('project', ['', ''])).path).toEqual(['', 'Unnamed project'])
+    // a task of a deleted top-level project saved with a blank name
+    expect(shownMatch(hit('project', ['', ''])).path).toEqual([
+      'Unnamed project',
+      'Unnamed sub-project',
+    ])
     expect(shownMatch(hit('project', ['Luma', ''])).path).toEqual(['Luma', 'Unnamed sub-project'])
     expect(blockedText({ reason: 'view_only', project: ' ' })).toBe(
       'You can only view its project now. Ask an organization admin to restore it.',
