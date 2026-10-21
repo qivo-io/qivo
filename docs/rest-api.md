@@ -1350,7 +1350,7 @@ true`). It is at most 500 characters after trimming, counted like a
 description, the same limit as the reason the app's delete window shows in
 Deleted items. A longer one is a `400` (`an archive reason must be at most 500
 characters`) and the PATCH changes nothing, also for a task that is already
-archived.
+archived. Until October 2026 the limit was 20,000 characters.
 
 Task shape of a list row from `GET /v1/tasks`:
 
