@@ -2089,17 +2089,25 @@ a number for `remaining_hours`, `review_hours` and `plannable_hours`, a
 boolean for `paused`, `track_delay` and `has_hidden_parent`, a uuid for an
 id, and `null` where the field can be unset. `level` is `user`, `viewer` or `null`.
 A value also follows the rule of its field, the one a write of that field
-follows. `start_week`, `end_week`, `due_date` and a milestone's `date` are
-real calendar dates written `YYYY-MM-DD`. `remaining_hours` is a number of
-at least 0, with no upper limit, because a task given more than 99999.9 hours
-before the cap reads them back. `review_hours` is a number from 0 to 999,
-`plannable_hours` a whole number from 1 to 168, and a label's `color` `#`
-followed by six hex digits. A task's `title`, a name and a comment's `body`
-are not blank once trimmed. A `title` has at most 80 characters and a
-label's `name` at most 40, counted as code points once trimmed. Other
-names, a comment's `body` and a task's or project's `description` have no
-length limit here, because a record saved before their caps reads back
-longer, and a stale read of it must compare. Every read answers values that follow these rules.
+follows. `start_week`, `end_week` and `due_date` are real calendar dates
+written `YYYY-MM-DD`, and a milestone's `date` is written `YYYY-MM-DD`.
+`remaining_hours` is a number of at least 0, `review_hours` a number from 0
+to 999, `plannable_hours` a whole number from 1 to 168, and a label's
+`color` `#` followed by six hex digits. A task's `title`, a label's `name`
+and a comment's `body` are not blank once trimmed. A `title` has at most 80
+characters and a label's `name` at most 40, counted as code points once
+trimmed.
+
+Some rules are looser here than for a write, because a record saved before
+its field's rule reads back as stored and a stale read of it must compare.
+A team's, project's or milestone's `name` takes any string, blank or long,
+because these names had no rule before 2026-10-15. A milestone's `date` may
+name a day that does not exist, such as `2026-02-31`, because one saved
+before 2026-10-14 can. `remaining_hours` has no upper limit, because a task
+given more than 99999.9 hours before the cap reads them back. A comment's
+`body` and a task's or project's `description` have no length limit,
+because a record saved before their caps reads back longer. Every read
+answers values that follow these rules.
 
 An id key is checked for its shape only. A well-formed uuid that names no
 person, task or project is compared like any other value and can answer
@@ -2144,9 +2152,10 @@ that breaks its field's rule is a `400`, never a `409`:
 - `expected.<key> must be <type>`, such as `expected.remaining_hours must be
   a non-negative number or null`, `expected.due_date must be a calendar date
   as YYYY-MM-DD or null` (also for a day that does not exist, such as
-  `2026-02-31`), `expected.title must be a string that is not blank, of at
-  most 80 characters`, `expected.name must be a string that is not blank`,
-  `expected.status must be one of backlog, todo, progress, review, done` or
+  `2026-02-31`), `expected.date must be a date as YYYY-MM-DD` (a
+  milestone's), `expected.title must be a string that is not blank, of at
+  most 80 characters`, `expected.name must be a string that is not blank, of
+  at most 40 characters` (a label's), `expected.status must be one of backlog, todo, progress, review, done` or
   `expected.assignee_id must be a profile uuid or null`.
 - `expected applies only when changing an existing <record>`, for
   `expected` on a request that creates a task, comment, project, milestone,
@@ -2161,7 +2170,12 @@ that breaks its field's rule is a `400`, never a `409`:
 Until later in October 2026, a value that broke its field's rule, such as a
 `due_date` of `2026-02-31` or a `title` of `""`, was compared and could
 answer `409`, and a create that sent `expected` answered `unknown field
-"expected"; this request takes …`.
+"expected"; this request takes …`. For a few days after that, a blank
+`expected.name` of a team, project or milestone was a `400` with
+`expected.name must be a string that is not blank`, and so was a milestone's
+`expected.date` naming a day that does not exist, with `expected.date must
+be a calendar date as YYYY-MM-DD`. Both compare again, because records saved
+before their rules can read back that way.
 
 A conflict is a `409` with one sentence in `error`. It names the fields by
 their request field, never their values, and names a person only where Qivo

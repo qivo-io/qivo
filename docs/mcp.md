@@ -223,6 +223,18 @@ more before the cap reads them back, and `update_task` takes them
 unchanged or any value from 0 to 99999.9. Any other value above the cap is
 refused, a lower one included.
 
+Days later, still in October 2026, `expected.name` of a team, project or
+milestone took any string again, blank included, and lost its `minLength`.
+Before 2026-10-15 these records took any name, so one can read back blank,
+and `set_team`, `update_project` and `set_milestone` refused the name a
+client read with `expected.name must be a string that is not blank`. A
+milestone's `expected.date` is checked for the `YYYY-MM-DD` shape only for
+the same reason, because a milestone saved before 2026-10-14 can hold a day
+that does not exist, such as `2026-02-31`. Such a day is compared, and text
+of another shape is refused with `expected.date must be a date as
+YYYY-MM-DD` instead of `expected.date must be a calendar date as
+YYYY-MM-DD`.
+
 ## Access model: the credential is a user
 
 MCP authenticates as **one user**, with three connection options. **OAuth is
@@ -1061,22 +1073,28 @@ Send each value as a read tool answered it:
 - `list_comments`, `list_teams` and `list_users` give a comment's `body`, a
   team's `name` and a person's `plannable_hours`.
 
-A value also follows the rule of its field. `start_week`, `end_week`,
-`due_date` and a milestone's `date` are real calendar dates written
-`YYYY-MM-DD`, `remaining_hours` is at least 0, `review_hours` is from 0 to
-999, `plannable_hours` is a whole number from 1 to 168, and a label's
-`color` is `#` followed by six hex digits. `remaining_hours` has no upper
-limit here, because a task given more than 99999.9 hours before the cap
-reads them back. A task's `title`, a name and a comment's `body` are not
-blank once trimmed. A `title` has at most 80 characters and a label's
-`name` at most 40, counted as code points once trimmed. Other names, a
-comment's `body` and a task's or project's `description` have no length
-limit here, because a record saved
-before their caps reads back longer, and a stale read of it must compare.
-The schema of `expected` in the tool list carries the date shape, the hour
-ranges, the color pattern and the text lengths, and Qivo also checks that a
-date exists and that text is not blank. Every read answers values that
-follow these rules.
+A value also follows the rule of its field. `start_week`, `end_week` and
+`due_date` are real calendar dates written `YYYY-MM-DD`, and a milestone's
+`date` is written `YYYY-MM-DD`. `remaining_hours` is at least 0,
+`review_hours` is from 0 to 999, `plannable_hours` is a whole number from 1
+to 168, and a label's `color` is `#` followed by six hex digits. A task's
+`title`, a label's `name` and a comment's `body` are not blank once
+trimmed. A `title` has at most 80 characters and a label's `name` at most
+40, counted as code points once trimmed.
+
+Some rules are looser here than for the field itself, because a record
+saved before its field's rule reads back as stored and a stale read of it
+must compare. A team's, project's or milestone's `name` takes any string,
+blank or long, because these names had no rule before 2026-10-15. A
+milestone's `date` may name a day that does not exist, such as
+`2026-02-31`, because one saved before 2026-10-14 can. `remaining_hours` has
+no upper limit, because a task given more than 99999.9 hours before the cap
+reads them back. A comment's `body` and a task's or project's `description`
+have no length limit, because a record saved before their caps reads back
+longer. The schema of `expected` in the tool list carries the date shape,
+the hour ranges, the color pattern and the text lengths, and Qivo also
+checks that a task date exists and that a title, a label name or a comment
+body is not blank. Every read answers values that follow these rules.
 
 An id key is checked for its shape only. A well-formed uuid that names no
 person, task or project is compared like any other value and can answer as
@@ -1096,7 +1114,8 @@ field "expected.colour"; expected takes name, color`,
 `expected.remaining_hours must be a non-negative number or null`,
 `expected.due_date must be a calendar date as YYYY-MM-DD or null`,
 `expected.title must be a string that is not blank, of at most 80
-characters`, `expected.name must be a string that is not blank`,
+characters`, `expected.name must be a string that is not blank, of at most
+40 characters` (a label's), `expected.date must be a date as YYYY-MM-DD`,
 `expected.parent_id applies only when the request sends parent` and
 `expected.parent_id and expected.has_hidden_parent go together`. `expected`
 on a call that creates is refused with `expected applies only when changing
