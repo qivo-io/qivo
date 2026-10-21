@@ -780,14 +780,21 @@ function Kanban({
   React.useEffect(
     () =>
       registerTaskMount((mark) => {
-        for (const cell of latestCells())
-          for (const group of cell.groups)
-            if (
-              group.issues.some((it) => it.id === mark.taskId) ||
-              group.parent?.id === mark.taskId ||
-              group.ancestors.some((it) => it.id === mark.taskId)
-            )
-              scheduler.mountThrough(cell.key, group.key)
+        // the task's card in each cell that shows it; a parent heading
+        // repeats in every cell that holds one of its subtasks
+        const holding = latestCells().flatMap((cell) => {
+          const group = cell.groups.find(
+            (it) =>
+              it.issues.some((task) => task.id === mark.taskId) ||
+              it.parent?.id === mark.taskId ||
+              it.ancestors.some((task) => task.id === mark.taskId),
+          )
+          return group ? [{ cell: cell.key, group: group.key }] : []
+        })
+        // the remembered cell when it still holds the task, else the first:
+        // focus needs one card, and mounting is synchronous work
+        const one = holding.find((it) => it.cell === `${mark.cell}:${mark.status}`) ?? holding[0]
+        if (one) scheduler.mountThrough(one.cell, one.group)
       }),
     [latestCells, scheduler],
   )
@@ -800,7 +807,7 @@ function Kanban({
     cardWidth: number,
   ) {
     // the place a card shows follows the scope and layout, which key them
-    const estimate = (group: CardGroup) => estimates(group, place, cardWidth, layoutKey)
+    const estimate = (group: CardGroup) => estimates(group, place, cardWidth, layoutKey, cell.key)
     return (
       <DeferredList
         id={cell.key}

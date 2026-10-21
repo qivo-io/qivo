@@ -22,6 +22,9 @@
   flex-direction: column;
   flex-shrink: 0;
   content-visibility: auto;
+  /* content-visibility contains paint even on screen; leave the items'
+     shadows room outside the block, as without it */
+  overflow-clip-margin: 8px;
 }
 
 .deferred-block:focus-within {

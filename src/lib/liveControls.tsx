@@ -68,11 +68,15 @@ export function useLiveControls(root: RefObject<HTMLElement | null>) {
       const wrapAt = wrap ? [...element.querySelectorAll('[data-popover-wrap]')].indexOf(wrap) : -1
       // Already going live, as a mouse that arrives renders the row later:
       // a press that lands first still opens its popover.
+      const active = document.activeElement
       if (handover.current) {
+        // the newest press, pointer and focus while the render is pending
         if (wrapAt >= 0) handover.current.wrap = wrapAt
+        if (pointer) handover.current.pointer = pointer
+        if (!handover.current.focus && active && element.contains(active))
+          handover.current.focus = markTaskFocus(active)
         return
       }
-      const active = document.activeElement
       handover.current = {
         focus: active && element.contains(active) ? markTaskFocus(active) : null,
         wrap: wrapAt,

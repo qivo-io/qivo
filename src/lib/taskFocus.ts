@@ -104,7 +104,8 @@ export function restoreTaskFocus(
     )
   let target = mark.control ? rows.map((row) => keyed(row, mark.control)).find(usable) : undefined
   target ??= rows.map((row) => keyed(row)).find(usable)
-  if (!target && !rows.length && nearby && usable(mark.place)) {
+  // exact takes the remembered row or nothing, never a neighbour
+  if (!target && !rows.length && nearby && !exact && usable(mark.place)) {
     const others = [...mark.place.querySelectorAll<HTMLElement>(ROWS)]
     const row = others[Math.min(mark.index, others.length - 1)]
     if (row) target = keyed(row)

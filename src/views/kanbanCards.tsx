@@ -77,8 +77,17 @@ function DueDate({ it, inButton = false }: { it: IssueVM; inButton?: boolean }) 
  * A group's owner is always its assignee. */
 function ParentHeading({ it, place }: { it: IssueVM; place: ProjectPlace | null }) {
   const owner = P.user(it.owner)
-  // a screen reader hears the owner, priority and due date after the title
+  /* A screen reader hears the owner, priority and due date after the title,
+     in plain words: the meta row holds the owner button, whose name repeats
+     the title. A parent is never paused (P.isPaused). */
   const meta = useId()
+  const summary = [
+    owner?.name || 'Unassigned',
+    `${P.PRIORITIES[it.priority]?.name ?? ''} priority`,
+    it.due && `due ${P.fmtISO(it.due)}`,
+  ]
+    .filter(Boolean)
+    .join(', ')
   return (
     <span className="flex w-full min-w-0 flex-col gap-2 p-2">
       <Button
@@ -95,10 +104,10 @@ function ParentHeading({ it, place }: { it: IssueVM; place: ProjectPlace | null 
           {it.title}
         </span>
       </Button>
-      <span
-        id={meta}
-        className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-2"
-      >
+      <span id={meta} className="sr-only">
+        {summary}
+      </span>
+      <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-2">
         <HoverTooltip content={owner?.name || 'Unassigned'}>
           <span data-focus-key="owner-name" className="inline-flex min-w-0 items-center gap-1.5">
             <AssigneeAvatar issue={it} compact />
@@ -170,7 +179,7 @@ function TaskRow({
         onDragStart(it.id, e.currentTarget)
       }}
       onDragEnd={onDragEnd}
-      className={`relative flex w-full min-w-0 flex-col overflow-hidden border-0 bg-transparent text-left font-normal text-text-1 transition-[background-color,opacity] hover:bg-hover focus-within:opacity-100 ${indented ? 'pl-3' : ''} ${dragging ? 'opacity-40' : stale ? 'opacity-50 hover:opacity-100' : 'opacity-100'}`}
+      className={`relative flex w-full min-w-0 flex-col overflow-hidden border-0 bg-transparent text-left font-normal text-text-1 transition-[background-color,opacity] hover:bg-hover focus-within:opacity-100 ${indented ? 'pl-3' : ''} ${dragging ? 'opacity-40' : stale ? 'opacity-50 hover:opacity-100 has-[[aria-expanded=true]]:opacity-100' : 'opacity-100'}`}
     >
       <div
         className={`relative flex w-full min-w-0 flex-col ${movable ? (dragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-pointer'}`}

@@ -26,10 +26,12 @@ export function estimateBoardCard(
   })
 }
 
-/** estimateBoardCard, remembered per card while its tasks (the same
-    objects), its width, the store's context and the layout `kind` stay the
-    same. A Board renders again on every store change and sizes every
-    waiting card, so it works out only the cards that changed. */
+/** estimateBoardCard, remembered per card of each cell while its tasks
+    (the same objects), its width, the store's context and the layout `kind`
+    stay the same. A Board renders again on every store change and sizes
+    every waiting card, so it works out only the cards that changed. A
+    parent's card repeats in each cell that holds one of its subtasks, with
+    other tasks, so the cell is part of the key. */
 export function createEstimateCache() {
   const known = new Map<
     string,
@@ -40,9 +42,11 @@ export function createEstimateCache() {
     place: (issue: IssueVM) => ProjectPlace | null,
     cardWidth: number,
     kind: string,
+    cell: string,
   ) => {
     const members = [...group.ancestors, ...(group.parent ? [group.parent] : []), ...group.issues]
-    const entry = known.get(group.key)
+    const key = `${cell} ${group.key}`
+    const entry = known.get(key)
     if (
       entry &&
       entry.width === cardWidth &&
@@ -53,7 +57,7 @@ export function createEstimateCache() {
     )
       return entry.value
     const value = estimateBoardCard(group, place, cardWidth)
-    known.set(group.key, { members, width: cardWidth, context: P.contextVersion, kind, value })
+    known.set(key, { members, width: cardWidth, context: P.contextVersion, kind, value })
     return value
   }
 }

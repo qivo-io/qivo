@@ -114,16 +114,19 @@ describe('the Board for a screen reader', { timeout: BOARD_TEST_TIMEOUT }, () =>
 
   it('describes a parent heading with its owner and priority', async () => {
     const board = await loadBoard(network, (snap) => {
-      snap.issues.push(taskRow(snap, 'p', 'todo', 1), {
-        ...taskRow(snap, 'k', 'todo', 2),
-        parent_id: 'p',
-      })
+      snap.issues.push(
+        { ...taskRow(snap, 'p', 'todo', 1), due_date: '2026-11-12' },
+        {
+          ...taskRow(snap, 'k', 'todo', 2),
+          parent_id: 'p',
+        },
+      )
     })
     await board.render(root)
     const heading = document.querySelector('[data-focus-key="parent"]')
     const text = description(heading).join(' ')
-    expect(text).toContain('Planner')
-    expect(text).toContain('Medium priority')
+    expect(text).toBe('Planner, Medium priority, due 2026-11-12')
+    // not the owner button's own name, which repeats the title
   })
 
   it('keeps the cards and waiting space of a large Board items of its list', async () => {

@@ -182,6 +182,18 @@ describe('static Board cards', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(dialog?.contains(document.activeElement)).toBe(true)
   })
 
+  it('keep keyboard focus that arrives while a pointer has the card going live', async () => {
+    const board = await loadBoard(network, twenty)
+    await board.render(root)
+    const owner = cards()[4].querySelector<HTMLElement>('[data-focus-key="owner"]')
+    await act(async () => {
+      cards()[4].dispatchEvent(pointer('pointerover'))
+      owner?.focus()
+    })
+    expect(document.activeElement?.getAttribute('data-focus-key')).toBe('owner')
+    expect(cards()[4].contains(document.activeElement)).toBe(true)
+  })
+
   it('render the same markup and tab stops static and live, for every card shape', async () => {
     const shapes = (readOnly: boolean) => async () => {
       const board = await loadBoard(network, (snap) => {
