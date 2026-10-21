@@ -1,12 +1,14 @@
 import {
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
+import { get } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { build, createServer, loadConfigFromFile, resolveConfig } from 'vite'
@@ -31,7 +33,7 @@ const denied = [
 const links = {
   'src/notes.txt': 'dev-temp/notes.txt',
   'src/module.js': 'dev-temp/module.js',
-  'src/local': 'dev-temp',
+  'src/local': 'dev-temp/linked',
   'src/project.json': '.vercel/project.json',
   'src/env.txt': '.env',
   'src/page.html': 'dev-temp/page.html',
@@ -46,6 +48,19 @@ let root
 let server
 let origin
 const events = []
+
+/** Sends `path` exactly as written, which fetch would normalize first. */
+const raw = (path) =>
+  new Promise((done, fail) => {
+    const { hostname, port } = new URL(origin)
+    get({ hostname, port, path }, (response) => {
+      let body = ''
+      response.on('data', (chunk) => {
+        body += chunk
+      })
+      response.on('end', () => done({ status: response.statusCode, body }))
+    }).on('error', fail)
+  })
 
 const write = (path, text = 'fixture') => {
   mkdirSync(dirname(join(root, path)), { recursive: true })
@@ -63,20 +78,27 @@ beforeAll(async () => {
   for (const path of ['dev-temp/notes.txt', '.vercel/project.json', 'dev-temp/page.html'])
     write(path, 'SECRET')
   write('dev-temp/module.js', 'export const secret = "SECRET"\n')
+  write('dev-temp/linked/notes.txt', 'SECRET')
+  write('dev-temp/linked/module.js', 'export const secret = "SECRET"\n')
   write('dev-temp/style.css', '.secret { content: "SECRET" }\n')
   mkdirSync(join(root, 'src/folder'))
   write('../fixtures/contract.credentials.json', 'SECRET')
   for (const [link, target] of Object.entries(links))
     symlinkSync(join(root, target), join(root, link))
-  // A link to an allowed file is served as before.
+  // A link to an allowed file is served as before, and so is a dependency
+  // cache that links outside the checkout, as a shared node_modules does.
   symlinkSync(join(root, 'src/main.js'), join(root, 'src/alias.js'))
+  mkdirSync(join(parent, 'shared-cache', 'files'), { recursive: true })
+  writeFileSync(join(parent, 'shared-cache', 'files', 'dep.txt'), 'cached')
+  mkdirSync(join(root, 'node_modules'))
+  symlinkSync(join(parent, 'shared-cache'), join(root, 'node_modules', '.vite'))
   // Vite resolves symlinks in its root, so the rules come from a link to the
   // checkout while the server runs on the checkout itself.
   symlinkSync(root, join(parent, 'link'))
   server = await createServer({
     configFile: false,
     root,
-    cacheDir: join(parent, '.vite'),
+    cacheDir: join(root, 'node_modules', '.vite'),
     logLevel: 'silent',
     appType: 'mpa',
     plugins: [refuseLinkedFiles()],
@@ -102,15 +124,21 @@ describe('dev server files', () => {
   })
 
   it('refuses a symlink to a refused file however it is requested', async () => {
+    const fs = `/@fs${root}`
     const requests = [
       // the file under its link, with the queries that read it raw
       ...['?raw', '?import', '?url', '?inline', ''].map((query) => `/src/notes.txt${query}`),
       '/src/project.json',
       '/src/env.txt',
       '/src/stash.json',
-      `/@fs${root}/src/notes.txt`,
+      `${fs}/src/notes.txt`,
       '/src/%6Eotes.txt',
       '/src//notes.txt',
+      // a trailing slash, which the static server drops
+      '/src/notes.txt/',
+      '/notes.txt/',
+      `${fs}/src/notes.txt/`,
+      `${fs}/public/notes.txt/?raw`,
       // through a linked directory
       '/src/local/notes.txt',
       '/src/local%2Fnotes.txt',
@@ -119,12 +147,7 @@ describe('dev server files', () => {
       // the index file the static server tries for a directory
       '/src/folder',
       '/src/folder/',
-      // modules found by Vite's resolver, checked when they load
-      `/@id//@fs${root}/src/notes.txt?raw&import`,
-      `/@id//@fs${root}/src/style.css`,
-      `/@id//@fs${root}/src/style.css?inline`,
-      '/src/module',
-      '/src/local/module',
+      `${fs}/src/folder`,
     ]
     for (const url of requests) {
       const response = await fetch(`${origin}${url}`)
@@ -134,15 +157,76 @@ describe('dev server files', () => {
         false,
       ])
     }
+    // dot segments and backslashes that only a raw client sends
+    const encoded = `/@fs${encodeURI(root)}`
+    for (const path of [
+      `${encoded}/src/nope/../notes.txt`,
+      `${encoded}/src/notes.txt/../notes.txt`,
+      `${encoded}/src/nope/%2e%2e/notes.txt`,
+      `${encoded}/src/local/../notes.txt`,
+      `${encoded}/src\\notes.txt`,
+      '/src/nope/../notes.txt',
+    ]) {
+      const { status, body } = await raw(path)
+      expect([path, status, body.includes('SECRET')]).toEqual([path, 403, false])
+    }
     // a page the HTML fallback or the static server finds by its name
     for (const url of ['/src/page', '/src/page.html', '/src/folder']) {
       const response = await fetch(`${origin}${url}`, { headers: { accept: 'text/html' } })
       expect([url, response.status]).toEqual([url, 403])
     }
+    // modules Vite's resolver finds are refused when they load, with a 404
+    // that names neither the link nor its target
+    for (const url of [
+      `/@id//@fs${root}/src/notes.txt?raw&import`,
+      `/@id//@fs${root}/src/stash.json?import`,
+      `/@id//@fs${root}/src/style.css`,
+      `/@id//@fs${root}/src/style.css?inline`,
+      '/src/module',
+      '/src/local/module',
+    ]) {
+      const response = await fetch(`${origin}${url}`)
+      const body = await response.text()
+      expect([url, response.status, body.includes('SECRET'), body.includes(parent)]).toEqual([
+        url,
+        404,
+        false,
+        false,
+      ])
+    }
+  })
+
+  it('refuses a symlink under a base path', async () => {
+    const based = await createServer({
+      configFile: false,
+      root,
+      base: '/x/',
+      cacheDir: join(root, 'node_modules', '.vite'),
+      logLevel: 'silent',
+      appType: 'mpa',
+      plugins: [refuseLinkedFiles()],
+      server: { host: '127.0.0.1', port: 0, ...devServerFiles(root) },
+    })
+    await based.listen()
+    try {
+      const at = `http://127.0.0.1:${based.httpServer.address().port}`
+      expect((await fetch(`${at}/x/src/main.js`)).status).toBe(200)
+      for (const url of ['/x/src/notes.txt', '/x/notes.txt', '/x/src/folder'])
+        expect([url, (await fetch(`${at}${url}`)).status]).toEqual([url, 403])
+    } finally {
+      await based.close()
+    }
   })
 
   it('serves sources, public files and links to allowed files', async () => {
-    for (const url of ['/src/main.js', '/src/main', '/src/alias.js', '/src/alias', '/logo.txt'])
+    for (const url of [
+      '/src/main.js',
+      '/src/main',
+      '/src/alias.js',
+      '/src/alias',
+      '/logo.txt',
+      '/node_modules/.vite/files/dep.txt',
+    ])
       expect([url, (await fetch(`${origin}${url}`)).status]).toEqual([url, 200])
   })
 
@@ -171,6 +255,7 @@ describe('dev server files', () => {
       const target = link.endsWith('local') ? 'dev-temp' : 'dev-temp/notes.txt'
       symlinkSync(join(site, target), join(site, link))
       await expect(run()).rejects.toThrow(`links to files the dev server refuses: ${link}`)
+      expect(readdirSync(output, { recursive: true }).join()).not.toMatch(/notes/)
       rmSync(join(site, link))
     }
   })
@@ -181,8 +266,7 @@ describe('dev server files', () => {
     write('src/later.js')
     await expect.poll(() => events.includes(join(root, 'src/later.js'))).toBe(true)
     await new Promise((done) => setTimeout(done, 300))
-    const local = ['dev-temp', '.claude'].map((name) => join(root, name))
-    expect(events.filter((path) => local.some((name) => path.startsWith(name)))).toEqual([])
+    expect(events.filter((path) => /screenshot|report/.test(path))).toEqual([])
   })
 
   it("matches only this checkout's directories, not one around it", () => {

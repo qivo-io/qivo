@@ -90,6 +90,7 @@ const named = () =>
 const minted = () =>
   calls.filter((call) => call.fn === 'machine/testing:mintCredential').map((call) => call.args)
 const stash = () => join(fixtures, 'contract-fine-goose-986.credentials.json')
+const next = () => join(fixtures, 'contract-fine-goose-986.new.credentials.json')
 const legacy = () => join(root, 'tests', 'contract', '.credentials.json')
 const resetMarker = () => calls.push({ fn: 'reset', args: {} })
 
@@ -115,7 +116,8 @@ describe('contract pass setup', () => {
 
     teardown()
     expect(existsSync(stash())).toBe(false)
-    expect(named()).toEqual(minted().map((args) => args.name))
+    // the call before the first mint, then one per credential
+    expect(named()).toEqual([minted()[0]!.name, ...minted().map((args) => args.name)])
     expect(rows).toEqual([])
     expect(logged.at(-1)).toBe('[contract] deleted 2 of the 2 credentials the pass tried to mint')
   })
@@ -185,11 +187,11 @@ describe('contract pass setup', () => {
   it('removes a replacement stash that a failed write left behind', async () => {
     const run = runner((fn, args) => {
       if (fn === 'machine/testing:mintCredential' && args.kind === 'agent_key')
-        mkdirSync(join(`${stash()}.new`, 'blocked'), { recursive: true })
+        mkdirSync(join(next(), 'blocked'), { recursive: true })
       return false
     })
     await expect(contractSetup({ env, run, reset: () => {} }, root)).rejects.toThrow()
-    expect([existsSync(stash()), existsSync(`${stash()}.new`), rows]).toEqual([false, false, []])
+    expect([existsSync(stash()), existsSync(next()), rows]).toEqual([false, false, []])
   })
 
   it('deletes a credential whose mint output names no id', async () => {
@@ -204,12 +206,13 @@ describe('contract pass setup', () => {
     expect(rows).toEqual([])
   })
 
-  it('reports that nothing was minted when the setup fails before the first mint', async () => {
-    // the stash cannot be written once the reset is done
-    const reset = () => chmodSync(fixtures, 0o500)
-    await expect(contractSetup({ env, run: runner(), reset }, root)).rejects.toThrow(/EACCES/)
+  it('mints nothing and says so on a deployment without the delete by name', async () => {
+    const run = runner((fn) => fn === 'machine/testing:deleteNamedCredentials')
+    await expect(contractSetup({ env, run, reset: () => {} }, root)).rejects.toThrow(
+      'machine/testing:deleteNamedCredentials failed',
+    )
     expect(minted()).toEqual([])
-    expect(named()).toEqual([])
+    expect(existsSync(stash())).toBe(false)
     expect(logged.at(-1)).toBe(
       '[contract] the pass minted no credentials, so there was nothing to delete',
     )
@@ -225,19 +228,21 @@ describe('contract pass setup', () => {
       return false
     })
     await expect(contractSetup({ env, run, reset: () => {} }, root)).rejects.toThrow(AggregateError)
-    expect(named()).toHaveLength(2)
+    expect(named()).toHaveLength(3)
     expect(rows).toEqual([])
   })
 
   it('keeps the pass id stashed when the full stash cannot replace it', async () => {
     // the full stash cannot be written, and the cleanup that follows fails
+    let minting = false
     const run = runner((fn, args) => {
+      if (fn === 'machine/testing:mintCredential') minting = true
       if (fn === 'machine/testing:mintCredential' && args.kind === 'agent_key')
-        mkdirSync(join(`${stash()}.new`, 'blocked'), { recursive: true })
-      return fn === 'machine/testing:deleteNamedCredentials'
+        mkdirSync(join(next(), 'blocked'), { recursive: true })
+      return minting && fn === 'machine/testing:deleteNamedCredentials'
     })
     await expect(contractSetup({ env, run, reset: () => {} }, root)).rejects.toThrow(AggregateError)
-    expect(existsSync(`${stash()}.new`)).toBe(true)
+    expect(existsSync(next())).toBe(true)
     const left = JSON.parse(readFileSync(stash(), 'utf8'))
     expect(left.pass).toMatch(/^[0-9a-f]{16}$/)
     expect(minted().map((args) => args.name)).toEqual([
@@ -260,14 +265,18 @@ describe('contract pass setup', () => {
   })
 
   it('tries every delete and keeps the stash for the next pass when one fails', async () => {
+    let tearingDown = false
     const run = runner(
       (fn, args) =>
-        fn === 'machine/testing:deleteNamedCredentials' && /token/.test(args.name ?? ''),
+        tearingDown &&
+        fn === 'machine/testing:deleteNamedCredentials' &&
+        /token/.test(args.name ?? ''),
     )
     const teardown = await contractSetup({ env, run, reset: () => {} }, root)
+    tearingDown = true
     expect(() => teardown()).toThrow(AggregateError)
     expect(process.exitCode).toBe(1)
-    expect(named()).toHaveLength(2)
+    expect(named()).toHaveLength(3)
     expect(rows.map((row) => row.kind)).toEqual(['mcp_token'])
     expect(JSON.parse(readFileSync(stash(), 'utf8')).qvtId).toBe('id-mcp_token')
   })
@@ -275,6 +284,7 @@ describe('contract pass setup', () => {
   it('revokes by name what an interrupted pass left before the reset, and removes its stash', async () => {
     // a pass killed after its first mint, before it saved the id
     const nora = await marketingId('northstar-labs', 'person:nora')
+    const atlas = await marketingId('northstar-labs', 'person:atlas')
     const pass = '0123456789abcdef'
     const left = { siteUrl: env.VITE_CONVEX_SITE_URL, orgId: 'org', pass }
     writeFileSync(stash(), JSON.stringify(left))
@@ -290,7 +300,7 @@ describe('contract pass setup', () => {
       },
       {
         fn: 'machine/testing:deleteNamedCredentials',
-        args: expect.objectContaining({ name: `contract pass key ${pass}` }),
+        args: { profile_id: atlas, name: `contract pass key ${pass}` },
       },
       { fn: 'reset', args: {} },
     ])
@@ -324,6 +334,38 @@ describe('contract pass setup', () => {
     )
     expect(readFileSync(stash(), 'utf8')).toBe(left)
     expect(calls.map((call) => call.fn)).toEqual(['machine/testing:deleteNamedCredentials'])
+  })
+
+  it('keeps an older stash and stops before the reset when revoking an id fails', async () => {
+    const left = JSON.stringify({ siteUrl: env.VITE_CONVEX_SITE_URL, qvaId: 'old-qva' })
+    writeFileSync(stash(), left)
+    const run = runner((fn) => fn === 'machine/testing:deleteCredential')
+    await expect(contractSetup({ env, run, reset: resetMarker }, root)).rejects.toThrow(
+      'machine/testing:deleteCredential failed',
+    )
+    expect(readFileSync(stash(), 'utf8')).toBe(left)
+    expect(calls.map((call) => call.fn)).toEqual(['machine/testing:deleteCredential'])
+  })
+
+  it('revokes every id a stash holds, and by name only for a well-formed pass id', async () => {
+    for (const pass of ['', 'not-a-pass', '0123456789abcdef']) {
+      calls = []
+      const left = { siteUrl: env.VITE_CONVEX_SITE_URL, pass, qvaId: 'old-qva', qvtId: 'old-qvt' }
+      writeFileSync(stash(), JSON.stringify(left))
+      writeFileSync(next(), 'a replacement a failed write left')
+      await contractSetup({ env, run: runner(), reset: resetMarker }, root)
+      const before = calls.slice(
+        0,
+        calls.findIndex((call) => call.fn === 'reset'),
+      )
+      expect([pass, before.map((call) => call.args.name ?? call.args.id)]).toEqual([
+        pass,
+        pass === '0123456789abcdef'
+          ? [`contract pass token ${pass}`, `contract pass key ${pass}`, 'old-qva', 'old-qvt']
+          : ['old-qva', 'old-qvt'],
+      ])
+      expect(existsSync(next())).toBe(false)
+    }
   })
 
   it('reads the fixture directory from .env.local when the environment has none', async () => {

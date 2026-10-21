@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs'
-import { isAbsolute, join, relative } from 'node:path'
-import { isFileLoadingAllowed, normalizePath } from 'vite'
+import { isAbsolute, join, posix, relative, resolve } from 'node:path'
+import { normalizePath } from 'vite'
 
 /* Development only. The dev server serves every file under the checkout
    unless server.fs.deny refuses it, and reloads open pages when a watched
@@ -71,44 +71,77 @@ export function devServerFiles(root) {
 }
 
 /**
- * The real path of `file` when the server's file rules refuse it, else
- * undefined. A path that does not exist names nothing to serve. Any other
- * error refuses the path itself.
+ * The directories whose files Vite serves, under their given and their real
+ * paths: server.fs.allow and the dependency cache. Either can be a link, for
+ * example a node_modules shared with another checkout.
  */
-function refusedRealPath(config, file) {
+function servedDirectories(config) {
+  return [...config.server.fs.allow, config.cacheDir].flatMap((directory) => {
+    try {
+      return [normalizePath(directory), normalizePath(realpathSync.native(directory))]
+    } catch {
+      return [normalizePath(directory)]
+    }
+  })
+}
+
+/**
+ * Whether a symlink on the way to `file` leads to a place the server.fs rules
+ * refuse: a denied path, or one outside every directory Vite serves from. A
+ * path without a link is left to Vite's own checks, and one that cannot be
+ * resolved names nothing Vite could open.
+ */
+function refusedLink(config, served, file) {
   let real
   try {
     real = normalizePath(realpathSync.native(file))
-  } catch (error) {
-    return error.code === 'ENOENT' || error.code === 'ENOTDIR' ? undefined : file
+  } catch {
+    return false
   }
-  return isFileLoadingAllowed(config, real) ? undefined : real
+  if (real === normalizePath(file)) return false
+  // Vite's compiled server.fs.deny, the glob its own checks match.
+  if (config.fsDenyGlob(real)) return true
+  const inside = (directory) => real === directory || real.startsWith(`${directory}/`)
+  return !config.safeModulePaths.has(real) && !served.some(inside)
 }
 
-/** A Windows drive, which an /@fs/ path may start with. */
-const VOLUME = /^[A-Z]:/i
+/** A Windows drive at the start of an /@fs/ path. */
+const VOLUME = /^\/[A-Z]:/i
 
-/** The files a request URL can name, decoded the ways Vite's middlewares do:
- * an /@fs/ path, or a path under the root or the public directory together
- * with the `index` file Vite's static server tries for it. */
+/**
+ * The files a request URL can name in Vite's dev server. Each middleware
+ * parses the URL its own way, so the path is taken both as sent and as a
+ * browser URL would normalize it, decoded every way Vite decodes it, with and
+ * without the base. It names an /@fs/ path, or a path under the root or the
+ * public directory, each with the `index` file Vite's static server tries.
+ */
 function requestedFiles(config, url) {
-  const path = url.split(/[?#]/, 1)[0]
-  const decoded = new Set([path])
-  for (const decode of [decodeURI, decodeURIComponent]) {
-    try {
-      decoded.add(decode(path))
-    } catch {}
-  }
-  return [...decoded].flatMap((name) => {
-    if (name.startsWith('/@fs/')) {
-      const file = name.slice('/@fs/'.length)
-      return [VOLUME.test(file) ? file : `/${file}`]
+  const sent = url.split(/[?#]/, 1)[0]
+  const forms = [sent]
+  try {
+    forms.push(new URL(`http://localhost${sent}`).pathname)
+  } catch {}
+  const names = new Set()
+  for (const form of forms)
+    for (const decode of [(path) => path, decodeURI, decodeURIComponent]) {
+      try {
+        const name = posix.resolve('/', decode(form))
+        names.add(name)
+        if (config.base !== '/' && name.startsWith(config.base))
+          names.add(posix.resolve('/', name.slice(config.base.length)))
+      } catch {}
     }
-    const directories = [config.root, config.publicDir].filter(Boolean)
-    return directories.flatMap((directory) => [
-      join(directory, name),
-      join(directory, name, 'index'),
-    ])
+  return [...names].flatMap((name) => {
+    let files
+    if (name.startsWith('/@fs/')) {
+      const file = name.slice('/@fs'.length)
+      // Windows: Vite resolves the path with its drive, and serves the file
+      // without the drive from the current one.
+      files = VOLUME.test(file) ? [file.slice(1), resolve('/', file.replace(VOLUME, ''))] : [file]
+    } else {
+      files = [config.root, config.publicDir].filter(Boolean).map((dir) => join(dir, name))
+    }
+    return files.flatMap((file) => [file, join(file, 'index')])
   })
 }
 
@@ -126,34 +159,36 @@ function linkedPaths(directory, seen = new Set()) {
 }
 
 /**
- * Refuses dev server requests for a file whose real path the server.fs rules
- * refuse. Those rules match the requested path, so a symlink in an allowed
- * directory to a file in dev-temp/, the fixture credentials directory or any
- * other refused place would otherwise be served.
+ * Refuses dev server requests for a file reached through a symlink to a place
+ * the server.fs rules refuse. Those rules match the requested path, so a link
+ * in an allowed directory to a file in dev-temp/, the fixture credentials
+ * directory or anywhere outside the checkout would otherwise be served.
+ * Files reached without a link keep Vite's own checks.
  *
- * The check runs before Vite serves files, and again after the HTML fallback
- * has added `.html` or `index.html`, at one realpath call per candidate
- * file. A module Vite's resolver found, such as `/@id//@fs/<path>?raw`, is
- * checked again when it loads, and refused with the error Vite answers 403
- * for.
+ * The check answers 403 before Vite serves files, and again after the HTML
+ * fallback has added `.html` or `index.html`, at a few realpath calls per
+ * request. A module Vite's resolver found, such as `/@id//@fs/<path>?raw`, is
+ * checked again when it loads and answered with a 404 that names no path.
  *
  * A build copies the public directory and the files its links point to, so
  * a build fails while the public directory links to a refused file.
  */
 export function refuseLinkedFiles() {
   let config
+  let served
   return {
     name: 'qivo-refuse-linked-files',
     // Loads modules before Vite's own loaders read the file.
     enforce: 'pre',
     configResolved(resolved) {
       config = resolved
+      served = servedDirectories(config)
     },
     buildStart() {
       const { command, publicDir, build } = config
       if (command !== 'build' || !build.copyPublicDir || !publicDir || !existsSync(publicDir))
         return
-      const refused = linkedPaths(publicDir).filter((path) => refusedRealPath(config, path))
+      const refused = linkedPaths(publicDir).filter((path) => refusedLink(config, served, path))
       if (refused.length > 0)
         this.error(
           `The public directory links to files the dev server refuses: ${refused.map((path) => relative(config.root, path)).join(', ')}`,
@@ -162,8 +197,8 @@ export function refuseLinkedFiles() {
     configureServer(server) {
       const refuse = (req, res, next) => {
         const files = requestedFiles(config, req.url ?? '/')
-        if (!files.some((file) => refusedRealPath(config, file))) return next()
-        config.logger.warn(`Refused ${req.url}: its real path is not served`)
+        if (!files.some((file) => refusedLink(config, served, file))) return next()
+        config.logger.warn(`Refused ${req.url}: it links to a file that is not served`)
         res.statusCode = 403
         res.end('Restricted')
       }
@@ -173,10 +208,11 @@ export function refuseLinkedFiles() {
     load(id) {
       const file = id.split('?', 1)[0]
       if (config.command !== 'serve' || id[0] === '\0' || !isAbsolute(file)) return
-      const real = refusedRealPath(config, file)
-      if (real === undefined) return
-      // Vite's transform middleware answers this error with its 403.
-      throw Object.assign(new Error(`Denied ID ${real}`), { code: 'ERR_DENIED_ID', id: real })
+      if (!refusedLink(config, served, file)) return
+      config.logger.warn(`Refused ${id}: it links to a file that is not served`)
+      // Vite's transform middleware passes this on, which ends in a 404 that
+      // names no path.
+      throw Object.assign(new Error(`Refused ${id}`), { code: 'ERR_LOAD_URL' })
     },
   }
 }

@@ -126,11 +126,12 @@ export const mintCredential = internalMutation({
   },
 })
 
-/* Teardown twin: the contract pass deletes the credentials it minted so the
- * shared dev deployment never accumulates live secrets (a standing qva_ key
- * IS a capability). Tolerates an already-deleted row — the mcp contract
- * suite's finale deletes the qvt token mid-run to capture the revoked-token
- * 401 live, and the globalSetup teardown then deletes it again. */
+/* Delete twin by id: the mcp contract suite's finale deletes its qvt token
+ * mid-run to capture the revoked-token 401 live, and the contract setup
+ * revokes the ids a stash names when it cleans up after an interrupted pass,
+ * so the shared dev deployment never accumulates live secrets (a standing
+ * qva_ key IS a capability). Tolerates an already-deleted row, because the
+ * setup's teardown deletes the same credentials again by name. */
 export const deleteCredential = internalMutation({
   args: {
     id: v.string(),

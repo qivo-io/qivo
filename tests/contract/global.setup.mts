@@ -35,10 +35,12 @@
  *      not be parsed.
  *   3. Stash them for the suites in the private fixture directory, outside
  *      the checkout (contract/stash.mts). Setup refuses to start without
- *      that directory. The pass id is stashed before the first mint. Before
- *      the reset it revokes the credentials an interrupted pass left in its
- *      stash, by name, or by id from the stash older passes kept inside the
- *      checkout, and removes that file.
+ *      that directory. The pass id is stashed before the first mint, after
+ *      a call that deletes nothing proves the deployment has the delete
+ *      function. Before the reset it revokes the credentials an interrupted
+ *      pass left in its stash, or in the stash older passes kept inside the
+ *      checkout: by name when the stash holds a pass id, and by id for every
+ *      id it holds. Then it removes that file.
  *   4. Teardown: delete every credential named for the pass via
  *      machine/testing:deleteNamedCredentials — a live qva_ key on a shared
  *      deployment is a standing capability — then remove the stash. A
@@ -54,7 +56,7 @@ import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { marketingId } from '../../convex/internal/marketingDemoData'
 import { contractDeployment, contractSiteUrl } from './site.mts'
-import { ROOT, type Stash, stashPath, writeStash } from './stash.mts'
+import { nextStashPath, ROOT, type Stash, stashPath, writeStash } from './stash.mts'
 
 const NORTHSTAR = 'northstar-labs'
 const ANCHOR = process.env.CONTRACT_ANCHOR ?? '2026-09-07'
@@ -142,33 +144,38 @@ function siteOf(site: unknown, deployment: string): boolean {
   )
 }
 
+/** The form of the random id every pass names its credentials after. */
+const PASS_ID = /^[0-9a-f]{16}$/
+
 /**
  * Revokes the credentials named by a stash an interrupted pass left at
- * `path`, when they belong to this pass's deployment, then removes the file.
- * A stash with a pass id is revoked by name, which also covers a credential
- * whose id the pass never saved. One without, from an older pass, is revoked
- * by id. A stash that cannot be read or names another deployment is removed
- * unrevoked, because this key cannot reach that deployment.
+ * `path`, when they belong to this pass's deployment, then removes the file
+ * and any replacement a failed write left beside it. A stash with a pass id
+ * is revoked by name, which also covers a credential whose id the pass never
+ * saved, and every id it holds is revoked as well. A stash that cannot be
+ * read or names another deployment is removed unrevoked, because this key
+ * cannot reach that deployment.
  */
 async function revokeLeftover(path: string, deployment: string, run: Run): Promise<void> {
   if (!existsSync(path)) return
-  let left: Partial<Stash> = {}
+  let left: Partial<Stash> | null = null
   try {
     left = JSON.parse(readFileSync(path, 'utf8'))
   } catch {}
-  if (!siteOf(left.siteUrl, deployment)) {
+  if (!siteOf(left?.siteUrl, deployment)) {
     console.log('[contract] removing a stash from another deployment without revoking it')
-  } else if (typeof left.pass === 'string') {
-    for (const named of Object.values(await passCredentials(left.pass))) deleteNamed(run, named)
   } else {
+    if (typeof left?.pass === 'string' && PASS_ID.test(left.pass))
+      for (const named of Object.values(await passCredentials(left.pass))) deleteNamed(run, named)
     const ids = [
-      [left.qvaId, 'agent_key'],
-      [left.qvtId, 'mcp_token'],
+      [left?.qvaId, 'agent_key'],
+      [left?.qvtId, 'mcp_token'],
     ] as const
     for (const [id, kind] of ids)
       if (typeof id === 'string') run('machine/testing:deleteCredential', { id, kind })
   }
   rmSync(path, { force: true })
+  rmSync(nextStashPath(path), { force: true, recursive: true })
 }
 
 /**
@@ -210,12 +217,17 @@ export async function contractSetup(
       }
     }
     if (failures.length === 0) {
-      try {
-        rmSync(stash, { force: true })
-        // a replacement that a failed write left behind
-        rmSync(`${stash}.new`, { force: true, recursive: true })
-      } catch (error) {
-        failures.push(error)
+      // the stash, and a replacement that a failed write left behind
+      const removals = [
+        () => rmSync(stash, { force: true }),
+        () => rmSync(nextStashPath(stash), { force: true, recursive: true }),
+      ]
+      for (const remove of removals) {
+        try {
+          remove()
+        } catch (error) {
+          failures.push(error)
+        }
       }
     }
     if (failures.length > 0) {
@@ -231,6 +243,8 @@ export async function contractSetup(
   }
 
   try {
+    // fails before anything is minted on a deployment without the delete
+    deleteNamed(run, credentials.mcp_token)
     writeStash(stash, { siteUrl, orgId, pass })
     minting.push(credentials.mcp_token)
     const qvt = mint(run, 'mcp_token', credentials.mcp_token)

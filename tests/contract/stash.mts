@@ -45,6 +45,12 @@ export function stashPath(env: Record<string, string | undefined>, root = ROOT):
   return join(directory, `contract-${deployment}.credentials.json`)
 }
 
+/** Where writeStash writes a replacement before it renames it over `path`.
+ * The name keeps the .credentials.json ending the dev server refuses. */
+export function nextStashPath(path: string): string {
+  return path.replace(/(\.credentials\.json)?$/, '.new.credentials.json')
+}
+
 /**
  * Writes a new stash that only this user can read, replacing any old one.
  * The pass writes its id alone before it mints anything. The new file is
@@ -55,7 +61,7 @@ export function writeStash(
   path: string,
   stash: Pick<Stash, 'siteUrl' | 'orgId' | 'pass'> & Partial<Stash>,
 ): void {
-  const next = `${path}.new`
+  const next = nextStashPath(path)
   rmSync(next, { force: true })
   writeFileSync(next, JSON.stringify(stash, null, 2), { mode: 0o600, flag: 'wx' })
   renameSync(next, path)
