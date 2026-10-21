@@ -22,10 +22,17 @@ export function assertAppTarget(env) {
     throw new Error('QIVO_APP_ORIGIN must be an exact HTTPS origin.')
 }
 
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
-  assertAppTarget(process.env)
-  // Deployment never creates users, seeds data or resets a workspace.
-  execFileSync('npx', ['convex', 'deploy', '--cmd', 'node scripts/vercel-build.mjs'], {
+/** Checks the target, then pushes the backend with vercel-build.mjs as the
+ * build command, which refuses a production backend without its mail
+ * settings. Deployment never creates users, seeds data or resets a
+ * workspace. `run` is execFileSync; the tests pass their own. */
+export function deploy(env, run = execFileSync) {
+  assertAppTarget(env)
+  run('npx', ['convex', 'deploy', '--cmd', 'node scripts/vercel-build.mjs'], {
     stdio: 'inherit',
   })
+}
+
+if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+  deploy(process.env)
 }

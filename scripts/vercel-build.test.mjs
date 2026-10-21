@@ -5,6 +5,7 @@ import {
   ignoredTheTarget,
   isOneAddress,
   isPreviewDeployKey,
+  main,
   previewSiteUrl,
   requireProductionBackendEnv,
   websiteOrigin,
@@ -181,5 +182,52 @@ describe('requireProductionBackendEnv — production mail before functions push'
     for (const environment of ['staging', 'preview', 'demo'])
       requireProductionBackendEnv({ QIVO_ENVIRONMENT: environment }, read)
     expect(read).not.toHaveBeenCalled()
+  })
+})
+
+describe('main — the build refuses a production backend before it builds', () => {
+  const production = {
+    QIVO_ENVIRONMENT: 'production',
+    QIVO_APP_ORIGIN: 'https://qivo.io',
+    QIVO_CONVEX_DEPLOYMENT: 'fixture-cloud-123',
+    VITE_CONVEX_URL: 'https://fixture-cloud-123.convex.cloud',
+    CONVEX_DEPLOY_KEY: 'prod:fixture-cloud-123|test-only',
+  }
+  /** A command runner that answers `convex env get` from `values` and
+   * records every command. */
+  const runner = (values) =>
+    vi.fn((command, args) =>
+      command === 'npx' && args[1] === 'env' && args[2] === 'get'
+        ? `${values[args[3]] ?? ''}\n`
+        : '',
+    )
+  const identity = { QIVO_ENVIRONMENT: 'production', SITE_URL: 'https://qivo.io' }
+  const built = (run) =>
+    run.mock.calls.some(([command, args]) => command === 'npm' && args[1] === 'build')
+
+  it('stops before npm run build when the backend lacks the mail settings', () => {
+    for (const values of [
+      identity,
+      { ...identity, LETTERMINT_API_KEY: 'test-only-token' },
+      { ...identity, LETTERMINT_API_KEY: 'test-only-token', MAIL_FROM: 'Qivo <no-reply@qivo.io>' },
+    ]) {
+      const run = runner(values)
+      const receipt = vi.fn()
+      expect(() => main(production, { run, receipt })).toThrow(/before releasing to production/)
+      expect(built(run)).toBe(false)
+      expect(receipt).not.toHaveBeenCalled()
+    }
+  })
+
+  it('builds once the backend has them', () => {
+    const run = runner({
+      ...identity,
+      LETTERMINT_API_KEY: 'test-only-token',
+      MAIL_FROM: 'no-reply@qivo.io',
+    })
+    const receipt = vi.fn()
+    main(production, { run, receipt })
+    expect(built(run)).toBe(true)
+    expect(receipt).toHaveBeenCalledWith(production)
   })
 })
