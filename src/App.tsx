@@ -31,7 +31,7 @@ import { parseSyncScope } from './lib/teamSync'
 import { useMobile } from './lib/useMobile'
 import './styles/mobile.css'
 import { announce } from './lib/announce'
-import { closedBy } from './lib/closingMoves'
+import { closedBy, dropRefusedTask } from './lib/closingMoves'
 import { floatSlot } from './lib/floatStack'
 import { isLandscapeRoadmapOpen } from './lib/landscape'
 import { createUnsentScope, UnsentScopeContext } from './lib/leaveGuard'
@@ -1456,8 +1456,14 @@ function App() {
     // The preview can be invalidated by ANY concurrent create in the org
     // (0050's shared counter), more than once: the open window follows its
     // task (P.watchHandles above), so it doesn't blank or show the concurrent
-    // issue, and a refusal closes it under the handle it showed last.
-    const key = P.addIssue(issue, (last) => setOpenIssue((cur) => (cur === last ? null : cur)))
+    // issue, and a refusal closes it under the handle it showed last, saying
+    // what text typed in it went with it.
+    const key = P.addIssue(issue, (last) => {
+      if (hereRef.current.openIssue !== last) return
+      const lost = dropRefusedTask(unsent.task, last)
+      setOpenIssue((cur) => (cur === last ? null : cur))
+      if (lost) window.showToast?.(lost, 'error')
+    })
     if (!key) {
       window.showToast?.('That sub-project is gone, so the task was not created.', 'error')
       return false
