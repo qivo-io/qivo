@@ -20,9 +20,11 @@ export function imageRefs(text: string): Set<string> {
   return new Set(Array.from(text.matchAll(ANY_REF_RE), (m) => m[1].toLowerCase()))
 }
 
-/** The attachment ids of the images `text` shows, as the app renders it. */
+/** The attachment ids of the images `text` shows, as the app renders it.
+ * Text without any `att:` shows none, and is not parsed. */
 export function shownImages(text: string): Set<string> {
   const ids = new Set<string>()
+  if (!/att:/i.test(text)) return ids
   const walk = (nodes: readonly MdInline[]) => {
     for (const node of nodes) {
       if (node.t === 'image') {

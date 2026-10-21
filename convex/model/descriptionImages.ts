@@ -111,10 +111,13 @@ export async function settleDescriptionImages(
     .take(ATTACHMENT_MAX + DROPPED_IMAGES_MAX)
   const byId = new Map(rows.map((row) => [row.id, row]))
   // an image the saved text already showed may stay, even one deleted
-  // since; an id it only named in prose or code is no such image
-  const shownBefore = shownImages(issue.description ?? '')
+  // since; an id it only named in prose or code is no such image. The old
+  // text is parsed only when an image is not the task's.
+  let shownBefore: Set<string> | undefined
   for (const id of shown) {
-    if (!shownBefore.has(id) && !byId.has(id)) throw rule(IMAGE_NOT_ATTACHED)
+    if (byId.has(id)) continue
+    shownBefore ??= shownImages(issue.description ?? '')
+    if (!shownBefore.has(id)) throw rule(IMAGE_NOT_ATTACHED)
   }
   const log = (
     row: Doc<'issue_attachments'>,

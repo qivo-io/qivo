@@ -1529,16 +1529,18 @@ async function taskSubtree(
   // looked at too, past those already read.
   const after = async (read: readonly Doc<'issues'>[]): Promise<Doc<'issues'> | null> => {
     const last = read.at(-1)
-    const seen = new Set(read.map((kid) => kid.id))
-    const rest = ctx.db
+    // those read at the last one's moment, which the range starts with
+    const tied = read.filter((kid) => kid._creationTime === last?._creationTime)
+    const seen = new Set(tied.map((kid) => kid.id))
+    const rest = await ctx.db
       .query('issues')
       .withIndex('by_parent', (q) =>
         last === undefined
           ? q.eq('parent_id', root.id)
           : q.eq('parent_id', root.id).gte('_creationTime', last._creationTime),
       )
-    for await (const kid of rest) if (!seen.has(kid.id)) return kid
-    return null
+      .take(tied.length + 1)
+    return rest.find((kid) => !seen.has(kid.id)) ?? null
   }
   if (kids.length === 0) {
     const first = await after([])
