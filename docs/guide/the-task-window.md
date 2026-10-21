@@ -106,9 +106,9 @@ its description counted as attachments. At a limit the control is disabled
 with a sentence such as **This task has 20 labels, the most a task can have**,
 and the label picker only takes labels off. A file you drop or paste on a
 full task is refused before it uploads. A link also needs room on the other
-task, so the link picker leaves out tasks that have 100 links. The window
-counts only the links whose other task you can see, so Qivo can still refuse
-a link when you make it, naming the task that is full.
+task, so picking a task that has 100 links is refused with a sentence that
+names it. The window counts only the links whose other task you can see, so
+Qivo can also refuse a link when you make it, naming the task that is full.
 
 Linked tasks show **Blocks**, **Blocked by** or **Relates to**. When the linked
 task is Done, the dependency labels become **Previously blocked** or

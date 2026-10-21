@@ -1786,17 +1786,15 @@ function IssueDetail({
   const canLink = (otherId: string) => canLabel || P.canWrite(P.issueById[otherId]?.project)
   const linkable = (x: IssueVM) => sameOrg(x) && x.id !== it.id && canLink(x.id)
   const canLinkAny = !!it && (canLabel || P.issues.some(linkable))
-  // the per-task cap on links: a full task takes no new link, and a full
-  // task is offered only to take its link off
+  // the per-task cap on links: a full task takes no new link. Another full
+  // task stays listed, so a search for its title finds it rather than
+  // offering to create one, and picking it says why (P.addLink)
   const noLink = it ? linkBlock(it.links || []) : undefined
   let linkCandidates = []
   if (it && linkAnchor) {
     // anything except the issue itself; already-linked issues show a check
     // and toggle off (link direction has no cycle concerns)
-    const linked = (x: IssueVM) => (it.links || []).some((l) => l.id === x.id)
-    linkCandidates = P.issues
-      .filter((x) => linkable(x) && (linked(x) || !linkBlock(x.links || [])))
-      .sort(sameProjFirst)
+    linkCandidates = P.issues.filter(linkable).sort(sameProjFirst)
   }
 
   // the discussion spine: this issue's comments and activity interleaved in

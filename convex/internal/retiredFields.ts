@@ -50,9 +50,12 @@ import {
   type QueryCtx,
 } from '../_generated/server'
 
-/** Rows per page, for the check and for each step of the clear. Every row
- * read here is small, so a page stays far inside one transaction's limits. */
+/** Rows per page, for the check and for each step of the clear, and the
+ * bytes one page may read. An attachment row stored before its name was
+ * capped, or a stored copy, has no fixed size, so a page can end early,
+ * and the cursor goes on from there. */
 const PAGE = 500
+const PAGE_BYTES = 4 * 1024 * 1024
 
 /** The tables the migration walks, in the order the clear runs them. */
 const PHASES = ['teams', 'attachments', 'stored_attachments'] as const
@@ -89,7 +92,9 @@ async function walk(
   write: MutationCtx | null,
 ): Promise<PageResult> {
   if (phase === 'teams') {
-    const page = await ctx.db.query('teams').paginate({ cursor, numItems: PAGE })
+    const page = await ctx.db
+      .query('teams')
+      .paginate({ cursor, numItems: PAGE, maximumBytesRead: PAGE_BYTES })
     const held = page.page.filter(teamHolds)
     for (const team of held) {
       // ctx.db.patch unsets a key whose value is undefined
@@ -102,7 +107,9 @@ async function walk(
     return { rows: held.length, cursor: page.continueCursor, done: page.isDone }
   }
   if (phase === 'attachments') {
-    const page = await ctx.db.query('issue_attachments').paginate({ cursor, numItems: PAGE })
+    const page = await ctx.db
+      .query('issue_attachments')
+      .paginate({ cursor, numItems: PAGE, maximumBytesRead: PAGE_BYTES })
     const held = page.page.filter((row) => row.project_id !== undefined)
     for (const row of held) await write?.db.patch(row._id, { project_id: undefined })
     return { rows: held.length, cursor: page.continueCursor, done: page.isDone }
@@ -110,7 +117,7 @@ async function walk(
   const page = await ctx.db
     .query('deleted_rows')
     .withIndex('by_row', (q) => q.eq('table', 'issue_attachments'))
-    .paginate({ cursor, numItems: PAGE })
+    .paginate({ cursor, numItems: PAGE, maximumBytesRead: PAGE_BYTES })
   const held = page.page.filter(storedHolds)
   for (const row of held) {
     if (row.row.table !== 'issue_attachments') continue
