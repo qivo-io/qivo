@@ -3,7 +3,7 @@
  * more tasks, or any other list past that, failed for every member. The
  * snapshot sends its long lists through chunkLists and the app joins them
  * back with joinLists. No imports, so the app can import this file as it
- * does textLimits.ts. */
+ * does limits.ts. */
 
 /** The most values one array in a function result may hold. A mutable
  * object, so tests can lower it. */

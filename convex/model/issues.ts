@@ -82,20 +82,14 @@ import {
 import { descriptionForm, printOf, trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { shownImages } from '../lib/imageRefs'
+import { limitedText } from '../lib/limitRules'
+import { grouped, LIMITS, PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from '../lib/limits'
 import { countsAsSubtask, type Liveness, projectLiveness } from '../lib/liveTasks'
-import { TOO_MANY_MENTIONS, tooManyMentions } from '../lib/mentions'
-import { projectName } from '../lib/recordNames'
+import { tooManyMentions } from '../lib/mentions'
 import { reviewStamp } from '../lib/review'
-import {
-  PARENT_FULL,
-  PARENT_IS_SUBTASK,
-  SUBTASK_MAX,
-  SUBTASK_WITH_SUBTASKS,
-} from '../lib/taskLimits'
 import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
-import { DESCRIPTION_TOO_LONG, plainText, TEXT_MAX } from '../lib/textLimits'
 import { inWorkingSet } from '../lib/workingSet'
-import { issueChanges, logActivity, machineDetail, narratedChange } from './activity'
+import { excerpt, issueChanges, logActivity, machineDetail, narratedChange } from './activity'
 import { scheduleMarkClears } from './archiveMarks'
 import { IMAGE_NOT_ATTACHED, settleDescriptionImages } from './descriptionImages'
 import {
@@ -108,11 +102,11 @@ import {
   filledText,
   hoursOrNull,
   idForm,
-  idOf,
   oneOf,
   type Read,
   sentKeys,
-  TEXT_OR_NULL,
+  textOrNull,
+  uuidOf,
   type View,
   type Writers,
 } from './expected'
@@ -131,8 +125,6 @@ import { assertWeekPair, cleanRemaining, cleanTaskDate, roundTenths } from './ta
 
 export { ISSUE_PREFIX } from '../lib/taskRefs'
 export { assertRemainingShape, assertWeekPair, cleanRemaining } from './taskValues'
-/* char_length in the DB CHECK (0061), so codepoints here too. */
-export const TITLE_MAX = 80
 
 /* num and org_id are immutable — structural here (no public patch carries
  * them), but the sentence stays exported for the machine surface and tests. */
@@ -188,26 +180,20 @@ export async function assertCanEdit(
  * core.ts grammar (bad_request) — the machine surface's readable errors,
  * built here because the browser mutations need the same predicates. */
 
+/** The title to store: trimmed, refused when blank or past LIMITS.title. */
 export function cleanTitle(raw: unknown): string {
   if (typeof raw !== 'string') throw badRequest('title must be a non-empty string')
-  const title = raw.trim()
-  if (!title) throw badRequest('title must not be blank')
-  // codepoints, matching the DB CHECK's char_length (0061)
-  if ([...title].length > TITLE_MAX)
-    throw badRequest(`title must be at most ${TITLE_MAX} characters`)
+  const title = limitedText(LIMITS.title, raw)
+  if (!title) throw rule('title must not be blank')
   return title
 }
 
-/** Answers the description to store, which is the text as sent, untrimmed,
- * or '' for null or absent. Refuses text longer than TEXT_MAX, or text that
- * mentions more than MENTION_MAX people, unless it equals `current`, the
- * task's stored description, so a task saved before the cap keeps its text
- * through writes that send it back unchanged. */
-export function cleanDescription(raw: string | null | undefined, current?: string): string {
-  const text = raw ?? ''
-  if (text === current) return text
-  if (text.length > TEXT_MAX) throw rule(DESCRIPTION_TOO_LONG)
-  if (tooManyMentions(text)) throw rule(TOO_MANY_MENTIONS)
+/** The description to store: trimmed, or '' for null or absent. Refuses
+ * text past LIMITS.description or mentioning more people than
+ * LIMITS.mentions allows. */
+export function cleanDescription(raw: string | null | undefined): string {
+  const text = limitedText(LIMITS.description, raw ?? '')
+  if (tooManyMentions(text)) throw rule(LIMITS.mentions.refusal)
   return text
 }
 
@@ -216,40 +202,15 @@ export function cleanDescription(raw: string | null | undefined, current?: strin
  * parent compares as the pair a read shows: parent_id when the reader is
  * shown the parent, else has_hidden_parent. project_id is a move's. */
 
-/** The id of the task `parentId` names exactly when it is shown to the
- * reader as a parent: a task of the reader's organization in a project it
- * can see, and in the app also active in an active project
- * (lib/workingSet.ts inWorkingSet). Null otherwise. */
-async function shownParent(read: Read, parentId: string): Promise<string | null> {
+/** Whether `parentId` is shown to the reader as a parent: a task of the
+ * reader's organization in a project it can see, and in the app also active
+ * in an active project (lib/workingSet.ts inWorkingSet). */
+async function parentShown(read: Read, parentId: string): Promise<boolean> {
   const parent = await byId(read.ctx, 'issues', parentId)
-  if (parent === null || parent.org_id !== read.me.org_id) return null
+  if (parent === null || parent.org_id !== read.me.org_id) return false
   const project = await byId(read.ctx, 'projects', parent.project_id)
-  if (project === null || !(await canSeeProject(read.ctx, read.me, project))) return null
-  return read.view === 'machine' || inWorkingSet(parent, project, true) ? parent.id : null
-}
-
-/* Whether the parent `expected` names is the one `row` stores, by the rule
- * of TASK_FIELDS.parent_id. A task's id compares in any case, and a task
- * made before 2026-10-19 may have one that is not a lowercase uuid (idOf).
- * Such a task is found as shown only by its id as read: sent in another
- * case it counts as a parent the reader is not shown. */
-async function parentSeen(
-  row: Doc<'issues'>,
-  read: Read,
-  expected: Readonly<Record<string, unknown>>,
-): Promise<boolean> {
-  const stored = idForm(row.parent_id)
-  const hidden = async () =>
-    row.parent_id !== undefined && (await shownParent(read, row.parent_id)) === null
-  const seenId = idForm(expected.parent_id)
-  if (seenId === null) return expected.has_hidden_parent === true ? await hidden() : stored === null
-  const sent = String(expected.parent_id)
-  const shown =
-    (await shownParent(read, sent)) ??
-    (sent === seenId ? null : await shownParent(read, String(seenId)))
-  // a task the reader is shown matches by its own id, so two ids that
-  // differ in case only never tell of a task the reader is not shown
-  return shown !== null ? shown === row.parent_id : seenId === stored || (await hidden())
+  if (project === null || !(await canSeeProject(read.ctx, read.me, project))) return false
+  return read.view === 'machine' || inWorkingSet(parent, project, true)
 }
 
 const hoursForm = (value: unknown): unknown =>
@@ -258,24 +219,28 @@ const hoursForm = (value: unknown): unknown =>
 /** The keys of a task's `expected`, in the order refusals name them. */
 export const TASK_FIELDS: Fields<Doc<'issues'>> = {
   // cleanTitle's rule
-  title: { sends: 'title', type: filledText(TITLE_MAX), form: trimmedForm, printed: true },
+  title: { sends: 'title', type: filledText(LIMITS.title), form: trimmedForm, printed: true },
   description: {
     sends: 'description',
-    type: TEXT_OR_NULL,
+    type: textOrNull(LIMITS.description),
     form: descriptionForm,
     printed: true,
   },
   status: { sends: 'status', type: oneOf(ISSUE_STATUSES), form: exact },
   priority: { sends: 'priority', type: oneOf(ISSUE_PRIORITIES), form: exact },
-  assignee_id: { sends: 'assignee_id', type: idOf('profile', true), form: idForm },
-  reviewer_id: { sends: 'reviewer_id', type: idOf('profile', true), form: idForm },
+  assignee_id: { sends: 'assignee_id', type: uuidOf('profile', true), form: idForm },
+  reviewer_id: { sends: 'reviewer_id', type: uuidOf('profile', true), form: idForm },
   start_week: { sends: 'start_week', type: dayOf(true), form: exact },
   end_week: { sends: 'end_week', type: dayOf(true), form: exact },
   due_date: { sends: 'due_date', type: dayOf(true), form: exact },
   remaining_hours: {
     sends: 'remaining_hours',
     // cleanRemaining's rule
-    type: hoursOrNull({ min: 0, says: 'a non-negative number or null' }),
+    type: hoursOrNull({
+      min: 0,
+      max: LIMITS.remainingHours.max,
+      says: `a number from 0 to ${grouped(LIMITS.remainingHours.max)}, or null`,
+    }),
     form: hoursForm,
     // REST and MCP read an active group's hours as null, even while it
     // still stores hours from before its subtasks (lib/core.ts issueOut)
@@ -289,7 +254,7 @@ export const TASK_FIELDS: Fields<Doc<'issues'>> = {
   paused: { sends: 'paused', type: BOOLEAN, form: exact },
   parent_id: {
     sends: 'parent',
-    type: idOf('task', true),
+    type: uuidOf('task', true),
     form: idForm,
     pair: 'has_hidden_parent',
     shape: (expected) =>
@@ -301,14 +266,24 @@ export const TASK_FIELDS: Fields<Doc<'issues'>> = {
     // one hidden parent to another goes unseen: telling it would tell of
     // tasks the reader cannot see. For the same reason an id the reader is
     // not shown now counts as a hidden parent, so the answer never says
-    // whether a task the reader cannot see is the parent (parentSeen).
-    compare: async ({ row, read, expected, next }) => ({
-      seen: await parentSeen(row, read, expected),
-      next: idForm(next.parent_id) === idForm(row.parent_id),
-    }),
+    // whether a task the reader cannot see is the parent.
+    compare: async ({ row, read, expected, next }) => {
+      const stored = idForm(row.parent_id)
+      const seenId = idForm(expected.parent_id)
+      const hidden = async () => stored !== null && !(await parentShown(read, String(stored)))
+      const seen =
+        seenId !== null
+          ? (await parentShown(read, String(seenId)))
+            ? stored === seenId
+            : await hidden()
+          : expected.has_hidden_parent === true
+            ? await hidden()
+            : stored === null
+      return { seen, next: idForm(next.parent_id) === stored }
+    },
   },
   has_hidden_parent: { sends: 'parent', type: BOOLEAN, form: exact, pair: 'parent_id' },
-  project_id: { sends: 'project', type: idOf('project', false), form: idForm },
+  project_id: { sends: 'project', type: uuidOf('project', false), form: idForm },
 }
 
 /** The keys of a task's `expected` whose fields a REST body or MCP call
@@ -560,7 +535,7 @@ function chainSight(ctx: QueryCtx, chain: readonly Doc<'issues'>[], bulk?: BulkU
 
 /** How full a change that walks a task's subtasks may let its transaction
  * get (lib/db.ts usedMoreThan). Every walk has a fixed bound: at most
- * SUBTASK_MAX active subtasks, and a move carries at most MOVE_SUBTREE_MAX
+ * LIMITS.subtasks.max active subtasks, and a move carries at most LIMITS.moveSubtree.max
  * subtasks. The room is the backstop for the rest, such as the sight checks
  * of every person working on them or a write whose earlier work filled the
  * transaction. The walk asks every `every` queries or rows, and sooner once
@@ -575,8 +550,8 @@ export const SUBTREE_TOO_LARGE =
   'this task and its subtasks are too large to change in one request; detach some subtasks first'
 
 /** The refusal of a move to another project whose task and subtasks are
- * too large for one transaction (SUBTREE_ROOM), such as MOVE_SUBTREE_MAX
- * subtasks with very long descriptions (model/issues.ts MOVE_SUBTREE_MAX). */
+ * too large for one transaction (SUBTREE_ROOM), such as
+ * LIMITS.moveSubtree.max subtasks with very long descriptions. */
 export const MOVE_TOO_LARGE =
   'this task and its subtasks are too large to move to another project in one request; remove some subtasks from this task first, restoring archived ones to do so, or move it within its project'
 
@@ -610,7 +585,7 @@ const subtaskBytes = (task: Doc<'issues'>): number =>
   3 * (task.title.length + (task.description?.length ?? 0)) + 1024
 
 /* The active subtasks of the task `parentId`, one by_parent_archived range,
- * at most SUBTASK_MAX rows. */
+ * at most LIMITS.subtasks.max rows. */
 const activeSubtasks = (ctx: QueryCtx, parentId: string) =>
   ctx.db
     .query('issues')
@@ -622,10 +597,10 @@ const activeSubtasks = (ctx: QueryCtx, parentId: string) =>
  * each reviewer of a task that is no group (a group's reviewer is dormant).
  * `self` holds the task's own next values. Callers skip switched-off people,
  * who hold no new work. A subtask has no subtasks of its own, so each one's
- * reviewer counts, and the walk reads one range of at most SUBTASK_MAX
- * active subtasks, under SUBTREE_ROOM, unless the caller already read them
- * all (`kids`, every subtask, archived ones too, which do not count).
- * `refusal` is the room refusal (assertRoom). */
+ * reviewer counts, and the walk reads one range of at most
+ * LIMITS.subtasks.max active subtasks, under SUBTREE_ROOM, unless the caller
+ * already read them all (`kids`, every subtask, archived ones too, which do
+ * not count). `refusal` is the room refusal (assertRoom). */
 async function holdersUnder(
   ctx: QueryCtx,
   rootId: string,
@@ -828,7 +803,7 @@ export const GROUP_PAUSE_RULE = 'a task with subtasks cannot be paused; pause it
 
 /* -------------------------------------------------- the parent link fence
  * issues_check_parent (0057:38-85, final), plus the subtask family rule and
- * the one level of subtasks (lib/taskLimits.ts). The caller must pass the
+ * the one level of subtasks (lib/limits.ts). The caller must pass the
  * row's PINNED org (0057:27-30: org from the project first, THEN this
  * check). A parent the actor cannot see (missing, in another organization or
  * in a hidden project) answers 'parent task not found' before any other
@@ -857,9 +832,9 @@ export const SUBTASK_PROJECT_RULE =
 /** Why parentChainCheck refuses a parent, in the order it checks.
  * `parent_is_subtask` means the parent has a parent of its own,
  * `has_subtasks` that the child has subtasks, archived ones included, and
- * `parent_full` that the parent already has SUBTASK_MAX active subtasks,
- * whether the child is active or not. Any of them would break the one level of subtasks or
- * its size. */
+ * `parent_full` that the parent already has LIMITS.subtasks.max active
+ * subtasks, whether the child is active or not. Any of them would break the
+ * one level of subtasks or its size. */
 export type ParentProblem =
   | 'self'
   | 'not_found'
@@ -869,15 +844,16 @@ export type ParentProblem =
   | 'has_subtasks'
   | 'parent_full'
 
-/** How many active subtasks `parentId` has, counted up to SUBTASK_MAX: one
- * by_parent_archived range of at most SUBTASK_MAX rows, under SUBTREE_ROOM. */
+/** How many active subtasks `parentId` has, counted up to
+ * LIMITS.subtasks.max: one by_parent_archived range of at most that many
+ * rows, under SUBTREE_ROOM. */
 export async function subtaskCount(ctx: QueryCtx, parentId: string): Promise<number> {
   const room = roomCheck(ctx)
   await room()
   let count = 0
   for await (const kid of activeSubtasks(ctx, parentId)) {
     count += 1
-    if (count >= SUBTASK_MAX) break
+    if (count >= LIMITS.subtasks.max) break
     await room(subtaskBytes(kid))
   }
   return count
@@ -926,7 +902,7 @@ export async function parentChainCheck(
   }
   if (parent.parent_id !== undefined) return no('parent_is_subtask')
   if (await hasAnySubtask(ctx, child.id)) return no('has_subtasks')
-  if ((await subtaskCount(ctx, parent.id)) >= SUBTASK_MAX) return no('parent_full')
+  if ((await subtaskCount(ctx, parent.id)) >= LIMITS.subtasks.max) return no('parent_full')
   return { ok: true, parent }
 }
 
@@ -939,7 +915,7 @@ const PARENT_REFUSALS: Record<ParentProblem, () => ReturnType<typeof rule>> = {
   other_project: () => rule(SUBTASK_PROJECT_RULE),
   parent_is_subtask: () => rule(PARENT_IS_SUBTASK),
   has_subtasks: () => rule(SUBTASK_WITH_SUBTASKS),
-  parent_full: () => rule(PARENT_FULL),
+  parent_full: () => rule(LIMITS.subtasks.refusal),
 }
 
 /** parentChainCheck as a guard. It refuses a parent that does not qualify
@@ -1068,7 +1044,7 @@ export async function clearParentRemaining(
  * project needs no Edit: only the link to the parent goes, as a delete has
  * always detached such children. The child is not read again, because its
  * new state is `child` with the patch applied: a delete detaches up to
- * SUBTASK_MAX children, whose descriptions a second read would count twice
+ * LIMITS.subtasks.max children, whose descriptions a second read would count twice
  * against the transaction's 16 MiB. */
 export async function detachChild(
   ctx: MutationCtx,
@@ -1130,12 +1106,6 @@ function fmtDateWith(format: string, iso: string): string {
 /* The client's fmtRange (dates.ts:142-144): compact dates joined ' → '. */
 export function fmtRangeWith(format: string, aIso: string, bIso: string): string {
   return `${fmtDateWith(format, aIso)} → ${fmtDateWith(format, bIso)}`
-}
-
-const excerpt = (s: string): string => {
-  const t = plainText(s)
-  const cp = [...t]
-  return cp.length > 80 ? `${cp.slice(0, 79).join('')}…` : t
 }
 
 /** The app's verb and detail for an update of `before` to `after`, chosen
@@ -1333,7 +1303,8 @@ export type MachineUpdate = MachineNarration & {
   appGrammar?: boolean
   later?: LaterPeople
   /** The update names the task's current parent, so a restore under it
-   * that is full is refused with PARENT_FULL rather than leaving it. */
+   * that is full is refused with LIMITS.subtasks' sentence rather than
+   * leaving it. */
   keepParent?: boolean
   /** An earlier write of the same update gave the task its parent, so a
    * pending detach of that parent's subtasks never concerned it
@@ -1388,7 +1359,7 @@ const DUPLICATE_TASK_ID = 'a task with this id already exists'
 /** Creates the task `args` describes as `me`, who needs Edit on its
  * sub-project, and answers the stored row. The app, REST and MCP all create
  * through it, so every shared field rule runs here, including the title cap
- * and the TEXT_MAX description cap. */
+ * and the description cap (LIMITS.description). */
 export async function createIssueCore(
   ctx: MutationCtx,
   a: { me: Doc<'profiles'>; args: CreateIssueArgs; now: string; machine?: MachineNarration },
@@ -1580,8 +1551,7 @@ async function checkOnce(
 
 /** Applies `patch` to `issue` as `me`, who needs Edit on its project, and
  * answers the stored row. A key present in the patch sets that field and null
- * clears it. A description over TEXT_MAX is refused unless it equals the
- * stored text. `machine` carries a REST or MCP caller's provenance and
+ * clears it. `machine` carries a REST or MCP caller's provenance and
  * archive toggle (MachineUpdate). `bulk` lets a bulk writer skip the write
  * gate and the assignee and reviewer rules it already passed for the
  * project, and notify from its preload (BulkUpdate). */
@@ -1724,7 +1694,7 @@ export async function updateIssueCore(
     }
   }
   if ('remaining_hours' in patch) {
-    const next = cleanRemaining(patch.remaining_hours, issue.remaining_hours)
+    const next = cleanRemaining(patch.remaining_hours)
     const changed = (issue.remaining_hours ?? null) !== (next ?? null)
     if (changed && next !== undefined) await assertOwnRemaining(ctx, issue)
     w.remaining_hours = next
@@ -1734,7 +1704,7 @@ export async function updateIssueCore(
   }
   if ('title' in patch) w.title = cleanTitle(patch.title)
   if ('description' in patch) {
-    w.description = cleanDescription(patch.description, issue.description)
+    w.description = cleanDescription(patch.description)
     // the images the save takes out, brings back or adds (model/descriptionImages.ts)
     if (w.description !== (issue.description ?? '')) {
       await settleDescriptionImages(ctx, {
@@ -1925,16 +1895,15 @@ export const MOVE_SUBTREE_EDIT_RULE =
   'moving this task would move a subtask in a project you cannot edit; an organization admin can move it'
 export const MOVE_SUBTREE_HOLDER_RULE =
   'someone assigned to or reviewing a subtask of this task cannot edit that sub-project; give them Edit access there, or change who works on that subtask first'
-/* The most subtasks, archived ones included, that a task moving to another
- * top-level project may have. The move reads them all, including any
- * already in the destination's top-level project, and carries the rest.
- * SUBTASK_MAX bounds only the active ones, so this bounds what the move
- * reads and writes: SUBTASK_MAX active subtasks and as many archived. Each
- * carried subtask is read twice, once by the move and once by its write,
- * so about 120 subtasks with descriptions at TEXT_MAX fit in one request.
- * A larger family is refused with MOVE_TOO_LARGE. */
-export const MOVE_SUBTREE_MAX = 200
-export const MOVE_SUBTREE_TOO_LARGE = `this task has more than ${MOVE_SUBTREE_MAX} subtasks, archived ones included, and a move to another project carries them all; restore some archived subtasks and remove them from this task first, or move it within its project`
+/* A task moving to another top-level project may have at most
+ * LIMITS.moveSubtree.max subtasks, archived ones included. The move reads
+ * them all, including any already in the destination's top-level project,
+ * and carries the rest. LIMITS.subtasks.max bounds only the active ones, so
+ * this bounds what the move reads and writes: LIMITS.subtasks.max active
+ * subtasks and as many archived. Each carried subtask is read twice, once by
+ * the move and once by its write, so about 120 subtasks with descriptions at
+ * TEXT_MAX fit in one request. A larger family is refused with
+ * MOVE_TOO_LARGE. */
 
 /* Per-call cache from a project id to its top-level project id, null for a
  * missing project. */
@@ -1951,18 +1920,18 @@ function topLevelCache(ctx: QueryCtx): (projectId: string) => Promise<string | n
 }
 
 /* The subtasks of the task `rootId`, active or archived, at most
- * MOVE_SUBTREE_MAX + 1 of them, so a caller can tell a task with more than
- * MOVE_SUBTREE_MAX. A subtask has no subtasks of its own, so one by_parent
+ * LIMITS.moveSubtree.max + 1 of them, so a caller can tell a task with more than
+ * LIMITS.moveSubtree.max. A subtask has no subtasks of its own, so one by_parent
  * range holds them all. */
 const subtasksOf = (ctx: QueryCtx, rootId: string): Promise<Doc<'issues'>[]> =>
   ctx.db
     .query('issues')
     .withIndex('by_parent', (q) => q.eq('parent_id', rootId))
-    .take(MOVE_SUBTREE_MAX + 1)
+    .take(LIMITS.moveSubtree.max + 1)
 
 /** Whether moving `issue` to `target` would carry subtasks along, for the
  * app's Move window, whose view holds no archived subtasks. A move within
- * the task's top-level project carries none. Past MOVE_SUBTREE_MAX, where
+ * the task's top-level project carries none. Past LIMITS.moveSubtree.max, where
  * moveIssueCore refuses, it answers false, because such a move carries
  * nothing. */
 export async function subtasksWouldMove(
@@ -1975,7 +1944,7 @@ export async function subtasksWouldMove(
   if (source === null || topLevelOf(source) === dst) return false
   const topOf = topLevelCache(ctx)
   const below = await subtasksOf(ctx, issue.id)
-  if (below.length > MOVE_SUBTREE_MAX) return false
+  if (below.length > LIMITS.moveSubtree.max) return false
   for (const row of below) {
     if ((await topOf(row.project_id)) !== dst) return true
   }
@@ -1989,7 +1958,7 @@ export async function subtasksWouldMove(
  * it at the target. A subtask has no subtasks of its own, so its reviewer is
  * never a group's dormant one. Archived subtasks keep their people
  * unchecked, as an archived task's people are. `below` holds every subtask
- * (subtasksOf), and the walk refuses past MOVE_SUBTREE_MAX of them. */
+ * (subtasksOf), and the walk refuses past LIMITS.moveSubtree.max of them. */
 async function subtreeToCarry(
   ctx: QueryCtx,
   a: {
@@ -2000,7 +1969,7 @@ async function subtreeToCarry(
   },
 ): Promise<Doc<'issues'>[]> {
   const { below } = a
-  if (below.length > MOVE_SUBTREE_MAX) throw rule(MOVE_SUBTREE_TOO_LARGE)
+  if (below.length > LIMITS.moveSubtree.max) throw rule(LIMITS.moveSubtree.refusal)
   const dst = topLevelOf(a.target)
   const edits = editableBy(ctx, a.actor)
   const holds = new Map<string, Promise<boolean>>()
@@ -2147,7 +2116,7 @@ export async function moveIssueCore(
   }
   // to another top-level project, the subtasks outside it come along. They
   // are read once, for the carry and the holders below: a subtask can be
-  // about 60 KB within TEXT_MAX, so MOVE_SUBTREE_MAX of them take most of
+  // about 60 KB within TEXT_MAX, so LIMITS.moveSubtree.max of them take most of
   // what one transaction may read
   const below = crosses ? await subtasksOf(ctx, issue.id) : undefined
   const carried =
@@ -2204,9 +2173,8 @@ export async function moveIssueCore(
     }
   }
   // lib/activityVisibility.ts isUnrecordedProjectMove recognizes older rows by
-  // this wording; a sub-project saved with a blank name reads as its label
-  const to = target.name.trim() ? `${target.name} sub-project` : projectName(target)
-  const moved = `to the ${to}${source ? ` (from ${projectName(source)})` : ''}${
+  // this wording
+  const moved = `to the ${target.name} sub-project${source ? ` (from ${source.name})` : ''}${
     carried.length > 0 ? ' with its subtasks' : ''
   }`
   const event = {
@@ -2284,7 +2252,7 @@ function editableBy(
  * stamps active subtasks (touched, NEVER notified). An active subtask in a
  * project the actor cannot edit refuses the archive, because an active task
  * may never sit under an archived parent. A subtask has no subtasks of its
- * own, so the walk reads one range of at most SUBTASK_MAX active subtasks,
+ * own, so the walk reads one range of at most LIMITS.subtasks.max active subtasks,
  * under SUBTREE_ROOM. Returns the ids it stamped. */
 async function archiveSubtree(
   ctx: MutationCtx,
@@ -2296,7 +2264,7 @@ async function archiveSubtree(
   const room = roomCheck(ctx)
   await room()
   // read in full before the first patch, which moves a row out of the range
-  const kids = await activeSubtasks(ctx, rootId).take(SUBTASK_MAX)
+  const kids = await activeSubtasks(ctx, rootId).take(LIMITS.subtasks.max)
   for (const c of kids) {
     await room(subtaskBytes(c))
     const editable = await edits(c.project_id)
@@ -2332,7 +2300,7 @@ export async function archiveIssueCore(
   if (issue.archived_at !== undefined) return issue
   if (a.keepSubtasks === true) {
     // read in full before the first detach, which moves a row out of the range
-    const kids = await activeSubtasks(ctx, issue.id).take(SUBTASK_MAX)
+    const kids = await activeSubtasks(ctx, issue.id).take(LIMITS.subtasks.max)
     // the detaches change only tasks, so one preload serves them all
     const preload = newNotifyPreload()
     for (const kid of kids) {
@@ -2441,12 +2409,12 @@ export const PARENT_DELETED_SINCE =
 /** Why restoring the archived task `issue` from the archive brings it back
  * as a top-level task, as the refusal a machine restore that names the
  * parent gets, or undefined when it keeps its parent. It leaves a parent
- * that is active and already has SUBTASK_MAX active subtasks
- * (lib/taskLimits.ts). A restore from Deleted items clears such a parent
- * the same way (model/deletedItems.ts keptParent), so no restore refuses
- * over it or passes the cap. An archived parent holds no active subtask,
- * because an active task never sits under an archived one, so the restore
- * brings it back too, as before. It also leaves a parent whose delete
+ * that is active and already has LIMITS.subtasks.max active subtasks. A
+ * restore from Deleted items clears such a parent the same way
+ * (model/deletedItems.ts keptParent), so no restore refuses over it or
+ * passes the cap. An archived parent holds no active subtask, because an
+ * active task never sits under an archived one, so the restore brings it
+ * back too, as before. It also leaves a parent whose delete
  * after the task was archived left it to the steps that detach archived
  * subtasks (model/deletedItems.ts detachArchivedChildren), whether that
  * parent is gone, as one in Deleted items is, or came back from Deleted
@@ -2472,7 +2440,9 @@ async function restoreLeavesParent(
     if (detach !== null) return PARENT_DELETED_SINCE
   }
   if (parent.archived_at !== undefined) return undefined
-  return (await subtaskCount(ctx, parent.id)) >= SUBTASK_MAX ? PARENT_FULL : undefined
+  return (await subtaskCount(ctx, parent.id)) >= LIMITS.subtasks.max
+    ? LIMITS.subtasks.refusal
+    : undefined
 }
 
 /* The activity row of a task that left its parent `before.parent_id` in
@@ -2510,7 +2480,7 @@ async function logLeftParent(
  * delete still has to detach it, comes back as a top-level task
  * (restoreLeavesParent), with a detach's activity row, and its followers
  * read that it left its parent. Answers the restored row and, when it left
- * its parent, why: PARENT_FULL or PARENT_DELETED_SINCE. */
+ * its parent, why: LIMITS.subtasks.refusal or PARENT_DELETED_SINCE. */
 export async function unarchiveIssueCore(
   ctx: MutationCtx,
   a: { me: Doc<'profiles'>; issue: Doc<'issues'>; now: string },

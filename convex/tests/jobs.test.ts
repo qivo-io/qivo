@@ -25,9 +25,10 @@ import { api, components, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import { REAP_PAGES } from '../files'
 import { ARCHIVE_LIMITS, SWEEP_LIMITS } from '../jobs'
+import { DEFAULT_MESSAGE_RETENTION_DAYS } from '../lib/limits'
 import { ITEM_UNREAD_CAP, wakeSnoozedItem } from '../model/messages'
 import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
-import { DEFAULT_MESSAGE_RETENTION_DAYS, messageRetentionDays } from '../model/people'
+import { messageRetentionDays } from '../model/people'
 import {
   as,
   messagesFor,

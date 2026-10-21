@@ -3,11 +3,21 @@
  * (messages.snoozed_until, cleared by the scheduled messages.wake); nothing
  * here compares a stamp to the clock to decide whether an item is hidden. */
 
+import { LIMITS } from '../../convex/lib/limits'
 import { fmtTime } from './dates'
 
-export const SNOOZE_UNIT_MS = { hours: 3_600_000, days: 86_400_000 } as const
+export const SNOOZE_UNIT_MS = {
+  hours: 3_600_000,
+  days: 86_400_000,
+  weeks: 7 * 86_400_000,
+} as const
 export type SnoozeUnit = keyof typeof SNOOZE_UNIT_MS
-export const SNOOZE_STEP_MAX = 99
+
+/** The most steps of `unit` a snooze takes: as far as the server's
+    LIMITS.snooze allows (366 days ahead) and never past it, so 366 days
+    or 52 weeks. */
+export const snoozeStepMax = (unit: SnoozeUnit): number =>
+  Math.floor((LIMITS.snooze.max * SNOOZE_UNIT_MS.days) / SNOOZE_UNIT_MS[unit])
 
 /* When a snoozed item returns, for the age slot and the Unsnooze row: the
    time alone today, "Tomorrow" + time, the weekday within a week, else day

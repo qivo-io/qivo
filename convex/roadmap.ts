@@ -11,7 +11,7 @@ import { canSeeProject, hasProjectLevel } from './lib/access'
 import { assertOrgWritable } from './lib/billingAccess'
 import { assertNewRowId, byId, insertUnique, usedMoreThan } from './lib/db'
 import { authedMutation, badRequest, conflict, forbidden, notFound, rule } from './lib/functions'
-import { SUBTASK_MAX } from './lib/taskLimits'
+import { LIMITS } from './lib/limits'
 import { logActivity } from './model/activity'
 import { changedPrints, DELETES } from './model/expected'
 import {
@@ -161,14 +161,14 @@ async function seatFor(ctx: Context, projectId: string | undefined) {
 
 /* What an undo of a roadmap change to `row` checks is unchanged: the task's
  * place and archive state and its active subtasks, which decide whether it
- * is a group. Archived subtasks have no bound (lib/taskLimits.ts
- * SUBTASK_MAX), so they are left out; one range of at most SUBTASK_MAX
- * active ones is read. */
+ * is a group. Archived subtasks have no bound (LIMITS.subtasks counts only
+ * active ones), so they are left out; one range of at most
+ * LIMITS.subtasks.max active ones is read. */
 async function taskGuard(ctx: MutationCtx, row: Doc<'issues'>): Promise<string> {
   const children = await ctx.db
     .query('issues')
     .withIndex('by_parent_archived', (q) => q.eq('parent_id', row.id).eq('archived_at', undefined))
-    .take(SUBTASK_MAX)
+    .take(LIMITS.subtasks.max)
   return JSON.stringify({
     row: row._id,
     org: row.org_id,
@@ -335,7 +335,7 @@ export const change = authedMutation({
         })
         // the cap after the field check, so stale hours answer as changed
         if ('remaining_hours' in patch)
-          patch.remaining_hours = cleanRemaining(patch.remaining_hours, row.remaining_hours) ?? null
+          patch.remaining_hours = cleanRemaining(patch.remaining_hours) ?? null
         if (
           Object.entries(patch).every(
             ([field, value]) => (row[field as keyof typeof patch] ?? null) === value,
@@ -401,7 +401,7 @@ export const change = authedMutation({
             await logMilestone(ctx, before, undefined, now)
           } else {
             const patch = { ...op.patch }
-            if (patch.name !== undefined) patch.name = cleanMilestoneName(patch.name, existing.name)
+            if (patch.name !== undefined) patch.name = cleanMilestoneName(patch.name)
             if (patch.week !== undefined) patch.week = cleanMilestoneWeek(patch.week)
             const after = { ...before, ...patch }
             if (same(before, after)) continue

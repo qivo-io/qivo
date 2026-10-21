@@ -1,8 +1,11 @@
 import { type ChangeEvent, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { LIMITS } from '../../../convex/lib/limits'
+import { LimitedInput } from '../../components/LimitedField'
 import { Avatar, type AvatarSize, Icon, MenuItem, Popover } from '../../components/qivo'
 import { SettingsField } from '../../components/settingsPage'
+import { cleanName, overLimit } from '../../lib/fieldLimits'
 import { useUnsaved } from '../../lib/leaveGuard'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { P, type ToastTone, type UserVM } from '../../store/planner'
@@ -135,12 +138,13 @@ export function NameField({ me }: { me: Pick<UserVM, 'name'> }) {
     setErr('')
   }, [me.name])
   // compared as the store will save it, with runs of spaces collapsed
-  const next = v.replace(/\s+/g, ' ').trim()
+  const next = cleanName(v)
   const dirty = next !== me.name
+  const tooLong = overLimit(LIMITS.personName, next)
   useUpdateBlocker(dirty || busy)
   useUnsaved(dirty, 'name')
   const save = async () => {
-    if (busy || !dirty) return
+    if (busy || !dirty || tooLong) return
     setBusy(true)
     const e = await P.setDisplayName(next)
     setBusy(false)
@@ -150,10 +154,11 @@ export function NameField({ me }: { me: Pick<UserVM, 'name'> }) {
   return (
     <SettingsField label="Your name" width={470}>
       <div className="flex min-h-10 items-center gap-2">
-        <Input
+        <LimitedInput
+          limit={LIMITS.personName}
+          clean={cleanName}
           value={v}
           data-account-name
-          maxLength={P.NAME_MAX}
           placeholder="Your name"
           autoComplete="name"
           onChange={(e) => {
@@ -174,12 +179,13 @@ export function NameField({ me }: { me: Pick<UserVM, 'name'> }) {
               setErr('')
             }
           }}
-          className="h-control w-full bg-surface-1 px-2.5 text-base font-sans [flex:1]"
+          wrapperClassName="[flex:1]"
+          className="h-control w-full bg-surface-1 px-2.5 text-base font-sans"
         />
         <Button
           type="button"
           data-account-name-save
-          disabled={busy || !dirty}
+          disabled={busy || !dirty || tooLong}
           onClick={() => void save()}
         >
           {busy ? 'Saving…' : 'Save'}

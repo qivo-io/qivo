@@ -22,7 +22,9 @@ import { authComponent } from './auth'
 import { markBillingMembershipChanged } from './lib/billableUsers'
 import { byId } from './lib/db'
 import { isDemoDeployment, refuseDemoFeature } from './lib/demo'
+import { asciiEmail } from './lib/email'
 import { authedMutation, authedQuery, require, rule } from './lib/functions'
+import { cutText, DEFAULT_MESSAGE_RETENTION_DAYS, LIMITS } from './lib/limits'
 import { enrollOrganization } from './model/billing'
 import {
   cleanOrgName,
@@ -35,7 +37,7 @@ import {
   newOrgDefaults,
   newUuid,
 } from './model/orgs'
-import { byClaimOrder } from './model/people'
+import { byClaimOrder, cleanName } from './model/people'
 
 const seatsOf = (ctx: MutationCtx, authUserId: string) =>
   ctx.db
@@ -83,7 +85,9 @@ export async function claimSeatsForLogin(
   if (isDemoDeployment()) return 0
   // 0085: "an unconfirmed address proves nothing about its owner"
   if (!emailVerified) return 0
-  const em = email.toLowerCase()
+  // the form invitations store (lib/email.ts), so a provider's Unicode
+  // domain finds the seat invited under its punycode one
+  const em = asciiEmail(email)
   const waiting = (
     await ctx.db
       .query('profiles')
@@ -188,18 +192,21 @@ export const createOrganization = authedMutation({
     ))
     const nm = cleanOrgName(name)
     require(nm !== '', rule('the organization needs a name'))
-    const em = user.email.toLowerCase()
+    // the form every seat stores (lib/email.ts), so canonical lookups find it
+    const em = asciiEmail(user.email)
     /* (e) who the provider says this is, before a name is invented from an
      * address; the local part stays the password-path fallback, 'Admin' the
-     * last resort. Folded, then cut to 80 codepoints (profiles_name_shape). */
-    let who = user.name.replace(/\s+/g, ' ').trim()
+     * last resort. Folded, then cut to a name's length (LIMITS.personName)
+     * rather than refused, because the provider chose it. */
+    let who = cleanName(user.name)
     if (who === '') who = em.split('@')[0] || 'Admin'
-    who = [...who].slice(0, 80).join('').trim()
+    who = cutText(who, LIMITS.personName.max).trim()
     if (who === '') who = 'Admin'
 
     const now = new Date().toISOString()
     // Retention follows the person across seats (0112), including a saved
-    // Never. With no prior seat, stamp 7: an absent database field means Never.
+    // Never. With no prior seat, stamp the default: an absent database field
+    // means Never.
     const retentionSeats = [
       ...mine,
       ...(await ctx.db
@@ -207,7 +214,10 @@ export const createOrganization = authedMutation({
         .withIndex('by_email', (q) => q.eq('email', em))
         .collect()),
     ].sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0))
-    const retention = retentionSeats.length > 0 ? retentionSeats[0].message_retention_days : 7
+    const retention =
+      retentionSeats.length > 0
+        ? retentionSeats[0].message_retention_days
+        : DEFAULT_MESSAGE_RETENTION_DAYS
     const orgId = newUuid()
     await insertOrgRows(ctx, {
       id: orgId,

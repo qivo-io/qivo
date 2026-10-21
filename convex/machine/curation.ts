@@ -72,6 +72,9 @@ function refusalResponse(error: unknown): Response {
   return err('unable to process the curation request', 500)
 }
 
+/* The refusal of a body over CURATION_BODY_LIMIT_BYTES, in KiB. */
+const BODY_TOO_LARGE = `request body exceeds ${CURATION_BODY_LIMIT_BYTES / 1024} KiB`
+
 async function bodyObject(
   req: Request,
   allowed: readonly string[],
@@ -81,10 +84,10 @@ async function bodyObject(
   }
   const length = req.headers.get('Content-Length')
   if (length !== null && Number(length) > CURATION_BODY_LIMIT_BYTES)
-    throw badRequest('request body exceeds 16 KB')
+    throw badRequest(BODY_TOO_LARGE)
   const text = await req.text()
   if (new TextEncoder().encode(text).byteLength > CURATION_BODY_LIMIT_BYTES)
-    throw badRequest('request body exceeds 16 KB')
+    throw badRequest(BODY_TOO_LARGE)
   let body: unknown
   try {
     body = JSON.parse(text)

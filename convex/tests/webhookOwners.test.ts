@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
+import { LIMITS } from '../lib/limits'
 import type { EventOwner } from '../lib/taskEvents'
 import { removeProfile } from '../model/cascade'
 import { as, expectRefusal, newT, uuid, withOrg } from './helpers.setup'
@@ -139,11 +140,8 @@ describe('webhook owner quota cleanup', () => {
     await f.t.run((ctx) => ctx.db.patch(f.fx.guest._id, { active: false }))
     for (let n = 0; n < 4; n++) await f.seed(await f.credential(), 20, n === 0)
 
-    await expectRefusal(
-      f.save(await f.credential()),
-      'bad_request',
-      /Webhook subscription limit reached/,
-    )
+    const full = await expectRefusal(f.save(await f.credential()), 'rule')
+    expect(full.data.message).toBe(LIMITS.webhooksPerOrg.refusal)
     expect(await f.rows()).toHaveLength(100)
     expect((await f.rows()).filter((row) => row.disabled_at !== undefined)).toHaveLength(20)
   })
@@ -152,7 +150,8 @@ describe('webhook owner quota cleanup', () => {
     const f = await fixture()
     const owner = await f.credential()
     await f.seed(owner, 20, true)
-    await expectRefusal(f.save(owner), 'bad_request', /Webhook subscription limit reached/)
+    const full = await expectRefusal(f.save(owner), 'rule')
+    expect(full.data.message).toBe(LIMITS.webhooksPerKey.refusal)
     expect(await f.rows()).toHaveLength(20)
   })
 

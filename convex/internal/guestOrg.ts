@@ -40,6 +40,8 @@ import { internalMutation } from '../_generated/server'
 import { byId } from '../lib/db'
 import { refuseProduction } from '../lib/deployment'
 import type { IssueStatus } from '../lib/enums'
+import { DEFAULT_MESSAGE_RETENTION_DAYS } from '../lib/limits'
+import { DEFAULT_PLANNABLE_HOURS } from '../lib/workload'
 import { deleteOrgDeep } from '../model/cascade'
 import { insertOrgRows, newOrgDefaults, newTeamDefaults } from '../model/orgs'
 import { projectDescription } from '../model/projects'
@@ -151,8 +153,8 @@ export const zzGuestOrg = internalMutation({
 
     /* The STAFF member of the host org — the person whose capacity a guest
      * may and may not read. No login, no accepted_at (the fixture mints no
-     * auth). plannable_hours 32 = the org default the 0092 insert trigger
-     * stamped; message_retention_days 7 = the PG column default (0110),
+     * auth). plannable_hours is the org default the 0092 insert trigger
+     * stamped; message_retention_days the PG column default (0110),
      * stamped by hand because absent means Never here. */
     const profile = (
       id: string,
@@ -171,8 +173,8 @@ export const zzGuestOrg = internalMutation({
         org_role,
         active: true,
         kind: 'person',
-        plannable_hours: 32,
-        message_retention_days: 7,
+        plannable_hours: DEFAULT_PLANNABLE_HOURS,
+        message_retention_days: DEFAULT_MESSAGE_RETENTION_DAYS,
         created_at: now,
       })
     await profile(ZZ.staff, 'zz-staff@guest.local', 'ZZ Staff', 'ZS', 'user')

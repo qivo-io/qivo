@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { canSeeProject } from '../lib/access'
-import { PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from '../lib/taskLimits'
+import { PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from '../lib/limits'
 import {
   ASSIGNEE_SIGHT_RULE,
   HOLDER_SIGHT_RULE,

@@ -5,6 +5,7 @@ import { ConvexError } from 'convex/values'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { LIMITS } from '../../convex/lib/limits'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 import type { Row } from '../store/rows'
@@ -354,6 +355,30 @@ describe('comment drafts in the task window', { timeout: 20_000 }, () => {
     await act(async () => writes[1].answer.resolve(null))
     expect(editing()).toBeNull()
     expect(thread()).toEqual(['Check 1', 'Check 2 rerun', 'Check 3'])
+  })
+
+  it('turns Comment and Save off while the text is over its limit', async () => {
+    await load()
+    await open()
+    await act(async () => deliver({ comments: range(1, 4), earlier: false }))
+    const cases: [string, string, number][] = [
+      ['Leave a comment', 'Comment', LIMITS.comment.max],
+      ['Task description', 'Save', LIMITS.description.max],
+    ]
+    for (const [label, submit, max] of cases) {
+      const editor = await editorOf(label)
+      await act(async () => editor.commands.insertContent('a'.repeat(max + 1)))
+      // the count follows once typing rests
+      await vi.waitFor(() => expect(button(submit).disabled, label).toBe(true))
+      expect(document.querySelector('[data-limit-count]')?.getAttribute('data-limit-count')).toBe(
+        'over',
+      )
+      await act(async () => editor.commands.setContent('a'.repeat(max)))
+      await vi.waitFor(() => expect(button(submit).disabled, label).toBe(false))
+      // nothing goes out on the way
+      expect(writes).toEqual([])
+      await act(async () => editor.commands.setContent(''))
+    }
   })
 })
 

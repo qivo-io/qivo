@@ -6,6 +6,7 @@ import { createServer } from 'node:https'
 import type { Socket } from 'node:net'
 import { Webhook } from 'standardwebhooks'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { LIMITS } from '../convex/lib/limits'
 import {
   CallbackError,
   callbackError,
@@ -17,7 +18,6 @@ import {
   signingSecret,
   signingSecretHash,
 } from '../convex/lib/webhookTransport'
-
 import { testCertificate, testKey } from './fixtures/local-tls.mjs'
 
 const receiver = vi.hoisted(() => ({
@@ -187,6 +187,11 @@ describe('standard webhook transport', () => {
     ])
       expect(() => callbackUrl(url)).toThrow()
     expect(callbackUrl('https://receiver.example/events')).toBe('https://receiver.example/events')
+    // the length limit counts the trimmed URL and refuses with its sentence
+    const atCap = `https://receiver.example/${'a'.repeat(LIMITS.webhookUrl.max - 25)}`
+    expect(atCap).toHaveLength(LIMITS.webhookUrl.max)
+    expect(callbackUrl(`  ${atCap}  `)).toBe(atCap)
+    expect(() => callbackUrl(`${atCap}a`)).toThrow(LIMITS.webhookUrl.refusal)
   })
 
   it('validates and encrypts secrets with an authenticated subscription binding', () => {

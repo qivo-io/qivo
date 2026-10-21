@@ -89,7 +89,7 @@ const projectsTable = defineTable({
   key: v.string(), // ^[A-Z0-9]{1,5}$, unique (org_id, key)
   name: v.string(),
   lead_id: v.optional(v.string()), // same org, never a viewer
-  description: v.string(), // PROJECT_DESCRIPTION_MAX UTF-16 units, enforced by model/projects
+  description: v.string(), // LIMITS.projectDescription (lib/limits.ts), trimmed, enforced by model/projects
   sort_order: v.number(),
   num: v.number(), // org-scoped, assigned by counter, immutable
   // Legacy icon and its color: nothing writes or shows them now. Optional
@@ -98,7 +98,7 @@ const projectsTable = defineTable({
   icon_color: v.optional(v.string()),
   track_delay: v.boolean(),
   // remaining time a task gets on entering Review; absent = the parent
-  // project's value, else DEFAULT_REVIEW_HOURS (2); 0..REVIEW_HOURS_MAX
+  // project's value, else DEFAULT_REVIEW_HOURS (2); LIMITS.reviewHours (lib/limits.ts)
   // (999), 0.1 h grain
   review_hours: v.optional(v.number()),
   archived_at: v.optional(v.string()),
@@ -135,7 +135,7 @@ const issuesTable = defineTable({
   project_id: v.string(), // always a sub-project, never a meta
   org_id: v.string(), // denormalized, pinned from the project, immutable
   num: v.number(), // org-scoped, assigned by counter, immutable
-  title: v.string(), // ≤80 chars (0061)
+  title: v.string(), // LIMITS.title (lib/limits.ts), trimmed
   description: v.string(),
   status: vIssueStatus,
   priority: vIssuePriority,
@@ -143,7 +143,8 @@ const issuesTable = defineTable({
   // same rule as the assignee (same org, active, never a viewer, Edit+);
   // owns the task while it is In Review (lib/review.ts)
   reviewer_id: v.optional(v.string()),
-  parent_id: v.optional(v.string()), // no self-parent, same org, one level of subtasks (lib/taskLimits.ts)
+  // no self-parent, same org, one level of subtasks (lib/limits.ts)
+  parent_id: v.optional(v.string()),
   // (start absent) = (end absent), start <= end; dormant while the task has
   // active subtasks, whose leaves give its dates
   start_week: v.optional(v.string()),
@@ -205,7 +206,7 @@ const issuesTable = defineTable({
   .index('by_created_by_archived', ['created_by', 'archived_at'])
   .index('by_reporter_archived', ['reporter_id', 'archived_at'])
 
-// A task is an end of at most LINK_MAX links (lib/taskLimits.ts).
+// A task is an end of at most LIMITS.links.max links (lib/limits.ts).
 const issueLinksTable = defineTable({
   org_id: v.string(),
   id: v.string(),
@@ -227,7 +228,7 @@ const issueLinksTable = defineTable({
   .index('by_target', ['target_id'])
   .index('by_pair', ['pair_key'])
 
-// A task carries at most LABEL_MAX labels (lib/taskLimits.ts).
+// A task carries at most LIMITS.labels.max labels (lib/limits.ts).
 const issueLabelsTable = defineTable({
   org_id: v.string(),
   issue_id: v.string(), // label and issue must share an org
@@ -253,7 +254,7 @@ const issueSubscriptionsTable = defineTable({
   .index('by_profile_task_archived', ['profile_id', 'task_archived'])
   .index('by_issue_profile', ['issue_id', 'profile_id'])
 
-// A task holds at most ATTACHMENT_MAX rows (lib/taskLimits.ts) without a
+// A task holds at most LIMITS.attachments.max rows (lib/limits.ts) without a
 // dropped_at, and at most DROPPED_IMAGES_MAX with one (model/descriptionImages.ts).
 // A row names no project: storage totals read it through its task
 // (model/billing.ts storagePage), so a move writes no attachment row.
@@ -271,7 +272,7 @@ const issueAttachmentsTable = defineTable({
   task_archived: taskArchived,
   // When a description save took this image out of the description
   // (model/descriptionImages.ts settleDescriptionImages). It no longer counts
-  // toward ATTACHMENT_MAX, and a save that shows it again within a day
+  // toward LIMITS.attachments.max, and a save that shows it again within a day
   // brings it back; after that it is deleted with its bytes.
   dropped_at: v.optional(v.string()),
 })
@@ -283,7 +284,7 @@ const issueAttachmentsTable = defineTable({
   .index('by_org', ['org_id'])
   .index('by_uuid', ['id'])
   .index('by_issue', ['issue_id'])
-  // the rows that count toward ATTACHMENT_MAX are those without dropped_at
+  // the rows that count toward LIMITS.attachments.max are those without dropped_at
   .index('by_issue_dropped', ['issue_id', 'dropped_at'])
   .index('by_storage', ['storage_id'])
   .index('by_uploaded_by', ['uploaded_by']) // removeProfile's SET NULL
@@ -686,7 +687,7 @@ export default defineSchema({
     // rollback to an earlier release, whose schema requires it, can deploy.
     // Optional so rows can drop it later.
     gravatar_avatars: v.optional(v.boolean()),
-    // Org-wide upload cap, 1..20 MiB. Older organizations default to 20.
+    // Org-wide upload cap in MiB, LIMITS.attachmentLimit (lib/limits.ts).
     max_attachment_mb: v.optional(v.number()),
     // Retired and unread. No rule consults it and nothing writes it. Kept
     // optional so rows that stored it still validate.
@@ -768,14 +769,14 @@ export default defineSchema({
     auth_user_id: v.optional(v.string()), // Better Auth user id; absent = unclaimed seat
     org_id: v.string(),
     email: v.optional(v.string()), // lowercase; (kind='agent') = (email absent) (0104)
-    name: v.string(), // non-blank, ≤80 codepoints (0116)
+    name: v.string(), // non-blank, LIMITS.personName (lib/limits.ts)
     initials: v.string(), // 1–3 chars; derived on rename, hand-picked values stand
     color: v.string(),
     org_role: vOrgRole, // agents are never admin or guest (0100/0102)
     active: v.boolean(),
     kind: vProfileKind,
     plannable_hours: v.optional(v.number()), // whole hours; agents have none (0103)
-    message_retention_days: v.optional(v.number()), // 1..3650; absent = keep forever
+    message_retention_days: v.optional(v.number()), // LIMITS.messageRetention; absent = keep forever
     avatar_storage_id: v.optional(v.id('_storage')), // replaces avatar_path
     // Public sample portraits are immutable build assets, never private storage.
     sample_avatar: v.optional(

@@ -2,8 +2,8 @@
  * The rules live in model/labels. Staff with User standing on a top-level
  * project may create labels (canWriteOrgLabels); renaming, recoloring and
  * deleting are for org admins only (canManageOrgLabels), as on the app's
- * admin-only Labels settings page. Names follow 0010's CHECK (trimmed
- * non-blank, ≤40 codepoints) with the case-insensitive per-org uniqueness
+ * admin-only Labels settings page. Names are trimmed, non-blank and within
+ * LIMITS.labelName (lib/limits.ts), with the case-insensitive per-org uniqueness
  * carried by name_lower; colors are #rrggbb because clients render them as
  * CSS backgrounds.
  *

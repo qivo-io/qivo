@@ -213,9 +213,7 @@ function Roadmap({
      project, one per PROJECT across all of them (deviation #47) — a track per
      sub-project of every project would bury the timeline. Alphabetical either
      way; the sort lives here (not in the store) because it is this view's. */
-  const allTracks = info.groups
-    .slice()
-    .sort((a, b) => P.projectName(a.proj).localeCompare(P.projectName(b.proj)))
+  const allTracks = info.groups.slice().sort((a, b) => a.proj.name.localeCompare(b.proj.name))
 
   /* One pass to bucket the scoped issues by sub-project; everything below
      reads the buckets. Filtering P.issues per group instead would rescan every
@@ -1274,7 +1272,7 @@ function Roadmap({
       .filter(shows)
       .map((id) => P.project(id))
       .filter(Boolean)
-      .sort((a, b) => P.projectName(a).localeCompare(P.projectName(b)))
+      .sort((a, b) => a.name.localeCompare(b.name))
       .forEach((sp) => {
         rows.push({ kind: 'sub', proj: sp, pid: sp.id, parentPid: pid, subIds: [sp.id] })
         if (isOpen(sp.id)) emit(rows, [sp.id], sp, sp.id)

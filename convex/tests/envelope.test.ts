@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from '../lib/taskLimits'
+import { PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from '../lib/limits'
 import {
   type CreateIssueArgs,
   GROUP_DATES_RULE,

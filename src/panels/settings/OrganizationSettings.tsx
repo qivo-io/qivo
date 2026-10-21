@@ -3,9 +3,12 @@ import { useEffect as useEffectS, useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
+import { LIMITS, type Limit } from '../../../convex/lib/limits'
+import { LimitedInput } from '../../components/LimitedField'
 import { Seg } from '../../components/qivo'
 import { PageTitle, SettingsField, SettingsSection } from '../../components/settingsPage'
 import { DEMO_MODE } from '../../lib/demoMode'
+import { limitSentence, overLimit, wholeIn } from '../../lib/fieldLimits'
 import { useFieldUnsaved, useUnsaved } from '../../lib/leaveGuard'
 import { creatorPhrase, projectCreatorsIn } from '../../lib/projectCreators'
 import { useUpdateBlocker } from '../../lib/updateSafety'
@@ -33,10 +36,11 @@ function OrgAddressField() {
   // compared as the store will save it, so surrounding spaces are no change
   const next = v.trim()
   const dirty = next !== current
+  const tooLong = overLimit(LIMITS.slug, next)
   useUpdateBlocker(dirty || busy)
   useUnsaved(dirty, 'address')
   const save = async () => {
-    if (busy || !dirty) return
+    if (busy || !dirty || tooLong) return
     setBusy(true)
     const e = await P.setOrgSlug(next)
     setBusy(false)
@@ -51,10 +55,10 @@ function OrgAddressField() {
     >
       <div className="flex flex-wrap items-center gap-2">
         <span className="min-w-0 break-all text-base text-text-2 !font-mono">{stem}</span>
-        <Input
+        <LimitedInput
+          limit={LIMITS.slug}
           value={v}
           data-org-slug
-          maxLength={40}
           spellCheck={false}
           autoCapitalize="off"
           autoCorrect="off"
@@ -75,12 +79,13 @@ function OrgAddressField() {
               void save()
             }
           }}
-          className="h-control w-[200px] max-w-full bg-surface-1 px-2.5 !font-mono text-base"
+          wrapperClassName="w-[200px] max-w-full"
+          className="h-control w-full bg-surface-1 px-2.5 !font-mono text-base"
         />
         <Button
           type="button"
           data-org-slug-save
-          disabled={busy || !dirty}
+          disabled={busy || !dirty || tooLong}
           onClick={() => void save()}
           className="shrink-0"
         >
@@ -182,6 +187,13 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
     `${P.org.defaultPlannableHours}`,
     'plannable hours',
   )
+  // a number refused on blur stays typed and marked until that field changes
+  const [attachmentRefused, setAttachmentRefused] = useStateS(false)
+  const [plannableRefused, setPlannableRefused] = useStateS(false)
+  const refuse = (mark: (refused: boolean) => void, limit: Limit) => {
+    mark(true)
+    window.showToast?.(limitSentence(limit), 'error')
+  }
   return (
     <>
       <PageTitle>Organization</PageTitle>
@@ -189,7 +201,7 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
         <TextField
           label="Organization name"
           value={P.org.name}
-          maxLength={P.NAME_MAX}
+          limit={LIMITS.orgName}
           probe="data-org-name"
           onCommit={(v) => {
             // the toast waits for the server, so a refusal never reads as done
@@ -206,36 +218,37 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
           width={400}
           hint={
             canManage
-              ? '1–20 MiB, including description images. Existing files are unaffected.'
+              ? `${LIMITS.attachmentLimit.min}–${LIMITS.attachmentLimit.max} MiB, including description images. Existing files are unaffected.`
               : 'Only an organization admin can change the attachment limit.'
           }
         >
           <div className="flex items-center gap-2">
             <Input
               type="number"
-              min={1}
-              max={20}
+              min={LIMITS.attachmentLimit.min}
+              max={LIMITS.attachmentLimit.max}
               step={1}
               data-org-attachment-limit
               aria-label="Max attachment size"
+              aria-invalid={attachmentRefused || undefined}
               {...attachmentUnsaved}
               key={`attachment${P.org.maxAttachmentMb}`}
-              defaultValue={P.org.maxAttachmentMb ?? 20}
+              defaultValue={P.org.maxAttachmentMb ?? LIMITS.attachmentLimit.max}
               disabled={!canManage}
+              onChange={() => setAttachmentRefused(false)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') e.currentTarget.blur()
               }}
               onBlur={(e) => {
                 if (!canManage) return
-                const current = P.org.maxAttachmentMb ?? 20
+                const current = P.org.maxAttachmentMb ?? LIMITS.attachmentLimit.max
                 const raw = e.currentTarget.value.trim()
-                const value = Number(raw)
-                if (!raw || !Number.isFinite(value)) {
+                if (!raw) {
                   e.currentTarget.value = String(current)
                   return
                 }
-                const mib = Math.max(1, Math.min(20, Math.round(value)))
-                e.currentTarget.value = String(mib)
+                const mib = wholeIn(LIMITS.attachmentLimit, raw)
+                if (mib === null) return refuse(setAttachmentRefused, LIMITS.attachmentLimit)
                 if (mib === current) return
                 void P.setOrg({ maxAttachmentMb: mib }).then((saved) => {
                   if (saved) window.showToast?.(`Attachment limit set to ${mib} MiB`)
@@ -311,26 +324,28 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
           <div className="[display:flex] [align-items:center] [gap:8px]">
             <Input
               type="number"
-              min={1}
-              max={168}
+              min={LIMITS.plannableHours.min}
+              max={LIMITS.plannableHours.max}
               step={1}
               data-org-plannable
               aria-label="Default plannable hours per week"
+              aria-invalid={plannableRefused || undefined}
               {...plannableUnsaved}
               key={`dph${P.org.defaultPlannableHours}`}
               defaultValue={P.org.defaultPlannableHours || DEFAULT_PLANNABLE_HOURS}
+              onChange={() => setPlannableRefused(false)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') e.currentTarget.blur()
               }}
               onBlur={(e) => {
                 const cur = P.org.defaultPlannableHours || DEFAULT_PLANNABLE_HOURS
                 const raw = e.target.value.trim()
-                if (!raw || !Number(raw)) {
+                if (!raw) {
                   e.target.value = String(cur)
                   return
                 }
-                const h = Math.max(1, Math.min(168, Math.round(Number(raw))))
-                e.target.value = String(h)
+                const h = wholeIn(LIMITS.plannableHours, raw)
+                if (h === null) return refuse(setPlannableRefused, LIMITS.plannableHours)
                 if (h === cur) return
                 void P.setOrg({ defaultPlannableHours: h }).then((saved) => {
                   if (saved) window.showToast?.(`New users start on ${h} h per week`)

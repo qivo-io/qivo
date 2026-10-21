@@ -16,7 +16,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { assertNewRowId, insertUnique } from '../lib/db'
 import type { LinkType } from '../lib/enums'
 import { badRequest, forbidden, notFound, rule } from '../lib/functions'
-import { LINK_MAX, linksFull } from '../lib/taskLimits'
+import { LIMITS, linksFull } from '../lib/limits'
 import { issueKey } from '../lib/taskRefs'
 import { logActivity, signedDetail } from './activity'
 import { assertExpected, DELETES, exact, type Fields, oneOf } from './expected'
@@ -85,20 +85,20 @@ export async function linksOf(ctx: QueryCtx, taskId: string): Promise<Doc<'issue
   return [...byId.values()]
 }
 
-/** Whether task `taskId` is an end of LINK_MAX links already: at most
- * LINK_MAX rows from each of its two ranges. A pair has one link, and a task
+/** Whether task `taskId` is an end of LIMITS.links.max links already: at
+ * most that many rows from each of its two ranges. A pair has one link, and a task
  * is never linked to itself, so no link is in both. */
 export async function linksFullAt(ctx: QueryCtx, taskId: string): Promise<boolean> {
   const asSource = await ctx.db
     .query('issue_links')
     .withIndex('by_source', (q) => q.eq('source_id', taskId))
-    .take(LINK_MAX)
-  if (asSource.length >= LINK_MAX) return true
+    .take(LIMITS.links.max)
+  if (asSource.length >= LIMITS.links.max) return true
   const asTarget = await ctx.db
     .query('issue_links')
     .withIndex('by_target', (q) => q.eq('target_id', taskId))
-    .take(LINK_MAX - asSource.length)
-  return asSource.length + asTarget.length >= LINK_MAX
+    .take(LIMITS.links.max - asSource.length)
+  return asSource.length + asTarget.length >= LIMITS.links.max
 }
 
 /**
@@ -108,7 +108,7 @@ export async function linksFullAt(ctx: QueryCtx, taskId: string): Promise<boolea
  * again is a no-op that writes nothing and answers `added: false`; a
  * different link between the same tasks, or an `id` another link already
  * has, is refused, and so is a new link to a task that is an end of
- * LINK_MAX links already (linksFull).
+ * LIMITS.links.max links already (linksFull).
  * `provenance` signs a machine write's activity row. Refuses a self link, a
  * task the actor cannot see (in the organization sentence, so no answer
  * describes it) and an actor without Edit on either task.

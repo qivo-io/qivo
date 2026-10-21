@@ -5,6 +5,7 @@ import type { Id } from '../_generated/dataModel'
 import { STORAGE_ATTEMPTS, STORAGE_RETRY_MS, STORAGE_STALL_MS } from '../billingSync'
 import { addCalendarMonths } from '../lib/billingAccess'
 import type { BillingPlan, BillingSummary, BillingUsage } from '../lib/billingTypes'
+import { LIMITS } from '../lib/limits'
 import { enrollOrganization, STORAGE_PAGE, storageUsage } from '../model/billing'
 import {
   as,
@@ -68,6 +69,7 @@ const eventResult = makeFunctionReference<'mutation', { id: string; success: boo
 const eventReady = makeFunctionReference<'mutation', { id: string }, boolean>(
   'billingSync:eventReady',
 )
+const reconcile = makeFunctionReference<'action', { org_id: string }, null>('billingSync:reconcile')
 const restartStorage = makeFunctionReference<
   'mutation',
   { period: Id<'billing_periods'> },
@@ -179,6 +181,26 @@ function remote(orgId: string, overrides: Record<string, unknown> = {}) {
     ...overrides,
   })
 }
+/* Adds LIMITS.billingSeats.max active standard users, so with withOrg's
+ * members the organization is past the online billing ceiling. */
+const pastSeatCeiling = (t: T, orgId: string) =>
+  t.run(async (ctx) => {
+    for (let i = 0; i < LIMITS.billingSeats.max; i += 1) {
+      await ctx.db.insert('profiles', {
+        id: uuid(),
+        org_id: orgId,
+        email: `member-${i}@testbed.test`,
+        name: `Member ${i}`,
+        initials: 'MB',
+        color: '#7a7ad0',
+        org_role: 'user',
+        active: true,
+        kind: 'person',
+        created_at: NOW,
+      })
+    }
+  })
+
 async function createTask(t: T, f: Awaited<ReturnType<typeof withOrg>>, title = 'Billable test') {
   return await as(t, f.admin).mutation(api.issues.create, {
     org_id: f.org.id,
@@ -281,6 +303,20 @@ describe('billing authority and plan versions', () => {
         response.external_customer_id !== f.org.id ? 'bad_request' : 'rule',
       )
     }
+  })
+
+  it('refuses checkout past the online billing ceiling before asking Polar', async () => {
+    const { t, f } = await fixture()
+    await pastSeatCeiling(t, f.org.id)
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    // the old code refused with its own sentence, not the registry's
+    const refusal = await expectRefusal(
+      as(t, f.admin).action(checkout, { org_id: f.org.id }),
+      'rule',
+    )
+    expect(refusal.data.message).toBe(LIMITS.billingSeats.refusal)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it.each(['expired', 'failed'])(
@@ -491,6 +527,25 @@ describe('provider state, retries and billing snapshots', () => {
     expect(rows.periods[0].seats).toBe(8)
     expect(rows.receipts.filter((row) => row.event_id === 'delivery-1')).toHaveLength(1)
     expect(rows.audits.filter((row) => row.action === 'billing.subscription')).toHaveLength(1)
+  })
+
+  it('records the ceiling sentence and leaves Polar seats alone past the online billing ceiling', async () => {
+    const { t, f } = await fixture()
+    await t.mutation(apply, { payload: remote(f.org.id) })
+    await pastSeatCeiling(t, f.org.id)
+    const fetchMock = vi.fn(async () => new Response(remote(f.org.id)))
+    vi.stubGlobal('fetch', fetchMock)
+    await t.action(reconcile, { org_id: f.org.id })
+    // the old code went on to ask Polar for the seat change, which failed
+    // into the generic retry sentence
+    expect(await stored(t, f.org.id)).toMatchObject({
+      sync_error: LIMITS.billingSeats.refusal,
+      billed_seats: 5,
+    })
+    expect(fetchMock).toHaveBeenCalled()
+    for (const [url, init] of fetchMock.mock.calls as unknown as [string, RequestInit][]) {
+      expect(init.method, String(url)).toBe('GET')
+    }
   })
 
   it('a canceled predecessor cannot revoke or rebind a paid replacement', async () => {

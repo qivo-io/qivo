@@ -114,7 +114,7 @@ import { type StaticControls, useStaticControls } from '@/lib/liveControls'
 import { hasOpenTooltip } from '@/lib/passEscapeOn'
 import { useMenuBackLayer } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
-import { P, type ProjectVM } from '../../store/planner'
+import { P } from '../../store/planner'
 
 /* ---- Generic chrome icons use lucide; Qivo status/priority glyphs stay below. ---- */
 const LUCIDE_ICONS: Record<string, LucideIcon> = {
@@ -522,7 +522,7 @@ function IssueKey({ id, dim }: { id: string; dim?: boolean }) {
     </span>
   )
 }
-type ProjectRef = { id: string; name: string; type: ProjectVM['type'] }
+type ProjectRef = { id: string; name: string }
 /** A project's name, followed by its number when another project shown
     alongside it has the same name (P.projectTag). `owner` names the owning
     project first, as in "Website, Design"; spread a P.projectPlace to get both.
@@ -539,8 +539,8 @@ function ProjectName({
   wrap?: boolean
 }) {
   const names = owner && owner.id !== project.id ? [owner, project] : [project]
-  const parts = names.map((p) => ({ id: p.id, name: P.projectName(p), tag: P.projectTag(p.id) }))
-  if (!parts.some((p) => p.tag)) return <>{parts.map((p) => p.name).join(', ')}</>
+  const parts = names.map((p) => ({ id: p.id, name: p.name, tag: P.projectTag(p.id) }))
+  if (!parts.some((p) => p.tag)) return <>{names.map((p) => p.name).join(', ')}</>
   // line-height 1 keeps the mono number from deepening the line it sits on
   const number = (tag: string) => (
     <span

@@ -521,9 +521,9 @@ describe("an active list's refusals", () => {
     const sentences = {
       [PAGE_TOO_LARGE]: 'this page of tasks is too large to read at once; ask for a smaller limit',
       [ACTIVE_TASKS_TOO_LARGE]:
-        "this organization's active tasks are too large to list in one request",
+        "this organization's active tasks are too large to list in one request; archive done tasks and finished projects so fewer stay active",
       [ACTIVE_LIST_TOO_WIDE]:
-        'this organization has too many projects, teams or labels to list its tasks in one request',
+        'this organization has too many projects, teams or labels to list its tasks in one request; archive finished projects or search with fewer words',
       [SEARCH_TOO_LARGE]:
         'this search reads too many label assignments to answer in one request; name a project or add a filter',
     }

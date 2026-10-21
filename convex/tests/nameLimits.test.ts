@@ -1,22 +1,19 @@
 /* The 80-character cap on project, sub-project, team, milestone and
- * organization names and on agent key and personal token names
- * (lib/textLimits.ts NAME_MAX). Names count code points, so most single
- * emoji count once. The model layer enforces the cap for the app, REST and
- * MCP alike, and MCP's tool schemas declare it as maxLength. Rows named
- * before the cap are planted raw and keep their names through writes that
- * resend them. */
+ * organization names and on agent key and personal token names, and the
+ * 40-character cap on label names, from the limits registry (lib/limits.ts).
+ * Names count the UTF-16 code units of the trimmed text, so most emoji
+ * count two, and the trimmed name is stored. The model layer enforces the
+ * caps for the app, REST and MCP alike with each limit's `rule` sentence,
+ * and MCP's tool schemas declare them as maxLength. A row named longer
+ * before the cap is planted raw: other edits still save, and its name sent
+ * back unchanged is refused like any other. */
 
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { NAME_MAX } from '../lib/textLimits'
+import { LIMITS, NAME_MAX } from '../lib/limits'
 import { sha256hex } from '../machine/auth'
-import { MILESTONE_NAME_TOO_LONG } from '../model/milestones'
-import { ORG_NAME_TOO_LONG } from '../model/orgs'
-import { PROJECT_NAME_TOO_LONG } from '../model/projects'
-import { TEAM_NAME_TOO_LONG } from '../model/teams'
 import {
-  activityFor,
   as,
   expectRefusal,
   NOW,
@@ -29,13 +26,15 @@ import {
 
 const AT_CAP = 'a'.repeat(NAME_MAX)
 const OVER = 'a'.repeat(NAME_MAX + 1)
-// 80 code points that are 160 UTF-16 code units. A code unit count would
-// refuse it.
-const EMOJI_AT_CAP = '😀'.repeat(NAME_MAX)
-const EMOJI_OVER = '😀'.repeat(NAME_MAX + 1)
+// 40 emoji are 80 UTF-16 code units, and 41 are 82. A code point count
+// would let 41 through.
+const EMOJI_AT_CAP = '😀'.repeat(NAME_MAX / 2)
+const EMOJI_OVER = '😀'.repeat(NAME_MAX / 2 + 1)
 const LEGACY = 'L'.repeat(120)
 
-const sentence = (text: string) => new RegExp(`^${text}$`)
+/* A pattern matching exactly `text`, a refusal sentence that holds dots. */
+const escaped = (text: string) => text.replace(/[.*+?^$()|[\]\\{}]/g, '\\$&')
+const sentence = (text: string) => new RegExp(`^${escaped(text)}$`)
 
 type Named = 'projects' | 'teams' | 'milestones' | 'organizations'
 
@@ -46,16 +45,15 @@ const rowOf = <Table extends Named>(t: T, table: Table, id: string) =>
       (await ctx.db.query(table).collect()).find((row) => row.id === id) ?? null,
   )
 
-/* Renames a stored row to `name` (LEGACY by default), as a write before the
- * cap could. */
-const plantLegacyName = (t: T, table: Named, id: string, name = LEGACY) =>
+/* Renames a stored row to LEGACY, as a write before the cap could. */
+const plantLegacyName = (t: T, table: Named, id: string) =>
   t.run(async (ctx) => {
     const row = (await ctx.db.query(table).collect()).find((r) => r.id === id)
     if (row === undefined) throw new Error(`${table} ${id} missing`)
-    await ctx.db.patch(row._id, { name })
+    await ctx.db.patch(row._id, { name: LEGACY })
   })
 
-describe('project names', () => {
+describe('project names and descriptions', () => {
   const create = (t: T, f: OrgFixture, name: string, key: string) =>
     as(t, f.admin).mutation(api.projects.create, {
       org_id: f.org.id,
@@ -66,7 +64,7 @@ describe('project names', () => {
       sort_order: 9,
     })
 
-  it('creates and renames with up to 80 code points and refuses 81', async () => {
+  it('creates and renames with up to 80 code units, 40 emoji, and refuses 81 or 41 emoji', async () => {
     const t = newT()
     const f = await withOrg(t)
     const made = await create(t, f, ` ${AT_CAP} `, 'NA')
@@ -76,7 +74,7 @@ describe('project names', () => {
     const count = () => t.run(async (ctx) => (await ctx.db.query('projects').collect()).length)
     const before = await count()
     for (const name of [OVER, EMOJI_OVER]) {
-      await expectRefusal(create(t, f, name, 'NC'), 'rule', sentence(PROJECT_NAME_TOO_LONG))
+      await expectRefusal(create(t, f, name, 'NC'), 'rule', sentence(LIMITS.projectName.refusal))
     }
     expect(await count()).toBe(before)
     const rename = (name: string) =>
@@ -85,48 +83,52 @@ describe('project names', () => {
         id: made.id,
         patch: { name },
       })
-    await expectRefusal(rename(OVER), 'rule', sentence(PROJECT_NAME_TOO_LONG))
+    await expectRefusal(rename(EMOJI_OVER), 'rule', sentence(LIMITS.projectName.refusal))
     expect((await rowOf(t, 'projects', made.id))?.name).toBe(AT_CAP)
     await rename(EMOJI_AT_CAP)
     expect((await rowOf(t, 'projects', made.id))?.name).toBe(EMOJI_AT_CAP)
   })
 
-  it('keeps a longer name stored before the cap until it is renamed', async () => {
+  it('refuses a longer name stored before the cap when it is sent back, and saves other settings', async () => {
     const t = newT()
     const f = await withOrg(t)
     await plantLegacyName(t, 'projects', f.meta.id)
     const update = (patch: { name?: string; description?: string }) =>
       as(t, f.user).mutation(api.projects.update, { org_id: f.org.id, id: f.meta.id, patch })
     await update({ description: 'Other settings still save' })
-    await update({ name: LEGACY, description: 'An identical name is no change' })
+    await expectRefusal(
+      update({ name: LEGACY, description: 'Not with the old name' }),
+      'rule',
+      sentence(LIMITS.projectName.refusal),
+    )
     expect(await rowOf(t, 'projects', f.meta.id)).toMatchObject({
       name: LEGACY,
-      description: 'An identical name is no change',
+      description: 'Other settings still save',
     })
-    await expectRefusal(update({ name: LEGACY.slice(1) }), 'rule', sentence(PROJECT_NAME_TOO_LONG))
     await update({ name: 'Testbed' })
     expect((await rowOf(t, 'projects', f.meta.id))?.name).toBe('Testbed')
   })
 
-  it('compares a longer stored name with surrounding spaces trimmed', async () => {
+  it('stores a padded description trimmed and refuses one past 500 as a rule', async () => {
     const t = newT()
     const f = await withOrg(t)
-    await plantLegacyName(t, 'projects', f.meta.id, `  ${LEGACY} `)
-    // the app trims the name it shows before it sends it back
-    await as(t, f.user).mutation(api.projects.update, {
-      org_id: f.org.id,
-      id: f.meta.id,
-      patch: { name: LEGACY, description: 'Saved with the name' },
-    })
-    expect(await rowOf(t, 'projects', f.meta.id)).toMatchObject({
-      name: LEGACY,
-      description: 'Saved with the name',
-    })
+    const update = (description: string) =>
+      as(t, f.user).mutation(api.projects.update, {
+        org_id: f.org.id,
+        id: f.meta.id,
+        patch: { description },
+      })
+    const max = 'd'.repeat(LIMITS.projectDescription.max)
+    await update(`  ${max}\n`)
+    expect((await rowOf(t, 'projects', f.meta.id))?.description).toBe(max)
+    const e = await expectRefusal(update(`${max}d`), 'rule')
+    expect(e.data.message).toBe(LIMITS.projectDescription.refusal)
+    expect((await rowOf(t, 'projects', f.meta.id))?.description).toBe(max)
   })
 })
 
 describe('team names', () => {
-  it('creates and renames with up to 80 code points and keeps a longer stored name', async () => {
+  it('creates and renames with up to 80 code units and refuses a longer stored name sent back', async () => {
     const t = newT()
     const f = await withOrg(t)
     const create = (name: string) =>
@@ -135,8 +137,8 @@ describe('team names', () => {
       as(t, f.user).mutation(api.teams.update, { org_id: f.org.id, id: f.team.id, patch })
     await create(AT_CAP)
     await create(EMOJI_AT_CAP)
-    await expectRefusal(create(OVER), 'rule', sentence(TEAM_NAME_TOO_LONG))
-    await expectRefusal(create(EMOJI_OVER), 'rule', sentence(TEAM_NAME_TOO_LONG))
+    await expectRefusal(create(OVER), 'rule', sentence(LIMITS.teamName.refusal))
+    await expectRefusal(create(EMOJI_OVER), 'rule', sentence(LIMITS.teamName.refusal))
     const names = await t.run(async (ctx) =>
       (await ctx.db.query('teams').collect()).map((team) => team.name),
     )
@@ -144,19 +146,18 @@ describe('team names', () => {
 
     await plantLegacyName(t, 'teams', f.team.id)
     await update({ track_delay_default: false })
-    await update({ name: LEGACY })
+    await expectRefusal(update({ name: LEGACY }), 'rule', sentence(LIMITS.teamName.refusal))
     expect(await rowOf(t, 'teams', f.team.id)).toMatchObject({
       name: LEGACY,
       track_delay_default: false,
     })
-    await expectRefusal(update({ name: LEGACY.slice(1) }), 'rule', sentence(TEAM_NAME_TOO_LONG))
     await update({ name: EMOJI_AT_CAP })
     expect((await rowOf(t, 'teams', f.team.id))?.name).toBe(EMOJI_AT_CAP)
   })
 })
 
 describe('milestone names', () => {
-  it('adds and renames with up to 80 code points and keeps a longer stored name on a move', async () => {
+  it('adds with up to 80 code units and refuses a move that sends back a longer stored name', async () => {
     const t = newT()
     const f = await withOrg(t)
     const add = (id: string, name: string) =>
@@ -169,21 +170,23 @@ describe('milestone names', () => {
       })
     const id = uuid()
     await add(id, EMOJI_AT_CAP)
-    await expectRefusal(add(uuid(), OVER), 'rule', sentence(MILESTONE_NAME_TOO_LONG))
+    for (const name of [OVER, EMOJI_OVER]) {
+      await expectRefusal(add(uuid(), name), 'rule', sentence(LIMITS.milestoneName.refusal))
+    }
     expect(await t.run(async (ctx) => (await ctx.db.query('milestones').collect()).length)).toBe(1)
 
     // the app's Milestones window always sends the name with the week
     await plantLegacyName(t, 'milestones', id)
     const update = (patch: { name?: string; week?: string }) =>
       as(t, f.user).mutation(api.projects.updateMilestone, { org_id: f.org.id, id, patch })
-    await update({ name: LEGACY, week: '2026-01-12' })
-    expect(await rowOf(t, 'milestones', id)).toMatchObject({ name: LEGACY, week: '2026-01-12' })
     await expectRefusal(
-      update({ name: LEGACY.slice(1), week: '2026-01-19' }),
+      update({ name: LEGACY, week: '2026-01-12' }),
       'rule',
-      sentence(MILESTONE_NAME_TOO_LONG),
+      sentence(LIMITS.milestoneName.refusal),
     )
-    expect((await rowOf(t, 'milestones', id))?.week).toBe('2026-01-12')
+    expect(await rowOf(t, 'milestones', id)).toMatchObject({ name: LEGACY, week: '2026-01-05' })
+    await update({ week: '2026-01-19' })
+    expect((await rowOf(t, 'milestones', id))?.week).toBe('2026-01-19')
   })
 
   it('applies the same rule to roadmap changes', async () => {
@@ -200,7 +203,7 @@ describe('milestone names', () => {
         ],
       }),
       'rule',
-      sentence(MILESTONE_NAME_TOO_LONG),
+      sentence(LIMITS.milestoneName.refusal),
     )
     await user.mutation(api.roadmap.change, {
       session_id,
@@ -209,50 +212,36 @@ describe('milestone names', () => {
       ],
     })
     await plantLegacyName(t, 'milestones', id)
-    await user.mutation(api.roadmap.change, {
-      session_id,
-      operations: [{ kind: 'milestone_update', id, patch: { name: LEGACY, week: '2026-02-02' } }],
-    })
-    expect(await rowOf(t, 'milestones', id)).toMatchObject({ name: LEGACY, week: '2026-02-02' })
     await expectRefusal(
       user.mutation(api.roadmap.change, {
         session_id,
-        operations: [{ kind: 'milestone_update', id, patch: { name: OVER } }],
+        operations: [{ kind: 'milestone_update', id, patch: { name: LEGACY, week: '2026-02-02' } }],
       }),
       'rule',
-      sentence(MILESTONE_NAME_TOO_LONG),
+      sentence(LIMITS.milestoneName.refusal),
     )
+    expect(await rowOf(t, 'milestones', id)).toMatchObject({ name: LEGACY, week: '2026-01-05' })
   })
 })
 
 describe('organization names', () => {
-  it('renames with up to 80 code points, trimmed, and keeps a longer stored name', async () => {
+  it('renames with up to 80 code units, trimmed, and refuses a longer stored name sent back', async () => {
     const t = newT()
     const f = await withOrg(t)
     const update = (patch: { name?: string; week_start?: number }) =>
       as(t, f.admin).mutation(api.orgs.update, { org_id: f.org.id, patch })
     await update({ name: ` ${EMOJI_AT_CAP} ` })
     expect((await rowOf(t, 'organizations', f.org.id))?.name).toBe(EMOJI_AT_CAP)
-    await expectRefusal(update({ name: OVER }), 'rule', sentence(ORG_NAME_TOO_LONG))
+    for (const name of [OVER, EMOJI_OVER]) {
+      await expectRefusal(update({ name }), 'rule', sentence(LIMITS.orgName.refusal))
+    }
     await plantLegacyName(t, 'organizations', f.org.id)
-    await update({ name: LEGACY, week_start: 0 })
-    expect(await rowOf(t, 'organizations', f.org.id)).toMatchObject({
-      name: LEGACY,
-      week_start: 0,
-    })
-    await expectRefusal(update({ name: LEGACY.slice(1) }), 'rule', sentence(ORG_NAME_TOO_LONG))
-  })
-
-  it('keeps a longer stored name with surrounding spaces when it is sent back unchanged', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    // orgs.update stored names untrimmed before the cap
-    const padded = ` ${LEGACY}  `
-    await plantLegacyName(t, 'organizations', f.org.id, padded)
-    await as(t, f.admin).mutation(api.orgs.update, {
-      org_id: f.org.id,
-      patch: { name: padded, week_start: 0 },
-    })
+    await expectRefusal(
+      update({ name: LEGACY, week_start: 0 }),
+      'rule',
+      sentence(LIMITS.orgName.refusal),
+    )
+    await update({ week_start: 0 })
     expect(await rowOf(t, 'organizations', f.org.id)).toMatchObject({
       name: LEGACY,
       week_start: 0,
@@ -267,13 +256,35 @@ describe('organization names', () => {
         people: [],
         actor: { auth_user_id: 'operator-login', email: 'operator@platform.test' },
       })
-    await expectRefusal(insert(OVER), 'rule', sentence(ORG_NAME_TOO_LONG))
+    await expectRefusal(insert(EMOJI_OVER), 'rule', sentence(LIMITS.orgName.refusal))
     expect(await t.run((ctx) => ctx.db.query('organizations').collect())).toEqual([])
     const { org_id } = await insert(EMOJI_AT_CAP)
     expect((await rowOf(t, 'organizations', org_id))?.name).toBe(EMOJI_AT_CAP)
     // the starter team is named after the organization
     const teams = await t.run((ctx) => ctx.db.query('teams').collect())
     expect(teams.map((team) => team.name)).toEqual([EMOJI_AT_CAP])
+  })
+})
+
+describe('label names', () => {
+  it('creates with up to 40 code units, 20 emoji, and refuses 41 or 21 emoji as a rule', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const create = (name: string) =>
+      as(t, f.admin).mutation(api.labels.create, {
+        org_id: f.org.id,
+        id: uuid(),
+        name,
+        color: '#123ABC',
+      })
+    for (const name of ['a'.repeat(LIMITS.labelName.max + 1), '🚀'.repeat(21)]) {
+      const e = await expectRefusal(create(name), 'rule')
+      expect(e.data.message).toBe(LIMITS.labelName.refusal)
+    }
+    await create(` ${'🚀'.repeat(20)} `)
+    const labels = await t.run((ctx) => ctx.db.query('labels').collect())
+    expect(labels.map((label) => label.name)).toContain('🚀'.repeat(20))
+    expect(labels.map((label) => label.name)).not.toContain('🚀'.repeat(21))
   })
 })
 
@@ -293,11 +304,7 @@ describe('agent key and personal token names', () => {
         key_hash: HEX64,
         ...over,
       })
-    await expectRefusal(
-      mint({ name: OVER }),
-      'rule',
-      sentence(`a key name must be at most ${NAME_MAX} characters`),
-    )
+    await expectRefusal(mint({ name: OVER }), 'rule', sentence(LIMITS.keyName.refusal))
     for (const key_prefix of [
       'qva_test',
       'qva_0123456789abcdef',
@@ -325,11 +332,7 @@ describe('agent key and personal token names', () => {
         access: 'write',
         ...over,
       })
-    await expectRefusal(
-      mint({ name: EMOJI_OVER }),
-      'rule',
-      sentence(`a token name must be at most ${NAME_MAX} characters`),
-    )
+    await expectRefusal(mint({ name: EMOJI_OVER }), 'rule', sentence(LIMITS.tokenName.refusal))
     for (const token_prefix of ['qvt_test', 'qvt_01234567', 'qva_0123456', 'qvt_ABCDEF0']) {
       await expectRefusal(mint({ token_prefix }), 'bad_request', /^a token prefix is the first 11/)
     }
@@ -346,9 +349,8 @@ const SECRET = `qva_${'1'.repeat(48)}`
 type Wire = { status: number; json: unknown }
 
 /* withOrg, with the fixture agent holding User on the TBED meta and an agent
- * key named `keyName`, so REST and MCP run over t.fetch as a client calls
- * them. */
-async function wireOrg(t: T, keyName = 'limits'): Promise<OrgFixture> {
+ * key, so REST and MCP run over t.fetch as a client calls them. */
+async function wireOrg(t: T): Promise<OrgFixture> {
   const f = await withOrg(t)
   const key_hash = await sha256hex(SECRET)
   await t.run(async (ctx) => {
@@ -360,7 +362,7 @@ async function wireOrg(t: T, keyName = 'limits'): Promise<OrgFixture> {
     await ctx.db.insert('agent_keys', {
       id: uuid(),
       profile_id: f.agent.id,
-      name: keyName,
+      name: 'limits',
       key_prefix: 'qva_111...11111',
       key_hash,
       created_at: NOW,
@@ -391,21 +393,17 @@ async function send(
 }
 
 describe('REST', () => {
-  it('cuts a longer stored key name to 80 code points in the activity row of each write', async () => {
-    const t = newT()
-    const f = await wireOrg(t, 'k'.repeat(5_000))
-    const created = await send(t, 'POST', '/v1/tasks', { project: f.sub.key, title: 'Signed' })
-    expect(created.status).toBe(201)
-    const events = await activityFor(t, f.org.id)
-    expect(events.map((e) => e.detail)).toEqual([`via the REST API (${'k'.repeat(NAME_MAX)}…)`])
-  })
-
   it('answers 400 with the milestone sentence for a longer name', async () => {
     const t = newT()
     const f = await wireOrg(t)
     const add = (name: string) =>
       send(t, 'POST', `/v1/projects/${f.meta.key}/milestones`, { name, date: '2026-01-05' })
-    expect(await add(OVER)).toEqual({ status: 400, json: { error: MILESTONE_NAME_TOO_LONG } })
+    for (const name of [OVER, EMOJI_OVER]) {
+      expect(await add(name)).toEqual({
+        status: 400,
+        json: { error: LIMITS.milestoneName.refusal },
+      })
+    }
     expect(await add(EMOJI_AT_CAP)).toMatchObject({ status: 201, json: { name: EMOJI_AT_CAP } })
   })
 })
@@ -445,18 +443,14 @@ async function mcp(t: T, method: string, params: Record<string, unknown>, name?:
 const tool = async (t: T, name: string, args: Record<string, unknown>): Promise<ToolResult> =>
   (await mcp(t, 'tools/call', { name, arguments: args }, name)) as ToolResult
 
-const tooBig = (name: string, field: string, max: number): ToolResult => ({
-  content: [
-    {
-      type: 'text',
-      text: `Input validation error: Invalid arguments for tool ${name}: ${field}: Too big: expected string to have <=${max} characters`,
-    },
-  ],
+/* The error result MCP answers for a server refusal: its bare sentence. */
+const refusal = (text: string): ToolResult => ({
+  content: [{ type: 'text', text }],
   isError: true,
 })
 
 describe('MCP', () => {
-  it('declares maxLength 80 on the name arguments', async () => {
+  it('declares the name limits as maxLength', async () => {
     const t = newT()
     await wireOrg(t)
     const { tools } = (await mcp(t, 'tools/list', {})) as {
@@ -464,32 +458,29 @@ describe('MCP', () => {
     }
     const max = (name: string) =>
       tools.find((x) => x.name === name)?.inputSchema.properties.name?.maxLength
-    expect(['create_project', 'update_project', 'set_milestone', 'set_team'].map(max)).toEqual([
-      80, 80, 80, 80,
-    ])
+    expect(
+      ['create_project', 'update_project', 'set_milestone', 'set_team', 'set_label'].map(max),
+    ).toEqual([NAME_MAX, NAME_MAX, NAME_MAX, NAME_MAX, LIMITS.labelName.max])
   })
 
-  it('caps set_label names at 40 code points in the schema, as the server does', async () => {
+  it('refuses a set_label name of 21 emoji with the server sentence and takes 20', async () => {
     const t = newT()
     await wireOrg(t)
-    const { tools } = (await mcp(t, 'tools/list', {})) as {
-      tools: { name: string; inputSchema: { properties: Record<string, { maxLength?: number }> } }[]
-    }
-    const label = tools.find((x) => x.name === 'set_label')?.inputSchema.properties.name
-    expect(label?.maxLength).toBe(40)
     const color = '#123ABC'
-    expect(await tool(t, 'set_label', { name: '🚀'.repeat(41), color })).toMatchObject(
-      tooBig('set_label', 'name', 40),
+    expect(await tool(t, 'set_label', { name: '🚀'.repeat(21), color })).toMatchObject(
+      refusal(LIMITS.labelName.refusal),
     )
-    const made = await tool(t, 'set_label', { name: '🚀'.repeat(40), color })
+    const made = await tool(t, 'set_label', { name: '🚀'.repeat(20), color })
     expect(made.isError).toBeUndefined()
-    expect(JSON.parse(made.content[0].text)).toMatchObject({ name: '🚀'.repeat(40) })
+    expect(JSON.parse(made.content[0].text)).toMatchObject({ name: '🚀'.repeat(20) })
   })
 
-  it('counts code points for titles and names, as the server does', async () => {
+  it('counts UTF-16 code units for titles and names, as the server does', async () => {
     const t = newT()
     const f = await wireOrg(t)
-    const made = await tool(t, 'create_task', { project: f.sub.key, title: EMOJI_AT_CAP })
+    // 127 emoji and a letter are 255 code units, 128 emoji are 256
+    const title = `${'😀'.repeat(127)}a`
+    const made = await tool(t, 'create_task', { project: f.sub.key, title })
     expect(made.isError).toBeUndefined()
     const { id } = JSON.parse(made.content[0].text) as { id: string }
     const task = await t.run((ctx) =>
@@ -498,10 +489,10 @@ describe('MCP', () => {
         .withIndex('by_uuid', (q) => q.eq('id', id))
         .unique(),
     )
-    expect(task?.title).toBe(EMOJI_AT_CAP)
-    expect(await tool(t, 'create_task', { project: f.sub.key, title: EMOJI_OVER })).toMatchObject(
-      tooBig('create_task', 'title', 80),
-    )
+    expect(task?.title).toBe(title)
+    expect(
+      await tool(t, 'create_task', { project: f.sub.key, title: '😀'.repeat(128) }),
+    ).toMatchObject(refusal(LIMITS.title.refusal))
     const milestone = await tool(t, 'set_milestone', {
       project: f.meta.key,
       name: EMOJI_AT_CAP,
@@ -511,16 +502,8 @@ describe('MCP', () => {
     for (const name of [OVER, EMOJI_OVER]) {
       expect(
         await tool(t, 'set_milestone', { project: f.meta.key, name, date: '2026-01-05' }),
-      ).toMatchObject(tooBig('set_milestone', 'name', 80))
+      ).toMatchObject(refusal(LIMITS.milestoneName.refusal))
     }
     expect(await t.run(async (ctx) => (await ctx.db.query('milestones').collect()).length)).toBe(1)
-    // long text keeps counting UTF-16 code units
-    expect(
-      await tool(t, 'create_task', {
-        project: f.sub.key,
-        title: 'Units',
-        description: '😀'.repeat(10_001),
-      }),
-    ).toMatchObject(tooBig('create_task', 'description', 20000))
   })
 })

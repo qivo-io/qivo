@@ -30,12 +30,12 @@ import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import type { GrantLevel, ProjectType } from '../lib/enums'
 import { descriptionForm, trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
+import { limitedNumber, limitedText } from '../lib/limitRules'
+import { grouped, LIMITS } from '../lib/limits'
 import { canCreateProjects, projectCreationRefusal } from '../lib/projectCreators'
 import { creatorGrant, type Grants, grantsAfterHandover } from '../lib/projectGrants'
 import { PROJECT_KEY_SHAPE, projectKeyBase, projectKeyCandidate } from '../lib/projectKeys'
-import { PROJECT_DESCRIPTION_MAX } from '../lib/projectLimits'
-import { REVIEW_HOURS_MAX, resolveReviewHours, roundReviewHours } from '../lib/review'
-import { NAME_MAX, nameOverCap } from '../lib/textLimits'
+import { resolveReviewHours, roundReviewHours } from '../lib/review'
 import { logActivity, signedDetail } from './activity'
 import { estimateDocumentBytes } from './demoMetrics'
 import {
@@ -43,11 +43,12 @@ import {
   BOOLEAN,
   exact,
   type Fields,
+  filledText,
   hoursOrNull,
   idForm,
-  idOf,
   TEXT,
-  TEXT_OR_NULL,
+  textOrNull,
+  uuidOf,
   type View,
 } from './expected'
 import { scheduleArchivedReads } from './messages'
@@ -61,39 +62,25 @@ const restoredStepRef = makeFunctionReference<
   null
 >('regroup:restoredStep')
 
-/** Preserve the supplied text; null/omitted create values mean no description. */
+/** The description to store: trimmed, '' for null or absent, refused past
+ * LIMITS.projectDescription. */
 export function projectDescription(value: string | null | undefined): string {
-  const description = value ?? ''
-  // String.length matches the browser's native textarea maxLength exactly.
-  if (description.length > PROJECT_DESCRIPTION_MAX) {
-    throw badRequest(`a project description must be ${PROJECT_DESCRIPTION_MAX} characters or fewer`)
-  }
-  return description
+  return limitedText(LIMITS.projectDescription, value ?? '')
 }
 
-export const PROJECT_NAME_TOO_LONG = `a project name must be at most ${NAME_MAX} characters`
-
 /** A project name as stored: trimmed, and refused when nothing is left or
- * when it has more than NAME_MAX code points. A name equal to `current`, the
- * project's stored one, passes, so a project named before the cap keeps its
- * name through writes that resend it. */
-export function cleanProjectName(raw: string, current?: string): string {
-  const name = raw.trim()
-  if (name === '') throw badRequest('a project name cannot be blank')
-  if (nameOverCap(name, current)) throw rule(PROJECT_NAME_TOO_LONG)
+ * past LIMITS.projectName. */
+export function cleanProjectName(raw: string): string {
+  const name = limitedText(LIMITS.projectName, raw)
+  if (name === '') throw rule('a project name cannot be blank')
   return name
 }
 
 /** The stored project review time: null clears it (the project inherits
- * again), a value is kept to the 0.1 h grain within 0..REVIEW_HOURS_MAX. */
+ * again), a value is kept to the 0.1 h grain within LIMITS.reviewHours. */
 export function cleanReviewHours(v: number | null): number | undefined {
   if (v === null) return undefined
-  if (!Number.isFinite(v) || v < 0 || v > REVIEW_HOURS_MAX) {
-    throw badRequest(
-      `review_hours must be a number of hours from 0 to ${REVIEW_HOURS_MAX}, or null`,
-    )
-  }
-  return roundReviewHours(v)
+  return roundReviewHours(limitedNumber(LIMITS.reviewHours, v))
 }
 
 /** The remaining time a task in this sub-project gets on entering Review:
@@ -462,11 +449,14 @@ export const ACCESS_MAP_REMOVES =
 /** The keys of a project's `expected`. REST and MCP read a project with no
  * lead of its own as led by its parent's lead, and cannot change the key. */
 export const PROJECT_FIELDS: Fields<Doc<'projects'>> = {
-  // any text: a project took a blank name until 2026-10-16 and a longer one
-  // until 2026-10-19, and a read answers it as stored
-  name: { sends: 'name', type: TEXT, form: trimmedForm },
-  // a description saved before PROJECT_DESCRIPTION_MAX reads back longer
-  description: { sends: 'description', type: TEXT_OR_NULL, form: descriptionForm },
+  // cleanProjectName's rule
+  name: { sends: 'name', type: filledText(LIMITS.projectName), form: trimmedForm },
+  // projectDescription's rule
+  description: {
+    sends: 'description',
+    type: textOrNull(LIMITS.projectDescription),
+    form: descriptionForm,
+  },
   key: { sends: 'key', type: TEXT, form: exact },
   track_delay: { sends: 'track_delay', type: BOOLEAN, form: exact },
   review_hours: {
@@ -474,14 +464,14 @@ export const PROJECT_FIELDS: Fields<Doc<'projects'>> = {
     // cleanReviewHours's rule
     type: hoursOrNull({
       min: 0,
-      max: REVIEW_HOURS_MAX,
-      says: `a number of hours from 0 to ${REVIEW_HOURS_MAX}, or null`,
+      max: LIMITS.reviewHours.max,
+      says: `a number of hours from 0 to ${grouped(LIMITS.reviewHours.max)}, or null`,
     }),
     form: (value) => (typeof value === 'number' ? roundReviewHours(value) : (value ?? null)),
   },
   lead_id: {
     sends: 'lead_id',
-    type: idOf('profile', true),
+    type: uuidOf('profile', true),
     form: idForm,
     stored: async (project, read) =>
       read.view === 'machine'
@@ -572,7 +562,7 @@ export async function updateProjectCore(
     next: fields,
   })
   const db: Partial<Doc<'projects'>> = {}
-  if (patch.name !== undefined) db.name = cleanProjectName(patch.name, project.name)
+  if (patch.name !== undefined) db.name = cleanProjectName(patch.name)
   if (patch.description !== undefined) db.description = projectDescription(patch.description)
   if (patch.track_delay !== undefined) db.track_delay = patch.track_delay
   // null clears: undefined unsets the column through ctx.db.patch

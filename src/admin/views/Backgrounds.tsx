@@ -40,6 +40,7 @@ import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { cn } from '@/lib/utils'
 import { api } from '../../../convex/_generated/api'
 import type { Id } from '../../../convex/_generated/dataModel'
+import { LIMITS } from '../../../convex/lib/limits'
 import { panoramaFilename } from '../../../convex/lib/panoramaFilename'
 import {
   MANUAL_IMAGE_REQUIREMENTS,
@@ -1939,7 +1940,7 @@ function ImageUpload({ target, cancel }: { target: ImageUploadTarget; cancel: ()
       )}
       <div className="space-y-2">
         <Label htmlFor={fieldId('file')}>
-          {submission ? 'JPEG file, up to 8 MB' : 'Image file'}
+          {submission ? `JPEG file, up to ${LIMITS.backgroundSize.max} MiB` : 'Image file'}
         </Label>
         <p id={fieldId('file-hint')} className="text-sm text-text-2">
           {submission ? PANORAMA_IMAGE_REQUIREMENTS : MANUAL_IMAGE_REQUIREMENTS}

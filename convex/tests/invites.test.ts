@@ -9,12 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import authSchema from '../betterAuth/schema'
 import type { Refusal, RefusalCode } from '../lib/functions'
-import {
-  APP_SENDS_PER_ORG_HOUR,
-  INVITE_NOT_HELD,
-  INVITE_SENDING,
-  INVITES_HELD,
-} from '../lib/inviteLimits'
+import { INVITE_NOT_HELD, INVITE_SENDING, LIMITS } from '../lib/limits'
 import { as, expectRefusal, NOW, newT, plantSeat, type T, uuid, withOrg } from './helpers.setup'
 
 async function refused(p: Promise<unknown>, code: RefusalCode, sentence: string): Promise<void> {
@@ -138,6 +133,61 @@ describe('invitations from the app', () => {
     expect((await invite()).emailed).toBe(false)
     await flush(t)
     expect(letters()).toHaveLength(1)
+  })
+
+  it('stores a Unicode domain as punycode and names a guest by the local part, cut to 80', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const invite = (email: string) =>
+      as(t, f.admin).mutation(api.projects.inviteGuest, {
+        org_id: f.org.id,
+        project_id: f.meta.id,
+        email,
+        level: 'viewer',
+      })
+    // the old code stored the Unicode domain and the whole local part as the name
+    const local = 'g'.repeat(LIMITS.personName.max + 20)
+    await invite('Anna@Bücher.DE')
+    await invite(`${local}@example.se`)
+    const seats = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query('profiles')
+          .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+          .collect()
+      )
+        .filter((p) => p.org_role === 'guest' && p.id !== f.guest.id)
+        .map((p) => [p.email, p.name]),
+    )
+    expect(seats).toEqual([
+      ['anna@xn--bcher-kva.de', 'anna'],
+      [`${local}@example.se`, 'g'.repeat(LIMITS.personName.max)],
+    ])
+    await flush(t)
+    expect(letters().map((l) => l.to)).toEqual([['anna@xn--bcher-kva.de'], [`${local}@example.se`]])
+  })
+
+  it('stores and emails an address with an apostrophe', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    // the old rule refused it, though Better Auth and Google accept it
+    await as(t, f.admin).mutation(api.projects.inviteGuest, {
+      org_id: f.org.id,
+      project_id: f.meta.id,
+      email: "Sean.O'Brien@Company.com",
+      level: 'viewer',
+    })
+    const stored = await t.run((ctx) =>
+      ctx.db
+        .query('profiles')
+        .withIndex('by_org_email', (q) =>
+          q.eq('org_id', f.org.id).eq('email', "sean.o'brien@company.com"),
+        )
+        .unique(),
+    )
+    expect(stored?.org_role).toBe('guest')
+    await flush(t)
+    expect(letters().map((l) => l.to)).toEqual([["sean.o'brien@company.com"]])
   })
 
   it('emails a quickly corrected address once, and nothing for an agent', async () => {
@@ -595,7 +645,7 @@ describe('whoever caused an app invitation sees whether it went out', () => {
     const first = Date.now()
     // the hour's 50 counted sends, a minute apart from `first`
     await t.run(async (ctx) => {
-      for (let i = 0; i < APP_SENDS_PER_ORG_HOUR; i++) {
+      for (let i = 0; i < LIMITS.invitesPerHour.max; i++) {
         await ctx.db.insert('platform_audit_log', {
           ts: new Date(first + i * 60_000 - 3_000_000).toISOString(),
           actor_email: 'system',
@@ -617,7 +667,7 @@ describe('whoever caused an app invitation sees whether it went out', () => {
     expect(await row()).toMatchObject({ state: 'held', free_at: freeAt })
     const again = () =>
       as(t, f.admin).mutation(api.invites.sendAgain, { org_id: f.org.id, profile_id: seat.id })
-    await refused(again(), 'rule', INVITES_HELD)
+    await refused(again(), 'rule', LIMITS.invitesPerHour.refusal)
     // someone who did not cause the send may not send it
     await expectRefusal(
       as(t, f.user).mutation(api.invites.sendAgain, { org_id: f.org.id, profile_id: seat.id }),

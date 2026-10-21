@@ -313,9 +313,12 @@ describe('New token', () => {
     expect(find('[data-new-mcp-token-changes]').getAttribute('aria-checked')).toBe('true')
     expect(radio('never').checked).toBe(true)
     expect(find('input[aria-label="Name"]')).toBe(document.activeElement)
-    expect(find<HTMLInputElement>('input[aria-label="Name"]').maxLength).toBe(80)
     expect(createButton().disabled).toBe(true)
     await type('input[aria-label="Name"]', '   ')
+    expect(createButton().disabled).toBe(true)
+    // a pasted name over the cap stays whole, and Create waits for it
+    await type('input[aria-label="Name"]', 'n'.repeat(81))
+    expect(find<HTMLInputElement>('input[aria-label="Name"]').value).toHaveLength(81)
     expect(createButton().disabled).toBe(true)
 
     await type('input[aria-label="Name"]', 'Raycast on my Mac')

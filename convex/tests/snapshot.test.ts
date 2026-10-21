@@ -1,4 +1,5 @@
-/* snapshot.forMe + snapshot.commentsForIssue — the phase-3 read-path gate.
+/* snapshot.forMe, the phase-3 read-path gate, and the task history that
+ * snapshot.commentThread answers beside a task's comments.
  *
  * Extra scenery beside withOrg's mini-Testbed:
  * - hiddenSub: a sub under f.hidden (lead: user) — invisible to guest/viewer,
@@ -15,7 +16,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
-import { INBOX_LIMIT, loadInbox } from '../lib/inbox'
+import { loadInbox } from '../lib/inbox'
+import { INBOX_LIMIT } from '../lib/limits'
 import { insertActivity } from '../model/activity'
 import { startPurge } from '../model/deletedItems'
 import { invokeSnapshot } from './backendPerformance.setup'
@@ -1603,67 +1605,6 @@ describe('hidden parents', () => {
     ]
     expect(referenced.filter((id) => !known.has(id))).toEqual([])
     expect(JSON.stringify(snap)).not.toContain(hiddenTask.id)
-  })
-})
-
-describe('commentsForIssue', () => {
-  it("returns a visible issue's thread, created_at ascending, as pure app rows", async () => {
-    const [c1, c2] = await t.run(async (ctx) => {
-      const first = {
-        id: uuid(),
-        issue_id: issueVis.id,
-        author: f.user.id,
-        body: 'first',
-        created_at: '2026-01-01T01:00:00.000Z',
-      }
-      const second = {
-        id: uuid(),
-        issue_id: issueVis.id,
-        author: f.admin.id,
-        body: 'second',
-        created_at: '2026-01-01T02:00:00.000Z',
-      }
-      // inserted out of order on purpose
-      await ctx.db.insert('comments', second)
-      await ctx.db.insert('comments', first)
-      return [first, second]
-    })
-    const rows = await as(t, f.guest).query(api.snapshot.commentsForIssue, {
-      org_id: f.org.id,
-      issue_id: issueVis.id,
-    })
-    expect(rows.map((r) => r.id)).toEqual([c1.id, c2.id])
-    expect(rows[0]).toEqual(c1)
-  })
-
-  it('hidden, foreign and unknown issues are uniformly not found', async () => {
-    const hid = await plantIssue(t, { org_id: f.org.id, project_id: hiddenSub.id })
-    const foreign = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id })
-    await expectRefusal(
-      as(t, f.guest).query(api.snapshot.commentsForIssue, { org_id: f.org.id, issue_id: hid.id }),
-      'not_found',
-    )
-    await expectRefusal(
-      as(t, f.admin).query(api.snapshot.commentsForIssue, {
-        org_id: f.org.id,
-        issue_id: foreign.id,
-      }),
-      'not_found',
-    )
-    await expectRefusal(
-      as(t, f.guest).query(api.snapshot.commentsForIssue, { org_id: f.org.id, issue_id: uuid() }),
-      'not_found',
-    )
-  })
-
-  it('requires a seat in the named org', async () => {
-    await expectRefusal(
-      as(t, f.guest).query(api.snapshot.commentsForIssue, {
-        org_id: f.otherOrg.id,
-        issue_id: issueVis.id,
-      }),
-      'forbidden',
-    )
   })
 })
 

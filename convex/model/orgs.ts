@@ -8,7 +8,7 @@
  *   counters         the per-org issue and project numbers (org_counters),
  *                    and the helpers that insert an organization with its
  *                    org_counters row and delete that row
- *   column defaults  including the organization-wide 20 MiB upload cap
+ *   column defaults  including the organization-wide upload cap
  *   last admin       an org may never lose its last admin
  *   last team        an org may never lose its last team
  *   slug narration   organizations_slug_narrate (0108)
@@ -27,12 +27,15 @@ import { isTeamLeader } from '../lib/access'
 import { byId } from '../lib/db'
 import { trimmedForm } from '../lib/fieldPrints'
 import { conflict, notFound, require, rule } from '../lib/functions'
-import { NAME_MAX, nameOverCap } from '../lib/textLimits'
+import { limitedText, limitedWhole } from '../lib/limitRules'
+import { LIMITS, SLUG_SHAPE } from '../lib/limits'
+import { DEFAULT_PLANNABLE_HOURS } from '../lib/workload'
 import { logActivity } from './activity'
 import {
   assertExpected,
   exact,
   type Fields,
+  filledText,
   NUMBER,
   NUMBER_OR_NULL,
   TEXT,
@@ -65,22 +68,17 @@ export function nameInitials(name: string | null | undefined): string {
 
 /* ---------------------------------------------------------------------- name */
 
-export const ORG_NAME_TOO_LONG = `an organization name must be at most ${NAME_MAX} characters`
-
-/** An organization name as stored: trimmed, and refused when it has more
- * than NAME_MAX code points unless it equals `current`, the stored name, so
- * an organization named before the cap keeps its name. Each caller refuses a
- * blank name with its own sentence. */
-export function cleanOrgName(raw: string, current?: string): string {
-  const name = raw.trim()
-  if (nameOverCap(name, current)) throw rule(ORG_NAME_TOO_LONG)
-  return name
+/** An organization name as stored: trimmed, and refused past
+ * LIMITS.orgName. Each caller refuses a blank name with its own sentence. */
+export function cleanOrgName(raw: string): string {
+  return limitedText(LIMITS.orgName, raw)
 }
 
 /** The keys of an organization's `expected` (model/expected.ts): its
  * settings and its address. */
 export const ORG_FIELDS: Fields<Doc<'organizations'>> = {
-  name: { sends: 'name', type: TEXT, form: trimmedForm },
+  // cleanOrgName's rule
+  name: { sends: 'name', type: filledText(LIMITS.orgName), form: trimmedForm },
   date_format: { sends: 'date_format', type: TEXT, form: exact },
   week_start: { sends: 'week_start', type: NUMBER, form: exact },
   week_one_rule: { sends: 'week_one_rule', type: TEXT, form: exact },
@@ -134,12 +132,6 @@ const RESERVED_WORDS =
 
 export const RESERVED_SLUGS: ReadonlySet<string> = new Set(RESERVED_WORDS.split('|'))
 
-/* organizations_slug_check (0107): alphanumeric groups joined by SINGLE
- * hyphens, no leading/trailing one, 1..40 chars. '~' is structurally
- * unspellable — /app/~/ routing depends on that. */
-export const SLUG_SHAPE = /^[a-z0-9]+(-[a-z0-9]+)*$/
-export const SLUG_MAX = 40
-
 const trimHyphens = (s: string) => s.replace(/^-+|-+$/g, '')
 
 const slugHolder = (ctx: QueryCtx, slug: string) =>
@@ -157,11 +149,9 @@ export async function assertSlugAvailable(
   slug: string,
   owner?: string,
 ): Promise<void> {
-  if (!SLUG_SHAPE.test(slug) || slug.length > SLUG_MAX) {
-    throw conflict(
-      'An address is up to 40 lowercase letters, digits and single hyphens between them.',
-      'slug_shape',
-    )
+  if (!SLUG_SHAPE.test(slug) || slug.length > LIMITS.slug.max) {
+    const sentence = LIMITS.slug.refusal
+    throw conflict(`${sentence[0].toUpperCase()}${sentence.slice(1)}`, 'slug_shape')
   }
   if (RESERVED_SLUGS.has(slug)) {
     throw conflict('That address is reserved. Choose another.', 'slug_reserved')
@@ -327,20 +317,21 @@ export const newOrgDefaults = (now: string) => ({
   date_format: 'YYYY-MM-DD',
   week_start: 1,
   week_one_rule: 'first4day',
-  default_plannable_hours: 32,
-  max_attachment_mb: 20,
+  default_plannable_hours: DEFAULT_PLANNABLE_HOURS,
+  max_attachment_mb: LIMITS.attachmentLimit.max,
   // Retired and unread (schema.ts). Earlier releases' schemas require it, so
   // new organizations store false until no earlier release can be rolled
   // back to.
   gravatar_avatars: false,
 })
 
-/* The organization's upload cap in MiB, at most 20. The 20 MiB ceiling is a
- * product and cost rule, not a technical limit: Qivo makes it simple to add
- * images and PDF files to tasks and is not a storage service, so a larger
- * file does not go onto Qivo. An org row without a value gets the ceiling. */
+/* The organization's upload cap in MiB, at most LIMITS.attachmentLimit.max.
+ * The ceiling is a product and cost rule, not a technical limit: Qivo makes
+ * it simple to add images and PDF files to tasks and is not a storage
+ * service, so a larger file does not go onto Qivo. A row without a value
+ * gets the ceiling. */
 export const attachmentLimitMb = (org: Pick<Doc<'organizations'>, 'max_attachment_mb'> | null) =>
-  Math.min(org?.max_attachment_mb ?? 20, 20)
+  Math.min(org?.max_attachment_mb ?? LIMITS.attachmentLimit.max, LIMITS.attachmentLimit.max)
 
 /* The auto-archive threshold in days for Done tasks (jobs.ts). */
 export const DEFAULT_ARCHIVE_DAYS = 30
@@ -473,10 +464,7 @@ export async function setPlannableHoursCore(
   if (target.kind === 'agent') {
     throw rule('an agent has no plannable week, because its capacity is unbounded')
   }
-  const h = Math.round(Number(a.hours) || 0)
-  if (h < 1 || h > 168) {
-    throw rule('plannable hours must be a whole number of hours from 1 to 168')
-  }
+  const h = limitedWhole(LIMITS.plannableHours, a.hours)
   // after the rules, so a request no check can let through says why
   await assertProfileExpected(ctx, {
     me: a.me,

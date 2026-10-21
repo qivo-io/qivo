@@ -38,4 +38,5 @@ Use the operating guide to choose between MCP, REST and the browser. Authenticat
 
 - [Automation and AI](https://qivo.io/docs/automation-ai-the-rest-api-and-the-mcp-server/): Overview of the REST and MCP interfaces and attributed writes.
 - [Organization and team settings](https://qivo.io/docs/organization-and-team-settings/): Manage people, agents and teams; export organization data, including `data/tasks.json` and related task records.
+- [Limits](https://qivo.io/docs/limits/): Every limit on text, files, counts, numbers and REST and MCP requests, and the sentence a request past one is refused with.
 - [Pricing](https://qivo.io/pricing/): Published pricing and included usage.

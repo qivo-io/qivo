@@ -4,6 +4,7 @@ import { Icon, PausedMark, PriorityIcon, ProjectName } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import type { BoardCellGroup } from '@/lib/boardGroups'
+import { clampedTitleTip } from '@/lib/clampedTitle'
 import { StaticControlsContext, useLiveControls } from '@/lib/liveControls'
 import { type IssueVM, P, type ProjectPlace } from '@/store/planner'
 import type { StoreVersion } from '@/store/updates'
@@ -97,10 +98,11 @@ function ParentHeading({ it, place }: { it: IssueVM; place: ProjectPlace | null 
         data-focus-key="parent"
         aria-label={`Parent: ${it.title}`}
         aria-describedby={meta}
+        title={clampedTitleTip(it.title)}
         className="flex min-w-0 items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary"
       >
         <PausedGlyph it={it} />
-        <span className="min-w-0 break-words text-base font-semibold leading-[1.4] text-[var(--board-parent-text)]">
+        <span className="line-clamp-4 min-w-0 break-words text-base font-semibold leading-[1.4] text-[var(--board-parent-text)]">
           {it.title}
         </span>
       </Button>
@@ -196,11 +198,12 @@ function TaskRow({
               data-focus-key="title"
               aria-label={it.title}
               aria-describedby={describedBy}
+              title={clampedTitleTip(it.title)}
               className="min-w-0 cursor-inherit text-left font-normal outline-none focus-visible:ring-2 focus-visible:ring-primary"
             >
               <span className="flex min-w-0 items-start gap-2">
                 <PausedGlyph it={it} id={`${ids}paused`} />
-                <span className="min-w-0 break-words text-base font-medium leading-[1.35]">
+                <span className="line-clamp-4 min-w-0 break-words text-base font-medium leading-[1.35]">
                   {it.title}
                 </span>
               </span>

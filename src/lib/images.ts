@@ -1,3 +1,5 @@
+import { LIMITS } from '../../convex/lib/limits'
+
 /* Re-encode large PNG/JPEG uploads to WebP only when the result is smaller.
    APNG, GIF and SVG pass through to preserve animation/vector content; other
    formats are untouched. Decode, canvas or codec failures keep the original.
@@ -62,18 +64,21 @@ export function fitWithin(
   return { w: Math.max(1, Math.round(w * scale)), h: Math.max(1, Math.round(h * scale)) }
 }
 
-/** The longest attachment name the server stores, in characters
-    (convex/model/attachments.ts cleanAttachmentName). */
-const NAME_MAX = 255
-
 /** Re-extension for the WebP that comes out. Keeps the stem (the description
     editor already gave clipboard images a readable name) and never doubles up
     a suffix. Shortens the stem when the new suffix would take the name past
-    the server's 255 characters, so a file the user could attach as chosen
-    still attaches once compressed. Pure. */
+    LIMITS.attachmentName (255 UTF-16 code units, never splitting a character),
+    so a file the user could attach as chosen still attaches once compressed.
+    Pure. */
 export function webpName(name: string): string {
   const stem = (name || 'image').replace(/\.[A-Za-z0-9]{1,5}$/, '') || 'image'
-  return `${[...stem].slice(0, NAME_MAX - '.webp'.length).join('')}.webp`
+  const room = LIMITS.attachmentName.max - '.webp'.length
+  let kept = ''
+  for (const char of stem) {
+    if (kept.length + char.length > room) break
+    kept += char
+  }
+  return `${kept}.webp`
 }
 
 /** Encode a bitmap to a WebP blob, preferring OffscreenCanvas and falling

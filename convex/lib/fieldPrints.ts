@@ -16,10 +16,10 @@ export const FIELD_CHANGED = 'field_changed'
 export const trimmedForm = (value: unknown): string | null =>
   value == null ? null : String(value).trim()
 
-/** The compare form of a description: an empty one is null, otherwise the
- * text exactly, because descriptions are stored untrimmed. */
+/** The compare form of a description: trimmed, as it is stored, and null
+ * when empty or unset. */
 export const descriptionForm = (value: unknown): string | null =>
-  value == null || value === '' ? null : String(value)
+  value == null || String(value).trim() === '' ? null : String(value).trim()
 
 /* cyrb53 (public domain, bryc): a fast 53-bit string hash. It is not
  * cryptographic. A collision could only let a stale edit through, and only

@@ -430,6 +430,14 @@ describe('body validation and safe failures', () => {
     expect(
       (await send(`${PREFIX}/submissions`, { method: 'POST', body: JSON.stringify(input) })).status,
     ).toBe(202)
+    // one byte more is refused, with the size in KiB
+    input.reason += 'a'
+    const over = await send(`${PREFIX}/submissions`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+    expect(over.status).toBe(400)
+    expect(await result(over)).toEqual({ error: 'request body exceeds 16 KiB' })
   })
 
   it.each([

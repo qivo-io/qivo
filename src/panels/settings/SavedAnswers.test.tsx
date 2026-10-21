@@ -41,10 +41,11 @@ let toast: ReturnType<typeof vi.fn<(message: string, tone?: string) => void>>
 let container: HTMLDivElement
 let root: Root
 
-/* Loads the store and pages. `crewName`, `betaName` and `sensorName` name
-   the Crew team, the Beta milestone and the Luma Sensor project, so a test
-   can store a name saved before names were required. */
-async function load(crewName = 'Crew', betaName = 'Beta', sensorName = 'Luma Sensor') {
+/* Loads the store and pages. `betaName` names the Beta milestone, so a test
+   can store a name saved with spaces around it. `crewName` names the Crew
+   team and `labelName` adds a Firmware label of that name, so a test can
+   store a name over the cap. */
+async function load(betaName = 'Beta', { crewName = 'Crew', labelName = '' } = {}) {
   vi.resetModules()
   const snap: Snapshot = plannerFixture()
   const org = snap.orgs[0].id
@@ -61,7 +62,7 @@ async function load(crewName = 'Crew', betaName = 'Beta', sensorName = 'Luma Sen
     type: 'meta',
     key: 'SEN',
     num: 2,
-    name: sensorName,
+    name: 'Luma Sensor',
     description: '',
     sort_order: 1,
     track_delay: true,
@@ -86,6 +87,15 @@ async function load(crewName = 'Crew', betaName = 'Beta', sensorName = 'Luma Sen
     has_hidden_subtasks: false,
     has_hidden_parent: false,
   })
+  if (labelName)
+    snap.labels.push({
+      id: 'firmware',
+      org_id: org,
+      name: labelName,
+      name_lower: labelName.toLowerCase(),
+      color: '#335577',
+      created_at: NOW,
+    })
   requests = []
   network.query.mockResolvedValue(null)
   network.onUpdate.mockImplementation((_ref, _args, next) => {
@@ -183,68 +193,9 @@ async function answer(name: string, outcome: 'accept' | 'refuse') {
 
 const toasts = () => toast.mock.calls.map(([message]) => message)
 
-describe('a team saved with a blank name', () => {
-  it('opens from the list by a label of its own', async () => {
-    await load('  ')
-    const setPage = vi.fn()
-    await render(() => <pages.teams.OrgTeamsPage setPage={setPage} />)
-    await act(async () => button('Unnamed team')?.click())
-    expect(setPage).toHaveBeenCalledWith('team:crew')
-    await render(() => <pages.teams.TeamPage teamId="crew" setPage={vi.fn()} />)
-    expect(document.querySelector('h1')?.textContent).toBe('Unnamed team')
-  })
-
-  it('reads as a team in the notice of a refused rename', async () => {
-    await load('  ')
-    const { P } = await import('../../store/planner')
-    void P.updateTeam('crew', { name: 'Field crew' })
-    const request = requests.find((r) => r.name === 'teams:update')
-    expect(request).toBeDefined()
-    await act(async () =>
-      request?.reject(
-        new ConvexError({
-          code: 'conflict',
-          reason: 'field_changed',
-          message: 'name of team crew changed since you read it',
-          changes: [{ record: 'team', id: 'crew', field: 'name', by: null, at: null }],
-        }),
-      ),
-    )
-    expect(toasts()).toContain(
-      'Not saved. The name of a team was changed elsewhere. Your change was discarded.',
-    )
-  })
-})
-
-describe('a project and milestone saved with a blank name', () => {
-  it('read as Unnamed project and Unnamed milestone in Settings and the milestone list', async () => {
-    await load('Crew', '', ' ')
-    await render(() => (
-      <pages.modals.MilestoneModal init={{ project: 'sensor' }} onClose={vi.fn()} />
-    ))
-    const row = document.querySelector('[data-milestone-row="beta"]')
-    expect(row?.textContent).toContain('Unnamed milestone')
-    expect(row?.querySelector('button')?.getAttribute('aria-label')).toBe('Edit Unnamed milestone')
-    expect(document.body.textContent).toContain('Unnamed project')
-    await render(() => (
-      <pages.project.OrgProjectsPage
-        setPage={vi.fn()}
-        onNewProject={vi.fn()}
-        onNewSubProject={vi.fn()}
-        onOpenArchivedTasks={vi.fn()}
-      />
-    ))
-    expect(document.querySelector('[data-project-row="sensor"]')?.textContent).toBe(
-      'Unnamed project',
-    )
-    await render(() => <pages.project.ProjectPage projectId="sensor" setPage={vi.fn()} />)
-    expect(document.querySelector('h1')?.textContent).toContain('Unnamed project')
-  })
-})
-
 describe('a milestone saved with spaces around its name', () => {
   it('opens its editor with nothing unsaved', async () => {
-    await load('Crew', ' Beta ')
+    await load(' Beta ')
     const onClose = vi.fn()
     await render(() => <pages.modals.MilestoneModal init={{ id: 'beta' }} onClose={onClose} />)
     expect(input('[data-milestone-editor] input[aria-label="Name"]')?.value).toBe('Beta')
@@ -334,6 +285,27 @@ describe('the label picker in the task window', () => {
     await answer('labels:create', 'refuse')
     expect(field?.value).toBe('Firmware')
   })
+
+  it('says why a name over the cap creates nothing, and keeps it whole', async () => {
+    const { P } = await import('../../store/planner')
+    const task = P.issues.find((t) => t.title === 'Calibrate the sensor')
+    if (!task) throw new Error('no task')
+    await render(() => (
+      <pages.detail.LabelPickerPopup it={task} anchor={{ x: 0, y: 0 }} onDone={vi.fn()} />
+    ))
+    const field = input('input[placeholder="Add labels…"]')
+    await type(field, 'Firmware calibration notes for the sensor')
+    expect(field?.value).toHaveLength(41)
+    expect(document.querySelector('[data-picker-refusal]')?.textContent).toBe(
+      'A label name must be at most 40 characters. Shorten it.',
+    )
+    expect(document.body.textContent).not.toContain('Create new label')
+    await act(async () =>
+      field?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
+    )
+    expect(requests).toEqual([])
+    expect(field?.value).toHaveLength(41)
+  })
 })
 
 describe('the milestone editor', () => {
@@ -363,6 +335,128 @@ describe('rename toasts', () => {
     expect(toasts()).toEqual([])
     await answer('teams:update', 'accept')
     expect(toasts()).toEqual(['Team renamed'])
+  })
+
+  it('keeps a team name over the cap typed, marked and unsent, and says why', async () => {
+    await render(() => <pages.teams.TeamPage teamId="crew" setPage={vi.fn()} />)
+    const field = input('input[aria-label="Team name"]')
+    await rename(field, 'c'.repeat(81))
+    expect(requests).toEqual([])
+    expect(toasts()).toEqual(['A team name must be at most 80 characters. Shorten it.'])
+    expect(field?.value).toHaveLength(81)
+    expect(field?.getAttribute('aria-invalid')).toBe('true')
+    expect(document.querySelector('[data-limit-count]')?.textContent).toContain('81/80')
+  })
+
+  it('says nothing when a stored name over the cap is left unchanged', async () => {
+    await load('Beta', { crewName: 'c'.repeat(81), labelName: 'f'.repeat(41) })
+    await render(() => (
+      <>
+        <pages.teams.TeamPage teamId="crew" setPage={vi.fn()} />
+        <pages.labels.OrgLabelsPage />
+      </>
+    ))
+    for (const field of [
+      input('input[aria-label="Team name"]'),
+      input(`input[aria-label="Name of label ${'f'.repeat(41)}"]`),
+    ]) {
+      expect(field?.getAttribute('aria-invalid')).toBe('true')
+      await act(async () => field?.focus())
+      await act(async () => field?.blur())
+    }
+    expect(toasts()).toEqual([])
+    expect(requests).toEqual([])
+    // a change is still refused with the sentence
+    await rename(input('input[aria-label="Team name"]'), 'c'.repeat(82))
+    expect(toasts()).toEqual(['A team name must be at most 80 characters. Shorten it.'])
+  })
+
+  it('keeps a refused number marked while the other number field changes', async () => {
+    await render(() => <pages.general.OrgGeneralPage setPage={vi.fn()} />)
+    const attachment = input('[data-org-attachment-limit]')
+    const plannable = input('[data-org-plannable]')
+    await rename(attachment, '21')
+    await rename(plannable, '0')
+    expect(attachment?.getAttribute('aria-invalid')).toBe('true')
+    expect(plannable?.getAttribute('aria-invalid')).toBe('true')
+    // typing in one field clears its own mark only
+    await type(plannable, '30')
+    expect(plannable?.getAttribute('aria-invalid')).toBeNull()
+    expect(attachment?.getAttribute('aria-invalid')).toBe('true')
+  })
+
+  it('refuses 0 and 169 default plannable hours instead of clamping them', async () => {
+    await render(() => <pages.general.OrgGeneralPage setPage={vi.fn()} />)
+    const field = input('[data-org-plannable]')
+    const sentence = 'Plannable hours per week must be a whole number of hours from 1 to 168.'
+    for (const typed of ['0', '169']) {
+      await rename(field, typed)
+      expect(field?.value).toBe(typed)
+      expect(field?.getAttribute('aria-invalid')).toBe('true')
+    }
+    expect(requests).toEqual([])
+    expect(toasts()).toEqual([sentence, sentence])
+    await rename(field, '168')
+    expect(requests.map((r) => r.name)).toEqual(['orgs:update'])
+  })
+
+  it('warns of a refused number until it is put back or saved', async () => {
+    const { hasUnsaved } = await import('../../lib/leaveGuard')
+    const { P } = await import('../../store/planner')
+    const { PlannableHoursInput } = await import('./UserControls')
+    const me = P.users[0]
+    await render(() => (
+      <>
+        <pages.general.OrgGeneralPage setPage={vi.fn()} />
+        <pages.project.ProjectPage projectId="sensor" setPage={vi.fn()} />
+        <PlannableHoursInput user={me} canEdit />
+      </>
+    ))
+    /* Leaves the field with `value` typed, once its blur check has run. */
+    const leave = async (field: HTMLInputElement | null, value: string) => {
+      await rename(field, value)
+      await act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
+    }
+    const refusals: [string, string][] = [
+      ['[data-org-attachment-limit]', '21'],
+      ['[data-org-plannable]', '169'],
+      ['[data-project-review-hours]', '1000'],
+      [`[data-plannable-for="${me.id}"]`, '0'],
+    ]
+    for (const [selector, refused] of refusals) {
+      const field = input(selector)
+      const saved = field?.defaultValue ?? ''
+      await leave(field, refused)
+      expect(field?.getAttribute('aria-invalid'), selector).toBe('true')
+      expect(hasUnsaved(), selector).toBe(true)
+      // put back by hand: nothing left to save
+      await leave(field, saved)
+      expect(hasUnsaved(), selector).toBe(false)
+    }
+    expect(requests).toEqual([])
+    // refused, then a number in range: the warning lasts until the save
+    await leave(input('[data-org-plannable]'), '169')
+    expect(hasUnsaved()).toBe(true)
+    await leave(input('[data-org-plannable]'), '30')
+    expect(requests.map((r) => r.name)).toEqual(['orgs:update'])
+    expect(hasUnsaved()).toBe(false)
+  })
+
+  it('refuses a review time outside 0 to 999 before rounding it', async () => {
+    await render(() => <pages.project.ProjectPage projectId="sensor" setPage={vi.fn()} />)
+    const field = input('[data-project-review-hours]')
+    const sentence = 'Review hours must be a number from 0 to 999. Enter a number in that range.'
+    for (const typed of ['-0.04', '999.04']) {
+      await rename(field, typed)
+      expect(field?.value).toBe(typed)
+      expect(field?.getAttribute('aria-invalid')).toBe('true')
+    }
+    expect(requests).toEqual([])
+    expect(toasts()).toEqual([sentence, sentence])
+    // a number in range still saves at the 0.1 h grain
+    await rename(field, '2.04')
+    expect(field?.value).toBe('2')
+    expect(requests.map((r) => r.name)).toEqual(['projects:update'])
   })
 
   it('says nothing of a renamed organization the server refused', async () => {

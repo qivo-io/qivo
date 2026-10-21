@@ -16,7 +16,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
-import { NAME_MAX } from '../lib/textLimits'
+import { LIMITS, NAME_MAX } from '../lib/limits'
 import {
   as,
   expectRefusal,
@@ -142,6 +142,12 @@ describe('claimSeatsForLogin — the claim loop', () => {
     expect(c.auth_user_id).toBe('someone-else')
     expect(c.org_role).toBe('user')
     expect((await reload(t, bystander)).auth_user_id).toBeUndefined()
+  })
+
+  it('a provider address with a Unicode domain claims the seat invited under its punycode form', async () => {
+    const seat = await plantSeat(t, { org_id: f.org.id, email: 'anna@xn--bcher-kva.de' })
+    expect(await claim(t, { email: 'Anna@Bücher.de' })).toBe(1)
+    expect((await reload(t, seat)).auth_user_id).toBe(LOGIN)
   })
 
   it('an unverified email claims nothing', async () => {
@@ -421,14 +427,17 @@ describe('createOrganization guards (0118)', () => {
     expect(typeof orgId).toBe('string')
   })
 
-  it('takes a name of up to 80 code points, trimmed, and refuses a longer one', async () => {
+  it('takes a name of up to 80 UTF-16 units, trimmed, and refuses a longer one', async () => {
     const login = await withLogin(t, 'founder@example.test')
-    await expectRefusal(
-      login.as.mutation(api.identity.createOrganization, { name: 'a'.repeat(NAME_MAX + 1) }),
-      'rule',
-      /^an organization name must be at most 80 characters$/,
-    )
-    const name = '😀'.repeat(NAME_MAX)
+    // 41 emoji are 82 units, which the old code point count let through
+    for (const long of ['a'.repeat(NAME_MAX + 1), '😀'.repeat(NAME_MAX / 2 + 1)]) {
+      const refusal = await expectRefusal(
+        login.as.mutation(api.identity.createOrganization, { name: long }),
+        'rule',
+      )
+      expect(refusal.data.message).toBe(LIMITS.orgName.refusal)
+    }
+    const name = '😀'.repeat(NAME_MAX / 2)
     const orgId = await login.as.mutation(api.identity.createOrganization, { name: ` ${name} ` })
     const stored = await t.run(async (ctx) => ({
       orgs: (await ctx.db.query('organizations').collect()).filter((o) => o.id === orgId),

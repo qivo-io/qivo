@@ -16,27 +16,14 @@ import { hasProjectLevel } from '../lib/access'
 import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, rule } from '../lib/functions'
-import { TOO_MANY_MENTIONS, tooManyMentions } from '../lib/mentions'
+import { limitedText } from '../lib/limitRules'
+import { LIMITS } from '../lib/limits'
+import { tooManyMentions } from '../lib/mentions'
 import { issueKey } from '../lib/taskRefs'
-import { COMMENT_TOO_LONG, DELETE_REASON_MAX, TEXT_MAX } from '../lib/textLimits'
 import { assertExpected, DELETES, type Fields, filledText, type Next, type View } from './expected'
 import { assertCanEdit } from './issues'
 import { notifyCommentInsert, notifyCommentUpdate } from './messages'
 import { newUuid } from './orgs'
-
-/* The archive reason's cap is the delete reason's (lib/textLimits.ts
- * DELETE_REASON_MAX), because the app's archive and delete window share one
- * reason field. It counts the trimmed text, which is what is stored. The app,
- * REST and MCP refuse with this sentence, a `rule` refusal so the app shows
- * it (lib/textLimits.ts DESCRIPTION_TOO_LONG says why). */
-export const ARCHIVE_REASON_TOO_LONG = `an archive reason must be at most ${DELETE_REASON_MAX} characters`
-
-/** Refuses an archive reason longer than DELETE_REASON_MAX once trimmed.
- * REST and MCP call it while they parse a request, before any write, so a
- * task already archived, which posts no reason, refuses it too. */
-export function assertArchiveReasonFits(reason: string): void {
-  if (reason.trim().length > DELETE_REASON_MAX) throw rule(ARCHIVE_REASON_TOO_LONG)
-}
 
 type NewComment = {
   id?: string
@@ -51,25 +38,25 @@ type NewComment = {
  * every message its fan-out posts share. `id` is the app's client-made id;
  * machine callers omit it and get a new one. Refuses an id that is not a
  * lowercase UUID (lib/db.ts assertNewRowId), an author without Edit on the
- * task's project, a blank body, a body longer than TEXT_MAX or
- * mentioning more than MENTION_MAX people (lib/mentions.ts) and an id
- * already in use. Every caller trims `body` first, so the cap measures the
+ * task's project, a blank body, a body past LIMITS.comment or mentioning
+ * more people than LIMITS.mentions allows (lib/mentions.ts) and an id
+ * already in use. It stores `body` trimmed, so the cap measures the
  * stored text.
  */
 export async function postComment(ctx: MutationCtx, a: NewComment): Promise<Doc<'comments'>> {
   const { issue, author, now } = a
   if (a.id !== undefined) assertNewRowId(a.id)
   await assertCanEdit(ctx, author, issue.project_id)
-  if (a.body.trim() === '') throw badRequest('a comment cannot be empty')
-  if (a.body.length > TEXT_MAX) throw rule(COMMENT_TOO_LONG)
-  if (tooManyMentions(a.body)) throw rule(TOO_MANY_MENTIONS)
+  const body = limitedText(LIMITS.comment, a.body)
+  if (body === '') throw rule('a comment cannot be empty')
+  if (tooManyMentions(body)) throw rule(LIMITS.mentions.refusal)
   const id = a.id ?? newUuid()
   const docId = await insertUnique(
     ctx,
     'comments',
     'by_uuid',
     { id },
-    { id, issue_id: issue.id, author: author.id, body: a.body, created_at: now },
+    { id, issue_id: issue.id, author: author.id, body, created_at: now },
     badRequest('a comment with this id already exists'),
   )
   const comment = (await ctx.db.get(docId)) as Doc<'comments'>
@@ -81,16 +68,17 @@ export async function postComment(ctx: MutationCtx, a: NewComment): Promise<Doc<
  * Posts the reason given for archiving `issue` as a normal comment by
  * `author`, trimmed and sharing the archive's `now`. The app's archive and
  * the machine archive call it only when their write archived the task; a
- * blank or missing reason posts nothing, and one longer than
- * DELETE_REASON_MAX after trimming is refused with ARCHIVE_REASON_TOO_LONG.
+ * blank or missing reason posts nothing, and one past LIMITS.archiveReason
+ * after trimming is refused. REST and MCP also check the reason with
+ * limitedText while they parse a request, before any write, so a task
+ * already archived, which posts no reason, refuses it too.
  */
 export async function postArchiveReason(
   ctx: MutationCtx,
   a: { issue: Doc<'issues'>; author: Doc<'profiles'>; reason: string | undefined; now: string },
 ): Promise<Doc<'comments'> | null> {
-  const body = (a.reason ?? '').trim()
+  const body = limitedText(LIMITS.archiveReason, a.reason ?? '')
   if (body === '') return null
-  assertArchiveReasonFits(body)
   return await postComment(ctx, { issue: a.issue, author: a.author, body, now: a.now })
 }
 
@@ -116,8 +104,8 @@ export async function assertCommentEditor(
 /** The key of a comment's `expected`. The app sends the body's print
  * (lib/fieldPrints.ts). */
 export const COMMENT_FIELDS: Fields<Doc<'comments'>> = {
-  // editComment's rule; a body saved before the cap reads back longer
-  body: { sends: 'body', type: filledText(), form: trimmedForm, printed: true },
+  // editComment's rule
+  body: { sends: 'body', type: filledText(LIMITS.comment), form: trimmedForm, printed: true },
 }
 
 /** The app's `expected` for a comment edit or delete. */
@@ -157,10 +145,9 @@ async function assertCommentExpected(
 /**
  * Replaces the body of `comment` with `body`, trimmed, as `me`, in place and
  * without history. Refuses anyone but the author or a project lead, then a
- * blank body. The same text again changes nothing and stamps nothing, even
- * when a comment saved before the cap is longer than TEXT_MAX; any other
- * text longer than that, or mentioning more than MENTION_MAX people, is
- * refused. Otherwise the comment records who edited
+ * blank body, one past LIMITS.comment or one mentioning more people than
+ * LIMITS.mentions allows. The same text again changes nothing and stamps
+ * nothing. Otherwise the comment records who edited
  * it and when, stamped `now`, and people the edit newly mentions follow the
  * task and hear about it. Returns the comment as stored and whether it
  * changed.
@@ -188,11 +175,10 @@ export async function editComment(
     expected: a.expected,
     next: { body: a.body },
   })
-  const text = a.body.trim()
-  if (text === '') throw badRequest('a comment cannot be empty')
+  const text = limitedText(LIMITS.comment, a.body)
+  if (text === '') throw rule('a comment cannot be empty')
+  if (tooManyMentions(text)) throw rule(LIMITS.mentions.refusal)
   if (text === comment.body) return { comment, changed: false }
-  if (text.length > TEXT_MAX) throw rule(COMMENT_TOO_LONG)
-  if (tooManyMentions(text)) throw rule(TOO_MANY_MENTIONS)
   await ctx.db.patch(comment._id, { body: text, edited_at: now, edited_by: me.id })
   const after = (await ctx.db.get(comment._id)) as Doc<'comments'>
   await notifyCommentUpdate(ctx, { before: comment, after, issue, actor: me, now })
@@ -234,7 +220,7 @@ export async function deleteComment(
  * newest page of a thread and then earlier pages on request (threadPage),
  * and a REST or MCP read answers one unless it asks for fewer (lib/core.ts
  * listCommentsCore). */
-export const COMMENT_PAGE_MAX = 50
+export const COMMENT_PAGE_MAX = LIMITS.listComments.max
 
 /** The most one page of comments reads, in bytes as Convex counts a
  * document's size. Half of Convex's 16 MiB read limit per transaction leaves

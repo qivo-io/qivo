@@ -2,7 +2,7 @@
  * cases pin the day boundaries (today / tomorrow / this week / later), the
  * 24-hour clock, and that the boundary is the calendar day, not 24 hours. */
 import { describe, expect, it } from 'vitest'
-import { fmtSnoozeUntil } from './snooze'
+import { fmtSnoozeUntil, SNOOZE_UNIT_MS, snoozeStepMax } from './snooze'
 
 const at = (iso: string) => new Date(iso).getTime()
 // a Thursday, mid-afternoon, in local time
@@ -27,5 +27,18 @@ describe('fmtSnoozeUntil', () => {
   })
   it('an overdue stamp (wake pending) still reads as a time, never a negative day', () => {
     expect(fmtSnoozeUntil(at('2026-09-17T10:00:00'), NOW)).toBe('10:00')
+  })
+})
+
+describe('snoozeStepMax', () => {
+  it('reaches the server limit of 366 days ahead in days, and 52 whole weeks', () => {
+    expect(snoozeStepMax('days')).toBe(366)
+    expect(snoozeStepMax('weeks')).toBe(52)
+    expect(snoozeStepMax('hours')).toBe(366 * 24)
+  })
+
+  it('never steps past the limit', () => {
+    for (const unit of ['hours', 'days', 'weeks'] as const)
+      expect((snoozeStepMax(unit) + 1) * SNOOZE_UNIT_MS[unit]).toBeGreaterThan(366 * 86_400_000)
   })
 })

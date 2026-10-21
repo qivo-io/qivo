@@ -5,12 +5,8 @@ import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-import { PROJECT_DESCRIPTION_MAX } from '../../../convex/lib/projectLimits'
-import {
-  DEFAULT_REVIEW_HOURS,
-  REVIEW_HOURS_MAX,
-  roundReviewHours,
-} from '../../../convex/lib/review'
+import { LIMITS } from '../../../convex/lib/limits'
+import { DEFAULT_REVIEW_HOURS, roundReviewHours } from '../../../convex/lib/review'
 import { navRowDiv } from '../../components/navRow'
 import { ProjectAccessEditor } from '../../components/ProjectAccessEditor'
 import { Icon, MenuItem, Popover, ProjectName } from '../../components/qivo'
@@ -23,6 +19,7 @@ import {
 } from '../../components/settingsPage'
 import { dayInSentence, deletedAtFull } from '../../lib/deletedTime'
 import { DEMO_MODE } from '../../lib/demoMode'
+import { limitSentence } from '../../lib/fieldLimits'
 import { useFieldUnsaved, useUnsaved } from '../../lib/leaveGuard'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import type { AccessLevel, AccessRemoval, ArchivedProjectVM, ProjectVM } from '../../store/planner'
@@ -288,14 +285,14 @@ export function ArchivedProjectsPage() {
         n.delete(r.id)
         return n
       })
-      if (ok) window.showToast?.(`Restored “${P.projectName(r)}”`)
+      if (ok) window.showToast?.(`Restored “${r.name}”`)
     })
   }
   // the window waits for the server, so a refusal leaves it open
   const del = async (r: ArchivedProjectVM, reason: string) => {
     if (!(await P.removeProject(r.id, reason))) return false
     setDeleting(null)
-    window.showToast?.(`Deleted “${P.projectName(r)}”`)
+    window.showToast?.(`Deleted “${r.name}”`)
     return true
   }
   return (
@@ -318,8 +315,8 @@ export function ArchivedProjectsPage() {
                       {r.type !== 'meta' && (
                         <span className="[margin-left:7px] [font-size:var(--fs-xs)] [font-weight:500] [color:var(--text-2)]">
                           sub-project
-                          {r.parentName !== null && r.parent
-                            ? ` of ${P.projectLabel({ id: r.parent, name: r.parentName, type: 'meta' })}`
+                          {r.parentName && r.parent
+                            ? ` of ${P.projectLabel({ id: r.parent, name: r.parentName })}`
                             : ''}
                         </span>
                       )}
@@ -341,8 +338,8 @@ export function ArchivedProjectsPage() {
                         disabled={busy.has(r.id)}
                         title={
                           r.type === 'meta' && kids.some((k) => k.withParent)
-                            ? `Restore “${P.projectName(r)}” and the sub-projects archived with it`
-                            : `Restore “${P.projectName(r)}”`
+                            ? `Restore “${r.name}” and the sub-projects archived with it`
+                            : `Restore “${r.name}”`
                         }
                         onClick={() => restore(r)}
                       >
@@ -371,7 +368,7 @@ export function ArchivedProjectsPage() {
                       <HoverTooltip
                         content={
                           k.withParent
-                            ? `Comes back when “${P.projectName(r)}” is restored`
+                            ? `Comes back when “${r.name}” is restored`
                             : 'Archived separately. Restore the project first, then restore this sub-project.'
                         }
                         key={k.id}
@@ -453,7 +450,7 @@ export function ProjectPage({
       if (P.refusePausedEdit()) return
       setRemoving(null)
       P.archiveProject(shown.id)
-      window.showToast?.(`Archived “${P.projectName(shown)}”`)
+      window.showToast?.(`Archived “${shown.name}”`)
       onProjectGone?.(shown.parent || null)
       setPage('projects-archived')
     }
@@ -466,7 +463,7 @@ export function ProjectPage({
         return false
       }
       setRemoving(null)
-      window.showToast?.(`Deleted “${P.projectName(shown)}”`)
+      window.showToast?.(`Deleted “${shown.name}”`)
       onProjectGone?.(parent)
       // a sub-project falls back to its project; a project back to the list it
       // was opened from (never to some other project the caller may not see)
@@ -539,6 +536,8 @@ function ProjectSettingsFields({
     `${proj.id}:${proj.reviewHours ?? ''}`,
     'review hours',
   )
+  // a review time refused on blur stays typed and marked until it changes
+  const [reviewRefused, setReviewRefused] = useStateS(false)
   const accessHeading = React.useRef<HTMLDivElement>(null)
   const isMeta = proj.type === 'meta'
   const parentMeta = proj.parent ? P.project(proj.parent) : null
@@ -570,13 +569,13 @@ function ProjectSettingsFields({
           reason: an archived or unreadable parent leaves `parentMeta` null, so
           the fallback is the list rather than a page that would not render. */}
       <BackLink
-        to={parentMeta ? P.projectName(parentMeta) : 'Projects'}
+        to={parentMeta ? parentMeta.name : 'Projects'}
         onClick={() => onBackPage(parentMeta ? `project:${parentMeta.id}` : 'projects')}
       />
       <PageTitle
         sub={isMeta ? undefined : 'Controlled by its own lead; permissions can be shared.'}
       >
-        {P.projectName(proj)}
+        {proj.name}
         <span className="[font-size:var(--fs-sm)] [font-weight:500] [color:var(--text-2)] [margin-left:10px]">
           {isMeta ? 'Project' : 'Sub-project'}
         </span>
@@ -599,7 +598,7 @@ function ProjectSettingsFields({
         <TextField
           label="Name"
           value={proj.name}
-          maxLength={P.NAME_MAX}
+          limit={LIMITS.projectName}
           disabled={!isLead}
           onCommit={(v) => {
             // the toast waits for the server, so a refusal never reads as done
@@ -612,7 +611,7 @@ function ProjectSettingsFields({
           <TextField
             label="Description"
             multiline
-            maxLength={PROJECT_DESCRIPTION_MAX}
+            limit={LIMITS.projectDescription}
             value={proj.description || ''}
             disabled={!isLead}
             onCommit={(v) => P.updateProject(proj.id, { description: v })}
@@ -669,16 +668,18 @@ function ProjectSettingsFields({
           <div className="flex items-center gap-2">
             <Input
               type="number"
-              min={0}
-              max={REVIEW_HOURS_MAX}
+              min={LIMITS.reviewHours.min}
+              max={LIMITS.reviewHours.max}
               step={0.5}
               data-project-review-hours
               aria-label="Review time"
+              aria-invalid={reviewRefused || undefined}
               {...reviewUnsaved}
               key={`review:${proj.id}:${proj.reviewHours ?? ''}`}
               defaultValue={proj.reviewHours ?? ''}
               placeholder={String(inheritedReview)}
               disabled={!isLead}
+              onChange={() => setReviewRefused(false)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') e.currentTarget.blur()
               }}
@@ -702,7 +703,14 @@ function ProjectSettingsFields({
                   }
                   return
                 }
-                const h = roundReviewHours(Math.min(REVIEW_HOURS_MAX, Math.max(0, n)))
+                // the typed number against the range, as the server checks
+                // it, so -0.04 is refused rather than saved as 0
+                if (n < LIMITS.reviewHours.min || n > LIMITS.reviewHours.max) {
+                  setReviewRefused(true)
+                  window.showToast?.(limitSentence(LIMITS.reviewHours), 'error')
+                  return
+                }
+                const h = roundReviewHours(n)
                 el.value = String(h)
                 if (h === own) return
                 void P.updateProject(proj.id, { reviewHours: h }).then((saved) => {
@@ -738,7 +746,7 @@ function ProjectSettingsFields({
                 type="button"
                 key={sp.id}
                 onClick={() => setPage(`project:${sp.id}`)}
-                title={`Open settings for ${P.projectName(sp)}`}
+                title={`Open settings for ${sp.name}`}
                 className="[display:flex] [align-items:center] [gap:8px] [padding:8px] [border-radius:var(--r-md)] [text-align:left] [border:1px_solid_var(--border)] [background:var(--surface-1)] [color:var(--text-1)] [cursor:pointer] [transition:background-color_var(--dur-fast)_var(--ease-out),_border-color_var(--dur-fast)_var(--ease-out)] [font-family:var(--sans)]"
                 onMouseEnter={(e) => {
                   e.currentTarget.style.background = 'var(--hover)'
@@ -831,9 +839,7 @@ function ProjectSettingsFields({
                     const invited = await P.inviteToProject(proj.id, inviteEmail, grantRole)
                     setInviting(false)
                     if (invited) {
-                      window.showToast?.(
-                        `${inviteEmail.trim()} was added to “${P.projectName(proj)}”`,
-                      )
+                      window.showToast?.(`${inviteEmail.trim()} was added to “${proj.name}”`)
                       const seat = invited.emailed
                       if (seat)
                         setEmailed((all) => [

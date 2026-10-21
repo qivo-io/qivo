@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Separator } from '@/components/ui/separator'
 import { HoverTooltip } from '@/components/ui/tooltip'
-import { FOLLOWER_MAX } from '../../convex/lib/taskLimits'
+import { LIMITS } from '../../convex/lib/limits'
 import { matchesAllWords } from '../lib/search'
 import { type IssueVM, P, type IssueSubscribers as SubscriberRoster } from '../store/planner'
 import { Avatar, Icon, MenuItem } from './qivo'
@@ -46,10 +46,10 @@ export function IssueSubscribers({ issue }: { issue: IssueVM }) {
       setSearch('')
     }
   }
-  // A task takes no new follower by hand past FOLLOWER_MAX; leaving it and
+  // A task takes no new follower by hand past LIMITS.followers.max; leaving it and
   // removing others still work. A new assignee or reviewer still follows.
-  const full = !!roster && roster.subscribers.length >= FOLLOWER_MAX
-  const fullTip = `This task has ${FOLLOWER_MAX} followers, the most a task can have`
+  const full = !!roster && roster.subscribers.length >= LIMITS.followers.max
+  const fullTip = `This task has ${LIMITS.followers.max} followers, the most a task can have`
   const nameOf = (id: string) => P.user(id)?.name || 'Unavailable user'
   const byName = (a: string, b: string) => nameOf(a).localeCompare(nameOf(b))
   const others = (roster?.subscribers ?? []).filter((id) => id !== me).sort(byName)

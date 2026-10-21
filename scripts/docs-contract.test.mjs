@@ -11,7 +11,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { LIMITS } from '../convex/lib/limits.ts'
 import { checkDocs } from './docs-contract.mjs'
+import { limitsDocsErrors } from './limits-docs.mjs'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 
@@ -22,10 +24,13 @@ describe('public documentation contract', () => {
     copy = undefined
   })
 
-  /** A copy of the real guide and agent guides, changed by one edit per case. */
+  /** A copy of the real guide, the REST and MCP docs and the agent guides,
+   * changed by one edit per case. */
   function fixture(edit) {
     copy = mkdtempSync(join(tmpdir(), 'qivo-docs-contract-'))
     cpSync(join(root, 'docs/guide'), join(copy, 'docs/guide'), { recursive: true })
+    for (const file of ['rest-api.md', 'mcp.md'])
+      cpSync(join(root, 'docs', file), join(copy, 'docs', file))
     cpSync(join(root, 'public'), join(copy, 'public'), { recursive: true })
     const manifestFile = join(copy, 'docs/guide/pages.json')
     const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'))
@@ -50,6 +55,26 @@ describe('public documentation contract', () => {
         first.aliases = { renamed: ['old-name'] }
       }),
     ).toEqual([])
+  })
+
+  it('fails while a limits table differs from the registry', () => {
+    const stale = 'docs/guide/limits.md: the limits table differs from convex/lib/limits.ts'
+    expect(
+      fixture(({ page }) =>
+        writeFileSync(
+          page('limits.md'),
+          readFileSync(page('limits.md'), 'utf8').replace('255 characters', '80 characters'),
+        ),
+      ).join('\n'),
+    ).toContain(stale)
+    // a registry value that changed without the docs is caught on every page
+    const changed = { ...LIMITS, title: { ...LIMITS.title, max: 300 } }
+    expect(limitsDocsErrors(root, changed)).toEqual([
+      expect.stringContaining('docs/guide/limits.md'),
+      expect.stringContaining('docs/rest-api.md'),
+      expect.stringContaining('docs/mcp.md'),
+    ])
+    expect(limitsDocsErrors(root)).toEqual([])
   })
 
   it('reports every problem at once', () => {

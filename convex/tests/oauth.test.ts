@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import { createAuth } from '../auth'
 import authSchema from '../betterAuth/schema'
-import { NAME_MAX } from '../lib/textLimits'
+import { LIMITS, NAME_MAX } from '../lib/limits'
 import { sha256hex } from '../machine/auth'
 import { TOOLS } from '../machine/mcp'
 import { BODY_MAX_BYTES } from '../machine/shared'
@@ -859,11 +859,11 @@ describe('OAuth consent and resource binding', () => {
 })
 
 describe('OAuth client names and request bodies', () => {
-  it('cuts a long registered name to 80 code points on the consent screen and in stored connections', async () => {
+  it('cuts a long registered name to 80 characters on the consent screen and in stored connections', async () => {
     const f = await fixture()
     const clientId = await register(f, WRITE, `  Spoof\n\n${'x'.repeat(5_000)}  `)
     const cut = `Spoof ${'x'.repeat(NAME_MAX - 6)}…`
-    expect([...cut]).toHaveLength(NAME_MAX + 1)
+    expect(cut).toHaveLength(NAME_MAX + 1)
     // the consent page reads the context first, which stores the connection
     const request = await authorization(f, clientId)
     const oauthQuery = await consentPage(request)
@@ -895,7 +895,7 @@ describe('OAuth client names and request bodies', () => {
     expect(over.status).toBe(413)
     expect(await json(over)).toEqual({
       jsonrpc: '2.0',
-      error: { code: -32600, message: 'Bad Request: the request body is too large' },
+      error: { code: -32600, message: `Bad Request: ${LIMITS.requestBody.refusal}` },
       id: null,
     })
     expect((await call('qvo_unknown')).status).toBe(401)

@@ -372,7 +372,7 @@ function LaneHeader({
 }) {
   const leadId = proj ? P.leadOf(proj.id) : owner
   const lead = leadId ? P.user(leadId) : null
-  const name = proj ? P.projectName(proj) : lead?.name || (owner ? 'Unknown user' : 'Unassigned')
+  const name = proj?.name || lead?.name || (owner ? 'Unknown user' : 'Unassigned')
   return (
     <div
       data-lane={proj?.id || `assignee:${owner || 'unassigned'}`}
@@ -1031,8 +1031,8 @@ function Kanban({
                           variant="ghost"
                           size="icon"
                           className="w-control-xs h-control-xs"
-                          aria-label={`New task in ${P.projectName(proj)}`}
-                          title={`New task in ${P.projectName(proj)}`}
+                          aria-label={`New task in ${proj.name}`}
+                          title={`New task in ${proj.name}`}
                           onClick={() => actions.newIssue({ project: proj.id })}
                         >
                           <Icon name="plus" size={16} />

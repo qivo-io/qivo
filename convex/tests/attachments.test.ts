@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import { attachmentFileUrl, mintFileToken, verifyFileToken } from '../lib/fileTokens'
+import { attachmentTooLarge, LIMITS } from '../lib/limits'
 import {
   activityFor,
   allMessages,
@@ -179,33 +180,37 @@ describe('files.attach', () => {
 
   it('trims the name and refuses an empty or longer name or media type before any write', async () => {
     const { t, fx, issue } = await setup()
-    const NAME = /^name must be a file name of 1 to 255 characters$/
-    const TYPE = /^the file's media type must be at most 255 characters$/
+    const NAME = LIMITS.attachmentName.refusal
+    const TYPE = LIMITS.mediaType.refusal
     const cases = [
-      { name: '   ', refusal: NAME },
+      { name: '   ', refusal: 'a file name cannot be blank' },
       { name: 'x'.repeat(256), refusal: NAME },
+      // 128 emoji are 256 UTF-16 units, which the old code point count took
+      { name: '📎'.repeat(128), refusal: NAME },
       { name: 'a.bin', mime: `application/${'x'.repeat(244)}`, refusal: TYPE },
       // a type the upload stored, when the client sends none
       { name: 'a.bin', stored: `application/${'x'.repeat(244)}`, refusal: TYPE },
     ]
     for (const c of cases) {
       const sid = await storeBlob(t, 8, c.stored)
-      await expectRefusal(attachAs(t, fx, fx.user, issue, sid, c), 'bad_request', c.refusal)
+      const refusal = await expectRefusal(attachAs(t, fx, fx.user, issue, sid, c), 'rule')
+      expect(refusal.data.message).toBe(c.refusal)
       // the bytes stay for the weekly sweep
       expect(await storageExists(t, sid)).toBe(true)
     }
     expect(await attachmentRows(t)).toEqual([])
     expect(await activityFor(t, fx.org.id)).toEqual([])
 
-    // 255 characters of either pass, counted as characters, not code units
-    for (const name of [` ${'x'.repeat(255)} `, '📎'.repeat(255)]) {
+    // 255 UTF-16 units of either pass after trimming, which the old code
+    // did not do for the media type
+    for (const name of [` ${'x'.repeat(255)} `, `${'📎'.repeat(127)}x`]) {
       const result = await attachAs(t, fx, fx.user, issue, await storeBlob(t, 8), {
         name,
-        mime: `application/${'x'.repeat(243)}`,
+        mime: ` application/${'x'.repeat(243)} `,
       })
       if ('refused' in result) throw new Error(`unexpected refusal: ${result.refused.message}`)
       expect(result.attachment.name).toBe(name.trim())
-      expect(result.attachment.mime).toHaveLength(255)
+      expect(result.attachment.mime).toBe(`application/${'x'.repeat(243)}`)
     }
     expect((await activityFor(t, fx.org.id)).at(-2)?.detail).toBe('x'.repeat(255))
   })
@@ -241,8 +246,8 @@ describe('files.attach', () => {
     const sid = await storeBlob(t, 1 * MiB + 1)
     const result = await attachAs(t, fx, fx.user, issue, sid, { name: 'big.bin' })
     if (!('refused' in result)) throw new Error('expected a refusal')
-    expect(result.refused.code).toBe('bad_request')
-    expect(result.refused.message).toBe('attachment exceeds the organization limit of 1 MiB')
+    expect(result.refused.code).toBe('rule')
+    expect(result.refused.message).toBe(attachmentTooLarge(1))
     // the commit carried the delete (probe: delete+throw would have rolled back)
     expect(await storageExists(t, sid)).toBe(false)
     expect(await attachmentRows(t)).toEqual([])
@@ -258,8 +263,8 @@ describe('files.attach', () => {
       const result = await attachAs(t, fx, fx.user, target, sid, { inline: true })
       expect(result).toEqual({
         refused: {
-          code: 'bad_request',
-          message: 'attachment exceeds the organization limit of 1 MiB',
+          code: 'rule',
+          message: attachmentTooLarge(1),
         },
       })
       expect(await storageExists(t, sid)).toBe(false)
@@ -279,8 +284,8 @@ describe('files.attach', () => {
     const denied = await storeBlob(t, MiB + 1)
     expect(await attachAs(t, fx, fx.otherAdmin, issue, denied)).toEqual({
       refused: {
-        code: 'bad_request',
-        message: 'attachment exceeds the organization limit of 1 MiB',
+        code: 'rule',
+        message: attachmentTooLarge(1),
       },
     })
     expect(await storageExists(t, denied)).toBe(false)
@@ -309,8 +314,8 @@ describe('files.attach', () => {
     const denied = await storeBlob(t, 20 * MiB + 1)
     expect(await attachAs(t, fx, fx.user, issue, denied)).toEqual({
       refused: {
-        code: 'bad_request',
-        message: 'attachment exceeds the organization limit of 20 MiB',
+        code: 'rule',
+        message: attachmentTooLarge(20),
       },
     })
     expect(await storageExists(t, denied)).toBe(false)
@@ -489,7 +494,7 @@ describe('files.setAvatar / clearAvatar', () => {
     expect((await profileRow(t, fx.user.id))?.avatar_storage_id).toBeUndefined()
   })
 
-  it('2 MB cap: exactly at passes, one byte over refuses', async () => {
+  it('2 MiB cap: exactly at passes, one byte over refuses', async () => {
     const { t, fx } = await setup()
     const atCap = await storeBlob(t, 2_097_152, 'image/png')
     await as(t, fx.user).mutation(api.files.setAvatar, {
@@ -498,11 +503,11 @@ describe('files.setAvatar / clearAvatar', () => {
     })
     expect((await profileRow(t, fx.user.id))?.avatar_storage_id).toBe(atCap)
     const over = await storeBlob(t, 2_097_153, 'image/png')
-    await expectRefusal(
+    const refusal = await expectRefusal(
       as(t, fx.admin).mutation(api.files.setAvatar, { profile_id: fx.admin.id, storage_id: over }),
       'rule',
-      /at most 2 MB/,
     )
+    expect(refusal.data.message).toBe(LIMITS.avatarSize.refusal)
   })
 
   it('a storage id referenced elsewhere is refused — the delete paths could destroy foreign bytes', async () => {

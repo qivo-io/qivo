@@ -27,10 +27,10 @@ export const RELATION_READ = { tasks: 512, ratio: 2, ranges: 4096 }
  * documents per index range (32,000 to 4,096), and half that leaves room for
  * the other tables and the rest of the snapshot. With all three tables at
  * their caps, a view reads at most 16 rows per visible task. A task holds at
- * most ATTACHMENT_MAX attachments, LINK_MAX links and LABEL_MAX labels
- * (lib/taskLimits.ts), and as many dropped description images as
- * attachments (model/descriptionImages.ts DROPPED_IMAGES_MAX), so a read
- * task by task reads at most that many rows of each table per task. */
+ * most LIMITS.attachments.max attachments, LIMITS.links.max links and
+ * LIMITS.labels.max labels (lib/limits.ts), and as many dropped description
+ * images as attachments (model/descriptionImages.ts DROPPED_IMAGES_MAX), so a
+ * read task by task reads at most that many rows of each table per task. */
 const BULK_ROWS_PER_RANGE = 4
 
 /* The ranges the table reads take at once, before any read task by task:

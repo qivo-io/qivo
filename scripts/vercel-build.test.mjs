@@ -164,10 +164,13 @@ describe('requireProductionBackendEnv — production mail before functions push'
       'no-reply@localhost',
       'no-reply@-qivo.io',
       "o'brien@qivo.io",
+      '"no-reply"@qivo.io',
       `${'a'.repeat(250)}@q.io`,
       `${'a'.repeat(249)}@q.io`,
     ]
     for (const s of samples) expect(isOneAddress(s), s).toBe(address(s) !== null)
+    // an apostrophe is an ordinary address character
+    expect(isOneAddress("o'brien@qivo.io")).toBe(true)
   })
 
   it('passes a configured production backend and never reads mail settings elsewhere', () => {

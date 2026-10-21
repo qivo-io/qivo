@@ -173,13 +173,21 @@ html[data-appearance] .inbox-detail-frame [data-issue-layout="embedded"] {
     font-size: 16px;
     line-height: 1.4;
   }
+  /* two lines each: a rename quotes both titles, up to 255 characters each */
   .inbox-message-list [data-msg-line2] {
     margin-top: 6px;
     white-space: normal;
     overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
   }
   .inbox-message-preview {
-    display: block;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    overflow-wrap: anywhere;
     margin-top: 4px;
     color: var(--text-2);
     font-size: var(--fs-sm);

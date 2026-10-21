@@ -5,7 +5,7 @@
 import type { FunctionReturnType } from 'convex/server'
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../convex/_generated/api'
-import { APP_SENDS_PER_ORG_HOUR } from '../../convex/lib/inviteLimits'
+import { LIMITS } from '../../convex/lib/limits'
 import { convex } from './convex'
 import { fmtTime } from './dates'
 import { DEMO_MODE } from './demoMode'
@@ -95,8 +95,8 @@ export function inviteLabel(
         // the hour is still full only while freeAt lies ahead
         detail: `Invitation not sent. ${
           freeAt && Date.parse(freeAt) > Date.now()
-            ? `This organization sent ${APP_SENDS_PER_ORG_HOUR} invitation emails in the last hour. Send it again after ${fmtTime(new Date(freeAt))}. `
-            : `It was held back by the limit of ${APP_SENDS_PER_ORG_HOUR} invitation emails an hour. ${
+            ? `This organization sent ${LIMITS.invitesPerHour.max} invitation emails in the last hour. Send it again after ${fmtTime(new Date(freeAt))}. `
+            : `It was held back by the limit of ${LIMITS.invitesPerHour.max} invitation emails an hour. ${
                 freeAt === undefined ? '' : 'Send it again now. '
               }`
         }${JOIN_ANYWAY}`,

@@ -1,7 +1,7 @@
 /** Pure snapshot-to-view transformations. Store identity and caches arrive as arguments. */
 import type { FunctionReturnType } from 'convex/server'
 import type { api } from '../../convex/_generated/api'
-import { projectName } from '../../convex/lib/recordNames'
+import { LIMITS } from '../../convex/lib/limits'
 import { reviewerOwns, taskOwnerId } from '../../convex/lib/review'
 import type { SyncStamp } from '../../convex/lib/teamSync'
 import {
@@ -97,7 +97,7 @@ export const shapeOrg = (
   // settings above this one is the HOME org's without a fallback: it governs
   // people added to my organization, and a guest-only login adds none.
   defaultPlannableHours: home ? Number(home.default_plannable_hours) : DEFAULT_PLANNABLE_HOURS,
-  maxAttachmentMb: home?.max_attachment_mb ?? 20,
+  maxAttachmentMb: home?.max_attachment_mb ?? LIMITS.attachmentSize.max,
   // who may create top-level projects besides org admins; missing is 'users'
   projectCreators: home?.project_creators ?? 'users',
 })
@@ -195,15 +195,14 @@ export type ArchivedProjectVM = ReturnType<typeof shapeArchivedProject>
    ("Test #1", "Test #4"), the number their address already uses. Names
    compare with runs of whitespace collapsed (as HTML renders them) and
    case-insensitively, independent of the browser's locale, among projects of one organization with the same parent. Each list
-   is compared on its own: active and archived projects never share a list. A name compares as
-   shown, so a blank one is the "Unnamed project" it reads as (lib/recordNames.ts). */
-export type TaggableProject = Pick<ProjectVM, 'id' | 'org' | 'parent' | 'name' | 'num' | 'type'>
+   is compared on its own: active and archived projects never share a list. */
+export type TaggableProject = Pick<ProjectVM, 'id' | 'org' | 'parent' | 'name' | 'num'>
 export function duplicateNameTags(...lists: readonly TaggableProject[][]): Map<string, string> {
   const tags = new Map<string, string>()
   for (const list of lists) {
     const groups = new Map<string, TaggableProject[]>()
     for (const p of list) {
-      const key = `${p.org}\u0000${p.parent ?? ''}\u0000${projectName(p).replace(/\s+/g, ' ').toLowerCase()}`
+      const key = `${p.org}\u0000${p.parent ?? ''}\u0000${p.name.trim().replace(/\s+/g, ' ').toLowerCase()}`
       const group = groups.get(key)
       if (group) group.push(p)
       else groups.set(key, [p])

@@ -275,7 +275,7 @@ function SettingsScreen({
       const project = P.project(page.slice(8))
       const parent = project?.parent ? P.project(project.parent) : null
       return parent
-        ? { page: `project:${parent.id}`, label: P.projectName(parent) }
+        ? { page: `project:${parent.id}`, label: parent.name }
         : { page: 'projects', label: 'Projects' }
     }
     return { page: 'menu', label: 'settings' }

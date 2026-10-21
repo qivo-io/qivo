@@ -3,8 +3,8 @@ import type { MutationCtx } from '../_generated/server'
 import { byId } from '../lib/db'
 import type { ActivityTarget, IssuePriority, IssueStatus } from '../lib/enums'
 import { notFound } from '../lib/functions'
+import { cutText } from '../lib/limits'
 import { PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
-import { plainText } from '../lib/textLimits'
 import { newUuid } from './orgs'
 
 /* ------------------------------------------------------------------- history
@@ -104,11 +104,24 @@ export function narratedChange(before: Doc<'issues'>, after: Doc<'issues'>): boo
   )
 }
 
-// Strip diff delimiters to prevent forged clauses; truncate by codepoint.
-const clean = (s: string): string => {
+/** `s` as plain activity text: trimmed, each run of whitespace (line
+ * breaks included) one space, the → arrow `-` and curly double quotes `'`.
+ * Activity diffs use those characters as delimiters, and the app reads
+ * status and reviewer clauses out of them (src/lib/teamSync.ts
+ * statusMoveOf), so free text written through this cannot add or hide one. */
+export const plainText = (s: string): string =>
+  s.replace(/\s+/g, ' ').replace(/[“”]/g, "'").replace(/→/g, '-').trim()
+
+/** The longest excerpt of a title or description an activity line quotes,
+ * in UTF-16 code units with its "…". A display length, not a limit: a
+ * longer text is cut, never refused. */
+const EXCERPT_MAX = 80
+
+/** `s` as plain activity text (plainText), cut to EXCERPT_MAX with "…"
+ * when longer, without splitting an emoji. */
+export const excerpt = (s: string): string => {
   const t = plainText(s)
-  const cp = [...t]
-  return cp.length > 80 ? `${cp.slice(0, 79).join('')}…` : t
+  return t.length > EXCERPT_MAX ? `${cutText(t, EXCERPT_MAX - 1)}…` : t
 }
 
 /** Appends a machine write's provenance to a detail, after a comma, or is
@@ -140,7 +153,7 @@ export function issueChanges(
     if (col === 'remaining_hours') return `${String(v)} h`
     if (col === 'paused') return v ? 'yes' : 'no'
     if (col === 'title' || col === 'description') {
-      return `“${clean(String(v))}”`
+      return `“${excerpt(String(v))}”`
     }
     return String(v) // the date columns keep their ISO grammar
   }

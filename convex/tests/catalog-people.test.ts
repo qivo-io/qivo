@@ -11,6 +11,7 @@ import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
 import { AVATAR_COLORS } from '../lib/avatarColors'
+import { LIMITS } from '../lib/limits'
 import { newOrgDefaults } from '../model/orgs'
 import { avatarColor } from '../model/people'
 import {
@@ -184,6 +185,17 @@ describe('profiles.create — the org-seat invitation', () => {
       'rule',
       /^A person needs an email address/,
     )
+    // at most 254 characters, where the old shape check took any length
+    const at254 = `${'a'.repeat(243)}@example.se`
+    expect(at254).toHaveLength(LIMITS.email.max)
+    const tooLong = await expectRefusal(
+      as(t, f.admin).mutation(api.profiles.create, personArgs(f, { email: `a${at254}` })),
+      'rule',
+    )
+    expect(tooLong.data.message).toBe(LIMITS.email.refusal)
+    const fits = personArgs(f, { email: at254 })
+    await as(t, f.admin).mutation(api.profiles.create, fits)
+    expect((await profileById(t, fits.id))?.email).toBe(at254)
     const dup = await expectRefusal(
       as(t, f.admin).mutation(api.profiles.create, personArgs(f, { email: f.user.email })),
       'rule',
@@ -296,8 +308,23 @@ describe('profiles.update — the admin door', () => {
         patch: { name: 'x'.repeat(81) },
       }),
       'rule',
-      /^a name is at most 80 characters$/,
     )
+    // a name counts UTF-16 units: 41 emoji are 82, which the old code point count took
+    const emoji = await expectRefusal(
+      as(t, f.admin).mutation(api.profiles.update, {
+        org_id: f.org.id,
+        id: f.user.id,
+        patch: { name: '😀'.repeat(41) },
+      }),
+      'rule',
+    )
+    expect(emoji.data.message).toBe(LIMITS.personName.refusal)
+    await as(t, f.admin).mutation(api.profiles.update, {
+      org_id: f.org.id,
+      id: f.user.id,
+      patch: { name: '😀'.repeat(40) },
+    })
+    expect((await profileById(t, f.user.id))?.name).toBe('😀'.repeat(40))
   })
 
   it('email: the claimed-seat refusal verbatim; an unclaimed address is corrected, never emptied', async () => {
@@ -772,8 +799,8 @@ describe('profiles.setPlannableHours — the rights matrix', () => {
         profile_id,
         hours,
       })
-    await set(f.admin, f.viewer.id, 37.4)
-    expect((await profileById(t, f.viewer.id))?.plannable_hours).toBe(37) // rounded
+    await set(f.admin, f.viewer.id, 37)
+    expect((await profileById(t, f.viewer.id))?.plannable_hours).toBe(37)
     // f.user leads Hardware, f.admin sits on it — the leader qualifies
     await set(f.user, f.admin.id, 20)
     expect((await profileById(t, f.admin.id))?.plannable_hours).toBe(20)
@@ -813,10 +840,12 @@ describe('profiles.setPlannableHours — the rights matrix', () => {
     expect(agent.data.message).toBe(
       'an agent has no plannable week, because its capacity is unbounded',
     )
-    for (const hours of [0.4, 169, -3]) {
+    // 37.4 is refused, where the old code rounded it to 37
+    for (const hours of [0.4, 169, -3, 37.4]) {
       const r = await expectRefusal(set(f.admin, f.viewer.id, hours), 'rule')
-      expect(r.data.message).toBe('plannable hours must be a whole number of hours from 1 to 168')
+      expect(r.data.message).toBe(LIMITS.plannableHours.refusal)
     }
+    expect((await profileById(t, f.viewer.id))?.plannable_hours).toBe(37)
   })
 })
 
@@ -888,7 +917,7 @@ describe('profiles.setDisplayName — the self door, fanned out', () => {
     )
     expect(
       await as(t, f.user).mutation(api.profiles.setDisplayName, { name: 'x'.repeat(81) }),
-    ).toBe('a name is at most 80 characters')
+    ).toBe(LIMITS.personName.refusal)
     expect(
       await t
         .withIdentity({ subject: 'auth_nobody' })
@@ -915,9 +944,7 @@ describe('profiles.setMessageRetention', () => {
         as(t, f.user).mutation(api.profiles.setMessageRetention, { days }),
         'rule',
       )
-      expect(r.data.message).toBe(
-        'message retention must be NULL (never) or a whole number of days from 1 to 3650',
-      )
+      expect(r.data.message).toBe(LIMITS.messageRetention.refusal)
     }
     // unlike setDisplayName, this door THROWS its no-seat sentence
     await expectRefusal(

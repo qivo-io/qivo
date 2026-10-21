@@ -96,6 +96,8 @@ import {
   type ProjectType,
 } from './enums'
 import { badRequest, notFound, type Refusal } from './functions'
+import { limitedText } from './limitRules'
+import { LIMITS } from './limits'
 import {
   countsAsSubtask,
   groupTest,
@@ -118,7 +120,6 @@ import { taskOwnerId } from './review'
 import { allWordsMatcher, searchPieces, taskSearchText } from './search'
 import type { EventOwner } from './taskEvents'
 import { ISSUE_PREFIX, issueKey } from './taskRefs'
-import { cutName } from './textLimits'
 import { groupRemainingHours, linkShown, parentLink, type Shown } from './workingSet'
 
 export { machineDetail }
@@ -611,7 +612,8 @@ async function listedActiveTasks(
  * name, assignee name and label names. REST retains explicit `*` wildcards;
  * all other punctuation stays literal. Label names are read only for the
  * tasks the other fields miss (activeLabelNames), and a search whose label
- * assignments do not fit in one request is refused with SEARCH_TOO_LARGE.
+ * assignments do not fit in one request is refused with SEARCH_TOO_LARGE. A
+ * search past LIMITS.search, once trimmed, is refused first.
  */
 export async function listActiveIssuesCore(
   ctx: QueryCtx,
@@ -631,6 +633,7 @@ export async function listActiveIssuesCore(
   o: ActiveListOpts,
   view: ListView,
 ): Promise<(RestIssueJson | McpIssueOut)[]> {
+  if (o.search !== undefined) limitedText(LIMITS.search, o.search)
   const { cat, readable } = view
   const scope = o.scope === null ? null : new Set(o.scope)
   const active = await listedActiveTasks(ctx, me, cat, o.scope)
@@ -725,14 +728,14 @@ export const PAGE_TOO_LARGE =
  * leave no documents or bytes for even one, which the organization's active
  * tasks fill, so a smaller limit cannot help. */
 export const ACTIVE_TASKS_TOO_LARGE =
-  "this organization's active tasks are too large to list in one request"
+  "this organization's active tasks are too large to list in one request; archive done tasks and finished projects so fewer stay active"
 
 /** The refusal for an active list whose reads before its rows' comments
  * leave no index ranges for even one. Ranges run out through the caller's
  * team memberships, the labels a search matches and the active projects,
  * not through the tasks themselves, so a smaller limit cannot help. */
 export const ACTIVE_LIST_TOO_WIDE =
-  'this organization has too many projects, teams or labels to list its tasks in one request'
+  'this organization has too many projects, teams or labels to list its tasks in one request; archive finished projects or search with fewer words'
 
 /* `read` of each of `items`, in order, for an active page. Each read is one
  * index range and at most one document, and they run a few at a time, never
@@ -829,6 +832,7 @@ export async function listArchivedIssuesCore(
   o: ArchivedListOpts,
   view: ListView,
 ): Promise<ArchivedPage<RestIssueJson | McpIssueOut>> {
+  if (o.search !== undefined) limitedText(LIMITS.search, o.search)
   const { cat, readable } = view
   const names = await rosterNames(ctx, me.org_id)
   const orgSlug = (await byId(ctx, 'organizations', me.org_id))?.slug
@@ -1390,7 +1394,7 @@ type Walk = { children: ChildIndex; whole: boolean; rootWhole: boolean }
  * at a time, and the seen set stops a corrupt cycle. Each task a level
  * enters takes one read. An active root's walk reads only active subtasks
  * (by_parent_archived), because an active group counts nothing else and
- * lists nothing else, so each read holds at most SUBTASK_MAX tasks however
+ * lists nothing else, so each read holds at most LIMITS.subtasks.max tasks however
  * many archived subtasks have gathered. An active root's walk that would
  * pass SUBTREE_WALK reads reads the organization's active tasks once
  * instead, as soon as a level shows it. It enters only active tasks, and
@@ -1508,7 +1512,7 @@ async function activeTasksUnder(
  * even one fit, it reads the first, within the reserve, so the read still
  * tells a group from a leaf, and it reads one past the last listed, so
  * `more` is set only when a subtask is left out. Active subtasks number at
- * most SUBTASK_MAX, so an active task's read lists them all. */
+ * most LIMITS.subtasks.max, so an active task's read lists them all. */
 async function taskSubtree(
   ctx: QueryCtx,
   root: Doc<'issues'>,
@@ -2210,7 +2214,7 @@ export async function applyTaskUpdate(
       },
     })
   }
-  // removals first, so a task at LABEL_MAX can swap labels in one update
+  // removals first, so a task at LIMITS.labels.max can swap labels in one update
   for (const [list, on] of [
     [a.labels.remove, false],
     [a.labels.add, true],
@@ -2395,10 +2399,7 @@ const credentialName = (row: Doc<EventOwner['credential_table']>): string =>
 
 /**
  * The credential a REST or MCP delete came through, as Deleted items records
- * it (`via`): its table, uuid and current name. A name longer than NAME_MAX,
- * which only a key, token or connection named before that cap has, is cut
- * as restProvenance cuts a key's name (lib/textLimits.ts cutName), so every
- * item the credential deletes does not repeat it. `credential` names the
+ * it (`via`): its table, uuid and current name. `credential` names the
  * exact row that authenticated the request. One revoked or expired since then
  * still names itself, because a request already accepted may finish; one
  * deleted since then, or of another profile, answers like a caller gone
@@ -2415,7 +2416,7 @@ export async function credentialVia(
   return {
     table: credential.credential_table,
     id: credential.credential_id,
-    name: cutName(credentialName(row)),
+    name: credentialName(row),
   }
 }
 

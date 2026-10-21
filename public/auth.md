@@ -140,8 +140,9 @@ inspect and remove subscriptions. There is no Qivo webhook settings UI.
 REST subscriptions default to no expiry; MCP subscriptions default to seven days.
 Send `ttlMs: null` for no expiry on either interface. Renew finite subscriptions
 before `refreshBefore`. Existing subscriptions keep their expiry until registered
-again, when the same TTL rules apply. Positive integer lifetimes are clamped
-between 60 seconds and seven days.
+again, when the same TTL rules apply. A lifetime is a whole number of
+milliseconds from 60,000 (one minute) to 604,800,000 (seven days), and any
+other number is refused.
 
 OAuth subscriptions belong to the approved connection grant, independently of
 its current access token. Access-token expiry, rotation or revocation of an

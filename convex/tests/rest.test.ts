@@ -16,6 +16,7 @@ import { internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import { CALLER_GONE, SUBTREE_WALK } from '../lib/core'
 import type { Refusal, RefusalCode } from '../lib/functions'
+import { LIMITS } from '../lib/limits'
 import {
   classifySecret,
   REST_AUTH_401,
@@ -23,6 +24,7 @@ import {
   restAuth401,
   sha256hex,
 } from '../machine/auth'
+import { OFFSET_SENTENCE } from '../machine/shared'
 import { GROUP_DATES_MACHINE } from '../model/issues'
 import {
   activityFor,
@@ -893,7 +895,7 @@ describe('GET /v1/tasks', () => {
     expect(await ids('high')).toEqual([])
   })
 
-  it('limit/offset keep the deployed parsing quirks: 0/NaN → 100, negatives clamp', async () => {
+  it('limit and offset page the list, and a value out of range is refused, not changed', async () => {
     const t = newT()
     const f = await machineOrg(t)
     const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title: 'first' })
@@ -903,10 +905,13 @@ describe('GET /v1/tasks', () => {
       restTasks(t, { callerId: f.agent.id, access: 'read', ...params })
     expect((await call({ limit: '1' })).map((i) => i.id)).toEqual([a.id])
     expect((await call({ limit: '1', offset: '1' })).map((i) => i.id)).toEqual([b.id])
-    expect((await call({ limit: 'abc' })).map((i) => i.id)).toEqual([a.id, b.id, c.id]) // NaN → 100
-    expect((await call({ limit: '0' })).map((i) => i.id)).toEqual([a.id, b.id, c.id]) // 0 → 100
-    expect((await call({ limit: '-5' })).map((i) => i.id)).toEqual([a.id]) // → 1
-    expect((await call({ offset: 'abc' })).map((i) => i.id)).toEqual([a.id, b.id, c.id]) // → 0
+    expect((await call({ limit: '200' })).map((i) => i.id)).toEqual([a.id, b.id, c.id])
+    for (const limit of ['abc', '0', '-5', '201', '500', '2.5', ' ']) {
+      await refused(call({ limit }), 'rule', LIMITS.listTasks.refusal)
+    }
+    for (const offset of ['abc', '-1', '1.5']) {
+      await refused(call({ offset }), 'bad_request', OFFSET_SENTENCE)
+    }
   })
 })
 
@@ -1173,11 +1178,11 @@ describe('POST /v1/tasks', () => {
       'bad_request',
       'title must be a non-empty string',
     )
-    await refused(post({ project: 'FW', title: '   ' }), 'bad_request', 'title must not be blank')
+    await refused(post({ project: 'FW', title: '   ' }), 'rule', 'title must not be blank')
     await refused(
-      post({ project: 'FW', title: 'x'.repeat(81) }),
-      'bad_request',
-      'title must be at most 80 characters',
+      post({ project: 'FW', title: 'x'.repeat(LIMITS.title.max + 1) }),
+      'rule',
+      LIMITS.title.refusal,
     )
     await refused(
       post({ project: 'FW', title: 'ok', description: 7 }),
@@ -1207,7 +1212,7 @@ describe('POST /v1/tasks', () => {
     await refused(
       post({ project: 'FW', title: 'ok', remaining_hours: -1 }),
       'rule',
-      'remaining_hours must be a number of hours from 0 to 99999.9, or null',
+      LIMITS.remainingHours.refusal,
     )
     await refused(
       post({ project: 'FW', title: 'ok', paused: 'yes' }),

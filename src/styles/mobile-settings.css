@@ -210,7 +210,8 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
   }
-  .settings-add-user-form > input {
+  .settings-add-user-form > input,
+  .settings-add-user-form > [data-limited-field] {
     grid-column: 1 / -1;
     width: 100%;
   }

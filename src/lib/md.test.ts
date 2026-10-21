@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { TEXT_MAX, TEXT_MAX_LABEL } from '../../convex/lib/textLimits'
+import { grouped, TEXT_MAX } from '../../convex/lib/limits'
 import { MAX_PARSE, type MdBlock, parseInline, parseMd, sanitizeHref } from './md'
 
 describe('the parse limit', () => {
   it('equals the server text cap, so every saved text stays editable', () => {
     expect(MAX_PARSE).toBe(TEXT_MAX)
-    expect(TEXT_MAX_LABEL).toBe(TEXT_MAX.toLocaleString('en-US'))
+    expect(grouped(TEXT_MAX)).toBe(TEXT_MAX.toLocaleString('en-US'))
   })
 })
 

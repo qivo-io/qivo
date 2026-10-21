@@ -12,7 +12,9 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { billingDate, billingMoney } from '@/lib/billingDisplay'
+import { limitSentence } from '@/lib/fieldLimits'
 import type { BillingSummary } from '../../convex/lib/billingTypes'
+import { LIMITS } from '../../convex/lib/limits'
 
 const statusLabels: Record<BillingSummary['status'], string> = {
   unconfigured: 'Not configured',
@@ -196,11 +198,20 @@ export function BillingOverview({
         {billing.sync_pending && (
           <FieldHint>Your next renewal quantity is being updated.</FieldHint>
         )}
-        {billing.sync_error && (
-          <p role="status" className="mt-2 text-sm text-text-2">
-            Your next renewal quantity has not been confirmed yet. The update will be retried
-            automatically.
+        {/* past the online billing ceiling a retry cannot succeed, so the
+            registry's sentence says what to do instead */}
+        {billing.sync_error === LIMITS.billingSeats.refusal ||
+        billing.billable_users > LIMITS.billingSeats.max ? (
+          <p role="status" data-billing-seat-ceiling className="mt-2 text-sm text-danger">
+            {limitSentence(LIMITS.billingSeats)}
           </p>
+        ) : (
+          billing.sync_error && (
+            <p role="status" className="mt-2 text-sm text-text-2">
+              Your next renewal quantity has not been confirmed yet. The update will be retried
+              automatically.
+            </p>
+          )
         )}
         <SettingsGroup legend="Billable accounts">
           <details>

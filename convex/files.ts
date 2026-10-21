@@ -13,7 +13,7 @@
  *                      uploader-only
  *   setAvatar/clear    set_avatar 0099:189-210 (self-or-admin, one sentence
  *                      for absent AND invisible) + the avatars bucket's mime
- *                      allowlist and 2 MB cap (0096:548-554 — no other
+ *                      allowlist and 2 MiB cap (0096:548-554 — no other
  *                      successor exists)
  *   mintUrls           ia_select (can_see_project) / profiles_select
  *                      disjunction (0099:246-248); invisible ids are OMITTED,
@@ -61,6 +61,7 @@ import {
   orgQuery,
   rule,
 } from './lib/functions'
+import { LIMITS, MIB } from './lib/limits'
 import { clearAccountAppearance } from './model/appearance'
 import {
   type AttachResult,
@@ -206,7 +207,7 @@ export const reapDroppedImage = internalMutation({
  * generateUploadUrl enforces nothing, so the mutation must — or an SVG
  * "avatar" walks into the cookie-carrying gateway origin. */
 const AVATAR_TYPES = ['image/webp', 'image/png', 'image/jpeg', 'image/gif']
-const AVATAR_MAX_BYTES = 2_097_152
+const AVATAR_MAX_BYTES = LIMITS.avatarSize.max * MIB
 
 /* The app's `expected` for a profile picture change: the picture it
  * showed when the person picked the file, null for none. */
@@ -234,7 +235,7 @@ export const setAvatar = authedMutation({
     if (mime === undefined || !AVATAR_TYPES.includes(mime)) {
       throw rule('a profile picture must be a PNG, JPEG, WebP, or GIF image')
     }
-    if (meta.size > AVATAR_MAX_BYTES) throw rule('a profile picture is at most 2 MB')
+    if (meta.size > AVATAR_MAX_BYTES) throw rule(LIMITS.avatarSize.refusal)
     if (await storageIdInUse(ctx, storage_id)) throw badRequest('this file is already in use')
     const prev = target.avatar_storage_id
     await ctx.db.patch(target._id, { avatar_storage_id: storage_id })

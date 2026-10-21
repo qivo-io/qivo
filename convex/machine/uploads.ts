@@ -23,8 +23,8 @@ import type { Id } from '../_generated/dataModel'
 import { httpAction, internalMutation } from '../_generated/server'
 import { verifyFileToken } from '../lib/fileTokens'
 import { badRequest, type Refusal } from '../lib/functions'
+import { LIMITS, overText } from '../lib/limits'
 import {
-  ATTACHMENT_TYPE_MAX,
   abandonTicketUpload,
   beginTicketUpload,
   finishTicketUpload,
@@ -43,9 +43,9 @@ const READ_MS = UPLOAD_CLAIM_MS / 3
 /** The answer for a body that took longer than READ_MS to arrive. */
 export const UPLOAD_TOO_SLOW = 'the upload took too long; send it again'
 
-/** The answer for a Content-Type longer than ATTACHMENT_TYPE_MAX, the
+/** The answer for a Content-Type longer than LIMITS.mediaType, the
  * confirm's sentence for it. */
-export const MEDIA_TYPE_TOO_LONG = `the file's media type must be at most ${ATTACHMENT_TYPE_MAX} characters`
+export const MEDIA_TYPE_TOO_LONG = LIMITS.mediaType.refusal
 
 /* The Convex runtime's Blob, timers and crypto, which convex/tsconfig's
  * ESNext lib does not declare. */
@@ -179,7 +179,7 @@ const receive = httpAction(async (ctx, request) => {
   // the confirm refuses a longer media type, and the URL would be spent by
   // then, so this POST is refused before it claims anything
   const type = request.headers.get('Content-Type') ?? ''
-  if (type.length > ATTACHMENT_TYPE_MAX) {
+  if (overText(LIMITS.mediaType, type.trim())) {
     return answer(400, { error: MEDIA_TYPE_TOO_LONG })
   }
   // this POST's own claim, so cleanup never frees another POST's claim

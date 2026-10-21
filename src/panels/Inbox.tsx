@@ -32,7 +32,7 @@ import { closeOrAsk } from '../lib/discardQuestion'
 import { UnsentScopeContext, useUnsentScope } from '../lib/leaveGuard'
 import { notificationPermission, requestNotificationPermission } from '../lib/notify'
 import { matchesAllWords } from '../lib/search'
-import { fmtSnoozeUntil, SNOOZE_STEP_MAX, SNOOZE_UNIT_MS, type SnoozeUnit } from '../lib/snooze'
+import { fmtSnoozeUntil, SNOOZE_UNIT_MS, type SnoozeUnit, snoozeStepMax } from '../lib/snooze'
 import { firstUnreadTs } from '../lib/spine'
 import { useMobile } from '../lib/useMobile'
 import { type MessageGroupVM, type MessageVM, P } from '../store/planner'
@@ -49,9 +49,10 @@ function fmtMsgAge(ts: number): string {
 }
 
 /* One row of the menu's Snooze section: a unit, its stepper and its own
-   Snooze button. The button pressed decides the unit; the other row's number
-   is ignored. Stepping never closes the menu and stops at 1; the button's
-   hover help names the exact return time. */
+   Snooze button. The button pressed decides the unit; the other rows'
+   numbers are ignored. Stepping never closes the menu, stops at 1 and at the
+   server's snooze limit (snoozeStepMax); the button's hover help names the
+   exact return time. */
 function SnoozeRow({
   unit,
   count,
@@ -64,6 +65,7 @@ function SnoozeRow({
   onSnooze: (until: string) => void
 }) {
   const until = new Date(Date.now() + count * SNOOZE_UNIT_MS[unit])
+  const max = snoozeStepMax(unit)
   const stepClass =
     'inline-flex size-6 shrink-0 items-center justify-center rounded-md border border-border bg-surface-1 text-text-1 hover:border-border-strong hover:bg-hover disabled:cursor-default disabled:opacity-55 disabled:hover:border-border disabled:hover:bg-surface-1'
   return (
@@ -72,7 +74,7 @@ function SnoozeRow({
       className="flex min-h-8 items-center gap-2 px-2 py-1 text-base text-text-1"
     >
       <Icon name="clockFading" size={13} />
-      {unit === 'hours' ? 'Hours' : 'Days'}
+      {unit.charAt(0).toUpperCase() + unit.slice(1)}
       <div className="[flex:1]" />
       <Button
         type="button"
@@ -98,8 +100,8 @@ function SnoozeRow({
         className={stepClass}
         data-control-fill
         aria-label={`More ${unit}`}
-        disabled={count >= SNOOZE_STEP_MAX}
-        onClick={() => onCount(Math.min(SNOOZE_STEP_MAX, count + 1))}
+        disabled={count >= max}
+        onClick={() => onCount(Math.min(max, count + 1))}
       >
         <Plus size={12} strokeWidth={2} aria-hidden="true" />
       </Button>
@@ -338,7 +340,9 @@ function PaneNote({ title, children }: { title?: string; children?: React.ReactN
     <div data-inbox-detail className="inbox-note">
       <div className="[text-align:center] [color:var(--text-3)] [font-size:var(--fs-base)]">
         {title && (
-          <div className="[font-weight:600] [color:var(--text-1)] [margin-bottom:4px]">{title}</div>
+          <div className="[font-weight:600] [color:var(--text-1)] [margin-bottom:4px] [overflow-wrap:anywhere]">
+            {title}
+          </div>
         )}
         {children}
       </div>
@@ -358,7 +362,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   const [showSnoozed, setShowSnoozed] = useState(false) // sleeping items are hidden by default
   const [kinds, setKinds] = useState([] as string[]) // empty = all
   // the row menu's Hours / Days steppers — back to 1 on every open
-  const [snoozeFor, setSnoozeFor] = useState({ hours: 1, days: 1 })
+  const [snoozeFor, setSnoozeFor] = useState({ hours: 1, days: 1, weeks: 1 })
   const [search, setSearch] = useState('')
   const [, setNoteN] = useState(0) // re-render after a permission grant
   const [menu, setMenu] = useState(null as { x: number; y: number; id: string | null } | null) // right-click menu
@@ -493,7 +497,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
       // still how you find the item it changed. The project names are new
       // here because they are now ON the row: what you can read, you can find.
       const hay = [g.issueTitle, g.issueLabel, secondLine(g)]
-        .concat(place ? place.parts.map((p) => P.projectName(p)) : [])
+        .concat(place ? place.parts.map((p) => p.name) : [])
         .concat(
           g.items.map((m) => {
             const actor = m.actor ? P.user(m.actor) : null
@@ -541,7 +545,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     e.preventDefault()
     e.stopPropagation()
     setMenu({ x: e.clientX + MENU_W / 2, y: e.clientY, id: g?.id ?? null })
-    setSnoozeFor({ hours: 1, days: 1 })
+    setSnoozeFor({ hours: 1, days: 1, weeks: 1 })
   }
   const runOnItem = (fn: (g: MessageGroupVM) => void) => {
     if (menuGroup) fn(menuGroup)
@@ -909,7 +913,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
                     </span>
                   </MenuItem>
                 ) : (
-                  (['hours', 'days'] as const).map((unit) => (
+                  (['hours', 'days', 'weeks'] as const).map((unit) => (
                     <SnoozeRow
                       key={unit}
                       unit={unit}

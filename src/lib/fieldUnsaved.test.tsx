@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DiscardPrompt } from '../components/DiscardPrompt'
@@ -17,9 +17,21 @@ let root: Root
 
 function Field({ saved = '16', what }: { saved?: string; what?: string }) {
   const unsaved = useFieldUnsaved(() => paused, saved, what)
+  // the field refuses a number over 100 on blur and marks itself, as the
+  // settings' number fields do
+  const [refused, setRefused] = useState(false)
   return (
     <TooltipProvider>
-      <Input aria-label="Hours" type="number" key={saved} defaultValue={saved} {...unsaved} />
+      <Input
+        aria-label="Hours"
+        type="number"
+        key={saved}
+        defaultValue={saved}
+        aria-invalid={refused || undefined}
+        {...unsaved}
+        onChange={() => setRefused(false)}
+        onBlur={(e) => setRefused(Number(e.target.value) > 100)}
+      />
     </TooltipProvider>
   )
 }
@@ -49,10 +61,9 @@ async function typeAndLeave(value: string) {
     field.dispatchEvent(new Event('input', { bubbles: true }))
   })
   expect(hasUnsaved()).toBe(true)
-  await act(async () => {
-    field.blur()
-    vi.runAllTimers()
-  })
+  // the blur's own render commits before its timer runs, as in a browser
+  await act(async () => field.blur())
+  await act(async () => vi.runAllTimers())
 }
 
 describe('useFieldUnsaved', () => {
@@ -71,6 +82,13 @@ describe('useFieldUnsaved', () => {
     await act(async () => root.render(<Field saved="20" />))
     expect(hasUnsaved()).toBe(false)
     await typeAndLeave('20.0')
+    expect(hasUnsaved()).toBe(false)
+  })
+
+  it('keeps the warning while the field refused the typed number', async () => {
+    await typeAndLeave('120')
+    expect(hasUnsaved()).toBe(true)
+    await typeAndLeave('16')
     expect(hasUnsaved()).toBe(false)
   })
 

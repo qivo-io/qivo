@@ -18,7 +18,7 @@ import type { Doc } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import { canSeeProject } from './lib/access'
 import { byId } from './lib/db'
-import { badRequest, notFound, orgMutation } from './lib/functions'
+import { notFound, orgMutation } from './lib/functions'
 import { deleteComment, editComment, postComment, vCommentExpected } from './model/comments'
 import { assertCanEdit } from './model/issues'
 
@@ -45,12 +45,6 @@ async function myComment(
   return { comment, issue }
 }
 
-const trimmedBody = (body: string): string => {
-  const text = body.trim()
-  if (text === '') throw badRequest('a comment cannot be empty')
-  return text
-}
-
 /* ----------------------------------------------------------------- create
  * P.addComment. Author is structurally ctx.me ('comments can only be
  * created as yourself' becomes shape); created_at is server-stamped — a
@@ -63,8 +57,7 @@ export const create = orgMutation({
     const now = new Date().toISOString()
     const issue = await visibleIssue(ctx, issue_id, 'task not found')
     await assertCanEdit(ctx, ctx.me, issue.project_id)
-    const text = trimmedBody(body)
-    await postComment(ctx, { id, issue, author: ctx.me, body: text, now })
+    await postComment(ctx, { id, issue, author: ctx.me, body, now })
     return null
   },
 })

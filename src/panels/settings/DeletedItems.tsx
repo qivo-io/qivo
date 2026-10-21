@@ -16,12 +16,13 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { PageTitle } from '@/components/settingsPage'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { convex } from '@/lib/convex'
 import { cn } from '@/lib/utils'
 import { api } from '../../../convex/_generated/api'
+import { LIMITS } from '../../../convex/lib/limits'
+import { LimitedInput } from '../../components/LimitedField'
 import { Icon, MenuItem, Popover, Seg, StatusDot } from '../../components/qivo'
 import {
   ANYONE,
@@ -57,12 +58,11 @@ import {
   refusalText,
   restoreNoun,
   rowHasText,
-  shownMatch,
-  shownRow,
   stateText,
   viaText,
 } from '../../lib/deletedItems'
 import { deletedAtFull, deletedAtLabel } from '../../lib/deletedTime'
+import { overLimit } from '../../lib/fieldLimits'
 import { restoreFocus } from '../../lib/focusVisibility'
 import { type DeletedItemsOutcome, P } from '../../store/planner'
 import { ModalShell } from '../Modals'
@@ -128,9 +128,8 @@ function useDeletedList(deletedBy: string | undefined, enabled: boolean) {
       deletedBy === undefined ? {} : { deleted_by: deletedBy },
       (answer) => {
         if (!active) return
-        const shown = { ...answer, items: answer.items.map(shownRow) }
-        latest.current = shown
-        setList(shown)
+        latest.current = answer
+        setList(answer)
       },
       (cause) => {
         console.error('[qivo] deleted items failed:', cause)
@@ -159,7 +158,7 @@ function useDeletedItem(id: string | undefined) {
       api.deletedItems.item,
       { id },
       (row) => {
-        if (active) setAnswer({ id, row: row && shownRow(row) })
+        if (active) setAnswer({ id, row })
       },
       (cause) => {
         console.error('[qivo] deleted item failed:', cause)
@@ -260,8 +259,10 @@ export function DeletedItemsPage() {
      error keeps the hits of the text, or shows none when the text has no
      answer yet. */
   const text = search.trim()
+  // a search over the server's cap is not sent; the field shows it invalid
+  const tooLong = overLimit(LIMITS.search, text)
   useEffect(() => {
-    if (!text) {
+    if (!text || tooLong) {
       setFound(NOTHING_FOUND)
       return
     }
@@ -272,8 +273,7 @@ export function DeletedItemsPage() {
         api.deletedItems.matches,
         { text },
         (answer) => {
-          if (active)
-            setFound({ text, matches: answer.matches.map(shownMatch), capped: answer.capped })
+          if (active) setFound({ text, matches: answer.matches, capped: answer.capped })
         },
         (cause) => {
           console.error('[qivo] deleted items search failed:', cause)
@@ -289,7 +289,7 @@ export function DeletedItemsPage() {
       window.clearTimeout(timer)
       unsubscribe?.()
     }
-  }, [text])
+  }, [text, tooLong])
   const lower = text.toLowerCase()
   // Until the new text has its answer, the hits of the previous one show only
   // when they still hold the new text.
@@ -1007,7 +1007,8 @@ export function DeletedItemsPage() {
             />
             <div className="deleted-search flex h-control items-center gap-2 rounded-md border border-border bg-surface-1 px-2">
               <Icon name="search" size={16} color="var(--text-3)" />
-              <Input
+              <LimitedInput
+                limit={LIMITS.search}
                 ref={searchRef}
                 data-deleted-search
                 aria-label="Filter deleted items"
@@ -1022,7 +1023,8 @@ export function DeletedItemsPage() {
                     setSearch('')
                   }
                 }}
-                className="h-full min-w-0 flex-1 rounded-none border-none bg-transparent p-0 text-base text-text-1 shadow-none focus-visible:ring-0"
+                wrapperClassName="h-full flex-1"
+                className="h-full rounded-none border-none bg-transparent p-0 text-base text-text-1 shadow-none focus-visible:ring-0"
               />
               {search && (
                 <Button
@@ -1327,7 +1329,10 @@ function WholeItemWindow({
       }
     >
       {root ? (
-        <div data-task-first className="flex flex-col gap-3 text-base leading-normal text-text-2">
+        <div
+          data-task-first
+          className="flex flex-col gap-3 break-words text-base leading-normal text-text-2"
+        >
           <p>
             <b className="font-semibold text-text-1">{name}</b> was deleted together with{' '}
             <b className="font-semibold text-text-1">
@@ -1342,7 +1347,7 @@ function WholeItemWindow({
       ) : (
         <div
           data-project-first
-          className="flex flex-col gap-3 text-base leading-normal text-text-2"
+          className="flex flex-col gap-3 break-words text-base leading-normal text-text-2"
         >
           {holder ? (
             <p>
@@ -1427,7 +1432,7 @@ function PurgeWindow({
       submitLabel={saving ? 'Deleting…' : 'Delete for good'}
       focusAfterClose={focusAfterClose}
     >
-      <p data-purge className="text-base leading-normal text-text-2">
+      <p data-purge className="break-words text-base leading-normal text-text-2">
         Deletes{' '}
         <b className="font-semibold text-text-1">
           {row.kind === 'task' ? `${row.key} ${row.title}` : row.title}

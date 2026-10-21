@@ -4,6 +4,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { HoverTooltip } from '@/components/ui/tooltip'
+import { LIMITS } from '../../../convex/lib/limits'
+import { LimitedInput } from '../../components/LimitedField'
 import { Avatar, Icon } from '../../components/qivo'
 import {
   FieldHint,
@@ -12,6 +14,7 @@ import {
   SettingsGroup,
   SettingsSection,
 } from '../../components/settingsPage'
+import { overLimit } from '../../lib/fieldLimits'
 import { useUnsaved } from '../../lib/leaveGuard'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { useConfirmArm } from '../../lib/useConfirmArm'
@@ -30,8 +33,7 @@ export function TeamPage({
   onBackPage?: (page: string) => void
 }) {
   // A removed team shows an empty name until the settings shell redirects.
-  const team = P.teamById(teamId)
-  const teamName = team?.name || ''
+  const teamName = P.teamById(teamId)?.name || ''
   const ws = teamId // the update calls below all take the team id
   const canManage = P.isTeamLeader(teamId) // team leader or org admin
   const confirm = useConfirmArm<string>()
@@ -49,7 +51,7 @@ export function TeamPage({
   return (
     <>
       <BackLink to="Teams" onClick={() => onBackPage('org-teams')} />
-      <PageTitle>{team ? P.teamLabel(team) : 'Team'}</PageTitle>
+      <PageTitle>{teamName || 'Team'}</PageTitle>
       <SettingsSection
         title="Team"
         description={
@@ -60,7 +62,7 @@ export function TeamPage({
           <TextField
             label="Team name"
             value={teamName}
-            maxLength={P.NAME_MAX}
+            limit={LIMITS.teamName}
             onCommit={(v) => {
               // the toast waits for the server, so a refusal never reads as done
               void P.updateTeam(ws, { name: v }).then((saved) => {
@@ -234,7 +236,7 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
   const mine = homeTeams.filter((t) => P.isTeamLeader(t.id))
   const addTeam = () => {
     const name = teamName.trim()
-    if (!name || !admin || adding) return
+    if (!name || overLimit(LIMITS.teamName, name) || !admin || adding) return
     // The typed name stays until the server creates the team, and after a
     // refusal, so a paused or refused create can be sent again.
     setAdding(true)
@@ -260,8 +262,6 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
             // Count home teams only; P.teams also contains foreign teams.
             const last = homeTeams.length <= 1
             const arm = confirm.armed === `t:${t.id}`
-            // an empty button has no height to click (P.teamLabel)
-            const name = P.teamLabel(t)
             return (
               <div
                 key={t.id}
@@ -271,11 +271,11 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
                 <Button
                   type="button"
                   onClick={() => setPage(`team:${t.id}`)}
-                  title={`Open ${name}`}
+                  title={`Open ${t.name}`}
                   className="[flex:1] [text-align:left] [background:none] [border:none] [padding:0] [cursor:pointer] [font-size:var(--fs-base)] [font-weight:600] [color:var(--text-1)] [font-family:var(--sans)]"
                   variant="unstyled"
                 >
-                  {name}
+                  {t.name}
                 </Button>
                 <span className="[font-size:var(--fs-xs)] [color:var(--text-2)] !font-mono">
                   {memberCount} member
@@ -333,17 +333,22 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
         {admin && (
           <SettingsGroup legend="New team">
             <div className="[display:flex] [gap:8px]">
-              <Input
+              <LimitedInput
+                limit={LIMITS.teamName}
                 value={teamName}
-                maxLength={P.NAME_MAX}
                 onChange={(e) => setTeamName(e.target.value)}
                 placeholder="New team name"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') addTeam()
                 }}
-                className="h-control w-full bg-surface-1 px-2.5 text-base font-sans [flex:1]"
+                wrapperClassName="[flex:1]"
+                className="h-control w-full bg-surface-1 px-2.5 text-base font-sans"
               />
-              <Button type="button" disabled={!teamName.trim() || adding} onClick={addTeam}>
+              <Button
+                type="button"
+                disabled={!teamName.trim() || overLimit(LIMITS.teamName, teamName) || adding}
+                onClick={addTeam}
+              >
                 <Icon name="plus" size={16} />
                 Add team
               </Button>

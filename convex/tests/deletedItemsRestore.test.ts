@@ -12,13 +12,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
+import { LIMITS, PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from '../lib/limits'
 import type { EventOwner } from '../lib/taskEvents'
-import {
-  PARENT_FULL,
-  PARENT_IS_SUBTASK,
-  SUBTASK_MAX,
-  SUBTASK_WITH_SUBTASKS,
-} from '../lib/taskLimits'
 import { storageUsage } from '../model/billing'
 import { deleteOrgDeep } from '../model/cascade'
 import {
@@ -592,7 +587,7 @@ describe('restoring a task item', () => {
     expect(refused.data.message).toBe(PARENT_IS_SUBTASK)
   })
 
-  it(`keeps a parent with ${SUBTASK_MAX - 1} active subtasks and none with ${SUBTASK_MAX}, archived ones aside`, async () => {
+  it(`keeps a parent with ${LIMITS.subtasks.max - 1} active subtasks and none with ${LIMITS.subtasks.max}, archived ones aside`, async () => {
     const t = newT()
     const f = await withOrg(t)
     const org_id = f.org.id
@@ -604,7 +599,7 @@ describe('restoring a task item', () => {
     for (const task of [first, second]) await deleteTask(t, f, task.id)
     // the parent gets 99 active subtasks while they are in Deleted items,
     // and 10 archived ones, which do not count
-    await plantSubtasks(t, f, parent.id, SUBTASK_MAX - 1 + 10, 10)
+    await plantSubtasks(t, f, parent.id, LIMITS.subtasks.max - 1 + 10, 10)
     // the first comes back as the hundredth active one
     await restore(t, f.user, [(await itemFor(t, first.id)).id])
     expect((await liveTask(t, first.id))?.parent_id).toBe(parent.id)
@@ -619,7 +614,7 @@ describe('restoring a task item', () => {
       }),
       'rule',
     )
-    expect(refused.data.message).toBe(PARENT_FULL)
+    expect(refused.data.message).toBe(LIMITS.subtasks.refusal)
 
     // two items restored in one call count the reveal before them: only one
     // of them becomes the hundredth active subtask of a parent with 99
@@ -629,7 +624,7 @@ describe('restoring a task item', () => {
       await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: other.id }),
     ]
     for (const task of pair) await deleteTask(t, f, task.id)
-    await plantSubtasks(t, f, other.id, SUBTASK_MAX - 1 + 5, 5)
+    await plantSubtasks(t, f, other.id, LIMITS.subtasks.max - 1 + 5, 5)
     const items = [await itemFor(t, pair[0].id), await itemFor(t, pair[1].id)]
     expect(
       (
@@ -754,7 +749,7 @@ describe('restoring a task item', () => {
     })
   })
 
-  it(`brings a task back with its ${SUBTASK_MAX} subtasks and their people, within the real limits`, async () => {
+  it(`brings a task back with its ${LIMITS.subtasks.max} subtasks and their people, within the real limits`, async () => {
     // the most active subtasks a task can have, each with a person of its
     // own whose sight the reveal checks
     const t = newT({ transactionLimits: true })
@@ -763,12 +758,12 @@ describe('restoring a task item', () => {
     const org_id = f.org.id
     const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
     const root = await plantIssue(t, { org_id, project_id: f.sub2.id })
-    const people = await plantPeople(t, f, SUBTASK_MAX)
+    const people = await plantPeople(t, f, LIMITS.subtasks.max)
     const subtasks = await plantAssigned(t, f, root.id, people)
     await deleteTask(t, f, root.id, { subtask_ids: subtasks })
     await runSteps(t)
     const item = await itemFor(t, root.id)
-    expect(item).toMatchObject({ state: 'ready', counts: { tasks: SUBTASK_MAX + 1 } })
+    expect(item).toMatchObject({ state: 'ready', counts: { tasks: LIMITS.subtasks.max + 1 } })
 
     const result = await as(t, f.user).mutation(api.deletedItems.restore, {
       org_id,
@@ -1873,7 +1868,7 @@ describe('parents outside a restored project', () => {
     return low
   }
 
-  it(`brings back 500 tasks of 16 KB under five parents outside the project, ${SUBTASK_MAX} each, within the real limits`, async () => {
+  it(`brings back 500 tasks of 16 KB under five parents outside the project, ${LIMITS.subtasks.max} each, within the real limits`, async () => {
     // 8 MiB of tasks under parents outside, which no single transaction
     // can read and write back with their parent
     const t = newT({ transactionLimits: true })
@@ -1891,12 +1886,12 @@ describe('parents outside a restored project', () => {
       const planted: string[][] = []
       for (const [e, epic] of epics.entries()) {
         planted.push([])
-        for (let i = 0; i < SUBTASK_MAX; i++) {
+        for (let i = 0; i < LIMITS.subtasks.max; i++) {
           const id = uuid()
           await ctx.db.insert('issues', {
             id,
             org_id,
-            num: 50_000 + e * SUBTASK_MAX + i,
+            num: 50_000 + e * LIMITS.subtasks.max + i,
             project_id: f.sub2.id,
             parent_id: epic.id,
             title: 'Planted task',
@@ -1956,11 +1951,11 @@ describe('parents outside a restored project', () => {
     const under = (parent_id: string, description = '') =>
       plantIssue(t, { org_id, project_id: f.sub2.id, parent_id, description })
     await under(light.id)
-    for (let i = 0; i < SUBTASK_MAX; i++) await under(heavy.id, HEAVY)
+    for (let i = 0; i < LIMITS.subtasks.max; i++) await under(heavy.id, HEAVY)
     await deleteProject(t, f, f.sub2.id)
     await runSteps(t)
     const item = await itemFor(t, f.sub2.id)
-    expect(item).toMatchObject({ state: 'ready', counts: { tasks: 3 + 1 + SUBTASK_MAX } })
+    expect(item).toMatchObject({ state: 'ready', counts: { tasks: 3 + 1 + LIMITS.subtasks.max } })
 
     await as(t, f.user).mutation(api.deletedItems.restore, { org_id, ids: [item.id] })
     await stepThrough(t, item.id)
@@ -1971,7 +1966,7 @@ describe('parents outside a restored project', () => {
     expect(await parentsOf(t, tasks)).toEqual([undefined, undefined, epic.id])
     expect(warn.mock.calls).toEqual([])
     expect(await subtaskCount(t, light.id)).toBe(1)
-    expect(await subtaskCount(t, heavy.id)).toBe(SUBTASK_MAX)
+    expect(await subtaskCount(t, heavy.id)).toBe(LIMITS.subtasks.max)
     expect(await waitingParents(t)).toEqual([])
   }, 300_000)
 
@@ -2357,13 +2352,13 @@ describe('parents outside a restored project', () => {
     expect(await parentsOf(t, tasks)).toEqual(stories.map((story) => story.id))
   })
 
-  it(`counts the subtasks of each parent after the attaches before it in its step, up to ${SUBTASK_MAX}`, async () => {
+  it(`counts the subtasks of each parent after the attaches before it in its step, up to ${LIMITS.subtasks.max}`, async () => {
     const t = newT()
     const f = await withOrg(t)
     const org_id = f.org.id
     // the epic has 97 subtasks in Firmware, and a fifth task waits for it
     const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
-    await plantSubtasks(t, f, epic.id, SUBTASK_MAX - 3)
+    await plantSubtasks(t, f, epic.id, LIMITS.subtasks.max - 3)
     const tasks = await plantUnder(t, f, [epic, epic, epic, epic])
     await deleteProject(t, f, f.sub2.id)
     const item = await itemFor(t, f.sub2.id)
@@ -2378,7 +2373,7 @@ describe('parents outside a restored project', () => {
     await step(t, item.id)
     expect(await jobFor(t, item.id)).toBeNull()
     expect(await parentsOf(t, tasks)).toEqual([epic.id, epic.id, epic.id, undefined])
-    expect(await subtaskCount(t, epic.id)).toBe(SUBTASK_MAX)
+    expect(await subtaskCount(t, epic.id)).toBe(LIMITS.subtasks.max)
     expect(await waitingParents(t)).toEqual([])
   })
 

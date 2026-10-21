@@ -8,7 +8,7 @@
      blocks  # ## ### headings · > quotes · -/* bullets · 1. numbered lists
              ``` fenced code ``` · blank-line paragraphs (single \n = <br>)
 
-   It lives here, importing only textLimits, so the server reads a
+   It lives here, importing only lib/limits.ts, so the server reads a
    description as the app shows it (lib/imageRefs.ts); the app imports it
    through src/lib/md.ts. The renderer (src/components/markdown.tsx) walks
    this AST and builds React elements — raw HTML in a description is never
@@ -21,7 +21,7 @@
    editor's transient placeholder while a paste is in flight).
    ========================================================================= */
 
-import { TEXT_MAX } from './textLimits'
+import { TEXT_MAX } from './limits'
 
 export type MdInline =
   | { t: 'text'; text: string }
@@ -296,8 +296,8 @@ const ORDERED = /^(\d{1,3})[.)]\s+/
    plain paragraphs instead of freezing every viewer of the issue. The editor
    checks it too: the fallback AST must never round-trip through a commit
    (re-escaping would corrupt the whole text). The limit equals the server's
-   save cap, so every text saved within it stays editable; only a longer text
-   saved before the cap renders as plain paragraphs, read-only. */
+   save cap, so every stored text parses; only a draft typed past the cap,
+   which cannot be saved, reaches the fallback. */
 export const MAX_PARSE = TEXT_MAX
 
 export function parseMd(src: string): MdBlock[] {

@@ -11,7 +11,7 @@ import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
    sent, on the real store and the real editors. The window closes the way
    App's close does (closeOrAsk with the window's scope), and the question
    is the one mounted at the root. Writes never answer, so a sent comment
-   stays on its way. */
+   stays on its way. The last block leaves the title field unchanged. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', () => ({ convex: network }))
@@ -32,7 +32,7 @@ let close: () => Promise<void>
 /** Takes the task window away, as App does once its close goes ahead. */
 let unmountTask: () => Promise<void>
 
-async function open({ embedded = false } = {}) {
+async function open({ embedded = false, title = 'Run the soak test' } = {}) {
   vi.resetModules()
   const snap: Snapshot = plannerFixture()
   snap.issues.push({
@@ -40,7 +40,7 @@ async function open({ embedded = false } = {}) {
     org_id: snap.orgs[0].id,
     project_id: snap.projects[0].id,
     num: 27,
-    title: 'Run the soak test',
+    title,
     description: 'Measure the drift.',
     status: 'progress',
     priority: 'medium',
@@ -365,5 +365,18 @@ describe('closing the task window with unsent text', { timeout: 30_000 }, () => 
     await close()
     expect(question()).toBeNull()
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('leaving the title field', { timeout: 30_000 }, () => {
+  it('closes a stored title over the cap left as it was without a word', async () => {
+    await open({ title: 'r'.repeat(256) })
+    await press('[data-task-title]')
+    const field = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Task title"]')
+    expect(field?.getAttribute('aria-invalid')).toBe('true')
+    await act(async () => field?.blur())
+    expect(document.querySelector('textarea[aria-label="Task title"]')).toBeNull()
+    expect(window.showToast).not.toHaveBeenCalled()
+    expect(renames()).toEqual([])
   })
 })

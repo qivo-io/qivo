@@ -33,6 +33,7 @@ import { authComponent, createAuth, createCaptureAuth } from './auth'
 import { claimSeatsForLogin } from './identity'
 import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
+import { asciiEmail } from './lib/email'
 import {
   badRequest,
   conflict,
@@ -43,8 +44,11 @@ import {
   require,
   rule,
 } from './lib/functions'
+import { limitedEmail } from './lib/limitRules'
+import { DEFAULT_MESSAGE_RETENTION_DAYS } from './lib/limits'
 import { audit } from './model/admin'
 import { newUuid } from './model/orgs'
+import { assertNameShape, cleanName } from './model/people'
 
 /* Web Crypto exists in the Convex isolate; convex/tsconfig's lib is ESNext
  * only, which does not declare the global (same move as model/orgs). */
@@ -100,8 +104,10 @@ export const profilesByEmail = internalQuery({
 const owningSeat = (all: SeatRow[]): SeatRow | null =>
   all.find((p) => p.org_role !== 'guest') ?? all[0] ?? null
 
-const cleanEmail = (raw: string): string => {
-  const email = raw.trim().toLowerCase()
+/* An address to look a login or seat up by, in the form Qivo stores
+ * (lib/email.ts asciiEmail). */
+const lookupEmail = (raw: string): string => {
+  const email = asciiEmail(raw)
   require(email !== '', badRequest('email required'))
   return email
 }
@@ -156,7 +162,7 @@ async function mintRecoveryLink(ctx: ActionCtx, email: string): Promise<string> 
 export const recoveryLink = platformAction({
   args: { email: v.string() },
   handler: async (ctx, args): Promise<{ link: string }> => {
-    const email = cleanEmail(args.email)
+    const email = lookupEmail(args.email)
     const link = await mintRecoveryLink(ctx, email)
     const p = owningSeat(await ctx.runQuery(internal.adminAuth.profilesByEmail, { email }))
     await ctx.runMutation(internal.adminAuth.logAction, {
@@ -181,7 +187,7 @@ async function setBan(
   rawEmail: string,
   ban: boolean,
 ): Promise<{ ok: boolean }> {
-  const email = cleanEmail(rawEmail)
+  const email = lookupEmail(rawEmail)
   const p = owningSeat(await ctx.runQuery(internal.adminAuth.profilesByEmail, { email }))
   if (p === null || p.auth_user_id === null) throw notFound('no login found for that email')
   const { auth, headers } = await authComponent.getAuth(createAuth, ctx)
@@ -226,15 +232,15 @@ export const createBreakGlass = platformAction({
   args: { org_id: v.string(), email: v.string(), name: v.optional(v.string()) },
   handler: async (ctx, args): Promise<{ link: string }> => {
     require(args.org_id !== '' && args.email.trim() !== '', badRequest('org_id and email required'))
-    const email = cleanEmail(args.email)
+    const email = limitedEmail(args.email, 'that does not look like an email address')
     /* Existence fence — ANY seat, home or guest (edge sentence verbatim).
      * Pre-checked here for the readable refusal, re-checked in the insert
      * mutation whose serializability closes the race. */
     const existing = await ctx.runQuery(internal.adminAuth.profilesByEmail, { email })
     if (existing.length > 0)
       throw conflict('a member with that email already exists', 'member_exists')
-    const name =
-      args.name !== undefined && args.name.trim() !== '' ? args.name.trim() : 'Recovery Admin'
+    const name = cleanName(args.name ?? '') || 'Recovery Admin'
+    assertNameShape(name)
     const auth = createAuth(ctx)
     const { user } = await auth.api.createUser({
       body: {
@@ -267,7 +273,7 @@ export const createBreakGlass = platformAction({
 /* The break-glass write, in one transaction. It re-checks the email
  * existence fence that createBreakGlass checked first, so a seat added in
  * between makes it refuse. Then it looks up the organization, inserts the
- * org admin profile (edge field for field, and retention 7 was the PG column
+ * org admin profile (edge field for field, and the default retention was the PG column
  * default), claims it for the login and writes the audit row. It refuses a
  * demo deployment itself, because the dashboard and deploy keys can run it
  * without createBreakGlass. */
@@ -300,7 +306,7 @@ export const insertBreakGlass = internalMutation({
       org_role: 'admin',
       active: true,
       kind: 'person',
-      message_retention_days: 7,
+      message_retention_days: DEFAULT_MESSAGE_RETENTION_DAYS,
       created_at: now,
     })
     // Claiming also schedules the new active member's billing recount.
@@ -450,7 +456,7 @@ export const removeAuthUser = internalMutation({
 export const deleteOrphanLogin = internalMutation({
   args: { email: v.string() },
   handler: async (ctx, args) => {
-    const email = cleanEmail(args.email)
+    const email = lookupEmail(args.email)
     const user = (await ctx.runQuery(components.betterAuth.adapter.findOne, {
       model: 'user',
       where: [{ field: 'email', value: email }],

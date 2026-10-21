@@ -317,6 +317,11 @@
   line-height: 1.45;
   font-weight: 500;
   color: var(--text-1);
+  /* a 255-character title holds three lines; the task opens on a tap */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
 }
 
 .mobile-roadmap-task-filter {

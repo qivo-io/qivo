@@ -9,15 +9,12 @@
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { LIMITS, SUBTASK_WITH_SUBTASKS, TEXT_MAX } from '../lib/limits'
 import type { EventOwner } from '../lib/taskEvents'
-import { PARENT_FULL, SUBTASK_MAX, SUBTASK_WITH_SUBTASKS } from '../lib/taskLimits'
-import { TEXT_MAX } from '../lib/textLimits'
 import {
   MOVE_SUBTASK_RULE,
   MOVE_SUBTREE_EDIT_RULE,
   MOVE_SUBTREE_HOLDER_RULE,
-  MOVE_SUBTREE_MAX,
-  MOVE_SUBTREE_TOO_LARGE,
   MOVE_TOO_LARGE,
   parentChainCheck,
   SUBTASK_PROJECT_RULE,
@@ -257,28 +254,6 @@ describe('moving a task to another top-level project', () => {
     expect((await updateEvents(t)).sort()).toEqual([root.id, kid.id, sibling.id, old.id].sort())
   })
 
-  /* Until 2026-10-16 a sub-project took a blank name. A move names it by
-   * its label instead of nothing. */
-  it('names a sub-project saved with a blank name as Unnamed sub-project', async () => {
-    const t = newT()
-    const { f, backend } = await scene(t)
-    await subscribeToUpdates(t, f)
-    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    await plantSubscription(t, { issue_id: task.id, profile_id: f.user.id })
-    await t.run(async (ctx) => {
-      await ctx.db.patch(f.sub._id, { name: '' })
-      await ctx.db.patch(backend._id, { name: '  ' })
-    })
-    await appMove(t, f, task.id, backend.id)
-    expect((await messagesFor(t, f.user.id, task.id)).map((m) => m.detail)).toEqual([
-      'Moved to Unnamed sub-project',
-    ])
-    const rows = (await activityFor(t, f.org.id)).filter((e) => e.verb === 'moved')
-    expect(rows.map((e) => e.detail)).toEqual([
-      'to the Unnamed sub-project (from Unnamed sub-project)',
-    ])
-  })
-
   it('refuses a subtask that would stay under its parent, unless it leaves it in the app', async () => {
     const t = newT()
     const { f, backend } = await scene(t)
@@ -376,9 +351,9 @@ describe('moving a task to another top-level project', () => {
       await ctx.db.patch(inPcb._id, { reviewer_id: undefined })
     })
     // more than the limit at one level, archived subtasks included: with
-    // inPcb, SUBTASK_MAX active ones and the rest archived
+    // inPcb, LIMITS.subtasks.max active ones and the rest archived
     await t.run(async (ctx) => {
-      for (let i = 0; i < MOVE_SUBTREE_MAX; i++) {
+      for (let i = 0; i < LIMITS.moveSubtree.max; i++) {
         await ctx.db.insert('issues', {
           ...base,
           id: uuid(),
@@ -389,7 +364,7 @@ describe('moving a task to another top-level project', () => {
           priority: 'low',
           paused: false,
           parent_id: root.id,
-          archived_at: i < SUBTASK_MAX - 1 ? undefined : ARCHIVED,
+          archived_at: i < LIMITS.subtasks.max - 1 ? undefined : ARCHIVED,
           created_at: ARCHIVED,
           updated_at: ARCHIVED,
         })
@@ -397,10 +372,10 @@ describe('moving a task to another top-level project', () => {
     })
     const crowded = await allIssues(t, f.org.id)
     const tooMany = await expectRefusal(appMove(t, f, root.id, backend.id), 'rule')
-    expect(tooMany.data.message).toBe(MOVE_SUBTREE_TOO_LARGE)
+    expect(tooMany.data.message).toBe(LIMITS.moveSubtree.refusal)
     expect(await allIssues(t, f.org.id)).toEqual(crowded)
     // at the limit the move lands, every subtask with it
-    const last = crowded.find((i) => i.title === `Step ${MOVE_SUBTREE_MAX - 1}`)!
+    const last = crowded.find((i) => i.title === `Step ${LIMITS.moveSubtree.max - 1}`)!
     await t.run(async (ctx) => {
       await ctx.db.delete(last._id)
     })
@@ -412,7 +387,7 @@ describe('moving a task to another top-level project', () => {
         .map((i) => i.id)
         .sort(),
     )
-    expect(moved).toHaveLength(MOVE_SUBTREE_MAX + 1)
+    expect(moved).toHaveLength(LIMITS.moveSubtree.max + 1)
   })
 })
 
@@ -553,7 +528,7 @@ describe('a move, archive or parent change too large for one transaction', () =>
   })
 
   it('reads only the active subtasks under a real limit, however many are archived', async () => {
-    // a limit of 400 documents read, and a task with SUBTASK_MAX active
+    // a limit of 400 documents read, and a task with LIMITS.subtasks.max active
     // subtasks and 1,000 archived ones: a walk that read the archived ones
     // would fail on the limit
     const t = newT({ transactionLimits: { documentsRead: 400 } })
@@ -561,7 +536,7 @@ describe('a move, archive or parent change too large for one transaction', () =>
     const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
     await t.run(async (ctx) => {
-      for (let i = 0; i < SUBTASK_MAX + 1000; i++)
+      for (let i = 0; i < LIMITS.subtasks.max + 1000; i++)
         await ctx.db.insert('issues', {
           id: uuid(),
           org_id: f.org.id,
@@ -573,7 +548,7 @@ describe('a move, archive or parent change too large for one transaction', () =>
           status: 'todo',
           priority: 'medium',
           paused: false,
-          archived_at: i < SUBTASK_MAX ? undefined : ARCHIVED,
+          archived_at: i < LIMITS.subtasks.max ? undefined : ARCHIVED,
           created_at: root.created_at,
           updated_at: root.updated_at,
         })
@@ -595,15 +570,15 @@ describe('a move, archive or parent change too large for one transaction', () =>
     expect((await row(t, root.id)).project_id).toBe(f.sub2.id)
     // a new subtask counts no further than the limit, and is refused there
     const p = await expectRefusal(appUpdate(t, f, other.id, { parent_id: root.id }), 'rule')
-    expect(p.data.message).toBe(PARENT_FULL)
+    expect(p.data.message).toBe(LIMITS.subtasks.refusal)
     expect(await row(t, other.id)).toEqual(other)
     // a move to another top-level project, which carries the archived ones
-    // too, stops reading past MOVE_SUBTREE_MAX
+    // too, stops reading past LIMITS.moveSubtree.max
     const m = await expectRefusal(appMove(t, f, root.id, backend.id), 'rule')
-    expect(m.data.message).toBe(MOVE_SUBTREE_TOO_LARGE)
+    expect(m.data.message).toBe(LIMITS.moveSubtree.refusal)
     expect((await row(t, root.id)).project_id).toBe(f.sub2.id)
     // the archive takes the active subtasks with it
-    expect(await activeUnder()).toBe(SUBTASK_MAX)
+    expect(await activeUnder()).toBe(LIMITS.subtasks.max)
     await as(t, f.admin).mutation(api.issues.archive, {
       org_id: f.org.id,
       id: root.id,

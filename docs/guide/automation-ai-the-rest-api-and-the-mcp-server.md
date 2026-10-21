@@ -99,7 +99,7 @@ and supports task search, creation, updates, moves, subtasks, links, labels,
 attachments, task history, workload, deletion, archive/restore, comments,
 following and the inbox. With an organization admin's or team leader's token
 it also sets a person's plannable weekly hours. It checks field values,
-including the 80-character title limit and paired planning dates. An
+including the [limits](./limits.md) and paired planning dates. An
 unreadable task returns 404, as does a nonexistent one. Changes name the agent
 or person in the activity feed with **via the REST API** attribution, plus the
 key name for an agent key; comments use them as their author. A change can

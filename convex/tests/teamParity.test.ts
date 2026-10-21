@@ -21,18 +21,12 @@ import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
 import type { Refusal, RefusalCode } from '../lib/functions'
+import { LIMITS } from '../lib/limits'
 import { sha256hex } from '../machine/auth'
 import { deleteTeamDeep } from '../model/cascade'
 import { LAST_TEAM_RULE } from '../model/orgs'
 import { HELD_TASKS_SHAPE, KEEP_TOO_LARGE, REMOVAL_FULL } from '../model/projectAccess'
-import {
-  deleteTeamCore,
-  TEAM_DELETE_ROWS_MAX,
-  TEAM_DELETE_ROWS_MAX_LABEL,
-  TEAM_RUNS_RULE,
-  TEAM_TOO_LARGE,
-  teamsJson,
-} from '../model/teams'
+import { deleteTeamCore, TEAM_RUNS_RULE, teamsJson } from '../model/teams'
 import {
   activityFor,
   as,
@@ -286,7 +280,7 @@ describe('creating and renaming teams', () => {
     }
     await refused(
       fx.t.mutation(internal.machine.teams.mcpSetTeam, { ...as_(fx.admin), name: '   ' }),
-      'bad_request',
+      'rule',
       'a team name cannot be blank',
     )
     const post = (body: unknown) =>
@@ -299,7 +293,7 @@ describe('creating and renaming teams', () => {
     // the app's create follows the same name rule
     await refused(
       as(fx.t, fx.admin).mutation(api.teams.create, { org_id: fx.org.id, id: uuid(), name: ' ' }),
-      'bad_request',
+      'rule',
       'a team name cannot be blank',
     )
   })
@@ -314,14 +308,14 @@ describe('creating and renaming teams', () => {
       })
     const renamed = await parsed(rename(' HW '))
     expect(renamed).toMatchObject({ id: fx.team.id, name: 'HW', created: false })
-    await refused(rename('  '), 'bad_request', 'a team name cannot be blank')
+    await refused(rename('  '), 'rule', 'a team name cannot be blank')
     const patch = (who: Doc<'profiles'>, body: unknown, ref = fx.team.id) =>
       fx.t.mutation(internal.machine.teams.restUpdateTeam, {
         ...as_(who),
         ref,
         body: JSON.stringify(body),
       })
-    await refused(patch(fx.admin, { name: ' ' }), 'bad_request', 'a team name cannot be blank')
+    await refused(patch(fx.admin, { name: ' ' }), 'rule', 'a team name cannot be blank')
     expect((await teamRow(fx.t, fx.team.id))?.name).toBe('HW')
     // a field REST does not change is refused, and the name stays
     await refused(
@@ -1044,7 +1038,7 @@ describe("deleting a team settles its members' open tasks", () => {
     expect(await grantsOf(fx.t, fx.emil.id)).toEqual([[fx.meta.id, 'viewer']])
   })
 
-  it(`deletes a team with ${TEAM_DELETE_ROWS_MAX} memberships and shares, and refuses one more before reading anything else`, async () => {
+  it(`deletes a team with ${LIMITS.teamDeleteRows.max} memberships and shares, and refuses one more before reading anything else`, async () => {
     const fx = await setup()
     await plantTeam(fx, fx.org.id, 'Design')
     // Hardware has three members and one share; profiles need not exist
@@ -1058,10 +1052,9 @@ describe("deleting a team settles its members' open tasks", () => {
           })
       })
     // one row past the bound: 3 + (MAX - 3) memberships and the share
-    await plant(TEAM_DELETE_ROWS_MAX - 3)
+    await plant(LIMITS.teamDeleteRows.max - 3)
     const e = await expectRefusal(deleteHardware(fx, 'keep_as_viewer'), 'rule')
-    expect((e.data as Refusal).message).toBe(TEAM_TOO_LARGE)
-    expect(TEAM_DELETE_ROWS_MAX_LABEL).toBe(TEAM_DELETE_ROWS_MAX.toLocaleString('en-US'))
+    expect((e.data as Refusal).message).toBe(LIMITS.teamDeleteRows.refusal)
     await refused(
       as(fx.t, fx.admin).mutation(api.teams.deleteDeep, {
         org_id: fx.org.id,
@@ -1069,9 +1062,9 @@ describe("deleting a team settles its members' open tasks", () => {
         on_held_tasks: 'leave',
       }),
       'rule',
-      TEAM_TOO_LARGE,
+      LIMITS.teamDeleteRows.refusal,
     )
-    expect(await hardwareLeft(fx)).toMatchObject({ members: TEAM_DELETE_ROWS_MAX, shares: 1 })
+    expect(await hardwareLeft(fx)).toMatchObject({ members: LIMITS.teamDeleteRows.max, shares: 1 })
     // at the bound it fits
     await fx.t.run(async (ctx) => {
       const one = await ctx.db

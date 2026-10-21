@@ -25,6 +25,7 @@ import type { QueryCtx } from '../_generated/server'
 import { byId } from '../lib/db'
 import { FIELD_CHANGED, printOf } from '../lib/fieldPrints'
 import { badRequest, type FieldChange, type Refusal } from '../lib/functions'
+import { grouped, type Limit, overText } from '../lib/limits'
 import { DATE_PATTERN, dateShaped, isCalendarDay } from './taskValues'
 
 export { FIELD_CHANGED }
@@ -122,32 +123,32 @@ export const oneOf = (values: readonly string[], nullable = false): KeyType => (
     ? orNull({ type: 'string', enum: [...values] })
     : { type: 'string', enum: [...values] },
 })
-/** The id of a `what` as a read answers it, any string, or also null when
- * `nullable`. Until 2026-10-19 the app took any string as the id of a new
- * person, project or task (lib/db.ts assertNewRowId), so a stored id, and
- * every field that names that row, may hold one that is not a uuid, and a
- * stale read of it must compare. */
-export const idOf = (what: string, nullable: boolean): KeyType => ({
-  ok: (v) => (nullable && v === null) || typeof v === 'string',
-  says: `a ${what} id${nullable ? ' or null' : ''}`,
-  schema: nullable ? orNull({ type: 'string' }) : { type: 'string' },
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** A uuid naming `what`, or null when `nullable`. */
+export const uuidOf = (what: string, nullable: boolean): KeyType => ({
+  ok: (v) => (nullable && v === null) || (typeof v === 'string' && UUID.test(v)),
+  says: `a ${what} uuid${nullable ? ' or null' : ''}`,
+  schema: nullable
+    ? orNull({ type: 'string', format: 'uuid' })
+    : { type: 'string', format: 'uuid' },
 })
 
-/** Text by the rule of a required text field whose rule has held for every
- * stored row: not blank once trimmed and, when `max` is given, at most `max`
- * code points once trimmed (as cleanTitle and labelName count). A field that
- * lets a value stored before its cap through, such as a comment body, takes
- * no `max` here, because a read answers that value and a stale read of it
- * must compare. A field that could be stored blank takes TEXT instead, such
- * as a team, project or milestone name (model/teams.ts TEAM_FIELDS). */
-export const filledText = (max?: number): KeyType => ({
-  ok: (v) =>
-    typeof v === 'string' && v.trim() !== '' && (max === undefined || [...v.trim()].length <= max),
-  says:
-    max === undefined
-      ? 'a string that is not blank'
-      : `a string that is not blank, of at most ${max} characters`,
-  schema: { type: 'string', minLength: 1, ...(max === undefined ? {} : { maxLength: max }) },
+/** Text by the rule of a required text field: not blank once trimmed and at
+ * most `limit`'s maximum of UTF-16 code units once trimmed (lib/limitRules.ts
+ * limitedText). */
+export const filledText = (limit: Limit): KeyType => ({
+  ok: (v) => typeof v === 'string' && v.trim() !== '' && !overText(limit, v.trim()),
+  says: `a string that is not blank, of at most ${grouped(limit.max)} characters`,
+  schema: { type: 'string', minLength: 1, maxLength: limit.max },
+})
+
+/** Text by the rule of a text field that may be empty or unset: at most
+ * `limit`'s maximum of UTF-16 code units once trimmed, or null. */
+export const textOrNull = (limit: Limit): KeyType => ({
+  ok: (v) => v === null || (typeof v === 'string' && !overText(limit, v.trim())),
+  says: `a string of at most ${grouped(limit.max)} characters, or null`,
+  schema: orNull({ type: 'string', maxLength: limit.max }),
 })
 
 /** A calendar date written YYYY-MM-DD, by the rule of the date fields
@@ -232,12 +233,6 @@ export const createExpectedSentence = (record: string) =>
 export function refuseCreateExpected(body: Readonly<Record<string, unknown>>, record: string) {
   if (Object.hasOwn(body, 'expected')) throw badRequest(createExpectedSentence(record))
 }
-
-/** How a refusal names a `kind` of record called `name`, such as
- * `team "Hardware"`, or by `id` when the name is blank, as one saved before
- * names were required can be. */
-export const namedRecord = (kind: string, name: string, id: string): string =>
-  name.trim() === '' ? `${kind} ${id}` : `${kind} "${name.trim()}"`
 
 /** Joins words as people list them: "a", "a and b", "a, b and c". */
 export const listed = (words: readonly string[]): string =>

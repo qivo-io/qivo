@@ -1,3 +1,5 @@
+import { LIMITS, MIB } from '../../convex/lib/limits'
+
 /** One account/deployment-scoped selection, containing bytes rather than bearer
  * URLs. IndexedDB is optional: blocked storage still leaves the in-tab cache. */
 export type BackgroundSelection = { key: string; previewVersion: string | null }
@@ -12,7 +14,8 @@ export type BackgroundCacheStore = {
   write(record: BackgroundCacheRecord | null): Promise<void>
 }
 
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024
+// a full image is at most the background image size the server takes
+const MAX_IMAGE_BYTES = LIMITS.backgroundSize.max * MIB
 const MAX_PREVIEW_BYTES = 4 * 1024 * 1024
 const STORAGE_TIMEOUT_MS = 750
 

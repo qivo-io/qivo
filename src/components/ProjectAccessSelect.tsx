@@ -6,14 +6,8 @@ import { NativeSelect } from '@/components/ui/native-select'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { DropdownChevron } from '@/components/ui/select'
 import { matchesAllWords } from '../lib/search'
-import {
-  type AccessLevel,
-  P,
-  type TeamAccessLevel,
-  type TeamVM,
-  type UserVM,
-} from '../store/planner'
-import { Avatar, Icon } from './qivo'
+import type { AccessLevel, TeamAccessLevel, TeamVM, UserVM } from '../store/planner'
+import { Avatar } from './qivo'
 
 /* "2 teams, 1 user": how many of each are selected. */
 const countOf = (teams: number, users: number) =>
@@ -52,10 +46,7 @@ export function ProjectAccessSelect({
   const inputId = useId()
   const query = search.trim()
   const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name)
-  // a team saved with a blank name is found by the label it shows
-  const matchingTeams = teams
-    .filter((team) => matchesAllWords(P.teamLabel(team), query))
-    .sort((a, b) => P.teamLabel(a).localeCompare(P.teamLabel(b)))
+  const matchingTeams = teams.filter((team) => matchesAllWords(team.name, query)).sort(byName)
   const matchingUsers = users.filter((user) => matchesAllWords(user.name, query)).sort(byName)
   const teamIds = Object.keys(teamAccess)
   const userIds = Object.keys(access)
@@ -150,18 +141,18 @@ export function ProjectAccessSelect({
                     <Checkbox
                       id={id}
                       data-project-access-team-option={team.id}
-                      aria-label={team.name.trim() ? `${team.name} team` : P.teamLabel(team)}
+                      aria-label={`${team.name} team`}
                       checked={selected}
                       onCheckedChange={(checked) =>
                         onTeamChange(team.id, checked === true ? 'user' : null)
                       }
                     />
-                    <span className="min-w-0 truncate text-sm">{P.teamLabel(team)}</span>
+                    <span className="min-w-0 truncate text-sm">{team.name}</span>
                   </label>
                   {selected && (
                     <NativeSelect
                       data-project-team-role={team.id}
-                      aria-label={`Project role for ${P.teamLabel(team)}`}
+                      aria-label={`Project role for ${team.name}`}
                       value={teamAccess[team.id]}
                       onChange={(event) =>
                         onTeamChange(team.id, event.target.value as TeamAccessLevel)

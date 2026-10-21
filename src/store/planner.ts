@@ -25,10 +25,21 @@ import type { Id } from '../../convex/_generated/dataModel'
 import { joinLists } from '../../convex/lib/arrayLimit'
 import { AVATAR_COLORS } from '../../convex/lib/avatarColors'
 import { BILLING_READ_ONLY, deletionReadOnly } from '../../convex/lib/billingAccess'
+import { asciiEmail, cleanEmail } from '../../convex/lib/email'
 import { descriptionForm, FIELD_CHANGED, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
 import type { FieldChange } from '../../convex/lib/functions'
 import { imageRefs, shownImages } from '../../convex/lib/imageRefs'
-import { TOO_MANY_MENTIONS, tooManyMentions } from '../../convex/lib/mentions'
+import {
+  DEFAULT_MESSAGE_RETENTION_DAYS,
+  grouped,
+  LIMITS,
+  type Limit,
+  MIB,
+  outsideWhole,
+  overText,
+  SLUG_SHAPE,
+} from '../../convex/lib/limits'
+import { tooManyMentions } from '../../convex/lib/mentions'
 import { roundTenths } from '../../convex/lib/numbers'
 import {
   canCreateProjects,
@@ -36,18 +47,8 @@ import {
   projectRightAfterUpdate,
 } from '../../convex/lib/projectCreators'
 import { creatorGrant, grantsAfterHandover } from '../../convex/lib/projectGrants'
-import { milestoneLabel, projectName, teamLabel } from '../../convex/lib/recordNames'
 import { resolveReviewHours, reviewStamp } from '../../convex/lib/review'
-import { REMAINING_HOURS_MAX, REMAINING_HOURS_RULE, SUBTASK_MAX } from '../../convex/lib/taskLimits'
 import { firstSittingDay, nextSyncStamp, SYNC_OWNERS_MAX } from '../../convex/lib/teamSync'
-import {
-  COMMENT_TOO_LONG,
-  DESCRIPTION_TOO_LONG,
-  NAME_MAX,
-  nameOverCap,
-  TEXT_MAX,
-  TEXT_MAX_LABEL,
-} from '../../convex/lib/textLimits'
 import { armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
 import { avatarCacheScope, createAvatarImageCache } from '../lib/avatarImageCache'
 import { createAvatarSources } from '../lib/avatarSources'
@@ -94,6 +95,7 @@ import {
 import { DELAY_COLORS, DELAY_LABELS, DELAY_NEUTRAL, type DelayInfo } from '../lib/delay'
 import type { PurgeRefusal, RestoreRefusal } from '../lib/deletedItems'
 import { DEMO_MODE, notifyDemoEnded } from '../lib/demoMode'
+import { sentence as asSentence, cleanName, limitSentence } from '../lib/fieldLimits'
 import { AVATAR_TYPES, avatarImage, compressImage } from '../lib/images'
 import { nameInitials } from '../lib/initials'
 import { groupProgress, groupSpan, isIssueDone, isIssueGroup } from '../lib/issueGroups'
@@ -993,11 +995,10 @@ const PRIORITIES: Record<string, { id: string; name: string; rank: number; color
    with two hex digits stuck on the end is not a colour at all. */
 const MILESTONE_COLOR = 'var(--milestone)'
 
-/* How long a READ inbox message is kept, in days, and the periods the setting
-   offers (0110). The number mirrors the old column default: a profile is
-   inserted without the value, so the optimistic row has to predict what the
-   default fills in, exactly as it does for plannable hours. */
-const DEFAULT_MESSAGE_RETENTION_DAYS = 7
+/* The periods, in days, the read message retention setting offers (0110).
+   A profile is inserted without a retention, so the optimistic row predicts
+   the server's DEFAULT_MESSAGE_RETENTION_DAYS, as it does for plannable
+   hours. */
 const MESSAGE_RETENTION_DAYS = [1, 7, 30, 90]
 
 /* Inbox writes are orgMutations and a bulk act (mark all read) can span
@@ -1152,22 +1153,40 @@ function toast(msg: string, tone: ToastTone = 'error') {
   window.showToast?.(msg, tone)
 }
 
-/** The save-time refusals for text over TEXT_MAX, the server's cap. The cap
-    counts the stored markdown, so formatting, link targets and mentions
-    count too. The editor and the store guards below share them. */
-export const TEXT_TOO_LONG = {
-  description: `Description too long to save. The limit is ${TEXT_MAX_LABEL} characters, including formatting.`,
-  comment: `Comment too long to save. The limit is ${TEXT_MAX_LABEL} characters, including formatting.`,
+/** Toasts `limit`'s sentence and answers true when `value`, trimmed, is over
+    it: the store's check before anything is painted, behind the field's
+    own (components/LimitedField.tsx). */
+function refuseOver(limit: Limit, value: string): boolean {
+  if (!overText(limit, value.trim())) return false
+  toast(limitSentence(limit))
+  return true
 }
 
-/** The save-time refusal of a description or comment `text` the server would
-    refuse, for its length (TEXT_TOO_LONG) or for mentioning more people than
-    MENTION_MAX (lib/mentions.ts), or null when it may be sent. The editor
-    and the store guards below share it, so a refused draft is kept. */
-export function textRefusal(kind: keyof typeof TEXT_TOO_LONG, text: string): string | null {
-  if (text.length > TEXT_MAX) return TEXT_TOO_LONG[kind]
-  if (tooManyMentions(text)) return asSentence(TOO_MANY_MENTIONS)
+/** Toasts `limit`'s sentence and answers true when `n` is not a whole
+    number within it. */
+function refuseOutside(limit: Limit, n: number): boolean {
+  if (!outsideWhole(limit, n)) return false
+  toast(limitSentence(limit))
+  return true
+}
+
+/** The sentence the server would refuse a description or comment `text`
+    with, trimmed as the server trims it: over `limit` (LIMITS.description or
+    LIMITS.comment), or mentioning more people than LIMITS.mentions allows
+    (lib/mentions.ts). Null when it may be sent. The editor and the store
+    guards below share it, so a refused draft is kept. */
+export function textRefusal(limit: Limit, text: string): string | null {
+  if (overText(limit, text.trim())) return limitSentence(limit)
+  if (tooManyMentions(text)) return limitSentence(LIMITS.mentions)
   return null
+}
+
+/** Toasts textRefusal's sentence and answers true when the server would
+    refuse `text`: the store's check before anything is painted. */
+function refuseText(limit: Limit, text: string): boolean {
+  const refusal = textRefusal(limit, text)
+  if (refusal) toast(refusal)
+  return refusal !== null
 }
 
 /* --- the write path ---------------------------------------------------------
@@ -1960,22 +1979,11 @@ const errData = (e: unknown): ErrData => (e instanceof ConvexError ? (e.data as 
    name the reason, and for a pending deletion its date, so they show verbatim. */
 const readOnly = (d: ErrData) =>
   d.reason === 'billing_required' || d.reason === 'deletion_scheduled'
-/** The app's words for the field rules a person can meet in it, which the
-    server says in the API's terms (REST and MCP keep them as they are). */
-const APP_RULE_WORDS = new Map([
-  [
-    REMAINING_HOURS_RULE,
-    `Remaining time must be between 0 and ${REMAINING_HOURS_MAX.toLocaleString('en-US')} hours.`,
-  ],
-  [DESCRIPTION_TOO_LONG, TEXT_TOO_LONG.description],
-  [COMMENT_TOO_LONG, TEXT_TOO_LONG.comment],
-])
-/** A refusal message as the app shows it: its own words for a field rule
-    (APP_RULE_WORDS), else the message capitalized and ending with a period
-    unless it already ends in `.`, `!` or `?`. Server messages are often
-    lowercase fragments, and a toast joins them with a sentence of its own. */
-const asSentence = (m: string) =>
-  APP_RULE_WORDS.get(m) ?? m.charAt(0).toUpperCase() + m.slice(1) + (/[.!?]$/.test(m) ? '' : '.')
+/* asSentence (lib/fieldLimits.ts sentence) shows a refusal message
+   capitalized and ending with a period. Server messages are often lowercase
+   fragments, and a toast joins them with a sentence of its own. A limit's
+   refusal reads as the registry writes it (convex/lib/limits.ts), the same
+   words REST and MCP answer. */
 
 /* --- snapshot health ---------------------------------------------------------
    The live snapshot (snapshot.forMe) can stop loading mid-session, after a
@@ -2291,10 +2299,7 @@ const refusedLines = new Map<number, FieldNoticeLine>()
 const fieldLookup = {
   record(change: FieldChange, seenName?: string): string {
     const task = (id: string | undefined) => (id && uuidToKey.get(id)) || 'a task'
-    // a name saved blank before names were required names nothing
-    const shown = (name: string | undefined) => name?.trim() || undefined
-    const named = (name: string | undefined, fallback: string) =>
-      shown(seenName) ?? shown(name) ?? fallback
+    const named = (name: string | undefined, fallback: string) => seenName ?? name ?? fallback
     switch (change.record) {
       case 'task':
         return task(change.id)
@@ -2303,22 +2308,21 @@ const fieldLookup = {
         return comment ? `this comment on ${task(comment.issue_id)}` : 'this comment'
       }
       case 'milestone': {
-        const name = shown(seenName) ?? shown(rows.milestones.get(change.id)?.name)
+        const name = seenName ?? rows.milestones.get(change.id)?.name
         return name ? `milestone “${name}”` : 'a milestone'
       }
       case 'project':
         return named(rows.projects.get(change.id)?.name, 'a project')
       case 'grant': {
         const who =
-          shown(rows.profiles.get(change.of ?? '')?.name) ??
-          shown(rows.teams.get(change.of ?? '')?.name)
-        const where = shown(rows.projects.get(change.id)?.name)
+          rows.profiles.get(change.of ?? '')?.name ?? rows.teams.get(change.of ?? '')?.name
+        const where = rows.projects.get(change.id)?.name
         return who && where ? `${who}'s access to ${where}` : 'an access level'
       }
       case 'team':
         return named(rows.teams.get(change.id)?.name, 'a team')
       case 'label': {
-        const name = shown(seenName) ?? shown(rows.labels.get(change.id)?.name)
+        const name = seenName ?? rows.labels.get(change.id)?.name
         return name ? `label “${name}”` : 'a label'
       }
       case 'profile':
@@ -2450,14 +2454,11 @@ function deletedItemsErrorText(e: unknown, failed: string): string {
   return `${failed}. Try again.`
 }
 
-/** The most ids one deletedItems.restore or purge call takes
-    (convex/model/deletedItems.ts RESTORE_MAX, PURGE_MAX). */
-const DELETED_ITEMS_BATCH = 25
-
-/* Sends `items` in calls of one organization and at most 25 ids each, one
-   call after another, and adds up the answers. A call refused whole fails
-   only its own ids. */
+/* Sends `items` in calls of one organization and at most `limit.max` ids
+   each (LIMITS.restoreBatch or LIMITS.purgeBatch), one call after another,
+   and adds up the answers. A call refused whole fails only its own ids. */
 async function deletedItemsCalls<Reason>(
+  limit: Limit,
   items: { id: string; org_id: string }[],
   call: (
     orgId: string,
@@ -2484,8 +2485,8 @@ async function deletedItemsCalls<Reason>(
     byOrg.set(org_id, ids)
   }
   for (const [orgId, ids] of byOrg) {
-    for (let at = 0; at < ids.length; at += DELETED_ITEMS_BATCH) {
-      const batch = ids.slice(at, at + DELETED_ITEMS_BATCH)
+    for (let at = 0; at < ids.length; at += limit.max) {
+      const batch = ids.slice(at, at + limit.max)
       try {
         const answer = await call(orgId, batch)
         outcome.done.push(...('restored' in answer ? answer.restored : answer.purged))
@@ -2499,23 +2500,6 @@ async function deletedItemsCalls<Reason>(
     }
   }
   return outcome
-}
-
-/** Toasts the server's refusal of a `what` name over NAME_MAX and answers
-    true, before anything is painted. A name stored before the cap shows in
-    its field and must be shortened to NAME_MAX before it saves; resending
-    the stored name passes (nameOverCap, model/projects.ts cleanProjectName
-    and its siblings). */
-function refuseLongName(
-  what: 'project' | 'team' | 'milestone' | 'organization',
-  name: string,
-  current: string,
-): boolean {
-  if (!nameOverCap(name.trim(), current)) return false
-  toast(
-    `${what === 'organization' ? 'An' : 'A'} ${what} name must be at most ${NAME_MAX} characters.`,
-  )
-  return true
 }
 
 /* A refused project create names what disappeared, followed by the reason
@@ -2544,7 +2528,7 @@ function toastCreateProjectError(e: unknown, label: string) {
 }
 
 /* The avatar mutators return an error SENTENCE (Settings toasts it verbatim).
-   A refusal's own message — the set_avatar right, the mime/2 MB rules — is
+   A refusal's own message — the set_avatar right, the type and size rules — is
    the best sentence there is; anything without one gets the fallback. */
 function avatarErrorText(e: unknown, fallback: string): string {
   const d = errData(e)
@@ -3303,7 +3287,7 @@ function rebuild(now = new Date(), full = false) {
       .sort(
         (a, b) =>
           (b.archivedAt || 0) - (a.archivedAt || 0) ||
-          PLANNER.projectName(a).localeCompare(PLANNER.projectName(b)) ||
+          a.name.localeCompare(b.name) ||
           byStamp('', a.id, '', b.id),
       ),
   )
@@ -3530,21 +3514,18 @@ function checkTasks(sources: TaskSources) {
 }
 
 /* --- email addresses ------------------------------------------------------
-   One rule, used by every write: trimmed and lowercased, empty means absent.
-   The server checks lowercase + per-org uniqueness; anything else is a
-   refusal from the mutation. */
-function normalizeEmail(v: unknown): string | null {
-  const e = String(v == null ? '' : v)
-    .trim()
-    .toLowerCase()
-  return e || null
-}
+   One rule, the server's (convex/lib/email.ts cleanEmail): an address the
+   mail sender can send to, trimmed, lowercased, with a Unicode domain
+   written as punycode, at most LIMITS.email.max characters. Every write
+   stores that form; null is an empty or unusable address. */
+const normalizeEmail = (v: unknown): string | null => cleanEmail(String(v ?? ''))
 
-/** Same shape as the only address check the server has (the invite regex):
-    something, an @, something, a dot, something — no whitespace anywhere.
-    Deliberately loose; the address is proved by someone signing in with it,
-    not by a pattern. */
-const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
+/** Why `v`, which normalizeEmail refused, cannot be a person's address: the
+    length sentence when its stored form is too long, as the server says. */
+const emailRefusal = (v: unknown): string =>
+  asciiEmail(String(v ?? '')).length > LIMITS.email.max
+    ? limitSentence(LIMITS.email)
+    : 'Enter an email address for sign-in.'
 
 /* --- sub-issue remaining rollup (0066) — the optimistic mirror ------------
    A task that gains a subtask loses its own hours, at `at`. */
@@ -3576,15 +3557,9 @@ function eachDescendant(it: IssueVM, visit: (child: IssueVM) => void) {
 }
 
 /* --- issue field mapping (app patch -> DB patch) ------------------------------ */
-// Hard cap on issue titles, mirrored by the server check (0061) and the
-// REST/MCP validators. Sliced by codepoint to match the server's char count —
-// a plain .slice can split a surrogate pair and the server rejects the half.
-export const TITLE_MAX = 80
-const clampTitle = (t: unknown) => [...String(t ?? '').trim()].slice(0, TITLE_MAX).join('')
-
-// Same cap, same reason, for a person's name (0116) and every other name the
-// server caps (convex/lib/textLimits.ts NAME_MAX).
-export { NAME_MAX }
+// A title as the server stores it, trimmed. One over LIMITS.title is refused
+// before it gets here (refuseOver), never cut.
+const cleanTitle = (t: unknown) => String(t ?? '').trim()
 
 /* The app-side patch: camelCase fields, week INDEXES for dates, null (or ''
    for remaining) meaning clear — what every issue-editing surface hands
@@ -3906,7 +3881,7 @@ export type NewIssueInput = IssuePatch & { project: string }
 type IssueWirePatch = FunctionArgs<typeof api.issues.update>['patch']
 function mapIssuePatch(patch: IssuePatch): IssueWirePatch {
   const db: IssueWirePatch = {}
-  if ('title' in patch) db.title = clampTitle(patch.title)
+  if ('title' in patch) db.title = cleanTitle(patch.title)
   if ('description' in patch) db.description = patch.description || '' // required column; drawer commits null to clear
   if ('status' in patch) db.status = patch.status
   if ('priority' in patch) db.priority = patch.priority
@@ -4289,8 +4264,6 @@ export const PLANNER = {
   TODAY_POS,
   TODAY_ISO,
   MONTHS,
-  TITLE_MAX,
-  NAME_MAX,
   weekToDate,
   fmtDate,
   weekLabel,
@@ -4399,13 +4372,11 @@ export const PLANNER = {
   /** "#4" when another project shown alongside this one has the same name. */
   projectTag: (id: string | null | undefined): string | null =>
     (id && PLANNER.projectTags.get(id)) || null,
-  projectName,
   /** A project's name for plain-text places such as select options, with its
       number when the name is shared ("Test #4"). */
-  projectLabel: (p: { id: string; name: string; type: ProjectVM['type'] }): string => {
+  projectLabel: (p: { id: string; name: string }): string => {
     const tag = PLANNER.projectTag(p.id)
-    const name = PLANNER.projectName(p)
-    return tag ? `${name} ${tag}` : name
+    return tag ? `${p.name} ${tag}` : p.name
   },
   /** projectLabel for a project id; '' when the project is not loaded. */
   projectLabelOf: (id: string | null | undefined): string => {
@@ -4428,8 +4399,6 @@ export const PLANNER = {
       : PLANNER.projectLabel(project),
   user: (id: string | null | undefined): UserVM | undefined => findUser(PLANNER.users, id),
   teamById: (id: string | null | undefined): TeamVM | undefined => findTeam(PLANNER.teams, id),
-  teamLabel,
-  milestoneLabel,
   metaOf: (pid: string | null | undefined): ProjectVM | null => {
     const p = PLANNER.project(pid)
     if (!p) return null
@@ -4603,7 +4572,7 @@ export const PLANNER = {
       mine: false,
       only: null,
       id: p.id,
-      name: PLANNER.projectName(p),
+      name: p.name,
       proj: p as ProjectVM | null,
       isMeta,
       metas: meta ? [meta] : [],
@@ -5047,7 +5016,7 @@ export const PLANNER = {
     }
     const removed = await removeAtOnce(change, choice, items, stays)
     if (removed && change.kind === 'deleteTeam' && team)
-      toast(`Team “${PLANNER.teamLabel(team)}” deleted`, 'success')
+      toast(`Team “${team.name}” deleted`, 'success')
     return removed
   },
   /* Whether the access a removal takes away is still there: someone else may
@@ -5098,7 +5067,7 @@ export const PLANNER = {
   guestProjects: (profileId: string) =>
     PLANNER.projects
       .filter((p) => !!p.access?.[profileId])
-      .map((p) => ({ id: p.id, name: PLANNER.projectName(p), level: p.access?.[profileId] })),
+      .map((p) => ({ id: p.id, name: p.name, level: p.access?.[profileId] })),
   /* URL support (0081). An org-prefixed link names the organization by slug;
      these two turn that segment into the handle/project the app threads. */
   orgBySlug: (slug: string) =>
@@ -5142,8 +5111,10 @@ export const PLANNER = {
     if (!org) return null
     // a seat the address already names: the level it holds on screen, so a
     // change made meanwhile is not overwritten unseen
-    const address = email.trim().toLowerCase()
-    const seat = [...rows.profiles.values()].find((p) => p.org_id === org && p.email === address)
+    const address = normalizeEmail(email)
+    const seat = address
+      ? [...rows.profiles.values()].find((p) => p.org_id === org && p.email === address)
+      : undefined
     const held =
       seat && rows.access.find((a) => a.project_id === metaId && a.profile_id === seat.id)
     let invited: { id: string; emailed: boolean }
@@ -5496,7 +5467,8 @@ export const PLANNER = {
     // Numbering, org and reporter all follow the TARGET project's organization
     // (0081): creating in a foreign project is attributed to my guest profile
     const orgRow = proj ? rows.orgs.get(proj.org_id) : null
-    if (proj?.type !== 'project' || !orgRow || refusePausedEdit()) return null
+    if (proj?.type !== 'project' || !orgRow) return null
+    if (refuseOver(LIMITS.title, cleanTitle(it.title)) || refusePausedEdit()) return null
     const uuid = crypto.randomUUID()
     const now = new Date().toISOString()
     const previewNum = (orgRow.next_issue_num || 0) + 1
@@ -5510,7 +5482,7 @@ export const PLANNER = {
       project_id: it.project,
       num: previewNum,
       org_id: orgRow.id,
-      title: clampTitle(it.title),
+      title: cleanTitle(it.title),
       description: it.description || '',
       status: it.status || 'backlog',
       priority: it.priority || 'low',
@@ -5605,16 +5577,11 @@ export const PLANNER = {
     if (!row || !uuid || !patch || !Object.keys(patch).length) return Promise.resolve(false)
     if (refusePausedEdit()) return Promise.resolve(false)
     // text the server would refuse is refused before the paint, so a draft
-    // is never lost to a refusal; a task saved before the cap may send its
-    // stored text back unchanged, as the server allows
-    if ('description' in patch) {
-      const text = patch.description ?? ''
-      const refusal = text === row.description ? null : textRefusal('description', text)
-      if (refusal) {
-        toast(refusal)
-        return Promise.resolve(false)
-      }
-    }
+    // is never lost to a refusal
+    if ('title' in patch && refuseOver(LIMITS.title, cleanTitle(patch.title)))
+      return Promise.resolve(false)
+    if ('description' in patch && refuseText(LIMITS.description, patch.description ?? ''))
+      return Promise.resolve(false)
     // whoever holds a subtask must see every task above it: refuse here, with
     // the server's reason, before anything is painted (a hidden parent is
     // left to the server)
@@ -5733,11 +5700,7 @@ export const PLANNER = {
     return data.map((r) => ({
       issueUuid: r.issue_id || null,
       projectId: r.project_id || null,
-      // a task lives in a sub-project
-      projectName:
-        r.project_name === null
-          ? null
-          : PLANNER.projectName({ name: r.project_name, type: 'project' }),
+      projectName: r.project_name || null,
       start: isoToWeek(r.start_week),
       end: isoToWeek(r.end_week),
       remaining: r.remaining != null ? Number(r.remaining) : 0,
@@ -5769,13 +5732,13 @@ export const PLANNER = {
       makes it that task's parent, for the Parent picker, in one server
       transaction (api.issues.createParent). The view holds no archived
       subtasks, which also keep a task from getting a parent
-      (convex/lib/taskLimits.ts), so a refusal shows its sentence and takes
+      (convex/lib/limits.ts), so a refusal shows its sentence and takes
       the new task away again. The new task paints at once, with
       createIssueCore's defaults. */
   createParent: (id: string, title: string): void => {
     const it = PLANNER.issueById[id]
     const orgRow = it ? rows.orgs.get(it.org) : undefined
-    if (!it || !orgRow || refusePausedEdit()) return
+    if (!it || !orgRow || refuseOver(LIMITS.title, title) || refusePausedEdit()) return
     const parentId = crypto.randomUUID()
     const at = new Date().toISOString()
     const me = profileIn(it.org) || undefined
@@ -5784,7 +5747,7 @@ export const PLANNER = {
       project_id: it.project,
       num: (orgRow.next_issue_num || 0) + 1,
       org_id: it.org,
-      title: clampTitle(title),
+      title: cleanTitle(title),
       description: '',
       status: 'backlog',
       priority: 'low',
@@ -5832,10 +5795,10 @@ export const PLANNER = {
   createLinked: (id: string, type: string, title: string): void => {
     const it = PLANNER.issueById[id]
     const orgRow = it ? rows.orgs.get(it.org) : undefined
-    if (!it || !orgRow || refusePausedEdit()) return
+    if (!it || !orgRow || refuseOver(LIMITS.title, title) || refusePausedEdit()) return
     const full = linkBlock(it.links ?? [])
     if (full) {
-      toast(`${full}.`)
+      toast(full)
       return
     }
     const kind = type === 'blocks' || type === 'blocked_by' ? type : 'relates'
@@ -5847,7 +5810,7 @@ export const PLANNER = {
       project_id: it.project,
       num: (orgRow.next_issue_num || 0) + 1,
       org_id: it.org,
-      title: clampTitle(title),
+      title: cleanTitle(title),
       description: '',
       status: 'backlog',
       priority: 'low',
@@ -6080,12 +6043,12 @@ export const PLANNER = {
     pendingRestoreIssueIds.add(issueUuid)
     try {
       const out = await sendAwaited(api.issues.unarchive, { org_id: org, id: issueUuid }, 'none')
-      // the parent was full (convex/lib/taskLimits.ts SUBTASK_MAX), or was
-      // deleted after this task was archived and came back since
+      // the parent was full (LIMITS.subtasks), or was deleted after this
+      // task was archived and came back since
       if (out.left_parent) {
         const why =
           out.left_parent === 'full'
-            ? `its parent already has ${SUBTASK_MAX} active subtasks`
+            ? `its parent already has ${grouped(LIMITS.subtasks.max)} active subtasks`
             : 'its parent was deleted after this task was archived'
         toast(
           `${title ? `"${title}"` : 'The task'} is back as a top-level task, because ${why}.`,
@@ -6159,7 +6122,7 @@ export const PLANNER = {
       linkBlock(PLANNER.issueById[srcId]?.links ?? []) ||
       linkBlock(PLANNER.issueById[dstId]?.links ?? [], PLANNER.issueById[dstId]?.key)
     if (full) {
-      toast(`${full}.`)
+      toast(full)
       return
     }
     // canonical storage stays client-side: blocks is directed source→target,
@@ -6243,7 +6206,8 @@ export const PLANNER = {
   projectAttachmentLimit: (projectId: string) => {
     const project = rows.projects.get(projectId)
     const org = project ? rows.orgs.get(project.org_id) : null
-    return Math.min(org?.max_attachment_mb ?? 20, 20) * 1024 * 1024
+    const cap = LIMITS.attachmentSize.max
+    return Math.min(org?.max_attachment_mb ?? cap, cap) * MIB
   },
 
   /** Takes a derived key or the issue uuid, like addAttachment. */
@@ -6290,7 +6254,7 @@ export const PLANNER = {
         ).length,
       )
       if (full) {
-        toast(`Couldn't upload "${file.name}". ${full}.`)
+        toast(`Couldn't upload "${file.name}". ${full}`)
         return null
       }
       const limit = PLANNER.attachmentLimit(issueKey)
@@ -6704,20 +6668,14 @@ export const PLANNER = {
       whether the server saved it, so the caller keeps the draft until it
       did. A body the server would refuse after trimming (textRefusal), or
       any comment while edits are paused, is refused here with a toast,
-      before the optimistic row.
-      A server refusal, such as lost access, is toasted and its row
-      taken away before the promise resolves false. */
+      before the optimistic row. A server refusal, such as lost access, is
+      toasted and its row taken away before the promise resolves false. */
   addComment: (issueUuid: string, body: string): Promise<boolean> => {
     const row = rows.issues.get(issueUuid)
     if (!row) return Promise.resolve(false)
     const text = (body || '').trim()
-    if (!text) return Promise.resolve(false)
-    const refusal = textRefusal('comment', text)
-    if (refusal) {
-      toast(refusal)
+    if (!text || refuseText(LIMITS.comment, text) || refusePausedEdit())
       return Promise.resolve(false)
-    }
-    if (refusePausedEdit()) return Promise.resolve(false)
     const rec: Row<'comments'> = {
       id: crypto.randomUUID(),
       issue_id: issueUuid,
@@ -6743,7 +6701,8 @@ export const PLANNER = {
       Resolves whether the server saved it, so the editor keeps the draft
       until it did; the same text resolves true without a write, and a
       missing comment or a blank body false. A body the server would refuse
-      (textRefusal) is refused here with a toast, before the paint. */
+      (textRefusal) is refused here with a toast, before the paint, even when
+      it is the stored body. */
   updateComment: (
     id: string,
     body: string,
@@ -6751,13 +6710,8 @@ export const PLANNER = {
   ): Promise<boolean> => {
     const rec = rows.comments.get(id)
     const text = (body || '').trim()
-    if (!rec || !text) return Promise.resolve(false)
+    if (!rec || !text || refuseText(LIMITS.comment, text)) return Promise.resolve(false)
     if (rec.body === text) return Promise.resolve(true)
-    const refusal = textRefusal('comment', text)
-    if (refusal) {
-      toast(refusal)
-      return Promise.resolve(false)
-    }
     if (refusePausedEdit()) return Promise.resolve(false)
     const issue = rows.issues.get(rec.issue_id)
     const org = issue ? issue.org_id : HOME_ORG
@@ -7072,11 +7026,9 @@ export const PLANNER = {
     if (!me) return 'You are not signed in'
     // collapse runs of whitespace as well as trimming, exactly as the server
     // does, so what the field echoes back is what would be stored
-    const next = String(name ?? '')
-      .replace(/\s+/g, ' ')
-      .trim()
+    const next = cleanName(String(name ?? ''))
     if (!next) return 'A name cannot be blank'
-    if ([...next].length > NAME_MAX) return `A name is at most ${NAME_MAX} characters`
+    if (overText(LIMITS.personName, next)) return limitSentence(LIMITS.personName)
     if (next === me.name) return null
     let sentence: string | null
     try {
@@ -7387,7 +7339,9 @@ export const PLANNER = {
   updateProject: (id: string, patch: ProjectPatch): Promise<boolean> => {
     const row = rows.projects.get(id)
     if (!row || refusePausedEdit()) return Promise.resolve(false)
-    if ('name' in patch && refuseLongName('project', patch.name ?? '', row.name))
+    if ('name' in patch && refuseOver(LIMITS.projectName, patch.name ?? ''))
+      return Promise.resolve(false)
+    if ('description' in patch && refuseOver(LIMITS.projectDescription, patch.description ?? ''))
       return Promise.resolve(false)
     const wire: FunctionArgs<typeof api.projects.update>['patch'] = {}
     if ('name' in patch) wire.name = patch.name
@@ -7526,6 +7480,7 @@ export const PLANNER = {
     { bulk = false }: { bulk?: boolean } = {},
   ): Promise<DeletedItemsOutcome<RestoreRefusal>> =>
     deletedItemsCalls(
+      LIMITS.restoreBatch,
       items,
       (orgId, ids) =>
         sendAwaited(
@@ -7542,6 +7497,7 @@ export const PLANNER = {
     items: { id: string; org_id: string }[],
   ): Promise<DeletedItemsOutcome<PurgeRefusal>> =>
     deletedItemsCalls(
+      LIMITS.purgeBatch,
       items,
       (orgId, ids) => sendAwaited(api.deletedItems.purge, { org_id: orgId, ids }, 'none'),
       "Couldn't delete it for good",
@@ -7574,15 +7530,25 @@ export const PLANNER = {
   },
 
   /* Organization settings — the old six independent UPDATEs fold into ONE
-     patch mutation; the client clamps stay (the field must show what will be
-     stored before it is). Narrates nothing, name included. Resolves whether
+     patch mutation. A name or number outside its limit is refused here with
+     the limit's sentence, never clamped. Narrates nothing, name included. Resolves whether
      the server saved the change: false without sending when it refused the
      change first (toasted) or there is no home organization here, and false
      after a refusal, which is toasted and taken back. */
   setOrg: (patch: OrgPatch): Promise<boolean> => {
     const org = homeRow()
     if (!org || refusePausedEdit()) return Promise.resolve(false)
-    if ('name' in patch && refuseLongName('organization', patch.name ?? '', org.name))
+    if ('name' in patch && refuseOver(LIMITS.orgName, patch.name ?? ''))
+      return Promise.resolve(false)
+    if (
+      'defaultPlannableHours' in patch &&
+      refuseOutside(LIMITS.plannableHours, Number(patch.defaultPlannableHours))
+    )
+      return Promise.resolve(false)
+    if (
+      'maxAttachmentMb' in patch &&
+      refuseOutside(LIMITS.attachmentLimit, Number(patch.maxAttachmentMb))
+    )
       return Promise.resolve(false)
     const wire: FunctionArgs<typeof api.orgs.update>['patch'] = {}
     if ('name' in patch) wire.name = patch.name
@@ -7597,18 +7563,9 @@ export const PLANNER = {
       wire.week_start = patch.weekStart
     if ('weekOneRule' in patch && (WEEK_ONE_RULES as readonly string[]).includes(patch.weekOneRule))
       wire.week_one_rule = patch.weekOneRule
-    // whole hours, within the server check [1, 168] — the same clamp the
-    // per-person setter uses, since this is the value it starts from
     if ('defaultPlannableHours' in patch)
-      wire.default_plannable_hours = Math.max(
-        1,
-        Math.min(168, Math.round(Number(patch.defaultPlannableHours) || 0)),
-      )
-    if ('maxAttachmentMb' in patch)
-      wire.max_attachment_mb = Math.max(
-        1,
-        Math.min(20, Math.round(Number(patch.maxAttachmentMb) || 0)),
-      )
+      wire.default_plannable_hours = Number(patch.defaultPlannableHours)
+    if ('maxAttachmentMb' in patch) wire.max_attachment_mb = Number(patch.maxAttachmentMb)
     if ('projectCreators' in patch && isProjectCreators(patch.projectCreators))
       wire.project_creators = patch.projectCreators
     if (!Object.keys(wire).length) return Promise.resolve(true)
@@ -7641,9 +7598,7 @@ export const PLANNER = {
       .toLowerCase()
     if (!slug) return 'An address cannot be empty'
     if (slug === org.slug) return null
-    if (slug.length > 40 || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug)) {
-      return 'Use lowercase letters, digits and single hyphens; 40 characters maximum.'
-    }
+    if (overText(LIMITS.slug, slug) || !SLUG_SHAPE.test(slug)) return limitSentence(LIMITS.slug)
     const orgId = org.id
     try {
       // the accepted address paints now, so the address-bar sync moves now
@@ -7698,7 +7653,7 @@ export const PLANNER = {
   updateTeam: (id: string, patch: TeamPatch): Promise<boolean> => {
     const row = rows.teams.get(id)
     if (!row || refusePausedEdit()) return Promise.resolve(false)
-    if ('name' in patch && refuseLongName('team', patch.name ?? '', row.name))
+    if ('name' in patch && refuseOver(LIMITS.teamName, patch.name ?? ''))
       return Promise.resolve(false)
     const wire: FunctionArgs<typeof api.teams.update>['patch'] = {}
     if ('name' in patch) wire.name = patch.name
@@ -7764,9 +7719,14 @@ export const PLANNER = {
     const isAgent = rec.kind === 'agent'
     const email = isAgent ? null : normalizeEmail(rec.email)
     if (!isAgent && !PLANNER.emailLooksValid(email)) {
-      toast('Enter an email address for sign-in.')
+      toast(emailRefusal(rec.email))
       return
     }
+    // the SAME rule the server applies on a rename (0116), so a person's
+    // initials do not silently change shape the first time they rename, and
+    // the cap counts the name as stored
+    const name = cleanName(String(rec.name ?? ''))
+    if (refuseOver(LIMITS.personName, name)) return
     if (
       email &&
       [...rows.profiles.values()].some((p) => p.org_id === org.id && p.email === email)
@@ -7775,11 +7735,6 @@ export const PLANNER = {
       return
     }
     const uuid = crypto.randomUUID()
-    // the SAME rule the server applies on a rename (0116), so a person's
-    // initials do not silently change shape the first time they rename
-    const name = String(rec.name ?? '')
-      .replace(/\s+/g, ' ')
-      .trim()
     const orgRole = rec.orgRole === 'viewer' ? 'viewer' : isAgent ? 'user' : rec.orgRole || 'user'
     const row: Row<'profiles'> = {
       id: uuid,
@@ -7853,17 +7808,12 @@ export const PLANNER = {
        the same rules); a refusal here aborts the whole patch, matching the
        server's all-or-nothing mutation. */
     if ('name' in patch) {
-      const next = String(patch.name ?? '')
-        .replace(/\s+/g, ' ')
-        .trim()
+      const next = cleanName(String(patch.name ?? ''))
       if (!next) {
         toast('A name cannot be blank')
         return false
       }
-      if ([...next].length > NAME_MAX) {
-        toast(`A name is at most ${NAME_MAX} characters`)
-        return false
-      }
+      if (refuseOver(LIMITS.personName, next)) return false
     }
     if ('email' in patch) {
       const next = normalizeEmail(patch.email)
@@ -7881,7 +7831,7 @@ export const PLANNER = {
         return false
       }
       if (!PLANNER.emailLooksValid(next)) {
-        toast('Enter an email address for sign-in.')
+        toast(emailRefusal(patch.email))
         return false
       }
       if (taken) {
@@ -7889,13 +7839,19 @@ export const PLANNER = {
         return false
       }
     }
+    if (
+      'plannableHours' in patch &&
+      row.kind !== 'agent' &&
+      refuseOutside(LIMITS.plannableHours, Number(patch.plannableHours))
+    )
+      return false
     // Capacity has its own write path (0094): the column may also be set by
     // a team's LEADER, so it is its own mutation (orgMutation, not admin),
-    // with its own layer. An agent has no plannable week (0103) — skipping
-    // rather than clamping matters: Math.min(168, Infinity) is 168, the
-    // loudest wrong answer.
+    // with its own layer. An agent has no plannable week (0103), so its
+    // hours are skipped; hours outside LIMITS.plannableHours were refused
+    // above, never clamped.
     if ('plannableHours' in patch && row.kind !== 'agent') {
-      const h = Math.max(1, Math.min(168, Math.round(Number(patch.plannableHours) || 0)))
+      const h = Number(patch.plannableHours)
       const hours: View = {
         workspace: () => {
           const live = rows.profiles.get(id)
@@ -7926,9 +7882,7 @@ export const PLANNER = {
        an admin's authority stops at their organization; set_display_name's
        every-seat fan-out is the other door, and they are different rules. */
     if ('name' in patch) {
-      const next = String(patch.name ?? '')
-        .replace(/\s+/g, ' ')
-        .trim()
+      const next = cleanName(String(patch.name ?? ''))
       if (next !== row.name) {
         db.name = next
         db.initials = nameInitials(next)
@@ -7993,12 +7947,10 @@ export const PLANNER = {
     return true
   },
 
-  /** Does this look like an address the app can store? The UI asks before
-      offering to write one; the server's own regex is the same shape. */
-  emailLooksValid: (v: unknown) => {
-    const e = normalizeEmail(v)
-    return !!e && EMAIL_RE.test(e)
-  },
+  /** Whether `v` is an address the app can store: the server's own rule
+      (convex/lib/email.ts cleanEmail). The UI asks before offering to
+      write one. */
+  emailLooksValid: (v: unknown) => normalizeEmail(v) !== null,
 
   /* --- profile picture ------------------------------------------------------
      Who may: that person, or an admin of their organization. The server owns
@@ -8018,7 +7970,7 @@ export const PLANNER = {
 
   /** Upload a picture and hang it on the profile: files.avatarUploadUrl →
       POST → files.setAvatar. Returns an error string, or null when it landed.
-      The mime and 2 MB pre-checks mirror the server's (the old avatars
+      The type and LIMITS.avatarSize pre-checks mirror the server's (the old avatars
       bucket's rules, now enforced in files.setAvatar) so a refusal is caught
       before any bytes move. bc022c2's bytes-first/rows-first ceremony
       collapses server-side: row-swap and old-byte delete commit atomically. */
@@ -8035,7 +7987,7 @@ export const PLANNER = {
     // an avatar is fetched on nearly every screen, so the bytes matter more
     // here than anywhere else in the app
     const small = await avatarImage(file)
-    if (small.size > 2 * 1024 * 1024) return 'A picture has to be at most 2 MB'
+    if (small.size > LIMITS.avatarSize.max * MIB) return limitSentence(LIMITS.avatarSize)
     try {
       const url = await sendAwaited(api.files.avatarUploadUrl, { profile_id: profileId }, 'none')
       const res = await fetch(browserBackendUrl(url), {
@@ -8284,7 +8236,7 @@ export const PLANNER = {
     if (patch.week != null && patch.week !== isoToWeek(shown.week)) db.week = weekToISO(patch.week)
     if (!Object.keys(db).length) return Promise.resolve(true)
     if (refusePausedEdit()) return Promise.resolve(false)
-    if ('name' in patch && refuseLongName('milestone', patch.name ?? '', row.name))
+    if ('name' in patch && refuseOver(LIMITS.milestoneName, patch.name ?? ''))
       return Promise.resolve(false)
     const view: View = {
       workspace: () => {
@@ -8332,14 +8284,16 @@ export const PLANNER = {
   /** Paints a new label at once. Returns its id and whether the server
       created it, or the existing label of that name with nothing sent. Null
       when it refused the change first (toasted) or there is nothing to
-      create. A refusal after sending is toasted and taken back. */
+      create. A name over LIMITS.labelName is refused with its sentence
+      before anything else, so no label is made or matched from a cut name.
+      A refusal after sending is toasted and taken back. */
   addLabel: (rec: {
     name?: string
     color?: string
   }): { id: string; saved: Promise<boolean> } | null => {
-    const name = (rec.name || '').trim().slice(0, 40)
+    const name = (rec.name || '').trim()
     const org = homeRow()
-    if (!name || !org) return null
+    if (!name || !org || refuseOver(LIMITS.labelName, name)) return null
     // the vocabulary is per ORGANIZATION and the cache is blended (0081):
     // a same-named label in a host org must not be returned as "already there"
     const dup = [...rows.labels.values()].find(
@@ -8378,8 +8332,8 @@ export const PLANNER = {
     if (!row || refusePausedEdit()) return false
     const wire: FunctionArgs<typeof api.labels.update>['patch'] = {}
     if ('name' in patch) {
-      const name = (patch.name || '').trim().slice(0, 40)
-      if (!name) return false
+      const name = (patch.name || '').trim()
+      if (!name || refuseOver(LIMITS.labelName, name)) return false
       // names are unique per organization, as in addLabel and on the server;
       // a guest's cache also holds the host organization's labels
       const dup = [...rows.labels.values()].find(
@@ -8441,7 +8395,7 @@ export const PLANNER = {
     const on = !rows.issueLabels.some((il) => il.issue_id === uuid && il.label_id === labelId)
     const full = on && labelBlock(rows.issueLabels.filter((il) => il.issue_id === uuid))
     if (full) {
-      toast(`${full}.`)
+      toast(full)
       return
     }
     const view: View = {

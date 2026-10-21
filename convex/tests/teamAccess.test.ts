@@ -160,7 +160,7 @@ describe('project team sharing', () => {
       /active user with Edit permission or higher on its project/,
     )
     await expectRefusal(
-      as(t, person).query(api.snapshot.commentsForIssue, { org_id: f.org.id, issue_id: issue.id }),
+      as(t, person).query(api.snapshot.commentThread, { org_id: f.org.id, issue_id: issue.id }),
       'not_found',
     )
   })

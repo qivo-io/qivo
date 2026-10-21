@@ -58,7 +58,6 @@ import {
   CALLER_GONE,
   type Caller,
   type Catalogue,
-  COMMENT_PAGE_MAX,
   commentOut,
   credentialVia,
   destinationOf,
@@ -96,12 +95,14 @@ import {
   type ProfileKind,
   vCredentialAccess,
 } from '../lib/enums'
-import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
+import { badRequest, forbidden, notFound, type Refusal, rule } from '../lib/functions'
+import { limitedText } from '../lib/limitRules'
+import { LIMITS, serviceBusy, tooManyRequests } from '../lib/limits'
 import { utcToday } from '../lib/machineDelay'
 import { mcpResource } from '../lib/oauth'
 import { type EventOwner, vEventOwner } from '../lib/taskEvents'
-import { ingressShard } from '../model/billingUsage'
-import { assertArchiveReasonFits, postComment } from '../model/comments'
+import { ingressShard, machineRetryAfter } from '../model/billingUsage'
+import { postComment } from '../model/comments'
 import { moveTasksToTrash } from '../model/deletedItems'
 import { parseExpected, refuseCreateExpected, sentKeys } from '../model/expected'
 import {
@@ -154,8 +155,10 @@ import { conflictRetrying, type MachineEntry, type Principal, runEntry } from '.
 import {
   REST_CALLER as CALLER,
   internalError,
+  listOffset,
   needJson,
   optionalJson,
+  pageLimit,
   restProvenance as provenanceOf,
   REST_NOT_UTF8,
   readBody,
@@ -165,7 +168,6 @@ import {
   WRITE_CONFLICT,
   WRITE_CONFLICT_MESSAGE,
   WRITE_CONFLICT_RETRY_AFTER,
-  wholeParam,
 } from './shared'
 import { TEAM_ROUTES } from './teams'
 
@@ -413,8 +415,7 @@ function archiveReason(b: Record<string, unknown>): string | undefined {
   if (!('archive_reason' in b)) return undefined
   if (typeof b.archive_reason !== 'string') throw badRequest('archive_reason must be a string')
   if (b.archived !== true) throw badRequest('archive_reason needs archived set to true')
-  assertArchiveReasonFits(b.archive_reason)
-  return b.archive_reason
+  return limitedText(LIMITS.archiveReason, b.archive_reason)
 }
 
 /* Presence-driven fields → the model's IssuePatch (a key's presence means
@@ -539,8 +540,10 @@ export const updateUser = internalMutation({
     refuseUnknownFields(b, ['plannable_hours', 'expected'])
     const expected = parseExpected(PLANNABLE_FIELDS, b.expected, sentKeys(PLANNABLE_FIELDS, b))
     if (!('plannable_hours' in b)) throw badRequest('no recognized fields to update')
+    // the shape first, as MCP's integer schema does; the core checks the
+    // range after the rights, with the same sentence
     if (typeof b.plannable_hours !== 'number' || !Number.isInteger(b.plannable_hours)) {
-      throw badRequest('plannable hours must be a whole number of hours from 1 to 168')
+      throw rule(LIMITS.plannableHours.refusal)
     }
     try {
       const fresh = await setPlannableHoursCore(ctx, {
@@ -562,13 +565,13 @@ export const updateUser = internalMutation({
 /* --------------------------------------------------------------- issues -- */
 
 /* GET /v1/tasks — filters + scope expansion (rest:368-403). Query params
- * arrive as raw strings so the parsing quirks stay byte-faithful: limit 0/NaN
- * → 100, limit -5 → 1, offset NaN → 0, `archived=maybe` → 400. Active tasks
- * answer an array paged with `offset`. Archived tasks need `project` and
- * answer `{next_cursor, tasks}`, paged with `cursor` (lib/core.ts
- * listArchivedIssuesCore), and refuse any `offset` but 0, `abc` and -5 too.
- * `today` is the HTTP action's UTC day, which active rows' delay is judged
- * by. */
+ * arrive as raw strings. `limit` and `offset` follow MCP list_tasks's rules
+ * (shared.ts pageLimit, pageOffset), so a value out of range is refused
+ * rather than changed. Active tasks answer an array paged with `offset`.
+ * Archived tasks need `project` and answer `{next_cursor, tasks}`, paged
+ * with `cursor` (lib/core.ts listArchivedIssuesCore), and refuse any
+ * `offset` but 0. `today` is the HTTP action's UTC day, which active rows'
+ * delay is judged by. */
 export const listIssues = internalQuery({
   args: {
     callerId: v.string(),
@@ -604,10 +607,9 @@ export const listIssues = internalQuery({
     }
     if (a.assignee && !UUID.test(a.assignee)) throw badRequest('assignee must be a profile uuid')
     if (a.owner && !UUID.test(a.owner)) throw badRequest('owner must be a profile uuid')
-    const limit = Math.min(Math.max(Number(a.limit ?? 100) || 100, 1), 200)
+    const limit = pageLimit(LIMITS.listTasks, a.limit)
     const archived = a.archived === 'true'
-    // an archived list refuses any offset but 0, so it takes the value as sent
-    const offset = archived ? Number(a.offset || 0) : Math.max(Number(a.offset ?? 0) || 0, 0)
+    const offset = listOffset(a.offset, archived)
     const filters = {
       statuses: statuses as IssueStatus[],
       priority: a.priority ? (a.priority as IssuePriority) : undefined,
@@ -912,7 +914,7 @@ export const listComments = internalQuery({
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
     const rows = await listCommentsCore(ctx, issue.id, {
-      limit: wholeParam(a.limit, 'limit', COMMENT_PAGE_MAX, 1, COMMENT_PAGE_MAX),
+      limit: pageLimit(LIMITS.listComments, a.limit),
       before: a.before,
     })
     const names = await orgNames(ctx, me.org_id)
@@ -1103,13 +1105,19 @@ const json = (body: unknown, status: number): Response =>
 const err = (message: string, status: number): Response => json({ error: message }, status)
 
 /* The 413 for a body over BODY_MAX_BYTES (shared.ts readBody). */
-const tooLarge = (): Response => err('request body is too large', 413)
+const tooLarge = (): Response => err(LIMITS.requestBody.refusal, 413)
 
-const rateLimited = (): Response =>
-  new Response(JSON.stringify({ error: 'Too many requests. Try again in 60 seconds.' }), {
+/* The 429 for a request past the rate limit, which names the seconds left
+ * in the minute's window in its sentence and in Retry-After. The
+ * per-profile limit answers tooManyRequests; the deployment-wide ingress
+ * limit answers serviceBusy, which does not blame the caller's own rate. */
+const rateLimited = (sentence: (seconds: number) => string = tooManyRequests): Response => {
+  const seconds = machineRetryAfter()
+  return new Response(JSON.stringify({ error: sentence(seconds) }), {
     status: 429,
-    headers: { ...CORS, 'Content-Type': 'application/json', 'Retry-After': '60' },
+    headers: { ...CORS, 'Content-Type': 'application/json', 'Retry-After': String(seconds) },
   })
+}
 
 /* The 503 for a write that kept conflicting with other writes, or kept
  * running out of time, and changed nothing (WRITE_CONFLICT), which the
@@ -1597,11 +1605,13 @@ async function webhookResponse(
     params_json: read.text,
   })
   if ('error' in reply) {
+    // a quota stays full until a subscription is deleted, so it is a 409
+    // that waiting cannot clear, not a 429
     const status =
       reply.error.code === -32603
         ? 500
         : reply.error.code === -32013
-          ? 429
+          ? 409
           : reply.error.code === -32012
             ? 403
             : reply.error.code === -32011
@@ -1619,7 +1629,7 @@ const restHandler = httpAction(async (ctx, req) => {
   const runMutation = conflictRetrying(ctx)
   try {
     if (!(await runMutation(internal.billingMetering.ingress, { shard: ingressShard() })))
-      return rateLimited()
+      return rateLimited(serviceBusy)
     // ---- authenticate the agent key (qva_) or personal token (qvt_) --------
     const auth = req.headers.get('Authorization') ?? ''
     const secret = auth.startsWith('Bearer ')

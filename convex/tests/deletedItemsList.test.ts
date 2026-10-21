@@ -15,6 +15,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import { byId } from '../lib/db'
 import type { OrgRole } from '../lib/enums'
+import { LIMITS } from '../lib/limits'
 import { TRASH_BUDGET } from '../model/deletedItems'
 import { LIST, listFor, MATCHES, matchesFor } from '../model/deletedItemsList'
 import { REMOVAL_COUNT } from '../model/projects'
@@ -1127,6 +1128,11 @@ describe('searching for deleted tasks', () => {
     expect(await matches(t, f.user, `qn-${kept.num}`)).toEqual([hit])
     expect(await matches(t, f.user, `${kept.num}`)).toEqual([hit])
     expect(await matches(t, f.user, '   ')).toEqual([])
+    // the search counts after trimming, up to LIMITS.search, and refuses more
+    expect(await matches(t, f.user, `power${' '.repeat(LIMITS.search.max)}`)).toEqual([hit])
+    expect(await matches(t, f.user, 'p'.repeat(LIMITS.search.max))).toEqual([])
+    const long = await expectRefusal(matches(t, f.user, 'p'.repeat(LIMITS.search.max + 1)), 'rule')
+    expect(long.data.message).toBe(LIMITS.search.refusal)
     expect((await matches(t, f.admin, 'power')).map((m) => m.key)).toEqual([`QN-${kept.num}`])
     // a member who can see Board rev, and neither deleted nor leads it
     expect(await matches(t, f.guest, 'power')).toEqual([])
@@ -1463,11 +1469,11 @@ describe('restore and purge calls', () => {
       deferred: [],
     })
     expect(await liveTask(t, mine.id)).not.toBeNull()
-    await expectRefusal(
-      restore(t, f.guest, Array.from({ length: 26 }, uuid)),
+    const e = await expectRefusal(
+      restore(t, f.guest, Array.from({ length: LIMITS.restoreBatch.max + 1 }, uuid)),
       'rule',
-      /^at most 25 items can be restored at a time$/,
     )
+    expect(e.data.message).toBe(LIMITS.restoreBatch.refusal)
   })
 
   it('lets an organization admin delete ready and stuck items for good', async () => {
@@ -1500,11 +1506,11 @@ describe('restore and purge calls', () => {
     expect(await itemById(t, readyItem.id)).toBeNull()
     expect(await itemById(t, stuckItem.id)).toBeNull()
     expect(await blobExists(t, attachment.storage_id)).toBe(false)
-    await expectRefusal(
-      purge(t, f.admin, Array.from({ length: 26 }, uuid)),
+    const gone = await expectRefusal(
+      purge(t, f.admin, Array.from({ length: LIMITS.purgeBatch.max + 1 }, uuid)),
       'rule',
-      /^at most 25 items can be deleted for good at a time$/,
     )
+    expect(gone.data.message).toBe(LIMITS.purgeBatch.refusal)
   })
 
   it('offers Delete now only while billing lets an admin write', async () => {

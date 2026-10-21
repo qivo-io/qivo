@@ -3,15 +3,15 @@
  *
  *   1. An access removal that reassigns its held tasks
  *      (model/projectAccess.ts removeAndSettle), deleting a team included,
- *      stays inside Convex's limits for one transaction up to REASSIGN_MAX
- *      tasks. Its followers hear from
- *      background steps (NotifyPreload.deferFollowers), so their number costs
- *      the removal nothing. It refuses more tasks, or fewer that fill the
+ *      stays inside Convex's limits for one transaction up to
+ *      LIMITS.reassign.max tasks. Its followers hear from background steps
+ *      (NotifyPreload.deferFollowers), so their number costs the removal
+ *      nothing. It refuses more tasks, or fewer that fill the
  *      transaction (REASSIGN_ROOM), without blaming the tasks, and suggests
  *      keeping the people as Viewers only to a remover who could.
  *   2. The preload and the passed checks (model/issues.ts BulkUpdate) change
  *      nothing a follower reads or follows.
- *   3. Deleting a task with SUBTASK_MAX active subtasks detaches and
+ *   3. Deleting a task with LIMITS.subtasks.max active subtasks detaches and
  *      announces them all inside those limits, and its archived subtasks in
  *      background steps (model/deletedItems.ts moveTasksToTrash).
  *
@@ -19,8 +19,8 @@
  * and counts every index range a function reads, where a deployment counts a
  * range it already read once, so these counts are an upper bound.
  *
- * REASSIGN_MAX comes from the `crowded` fixture below. When it was set, the
- * largest count that fixture reassigned inside the limits was 196 tasks, at
+ * LIMITS.reassign.max comes from the `crowded` fixture below. When it was
+ * set, the largest count that fixture reassigned inside the limits was 196 tasks, at
  * about 16 index ranges per task after about 900 for the first sight check of
  * each follower, back when the removal told every follower itself. Index
  * ranges ran out first. A local Convex backend now reassigns 120 tasks with
@@ -34,11 +34,10 @@ import type { QueryCtx } from '../_generated/server'
 import { LEVELS_READ, projectLevelsForPeople } from '../lib/access'
 import { byId } from '../lib/db'
 import type { Refusal } from '../lib/functions'
-import { REASSIGN_MAX, REMOVAL_HOLDERS_MAX } from '../lib/projectGrants'
-import { SUBTASK_MAX } from '../lib/taskLimits'
+import { LIMITS } from '../lib/limits'
 import { type BulkUpdate, holderKey, type IssuePatch, updateIssueCore } from '../model/issues'
 import { newNotifyPreload } from '../model/messages'
-import { REMOVAL_FULL, REMOVAL_TOO_LARGE, reassignTooLarge } from '../model/projectAccess'
+import { REMOVAL_FULL, reassignTooLarge } from '../model/projectAccess'
 import {
   as,
   expectRefusal,
@@ -224,8 +223,8 @@ describe('reassigning the tasks of an access removal', () => {
     vi.useRealTimers()
   })
 
-  it(`hands over ${REASSIGN_MAX} tasks inside one transaction's limits`, async () => {
-    const fx = await crowded(REASSIGN_MAX)
+  it(`hands over ${LIMITS.reassign.max} tasks inside one transaction's limits`, async () => {
+    const fx = await crowded(LIMITS.reassign.max)
     await removeEmil(fx, fx.leo.id)
     expect(await membership(fx)).toBeNull()
     // each task keeps its other holder, and Leo takes Emil's role
@@ -236,11 +235,11 @@ describe('reassigning the tasks of an access removal', () => {
     )
   })
 
-  it(`refuses ${REASSIGN_MAX + 1} tasks for their number, and changes nothing`, async () => {
-    const fx = await crowded(REASSIGN_MAX + 1)
+  it(`refuses ${LIMITS.reassign.max + 1} tasks for their number, and changes nothing`, async () => {
+    const fx = await crowded(LIMITS.reassign.max + 1)
     const before = await holders(fx)
     const e = await expectRefusal(removeEmil(fx, fx.leo.id), 'rule')
-    expect((e.data as Refusal).message).toBe(reassignTooLarge(true))
+    expect((e.data as Refusal).message).toBe(LIMITS.reassign.refusal)
     // the app quotes the sentence rather than blaming the tasks
     expect((e.data as Refusal).reason).toBeUndefined()
     expect(await membership(fx)).not.toBeNull()
@@ -255,8 +254,8 @@ describe('reassigning the tasks of an access removal', () => {
     expect(await membership(fx)).toBeNull()
   })
 
-  it(`deletes a team and hands over ${REASSIGN_MAX} tasks inside one transaction's limits`, async () => {
-    const fx = await crowded(REASSIGN_MAX)
+  it(`deletes a team and hands over ${LIMITS.reassign.max} tasks inside one transaction's limits`, async () => {
+    const fx = await crowded(LIMITS.reassign.max)
     await deleteHardware(fx, fx.leo.id)
     expect(await hardware(fx)).toBeNull()
     // Leo takes every role a Hardware member held
@@ -272,11 +271,11 @@ describe('reassigning the tasks of an access removal', () => {
     )
   })
 
-  it(`refuses to delete a team over ${REASSIGN_MAX} tasks, and changes nothing`, async () => {
-    const fx = await crowded(REASSIGN_MAX + 1)
+  it(`refuses to delete a team over ${LIMITS.reassign.max} tasks, and changes nothing`, async () => {
+    const fx = await crowded(LIMITS.reassign.max + 1)
     const before = await holders(fx)
     const e = await expectRefusal(deleteHardware(fx, fx.leo.id), 'rule')
-    expect((e.data as Refusal).message).toBe(reassignTooLarge(true))
+    expect((e.data as Refusal).message).toBe(LIMITS.reassign.refusal)
     // the app quotes the sentence rather than blaming the tasks
     expect((e.data as Refusal).reason).toBeUndefined()
     expect(await hardware(fx)).not.toBeNull()
@@ -462,7 +461,7 @@ describe('reassigning the tasks of an access removal', () => {
   }, 60_000)
 
   it('refuses a project grant removal above the cap too, keeping the grant', async () => {
-    const fx = await crowded(REASSIGN_MAX + 1)
+    const fx = await crowded(LIMITS.reassign.max + 1)
     const e = await expectRefusal(
       as(fx.t, fx.user).mutation(api.projects.removeAccess, {
         org_id: fx.org.id,
@@ -472,7 +471,7 @@ describe('reassigning the tasks of an access removal', () => {
       }),
       'rule',
     )
-    expect((e.data as Refusal).message).toBe(reassignTooLarge(true))
+    expect((e.data as Refusal).message).toBe(LIMITS.reassign.refusal)
     const grant = await fx.t.run((ctx) =>
       ctx.db
         .query('project_team_access')
@@ -485,12 +484,13 @@ describe('reassigning the tasks of an access removal', () => {
   })
 
   it('suggests Viewers only to a remover who could keep them', async () => {
-    const fx = await crowded(REASSIGN_MAX + 1)
+    const fx = await crowded(LIMITS.reassign.max + 1)
     // `user` still leads Hardware but no longer leads TBED, so cannot give
     // Viewer grants on it
     await fx.t.run((ctx) => ctx.db.patch(fx.meta._id, { lead_id: fx.admin.id }))
     const e = await expectRefusal(removeEmil(fx, fx.leo.id), 'rule')
     expect((e.data as Refusal).message).toBe(reassignTooLarge(false))
+    expect(reassignTooLarge(false)).not.toMatch(/Viewer/)
     await expectRefusal(
       as(fx.t, fx.user).mutation(api.teams.removeMember, {
         org_id: fx.org.id,
@@ -526,7 +526,7 @@ describe('reassigning the tasks of an access removal', () => {
     const fx = await crowded(40, { t: newT({ transactionLimits: { databaseQueries: 350 } }) })
     const before = await holders(fx)
     const e = await expectRefusal(removeEmil(fx, fx.leo.id), 'rule')
-    expect((e.data as Refusal).message).toBe(reassignTooLarge(true))
+    expect((e.data as Refusal).message).toBe(LIMITS.reassign.refusal)
     expect((e.data as Refusal).reason).toBeUndefined()
     // the tasks reassigned before the check refused are rolled back too
     expect(await membership(fx)).not.toBeNull()
@@ -740,8 +740,8 @@ async function manyHolders(n: number, limits: Parameters<typeof newT>[0] = {}) {
 }
 
 describe('a removal of many people', () => {
-  it(`takes access from ${REMOVAL_HOLDERS_MAX} people with open tasks inside one transaction's limits, the costliest way`, async () => {
-    const { t, f, state } = await manyHolders(REMOVAL_HOLDERS_MAX)
+  it(`takes access from ${LIMITS.removalHolders.max} people with open tasks inside one transaction's limits, the costliest way`, async () => {
+    const { t, f, state } = await manyHolders(LIMITS.removalHolders.max)
     // each holder's teams read one at a time, as in an organization with
     // more than LEVELS_READ memberships, and a Viewer grant each: five index
     // ranges a holder
@@ -757,11 +757,11 @@ describe('a removal of many people', () => {
     } finally {
       LEVELS_READ.max = before
     }
-    expect(await state()).toMatchObject({ share: null, viewers: REMOVAL_HOLDERS_MAX })
+    expect(await state()).toMatchObject({ share: null, viewers: LIMITS.removalHolders.max })
   }, 120_000)
 
-  it(`refuses to settle the tasks of ${REMOVAL_HOLDERS_MAX + 1} people in the app, REST and MCP, and changes nothing, but leaves them`, async () => {
-    const { t, f, admin, state } = await manyHolders(REMOVAL_HOLDERS_MAX + 1)
+  it(`refuses to settle the tasks of ${LIMITS.removalHolders.max + 1} people in the app, REST and MCP, and changes nothing, but leaves them`, async () => {
+    const { t, f, admin, state } = await manyHolders(LIMITS.removalHolders.max + 1)
     const refusals = [
       as(t, f.admin).mutation(api.teams.deleteDeep, {
         org_id: f.org.id,
@@ -785,7 +785,7 @@ describe('a removal of many people', () => {
     ]
     for (const refusal of refusals) {
       const e = await expectRefusal(refusal, 'rule')
-      expect((e.data as Refusal).message).toBe(REMOVAL_TOO_LARGE)
+      expect((e.data as Refusal).message).toBe(LIMITS.removalHolders.refusal)
     }
     expect(await state()).toMatchObject({ share: { level: 'user' }, viewers: 0 })
     expect((await state()).team).not.toBeNull()
@@ -797,7 +797,7 @@ describe('a removal of many people', () => {
       subject: f.team.id,
       body: '',
     })
-    expect(left.stranded).toHaveLength(REMOVAL_HOLDERS_MAX + 1)
+    expect(left.stranded).toHaveLength(LIMITS.removalHolders.max + 1)
     expect((await state()).share).toBeNull()
   }, 120_000)
 
@@ -1070,7 +1070,7 @@ describe('deleting a task with many subtasks', () => {
     vi.useRealTimers()
   })
 
-  it(`detaches ${SUBTASK_MAX} active subtasks inside one transaction and 200 archived ones after, and tells their followers from steps`, async () => {
+  it(`detaches ${LIMITS.subtasks.max} active subtasks inside one transaction and 200 archived ones after, and tells their followers from steps`, async () => {
     const fx = await crowded(0)
     const parent = await plantIssue(fx.t, {
       org_id: fx.org.id,
@@ -1081,7 +1081,7 @@ describe('deleting a task with many subtasks', () => {
     const followers = (i: number) => [1, 2].map((k) => fx.crowd[(i * 2 + k) % CROWD])
     const kids = await fx.t.run(async (ctx) => {
       const ids: string[] = []
-      for (let i = 0; i < SUBTASK_MAX + 200; i++) {
+      for (let i = 0; i < LIMITS.subtasks.max + 200; i++) {
         const id = uuid()
         await ctx.db.insert('issues', {
           id,
@@ -1095,7 +1095,7 @@ describe('deleting a task with many subtasks', () => {
           paused: false,
           parent_id: parent.id,
           // past the active ones, archived subtasks have no bound
-          ...(i < SUBTASK_MAX ? {} : { archived_at: NOW }),
+          ...(i < LIMITS.subtasks.max ? {} : { archived_at: NOW }),
           created_at: NOW,
           updated_at: NOW,
         })
@@ -1119,12 +1119,12 @@ describe('deleting a task with many subtasks', () => {
     await as(fx.t, fx.user).mutation(api.issues.deleteDeep, { org_id: fx.org.id, id: parent.id })
     // the delete's own transaction detaches the active ones
     const detached = (await subtaskRows()).filter((r) => r.parent_id === undefined)
-    expect(detached.map((r) => r.id).sort()).toEqual(kids.slice(0, SUBTASK_MAX).sort())
+    expect(detached.map((r) => r.id).sort()).toEqual(kids.slice(0, LIMITS.subtasks.max).sort())
     // and leaves every follower to background steps
     expect(await fx.t.run((ctx) => ctx.db.query('messages').collect())).toEqual([])
     await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
     expect((await subtaskRows()).filter((r) => r.parent_id === undefined)).toHaveLength(
-      SUBTASK_MAX + 200,
+      LIMITS.subtasks.max + 200,
     )
     const messages = await fx.t.run((ctx) => ctx.db.query('messages').collect())
     const told = new Map<string, string[]>()

@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { api, components } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
+import { LIMITS } from '../lib/limits'
 import {
   assertNotLastAdmin,
   assertNotLastTeam,
@@ -192,7 +193,7 @@ describe('assertSlugAvailable — the setSlug refusal taxonomy', () => {
       )
       expect(err.data.reason, bad).toBe('slug_shape')
       expect(err.data.message).toBe(
-        'An address is up to 40 lowercase letters, digits and single hyphens between them.',
+        `${LIMITS.slug.refusal[0].toUpperCase()}${LIMITS.slug.refusal.slice(1)}`,
       )
     }
   })
@@ -328,6 +329,18 @@ describe('identity.createOrganization — the whole door', () => {
     )
     expect(me.name).toBe('plain')
     expect(me.initials).toBe('P')
+  })
+
+  it("stores the founder's Unicode domain in punycode, the form every seat lookup uses", async () => {
+    const login = await withLogin(t, 'Founder@Bücher.test', 'Anna')
+    const orgId = await login.as.mutation(api.identity.createOrganization, { name: 'Bücher' })
+    const seat = await t.run((ctx) =>
+      ctx.db
+        .query('profiles')
+        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .unique(),
+    )
+    expect(seat?.email).toBe('founder@xn--bcher-kva.test')
   })
 
   it('refuses a login holding an accepted non-guest seat', async () => {

@@ -44,7 +44,8 @@ import { historyAnchor, taskHistoryPage } from './lib/activityVisibility'
 import { chunkLists } from './lib/arrayLimit'
 import { byId } from './lib/db'
 import { authedQuery, notFound, orgQuery } from './lib/functions'
-import { INBOX_LIMIT, loadInbox } from './lib/inbox'
+import { loadInbox } from './lib/inbox'
+import { INBOX_LIMIT, LIMITS } from './lib/limits'
 import { liveTasksOf } from './lib/liveTasks'
 import { snapshotRelations } from './lib/snapshotRelations'
 import { orgProjectView } from './lib/visibility'
@@ -55,7 +56,7 @@ import {
   parentLink,
   workingSetOf,
 } from './lib/workingSet'
-import { COMMENT_PAGE_MAX, commentAnchor, newestComments, threadPage } from './model/comments'
+import { commentAnchor, threadPage } from './model/comments'
 import { shownLabelColor } from './model/labels'
 import { countersOf, type OrgCounters } from './model/orgs'
 import { shownAvatarColor } from './model/people'
@@ -127,7 +128,9 @@ const recentlyReadFirst = (a: Doc<'messages'>, b: Doc<'messages'>): number => {
   return newestFirst(a, b)
 }
 
-const CAP = 500
+/* The most messages one delivery carries across all of a person's seats,
+ * after each seat's read kept up to INBOX_LIMIT of each kind. */
+const CAP = LIMITS.inboxShown.max
 
 export const forMe = authedQuery({
   args: {},
@@ -517,21 +520,5 @@ export const commentsBefore = orgQuery({
     const anchor = await commentAnchor(ctx, issue.id, before)
     const page = await threadPage(ctx, issue.id, anchor)
     return { comments: page.comments.map(rowOf), earlier: page.earlier }
-  },
-})
-
-/* The thread as browser tabs loaded before commentThread subscribe to it,
- * the newest COMMENT_PAGE_MAX comments sorted by created_at with ties by
- * id. Remove it in the release after commentThread ships. */
-export const commentsForIssue = orgQuery({
-  args: { issue_id: v.string() },
-  handler: async (ctx, { issue_id }) => {
-    const { issue } = await threadTask(ctx, issue_id)
-    const thread = await newestComments(ctx, issue.id, { limit: COMMENT_PAGE_MAX })
-    // created_at asc, id tiebreak — the order spine.ts depends on
-    thread.sort((a, b) =>
-      a.created_at === b.created_at ? (a.id < b.id ? -1 : 1) : a.created_at < b.created_at ? -1 : 1,
-    )
-    return thread.map(rowOf)
   },
 })

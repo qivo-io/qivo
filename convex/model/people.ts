@@ -17,8 +17,10 @@ import { v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { byId } from '../lib/db'
+import { asciiEmail } from '../lib/email'
 import { ORG_ROLES } from '../lib/enums'
 import { badRequest, rule } from '../lib/functions'
+import { cleanName, DEFAULT_MESSAGE_RETENTION_DAYS, LIMITS, overText } from '../lib/limits'
 import {
   assertExpected,
   BOOLEAN,
@@ -27,27 +29,24 @@ import {
   hoursOrNull,
   oneOf,
   TEXT_OR_NULL,
+  textOrNull,
 } from './expected'
 import { isLabelColor } from './labels'
-
-/* invite_project_guest's regex, mirrored by the client's EMAIL_RE: something,
- * @, something, dot, something, no whitespace. The address is proved by
- * someone signing in with it. */
-export const EMAIL_SHAPE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 
 export const normalizeEmail = (raw: string | null | undefined): string | undefined => {
   const e = (raw ?? '').trim().toLowerCase()
   return e === '' ? undefined : e
 }
 
-/* 0116's normalization, shared by both rename doors AND create: collapse
- * whitespace runs, trim; then the two profiles_name_shape rules as sentences
- * (the CHECK was bare — these are 0116's own RPC wordings). */
-export const cleanName = (raw: string): string => raw.replace(/\s+/g, ' ').trim()
+/* 0116's normalization, shared by both rename doors AND create, and by the
+ * app's name fields (lib/limits.ts cleanName). */
+export { cleanName }
 
+/** Refuses a person name, already cleaned (cleanName), that is blank or past
+ * LIMITS.personName. */
 export function assertNameShape(name: string): void {
   if (name === '') throw rule('a name cannot be blank')
-  if ([...name].length > 80) throw rule('a name is at most 80 characters')
+  if (overText(LIMITS.personName, name)) throw rule(LIMITS.personName.refusal)
 }
 
 /** The avatar color as given, refused unless it is `#rrggbb`. Clients paint
@@ -110,11 +109,6 @@ export const adminElsewhere = (email: string, org: Doc<'organizations'>) =>
   rule(
     `${email} already belongs to ${org.name}, so they would join as a guest and could not manage this organization. Invite someone else as org admin.`,
   )
-
-/* How many days a new seat keeps read inbox messages when nothing else
- * decides. It is the old column default, where the app's retention setting
- * also starts. */
-export const DEFAULT_MESSAGE_RETENTION_DAYS = 7
 
 /**
  * How many days `p` keeps read inbox messages before the nightly sweep
@@ -204,13 +198,14 @@ export const PROFILE_FIELDS: Fields<Doc<'profiles'>> = {
   active: { sends: 'active', type: BOOLEAN, form: exact },
   name: {
     sends: 'name',
-    type: TEXT_OR_NULL,
+    type: textOrNull(LIMITS.personName),
     form: (value) => (value == null ? null : cleanName(String(value))),
   },
   email: {
     sends: 'email',
-    type: TEXT_OR_NULL,
-    form: (value) => normalizeEmail(value == null ? null : String(value)) ?? null,
+    type: textOrNull(LIMITS.email),
+    // the stored form (lib/email.ts), so an address read back compares
+    form: (value) => (value == null ? null : asciiEmail(String(value)) || null),
   },
   // Off is stored as absence (lib/projectCreators.ts), so false and absent
   // are one value
@@ -224,10 +219,10 @@ export const PROFILE_FIELDS: Fields<Doc<'profiles'>> = {
   plannable_hours: {
     sends: 'plannable_hours',
     type: hoursOrNull({
-      min: 1,
-      max: 168,
+      min: LIMITS.plannableHours.min,
+      max: LIMITS.plannableHours.max,
       whole: true,
-      says: 'a whole number of hours from 1 to 168, or null',
+      says: `a whole number of hours from ${LIMITS.plannableHours.min} to ${LIMITS.plannableHours.max}, or null`,
     }),
     form: exact,
   },

@@ -26,6 +26,7 @@ import { internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import { verifyFileToken } from '../lib/fileTokens'
 import type { Refusal, RefusalCode } from '../lib/functions'
+import { attachmentTooLarge, LIMITS } from '../lib/limits'
 import { weekGrid, weeksSpreadSoFar } from '../lib/workload'
 import { sha256hex } from '../machine/auth'
 import { storeThenAttach } from '../machine/records'
@@ -688,8 +689,8 @@ describe('the REST upload', () => {
     // the organization allows 10 MiB
     await refused(
       start(fx, issue.id, { name: 'big.bin', size: 10 * MiB + 1 }),
-      'bad_request',
-      'attachment exceeds the organization limit of 10 MiB',
+      'rule',
+      attachmentTooLarge(10),
     )
     expect(await tickets(fx.t)).toEqual([])
     const { ticket, upload_url } = await start(fx, issue.id, { name: 'a.bin', size: 100 })
@@ -713,8 +714,8 @@ describe('the REST upload', () => {
     )
     await refused(
       confirm(fx, issue.id, ticket, { storage_id: typed }),
-      'bad_request',
-      "the file's media type must be at most 255 characters",
+      'rule',
+      LIMITS.mediaType.refusal,
     )
     expect(await storageExists(fx.t, typed)).toBe(true)
     expect(await tickets(fx.t)).toHaveLength(1)
@@ -728,7 +729,7 @@ describe('the REST upload', () => {
     const six = await upload(fx.t, upload_url, 6 * MiB)
     await fx.t.run((ctx) => ctx.db.patch(fx.org._id, { max_attachment_mb: 5 }))
     expect(await confirm(fx, issue.id, ticket, { storage_id: six })).toEqual({
-      refused: 'attachment exceeds the organization limit of 5 MiB',
+      refused: attachmentTooLarge(5),
     })
     expect(await storageExists(fx.t, six)).toBe(false)
     expect(await tickets(fx.t)).toEqual([])
@@ -929,9 +930,17 @@ describe('the REST upload', () => {
       PERSON_NO_WRITE,
     )
     for (const [body, sentence] of [
-      [{ size: 1 }, 'name must be a file name of 1 to 255 characters'],
-      [{ name: '   ', size: 1 }, 'name must be a file name of 1 to 255 characters'],
-      [{ name: 'x'.repeat(256), size: 1 }, 'name must be a file name of 1 to 255 characters'],
+      [{ size: 1 }, 'a file name cannot be blank'],
+      [{ name: '   ', size: 1 }, 'a file name cannot be blank'],
+      [{ name: 'x'.repeat(LIMITS.attachmentName.max + 1), size: 1 }, LIMITS.attachmentName.refusal],
+      [
+        { name: 'a', content_type: 'x'.repeat(LIMITS.mediaType.max + 1), size: 1 },
+        LIMITS.mediaType.refusal,
+      ],
+    ] as const) {
+      await refused(start(fx, issue.id, body), 'rule', sentence)
+    }
+    for (const [body, sentence] of [
       [
         { name: 'a', content_type: 'pdf', size: 1 },
         'content_type must be a media type such as application/pdf',
@@ -983,7 +992,7 @@ describe('the REST upload', () => {
     await fx.t.run((ctx) => ctx.db.patch(fx.org._id, { max_attachment_mb: 5 }))
     expect(await rest(fx, 'POST', path, { storage_id: six })).toEqual({
       status: 400,
-      text: JSON.stringify({ error: 'attachment exceeds the organization limit of 5 MiB' }),
+      text: JSON.stringify({ error: attachmentTooLarge(5) }),
     })
     expect(await storageExists(fx.t, six)).toBe(false)
     expect(await storageExists(fx.t, earlier)).toBe(true)
@@ -1163,13 +1172,13 @@ describe('the MCP upload', () => {
     )
     await refused(
       start(fx, issue.id, { name: '   ', size: 1 }),
-      'bad_request',
-      'name must be a file name of 1 to 255 characters',
+      'rule',
+      'a file name cannot be blank',
     )
     await refused(
       start(fx, issue.id, { name: 'big.bin', size: 10 * MiB + 1 }),
-      'bad_request',
-      'attachment exceeds the organization limit of 10 MiB',
+      'rule',
+      attachmentTooLarge(10),
     )
     expect(await tickets(fx.t)).toEqual([])
   })
@@ -1204,7 +1213,7 @@ describe('the MCP upload', () => {
         ticket,
         storage_id: six,
       }),
-    ).toEqual({ text: 'attachment exceeds the organization limit of 5 MiB', isError: true })
+    ).toEqual({ text: attachmentTooLarge(5), isError: true })
     expect(await storageExists(fx.t, six)).toBe(false)
     expect(await storageExists(fx.t, earlier)).toBe(true)
     expect(await tickets(fx.t)).toEqual([])
@@ -1325,11 +1334,7 @@ describe('attach_text_file', () => {
       'not_found',
       `task "${hidden.id}" not found (or not visible to you)`,
     )
-    await refused(
-      attachText(fx, { ...args, name: '   ' }),
-      'bad_request',
-      'name must be a file name of 1 to 255 characters',
-    )
+    await refused(attachText(fx, { ...args, name: '   ' }), 'rule', 'a file name cannot be blank')
     await refused(
       attachText(fx, { ...args, content_type: 'csv' }),
       'bad_request',
@@ -1338,8 +1343,8 @@ describe('attach_text_file', () => {
     // 256 KiB counts UTF-8 bytes, not characters
     await refused(
       attachText(fx, { ...args, text: `${'é'.repeat(128 * 1024)}a` }),
-      'bad_request',
-      'text must be at most 256 KiB (262144 bytes) as UTF-8',
+      'rule',
+      LIMITS.textFile.refusal,
     )
     // an unpaired surrogate cannot reach a function, so the schema refuses it
     const token = await personalToken(fx.t, fx.user, 'write')
@@ -1392,8 +1397,8 @@ describe('attach_text_file', () => {
     const before = await storedFiles(fx.t)
     await refused(
       attachText(fx, { ref: issue.id, name: 'log.txt', text: 'x'.repeat(200 * 1024) }),
-      'bad_request',
-      'attachment exceeds the organization limit of 0.1 MiB',
+      'rule',
+      attachmentTooLarge(0.1),
     )
     expect(await storedFiles(fx.t)).toBe(before)
     expect(await attachmentRows(fx.t)).toEqual([])
@@ -1743,11 +1748,7 @@ describe('workload', () => {
     expect(load.week_starts).toHaveLength(8)
     expect(load.week_starts[0]).toBe('2026-10-12')
     for (const weeks of ['0', '53', '1.5', 'x']) {
-      await refused(
-        restLoad(fx, { weeks }),
-        'bad_request',
-        'weeks must be a whole number from 1 to 52',
-      )
+      await refused(restLoad(fx, { weeks }), 'rule', LIMITS.workloadWeeks.refusal)
     }
     await refused(
       restLoad(fx, { from_week: '2026-02-30' }),

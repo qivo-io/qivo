@@ -1,6 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { LIMITS } from '../../convex/lib/limits'
 import { plannerFixture as fixture, type Snapshot } from './plannerFixture.setup'
 
 type Planner = typeof import('./planner')['P']
@@ -333,7 +334,7 @@ describe('task creation through the client store', () => {
       new ConvexError({
         code: 'rule',
         message:
-          'QN-1 already has 100 links, the most a task can have; remove one of its links first',
+          'QN-1 already has 100 links, the most a task can have. Remove one of its links first.',
       }),
     )
     await settled()
@@ -343,6 +344,21 @@ describe('task creation through the client store', () => {
       expect.stringContaining('already has 100 links'),
       'error',
     )
+  })
+
+  it('refuses a linked task titled over the cap and sends one at it, trimmed', async () => {
+    const { key } = await oneTask()
+    const long = 't'.repeat(LIMITS.title.max)
+    P.createLinked(key, 'blocks', `${long}t`)
+    expect(showToast).toHaveBeenCalledWith(
+      'A task title must be at most 255 characters. Shorten it.',
+      'error',
+    )
+    expect(P.issues.map((task) => task.title)).toEqual(['Task'])
+    expect(requests).toEqual([])
+    P.createLinked(key, 'blocks', ` ${long} `)
+    expect(requests.map((r) => r.name)).toEqual(['issues:createLinked'])
+    expect(requests[0].args).toMatchObject({ title: long })
   })
 
   it('frees the place of a description image at once when a save takes it out', async () => {

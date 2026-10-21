@@ -9,6 +9,7 @@ import type { FunctionArgs } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { LIMITS } from '../lib/limits'
 import { wakeSnoozedItem } from '../model/messages'
 import {
   as,
@@ -148,11 +149,11 @@ describe('messages.snooze — the item, stamped alike, unread, woken by the serv
       'bad_request',
       /in the future/,
     )
-    await expectRefusal(
+    const ahead = await expectRefusal(
       snooze(t, f.guest, [m.id], new Date(Date.now() + 400 * 24 * HOUR).toISOString()),
-      'bad_request',
-      /a year/,
+      'rule',
     )
+    expect(ahead.data.message).toBe(LIMITS.snooze.refusal)
     const [row] = await messagesFor(t, f.guest.id, m.issue_id)
     expect(row.snoozed_until).toBeUndefined()
   })

@@ -1,21 +1,17 @@
-/* The 20,000-character cap on task descriptions and comment bodies, and the
- * 500-character cap on archive reasons, the delete reason's (lib/textLimits.ts).
- * The model layer enforces them for the app, REST and MCP alike, and MCP's
- * tool schemas declare them as maxLength. Lengths are UTF-16 code units.
- * Rows saved before the cap are planted raw, so they can be longer, and they
- * keep working. */
+/* The caps on task titles (255), on task descriptions and comment bodies
+ * (20,000) and on archive reasons (500), from the limits registry
+ * (lib/limits.ts). The model layer enforces them for the app, REST and MCP
+ * alike, with the registry's `rule` sentence, and MCP's tool schemas declare
+ * them as maxLength. Lengths are UTF-16 code units of the trimmed text,
+ * which is what is stored. A row stored longer before a cap is planted raw:
+ * it keeps its text through edits that leave the field out, and any value
+ * sent for the field must fit. */
 
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import {
-  COMMENT_TOO_LONG,
-  DELETE_REASON_MAX,
-  DESCRIPTION_TOO_LONG,
-  TEXT_MAX,
-} from '../lib/textLimits'
+import { LIMITS, TEXT_MAX } from '../lib/limits'
 import { sha256hex } from '../machine/auth'
-import { ARCHIVE_REASON_TOO_LONG } from '../model/comments'
 import {
   as,
   countersFor,
@@ -35,8 +31,10 @@ const OVER = 'a'.repeat(TEXT_MAX + 1)
 // also let the one-letter-longer text through
 const EMOJI_AT_CAP = '😀'.repeat(TEXT_MAX / 2)
 const LEGACY = 'b'.repeat(25_000)
-const REASON_AT_CAP = 'r'.repeat(DELETE_REASON_MAX)
-const REASON_OVER = 'r'.repeat(DELETE_REASON_MAX + 1)
+const REASON_AT_CAP = 'r'.repeat(LIMITS.archiveReason.max)
+const REASON_OVER = 'r'.repeat(LIMITS.archiveReason.max + 1)
+const TITLE_AT_CAP = 't'.repeat(LIMITS.title.max)
+const TITLE_OVER = 't'.repeat(LIMITS.title.max + 1)
 
 const issueRow = (t: T, id: string): Promise<Doc<'issues'> | null> =>
   t.run(
@@ -74,7 +72,7 @@ async function plantComment(t: T, issueId: string, author: string, body: string)
   return id
 }
 
-describe('task descriptions in the app', () => {
+describe('task titles and descriptions in the app', () => {
   it('stores exactly 20,000 characters, with emoji counting two each', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -106,7 +104,7 @@ describe('task descriptions in the app', () => {
         }),
         'rule',
       )
-      expect(e.data.message).toBe(DESCRIPTION_TOO_LONG)
+      expect(e.data.message).toBe(LIMITS.description.refusal)
       expect(await issueRow(t, id)).toBeNull()
     }
     expect((await countersFor(t, f.org.id)).next_issue_num).toBe(1)
@@ -125,13 +123,13 @@ describe('task descriptions in the app', () => {
     await update(AT_CAP)
     expect((await issueRow(t, task.id))?.description).toBe(AT_CAP)
     const e = await expectRefusal(update(`${AT_CAP}!`), 'rule')
-    expect(e.data.message).toBe(DESCRIPTION_TOO_LONG)
+    expect(e.data.message).toBe(LIMITS.description.refusal)
     expect((await issueRow(t, task.id))?.description).toBe(AT_CAP)
     await update(null)
     expect((await issueRow(t, task.id))?.description).toBe('')
   })
 
-  it('a task saved before the cap keeps its text; a new value must fit', async () => {
+  it('a task stored over the cap keeps its text through other edits, and a resend of it is refused', async () => {
     const t = newT()
     const f = await withOrg(t)
     const task = await plantIssue(t, {
@@ -145,22 +143,50 @@ describe('task descriptions in the app', () => {
       assignee_id?: string
       description?: string
     }) => as(t, f.user).mutation(api.issues.update, { org_id: f.org.id, id: task.id, patch })
-    // patches without the field, and one sending the stored text back
+    // patches without the field save
     await update({ title: 'Renamed', status: 'progress' })
     await update({ assignee_id: f.user.id })
-    await update({ description: LEGACY })
     expect(await issueRow(t, task.id)).toMatchObject({
       title: 'Renamed',
       status: 'progress',
       assignee_id: f.user.id,
       description: LEGACY,
     })
-    // shorter, but still over the cap
-    const e = await expectRefusal(update({ description: LEGACY.slice(1) }), 'rule')
-    expect(e.data.message).toBe(DESCRIPTION_TOO_LONG)
-    expect((await issueRow(t, task.id))?.description).toBe(LEGACY)
+    // the stored text sent back unchanged is held to the cap like any other
+    const e = await expectRefusal(update({ description: LEGACY, title: 'Again' }), 'rule')
+    expect(e.data.message).toBe(LIMITS.description.refusal)
+    expect(await issueRow(t, task.id)).toMatchObject({ title: 'Renamed', description: LEGACY })
     await update({ description: AT_CAP })
     expect((await issueRow(t, task.id))?.description).toBe(AT_CAP)
+  })
+
+  it('stores a padded title and description trimmed, and refuses a title past 255 as a rule', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const id = uuid()
+    await as(t, f.user).mutation(api.issues.create, {
+      org_id: f.org.id,
+      id,
+      project_id: f.sub.id,
+      title: `   ${TITLE_AT_CAP}   `,
+      description: '\n  Padded brief  \n',
+    })
+    expect(await issueRow(t, id)).toMatchObject({
+      title: TITLE_AT_CAP,
+      description: 'Padded brief',
+    })
+    const update = (patch: { title?: string; description?: string }) =>
+      as(t, f.user).mutation(api.issues.update, { org_id: f.org.id, id, patch })
+    // 128 emoji are 256 code units
+    for (const title of [TITLE_OVER, '😀'.repeat(128)]) {
+      const e = await expectRefusal(update({ title }), 'rule')
+      expect(e.data.message).toBe(LIMITS.title.refusal)
+    }
+    await update({ title: ` ${'😀'.repeat(127)}a `, description: ' Edited ' })
+    expect(await issueRow(t, id)).toMatchObject({
+      title: `${'😀'.repeat(127)}a`,
+      description: 'Edited',
+    })
   })
 })
 
@@ -183,12 +209,12 @@ describe('comments and archive reasons in the app', () => {
     expect((await commentRow(t, await post(`     ${AT_CAP}     `)))?.body).toBe(AT_CAP)
     for (const body of [OVER, `  ${OVER}  `]) {
       const e = await expectRefusal(post(body), 'rule')
-      expect(e.data.message).toBe(COMMENT_TOO_LONG)
+      expect(e.data.message).toBe(LIMITS.comment.refusal)
     }
     expect(await commentsOn(t, task.id)).toHaveLength(2)
   })
 
-  it('edits within the cap; a comment saved before it can be sent back unchanged', async () => {
+  it('edits within the cap; a comment stored over it is refused even when sent back unchanged', async () => {
     const t = newT()
     const f = await withOrg(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -197,18 +223,16 @@ describe('comments and archive reasons in the app', () => {
     const edit = (id: string, body: string) =>
       as(t, f.user).mutation(api.comments.update, { org_id: f.org.id, id, body })
     const e = await expectRefusal(edit(short, OVER), 'rule')
-    expect(e.data.message).toBe(COMMENT_TOO_LONG)
+    expect(e.data.message).toBe(LIMITS.comment.refusal)
     expect((await commentRow(t, short))?.body).toBe('short')
     await edit(short, AT_CAP)
     expect((await commentRow(t, short))?.body).toBe(AT_CAP)
-    // the identical legacy text is no change and stamps nothing
-    await edit(legacy, LEGACY)
+    // the cap comes before the check for an unchanged text
+    const resent = await expectRefusal(edit(legacy, LEGACY), 'rule')
+    expect(resent.data.message).toBe(LIMITS.comment.refusal)
     const kept = await commentRow(t, legacy)
     expect(kept?.body).toBe(LEGACY)
     expect(kept?.edited_at).toBeUndefined()
-    const shorter = await expectRefusal(edit(legacy, LEGACY.slice(1)), 'rule')
-    expect(shorter.data.message).toBe(COMMENT_TOO_LONG)
-    expect((await commentRow(t, legacy))?.body).toBe(LEGACY)
   })
 
   it('archives with a 500-character reason and refuses 501 without archiving', async () => {
@@ -218,8 +242,7 @@ describe('comments and archive reasons in the app', () => {
     const archive = (reason: string) =>
       as(t, f.user).mutation(api.issues.archive, { org_id: f.org.id, id: task.id, reason })
     const e = await expectRefusal(archive(` ${REASON_OVER} `), 'rule')
-    expect(e.data.message).toBe('an archive reason must be at most 500 characters')
-    expect(e.data.message).toBe(ARCHIVE_REASON_TOO_LONG)
+    expect(e.data.message).toBe(LIMITS.archiveReason.refusal)
     expect((await issueRow(t, task.id))?.archived_at).toBeUndefined()
     expect(await commentsOn(t, task.id)).toEqual([])
     await archive(` ${REASON_AT_CAP} `)
@@ -292,7 +315,7 @@ describe('REST', () => {
     const created = await create('At the cap', AT_CAP)
     expect(created.status).toBe(201)
     const task = created.json as { id: string; key: string }
-    const sentence = { error: 'description must be at most 20,000 characters' }
+    const sentence = { error: LIMITS.description.refusal }
     expect(await create('Over', OVER)).toEqual({ status: 400, json: sentence })
     expect(await create('Emoji', EMOJI_AT_CAP)).toMatchObject({ status: 201 })
     expect(await create('Emoji over', `${EMOJI_AT_CAP}a`)).toEqual({ status: 400, json: sentence })
@@ -309,7 +332,7 @@ describe('REST', () => {
     })
   })
 
-  it('keeps a legacy description through an identical resend; a new value must fit', async () => {
+  it('refuses a description stored over the cap when it is sent back, and saves other fields', async () => {
     const t = newT()
     const f = await wireOrg(t)
     const task = await plantIssue(t, {
@@ -318,12 +341,13 @@ describe('REST', () => {
       description: LEGACY,
     })
     const path = `/v1/tasks/${task.id}`
-    expect(await rest(t, 'PATCH', path, { description: LEGACY, status: 'progress' })).toMatchObject(
-      { status: 200, json: { status: 'progress', description: LEGACY } },
-    )
-    expect(await rest(t, 'PATCH', path, { description: LEGACY.slice(1) })).toEqual({
+    expect(await rest(t, 'PATCH', path, { description: LEGACY, status: 'progress' })).toEqual({
       status: 400,
-      json: { error: 'description must be at most 20,000 characters' },
+      json: { error: LIMITS.description.refusal },
+    })
+    expect(await rest(t, 'PATCH', path, { status: 'progress' })).toMatchObject({
+      status: 200,
+      json: { status: 'progress', description: LEGACY },
     })
     expect(await rest(t, 'PATCH', path, { description: AT_CAP })).toMatchObject({ status: 200 })
     expect((await issueRow(t, task.id))?.description).toBe(AT_CAP)
@@ -336,7 +360,7 @@ describe('REST', () => {
     const done = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: NOW })
     const archive = (id: string, archive_reason: string) =>
       rest(t, 'PATCH', `/v1/tasks/${id}`, { archived: true, archive_reason })
-    const sentence = { error: ARCHIVE_REASON_TOO_LONG }
+    const sentence = { error: LIMITS.archiveReason.refusal }
     expect(await archive(task.id, ` ${REASON_OVER} `)).toEqual({ status: 400, json: sentence })
     expect(await archive(done.id, REASON_OVER)).toEqual({ status: 400, json: sentence })
     expect((await issueRow(t, task.id))?.archived_at).toBeUndefined()
@@ -355,7 +379,7 @@ describe('REST', () => {
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const posted = await rest(t, 'POST', `/v1/tasks/${task.id}/comments`, { body: AT_CAP })
     expect(posted.status).toBe(201)
-    const sentence = { error: 'a comment must be at most 20,000 characters' }
+    const sentence = { error: LIMITS.comment.refusal }
     expect(await rest(t, 'POST', `/v1/tasks/${task.id}/comments`, { body: OVER })).toEqual({
       status: 400,
       json: sentence,
@@ -371,6 +395,28 @@ describe('REST', () => {
       json: { body: 'shorter' },
     })
     expect(await commentsOn(t, task.id)).toHaveLength(1)
+  })
+
+  it('stores a padded title and description trimmed, takes a 255-unit title and refuses 256', async () => {
+    const t = newT()
+    const f = await wireOrg(t)
+    const created = await rest(t, 'POST', '/v1/tasks', {
+      project: f.sub.key,
+      title: `  ${TITLE_AT_CAP}  `,
+      description: ' Padded brief\n',
+    })
+    expect(created.status).toBe(201)
+    const { id } = created.json as { id: string }
+    expect(await issueRow(t, id)).toMatchObject({
+      title: TITLE_AT_CAP,
+      description: 'Padded brief',
+    })
+    const sentence = { status: 400, json: { error: LIMITS.title.refusal } }
+    expect(await rest(t, 'POST', '/v1/tasks', { project: f.sub.key, title: TITLE_OVER })).toEqual(
+      sentence,
+    )
+    expect(await rest(t, 'PATCH', `/v1/tasks/${id}`, { title: TITLE_OVER })).toEqual(sentence)
+    expect((await issueRow(t, id))?.title).toBe(TITLE_AT_CAP)
   })
 })
 
@@ -409,18 +455,14 @@ async function mcp(t: T, method: string, params: Record<string, unknown>, name?:
 const tool = async (t: T, name: string, args: Record<string, unknown>): Promise<ToolResult> =>
   (await mcp(t, 'tools/call', { name, arguments: args }, name)) as ToolResult
 
-const tooBig = (name: string, field: string): ToolResult => ({
-  content: [
-    {
-      type: 'text',
-      text: `Input validation error: Invalid arguments for tool ${name}: ${field}: Too big: expected string to have <=20000 characters`,
-    },
-  ],
+/* The error result MCP answers for a server refusal: its bare sentence. */
+const refusal = (text: string): ToolResult => ({
+  content: [{ type: 'text', text }],
   isError: true,
 })
 
 describe('MCP', () => {
-  it('declares maxLength 20000 on the four text arguments and 500 on archive_reason', async () => {
+  it('declares maxLength 20000 on the four text arguments, 500 on archive_reason and 255 on the titles', async () => {
     const t = newT()
     await wireOrg(t)
     const { tools } = (await mcp(t, 'tools/list', {})) as {
@@ -435,16 +477,13 @@ describe('MCP', () => {
       max('add_comment', 'body'),
       max('update_comment', 'body'),
     ]).toEqual([20000, 20000, 500, 20000, 20000])
+    expect([max('create_task', 'title'), max('update_task', 'title')]).toEqual([255, 255])
   })
 
-  it('writes 20,000 characters and refuses 20,001, by the schema or by the server rule', async () => {
+  it('writes 20,000 characters and refuses 20,001 with the server rule sentence', async () => {
     const t = newT()
     await wireOrg(t)
     const issueCount = () => t.run(async (ctx) => (await ctx.db.query('issues').collect()).length)
-    const refusal = (text: string): ToolResult => ({
-      content: [{ type: 'text', text }],
-      isError: true,
-    })
     const made = await tool(t, 'create_task', {
       project: 'FW',
       title: 'At cap',
@@ -454,27 +493,26 @@ describe('MCP', () => {
     const { id: taskId, key } = JSON.parse(made.content[0].text) as { id: string; key: string }
     expect(
       await tool(t, 'create_task', { project: 'FW', title: 'No', description: OVER }),
-    ).toMatchObject(tooBig('create_task', 'description'))
+    ).toMatchObject(refusal(LIMITS.description.refusal))
     expect(await issueCount()).toBe(1)
 
-    // the server checks these, as for the app and REST
     const updated = await tool(t, 'update_task', { ref: key, description: AT_CAP.slice(1) })
     expect(updated.isError).toBeUndefined()
     expect(await tool(t, 'update_task', { ref: key, description: OVER })).toMatchObject(
-      refusal('description must be at most 20,000 characters'),
+      refusal(LIMITS.description.refusal),
     )
     expect(
       await tool(t, 'update_task', { ref: key, archived: true, archive_reason: REASON_OVER }),
-    ).toMatchObject(refusal(ARCHIVE_REASON_TOO_LONG))
+    ).toMatchObject(refusal(LIMITS.archiveReason.refusal))
 
     const commented = await tool(t, 'add_comment', { ref: key, body: AT_CAP })
     expect(commented.isError).toBeUndefined()
     const { id } = JSON.parse(commented.content[0].text) as { id: string }
     expect(await tool(t, 'add_comment', { ref: key, body: OVER })).toMatchObject(
-      refusal('a comment must be at most 20,000 characters'),
+      refusal(LIMITS.comment.refusal),
     )
     expect(await tool(t, 'update_comment', { comment: id, body: OVER })).toMatchObject(
-      refusal('a comment must be at most 20,000 characters'),
+      refusal(LIMITS.comment.refusal),
     )
     expect((await tool(t, 'update_comment', { comment: id, body: 'shorter' })).isError).toBe(
       undefined,
@@ -486,7 +524,7 @@ describe('MCP', () => {
     expect((await commentsOn(t, taskId)).map((c) => c.body)).toEqual(['shorter'])
   })
 
-  it('takes text at the cap after trimming and an unchanged longer description, as REST does', async () => {
+  it('takes text at the cap after trimming and refuses a longer stored description sent back, as REST does', async () => {
     const t = newT()
     await wireOrg(t)
     const made = await tool(t, 'create_task', { project: 'FW', title: 'Padded' })
@@ -498,7 +536,7 @@ describe('MCP', () => {
     expect((await tool(t, 'update_comment', { comment: id, body: ` ${AT_CAP} ` })).isError).toBe(
       undefined,
     )
-    // a description saved before the cap may be sent back unchanged
+    // a description stored over the cap is refused when it is sent back
     await t.run(async (ctx) => {
       const row = await ctx.db
         .query('issues')
@@ -507,7 +545,8 @@ describe('MCP', () => {
       await ctx.db.patch(row!._id, { description: OVER })
     })
     const resent = await tool(t, 'update_task', { ref: key, description: OVER, title: 'Kept' })
-    expect(resent.isError).toBeUndefined()
+    expect(resent).toMatchObject(refusal(LIMITS.description.refusal))
+    expect((await issueRow(t, taskId))?.title).toBe('Padded')
     const archived = await tool(t, 'update_task', {
       ref: key,
       archived: true,
@@ -517,7 +556,30 @@ describe('MCP', () => {
     expect((await issueRow(t, taskId))?.archived_at).toBeDefined()
     expect((await commentsOn(t, taskId)).map((c) => c.body.length)).toEqual([
       TEXT_MAX,
-      DELETE_REASON_MAX,
+      LIMITS.archiveReason.max,
     ])
+  })
+
+  it('stores a padded title and description trimmed, takes a 255-unit title and refuses 256', async () => {
+    const t = newT()
+    await wireOrg(t)
+    const made = await tool(t, 'create_task', {
+      project: 'FW',
+      title: `  ${TITLE_AT_CAP}  `,
+      description: '\tPadded brief ',
+    })
+    expect(made.isError).toBeUndefined()
+    const { id, key } = JSON.parse(made.content[0].text) as { id: string; key: string }
+    expect(await issueRow(t, id)).toMatchObject({
+      title: TITLE_AT_CAP,
+      description: 'Padded brief',
+    })
+    expect(await tool(t, 'create_task', { project: 'FW', title: TITLE_OVER })).toMatchObject(
+      refusal(LIMITS.title.refusal),
+    )
+    expect(await tool(t, 'update_task', { ref: key, title: TITLE_OVER })).toMatchObject(
+      refusal(LIMITS.title.refusal),
+    )
+    expect((await issueRow(t, id))?.title).toBe(TITLE_AT_CAP)
   })
 })

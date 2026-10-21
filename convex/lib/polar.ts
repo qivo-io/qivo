@@ -2,12 +2,13 @@
  * cross the public Convex boundary. Sources: polar.sh/docs/api-reference/2026-04
  * and polar.sh/docs/integrate/webhooks/delivery (including the Sep 8 key change). */
 import { ConvexError } from 'convex/values'
+import { LIMITS } from './limits'
 
 export const POLAR_API_VERSION = '2026-04'
 export const POLAR_MAX_BODY_BYTES = 1024 * 1024
 const HTTP_TIMEOUT_MS = 15_000
 const MAX_PAGES = 10
-const MAX_SEATS = 1_000
+const MAX_SEATS = LIMITS.billingSeats.max
 
 declare class TextEncoder {
   encode(input: string): Uint8Array

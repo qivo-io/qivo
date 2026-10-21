@@ -9,8 +9,6 @@ import type { Doc } from '../_generated/dataModel'
 /* Remaining time a task gets on entering Review when neither its
  * sub-project nor its project sets one. */
 export const DEFAULT_REVIEW_HOURS = 2
-/* The largest project review time, in hours. */
-export const REVIEW_HOURS_MAX = 999
 
 /* True while the reviewer owns the task. A group's stored status is dormant
  * (its subtasks carry the work), so a group always stays with its assignee. */

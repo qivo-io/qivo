@@ -12,7 +12,9 @@ import { literals } from 'convex-helpers/validators'
 import type { Doc } from './_generated/dataModel'
 import { byId } from './lib/db'
 import { vProjectCreators } from './lib/enums'
-import { adminMutation, badRequest, notFound, require } from './lib/functions'
+import { adminMutation, badRequest, notFound, require, rule } from './lib/functions'
+import { limitedWhole } from './lib/limitRules'
+import { LIMITS } from './lib/limits'
 import {
   assertOrgExpected,
   assertSlugAvailable,
@@ -66,8 +68,8 @@ export const update = adminMutation({
       >
     > = {}
     if (patch.name !== undefined) {
-      if (patch.name.trim() === '') throw badRequest('an organization name cannot be blank')
-      fields.name = cleanOrgName(patch.name, org.name)
+      fields.name = cleanOrgName(patch.name)
+      if (fields.name === '') throw rule('an organization name cannot be blank')
     }
     if (patch.date_format !== undefined) fields.date_format = patch.date_format
     if (patch.week_start !== undefined) {
@@ -79,17 +81,14 @@ export const update = adminMutation({
     }
     if (patch.week_one_rule !== undefined) fields.week_one_rule = patch.week_one_rule
     if (patch.default_plannable_hours !== undefined) {
-      // the client's clamp (bc022c2:3004), which the 0095 integer column and
-      // its 1..168 CHECK bounded server-side
-      const n = patch.default_plannable_hours
-      if (!Number.isFinite(n)) throw badRequest('default_plannable_hours must be a number')
-      fields.default_plannable_hours = Math.max(1, Math.min(168, Math.round(n)))
+      fields.default_plannable_hours = limitedWhole(
+        LIMITS.plannableHours,
+        patch.default_plannable_hours,
+      )
     }
     if (patch.project_creators !== undefined) fields.project_creators = patch.project_creators
     if (patch.max_attachment_mb !== undefined) {
-      const n = patch.max_attachment_mb
-      if (!Number.isFinite(n)) throw badRequest('max_attachment_mb must be a number')
-      fields.max_attachment_mb = Math.max(1, Math.min(20, Math.round(n)))
+      fields.max_attachment_mb = limitedWhole(LIMITS.attachmentLimit, patch.max_attachment_mb)
     }
     await assertOrgExpected(ctx, { me: ctx.me, org, expected, next: fields })
     if (Object.keys(fields).length > 0) await ctx.db.patch(org._id, fields)

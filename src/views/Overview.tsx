@@ -127,7 +127,7 @@ function OvLeadStat({ info }: { info: ScopeInfo }) {
       <div className="min-w-0 break-words">
         <div className="mb-1 text-sm text-text-2">Lead</div>
         <div className="text-md font-semibold leading-snug text-text-1">{u.name}</div>
-        {inherited && <div className={statSubClass}>Inherited from {P.projectName(meta)}</div>}
+        {inherited && <div className={statSubClass}>Inherited from {meta.name}</div>}
       </div>
     </div>
   )
@@ -432,7 +432,7 @@ function OvHealthTable({ rows, unit, sort, setSort, onOpen, mobile }) {
                a keyboard. Keep the row out of the Tab order; focus on its name
                also opens the shared tooltip. The button stops the
                click from reaching the row so one press is one navigation. */
-              <HoverTooltip key={r.proj.id} content={`Open the ${P.projectName(r.proj)} board`}>
+              <HoverTooltip key={r.proj.id} content={`Open the ${r.proj.name} board`}>
                 <tr
                   data-ovcard={r.proj.id}
                   onClick={() => onOpen(r.proj.id)}
@@ -651,7 +651,7 @@ function OvMilestoneRow({
     <Button
       type="button"
       onClick={() => onEdit(m.id)}
-      title={`Edit “${P.milestoneLabel(m)}”${owner ? `, ${owner}` : ''}`}
+      title={`Edit “${m.name}”${owner ? `, ${owner}` : ''}`}
       data-next={next ? '' : undefined}
       className={cn(
         'overview-milestone min-h-16 w-full justify-start gap-3 whitespace-normal rounded-md p-3 text-left font-sans',
@@ -671,7 +671,7 @@ function OvMilestoneRow({
             next ? 'font-semibold' : 'font-medium',
           )}
         >
-          {P.milestoneLabel(m)}
+          {m.name}
         </span>
       </span>
       <span className="overview-milestone-date flex shrink-0 flex-col items-end gap-1">
@@ -937,7 +937,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
           <OvStat label="Paused" value={pausedIssues.length} />
           <OvStat
             label="Next milestone"
-            value={nextMs ? P.milestoneLabel(nextMs) : '—'}
+            value={nextMs ? nextMs.name : '—'}
             valueClassName="font-sans text-md"
             sub={
               nextMs
@@ -991,7 +991,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
             const key = (r) => {
               switch (sort.key) {
                 case 'name':
-                  return P.projectName(r.proj).toLowerCase()
+                  return r.proj.name.toLowerCase()
                 case 'lead':
                   return (r.lead ? r.lead.name : '￿').toLowerCase()
                 case 'progress':
@@ -1008,10 +1008,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
               const ka = key(a),
                 kb = key(b)
               const d = ka < kb ? -1 : ka > kb ? 1 : 0
-              return (
-                (sort.dir === 'asc' ? d : -d) ||
-                P.projectName(a.proj).localeCompare(P.projectName(b.proj))
-              )
+              return (sort.dir === 'asc' ? d : -d) || a.proj.name.localeCompare(b.proj.name)
             })
             return (
               <OvSection title={wide ? 'Project health' : 'Sub-project health'}>

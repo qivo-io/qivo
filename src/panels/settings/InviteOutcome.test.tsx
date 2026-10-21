@@ -57,11 +57,11 @@ const row = (state: string, address = 'guest.new@example.test'): Row => ({
   since: new Date().toISOString(),
 })
 
-async function mount() {
+async function mount(typed = email) {
   act(() =>
     root.render(
       <TooltipProvider>
-        <InviteOutcome orgId="org-1" seat={seat} email={email} />
+        <InviteOutcome orgId="org-1" seat={seat} email={typed} />
       </TooltipProvider>,
     ),
   )
@@ -90,6 +90,12 @@ describe('the outcome of an invitation from the project form', () => {
     expect(said()).toBe(`Invitation email sent to ${email}.`)
     push([])
     expect(said()).toBe(`Invitation email sent to ${email}.`)
+  })
+
+  it('follows the send to an address with a Unicode domain, stored as punycode', async () => {
+    await mount('Anna@Bücher.DE')
+    push([row('sent', 'anna@xn--bcher-kva.de')])
+    expect(said()).toBe('Invitation email sent to Anna@Bücher.DE.')
   })
 
   it('reports nothing for a send to an address corrected elsewhere', async () => {

@@ -23,6 +23,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { hashPassword } from 'better-auth/crypto'
 import { ConvexHttpClient } from 'convex/browser'
 import { makeFunctionReference } from 'convex/server'
+import { LIMITS, MIB } from '../convex/lib/limits.ts'
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const SLUG = 'northstar-labs'
@@ -495,9 +496,9 @@ function readAvatars(cwd, people) {
         `Exactly one checked-in portrait is required for ${person.key} in scripts/demo/assets (PNG, JPEG, or WebP).`,
       )
     const bytes = readFileSync(paths[0])
-    if (!bytes.length || bytes.length > 2 * 1024 * 1024)
+    if (!bytes.length || bytes.length > LIMITS.avatarSize.max * MIB)
       throw new DemoCliError(
-        `The ${person.key} portrait must be a nonempty image no larger than 2 MiB.`,
+        `The ${person.key} portrait must be a nonempty image no larger than ${LIMITS.avatarSize.max} MiB.`,
       )
     const ext = paths[0].split('.').at(-1)
     return {

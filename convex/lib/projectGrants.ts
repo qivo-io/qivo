@@ -7,29 +7,6 @@
 
 import type { GrantLevel } from './enums'
 
-/** The most tasks one access removal reassigns (model/projectAccess.ts
- * removeAndSettle). Each task's reassignment runs every rule of a task
- * update inside the removal's one transaction, so a larger handover would
- * pass Convex's limits for one transaction. Set at about 60% of the largest
- * count that passed the measurement behind tests/bulkReassign.test.ts (196
- * tasks with four followers each, in an organization of 100 people), taken
- * when the removal still told each follower itself. Background steps tell
- * them now (model/messages.ts NotifyPreload.deferFollowers). The removal
- * window shows it. */
-export const REASSIGN_MAX = 120
-
-/** The most people with open tasks one access removal takes access from
- * when it keeps them as Viewers or reassigns their tasks
- * (model/projectAccess.ts removeAndSettle). The removal works out each such
- * person's sight before and after, and keeping them as Viewers looks up each
- * one's grant, which cost at most five index ranges a person when
- * convex-test counted every query (tests/bulkReassign.test.ts). 700 people
- * use about 3,500 of Convex's 4,096 and leave the rest for the removal's
- * other reads. A removal that leaves the tasks costs less and is bounded only
- * by the room it checks as it reads. Only a team's removal or deletion has
- * more than one such person. */
-export const REMOVAL_HOLDERS_MAX = 700
-
 /** Individual grants on one project, by profile id. */
 export type Grants = Record<string, GrantLevel>
 

@@ -10,6 +10,7 @@ import { useFieldUnsaved } from '@/lib/leaveGuard'
 import { remainingPatchFromInput, remainingValue } from '@/lib/remaining'
 import { cn } from '@/lib/utils'
 import { type IssueVM, P, type UserVM } from '@/store/planner'
+import { LIMITS } from '../../convex/lib/limits'
 import { Avatar, Icon } from './qivo'
 import type { WalkHook } from './walkRows'
 
@@ -132,7 +133,8 @@ export function RemainingInput({
       {...hook(walk, 'input')}
       aria-label={`Remaining hours for ${it.title}`}
       type="number"
-      min="0"
+      min={LIMITS.remainingHours.min}
+      max={LIMITS.remainingHours.max}
       placeholder="—"
       key={`${it.uuid}:${it.remaining != null ? it.remaining : ''}`}
       defaultValue={remainingValue(it.remaining)}

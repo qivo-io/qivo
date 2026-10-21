@@ -4,12 +4,16 @@ import { getFunctionName } from 'convex/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { LIMITS } from '../../../convex/lib/limits'
 import { TooltipProvider } from '../../components/ui/tooltip'
+import { limitSentence } from '../../lib/fieldLimits'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 
-/* An agent's keys in Organization > Users, on the real store. The fixture
-   admin (me) manages Atlas, a Standard user agent. The network lists no keys
-   and accepts every agent key it is sent. */
+/* Organization > Users on the real store: an agent's keys, adding a person
+   and editing an invitation's address. The fixture admin (me) manages Atlas,
+   a Standard user agent, and Anna, invited at a Unicode domain. The network
+   lists no keys or invitation emails and accepts every agent key it is
+   sent. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../../lib/convex', () => ({ convex: network }))
@@ -44,10 +48,18 @@ async function load() {
     auth_user_id: undefined,
     email: undefined,
   })
+  snap.profiles.push({
+    ...me,
+    id: 'anna',
+    name: 'Anna Berg',
+    org_role: 'user',
+    auth_user_id: undefined,
+    email: 'anna@xn--bcher-kva.de',
+  })
   // the Users page lists agent keys on mount and after each new key
   network.query.mockResolvedValue([])
-  network.onUpdate.mockImplementation((_ref, _args, next) => {
-    next(structuredClone(snap))
+  network.onUpdate.mockImplementation((ref, _args, next) => {
+    next(getFunctionName(ref) === 'invites:deliveries' ? [] : structuredClone(snap))
     return () => {}
   })
   network.mutation.mockImplementation((ref, args) => {
@@ -117,8 +129,8 @@ async function click(element: HTMLElement) {
   await act(async () => element.click())
 }
 
-/* Renders the Users page and opens Atlas's keys. */
-async function openKeys() {
+/* Renders the Users page. */
+async function show() {
   await act(async () =>
     root.render(
       <TooltipProvider>
@@ -127,13 +139,23 @@ async function openKeys() {
     ),
   )
   await settle()
+}
+
+/* Renders the Users page and opens Atlas's keys. */
+async function openKeys() {
+  await show()
   await click(find('[data-user-row="atlas"] button[aria-label="Manage this agent\'s keys"]'))
 }
+
+const sentNames = () => network.mutation.mock.calls.map(([ref]) => getFunctionName(ref))
 
 describe('New key', () => {
   it('creates a key and shows its secret once', async () => {
     await openKeys()
-    expect(nameField().maxLength).toBe(80)
+    // a pasted name over the cap stays whole, and New key waits for it
+    await type(nameField(), 'k'.repeat(81))
+    expect(nameField().value).toHaveLength(81)
+    expect(newKey().disabled).toBe(true)
     await type(nameField(), 'CI runner')
     await click(newKey())
     await settle()
@@ -184,5 +206,54 @@ describe('New key', () => {
     expect(window.showToast).toHaveBeenCalledTimes(2)
     expect(newKey().disabled).toBe(false)
     expect(nameField().value).toBe('CI runner')
+  })
+})
+
+describe('Add person', () => {
+  const nameInput = () => find<HTMLInputElement>('input[aria-label="New person name"]')
+  const addButton = () => find<HTMLButtonElement>('[data-add-user]')
+
+  it('counts a name as the server stores it, with whitespace runs collapsed', async () => {
+    await show()
+    // 81 characters typed, 80 once the double space is one
+    await type(nameInput(), `${'a'.repeat(40)}  ${'b'.repeat(39)}`)
+    await type(find<HTMLInputElement>('[data-add-email]'), 'bo@example.com')
+    expect(nameInput().getAttribute('aria-invalid')).toBeNull()
+    expect(addButton().disabled).toBe(false)
+    await click(addButton())
+    const create = network.mutation.mock.calls.find(
+      ([ref]) => getFunctionName(ref) === 'profiles:create',
+    )
+    expect(create?.[1]).toMatchObject({ name: `${'a'.repeat(40)} ${'b'.repeat(39)}` })
+    // one more character is over the cap however it is spaced
+    await type(nameInput(), `${'a'.repeat(40)}  ${'b'.repeat(40)}`)
+    expect(nameInput().getAttribute('aria-invalid')).toBe('true')
+    expect(addButton().disabled).toBe(true)
+  })
+
+  it('says why an address longer than the server stores cannot be added', async () => {
+    await show()
+    await type(nameInput(), 'Bo Lind')
+    const email = find<HTMLInputElement>('[data-add-email]')
+    await type(email, `${'a'.repeat(250)}@b.io`)
+    expect(addButton().disabled).toBe(true)
+    expect(email.getAttribute('aria-invalid')).toBe('true')
+    // the field's tooltip, which shows on focus as on hover
+    await act(async () => email.focus())
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(
+      limitSentence(LIMITS.email),
+    )
+  })
+})
+
+describe("An invitation's address", () => {
+  it('sends nothing when the address is retyped with a Unicode domain', async () => {
+    await show()
+    const field = find<HTMLInputElement>('input[data-user-email="anna"]')
+    await act(async () => field.focus())
+    await type(field, 'Anna@Bücher.de')
+    await act(async () => field.blur())
+    expect(sentNames()).not.toContain('profiles:update')
+    expect(field.value).toBe('anna@xn--bcher-kva.de')
   })
 })

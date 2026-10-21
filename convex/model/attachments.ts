@@ -18,13 +18,13 @@
  * organization's rows by index. It names no project: the storage totals
  * read each row's project through its task (model/billing.ts storagePage),
  * so moving a task writes none of its rows. A task holds at most
- * ATTACHMENT_MAX rows, files and description images together
- * (lib/taskLimits.ts), less the description images a save took out
- * (model/descriptionImages.ts): an upload that would pass it is refused before any
- * bytes are sent (startAttachmentUpload, files.ts uploadUrl, machine/records.ts
- * attach_text_file), and attachFileCore checks again. A file name has 1 to
- * 255 characters and a media type at most 255. That keeps every row small,
- * so a page of rows stays small too.
+ * LIMITS.attachments.max rows, files and description images together
+ * (lib/limits.ts), less the description images a save took out
+ * (model/descriptionImages.ts): an upload that would pass it is refused
+ * before any bytes are sent (startAttachmentUpload, files.ts uploadUrl,
+ * machine/records.ts attach_text_file), and attachFileCore checks again. A file name and a
+ * media type stay within LIMITS.attachmentName and LIMITS.mediaType. That
+ * keeps every row small, so a page of rows stays small too.
  *
  * REST and MCP upload in two steps. startAttachmentUpload checks the write
  * gate and the declared size, records a ticket naming the caller, the task
@@ -52,7 +52,8 @@ import {
   mintFileToken,
 } from '../lib/fileTokens'
 import { badRequest, conflict, notFound, rule } from '../lib/functions'
-import { ATTACHMENT_MAX, ATTACHMENTS_FULL } from '../lib/taskLimits'
+import { limitedText } from '../lib/limitRules'
+import { attachmentTooLarge, LIMITS, MIB } from '../lib/limits'
 import { logActivity, signedDetail } from './activity'
 import { assertCanEdit } from './issues'
 import { attachmentLimitMb, newUuid } from './orgs'
@@ -115,37 +116,24 @@ async function attachmentCapMb(ctx: QueryCtx, orgId: string): Promise<number> {
   return attachmentLimitMb(await byId(ctx, 'organizations', orgId))
 }
 
-/** Refuses with ATTACHMENTS_FULL when task `issueId` already has
- * ATTACHMENT_MAX attachment rows that count, which are those a description
- * save has not dropped (model/descriptionImages.ts). One range of at most
- * ATTACHMENT_MAX rows. */
+/** Refuses with LIMITS.attachments' sentence when task `issueId` already
+ * has LIMITS.attachments.max attachment rows that count, which are those a
+ * description save has not dropped (model/descriptionImages.ts). One range
+ * of at most that many rows. */
 export async function assertAttachmentRoom(ctx: QueryCtx, issueId: string): Promise<void> {
   const rows = await ctx.db
     .query('issue_attachments')
     .withIndex('by_issue_dropped', (q) => q.eq('issue_id', issueId).eq('dropped_at', undefined))
-    .take(ATTACHMENT_MAX)
-  if (rows.length >= ATTACHMENT_MAX) throw rule(ATTACHMENTS_FULL)
+    .take(LIMITS.attachments.max)
+  if (rows.length >= LIMITS.attachments.max) throw rule(LIMITS.attachments.refusal)
 }
 
-/** The refusal for a file larger than the organization allows. */
-const overCap = (cap: number): string => `attachment exceeds the organization limit of ${cap} MiB`
-
-/** The longest file name an attachment may have, in characters (code
- * points). The MCP upload tools' schemas state it too. */
-export const ATTACHMENT_NAME_MAX = 255
-
-/** The longest media type an attachment may have. REST and MCP also check
- * it when an upload starts (machine/records.ts uploadFields). */
-export const ATTACHMENT_TYPE_MAX = 255
-
 /** Answers `raw` trimmed, the name an attachment stores. Refuses a name that
- * is empty after trimming or longer than 255 characters. REST and MCP check
+ * is empty after trimming or past LIMITS.attachmentName. REST and MCP check
  * it when an upload starts, and attachFileCore for every attach. */
 export function cleanAttachmentName(raw: string): string {
-  const name = raw.trim()
-  if (name === '' || [...name].length > ATTACHMENT_NAME_MAX) {
-    throw badRequest(`name must be a file name of 1 to ${ATTACHMENT_NAME_MAX} characters`)
-  }
+  const name = limitedText(LIMITS.attachmentName, raw)
+  if (name === '') throw rule('a file name cannot be blank')
   return name
 }
 
@@ -159,17 +147,18 @@ export type AttachmentRow = ReturnType<typeof pub>
  * (the probe verdict above). The app's client toasts the message, REST
  * answers it as a 400 and MCP as an error result. */
 export type AttachResult =
-  | { refused: { code: 'bad_request'; message: string } }
+  | { refused: { code: 'rule'; message: string } }
   | { attachment: AttachmentRow }
 
 /**
  * Attaches the stored file `storage_id` to `issue` as `me`, with the
  * activity row the app writes ('attached a file to', or 'added an image to'
  * for an inline image), signed with `provenance` for a machine caller. The
- * row takes the task's organization. A task with ATTACHMENT_MAX rows refuses
- * it (assertAttachmentRoom). `name` is stored trimmed
- * and must have 1 to 255 characters, and the media type (`mime`, else the
- * stored file's) at most 255. The size comes from storage metadata. When
+ * row takes the task's organization. A task with LIMITS.attachments.max rows
+ * refuses it (assertAttachmentRoom). `name` is stored trimmed and must be
+ * within LIMITS.attachmentName, and the media type (`mime`, else the stored
+ * file's), trimmed, within LIMITS.mediaType. The size comes from storage
+ * metadata. When
  * `declaredSize` is given, the stored file must have exactly that many
  * bytes, checked before the cap so that a file of another size is refused
  * and kept, never deleted. Throws before any write; only an oversize file is
@@ -202,17 +191,15 @@ export async function attachFileCore(
   }
   const meta = await ctx.db.system.get(a.storage_id)
   if (meta === null) throw badRequest('attachment bytes not found in storage')
-  const mime = a.mime ?? meta.contentType ?? undefined
-  if (mime !== undefined && mime.length > ATTACHMENT_TYPE_MAX) {
-    throw badRequest(`the file's media type must be at most ${ATTACHMENT_TYPE_MAX} characters`)
-  }
+  const sent = a.mime ?? meta.contentType ?? undefined
+  const mime = sent === undefined ? undefined : limitedText(LIMITS.mediaType, sent)
   if (a.declaredSize !== undefined && meta.size !== a.declaredSize) {
     throw badRequest(`the uploaded file has ${meta.size} bytes, not the ${a.declaredSize} declared`)
   }
   const cap = await attachmentCapMb(ctx, issue.org_id)
-  if (meta.size > cap * 1024 * 1024) {
+  if (meta.size > cap * MIB) {
     await ctx.storage.delete(a.storage_id)
-    return { refused: { code: 'bad_request', message: overCap(cap) } }
+    return { refused: { code: 'rule', message: attachmentTooLarge(cap) } }
   }
   const rowId = await insertUnique(
     ctx,
@@ -319,7 +306,7 @@ export async function startAttachmentUpload(
   await assertCanEdit(ctx, me, issue.project_id)
   await assertAttachmentRoom(ctx, issue.id)
   const cap = await attachmentCapMb(ctx, issue.org_id)
-  if (a.size > cap * 1024 * 1024) throw badRequest(overCap(cap))
+  if (a.size > cap * MIB) throw rule(attachmentTooLarge(cap))
   const expired = await ctx.db
     .query('attachment_uploads')
     .withIndex('by_profile_expiry', (q) => q.eq('profile_id', me.id).lte('expires_at', a.nowMs))

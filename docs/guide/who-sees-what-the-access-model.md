@@ -108,7 +108,8 @@ task restored from Deleted items shows its history again to everyone who can
 open it, and deleting a task for good deletes its history.
 
 Organization admins add people through **Organization → Users**. There is no
-purchased-seat limit on adding or reactivating users. Billing counts active
+purchased-seat limit on adding or reactivating users, though online billing
+supports up to 1,000 active billable users ([Limits](./limits.md)). Billing counts active
 users at renewal, including pending invitations ([Billing and free access](./administration-guard-rails-and-the-demo.md#billing-and-free-access)). Signing up does not
 let someone join your organization without an invitation.
 

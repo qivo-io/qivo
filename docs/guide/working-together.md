@@ -178,8 +178,8 @@ people still receive their message. A new assignee or reviewer is still
 subscribed, so the people working on a task always hear about it. A comment
 or description can mention at most 100 people. Qivo refuses to save one that
 mentions more, keeps your draft and says **A text can mention at most 100
-people; remove some mentions and save again.** Tasks that had more
-subscribers before this limit keep them. On such a task, a comment or a
+people. Remove some mentions and save again.** A task can pass 100
+subscribers through its assignee and reviewer. On such a task, a comment or a
 change reaches the first subscribers at once and the rest a few seconds
 later. Changes saved for many tasks at once, from the Roadmap, by
 reassigning tasks when someone loses access or by detaching the subtasks of
@@ -258,8 +258,9 @@ you lost access to.
 These actions leave tasks, comments and open drafts intact. The list's
 context menu offers them even when a filter shows no messages.
 
-**Snoozing.** In a row's menu, set the number beside **Hours** or **Days**, then
-press that row's **Snooze** button. Hover the button to see the return time.
+**Snoozing.** In a row's menu, set the number beside **Hours**, **Days** or
+**Weeks**, then press that row's **Snooze** button. A snooze reaches at most
+366 days ahead ([Limits](./limits.md)). Hover the button to see the return time.
 Snoozing marks the task's messages unread, hides the row across your devices
 and removes it from the badge count.
 

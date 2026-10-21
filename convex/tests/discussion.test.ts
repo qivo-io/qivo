@@ -21,9 +21,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { Refusal, RefusalCode } from '../lib/functions'
-import { INBOX_LIMIT } from '../lib/inbox'
+import { INBOX_LIMIT, LIMITS } from '../lib/limits'
 import { sha256hex } from '../machine/auth'
 import { INBOX_TASKS_MAX } from '../machine/discussion'
+import { OFFSET_SENTENCE } from '../machine/shared'
 import { ITEM_UNREAD_CAP } from '../model/messages'
 import {
   allMessages,
@@ -257,14 +258,14 @@ describe('editing and deleting comments', () => {
         comment: own.id,
         body: '   ',
       }),
-      'bad_request',
+      'rule',
       'a comment cannot be empty',
     )
-    for (const [body, sentence] of [
-      ['{', 'request body must be JSON'],
-      ['{}', 'body must be a non-empty string'],
-      ['{"body":""}', 'a comment cannot be empty'],
-    ]) {
+    for (const [body, code, sentence] of [
+      ['{', 'bad_request', 'request body must be JSON'],
+      ['{}', 'bad_request', 'body must be a non-empty string'],
+      ['{"body":""}', 'rule', 'a comment cannot be empty'],
+    ] as const) {
       await refused(
         fx.t.mutation(internal.machine.discussion.restUpdateComment, {
           callerId: fx.agent.id,
@@ -272,7 +273,7 @@ describe('editing and deleting comments', () => {
           ref: own.id,
           body,
         }),
-        'bad_request',
+        code,
         sentence,
       )
     }
@@ -611,13 +612,17 @@ describe('reading the inbox', () => {
     for (const [q, sentence] of [
       [{ unread_only: 'yes' }, 'unread_only must be true or false'],
       [{ include_snoozed: '1' }, 'include_snoozed must be true or false'],
-      [{ limit: '0' }, 'limit must be a whole number from 1 to 200'],
-      [{ limit: '201' }, 'limit must be a whole number from 1 to 200'],
-      [{ offset: '-1' }, `offset must be a whole number from 0 to ${Number.MAX_SAFE_INTEGER}`],
-      [{ offset: '1.5' }, `offset must be a whole number from 0 to ${Number.MAX_SAFE_INTEGER}`],
+      [{ offset: '-1' }, OFFSET_SENTENCE],
+      [{ offset: '1.5' }, OFFSET_SENTENCE],
     ] as const) {
       await refused(rest(q), 'bad_request', sentence)
     }
+    // a page size outside 1 to 200 is the registry's refusal on both surfaces
+    for (const limit of [0, 201, 1.5]) {
+      await refused(rest({ limit: String(limit) }), 'rule', LIMITS.listInbox.refusal)
+      await refused(listMcp(fx, { limit }), 'rule', LIMITS.listInbox.refusal)
+    }
+    await refused(listMcp(fx, { offset: -1 }), 'bad_request', OFFSET_SENTENCE)
   })
 
   it('lists what the app lists: an archived task or one in an archived project leaves until restored', async () => {
@@ -1037,7 +1042,6 @@ describe('changing the inbox', () => {
         { tasks: t, until: '2020-01-01T00:00:00Z' },
         'snooze: until must be in the future',
       ],
-      ['snooze', { tasks: t, until: '2099-01-01T00:00:00Z' }, 'snooze: at most a year ahead'],
       ['read', { tasks: t, before: 1 }, 'before applies to read with all only'],
       ['remove', { all: true, before: 1 }, 'before applies to read with all only'],
       ['snooze', { tasks: t, until: null, before: 1 }, 'before applies to read with all only'],
@@ -1049,6 +1053,10 @@ describe('changing the inbox', () => {
       const rest = expectRefusal(updateRest(fx, action, body), 'bad_request')
       expect(((await rest).data as Refusal).message, label).toBe(sentence)
     }
+    // a snooze past the limit is the registry's refusal
+    const far = { tasks: t, until: '2099-01-01T00:00:00Z' }
+    await refused(updateMcp(fx, { action: 'snooze', ...far }), 'rule', LIMITS.snooze.refusal)
+    await refused(updateRest(fx, 'snooze', far), 'rule', LIMITS.snooze.refusal)
     // REST-only shapes
     for (const [body, sentence] of [
       ['[', 'request body must be JSON'],
@@ -1091,14 +1099,14 @@ describe('changing the inbox', () => {
       }
     })
     const refs = tasks.map(key)
-    const sentence = `tasks must name at most ${INBOX_TASKS_MAX} tasks per call`
+    const sentence = LIMITS.inboxTasks.refusal
     // one more, even a repeat, is refused on both surfaces before anything changes
     for (const over of [
       [...refs, key(fx.task)],
       [...refs, refs[0]],
     ]) {
-      await refused(updateMcp(fx, { action: 'read', tasks: over }), 'bad_request', sentence)
-      await refused(updateRest(fx, 'read', { tasks: over }), 'bad_request', sentence)
+      await refused(updateMcp(fx, { action: 'read', tasks: over }), 'rule', sentence)
+      await refused(updateRest(fx, 'read', { tasks: over }), 'rule', sentence)
     }
     expect((await messagesFor(fx.t, fx.agent.id)).every((m) => m.read_at === undefined)).toBe(true)
     // at the limit, the heaviest action, mark read, patches and prunes every item

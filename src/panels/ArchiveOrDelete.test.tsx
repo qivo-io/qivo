@@ -309,19 +309,38 @@ describe('Archive or delete a task', () => {
     answers['issues:deleteDeep'] = () => Promise.resolve(null)
     await openTask('root')
     const field = () => find<HTMLTextAreaElement>('[data-fate-reason]')
-    expect(field().maxLength).toBe(500)
     expect(text('[data-fate-reason-field]')).toContain(
       "Saved to the task's comments. At most 500 characters.",
     )
-    const full = 'Measured drift '.repeat(40).slice(0, 500)
-    await type(full)
-    expect(button('Archive').disabled).toBe(false)
+    // 600 characters, the field keeps them all and holds both
+    const long = 'Measured drift '.repeat(40)
+    await type(long)
+    expect(field().value).toBe(long)
+    expect(field().getAttribute('aria-invalid')).toBe('true')
+    expect(text('[data-fate-reason-field]')).toContain(
+      'An archive reason must be at most 500 characters. Shorten it.',
+    )
+    expect(button('Archive').disabled).toBe(true)
     await choose('delete')
-    expect(field().maxLength).toBe(500)
+    expect(text('[data-fate-reason-field]')).toContain(
+      'A delete reason must be at most 500 characters. Shorten it.',
+    )
+    // the trailing space does not count, as the server trims it
+    expect(text('[data-fate-reason-field] [data-limit-count]')).toContain('599/500')
+    expect(field().getAttribute('aria-invalid')).toBe('true')
+    expect(field().value).toBe(long)
+    expect(button('Delete 4 tasks').disabled).toBe(true)
+    await click(button('Delete 4 tasks'))
+    expect(writes()).toEqual([])
+    const full = long.slice(0, 500)
+    await type(full)
+    expect(field().hasAttribute('aria-invalid')).toBe(false)
     expect(text('[data-fate-reason-field]')).toContain(
       'Shown in Deleted items. At most 500 characters.',
     )
-    expect(field().value).toBe(full)
+    await choose('archive')
+    expect(button('Archive').disabled).toBe(false)
+    await choose('delete')
     await click(button('Delete 4 tasks'))
     await settle()
     expect(writes()).toEqual([
@@ -654,7 +673,6 @@ describe('Archive or delete a project', () => {
     answers['projects:deleteDeep'] = () => Promise.reject(new Error('requires the project lead'))
     const { onClose } = await openProject()
     await choose('delete')
-    expect(find<HTMLTextAreaElement>('[data-fate-reason]').maxLength).toBe(500)
     await type('  Trial cancelled  ')
     await click(button('Delete project and 48 tasks'))
     await settle()

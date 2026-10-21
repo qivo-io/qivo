@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { PROJECT_CREATORS } from '../lib/enums'
+import { LIMITS } from '../lib/limits'
 import {
   activityFor,
   as,
@@ -57,7 +58,7 @@ const orgRow = (t: T, id: string) =>
   )
 
 describe('orgs.update — settings, silently', () => {
-  it('patches validated fields, clamps hours, and narrates nothing', async () => {
+  it('patches validated fields and narrates nothing', async () => {
     const t = newT()
     const f = await withOrg(t)
     await as(t, f.admin).mutation(api.orgs.update, {
@@ -67,7 +68,7 @@ describe('orgs.update — settings, silently', () => {
         date_format: 'DD.MM.YYYY',
         week_start: 0,
         week_one_rule: 'jan1',
-        default_plannable_hours: 500,
+        default_plannable_hours: 168,
       },
     })
     const org = await orgRow(t, f.org.id)
@@ -75,8 +76,28 @@ describe('orgs.update — settings, silently', () => {
     expect(org?.date_format).toBe('DD.MM.YYYY')
     expect(org?.week_start).toBe(0)
     expect(org?.week_one_rule).toBe('jan1')
-    expect(org?.default_plannable_hours).toBe(168) // clamped, like the client
+    expect(org?.default_plannable_hours).toBe(168)
     expect(await activityFor(t, f.org.id)).toEqual([]) // settings + rename never narrate
+  })
+
+  it('takes default plannable hours from 1 to 168 and refuses the rest unchanged', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const update = (hours: number) =>
+      as(t, f.admin).mutation(api.orgs.update, {
+        org_id: f.org.id,
+        patch: { default_plannable_hours: hours },
+      })
+    for (const hours of [1, 168]) {
+      await update(hours)
+      expect((await orgRow(t, f.org.id))?.default_plannable_hours).toBe(hours)
+    }
+    // the old code clamped 0 and 169 and rounded 37.5 instead of refusing
+    for (const hours of [0, 169, 37.5, Number.NaN]) {
+      const refusal = await expectRefusal(update(hours), 'rule')
+      expect(refusal.data.message).toBe(LIMITS.plannableHours.refusal)
+    }
+    expect((await orgRow(t, f.org.id))?.default_plannable_hours).toBe(168)
   })
 
   it('refuses a bad week_start, a blank name, and a non-admin', async () => {
@@ -88,7 +109,8 @@ describe('orgs.update — settings, silently', () => {
     )
     await expectRefusal(
       as(t, f.admin).mutation(api.orgs.update, { org_id: f.org.id, patch: { name: '  ' } }),
-      'bad_request',
+      'rule',
+      /^an organization name cannot be blank$/,
     )
     await expectRefusal(
       as(t, f.user).mutation(api.orgs.update, { org_id: f.org.id, patch: { name: 'Coup' } }),
@@ -174,31 +196,24 @@ describe('orgs.update — settings, silently', () => {
     expect(await activityFor(t, f.org.id)).toEqual([])
   })
 
-  it('clamps the attachment cap to whole MiB from 1 to 20 and refuses non-finite input', async () => {
+  it('takes an attachment cap of whole MiB from 1 to 20 and refuses the rest unchanged', async () => {
     const t = newT()
     const f = await withOrg(t)
-    for (const [input, stored] of [
-      [0, 1],
-      [999, 20],
-      [4.6, 5],
-    ]) {
-      await as(t, f.admin).mutation(api.orgs.update, {
+    const update = (mb: number) =>
+      as(t, f.admin).mutation(api.orgs.update, {
         org_id: f.org.id,
-        patch: { max_attachment_mb: input },
+        patch: { max_attachment_mb: mb },
       })
-      expect((await orgRow(t, f.org.id))?.max_attachment_mb).toBe(stored)
+    for (const mb of [1, 20]) {
+      await update(mb)
+      expect((await orgRow(t, f.org.id))?.max_attachment_mb).toBe(mb)
     }
-    for (const input of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
-      await expectRefusal(
-        as(t, f.admin).mutation(api.orgs.update, {
-          org_id: f.org.id,
-          patch: { max_attachment_mb: input },
-        }),
-        'bad_request',
-        /max_attachment_mb must be a number/,
-      )
+    // the old code clamped 0 and 21 and rounded 4.6 instead of refusing
+    for (const mb of [0, 21, 4.6, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const refusal = await expectRefusal(update(mb), 'rule')
+      expect(refusal.data.message).toBe(LIMITS.attachmentLimit.refusal)
     }
-    expect((await orgRow(t, f.org.id))?.max_attachment_mb).toBe(5)
+    expect((await orgRow(t, f.org.id))?.max_attachment_mb).toBe(20)
   })
 })
 
@@ -313,7 +328,8 @@ describe('comments — create/update/remove', () => {
         issue_id: issue.id,
         body: '   ',
       }),
-      'bad_request',
+      'rule',
+      /^a comment cannot be empty$/,
     )
     const id = uuid()
     const args = { org_id: f.org.id, id, issue_id: issue.id, body: 'once' }
@@ -1204,7 +1220,8 @@ describe('tokens — agent keys are the admin’s, MCP tokens are yours', () => 
     )
     await expectRefusal(
       as(t, f.admin).mutation(api.tokens.createAgentKey, mintArgs(f, { name: '  ' })),
-      'bad_request',
+      'rule',
+      /^a key needs a name$/,
     )
     await as(t, f.admin).mutation(api.tokens.createAgentKey, mintArgs(f))
     await expectRefusal(

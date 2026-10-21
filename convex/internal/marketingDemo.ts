@@ -13,6 +13,7 @@ import { byId } from '../lib/db'
 import { refuseProduction } from '../lib/deployment'
 import type { StoredTable } from '../lib/enums'
 import { badRequest, conflict, require, rule } from '../lib/functions'
+import { DEFAULT_MESSAGE_RETENTION_DAYS, LIMITS, MIB } from '../lib/limits'
 import { SAMPLE_AVATARS, type SampleAvatar, writeNorthstarWork } from '../model/demoSeed'
 import { wipeWorkStep } from '../model/orgDeletion'
 import { assertSlugAvailable, insertOrgRows, newOrgDefaults, setCounters } from '../model/orgs'
@@ -302,7 +303,7 @@ export const provision = internalMutation({
               auth_user_id: authIds[p.key],
               accepted_at: now,
               plannable_hours: newOrgDefaults(now).default_plannable_hours,
-              message_retention_days: 7,
+              message_retention_days: DEFAULT_MESSAGE_RETENTION_DAYS,
             }
           : {}),
       })
@@ -552,8 +553,8 @@ export const adoptAvatar = internalMutation({
     const meta = await ctx.db.system.get(args.storage_id)
     require(meta !== null &&
       ['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(meta.contentType ?? '') &&
-      meta.size <= 2 * 1024 * 1024, badRequest(
-      'marketing demo: avatar must be an image of at most 2 MB',
+      meta.size <= LIMITS.avatarSize.max * MIB, badRequest(
+      `marketing demo: avatar must be an image of at most ${LIMITS.avatarSize.max} MiB`,
     ))
     const other = await ctx.db
       .query('profiles')

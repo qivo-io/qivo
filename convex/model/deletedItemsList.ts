@@ -48,6 +48,8 @@ import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { byId } from '../lib/db'
 import type { CredentialTable } from '../lib/enums'
+import { limitedText } from '../lib/limitRules'
+import { LIMITS } from '../lib/limits'
 import { issueKey } from '../lib/taskRefs'
 import {
   type BlockDetail,
@@ -538,14 +540,14 @@ const TASK_REF = /^(?:QN-)?(\d+)$/i
  * by visible matches alone. The scan's MATCHES.scan results and the budget
  * also count tasks the seat cannot see, so a stop at either is not
  * reported, or `capped` would tell that hidden deleted tasks match the
- * text.
+ * text. A search past LIMITS.search is refused.
  */
 export async function matchesFor(
   ctx: QueryCtx,
   seats: Iterable<Doc<'profiles'>>,
   text: string,
 ): Promise<{ matches: DeletedMatch[]; capped: boolean }> {
-  const query = text.trim()
+  const query = limitedText(LIMITS.search, text)
   if (query === '') return { matches: [], capped: false }
   const ref = TASK_REF.exec(query)
   const out: DeletedMatch[] = []

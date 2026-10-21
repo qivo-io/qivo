@@ -5,6 +5,7 @@
    (docs/team-sync-brief.md, "Each row carries"). */
 import { memo, type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { AssigneeAvatar, OwnerPickList } from '@/components/AssigneeAvatar'
+import { LimitedTextarea } from '@/components/LimitedField'
 import {
   AnchoredPop,
   Avatar,
@@ -18,11 +19,12 @@ import {
 } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
 import { PopoverContent, Popover as PopoverRoot, PopoverTrigger } from '@/components/ui/popover'
-import { Textarea } from '@/components/ui/textarea'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { RemainingInput, ReviewTick } from '@/components/walk'
 import { planHint, type Reviewed } from '@/components/walkRows'
+import { clampedTitleTip } from '@/lib/clampedTitle'
 import { closeOrAsk, questionOpen } from '@/lib/discardQuestion'
+import { overLimit } from '@/lib/fieldLimits'
 import { type UnsentScope, UnsentScopeContext, useUnsaved, useUnsentScope } from '@/lib/leaveGuard'
 import {
   bannerVerdict,
@@ -41,7 +43,7 @@ import { cn } from '@/lib/utils'
 import { fmtHours } from '@/lib/workload'
 import { type IssueVM, P, type UserVM } from '@/store/planner'
 import type { StoreVersion } from '@/store/updates'
-import { TEXT_MAX } from '../../../convex/lib/textLimits'
+import { LIMITS } from '../../../convex/lib/limits'
 import { DelayBanner } from '../kanbanCards'
 import { weekFigure } from './weekFigure'
 
@@ -119,15 +121,18 @@ export function LoadChip({ user }: { user: UserVM }) {
 }
 
 /** A task title that opens the task window: tasks open on request, never
-    required. */
+    required. `clamp` holds a long title to four lines, the whole of it in
+    a tooltip. */
 export function TitleButton({
   it,
   ctx,
   className,
+  clamp = false,
 }: {
   it: IssueVM
   ctx: Pick<PageCtx, 'onOpenTask'>
   className?: string
+  clamp?: boolean
 }) {
   return (
     <Button
@@ -135,12 +140,14 @@ export function TitleButton({
       variant="unstyled"
       data-sync-open={it.id}
       onClick={() => ctx.onOpenTask(it.id)}
+      title={clamp ? clampedTitleTip(it.title) : undefined}
       className={cn(
         'min-w-0 cursor-pointer rounded-sm text-left outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-primary',
         className,
       )}
     >
-      {it.title}
+      {/* a button does not clamp in every browser, so a span inside does */}
+      {clamp ? <span className="line-clamp-4">{it.title}</span> : it.title}
     </Button>
   )
 }
@@ -323,7 +330,8 @@ export function MentionCtl({
     (u) => u.active && !u.isAgent && u.id !== P.CURRENT_USER,
   )
   const person = people.find((u) => u.id === who) || null
-  const ready = !!person && text.trim() !== '' && !sending
+  // the note is saved as a comment, so a comment's cap holds it
+  const ready = !!person && text.trim() !== '' && !overLimit(LIMITS.comment, text) && !sending
   const send = () => {
     if (!ready) return
     // The window closes once the server saves the note. A refused one (the
@@ -405,11 +413,11 @@ export function MentionCtl({
             </Button>
           ))}
         </div>
-        <Textarea
+        <LimitedTextarea
+          limit={LIMITS.comment}
           rows={2}
           aria-label="Note"
           placeholder="A short note…"
-          maxLength={TEXT_MAX}
           readOnly={sending}
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -419,7 +427,8 @@ export function MentionCtl({
               send()
             }
           }}
-          className="mb-2 max-h-[min(48dvh,260px)] min-h-0 resize-none overflow-y-auto bg-surface-1 text-sm"
+          wrapperClassName="mb-2"
+          className="max-h-[min(48dvh,260px)] min-h-0 resize-none overflow-y-auto bg-surface-1 text-sm"
         />
         <div className="flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-xs text-text-3">
@@ -589,6 +598,7 @@ function SyncCardView({ it, ctx, later }: SyncCardProps) {
             <TitleButton
               it={it}
               ctx={ctx}
+              clamp
               className="flex-1 break-words text-base font-medium leading-[1.35]"
             />
             {it.paused && (
@@ -724,6 +734,7 @@ export function DoneItem({
         <TitleButton
           it={it}
           ctx={ctx}
+          clamp
           className="flex-1 break-words text-base leading-[1.35] text-text-2"
         />
       </div>

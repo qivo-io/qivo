@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
+import { LIMITS } from '../lib/limits'
 import { sha256hex } from '../machine/auth'
-import { REMAINING_HOURS_RULE } from '../model/taskValues'
 import {
   activityFor,
   as,
@@ -24,6 +24,12 @@ const taskRow = (t: T, id: string) =>
 
 const bodyOf = (response: Response): Promise<string> =>
   (response as unknown as { text(): Promise<string> }).text()
+
+/* Expects `promise` refused as a rule with the remaining hours' sentence. */
+async function refusedHours(promise: Promise<unknown>): Promise<void> {
+  const e = await expectRefusal(promise, 'rule')
+  expect(e.data.message).toBe(LIMITS.remainingHours.refusal)
+}
 
 describe('task value guards', () => {
   it('refuses invalid calendar dates on create and update without partial writes', async () => {
@@ -105,7 +111,7 @@ describe('task value guards', () => {
       expect(cleared[field]).toBeUndefined()
   })
 
-  it('refuses estimates outside 0 to REMAINING_HOURS_MAX and keeps the ones inside', async () => {
+  it('refuses estimates outside 0 to LIMITS.remainingHours.max and keeps the ones inside', async () => {
     const t = newT()
     const org = await withOrg(t)
     const caller = as(t, org.admin)
@@ -126,7 +132,7 @@ describe('task value guards', () => {
       Number.MAX_VALUE,
     ]) {
       const id = uuid()
-      await expectRefusal(
+      await refusedHours(
         caller.mutation(api.issues.create, {
           org_id: org.org.id,
           project_id: org.sub.id,
@@ -134,18 +140,14 @@ describe('task value guards', () => {
           title: 'Refused hours',
           remaining_hours: invalid,
         }),
-        'rule',
-        /^remaining_hours must be a number of hours from 0 to 99999\.9, or null$/,
       )
       expect(await taskRow(t, id)).toBeNull()
-      await expectRefusal(
+      await refusedHours(
         caller.mutation(api.issues.update, {
           org_id: org.org.id,
           id: row.id,
           patch: { remaining_hours: invalid },
         }),
-        'rule',
-        /^remaining_hours must be a number of hours from 0 to 99999\.9, or null$/,
       )
     }
     expect(await taskRow(t, row.id)).toEqual(row)
@@ -205,9 +207,9 @@ describe('task value guards over HTTP', () => {
     const row = await plantIssue(t, { org_id: org.org.id, project_id: org.sub.id })
     const errors = [
       ['"due_date":"2026-02-31"', 'due_date must be a valid calendar date or null'],
-      ['"remaining_hours":1e309', REMAINING_HOURS_RULE],
-      ['"remaining_hours":100000', REMAINING_HOURS_RULE],
-      ['"remaining_hours":-0.5', REMAINING_HOURS_RULE],
+      ['"remaining_hours":1e309', LIMITS.remainingHours.refusal],
+      ['"remaining_hours":100000', LIMITS.remainingHours.refusal],
+      ['"remaining_hours":-0.5', LIMITS.remainingHours.refusal],
     ] as const
     for (const [field, message] of errors) {
       for (const create of [true, false]) {
@@ -264,11 +266,11 @@ describe('task value guards over HTTP', () => {
   })
 })
 
-describe('hours stored above the cap', () => {
-  /* A task given more than REMAINING_HOURS_MAX before the cap keeps its
-   * hours: every surface reads them, accepts them sent back unchanged and
-   * lowers them, and refuses any other value above the cap alike. */
-  it('read back, pass unchanged and can be lowered on the app, REST and MCP', async () => {
+describe('a task storing hours above the cap', () => {
+  /* Every write of remaining hours holds the cap, so hours above it that a
+   * task still stores are refused when sent back, unchanged or not, and
+   * `expected` cannot name them. Lowering them saves. */
+  it('refuses them sent back on the app, the roadmap, REST and MCP, and saves lower hours', async () => {
     const t = newT()
     const org = await withOrg(t)
     const secret = `qva_${'over-cap'.repeat(6)}`
@@ -294,15 +296,15 @@ describe('hours stored above the cap', () => {
         init: { method: string; headers: Record<string, string>; body?: string },
       ): Promise<Response>
     }
-    const rest = async (method: string, path: string, body?: unknown) => {
-      const res = await http.fetch(path, {
-        method,
+    const rest = async (body: unknown) => {
+      const res = await http.fetch(`/v1/tasks/${row.id}`, {
+        method: 'PATCH',
         headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body: JSON.stringify(body),
       })
       return { status: res.status, json: JSON.parse(await bodyOf(res)) }
     }
-    const tool = async (name: string, args: Record<string, unknown>) => {
+    const tool = async (args: Record<string, unknown>) => {
       const res = await http.fetch('/mcp', {
         method: 'POST',
         headers: {
@@ -311,14 +313,14 @@ describe('hours stored above the cap', () => {
           Accept: 'application/json, text/event-stream',
           'MCP-Protocol-Version': '2026-07-28',
           'Mcp-Method': 'tools/call',
-          'Mcp-Name': name,
+          'Mcp-Name': 'update_task',
         },
         body: JSON.stringify({
           jsonrpc: '2.0',
           method: 'tools/call',
           params: {
-            name,
-            arguments: args,
+            name: 'update_task',
+            arguments: { ref: row.id, ...args },
             _meta: {
               'io.modelcontextprotocol/protocolVersion': '2026-07-28',
               'io.modelcontextprotocol/clientInfo': { name: 'over-cap', version: '1.0.0' },
@@ -329,7 +331,7 @@ describe('hours stored above the cap', () => {
         }),
       })
       return JSON.parse(await bodyOf(res)).result as {
-        content: { text: string }[]
+        content: { type: string; text: string }[]
         isError?: true
       }
     }
@@ -339,114 +341,43 @@ describe('hours stored above the cap', () => {
         id: row.id,
         patch: { remaining_hours },
       })
+    const roadmap = (remaining_hours: number) =>
+      as(t, org.admin).mutation(api.roadmap.change, {
+        session_id: uuid(),
+        operations: [{ kind: 'task', id: row.id, patch: { remaining_hours } }],
+      })
     const row = await plantIssue(t, {
       org_id: org.org.id,
       project_id: org.sub.id,
       remaining_hours: 150_000,
       remaining_set_at: NOW,
     })
-
-    expect((await rest('GET', `/v1/tasks/${row.id}`)).json.remaining_hours).toBe(150_000)
-    const read = await tool('get_task', { ref: row.id })
-    expect(JSON.parse(read.content[0].text).remaining_hours).toBe(150_000)
+    const refused = (text: string) => ({ content: [{ type: 'text', text }], isError: true })
 
     // sent back unchanged, with another change or alone
-    expect(
-      await rest('PATCH', `/v1/tasks/${row.id}`, { title: 'Kept', remaining_hours: 150_000 }),
-    ).toMatchObject({ status: 200, json: { title: 'Kept', remaining_hours: 150_000 } })
-    expect((await tool('update_task', { ref: row.id, remaining_hours: 150_000 })).isError).toBe(
-      undefined,
-    )
-    expect((await app(150_000)).remaining_hours).toBe(150_000)
-
-    // any other value above the cap is refused alike
-    expect(await rest('PATCH', `/v1/tasks/${row.id}`, { remaining_hours: 150_001 })).toEqual({
+    expect(await rest({ title: 'Kept', remaining_hours: 150_000 })).toEqual({
       status: 400,
-      json: { error: REMAINING_HOURS_RULE },
+      json: { error: LIMITS.remainingHours.refusal },
     })
-    expect(await tool('update_task', { ref: row.id, remaining_hours: 150_001 })).toMatchObject({
-      content: [{ type: 'text', text: REMAINING_HOURS_RULE }],
-      isError: true,
-    })
-    await expectRefusal(
-      app(150_001),
-      'rule',
-      /^remaining_hours must be a number of hours from 0 to 99999\.9, or null$/,
+    expect(await tool({ remaining_hours: 150_000 })).toMatchObject(
+      refused(LIMITS.remainingHours.refusal),
     )
-    // lower, but still above the cap, is any other value too
-    expect((await rest('PATCH', `/v1/tasks/${row.id}`, { remaining_hours: 140_000 })).status).toBe(
-      400,
-    )
-    expect(
-      (await tool('update_task', { ref: row.id, remaining_hours: 140_000 })).content[0].text,
-    ).toBe(REMAINING_HOURS_RULE)
-    await expectRefusal(app(140_000), 'rule')
-    // the roadmap's plan changes follow the same rule
-    const roadmap = (remaining_hours: number) =>
-      as(t, org.admin).mutation(api.roadmap.change, {
-        session_id: uuid(),
-        operations: [{ kind: 'task', id: row.id, patch: { remaining_hours } }],
-      })
-    await expectRefusal(roadmap(150_001), 'rule')
-    expect(await roadmap(150_000)).toEqual({ count: 0 })
-    expect((await taskRow(t, row.id))?.remaining_hours).toBe(150_000)
+    await refusedHours(app(150_000))
+    await refusedHours(roadmap(150_000))
+    // and `expected` cannot name them
+    const EXPECTED = 'expected.remaining_hours must be a number from 0 to 99,999.9, or null'
+    const stale = { remaining_hours: 8, expected: { remaining_hours: 150_000 } }
+    expect(await rest(stale)).toEqual({ status: 400, json: { error: EXPECTED } })
+    expect(await tool(stale)).toMatchObject(refused(EXPECTED))
+    expect(await taskRow(t, row.id)).toEqual(row)
 
-    // and each surface lowers them
-    // 99999.94 rounds to the cap, so it passes on every surface
-    expect(
-      await rest('PATCH', `/v1/tasks/${row.id}`, { remaining_hours: 99_999.94 }),
-    ).toMatchObject({ status: 200, json: { remaining_hours: 99_999.9 } })
-    expect((await tool('update_task', { ref: row.id, remaining_hours: 99_999.94 })).isError).toBe(
-      undefined,
-    )
-    expect((await tool('update_task', { ref: row.id, remaining_hours: 40 })).isError).toBe(
-      undefined,
-    )
+    // hours at or below the cap save on each surface
+    expect(await rest({ remaining_hours: 99_999.94 })).toMatchObject({
+      status: 200,
+      json: { remaining_hours: LIMITS.remainingHours.max },
+    })
+    expect((await tool({ remaining_hours: 40 })).isError).toBeUndefined()
     expect((await taskRow(t, row.id))?.remaining_hours).toBe(40)
     expect((await app(8)).remaining_hours).toBe(8)
-    // once lowered, the old value is above the cap like any other
-    expect((await rest('PATCH', `/v1/tasks/${row.id}`, { remaining_hours: 150_000 })).status).toBe(
-      400,
-    )
-    // but sent with the stale read of it, it answers as a changed field
-    const resend = { remaining_hours: 150_000, expected: { remaining_hours: 150_000 } }
-    expect((await rest('PATCH', `/v1/tasks/${row.id}`, resend)).status).toBe(409)
-    expect((await tool('update_task', { ref: row.id, ...resend })).content[0].text).toBe(
-      // the app's last write names who changed it
-      `admin changed remaining_hours of QN-${row.num} since you read it, so nothing was saved; read QN-${row.num} again and resend your change`,
-    )
-    await expectRefusal(
-      as(t, org.admin).mutation(api.issues.update, {
-        org_id: org.org.id,
-        id: row.id,
-        patch: { remaining_hours: 150_000 },
-        expected: { remaining_hours: 150_000 },
-      }),
-      'conflict',
-    )
-    await expectRefusal(
-      as(t, org.admin).mutation(api.roadmap.change, {
-        session_id: uuid(),
-        operations: [
-          {
-            kind: 'task',
-            id: row.id,
-            patch: { remaining_hours: 150_000 },
-            expected: { remaining_hours: 150_000 },
-          },
-        ],
-      }),
-      'conflict',
-    )
-    // a value no task can hold is refused before the comparison, on both
-    const negative = { remaining_hours: -1, expected: { remaining_hours: 150_000 } }
-    expect(await rest('PATCH', `/v1/tasks/${row.id}`, negative)).toEqual({
-      status: 400,
-      json: { error: REMAINING_HOURS_RULE },
-    })
-    expect((await tool('update_task', { ref: row.id, ...negative })).content[0].text).toBe(
-      REMAINING_HOURS_RULE,
-    )
-    expect((await taskRow(t, row.id))?.remaining_hours).toBe(8)
   })
 })

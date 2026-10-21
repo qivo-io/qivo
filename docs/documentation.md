@@ -67,6 +67,18 @@ natural width. Keep images inside `docs/guide/`; the website copies only
 images that pages reference. Keep screenshots free of credentials and
 private customer data.
 
+## The Limits page and the limits tables
+
+`docs/guide/limits.md` and the tables between the `limits:start` and
+`limits:end` markers in `docs/rest-api.md` and `docs/mcp.md` are generated
+from the limits registry, `convex/lib/limits.ts`. Do not edit them by hand.
+After changing a limit, run `node scripts/limits-docs.mjs` (Node 24, which
+loads the registry's TypeScript directly) and commit the result.
+`node scripts/docs-contract.mjs` fails while a table differs from the
+registry. The page's section headings come from `LIMIT_GROUPS` in the
+registry. They are public anchors, so renaming a group needs an alias as
+described above.
+
 ## Preview and validate
 
 Markdown is rendered with markdown-it. Raw HTML is disabled, and unsafe link

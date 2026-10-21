@@ -35,14 +35,13 @@ import type { Doc } from './_generated/dataModel'
 import { internalMutation, type QueryCtx } from './_generated/server'
 import { refuseProduction } from './lib/deployment'
 import { adminMutation, authedQuery, orgMutation, rule } from './lib/functions'
+import { LIMITS } from './lib/limits'
 import {
   clearOrgTrash,
   detachArchivedChildren,
   expireItems,
   myItem,
-  PURGE_MAX,
   purgeItems,
-  RESTORE_MAX,
   recoverArchivedDetaches,
   recoverJobs,
   restoreItems,
@@ -108,8 +107,7 @@ export const matches = authedQuery({
 export const restore = orgMutation({
   args: { ids: v.array(v.string()), bulk: v.optional(v.boolean()) },
   handler: async (ctx, { ids, bulk }) => {
-    if (ids.length > RESTORE_MAX)
-      throw rule(`at most ${RESTORE_MAX} items can be restored at a time`)
+    if (ids.length > LIMITS.restoreBatch.max) throw rule(LIMITS.restoreBatch.refusal)
     const { items, missing } = await loadItems(ctx, ctx.me, ids)
     const result = await restoreItems(ctx, {
       me: ctx.me,
@@ -128,8 +126,7 @@ export const restore = orgMutation({
 export const purge = adminMutation({
   args: { ids: v.array(v.string()) },
   handler: async (ctx, { ids }) => {
-    if (ids.length > PURGE_MAX)
-      throw rule(`at most ${PURGE_MAX} items can be deleted for good at a time`)
+    if (ids.length > LIMITS.purgeBatch.max) throw rule(LIMITS.purgeBatch.refusal)
     const { items, missing } = await loadItems(ctx, ctx.me, ids)
     const result = await purgeItems(ctx, items)
     return { ...result, refused: [...missing, ...result.refused] }
@@ -229,6 +226,7 @@ export const purgeTasks = internalMutation({
         .withIndex('by_target', (q) => q.eq('target_id', id))
         .collect())
         if (item.kind === 'task' && item.state !== 'purging') items.push(item)
+    if (items.length > LIMITS.purgeBatch.max) throw rule(LIMITS.purgeBatch.refusal)
     const { purged, refused } = await purgeItems(ctx, items)
     return { purged: purged.length, waiting: refused.length }
   },

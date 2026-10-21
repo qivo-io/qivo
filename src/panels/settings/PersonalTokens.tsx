@@ -12,10 +12,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import type { api } from '../../../convex/_generated/api'
+import { LIMITS } from '../../../convex/lib/limits'
 import { CopyValue } from '../../components/CopyValue'
+import { LimitedInput } from '../../components/LimitedField'
 import { Icon } from '../../components/qivo'
 import { SettingsGroup } from '../../components/settingsPage'
 import { isoFromDate } from '../../lib/dates'
+import { overLimit } from '../../lib/fieldLimits'
 import { watchLocalDay } from '../../lib/localDay'
 import { connectionScopeLabel } from '../../lib/oauthConnection'
 import {
@@ -282,10 +285,11 @@ export function NewTokenDialog({
   const now = new Date()
   // undefined means never; null means On without a usable day
   const expiresAt = expires === 'on' ? expiryFromDay(day, now) : undefined
-  const canCreate = !!name.trim() && !busy && expiresAt !== null
+  const canCreate =
+    !!name.trim() && !overLimit(LIMITS.tokenName, name) && !busy && expiresAt !== null
 
   const create = async () => {
-    if (!name.trim() || busy || expiresAt === null) return
+    if (!canCreate) return
     // a paused create keeps the dialog and says why
     if (P.refusePausedEdit()) return
     const choice: McpTokenChoice = { access: allowChanges ? 'write' : 'read', expiresAt }
@@ -367,11 +371,11 @@ export function NewTokenDialog({
     >
       <div data-new-mcp-token="form">
         <MField label="Name">
-          <Input
+          <LimitedInput
+            limit={LIMITS.tokenName}
             aria-label="Name"
             data-autofocus=""
             value={name}
-            maxLength={P.NAME_MAX}
             placeholder="e.g. Claude on my laptop"
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
