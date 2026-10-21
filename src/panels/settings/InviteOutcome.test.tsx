@@ -12,6 +12,12 @@ const network = vi.hoisted(() => ({
   push: (_rows: Row[] | null) => {},
 }))
 vi.mock('../../lib/convex', () => ({ convex: network }))
+// UserControls reaches the store, whose auth client needs a backend URL
+vi.mock('../../lib/auth', () => ({
+  armConvexAuth: async () => true,
+  authClient: { getSession: async () => ({ data: null }) },
+  signOut: vi.fn(),
+}))
 
 // the component's module graph is large; load it once, outside the tests' time limit
 let InviteOutcome: typeof import('./UserControls').InviteOutcome
