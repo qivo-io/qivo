@@ -1,6 +1,6 @@
 import {
   createContext,
-  type PointerEvent,
+  type PointerEvent as ReactPointerEvent,
   type RefObject,
   useContext,
   useLayoutEffect,
@@ -17,8 +17,11 @@ import { markTaskFocus, type TaskFocusMark } from './taskFocus'
    one of its popover triggers. A live row renders the full controls. */
 
 /** What a static scope's controls call to make their row live. A popover
-    trigger passes its `[data-popover-wrap]`, so the live trigger opens. */
-export type StaticControls = { activate: (wrap?: HTMLElement | null) => void }
+    trigger passes its `[data-popover-wrap]`, so the live trigger opens; a
+    mouse passes where it points, so the live control under it sees it. */
+export type StaticControls = {
+  activate: (wrap?: HTMLElement | null, pointer?: { x: number; y: number }) => void
+}
 
 /** Null (the default) means live, so controls outside a static row are
     unchanged. */
@@ -52,16 +55,21 @@ function markedControl(root: HTMLElement, mark: TaskFocusMark) {
 export function useLiveControls(root: RefObject<HTMLElement | null>) {
   const [live, setLive] = useState(false)
   // what to restore once the live controls are in
-  const handover = useRef<{ focus: TaskFocusMark | null; wrap: number } | null>(null)
+  const handover = useRef<{
+    focus: TaskFocusMark | null
+    wrap: number
+    pointer?: { x: number; y: number }
+  } | null>(null)
   // made once: it reads only the refs and the setter, which keep their identity
   const [statics] = useState<StaticControls>(() => ({
-    activate: (wrap) => {
+    activate: (wrap, pointer) => {
       const element = root.current
       if (!element || handover.current) return
       const active = document.activeElement
       handover.current = {
         focus: active && element.contains(active) ? markTaskFocus(active) : null,
         wrap: wrap ? [...element.querySelectorAll('[data-popover-wrap]')].indexOf(wrap) : -1,
+        pointer,
       }
       setLive(true)
     },
@@ -75,6 +83,23 @@ export function useLiveControls(root: RefObject<HTMLElement | null>) {
     if (next.focus?.control && !element.contains(document.activeElement)) {
       markedControl(element, next.focus)?.focus({ preventScroll: true })
     }
+    // The mouse that made the row live already rests on a control the switch
+    // replaced. A tooltip opens on a move over its trigger, so the new
+    // control under the mouse gets one.
+    const under =
+      next.pointer && typeof document.elementFromPoint === 'function'
+        ? document.elementFromPoint(next.pointer.x, next.pointer.y)
+        : null
+    if (next.pointer && under && element.contains(under) && typeof PointerEvent === 'function')
+      under.dispatchEvent(
+        new PointerEvent('pointermove', {
+          bubbles: true,
+          clientX: next.pointer.x,
+          clientY: next.pointer.y,
+          pointerType: 'mouse',
+          isPrimary: true,
+        }),
+      )
     if (next.wrap < 0) return
     const trigger = element.querySelectorAll('[data-popover-wrap]')[next.wrap]?.firstElementChild
     if (!(trigger instanceof HTMLElement)) return
@@ -85,8 +110,9 @@ export function useLiveControls(root: RefObject<HTMLElement | null>) {
   const value = live ? null : statics
   /* A mouse that points at the row, never a touch, and never while a button
      is held: a press or drag keeps the node it started on. */
-  const pointed = (event: PointerEvent) => {
-    if (event.pointerType !== 'touch' && event.buttons === 0) activate()
+  const pointed = (event: ReactPointerEvent) => {
+    if (event.pointerType !== 'touch' && event.buttons === 0)
+      activate(null, { x: event.clientX, y: event.clientY })
   }
   const rootProps = live
     ? { 'data-card-live': '' }
