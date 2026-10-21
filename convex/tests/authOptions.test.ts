@@ -1,3 +1,4 @@
+import { runWithEndpointContext } from '@better-auth/core/context'
 import type { GenericCtx } from '@convex-dev/better-auth'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DataModel } from '../_generated/dataModel'
@@ -56,6 +57,28 @@ describe('email verification is mailed on every path that needs it', () => {
       subject: 'Confirm your email address on Qivo',
     })
     expect(sent()[0].text).toContain(url)
+  })
+
+  it('leaves a provider registration and a resend without a session to the app, mailing nothing', async () => {
+    const { fetch } = provider()
+    const options = createAuthOptions(noCtx)
+    const callback = () =>
+      options.emailVerification!.sendVerificationEmail!({
+        user: { email: 'ana@example.com' },
+        url: 'https://example.convex.site/api/auth/verify-email?token=t',
+        token: 't',
+      } as never)
+    const inEndpoint = (path: string, session: unknown) =>
+      runWithEndpointContext({ path, context: { session } } as never, callback)
+
+    await inEndpoint('/callback/:id', null)
+    await inEndpoint('/sign-in/social', null)
+    await inEndpoint('/send-verification-email', null)
+    expect(fetch).not.toHaveBeenCalled()
+    // the same callback mails for a signed-in resend and an unconfirmed sign-in
+    await inEndpoint('/send-verification-email', { user: { id: 'u' } })
+    await inEndpoint('/sign-in/email', null)
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
 
   it('the reset callback is a different letter — the two are not crossed', async () => {
