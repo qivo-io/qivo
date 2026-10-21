@@ -41,8 +41,8 @@ type Options = {
 
 /** The time one slice aims to take, and its first, least and most items. */
 const SLICE_MS = 8
-const FIRST_SLICE = 32
-const MIN_SLICE = 8
+const FIRST_SLICE = 8
+const MIN_SLICE = 1
 const MAX_SLICE = 512
 
 /* A MessageChannel task, which the browser does not clamp the way it

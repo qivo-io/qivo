@@ -69,8 +69,8 @@ describe('createMountScheduler', () => {
     expect(s.root.getAttribute('data-board-mount')).toBe('pending')
     expect(s.root.getAttribute('aria-busy')).toBe('true')
     await s.run()
-    expect(a.state.grown).toEqual([32])
-    await s.run()
+    expect(a.state.grown).toEqual([8])
+    while (s.tasks.length) await s.run()
     expect(a.state.mounted).toBe(40)
     expect(s.root.getAttribute('data-board-mount')).toBe('complete')
     expect(s.root.hasAttribute('aria-busy')).toBe(false)
@@ -89,38 +89,36 @@ describe('createMountScheduler', () => {
   it('mounts lists near the view first, then in document order', async () => {
     const s = setup()
     s.scheduler.setRoot(s.root)
-    // 0.25ms an item keeps each slice at 32 items
-    const a = s.list('a', 100, 0, 0.25)
-    const b = s.list('b', 100, 0, 0.25)
-    const c = s.list('c', 100, 0, 0.25)
+    // 1ms an item keeps each slice at 8 items
+    const a = s.list('a', 100, 0, 1)
+    const b = s.list('b', 100, 0, 1)
+    const c = s.list('c', 100, 0, 1)
     await s.settle()
     s.near(c.spacer)
     await s.run()
-    expect([a.state.mounted, b.state.mounted, c.state.mounted]).toEqual([0, 0, 32])
+    expect([a.state.mounted, b.state.mounted, c.state.mounted]).toEqual([0, 0, 8])
     s.near(c.spacer, false)
     await s.run()
-    expect([a.state.mounted, b.state.mounted, c.state.mounted]).toEqual([32, 0, 32])
+    expect([a.state.mounted, b.state.mounted, c.state.mounted]).toEqual([8, 0, 8])
   })
 
-  it('sizes each slice to about 8ms, between 8 and 512 items', async () => {
+  it('sizes each slice to about 8ms, between 1 and 512 items', async () => {
     const s = setup()
     s.scheduler.setRoot(s.root)
-    // 1ms an item: 32 take 32ms, so the next slice is 8 items
-    const slow = s.list('slow', 1000, 0, 1)
+    // 4ms an item: the first 8 take 32ms, so the next slice is 2 items
+    const slow = s.list('slow', 1000, 0, 4)
     await s.settle()
     await s.run()
     await s.run()
-    expect(slow.state.grown).toEqual([32, 8])
-    await s.run()
-    expect(slow.state.grown[2]).toBe(8)
+    expect(slow.state.grown).toEqual([8, 2])
     slow.unregister()
-    // free items: from the 8 it came down to, slices grow as the averaged
-    // time per item falls, never more than double, up to 512
+    // free items: slices grow as the averaged time per item falls, never
+    // more than double, up to 512
     const fast = s.list('fast', 100_000)
     await s.settle()
     for (let n = 0; n < 40; n++) await s.run()
     const grown = fast.state.grown
-    expect(grown[0]).toBe(8)
+    expect(grown[0]).toBeLessThanOrEqual(4)
     expect(grown.every((n, i) => i === 0 || n <= grown[i - 1] * 2)).toBe(true)
     expect(grown.at(-1)).toBe(512)
   })
@@ -128,13 +126,13 @@ describe('createMountScheduler', () => {
   it('does not take a slice that found few items left for a cheap one', async () => {
     const s = setup()
     s.scheduler.setRoot(s.root)
-    // 1ms an item: 32 take 32ms, then the last 2 take 2ms
-    const a = s.list('a', 34, 0, 1)
+    // 1ms an item: 8 take 8ms, then the last 1 takes 1ms
+    const a = s.list('a', 9, 0, 1)
     await s.settle()
     await s.run()
     await s.run()
-    expect(a.state.grown).toEqual([32, 2])
-    // two items in 2ms is the same rate: the next list starts at 8, not 32
+    expect(a.state.grown).toEqual([8, 1])
+    // one item in 1ms is the same rate: the next list gets 8, not 64
     const b = s.list('b', 1000, 0, 1)
     await s.settle()
     await s.run()
@@ -171,27 +169,27 @@ describe('createMountScheduler', () => {
     s.scheduler.revive()
     await s.settle()
     await s.run()
-    expect(a.state.mounted).toBe(32)
+    expect(a.state.mounted).toBe(8)
   })
 
   it('runs slices within 8ms of a frame, then waits for the next frame', async () => {
     const frames: (() => void)[] = []
     const s = setup({ frames })
     s.scheduler.setRoot(s.root)
-    // 0.1ms an item: a first slice of 32 takes 3.2ms
-    const a = s.list('a', 10_000, 0, 0.1)
+    // 0.5ms an item: a first slice of 8 takes 4ms
+    const a = s.list('a', 10_000, 0, 0.5)
     await s.settle()
     // the first slice waits for a frame
     expect(s.tasks).toHaveLength(0)
     expect(frames).toHaveLength(1)
     frames.shift()?.()
     await s.run()
-    // 3.2ms into the frame: the next slice follows at once
+    // 4ms into the frame: the next slice follows at once
     expect(s.tasks).toHaveLength(1)
     expect(frames).toHaveLength(0)
     await s.run()
     // past 8ms of the frame: the next slice waits for the next frame
-    expect(a.state.grown.reduce((x, y) => x + y, 0) * 0.1).toBeGreaterThan(8)
+    expect(a.state.grown.reduce((x, y) => x + y, 0) * 0.5).toBeGreaterThan(8)
     expect(s.tasks).toHaveLength(0)
     expect(frames).toHaveLength(1)
   })
