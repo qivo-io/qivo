@@ -131,8 +131,18 @@ const withLead = (acc: Record<string, string> | undefined, lead: string | null |
   if (lead) m[lead] = 'lead'
   return m
 }
+/** Projects by their sort order, then creation time and id. */
 export const byOrder = (a: Row<'projects'>, b: Row<'projects'>) =>
-  a.sort_order - b.sort_order || (a.created_at < b.created_at ? -1 : 1)
+  a.sort_order - b.sort_order ||
+  (a.created_at < b.created_at
+    ? -1
+    : a.created_at > b.created_at
+      ? 1
+      : a.id < b.id
+        ? -1
+        : a.id > b.id
+          ? 1
+          : 0)
 /** Active and archived projects stay in separate lists, including their children. */
 export const shapeProject = (
   p: Row<'projects'>,
@@ -218,24 +228,30 @@ export const shapeAttachment = (a: Row<'issue_attachments'>) => ({
 })
 export type AttachmentVM = ReturnType<typeof shapeAttachment>
 
-/* the per-rebuild derivations shapeIssue folds in: mirrored links, child
-   keys, label attachments, the attachment views, my subscriptions */
+/** A lookup by key, such as a Map. */
+type Lookup<T> = { get(key: string): T | undefined }
+/** A membership test, such as a Set. */
+type Members = { has(key: string): boolean }
+
+/* the derivations shapeIssue folds in (store/taskIndex.ts): mirrored links,
+   child keys, label attachments, the attachment views, my subscriptions */
 type IssueShapeCtx = {
-  uuidToKey: Map<string, string>
-  uuidToDisplayKey: Map<string, string>
-  hiddenSubtaskParents: Set<string>
-  hiddenParentTasks: Set<string>
-  linkViews: Map<string, { type: string; id: string }[]>
-  childKeys: Map<string, string[]>
-  labelsByIssue: Map<string, string[]>
-  attByIssue: Map<string, AttachmentVM[]>
+  uuidToKey: Lookup<string>
+  uuidToDisplayKey: Lookup<string>
+  hiddenSubtaskParents: Members
+  hiddenParentTasks: Members
+  linkViews: Lookup<{ type: string; id: string }[]>
+  childKeys: Lookup<string[]>
+  labelsByIssue: Lookup<string[]>
+  attByIssue: Lookup<AttachmentVM[]>
   /** every attachment row of a task, description images included, by uuid */
-  attachmentCounts: Map<string, number>
-  subscribedIssues: Set<string>
+  attachmentCounts: Lookup<number>
+  subscribedIssues: Members
 }
 export const shapeIssue = (i: Row<'issues'>, ctx: IssueShapeCtx) => {
   const { uuidToKey, uuidToDisplayKey, hiddenSubtaskParents } = ctx
-  const isGroup = !!ctx.childKeys.get(i.id)?.length || hiddenSubtaskParents.has(i.id)
+  const children = ctx.childKeys.get(i.id) || []
+  const isGroup = !!children.length || hiddenSubtaskParents.has(i.id)
   return {
     id: uuidToKey.get(i.id) as string, // the handle the app threads (key at home, uuid abroad)
     key: uuidToDisplayKey.get(i.id) as string, // what surfaces RENDER — always "QN-n"
@@ -256,7 +272,7 @@ export const shapeIssue = (i: Row<'issues'>, ctx: IssueShapeCtx) => {
     ownerField: reviewerOwns(i, isGroup) ? ('reviewer' as const) : ('assignee' as const),
     reporter: i.reporter_id,
     parent: i.parent_id ? uuidToKey.get(i.parent_id) || null : null,
-    children: ctx.childKeys.get(i.id) || [],
+    children,
     hasHiddenSubtasks: hiddenSubtaskParents.has(i.id),
     // the parent is outside this view; `parent` is null, as for no parent
     hasHiddenParent: ctx.hiddenParentTasks.has(i.id),
@@ -321,7 +337,7 @@ export const shapeMilestone = (m: Row<'milestones'>) => ({
 })
 export type MilestoneVM = ReturnType<typeof shapeMilestone>
 
-export const shapeActivity = (e: Row<'activity_events'>, uuidToKey: Map<string, string>) => ({
+export const shapeActivity = (e: Row<'activity_events'>, uuidToKey: Lookup<string>) => ({
   id: e.id,
   ts: new Date(e.ts).getTime(),
   actor: e.actor_id,
@@ -356,9 +372,9 @@ export type CommentVM = ReturnType<typeof shapeComment>
 export const shapeMessage = (
   m: Row<'messages'>,
   ctx: {
-    issues: Map<string, Row<'issues'>>
-    uuidToKey: Map<string, string>
-    uuidToDisplayKey: Map<string, string>
+    issues: Lookup<Row<'issues'>>
+    uuidToKey: Lookup<string>
+    uuidToDisplayKey: Lookup<string>
   },
 ) => {
   const { uuidToKey, uuidToDisplayKey } = ctx

@@ -2,10 +2,13 @@
    across organizations; display keys are org-scoped QN numbers. Relationships,
    project access and week-indexed schedules are derived from the raw rows.
 
-   Every non-null snapshot updates serverSnap. A later null (no seat left)
-   keeps the last one. Every write paints its own optimistic layer
-   (store/layers.ts) over the server's rows, and a refusal takes away only
-   that layer (see the write path below).
+   Every non-null snapshot updates serverSnap and is staged in the base
+   (store/workspaceBase.ts), which keeps each unchanged row's object. A later
+   null (no seat left) keeps the last one. Every write paints its own
+   optimistic layer (store/layers.ts) over the server's rows, copying only
+   the rows it reaches (store/rowMap.ts), and a refusal takes away only that
+   layer (see the write path below). A repaint reshapes only the view models
+   a change reaches (store/taskIndex.ts).
    Comments and Team sync have separate subscriptions and update channels.
    Preferences load once and save through their own debounced lifecycle.
    Uploads remain awaited; signed file URLs are minted with one-shot queries. */
@@ -87,13 +90,7 @@ import {
   weekToISO,
   winLabel,
 } from '../lib/dates'
-import {
-  computeDelayMap,
-  DELAY_COLORS,
-  DELAY_LABELS,
-  DELAY_NEUTRAL,
-  type DelayInfo,
-} from '../lib/delay'
+import { DELAY_COLORS, DELAY_LABELS, DELAY_NEUTRAL, type DelayInfo } from '../lib/delay'
 import type { PurgeRefusal, RestoreRefusal } from '../lib/deletedItems'
 import { DEMO_MODE, notifyDemoEnded } from '../lib/demoMode'
 import { AVATAR_TYPES, avatarImage, compressImage } from '../lib/images'
@@ -128,7 +125,9 @@ import {
   type View,
 } from './layers'
 import { createPreferences } from './preferences'
+import { createWorkspaceRows, RowMap, rowCopies } from './rowMap'
 import { keep, keepItems, sameData } from './stable'
+import { createTaskIndex, type TaskChanges, type TaskSources } from './taskIndex'
 
 export type { UIPrefs } from './preferences'
 
@@ -171,6 +170,7 @@ import {
   type TeamVM,
   type UserVM,
 } from './viewModels'
+import { createWorkspaceBase, deepFreeze } from './workspaceBase'
 
 export type {
   ActivityVM,
@@ -223,32 +223,68 @@ type Snapshot = NonNullable<FunctionReturnType<typeof api.snapshot.forMe>>
    per org (profileIn). There is no active-org state and no switcher: the
    home org drives display settings, and foreign projects simply appear
    alongside the home ones. */
+/* The server's rows of the last delivery painted, each unchanged row kept
+   as one frozen object (store/workspaceBase.ts), and the rows on screen:
+   those with every live layer painted over them (store/rowMap.ts). */
+const base = createWorkspaceBase()
+const workspaceRows = createWorkspaceRows(base)
 const rows = {
-  orgs: new Map<string, Row<'organizations'>>(),
-  // billing rides the org row, admin-redacted server-side; this slot is the
-  // home org's object (the organization_billing table's successor)
-  billing: null as Row<'organizations'>['billing'] | null,
-  teams: new Map<string, Row<'teams'>>(),
-  profiles: new Map<string, Row<'profiles'>>(),
-  teamMembers: [] as Row<'team_members'>[],
-  projects: new Map<string, Row<'projects'>>(),
-  access: [] as Row<'project_access'>[],
-  teamAccess: [] as Row<'project_team_access'>[],
-  issues: new Map<string, Row<'issues'>>(),
-  hiddenSubtaskParents: new Set<string>(),
+  orgs: workspaceRows.orgs,
+  // billing rides the org row, admin-redacted server-side; this is the home
+  // org's object (the organization_billing table's successor)
+  get billing(): Row<'organizations'>['billing'] | null {
+    return (HOME_ORG ? workspaceRows.orgs.peek(HOME_ORG)?.billing : undefined) || null
+  },
+  teams: workspaceRows.teams,
+  profiles: workspaceRows.profiles,
+  get teamMembers() {
+    return workspaceRows.list('teamMembers')
+  },
+  set teamMembers(value) {
+    workspaceRows.setList('teamMembers', value)
+  },
+  projects: workspaceRows.projects,
+  get access() {
+    return workspaceRows.list('access')
+  },
+  set access(value) {
+    workspaceRows.setList('access', value)
+  },
+  get teamAccess() {
+    return workspaceRows.list('teamAccess')
+  },
+  set teamAccess(value) {
+    workspaceRows.setList('teamAccess', value)
+  },
+  issues: workspaceRows.issues,
+  get hiddenSubtaskParents() {
+    return workspaceRows.flags('hiddenSubtaskParents')
+  },
   // tasks whose parent is outside the working set; the snapshot omits that
   // parent's id
-  hiddenParentTasks: new Set<string>(),
-  links: new Map<string, Row<'issue_links'>>(),
-  milestones: new Map<string, Row<'milestones'>>(),
-  labels: new Map<string, Row<'labels'>>(),
-  issueLabels: [] as Row<'issue_labels'>[],
+  get hiddenParentTasks() {
+    return workspaceRows.flags('hiddenParentTasks')
+  },
+  links: workspaceRows.links,
+  milestones: workspaceRows.milestones,
+  labels: workspaceRows.labels,
+  get issueLabels() {
+    return workspaceRows.list('issueLabels')
+  },
+  set issueLabels(value) {
+    workspaceRows.setList('issueLabels', value)
+  },
   // who follows which task (0114). The snapshot carries own rows only, exactly
   // like user_prefs: a subscription is MY notification preference, not a
   // published fact about the task, so this cache never holds anybody else's
   // row and `subscribed` below is the only thing derived from it.
-  issueSubs: [] as Row<'issue_subscriptions'>[],
-  attachments: new Map<string, Row<'issue_attachments'>>(),
+  get issueSubs() {
+    return workspaceRows.list('issueSubs')
+  },
+  set issueSubs(value) {
+    workspaceRows.setList('issueSubs', value)
+  },
+  attachments: workspaceRows.attachments,
   // comments for ONE issue — the open modal's (watchComments); other issues'
   // comments are never fetched, so this is not org-wide state
   comments: new Map<string, Row<'comments'>>(),
@@ -257,10 +293,15 @@ const rows = {
   // inbox messages (0074) — the snapshot returns only the signed-in user's
   // rows; generation is server-side (notify triggers), clients only mark
   // read/unread, snooze and delete
-  messages: new Map<string, Row<'messages'>>(),
+  messages: workspaceRows.messages,
   // Reactive organization-wide load by effective owner; hidden projects
   // contribute hours without exposing their identity.
-  orgLoad: [] as Snapshot['orgLoad'],
+  get orgLoad() {
+    return workspaceRows.list('orgLoad')
+  },
+  set orgLoad(value) {
+    workspaceRows.setList('orgLoad', value)
+  },
 }
 
 // Read notifications outside the snapshot's 500-row display window still
@@ -277,15 +318,15 @@ let unexaminedRead = false
 // ones included (snapshot messagesCut).
 let messagesCut = false
 
-/* issue uuid → projected-delay info, rebuilt with every snapshot */
-let delayMap = new Map<string, DelayInfo>()
-
-/* plan_org_load grouped by owner (rebuilt with the delay map, which reads
-   the same spans), and each owner's hours in the weeks P.weekLoadOf was asked
-   about, added up one week at a time on first ask and emptied by every
-   rebuild. */
-let orgLoadByOwner = new Map<string, LoadSpan[]>()
+/* Each owner's hours in the weeks P.weekLoadOf was asked about, added up
+   one week at a time on first ask from the owner's organization-wide load
+   (tasks.loads), and forgotten when that load changes. */
 const committedByOwner = new Map<string, Map<number, number>>()
+
+/* The task view models, handles, delays and load, kept up to date a task
+   at a time (store/taskIndex.ts). */
+const tasks = createTaskIndex((owner) => committedByOwner.delete(owner))
+const delayMap = tasks.delays
 
 /* The home organization whose latest-comment facts the Team sync page
    watches (P.watchTeamSync), or null, and the people it asks about (joined
@@ -547,7 +588,7 @@ function dropComment(id: string) {
 /* The server's row of task `uuid` in the last snapshot delivery. A task the
    rows show without one is a create still on its way, painted by its layer,
    which the server does not know yet. */
-const serverTask = (uuid: string) => serverSnap?.issues.find((r) => r.id === uuid)
+const serverTask = (uuid: string) => base.stagedTask(uuid)
 
 /* Subscribes to the watched thread once the snapshot holds its task, for a
    task watched while its create was on its way (watchComments). Asking
@@ -827,7 +868,6 @@ function announceNewMessages(snap: Snapshot) {
   // a snooze that ended since the last delivery: the server stamps every
   // row of the item with one woke_at, so the item announces once, not per row
   const returned = new Map<string, Row<'messages'>>()
-  const issues = new Map(snap.issues.map((issue) => [issue.id, issue]))
   const profiles = new Map(snap.profiles.map((profile) => [profile.id, profile]))
   snap.messages.forEach((m) => {
     const known = announcedMessages!.has(m.id)
@@ -844,7 +884,8 @@ function announceNewMessages(snap: Snapshot) {
   // a click on the notification opens the inbox (setInboxOpener)
   const openInbox = () => inboxOpener?.()
   const titleOf = (m: Row<'messages'>) => {
-    const iss = issues.get(m.issue_id)
+    // this delivery's row, which base.stage just kept
+    const iss = base.stagedTask(m.issue_id)
     return (iss ? iss.title : m.issue_title) || m.issue_title
   }
   fresh
@@ -908,11 +949,12 @@ export const MINE_SCOPE = 'mine'
    Home-org behaviour is therefore byte-identical to before 0081 — every
    existing surface, drive and shared link keeps working — and only guest
    content (which no link predating 0081 can name) uses uuid handles. */
-let keyToUuid = new Map<string, string>() // handle -> issue uuid
-let uuidToKey = new Map<string, string>() // uuid -> handle
-let uuidToDisplayKey = new Map<string, string>() // uuid -> "QN-482" (what's rendered)
+// kept by the task index (store/taskIndex.ts), a task at a time
+const keyToUuid = tasks.keyToUuid // handle -> issue uuid
+const uuidToKey = tasks.uuidToKey // uuid -> handle
+const uuidToDisplayKey = tasks.uuidToDisplayKey // uuid -> "QN-482" (what's rendered)
 // org id -> ("QN-482" -> uuid): resolves an org-prefixed URL exactly (0081)
-let keyByOrg = new Map<string, Map<string, string>>()
+const keyByOrg = tasks.keyByOrg
 const handleFor = (uuid: string, orgId: string, key: string) =>
   orgId && orgId === HOME_ORG ? key : uuid
 
@@ -1005,18 +1047,23 @@ const updates = createPlannerUpdates()
    on screen are exactly what the layers paint (checkLayers). */
 const emit = (section?: Parameters<typeof updates.emit>[0]) => {
   if (STRICT_LAYERS) checkLayers()
-  if (!section || section === 'workspace') lastShown = shownWorkspace()
+  if (!section || section === 'workspace') {
+    lastShown = shownWorkspace()
+    // what shows now is where the next comparison starts (sameShown)
+    workspaceRows.checkpoint()
+  }
   updates.emit(section)
 }
 
-/** What a workspace emit shows: the rows outside the inbox, every value
-    rebuild() derives from them, Roadmap's undo history and whether a write
-    waits, which its undo reads too (P.roadmapUndo). The layers' paints show
-    in the rows. */
+/** What a workspace emit shows besides the workspace rows, which keep their
+    own record (store/rowMap.ts rowsChanged): the watched thread's rows,
+    every value rebuild() derives, Roadmap's undo history and whether a
+    write waits, which its undo reads too (P.roadmapUndo). The layers'
+    paints show in the rows. */
 function shownWorkspace() {
   const P = PLANNER
   return {
-    rows: Object.entries(rows).filter(([section]) => section !== 'messages'),
+    thread: [rows.comments, rows.threadEvents],
     derived: [
       P.gridEpoch,
       P.TIMELINE_START.getTime(),
@@ -1059,16 +1106,20 @@ function shownWorkspace() {
 /* What the last workspace emit showed, or null before the first. */
 let lastShown: ReturnType<typeof shownWorkspace> | null = null
 
-/** Whether `a` and `b` show the same: the same derived values (which
-    rebuild keeps identical while their data is, stable.ts), rows holding
-    the same data and the same answer to whether a write waits. The inbox's
-    rows are left out, because a painted read and the server's read differ
-    only in its time, which no view shows; its view models count instead. */
-function sameShown(a: ReturnType<typeof shownWorkspace>, b: ReturnType<typeof shownWorkspace>) {
+/** Whether what shows now is what `a` showed: the same derived values
+    (which rebuild keeps identical while their data is, stable.ts), rows
+    holding the same data and the same answer to whether a write waits. The
+    workspace rows compare only the keys changed since `a` (rowsChanged).
+    The inbox's rows are left out, because a painted read and the server's
+    read differ only in its time, which no view shows; its view models count
+    instead. */
+function sameShown(a: ReturnType<typeof shownWorkspace>) {
+  const b = shownWorkspace()
   return (
     a.waiting === b.waiting &&
     a.derived.every((value, i) => value === b.derived[i]) &&
-    a.rows.every(([section, value], i) => b.rows[i][0] === section && sameData(value, b.rows[i][1]))
+    sameData(a.thread, b.thread) &&
+    !workspaceRows.rowsChanged('messages')
   )
 }
 
@@ -1169,15 +1220,6 @@ let demoDisposed = false
    anchors, so a paint or answer that writes into the server's rows throws. */
 const STRICT_LAYERS = import.meta.env.MODE === 'test'
 
-/** Freezes `value` and everything in it. */
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
-    Object.freeze(value)
-    for (const inner of Object.values(value)) deepFreeze(inner)
-  }
-  return value
-}
-
 /** A delivered value as the store keeps it as an anchor: frozen copy in
     tests, the value itself otherwise. */
 const anchor = <T>(value: T): T => (STRICT_LAYERS ? deepFreeze(structuredClone(value)) : value)
@@ -1199,14 +1241,13 @@ function repaint(parts: { workspace?: boolean; thread?: boolean }) {
     clearTimeout(payTimer)
     payTimer = null
   }
-  const handles = workspace ? new Map(uuidToKey) : null
   paintRows(workspace, thread)
   if (workspace) {
     rebuild()
-    if (handles) moveHandles(handles)
+    moveHandles(lastMoves)
     // a delivery that brings nothing new to the screen, such as a batch's
     // echo of rows a bulk inbox action painted already, renders nothing
-    if (!lastShown || !sameShown(lastShown, shownWorkspace())) emit()
+    if (!lastShown || !sameShown(lastShown)) emit()
     else if (thread) emit('comments')
     // after the emit: it may send (reapPausedUploads)
     endHeldRecovery()
@@ -1239,20 +1280,25 @@ function together(step: () => void) {
 }
 
 /** Builds the rows of the parts named from their anchors and paints every
-    live layer over them, in order (layers.ordered), without showing them. */
+    live layer over them, in order (layers.ordered), without showing them.
+    The workspace rows start again from the server's, with the staged
+    delivery applied (store/rowMap.ts beginRepaint). */
 function paintRows(workspace: boolean, thread: boolean) {
-  const snap = workspace ? serverSnap : null
-  if (snap) {
-    adoptIdentity(snap)
-    buildRows(snap)
+  const painting = workspace && serverSnap !== null
+  if (painting) {
+    workspaceRows.beginRepaint()
+    adoptIdentity()
+    countInbox()
   }
   if (thread) buildThreadRows()
-  for (const layer of layers.ordered()) {
-    // one paint that throws cannot keep every later delivery off the screen
-    if (snap && layer.view.workspace) guarded(layer.view.workspace)
-    const part = layer.view.thread
-    if (thread && part && part.task === watchedComments) guarded(part.paint)
-  }
+  workspaceRows.paint(() => {
+    for (const layer of layers.ordered()) {
+      // one paint that throws cannot keep every later delivery off the screen
+      if (painting && layer.view.workspace) guarded(layer.view.workspace)
+      const part = layer.view.thread
+      if (thread && part && part.task === watchedComments) guarded(part.paint)
+    }
+  })
 }
 
 /* Faults the layer machinery caught (reportFault), kept in tests so the
@@ -1293,9 +1339,11 @@ function pay() {
 /** Paints `view` over the rows on screen, the moment its write is sent, and
     shows the change. A thread part shows only while its task is watched. */
 function showPaint(view: View) {
-  view.workspace?.()
   const thread = view.thread && view.thread.task === watchedComments ? view.thread : null
-  thread?.paint()
+  workspaceRows.paint(() => {
+    view.workspace?.()
+    thread?.paint()
+  })
   if (view.workspace) {
     rebuild()
     emit()
@@ -1308,18 +1356,16 @@ function showPaint(view: View) {
 /* Who hears that tasks' handles moved (P.watchHandles). */
 const handleWatchers = new Set<(moved: ReadonlyMap<string, string>) => void>()
 
+/* The handles the last rebuild moved, old to new (store/taskIndex.ts). */
+let lastMoves: ReadonlyMap<string, string> = new Map()
+
 /** Tells P.watchHandles' listeners, once per repaint, every task whose
-    handle moved since `before` (uuid to handle), as one map from the old
-    handle to the new. A new task's preview number moves when another
-    person's create takes it while the write waits, and again when the
-    server's answer fixes it. Taken together, two creates that both move
-    cannot make a caller follow the wrong one. */
-function moveHandles(before: ReadonlyMap<string, string>) {
-  const moved = new Map<string, string>()
-  for (const [uuid, handle] of before) {
-    const now = uuidToKey.get(uuid)
-    if (now && now !== handle) moved.set(handle, now)
-  }
+    handle the repaint moved, as one map from the old handle to the new. A
+    new task's preview number moves when another person's create takes it
+    while the write waits, and again when the server's answer fixes it.
+    Taken together, two creates that both move cannot make a caller follow
+    the wrong one. */
+function moveHandles(moved: ReadonlyMap<string, string>) {
   if (moved.size) for (const watcher of handleWatchers) watcher(moved)
 }
 
@@ -1561,10 +1607,22 @@ function settleRefused(layer: Layer) {
    paint rules in store/layers.ts). Skipped while a part is owed or before
    the first load. Leaves the rows as they were. */
 let checkingLayers = false
+/* Whether the test-only checks (checkLayers, checkTasks) are off, while a
+   test measures what a step costs as it would outside tests. */
+let unchecked = false
 function checkLayers() {
-  if (checkingLayers || owed.workspace || owed.thread || !PLANNER.loaded || !serverSnap) return
+  if (
+    unchecked ||
+    checkingLayers ||
+    owed.workspace ||
+    owed.thread ||
+    !PLANNER.loaded ||
+    !serverSnap
+  )
+    return
   checkingLayers = true
-  const shownRows = { ...rows }
+  const saved = workspaceRows.save()
+  const thread = { comments: rows.comments, threadEvents: rows.threadEvents }
   const counters = { hiddenReadMessages, unexaminedUnread, unexaminedRead, messagesCut }
   try {
     const shown = canonicalRows()
@@ -1572,13 +1630,15 @@ function checkLayers() {
     const outside = firstDifference(shown, canonicalRows())
     if (outside) throw new Error(`rows changed outside a layer: ${outside}`)
     const built = canonicalRows(true)
-    const ahead = withClockAhead(() => {
-      for (const layer of layers.ordered()) {
-        layer.view.workspace?.()
-        const thread = layer.view.thread
-        if (thread && thread.task === watchedComments) thread.paint()
-      }
-    })
+    const ahead = withClockAhead(() =>
+      workspaceRows.paint(() => {
+        for (const layer of layers.ordered()) {
+          layer.view.workspace?.()
+          const part = layer.view.thread
+          if (part && part.task === watchedComments) part.paint()
+        }
+      }),
+    )
     // the shifted clock answers one instant, so a time read from it shows as that
     const marks = [new Date(ahead).toISOString(), String(ahead)]
     const read = Object.entries(canonicalRows()).find(([, json]) =>
@@ -1588,7 +1648,8 @@ function checkLayers() {
     const changed = firstDifference(built, canonicalRows(true))
     if (changed) throw new Error(`a paint is not safe to run again: ${changed}`)
   } finally {
-    Object.assign(rows, shownRows)
+    workspaceRows.restore(saved)
+    Object.assign(rows, thread)
     ;({ hiddenReadMessages, unexaminedUnread, unexaminedRead, messagesCut } = counters)
     checkingLayers = false
   }
@@ -1620,7 +1681,7 @@ const SET_FLAGS = new Set(['has_hidden_subtasks', 'has_hidden_parent'])
     shows only that it is set. */
 function canonicalRows(noStamps = false): Record<string, string> {
   const norm = (value: unknown): unknown => {
-    if (value instanceof Map)
+    if (value instanceof Map || value instanceof RowMap)
       return [...value.entries()].map(([key, item]) => [String(key), norm(item)]).sort()
     if (value instanceof Set) return [...value].map(String).sort()
     if (Array.isArray(value)) return value.map((item) => JSON.stringify(norm(item))).sort()
@@ -1680,13 +1741,33 @@ export const __layerProbe = STRICT_LAYERS
           and how many layers are live. */
       rows: (noStamps = false) => canonicalRows(noStamps),
       layerCount: () => layers.ordered().length,
+      /** How many rows the paints have copied so far (store/rowMap.ts). */
+      rowCopies,
+      /** Turns the test-only checks, which rebuild and walk every row,
+          off or back on, so a test can count what a step costs. */
+      uncheck(off: boolean) {
+        unchecked = off
+      },
       /** The faults the store caught and reported, and forgets them. */
       faults: () => faults.splice(0),
-      /** Changes a task's title outside any layer and emits. */
+      /** Changes a task's title outside any layer and emits. The title
+          changes in a painted copy, since the server's rows are frozen
+          (writeServerRow). */
       writeOutside() {
-        const issue = rows.issues.values().next().value
+        const id = rows.issues.keys().next().value
+        let issue: Row<'issues'> | undefined
+        // a pass that changes nothing, which leaves a copy to change
+        workspaceRows.paint(() => {
+          issue = id === undefined ? undefined : rows.issues.get(id)
+        })
         if (issue) issue.title = `${issue.title}!`
         emit()
+      },
+      /** Writes into one of the server's rows outside any paint, which
+          throws. */
+      writeServerRow() {
+        const issue = rows.issues.values().next().value
+        if (issue) issue.title = `${issue.title}!`
       },
       /** Paints a layer that reads the clock, which emits. */
       paintClock() {
@@ -3023,8 +3104,13 @@ function rebuildComments() {
     !PLANNER.commentsLoaded || historyStart ? 'none' : historyLoad === 'idle' ? 'more' : historyLoad
 }
 
-function rebuild(now = new Date()) {
+/** Rebuilds every view model from the rows (rebuildChanged), or reshapes
+    the tasks from scratch with `full`, as a new day, a moved week grid or
+    another identity always does. */
+function rebuild(now = new Date(), full = false) {
   const P = PLANNER
+  const gridBefore = P.TIMELINE_START?.getTime()
+  const todayBefore = P.TODAY_ISO
   avatarSources.sync(
     [...rows.profiles.values()]
       .filter((profile) => profile.avatar_storage_id)
@@ -3072,7 +3158,7 @@ function rebuild(now = new Date()) {
   P.users = keepItems(
     P.users,
     [...rows.profiles.values()]
-      .sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
+      .sort((a, b) => byStamp(a.created_at, a.id, b.created_at, b.id))
       .map((u) =>
         shapeUser(
           u,
@@ -3094,7 +3180,11 @@ function rebuild(now = new Date()) {
     [...rows.orgs.values()]
       .map(shapeOrgRef)
       .sort((a, b) =>
-        a.id === HOME_ORG ? -1 : b.id === HOME_ORG ? 1 : a.name.localeCompare(b.name),
+        a.id === HOME_ORG
+          ? -1
+          : b.id === HOME_ORG
+            ? 1
+            : a.name.localeCompare(b.name) || byStamp('', a.id, '', b.id),
       ),
   )
   P.myProfileIds = keep(P.myProfileIds, [...myProfileSet])
@@ -3105,12 +3195,11 @@ function rebuild(now = new Date()) {
   P.teams = keepItems(
     P.teams,
     [...rows.teams.values()]
-      .sort((a, b) =>
-        a.created_at < b.created_at
-          ? -1
-          : a.created_at > b.created_at
-            ? 1
-            : a.name.localeCompare(b.name),
+      .sort(
+        (a, b) =>
+          byStamp(a.created_at, '', b.created_at, '') ||
+          a.name.localeCompare(b.name) ||
+          byStamp('', a.id, '', b.id),
       )
       .map(shapeTeam),
   )
@@ -3121,7 +3210,7 @@ function rebuild(now = new Date()) {
   P.labels = keepItems(
     P.labels,
     [...rows.labels.values()]
-      .sort((a, b) => (a.name.toLowerCase() < b.name.toLowerCase() ? -1 : 1))
+      .sort((a, b) => byStamp(a.name.toLowerCase(), a.id, b.name.toLowerCase(), b.id))
       .map(shapeLabel),
   )
   if (P.labels !== labelsBefore) {
@@ -3131,21 +3220,6 @@ function rebuild(now = new Date()) {
     })
     P.labelById = labelById
   }
-  const labelsByIssue = new Map<string, string[]>() // issue uuid -> label ids (name order)
-  rows.issueLabels
-    .slice()
-    .sort((a, b) => {
-      const an = (rows.labels.get(a.label_id) || { name: '' }).name.toLowerCase()
-      const bn = (rows.labels.get(b.label_id) || { name: '' }).name.toLowerCase()
-      return an < bn ? -1 : 1
-    })
-    .forEach((il) => {
-      if (!rows.labels.has(il.label_id)) return
-      const l = labelsByIssue.get(il.issue_id) || []
-      l.push(il.label_id)
-      labelsByIssue.set(il.issue_id, l)
-    })
-
   // projects (+ children / access derived) — see shapeProject
   const accByProject = new Map<string, Record<string, string>>()
   rows.access.forEach((a) => {
@@ -3201,171 +3275,44 @@ function rebuild(now = new Date()) {
       .sort(
         (a, b) =>
           (b.archivedAt || 0) - (a.archivedAt || 0) ||
-          PLANNER.projectName(a).localeCompare(PLANNER.projectName(b)),
+          PLANNER.projectName(a).localeCompare(PLANNER.projectName(b)) ||
+          byStamp('', a.id, '', b.id),
       ),
   )
   P.projectTags = keep(P.projectTags, duplicateNameTags(P.projects, P.archivedProjects))
 
-  // issues — handle mapping first, then shapes with mirrored links + children.
-  // Numbers are per ORG (0050), so a blended snapshot (0081) can hold two
-  // "QN-5": the HANDLE (see handleFor) keeps the app's references unique
-  // while `keyByOrg` resolves an org-prefixed URL to the exact one.
-  keyToUuid = new Map()
-  uuidToKey = new Map()
-  uuidToDisplayKey = new Map()
-  keyByOrg = new Map()
-  rows.issues.forEach((i) => {
-    const key = `${ISSUE_PREFIX}-${i.num}`
-    let m = keyByOrg.get(i.org_id)
-    if (!m) {
-      m = new Map()
-      keyByOrg.set(i.org_id, m)
-    }
-    m.set(key, i.id)
-    uuidToDisplayKey.set(i.id, key)
-    const handle = handleFor(i.id, i.org_id, key)
-    uuidToKey.set(i.id, handle)
-    keyToUuid.set(handle, i.id)
-  })
-
-  const linkViews = new Map<string, { type: string; id: string }[]>() // uuid -> links
-  const REV: Record<string, string> = {
-    blocks: 'blocked_by',
-    blocked_by: 'blocks',
-    relates: 'relates',
+  // tasks — their handles, view models, delays and load, reshaped only where
+  // a change reaches them (store/taskIndex.ts). Numbers are per ORG (0050),
+  // so a blended snapshot (0081) can hold two "QN-5": the HANDLE keeps the
+  // app's references unique while `keyByOrg` resolves an org-prefixed URL
+  // to the exact one. Projected delays (0064) walk each visible task's
+  // finish week against its effective owner's org-wide free capacity
+  // (plan_org_load): the reviewer while the task waits In Review, else the
+  // assignee (#314), with the owner's own plannable week (0092).
+  const sources = taskSources()
+  const dirty = workspaceRows.takeDirty()
+  const identity = `${HOME_ORG}\u0000${[...myProfileSet].join()}`
+  const whole =
+    full ||
+    identity !== lastIdentity ||
+    gridBefore !== TIMELINE_START.getTime() ||
+    todayBefore !== TODAY_ISO
+  lastIdentity = identity
+  const moved = whole ? null : tasks.update(sources, taskChangesOf(dirty))
+  if (moved) lastMoves = moved
+  else {
+    lastMoves = tasks.full(sources)
+    committedByOwner.clear()
   }
-  rows.links.forEach((l) => {
-    const sKey = uuidToKey.get(l.source_id)
-    const tKey = uuidToKey.get(l.target_id)
-    if (!sKey || !tKey) return
-    const s = linkViews.get(l.source_id) || []
-    if (!s.some((x) => x.id === tKey)) s.push({ type: l.type, id: tKey })
-    linkViews.set(l.source_id, s)
-    const t = linkViews.get(l.target_id) || []
-    if (!t.some((x) => x.id === sKey)) t.push({ type: REV[l.type] || 'relates', id: sKey })
-    linkViews.set(l.target_id, t)
-  })
-
-  const childKeys = new Map<string, string[]>() // parent uuid -> child keys
-  rows.issues.forEach((i) => {
-    if (i.parent_id) {
-      const l = childKeys.get(i.parent_id) || []
-      l.push(uuidToKey.get(i.id) as string)
-      childKeys.set(i.parent_id, l)
-    }
-  })
-
-  /* Tasks I follow (0114). The cache holds only my own rows, but "my own"
-     is plural — one human is several profile uuids, one per organization
-     (myProfileSet), so a task in a guest org is followed under that seat's
-     id and `=== CURRENT_USER` would read it back as "not following". */
-  const subscribedIssues = new Set<string>()
-  rows.issueSubs.forEach((s) => {
-    if (myProfileSet.has(s.profile_id)) subscribedIssues.add(s.issue_id)
-  })
-
-  const attByIssue = new Map<string, AttachmentVM[]>() // issue uuid -> attachment views
-  const attachmentCounts = new Map<string, number>() // issue uuid -> rows, inline included
-  ;[...rows.attachments.values()]
-    .sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
-    .forEach((a) => {
-      attachmentCounts.set(a.issue_id, (attachmentCounts.get(a.issue_id) ?? 0) + 1)
-      if (a.inline) return // description images live in the markdown, not the attachments list
-      const l = attByIssue.get(a.issue_id) || []
-      l.push(shapeAttachment(a))
-      attByIssue.set(a.issue_id, l)
-    })
-
-  const issueCtx = {
-    linkViews,
-    childKeys,
-    labelsByIssue,
-    attByIssue,
-    attachmentCounts,
-    subscribedIssues,
-    uuidToKey,
-    uuidToDisplayKey,
-    hiddenSubtaskParents: rows.hiddenSubtaskParents,
-    hiddenParentTasks: rows.hiddenParentTasks,
-  }
-  const issuesBefore = P.issues
-  const issueByIdBefore = P.issueById
-  const delayBefore = delayMap
-  P.issues = [...rows.issues.values()]
-    .sort((a, b) => a.num - b.num)
-    .map((i) => shapeIssue(i, issueCtx))
-  // keyed by HANDLE, so it is a bijection even across organizations
-  const byId: Record<string, IssueVM> = {}
-  P.issues.forEach((it) => {
-    byId[it.id] = it
-  })
-  P.issueById = byId
-  /* A group's dates are calculated as the span of its visible scheduled
-     leaves at any depth (groupSpan). They replace the group's own start/end
-     here so every reader gets them. The stored dates stay in the row, dormant
-     like its status, and apply again once its last subtask leaves. A group with
-     subtasks outside this view is `partial`, which limits its delay verdict. */
-  const partialSpans = new Set<string>()
-  P.issues.forEach((it) => {
-    const span = groupSpan(it, byId)
-    if (!span) return
-    it.start = span.start
-    it.end = span.end
-    if (span.partial) partialSpans.add(it.uuid)
-  })
-
-  // projected-delay status (0064) — each visible issue's finish week walked
-  // against its effective owner's org-wide free capacity (plan_org_load), the
-  // same spread/fit math as the roadmap's auto-fit. Capacity is the OWNER's
-  // own plannable week (0092), which is also whose load it is walked against:
-  // the reviewer while the task waits In Review, else the assignee (#314). An
-  // unowned issue never reaches the capacity branch of delayOf.
-  const loadByOwner = new Map<string, LoadSpan[]>()
-  orgLoadByOwner = loadByOwner
-  committedByOwner.clear()
-  rows.orgLoad.forEach((r) => {
-    const l = loadByOwner.get(r.owner_id) || []
-    l.push({
-      issueUuid: r.issue_id || null,
-      start: isoToWeek(r.start_week),
-      end: isoToWeek(r.end_week),
-      remaining: r.remaining != null ? Number(r.remaining) : 0,
-      remainingSet: r.remaining_set_at != null ? tsToWeek(r.remaining_set_at) : null,
-    })
-    loadByOwner.set(r.owner_id, l)
-  })
-  // indexed once: this runs per ISSUE, and P.user is a linear scan
-  const capacityByUser = new Map<string, number>()
-  P.users.forEach((u) => {
-    capacityByUser.set(u.id, plannableHoursOf(u))
-  })
-  const capacityOf = (person: string | null | undefined) =>
-    (person && capacityByUser.get(person)) || DEFAULT_PLANNABLE_HOURS
-  delayMap = computeDelayMap(
-    P.issues.map((it) => ({
-      uuid: it.uuid,
-      status: it.status,
-      isGroup: PLANNER.isGroup(it),
-      isDone: PLANNER.isDone(it),
-      partial: partialSpans.has(it.uuid),
-      owner: it.owner,
-      start: it.start,
-      end: it.end,
-      dueWeek: it.due ? isoToWeek(it.due) : null,
-      duePast: !!it.due && it.due < TODAY_ISO,
-      remaining: it.remaining,
-      remainingSet: it.remainingSet,
-      capacity: capacityOf(it.owner),
-    })),
-    loadByOwner,
-  )
-  keepIssues(issuesBefore, issueByIdBefore, delayBefore)
+  P.issues = tasks.issues()
+  P.issueById = tasks.issueById()
+  if (STRICT_LAYERS && !unchecked) checkTasks(sources)
 
   // milestones
   P.milestones = keepItems(
     P.milestones,
     [...rows.milestones.values()]
-      .sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
+      .sort((a, b) => byStamp(a.created_at, a.id, b.created_at, b.id))
       .map(shapeMilestone),
   )
 
@@ -3471,63 +3418,87 @@ let lastContextUsers: UserVM[] = []
 /** `users` without their Team sync stamps, for contextVersion. */
 const withoutStamps = (users: readonly UserVM[]) => users.map(({ sync: _sync, ...user }) => user)
 
-/** Keeps each task's view model from the last rebuild (`before`, with its
-    `beforeById` and delay map) when it holds the same data and its delay is
-    the same (stable.ts). Views also read a task's family through P, such as
-    isDone, remainingOf and the people who may own it, so every task above
-    or below a changed one takes its new object too, and so does every task
-    linked to one of those, whose Team sync row says what blocks it.
-    P.issueById follows P.issues. */
-function keepIssues(
-  before: IssueVM[],
-  beforeById: Record<string, IssueVM>,
-  delayBefore: ReadonlyMap<string, DelayInfo>,
-) {
-  const P = PLANNER
-  const byId = P.issueById
-  const changed: string[] = []
-  for (const it of P.issues) {
-    const prev = beforeById[it.id]
-    if (
-      !prev ||
-      !sameData(prev, it) ||
-      !sameData(delayBefore.get(prev.uuid), delayMap.get(it.uuid))
+/** -1, 0 or 1 as `a` sorts before, with or after `b`: by stamp, then id. */
+const byStamp = (a: string, aId: string, b: string, bId: string) =>
+  a < b ? -1 : a > b ? 1 : aId < bId ? -1 : aId > bId ? 1 : 0
+
+/* The home organization and the signed-in person's profiles the tasks were
+   last shaped for; another shapes them all again. */
+let lastIdentity = ''
+
+/** The rows and facts the task index shapes the tasks from. */
+function taskSources(): TaskSources {
+  return {
+    issues: rows.issues,
+    links: rows.links,
+    attachments: rows.attachments,
+    labels: rows.labels,
+    issueLabels: rows.issueLabels,
+    issueSubs: rows.issueSubs,
+    orgLoad: rows.orgLoad,
+    hiddenSubtaskParents: rows.hiddenSubtaskParents,
+    hiddenParentTasks: rows.hiddenParentTasks,
+    homeOrg: HOME_ORG,
+    mine: myProfileSet,
+    // indexed once: P.user is a linear scan
+    capacity: new Map(PLANNER.users.map((u) => [u.id, plannableHoursOf(u)])),
+    defaultCapacity: DEFAULT_PLANNABLE_HOURS,
+  }
+}
+
+/** What the rows say changed since the last rebuild, as the task index
+    reads it. */
+function taskChangesOf(dirty: ReturnType<typeof workspaceRows.takeDirty>): TaskChanges {
+  const keys = (name: 'issues' | 'links' | 'attachments') => dirty.keys.get(name) ?? new Set()
+  return {
+    issues: keys('issues'),
+    links: keys('links'),
+    attachments: keys('attachments'),
+    labels: dirty.keys.has('labels'),
+    issueLabels: dirty.lists.has('issueLabels'),
+    issueSubs: dirty.lists.has('issueSubs'),
+    orgLoad: dirty.lists.has('orgLoad'),
+    flags: dirty.flags,
+  }
+}
+
+/** Test builds only (STRICT_LAYERS): the tasks a rebuild kept up to date
+    must hold exactly what a full build from the same rows gives, so a
+    change the update missed fails the test that made it. */
+function checkTasks(sources: TaskSources) {
+  const fresh = createTaskIndex()
+  fresh.full(sources)
+  const parts = [
+    ['issues', tasks.issues(), fresh.issues()],
+    ['issueById', tasks.issueById(), fresh.issueById()],
+    ['delays', tasks.delays, fresh.delays],
+    ['load', tasks.loads(), fresh.loads()],
+    ['handles', tasks.uuidToKey, fresh.uuidToKey],
+    ['keys', tasks.keyToUuid, fresh.keyToUuid],
+    ['display keys', tasks.uuidToDisplayKey, fresh.uuidToDisplayKey],
+    ['keys by organization', tasks.keyByOrg, fresh.keyByOrg],
+  ] as const
+  for (const [name, kept, built] of parts) {
+    if (sameData(kept, built)) continue
+    // the first entry that differs, for the test's message
+    const entries = (value: unknown): [string, unknown][] =>
+      value instanceof Map ? [...value] : Object.entries(value as object)
+    const other = new Map(entries(built))
+    const first = entries(kept).find(([key, item]) => !sameData(item, other.get(key)))
+    const field =
+      first && first[1] && typeof first[1] === 'object'
+        ? Object.keys(first[1]).find(
+            (key) =>
+              !sameData(
+                (first[1] as Record<string, unknown>)[key],
+                (other.get(first[0]) as Record<string, unknown> | undefined)?.[key],
+              ),
+          )
+        : undefined
+    throw new Error(
+      `the tasks' ${name} differ from a full rebuild${first ? ` at ${first[0]}${field ? `.${field}` : ''}: ${JSON.stringify(first[1])?.slice(0, 300)} versus ${JSON.stringify(other.get(first[0]))?.slice(0, 300)}` : ''}`,
     )
-      changed.push(it.id)
   }
-  if (!changed.length && before.length === P.issues.length) {
-    // the same handles in the same order (by num, which each holds)
-    P.issues = before
-    P.issueById = beforeById
-    return
-  }
-  // each walk stops where an earlier one went on, so this is linear
-  const fresh = new Set(changed)
-  const up = new Set<string>()
-  const down = new Set<string>()
-  for (const id of changed) {
-    for (let at = byId[id]?.parent; at && !up.has(at); at = byId[at]?.parent) {
-      up.add(at)
-      fresh.add(at)
-    }
-    const stack = [id]
-    while (stack.length) {
-      const at = stack.pop() as string
-      if (down.has(at)) continue
-      down.add(at)
-      fresh.add(at)
-      stack.push(...(byId[at]?.children ?? []))
-    }
-  }
-  // links are mirrored, so a changed blocker reaches the task it blocks; a
-  // copy, because the tasks linked to a linked task did not change
-  for (const id of [...fresh]) for (const link of byId[id]?.links ?? []) fresh.add(link.id)
-  P.issues = P.issues.map((it) => (fresh.has(it.id) ? it : beforeById[it.id]))
-  const kept: Record<string, IssueVM> = {}
-  P.issues.forEach((it) => {
-    kept[it.id] = it
-  })
-  P.issueById = kept
 }
 
 /* --- email addresses ------------------------------------------------------
@@ -4311,7 +4282,7 @@ export const PLANNER = {
      every read and every callback over them infers). Each list, and each
      item in it, keeps its identity while its data stays the same
      (stable.ts); a task also takes a new object when its delay or a task
-     above or below it changed (keepIssues). */
+     above or below it changed (store/taskIndex.ts). */
   gridEpoch: 0, // bumped whenever TIMELINE_START re-anchors (see rebuild)
   users: [] as UserVM[],
   CURRENT_USER: '',
@@ -4347,7 +4318,7 @@ export const PLANNER = {
   // one, as commentsEarlier says for its comments (P.loadEarlierHistory)
   historyEarlier: 'none' as CommentsEarlier,
   /* Changes whenever a rebuild changes anything a task's view reads besides
-     the task's own view model and delay (keepIssues): people (but not their
+     the task's own view model and delay (store/taskIndex.ts): people (but not their
      Team sync stamps), organizations and their settings, projects and
      access, teams, labels, milestones, the week grid and today. A view that
      skips unchanged tasks by identity compares this as well. The
@@ -5210,7 +5181,7 @@ export const PLANNER = {
     let hours = byWeek.get(week)
     if (hours === undefined) {
       // only the asked week, however far the owner's plans run
-      const load = orgLoadByOwner.get(profileId) || []
+      const load = tasks.loads().get(profileId) || []
       hours = committedByWeek(load, null, { from: week, to: week }).get(week) || 0
       byWeek.set(week, hours)
     }
@@ -8552,12 +8523,12 @@ function subscribeSnapshot(
       const snap = delivered && anchor(joinLists(delivered))
       if (!settled) {
         settled = true
-        const prev = serverSnap
         serverSnap = snap
+        const entered = snap ? base.stage(snap) : null
         snapshotCurrent = snap !== null && !replay
-        if (snap && !replay) {
+        if (snap && entered && !replay) {
           snapshotDeliveries++
-          noteDelivery(prev, snap)
+          noteDelivery(entered, snap)
         }
         first?.resolve(snap)
         return
@@ -8578,16 +8549,17 @@ function subscribeSnapshot(
       // layer goes for it and it ends no trouble.
       if (replay) {
         serverSnap = snap
+        base.stage(snap)
         snapshotCurrent = false
         subscribeWaitingThread()
         owe('workspace')
         return
       }
-      const prev = serverSnap
       serverSnap = snap
+      const entered = base.stage(snap)
       snapshotCurrent = true
       snapshotDeliveries++
-      noteDelivery(prev, snap)
+      noteDelivery(entered, snap)
       subscribeWaitingThread()
       // a good delivery holds every write accepted before it
       layers.dropSaved('workspace')
@@ -8689,11 +8661,10 @@ export function disposeDemoStore() {
   } catch {
     /* storage unavailable */
   }
-  for (const value of Object.values(rows)) {
-    if (value instanceof Map || value instanceof Set) value.clear()
-    else if (Array.isArray(value)) value.length = 0
-  }
-  rows.billing = null
+  // every row, the server's and the paints'
+  workspaceRows.reset()
+  rows.comments = new Map()
+  rows.threadEvents = []
   hiddenReadMessages = 0
   unexaminedUnread = false
   unexaminedRead = false
@@ -8705,11 +8676,8 @@ export function disposeDemoStore() {
   CURRENT_USER = ''
   myProfiles.clear()
   myProfileSet.clear()
-  keyToUuid.clear()
-  uuidToKey.clear()
-  uuidToDisplayKey.clear()
-  keyByOrg.clear()
-  delayMap.clear()
+  tasks.clear()
+  committedByOwner.clear()
   agentKeyOrg.clear()
   announcedMessages = null
   lastDeliveryAt = null
@@ -8721,20 +8689,17 @@ export function disposeDemoStore() {
   PLANNER.loaded = false
   PLANNER.commentsLoaded = false
   PLANNER.commentsFailure = 'none'
-  rebuild()
+  rebuild(new Date(), true)
   emit()
 }
 
-/* The arrival bookkeeping of live delivery `snap` after `prev`, once per
-   delivery and never on a repaint: the stored messages of tasks that a
-   restore brought back, or that newly entered the working set, raise no
-   desktop notification, and new messages do. Task ids are compared with the
-   previous delivery, not with the painted rows. */
-function noteDelivery(prev: Snapshot | null, snap: Snapshot) {
-  const priorIssueIds = new Set(prev ? prev.issues.map((issue) => issue.id) : [])
-  const newlyVisibleIssueIds = new Set(
-    snap.issues.filter((issue) => !priorIssueIds.has(issue.id)).map((issue) => issue.id),
-  )
+/* The arrival bookkeeping of live delivery `snap`, once per delivery and
+   never on a repaint: the stored messages of tasks that a restore brought
+   back, or that newly entered the working set, raise no desktop
+   notification, and new messages do. `newlyVisibleIssueIds` are the tasks
+   it holds that the previous delivery did not (base.stage), not the tasks
+   the painted rows lacked. */
+function noteDelivery(newlyVisibleIssueIds: ReadonlySet<string>, snap: Snapshot) {
   const restoreDelivery = [...pendingRestoreIssueIds].some((id) => newlyVisibleIssueIds.has(id))
   if (restoreDelivery) {
     /* A child restore can also surface archived ancestors. Suppress every
@@ -8768,16 +8733,18 @@ function noteDelivery(prev: Snapshot | null, snap: Snapshot) {
   announceNewMessages(snap)
 }
 
-/* Takes the identity from `snap`. The snapshot says which roster rows are
-   mine (myProfileIds), so the blend can be re-keyed on every delivery. The
-   HOME pick mirrors the old boot: first non-guest seat, else the first seat
-   (guest-only logins have no home org, only a display fallback). */
-function adoptIdentity(snap: Snapshot) {
-  const profById = new Map(snap.profiles.map((p) => [p.id, p]))
+/* Takes the identity from the server's rows (base). The snapshot says which
+   roster rows are mine (myProfileIds), so the blend can be re-keyed on every
+   delivery. The HOME pick mirrors the old boot: first non-guest seat, else
+   the first seat (guest-only logins have no home org, only a display
+   fallback). */
+function adoptIdentity() {
+  const ids = base.scalars()?.myProfileIds ?? []
+  const profById = base.map('profiles')
   myProfiles = new Map()
   myProfileSet.clear()
   const mine: Snapshot['profiles'] = []
-  snap.myProfileIds.forEach((pid) => {
+  ids.forEach((pid) => {
     const p = profById.get(pid)
     if (!p) return
     myProfiles.set(p.org_id, pid)
@@ -8789,77 +8756,19 @@ function adoptIdentity(snap: Snapshot) {
   CURRENT_USER = home ? home.id : ''
 }
 
-/** A copy of `row` that a paint may change without touching the anchor:
-    its own fields, and a deep copy of any object or list in it. Faster than
-    cloning the whole snapshot at once. */
-function copyRow<T extends object>(row: T): T {
-  const copy = { ...row }
-  for (const key in copy) {
-    const value = copy[key]
-    if (value && typeof value === 'object') copy[key] = structuredClone(value)
-  }
-  return copy
-}
-
-/* Builds every row section and the inbox counters from `source`, the rows
-   the layers paint over (paintRows). Copies (copyRow), because paints change
-   the rows and the anchor must stay the server's. Always followed by
-   rebuild(): rebuild is deliberately impure (setWeekConfig re-anchors
-   dates.ts's live bindings), so nothing may patch P.* directly off a
-   snapshot. */
-function buildRows(source: Snapshot) {
-  const copied = <T extends object>(list: readonly T[]) => list.map(copyRow)
-  const snap = {
-    ...source,
-    orgs: copied(source.orgs),
-    teams: copied(source.teams),
-    profiles: copied(source.profiles),
-    teamMembers: copied(source.teamMembers),
-    projects: copied(source.projects),
-    access: copied(source.access),
-    teamAccess: source.teamAccess && copied(source.teamAccess),
-    issues: copied(source.issues),
-    links: copied(source.links),
-    milestones: copied(source.milestones),
-    labels: copied(source.labels),
-    issueLabels: copied(source.issueLabels),
-    issueSubs: copied(source.issueSubs),
-    attachments: copied(source.attachments),
-    orgLoad: copied(source.orgLoad),
-    messages: copied(source.messages),
-  }
-  rows.orgs = new Map(snap.orgs.map((r) => [r.id, r]))
-  // the organization_billing successor: the home org's admin-only object
-  const homeOrgRow = HOME_ORG ? rows.orgs.get(HOME_ORG) : null
-  rows.billing = homeOrgRow?.billing || null
-  rows.teams = new Map(snap.teams.map((r) => [r.id, r]))
-  rows.profiles = new Map(snap.profiles.map((r) => [r.id, r]))
-  rows.teamMembers = snap.teamMembers
-  rows.projects = new Map(snap.projects.map((r) => [r.id, r]))
-  rows.access = snap.access
-  rows.teamAccess = snap.teamAccess || []
-  rows.issues = new Map(snap.issues.map((r) => [r.id, r]))
-  rows.hiddenSubtaskParents = new Set(
-    snap.issues.filter((r) => r.has_hidden_subtasks).map((r) => r.id),
-  )
-  rows.hiddenParentTasks = new Set(snap.issues.filter((r) => r.has_hidden_parent).map((r) => r.id))
-  rows.links = new Map(snap.links.map((r) => [r.id, r]))
-  rows.milestones = new Map(snap.milestones.map((r) => [r.id, r]))
-  rows.labels = new Map(snap.labels.map((r) => [r.id, r]))
-  rows.issueLabels = snap.issueLabels
-  rows.issueSubs = snap.issueSubs
-  rows.attachments = new Map(snap.attachments.map((r) => [r.id, r]))
-  rows.orgLoad = snap.orgLoad
-  rows.messages = new Map(snap.messages.map((r) => [r.id, r]))
+/* Sets the inbox counters from the server's rows (base), as a repaint
+   starts; paints change them from there. */
+function countInbox() {
+  const scalars = base.scalars()
+  const messages = base.list('messages')
   // the server's predicate: read rows minus snoozed ones (removeRead's scope)
-  const loadedReadCount = snap.messages.filter(
+  const loadedReadCount = messages.filter(
     (message) => message.read_at !== undefined && message.snoozed_until === undefined,
   ).length
-  hiddenReadMessages = Math.max(0, (snap.readMessageCount ?? loadedReadCount) - loadedReadCount)
-  unexaminedUnread = snap.unreadTruncated === true
-  unexaminedRead = snap.readTruncated === true
-  messagesCut = snap.messagesCut === true
-  // Preferences load once at boot; comments own their separate subscription.
+  hiddenReadMessages = Math.max(0, (scalars?.readMessageCount ?? loadedReadCount) - loadedReadCount)
+  unexaminedUnread = scalars?.unreadTruncated === true
+  unexaminedRead = scalars?.readTruncated === true
+  messagesCut = scalars?.messagesCut === true
 }
 
 /** Load the blended snapshot for the signed-in user. Returns the HOME profile

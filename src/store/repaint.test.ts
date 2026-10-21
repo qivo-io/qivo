@@ -344,4 +344,32 @@ describe('view model identity across repaints', () => {
     })
     expect(emits).toBe(shown + 1)
   })
+
+  it('lists people with the same creation time by id, in whatever order they arrive', () => {
+    const person = (id: string): Snapshot['profiles'][number] => ({
+      ...snapshot.profiles[0],
+      id,
+      auth_user_id: `account-${id}`,
+      name: `Person ${id}`,
+    })
+    deliverChange((snap) => {
+      snap.profiles.push(person('person-b'), person('person-a'))
+    })
+    const order = () =>
+      P()
+        .users.map((user) => user.id)
+        .filter((id) => id.startsWith('person-'))
+    expect(order()).toEqual(['person-a', 'person-b'])
+    deliverChange((snap) => {
+      snap.profiles.reverse()
+    })
+    expect(order()).toEqual(['person-a', 'person-b'])
+  })
+
+  it('lists subtasks by number, in whatever order they arrive', () => {
+    deliverChange((snap) => {
+      snap.issues.reverse()
+    })
+    expect(task('parent').children).toEqual(['child-a', 'child-b'].map((id) => task(id).id))
+  })
 })
