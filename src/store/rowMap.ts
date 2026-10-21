@@ -9,6 +9,11 @@
    every row. Layer rule 1 (store/layers.ts) already forbids keeping a row
    object, so paints work unchanged.
 
+   A paint that walks a whole section to find a few rows (an archive, a
+   delete) reads it with `where`, `keysWhere` or `peekValues`, which copy
+   only the rows it then changes, reads a list with `peekList` and filters
+   one with `keepList`, which copy none. A plain walk inside a pass copies every row it hands out.
+
    The rows also record what changed, in two ways:
    - since the last rebuild (takeDirty), so the store reshapes only those
      view models;
@@ -122,6 +127,37 @@ export class RowMap<R extends object> {
     return this.peek(key) !== undefined
   }
 
+  /** Every row shown, the server's order first and the inserts after,
+      without copying any: a paint must not change what it hands out, and
+      takes a row to change with get. */
+  *peekValues(): IterableIterator<R> {
+    for (const [key, row] of this.base) {
+      const own = this.overlay.get(key)
+      if (own !== GONE) yield own ?? row
+    }
+    for (const [key, own] of this.overlay) if (own !== GONE && !this.base.has(key)) yield own
+  }
+
+  /** The keys of the rows shown that pass `test`, which must not change
+      the row it reads. Copies nothing. */
+  keysWhere(test: (row: R) => boolean): string[] {
+    const keys: string[] = []
+    for (const [key, row] of this.base) {
+      const own = this.overlay.get(key)
+      if (own !== GONE && test(own ?? row)) keys.push(key)
+    }
+    for (const [key, own] of this.overlay)
+      if (own !== GONE && !this.base.has(key) && test(own)) keys.push(key)
+    return keys
+  }
+
+  /** The rows that pass `test`, which must not change the row it reads,
+      each as get hands it out: inside a pass a copy a paint may change, so
+      a walk copies only the rows it finds. */
+  where(test: (row: R) => boolean): R[] {
+    return this.keysWhere(test).map((key) => this.get(key) as R)
+  }
+
   set(key: string, row: R): this {
     this.host.touch(this.name, key, this.peek(key))
     this.overlay.set(key, row)
@@ -226,16 +262,26 @@ export function createWorkspaceRows(base: WorkspaceBase) {
     messages: new RowMap<Row<'messages'>>('messages', host),
   }
 
-  // the paints' copies of the lists and flag sets
+  // the paints' copies of the lists and flag sets, and the lists keepList
+  // filtered, which may still hold the server's own rows
   const listOverlay = new Map<ListedName, object[]>()
   const flagOverlay = new Map<FlagName, Set<string>>()
+  const kept = new Set<ListedName>()
 
   /** List `name` as shown: inside a pass, a copy the paint may change. */
   function list<S extends ListedName>(name: S): ListRow[S][] {
-    const own = listOverlay.get(name)
+    let own = listOverlay.get(name)
     if (own) {
-      // a paint may change the copy an earlier pass made
-      if (passes > 0) dirty.lists.add(name)
+      if (passes > 0) {
+        // a paint may change the copy an earlier pass made, so the rows
+        // keepList left uncopied are copied now
+        dirty.lists.add(name)
+        if (kept.delete(name)) {
+          const server = new Set<object>(base.list(name))
+          own = own.map((row) => (server.has(row) ? copyRow(row) : row))
+          listOverlay.set(name, own)
+        }
+      }
       return own as ListRow[S][]
     }
     const server = base.list(name) as readonly object[]
@@ -252,6 +298,23 @@ export function createWorkspaceRows(base: WorkspaceBase) {
   function setList<S extends ListedName>(name: S, value: ListRow[S][]) {
     noteList(name, list(name))
     listOverlay.set(name, value)
+  }
+  /** List `name` as shown, without copying it: a paint must not change it
+      or its rows, and reads the list to change it with list. */
+  function peekList<S extends ListedName>(name: S): readonly ListRow[S][] {
+    return (listOverlay.get(name) ?? base.list(name)) as readonly ListRow[S][]
+  }
+  /** Keeps the rows of list `name` that pass `keep`, without copying any:
+      the server's rows it keeps are copied only when a paint reads the
+      list again. */
+  function keepList<S extends ListedName>(name: S, keep: (row: ListRow[S]) => boolean) {
+    const shown = peekList(name)
+    const next = shown.filter(keep)
+    if (next.length === shown.length) return
+    noteList(name, shown)
+    listOverlay.set(name, next)
+    // an overlay a pass made holds copies only, and its rows stay copies
+    if (shown === base.list(name) || kept.has(name)) kept.add(name)
   }
   /** Flag set `name` as shown: inside a pass, a copy the paint may change. */
   function flags(name: FlagName): Set<string> {
@@ -281,6 +344,7 @@ export function createWorkspaceRows(base: WorkspaceBase) {
         (map) => [map, new Map(map.overlay)] as const,
       ),
       lists: new Map(listOverlay),
+      kept: new Set(kept),
       flags: new Map(flagOverlay),
       dirty: {
         keys: new Map([...dirty.keys].map(([k, v]) => [k, v === 'all' ? v : new Set(v)])),
@@ -297,6 +361,8 @@ export function createWorkspaceRows(base: WorkspaceBase) {
     for (const [map, overlay] of saved.overlays) map.overlay = overlay
     listOverlay.clear()
     for (const [k, v] of saved.lists) listOverlay.set(k, v)
+    kept.clear()
+    for (const k of saved.kept) kept.add(k)
     flagOverlay.clear()
     for (const [k, v] of saved.flags) flagOverlay.set(k, v)
     dirty.keys = saved.dirty.keys
@@ -314,6 +380,8 @@ export function createWorkspaceRows(base: WorkspaceBase) {
     ...maps,
     list,
     setList,
+    keepList,
+    peekList,
     flags,
 
     /** Runs `paint` as a pass. */
@@ -336,6 +404,7 @@ export function createWorkspaceRows(base: WorkspaceBase) {
       }
       for (const [name, own] of listOverlay) noteList(name, own)
       listOverlay.clear()
+      kept.clear()
       for (const [name, own] of flagOverlay) noteFlags(name, own)
       flagOverlay.clear()
       const lists = new Map(LISTED_SECTIONS.map((name) => [name, base.list(name)]))
@@ -403,6 +472,7 @@ export function createWorkspaceRows(base: WorkspaceBase) {
       base.reset()
       for (const map of Object.values(maps) as RowMap<object>[]) map.overlay = new Map()
       listOverlay.clear()
+      kept.clear()
       flagOverlay.clear()
       dirty.keys.clear()
       dirty.lists.clear()

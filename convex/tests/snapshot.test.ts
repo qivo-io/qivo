@@ -22,6 +22,7 @@ import { insertActivity } from '../model/activity'
 import { startPurge } from '../model/deletedItems'
 import { invokeSnapshot } from './backendPerformance.setup'
 import {
+  appLoadRows,
   as,
   expectRefusal,
   NOW,
@@ -425,7 +426,12 @@ describe('org_load', () => {
       remaining_set_at: NOW,
     })
     const admin = await snapFor(f.admin)
-    expect(admin.orgLoad.find((r) => r.owner_id === f.admin.id)?.issue_id).toBe(hid2Issue.id)
+    expect(appLoadRows(admin).find((r) => r.owner_id === f.admin.id)?.issue_id).toBe(hid2Issue.id)
+    // the snapshot sends only the rows of tasks its reader is not shown; the
+    // app derives the others from the task rows
+    expect(staff.orgLoad.length).toBeGreaterThan(0)
+    expect(staff.orgLoad.every((r) => r.issue_id === null)).toBe(true)
+    expect(admin.orgLoad.some((r) => r.issue_id === hid2Issue.id)).toBe(false)
   })
 
   it("guest: other people's hidden rows are excluded entirely; own hidden rows arrive anonymized", async () => {
@@ -448,9 +454,11 @@ describe('org_load', () => {
     const snap = await snapFor(f.guest)
     // user's only surviving row is the visible one, identified — the hidden
     // 4h row does not arrive even anonymously
-    expect(snap.orgLoad.filter((r) => r.owner_id === f.user.id).map((r) => r.issue_id)).toEqual([
-      issueVis.id,
-    ])
+    expect(
+      appLoadRows(snap)
+        .filter((r) => r.owner_id === f.user.id)
+        .map((r) => r.issue_id),
+    ).toEqual([issueVis.id])
     expect(snap.orgLoad.find((r) => r.owner_id === f.guest.id)).toEqual({
       issue_id: null,
       owner_id: f.guest.id,
@@ -471,7 +479,7 @@ describe('org_load', () => {
       remaining_hours: 4,
     })
     const snap = await snapFor(f.viewer)
-    expect(snap.orgLoad).toEqual([
+    expect(appLoadRows(snap)).toEqual([
       {
         issue_id: issueVis.id,
         owner_id: f.user.id,
@@ -537,12 +545,16 @@ describe('org_load', () => {
     await plantIssue(t, { ...inSub, ...scheduled, assignee_id: inactive.id, remaining_hours: 8 })
 
     const snap = await snapFor(f.admin)
-    expect(snap.orgLoad.filter((r) => r.owner_id === f.user.id).map((r) => r.issue_id)).toEqual([
-      issueVis.id,
-    ])
-    expect(snap.orgLoad.some((r) => r.owner_id === f.agent.id && r.remaining === 6)).toBe(true)
-    expect(snap.orgLoad.some((r) => r.owner_id === inactive.id && r.remaining === 8)).toBe(true)
-    expect(snap.orgLoad.some((r) => r.remaining === 9)).toBe(false)
+    expect(
+      appLoadRows(snap)
+        .filter((r) => r.owner_id === f.user.id)
+        .map((r) => r.issue_id),
+    ).toEqual([issueVis.id])
+    expect(appLoadRows(snap).some((r) => r.owner_id === f.agent.id && r.remaining === 6)).toBe(true)
+    expect(appLoadRows(snap).some((r) => r.owner_id === inactive.id && r.remaining === 8)).toBe(
+      true,
+    )
+    expect(appLoadRows(snap).some((r) => r.remaining === 9)).toBe(false)
   })
 
   it('the owner carries the load: the reviewer while In Review with one set, else the assignee', async () => {
@@ -562,7 +574,9 @@ describe('org_load', () => {
 
     const snap = await snapFor(f.admin)
     const ownersOf = (id: string) =>
-      snap.orgLoad.filter((r) => r.issue_id === id).map((r) => r.owner_id)
+      appLoadRows(snap)
+        .filter((r) => r.issue_id === id)
+        .map((r) => r.owner_id)
     expect(ownersOf(reviewing.id)).toEqual([f.admin.id])
     expect(ownersOf(building.id)).toEqual([f.user.id])
     expect(ownersOf(noReviewer.id)).toEqual([f.user.id])

@@ -572,7 +572,9 @@ describe('reading only live tasks', () => {
         expect(oneRange[key].out, key).toEqual(perProject[key].out)
         expect(oneRange[key].ranges, key).toBeLessThan(perProject[key].ranges - 40)
       }
-      expect(oneRange.owner.out.map((span) => span.issueUuid)).toEqual([leaf.id, shelvedOnly.id])
+      // in the canonical order (lib/workload.ts canonicalLoad): the same
+      // weeks, so fewer remaining hours first
+      expect(oneRange.owner.out.map((span) => span.issueUuid)).toEqual([shelvedOnly.id, leaf.id])
     } finally {
       LIVE_PROJECT_READS.reads = reads
       OWNER_LOAD_CHECKS.reads = checks.owner

@@ -15,6 +15,26 @@ export type LoadSpan = {
   remainingSet?: number | null
 }
 
+/* -1, 0 or 1 as `a` sorts before, with or after `b`, a null first. */
+const order = <T extends number | string>(a: T | null | undefined, b: T | null | undefined) =>
+  a === b ? 0 : a == null ? -1 : b == null ? 1 : a < b ? -1 : a > b ? 1 : 0
+
+/** `spans` in one total order: by start, end, remaining hours, measurement
+    week and task id, a missing one first. Weekly sums add floating point
+    hours in list order, so the app and the REST and MCP reads sort an
+    owner's load this way and add it up the same however its rows arrive.
+    Sorts in place and answers `spans`. */
+export function canonicalLoad<S extends LoadSpan>(spans: S[]): S[] {
+  return spans.sort(
+    (a, b) =>
+      a.start - b.start ||
+      a.end - b.end ||
+      a.remaining - b.remaining ||
+      order(a.remainingSet, b.remainingSet) ||
+      order(a.issueUuid, b.issueUuid),
+  )
+}
+
 /** The weeks an issue's remaining hours actually spread over. `remaining` is a
     measurement taken in `remainingSet`: work before that moment is already excluded
     from it, so the spread runs from there, never before the planned start

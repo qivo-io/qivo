@@ -301,6 +301,14 @@ The app before v0.1.18 reads an activity list that the snapshot no longer
 sends, so it cannot load at all. Never return the app or the demo to a
 deployment of a commit older than v0.1.18 (`8a1b37c`).
 
+The snapshot sends load rows only for tasks its reader cannot see, and the
+app works out the load of the tasks it shows from their rows, so a pending
+hours or owner change moves delays and Team sync load at once. An app from
+before that change counts no load for the tasks it shows, so against a
+later backend its delays and Team sync load come out too low. This moves the
+floor: never return the app or the demo to a deployment of a commit before
+the release that made this change. Roll forward instead.
+
 ## Environment configuration
 
 The `staging` and `production` GitHub environments provide these variables.

@@ -85,6 +85,8 @@ function fixture() {
     status: 'review',
     assignee_id: other.id,
     reviewer_id: me.id,
+    start_week: '2026-09-14',
+    end_week: '2026-09-21',
     remaining_hours: 3,
     remaining_set_at: EARLIER,
   })
@@ -135,16 +137,8 @@ function fixture() {
     issueLabels: [],
     issueSubs: [],
     attachments: [],
-    orgLoad: [
-      {
-        issue_id: a.id,
-        owner_id: me.id,
-        start_week: '2026-09-14',
-        end_week: '2026-09-21',
-        remaining: 3,
-        remaining_set_at: EARLIER,
-      },
-    ],
+    // A's load (the reviewer's while In Review) comes from its row
+    orgLoad: [],
     messages: [],
     readMessageCount: 0,
     unreadTruncated: false,

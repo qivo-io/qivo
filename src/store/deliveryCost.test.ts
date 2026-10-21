@@ -184,6 +184,25 @@ describe('the cost of a delivery', () => {
     expect(shapes.count).toBeLessThanOrEqual(2)
   })
 
+  it('copies only the rows a waiting delete changes, though it walks every task', async () => {
+    // the delete detaches task-0's two subtasks and drops task-0
+    void P().deleteIssue('QN-1')
+    expect(held).toHaveLength(1)
+    expect(P().issueById['QN-1']).toBeUndefined()
+    const copies = store.__layerProbe!.rowCopies()
+    shapes.count = 0
+    await deliverChange(() => {
+      row('task-500').title = 'Renamed elsewhere'
+    })
+    expect(P().issueById['QN-501'].title).toBe('Renamed elsewhere')
+    expect(P().issueById['QN-1']).toBeUndefined()
+    expect(P().issueById['QN-2'].parent).toBeFalsy()
+    // the repaint copies the two detached subtasks and no other row, and
+    // reshapes them, task-0 and the renamed task rather than every task
+    expect(store.__layerProbe!.rowCopies() - copies).toBeLessThanOrEqual(2)
+    expect(shapes.count).toBeLessThanOrEqual(4)
+  })
+
   it('walks no map of every task on a rename', () => {
     const walks = bigMapWalks(() =>
       deliverNow(() => {

@@ -2,9 +2,9 @@
    across organizations; display keys are org-scoped QN numbers. Relationships,
    project access and week-indexed schedules are derived from the raw rows.
 
-   Every non-null snapshot updates serverSnap and is staged in the base
-   (store/workspaceBase.ts), which keeps each unchanged row's object. A later
-   null (no seat left) keeps the last one. Every write paints its own
+   Every non-null snapshot is staged in the base (store/workspaceBase.ts),
+   which keeps each unchanged row's object, and sets hasSnapshot. A later
+   null (no seat left) keeps the last one's rows. Every write paints its own
    optimistic layer (store/layers.ts) over the server's rows, copying only
    the rows it reaches (store/rowMap.ts), and a refusal takes away only that
    layer (see the write path below). A repaint reshapes only the view models
@@ -750,34 +750,32 @@ function issueSubtree(rootId: string): Set<string> {
   let grew = true
   while (grew) {
     grew = false
-    rows.issues.forEach((issue) => {
+    for (const issue of rows.issues.peekValues()) {
       if (issue.parent_id && subtree.has(issue.parent_id) && !subtree.has(issue.id)) {
         subtree.add(issue.id)
         grew = true
       }
-    })
+    }
   }
   return subtree
 }
 
+/* Takes the tasks in `subtree` and every row hung on them off the rows. It
+   walks whole sections without copying them (store/rowMap.ts keysWhere,
+   keepList), so a pending archive or delete copies no row. */
 function purgeIssueRows(subtree: Set<string>) {
-  ;[...rows.attachments.values()].forEach((attachment) => {
-    if (subtree.has(attachment.issue_id)) {
-      rows.attachments.delete(attachment.id)
-      minted.delete(`att:${attachment.id}`)
-    }
-  })
-  ;[...rows.links.values()].forEach((link) => {
-    if (subtree.has(link.source_id) || subtree.has(link.target_id)) rows.links.delete(link.id)
-  })
-  rows.issueLabels = rows.issueLabels.filter((label) => !subtree.has(label.issue_id))
-  rows.issueSubs = rows.issueSubs.filter((subscription) => !subtree.has(subscription.issue_id))
-  ;[...rows.messages.values()].forEach((message) => {
-    if (subtree.has(message.issue_id)) rows.messages.delete(message.id)
-  })
-  rows.orgLoad = rows.orgLoad.filter(
-    (load) => load.issue_id === null || !subtree.has(load.issue_id),
-  )
+  for (const id of rows.attachments.keysWhere((a) => subtree.has(a.issue_id))) {
+    rows.attachments.delete(id)
+    minted.delete(`att:${id}`)
+  }
+  for (const id of rows.links.keysWhere(
+    (link) => subtree.has(link.source_id) || subtree.has(link.target_id),
+  ))
+    rows.links.delete(id)
+  workspaceRows.keepList('issueLabels', (label) => !subtree.has(label.issue_id))
+  workspaceRows.keepList('issueSubs', (subscription) => !subtree.has(subscription.issue_id))
+  for (const id of rows.messages.keysWhere((message) => subtree.has(message.issue_id)))
+    rows.messages.delete(id)
   subtree.forEach((id) => {
     rows.issues.delete(id)
   })
@@ -794,13 +792,11 @@ function archivePaint(rootId: string, keepSubtasks: boolean, at: string): Paint 
       purgeIssueRows(issueSubtree(rootId))
       return
     }
-    rows.issues.forEach((issue) => {
-      // the detach fires the touch server-side, as a delete's does
-      if (issue.parent_id === rootId) {
-        issue.parent_id = undefined
-        issue.updated_at = at
-      }
-    })
+    // the detach fires the touch server-side, as a delete's does
+    for (const issue of rows.issues.where((i) => i.parent_id === rootId)) {
+      issue.parent_id = undefined
+      issue.updated_at = at
+    }
     purgeIssueRows(new Set([rootId]))
   }
 }
@@ -812,22 +808,19 @@ function dropProjectRows(id: string) {
   const row = rows.projects.get(id)
   if (!row) return
   const ids =
-    row.type === 'meta'
-      ? [id, ...[...rows.projects.values()].filter((x) => x.parent_id === id).map((x) => x.id)]
-      : [id]
-  ;[...rows.issues.values()].forEach((i) => {
-    if (ids.includes(i.project_id)) rows.issues.delete(i.id)
-  })
-  ;[...rows.milestones.values()].forEach((m) => {
-    if (ids.includes(m.project_id)) rows.milestones.delete(m.id)
-  })
-  ;[...rows.links.values()].forEach((l) => {
-    if (!rows.issues.has(l.source_id) || !rows.issues.has(l.target_id)) rows.links.delete(l.id)
-  })
-  rows.issueLabels = rows.issueLabels.filter((il) => rows.issues.has(il.issue_id))
-  rows.issueSubs = rows.issueSubs.filter((s) => rows.issues.has(s.issue_id))
-  rows.access = rows.access.filter((a) => !ids.includes(a.project_id))
-  rows.teamAccess = rows.teamAccess.filter((a) => !ids.includes(a.project_id))
+    row.type === 'meta' ? [id, ...rows.projects.keysWhere((x) => x.parent_id === id)] : [id]
+  for (const key of rows.issues.keysWhere((i) => ids.includes(i.project_id)))
+    rows.issues.delete(key)
+  for (const key of rows.milestones.keysWhere((m) => ids.includes(m.project_id)))
+    rows.milestones.delete(key)
+  for (const key of rows.links.keysWhere(
+    (l) => !rows.issues.has(l.source_id) || !rows.issues.has(l.target_id),
+  ))
+    rows.links.delete(key)
+  workspaceRows.keepList('issueLabels', (il) => rows.issues.has(il.issue_id))
+  workspaceRows.keepList('issueSubs', (s) => rows.issues.has(s.issue_id))
+  workspaceRows.keepList('access', (a) => !ids.includes(a.project_id))
+  workspaceRows.keepList('teamAccess', (a) => !ids.includes(a.project_id))
   ids.forEach((pid) => {
     rows.projects.delete(pid)
   })
@@ -836,15 +829,15 @@ function dropProjectRows(id: string) {
 /* The paint of a task delete at `at`: the tasks in `gone` leave, and their
    subtasks outside it become top-level tasks, as the server detaches them. */
 function dropDeletedTasks(gone: Set<string>, at: string) {
-  rows.issues.forEach((r) => {
-    // the SET NULL cascade fires the touch server-side — mirror both
-    if (r.parent_id && gone.has(r.parent_id) && !gone.has(r.id)) {
-      r.parent_id = undefined
-      r.updated_at = at
-    }
-  })
-  // the rows, and everything hung on them: links, labels, attachments,
-  // inbox messages and load. The task's window releases the watched thread
+  // the SET NULL cascade fires the touch server-side — mirror both
+  for (const r of rows.issues.where(
+    (i) => !!i.parent_id && gone.has(i.parent_id) && !gone.has(i.id),
+  )) {
+    r.parent_id = undefined
+    r.updated_at = at
+  }
+  // the rows, and everything hung on them: links, labels, attachments and
+  // inbox messages. Their load leaves with the rows. The task's window releases the watched thread
   // once the task leaves the rows (IssueDetail).
   purgeIssueRows(gone)
 }
@@ -1031,9 +1024,10 @@ function markLoadedMessagesRead(ids: string[], at: string, skipSnoozed = false) 
     rows.messages.get(id)!.read_at = at
   })
   const issues = new Set(hit.map((id) => rows.messages.get(id)!.issue_id))
-  // one pass over the loaded rows, however many tasks the read reaches
+  // one pass over the loaded rows, however many tasks the read reaches,
+  // which only reads them (store/rowMap.ts peekValues)
   const byIssue = new Map<string, Row<'messages'>[]>()
-  for (const row of rows.messages.values()) {
+  for (const row of rows.messages.peekValues()) {
     if (!issues.has(row.issue_id)) continue
     const mine = byIssue.get(row.issue_id)
     if (mine) mine.push(row)
@@ -1308,7 +1302,7 @@ function together(step: () => void) {
     The workspace rows start again from the server's, with the staged
     delivery applied (store/rowMap.ts beginRepaint). */
 function paintRows(workspace: boolean, thread: boolean) {
-  const painting = workspace && serverSnap !== null
+  const painting = workspace && hasSnapshot
   if (painting) {
     workspaceRows.beginRepaint()
     adoptIdentity()
@@ -1649,7 +1643,7 @@ function checkLayers() {
     owed.workspace ||
     owed.thread ||
     !PLANNER.loaded ||
-    !serverSnap ||
+    !hasSnapshot ||
     base.staging()
   )
     return
@@ -3449,6 +3443,8 @@ function taskSources(): TaskSources {
     issueLabels: rows.issueLabels,
     issueSubs: rows.issueSubs,
     orgLoad: rows.orgLoad,
+    projects: rows.projects,
+    profiles: rows.profiles,
     hiddenSubtaskParents: rows.hiddenSubtaskParents,
     hiddenParentTasks: rows.hiddenParentTasks,
     homeOrg: HOME_ORG,
@@ -3462,11 +3458,14 @@ function taskSources(): TaskSources {
 /** What the rows say changed since the last rebuild, as the task index
     reads it. */
 function taskChangesOf(dirty: ReturnType<typeof workspaceRows.takeDirty>): TaskChanges {
-  const keys = (name: 'issues' | 'links' | 'attachments') => dirty.keys.get(name) ?? new Set()
+  const keys = (name: 'issues' | 'links' | 'attachments' | 'projects' | 'profiles') =>
+    dirty.keys.get(name) ?? new Set()
   return {
     issues: keys('issues'),
     links: keys('links'),
     attachments: keys('attachments'),
+    projects: keys('projects'),
+    profiles: keys('profiles'),
     labels: dirty.keys.has('labels'),
     issueLabels: dirty.lists.has('issueLabels'),
     issueSubs: dirty.lists.has('issueSubs'),
@@ -3722,27 +3721,30 @@ function removeAtOnce(
       for (const { uuid, uid, field, db } of patches)
         if (rows.issues.get(uuid)?.[field] === uid) patchIssueRow(uuid, db, at)
       if (change.kind === 'userGrant') {
-        rows.access = rows.access.filter(
+        workspaceRows.keepList(
+          'access',
           (a) => !(a.project_id === change.projectId && a.profile_id === change.userId),
         )
       } else if (change.kind === 'teamGrant') {
-        rows.teamAccess = rows.teamAccess.filter(
+        workspaceRows.keepList(
+          'teamAccess',
           (a) => !(a.project_id === change.projectId && a.team_id === change.teamId),
         )
       } else if (change.kind === 'teamMember') {
-        rows.teamMembers = rows.teamMembers.filter(
+        workspaceRows.keepList(
+          'teamMembers',
           (m) => !(m.team_id === change.teamId && m.profile_id === change.userId),
         )
       } else {
         // the team's memberships and grants go with it; projects and work stay
-        rows.teamMembers = rows.teamMembers.filter((m) => m.team_id !== change.teamId)
-        rows.teamAccess = rows.teamAccess.filter((a) => a.team_id !== change.teamId)
+        workspaceRows.keepList('teamMembers', (m) => m.team_id !== change.teamId)
+        workspaceRows.keepList('teamAccess', (a) => a.team_id !== change.teamId)
         rows.teams.delete(change.teamId)
       }
       for (const grant of grants.values()) {
-        const has = rows.access.some(
-          (a) => a.project_id === grant.project_id && a.profile_id === grant.profile_id,
-        )
+        const has = workspaceRows
+          .peekList('access')
+          .some((a) => a.project_id === grant.project_id && a.profile_id === grant.profile_id)
         const there = rows.projects.has(grant.project_id) && rows.profiles.has(grant.profile_id)
         if (!has && there) rows.access.push({ ...grant })
       }
@@ -5258,12 +5260,13 @@ export const PLANNER = {
   /* The remaining time a task in this project gets on entering Review: the
      project's own value, else its parent's, else DEFAULT_REVIEW_HOURS. */
   reviewHoursFor: (projectId: string) => reviewHoursForProject(projectId),
-  /* Hours a person is committed to in `week` ORG-WIDE: the snapshot's
-     plan_org_load (paused, Done and unscheduled work already left out by the
-     server, projects this viewer cannot see included), spread the way the
-     delay projection spreads it. The Team sync header shows it because
+  /* Hours a person is committed to in `week` ORG-WIDE, spread the way the
+     delay projection spreads it: the rows of the tasks on screen through
+     the server's fence (convex/lib/loadRows.ts, paused, Done, unscheduled
+     work and groups left out), and the snapshot's anonymous rows of
+     projects this viewer cannot see. The Team sync header shows it because
      capacity is org-wide; the Team strip's figure covers visible tasks only.
-     The server recomputes it, so a handover moves it on the next delivery. */
+     A pending hours or owner edit moves it at once (store/taskIndex.ts). */
   weekLoadOf: (profileId: string, week: number): number => {
     let byWeek = committedByOwner.get(profileId)
     if (!byWeek) {
@@ -6158,7 +6161,7 @@ export const PLANNER = {
     const view: View = {
       workspace: () => {
         if (!rows.issues.has(source) || !rows.issues.has(target)) return
-        if ([...rows.links.values()].some((l) => l.pair_key === row.pair_key)) return
+        if (rows.links.keysWhere((l) => l.pair_key === row.pair_key).length) return
         rows.links.set(row.id, { ...row })
       },
     }
@@ -6177,10 +6180,11 @@ export const PLANNER = {
     if (!src || refusePausedEdit()) return
     const view: View = {
       workspace: () => {
-        ;[...rows.links.values()].forEach((l) => {
-          if ((l.source_id === a && l.target_id === b) || (l.source_id === b && l.target_id === a))
-            rows.links.delete(l.id)
-        })
+        for (const id of rows.links.keysWhere(
+          (l) =>
+            (l.source_id === a && l.target_id === b) || (l.source_id === b && l.target_id === a),
+        ))
+          rows.links.delete(id)
       },
     }
     // the kind on screen, as seen from task a: a link of another kind put
@@ -6925,18 +6929,19 @@ export const PLANNER = {
       )
       const view: View = {
         workspace: () =>
-          rows.messages.forEach((r) => {
-            if (!pairs.has(pairOf(r))) return
-            if (until === null) {
-              if (r.snoozed_until === undefined) return
-              r.snoozed_until = undefined
-              r.read_at = undefined
-            } else {
-              r.snoozed_until = until
-              r.read_at = undefined
-              r.woke_at = undefined
-            }
-          }),
+          rows.messages
+            .where((r) => pairs.has(pairOf(r)))
+            .forEach((r) => {
+              if (until === null) {
+                if (r.snoozed_until === undefined) return
+                r.snoozed_until = undefined
+                r.read_at = undefined
+              } else {
+                r.snoozed_until = until
+                r.read_at = undefined
+                r.woke_at = undefined
+              }
+            }),
       }
       void send(api.messages.snooze, { org_id: org, ids: list, until }, view)
     })
@@ -6953,10 +6958,11 @@ export const PLANNER = {
     const account = me.auth_user_id
     const view: View = {
       workspace: () =>
-        rows.profiles.forEach((p) => {
-          if (p.auth_user_id && p.auth_user_id === account)
+        rows.profiles
+          .where((p) => !!p.auth_user_id && p.auth_user_id === account)
+          .forEach((p) => {
             p.message_retention_days = days == null ? undefined : days
-        }),
+          }),
     }
     void send(api.profiles.setMessageRetention, { days }, view)
     return true
@@ -7370,7 +7376,7 @@ export const PLANNER = {
         // drops the incoming lead's own grant
         if (lead && lead !== live.lead_id) {
           const after = grantsAfterHandover(grantsOn(id), live.lead_id, lead)
-          rows.access = rows.access.filter((a) => a.project_id !== id)
+          workspaceRows.keepList('access', (a) => a.project_id !== id)
           Object.entries(after).forEach(([uid, level]) => {
             rows.access.push({ project_id: id, profile_id: uid, level })
           })
@@ -7397,20 +7403,13 @@ export const PLANNER = {
         const live = rows.projects.get(id)
         if (!live) return
         const ids =
-          live.type === 'meta'
-            ? [
-                id,
-                ...[...rows.projects.values()].filter((x) => x.parent_id === id).map((x) => x.id),
-              ]
-            : [id]
+          live.type === 'meta' ? [id, ...rows.projects.keysWhere((x) => x.parent_id === id)] : [id]
         // an already archived sub-project keeps its own stamp
         ids.forEach((pid) => {
           const r = rows.projects.get(pid)
           if (r && !r.archived_at) r.archived_at = stamp
         })
-        const issueIds = new Set(
-          [...rows.issues.values()].filter((i) => ids.includes(i.project_id)).map((i) => i.id),
-        )
+        const issueIds = new Set(rows.issues.keysWhere((i) => ids.includes(i.project_id)))
         // A project archive hides its tasks; it does not archive the tasks. A
         // subtask in an archived project no longer makes a task in an active
         // one a group (convex/lib/liveTasks.ts countsAsSubtask), so a parent
@@ -7419,20 +7418,17 @@ export const PLANNER = {
         for (const iid of issueIds) rows.issues.delete(iid)
         // and a child left in another project now has its parent outside this
         // view, as the next delivery says
-        for (const r of rows.issues.values()) {
-          if (r.parent_id && issueIds.has(r.parent_id)) {
-            r.parent_id = undefined
-            rows.hiddenParentTasks.add(r.id)
-          }
+        for (const r of rows.issues.where((i) => !!i.parent_id && issueIds.has(i.parent_id))) {
+          r.parent_id = undefined
+          rows.hiddenParentTasks.add(r.id)
         }
-        ;[...rows.milestones.values()].forEach((m) => {
-          if (ids.includes(m.project_id)) rows.milestones.delete(m.id)
-        })
-        ;[...rows.links.values()].forEach((l) => {
-          if (!rows.issues.has(l.source_id) || !rows.issues.has(l.target_id))
-            rows.links.delete(l.id)
-        })
-        rows.issueLabels = rows.issueLabels.filter((il) => rows.issues.has(il.issue_id))
+        for (const key of rows.milestones.keysWhere((m) => ids.includes(m.project_id)))
+          rows.milestones.delete(key)
+        for (const key of rows.links.keysWhere(
+          (l) => !rows.issues.has(l.source_id) || !rows.issues.has(l.target_id),
+        ))
+          rows.links.delete(key)
+        workspaceRows.keepList('issueLabels', (il) => rows.issues.has(il.issue_id))
       },
     }
     void send(api.projects.archive, { org_id: row.org_id, id }, view)
@@ -7913,7 +7909,8 @@ export const PLANNER = {
         if (!live) return
         if (teams) {
           const prev = rows.teamMembers.filter((m) => m.profile_id === id).map((m) => m.team_id)
-          rows.teamMembers = rows.teamMembers.filter(
+          workspaceRows.keepList(
+            'teamMembers',
             (m) => !(m.profile_id === id && !teams.includes(m.team_id)),
           )
           teams
@@ -8068,25 +8065,23 @@ export const PLANNER = {
     const at = new Date().toISOString()
     const view: View = {
       workspace: () => {
-        rows.issues.forEach((i) => {
-          if (
-            i.assignee_id !== id &&
-            i.reviewer_id !== id &&
-            i.reporter_id !== id &&
-            i.created_by !== id
-          )
-            return
+        const named = rows.issues.where(
+          (i) =>
+            i.assignee_id === id ||
+            i.reviewer_id === id ||
+            i.reporter_id === id ||
+            i.created_by === id,
+        )
+        for (const i of named) {
           if (i.assignee_id === id) i.assignee_id = undefined
           if (i.reviewer_id === id) i.reviewer_id = undefined
           if (i.reporter_id === id) i.reporter_id = undefined
           if (i.created_by === id) i.created_by = undefined
           i.updated_at = at
-        })
-        rows.teamMembers = rows.teamMembers.filter((m) => m.profile_id !== id)
-        rows.access = rows.access.filter((a) => a.profile_id !== id)
-        rows.projects.forEach((p) => {
-          if (p.lead_id === id) p.lead_id = undefined
-        })
+        }
+        workspaceRows.keepList('teamMembers', (m) => m.profile_id !== id)
+        workspaceRows.keepList('access', (a) => a.profile_id !== id)
+        for (const p of rows.projects.where((x) => x.lead_id === id)) p.lead_id = undefined
         rows.profiles.delete(id)
       },
     }
@@ -8375,7 +8370,7 @@ export const PLANNER = {
     // the attach rows go with the label server-side — mirror the sweep
     const view: View = {
       workspace: () => {
-        rows.issueLabels = rows.issueLabels.filter((il) => il.label_id !== id)
+        workspaceRows.keepList('issueLabels', (il) => il.label_id !== id)
         rows.labels.delete(id)
       },
     }
@@ -8404,11 +8399,14 @@ export const PLANNER = {
     const view: View = {
       workspace: () => {
         if (!rows.issues.has(uuid) || !rows.labels.has(labelId)) return
-        const has = rows.issueLabels.some((il) => il.issue_id === uuid && il.label_id === labelId)
+        const has = workspaceRows
+          .peekList('issueLabels')
+          .some((il) => il.issue_id === uuid && il.label_id === labelId)
         if (has === on) return
         if (on) rows.issueLabels.push({ issue_id: uuid, label_id: labelId })
         else
-          rows.issueLabels = rows.issueLabels.filter(
+          workspaceRows.keepList(
+            'issueLabels',
             (il) => !(il.issue_id === uuid && il.label_id === labelId),
           )
       },
@@ -8476,7 +8474,8 @@ export const PLANNER = {
     // following a task in a guest org must write that seat's id
     const me = profileIn(row.org_id)
     if (!me) return
-    const has = () => rows.issueSubs.some((s) => s.issue_id === uuid && s.profile_id === me)
+    const has = () =>
+      workspaceRows.peekList('issueSubs').some((s) => s.issue_id === uuid && s.profile_id === me)
     if (has() === on) return // already in the asked-for state
     if (refusePausedWrite(on ? api.issues.subscribe : api.issues.unsubscribe)) return
     const at = new Date().toISOString()
@@ -8485,9 +8484,7 @@ export const PLANNER = {
         if (has() === on || !rows.issues.has(uuid)) return
         if (on) rows.issueSubs.push({ issue_id: uuid, profile_id: me, created_at: at })
         else
-          rows.issueSubs = rows.issueSubs.filter(
-            (s) => !(s.issue_id === uuid && s.profile_id === me),
-          )
+          workspaceRows.keepList('issueSubs', (s) => !(s.issue_id === uuid && s.profile_id === me))
       },
     }
     void send(
@@ -8541,12 +8538,13 @@ export const PLANNER = {
    left. The last snapshot stays on screen and shared edits pause until a
    later snapshot arrives and reaches the screen. */
 
-/* The last snapshot the server delivered, never a later null, which the
-   store only asks whether there is one. Its rows are staged in the base
-   (store/workspaceBase.ts), which a repaint applies before it paints every
-   live layer over them, so they run ahead of the rows on screen until
-   then. */
-let serverSnap: Snapshot | null = null
+/* Whether the server delivered a snapshot, never undone by a later null.
+   Its rows are staged in the base (store/workspaceBase.ts), which a repaint
+   applies before it paints every live layer over them, so they run ahead
+   of the rows on screen until then. The delivery itself is not kept: the
+   base keeps each unchanged row's earlier object, so holding the delivery
+   too would keep a second copy of every row. */
+let hasSnapshot = false
 let snapUnsub: (() => void) | null = null
 let cancelDemoBoot: (() => void) | null = null
 let stopDayWatch: (() => void) | null = null
@@ -8658,7 +8656,7 @@ function subscribeSnapshot(
       const snap = delivered && anchor(joinLists(delivered))
       if (!settled) {
         settled = true
-        serverSnap = snap
+        hasSnapshot = snap !== null
         const entered = snap ? base.stage(snap) : null
         snapshotCurrent = snap !== null && !replay
         if (snap && entered && !replay) {
@@ -8683,14 +8681,14 @@ function subscribeSnapshot(
       // A replay can predate writes accepted since: it paints, but no saved
       // layer goes for it and it ends no trouble.
       if (replay) {
-        serverSnap = snap
+        hasSnapshot = true
         base.stage(snap)
         snapshotCurrent = false
         subscribeWaitingThread()
         owe('workspace')
         return
       }
-      serverSnap = snap
+      hasSnapshot = true
       const entered = base.stage(snap)
       snapshotCurrent = true
       snapshotDeliveries++
@@ -8777,7 +8775,7 @@ export function disposeDemoStore() {
   PLANNER.lastComments = new Map()
   PLANNER.lastCommentsCut = []
   pendingRestoreIssueIds.clear()
-  serverSnap = null
+  hasSnapshot = false
   layers.clear()
   owed.workspace = false
   owed.thread = false

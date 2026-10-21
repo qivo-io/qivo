@@ -13,6 +13,7 @@
 import {
   type DataModelFromSchemaDefinition,
   type FunctionArgs,
+  type FunctionReturnType,
   type GenericMutationCtx,
   makeFunctionReference,
   type WithoutSystemFields,
@@ -20,7 +21,7 @@ import {
 import { ConvexError } from 'convex/values'
 import { convexTest, type TestConvex } from 'convex-test'
 import { onTestFinished, TestRunner, vi } from 'vitest'
-import { internal } from '../_generated/api'
+import { type api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import authSchema from '../betterAuth/schema'
@@ -28,6 +29,7 @@ import type { ReapCounts } from '../files'
 import type { RestIssueJson } from '../lib/core'
 import type { OrgRole } from '../lib/enums'
 import type { Refusal, RefusalCode } from '../lib/functions'
+import { loadRowFor, type OrgLoadRow } from '../lib/loadRows'
 import { type ActivityEntry, insertActivity } from '../model/activity'
 import { countersOf, countersRow, type OrgCounters } from '../model/orgs'
 import schema from '../schema'
@@ -904,4 +906,29 @@ export async function restArchivedPage(
   })
   if (Array.isArray(out)) throw new Error(`expected a page, got ${JSON.stringify(out)}`)
   return out
+}
+
+/** The load rows the app works with for snapshot `snap`: a row for each
+ * task it shows that passes the server's fence, taken from the task rows
+ * the way the store derives them (src/store/taskIndex.ts), then the rows
+ * forMe sends for the tasks the reader is not shown. */
+export function appLoadRows(
+  snap: NonNullable<FunctionReturnType<typeof api.snapshot.forMe>>,
+): OrgLoadRow[] {
+  const parents = new Set(snap.issues.flatMap((task) => task.parent_id ?? []))
+  const projects = new Map(snap.projects.map((project) => [project.id, project]))
+  const orgOf = new Map(snap.profiles.map((person) => [person.id, person.org_id]))
+  const shown = snap.issues.flatMap((task) => {
+    const project = projects.get(task.project_id)
+    const row = loadRowFor(task, {
+      isGroup: parents.has(task.id) || task.has_hidden_subtasks,
+      projectLive: project !== undefined && project.archived_at === undefined,
+      ownerInOrg: (id) => orgOf.get(id) === task.org_id,
+      visible: true,
+      staff: false,
+      meId: '',
+    })
+    return row === null ? [] : [row]
+  })
+  return [...shown, ...snap.orgLoad]
 }

@@ -24,7 +24,7 @@
 // pages, on --host (127.0.0.1 by default), until it is stopped.
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { rmSync, writeFileSync } from 'node:fs'
+import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -365,8 +365,8 @@ async function scrollBoard({ page, timed }, metrics, name) {
 
 /** Runs one sample of every scenario on the page at `origin` with `tasks`
     tasks, adding its numbers to `metrics`. */
-async function runSample(origin, tasks, metrics) {
-  const opened = await openPage(origin, tasks, metrics)
+async function runSample(origin, tasks, metrics, query = '') {
+  const opened = await openPage(origin, tasks, metrics, query)
   const { context, page, cdp, errors, settle, appRenders, timed } = opened
   await page.locator('[data-view-switch]').waitFor()
   await settle()
@@ -690,9 +690,9 @@ async function runSample(origin, tasks, metrics) {
 
 /** Runs one sample on the varied workspace: opens the Board right after
     startup, scrolls it and drags one card into the next status. */
-async function runVariedSample(origin, tasks, metrics) {
+async function runVariedSample(origin, tasks, metrics, query = '') {
   phase('variedStartup')
-  const opened = await openPage(origin, tasks, metrics, '&shape=varied')
+  const opened = await openPage(origin, tasks, metrics, `&shape=varied${query}`)
   const { context, page, errors, settle, timed } = opened
   await page.locator('[data-view-switch]').waitFor()
   await settle()
@@ -789,11 +789,14 @@ try {
     const server = await serve(outDir, process.argv.includes('--serve') ? host : '127.0.0.1')
     servers.push(server)
     target.origin = server.origin
+    // an app from before it derived the load of the tasks it shows from
+    // their rows gets those load rows too, as its own server sent them
+    target.query = existsSync(join(target.source, 'convex/lib/loadRows.ts')) ? '' : '&shownload=1'
   }
   if (process.argv.includes('--serve')) {
     for (const target of targets)
       console.log(
-        `Benchmark workspace (${target.label}): ${target.origin}/?tasks=${sizes[0]}&latency=${latency}&mbps=${bandwidth}${varied ? '&shape=varied' : ''}`,
+        `Benchmark workspace (${target.label}): ${target.origin}/?tasks=${sizes[0]}&latency=${latency}&mbps=${bandwidth}${varied ? '&shape=varied' : ''}${target.query}`,
       )
     // a supervised service stops with SIGTERM
     await new Promise((resolve) => {
@@ -810,8 +813,8 @@ try {
         // the targets take turns, so both run under the same load
         for (const target of targets) {
           running = { label: target.label, tasks, sample: sample + 1, phase: 'startup' }
-          await runSample(target.origin, tasks, target.metrics)
-          if (varied) await runVariedSample(target.origin, tasks, target.metrics)
+          await runSample(target.origin, tasks, target.metrics, target.query)
+          if (varied) await runVariedSample(target.origin, tasks, target.metrics, target.query)
           console.log(`${target.label}, ${tasks} tasks: sample ${sample + 1}/${samples}`)
         }
       }

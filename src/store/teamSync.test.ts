@@ -79,7 +79,13 @@ function fixture(myRole: Role) {
     remaining_set_at: ago(5 * HOUR),
     review_at: ago(5 * HOUR),
   })
-  const todo = task('To do', { assignee_id: aisha.id, status_at: ago(100 * HOUR) })
+  const todo = task('To do', {
+    assignee_id: aisha.id,
+    status_at: ago(100 * HOUR),
+    start_week: '2026-09-14',
+    end_week: '2026-09-21',
+    remaining_hours: 10,
+  })
   const snap: Snapshot = {
     auth_user_id: 'test-account',
     myProfileIds: [me.id],
@@ -137,17 +143,10 @@ function fixture(myRole: Role) {
     issueLabels: [],
     issueSubs: [],
     attachments: [],
-    // Aisha: 10 h over two weeks on a visible task, 6 h in one week on a
-    // task in a project this viewer cannot see (identity nulled); Ben: 4 h
+    // the load of tasks in projects this viewer cannot see (identity
+    // nulled): Aisha 6 h in one week, Ben 4 h. Aisha's 10 h over two weeks
+    // on To do come from its row.
     orgLoad: [
-      {
-        issue_id: todo.id,
-        owner_id: aisha.id,
-        start_week: '2026-09-14',
-        end_week: '2026-09-21',
-        remaining: 10,
-        remaining_set_at: null,
-      },
       {
         issue_id: null,
         owner_id: aisha.id,
@@ -157,7 +156,7 @@ function fixture(myRole: Role) {
         remaining_set_at: null,
       },
       {
-        issue_id: review.id,
+        issue_id: null,
         owner_id: ben.id,
         start_week: '2026-09-14',
         end_week: '2026-09-14',
@@ -386,9 +385,11 @@ describe('the Team sync store', () => {
     // the next delivery's load, not the first answer kept
     deliver({
       ...f.snap,
+      issues: f.snap.issues.map((i) => (i.id === f.todo.id ? { ...i, remaining_hours: 20 } : i)),
       orgLoad: f.snap.orgLoad.map((l) => ({ ...l, remaining: 2 * l.remaining })),
     })
     expect(P.weekLoadOf(f.ben, w14)).toBe(8)
+    expect(P.weekLoadOf(f.aisha, w14)).toBe(10)
   })
 
   it('reads a week of a plan that runs to the year 9999 without spreading the rest', async () => {
@@ -399,7 +400,7 @@ describe('the Team sync store', () => {
     const span = P.isoToWeek(end) - w14 + 1
     expect(span).toBeGreaterThan(416_000)
     // five such plans of an hour a week beside Ben's one-week task
-    const long = { ...f.snap.orgLoad[2], issue_id: null, end_week: end, remaining: span }
+    const long = { ...f.snap.orgLoad[1], end_week: end, remaining: span }
     const before = weeksSpreadSoFar()
     deliver({ ...f.snap, orgLoad: [...f.snap.orgLoad, ...Array(5).fill(long)] })
     const delivered = weeksSpreadSoFar()

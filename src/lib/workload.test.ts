@@ -1,6 +1,7 @@
 import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 import {
+  canonicalLoad,
   committedByWeek,
   DEFAULT_PLANNABLE_HOURS,
   fitEndWeek,
@@ -515,5 +516,51 @@ describe('the Team strip figures', () => {
     expect(fmtHours(7.04)).toBe('7')
     expect(fmtHours(0.1 + 0.2)).toBe('0.3')
     expect(fmtHours(Number.MAX_VALUE)).toBe(String(Number.MAX_VALUE))
+  })
+})
+
+describe('canonicalLoad', () => {
+  const orders = [
+    [0, 1, 2],
+    [0, 2, 1],
+    [1, 0, 2],
+    [1, 2, 0],
+    [2, 0, 1],
+    [2, 1, 0],
+  ]
+  const spans = [0.1, 0.2, 0.3].map((remaining, i) => ({
+    issueUuid: `t${i}`,
+    start: 4,
+    end: 4,
+    remaining,
+  }))
+
+  it('adds up a week the same in every order its spans arrive in', () => {
+    const week = (order: number[], sort: boolean) => {
+      const list = order.map((i) => ({ ...spans[i] }))
+      return committedByWeek(sort ? canonicalLoad(list) : list).get(4)
+    }
+    // floating point sums depend on their order
+    expect(new Set(orders.map((order) => week(order, false))).size).toBeGreaterThan(1)
+    expect(new Set(orders.map((order) => week(order, true))).size).toBe(1)
+  })
+
+  it('gives one order for any arrival order, ties and hidden rows included', () => {
+    const span = fc.record({
+      issueUuid: fc.option(fc.constantFrom('a', 'b', 'c'), { nil: null }),
+      start: fc.integer({ min: 0, max: 3 }),
+      end: fc.integer({ min: 0, max: 5 }),
+      remaining: fc.constantFrom(0.1, 0.2, 0.3, 1),
+      remainingSet: fc.option(fc.integer({ min: 0, max: 3 }), { nil: null }),
+    })
+    fc.assert(
+      fc.property(fc.array(span, { maxLength: 12 }), fc.integer(), (list, seed) => {
+        const shuffled = [...list]
+          .map((item, i) => ({ item, key: (i * 2654435761 + seed) % 1000 }))
+          .sort((a, b) => a.key - b.key)
+          .map(({ item }) => item)
+        expect(canonicalLoad([...shuffled])).toEqual(canonicalLoad([...list]))
+      }),
+    )
   })
 })

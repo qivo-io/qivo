@@ -358,8 +358,13 @@ export const forMe = authedQuery({
         for (const a of atts) attachments.push(relationRow(a))
       }
 
-      // Hidden workload remains anonymized by orgLoadRows.
-      orgLoad.push(...orgLoadRows(me, view, orgProfileIds, liveOrgIssues))
+      // Only the load of tasks this seat is not shown, anonymized by
+      // orgLoadRows. The app derives the rows of the tasks it shows from
+      // the task rows with the same fence (lib/loadRows.ts loadRowFor), so
+      // a pending edit moves its owner's load at once, and an edit of a
+      // shown task changes no load row here.
+      for (const row of orgLoadRows(me, view, orgProfileIds, liveOrgIssues))
+        if (row.issue_id === null) orgLoad.push(row)
     }
 
     // One cap across all organizations, unread rows first, newest first,

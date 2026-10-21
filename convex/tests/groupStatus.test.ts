@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { McpIssueOut } from '../lib/core'
 import {
+  appLoadRows,
   as,
   expectRefusal,
   NOW,
@@ -242,7 +243,7 @@ describe('parent task status', () => {
     expect(load).toHaveLength(2)
     expect(load.map((r) => r.remaining)).toEqual([3, 3])
     const snapshot = await as(t, f.admin).query(api.snapshot.forMe, {})
-    expect(snapshot?.orgLoad.map((r) => r.remaining)).toEqual([3, 3])
+    expect(snapshot && appLoadRows(snapshot).map((r) => r.remaining)).toEqual([3, 3])
   })
 
   it('archived groups retain grouping metadata and refuse status changes', async () => {

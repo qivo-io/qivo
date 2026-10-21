@@ -7,6 +7,7 @@
 import { spreadWindow, type WeekRange } from '../../convex/lib/workload'
 
 export {
+  canonicalLoad,
   committedByWeek,
   DEFAULT_PLANNABLE_HOURS,
   fitEndWeek,
