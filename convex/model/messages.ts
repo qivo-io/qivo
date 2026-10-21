@@ -36,6 +36,7 @@ import {
 import { byId } from '../lib/db'
 import type { MessageKind } from '../lib/enums'
 import { badRequest, forbidden, rule } from '../lib/functions'
+import { MENTION_MAX, mentionIds } from '../lib/mentions'
 import { projectName } from '../lib/recordNames'
 import { reviewerOwns, taskOwnerId } from '../lib/review'
 import { FOLLOWER_MAX, FOLLOWERS_FULL } from '../lib/taskLimits'
@@ -181,7 +182,9 @@ export async function pruneReadMessages(
  * keeps at most one read row, so an item held at the cap stays within
  * ITEM_UNREAD_CAP + 1 rows. An item that grew past the cap before the cap
  * existed shrinks by up to ITEM_TRIM_STEP rows per arrival, so it reaches
- * the cap over later arrivals. */
+ * the cap over later arrivals. The item counts what the cap deleted
+ * (trimRows), and the app, REST and MCP say how many earlier updates it no
+ * longer lists. */
 export const ITEM_UNREAD_CAP = 50
 
 /* The most unread rows one arrival trims from its item. An item at the cap
@@ -216,29 +219,67 @@ const itemStart = (ctx: MutationCtx, a: { recipient_id: string; issue_id: string
  * newest unread row of each kind, so the Inbox kind filter still finds the
  * item. A kind whose newest row lies past the first TRIM_READ keeps one more
  * row than it needs to. It never deletes `arrival` either, the row the
- * caller just posted, which woke the item from any snooze. This is separate
- * from retention, and the nightly sweep still never deletes an unread row. */
+ * caller just posted, which woke the item from any snooze.
+ *
+ * The item counts what the cap deleted in `dropped` (schema.ts), kept on
+ * `holder`, its newest unread row by insertion. The inbox reads walk unread
+ * rows newest first and stop at INBOX_LIMIT, so whenever they list an item
+ * they hold that row, while its oldest rows are the first they leave out.
+ * A trim adds the rows it deleted to the counts its rows carried, the
+ * deleted ones included, and to the count of the last holder, read on its
+ * own when the item is longer than `unread`, and moves the total to the
+ * holder. This is
+ * separate from retention, and the nightly sweep still never deletes an
+ * unread row. */
 async function trimRows(
   ctx: MutationCtx,
-  unread: readonly Pick<Doc<'messages'>, '_id' | 'kind'>[],
+  unread: readonly Pick<Doc<'messages'>, '_id' | 'kind' | 'dropped'>[],
+  pair: { recipient_id: string; issue_id: string },
+  holder: Pick<Doc<'messages'>, '_id' | 'dropped'>,
   arrival?: Id<'messages'>,
 ): Promise<void> {
-  let excess = Math.min(unread.length - ITEM_UNREAD_CAP, ITEM_TRIM_STEP)
+  const excess = Math.min(unread.length - ITEM_UNREAD_CAP, ITEM_TRIM_STEP)
   if (excess <= 0) return
+  // The count's last holder is the newest unread row before this one. In an
+  // item longer than `unread` reaches, it lies past it, so it is read here.
+  const prior = (
+    await ctx.db
+      .query('messages')
+      .withIndex('by_recipient_issue', (q) =>
+        q.eq('recipient_id', pair.recipient_id).eq('issue_id', pair.issue_id),
+      )
+      .order('desc')
+      .take(3)
+  ).find((r) => r.read_at === undefined && r._id !== holder._id)
+  const outside = prior?.dropped && !unread.some((r) => r._id === prior._id) ? prior : undefined
+  const first = unread[0]
   const newestOfKind = new Map<MessageKind, Pick<Doc<'messages'>, '_id' | 'kind'>>()
   for (const r of unread) newestOfKind.set(r.kind, r)
-  const kept = new Set([unread[0]._id, ...[...newestOfKind.values()].map((r) => r._id)])
+  const kept = new Set([first._id, holder._id, ...[...newestOfKind.values()].map((r) => r._id)])
   if (arrival !== undefined) kept.add(arrival)
+  let total = unread.some((r) => r._id === holder._id) ? 0 : (holder.dropped ?? 0)
+  for (const r of unread) total += r.dropped ?? 0
+  total += outside?.dropped ?? 0
+  const gone = new Set<Id<'messages'>>()
   for (const r of unread) {
-    if (excess === 0) break
+    if (gone.size === excess) break
     if (kept.has(r._id)) continue
     await ctx.db.delete(r._id)
-    excess -= 1
+    gone.add(r._id)
   }
+  if (gone.size === 0) return
+  // the counts move to the holder: clear them on the other rows that stay
+  for (const r of unread) {
+    if (r._id !== holder._id && r.dropped && !gone.has(r._id))
+      await ctx.db.patch(r._id, { dropped: undefined })
+  }
+  if (outside !== undefined) await ctx.db.patch(outside._id, { dropped: undefined })
+  await ctx.db.patch(holder._id, { dropped: total + gone.size })
 }
 
 /** Trims one item toward ITEM_UNREAD_CAP (trimRows), reading its first
- * TRIM_READ unread rows. The background trim step runs it. */
+ * TRIM_READ unread rows and its newest unread row, which holds the count.
+ * The background trim step runs it. */
 export async function trimUnreadMessages(
   ctx: MutationCtx,
   a: { recipient_id: string; issue_id: string },
@@ -249,7 +290,18 @@ export async function trimUnreadMessages(
       q.eq('recipient_id', a.recipient_id).eq('issue_id', a.issue_id).eq('read_at', undefined),
     )
     .take(TRIM_READ)
-  await trimRows(ctx, unread)
+  // the item keeps at most one read row (pruneReadMessages), so the newest
+  // unread row is among its last two by insertion
+  const holder = (
+    await ctx.db
+      .query('messages')
+      .withIndex('by_recipient_issue', (q) =>
+        q.eq('recipient_id', a.recipient_id).eq('issue_id', a.issue_id),
+      )
+      .order('desc')
+      .take(2)
+  ).find((r) => r.read_at === undefined)
+  if (holder !== undefined) await trimRows(ctx, unread, a, holder)
 }
 
 /* ---------------------------------------------------------------- preload
@@ -531,11 +583,22 @@ export async function postMessage(
   const unread = rows.filter((r) => r.read_at === undefined)
   // the arrival in its place in the item, which a background step's notice,
   // stamped with its write's time, may not be at the end of
-  await trimRows(
-    ctx,
-    row.read_at === undefined ? [...unread, { ...row, _id: inserted }].sort(oldestFirst) : unread,
-    inserted,
+  // the newest unread row by insertion holds the item's dropped count: the
+  // arrival, or the latest unread row before it when it is stored read
+  const arrived = { ...row, _id: inserted }
+  const latest = unread.reduce<(typeof unread)[number] | undefined>(
+    (best, r) => (best === undefined || r._creationTime > best._creationTime ? r : best),
+    undefined,
   )
+  const holder = row.read_at === undefined ? arrived : latest
+  if (holder !== undefined)
+    await trimRows(
+      ctx,
+      row.read_at === undefined ? [...unread, arrived].sort(oldestFirst) : unread,
+      pair,
+      holder,
+      inserted,
+    )
   return true
 }
 
@@ -1238,44 +1301,22 @@ export async function readArchivedProjectMessages(
 }
 
 /* ---------------------------------------------------------------- mentions
- * extract_mentions (0075:34-49 — the survey quotes 0074's obsolete regex).
- * Code contexts are stripped first (the dialect renders them literally):
- * ``` fences to the closer or EOF, then single-line backtick spans. Then
- * `@[label](user:uuid)` — case-INSENSITIVE (USER: matches, uppercase hex
- * folds), label charset [^][]* (no brackets), dest padding by spaces/tabs.
- * A plain [x](user:...) link is NOT a mention. Distinct uuids, mapped onto
- * the supplied profile list (callers pass the org's profiles — active or
- * not, the SQL org fence never filtered on active); unknown uuids drop. */
-const FENCE_RE = /```[\s\S]*?(```|$)/g
-const SPAN_RE = /`[^`\n]*`/g
-const MENTION_RE =
-  /@\[[^\][]*\]\([ \t]*user:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})[ \t]*\)/gi
+ * lib/mentions.ts reads the mentions out of a text. They map onto the
+ * supplied profile list (callers pass the org's profiles — active or not,
+ * the SQL org fence never filtered on active); unknown uuids drop. Every
+ * write refuses a text with more than MENTION_MAX mentions, so each one
+ * reads at most that many profiles. */
 
-/** The most people one text mentions. Mentions past them notify no one,
- * so a comment or description reads at most this many profiles to resolve
- * its mentions. */
-export const MENTION_MAX = 100
-
-/** The distinct uuids `text` mentions, lowercase, in order, at most `max`
- * of them (MENTION_MAX unless the caller reads no profiles for them, as for
- * the text before an edit). */
-export function mentionIds(text: string, max = MENTION_MAX): string[] {
-  const stripped = (text ?? '').replace(FENCE_RE, ' ').replace(SPAN_RE, ' ')
-  const seen = new Set<string>()
-  for (const match of stripped.matchAll(MENTION_RE)) {
-    if (seen.size >= max) break
-    seen.add(match[1].toLowerCase())
-  }
-  return [...seen]
-}
-
-/** The profiles among `profiles` that `text` mentions (mentionIds). */
+/** The profiles among `profiles` that `text` mentions (lib/mentions.ts
+ * mentionIds), at most MENTION_MAX of them. */
 export function extractMentions(text: string, profiles: Doc<'profiles'>[]): Doc<'profiles'>[] {
-  return mentionIds(text).flatMap((id) => profiles.filter((p) => p.id === id))
+  return mentionIds(text, MENTION_MAX).flatMap((id) => profiles.filter((p) => p.id === id))
 }
 
 /* The profiles of organization `orgId` that `text` mentions, read by uuid
- * through `cache`. Unknown and foreign uuids drop. */
+ * through `cache`. Unknown and foreign uuids drop. Writes refuse a text with
+ * more than MENTION_MAX mentions, and the bound here keeps the reads to that
+ * many regardless. */
 async function mentionedIn(
   ctx: QueryCtx,
   text: string,
@@ -1283,7 +1324,7 @@ async function mentionedIn(
   orgId: string,
 ): Promise<Doc<'profiles'>[]> {
   const out: Doc<'profiles'>[] = []
-  for (const id of mentionIds(text)) {
+  for (const id of mentionIds(text, MENTION_MAX)) {
     const profile = await orgProfile(ctx, cache, orgId, id)
     if (profile !== undefined) out.push(profile)
   }
@@ -1769,8 +1810,7 @@ export async function notifyIssueUpdate(
   // @mentions newly added to the description notify regardless of
   // subscribers, and subscribe the person to what they were pulled into. An
   // unchanged description adds none, so a bulk write of dates skips the scan
-  const oldMentions =
-    after.description === before.description ? [] : mentionIds(before.description, Infinity)
+  const oldMentions = after.description === before.description ? [] : mentionIds(before.description)
   const newMentions =
     after.description === before.description
       ? []
@@ -2086,7 +2126,7 @@ export async function notifyCommentUpdate(
   const { before, after, issue, actor, now } = a
   if (after.body === before.body) return
   const project = await byId(ctx, 'projects', issue.project_id)
-  const oldMentions = mentionIds(before.body, Infinity)
+  const oldMentions = mentionIds(before.body)
   const added = (await mentionedIn(ctx, after.body, new Map(), issue.org_id)).filter(
     (p) => !oldMentions.includes(p.id),
   )

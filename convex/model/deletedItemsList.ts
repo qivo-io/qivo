@@ -532,40 +532,47 @@ const TASK_REF = /^(?:QN-)?(\d+)$/i
  * item names the item's root. Every read of the call spends
  * one LIST.call budget, as a list call's do: the hits, each seat's sight
  * and each item it judges. Once it is spent, the search answers the
- * matches it found so far.
+ * matches it found so far. `capped` says that the seats see more matches
+ * than MATCHES.max, so the page can ask for a longer text instead of hiding
+ * the rest: the search finds one visible match past the cap. It is decided
+ * by visible matches alone. The scan's MATCHES.scan results and the budget
+ * also count tasks the seat cannot see, so a stop at either is not
+ * reported, or `capped` would tell that hidden deleted tasks match the
+ * text.
  */
 export async function matchesFor(
   ctx: QueryCtx,
   seats: Iterable<Doc<'profiles'>>,
   text: string,
-): Promise<DeletedMatch[]> {
+): Promise<{ matches: DeletedMatch[]; capped: boolean }> {
   const query = text.trim()
-  if (query === '') return []
+  if (query === '') return { matches: [], capped: false }
   const ref = TASK_REF.exec(query)
   const out: DeletedMatch[] = []
+  let capped = false
   const call: Reads = { ...LIST.call }
   const reader = spending(ctx, call)
-  for (const me of seats) {
-    if (out.length >= MATCHES.max || spent(call)) break
+  search: for (const me of seats) {
+    if (spent(call)) break
     const org = me.org_id
     const hits = reader.db.query('deleted_tasks')
-    const found = [
-      ...(ref === null
+    const byNum =
+      ref === null
         ? []
         : await hits
             .withIndex('by_org_num', (q) => q.eq('org_id', org).eq('num', Number(ref[1])))
-            .take(MATCHES.scan)),
-      ...(await hits
-        .withSearchIndex('search_title', (q) => q.search('title', query).eq('org_id', org))
-        .take(MATCHES.scan)),
-    ]
+            .take(MATCHES.scan)
+    const byTitle = await hits
+      .withSearchIndex('search_title', (q) => q.search('title', query).eq('org_id', org))
+      .take(MATCHES.scan)
+    const found = [...byNum, ...byTitle]
     if (found.length === 0) continue
     const sight = await sightOf(reader, me)
     const orgName = (await byId(reader, 'organizations', org))?.name ?? ''
     const items = new Map<string, Promise<{ item: Item; view: ItemView } | null>>()
     const seen = new Set<string>()
     for (const task of found) {
-      if (out.length >= MATCHES.max || spent(call)) break
+      if (spent(call)) break search
       if (seen.has(task.task_id)) continue
       seen.add(task.task_id)
       let read = items.get(task.item_id)
@@ -580,6 +587,11 @@ export async function matchesFor(
       const { item, view } = visible
       // viewOf never shows a purging item; the check narrows the state
       if (item.state === 'purging') continue
+      // a visible match past the cap: say there are more, and stop
+      if (out.length === MATCHES.max) {
+        capped = true
+        break search
+      }
       const ready = item.state === 'ready'
       const block = view.redacted ? 'no_access' : await restoreBlock(reader, me, item, sight.memo)
       let blocked: BlockDetail | undefined
@@ -608,7 +620,7 @@ export async function matchesFor(
       })
     }
   }
-  return out
+  return { matches: out, capped }
 }
 
 /** Item `id` with what `sight`'s person sees of it, when they see it. */

@@ -7,8 +7,10 @@ seat shows **invited** until they sign in with that email address, or
 did not go out; hover it for the reason. Admins can
 correct the email before sign-in, which sends a new invitation; afterward it
 is read-only. An organization can send up to 50 invitation emails an hour.
-Beyond that, people can still join by creating an account with the invited
-address. Agents use keys instead of email addresses ([Agent users](./administration-guard-rails-and-the-demo.md#agent-users)).
+An invitation held back by that limit says so on the seat, with
+**Send after 14:10** beside it, the time the hour frees a send. It then reads
+**Send invitation** and emails it again. It also appears when an email could not be sent. People
+can still join by creating an account with the invited address. Agents use keys instead of email addresses ([Agent users](./administration-guard-rails-and-the-demo.md#agent-users)).
 
 To change your name, open **Settings → Your preferences**, edit **Your name**
 and press **Save**. This updates your existing seats and pending invitations
@@ -174,7 +176,9 @@ followers, the most a task can have**. A subscriber can still unsubscribe,
 and a comment or a mention no longer subscribes anyone, though mentioned
 people still receive their message. A new assignee or reviewer is still
 subscribed, so the people working on a task always hear about it. A comment
-or description reaches at most 100 mentioned people. Tasks that had more
+or description can mention at most 100 people. Qivo refuses to save one that
+mentions more, keeps your draft and says **A text can mention at most 100
+people; remove some mentions and save again.** Tasks that had more
 subscribers before this limit keep them. On such a task, a comment or a
 change reaches the first subscribers at once and the rest a few seconds
 later. Changes saved for many tasks at once, from the Roadmap, by
@@ -195,8 +199,13 @@ the latest message in the inbox. Further updates start the unread counter
 again on the same row. A row keeps at most 50 unread updates. Beyond that,
 Qivo drops the oldest ones but keeps the first unread update and the newest
 mention, comment and change. On a task with many subscribers it does so
-moments after the update arrives. The Inbox loads up to 500 messages, unread ones
-first.
+moments after the update arrives. The row says how many it dropped, such as
+**12 earlier updates on this task are not listed**, and the task's comments
+and history still show what those updates were about. The Inbox loads up to
+500 messages, unread ones first. When older ones exist, the list ends with
+**Older messages are not listed**, and names **Mark all as read** or **Remove
+all read** when that action reaches them. Neither reaches snoozed
+messages.
 
 The Inbox badge counts tasks with unread updates and shows **99+** above 99.
 Read state follows you across devices. Sort by newest or oldest, or filter for unread,

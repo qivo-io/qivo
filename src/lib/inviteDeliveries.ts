@@ -5,25 +5,29 @@
 import type { FunctionReturnType } from 'convex/server'
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../convex/_generated/api'
+import { APP_SENDS_PER_ORG_HOUR } from '../../convex/lib/inviteLimits'
 import { convex } from './convex'
+import { fmtTime } from './dates'
 import { DEMO_MODE } from './demoMode'
 
-type Row = FunctionReturnType<typeof api.invites.deliveries>[number]
-export type InviteDelivery = Row['state']
+export type InviteDeliveryRow = FunctionReturnType<typeof api.invites.deliveries>[number]
+export type InviteDelivery = InviteDeliveryRow['state']
 
 /* The age at which an unsettled send is uncertain, as STALE_SEND_MS in
    convex/invites.ts. The query says so on a fresh load; this covers a page
    left open, because a query does not run again as time passes. */
 const STALE_SEND_MS = 5 * 60_000
 
-const staleAt = (row: Row) => Date.parse(row.since) + STALE_SEND_MS
+const staleAt = (row: InviteDeliveryRow) => Date.parse(row.since) + STALE_SEND_MS
 
 /** Each visible pending seat's newest invitation email in `orgId`, keyed by
     profile id. Org admins see every pending seat, others the sends they
     caused. A send unsettled for five minutes reads as uncertain, also while
     the page stays open. Null while loading, after a refusal and in the demo. */
-export function useInviteDeliveries(orgId: string | undefined): ReadonlyMap<string, Row> | null {
-  const [rows, setRows] = useState<readonly Row[] | null>(null)
+export function useInviteDeliveries(
+  orgId: string | undefined,
+): ReadonlyMap<string, InviteDeliveryRow> | null {
+  const [rows, setRows] = useState<readonly InviteDeliveryRow[] | null>(null)
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     setRows(null)
@@ -63,8 +67,14 @@ export function useInviteDeliveries(orgId: string | undefined): ReadonlyMap<stri
 const JOIN_ANYWAY = 'They can still join by creating an account with this address.'
 
 /** What a pending seat says about its invitation email: a short label, the
-    sentence behind it, and whether the email failed. */
-export function inviteLabel(state: InviteDelivery | undefined): {
+    sentence behind it, and whether the email failed. A send held back by
+    the hourly cap says when it can go again, at `freeAt` (null or past:
+    now, and undefined: not known here). A caller that stays on screen
+    renders again at that time (useRenderAt). */
+export function inviteLabel(
+  state: InviteDelivery | undefined,
+  freeAt?: string | null,
+): {
   text: string
   detail?: string
   failed: boolean
@@ -82,7 +92,14 @@ export function inviteLabel(state: InviteDelivery | undefined): {
     case 'held':
       return {
         text: 'invitation not sent',
-        detail: `This organization sent too many invitations in the last hour, so this one was not emailed. ${JOIN_ANYWAY}`,
+        // the hour is still full only while freeAt lies ahead
+        detail: `Invitation not sent. ${
+          freeAt && Date.parse(freeAt) > Date.now()
+            ? `This organization sent ${APP_SENDS_PER_ORG_HOUR} invitation emails in the last hour. Send it again after ${fmtTime(new Date(freeAt))}. `
+            : `It was held back by the limit of ${APP_SENDS_PER_ORG_HOUR} invitation emails an hour. ${
+                freeAt === undefined ? '' : 'Send it again now. '
+              }`
+        }${JOIN_ANYWAY}`,
         failed: true,
       }
     case 'uncertain':
@@ -94,4 +111,20 @@ export function inviteLabel(state: InviteDelivery | undefined): {
     default:
       return { text: 'invited', failed: false }
   }
+}
+
+/** Renders the caller again at `at` (ms), when it lies ahead, such as the
+    time a held invitation can go again, so what it says follows the clock. */
+export function useRenderAt(at: number): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    // a time already passed, such as one an answer brought late, counts now
+    if (at <= Date.now()) {
+      setNow(Date.now())
+      return
+    }
+    const timer = setTimeout(() => setNow(Date.now()), at - Date.now() + 500)
+    return () => clearTimeout(timer)
+  }, [at])
+  return now
 }

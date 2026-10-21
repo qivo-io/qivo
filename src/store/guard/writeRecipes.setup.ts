@@ -1107,6 +1107,13 @@ export const recipes: Recipe[] = [
     },
   },
   {
+    mutation: 'invites:sendAgain',
+    mutator: 'sendInvitationAgain',
+    what: 'an invitation email sent again, which paints nothing',
+    pause: 'P',
+    act: (P) => P.sendInvitationAgain(ORG, PAT),
+  },
+  {
     mutation: 'profiles:deactivate',
     mutator: 'updateUser',
     what: 'a person switched off',

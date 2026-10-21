@@ -13,7 +13,7 @@ import { dayInSentence, stretch, timeSpan } from './deletedTime'
 
 export type DeletedList = FunctionReturnType<typeof api.deletedItems.list>
 export type DeletedRow = DeletedList['items'][number]
-export type DeletedMatch = FunctionReturnType<typeof api.deletedItems.matches>[number]
+export type DeletedMatch = FunctionReturnType<typeof api.deletedItems.matches>['matches'][number]
 export type Deleter = DeletedRow['deleter']
 export type BlockDetail = NonNullable<DeletedRow['blocked']>
 /** Why the server refused to restore one item. */

@@ -8,7 +8,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import authSchema from '../betterAuth/schema'
-import { as, NOW, newT, plantSeat, type T, uuid, withOrg } from './helpers.setup'
+import type { Refusal, RefusalCode } from '../lib/functions'
+import {
+  APP_SENDS_PER_ORG_HOUR,
+  INVITE_NOT_HELD,
+  INVITE_SENDING,
+  INVITES_HELD,
+} from '../lib/inviteLimits'
+import { as, expectRefusal, NOW, newT, plantSeat, type T, uuid, withOrg } from './helpers.setup'
+
+async function refused(p: Promise<unknown>, code: RefusalCode, sentence: string): Promise<void> {
+  const e = await expectRefusal(p, code)
+  expect((e.data as Refusal).message).toBe(sentence)
+}
 
 declare const process: { env: Record<string, string | undefined> }
 
@@ -349,7 +361,7 @@ describe('invitations from the app', () => {
     expect(detail.members.find((m) => m.profile_id === added.id)?.invite).toMatchObject({
       sent: true,
     })
-    expect((await op.query(api.admin.auditLog, {})).map((r) => r.action)).not.toContain(
+    expect((await op.query(api.admin.auditLog, {})).rows.map((r) => r.action)).not.toContain(
       'invite_email',
     )
     // many newer app emails never push an operator action out of the listing
@@ -372,9 +384,10 @@ describe('invitations from the app', () => {
         })
       }
     })
-    expect((await op.query(api.admin.auditLog, { limit: 5 })).map((r) => r.action)).toEqual([
-      'create_org',
-    ])
+    expect(await op.query(api.admin.auditLog, { limit: 5 })).toMatchObject({
+      rows: [{ action: 'create_org' }],
+      next: null,
+    })
   })
 
   it('sends and records nothing on a public demo deployment', async () => {
@@ -443,6 +456,7 @@ describe('whoever caused an app invitation sees whether it went out', () => {
           email: 'refused@example.se',
           state: 'unsent',
           since: expect.any(String),
+          free_at: null,
         },
         {
           profile_id: guest,
@@ -461,6 +475,45 @@ describe('whoever caused an app invitation sees whether it went out', () => {
       },
     ])
     expect(await deliveries(f.viewer)).toEqual([])
+
+    // the lead may not email a delivered invitation again, and once they no
+    // longer lead its project, they may not send it at all
+    const again = () =>
+      as(t, f.user).mutation(api.invites.sendAgain, { org_id: f.org.id, profile_id: guest })
+    await refused(again(), 'rule', INVITE_NOT_HELD)
+    await t.run(async (ctx) => {
+      const meta = await ctx.db
+        .query('projects')
+        .withIndex('by_uuid', (q) => q.eq('id', f.meta.id))
+        .unique()
+      if (meta) await ctx.db.patch(meta._id, { lead_id: f.admin.id })
+    })
+    await expectRefusal(again(), 'forbidden')
+    // the admin sends the refused one again, which a live demo refuses
+    await t.run((ctx) =>
+      ctx.db.insert('demo_sessions', {
+        id: uuid(),
+        auth_user_id: f.admin.auth_user_id ?? '',
+        org_id: f.org.id,
+        created_at: Date.now(),
+        expires_at: Date.now() + 86_400_000,
+        status: 'ready',
+        seed_version: 1,
+        anchor: '2026-09-14',
+      }),
+    )
+    vi.stubEnv('APP_MODE', 'demo')
+    await expectRefusal(
+      as(t, f.admin).mutation(api.invites.sendAgain, { org_id: f.org.id, profile_id: added.id }),
+      'forbidden',
+      /requires a regular workspace/,
+    )
+    vi.stubEnv('APP_MODE', '')
+    const before = (await inviteRows(t)).length
+    await as(t, f.admin).mutation(api.invites.sendAgain, { org_id: f.org.id, profile_id: added.id })
+    await flush(t)
+    expect(letters().at(-1)?.to).toEqual(['refused@example.se'])
+    expect(await inviteRows(t)).toHaveLength(before + 1)
   })
 
   it('tells a send in flight, a held-back one and an uncertain one apart, for the current address only', async () => {
@@ -517,7 +570,14 @@ describe('whoever caused an app invitation sees whether it went out', () => {
           state: 'sending',
           since: expect.any(String),
         },
-        { profile_id: held.id, email: held.email, state: 'held', since: expect.any(String) },
+        // the planted rows leave the hour free, so it may go again now
+        {
+          profile_id: held.id,
+          email: held.email,
+          state: 'held',
+          since: expect.any(String),
+          free_at: null,
+        },
         {
           profile_id: uncertain.id,
           email: uncertain.email,
@@ -527,5 +587,52 @@ describe('whoever caused an app invitation sees whether it went out', () => {
         { profile_id: stuck.id, email: stuck.email, state: 'uncertain', since: expect.any(String) },
       ]),
     )
+  })
+
+  it(`says when the hourly cap frees a held send, refuses to send it again before, and sends it after`, async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const first = Date.now()
+    // the hour's 50 counted sends, a minute apart from `first`
+    await t.run(async (ctx) => {
+      for (let i = 0; i < APP_SENDS_PER_ORG_HOUR; i++) {
+        await ctx.db.insert('platform_audit_log', {
+          ts: new Date(first + i * 60_000 - 3_000_000).toISOString(),
+          actor_email: 'system',
+          action: 'invite_email',
+          channel: 'app',
+          target_org_id: f.org.id,
+          detail: { email: `earlier${i}@example.se`, sent: true, resend: false, settled: true },
+        })
+      }
+    })
+    const seat = person(f.org.id, 'later@example.se')
+    await as(t, f.admin).mutation(api.profiles.create, seat)
+    await flush(t)
+    const freeAt = new Date(first - 3_000_000 + 3_600_000).toISOString()
+    const row = async () =>
+      (await as(t, f.admin).query(api.invites.deliveries, { org_id: f.org.id })).find(
+        (r) => r.profile_id === seat.id,
+      )
+    expect(await row()).toMatchObject({ state: 'held', free_at: freeAt })
+    const again = () =>
+      as(t, f.admin).mutation(api.invites.sendAgain, { org_id: f.org.id, profile_id: seat.id })
+    await refused(again(), 'rule', INVITES_HELD)
+    // someone who did not cause the send may not send it
+    await expectRefusal(
+      as(t, f.user).mutation(api.invites.sendAgain, { org_id: f.org.id, profile_id: seat.id }),
+      'forbidden',
+    )
+    expect(letters()).toEqual([])
+    // once the oldest send leaves the hour, it goes, and counts as a resend;
+    // the seat shows it in flight at once, and a second click waits for it
+    vi.setSystemTime(Date.parse(freeAt) + 1)
+    await again()
+    expect(await row()).toMatchObject({ state: 'sending' })
+    await refused(again(), 'rule', INVITE_SENDING)
+    await flush(t)
+    expect(letters().map((l) => l.to[0])).toEqual(['later@example.se'])
+    expect(await row()).toMatchObject({ state: 'sent' })
+    expect((await inviteRows(t)).at(-1)?.detail).toMatchObject({ resend: true, by: f.admin.id })
   })
 })

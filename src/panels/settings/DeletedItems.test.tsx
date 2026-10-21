@@ -38,7 +38,7 @@ type Subscription = {
 }
 type Search = {
   text: string
-  next: (rows: DeletedMatch[]) => void
+  next: (rows: DeletedMatch[], capped?: boolean) => void
   fail: (cause: unknown) => void
   live: boolean
 }
@@ -191,7 +191,12 @@ async function load(role: Role = 'admin', setup?: (snapshot: Snapshot) => void) 
       }
     }
     if (name === 'deletedItems:matches') {
-      const subscription: Search = { text: args.text, next, fail, live: true }
+      const subscription: Search = {
+        text: args.text,
+        next: (rows, capped = false) => next({ matches: rows, capped }),
+        fail,
+        live: true,
+      }
       searches.push(subscription)
       return () => {
         subscription.live = false
@@ -310,12 +315,13 @@ async function search(value: string) {
 }
 /** Waits past the search's 250ms pause. */
 const pause = () => act(async () => await new Promise((r) => setTimeout(r, 300)))
-/** Types `value`, waits past the pause and answers the search with `matches`. */
-async function found(value: string, matches: DeletedMatch[]) {
+/** Types `value`, waits past the pause and answers the search with
+    `matches`, `capped` when more may match. */
+async function found(value: string, matches: DeletedMatch[], capped = false) {
   await search(value)
   await pause()
   const last = searches[searches.length - 1]
-  await act(async () => last.next(matches))
+  await act(async () => last.next(matches, capped))
   await settle()
 }
 /** Picks the Deleted by choice labelled `label`. */
@@ -1616,6 +1622,16 @@ describe('search hits follow the list', () => {
     await settle()
     expect(has('[data-deleted-match="QN-12"] [data-row-note="state"]')).toBe(false)
     expect(has('[data-deleted-match="QN-12"] [data-restore]')).toBe(true)
+  })
+
+  it('says when more deleted tasks match than the search answers', async () => {
+    await open()
+    await deliver([trial()])
+    const capped = '[data-deleted-search-capped]'
+    await found('Book', [hit()])
+    expect(has(capped)).toBe(false)
+    await found('Boo', [hit()], true)
+    expect(find(capped).textContent).toContain('More deleted tasks match than the search shows')
   })
 
   it('keeps the hits when the search fails, and stops following it on unmount', async () => {

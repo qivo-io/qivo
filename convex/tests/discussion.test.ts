@@ -430,6 +430,7 @@ const pageMcp = async (fx: Fx, args: Record<string, unknown> = {}, callerId = fx
     items: {
       task: { id: string; key: string; title: string }
       unread_count: number
+      dropped_count: number
       latest_at: string
       snoozed_until: string | null
       messages: { id: string; detail: string; read_at: string | null }[]
@@ -466,6 +467,7 @@ describe('reading the inbox', () => {
       {
         task: { id: fx.task.id, key: key(fx.task), title: 'Visible', status: 'todo' },
         unread_count: 1,
+        dropped_count: 0,
         latest_at: '2026-01-03T00:00:00.000Z',
         snoozed_until: null,
         messages: [
@@ -497,6 +499,69 @@ describe('reading the inbox', () => {
     expect(
       await fx.t.query(internal.machine.discussion.restListInbox, { callerId: fx.agent.id, ...R }),
     ).toEqual({ items, truncated: false })
+  })
+
+  it('keeps the dropped count of every item it lists when the inbox holds more unread messages than it reads', async () => {
+    const fx = await setup()
+    const tasks = await Promise.all(
+      Array.from({ length: 11 }, () =>
+        plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id }),
+      ),
+    )
+    // 51 unread messages on each, more than INBOX_LIMIT in all
+    for (const task of tasks) {
+      await plantSubscription(fx.t, { issue_id: task.id, profile_id: fx.agent.id })
+      await fx.t.run(async (ctx) => {
+        for (let n = 0; n < ITEM_UNREAD_CAP + 1; n++) {
+          await ctx.db.insert('messages', {
+            id: uuid(),
+            org_id: fx.org.id,
+            recipient_id: fx.agent.id,
+            issue_id: task.id,
+            issue_title: task.title,
+            kind: 'change',
+            detail: `change ${n}`,
+            created_at: `2026-01-01T00:00:${String(n).padStart(2, '0')}.000Z`,
+          })
+        }
+      })
+    }
+    // a comment on each makes its item drop two
+    for (const task of tasks)
+      await as(fx.t, fx.user).mutation(api.comments.create, {
+        org_id: fx.org.id,
+        id: uuid(),
+        issue_id: task.id,
+        body: 'news',
+      })
+    const page = await pageMcp(fx)
+    expect(page.truncated).toBe(true)
+    expect(page.items.length).toBeGreaterThan(0)
+    expect(page.items.every((item) => item.dropped_count === 2)).toBe(true)
+  })
+
+  it(`says how many earlier unread messages an item past ${ITEM_UNREAD_CAP} dropped, until it is read`, async () => {
+    const fx = await setup()
+    await plantSubscription(fx.t, { issue_id: fx.task.id, profile_id: fx.agent.id })
+    const comment = () =>
+      as(fx.t, fx.user).mutation(api.comments.create, {
+        org_id: fx.org.id,
+        id: uuid(),
+        issue_id: fx.task.id,
+        body: 'news',
+      })
+    for (let n = 0; n < ITEM_UNREAD_CAP + 3; n++) await comment()
+    const [item] = await listMcp(fx)
+    expect([item.unread_count, item.dropped_count]).toEqual([ITEM_UNREAD_CAP, 3])
+    const rest = await fx.t.query(internal.machine.discussion.restListInbox, {
+      callerId: fx.agent.id,
+      ...R,
+    })
+    expect(rest.items[0].dropped_count).toBe(3)
+    // reading the item ends the unread run and its count
+    await updateMcp(fx, { action: 'read', tasks: [key(fx.task)] })
+    await comment()
+    expect((await listMcp(fx))[0].dropped_count).toBe(0)
   })
 
   it('filters unread and snoozed items, orders by latest activity and pages', async () => {

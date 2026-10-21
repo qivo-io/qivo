@@ -53,7 +53,7 @@ describe('unconfirmed note', () => {
     ])
   })
 
-  it('reports nothing when the browser cannot tell which pages are open', async () => {
+  it('reports only month-old notes when the browser cannot tell which pages are open', async () => {
     const storage = memoryStorage()
     const open = (page: string) =>
       createUnconfirmedNote({ storage: () => storage, page, livePages: async () => null })
@@ -62,18 +62,27 @@ describe('unconfirmed note', () => {
       `qivo.unconfirmed.v1:${SCOPE}:long-gone`,
       JSON.stringify([{ task: 'QN-1', what: 'title', id: '1', at: 0 }]),
     )
-    expect(await open('next').collect([SCOPE])).toEqual([])
+    // a page does not wait a month for an answer, so that one is gone
+    expect(await open('next').collect([SCOPE])).toEqual([
+      { task: 'QN-1', what: 'title', scope: SCOPE },
+    ])
     expect([...storage.items.keys()]).toEqual([`qivo.unconfirmed.v1:${SCOPE}:maybe-open`])
   })
 
-  it('drops a month-old note in any scope, and leaves a fresh one of another person', async () => {
+  it('reports a month-old note of a seat still held, drops one of a seat left, and leaves a fresh one of another person', async () => {
     const { storage, open } = pages()
     storage.setItem(
       'qivo.unconfirmed.v1:org-9:left-org:gone',
       JSON.stringify([{ task: 'QN-1', what: 'title', id: '1', at: 0 }]),
     )
+    storage.setItem(
+      `qivo.unconfirmed.v1:${SCOPE}:gone`,
+      JSON.stringify([{ task: 'QN-5', what: 'description', id: '1', at: 0 }]),
+    )
     open('other-person').add('org-8:someone-else', { task: 'QN-2', what: 'title' })
-    expect(await open('next').collect([SCOPE])).toEqual([])
+    expect(await open('next').collect([SCOPE])).toEqual([
+      { task: 'QN-5', what: 'description', scope: SCOPE },
+    ])
     expect([...storage.items.keys()]).toEqual([
       'qivo.unconfirmed.v1:org-8:someone-else:other-person',
     ])

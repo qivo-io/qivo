@@ -201,7 +201,10 @@ rest into one line with **Show all**.
 Filter the list by kind, by text and, for admins and leads, by **Deleted
 by**. The page shows up to the newest 2,000 items, and fewer when the trash
 is very large. The text filter also finds deleted tasks by key or title,
-including tasks inside deleted projects and items the list does not show. A
+including tasks inside deleted projects and items the list does not show. It
+lists up to 50 such tasks; when it finds more, the page says so, and typing
+more of the title or key narrows the search. A very broad search in a large
+trash can show fewer than it would find with a longer text. A
 task inside a deleted project can only come back with its project, and a
 subtask deleted with its task only with that task and its other subtasks.
 When the filter shows such a task on a line of its own, its **Restore** first

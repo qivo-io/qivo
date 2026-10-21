@@ -1623,8 +1623,11 @@ subscribers, not "the assignee", who is simply subscribed by having been
 assigned. Being @mentioned or leaving a comment subscribes you too, so an
 agent that comments on a task starts receiving its news, unless the task
 already has 100 followers, the most a task can have. The comment and the
-mention still go through, and the mention still notifies. A text reaches at
-most 100 mentioned people. Whoever a task passes
+mention still go through, and the mention still notifies. A description or
+comment can mention at most 100 distinct people. A `POST` or `PATCH` whose
+text mentions more is a `400` (`a text can mention at most 100 people; remove
+some mentions and save again`) and saves nothing. Sending a stored text back
+unchanged is accepted, as for the length limit. Whoever a task passes
 to starts following it as well: the reviewer when the task enters `review`
 with a reviewer set (or a reviewer is set while it is there), who reads
 `Ready for your review`, and the assignee when it leaves `review` again or
@@ -1690,7 +1693,10 @@ that task the caller has not removed. An item keeps at most 50 unread
 messages. When more arrive, Qivo drops the oldest unread ones but keeps the
 item's first unread message and the newest message of each `kind`. On a task
 with many followers it does so moments after the arrival, so an item can
-briefly hold one more. A comment or a change on a task with more than 128
+briefly hold one more. The item's `dropped_count` says how many it dropped,
+until the item is read, and the app's Inbox shows it as **N earlier updates
+on this task are not listed**. The task's comments and history still hold
+what those messages announced. A comment or a change on a task with more than 128
 followers, such as a task from before the follower limit, reaches the
 first 128 at once and the rest moments later. The followers of the tasks a
 roadmap save or an access removal changes, and of the subtasks a task delete
@@ -1714,6 +1720,7 @@ POST /v1/inbox/snooze          { "tasks": ["QN-3"], "until": "2026-11-02T08:00:0
     {
       "task": { "id": "…uuid…", "key": "QN-3", "title": "Fix hinge tolerance", "status": "progress" },
       "unread_count": 1,
+      "dropped_count": 0,
       "latest_at": "2026-10-14T09:12:03.000Z",
       "snoozed_until": null,
       "messages": [

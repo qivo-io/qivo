@@ -156,6 +156,11 @@ In Team sync a moved review shows **handed to you** on the move day, although
 Qivo sends no new **Ready for your review** message, and a moved Done task
 appears in Done since again.
 
+Time marks need each task's latest comment, which Qivo checks for every
+person the page shows. If one person holds so many open tasks that a single
+check cannot cover them all, some of their rows show no time mark, and the
+page says so below the rows.
+
 A review has no recorded hand-off if it was handed over before Qivo recorded
 hand-offs, or if it has had subtasks since the hand-off. Such a review shows no
 hand-off age and no **handed to you** or **waiting since** mark, and sorts last

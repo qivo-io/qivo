@@ -16,6 +16,7 @@ import { hasProjectLevel } from '../lib/access'
 import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, rule } from '../lib/functions'
+import { TOO_MANY_MENTIONS, tooManyMentions } from '../lib/mentions'
 import { issueKey } from '../lib/taskRefs'
 import { COMMENT_TOO_LONG, DELETE_REASON_MAX, TEXT_MAX } from '../lib/textLimits'
 import { assertExpected, DELETES, type Fields, filledText, type Next, type View } from './expected'
@@ -50,7 +51,8 @@ type NewComment = {
  * every message its fan-out posts share. `id` is the app's client-made id;
  * machine callers omit it and get a new one. Refuses an id that is not a
  * lowercase UUID (lib/db.ts assertNewRowId), an author without Edit on the
- * task's project, a blank body, a body longer than TEXT_MAX and an id
+ * task's project, a blank body, a body longer than TEXT_MAX or
+ * mentioning more than MENTION_MAX people (lib/mentions.ts) and an id
  * already in use. Every caller trims `body` first, so the cap measures the
  * stored text.
  */
@@ -60,6 +62,7 @@ export async function postComment(ctx: MutationCtx, a: NewComment): Promise<Doc<
   await assertCanEdit(ctx, author, issue.project_id)
   if (a.body.trim() === '') throw badRequest('a comment cannot be empty')
   if (a.body.length > TEXT_MAX) throw rule(COMMENT_TOO_LONG)
+  if (tooManyMentions(a.body)) throw rule(TOO_MANY_MENTIONS)
   const id = a.id ?? newUuid()
   const docId = await insertUnique(
     ctx,
@@ -156,7 +159,8 @@ async function assertCommentExpected(
  * without history. Refuses anyone but the author or a project lead, then a
  * blank body. The same text again changes nothing and stamps nothing, even
  * when a comment saved before the cap is longer than TEXT_MAX; any other
- * text longer than that is refused. Otherwise the comment records who edited
+ * text longer than that, or mentioning more than MENTION_MAX people, is
+ * refused. Otherwise the comment records who edited
  * it and when, stamped `now`, and people the edit newly mentions follow the
  * task and hear about it. Returns the comment as stored and whether it
  * changed.
@@ -188,6 +192,7 @@ export async function editComment(
   if (text === '') throw badRequest('a comment cannot be empty')
   if (text === comment.body) return { comment, changed: false }
   if (text.length > TEXT_MAX) throw rule(COMMENT_TOO_LONG)
+  if (tooManyMentions(text)) throw rule(TOO_MANY_MENTIONS)
   await ctx.db.patch(comment._id, { body: text, edited_at: now, edited_by: me.id })
   const after = (await ctx.db.get(comment._id)) as Doc<'comments'>
   await notifyCommentUpdate(ctx, { before: comment, after, issue, actor: me, now })

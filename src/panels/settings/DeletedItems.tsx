@@ -194,11 +194,12 @@ type Around = { next?: string; previous?: string }
 
 const toast = (text: string, tone?: 'error') => window.showToast?.(text, tone)
 
-/** The newest search answer and the text it answers. */
-type Found = { text: string; matches: DeletedMatch[] }
+/** The newest search answer and the text it answers. `capped` when more
+    tasks may match than the server answers (MATCHES.max). */
+type Found = { text: string; matches: DeletedMatch[]; capped: boolean }
 /** No search. One shared object, so setting it again while the box stays
     empty does not render the page again. */
-const NOTHING_FOUND: Found = { text: '', matches: [] }
+const NOTHING_FOUND: Found = { text: '', matches: [], capped: false }
 
 export function DeletedItemsPage() {
   const main = useDeletedList(undefined, true)
@@ -271,12 +272,15 @@ export function DeletedItemsPage() {
         api.deletedItems.matches,
         { text },
         (answer) => {
-          if (active) setFound({ text, matches: answer.map(shownMatch) })
+          if (active)
+            setFound({ text, matches: answer.matches.map(shownMatch), capped: answer.capped })
         },
         (cause) => {
           console.error('[qivo] deleted items search failed:', cause)
           if (active)
-            setFound((current) => (current.text === text ? current : { text, matches: [] }))
+            setFound((current) =>
+              current.text === text ? current : { text, matches: [], capped: false },
+            )
         },
       )
     }, 250)
@@ -1082,6 +1086,13 @@ export function DeletedItemsPage() {
         {source.list?.capped && (
           <p className="mt-3 px-1 text-sm text-text-2">
             Not every item is shown. Search to find older ones.
+          </p>
+        )}
+        {/* the search answers at most 50 tasks (MATCHES.max) */}
+        {found.capped && found.text === text && kind !== 'project' && (
+          <p data-deleted-search-capped className="mt-3 px-1 text-sm text-text-2">
+            More deleted tasks match than the search shows. Type more of the title or key to narrow
+            it.
           </p>
         )}
         {selected.size > 0 && (

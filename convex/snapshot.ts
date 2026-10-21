@@ -161,6 +161,9 @@ export const forMe = authedQuery({
     // unexamined that Mark all as read (Remove all read) reaches
     let unreadTruncated = false
     let readTruncated = false
+    // whether any message the Inbox would list was left out, snoozed ones
+    // included, for the Inbox to say so (messagesCut below)
+    let messagesCut = false
     const seenLinkIds = new Set<string>()
     for (const me of ctx.myProfiles.values()) {
       const orgId = me.org_id
@@ -304,6 +307,7 @@ export const forMe = authedQuery({
       readDocs.push(...inbox.read)
       unreadTruncated ||= inbox.unreadTruncated
       readTruncated ||= inbox.readTruncated
+      messagesCut ||= inbox.truncated
 
       // The relation reads come last, after every other read of this seat,
       // so they plan with the ranges the transaction really has left
@@ -353,6 +357,7 @@ export const forMe = authedQuery({
       0,
     )
     const messages = [...unreadDocs, ...readDocs].slice(0, CAP).map(rowOf)
+    if (unreadDocs.length + readDocs.length > CAP) messagesCut = true
     // When several seats keep unread rows, the cut can drop some that Mark
     // all as read reaches while every unread row delivered is snoozed. Read
     // rows it drops are in readMessageCount already.
@@ -412,6 +417,11 @@ export const forMe = authedQuery({
       // (lib/inbox.ts loadInbox `peek`).
       unreadTruncated,
       readTruncated,
+      // Whether the Inbox lists fewer messages than the caller has: a
+      // seat's bounded read stopped early, snoozed rows included, or the
+      // blended cap dropped some. The Inbox then says older messages are
+      // not listed. Sent only when true.
+      ...(messagesCut ? { messagesCut: true } : {}),
       // the server time of this delivery, so the client can tell messages
       // created before it from newer ones without trusting its own clock
       delivered_at: new Date().toISOString(),

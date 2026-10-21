@@ -20,6 +20,7 @@ import { useMobile } from '@/lib/useMobile'
 import { EmptyState, Icon } from '../components/qivo'
 import { RoadmapUndo } from '../components/RoadmapUndo'
 import { WorkspaceToolbar } from '../components/WorkspaceShell'
+import { winWeeks } from '../lib/dates'
 import { groupSpan } from '../lib/issueGroups'
 import { autoMoves, dependencyPairs } from '../lib/schedule'
 import { captureWeekDates, restoreWeekDates } from '../lib/weekDrafts'
@@ -188,7 +189,7 @@ function Roadmap({
     setWinState(w)
     P.saveUI({ roadmapWin: w })
   }
-  const { w0, w1 } = P.resolveWin(win)
+  const { w0, w1, capped } = P.resolveWin(win)
   const NW = w1 - w0 + 1
   // Planning can bypass toolbar filters, but never the roadmap's status rule.
   const passes = (it: IssueVM) =>
@@ -956,7 +957,11 @@ function Roadmap({
      glyph that has no label. Two endpoint chips used to say this at rest, in
      193px of toolbar; the ruler under the glyph says it in full and nine times
      over, so the button only has to answer when asked. */
-  const winSays = `View window: ${P.fmtRange(w0, w1)}, ${NW} weeks`
+  // a window wider than the Roadmap shows says so beside its glyph (resolveWin)
+  const winCut = capped ? `First ${NW} of ${winWeeks(win).toLocaleString('en-US')} weeks` : null
+  const winSays = `View window: ${P.fmtRange(w0, w1)}, ${NW} weeks${
+    winCut ? `. ${winCut}, the most the Roadmap shows` : ''
+  }`
 
   // Keep controls available in empty states so filters can be cleared and
   // estimates opened. Pass moves explicitly and defer autoArrange through the
@@ -1655,6 +1660,17 @@ function Roadmap({
                       >
                         <Icon name="rotateCcw" size={16} />
                       </Button>
+                    )}
+                    {winCut && (
+                      <HoverTooltip content={winSays}>
+                        <span
+                          tabIndex={-1}
+                          data-win-capped
+                          className="[font-size:var(--fs-xs)] [color:var(--text-3)] [white-space:nowrap]"
+                        >
+                          {winCut}
+                        </span>
+                      </HoverTooltip>
                     )}
                     <Button
                       type="button"

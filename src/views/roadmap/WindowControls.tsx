@@ -2,7 +2,13 @@ import { useState as useStateR } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { AnchoredPop, DateInput, Icon, MenuItem, Seg } from '../../components/qivo'
-import type { RoadmapWin, WinEndpoint } from '../../lib/dates'
+import {
+  type RoadmapWin,
+  WIN_TOO_WIDE,
+  WIN_WEEKS_MAX,
+  type WinEndpoint,
+  winWeeks,
+} from '../../lib/dates'
 import { P } from '../../store/planner'
 
 // Preset widths; Custom range supports any valid pair of endpoints.
@@ -120,7 +126,9 @@ function EndpointFields({
   )
 }
 
-// Edit both relative-or-pinned endpoints together.
+// Edit both relative-or-pinned endpoints together. The picker keeps the pair
+// the fields show, and applies it whole; a pair wider than WIN_WEEKS_MAX is
+// not applied, and the picker says why until the fields show one that fits.
 export function WinRangePicker({
   x,
   y,
@@ -134,6 +142,13 @@ export function WinRangePicker({
   onApply: (win: RoadmapWin) => void
   onClose: () => void
 }) {
+  const [draft, setDraft] = useStateR(win)
+  const tooWide = winWeeks(draft) > WIN_WEEKS_MAX
+  const apply = (which: 'start' | 'end', ep: WinEndpoint) => {
+    const next = { ...draft, [which]: ep }
+    setDraft(next)
+    if (winWeeks(next) <= WIN_WEEKS_MAX) onApply(next)
+  }
   return (
     // stayOnScroll: applying a shrink can clamp the pane's scrollLeft, and that
     // scroll event must not dismiss the picker mid-use
@@ -142,13 +157,18 @@ export function WinRangePicker({
         data-win-picker
         className="[padding:20px] [display:flex] [flex-direction:column] [gap:24px]"
       >
-        <EndpointFields
-          which="start"
-          ep={win.start}
-          onApply={(ep) => onApply({ ...win, start: ep })}
-        />
+        <EndpointFields which="start" ep={win.start} onApply={(ep) => apply('start', ep)} />
         <div className="[height:1px] [background:var(--border)]" />
-        <EndpointFields which="end" ep={win.end} onApply={(ep) => onApply({ ...win, end: ep })} />
+        <EndpointFields which="end" ep={win.end} onApply={(ep) => apply('end', ep)} />
+        {tooWide && (
+          <div
+            role="alert"
+            data-win-too-wide
+            className="[font-size:var(--fs-sm)] [color:var(--danger)] [line-height:1.5]"
+          >
+            {WIN_TOO_WIDE}
+          </div>
+        )}
       </div>
     </AnchoredPop>
   )

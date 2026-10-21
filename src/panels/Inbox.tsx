@@ -161,6 +161,24 @@ function itemPlace(g: MessageGroupVM) {
   return parts.length ? { meta, parts } : null
 }
 
+/** The line an inbox row shows when the server's item cap deleted `n` of
+    its earlier unread updates. */
+/** What the Inbox's "Older messages are not listed" line adds about the
+    bulk actions that reach the messages it leaves out. */
+const inboxReachLine = (reach: { markAllRead: boolean; removeRead: boolean }) =>
+  reach.markAllRead && reach.removeRead
+    ? ' Mark all as read and Remove all read reach them too.'
+    : reach.markAllRead
+      ? ' Mark all as read reaches them too.'
+      : reach.removeRead
+        ? ' Remove all read reaches them too.'
+        : ''
+
+const droppedLine = (n: number) =>
+  n === 1
+    ? '1 earlier update on this task is not listed'
+    : `${n.toLocaleString('en-US')} earlier updates on this task are not listed`
+
 function MessageRow({
   g,
   selected,
@@ -280,6 +298,16 @@ function MessageRow({
               : secondLine(g)}
           </div>
           <div className="inbox-message-preview">{secondLine(g)}</div>
+          {/* an item keeps at most 50 unread updates (convex/model/messages.ts
+            ITEM_UNREAD_CAP); say how many older ones it no longer lists */}
+          {g.dropped > 0 && (
+            <div
+              data-msg-dropped={g.dropped}
+              className="[margin-top:3px] [font-size:var(--fs-xs)] [color:var(--text-3)]"
+            >
+              {droppedLine(g.dropped)}
+            </div>
+          )}
         </div>
         {!g.read && (
           <span
@@ -731,6 +759,16 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
               className="[font-size:var(--fs-base)] [color:var(--text-3)] [font-style:italic] [padding:14px_10px]"
             >
               {P.messageGroups.length === 0 ? 'No messages yet.' : 'No messages match the filters.'}
+            </div>
+          )}
+          {/* the Inbox loads the newest 500 messages (convex/snapshot.ts) */}
+          {P.inboxCut && (
+            <div
+              data-inbox-cut
+              className="[font-size:var(--fs-sm)] [color:var(--text-3)] [padding:14px_10px]"
+            >
+              Older messages are not listed.
+              {inboxReachLine(P.inboxCutReach)}
             </div>
           )}
         </div>

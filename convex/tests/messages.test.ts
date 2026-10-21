@@ -919,15 +919,60 @@ describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', 
 
     const kept = await details(t, f.guest, issue)
     expect(kept).toHaveLength(ITEM_UNREAD_CAP)
-    // the ten oldest changes after the protected three are the ones dropped
+    // the ten oldest changes after the protected three are the ones dropped,
+    // and the newest unread row counts them
     expect(kept).toEqual([...arrivals(0, 2), ...arrivals(13, 59)])
     const rows = await messagesFor(t, f.guest.id, issue.id)
+    expect(rows.map((m) => m.dropped ?? 0)).toEqual([...Array(ITEM_UNREAD_CAP - 1).fill(0), 10])
     expect(new Set(rows.map((m) => m.kind))).toEqual(new Set(['change', 'comment', 'mention']))
     expect(rows.every((m) => m.read_at === undefined)).toBe(true)
     // another item of the same recipient, and the same task in someone else's
     // inbox, keep every message
     expect(await details(t, f.guest, other)).toEqual(arrivals(0, 1))
     expect(await details(t, f.admin, issue)).toEqual(arrivals(0, 2))
+  })
+
+  it('keeps the dropped count when an earlier-stamped notice becomes the first row', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await arrive(t, f, { recipient: f.guest, issue }, SIXTY)
+    // a background step's notice stamped before the item's first row: the
+    // old first row, which carries the count of ten, makes way for it
+    await arrive(t, f, { recipient: f.guest, issue }, ['change'], -1)
+    const rows = await messagesFor(t, f.guest.id, issue.id)
+    expect(rows).toHaveLength(ITEM_UNREAD_CAP)
+    const details = rows.map((m) => m.detail)
+    expect(details).toContain('arrival -1')
+    expect(details).not.toContain('arrival 0')
+    expect(rows.reduce((n, m) => n + (m.dropped ?? 0), 0)).toBe(11)
+  })
+
+  it('moves a count held past the rows a trim reads to the arrival', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // 150 unread rows from before the cap; the newest holds a count of 50
+    await t.run(async (ctx) => {
+      for (let n = 0; n < 150; n++) {
+        await ctx.db.insert('messages', {
+          id: uuid(),
+          org_id: f.org.id,
+          recipient_id: f.guest.id,
+          issue_id: issue.id,
+          issue_title: 'T',
+          kind: 'change',
+          detail: `legacy ${n}`,
+          created_at: new Date(Date.parse('2026-01-01T00:00:00.000Z') + n * 1000).toISOString(),
+          ...(n === 149 ? { dropped: 50 } : {}),
+        })
+      }
+    })
+    await arrive(t, f, { recipient: f.guest, issue }, ['change'], 1_000_000)
+    const rows = await messagesFor(t, f.guest.id, issue.id)
+    // the arrival holds the earlier 50 and the 50 this trim deleted
+    expect(rows.at(-1)?.dropped).toBe(100)
+    expect(rows.slice(0, -1).every((m) => !m.dropped)).toBe(true)
   })
 
   it('keeps the newest row of a kind, not the oldest one', async () => {
@@ -995,6 +1040,9 @@ describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', 
     kept = await details(t, f.admin, issue)
     expect(kept).toHaveLength(ITEM_UNREAD_CAP)
     expect(kept).toEqual([...legacy(0, 1), ...legacy(360, 399), ...Array(8).fill('New comment')])
+    const counts = (await messagesFor(t, f.admin.id, issue.id)).map((m) => m.dropped ?? 0)
+    expect(counts.at(-1)).toBe(400 + 8 - ITEM_UNREAD_CAP)
+    expect(counts.slice(0, -1).every((n) => n === 0)).toBe(true)
   })
 
   it('an item at the cap keeps every message', async () => {
@@ -1038,6 +1086,9 @@ describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', 
     // the oldest unread (60), the only comment (61) and mention (62) stay;
     // the oldest other row (73) makes way for the arrival
     expect(rows.map((m) => m.detail)).toEqual([...arrivals(60, 62), ...arrivals(74, 120)])
+    // the read 59 took its count along; the new run counts its own 11, on
+    // its newest row
+    expect(rows.at(-1)?.dropped).toBe(11)
   })
 })
 

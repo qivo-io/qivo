@@ -1,7 +1,7 @@
 import { type FunctionReturnType, getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { api } from '../../convex/_generated/api'
-import { firstSittingDay, SYNC_SITTING_MS } from '../../convex/lib/teamSync'
+import { firstSittingDay, SYNC_OWNERS_MAX, SYNC_SITTING_MS } from '../../convex/lib/teamSync'
 
 type Snapshot = NonNullable<FunctionReturnType<typeof api.snapshot.forMe>>
 type Planner = typeof import('./planner')['P']
@@ -498,6 +498,40 @@ describe('the Team sync store', () => {
     expect(P.lastComments.size).toBe(0)
   })
 
+  it(`asks for every person in parts of ${SYNC_OWNERS_MAX}, halves a part cut short, and names who stays cut short alone`, () => {
+    const people = Array.from({ length: 2 * SYNC_OWNERS_MAX + 20 }, () => crypto.randomUUID())
+    P.watchTeamSync(f.org, people)
+    expect(watches.map((w) => w.args.owner_ids)).toEqual([
+      people.slice(0, SYNC_OWNERS_MAX),
+      people.slice(SYNC_OWNERS_MAX, 2 * SYNC_OWNERS_MAX),
+      people.slice(2 * SYNC_OWNERS_MAX),
+    ])
+    const at = ago(HOUR)
+    watches[0].next({ rows: [{ issue_id: f.todo.id, at }], complete: true })
+    // each part's marks show as its answer arrives
+    expect(P.lastComments.get(f.todo.id)).toBe(Date.parse(at))
+    // a part cut short is asked again in halves, and its answer is not used
+    watches[1].next({ rows: [{ issue_id: f.done.id, at }], complete: false })
+    expect(watches[1].unsub).toHaveBeenCalledOnce()
+    expect(watches.slice(3).map((w) => w.args.owner_ids)).toEqual([
+      people.slice(SYNC_OWNERS_MAX, SYNC_OWNERS_MAX * 1.5),
+      people.slice(SYNC_OWNERS_MAX * 1.5, 2 * SYNC_OWNERS_MAX),
+    ])
+    expect(P.lastComments.has(f.done.id)).toBe(false)
+    watches[3].next({ rows: [{ issue_id: f.done.id, at }], complete: true })
+    watches[4].next({ rows: [{ issue_id: f.review.id, at: null }], complete: true })
+    watches[2].next({ rows: [], complete: true })
+    expect(P.lastComments.get(f.done.id)).toBe(Date.parse(at))
+    expect(P.lastComments.get(f.review.id)).toBeNull()
+    expect(P.lastCommentsCut).toEqual([])
+
+    // one person whose own answer is still cut short is named
+    P.watchTeamSync(f.org, [f.aisha])
+    watches.at(-1)?.next({ rows: [{ issue_id: f.review.id, at }], complete: false })
+    expect(P.lastCommentsCut).toEqual([f.aisha])
+    expect(P.lastComments.get(f.review.id)).toBe(Date.parse(at))
+  })
+
   it('empties the marks of another organization', () => {
     P.watchTeamSync(f.org, [f.aisha])
     watches[0].next({ rows: [{ issue_id: f.todo.id, at: NOW }], complete: true })
@@ -512,5 +546,31 @@ describe('the Team sync store', () => {
     watches[0].next({ rows: [{ issue_id: f.todo.id, at: NOW }], complete: true })
     watches[0].fail(new Error('not_found'))
     expect(P.lastComments.size).toBe(0)
+    // the subscription stays, and its next good answer brings the marks back
+    expect(watches[0].unsub).not.toHaveBeenCalled()
+    watches[0].next({ rows: [{ issue_id: f.todo.id, at: NOW }], complete: true })
+    expect(P.lastComments.has(f.todo.id)).toBe(true)
+  })
+
+  it('drops the marks kept from before when a part fails while another still loads', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    P.watchTeamSync(f.org, [f.aisha])
+    watches[0].next({ rows: [{ issue_id: f.todo.id, at: NOW }], complete: true })
+    // other people: two parts, the old marks stay until both answer
+    const people = Array.from({ length: SYNC_OWNERS_MAX + 1 }, () => crypto.randomUUID())
+    P.watchTeamSync(f.org, people)
+    expect(P.lastComments.has(f.todo.id)).toBe(true)
+    watches[1].fail(new Error('offline'))
+    expect(P.lastComments.size).toBe(0)
+  })
+
+  it('blanks only the failed part, and keeps the marks of the others', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const people = Array.from({ length: SYNC_OWNERS_MAX + 1 }, () => crypto.randomUUID())
+    P.watchTeamSync(f.org, people)
+    watches[0].next({ rows: [{ issue_id: f.todo.id, at: NOW }], complete: true })
+    watches[1].next({ rows: [{ issue_id: f.review.id, at: NOW }], complete: true })
+    watches[1].fail(new Error('offline'))
+    expect([...P.lastComments.keys()]).toEqual([f.todo.id])
   })
 })

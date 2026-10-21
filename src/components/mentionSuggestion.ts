@@ -9,7 +9,7 @@
    which keeps this out of the editor's render cycle entirely. */
 import type { MentionNodeAttrs } from '@tiptap/extension-mention'
 import type { SuggestionKeyDownProps, SuggestionOptions, SuggestionProps } from '@tiptap/suggestion'
-import { matchesAllWords } from '../lib/search'
+import { matchesAllWords, moreMatches } from '../lib/search'
 import { P } from '../store/planner'
 
 type Member = {
@@ -28,23 +28,29 @@ function memberMatches(u: Member, q: string): boolean {
   return matchesAllWords(`${u.name}\n${u.initials}\n${u.email || ''}`, q)
 }
 
+/* Every member of the editor's organization that `query` matches; the popup
+   lists the first MAX_ITEMS and says how many more there are. Scoped to the
+   editor's organization (0081): `P.users` is blended across every org I hold
+   a seat in, and only someone inside THIS task's org can receive the
+   mention. Offering anyone else would render a mention that notifies nobody,
+   the exact parity trap 0075 closed on the server side. */
+function matchingMembers(query: string, editor: SuggestionProps<Member>['editor'] | undefined) {
+  const dom = editor && (editor.view.dom as HTMLElement)
+  const org = dom?.getAttribute('data-qivo-org') || P.homeOrg
+  return (P.usersIn(org) as Member[]).filter((u) => memberMatches(u, query))
+}
+
 export const mentionSuggestion: Omit<SuggestionOptions<Member, MentionNodeAttrs>, 'editor'> = {
   char: '@',
   allowSpaces: true,
-  // scoped to the editor's organization (0081): `P.users` is blended across
-  // every org I hold a seat in, and only someone inside THIS task's org can
-  // receive the mention — offering anyone else would render a mention that
-  // notifies nobody, the exact parity trap 0075 closed on the server side
-  items: ({ query, editor }) => {
-    const dom = editor && (editor.view.dom as HTMLElement)
-    const org = dom?.getAttribute('data-qivo-org') || P.homeOrg
-    return (P.usersIn(org) as Member[]).filter((u) => memberMatches(u, query)).slice(0, MAX_ITEMS)
-  },
+  items: ({ query, editor }) => matchingMembers(query, editor).slice(0, MAX_ITEMS),
 
   render: () => {
     let el: HTMLDivElement | null = null
     let unmount: (() => void) | null = null
     let items: Member[] = []
+    // how many matches the list leaves out
+    let more = 0
     let selected = 0
     let command: (attrs: MentionNodeAttrs) => void = () => {}
 
@@ -104,12 +110,20 @@ export const mentionSuggestion: Omit<SuggestionOptions<Member, MentionNodeAttrs>
         })
         el!.appendChild(row)
       })
+      if (more > 0) {
+        const rest = document.createElement('div')
+        rest.className = 'mentionpop-empty'
+        rest.setAttribute('data-mention-more', String(more))
+        rest.textContent = moreMatches(more)
+        el.appendChild(rest)
+      }
       const active = el.querySelector('.mentionpop-row.active')
       if (active) (active as HTMLElement).scrollIntoView({ block: 'nearest' })
     }
 
     const apply = (props: SuggestionProps<Member, MentionNodeAttrs>) => {
       items = props.items
+      more = Math.max(0, matchingMembers(props.query, props.editor).length - items.length)
       command = props.command
       if (selected >= items.length) selected = Math.max(0, items.length - 1)
       rebuild()

@@ -67,7 +67,7 @@ import {
 } from '../lib/relationCandidates'
 import { remainingPatchFromInput, remainingValue } from '../lib/remaining'
 import { buildPath, issueLink } from '../lib/router'
-import { matchesAllWords } from '../lib/search'
+import { matchesAllWords, moreMatches } from '../lib/search'
 import { firstUnreadTs, mergeSpine, spineWindow, unreadMark } from '../lib/spine'
 import { attachmentBlock, labelBlock, linkBlock } from '../lib/taskCaps'
 import { markTaskFocus, restoreTaskFocus } from '../lib/taskFocus'
@@ -634,6 +634,9 @@ export function LabelPickerPopup({
   )
 }
 
+/* The most tasks the issue picker lists at once; it says how many more match. */
+const ISSUE_PICKER_SHOWN = 8
+
 /* Issue picker: same floating-popup concept as the label picker — search
    existing issues by key or title and pick on click. `single` closes after
    one pick (parent), otherwise it stays open for multiple toggles
@@ -669,7 +672,7 @@ function IssuePickerPopup({
   const pool = ql
     ? candidates.filter((x) => matchesAllWords(`${x.key}\n${x.title}`, ql))
     : candidates
-  const matches = pool.slice(0, 8)
+  const matches = pool.slice(0, ISSUE_PICKER_SHOWN)
   // like the label picker: no create row when the query IS an existing issue,
   // so an exact search can't accidentally create a duplicate
   const canCreate = !!ql && !!onCreate && !pool.some((x) => x.title.toLowerCase() === ql)
@@ -766,6 +769,15 @@ function IssuePickerPopup({
           </Button>
         )}
       </div>
+      {/* under the scrolling list, so it shows however long the list is */}
+      {pool.length > matches.length && (
+        <div
+          data-picker-more={pool.length - matches.length}
+          className="[font-size:var(--fs-sm)] [color:var(--text-3)] [padding:4px_17px_10px]"
+        >
+          {moreMatches(pool.length - matches.length)}
+        </div>
+      )}
     </AnchoredPop>
   )
 }
