@@ -2118,10 +2118,13 @@ ids exist.
 Send each field as the read showed it:
 
 - **A task's parent.** Send `parent_id` and `has_hidden_parent` together, as
-  `GET /v1/tasks/{ref}` answered them. That is the parent's uuid with
+  `GET /v1/tasks/{ref}` answered them. That is the parent's id with
   `false`, `null` with `true` for a parent you cannot read, or `null` with
-  `false` for no parent. A parent you read by uuid matches while it stays
-  the parent, even after you lose sight of it. A parent you read as hidden matches any
+  `false` for no parent. A parent you read by id matches while it stays
+  the parent, even after you lose sight of it. Send a parent's id as you
+  read it: an id that is not a uuid, which a task made until 2026-10-19 can
+  have, is only recognized as a parent you can read in the case you read
+  it, and in another case it counts as a parent you cannot read. A parent you read as hidden matches any
   parent you cannot read, so a move from one hidden parent to another is not
   detected, because telling you would reveal tasks you cannot see.
 - **A group's remaining time.** An active task with subtasks reads
@@ -2182,7 +2185,7 @@ Both compare again, because records saved before their rules can read back
 that way. From 2026-10-20 an id key, such as `expected.assignee_id`,
 `expected.parent_id`, `expected.project_id` or `expected.lead_id`, had to
 be a uuid, and other text was a `400` with `expected.assignee_id must be a
-profile uuid or null` and the like. It takes any string again for the same
+profile uuid or null` and the like. It now takes any string for the same
 reason.
 
 A conflict is a `409` with one sentence in `error`. It names the fields by

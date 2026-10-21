@@ -1061,6 +1061,48 @@ describe('a parent the caller cannot read', () => {
   })
 })
 
+describe('parents made before ids had to be uuids', () => {
+  /* Tasks made until 2026-10-19 may have ids that are not uuids, and two
+   * of them may differ in case only. */
+  async function legacy() {
+    const fx = await setup()
+    const elsewhere = await plantProject(fx.t, { org_id: fx.org.id, key: 'HID' })
+    const away = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      key: 'HIDS',
+      type: 'project',
+      parent_id: elsewhere.id,
+    })
+    const plant = (id: string, project_id: string) =>
+      plantIssue(fx.t, { org_id: fx.org.id, project_id, id })
+    const shown = await plant('Task-A', fx.sub.id)
+    const twin = await plant('task-a', away.id)
+    const other = await plant('Task-B', away.id)
+    const row = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    const parentNow = (id: string) =>
+      fx.t.run(async (ctx) => {
+        const live = await byId(ctx, 'issues', row.id)
+        if (live) await ctx.db.patch(live._id, { parent_id: id })
+      })
+    const detach = (seen: string) =>
+      send(fx, 'PATCH', `/v1/tasks/${key(row)}`, {
+        parent: null,
+        expected: { parent_id: seen, has_hidden_parent: false },
+      })
+    return { shown, twin, other, parentNow, detach }
+  }
+
+  it('answers alike whichever hidden task is the parent, and matches one that stayed in any case', async () => {
+    const { shown, twin, other, parentNow, detach } = await legacy()
+    for (const hidden of [twin.id, other.id]) {
+      await parentNow(hidden)
+      expect((await detach(shown.id)).status, hidden).toBe(409)
+    }
+    await parentNow(shown.id)
+    expect((await detach(shown.id.toLowerCase())).status).toBe(200)
+  })
+})
+
 describe('the tool list', () => {
   it('offers expected on the tools that change or delete an existing record', async () => {
     const fx = await setup()

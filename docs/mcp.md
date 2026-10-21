@@ -237,7 +237,7 @@ of `expected.date must be a calendar date as YYYY-MM-DD`, which these tools
 answered from 2026-10-20.
 
 Later, an id key of `expected`, such as `assignee_id`, `parent_id`,
-`project_id` or `lead_id`, took any string again and lost its `uuid` format.
+`project_id` or `lead_id`, took any string and lost its `uuid` format.
 A person, project or task made until 2026-10-19 can have an id that is not a
 uuid, and from 2026-10-20 `update_task` and `update_project` refused such an
 id as read with `expected.assignee_id must be a profile uuid or null` and
@@ -1068,8 +1068,12 @@ refuses it with the sentence below.
 Send each value as a read tool answered it:
 
 - `get_task` gives a task's fields. Send `parent_id` and `has_hidden_parent`
-  together, as the parent's uuid with `false`, `null` with `true` for a
-  parent you cannot read, or `null` with `false` for no parent. A parent you read as
+  together, as the parent's id with `false`, `null` with `true` for a
+  parent you cannot read, or `null` with `false` for no parent. Send a
+  parent's id as you read it: an id that is not a uuid, which a task made
+  until 2026-10-19 can have, is only recognized as a parent you can read in
+  the case you read it, and in another case it counts as a parent you cannot
+  read. A parent you read as
   hidden matches any parent you cannot read, so a move from one hidden parent
   to another is not detected, because telling you would reveal tasks you
   cannot see. An active task with subtasks reads `remaining_hours: null`,
@@ -1436,7 +1440,7 @@ MCP`.
 columns: `owner_id` (whose work it is, the reviewer while the task is in
 `review` with one, else the assignee, and always the assignee on a group),
 `parent_id` with `has_hidden_parent`, `start_week` and `end_week`, and `url`,
-the address the app's **Copy link** gives. `parent_id` is the parent's uuid
+the address the app's **Copy link** gives. `parent_id` is the parent's id
 when you can read the parent. Otherwise it is `null` and `has_hidden_parent`
 is `true`, so a subtask under a task hidden from you is not mistaken for a
 top-level task. A group's `start_week` and `end_week` come from the subtasks

@@ -304,6 +304,18 @@ describe('a project saved with a blank name', () => {
     const task = shownRow(row('t', { path: ['', 'Firmware'] }))
     expect([task.title, placeText(task)]).toEqual(['Task t', 'Unnamed project › Firmware'])
     expect(placeText(shownRow(row('u', { path: [''] })))).toBe('Unnamed sub-project')
+    // the restore note names the project as the row does
+    const blocked = shownRow(
+      row('b', {
+        kind: 'project',
+        title: '',
+        path: ['Luma'],
+        blocked: { reason: 'not_lead', project: '', lead: 'Lena' },
+      }),
+    )
+    expect(blocked.blocked && blockedText(blocked.blocked)).toBe(
+      'Unnamed sub-project has its own lead, Lena. Ask them or an organization admin to restore it.',
+    )
     // a name that is not blank stays as stored
     expect(shownRow(row('n')).path).toEqual(['Luma Sensor', 'Firmware'])
   })
@@ -335,6 +347,9 @@ describe('a project saved with a blank name', () => {
     expect(shownMatch(hit('project', ['Luma', ''])).path).toEqual(['Luma', 'Unnamed sub-project'])
     expect(blockedText({ reason: 'view_only', project: ' ' })).toBe(
       'You can only view its project now. Ask an organization admin to restore it.',
+    )
+    expect(blockedText({ reason: 'not_lead', project: '', lead: 'Lena' })).toBe(
+      'This project has its own lead, Lena. Ask them or an organization admin to restore it.',
     )
   })
 })

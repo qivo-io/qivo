@@ -8,8 +8,8 @@
 
 import type { FunctionReturnType } from 'convex/server'
 import type { api } from '../../convex/_generated/api'
+import { projectName } from '../../convex/lib/recordNames'
 import { dayInSentence, stretch, timeSpan } from './deletedTime'
-import { projectName } from './recordNames'
 
 export type DeletedList = FunctionReturnType<typeof api.deletedItems.list>
 export type DeletedRow = DeletedList['items'][number]
@@ -142,23 +142,38 @@ const subProject = (name: string) => projectName({ name, type: 'project' })
 const taskPlace = (path: string[]): string[] =>
   path.length === 2 ? [topLevel(path[0]), subProject(path[1])] : path.map(subProject)
 
+/* `blocked` with the project it names labelled as `type`. */
+const blockedAs = (
+  blocked: BlockDetail | undefined,
+  type: 'meta' | 'project',
+): BlockDetail | undefined =>
+  blocked?.project === undefined
+    ? blocked
+    : { ...blocked, project: projectName({ name: blocked.project, type }) }
+
 /** A row as the page shows it, with a project name saved blank before names
     were required named "Unnamed project" or "Unnamed sub-project" in its
-    title and place (lib/recordNames.ts). Apply it to rows as they arrive. */
+    title, place and restore note (convex/lib/recordNames.ts). Apply it to
+    rows as they arrive. A task's note names its sub-project; a project's
+    names its parent when that is archived, else the project itself. */
 export function shownRow(row: DeletedRow): DeletedRow {
-  if (row.kind === 'task') return { ...row, path: taskPlace(row.path) }
+  if (row.kind === 'task')
+    return { ...row, path: taskPlace(row.path), blocked: blockedAs(row.blocked, 'project') }
+  const type = isSubProject(row) ? 'project' : 'meta'
   return {
     ...row,
-    title: projectName({ name: row.title, type: isSubProject(row) ? 'project' : 'meta' }),
+    title: projectName({ name: row.title, type }),
     path: row.path.map(topLevel),
+    blocked: blockedAs(row.blocked, row.blocked?.reason === 'parent_archived' ? 'meta' : type),
   }
 }
 
 /** shownRow for a search hit. A hit is a task, so its place is a task's,
-    whatever kind of item it comes back with. */
+    whatever kind of item it comes back with, and so is a task item's note. */
 export const shownMatch = (match: DeletedMatch): DeletedMatch => ({
   ...match,
   path: taskPlace(match.path),
+  ...(match.item_kind === 'task' ? { blocked: blockedAs(match.blocked, 'project') } : {}),
 })
 
 /** What a row says a project item holds, after "project" or after its name:
@@ -201,7 +216,9 @@ export const itemName = (row: DeletedRow): string => (row.kind === 'task' ? row.
  * redacted row, which says so in its own words.
  */
 export function blockedText(blocked: BlockDetail, holder?: string): string | null {
-  const project = blocked.project?.trim() || 'its project'
+  // a project item's own name, blank when shownRow has not labelled it
+  const named = blocked.project?.trim()
+  const project = named || 'its project'
   switch (blocked.reason) {
     case 'view_only':
       return blocked.lead
@@ -210,8 +227,8 @@ export function blockedText(blocked: BlockDetail, holder?: string): string | nul
     case 'not_lead':
       // the server names no lead when none passes today's lead rule
       return blocked.lead
-        ? `${project} has its own lead, ${blocked.lead}. Ask them or an organization admin to restore it.`
-        : `${project} has no lead now. Ask an organization admin to restore it.`
+        ? `${named || 'This project'} has its own lead, ${blocked.lead}. Ask them or an organization admin to restore it.`
+        : `${named || 'This project'} has no lead now. Ask an organization admin to restore it.`
     case 'subtask_project':
       return "A subtask is in a project you can't edit. Ask an organization admin to restore it."
     case 'project_archived':

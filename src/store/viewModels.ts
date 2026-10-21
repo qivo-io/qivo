@@ -1,6 +1,7 @@
 /** Pure snapshot-to-view transformations. Store identity and caches arrive as arguments. */
 import type { FunctionReturnType } from 'convex/server'
 import type { api } from '../../convex/_generated/api'
+import { projectName } from '../../convex/lib/recordNames'
 import { reviewerOwns, taskOwnerId } from '../../convex/lib/review'
 import type { SyncStamp } from '../../convex/lib/teamSync'
 import {
@@ -11,7 +12,6 @@ import {
   tsToWeek,
 } from '../lib/dates'
 import { sampleAvatarUrl } from '../lib/demoAvatars'
-import { projectName } from '../lib/recordNames'
 import { DEFAULT_PLANNABLE_HOURS } from '../lib/workload'
 import type { Row } from './rows'
 

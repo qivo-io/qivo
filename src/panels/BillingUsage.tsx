@@ -1,7 +1,7 @@
 import { FieldHint, SettingsField, SettingsGroup, SettingsSection } from '@/components/settingsPage'
 import { billingBytes, billingDate, usageHints } from '@/lib/billingDisplay'
-import { projectName } from '@/lib/recordNames'
 import type { BillingUsage as BillingUsageData } from '../../convex/lib/billingTypes'
+import { projectName } from '../../convex/lib/recordNames'
 
 /** The period line: a paid period's dates, a UTC calendar month, or the start
  * of an interval whose end is not known yet. */

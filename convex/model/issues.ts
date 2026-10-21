@@ -82,6 +82,7 @@ import {
 import { descriptionForm, printOf, trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { countsAsSubtask, type Liveness, projectLiveness } from '../lib/liveTasks'
+import { projectName } from '../lib/recordNames'
 import { reviewStamp } from '../lib/review'
 import {
   PARENT_FULL,
@@ -215,15 +216,40 @@ export function cleanDescription(raw: string | null | undefined, current?: strin
  * parent compares as the pair a read shows: parent_id when the reader is
  * shown the parent, else has_hidden_parent. project_id is a move's. */
 
-/** Whether `parentId` is shown to the reader as a parent: a task of the
- * reader's organization in a project it can see, and in the app also active
- * in an active project (lib/workingSet.ts inWorkingSet). */
-async function parentShown(read: Read, parentId: string): Promise<boolean> {
+/** The id of the task `parentId` names exactly when it is shown to the
+ * reader as a parent: a task of the reader's organization in a project it
+ * can see, and in the app also active in an active project
+ * (lib/workingSet.ts inWorkingSet). Null otherwise. */
+async function shownParent(read: Read, parentId: string): Promise<string | null> {
   const parent = await byId(read.ctx, 'issues', parentId)
-  if (parent === null || parent.org_id !== read.me.org_id) return false
+  if (parent === null || parent.org_id !== read.me.org_id) return null
   const project = await byId(read.ctx, 'projects', parent.project_id)
-  if (project === null || !(await canSeeProject(read.ctx, read.me, project))) return false
-  return read.view === 'machine' || inWorkingSet(parent, project, true)
+  if (project === null || !(await canSeeProject(read.ctx, read.me, project))) return null
+  return read.view === 'machine' || inWorkingSet(parent, project, true) ? parent.id : null
+}
+
+/* Whether the parent `expected` names is the one `row` stores, by the rule
+ * of TASK_FIELDS.parent_id. A task's id compares in any case, and a task
+ * made before 2026-10-19 may have one that is not a lowercase uuid (idOf).
+ * Such a task is found as shown only by its id as read: sent in another
+ * case it counts as a parent the reader is not shown. */
+async function parentSeen(
+  row: Doc<'issues'>,
+  read: Read,
+  expected: Readonly<Record<string, unknown>>,
+): Promise<boolean> {
+  const stored = idForm(row.parent_id)
+  const hidden = async () =>
+    row.parent_id !== undefined && (await shownParent(read, row.parent_id)) === null
+  const seenId = idForm(expected.parent_id)
+  if (seenId === null) return expected.has_hidden_parent === true ? await hidden() : stored === null
+  const sent = String(expected.parent_id)
+  const shown =
+    (await shownParent(read, sent)) ??
+    (sent === seenId ? null : await shownParent(read, String(seenId)))
+  // a task the reader is shown matches by its own id, so two ids that
+  // differ in case only never tell of a task the reader is not shown
+  return shown !== null ? shown === row.parent_id : seenId === stored || (await hidden())
 }
 
 const hoursForm = (value: unknown): unknown =>
@@ -275,27 +301,11 @@ export const TASK_FIELDS: Fields<Doc<'issues'>> = {
     // one hidden parent to another goes unseen: telling it would tell of
     // tasks the reader cannot see. For the same reason an id the reader is
     // not shown now counts as a hidden parent, so the answer never says
-    // whether a task the reader cannot see is the parent. A stored parent is
-    // looked up by its id as stored, and a seen one as sent or lowercased,
-    // because a task made before 2026-10-19 may have an id in another case
-    // (idOf) and ids compare in any case.
-    compare: async ({ row, read, expected, next }) => {
-      const stored = idForm(row.parent_id)
-      const seenId = idForm(expected.parent_id)
-      const sent = String(expected.parent_id)
-      const hidden = async () =>
-        row.parent_id !== undefined && !(await parentShown(read, row.parent_id))
-      const seenShown = async () =>
-        (await parentShown(read, sent)) ||
-        (sent !== seenId && (await parentShown(read, String(seenId))))
-      const seen =
-        seenId !== null
-          ? seenId === stored || (!(await seenShown()) && (await hidden()))
-          : expected.has_hidden_parent === true
-            ? await hidden()
-            : stored === null
-      return { seen, next: idForm(next.parent_id) === stored }
-    },
+    // whether a task the reader cannot see is the parent (parentSeen).
+    compare: async ({ row, read, expected, next }) => ({
+      seen: await parentSeen(row, read, expected),
+      next: idForm(next.parent_id) === idForm(row.parent_id),
+    }),
   },
   has_hidden_parent: { sends: 'parent', type: BOOLEAN, form: exact, pair: 'parent_id' },
   project_id: { sends: 'project', type: idOf('project', false), form: idForm },
@@ -2216,8 +2226,9 @@ export async function moveIssueCore(
     }
   }
   // lib/activityVisibility.ts isUnrecordedProjectMove recognizes older rows by
-  // this wording
-  const moved = `to the ${target.name} sub-project${source ? ` (from ${source.name})` : ''}${
+  // this wording; a sub-project saved with a blank name reads as its label
+  const to = target.name.trim() ? `${target.name} sub-project` : projectName(target)
+  const moved = `to the ${to}${source ? ` (from ${projectName(source)})` : ''}${
     carried.length > 0 ? ' with its subtasks' : ''
   }`
   const event = {
