@@ -42,7 +42,8 @@ try {
   page.on('console', (message) => {
     if (message.type() === 'error') errors.push(message.text())
   })
-  await page.goto(`${server.origin}/?tasks=${tasks}&latency=0`)
+  // a fast network: this checks the Board, not how long results take
+  await page.goto(`${server.origin}/?tasks=${tasks}&latency=0&mbps=10000`)
   await page.locator('[data-view-switch]').waitFor()
   await page
     .locator('[data-view-switch]')
@@ -55,12 +56,11 @@ try {
     null,
     slow,
   )
-  // every task but the parents, whose subtasks are their cards
+  // every task but the parents, whose subtasks are their cards, as the
+  // stand-in server counts them
   assert.equal(
     await page.locator('[data-card]').count(),
-    await page.evaluate(
-      () => window.PLANNER.issues.filter((it) => !window.PLANNER.isGroup(it)).length,
-    ),
+    await page.evaluate(() => window.__perf.cards),
     'The Board must show every task',
   )
   log(`opened with ${tasks} tasks`)

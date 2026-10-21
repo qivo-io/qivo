@@ -21,8 +21,8 @@ const server = new Worker(new URL('./server.mjs', import.meta.url), {
   name: parameters.toString(),
 })
 let next = 0
-/* The listeners of the subscriptions, and the calls waiting for an answer,
-   by id. */
+/* The listeners of the subscriptions, each with its error callback, and
+   the calls waiting for an answer, by id. */
 const receivers = new Map()
 const calls = new Map()
 
@@ -38,14 +38,23 @@ function call(message) {
 server.onmessage = ({ data }) => {
   window.__perf.writes = data.writes
   window.__perf.heldCount = data.held
-  if (data.type === 'result') {
+  window.__perf.made = data.made
+  window.__perf.cards = data.cards
+  if (data.type === 'result' && data.error) {
+    // a read the server could not answer, as Convex reports a failed query
+    const failure = new Error(data.error)
+    const receiver = receivers.get(data.to)
+    if (receiver) receiver.fail?.(failure)
+    else calls.get(data.to)?.reject(failure)
+    calls.delete(data.to)
+  } else if (data.type === 'result') {
     window.__perf.wireBytes += data.bytes
     window.__perf.deliveries++
     const start = performance.now()
     const value = jsonToConvex(JSON.parse(data.text))
     window.__perf.decodeMs += performance.now() - start
-    const receive = receivers.get(data.to)
-    if (receive) receive(value)
+    const receiver = receivers.get(data.to)
+    if (receiver) receiver.receive(value)
     else calls.get(data.to)?.resolve(value)
     calls.delete(data.to)
   } else if (data.type === 'answer') {
@@ -61,9 +70,9 @@ export const convex = {
   query(ref, args) {
     return call({ type: 'query', name: getFunctionName(ref), args })
   },
-  onUpdate(ref, args, receive) {
+  onUpdate(ref, args, receive, fail) {
     const id = `s${next++}`
-    receivers.set(id, receive)
+    receivers.set(id, { receive, fail })
     server.postMessage({ type: 'subscribe', id, name: getFunctionName(ref), args })
     return () => {
       receivers.delete(id)
@@ -102,6 +111,10 @@ window.__perf = {
   deliveries: 0,
   decodeMs: 0,
   count: Number(parameters.get('tasks') || 100),
+  // the visible tasks the server holds, and how many of them the Board
+  // shows as cards (all but the parents)
+  made: 0,
+  cards: 0,
   /* Holds every write from now until release(). */
   hold() {
     server.postMessage({ type: 'hold' })

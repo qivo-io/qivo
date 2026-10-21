@@ -69,7 +69,7 @@ const org = '00000000-0000-4000-8000-000000000001'
 const id = (kind, n) => `${kind.padStart(8, '0')}-0000-4000-8000-${String(n).padStart(12, '0')}`
 const storageId = (n) => `kg2${String(n).padStart(29, '0')}`
 const WORDS =
-  'the firmware build signs every image before the bootloader checks it against the key in fuse memory so a field update can never run code nobody approved and the test rig repeats this on each board revision'.split(
+  'the firmware build signs every image before the bootloader checks it against the key in fuse memory so a field update can never run code nobody approved and the test rig repeats this on each board revision during the prüfstand översikt naïve'.split(
     ' ',
   )
 /** Markdown prose of about `length` characters. */
@@ -83,7 +83,8 @@ const profiles = Array.from({ length: peopleCount }, (_, n) => ({
   org_id: org,
   auth_user_id: n ? `account-${n}` : 'perf-account',
   email: `planner${n + 1}@testbed.example`,
-  name: `Planner ${n + 1}`,
+  // some names in letters past ASCII, as real people's are
+  name: `${['Planner', 'Åsa', 'Jörg', 'Zoë'][n % 4]} ${n + 1}`,
   initials: `P${n + 1}`,
   color: '#335577',
   // staff, so hidden projects show as anonymized load like a real member's
@@ -291,10 +292,12 @@ const issueLabels = tasks.flatMap((row, n) =>
     label_id: labels[(n + k * 5) % labels.length].id,
   })),
 )
-const every = (share) => (share > 0 ? Math.max(1, Math.round(1 / share)) : 0)
+/** Whether task `n` is among a `share` of the tasks, spread evenly. Each
+    relation takes another `offset`, so they fall on different tasks. */
+const picked = (n, share, offset) =>
+  share > 0 && Math.floor((n + offset + 1) * share) > Math.floor((n + offset) * share)
 const links = tasks.flatMap((row, n) => {
-  const step = every(linkShare)
-  if (!step || n % step !== 1 % step || n + 3 >= count) return []
+  if (!picked(n, linkShare, 1) || n + 3 >= count) return []
   const target = tasks[n + 3].id
   return [
     {
@@ -308,8 +311,7 @@ const links = tasks.flatMap((row, n) => {
   ]
 })
 const attachments = tasks.flatMap((row, n) => {
-  const step = every(attachmentShare)
-  if (!step || n % step !== 2 % step) return []
+  if (!picked(n, attachmentShare, 2)) return []
   return [
     {
       id: id('b', n),
@@ -325,10 +327,7 @@ const attachments = tasks.flatMap((row, n) => {
   ]
 })
 const issueSubs = tasks.flatMap((row, n) => {
-  const step = every(followShare)
-  return step && n % step === 3 % step
-    ? [{ issue_id: row.id, profile_id: me.id, created_at: now }]
-    : []
+  return picked(n, followShare, 3) ? [{ issue_id: row.id, profile_id: me.id, created_at: now }] : []
 })
 const snapshot = {
   auth_user_id: 'perf-account',
@@ -369,6 +368,9 @@ const snapshot = {
   readTruncated: false,
   delivered_at: now,
 }
+/* How many cards the Board shows: every visible task but the parents,
+   whose subtasks are their cards. settleTasks keeps it. */
+let cards = 0
 /* Rebuilds the derived lists after a write: the task rows in creation
    order and the load rows. A write replaces the row objects it changes, so
    the rows it did not touch keep their cached JSON. */
@@ -376,6 +378,7 @@ function settleTasks() {
   parents = parentsOf()
   snapshot.issues = [...wireRows.values()]
   snapshot.orgLoad = [...loadRows.values()].filter((row) => row !== null)
+  cards = tasks.filter((row) => !parents.has(row.id)).length
 }
 settleTasks()
 
@@ -454,15 +457,23 @@ let lastDelivery = Promise.resolve()
     subscription or a query call), and resolves once it is sent. */
 function deliver(to, result) {
   const sent = lastDelivery.then(async () => {
-    const { text, bytes } = encode(result())
-    await transfer(bytes)
-    post({ type: 'result', to, text, bytes })
+    let encoded
+    try {
+      encoded = encode(result())
+    } catch (error) {
+      // a read the server cannot answer fails only its own caller
+      post({ type: 'result', to, error: String(error?.message ?? error) })
+      return
+    }
+    await transfer(encoded.bytes)
+    post({ type: 'result', to, ...encoded })
   })
   lastDelivery = sent
   return sent
 }
 /** Posts `message` to the page with the counters it mirrors. */
-const post = (message) => self.postMessage({ ...message, writes, held: held.length })
+const post = (message) =>
+  self.postMessage({ ...message, writes, held: held.length, made: tasks.length, cards })
 let writes = 0
 const listeners = new Map()
 const delay = () => new Promise((resolve) => setTimeout(resolve, latency))
@@ -701,6 +712,40 @@ const scenarios = {
   },
 }
 
+/* The answer of the write before, which the next one waits for. */
+let lastAnswer = Promise.resolve()
+
+/** Runs write `data` and answers it once `turn`, the answer of the write
+    before it, is sent. */
+async function write(data, turn) {
+  if (holding && data.name !== 'identity:claimMySeats' && data.name !== 'prefs:save') {
+    const refused = await new Promise((resolve) => {
+      held.push(resolve)
+      post({ type: 'state' })
+    })
+    if (refused) {
+      await turn
+      post({
+        type: 'answer',
+        id: data.id,
+        error: { code: 'forbidden', message: 'no write access' },
+      })
+      return
+    }
+  }
+  try {
+    const value = await mutate(data.name, data.args)
+    // as Convex answers a write only once the results before it are in,
+    // a write that changed nothing waits for the ones still on their way
+    await turn
+    await lastDelivery
+    post({ type: 'answer', id: data.id, value })
+  } catch (error) {
+    await turn
+    post({ type: 'answer', id: data.id, failure: String(error?.message ?? error) })
+  }
+}
+
 self.onmessage = async ({ data }) => {
   switch (data.type) {
     case 'subscribe': {
@@ -736,32 +781,27 @@ self.onmessage = async ({ data }) => {
       await deliver(data.id, () => read(data.name, data.args))
       return
     case 'mutation': {
-      await delay()
-      if (holding && data.name !== 'identity:claimMySeats' && data.name !== 'prefs:save') {
-        const refused = await new Promise((resolve) => {
-          held.push(resolve)
-          post({ type: 'state' })
-        })
-        if (refused) {
-          post({
-            type: 'answer',
-            id: data.id,
-            error: { code: 'forbidden', message: 'no write access' },
-          })
-          return
-        }
-      }
+      // writes are answered in the order they came, as Convex answers them
+      const turn = lastAnswer
+      let answered = () => {}
+      lastAnswer = new Promise((resolve) => {
+        answered = resolve
+      })
       try {
-        const value = await mutate(data.name, data.args)
-        // as Convex answers a write only once the results before it are in,
-        // a write that changed nothing waits for the ones still on their way
-        await lastDelivery
-        post({ type: 'answer', id: data.id, value })
+        await delay()
+        await write(data, turn)
+      } finally {
+        answered()
+      }
+      return
+    }
+    case 'scenario':
+      try {
+        post({ type: 'answer', id: data.id, value: await scenarios[data.name](...data.args) })
       } catch (error) {
         post({ type: 'answer', id: data.id, failure: String(error?.message ?? error) })
       }
       return
-    }
     case 'hold':
       holding = true
       return
@@ -773,9 +813,6 @@ self.onmessage = async ({ data }) => {
       holding = false
       while (held.length) held.shift()(false)
       post({ type: 'state' })
-      return
-    case 'scenario':
-      post({ type: 'answer', id: data.id, value: await scenarios[data.name](...data.args) })
       return
   }
 }

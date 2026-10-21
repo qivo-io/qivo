@@ -246,10 +246,9 @@ async function openPage(origin, tasks, metrics, query = '') {
    that mounts whole never sets it. */
 const boardComplete = () => !document.querySelector('[data-board-mount="pending"]')
 
-/** How many cards the Board shows: every task but the parents, whose
-    subtasks are their cards. */
-const boardCards = (page) =>
-  page.evaluate(() => window.PLANNER.issues.filter((it) => !window.PLANNER.isGroup(it)).length)
+/** How many cards the Board must show, as the stand-in server counts them:
+    every task but the parents, whose subtasks are their cards. */
+const boardCards = (page) => page.evaluate(() => window.__perf.cards)
 
 /** The heap in use after a collection, in MiB, and the page's elements. */
 async function pageSize(page, cdp) {
@@ -664,7 +663,7 @@ async function runSample(origin, tasks, metrics) {
   metrics.phoneBoardFirstCardMs.push(phoneFirstCard)
   assert.equal(
     await page.locator('.mobile-task-list [data-card]').count(),
-    await page.evaluate(() => window.PLANNER.issues.length),
+    await page.evaluate(() => window.__perf.made),
     'The phone list must show every task',
   )
   await page.setViewportSize({ width: 1440, height: 1000 })
@@ -777,7 +776,7 @@ try {
   if (process.argv.includes('--serve')) {
     for (const target of targets)
       console.log(
-        `Benchmark workspace (${target.label}): ${target.origin}/?tasks=${sizes[0]}&latency=${latency}${varied ? '&shape=varied' : ''}`,
+        `Benchmark workspace (${target.label}): ${target.origin}/?tasks=${sizes[0]}&latency=${latency}&mbps=${bandwidth}${varied ? '&shape=varied' : ''}`,
       )
     // a supervised service stops with SIGTERM
     await new Promise((resolve) => {
