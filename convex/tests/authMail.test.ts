@@ -70,6 +70,9 @@ function backend(mail = true) {
   return { t, provider, post, signUp, letters, link, confirmed }
 }
 
+// convex's tsconfig declares a Response without json()
+const json = async (response: Response) => JSON.parse(await response.text())
+
 /** Status and body, the two things a caller can compare. */
 const answer = async (response: Response) => ({
   status: response.status,
@@ -143,7 +146,7 @@ describe('a person is told when their email could not be sent', () => {
     const { post, signUp, provider } = backend(false)
     const signup = await signUp('off@example.test')
     expect(signup.status).toBe(503)
-    expect(await signup.json()).toEqual({
+    expect(await json(signup)).toEqual({
       code: 'AUTH_MAIL_UNAVAILABLE',
       message:
         'Qivo cannot send email right now, so it cannot confirm a new account. Try again later.',
@@ -151,7 +154,7 @@ describe('a person is told when their email could not be sent', () => {
     for (const email of ['off@example.test', 'nobody@example.test']) {
       const reset = await post('request-password-reset', { email })
       expect(reset.status).toBe(503)
-      expect((await reset.json()).code).toBe('AUTH_MAIL_UNAVAILABLE')
+      expect((await json(reset)).code).toBe('AUTH_MAIL_UNAVAILABLE')
       expect((await post('send-verification-email', { email })).status).toBe(503)
     }
     // no account was left behind that could never be confirmed: once mail
@@ -171,7 +174,7 @@ describe('a person is told when their email could not be sent', () => {
     vi.stubEnv('LETTERMINT_API_KEY', '')
     const signin = await post('sign-in/email', { email: 'later@example.test', password: PASSWORD })
     expect(signin.status).toBe(403)
-    expect(await signin.json()).toEqual({
+    expect(await json(signin)).toEqual({
       code: 'AUTH_MAIL_UNAVAILABLE',
       message:
         'Confirm your email first. Qivo cannot send email right now, so no new link was sent. Try again later.',
@@ -204,7 +207,7 @@ describe('a person is told when their email could not be sent', () => {
     provider.mockClear()
     const signin = await post('sign-in/email', { email: 'new@example.test', password: PASSWORD })
     expect(signin.status).toBe(403)
-    expect((await signin.json()).code).toBe('EMAIL_NOT_VERIFIED')
+    expect((await json(signin)).code).toBe('EMAIL_NOT_VERIFIED')
     expect(JSON.parse(provider.mock.calls[0][1].body).subject).toBe(
       'Confirm your email address on Qivo',
     )
@@ -233,7 +236,7 @@ describe('a person is told when their email could not be sent', () => {
     provider.mockImplementation(async () => failing())
     const reset = await post('request-password-reset', { email: 'nobody@example.test' })
     expect(reset.status).toBe(503)
-    expect(await reset.json()).toEqual({
+    expect(await json(reset)).toEqual({
       code: 'AUTH_MAIL_NOT_SENT',
       message:
         'We could not confirm that the email was sent. If it does not arrive, try again in a few minutes.',
@@ -247,7 +250,7 @@ describe('a person is told when their email could not be sent', () => {
     provider.mockImplementation(async () => refused())
     const signin = await post('sign-in/email', { email: 'later@example.test', password: PASSWORD })
     expect(signin.status).toBe(403)
-    expect(await signin.json()).toEqual({
+    expect(await json(signin)).toEqual({
       code: 'AUTH_MAIL_NOT_SENT',
       message:
         'Confirm your email first. We could not send a new link, so try again in a few minutes.',
@@ -293,7 +296,7 @@ describe('a person is told when their email could not be sent', () => {
     const input = { email: 'provider-login@example.test', callbackURL: `${APP}/app` }
     const resend = await post('send-verification-email', input, cookie)
     expect(resend.status).toBe(503)
-    expect(await resend.json()).toEqual({
+    expect(await json(resend)).toEqual({
       code: 'AUTH_MAIL_NOT_SENT',
       message: 'We could not send the confirmation email. Try again in a few minutes.',
     })

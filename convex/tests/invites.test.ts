@@ -406,7 +406,7 @@ describe('invitations from the app', () => {
 })
 
 describe('whoever caused an app invitation sees whether it went out', () => {
-  const byId = (rows: { profile_id: string }[]) =>
+  const byId = <R extends { profile_id: string }>(rows: R[]) =>
     [...rows].sort((a, b) => a.profile_id.localeCompare(b.profile_id))
 
   it('shows an org admin every pending seat and a project lead only the guests they invited', async () => {

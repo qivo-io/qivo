@@ -15,7 +15,8 @@ export const address = (s: string): string | null => (s.length <= 254 && ADDR.te
 export const mailFrom = (): string | null => address((process.env.MAIL_FROM ?? '').trim())
 
 const SEND_URL = 'https://api.lettermint.co/v1/send'
-const LOOPBACK = ['localhost', '127.0.0.1', '[::1]']
+// plain http to this machine, with an optional port and path
+const LOOPBACK_URL = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?(?:\/\S*)?$/
 
 /** Lettermint's send endpoint. A local development backend may name a
  * loopback stub in LETTERMINT_SEND_URL, to try refused and failed sends
@@ -23,13 +24,7 @@ const LOOPBACK = ['localhost', '127.0.0.1', '[::1]']
  * token only ever goes to Lettermint or to this machine. */
 export function mailSendUrl(): string {
   const stub = process.env.LETTERMINT_SEND_URL
-  if (!stub || !isLocalDevelopment()) return SEND_URL
-  try {
-    const url = new URL(stub)
-    return url.protocol === 'http:' && LOOPBACK.includes(url.hostname) ? url.href : SEND_URL
-  } catch {
-    return SEND_URL
-  }
+  return stub && isLocalDevelopment() && LOOPBACK_URL.test(stub) ? stub : SEND_URL
 }
 
 /** Only an explicit local development opt-in may disclose an auth link in logs. */
