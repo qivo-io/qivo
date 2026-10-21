@@ -442,7 +442,7 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
     // server restored with it arrives before the restore's answer
     await restored(2, 3)
     expect(rowIds()).toEqual(['archived-1', 'archived-4'])
-    await act(async () => restores[0](null))
+    await act(async () => restores[0]({ issue: active(2), left_parent: false }))
     await settle()
     expect(rowIds()).toEqual(['archived-1', 'archived-4'])
     expect(window.showToast).toHaveBeenCalledWith('Restored QN-2')
@@ -462,7 +462,7 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
     await last().answer([task(7, 3)], '1~6~k2~y', 1000)
     await click(find('[data-archive-row="archived-7"] [data-restore]'))
     await restored(7)
-    await act(async () => restores[0](null))
+    await act(async () => restores[0]({ issue: active(7), left_parent: false }))
     await settle()
     expect(rowIds()).toEqual([])
     expect(has('[data-archive-count]')).toBe(false)

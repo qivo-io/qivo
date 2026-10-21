@@ -18,6 +18,7 @@ import type { FunctionArgs, WithoutSystemFields } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { SUBTASK_MAX } from '../lib/taskLimits'
 import {
   BEFORE_NOT_A_CHANGE,
   HISTORY_HIDDEN,
@@ -522,22 +523,39 @@ describe('per-subject history, kept whole and read a page at a time', () => {
     }
   })
 
-  it('a Deleted items delete of a task with 200 subtasks stays within limits', async () => {
+  it('a Deleted items delete of a task with 100 subtasks and 100 archived ones stays within limits', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const subtasks: string[] = []
-    for (let i = 0; i < 200; i++)
+    for (let i = 0; i < SUBTASK_MAX; i++)
       subtasks.push(
         (await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: root.id })).id,
+      )
+    // archived subtasks have no bound, and leave the deleted task in background steps
+    const archived: string[] = []
+    for (let i = 0; i < 100; i++)
+      archived.push(
+        (
+          await plantIssue(t, {
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            parent_id: root.id,
+            archived_at: NOW,
+          })
+        ).id,
       )
     await as(t, f.admin).mutation(api.issues.deleteDeep, {
       org_id: f.org.id,
       id: root.id,
       subtask_ids: subtasks,
     })
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
     const deleted = (await activityFor(t, f.org.id)).filter((row) => row.verb === 'deleted')
-    expect(deleted).toHaveLength(201)
+    expect(deleted).toHaveLength(SUBTASK_MAX + 1)
+    const left = await t.run((ctx) => ctx.db.query('issues').collect())
+    expect(left.map((row) => row.id).sort()).toEqual([...archived].sort())
+    expect(left.every((row) => row.parent_id === undefined)).toBe(true)
   }, 120_000)
 })
 

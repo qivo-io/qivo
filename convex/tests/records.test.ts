@@ -574,7 +574,6 @@ describe('the REST upload', () => {
       storage_id: stored,
       issue_id: issue.id,
       org_id: fx.org.id,
-      project_id: fx.sub.id,
       uploaded_by: fx.agent.id,
     })
     expect((await activityFor(fx.t, fx.org.id)).at(-1)).toMatchObject({
@@ -1102,7 +1101,6 @@ describe('the MCP upload', () => {
     expect(await attachmentRow(fx.t, attachment.id)).toMatchObject({
       storage_id: stored,
       org_id: fx.org.id,
-      project_id: fx.sub.id,
     })
     expect((await activityFor(fx.t, fx.org.id)).at(-1)).toMatchObject({
       actor_id: fx.user.id,
@@ -1268,7 +1266,6 @@ describe('attach_text_file', () => {
     const row = await attachmentRow(fx.t, attachment.id)
     expect(row).toMatchObject({
       org_id: fx.org.id,
-      project_id: fx.sub.id,
       size_bytes: bytes.length,
     })
     expect((await activityFor(fx.t, fx.org.id)).at(-1)).toMatchObject({

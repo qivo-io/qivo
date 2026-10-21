@@ -117,9 +117,8 @@ describe('a subtask is held only by people who can see every task above it', () 
     const move = (id: string, project_id: string) =>
       as(t, f.admin).mutation(api.issues.move, { org_id: f.org.id, id, project_id })
     const top = await plantIssue(t, { ...base, title: 'Top' })
-    const mid = await plantIssue(t, { ...base, parent_id: top.id })
-    const deep = await plantIssue(t, { ...base, parent_id: mid.id, reviewer_id: f.guest.id })
-    // the guest reviews a task two levels down and cannot see hiddenSub
+    const kid = await plantIssue(t, { ...base, parent_id: top.id, reviewer_id: f.guest.id })
+    // the guest reviews a subtask and cannot see hiddenSub
     const r = await expectRefusal(move(top.id, hiddenSub.id), 'rule')
     expect(r.data.message).toBe(MOVE_HOLDER_RULE)
     expect(await issueRow(t, top.id)).toEqual(top)
@@ -127,7 +126,7 @@ describe('a subtask is held only by people who can see every task above it', () 
     await move(top.id, f.sub2.id)
     expect((await issueRow(t, top.id)).project_id).toBe(f.sub2.id)
     // and so is the move once nobody below is blind to it
-    await update(t, f, deep.id, { reviewer_id: f.user.id })
+    await update(t, f, kid.id, { reviewer_id: f.user.id })
     await move(top.id, hiddenSub.id)
     expect((await issueRow(t, top.id)).project_id).toBe(hiddenSub.id)
   })

@@ -198,17 +198,12 @@ describe('durable task events', () => {
     ).toEqual([[done.id, ['done_at', 'project_id', 'review_at']]])
   })
 
-  it('a carried subtask that lands as a group loses its hand-off once, never restarted first', async () => {
+  it('a carried subtask in review restarts its hand-off in the one event of its move', async () => {
     const f = await fixture()
     await f.subscribe('task.updated')
     const org_id = f.fx.org.id
     const far = await plantProject(f.t, { org_id, type: 'project', parent_id: f.fx.hidden.id })
-    const shelf = await plantProject(f.t, {
-      org_id,
-      type: 'project',
-      parent_id: f.fx.meta.id,
-      archived_at: NOW,
-    })
+    // the events' owner sees where the task lands
     await f.t.run((ctx) =>
       ctx.db.insert('project_access', {
         project_id: f.fx.hidden.id,
@@ -216,8 +211,8 @@ describe('durable task events', () => {
         level: 'user',
       }),
     )
-    // a leaf in review whose only subtask is in an archived sub-project, so
-    // it becomes a group once the move carries that subtask out
+    // a subtask has no subtasks of its own, so it lands a leaf and takes the
+    // leaf stamps, as the task above it does
     const leaf = await plantIssue(f.t, {
       org_id,
       project_id: f.fx.sub.id,
@@ -227,7 +222,6 @@ describe('durable task events', () => {
       remaining_hours: 2,
       remaining_set_at: NOW,
     })
-    await plantIssue(f.t, { org_id, project_id: shelf.id, parent_id: leaf.id })
     await as(f.t, f.fx.admin).mutation(api.issues.move, {
       org_id,
       id: f.issue.id,
@@ -240,9 +234,15 @@ describe('durable task events', () => {
       )
       .filter((p) => p.data.task_id === leaf.id)
       .map((p) => p.data.changed_fields)
-    expect(fields).toEqual([['project_id'], ['remaining_hours', 'remaining_set_at', 'review_at']])
+    expect(fields).toEqual([['project_id', 'review_at']])
     const landed = await f.t.run((ctx) => byId(ctx, 'issues', leaf.id))
-    expect(landed && 'review_at' in landed).toBe(false)
+    expect(landed).toMatchObject({
+      project_id: far.id,
+      review_at: landed?.updated_at,
+      remaining_hours: 2,
+      remaining_set_at: NOW,
+    })
+    expect(landed?.review_at).not.toBe(NOW)
   })
 
   it('emits create, comment, delete and restore through the shared model hooks', async () => {

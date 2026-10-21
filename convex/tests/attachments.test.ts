@@ -164,13 +164,14 @@ describe('files.attach', () => {
     expect(events[events.length - 1].verb).toBe('added an image to')
   })
 
-  it("stores the task's organization and project on the row, and neither the answer nor the snapshot shows them", async () => {
+  it("stores the task's organization on the row, and neither the answer nor the snapshot shows it", async () => {
     const { t, fx, issue } = await setup()
     const sid = await storeBlob(t, 64, 'application/pdf')
     const result = await attachAs(t, fx, fx.user, issue, sid)
     if ('refused' in result) throw new Error(`unexpected refusal: ${result.refused.message}`)
     const [row] = await attachmentRows(t)
-    expect(row).toMatchObject({ org_id: fx.org.id, project_id: fx.sub.id, issue_id: issue.id })
+    expect(row).toMatchObject({ org_id: fx.org.id, issue_id: issue.id })
+    expect(row).not.toHaveProperty('project_id')
     const snap = await as(t, fx.user).query(api.snapshot.forMe, {})
     const shown = snap?.attachments.find((a) => a.id === row.id)
     expect(shown).toMatchObject({ issue_id: issue.id, name: 'spec.pdf', size_bytes: 64 })

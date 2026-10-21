@@ -3767,8 +3767,8 @@ export async function detachArchivedChildren(
 }
 
 /**
- * Moves task `root` and the chosen `subtasks` (deletion order, deepest
- * first) to Deleted items as one task item, as the app's, REST and MCP
+ * Moves task `root` and the chosen `subtasks`, its direct subtasks,
+ * to Deleted items as one task item, as the app's, REST and MCP
  * deletes do. The callers check access and the subtask choice; each task's
  * Edit check is repeated here as defense in depth (model/issues.ts
  * assertCanEdit). In this transaction, for each task: its messages are

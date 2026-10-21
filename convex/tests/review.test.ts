@@ -453,28 +453,24 @@ describe('the status stamp (status_at)', () => {
     const kept = await move(t, f, same.id, f.sub.id)
     expect(kept.status_at).toBe(same.status_at)
 
-    // to another top-level project, carrying subtasks at two depths
+    // to another top-level project, carrying its subtasks
     const far = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.hidden.id })
     const top = await stamped(t, f)
     const child = await stamped(t, f)
-    const grandchild = await stamped(t, f)
-    // a deeper tree than new writes allow, as legacy data may hold
-    const [childRow, grandchildRow] = [
-      await issueRow(t, child.id),
-      await issueRow(t, grandchild.id),
-    ]
+    const sibling = await stamped(t, f)
+    const [childRow, siblingRow] = [await issueRow(t, child.id), await issueRow(t, sibling.id)]
     await t.run(async (ctx) => {
       await ctx.db.patch(childRow._id, { parent_id: top.id })
-      await ctx.db.patch(grandchildRow._id, { parent_id: child.id })
+      await ctx.db.patch(siblingRow._id, { parent_id: top.id })
     })
     expect((await move(t, f, top.id, far.id)).project_id).toBe(far.id)
-    for (const id of [top.id, child.id, grandchild.id]) {
+    for (const id of [top.id, child.id, sibling.id]) {
       const row = await issueRow(t, id)
       expect(row.project_id).toBe(far.id)
       expect('status_at' in row).toBe(false)
     }
     // the next status change stamps it again
-    const again = await update(t, f, grandchild.id, { status: 'review' })
+    const again = await update(t, f, sibling.id, { status: 'review' })
     expect(again.status_at).toBe(again.updated_at)
   })
 
@@ -572,24 +568,20 @@ describe('the hand-off and Done times across a move', () => {
       status: 'done',
       done_at: NOW,
     })
-    // a deeper tree than new writes allow, as legacy data may hold
-    const grandchild = await plantIssue(t, {
+    const sibling = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
-      parent_id: child.id,
+      parent_id: top.id,
       status: 'review',
       review_at: NOW,
     })
     const moved = await move(t, f, top.id, far.id)
     expect('review_at' in moved || 'done_at' in moved).toBe(false)
-    const [childRow, grandchildRow] = [
-      await issueRow(t, child.id),
-      await issueRow(t, grandchild.id),
-    ]
+    const [childRow, siblingRow] = [await issueRow(t, child.id), await issueRow(t, sibling.id)]
     expect(childRow.project_id).toBe(far.id)
     expect(childRow.done_at).toBe(moved.updated_at)
-    expect(grandchildRow.project_id).toBe(far.id)
-    expect(grandchildRow.review_at).toBe(moved.updated_at)
+    expect(siblingRow.project_id).toBe(far.id)
+    expect(siblingRow.review_at).toBe(moved.updated_at)
   })
 
   it('a move to another sub-project keeps the remaining-hours measurement', async () => {
@@ -624,7 +616,7 @@ describe('the hand-off and Done times across a move', () => {
     }
     const top = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const child = await plantIssue(t, { ...measured, parent_id: top.id })
-    const shelved = await plantIssue(t, { ...measured, parent_id: child.id, archived_at: NOW })
+    const shelved = await plantIssue(t, { ...measured, parent_id: top.id, archived_at: NOW })
     await move(t, f, top.id, far.id)
     const [childRow, shelvedRow] = [await issueRow(t, child.id), await issueRow(t, shelved.id)]
     expect(childRow).toMatchObject({ project_id: far.id, remaining_set_at: NOW })

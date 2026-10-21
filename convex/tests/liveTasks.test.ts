@@ -907,48 +907,32 @@ describe('writes that change which subtasks count', () => {
     })
   })
 
-  it('a move reads its carried subtasks as groups or leaves by where they land', async () => {
+  it('a move reads its carried subtasks as leaves wherever they land', async () => {
     const fx = await setup()
-    // Rita edits FW and cannot see SKNK; Vic edits FW and only views SKNK
+    // Rita edits FW and cannot see SKNK
     const rita = await plantSeat(fx.t, { org_id: fx.org.id, name: 'Rita' })
-    const vic = await plantSeat(fx.t, { org_id: fx.org.id, name: 'Vic' })
-    await fx.t.run(async (ctx) => {
-      for (const [project_id, profile_id, level] of [
-        [fx.sub.id, rita.id, 'user'],
-        [fx.sub.id, vic.id, 'user'],
-        [fx.hidden.id, vic.id, 'viewer'],
-      ] as const) {
-        await ctx.db.insert('project_access', { project_id, profile_id, level })
-      }
-    })
-    const move = (id: string) =>
+    await fx.t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: fx.sub.id,
+        profile_id: rita.id,
+        level: 'user',
+      }),
+    )
+    // a subtask has no subtasks of its own, so its review is never a group's
+    // dormant one: Rita, who cannot see AWAY, blocks the move rather than
+    // losing the review
+    const root = await task(fx, { title: 'Root' })
+    const kid = await task(fx, { title: 'Kid', parent_id: root.id, reviewer_id: rita.id })
+    await expectRefusal(
       as(fx.t, fx.admin).mutation(api.issues.move, {
         org_id: fx.org.id,
-        id,
+        id: root.id,
         project_id: fx.away.id,
-      })
-    // a leaf while its only subtask is archived away, so Rita reviews it.
-    // The subtask comes along to AWAY, where the task lands a group, so her
-    // review is dormant and goes, as she cannot see AWAY.
-    const root = await task(fx, { title: 'Root' })
-    const mid = await task(fx, { title: 'Mid', parent_id: root.id, reviewer_id: rita.id })
-    await task(fx, { project_id: fx.shelf.id, parent_id: mid.id })
-    await move(root.id)
-    expect(await row(fx, mid.id)).toMatchObject({ project_id: fx.away.id })
-    expect((await row(fx, mid.id))?.reviewer_id).toBeUndefined()
-    // a subtask stored in an archived sub-project of SKNK stays there, so
-    // the task lands a leaf and Vic, who cannot edit AWAY, blocks the move
-    const closed = await plantProject(fx.t, {
-      org_id: fx.org.id,
-      type: 'project',
-      parent_id: fx.hidden.id,
-      archived_at: NOW,
-    })
-    const root2 = await task(fx, { title: 'Root 2' })
-    const mid2 = await task(fx, { title: 'Mid 2', parent_id: root2.id, reviewer_id: vic.id })
-    await task(fx, { project_id: closed.id, parent_id: mid2.id })
-    await expectRefusal(move(root2.id), 'rule', new RegExp(`^${MOVE_SUBTREE_HOLDER_RULE}$`))
-    expect(await row(fx, mid2.id)).toMatchObject({ project_id: fx.sub.id, reviewer_id: vic.id })
+      }),
+      'rule',
+      new RegExp(`^${MOVE_SUBTREE_HOLDER_RULE}$`),
+    )
+    expect(await row(fx, kid.id)).toMatchObject({ project_id: fx.sub.id, reviewer_id: rita.id })
   })
 
   it('restoring or attaching a task in an archived project leaves a parent in an active one its own hours', async () => {

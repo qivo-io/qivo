@@ -120,7 +120,7 @@ describe('archiving a task', () => {
     ])
   })
 
-  it('stores the archive reason read and reaches every task of the subtree', async () => {
+  it('stores the archive reason read and reaches every subtask', async () => {
     const t = newT()
     const f = await withOrg(t)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -129,19 +129,19 @@ describe('archiving a task', () => {
       project_id: f.sub2.id,
       parent_id: parent.id,
     })
-    const grandchild = await plantIssue(t, {
+    const sibling = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
-      parent_id: child.id,
+      parent_id: parent.id,
     })
-    for (const id of [parent.id, child.id, grandchild.id]) await subscribe(t, f.guest, id)
-    await threeChanges(t, f, grandchild.id)
+    for (const id of [parent.id, child.id, sibling.id]) await subscribe(t, f.guest, id)
+    await threeChanges(t, f, sibling.id)
     await update(t, f.user, child.id, { priority: 'high' })
     later()
 
     await archive(t, f.user, parent.id, 'Superseded')
     expect((await item(t, f.guest, parent.id)).every((m) => m.read)).toBe(true)
-    expect((await item(t, f.guest, grandchild.id)).some((m) => !m.read)).toBe(true)
+    expect((await item(t, f.guest, sibling.id)).some((m) => !m.read)).toBe(true)
 
     await runSteps(t)
 
@@ -150,7 +150,7 @@ describe('archiving a task', () => {
     expect(await item(t, f.guest, child.id)).toEqual([
       { detail: 'Priority: Medium → High', read: true },
     ])
-    expect(await item(t, f.guest, grandchild.id)).toEqual([
+    expect(await item(t, f.guest, sibling.id)).toEqual([
       { detail: 'Title: “Planted task” → “Renamed”', read: true },
     ])
     const root = await item(t, f.guest, parent.id)
