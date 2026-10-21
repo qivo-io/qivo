@@ -1662,13 +1662,15 @@ function Roadmap({
                       </Button>
                     )}
                     {winCut && (
-                      <span
-                        data-win-capped
-                        title={winSays}
-                        className="[font-size:var(--fs-xs)] [color:var(--text-3)] [white-space:nowrap]"
-                      >
-                        {winCut}
-                      </span>
+                      <HoverTooltip content={winSays}>
+                        <span
+                          tabIndex={-1}
+                          data-win-capped
+                          className="[font-size:var(--fs-xs)] [color:var(--text-3)] [white-space:nowrap]"
+                        >
+                          {winCut}
+                        </span>
+                      </HoverTooltip>
                     )}
                     <Button
                       type="button"
