@@ -213,13 +213,17 @@ function once<T>(cache: Map<string, Promise<T>>, key: string, read: () => Promis
   return known
 }
 
+/** How many teams projectLevelsOf asks about one at a time before it reads
+ * all of a person's memberships instead. Tests lower it. */
+export const TEAM_LOOKUPS = { max: 64 }
+
 /** projectLevel of `me` on the projects of one organization asked about one
- * at a time, each project, root and direct level read once, and the
- * person's teams read once for all of them. A caller that
- * needs a few hundred of an organization's thousands of projects reads only
- * those, where projectLevelsForOrg reads them all with every share of the
- * person's teams. Whether a parent shows for navigation is answered from
- * the person's grants and team shares, read once (accessRowsOf's rows), and the
+ * at a time, each project, root and direct level read once, and each team a
+ * share names checked once (isMember, teamInOrg). A caller that needs a few
+ * hundred of an organization's thousands of projects reads only those,
+ * where projectLevelsForOrg reads them all with every share of the person's
+ * teams. Whether a parent shows for navigation is answered from the
+ * person's grants and team shares, read once (accessRowsOf's rows), and the
  * parent's sub-projects, as projectLevel's walk reads two or more ranges a
  * sub-project and passes Convex's 4,096 under a large parent. A missing
  * project, a dangling parent or a cycle answers null instead of throwing,
@@ -232,40 +236,65 @@ export function projectLevelsOf(
 ) {
   const projects = new Map(read.map((p) => [p.id, Promise.resolve<Doc<'projects'> | null>(p)]))
   const project = (id: string) => once(projects, id, () => byId(ctx, 'projects', id))
-  /* the teams of its organization the person belongs to, read once, so a
-   * project shared with many teams costs two ranges, not two per team */
-  let teams: Promise<Set<string>> | undefined
-  const teamsOf = () =>
-    (teams ??= receivesTeamAccess(me)
-      ? Promise.all([
-          ctx.db
+  /* Whether the person is a member of the team with this id, each team
+   * asked once: by the team for the first TEAM_LOOKUPS teams, then from all
+   * their memberships read once, so a project shared with many teams costs
+   * at most TEAM_LOOKUPS ranges and one more however many teams it names. */
+  const member = new Map<string, Promise<boolean>>()
+  let memberships: Promise<Set<string>> | undefined
+  const isMember = (teamId: string) =>
+    once(member, teamId, async () => {
+      if (memberships === undefined && member.size <= TEAM_LOOKUPS.max)
+        return (
+          (await ctx.db
             .query('team_members')
-            .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
-            .collect(),
-          ctx.db
-            .query('teams')
-            .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
-            .collect(),
-        ]).then(([memberships, orgTeams]) => {
-          const inOrg = new Set(orgTeams.map((team) => team.id))
-          return new Set(memberships.map((m) => m.team_id).filter((id) => inOrg.has(id)))
-        })
-      : Promise.resolve(new Set<string>()))
+            .withIndex('by_team_profile', (q) => q.eq('team_id', teamId).eq('profile_id', me.id))
+            .first()) !== null
+        )
+      memberships ??= ctx.db
+        .query('team_members')
+        .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
+        .collect()
+        .then((rows) => new Set(rows.map((m) => m.team_id)))
+      return (await memberships).has(teamId)
+    })
+  /* whether the team with this id is one of the person's organization,
+   * each read once */
+  const inOrg = new Map<string, Promise<boolean>>()
+  const teamInOrg = (id: string) =>
+    once(inOrg, id, async () => {
+      const team = await ctx.db
+        .query('teams')
+        .withIndex('by_uuid', (q) => q.eq('id', id))
+        .unique()
+      return team !== null && team.org_id === me.org_id
+    })
+  /* the shares of `shares` that reach the person: through a team of their
+   * organization they are a member of, for a role that receives team
+   * access */
+  const reaching = async <S extends { team_id: string }>(shares: readonly S[]) => {
+    if (!receivesTeamAccess(me)) return []
+    const ok = await Promise.all(
+      shares.map(
+        async (share) => (await isMember(share.team_id)) && (await teamInOrg(share.team_id)),
+      ),
+    )
+    return shares.filter((_, i) => ok[i])
+  }
   const direct = new Map<string, Promise<AccessLevel | null>>()
   /* directLevel over the cached teams */
   const directOf = (p: Doc<'projects'>) =>
     once(direct, p.id, async () => {
-      const [grant, shares, mine] = await Promise.all([
+      const [grant, shares] = await Promise.all([
         grantOn(ctx, p.id, me.id),
         ctx.db
           .query('project_team_access')
           .withIndex('by_project', (q) => q.eq('project_id', p.id))
-          .collect(),
-        teamsOf(),
+          .collect()
+          .then(reaching),
       ])
       let level: AccessLevel | null = grant?.level ?? null
-      for (const share of shares)
-        if (mine.has(share.team_id)) level = higherLevel(level, share.level)
+      for (const share of shares) level = higherLevel(level, share.level)
       return level
     })
   /* rootMetaOf over the cached reads, null where it throws */
@@ -283,19 +312,27 @@ export function projectLevelsOf(
   /* the projects the person has a level of their own on */
   let ownLevels: Promise<Set<string>> | undefined
   const navigates = async (parent: Doc<'projects'>) => {
-    // accessRowsOf's rows, over the cached teams
+    // accessRowsOf's rows, each team checked once
     ownLevels ??= Promise.all([
       ctx.db
         .query('project_access')
         .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
         .collect(),
-      teamsOf().then((mine) =>
+      (receivesTeamAccess(me)
+        ? ctx.db
+            .query('team_members')
+            .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
+            .collect()
+        : Promise.resolve([])
+      ).then((mine) =>
         Promise.all(
-          [...mine].map((teamId) =>
-            ctx.db
-              .query('project_team_access')
-              .withIndex('by_team', (q) => q.eq('team_id', teamId))
-              .collect(),
+          mine.map(async ({ team_id: teamId }) =>
+            (await teamInOrg(teamId))
+              ? await ctx.db
+                  .query('project_team_access')
+                  .withIndex('by_team', (q) => q.eq('team_id', teamId))
+                  .collect()
+              : [],
           ),
         ),
       ),

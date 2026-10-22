@@ -444,8 +444,16 @@ const windowTasks = (ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow, most: numb
  * projects, or null once the reads pass PAGE.hard. A task has no bound on
  * its subtasks, so they come PAGE.kids at a time, each range after the last
  * row of the one before (by parent, then creation): one range, and two for
- * each further PAGE.kids. */
-async function liveKids(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow, access: Access) {
+ * each further PAGE.kids. The ranges after the first wait for `before`,
+ * reads that run beside the first, so that the checks of PAGE.hard count
+ * them. */
+async function liveKids(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  w: IdWindow,
+  access: Access,
+  before: Promise<unknown>,
+) {
   const kids: Doc<'issues'>[] = []
   let last: Doc<'issues'> | undefined
   for (;;) {
@@ -460,6 +468,7 @@ async function liveKids(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow, access:
     else {
       const { parent_id: parent, _creationTime: at } = last
       if (parent === undefined) break // a window's subtasks all have one
+      await before
       if (await readPast(ctx, PAGE.hard)) return null
       const same = await ctx.db
         .query('issues')
@@ -544,9 +553,8 @@ export async function readTasks(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow)
     return (await byId(ctx, 'issues', id))?.relations_marked !== true
   }
   // The window's relation rows, each kind in one range and at most
-  // PAGE.relations of them, read before its subtasks so that the subtasks'
-  // checks of PAGE.hard count them.
-  const [labels, attachments, links, follows] = await Promise.all([
+  // PAGE.relations of them, beside the first range of its subtasks.
+  const relations = Promise.all([
     atMost(
       ctx.db
         .query('issue_labels')
@@ -576,9 +584,12 @@ export async function readTasks(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow)
         ),
     ),
   ])
+  const [[labels, attachments, links, follows], kids] = await Promise.all([
+    relations,
+    liveKids(ctx, me, w, access, relations),
+  ])
   if (labels === null || attachments === null || links === null || follows === null)
     return overflow(w)
-  const kids = await liveKids(ctx, me, w, access)
   if (kids === null) return overflow(w)
   // a kid in a live project the caller cannot see
   const allKids = [...kids.values()].flat()

@@ -21,6 +21,7 @@ import {
   projectLevelsForOrg,
   projectLevelsForPeople,
   projectLevelsOf,
+  TEAM_LOOKUPS,
 } from '../lib/access'
 import { type AccessFlag, accessFlags, loadCatalogue } from '../lib/core'
 import { type CredentialAccess, ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
@@ -158,17 +159,22 @@ describe('accessFlags', () => {
         for (const org_role of ORG_ROLES) {
           for (const kind of PROFILE_KINDS) {
             for (const me of [{ ...subject, org_role, kind }, f.viewer, f.guest, f.otherAdmin]) {
-              const levels = projectLevelsOf(ctx, me)
-              for (const p of projects) {
-                for (const navigation of [true, false]) {
-                  const level = await levels.level(p.id, navigation)
-                  expect(
-                    level,
-                    `${name}: ${me.name} as ${me.org_role} ${me.kind} on ${p.key}, navigation ${navigation}`,
-                  ).toBe(await projectLevel(ctx, me, p, navigation))
-                  seen.add(String(level))
+              // teams asked one at a time, and from all memberships at once
+              for (const lookups of [64, 0]) {
+                TEAM_LOOKUPS.max = lookups
+                const levels = projectLevelsOf(ctx, me)
+                for (const p of projects) {
+                  for (const navigation of [true, false]) {
+                    const level = await levels.level(p.id, navigation)
+                    expect(
+                      level,
+                      `${name}: ${me.name} as ${me.org_role} ${me.kind} on ${p.key}, navigation ${navigation}, lookups ${lookups}`,
+                    ).toBe(await projectLevel(ctx, me, p, navigation))
+                    seen.add(String(level))
+                  }
                 }
               }
+              TEAM_LOOKUPS.max = 64
             }
           }
         }
