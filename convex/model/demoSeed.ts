@@ -553,12 +553,13 @@ export function layoutHash(text: string): string {
   return (hash >>> 0).toString(16)
 }
 
-/** A fingerprint of the public demo's steps and the dataset version. A
+/** A fingerprint of the public demo's steps and its whole dataset. A
  * receipt stores it when provisioning starts, and a later call refuses when
  * it differs: a step number from another layout would write rows twice or
- * skip them. */
+ * skip them, and a later step from an edited dataset would miss a renamed
+ * key or mix two revisions of the data. */
 export const PUBLIC_DEMO_LAYOUT = `${PUBLIC_DEMO_STEPS}:${layoutHash(
-  JSON.stringify({ version: MARKETING_DEMO_VERSION, steps: NORTHSTAR_STEPS }),
+  JSON.stringify({ version: MARKETING_DEMO_VERSION, steps: NORTHSTAR_STEPS, data: MARKETING_DEMO }),
 )}`
 
 /** How far a public demo's provisioning got: the next of PUBLIC_DEMO_STEPS

@@ -653,4 +653,23 @@ describe('public demo provisioning steps', () => {
     )
     expect(refusal.data.reason).toBe('demo_unavailable')
   })
+
+  it('gives a dataset edit without a version bump a new layout, so a demo halfway refuses', async () => {
+    const { PUBLIC_DEMO_LAYOUT } = await import('../model/demoSeed')
+    vi.resetModules()
+    vi.doMock('../internal/marketingDemoData', async (actual) => {
+      const data = await actual<typeof import('../internal/marketingDemoData')>()
+      const [first, ...rest] = data.MARKETING_DEMO.labels
+      const labels = [{ ...first, key: `${first.key}-renamed` }, ...rest]
+      return { ...data, MARKETING_DEMO: { ...data.MARKETING_DEMO, labels } }
+    })
+    try {
+      const edited = await import('../model/demoSeed')
+      expect(edited.PUBLIC_DEMO_STEPS).toBe(PUBLIC_DEMO_STEPS)
+      expect(edited.PUBLIC_DEMO_LAYOUT).not.toBe(PUBLIC_DEMO_LAYOUT)
+    } finally {
+      vi.doUnmock('../internal/marketingDemoData')
+      vi.resetModules()
+    }
+  })
 })
