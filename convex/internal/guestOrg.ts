@@ -42,7 +42,7 @@ import { refuseProduction } from '../lib/deployment'
 import type { IssueStatus } from '../lib/enums'
 import { DEFAULT_MESSAGE_RETENTION_DAYS } from '../lib/limits'
 import { DEFAULT_PLANNABLE_HOURS } from '../lib/workload'
-import { deleteOrgDeep } from '../model/cascade'
+import { deleteOrgDeep, pendingRemoval } from '../model/cascade'
 import { insertOrgRows, newOrgDefaults, newTeamDefaults } from '../model/orgs'
 import { projectDescription } from '../model/projects'
 
@@ -97,6 +97,14 @@ export const zzGuestOrg = internalMutation({
       await deleteOrgDeep(ctx, org)
       torn_down = true
     }
+    // A fixture person removed in the app keeps its id until its background
+    // cleanup ends; a new profile with that id would take over its keys,
+    // tokens and grants that still wait for it.
+    for (const id of [ZZ.staff, ZZ.guestSeat])
+      if ((await pendingRemoval(ctx, id)) !== null)
+        throw new Error(
+          'A removed ZZ fixture profile is still being cleaned up; run this again in a minute',
+        )
 
     /* ---- create. Counters land at the seeded numbering: 3 issues, 4
      * projects — the NEXT insert takes 4/5. Billing exists so "the host

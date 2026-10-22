@@ -27,6 +27,7 @@ import {
   markMessagesRead,
   markMessagesUnread,
   notifyFollowersStep,
+  notifyMentionsStep,
   ownMessages,
   readArchivedProjectMessages,
   readArchivedTaskMessages,
@@ -35,6 +36,7 @@ import {
   snoozeMessages,
   trimUnreadMessages,
   vFollowerStep,
+  vMentionStep,
   wakeSnoozedItem,
 } from './model/messages'
 
@@ -150,6 +152,17 @@ export const notifyFollowers = internalMutation({
   args: vFollowerStep,
   handler: async (ctx, a) => {
     await notifyFollowersStep(ctx, a)
+    return null
+  },
+})
+
+/* One background step of the mention notices a write left to steps,
+ * scheduled by name from the fan-outs and from itself (model/messages.ts
+ * tellMentioned). */
+export const notifyMentions = internalMutation({
+  args: vMentionStep,
+  handler: async (ctx, a) => {
+    await notifyMentionsStep(ctx, a)
     return null
   },
 })

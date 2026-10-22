@@ -15,8 +15,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Doc, TableNames } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
+import { LIMITS } from '../lib/limits'
 import { mcpResource } from '../lib/oauth'
-import { deleteOrgDeep, REMOVAL_BUDGET, REVOKE_AT_ONCE, removeProfile } from '../model/cascade'
+import {
+  ACCESS_FIRST_PASS,
+  deleteOrgDeep,
+  REMOVAL_BUDGET,
+  REVOKE_AT_ONCE,
+  removeProfile,
+} from '../model/cascade'
 import { STALLED_MS } from '../profileRemovals'
 import schema from '../schema'
 import {
@@ -38,6 +45,7 @@ declare class Blob {
 
 const START = Date.parse('2026-05-04T10:00:00.000Z')
 const DEFAULT_BUDGET = { ...REMOVAL_BUDGET }
+const DEFAULT_FIRST_PASS = { ...ACCESS_FIRST_PASS }
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -45,6 +53,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   Object.assign(REMOVAL_BUDGET, DEFAULT_BUDGET)
+  Object.assign(ACCESS_FIRST_PASS, DEFAULT_FIRST_PASS)
   vi.clearAllTimers()
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -529,7 +538,7 @@ describe('background steps', () => {
       profile_id: f.user.id,
       phase: 'comments',
     })
-    expect((await jobOf(t, f.user.id))?.phase).toBe('tasks')
+    expect((await jobOf(t, f.user.id))?.phase).toBe('access')
     await t.finishAllScheduledFunctions(vi.runAllTimers)
     expect((await t.run((ctx) => ctx.db.get(late)))?.author).toBeUndefined()
     expect(await jobOf(t, f.user.id)).toBeNull()
@@ -700,6 +709,282 @@ describe('access ends in the removal transaction', () => {
   })
 })
 
+/* Rows of each access table that name `profileId`. */
+const accessRows = (t: T, profileId: string) =>
+  t.run(async (ctx) => {
+    const count = async (
+      table: 'agent_keys' | 'mcp_tokens' | 'team_members' | 'project_access' | 'user_prefs',
+    ) =>
+      (
+        await ctx.db
+          .query(table)
+          .withIndex('by_profile', (q) => q.eq('profile_id', profileId))
+          .collect()
+      ).length
+    return {
+      agent_keys: await count('agent_keys'),
+      mcp_tokens: await count('mcp_tokens'),
+      team_members: await count('team_members'),
+      project_access: await count('project_access'),
+      user_prefs: await count('user_prefs'),
+    }
+  })
+
+describe('access rows past the first pass', () => {
+  it('removes a person holding 4,500 memberships, grants and tokens within the limits', async () => {
+    // convex-test counts no range for a delete, which reads its row first,
+    // so the writes stand in for those ranges
+    const t = newT({ transactionLimits: { documentsWritten: 4096 } })
+    const f = await withOrg(t)
+    const user = f.user.id
+    for (let batch = 0; batch < 3; batch++)
+      await t.run(async (ctx) => {
+        for (let i = 0; i < 500; i++) {
+          const team = uuid()
+          await ctx.db.insert('teams', {
+            id: team,
+            org_id: f.org.id,
+            name: `Team ${batch}-${i}`,
+            track_delay_default: false,
+            created_at: NOW,
+          })
+          await ctx.db.insert('team_members', { team_id: team, profile_id: user, is_leader: false })
+          const project = uuid()
+          await ctx.db.insert('projects', {
+            id: project,
+            org_id: f.org.id,
+            type: 'project',
+            parent_id: f.meta.id,
+            key: `P${batch}X${i}`,
+            name: `Project ${batch}-${i}`,
+            description: '',
+            sort_order: i,
+            num: nextNum++,
+            track_delay: false,
+            created_at: NOW,
+          })
+          await ctx.db.insert('project_access', {
+            project_id: project,
+            profile_id: user,
+            level: 'user',
+          })
+          await ctx.db.insert('mcp_tokens', {
+            id: uuid(),
+            profile_id: user,
+            name: `Token ${batch}-${i}`,
+            token_prefix: 'qvt_1111111',
+            token_hash: uuid(),
+            access: 'write',
+            created_at: NOW,
+          })
+        }
+      })
+
+    await as(t, f.admin).mutation(api.profiles.remove, { org_id: f.org.id, id: user })
+    expect(await t.run((ctx) => ctx.db.get(f.user._id))).toBeNull()
+    // tokens go first, so the first pass leaves only some of them
+    expect(await accessRows(t, user)).toEqual({
+      agent_keys: 0,
+      mcp_tokens: 1500 - ACCESS_FIRST_PASS.rows,
+      team_members: 1501,
+      project_access: 1500,
+      user_prefs: 0,
+    })
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    expect(await accessRows(t, user)).toEqual({
+      agent_keys: 0,
+      mcp_tokens: 0,
+      team_members: 0,
+      project_access: 0,
+      user_prefs: 0,
+    })
+    expect(await jobOf(t, user)).toBeNull()
+  }, 240_000)
+
+  it('leaves rows that grant nothing and that no reader shows until the steps delete them', async () => {
+    ACCESS_FIRST_PASS.rows = 1
+    const t = newT()
+    const f = await withOrg(t)
+    const tokenHashes = ['d4'.repeat(32), 'e5'.repeat(32)]
+    const keyHashes = ['f6'.repeat(32), '17'.repeat(32)]
+    await t.run(async (ctx) => {
+      for (const [i, token_hash] of tokenHashes.entries())
+        await ctx.db.insert('mcp_tokens', {
+          id: uuid(),
+          profile_id: f.user.id,
+          name: `Personal ${i}`,
+          token_prefix: 'qvt_1111111',
+          token_hash,
+          access: 'write',
+          created_at: NOW,
+        })
+      for (const [i, key_hash] of keyHashes.entries())
+        await ctx.db.insert('agent_keys', {
+          id: uuid(),
+          profile_id: f.agent.id,
+          name: `Agent key ${i}`,
+          key_prefix: 'qva_1111111',
+          key_hash,
+          created_at: NOW,
+        })
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: f.agent.id,
+        is_leader: false,
+      })
+      for (const profile_id of [f.user.id, f.agent.id])
+        await ctx.db.insert('project_access', { project_id: f.sub.id, profile_id, level: 'user' })
+      await ctx.db.insert('user_prefs', { profile_id: f.user.id, prefs: {}, updated_at: NOW })
+    })
+    const lookups = async () => ({
+      tokens: await Promise.all(
+        tokenHashes.map((hash) =>
+          t.query(internal.machine.auth.lookupCredential, {
+            hash,
+            isAgent: false,
+            now: new Date().toISOString(),
+          }),
+        ),
+      ),
+      keys: await Promise.all(
+        keyHashes.map((hash) =>
+          t.query(internal.machine.auth.lookupCredential, {
+            hash,
+            isAgent: true,
+            now: new Date().toISOString(),
+          }),
+        ),
+      ),
+    })
+    const shown = async () => {
+      const rows = await as(t, f.admin).query(api.snapshot.forMe, {})
+      const projectUsers = await t.query(internal.machine.rest.listProjectUsers, {
+        callerId: f.admin.id,
+        access: 'read',
+        ref: f.sub.id,
+      })
+      const detail = await t.query(internal.machine.rest.getProject, {
+        callerId: f.admin.id,
+        access: 'read',
+        ref: f.sub.id,
+      })
+      return [
+        ...(rows?.teamMembers ?? []).map((m) => m.profile_id),
+        ...(rows?.access ?? []).map((g) => g.profile_id),
+        ...projectUsers.map((u) => u.id),
+        ...detail.grants.users.map((u) => u.id),
+      ]
+    }
+    // control case, everything works and shows while both profiles exist
+    expect((await lookups()).tokens.map((r) => r.ok)).toEqual([true, true])
+    expect((await lookups()).keys.map((r) => r.ok)).toEqual([true, true])
+    expect(await shown()).toEqual(expect.arrayContaining([f.user.id, f.agent.id]))
+
+    for (const profile of [f.user, f.agent])
+      await as(t, f.admin).mutation(api.profiles.remove, { org_id: f.org.id, id: profile.id })
+    expect(await stepsRun(t)).toBe(0)
+    // the first pass deleted one row of each, and the steps have not run
+    expect(await accessRows(t, f.user.id)).toEqual({
+      agent_keys: 0,
+      mcp_tokens: 1,
+      team_members: 1,
+      project_access: 1,
+      user_prefs: 1,
+    })
+    expect(await accessRows(t, f.agent.id)).toMatchObject({
+      agent_keys: 1,
+      team_members: 1,
+      project_access: 1,
+    })
+    expect(await lookups()).toEqual({
+      tokens: [
+        { ok: false, why: 'unknown', isAgent: false },
+        { ok: false, why: 'wrong_kind', isAgent: false },
+      ],
+      keys: [
+        { ok: false, why: 'unknown', isAgent: true },
+        { ok: false, why: 'wrong_kind', isAgent: true },
+      ],
+    })
+    const after = await shown()
+    expect(after).not.toContain(f.user.id)
+    expect(after).not.toContain(f.agent.id)
+    // a leader change for a membership that waits for its step changes nothing
+    await as(t, f.admin).mutation(api.teams.setLeader, {
+      org_id: f.org.id,
+      team_id: f.team.id,
+      profile_id: f.agent.id,
+      is_leader: true,
+    })
+    const left = await t.run((ctx) =>
+      ctx.db
+        .query('team_members')
+        .withIndex('by_team_profile', (q) =>
+          q.eq('team_id', f.team.id).eq('profile_id', f.agent.id),
+        )
+        .unique(),
+    )
+    expect(left?.is_leader).toBe(false)
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    for (const profile of [f.user, f.agent])
+      expect(await accessRows(t, profile.id)).toEqual({
+        agent_keys: 0,
+        mcp_tokens: 0,
+        team_members: 0,
+        project_access: 0,
+        user_prefs: 0,
+      })
+  })
+
+  it(`refuses to remove someone who leads more than ${LIMITS.removalLeads.max} projects`, async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the fixture's user leads two projects already
+    const more = (n: number) =>
+      t.run(async (ctx) => {
+        for (let i = 0; i < n; i++)
+          await ctx.db.insert('projects', {
+            id: uuid(),
+            org_id: f.org.id,
+            type: 'meta',
+            key: `L${nextNum}`,
+            name: `Led ${nextNum}`,
+            description: '',
+            sort_order: i,
+            num: nextNum++,
+            track_delay: false,
+            lead_id: f.user.id,
+            created_at: NOW,
+          })
+      })
+    await more(LIMITS.removalLeads.max - 1)
+    await expectRefusal(
+      as(t, f.admin).mutation(api.profiles.remove, { org_id: f.org.id, id: f.user.id }),
+      'rule',
+      new RegExp(`^${LIMITS.removalLeads.refusal.replace(/[.,]/g, '\\$&')}$`),
+    )
+    expect(await t.run((ctx) => ctx.db.get(f.user._id))).not.toBeNull()
+    expect(await jobOf(t, f.user.id)).toBeNull()
+    // at the cap the removal clears every lead
+    await t.run(async (ctx) => {
+      const one = await ctx.db
+        .query('projects')
+        .withIndex('by_lead', (q) => q.eq('lead_id', f.user.id))
+        .first()
+      if (one !== null) await ctx.db.patch(one._id, { lead_id: undefined })
+    })
+    await as(t, f.admin).mutation(api.profiles.remove, { org_id: f.org.id, id: f.user.id })
+    const led = await t.run((ctx) =>
+      ctx.db
+        .query('projects')
+        .withIndex('by_lead', (q) => q.eq('lead_id', f.user.id))
+        .first(),
+    )
+    expect(led).toBeNull()
+  }, 120_000)
+})
+
 describe('the reserved id and its end states', () => {
   it('profiles.create refuses an id with a pending removal until the cleanup ends', async () => {
     const t = newT()
@@ -740,7 +1025,7 @@ describe('the reserved id and its end states', () => {
       'Profile removal stopped because a live profile has its id',
       {
         profile_id: f.user.id,
-        phase: 'tasks',
+        phase: 'access',
       },
     )
     expect(await jobOf(t, f.user.id)).toBeNull()

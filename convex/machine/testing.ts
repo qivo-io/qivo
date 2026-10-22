@@ -39,6 +39,8 @@ import { byId, insertUnique } from '../lib/db'
 import { refuseProduction } from '../lib/deployment'
 import { vCredentialAccess } from '../lib/enums'
 import { badRequest, notFound } from '../lib/functions'
+import { limitedText } from '../lib/limitRules'
+import { LIMITS } from '../lib/limits'
 import { newUuid } from '../model/orgs'
 
 const HASH_RE = /^[0-9a-f]{64}$/
@@ -87,6 +89,9 @@ export const mintCredential = internalMutation({
       throw badRequest("an agent key takes no access or expiry because the agent's role decides")
     }
     const expiry = a.expires_at === undefined ? undefined : cleanTokenExpiry(a.expires_at)
+    // capped as tokens.ts caps every other key and token name, so a removal
+    // can read a profile's credentials a page at a time (model/cascade.ts)
+    const name = limitedText(a.kind === 'agent_key' ? LIMITS.keyName : LIMITS.tokenName, a.name)
     const email = a.email?.toLowerCase()
     let profile: Doc<'profiles'> | null = null
     if (a.profile_id !== undefined) {
@@ -139,7 +144,7 @@ export const mintCredential = internalMutation({
         {
           id,
           profile_id: profile.id,
-          name: a.name,
+          name,
           key_prefix: a.key_prefix,
           key_hash: PENDING + a.key_hash,
           created_at: now,
@@ -155,7 +160,7 @@ export const mintCredential = internalMutation({
         {
           id,
           profile_id: profile.id,
-          name: a.name,
+          name,
           token_prefix: a.key_prefix,
           token_hash: PENDING + a.key_hash,
           access: a.access,

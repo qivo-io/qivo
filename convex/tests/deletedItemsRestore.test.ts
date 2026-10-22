@@ -1582,7 +1582,7 @@ describe('restoring a project item', () => {
     let sawHiddenEdge = false
     const steps = await stepThrough(t, item.id, async () => {
       const job = await jobFor(t, item.id)
-      if (job === null || job.phase === 'restore_attach') return
+      if (job === null || job.phase === 'restore_grants' || job.phase === 'restore_attach') return
       // until the reveal the projects stay absent, even with tasks back
       await projectsAbsent()
       if ((await liveTask(t, top.id)) !== null || (await liveTask(t, tasks[0].id)) !== null)
@@ -2843,11 +2843,12 @@ describe('restore calls', () => {
     const item = await itemFor(t, root.id)
     TRASH_BUDGET.rows = 1
     await restore(t, f.user, [item.id])
-    // past the split, the subtask's project is still live; then it is deleted
+    // past the split, the subtask's project is still live; then it is
+    // deleted, its move whole in its own transaction
     expect((await jobFor(t, item.id))?.phase).toBe('restore_rows')
+    TRASH_BUDGET.rows = 300
     await deleteProject(t, f, f.sub2.id)
     const projectItem = await itemFor(t, f.sub2.id)
-    TRASH_BUDGET.rows = 300
     await stepThrough(t, item.id)
     expect(await itemById(t, item.id)).toBeNull()
     expect(await liveTask(t, root.id)).not.toBeNull()
@@ -3105,4 +3106,284 @@ describe('the storage files bill', () => {
     expect((await billed(t, org_id)).projects[f.sub2.id]).toBe(7)
     await assertNoDanglingRefs(t, 'after a split subtask and its file came back')
   })
+})
+
+/* `n` more sub-projects of `meta`, each with `rows` milestones and a User
+ * grant for each of `people`. */
+const plantSubProjects = async (
+  t: T,
+  f: OrgFixture,
+  meta: string,
+  n: number,
+  rows = 0,
+  people: string[] = [],
+) => {
+  for (let from = 0; from < n; from += 50)
+    await t.run(async (ctx) => {
+      for (let i = from; i < Math.min(n, from + 50); i++) {
+        const id = uuid()
+        await ctx.db.insert('projects', {
+          id,
+          org_id: f.org.id,
+          type: 'project',
+          parent_id: meta,
+          key: `S${meta.slice(0, 4).toUpperCase()}${i}`,
+          name: `Sub ${i}`,
+          description: '',
+          sort_order: i,
+          num: 1000 + i,
+          track_delay: false,
+          created_at: NOW,
+        })
+        for (let m = 0; m < rows; m++)
+          await ctx.db.insert('milestones', {
+            id: uuid(),
+            project_id: id,
+            name: `Milestone ${m}`,
+            week: '2026-05-04',
+            created_at: NOW,
+          })
+        for (const profile_id of people)
+          await ctx.db.insert('project_access', { project_id: id, profile_id, level: 'user' })
+      }
+    })
+}
+
+/* The live rows of `table` on the projects of `meta`'s tree. */
+const treeRows = (t: T, meta: string, table: 'milestones' | 'project_access') =>
+  t.run(async (ctx) => {
+    const ids = [
+      meta,
+      ...(
+        await ctx.db
+          .query('projects')
+          .withIndex('by_parent', (q) => q.eq('parent_id', meta))
+          .collect()
+      ).map((p) => p.id),
+    ]
+    let n = 0
+    for (const id of ids)
+      n += (
+        await ctx.db
+          .query(table)
+          .withIndex('by_project', (q) => q.eq('project_id', id))
+          .collect()
+      ).length
+    return { projects: ids.length, rows: n }
+  })
+
+describe('a project item at the sub-project cap', () => {
+  it(`refuses to delete a project with more than ${LIMITS.projectDeleteSubProjects.max} sub-projects`, async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the fixture's project has two sub-projects
+    await plantSubProjects(t, f, f.meta.id, LIMITS.projectDeleteSubProjects.max - 1)
+    await expectRefusal(
+      deleteProject(t, f, f.meta.id),
+      'rule',
+      new RegExp(`^${LIMITS.projectDeleteSubProjects.refusal.replace(/[.,]/g, '\\$&')}$`),
+    )
+    expect(await liveProject(t, f.meta.id)).not.toBeNull()
+    // one sub-project fewer, and the project goes
+    await deleteProject(t, f, f.sub2.id)
+    await deleteProject(t, f, f.meta.id)
+    expect(await liveProject(t, f.meta.id)).toBeNull()
+  }, 120_000)
+
+  it('deletes and restores the project with 2,000 milestones and grants within the limits', async () => {
+    // convex-test counts no range for a write, which reads its row first,
+    // so the writes stand in for those ranges
+    const t = newT({ transactionLimits: { documentsWritten: 4096 } })
+    const f = await withOrg(t)
+    const people = await plantPeople(t, f, 5)
+    await plantSubProjects(t, f, f.meta.id, LIMITS.projectDeleteSubProjects.max - 2, 5, people)
+    const milestones = await treeRows(t, f.meta.id, 'milestones')
+    const grants = await treeRows(t, f.meta.id, 'project_access')
+    expect(milestones).toEqual({ projects: LIMITS.projectDeleteSubProjects.max + 1, rows: 990 })
+    expect(grants.rows).toBe(990 + 5 + 2)
+
+    // storing every project, milestone and grant at once passed the limit
+    await deleteProject(t, f, f.meta.id)
+    expect(await liveProject(t, f.meta.id)).toBeNull()
+    await runSteps(t)
+    const item = await itemFor(t, f.meta.id)
+    expect(item.state).toBe('ready')
+    expect(await treeRows(t, f.meta.id, 'milestones')).toEqual({ projects: 1, rows: 0 })
+
+    // and so did writing them all back in the reveal
+    expect(await restore(t, f.user, [item.id])).toMatchObject({ restored: [item.id] })
+    await runSteps(t)
+    expect(await itemById(t, item.id)).toBeNull()
+    expect(await treeRows(t, f.meta.id, 'milestones')).toEqual(milestones)
+    expect(await treeRows(t, f.meta.id, 'project_access')).toEqual(grants)
+  }, 240_000)
+
+  it('restores many sub-project items for a lead whose other grants it does not read', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // grants of the lead's elsewhere, which say nothing about these items
+    for (let from = 0; from < 4000; from += 1000)
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 1000; i++)
+          await ctx.db.insert('project_access', {
+            project_id: uuid(),
+            profile_id: f.user.id,
+            level: 'user',
+          })
+      })
+    const subs: string[] = []
+    for (let i = 0; i < 10; i++) {
+      const sub = await plantProject(t, {
+        org_id: f.org.id,
+        type: 'project',
+        parent_id: f.meta.id,
+        key: `RST${i}`,
+      })
+      await deleteProject(t, f, sub.id)
+      subs.push(sub.id)
+    }
+    await runSteps(t)
+    const items = await Promise.all(subs.map((id) => itemFor(t, id)))
+    const ids = items.map((item) => item.id)
+    const result = await as(t, f.user).mutation(api.deletedItems.restore, {
+      org_id: f.org.id,
+      ids,
+    })
+    expect(result.restored.sort()).toEqual([...ids].sort())
+    await runSteps(t)
+    for (const id of subs) expect(await liveProject(t, id)).not.toBeNull()
+  }, 120_000)
+
+  it('restores a tree whose grants pass what one transaction may read', async () => {
+    // 30 sub-projects shared with 120 people each: 3,600 grants against a
+    // limit of 3,000 documents read, standing in for 200 x 200 against 32,000
+    const t = newT({ transactionLimits: { documentsRead: 3000 } })
+    const f = await withOrg(t)
+    const people = await plantPeople(t, f, 120)
+    await plantSubProjects(t, f, f.meta.id, 28)
+    // counted a project at a time, since all of them pass the read limit
+    const grantCount = async () => {
+      const ids = await t.run(async (ctx) => [
+        f.meta.id,
+        ...(
+          await ctx.db
+            .query('projects')
+            .withIndex('by_parent', (q) => q.eq('parent_id', f.meta.id))
+            .collect()
+        ).map((p) => p.id),
+      ])
+      let n = 0
+      for (const id of ids)
+        n += await t.run(
+          async (ctx) =>
+            (
+              await ctx.db
+                .query('project_access')
+                .withIndex('by_project', (q) => q.eq('project_id', id))
+                .collect()
+            ).length,
+        )
+      return { projects: ids.length, rows: n }
+    }
+    const subs = await t.run(async (ctx) =>
+      ctx.db
+        .query('projects')
+        .withIndex('by_parent', (q) => q.eq('parent_id', f.meta.id))
+        .collect(),
+    )
+    expect(subs).toHaveLength(30)
+    for (const p of subs)
+      await t.run(async (ctx) => {
+        for (const profile_id of people)
+          await ctx.db.insert('project_access', { project_id: p.id, profile_id, level: 'user' })
+      })
+    const grants = await grantCount()
+    expect(grants.rows).toBeGreaterThan(3000)
+
+    await deleteProject(t, f, f.meta.id)
+    await runSteps(t)
+    const item = await itemFor(t, f.meta.id)
+    expect(item.state).toBe('ready')
+    // its lead lists it and restores it, reading only their own grants
+    const listed = await as(t, f.user).query(api.deletedItems.list, {})
+    expect(JSON.stringify(listed)).toContain(item.id)
+    expect(await restore(t, f.user, [item.id])).toMatchObject({ restored: [item.id] })
+    await runSteps(t)
+    expect(await itemById(t, item.id)).toBeNull()
+    expect(await grantCount()).toEqual(grants)
+  }, 240_000)
+
+  it('keeps an assignee whose grant was stored before grantees, once the backfill ran', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const [worker] = await plantPeople(t, f, 1)
+    const task = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      assignee_id: worker,
+    })
+    await t.run((ctx) =>
+      ctx.db.insert('project_team_access', {
+        project_id: f.sub.id,
+        team_id: f.team.id,
+        level: 'user',
+      }),
+    )
+    await deleteProject(t, f, f.meta.id)
+    await runSteps(t)
+    const item = await itemFor(t, f.meta.id)
+    // stored rows as a release before grantees left them
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query('deleted_rows').collect())
+        if (row.grantee !== undefined) await ctx.db.patch(row._id, { grantee: undefined })
+    })
+    const backfill = (dry_run: boolean) =>
+      t.action(internal.internal.storedGrantees.backfill, { dry_run, page_size: 2 })
+    // the grants of the worker, the guest and the viewer on Testbed platform,
+    // and the team's share on Firmware
+    expect(await backfill(true)).toEqual({
+      project_access: { missing: 3, set: 0 },
+      project_team_access: { missing: 1, set: 0 },
+    })
+    expect(await backfill(false)).toEqual({
+      project_access: { missing: 3, set: 3 },
+      project_team_access: { missing: 1, set: 1 },
+    })
+    expect((await backfill(true)).project_access.missing).toBe(0)
+    expect(await restore(t, f.user, [item.id])).toMatchObject({ restored: [item.id] })
+    await runSteps(t)
+    expect((await liveTask(t, task.id))?.assignee_id).toBe(worker)
+  })
+
+  it('restores many project items without tasks, each reveal within the limits', async () => {
+    const t = newT({ transactionLimits: { documentsWritten: 1000 } })
+    const f = await withOrg(t)
+    const metas: string[] = []
+    for (let i = 0; i < 3; i++) {
+      const meta = await plantProject(t, {
+        org_id: f.org.id,
+        key: `BIG${i}`,
+        name: `Big ${i}`,
+        lead_id: f.user.id,
+      })
+      await plantSubProjects(t, f, meta.id, LIMITS.projectDeleteSubProjects.max - 1)
+      await deleteProject(t, f, meta.id)
+      metas.push(meta.id)
+    }
+    await runSteps(t)
+    const items = await Promise.all(metas.map((id) => itemFor(t, id)))
+
+    // every reveal in one restore wrote 600 projects and deleted their rows
+    const result = await restore(
+      t,
+      f.user,
+      items.map((item) => item.id),
+    )
+    expect(result.restored.sort()).toEqual(items.map((item) => item.id).sort())
+    await runSteps(t)
+    for (const meta of metas)
+      expect((await treeRows(t, meta, 'milestones')).projects).toBe(
+        LIMITS.projectDeleteSubProjects.max,
+      )
+  }, 240_000)
 })

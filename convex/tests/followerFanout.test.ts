@@ -4,7 +4,7 @@
  * before the follower cap stays inside Convex's limits, and every follower
  * reads the same line either way. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api } from '../_generated/api'
+import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { FOLLOWER_FANOUT, postMessage } from '../model/messages'
 import {
@@ -157,6 +157,120 @@ describe('a step whose followers hold many snoozed rows', () => {
     expect(detached.map((m) => m.recipient_id).sort()).toEqual([...followers].sort())
     expect(rows.filter((m) => m.snoozed_until !== undefined)).toEqual([])
   }, 120_000)
+})
+
+/* 50 snoozed rows about `task` in the item of each of `followers`, each a
+ * write to wake. */
+const plantSnoozed = async (t: T, f: OrgFixture, task: Doc<'issues'>, followers: string[]) => {
+  for (let from = 0; from < followers.length; from += 40)
+    await t.run(async (ctx) => {
+      for (const recipient_id of followers.slice(from, from + 40))
+        for (let i = 0; i < 50; i++)
+          await ctx.db.insert('messages', {
+            id: uuid(),
+            org_id: f.org.id,
+            recipient_id,
+            issue_id: task.id,
+            issue_title: task.title,
+            kind: 'change',
+            detail: `Status update ${i + 1}`,
+            created_at: NOW,
+            snoozed_until: '2026-12-01T09:00:00.000Z',
+          })
+    })
+}
+
+describe('a comment whose followers hold many snoozed rows', () => {
+  it('stops on its room and tells the rest in steps, within the limits', async () => {
+    // convex-test counts no range for a write, which reads its row first,
+    // so the writes stand in for those ranges
+    const t = newT({ transactionLimits: { documentsWritten: 4096 } })
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const followers = await plantFollowers(t, f, task, 100)
+    await plantSnoozed(t, f, task, followers)
+
+    await comment(t, f, task, 'The supplier confirmed the dates.')
+    const inline = (await told(t, task)).filter(([, detail]) => detail === 'New comment')
+    expect(inline.length).toBeGreaterThan(0)
+    expect(inline.length).toBeLessThan(followers.length)
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+
+    const rows = await t.run((ctx) =>
+      ctx.db
+        .query('messages')
+        .withIndex('by_issue_read', (q) => q.eq('issue_id', task.id))
+        .collect(),
+    )
+    const notices = rows.filter((m) => m.detail === 'New comment')
+    expect(notices.map((m) => m.recipient_id).sort()).toEqual([...followers].sort())
+    expect(rows.filter((m) => m.snoozed_until !== undefined)).toEqual([])
+  }, 120_000)
+
+  it('tells 100 mentioned people the same way, the first in the comment and the rest in steps', async () => {
+    const t = newT({ transactionLimits: { documentsWritten: 4096 } })
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // people who see the task but do not follow it yet
+    const people = await plantFollowers(t, f, task, 100)
+    await t.run(async (ctx) => {
+      for (const s of await ctx.db
+        .query('issue_subscriptions')
+        .withIndex('by_issue_profile', (q) => q.eq('issue_id', task.id))
+        .collect())
+        await ctx.db.delete(s._id)
+    })
+    await plantSnoozed(t, f, task, people)
+
+    await comment(t, f, task, people.map((id) => `@[Reviewer](user:${id})`).join(' '))
+    const mentioned = (await told(t, task)).filter(([, d]) => d === 'Mentioned you in a comment')
+    expect(mentioned.length).toBeGreaterThan(0)
+    expect(mentioned.length).toBeLessThan(people.length)
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    const all = (await told(t, task)).filter(([, d]) => d === 'Mentioned you in a comment')
+    expect(all.map(([id]) => id).sort()).toEqual([...people].sort())
+    // each follows the task now, and none heard the comment twice
+    expect((await told(t, task)).filter(([, d]) => d === 'New comment')).toEqual([])
+  }, 120_000)
+})
+
+describe('notices a step posts after their author was removed', () => {
+  it('do not name the removed author', async () => {
+    Object.assign(FOLLOWER_FANOUT, { inline: 1, step: 2, inlineRoom: 0 })
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const followers = await plantFollowers(t, f, task, 4)
+    // the author mentions two followers; the room leaves both mentions and
+    // all but the first follower to steps
+    await as(t, f.user).mutation(api.comments.create, {
+      org_id: f.org.id,
+      id: uuid(),
+      issue_id: task.id,
+      body: `@[A](user:${followers[0]}) @[B](user:${followers[1]}) please look`,
+    })
+    // the author is removed and the cleanup finishes before the steps run
+    await as(t, f.admin).mutation(api.profiles.remove, { org_id: f.org.id, id: f.user.id })
+    const pending = () =>
+      t.run((ctx) =>
+        ctx.db
+          .query('profile_removals')
+          .withIndex('by_profile', (q) => q.eq('profile_id', f.user.id))
+          .unique(),
+      )
+    while ((await pending()) !== null)
+      await t.mutation(internal.profileRemovals.step, { profile_id: f.user.id })
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+
+    const rows = await t.run((ctx) =>
+      ctx.db
+        .query('messages')
+        .withIndex('by_issue_read', (q) => q.eq('issue_id', task.id))
+        .collect(),
+    )
+    expect(rows.map((m) => m.recipient_id).sort()).toEqual([...followers].sort())
+    expect(rows.filter((m) => m.actor_id !== undefined)).toEqual([])
+  })
 })
 
 describe('a restore from Deleted items', () => {

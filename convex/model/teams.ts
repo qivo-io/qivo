@@ -356,7 +356,10 @@ export async function setTeamLeaderCore(
   const row = await membershipOf(ctx, team.id, a.profileId)
   if (row === null || row.is_leader === isLeader) return { changed: false }
   const member = await byId(ctx, 'profiles', a.profileId)
-  if (isLeader && member !== null && !canLeadTeams(member)) {
+  // a removed person's membership that waits for its cleanup
+  // (profileRemovals.ts) counts as none
+  if (member === null) return { changed: false }
+  if (isLeader && !canLeadTeams(member)) {
     if (member.kind === 'agent') throw rule('an agent cannot lead a team')
     throw forbidden(
       member.org_role === 'viewer'
@@ -365,22 +368,20 @@ export async function setTeamLeaderCore(
     )
   }
   await ctx.db.patch(row._id, { is_leader: isLeader })
-  if (member !== null) {
-    await logActivity(ctx, {
-      org_id: team.org_id,
-      actor_id: me.id,
-      verb: isLeader ? 'made' : 'demoted',
-      target_type: 'user',
-      target_id: member.id,
-      label: member.name,
-      detail: signedDetail(
-        `${isLeader ? 'a leader of ' : 'from leader of '}${team.name}`,
-        a.provenance,
-      ),
-      team_id: team.id,
-      ts: a.now,
-    })
-  }
+  await logActivity(ctx, {
+    org_id: team.org_id,
+    actor_id: me.id,
+    verb: isLeader ? 'made' : 'demoted',
+    target_type: 'user',
+    target_id: member.id,
+    label: member.name,
+    detail: signedDetail(
+      `${isLeader ? 'a leader of ' : 'from leader of '}${team.name}`,
+      a.provenance,
+    ),
+    team_id: team.id,
+    ts: a.now,
+  })
   return { changed: true }
 }
 

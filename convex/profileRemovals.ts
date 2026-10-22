@@ -1,7 +1,8 @@
 /* Background cleanup after a profile removal. model/cascade.ts removeProfile
  * deletes the profile and ends its access in one transaction. It also
- * clears the profile from project leads, its newest activity rows and as
- * many open tasks as one budget allows. It then inserts a profile_removals
+ * clears the profile from project leads, and deletes or clears as many of
+ * its keys, tokens, memberships, grants and preferences, its newest
+ * activity rows and its open tasks as its budgets allow. It then inserts a profile_removals
  * row and schedules `step`. Each step clears a bounded part of the
  * remaining rows that name the removed id, phase by phase
  * (REMOVAL_PHASES), and schedules the next step until nothing names the
@@ -31,8 +32,10 @@ import { internalMutation, type MutationCtx } from './_generated/server'
 import { byId, LARGE_ROWS_PER_READ } from './lib/db'
 import { REMOVAL_PHASES, type RemovalPhase } from './lib/enums'
 import {
+  accessRowsRemain,
   budgetSpent,
   clearHolder,
+  deleteAccessRows,
   heldTasks,
   pendingRemoval,
   REMOVAL_BUDGET,
@@ -129,8 +132,16 @@ const oauthEdge: Edge = {
 }
 
 /* The ranges each phase clears, in order. The SET NULLs keep their rows;
- * the inbox, subscriptions and connections are deleted. */
+ * the access rows, inbox, subscriptions and connections are deleted. */
 const PHASE_EDGES: Record<Exclude<RemovalPhase, 'finish'>, Edge[]> = {
+  // the keys, tokens, memberships, grants and preferences the removal
+  // transaction left
+  access: [
+    {
+      sweep: (ctx, profileId, budget) => deleteAccessRows(ctx, profileId, budget),
+      remains: accessRowsRemain,
+    },
+  ],
   // open tasks the removal transaction left, archived tasks, and any task
   // restored before this step reached it
   tasks: TASK_HOLDERS.map((holder) =>

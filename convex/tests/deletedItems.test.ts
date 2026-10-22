@@ -880,13 +880,12 @@ describe('moving a project to Deleted items', () => {
     Object.assign(TRASH_BUDGET, { rows: 6, tasks: 4, ranges: 50 })
     await deleteProject(t, f, f.meta.id)
 
-    // the projects are hidden at once, with their milestone and grants
+    // the projects are hidden at once; their milestone and grants, which
+    // name absent projects now, move in the steps
     const item = await itemFor(t, f.meta.id)
     expect(item).toMatchObject({ kind: 'project', state: 'moving', key: 'TBED', path: [] })
     await t.run(async (ctx) => {
       for (const p of [f.meta, f.sub, f.sub2]) expect(await byId(ctx, 'projects', p.id)).toBeNull()
-      expect(await ctx.db.query('milestones').collect()).toEqual([])
-      expect(await ctx.db.query('project_access').collect()).toEqual([])
     })
     expect(await jobFor(t, item.id)).not.toBeNull()
 
@@ -948,6 +947,10 @@ describe('moving a project to Deleted items', () => {
     expect(ready.projects.reduce((n, p) => n + p.tasks, 0)).toBe(all.length)
     expect(await storedTasks(t, item.id)).toHaveLength(all.length)
     expect(await stillLive(all)).toBe(0)
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query('milestones').collect()).toEqual([])
+      expect(await ctx.db.query('project_access').collect()).toEqual([])
+    })
     // the hierarchy inside is kept, and so is a parent outside
     expect((await storedIssue(t, member.id))?.parent_id).toBe(group.id)
     expect((await storedIssue(t, inChild.id))?.parent_id).toBe(outsideParent.id)

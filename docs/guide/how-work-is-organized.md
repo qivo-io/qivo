@@ -164,7 +164,9 @@ sub-projects and 48 tasks, including 9 archived tasks.** Its button names the
 count, such as **Delete project and 48 tasks**. An optional reason is shown
 in Deleted items. **Delete** on the Archived projects page opens the same
 window without the Archive choice. Deleting a project removes the inbox
-messages about its tasks.
+messages about its tasks. A project with more than 200 sub-projects, archived
+ones included, cannot be deleted at once. Delete some of its sub-projects
+first, then the project.
 
 ## Deleted items
 
@@ -230,7 +232,9 @@ subtasks are too large to count during the restore, it returns as a
 top-level task and keeps its people and its subtasks, as a subtask restored
 from the archive under a full parent does. Work that was archived when it was
 deleted returns archived. A restored Done task restarts its auto-archive
-clock. A task restored on its own sends its followers a **Restored** update.
+clock. A restored project shows first to its leads and organization admins,
+and to the people and teams it is shared with moments later, once their
+access is back. A task restored on its own sends its followers a **Restored** update.
 Restoring several items at once, or a project, sends none, and inbox
 messages removed by the delete do not come back
 ([Your inbox](./working-together.md#your-inbox)).

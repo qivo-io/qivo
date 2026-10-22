@@ -20,13 +20,16 @@ Open **Settings → Organization → Users** to manage account status:
   cannot be assigned until the account is reactivated. Removing an account
   instead clears its assignee and reviewer roles.
 
-Removing a user takes effect at once. The account loses all access and
-leaves the Users list, its teams, project sharing, project leads and open
-tasks. If it holds hundreds of open tasks, some are cleared shortly after.
-Qivo then clears it from archived tasks, comments and notifications in
+Removing a user takes effect at once. The account loses all access, its
+API keys and MCP tokens stop working, and it leaves the Users list, its teams,
+project sharing, project leads and open tasks. If it holds hundreds of open
+tasks, team memberships, project shares or keys, some are cleared shortly
+after. Qivo then clears it from archived tasks, comments and notifications in
 the background, usually within a few minutes. Until then, an archived task,
 or one restored from the archive in that time, can still show the removed
-user as an unknown person.
+user as an unknown person. A user who leads more than 1,000 projects cannot
+be removed: give some of those projects another lead first, or make the user
+**Inactive** to end their access at once.
 
 While **Who can create new projects?** is set to **Selected users**, the list
 has a **Can create projects** column. It holds a checkbox for each active
