@@ -73,8 +73,9 @@ const CELL_MIN_H = 60
 let lastBoardWidth: number | null = null
 
 /* The cards in one block of a cell (DeferredList). A block is what the
-   browser lays out when it comes into view: scrolling a 5,000-task Board
-   for the first time, a frame took up to 380ms with blocks of 64 at 4x CPU
+   browser lays out when it comes into view, unless the mount scheduler
+   laid it out while the page was idle: scrolling a 5,000-task Board for
+   the first time, a frame took up to 380ms with blocks of 64 at 4x CPU
    and 100 to 130ms with blocks of 16, about what the Board took before it
    mounted in slices. Blocks of 8 made every frame of a later scroll
    longer, as the browser checks each block on every frame. */
