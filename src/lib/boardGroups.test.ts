@@ -4,8 +4,13 @@ import {
   type BoardCellGroup,
   type BoardCellIssue,
   boardDropPatch,
+  eagerCounts,
+  estimateCardHeight,
   groupBoardAssignees,
   groupBoardCell,
+  type MetaItem,
+  MIN_CARD_PITCH,
+  sideEagerCounts,
 } from './boardGroups'
 
 describe('groupBoardAssignees', () => {
@@ -327,5 +332,135 @@ describe('groupBoardCell', () => {
     expect(groups[0].issues[0]).toBe(child)
     expect(all).toEqual([child, parent])
     expect(groupBoardCell([], byId)).toEqual([])
+  })
+})
+
+describe('estimateCardHeight', () => {
+  type Task = BoardCellIssue & {
+    title: string
+    late?: boolean
+    placed?: boolean
+    meta?: MetaItem[]
+  }
+  const icon = { width: 11, height: 11 }
+  const text = (width: number) => ({ width, height: 17.4 })
+  const task = (id: string, title = 'Testbed signed firmware task 12', more: Partial<Task> = {}) =>
+    ({ id, uuid: id, title, ...more }) as Task
+  const card = (issues: Task[], parent: Task | null = null, ancestors: Task[] = []) => ({
+    key: issues[0]?.id ?? parent?.id ?? 'card',
+    parent,
+    ancestors,
+    issues,
+  })
+  const shown = {
+    banner: (it: Task) => !!it.late,
+    placed: (it: Task) => !!it.placed,
+    // the priority mark and the hours, one line
+    meta: (it: Task) => it.meta ?? [icon, text(21)],
+  }
+  const height = (group: BoardCellGroup<Task>, width = 203) =>
+    estimateCardHeight(group, width, shown)
+
+  it('matches the measured plain card, and the pitch is its height and gap', () => {
+    // 81.17px measured for a two-line title at 203px (see the constants)
+    expect(height(card([task('a')]))).toBe(82)
+    // the least card: one title line and the priority mark alone
+    expect(height(card([task('a', 'Short', { meta: [icon] })]))).toBe(MIN_CARD_PITCH - 8 + 1)
+    expect(height(card([task('a', 'Short', { meta: [] })]))).toBeLessThan(
+      height(card([task('a', 'Short')])),
+    )
+  })
+
+  it('wraps the meta line as the card does', () => {
+    // measured at 203px: the mark, then a 156px place on a line of its own
+    // (32px), and the mark with 10h, then the place (39px)
+    const title = 'Board scale calibrate task 341'
+    expect(height(card([task('a', title, { meta: [icon, text(156)] })]))).toBe(
+      Math.ceil(2 + 16 + 2 * 18.9 + 8 + 11 + 4 + 17.4),
+    )
+    expect(height(card([task('a', title, { meta: [icon, text(21), text(156)] })]))).toBe(
+      Math.ceil(2 + 16 + 2 * 18.9 + 8 + 17.4 + 4 + 17.4),
+    )
+    // the mark, the place and a due date that fit one wide card's line
+    expect(height(card([task('a', 'Short', { meta: [icon, text(60), text(85)] })]), 400)).toBe(
+      Math.ceil(2 + 16 + 18.9 + 8 + 17.4),
+    )
+  })
+
+  it('never falls for a longer title, a banner, a place, more rows or a narrower card', () => {
+    const base = card([task('a')], task('p'), [task('g')])
+    const before = height(base)
+    const grown = [
+      card([task('a', 'A long title '.repeat(6))], task('p'), [task('g')]),
+      card([task('a', undefined, { late: true })], task('p'), [task('g')]),
+      card([task('a', undefined, { meta: [icon, text(21), text(156)] })], task('p'), [task('g')]),
+      card([task('a')], task('p', undefined, { placed: true }), [task('g')]),
+      card([task('a'), task('b')], task('p'), [task('g')]),
+      card([task('a')], task('p'), [task('g'), task('h')]),
+    ]
+    for (const group of grown) expect(height(group)).toBeGreaterThan(before)
+    expect(height(base, 150)).toBeGreaterThan(before)
+    for (let width = 400; width > 60; width -= 7)
+      expect(height(base, width - 7)).toBeGreaterThanOrEqual(height(base, width))
+  })
+
+  it('caps a title at six lines', () => {
+    const long = height(card([task('a', 'word '.repeat(200))]))
+    expect(height(card([task('a', 'word '.repeat(400))]))).toBe(long)
+    // the two-line card and four more 18.9px lines
+    expect(long).toBe(Math.ceil(81.17 + 4 * 18.9))
+  })
+})
+
+describe('eagerCounts', () => {
+  // the first screen: a 400px window and 500px more
+  const budget = 900
+  const fit = Math.floor((budget - 46 - 8) / MIN_CARD_PITCH)
+
+  it('fills one tall lane up to the first screen in every cell', () => {
+    expect(eagerCounts([{ headed: true, cells: [5000, 3, 0, 5000] }], budget)).toEqual([
+      [fit, 3, 0, fit],
+    ])
+    // a lane without a heading has its height for cards too
+    expect(eagerCounts([{ headed: false, cells: [5000] }], 1000)[0][0]).toBe(
+      Math.floor((1000 - 8) / MIN_CARD_PITCH),
+    )
+    expect(eagerCounts([{ headed: true, cells: [5000] }], 1000)[0][0]).toBe(
+      Math.floor((1000 - 46 - 8) / MIN_CARD_PITCH),
+    )
+  })
+
+  it('walks many short lanes until the first screen is used up', () => {
+    const lanes = Array.from({ length: 40 }, () => ({ headed: true, cells: [1, 2, 0] }))
+    const counts = eagerCounts(lanes, budget)
+    const full = counts.findIndex((row) => row.every((n) => n === 0))
+    expect(counts.slice(0, full - 1).every((row) => row.join() === '1,2,0')).toBe(true)
+    expect(full).toBeGreaterThan(3)
+    expect(counts.slice(full).every((row) => row.every((n) => n === 0))).toBe(true)
+    // a lane that starts inside the screen fits what is left of it
+    const total = counts.flat().reduce((a, b) => a + b, 0)
+    expect(total * MIN_CARD_PITCH).toBeLessThanOrEqual(budget)
+  })
+
+  it('mounts no cards of side-boards that start beyond the window', () => {
+    const counts = sideEagerCounts(
+      Array.from({ length: 8 }, () => [100, 100]),
+      budget,
+      1000,
+    )
+    // 20px of inset, then 248px boards 8px apart: four start inside 1000px
+    expect(counts.map((row) => row[0] > 0)).toEqual([
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+    ])
+    // each board walks its own statuses: the second gets what the first left
+    expect(counts[0][0] + counts[0][1]).toBeLessThanOrEqual(Math.floor(budget / MIN_CARD_PITCH))
+    expect(counts[0][1]).toBeLessThan(counts[0][0])
   })
 })

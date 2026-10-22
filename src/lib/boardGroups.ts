@@ -176,3 +176,158 @@ export function groupBoardCell<T extends BoardCellIssue>(
 
   return [...groups.values()]
 }
+
+/* Card geometry for estimateCardHeight, measured in Chromium (Playwright,
+   1440 x 1000) on the benchmark's varied workspace at 500 tasks: each row's
+   getBoundingClientRect height by shape, with the title's line count from
+   its height over its line height. Rows: 8px padding above and below; a
+   task title line is 18.9px, then an 8px gap and the meta line; a parent
+   title line is 19.6px, then an 8px gap and the 18px portrait line; the
+   delay banner is 25.4px; a place line adds its 8px gap and 17.4px. A
+   task's meta line wraps its items as flex-wrap does, 8px apart across and
+   4px down, and a line of text is 17.4px high, a line of the 11px priority
+   mark alone 11px (measured on the 10,000-task local Northstar).
+   TITLE_CHAR_PX is the width of a title character with its share of word
+   wrapping: 8px predicted 538 of 540 titles' lines exactly and 2 one line
+   high (the font's mean glyph is 6.8px). A task title is 54px narrower than
+   its card (borders, padding, portrait and gap), a child's another 12px for
+   the rail, a parent title 18px. */
+const ROW_PAD = 8
+const TITLE_LINE = 18.9
+const META_TOP = 8
+const META_GAP_X = 8
+const META_GAP_Y = 4
+/** The height of a line of meta text, and the size of the priority mark. */
+export const META_TEXT_LINE = 17.4
+export const META_ICON_PX = 11
+const PARENT_LINE = 19.6
+const PARENT_META = 8 + 18
+const BANNER = 25.4
+const PLACE_LINE = 8 + 17.4
+const TITLE_CHAR_PX = 8
+const TASK_CHROME_PX = 54
+const CHILD_CHROME_PX = TASK_CHROME_PX + 12
+const PARENT_CHROME_PX = 18
+const CARD_BORDER = 2
+/** The gap between cards in a cell. */
+export const CARD_GAP = 8
+/** The least a card and the gap after it take: one plain row of one line,
+    with the priority mark alone on its meta line. */
+export const MIN_CARD_PITCH = Math.floor(
+  CARD_BORDER + 2 * ROW_PAD + TITLE_LINE + META_TOP + META_ICON_PX + CARD_GAP,
+)
+
+/** One item of a task row's meta line, as wide and high as it draws. */
+export type MetaItem = { width: number; height: number }
+
+/** The height of a task row's meta line `width` pixels wide, with its gap
+    above: the items in rows as flex-wrap lays them out, each at most the
+    line's width, as a place truncates. */
+function metaHeight(items: readonly MetaItem[], width: number) {
+  let height = META_TOP
+  let row = 0
+  let x = -1
+  for (const item of items) {
+    const w = Math.min(item.width, width)
+    if (x >= 0 && x + META_GAP_X + w > width) {
+      height += row + META_GAP_Y
+      row = 0
+      x = -1
+    }
+    x = x < 0 ? w : x + META_GAP_X + w
+    row = Math.max(row, item.height)
+  }
+  return height + row
+}
+
+/** The lines a title of `length` characters takes in `width` pixels. */
+const titleLines = (length: number, width: number) =>
+  Math.min(6, Math.max(1, Math.ceil((length * TITLE_CHAR_PX) / Math.max(1, width))))
+
+/** The height in pixels a card of `group` takes `cardWidth` pixels wide,
+    for a card that has not rendered yet. `banner` says whether a task row
+    shows the delay banner, `placed` whether a heading shows its place line,
+    and `meta` what a task row's meta line holds. It never falls for a
+    longer title, a banner, more rows, more meta or a narrower card. */
+export function estimateCardHeight<T extends BoardCellIssue & { title: string }>(
+  group: BoardCellGroup<T>,
+  cardWidth: number,
+  {
+    banner,
+    placed,
+    meta,
+  }: {
+    banner: (issue: T) => boolean
+    placed: (issue: T) => boolean
+    meta: (issue: T) => readonly MetaItem[]
+  },
+) {
+  const heading = (issue: T) =>
+    2 * ROW_PAD +
+    PARENT_LINE * titleLines(issue.title.length, cardWidth - PARENT_CHROME_PX) +
+    PARENT_META +
+    (placed(issue) ? PLACE_LINE : 0)
+  const task = (issue: T, chrome: number) =>
+    (banner(issue) ? BANNER : 0) +
+    2 * ROW_PAD +
+    TITLE_LINE * titleLines(issue.title.length, cardWidth - chrome) +
+    metaHeight(meta(issue), Math.max(1, cardWidth - chrome))
+  let height = CARD_BORDER
+  for (const ancestor of group.ancestors) height += heading(ancestor)
+  if (group.parent) {
+    height += heading(group.parent)
+    // the children's bottom padding and the rule between two children
+    if (group.issues.length) height += ROW_PAD + group.issues.length - 1
+  }
+  const chrome = group.parent ? CHILD_CHROME_PX : TASK_CHROME_PX
+  for (const issue of group.issues) height += task(issue, chrome)
+  return Math.ceil(height)
+}
+
+/** A Board at or under this many cards renders them all at once, as it
+    always has. Every demo and smoke Board is under it. */
+export const SYNC_LIMIT = 300
+
+/* Lane geometry for eagerCounts, measured with the card constants above:
+   an assignee lane's heading is 46px (a project lane's 50px, so the walk
+   errs toward more cards), a cell's top padding 8px, and the lane's foot
+   24px with the 8px --panel-gap after it. A side-board's heading is 50px
+   and each status takes 25.4px for its row and 16px of cell padding. */
+const LANE_HEAD_PX = 46
+const CELL_TOP_PX = 8
+const LANE_END_PX = 24 + 8
+const SIDE_HEAD_PX = 50
+const SIDE_STATUS_PX = 25.4 + 16
+const SIDE_PITCH_PX = 248 + 8
+const SIDE_START_PX = 20
+
+/** How many cards each cell of the swimlane or pooled Board mounts in its
+    first render: the cells' cards that fit in `budgetPx` from the top,
+    lane by lane, counting each card at its least height. `lanes` gives
+    each lane's heading and its cells' card counts. */
+export function eagerCounts(lanes: { headed: boolean; cells: number[] }[], budgetPx: number) {
+  let remaining = budgetPx
+  return lanes.map(({ headed, cells }) => {
+    if (remaining <= 0) return cells.map(() => 0)
+    if (headed) remaining -= LANE_HEAD_PX
+    const room = Math.max(0, remaining - CELL_TOP_PX)
+    const counts = cells.map((count) => Math.min(count, Math.floor(room / MIN_CARD_PITCH)))
+    remaining -= CELL_TOP_PX + Math.max(0, ...counts) * MIN_CARD_PITCH + LANE_END_PX
+    return counts
+  })
+}
+
+/** eagerCounts for side-by-side boards: each board walks its own statuses
+    from the top, and a board that starts beyond `viewWidth` mounts none. */
+export function sideEagerCounts(boards: number[][], budgetPx: number, viewWidth: number) {
+  return boards.map((cells, index) => {
+    if (SIDE_START_PX + index * SIDE_PITCH_PX >= viewWidth) return cells.map(() => 0)
+    let remaining = budgetPx - SIDE_HEAD_PX
+    return cells.map((count) => {
+      remaining -= SIDE_STATUS_PX
+      const eager = Math.min(count, Math.floor(Math.max(0, remaining) / MIN_CARD_PITCH))
+      remaining -= eager * MIN_CARD_PITCH
+      return eager
+    })
+  })
+}

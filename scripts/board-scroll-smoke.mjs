@@ -444,6 +444,8 @@ try {
     await page.getByRole('button', { name: 'Swimlanes by project', exact: true }).click()
   }
   await panel('Luma Sensor').waitFor()
+  // a large Board mounts in slices; these are small, so this only guards
+  await page.waitForFunction(() => !document.querySelector('[data-board-mount="pending"]'))
   await page.evaluate(() => document.fonts.ready)
   await positionAt('Luma Sensor')
   await scrollDownTo('Luma Sensor', 'Luma Cloud')

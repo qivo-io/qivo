@@ -275,6 +275,8 @@ try {
     .getByRole('radio', { name: 'Board', exact: true })
     .click()
   await page.locator('[data-card]').first().waitFor()
+  // a large Board mounts in slices; this one is small, so this only guards
+  await page.waitForFunction(() => !document.querySelector('[data-board-mount="pending"]'))
   await sweep(page.locator('body'), 'Desktop Board and sidebar')
 
   await page.locator('aside').getByRole('button', { name: 'Luma Cloud', exact: true }).click()

@@ -95,6 +95,15 @@ export function useBoardPanelClipping() {
     let frame = 0
     const painted = new Map<HTMLElement, Map<PaintProperty, StylePaint>>()
     const observed = new Set<Element>()
+    /* Each lane or side-board with its parts, found again only when the
+       pane's structure changes (syncObserved). Finding them on every frame
+       walked every card of a large Board. */
+    let panels: {
+      panel: HTMLElement
+      body: HTMLElement | null
+      foot: HTMLElement | null
+      heading: HTMLElement | null
+    }[] = []
     const paneStyle = getComputedStyle(pane)
     const borderRight = Number.parseFloat(paneStyle.borderRightWidth) || 0
     const borderBottom = Number.parseFloat(paneStyle.borderBottomWidth) || 0
@@ -142,11 +151,8 @@ export function useBoardPanelClipping() {
       const bounds: PaintBounds[] = []
       const paths: string[] = []
 
-      for (const panel of pane.querySelectorAll<HTMLElement>('.board-lane, [data-board-group]')) {
-        const body = panel.querySelector<HTMLElement>('.board-lane-body')
-        const foot = panel.querySelector<HTMLElement>('[data-lane-foot]')
+      for (const { panel, body, foot, heading } of panels) {
         if (!body || !foot) continue
-        const heading = panel.querySelector<HTMLElement>('.board-panel-heading')
         const panelRect = panel.getBoundingClientRect()
         const bodyRect = body.getBoundingClientRect()
         const footRect = foot.getBoundingClientRect()
@@ -243,10 +249,17 @@ export function useBoardPanelClipping() {
     }
     const resizeObserver = new ResizeObserver(schedule)
     const syncObserved = () => {
-      const next = new Set<Element>([
-        pane,
-        ...pane.querySelectorAll('.board-panel-heading, .board-lane-body, [data-lane-foot]'),
-      ])
+      panels = [...pane.querySelectorAll<HTMLElement>('.board-lane, [data-board-group]')].map(
+        (panel) => ({
+          panel,
+          body: panel.querySelector<HTMLElement>('.board-lane-body'),
+          foot: panel.querySelector<HTMLElement>('[data-lane-foot]'),
+          heading: panel.querySelector<HTMLElement>('.board-panel-heading'),
+        }),
+      )
+      const next = new Set<Element>([pane])
+      for (const { body, foot, heading } of panels)
+        for (const part of [body, foot, heading]) if (part) next.add(part)
       for (const element of observed) {
         if (!next.has(element)) {
           resizeObserver.unobserve(element)

@@ -1,0 +1,33 @@
+/* The space of the items a DeferredList has not mounted yet, the cards of a
+   large Board or the rows of the phone's list: a plain block in the cards'
+   fill, with no text and no motion. A focus ring shows where Tab reached it. */
+.board-pending {
+  display: block;
+  width: 100%;
+  flex-shrink: 0;
+  border-radius: var(--r-md);
+  background: var(--board-card-fill, var(--surface-2));
+}
+.board-pending:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+/* A block of items in a list that mounts in slices: the browser skips its
+   style and layout while it is offscreen, and its items stay findable and
+   in the accessibility tree. DeferredList sets its gap and its estimated
+   height. */
+.deferred-block {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  content-visibility: auto;
+  /* content-visibility contains paint even on screen; leave the items'
+     shadows room outside the block, as without it */
+  overflow-clip-margin: 8px;
+}
+
+.deferred-block:focus-within {
+  /* Focus rings may extend beyond the block's paint containment. */
+  content-visibility: visible;
+}

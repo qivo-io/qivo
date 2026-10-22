@@ -59,6 +59,10 @@ parent's title. Siblings in different cells repeat the parent heading.
 Nested subtasks retain their ancestor names for context. Tasks without
 active subtasks outside these groups have individual cards.
 
+On very large boards, cards below the first screen appear in the first
+moments after the Board opens, in shaded space that keeps the Board's shape.
+Searching the page with Ctrl+F or ⌘F, or printing, loads them all first.
+
 Task rows show title, priority, remaining hours, due date and owner. Click
 the row or parent title to open the task. Drag individual task rows to change
 status; parent headings cannot be dragged and do not add to column counts.

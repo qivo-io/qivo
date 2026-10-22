@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useBoardPanelClipping } from './useBoardPanelClipping'
 
 /* The panel clipping follows lanes appearing and going, not the cards a
-   status cell gains. */
+   status cell gains, and repaints without searching the pane. */
 
 let container: HTMLDivElement
 let root: Root
@@ -101,5 +101,18 @@ describe('the Board panel clipping', () => {
     pane.append(lane)
     await observed()
     expect(query).toHaveBeenCalled()
+  })
+
+  it('repaints on a scroll without searching the pane', async () => {
+    await act(async () => root.render(createElement(Pane)))
+    const pane = container.querySelector<HTMLElement>('[data-pane]')!
+    const query = vi.spyOn(pane, 'querySelectorAll')
+    const lane = vi.spyOn(pane.querySelector<HTMLElement>('.board-lane')!, 'getBoundingClientRect')
+    pane.dispatchEvent(new Event('scroll'))
+    await act(
+      async () => await new Promise((resolve) => requestAnimationFrame(() => resolve(null))),
+    )
+    expect(lane).toHaveBeenCalled()
+    expect(query).not.toHaveBeenCalled()
   })
 })

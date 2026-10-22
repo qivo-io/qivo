@@ -66,9 +66,12 @@ describe('closing a task window', { timeout: BOARD_TEST_TIMEOUT }, () => {
   async function openEditClose(
     edit: (board: Board, open: (id: string) => void) => unknown,
     uuid = 'a',
+    backlog = 0,
   ) {
     const board = await loadBoard(network, (snap) => {
       snap.issues.push(taskRow(snap, 'a', 'todo', 1), taskRow(snap, 'b', 'todo', 2))
+      for (let n = 0; n < backlog; n++)
+        snap.issues.push(taskRow(snap, `backlog-${n}`, 'backlog', n + 3))
     })
     const { IssueDetail } = await import('./IssueDetail')
     let openTask: (id: string) => void = () => {}
@@ -98,6 +101,31 @@ describe('closing a task window', { timeout: BOARD_TEST_TIMEOUT }, () => {
       const a = P.issues.find((it) => it.uuid === 'a')!
       P.updateIssue(a.id, { status: 'progress' })
     })
+    expect(cell('progress')?.contains(title!)).toBe(true)
+    expect(document.activeElement).toBe(title)
+  })
+
+  it('returns focus to the card where the edit moved it while the Board still mounts', async () => {
+    // a large Board whose slices never run: In Progress mounts none of its
+    // cards until something asks for one
+    vi.stubGlobal(
+      'MessageChannel',
+      class {
+        port1 = { onmessage: null, close() {} }
+        port2 = { postMessage() {} }
+      },
+    )
+    const title = await openEditClose(
+      ({ P }) => {
+        const a = P.issues.find((it) => it.uuid === 'a')!
+        P.updateIssue(a.id, { status: 'progress' })
+      },
+      'a',
+      400,
+    )
+    expect(document.querySelector('[data-board-mount]')?.getAttribute('data-board-mount')).toBe(
+      'pending',
+    )
     expect(cell('progress')?.contains(title!)).toBe(true)
     expect(document.activeElement).toBe(title)
   })

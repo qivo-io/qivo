@@ -233,6 +233,8 @@ try {
   await page.locator('aside').getByText('Luma Sensor', { exact: true }).click()
   await page.getByRole('heading', { name: 'Luma Sensor', exact: true }).waitFor()
   if (initialFocus) await page.locator('[data-filter-focus]').click()
+  // a large Board mounts in slices; this one is small, so this only guards
+  await page.waitForFunction(() => !document.querySelector('[data-board-mount="pending"]'))
   // the closed switcher names the layout in a word
   if (!(await page.locator('[data-group-menu]').innerText()).includes('Project')) {
     await page.locator('[data-group-menu]').click()

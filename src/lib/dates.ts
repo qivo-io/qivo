@@ -128,6 +128,9 @@ export const DATE_FORMATS = [
 ]
 let dateFormat = DEFAULT_DATE_FORMAT
 
+/** The date format dates are shown in now (setDateFormat). */
+export const dateFormatInUse = () => dateFormat
+
 export function setDateFormat(f?: string | null): void {
   dateFormat = f && DATE_FORMATS.includes(f) ? f : DEFAULT_DATE_FORMAT
 }

@@ -197,6 +197,12 @@ function deferWorkspaceBoot(convex, { appearance = false } = {}) {
 
 // These drives keep the real account's upload intact. Only the browser's
 // cached copy is cleared to exercise network failures and cold startup.
+/* A large Board mounts in slices. The smoke's Boards are small, so this
+   only guards against a Board that has not finished. */
+async function boardMounted(page) {
+  await page.waitForFunction(() => !document.querySelector('[data-board-mount="pending"]'))
+}
+
 async function storedBackground({ clear = false } = {}) {
   const db = await new Promise((resolve, reject) => {
     const request = indexedDB.open('qivo-background-image', 1)
@@ -1091,6 +1097,7 @@ try {
   if ((await pageA.locator('[data-filter-focus]').count()) !== 1)
     await fail('The desktop Board does not render its Focus button')
   await pageA.locator('[data-card]').first().waitFor({ state: 'visible' })
+  await boardMounted(pageA)
   const desktopOnlyQuery = `no-task-matches-${STAMP}`
   await desktopTaskFilter.fill(desktopOnlyQuery)
   await pageA.waitForFunction(() => document.querySelectorAll('[data-card]').length === 0)
@@ -1136,6 +1143,7 @@ try {
     await fail('Returning to desktop did not restore its active text filter')
   await desktopTaskFilter.fill('')
   await pageA.locator('[data-card]').first().waitFor({ state: 'visible' })
+  await boardMounted(pageA)
   await pageA.setViewportSize({ width: 390, height: 844 })
   await pageA.locator('.mobile-task-list [data-card]').first().waitFor({ state: 'visible' })
   if (
@@ -2064,6 +2072,7 @@ try {
 
   await pageA.goto(`${BASE}/app/~/board/all`, { waitUntil: 'domcontentloaded' })
   await pageA.waitForSelector('[data-card]', { timeout: 30000 })
+  await boardMounted(pageA)
   await pageA.locator('aside').getByText('Luma Sensor', { exact: true }).click()
   // The scope heading is semantic only; the sidebar supplies visible context.
   await pageA

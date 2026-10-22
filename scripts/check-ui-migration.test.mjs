@@ -50,6 +50,24 @@ describe('UI migration guard with the native TypeScript parser', () => {
     expect(result.stdout).toContain('1 feature files, 1 reviewed runtime style sites')
   })
 
+  it('rejects a noTooltip Button with a title, and allows either alone', () => {
+    const result = runGuard({
+      files: {
+        'src/Feature.tsx': [
+          'export const view = <>',
+          '  <Button noTooltip title="Open">Open</Button>',
+          '  <Button noTooltip>Open</Button>',
+          '  <Button title="Open">Open</Button>',
+          '</>',
+        ].join('\n'),
+      },
+    })
+    expect(result.status).toBe(1)
+    expect(result.stderr.trim().split('\n')).toEqual([
+      'src/Feature.tsx:2 gives a noTooltip Button a title; it would never show',
+    ])
+  })
+
   it('rejects native controls, legacy classes and static styles even outside tsconfig', () => {
     const result = runGuard({
       tsconfig: { files: ['src/Included.tsx'] },

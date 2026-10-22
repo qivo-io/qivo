@@ -193,6 +193,8 @@ async function assertPhoneDialogBounds(width) {
 async function verifyLazyLoading() {
   const boardURL = `${demo.base}/app/${demo.orgSlug}/board/all`
   await page.locator('[data-card]').first().waitFor()
+  // a large Board mounts in slices; this one is small, so this only guards
+  await page.waitForFunction(() => !document.querySelector('[data-board-mount="pending"]'))
   assertChunkRequested('Kanban', true)
   // After the first paint the workspace downloads the other views in the
   // background (lib/lazyModule preloadInBackground), so a later drop of the

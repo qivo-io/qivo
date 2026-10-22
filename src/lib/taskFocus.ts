@@ -43,7 +43,8 @@ export function markTaskFocus(element: Element | null): TaskFocusMark | null {
 const mounts = new Set<(mark: TaskFocusMark) => void>()
 
 /** Registers `mount`, which restoreTaskFocus calls before it searches so a
-    view that mounts its cards later can mount the marked task's card.
+    view that mounts its cards later can mount the marked task's card. It
+    may commit a render synchronously, so it never runs inside a commit.
     Returns the registration's removal. */
 export function registerTaskMount(mount: (mark: TaskFocusMark) => void) {
   mounts.add(mount)
@@ -60,12 +61,21 @@ const usable = (element: HTMLElement | null | undefined): element is HTMLElement
     longer shown, it falls back to the card now at the remembered index in
     the remembered cell, as long as that cell is still on the page; a lane
     key alone repeats across scopes. Scrolls into view only when `scroll` is
-    set. Returns whether focus moved. */
+    set. With `mount` false it searches only what is mounted, as it must
+    inside a React commit; with `exact` it takes only the remembered row,
+    in the same kind and cell, so a mounted copy of a parent heading in
+    another cell does not stand in for one that still waits to mount.
+    Returns whether focus moved. */
 export function restoreTaskFocus(
   mark: TaskFocusMark,
-  { scroll, nearby = true }: { scroll: boolean; nearby?: boolean },
+  {
+    scroll,
+    nearby = true,
+    mount = true,
+    exact = false,
+  }: { scroll: boolean; nearby?: boolean; mount?: boolean; exact?: boolean },
 ) {
-  for (const mount of mounts) mount(mark)
+  if (mount) for (const register of mounts) register(mark)
   // Both kinds of row: a parent whose last subtask left becomes a card, and
   // a card that gains a subtask becomes a parent heading. Attribute values
   // are compared, not put in selectors, so any id works.
@@ -83,6 +93,10 @@ export function restoreTaskFocus(
     return (kind(row) === mark.row ? 0 : 3) + place
   }
   rows.sort((a, b) => rank(a) - rank(b))
+  if (exact) {
+    const other = rows.findIndex((row) => rank(row) > 0)
+    if (other >= 0) rows.length = other
+  }
   /** The row's control `key`, or its first control. */
   const keyed = (row: HTMLElement, key?: string | null) =>
     [row, ...row.querySelectorAll<HTMLElement>('[data-focus-key]')].find((element) =>
@@ -90,7 +104,8 @@ export function restoreTaskFocus(
     )
   let target = mark.control ? rows.map((row) => keyed(row, mark.control)).find(usable) : undefined
   target ??= rows.map((row) => keyed(row)).find(usable)
-  if (!target && !rows.length && nearby && usable(mark.place)) {
+  // exact takes the remembered row or nothing, never a neighbour
+  if (!target && !rows.length && nearby && !exact && usable(mark.place)) {
     const others = [...mark.place.querySelectorAll<HTMLElement>(ROWS)]
     const row = others[Math.min(mark.index, others.length - 1)]
     if (row) target = keyed(row)
@@ -139,26 +154,38 @@ export function useFollowTaskFocus(container: RefObject<HTMLElement | null>) {
     }
   }, [])
   useLayoutEffect(() => {
-    const current = followed.current
-    const list = container.current
-    if (
-      !current ||
-      !list ||
-      !document.hasFocus() ||
-      document.activeElement !== document.body ||
-      list.closest('[inert]')
-    )
-      return
-    // A mark that finds nothing now would find something unrelated later.
-    if (!restoreTaskFocus(current.mark, { scroll: !lastInputWasPointer() })) {
-      followed.current = null
-      return
+    /** Whether focus was lost from the followed card and can come back. */
+    const lost = () => {
+      const list = container.current
+      return (
+        !!followed.current &&
+        !!list &&
+        document.hasFocus() &&
+        document.activeElement === document.body &&
+        !list.closest('[inert]')
+      )
     }
-    // Follow the control focus landed on, whether or not React delivered its
-    // focus event during the commit.
-    const landed = document.activeElement
-    const mark = markTaskFocus(landed)
-    followed.current = mark && landed ? { mark, element: landed } : null
+    /* Follows the control focus landed on, whether or not React delivered
+       its focus event during the commit. */
+    const follow = () => {
+      const landed = document.activeElement
+      const mark = markTaskFocus(landed)
+      followed.current = mark && landed ? { mark, element: landed } : null
+    }
+    const current = followed.current
+    if (!current || !lost()) return
+    const scroll = !lastInputWasPointer()
+    // the card as it is mounted now, without mounting anything in the commit
+    if (restoreTaskFocus(current.mark, { scroll, nearby: false, mount: false, exact: true }))
+      return follow()
+    // Then once the commit is done, mounting the task's card if its cell
+    // still waits for it. A mark that finds nothing now would find something
+    // unrelated later.
+    queueMicrotask(() => {
+      if (followed.current !== current || !lost()) return
+      if (restoreTaskFocus(current.mark, { scroll })) follow()
+      else followed.current = null
+    })
   })
   return {
     onFocus: (event: FocusEvent) => {

@@ -200,6 +200,7 @@ function TimelineRowView({
           <Button
             type="button"
             variant="ghost"
+            noTooltip
             data-roadmap-task-open={row.issue.id}
             className={`h-full w-full min-w-0 justify-start rounded-none border-0 pr-0 text-left text-base font-normal ${hasSubHeads ? 'pl-[44px]' : 'pl-[15px]'}`}
             onPointerDown={holdTitle}

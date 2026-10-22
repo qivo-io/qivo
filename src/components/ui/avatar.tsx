@@ -1,6 +1,7 @@
 import { Avatar as AvatarPrimitive } from 'radix-ui'
 import type * as React from 'react'
 
+import { useStaticControls } from '@/lib/liveControls'
 import { cn } from '@/lib/utils'
 
 function Avatar({
@@ -10,8 +11,11 @@ function Avatar({
 }: React.ComponentProps<typeof AvatarPrimitive.Root> & {
   size?: 'default' | 'sm' | 'lg'
 }) {
+  // A static row (liveControls.tsx) renders the root's span without Radix;
+  // its image parts are not used there.
+  const Root = useStaticControls() ? 'span' : AvatarPrimitive.Root
   return (
-    <AvatarPrimitive.Root
+    <Root
       data-slot="avatar"
       data-size={size}
       className={cn(

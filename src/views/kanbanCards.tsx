@@ -1,11 +1,13 @@
-import { memo, useState } from 'react'
+import { memo, useId, useRef } from 'react'
 import { AssigneeAvatar } from '@/components/AssigneeAvatar'
 import { Icon, PausedMark, PriorityIcon, ProjectName } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import type { BoardCellGroup } from '@/lib/boardGroups'
+import { StaticControlsContext, useLiveControls } from '@/lib/liveControls'
 import { type IssueVM, P, type ProjectPlace } from '@/store/planner'
 import type { StoreVersion } from '@/store/updates'
+import { parentPlaceOf } from './board/cardEstimate'
 import { BOARD_TASK_TYPE } from './board/dropOver'
 
 type CardActions = {
@@ -20,11 +22,14 @@ type CardActions = {
  * A neutral band names the state and ends in a block of the roadmap's
  * yellow or red carrying a clock (tokens.css, deviation #312). The Team sync
  * page draws the same banner on its rows. */
-function DelayBanner({ it }: { it: IssueVM }) {
+function DelayBanner({ it, id }: { it: IssueVM; id?: string }) {
   if (!P.delayColor(it)) return null
   const behind = P.delayOf(it)?.status === 'behind'
   return (
-    <span className="flex w-full items-stretch justify-between bg-[var(--delay-banner)] text-xs font-extrabold tracking-[.05em] text-text-1">
+    <span
+      id={id}
+      className="flex w-full items-stretch justify-between bg-[var(--delay-banner)] text-xs font-extrabold tracking-[.05em] text-text-1"
+    >
       <span className="px-2.5 py-1">{behind ? 'Slipping' : 'Delayed'}</span>
       <span
         className={`flex w-[30px] shrink-0 items-center justify-center text-white ${behind ? 'bg-[var(--delay-banner-behind-block)]' : 'bg-[var(--delay-banner-late-block)]'}`}
@@ -37,11 +42,11 @@ function DelayBanner({ it }: { it: IssueVM }) {
 
 /* The paused mark stays visible on a faded card: a pause is a fact about the
    task, not a hover detail. The reason lives in the task's comments. */
-function PausedGlyph({ it }: { it: IssueVM }) {
+function PausedGlyph({ it, id }: { it: IssueVM; id?: string }) {
   if (!P.isPaused(it)) return null
   return (
     <HoverTooltip content="Paused">
-      <PausedMark className="mt-0.5" />
+      <PausedMark className="mt-0.5" id={id} />
     </HoverTooltip>
   )
 }
@@ -72,13 +77,26 @@ function DueDate({ it, inButton = false }: { it: IssueVM; inButton?: boolean }) 
  * A group's owner is always its assignee. */
 function ParentHeading({ it, place }: { it: IssueVM; place: ProjectPlace | null }) {
   const owner = P.user(it.owner)
+  /* A screen reader hears the owner, priority and due date after the title,
+     in plain words: the meta row holds the owner button, whose name repeats
+     the title. A parent is never paused (P.isPaused). */
+  const meta = useId()
+  const summary = [
+    owner?.name || 'Unassigned',
+    `${P.PRIORITIES[it.priority]?.name ?? ''} priority`,
+    it.due && `due ${P.fmtISO(it.due)}`,
+  ]
+    .filter(Boolean)
+    .join(', ')
   return (
     <span className="flex w-full min-w-0 flex-col gap-2 p-2">
       <Button
         type="button"
         variant="unstyled"
+        noTooltip
         data-focus-key="parent"
         aria-label={`Parent: ${it.title}`}
+        aria-describedby={meta}
         className="flex min-w-0 items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary"
       >
         <PausedGlyph it={it} />
@@ -86,6 +104,9 @@ function ParentHeading({ it, place }: { it: IssueVM; place: ProjectPlace | null 
           {it.title}
         </span>
       </Button>
+      <span id={meta} className="sr-only">
+        {summary}
+      </span>
       <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-2">
         <HoverTooltip content={owner?.name || 'Unassigned'}>
           <span data-focus-key="owner-name" className="inline-flex min-w-0 items-center gap-1.5">
@@ -128,11 +149,17 @@ function TaskRow({
   actualIssue?: boolean
   indented?: boolean
 }) {
-  const [hovered, setHovered] = useState(false)
   const movable = actualIssue && !P.isGroup(it) && P.canWrite(it.project)
   const dragging = actualIssue && dragId === it.id
-  const stale = actualIssue && P.isStale(it) && !hovered
+  const stale = actualIssue && P.isStale(it)
   const remaining = parentHeader ? null : P.remainingOf(it)
+  /* The title is the row's name. A screen reader hears the delay, the pause
+     and the meta row (priority, hours, place, due date, owner) after it. */
+  const ids = useId()
+  const banner = actualIssue && !!P.delayColor(it)
+  const describedBy = [banner && `${ids}delay`, P.isPaused(it) && `${ids}paused`, `${ids}meta`]
+    .filter(Boolean)
+    .join(' ')
   return (
     <div
       role="presentation"
@@ -152,14 +179,12 @@ function TaskRow({
         onDragStart(it.id, e.currentTarget)
       }}
       onDragEnd={onDragEnd}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      className={`relative flex w-full min-w-0 flex-col overflow-hidden border-0 bg-transparent text-left font-normal text-text-1 transition-[background-color,opacity] hover:bg-hover focus-within:opacity-100 ${indented ? 'pl-3' : ''} ${dragging ? 'opacity-40' : stale ? 'opacity-50' : 'opacity-100'}`}
+      className={`relative flex w-full min-w-0 flex-col overflow-hidden border-0 bg-transparent text-left font-normal text-text-1 transition-[background-color,opacity] hover:bg-hover focus-within:opacity-100 ${indented ? 'pl-3' : ''} ${dragging ? 'opacity-40' : stale ? 'opacity-50 hover:opacity-100 has-[[aria-expanded=true]]:opacity-100' : 'opacity-100'}`}
     >
       <div
         className={`relative flex w-full min-w-0 flex-col ${movable ? (dragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-pointer'}`}
       >
-        {actualIssue && <DelayBanner it={it} />}
+        {actualIssue && <DelayBanner it={it} id={`${ids}delay`} />}
         {parentHeader ? (
           <ParentHeading it={it} place={place} />
         ) : (
@@ -167,17 +192,22 @@ function TaskRow({
             <Button
               type="button"
               variant="unstyled"
+              noTooltip
               data-focus-key="title"
               aria-label={it.title}
+              aria-describedby={describedBy}
               className="min-w-0 cursor-inherit text-left font-normal outline-none focus-visible:ring-2 focus-visible:ring-primary"
             >
               <span className="flex min-w-0 items-start gap-2">
-                <PausedGlyph it={it} />
+                <PausedGlyph it={it} id={`${ids}paused`} />
                 <span className="min-w-0 break-words text-base font-medium leading-[1.35]">
                   {it.title}
                 </span>
               </span>
-              <span className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-3">
+              <span
+                id={`${ids}meta`}
+                className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-3"
+              >
                 <PriorityIcon priority={it.priority} size={11} />
                 {remaining != null && (
                   <span className="whitespace-nowrap !font-mono">
@@ -222,56 +252,59 @@ function BoardCardView({
   stale: _stale,
   ...actions
 }: BoardCardProps) {
-  // Repeated child project labels already name this shared project. Keep the
-  // parent's label when it has no local children or belongs to another project.
-  const parentPlace =
-    group.parent &&
-    !(group.issues.length > 0 && group.issues.every((it) => it.project === group.parent.project))
-      ? place(group.parent)
-      : null
+  const parentPlace = parentPlaceOf(group, place)
+  // The card mounts no tooltip or popover roots until it is used.
+  const root = useRef<HTMLDivElement>(null)
+  const controls = useLiveControls(root)
   return (
+    // biome-ignore lint/a11y/useSemanticElements: one item of its status cell's list (Kanban), a styled div that drags
     <div
+      ref={root}
+      {...controls.rootProps}
+      role="listitem"
       data-parent-card={group.parent?.id}
       className="board-card overflow-hidden rounded-md border border-border bg-surface-1 shadow-card transition-opacity duration-150 motion-reduce:transition-none"
     >
-      {group.ancestors.map((ancestor) => (
-        <TaskRow
-          key={ancestor.uuid}
-          it={ancestor}
-          parentHeader
-          actualIssue={false}
-          place={place(ancestor)}
-          {...actions}
-        />
-      ))}
-      {group.parent && (
-        <TaskRow
-          it={group.parent}
-          parentHeader
-          actualIssue={false}
-          place={parentPlace}
-          {...actions}
-        />
-      )}
-      <div className={group.parent && group.issues.length ? 'pb-2' : undefined}>
-        {group.issues.map((it, index) => (
-          // The rail and elbow sit in the row's 12px gutter and are lifted
-          // above the row (an isolated stacking context) so the hover fill
-          // spanning the card never covers them. The sibling separator stays
-          // on the indented content, starting at the rail.
-          <div
-            key={it.uuid}
-            data-child-row={group.parent ? it.id : undefined}
-            className={
-              group.parent
-                ? `relative isolate before:pointer-events-none before:absolute before:top-0 before:left-3 before:z-[1] before:w-0.5 before:bg-[var(--board-hierarchy-line)] after:pointer-events-none after:absolute after:left-3 after:z-[1] after:h-px after:w-2 after:bg-[var(--board-hierarchy-line)] ${P.delayColor(it) ? 'after:top-[42px]' : 'after:top-[18px]'} ${index === group.issues.length - 1 ? (P.delayColor(it) ? 'before:h-[42px]' : 'before:h-[18px]') : 'before:bottom-0'} ${index > 0 ? '[&>div>div]:border-t [&>div>div]:border-border' : ''}`
-                : undefined
-            }
-          >
-            <TaskRow it={it} place={place(it)} indented={!!group.parent} {...actions} />
-          </div>
+      <StaticControlsContext.Provider value={controls.value}>
+        {group.ancestors.map((ancestor) => (
+          <TaskRow
+            key={ancestor.uuid}
+            it={ancestor}
+            parentHeader
+            actualIssue={false}
+            place={place(ancestor)}
+            {...actions}
+          />
         ))}
-      </div>
+        {group.parent && (
+          <TaskRow
+            it={group.parent}
+            parentHeader
+            actualIssue={false}
+            place={parentPlace}
+            {...actions}
+          />
+        )}
+        <div className={group.parent && group.issues.length ? 'pb-2' : undefined}>
+          {group.issues.map((it, index) => (
+            // The rail and elbow sit in the row's 12px gutter and are lifted
+            // above the row (an isolated stacking context) so the hover fill
+            // spanning the card never covers them. The sibling separator stays
+            // on the indented content, starting at the rail.
+            <div
+              key={it.uuid}
+              data-child-row={group.parent ? it.id : undefined}
+              className={
+                group.parent
+                  ? `relative isolate before:pointer-events-none before:absolute before:top-0 before:left-3 before:z-[1] before:w-0.5 before:bg-[var(--board-hierarchy-line)] after:pointer-events-none after:absolute after:left-3 after:z-[1] after:h-px after:w-2 after:bg-[var(--board-hierarchy-line)] ${P.delayColor(it) ? 'after:top-[42px]' : 'after:top-[18px]'} ${index === group.issues.length - 1 ? (P.delayColor(it) ? 'before:h-[42px]' : 'before:h-[18px]') : 'before:bottom-0'} ${index > 0 ? '[&>div>div]:border-t [&>div>div]:border-border' : ''}`
+                  : undefined
+              }
+            >
+              <TaskRow it={it} place={place(it)} indented={!!group.parent} {...actions} />
+            </div>
+          ))}
+        </div>
+      </StaticControlsContext.Provider>
     </div>
   )
 }
