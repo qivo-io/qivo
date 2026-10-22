@@ -326,6 +326,10 @@ export default defineSchema({
     status: v.union(v.literal('unprovisioned'), v.literal('ready'), v.literal('deleting')),
     seed_version: v.optional(v.number()),
     anchor: v.optional(v.string()),
+    // Set while ensureMine builds the demo one bounded step a call
+    // (model/demoSeed.ts provisionPublicDemoStep): the next step, the write
+    // time every step shares and the step layout it started with.
+    provision: v.optional(v.object({ step: v.number(), now: v.string(), layout: v.string() })),
     expiry_scheduled_id: v.optional(v.id('_scheduled_functions')),
     cleanup_phase: v.optional(v.string()),
     cleanup_parent: v.optional(v.string()),

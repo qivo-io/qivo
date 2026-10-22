@@ -11,8 +11,11 @@ export type DemoLifecycle = {
   expiresAt: number | null
   orgId: string | null
   orgSlug: string | null
+  progress: DemoProgress | null
   serverNow: number
 }
+/** The provisioning steps done so far, and how many there are. */
+export type DemoProgress = { step: number; steps: number }
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 
 export function readDemoMarker(storage: StorageLike): DemoMarker | null {
@@ -73,24 +76,29 @@ export function demoStartupStep<T>(operation: () => Promise<T>, signal?: AbortSi
   })
 }
 
-/** A single deadline includes both queued Web Lock time and work performed
- * while holding it. Cancelling the active callback releases the lock even if
- * its underlying transport never settles. */
+/** One deadline includes both queued Web Lock time and work performed while
+ * holding it. The operation's `progressed` restarts it, so provisioning
+ * that keeps moving a step at a time may take longer than one deadline
+ * while a stalled step still times out. Cancelling the active callback
+ * releases the lock even if its underlying transport never settles. */
 export async function runDemoStartup<T>(
-  operation: (signal: AbortSignal) => Promise<T>,
+  operation: (signal: AbortSignal, progressed: () => void) => Promise<T>,
   signal?: AbortSignal,
 ): Promise<T> {
   const controller = new AbortController()
   const cancel = () => controller.abort(signal?.reason)
   if (signal?.aborted) cancel()
   else signal?.addEventListener('abort', cancel, { once: true })
-  const timer = setTimeout(
-    () => controller.abort(new DemoStartupTimeout()),
-    DEMO_STARTUP_TIMEOUT_MS,
-  )
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const arm = () => {
+    clearTimeout(timer)
+    if (controller.signal.aborted) return
+    timer = setTimeout(() => controller.abort(new DemoStartupTimeout()), DEMO_STARTUP_TIMEOUT_MS)
+  }
+  arm()
   try {
     return await withDemoStartupLock(
-      () => demoStartupStep(() => operation(controller.signal), controller.signal),
+      () => demoStartupStep(() => operation(controller.signal, arm), controller.signal),
       controller.signal,
     )
   } finally {
@@ -108,6 +116,8 @@ type Startup = {
   authenticate: () => Promise<boolean>
   current: () => Promise<DemoLifecycle>
   ensureMine: () => Promise<DemoLifecycle>
+  /** Called before each provisioning step with the steps done so far. */
+  onProgress?: (progress: DemoProgress) => void
 }
 
 /** Called inside the browser's shared startup lock. A lost response never
@@ -141,9 +151,18 @@ export async function startDemo(
   const current = await demoStartupStep(deps.current, signal)
   if (['expired', 'deleting'].includes(current.status)) throw new DemoSessionEnded('expired')
   if (current.status === 'missing') throw new DemoSessionEnded('lost')
-  const ready =
-    current.status === 'ready' ? current : await demoStartupStep(deps.ensureMine, signal)
-  signal?.throwIfAborted()
+  // The server builds a demo one bounded step a call, each answer a step
+  // further until it is ready. An answer that is not refuses, so a stuck
+  // demo never loops.
+  let ready = current
+  while (ready.status === 'unprovisioned') {
+    const done = ready.progress?.step ?? 0
+    if (ready.progress) deps.onProgress?.(ready.progress)
+    ready = await demoStartupStep(deps.ensureMine, signal)
+    signal?.throwIfAborted()
+    if (ready.status === 'unprovisioned' && (ready.progress?.step ?? 0) <= done)
+      throw new Error('Your demo stopped while it was being prepared. Please retry.')
+  }
   if (ready.status !== 'ready' || !ready.expiresAt || !ready.orgId || !ready.orgSlug)
     throw new Error('Your demo is still being prepared. Please retry.')
   saveDemoMarker(deps.storage, { state: 'started', expiresAt: ready.expiresAt })
