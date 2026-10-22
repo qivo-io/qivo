@@ -268,9 +268,18 @@ describe('Add person', () => {
       /^This address cannot get a password login\..*Use another address\.$/,
     )
     expect(email.getAttribute('aria-describedby')).toBe(note.id)
+    expect(note.parentElement?.getAttribute('aria-live')).toBe('polite')
+    // editing a refused address keeps the note in place, without a pause
+    await type(email, 'jørn.hansen@example.no')
+    expect(find('[data-add-email-refusal]')).toBe(note)
     await type(email, 'jorn@example.no')
     expect(document.querySelector('[data-add-email-refusal]')).toBeNull()
     expect(addButton().disabled).toBe(false)
+    // without the note the field keeps its tooltip's description
+    await act(async () => email.focus())
+    const tooltip = document.querySelector('[role="tooltip"]')
+    expect(tooltip?.textContent).toBe('The email address they will use to sign in')
+    expect(email.getAttribute('aria-describedby')).toBe(tooltip?.id)
   })
 })
 
