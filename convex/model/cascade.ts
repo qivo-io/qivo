@@ -21,6 +21,7 @@ import { hasPendingCheckout } from './billing'
 import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
 import { deleteOrgBookkeeping } from './orgs'
+import { deleteStamp } from './syncStamps'
 import { emitTaskEvent } from './taskEvents'
 
 async function deleteProfileRateLimit(ctx: MutationCtx, profileId: string): Promise<void> {
@@ -353,8 +354,8 @@ const ACTED_ROWS_FIRST_PASS = 500
  *   agent_keys.created_by (0100:51), issue_attachments.uploaded_by (0018:23).
  * - DELETE: team_members (0001:52), project_access (0001:81),
  *   issue_subscriptions (0114:86), messages by recipient, the whole inbox
- *   (0074:23), user_prefs (0036:11), agent_keys by profile (0100:47),
- *   mcp_tokens (0030:11).
+ *   (0074:23), user_prefs (0036:11), the Team sync stamp (sync_stamps),
+ *   agent_keys by profile (0100:47), mcp_tokens (0030:11).
  *
  * Storage: the avatar bytes die HERE (phase 5 on); phase 7 owns only avatar
  * upload/serving (setAvatar/clearAvatar and their replace-time deletes) and
@@ -403,6 +404,8 @@ export async function removeProfile(
     .order('desc')
     .take(ACTED_ROWS_FIRST_PASS)
   for (const e of acted) await ctx.db.patch(e._id, { actor_id: undefined })
+  // the person's Team sync stamp, one row (model/syncStamps.ts)
+  await deleteStamp(ctx, profile.id)
   // The background step deletes the connections with their replay hashes.
   // Every OAuth path already refuses once the profile row is gone, so this
   // only hides the newest connections from the person's own list at once;
@@ -606,6 +609,7 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
       .withIndex('by_profile', (q) => q.eq('profile_id', pr.id))
       .collect())
       await ctx.db.delete(u._id)
+    await deleteStamp(ctx, pr.id)
     for (const k of await ctx.db
       .query('agent_keys')
       .withIndex('by_profile', (q) => q.eq('profile_id', pr.id))

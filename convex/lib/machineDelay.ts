@@ -24,9 +24,11 @@ import type { Caller, GroupFacts } from './core'
 import { byId } from './db'
 import { type DelayInfo, type DelayIssue, type DelayStatus, delayOf, delayProjector } from './delay'
 import { liveIn, liveTasksOf, ownedOpenTasks } from './liveTasks'
+import type { OrgLoadRow } from './loadRows'
 import { taskOwnerId } from './review'
 import { type OrgProjectView, orgProjectView } from './visibility'
 import {
+  canonicalLoad,
   DEFAULT_PLANNABLE_HOURS,
   type LoadSpan,
   plannableHoursOf,
@@ -132,8 +134,9 @@ function delayJson(info: DelayInfo | null, grid: WeekGrid): DelayJson | null {
   }
 }
 
-/* Load rows as the delay projection walks them, by owner. */
-function spansByOwner(rows: ReturnType<typeof orgLoadRows>, grid: WeekGrid) {
+/* Load rows as the delay projection walks them, by owner, each owner's in
+ * the app's order (canonicalLoad). */
+function spansByOwner(rows: readonly OrgLoadRow[], grid: WeekGrid) {
   const out = new Map<string, LoadSpan[]>()
   for (const row of rows) {
     const span: LoadSpan = {
@@ -147,6 +150,7 @@ function spansByOwner(rows: ReturnType<typeof orgLoadRows>, grid: WeekGrid) {
     if (own === undefined) out.set(row.owner_id, [span])
     else own.push(span)
   }
+  for (const spans of out.values()) canonicalLoad(spans)
   return out
 }
 
@@ -249,10 +253,10 @@ export async function ownerLoadSpans(
 ): Promise<LoadSpan[]> {
   if (owner.org_id !== me.org_id) return []
   const live = liveIn(view.byUuid)
-  // what orgLoadRows drops anyway needs no subtask read. The owner's tasks
-  // come in the organization's active order (by_org_archived), which the
-  // list's load and the app's follow, so each week's hours add up in the
-  // same order and round the same way
+  // what orgLoadRows drops anyway needs no subtask read. spansByOwner puts
+  // the rows in the order the list's load and the app's take
+  // (canonicalLoad), so each week's hours add up in the same order and
+  // round the same way, whatever order the reads give
   const candidates = (await ownedOpenTasks(ctx, owner.id, live)).filter(
     (task) =>
       task.org_id === me.org_id &&

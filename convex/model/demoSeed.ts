@@ -35,6 +35,7 @@ import {
   setCounters,
 } from './orgs'
 import { cleanProjectName, projectDescription } from './projects'
+import { deleteStamp, writeStamp } from './syncStamps'
 import { cleanTeamName } from './teams'
 
 export const SAMPLE_AVATARS = [
@@ -120,6 +121,13 @@ export async function writeNorthstarWork(
   for (const p of data.people) {
     const profile = profiles.find((pr) => pr.id === personIds[p.key])
     require(profile !== undefined, rule('marketing demo: owned profile missing'))
+    // A wipe keeps profiles, so set or clear the Team sync stamp every time:
+    // a reset must not keep stamps from interactive use.
+    if (p.syncDay === undefined) await deleteStamp(ctx, profile.id)
+    else
+      await writeStamp(ctx, profile, {
+        at: marketingInstant(anchor, p.syncDay, DEMO_SYNC_TIME),
+      })
     await ctx.db.patch(profile._id, {
       name: p.name,
       initials: p.initials,
@@ -128,10 +136,9 @@ export async function writeNorthstarWork(
       active: true,
       plannable_hours: p.kind === 'person' ? orgDefaults.default_plannable_hours : undefined,
       message_retention_days: p.kind === 'person' ? DEFAULT_MESSAGE_RETENTION_DAYS : undefined,
-      // A wipe keeps profiles, so set or clear the Team sync stamp every time:
-      // a reset must not keep stamps from interactive use.
-      sync_at:
-        p.syncDay === undefined ? undefined : marketingInstant(anchor, p.syncDay, DEMO_SYNC_TIME),
+      // The retired Team sync fields (schema.ts) stay clear; the stamp is
+      // set below.
+      sync_at: undefined,
       sync_since: undefined,
       // Nor may a reset keep a project-creation right granted in the demo.
       can_create_projects: undefined,

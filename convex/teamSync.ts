@@ -1,7 +1,8 @@
 /* Team sync: the meeting page's two server facts. `stamp` records that a
- * change was made on a person through the sync page (profiles.sync_at /
- * sync_since, read through the sitting rule in lib/teamSync.ts; the columns
- * ride the snapshot's profile rows). `lastComments` is the one per-task fact
+ * change was made on a person through the sync page (the person's
+ * sync_stamps row, model/syncStamps.ts, read through the sitting rule in
+ * lib/teamSync.ts; the snapshot joins it into its profile rows as sync_at
+ * and sync_since). `lastComments` is the one per-task fact
  * the snapshot lacks: when each open task was last commented on, for the
  * page's "untouched" and "changed" marks. The page subscribes to it only
  * while it is open, and only for the people whose cards it shows, so neither
@@ -20,11 +21,12 @@ import { taskOwnerId } from './lib/review'
 import { nextSyncStamp, SYNC_OWNERS_MAX } from './lib/teamSync'
 import { orgProjectView } from './lib/visibility'
 import { DOCUMENT_MAX_BYTES, latestComment } from './model/comments'
+import { stampOf, writeStamp } from './model/syncStamps'
 
 /* A change made from a sync page stamps the owner of that page, who is often
  * not the caller. The sync is a home-organization page for staff: guests
  * never reach it and viewers change nothing. One server `now`; an absent
- * `since` stays absent (patched to undefined, never null). `first_since` is
+ * `since` stays absent (left out of the row, never null). `first_since` is
  * the day the caller's page was reading from (YYYY-MM-DD); it is kept only
  * on a person's first stamp and only when valid (lib/teamSync.ts
  * firstSittingSince), else ignored. */
@@ -35,10 +37,11 @@ export const stamp = orgMutation({
     if (!isOrgStaff(ctx.me)) throw forbidden('no permission to run a team sync')
     const person = await byId(ctx, 'profiles', profile_id)
     if (person === null || person.org_id !== ctx.me.org_id) throw notFound('profile not found')
-    const prev =
-      person.sync_at === undefined ? null : { at: person.sync_at, since: person.sync_since }
-    const next = nextSyncStamp(prev, now, first_since)
-    await ctx.db.patch(person._id, { sync_at: next.at, sync_since: next.since })
+    // the person's row, or the retired profile fields a backfill has not
+    // moved yet; the profile itself is never written, so the person's own
+    // subscriptions do not rerun
+    const next = nextSyncStamp(await stampOf(ctx, person), now, first_since)
+    await writeStamp(ctx, person, next)
     return null
   },
 })

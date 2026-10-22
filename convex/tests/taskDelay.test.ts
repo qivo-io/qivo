@@ -22,7 +22,12 @@ import {
   isIssueDone,
   isIssueGroup,
 } from '../../src/lib/issueGroups'
-import { DEFAULT_PLANNABLE_HOURS, type LoadSpan, plannableHoursOf } from '../../src/lib/workload'
+import {
+  canonicalLoad,
+  DEFAULT_PLANNABLE_HOURS,
+  type LoadSpan,
+  plannableHoursOf,
+} from '../../src/lib/workload'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
@@ -32,6 +37,7 @@ import { orgProjectView } from '../lib/visibility'
 import { weekGrid } from '../lib/workload'
 import { orgLoadRows } from '../planning'
 import {
+  appLoadRows,
   as,
   newT,
   type OrgFixture,
@@ -192,8 +198,10 @@ async function appDelays(fx: Fx, person: Doc<'profiles'>): Promise<Map<string, D
       plannableHoursOf({ plannableHours: p.plannable_hours ?? null, kind: p.kind }),
     ]),
   )
+  // the store's load: the rows of the tasks it shows and the snapshot's of
+  // those it does not (src/store/taskIndex.ts), each owner's in canonical order
   const load = new Map<string, LoadSpan[]>()
-  for (const r of snap.orgLoad) {
+  for (const r of appLoadRows(snap)) {
     const spans = load.get(r.owner_id) ?? []
     spans.push({
       issueUuid: r.issue_id || null,
@@ -225,6 +233,7 @@ async function appDelays(fx: Fx, person: Doc<'profiles'>): Promise<Map<string, D
       capacity: (owner && capacity.get(owner)) || DEFAULT_PLANNABLE_HOURS,
     }
   })
+  for (const spans of load.values()) canonicalLoad(spans)
   const delays = computeDelayMap(issues, load)
   const tracks = new Map(snap.projects.map((p) => [p.id, p.track_delay !== false]))
   return new Map(
@@ -405,18 +414,21 @@ describe('a single read’s load is the list’s load', () => {
               .collect()
             const rows = orgLoadRows(me, view, new Set(roster.map((p) => p.id)), active)
             for (const owner of Object.values(people)) {
-              const fromList = rows
-                .filter((r) => r.owner_id === owner.id)
-                .map((r) => ({
-                  issueUuid: r.issue_id,
-                  start: grid.ofDay(r.start_week),
-                  end: grid.ofDay(r.end_week),
-                  remaining: r.remaining,
-                  remainingSet:
-                    r.remaining_set_at === null ? null : grid.ofInstant(r.remaining_set_at),
-                }))
-              // in the same order too, as each week's hours add up in order,
-              // whether it checks each task for subtasks or reads them all
+              const fromList = canonicalLoad(
+                rows
+                  .filter((r) => r.owner_id === owner.id)
+                  .map((r) => ({
+                    issueUuid: r.issue_id,
+                    start: grid.ofDay(r.start_week),
+                    end: grid.ofDay(r.end_week),
+                    remaining: r.remaining,
+                    remainingSet:
+                      r.remaining_set_at === null ? null : grid.ofInstant(r.remaining_set_at),
+                  })),
+              )
+              // in the same order too (canonicalLoad), as each week's hours
+              // add up in order, whether it checks each task for subtasks or
+              // reads them all
               const fromOwner = await ownerLoadSpans(ctx, me, owner, grid, view)
               expect(fromOwner, `${owner.name} for ${me.name}`).toEqual(fromList)
               const checks = OWNER_LOAD_CHECKS.reads

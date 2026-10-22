@@ -4,7 +4,7 @@
  *
  * forMe reads every seat in one transaction, so the sum must stay within
  * Convex's limits of 4,096 index ranges, 32,000 documents and 16 MiB. Besides
- * one range for the caller's seats, each seat reads 11 ranges plus:
+ * one range for the caller's seats, each seat reads 12 ranges plus:
  * - one per active project of the organization, its active tasks
  *   (lib/liveTasks.ts liveTasksOf), so the tasks of archived projects are
  *   never read, or one for all of them past LIVE_PROJECT_READS active
@@ -23,7 +23,7 @@
  *   carry archive marks (model/archiveMarks.ts), its own relation reads and
  *   follow. Background steps clear the marks moments after the restore.
  * A seat whose relation tables stay in bulk therefore reads at most about
- * 17 ranges plus one per active project (at most 1,000) and three per team
+ * 18 ranges plus one per active project (at most 1,000) and three per team
  * and per visible project, and a person's seats add up. Teams and projects
  * are few beside tasks. A view read task by task adds up to 4 ranges per
  * task, as the rule this replaced did, until the ranges left run short and a
@@ -60,6 +60,7 @@ import { commentAnchor, threadPage } from './model/comments'
 import { shownLabelColor } from './model/labels'
 import { countersOf, type OrgCounters } from './model/orgs'
 import { shownAvatarColor } from './model/people'
+import { legacyStamp, stampsOfOrg } from './model/syncStamps'
 import { type OrgLoadRow, orgLoadRows } from './planning'
 
 type AppRow<T extends TableNames> = Omit<Doc<T>, '_id' | '_creationTime'>
@@ -178,14 +179,28 @@ export const forMe = authedQuery({
 
       // Include inactive, agent and unclaimed profiles in the org roster.
       // Clients paint the avatar color as a CSS background, so an older
-      // non-hex value goes out as gray.
+      // non-hex value goes out as gray. Each row carries its person's Team
+      // sync stamp as sync_at and sync_since, from the person's sync_stamps
+      // row (model/syncStamps.ts) or, before the backfill moved it, from the
+      // retired profile fields.
       const orgProfiles = await ctx.db
         .query('profiles')
         .withIndex('by_org', (q) => q.eq('org_id', orgId))
         .collect()
+      const stamps = await stampsOfOrg(ctx, orgId)
       const orgProfileIds = new Set<string>()
       for (const p of orgProfiles) {
-        profiles.push({ ...rowOf(p), color: shownAvatarColor(p.color) })
+        const { sync_at: _at, sync_since: _since, ...row } = rowOf(p)
+        const stamp = stamps.get(p.id) ?? legacyStamp(p)
+        profiles.push({
+          ...row,
+          color: shownAvatarColor(p.color),
+          ...(stamp === null
+            ? {}
+            : stamp.since === undefined
+              ? { sync_at: stamp.at }
+              : { sync_at: stamp.at, sync_since: stamp.since }),
+        })
         orgProfileIds.add(p.id)
       }
 
@@ -343,8 +358,13 @@ export const forMe = authedQuery({
         for (const a of atts) attachments.push(relationRow(a))
       }
 
-      // Hidden workload remains anonymized by orgLoadRows.
-      orgLoad.push(...orgLoadRows(me, view, orgProfileIds, liveOrgIssues))
+      // Only the load of tasks this seat is not shown, anonymized by
+      // orgLoadRows. The app derives the rows of the tasks it shows from
+      // the task rows with the same fence (lib/loadRows.ts loadRowFor), so
+      // a pending edit moves its owner's load at once, and an edit of a
+      // shown task changes no load row here.
+      for (const row of orgLoadRows(me, view, orgProfileIds, liveOrgIssues))
+        if (row.issue_id === null) orgLoad.push(row)
     }
 
     // One cap across all organizations, unread rows first, newest first,

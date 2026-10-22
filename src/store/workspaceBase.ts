@@ -34,8 +34,8 @@ const KEYED = {
 }
 /** The row sections kept as lists in delivery order, and their natural keys.
     A hidden task's load row has no task id, so a load row is keyed by its
-    task or, hidden, by its owner, then its place among the rows of that key
-    (keysOf). */
+    owner, then its place among that owner's rows (keysOf). Only those rows
+    are kept (hiddenLoad). */
 const LISTED = {
   teamMembers: (r: Snapshot['teamMembers'][number]) => `${r.team_id}:${r.profile_id}`,
   access: (r: Snapshot['access'][number]) => `${r.project_id}:${r.profile_id}`,
@@ -102,11 +102,17 @@ export type Scalars = Pick<
     added). The row it has now is in the base. */
 export type Changes = Partial<Record<SectionName, Map<string, object | undefined>>>
 
-/** Freezes `value` and everything in it. */
+/** Freezes `value` and everything in it. A delivery's rows hold mostly
+    strings and numbers, so only the objects among their fields are walked,
+    without listing every field first. */
 export function deepFreeze<T>(value: T): T {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
     Object.freeze(value)
-    for (const inner of Object.values(value)) deepFreeze(inner)
+    const fields = value as Record<string, unknown>
+    for (const key in fields) {
+      const inner = fields[key]
+      if (inner && typeof inner === 'object') deepFreeze(inner)
+    }
   }
   return value
 }
@@ -161,6 +167,12 @@ function indexOf(state: Staged): Map<string, number> {
   state.index ??= new Map(state.keys.map((key, i) => [key, i]))
   return state.index
 }
+
+/** The delivery's load rows of tasks this person is not shown. The store
+    derives the shown tasks' load from their rows (store/taskIndex.ts), so a
+    row naming a task, which a server before that change still sends, would
+    count twice. */
+const hiddenLoad = (snap: Snapshot) => (snap.orgLoad ?? []).filter((row) => row.issue_id === null)
 
 /** Creates an empty base. */
 export function createWorkspaceBase() {
@@ -259,7 +271,8 @@ export function createWorkspaceBase() {
         const keys = stageSection(name, snap[name], KEYED[name])
         if (name === 'issues') added = keys
       }
-      for (const name of LISTED_SECTIONS) stageSection(name, snap[name] ?? [], LISTED[name])
+      for (const name of LISTED_SECTIONS)
+        stageSection(name, name === 'orgLoad' ? hiddenLoad(snap) : (snap[name] ?? []), LISTED[name])
       stagedScalars = {
         auth_user_id: snap.auth_user_id,
         myProfileIds: snap.myProfileIds,
@@ -320,8 +333,7 @@ export function createWorkspaceBase() {
           for (const flag of ['hiddenSubtaskParents', 'hiddenParentTasks'] as const)
             if (!sameData(next[flag], flagged[flag])) flagged[flag] = next[flag]
         }
-        // a list that only changed its order changed too (orgLoad sums in
-        // delivery order)
+        // a list that only changed its order changed too
         if (changed.size || state.moved) changes[name] = changed
         state.pending = new Map()
         state.moved = false

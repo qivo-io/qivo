@@ -23,6 +23,9 @@
 //                        of tasks as the visible ones; they reach the
 //                        workspace only as anonymized load rows and the
 //                        has_hidden_subtasks and has_hidden_parent flags
+//   shownload=1          also send the load rows of the tasks the person is
+//                        shown, as the server did before the app derived
+//                        them from the task rows (an older baseline)
 //   shape=varied         a Board-shaped mix instead (variedTask): every
 //                        status, a parent for every 25 tasks, due dates,
 //                        paused, long-titled and unowned tasks
@@ -48,6 +51,7 @@ const followShare = option('follows', 0.1)
 const peopleCount = Math.max(2, option('people', 50))
 const hiddenCount = option('hidden', 4)
 const varied = parameters.get('shape') === 'varied'
+const shownLoad = parameters.get('shownload') === '1'
 const fixtureTime = new Date()
 const now = fixtureTime.toISOString()
 const day = (offset) => {
@@ -268,10 +272,13 @@ const wireTask = (row) => {
   out.has_hidden_subtasks = hiddenSubtaskParents.has(row.id)
   return out
 }
-/** The load row of task `row`, or null: convex/planning.ts orgLoadRows'
-    fence for a staff reader, every owner in the organization. */
+/** The load row the snapshot sends for task `row`, or null:
+    convex/planning.ts orgLoadRows' fence for a staff reader, every owner in
+    the organization, kept for tasks the reader is not shown only, as forMe
+    keeps them (the app derives the shown tasks' load from their rows), or
+    for every task with shownload=1. */
 const loadRow = (row) => {
-  if (parents.has(row.id)) return null
+  if (parents.has(row.id) || (!shownLoad && shown.has(row.id))) return null
   const owner = row.status === 'review' && row.reviewer_id ? row.reviewer_id : row.assignee_id
   if (owner === undefined || row.start_week === undefined || row.end_week === undefined) return null
   if (row.status === 'done' || row.paused || !((row.remaining_hours ?? 0) > 0)) return null

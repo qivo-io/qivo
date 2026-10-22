@@ -137,6 +137,13 @@ const profileRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
         () =>
           drain(ctx, budget, (n) =>
             ctx.db
+              .query('sync_stamps')
+              .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
+              .take(n),
+          ),
+        () =>
+          drain(ctx, budget, (n) =>
+            ctx.db
               .query('team_members')
               .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
               .take(n),
@@ -424,7 +431,7 @@ const billingRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
  * removal row. */
 async function finish(ctx: MutationCtx, removal: Doc<'org_removals'>): Promise<void> {
   const orgId = removal.org_id
-  for (const table of ['issues', 'projects', 'teams', 'profiles', 'labels'] as const)
+  for (const table of ['issues', 'projects', 'teams', 'profiles', 'labels', 'sync_stamps'] as const)
     require((await ctx.db
       .query(table)
       .withIndex('by_org', (q) => q.eq('org_id', orgId))

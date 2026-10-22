@@ -1,5 +1,5 @@
-/* Team sync: the sitting rule (lib/teamSync.ts), the per-person stamp on
- * profiles.sync_at / sync_since, and the page's latest-comment read. */
+/* Team sync: the sitting rule (lib/teamSync.ts), the per-person stamp in
+ * sync_stamps (model/syncStamps.ts), and the page's latest-comment read. */
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
@@ -180,12 +180,38 @@ const profileRow = (t: T, id: string): Promise<Doc<'profiles'>> =>
     return row
   })
 
+/* The person's stored stamp as the snapshot ships it: sync_at and, when
+ * set, sync_since, from their sync_stamps row; {} without one. */
+const stampOf = (t: T, id: string): Promise<{ sync_at?: string; sync_since?: string }> =>
+  t.run(async (ctx) => {
+    const row = await ctx.db
+      .query('sync_stamps')
+      .withIndex('by_profile', (q) => q.eq('profile_id', id))
+      .unique()
+    if (row === null) return {}
+    return row.since === undefined
+      ? { sync_at: row.at }
+      : { sync_at: row.at, sync_since: row.since }
+  })
+
 const stamp = (t: T, f: OrgFixture, caller: Doc<'profiles'>, profile_id: string) =>
   as(t, caller).mutation(api.teamSync.stamp, { org_id: f.org.id, profile_id })
 
-const setStamp = (t: T, profile: Doc<'profiles'>, patch: Partial<Doc<'profiles'>>) =>
+/* Overwrites the person's stamp row with `at` and `since`. */
+const setStamp = (t: T, profile: Doc<'profiles'>, at: string, since?: string) =>
   t.run(async (ctx) => {
-    await ctx.db.patch(profile._id, patch)
+    const row = await ctx.db
+      .query('sync_stamps')
+      .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
+      .unique()
+    const next = {
+      org_id: profile.org_id,
+      profile_id: profile.id,
+      at,
+      ...(since === undefined ? {} : { since }),
+    }
+    if (row === null) await ctx.db.insert('sync_stamps', next)
+    else await ctx.db.replace(row._id, next)
   })
 
 describe('teamSync.stamp', () => {
@@ -197,11 +223,11 @@ describe('teamSync.stamp', () => {
     await stamp(t, f, f.user, f.user.id)
     await stamp(t, f, f.user, f.agent.id)
     for (const person of [f.user, f.agent]) {
-      const row = await profileRow(t, person.id)
+      const row = await stampOf(t, person.id)
       expect(Date.parse(row.sync_at ?? '')).toBeGreaterThanOrEqual(before)
       expect(row).not.toHaveProperty('sync_since')
     }
-    expect(await profileRow(t, f.admin.id)).not.toHaveProperty('sync_at')
+    expect(await stampOf(t, f.admin.id)).toEqual({})
     expect(await activityFor(t, f.org.id)).toEqual([])
   })
 
@@ -212,6 +238,8 @@ describe('teamSync.stamp', () => {
     await expectRefusal(stamp(t, f, f.guest, f.guest.id), 'forbidden')
     expect(await profileRow(t, f.user.id)).toEqual(f.user)
     expect(await profileRow(t, f.guest.id)).toEqual(f.guest)
+    expect(await stampOf(t, f.user.id)).toEqual({})
+    expect(await stampOf(t, f.guest.id)).toEqual({})
   })
 
   it('a foreign-org or unknown profile reads not found', async () => {
@@ -228,22 +256,22 @@ describe('teamSync.stamp', () => {
     const earlier = '2025-12-30T09:00:00.000Z'
 
     await stamp(t, f, f.admin, f.user.id)
-    const first = await profileRow(t, f.user.id)
+    const first = await stampOf(t, f.user.id)
     await tick()
     await stamp(t, f, f.admin, f.user.id)
-    const second = await profileRow(t, f.user.id)
+    const second = await stampOf(t, f.user.id)
     expect(second.sync_at! > first.sync_at!).toBe(true)
     expect(second).not.toHaveProperty('sync_since') // absent stays absent
 
-    await setStamp(t, second, { sync_since: earlier })
+    await setStamp(t, f.user, second.sync_at!, earlier)
     await stamp(t, f, f.user, f.user.id)
-    expect((await profileRow(t, f.user.id)).sync_since).toBe(earlier)
+    expect((await stampOf(t, f.user.id)).sync_since).toBe(earlier)
 
     // the last change on this person was seven hours ago: a new sitting
     const lastSync = new Date(Date.now() - 7 * HOUR).toISOString()
-    await setStamp(t, second, { sync_at: lastSync, sync_since: earlier })
+    await setStamp(t, f.user, lastSync, earlier)
     await stamp(t, f, f.admin, f.user.id)
-    const rolled = await profileRow(t, f.user.id)
+    const rolled = await stampOf(t, f.user.id)
     expect(rolled.sync_since).toBe(lastSync)
     expect(rolled.sync_at! > lastSync).toBe(true)
   })
@@ -263,23 +291,23 @@ describe('teamSync.stamp', () => {
         first_since,
       })
     await firstStamp(f.user, back(3))
-    expect((await profileRow(t, f.user.id)).sync_since).toBe(back(3))
+    expect((await stampOf(t, f.user.id)).sync_since).toBe(back(3))
     // a later stamp in the sitting keeps it and ignores another reading day
     await firstStamp(f.user, back(1))
-    expect((await profileRow(t, f.user.id)).sync_since).toBe(back(3))
+    expect((await stampOf(t, f.user.id)).sync_since).toBe(back(3))
     // a reading day in the future or weeks back is ignored
     await firstStamp(f.admin, back(-2))
-    expect(await profileRow(t, f.admin.id)).not.toHaveProperty('sync_since')
+    expect(await stampOf(t, f.admin.id)).not.toHaveProperty('sync_since')
     await firstStamp(f.agent, back(20))
-    expect(await profileRow(t, f.agent.id)).not.toHaveProperty('sync_since')
+    expect(await stampOf(t, f.agent.id)).not.toHaveProperty('sync_since')
   })
 
   it("the stamp rides every member's snapshot profile row", async () => {
     const t = newT()
     const f = await withOrg(t)
     await stamp(t, f, f.admin, f.user.id)
-    await setStamp(t, f.user, { sync_since: NOW })
-    const row = await profileRow(t, f.user.id)
+    await setStamp(t, f.user, (await stampOf(t, f.user.id)).sync_at!, NOW)
+    const row = await stampOf(t, f.user.id)
     const snap = await as(t, f.viewer).query(api.snapshot.forMe, {})
     const shipped = snap?.profiles.find((p) => p.id === f.user.id)
     expect(shipped?.sync_at).toBe(row.sync_at)

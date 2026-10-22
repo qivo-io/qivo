@@ -28,23 +28,13 @@ import { byId } from './lib/db'
 import type { OrgRole, ProfileKind } from './lib/enums'
 import { authedQuery, badRequest } from './lib/functions'
 import { groupTest, liveIn, liveTasksOf, ownedOpenTasks } from './lib/liveTasks'
-import { taskOwnerId } from './lib/review'
+import { loadRowFor, type OrgLoadRow } from './lib/loadRows'
 import { type OrgProjectView, orgProjectView } from './lib/visibility'
-import { committedByWeek, type LoadSpan, weekGrid } from './lib/workload'
+import { canonicalLoad, committedByWeek, type LoadSpan, weekGrid } from './lib/workload'
 import { hasSubtasks } from './model/issues'
 import { roundTenths } from './model/taskValues'
 
-/* rows.orgLoad element, field names verbatim (planner.ts:90): `remaining`,
- * NOT remaining_hours. */
-export type OrgLoadRow = {
-  issue_id: string | null
-  // the effective owner: the reviewer while In Review with one set, else the assignee (#314)
-  owner_id: string
-  start_week: string
-  end_week: string
-  remaining: number
-  remaining_set_at: string | null
-}
+export type { OrgLoadRow }
 
 /* plan_assignee_load's wire shape — the SQL column names exactly. The client
  * never reads `title` today, but it is in the SQL contract; kept. */
@@ -60,8 +50,9 @@ export type AssigneeLoadRow = {
   visible: boolean
 }
 
-/* plan_org_load for one org. orgProfileIds = ALL profile ids of the org
- * (active + inactive + agents) — the 0065 owner fence. The snapshot passes
+/* plan_org_load for one org, each task through the one fence
+ * (lib/loadRows.ts loadRowFor). orgProfileIds = ALL profile ids of the org
+ * (active + inactive + agents), the 0065 owner fence. The snapshot passes
  * its live task read (lib/liveTasks.ts liveTasksOf) so planning and grouping
  * do not scan it again. A task's group state comes from those rows, which
  * hold every subtask that makes a task in an active project a group. The
@@ -74,31 +65,20 @@ export function orgLoadRows(
   issues: readonly Doc<'issues'>[],
 ): OrgLoadRow[] {
   const staff = isOrgStaff(me)
+  const live = liveIn(view.byUuid)
+  const isGroup = groupTest(issues, live)
+  const ownerInOrg = (id: string) => orgProfileIds.has(id)
   const rows: OrgLoadRow[] = []
-  const isGroup = groupTest(issues, liveIn(view.byUuid))
   for (const i of issues) {
-    if (isGroup(i)) continue
-    // groups are skipped above, so the rule's isGroup default holds
-    const owner = taskOwnerId(i)
-    if (owner === undefined) continue
-    if (i.start_week === undefined || i.end_week === undefined) continue
-    if (i.status === 'done' || i.paused) continue
-    const remaining = i.remaining_hours ?? 0
-    if (!(remaining > 0)) continue
-    if (i.archived_at !== undefined) continue
-    const project = view.byUuid.get(i.project_id)
-    if (project === undefined || project.archived_at !== undefined) continue
-    if (!orgProfileIds.has(owner)) continue
-    const vis = view.visible(i.project_id)
-    if (!(staff || vis || owner === me.id)) continue
-    rows.push({
-      issue_id: vis ? i.id : null,
-      owner_id: owner,
-      start_week: i.start_week,
-      end_week: i.end_week,
-      remaining,
-      remaining_set_at: i.remaining_set_at ?? null,
+    const row = loadRowFor(i, {
+      isGroup: isGroup(i),
+      projectLive: live(i.project_id),
+      ownerInOrg,
+      visible: view.visible(i.project_id),
+      staff,
+      meId: me.id,
     })
+    if (row !== null) rows.push(row)
   }
   return rows
 }
@@ -277,10 +257,11 @@ export async function workloadCore(
     spans.set(row.owner_id, own)
   }
   const window = Array.from({ length: o.weeks }, (_, i) => first + i)
-  // only the asked weeks are added up, however far a plan runs
+  // only the asked weeks are added up, however far a plan runs, in the
+  // order the app adds them (canonicalLoad)
   const asked = { from: first, to: first + o.weeks - 1 }
   const perWeek = (items: LoadSpan[]): number[] => {
-    const byWeek = committedByWeek(items, null, asked)
+    const byWeek = committedByWeek(canonicalLoad(items), null, asked)
     return window.map((week) => roundTenths(byWeek.get(week) ?? 0))
   }
   const people: PersonWorkloadJson[] = []

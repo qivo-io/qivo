@@ -100,6 +100,8 @@ const EXCLUDED_TABLES = [
   'machine_rate_limits',
   // Internal counters, exported on the organization row (next_issue_num).
   'org_counters',
+  // Team sync stamps, exported on the profile row (sync_at, sync_since).
+  'sync_stamps',
   // Deleted items are not exported: restore an item to include its work.
   'deleted_items',
   'deleted_item_jobs',

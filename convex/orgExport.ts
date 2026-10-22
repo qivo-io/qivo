@@ -26,6 +26,7 @@ import {
   type OrgExportSection,
 } from './lib/orgExport'
 import { countersOf } from './model/orgs'
+import { stampRow } from './model/syncStamps'
 
 const PAGE_SIZE = 100
 /* Ten rows for a page that reads another document per row, so even ten
@@ -327,6 +328,17 @@ export const page = orgQuery({
       const projectId = checkParents && 'project_id' in doc ? doc.project_id : undefined
       if (projectId !== undefined && !(await liveProject(projectId))) continue
       const row = exportRow(doc, section)
+      // A person's Team sync stamp goes out as sync_at and sync_since, from
+      // their sync_stamps row or, before the backfill moved it, from the
+      // retired profile fields the row already holds.
+      if (section === 'profiles' && typeof row.id === 'string') {
+        const stamp = await stampRow(ctx, row.id)
+        if (stamp !== null) {
+          row.sync_at = stamp.at
+          if (stamp.since === undefined) delete row.sync_since
+          else row.sync_since = stamp.since
+        }
+      }
       if (checkParents && typeof row.parent_id === 'string' && !(await liveParent(row.parent_id)))
         delete row.parent_id
       if (await hasOwnedEndpoint(ctx, section, row, orgId, inFlight ? liveProject : undefined))

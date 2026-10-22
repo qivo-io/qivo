@@ -26,7 +26,8 @@
  * org_approx_bytes and pg_database_size have no Convex analogue. The port
  * sums JSON.stringify(doc).length over the table set the SQL measured,
  * which was already approximate ("index/TOAST overhead excluded"). The set
- * also holds each organization's org_counters row and the copies of those
+ * also holds each organization's org_counters row, the Team sync stamps
+ * that moved off the profiles into sync_stamps, and the copies of those
  * tables that Deleted items keeps in deleted_rows. */
 
 import { type Infer, v } from 'convex/values'
@@ -230,7 +231,15 @@ export const childPage = internalQuery({
   },
 })
 
-const ORG_PARTS = ['profiles', 'teams', 'projects', 'issues', 'activity', 'deleted'] as const
+const ORG_PARTS = [
+  'profiles',
+  'stamps',
+  'teams',
+  'projects',
+  'issues',
+  'activity',
+  'deleted',
+] as const
 type OrgPart = (typeof ORG_PARTS)[number]
 
 /** Counts of one part of an organization. `rows` counts the part's own
@@ -240,8 +249,8 @@ type PartCounts = { rows: number; bytes: number; members: number; guests: number
  * STATS_PAGE.children rows. */
 type PartPage = PartCounts & { deferred: ChildRange[]; next: string | null }
 
-/** One page of one part of an organization: its profiles, teams with their
- * members, projects with their grants, team grants and milestones, tasks
+/** One page of one part of an organization: its profiles, their Team sync
+ * stamps (sync_stamps), teams with their members, projects with their grants, team grants and milestones, tasks
  * with the links they are the source of, activity, or Deleted items rows. */
 export const orgPart = internalQuery({
   args: { org_id: v.string(), part: literals(...ORG_PARTS), cursor: vCursor },
@@ -275,6 +284,14 @@ export const orgPart = internalQuery({
           else counts.members += 1
           if (p.auth_user_id !== undefined) counts.logins += 1
         }
+        return done(page)
+      }
+      case 'stamps': {
+        const page = await ctx.db
+          .query('sync_stamps')
+          .withIndex('by_org', (q) => q.eq('org_id', org_id))
+          .paginate(opts(STATS_PAGE.rows))
+        for (const row of page.page) counts.bytes += sizeOf(row)
         return done(page)
       }
       case 'teams': {
@@ -374,13 +391,15 @@ async function orgRow(ctx: Runner, org_id: string): Promise<AdminOrgRow | null> 
   const head: OrgHead | null = await ctx.runQuery(internal.adminStats.orgHead, { org_id })
   if (head === null) return null
   const profiles = await partCounts(ctx, org_id, 'profiles')
+  const stamps = await partCounts(ctx, org_id, 'stamps')
   const teams = await partCounts(ctx, org_id, 'teams')
   const projects = await partCounts(ctx, org_id, 'projects')
   const issues = await partCounts(ctx, org_id, 'issues')
   const activity = await partCounts(ctx, org_id, 'activity')
   const deleted = await partCounts(ctx, org_id, 'deleted')
   let bytes = head.bytes
-  for (const part of [profiles, teams, projects, issues, activity, deleted]) bytes += part.bytes
+  for (const part of [profiles, stamps, teams, projects, issues, activity, deleted])
+    bytes += part.bytes
   return {
     id: head.id,
     name: head.name,
@@ -471,6 +490,7 @@ const TOTAL_TABLES = [
   'issue_links',
   'milestones',
   'org_counters',
+  'sync_stamps',
   'deleted_rows',
 ] as const
 type TotalTable = (typeof TOTAL_TABLES)[number]

@@ -111,6 +111,18 @@ const profiles = (t: T, orgId: string) =>
       .withIndex('by_org', (q) => q.eq('org_id', orgId))
       .collect(),
   )
+/* The organization's Team sync stamp rows, by person. */
+const stamps = async (t: T, orgId: string) =>
+  new Map(
+    (
+      await t.run((ctx) =>
+        ctx.db
+          .query('sync_stamps')
+          .withIndex('by_org', (q) => q.eq('org_id', orgId))
+          .collect(),
+      )
+    ).map((row) => [row.profile_id, row]),
+  )
 const componentRow = (t: T, model: 'user' | 'account', field: string, value: string) =>
   t.run(async (ctx) =>
     ctx.runQuery(components.betterAuth.adapter.findOne, {
@@ -815,13 +827,14 @@ describe('marketing demo rebuild ownership', () => {
     }))
     await reset(t, NEXT_ANCHOR)
     await assertNoDanglingRefs(t, 'marketing demo reset')
-    // Identities are retained; only the dated Team sync stamps follow the anchor.
-    const unstamped = (rows: Doc<'profiles'>[]) =>
-      rows.map((row) => ({ ...row, sync_at: undefined }))
+    // Identities are retained; only the dated Team sync stamps, which live
+    // off the profiles, follow the anchor.
     const profilesAfter = await profiles(t, result.org_id)
-    expect(unstamped(profilesAfter)).toEqual(unstamped(stableProfiles))
+    expect(profilesAfter).toEqual(stableProfiles)
+    const stampsAfter = await stamps(t, result.org_id)
     for (const person of MARKETING_DEMO.people) {
-      expect(profilesAfter.find((p) => p.name === person.name)?.sync_at, person.key).toBe(
+      const profile = profilesAfter.find((p) => p.name === person.name)
+      expect(stampsAfter.get(profile?.id ?? '')?.at, person.key).toBe(
         person.syncDay === undefined
           ? undefined
           : marketingInstant(NEXT_ANCHOR, person.syncDay, DEMO_SYNC_TIME),
@@ -902,9 +915,16 @@ describe('marketing demo rebuild ownership', () => {
         .unique())!
       await ctx.db.patch(nora._id, {
         message_retention_days: undefined,
-        // Team sync stamps from interactive use, on a person the seed leaves unstamped
+        // a stamp in the retired profile fields, which a reset clears
         sync_at: NOW,
         sync_since: NOW,
+      })
+      // Team sync stamps from interactive use, on a person the seed leaves unstamped
+      await ctx.db.insert('sync_stamps', {
+        org_id: result.org_id,
+        profile_id: noraId,
+        at: NOW,
+        since: NOW,
       })
       // Who can create projects, changed in the demo
       const leo = (await ctx.db
@@ -952,15 +972,20 @@ describe('marketing demo rebuild ownership', () => {
           .unique(),
       )
       expect(org?.project_creators).toBeUndefined()
-      // Every stamp is set or cleared from the dataset, following the anchor.
+      // Every stamp is set or cleared from the dataset, following the anchor,
+      // and the retired profile fields stay clear.
+      const stamped = await stamps(t, result.org_id)
       for (const person of MARKETING_DEMO.people) {
         const row = roster.find((p) => p.name === person.name)
-        expect(row?.sync_at, person.key).toBe(
+        expect(row?.sync_at, person.key).toBeUndefined()
+        expect(row?.sync_since, person.key).toBeUndefined()
+        const stamp = stamped.get(row?.id ?? '')
+        expect(stamp?.at, person.key).toBe(
           person.syncDay === undefined
             ? undefined
             : marketingInstant(anchor, person.syncDay, DEMO_SYNC_TIME),
         )
-        expect(row?.sync_since, person.key).toBeUndefined()
+        expect(stamp?.since, person.key).toBeUndefined()
       }
       for (const table of [
         'messages',

@@ -25,6 +25,8 @@ describe('the task index', () => {
       issueLabels: rows.list('issueLabels'),
       issueSubs: rows.list('issueSubs'),
       orgLoad: rows.list('orgLoad'),
+      projects: rows.projects,
+      profiles: rows.profiles,
       hiddenSubtaskParents: rows.flags('hiddenSubtaskParents'),
       hiddenParentTasks: rows.flags('hiddenParentTasks'),
       homeOrg: snap.orgs[0].id,
@@ -41,6 +43,8 @@ describe('the task index', () => {
         issues: dirty.keys.get('issues') ?? new Set<string>(),
         links: dirty.keys.get('links') ?? new Set<string>(),
         attachments: dirty.keys.get('attachments') ?? new Set<string>(),
+        projects: dirty.keys.get('projects') ?? new Set<string>(),
+        profiles: dirty.keys.get('profiles') ?? new Set<string>(),
         labels: dirty.keys.has('labels'),
         issueLabels: dirty.lists.has('issueLabels'),
         issueSubs: dirty.lists.has('issueSubs'),
@@ -93,6 +97,11 @@ describe('the task index', () => {
     const snap = plannerFixture()
     const home = snap.orgs[0].id
     const owner = snap.profiles[0].id
+    // a second person, who can leave the organization, and a second project,
+    // which can be archived: both decide whose load a task counts as
+    const other = { ...snap.profiles[0], id: 'person-2', name: 'Other', auth_user_id: undefined }
+    snap.profiles.push(other)
+    snap.projects.push({ ...snap.projects[0], id: 'project-2', key: 'TWO', num: 2 })
     snap.labels = ['b', 'a', 'c'].map((name, n) => ({
       id: `label-${n}`,
       org_id: home,
@@ -219,6 +228,39 @@ describe('the task index', () => {
       },
       () => {
         capacity = 1 + random(40)
+      },
+      () => {
+        // who owns a task, and whether it counts as load at all
+        const row = snap.issues[random(snap.issues.length)]
+        row.assignee_id = [owner, other.id, undefined][random(3)]
+        row.reviewer_id = random(2) ? owner : other.id
+        row.status = (['todo', 'review', 'progress'] as const)[random(3)]
+        row.paused = random(4) === 0
+        row.remaining_hours = random(3) ? 1 + random(9) : undefined
+        if (!random(5)) delete row.end_week
+      },
+      () => {
+        snap.issues[random(snap.issues.length)].project_id = snap.projects[random(2)].id
+      },
+      () => {
+        made++
+        snap.issues.push({
+          ...task(snap, `t${made}`, made),
+          assignee_id: other.id,
+          start_week: '2026-09-14',
+          end_week: '2026-09-28',
+          remaining_hours: 1 + random(9),
+        })
+      },
+      () => {
+        const project = snap.projects[1]
+        project.archived_at = project.archived_at ? undefined : AT
+      },
+      () => {
+        const person = snap.profiles.find((p) => p.id === other.id)
+        if (!person) snap.profiles.push({ ...other })
+        else if (random(2)) person.org_id = person.org_id === home ? 'another-org' : home
+        else snap.profiles = snap.profiles.filter((p) => p.id !== other.id)
       },
     ]
     for (let step = 0; step < 400; step++) {

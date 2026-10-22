@@ -133,6 +133,7 @@ async function consoleFixture(t: T): Promise<OrgFixture> {
       level: 'user',
     })
     await patchCounters(ctx, org_id, { next_issue_num: 10 })
+    await ctx.db.insert('sync_stamps', { org_id, profile_id: f.user.id, at: NOW })
     await ctx.db.insert('activity_events', activity(org_id, '2026-04-20T09:00:00.000Z'))
     await ctx.db.insert('activity_events', activity(f.otherOrg.id, '2026-03-02T09:00:00.000Z'))
   })
@@ -166,6 +167,12 @@ const measuredBytes = (t: T, orgId: string) =>
     bytes += sum(
       await ctx.db
         .query('org_counters')
+        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .collect(),
+    )
+    bytes += sum(
+      await ctx.db
+        .query('sync_stamps')
         .withIndex('by_org', (q) => q.eq('org_id', orgId))
         .collect(),
     )
@@ -374,6 +381,32 @@ describe('listOrgs', () => {
     await expect(asOp.action(api.adminStats.listOrgs, {})).rejects.toThrow(
       /Scanned too many documents/,
     )
+  })
+
+  it('pages the Team sync stamps of 3,000 people, under 2,500 documents a read', async () => {
+    const t = newT({ transactionLimits: { documentsRead: 2500 } })
+    const f = await withOrg(t)
+    const asOp = await operator(t)
+    const footprint = async () =>
+      (await asOp.action(api.adminStats.listOrgs, {})).find((row) => row.id === f.org.id)
+        ?.approx_bytes ?? 0
+    const before = await footprint()
+    let added = 0
+    for (let batch = 0; batch < 3; batch++) {
+      added += await t.run(async (ctx) => {
+        let bytes = 0
+        for (let i = 0; i < 1000; i++) {
+          const _id = await ctx.db.insert('sync_stamps', {
+            org_id: f.org.id,
+            profile_id: uuid(),
+            at: NOW,
+          })
+          bytes += JSON.stringify(await ctx.db.get(_id)).length
+        }
+        return bytes
+      })
+    }
+    expect(await footprint()).toBe(before + added)
   })
 
   /* A page of tasks reads one range for the page and one for each task's
