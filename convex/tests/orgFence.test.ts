@@ -700,7 +700,12 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
           as(t, f.admin).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: [ref] }),
           ref,
         ),
-      value: { restored: [], refused: [{ id: '<ref>', reason: 'not_found' }], deferred: [] },
+      value: {
+        restored: [],
+        stepping: [],
+        refused: [{ id: '<ref>', reason: 'not_found' }],
+        deferred: [],
+      },
     },
     {
       name: 'deletedItems.purge',
