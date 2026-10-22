@@ -85,6 +85,7 @@ import type * as lib_inbox from "../lib/inbox.js";
 import type * as lib_limitRules from "../lib/limitRules.js";
 import type * as lib_limits from "../lib/limits.js";
 import type * as lib_liveTasks from "../lib/liveTasks.js";
+import type * as lib_loadRows from "../lib/loadRows.js";
 import type * as lib_machineDelay from "../lib/machineDelay.js";
 import type * as lib_mailConfig from "../lib/mailConfig.js";
 import type * as lib_md from "../lib/md.js";
@@ -270,6 +271,7 @@ declare const fullApi: ApiFromModules<{
   "lib/limitRules": typeof lib_limitRules;
   "lib/limits": typeof lib_limits;
   "lib/liveTasks": typeof lib_liveTasks;
+  "lib/loadRows": typeof lib_loadRows;
   "lib/machineDelay": typeof lib_machineDelay;
   "lib/mailConfig": typeof lib_mailConfig;
   "lib/md": typeof lib_md;
