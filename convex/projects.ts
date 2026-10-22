@@ -42,6 +42,7 @@ import { canManageOwnProjectAccess, canManageProjectUsers, hasProjectLevel } fro
 import { markBillingMembershipChanged } from './lib/billableUsers'
 import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
+import { asciiEmail } from './lib/email'
 import { vGrantLevel, vProjectType } from './lib/enums'
 import {
   accessRemovalMutation,
@@ -372,11 +373,18 @@ export const inviteGuest = orgMutation({
     if (level !== 'user' && level !== 'viewer') {
       throw rule('a project role is lead, member or viewer')
     }
-    const em = limitedEmail(email, 'that does not look like an email address')
+    // A seat the address already names only gains a grant, so it is found
+    // by the stored form (asciiEmail) and its address is not checked again.
+    // That address may predate the address rule or come from a provider
+    // sign-in. Only a new seat stores the address, and only then is it
+    // checked.
+    const typed = asciiEmail(email)
     const existing = await ctx.db
       .query('profiles')
-      .withIndex('by_org_email', (q) => q.eq('org_id', ctx.me.org_id).eq('email', em))
+      .withIndex('by_org_email', (q) => q.eq('org_id', ctx.me.org_id).eq('email', typed))
       .first()
+    const em =
+      existing === null ? limitedEmail(email, 'that does not look like an email address') : typed
     // A seat the address named when the inviter looked, gone since, holds no
     // grant now: an expected level other than none is stale, so a removed
     // member is not invited back unseen. Checked before the new seat.

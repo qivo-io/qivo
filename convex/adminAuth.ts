@@ -462,14 +462,17 @@ export const deleteOrphanLogin = internalMutation({
      * address is put in the stored form (asciiEmail) whichever way it was
      * typed, and the login is looked up in that form, with its domain
      * written back in Unicode (unicodeEmail), and as typed, lowercased, for a
-     * login whose Unicode is not in the form unicodeEmail writes. */
+     * login whose Unicode is not in the form unicodeEmail writes. A login
+     * counts only when its own stored form is that address, so the guards
+     * below check the address the login really has. */
     const spellings = [...new Set([email, unicodeEmail(email), args.email.trim().toLowerCase()])]
-    let user: { _id: string } | null = null
+    let user: { _id: string; email: string } | null = null
     for (const value of spellings) {
-      user ??= (await ctx.runQuery(components.betterAuth.adapter.findOne, {
+      const found = (await ctx.runQuery(components.betterAuth.adapter.findOne, {
         model: 'user',
         where: [{ field: 'email', value }],
-      })) as { _id: string } | null
+      })) as { _id: string; email: string } | null
+      if (found !== null && asciiEmail(found.email) === email) user ??= found
     }
     if (user === null) throw notFound('no auth account with that email')
     /* ANY profile — home or guest — means this login is not an orphan; the

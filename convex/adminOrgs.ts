@@ -53,7 +53,7 @@ import { AVATAR_COLORS } from './lib/avatarColors'
 import { markBillingMembershipChanged } from './lib/billableUsers'
 import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
-import { cleanEmail } from './lib/email'
+import { asciiEmail, cleanEmail } from './lib/email'
 import {
   notFound,
   platformAction,
@@ -344,7 +344,12 @@ export const updateInvite = internalMutation({
     assertNameShape(name)
     const typed = normalizeEmail(a.email)
     if (typed === undefined) throw rule(`${name} needs an email address.`)
-    const email = limitedEmail(typed, `${typed} is not an email address.`)
+    // the stored address is not checked again, so an invitation stored
+    // before the address rule keeps a name-only edit
+    const email =
+      asciiEmail(typed) === seat.email
+        ? seat.email
+        : limitedEmail(typed, `${typed} is not an email address.`)
     const patch: { name?: string; initials?: string; email?: string } = {}
     if (name !== seat.name) {
       patch.name = name

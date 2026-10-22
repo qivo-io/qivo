@@ -22,9 +22,9 @@ export function grouped(n: number): string {
 /** Where a limit is met. The REST and MCP docs list the entries marked for
  * them; the guide's Limits page lists every entry marked for any of the
  * three. 'operator' is the operator console, documented nowhere public, and
- * an entry met on no surface (the app splits its own calls by it, or only
- * the background curation API meets it, which docs/rest-api.md describes in
- * its own section) is listed nowhere. */
+ * an entry met on no surface (the app splits its own calls by it, or no
+ * console field meets it, such as the background curation API's, which
+ * docs/rest-api.md describes in its own section) is listed nowhere. */
 export type Surface = 'app' | 'rest' | 'mcp' | 'operator'
 
 /** The sections of the Limits page, in order. */
@@ -230,7 +230,9 @@ export const LIMITS = {
     OPERATOR,
   ),
   curationKeyName: text('Background curation key name', NAME_MAX, 'an agent name', OPERATOR),
-  // Only the background curation API meets these two.
+  // No console field meets these two. The background curation API checks
+  // both, and an operator upload through panoramaUploads.addFile checks the
+  // source URL, which the console does not send.
   curationReason: text('Background curation reason', 2_000, 'a reason', []),
   curationUrl: text('Background image source URL', 2_048, 'a source URL', [], 'Use a shorter URL.'),
   planName: text('Billing plan name', NAME_MAX, 'a plan name', OPERATOR),

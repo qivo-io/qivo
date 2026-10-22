@@ -2,9 +2,9 @@
  * sender's address rule within LIMITS.email, lowercased, with a Unicode
  * domain written as punycode, that a password login can also use. */
 
+import { createRequire } from 'node:module'
 import { domainToASCII, domainToUnicode } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import * as z from 'zod'
 import {
   asciiEmail,
   cleanEmail,
@@ -14,6 +14,12 @@ import {
   unicodeEmail,
 } from '../lib/email'
 import { LIMITS } from '../lib/limits'
+
+/* zod as better-auth itself resolves it, the copy its password endpoints
+ * check addresses with. Qivo does not depend on zod directly. */
+const z: typeof import('zod') = createRequire(
+  createRequire(import.meta.url).resolve('better-auth'),
+)('zod')
 
 /** An address of exactly `length` characters at example.com. */
 const ofLength = (length: number) => `${'a'.repeat(length - '@example.com'.length)}@example.com`
@@ -140,13 +146,22 @@ describe('password logins', () => {
       'a@例え.テスト',
       'jørn@example.no',
       'anna!berg@example.com',
+      // dots only between other characters, and no apostrophe at the end
       'anna..berg@example.com',
+      '.anna@example.com',
+      'anna.@example.com',
+      "o'@example.com",
+      // a top-level domain of at least two letters
       'anna@example.c',
+      'anna@example.c0m',
     ]) {
       expect(cleanEmail(raw), raw).toBeNull()
       expect(z.email().safeParse(asciiEmail(raw)).success, raw).toBe(false)
       expect(emailRefusal(raw), raw).toBe(NO_PASSWORD_LOGIN)
     }
+    expect(NO_PASSWORD_LOGIN).toBe(
+      "this address cannot get a password login. Before the @ it may hold only letters a to z, digits and . _ ' + -, may not start or end with a dot or hold two dots in a row, and may not end with an apostrophe. Its domain must end in at least two letters a to z, such as .com. Use another address.",
+    )
     // the length and the address shape keep their own refusals
     expect(emailRefusal(`${'a'.repeat(250)}@example.com`)).toBe(LIMITS.email.refusal)
     expect(emailRefusal('anna@')).toBeNull()
@@ -172,6 +187,8 @@ describe('unicodeEmail', () => {
 
   it('leaves a label that is not valid punycode as it is', () => {
     for (const email of [
+      // a delimiter cannot start the punycode (RFC 3492 section 6.2)
+      'ivan@xn---80aealotwbjpid2k.de',
       'a@xn--.de',
       'a@xn--abc-.de',
       'a@xn--!!.de',

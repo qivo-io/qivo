@@ -46,6 +46,7 @@ import type { MutationCtx, QueryCtx } from './_generated/server'
 import { markBillingMembershipChanged } from './lib/billableUsers'
 import { assertNewRowId, byId, insertUnique } from './lib/db'
 import { isDemoDeployment, refuseDemoFeature, requireActiveDemo } from './lib/demo'
+import { asciiEmail } from './lib/email'
 import { vOrgRole, vProfileKind } from './lib/enums'
 import {
   accessRemovalMutation,
@@ -329,10 +330,15 @@ async function updateProfile(
     if (row.auth_user_id !== undefined) {
       throw rule('This seat has been claimed. Its address is the one they signed in with')
     }
-    const email = limitedEmail(
-      patch.email ?? '',
-      'A person needs an email address. It is what they sign in with',
-    )
+    // the stored address is not checked again, so a patch that carries it
+    // unchanged passes even when it predates the address rule
+    const email =
+      asciiEmail(patch.email ?? '') === row.email
+        ? row.email
+        : limitedEmail(
+            patch.email ?? '',
+            'A person needs an email address. It is what they sign in with',
+          )
     if (email !== row.email) {
       const dup = await ctx.db
         .query('profiles')

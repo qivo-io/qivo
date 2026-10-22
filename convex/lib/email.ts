@@ -35,7 +35,7 @@ export const PASSWORD_ADDR =
 /** The refusal of an address the mail sender takes but a password login
  * does not (PASSWORD_ADDR). */
 export const NO_PASSWORD_LOGIN =
-  "this address cannot get a password login. Before the @ it may hold only letters a to z, digits, dots and _ ' + -, and its domain must end in letters a to z, such as .com. Use another address."
+  "this address cannot get a password login. Before the @ it may hold only letters a to z, digits and . _ ' + -, may not start or end with a dot or hold two dots in a row, and may not end with an apostrophe. Its domain must end in at least two letters a to z, such as .com. Use another address."
 
 /* RFC 3492 punycode parameters. */
 const BASE = 36
@@ -109,9 +109,12 @@ function digitValue(c: string): number {
 
 /** `encoded`, a label's punycode without the xn-- prefix, decoded by RFC 3492
  * section 6.2, or null when it is not valid punycode or decodes to a label
- * with no character outside ASCII, which a domain never writes so. */
+ * with no character outside ASCII, which a domain never writes so. A
+ * delimiter that starts the label is invalid: section 6.2 then decodes from
+ * the delimiter itself, which is no digit. */
 function unpunycode(encoded: string): string | null {
   const dash = encoded.lastIndexOf('-')
+  if (dash === 0) return null
   const points = Array.from(dash < 0 ? '' : encoded.slice(0, dash), (c) => c.charCodeAt(0))
   if (points.some((p) => p >= 0x80)) return null
   let n = 0x80

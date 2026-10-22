@@ -25,7 +25,7 @@ import type { Id } from '../../convex/_generated/dataModel'
 import { joinLists } from '../../convex/lib/arrayLimit'
 import { AVATAR_COLORS } from '../../convex/lib/avatarColors'
 import { BILLING_READ_ONLY, deletionReadOnly } from '../../convex/lib/billingAccess'
-import { cleanEmail, emailRefusal as storedEmailRefusal } from '../../convex/lib/email'
+import { asciiEmail, cleanEmail, emailRefusal as storedEmailRefusal } from '../../convex/lib/email'
 import { descriptionForm, FIELD_CHANGED, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
 import type { FieldChange } from '../../convex/lib/functions'
 import { imageRefs, shownImages } from '../../convex/lib/imageRefs'
@@ -5114,8 +5114,10 @@ export const PLANNER = {
     const org = orgOfProject(metaId)
     if (!org) return null
     // a seat the address already names: the level it holds on screen, so a
-    // change made meanwhile is not overwritten unseen
-    const address = normalizeEmail(email)
+    // change made meanwhile is not overwritten unseen. Found by the stored
+    // form, as the server finds it, so a seat whose address predates the
+    // address rule is found too.
+    const address = asciiEmail(email)
     const seat = address
       ? [...rows.profiles.values()].find((p) => p.org_id === org && p.email === address)
       : undefined

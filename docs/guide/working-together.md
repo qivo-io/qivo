@@ -3,9 +3,10 @@
 Each person has a name and email address. An admin adds them in
 **Settings → Organization → Users**, and Qivo emails them an invitation.
 Qivo takes only an address that can also sign in with a password. Before the
-@ it holds only letters a to z, digits, dots and _ ' + -, and its domain ends
-in letters a to z, such as .com. A domain such as bücher.de works. Their
-seat shows **invited** until they sign in with that email address, or
+@ it holds only letters a to z, digits and . _ ' + -. It does not start or end
+with a dot, has no two dots in a row and does not end with an apostrophe. Its
+domain ends in at least two letters a to z, such as .com. A domain such as
+bücher.de works. Their seat shows **invited** until they sign in with that email address, or
 **invitation not sent** or **invitation may not have arrived** when the email
 did not go out; hover it for the reason. Admins can
 correct the email before sign-in, which sends a new invitation; afterward it

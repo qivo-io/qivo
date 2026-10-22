@@ -13,6 +13,7 @@ import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import * as adminOrgsModule from '../adminOrgs'
 import authSchema from '../betterAuth/schema'
+import { NO_PASSWORD_LOGIN } from '../lib/email'
 import { as, expectRefusal, NOW, newT, plantSeat, type T, uuid, withOrg } from './helpers.setup'
 
 declare const process: { env: Record<string, string | undefined> }
@@ -824,6 +825,37 @@ describe('the home organization fence follows claim order', () => {
 })
 
 describe('editInvite', () => {
+  it('corrects the name of an invitation whose stored address the rule now refuses', async () => {
+    const t = newAuthT()
+    const op = await withOperator(t)
+    const out = await op.action(api.adminOrgs.createOrganization, {
+      name: 'Old Rule Co',
+      people: BRIGHTWATER.slice(0, 2),
+    })
+    const [, tomas] = await seatsOf(t, out.org_id)
+    // an invitation stored before the address rule
+    await t.run((ctx) => ctx.db.patch(tomas._id, { email: 'tomás@example.no' }))
+    expect(
+      await op.action(api.adminOrgs.editInvite, {
+        profile_id: tomas.id,
+        name: 'Tomás Lind',
+        email: 'Tomás@Example.no',
+      }),
+    ).toEqual({ sent: null })
+    const [, after] = await seatsOf(t, out.org_id)
+    expect([after.name, after.email]).toEqual(['Tomás Lind', 'tomás@example.no'])
+    // a new address the rule refuses is refused, with the reason
+    const refused = await expectRefusal(
+      op.action(api.adminOrgs.editInvite, {
+        profile_id: tomas.id,
+        name: 'Tomás Lind',
+        email: 'tomás@example.se',
+      }),
+      'rule',
+    )
+    expect(refused.data.message).toBe(NO_PASSWORD_LOGIN)
+  })
+
   it('corrects a pending invitation and emails the new address', async () => {
     const t = newAuthT()
     const op = await withOperator(t)

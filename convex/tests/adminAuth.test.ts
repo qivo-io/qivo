@@ -16,7 +16,7 @@ import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { LOGIN_PURGE } from '../adminAuth'
 import authSchema from '../betterAuth/schema'
-import { expectRefusal, newT, runInAuth, type T, uuid, withOrg } from './helpers.setup'
+import { expectRefusal, newT, plantSeat, runInAuth, type T, uuid, withOrg } from './helpers.setup'
 
 declare const process: { env: Record<string, string | undefined> }
 process.env.BETTER_AUTH_SECRET ??= 'adminAuth-test-secret-not-a-real-deployment'
@@ -334,6 +334,26 @@ describe('deleteOrphanLogin', () => {
       expect((await auditRows(t))[0].detail).toEqual({ email: 'anna@xn--bcher-kva.de' })
     },
   )
+
+  it('finds a login only by its own stored form, so a pending invitation under it keeps it', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    await plantLogin(t, 'ivan@правительство.de')
+    // the invitation waits under the stored form of the login's address
+    await plantSeat(t, { org_id: f.org.id, email: 'ivan@xn--80aealotwbjpid2k.de' })
+    // not punycode: a delimiter cannot start a label, so this names no login
+    await expectRefusal(
+      t.mutation(internal.adminAuth.deleteOrphanLogin, { email: 'ivan@xn---80aealotwbjpid2k.de' }),
+      'not_found',
+      /no auth account with that email/,
+    )
+    await expectRefusal(
+      t.mutation(internal.adminAuth.deleteOrphanLogin, { email: 'ivan@xn--80aealotwbjpid2k.de' }),
+      'conflict',
+      /remove the member instead/,
+    )
+    expect(await componentRow(t, 'user', 'email', 'ivan@правительство.de')).not.toBeNull()
+  })
 
   /* The MCP OAuth provider's rows and the roadmap undo receipts of `userId`,
    * planted as a connected assistant and a recent roadmap edit leave them. */

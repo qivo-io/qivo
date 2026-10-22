@@ -693,6 +693,21 @@ describe('removing someone who has work in the project', () => {
     expect(P.project(work)?.teamAccess).toEqual({ crew: 'viewer' })
   })
 
+  it('invites a seat whose stored address predates the address rule with the level it holds', async () => {
+    await load((snap) => {
+      const leo = snap.profiles.find((p) => p.id === 'leo')
+      if (leo) leo.email = 'jørn@example.no'
+    })
+    network.mutation.mockImplementation((ref, args) => {
+      requests.push({ name: getFunctionName(ref), args })
+      return Promise.resolve({ id: 'leo', emailed: false })
+    })
+    expect(await P.inviteToProject(work, ' Jørn@Example.no ', 'viewer')).toEqual({ emailed: null })
+    expect(requests.map((r) => [r.name, r.args.expected])).toEqual([
+      ['projects:inviteGuest', { level: 'user' }],
+    ])
+  })
+
   it('tells whether the access is still there to remove', async () => {
     await load()
     expect(P.removalPending(leaving('ann'))).toBe(true)
