@@ -263,8 +263,15 @@ closed, or with a `502` from the hosting front end, instead of Qivo's
 answer. Treat either like a network error, and check the credential and the
 body's size before you send it again. A body Qivo reads to answer, such as
 an authenticated request's body within the limit, has no such deadline. A
-client that sends `Expect: 100-continue` gets `100 Continue` at once, so it
-sends the whole body before any answer.
+client that sends `Expect: 100-continue` over HTTP/1.1 gets `100 Continue` at
+once, so it sends the whole body before any answer. Over HTTP/2 the hosting
+front end sends no `100 Continue`, so such a client sends the body only once
+its own wait for one ends, after 1 second for curl.
+
+The hosting front end hands a request to Qivo only once about 0.5 MiB of its
+body, or about 5 seconds of a steady upload, has arrived. A body that stops
+arriving before that gets no answer, and the front end resets the
+connection after about 15 seconds. Treat that like a network error too.
 
 A request that takes a JSON body needs a JSON object. Anything else, such as
 invalid JSON, an array or a number, is a `400` (`request body must be

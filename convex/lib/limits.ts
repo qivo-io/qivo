@@ -168,6 +168,12 @@ export const MIB = 1024 * 1024
  * background image or an attachment. */
 export const DEMO_FILE_BYTES = 5 * MIB
 
+/** The largest request body the sign-in endpoints under /api/auth take
+ * (http.ts readAuthBody), 64 KiB. The largest any of them needs is an OAuth
+ * client registration, whose metadata may hold 8 KiB
+ * (lib/oauthRegistration.ts); a sign-up or sign-in takes under 1 KiB. */
+export const AUTH_BODY_MAX_BYTES = 64 * 1024
+
 export const LIMITS = {
   title: text('Task title', 255, 'a task title'),
   description: text(

@@ -6,7 +6,9 @@
  * handler with answerAfterBody, which drops the rest of the body before the
  * answer goes out, however early the handler decided it. The Better Auth
  * component builds its own routes: its GET and POST handler (http.ts
- * createHttpAuthAfterBody) calls discardBody itself, and its CORS preflight
+ * createHttpAuthAfterBody) calls discardBody itself, and hands Better Auth,
+ * which reads a body with no bound in time or size, a copy whose body
+ * bufferedRequest has already read (http.ts readAuthBody). Its CORS preflight
  * for /api/auth/* and its /.well-known/openid-configuration redirect answer
  * without a handler of ours. Those two take OPTIONS and GET, which browsers
  * send without a body. convex/tests/requestBody.test.ts refuses any other
@@ -53,9 +55,10 @@ export const DISCARD_IDLE_MS = 1_000
 export const DISCARD_MAX_BYTES = 32 * MIB
 
 /** How long a cancel of a body may hold the answer, in milliseconds. A body
- * shared with a clone (Request.clone, which Better Auth calls) finishes
- * cancelling only once the clone is cancelled too, so the answer goes out
- * without waiting for that. */
+ * shared with a clone (Request.clone) finishes cancelling only once the
+ * clone is cancelled too. No route clones the request the platform hands it
+ * (Better Auth clones the copy bufferedRequest makes), so this only keeps a
+ * cancel that does not settle from holding the answer. */
 export const CANCEL_MS = 100
 
 /* Cancels the body `reader` reads, waiting at most CANCEL_MS for it. */
@@ -140,7 +143,7 @@ export const answerAfterBody = (handler: Parameters<typeof httpAction>[0]) =>
  * a request without one, `too_large` for one declared or found longer than
  * the limit and `too_slow` for one still arriving at the deadline. */
 export type LimitedBody =
-  | { outcome: 'read'; bytes: Uint8Array }
+  | { outcome: 'read'; bytes: Uint8Array<ArrayBuffer> }
   | { outcome: 'missing' | 'too_large' | 'too_slow' }
 
 /**
@@ -200,4 +203,40 @@ export async function readLimitedBody(
     if (late) await cancelBody(reader)
     else reader.releaseLock()
   }
+}
+
+/**
+ * A copy of `request` that holds its whole body in memory (`read`), or why
+ * readLimitedBody could not read it. The copy has the original method, URL
+ * and headers and exactly the bytes the client sent, so a handler that reads
+ * the body itself, such as Better Auth's, can neither wait on a slow client
+ * nor read past `maxBytes`. A request without a body comes back as it is. A
+ * GET or HEAD request, which a Request cannot carry a body on, comes back as
+ * a copy without one, so a body a client sent with it is never read; the
+ * caller drops it with discardBody.
+ */
+export async function bufferedRequest(
+  request: Request,
+  maxBytes: number,
+  waitMs: number,
+): Promise<{ outcome: 'read'; request: Request } | { outcome: 'too_large' | 'too_slow' }> {
+  if (request.method === 'GET' || request.method === 'HEAD')
+    return {
+      outcome: 'read',
+      request:
+        bodyOf(request) === null
+          ? request
+          : new Request(request.url, { method: request.method, headers: request.headers }),
+    }
+  const read = await readLimitedBody(request, maxBytes, waitMs)
+  if (read.outcome === 'read')
+    return {
+      outcome: 'read',
+      request: new Request(request.url, {
+        method: request.method,
+        headers: request.headers,
+        body: read.bytes,
+      }),
+    }
+  return read.outcome === 'missing' ? { outcome: 'read', request } : { outcome: read.outcome }
 }

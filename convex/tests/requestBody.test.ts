@@ -6,12 +6,19 @@
  * bytes and 32 MiB, so an early one is not lost to a reset connection. */
 /// <reference types="vite/client" />
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Doc } from '../_generated/dataModel'
 import { DEMO_REPORT_MAX_BYTES } from '../lib/demoReporting'
-import { LIMITS } from '../lib/limits'
+import { AUTH_BODY_MAX_BYTES, LIMITS } from '../lib/limits'
 import { POLAR_MAX_BODY_BYTES } from '../lib/polar'
-import { DISCARD_MAX_BYTES, discardBody, readLimitedBody } from '../lib/requestBody'
+import {
+  bodyOf,
+  bufferedRequest,
+  DISCARD_MAX_BYTES,
+  DISCARD_MS,
+  discardBody,
+  readLimitedBody,
+} from '../lib/requestBody'
 import { sha256hex } from '../machine/auth'
 import { BODY_MAX_BYTES } from '../machine/shared'
 import { NOW, newT, type OrgFixture, type T, uuid, withOrg } from './helpers.setup'
@@ -362,8 +369,6 @@ describe('early answers outside REST and MCP', () => {
   it.each([
     ['auth refusal on the demo', '/api/auth/sign-in/email', { APP_MODE: 'demo' }, json, 0, 403],
     ['OAuth refusal on the demo', '/api/auth/oauth2/register', { APP_MODE: 'demo' }, json, 0, 403],
-    // the copy oauthMachine forwards holds the body, so its own drain waits
-    ['OAuth token refusal', '/api/auth/oauth2/token', {}, json, 0, 400],
     [
       'image upload 404',
       '/background-uploads/x?e=1&m=x&t=y',
@@ -392,6 +397,15 @@ describe('early answers outside REST and MCP', () => {
       { DEMO_METRICS_SECRET: METRICS },
       { ...json, Authorization: `Bearer ${METRICS}` },
       DEMO_REPORT_MAX_BYTES + 1,
+      413,
+    ],
+    ['auth 413 past the cap', '/api/auth/sign-in/email', {}, json, AUTH_BODY_MAX_BYTES + 1, 413],
+    [
+      'OAuth token 413 past the cap',
+      '/api/auth/oauth2/token',
+      {},
+      { 'Content-Type': 'application/x-www-form-urlencoded' },
+      AUTH_BODY_MAX_BYTES + 1,
       413,
     ],
     ['Polar webhook 404', '/billing/polar/webhook', {}, json, 0, 404],
@@ -427,6 +441,143 @@ describe('early answers outside REST and MCP', () => {
       .filter(([, text]) => /import[^;]*\bhttpAction(Generic)?\b[^;]*from/.test(text))
       .map(([path]) => path)
     expect(bare).toEqual([])
+  })
+})
+
+describe('Better Auth bodies', () => {
+  const json = { 'Content-Type': 'application/json' }
+  const signIn = { email: 'nobody@example.com', password: 'wrong-password-1' }
+  // the timer the fake clock leaves alone, so the handler's own I/O can run
+  const realTimeout = setTimeout
+
+  /* Sends `headers` to `path` with a body whose first 10 bytes arrive and
+   * no more, advancing a fake clock while the handler waits on a timer until
+   * the answer comes, and answers it with whether the body was cancelled, or
+   * null when 4 * DISCARD_MS of fake time or 10 real seconds pass without
+   * one. The clock stands still while the handler loads or runs, so a slow
+   * first load of http.ts cannot use up the fake time. */
+  async function stalled(t: T, path: string, headers: Record<string, string>) {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let cancelled = false
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(10).fill(32))
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+    let answer: Response | null = null
+    void http(t, path, { method: 'POST', headers, body, duplex: 'half' }).then((response) => {
+      answer = response
+    })
+    const giveUp = performance.now() + 10_000
+    for (
+      let waited = 0;
+      answer === null && waited < 4 * DISCARD_MS && performance.now() < giveUp;
+    ) {
+      await new Promise((resolve) => realTimeout(resolve, 1))
+      if (vi.getTimerCount() === 0) continue
+      await vi.advanceTimersByTimeAsync(50)
+      waited += 50
+    }
+    vi.useRealTimers()
+    return answer === null ? null : { answer: answer as Response, cancelled }
+  }
+
+  beforeEach(() => {
+    vi.stubEnv('SITE_URL', 'http://localhost:5199')
+    vi.stubEnv('BETTER_AUTH_SECRET', 'request-body-files-secret')
+  })
+
+  it.each([
+    ['sign-in', '/api/auth/sign-in/email', json, 'code', 'REQUEST_TIMEOUT', 'message'],
+    [
+      'OAuth token',
+      '/api/auth/oauth2/token',
+      { 'Content-Type': 'application/x-www-form-urlencoded' },
+      'error',
+      'invalid_request',
+      'error_description',
+    ],
+  ] as const)(
+    'answers 408 to a %s body that stops arriving',
+    async (_name, path, headers, codeField, code, messageField) => {
+      const result = await stalled(newT(), path, headers)
+      expect(result?.answer.status).toBe(408)
+      expect(result?.cancelled).toBe(true)
+      const refusal = JSON.parse(await result!.answer.text()) as Record<string, string>
+      expect(refusal[codeField]).toBe(code)
+      expect(refusal[messageField]).toMatch(/longer than 5 seconds.*try again/)
+    },
+  )
+
+  it('hands Better Auth the exact bytes up to the cap and answers 413 past it', async () => {
+    const t = newT()
+    const send = (body: string) =>
+      http(t, '/api/auth/sign-in/email', { method: 'POST', headers: json, body })
+    const atCap = await send(jsonOfSize(signIn, AUTH_BODY_MAX_BYTES))
+    expect(atCap.status).toBe(401)
+    expect(JSON.parse(await atCap.text())).toMatchObject({ code: 'INVALID_EMAIL_OR_PASSWORD' })
+    const over = await send(jsonOfSize(signIn, AUTH_BODY_MAX_BYTES + 1))
+    expect(over.status).toBe(413)
+    expect(JSON.parse(await over.text())).toEqual({
+      code: 'PAYLOAD_TOO_LARGE',
+      message: expect.stringMatching(/larger than the 64 KiB.*Shorten what you sent/),
+    })
+  })
+
+  it('names an authorization server request in an OAuth 413', async () => {
+    const over = await http(newT(), '/api/auth/oauth2/register', {
+      method: 'POST',
+      headers: json,
+      body: jsonOfSize({ redirect_uris: ['https://client.example/cb'] }, AUTH_BODY_MAX_BYTES + 1),
+    })
+    expect(over.status).toBe(413)
+    expect(JSON.parse(await over.text())).toEqual({
+      error: 'invalid_request',
+      error_description: expect.stringMatching(
+        /larger than the 64 KiB an authorization server request may hold/,
+      ),
+    })
+  })
+
+  it('reads a demo sign-in body after the demo refusals and before admission', async () => {
+    vi.stubEnv('APP_MODE', 'demo')
+    vi.stubEnv('SITE_URL', 'https://demo.qivo.io')
+    vi.stubEnv('DEMO_ADMISSION_OPEN', 'true')
+    const t = newT()
+    const origin = { Origin: 'https://demo.qivo.io' }
+    const path = '/api/auth/sign-in/anonymous'
+    expect(
+      (await stalled(t, path, { ...origin, 'Content-Type': 'text/plain' }))?.answer.status,
+    ).toBe(415)
+    expect((await stalled(t, path, { ...origin, ...json }))?.answer.status).toBe(408)
+    const admissions = () =>
+      t.run(async (ctx) =>
+        (await ctx.db.query('demo_admission').collect()).map(({ key, count }) => ({ key, count })),
+      )
+    expect(await admissions()).toEqual([])
+    const signIn = () =>
+      http(t, path, { method: 'POST', headers: { ...origin, ...json }, body: '{}' })
+    expect((await signIn()).status).toBe(200)
+    const counted = await admissions()
+    expect(counted.map(({ count }) => count)).toEqual([1, 1])
+    // a full minute window refuses the next sign-in before Better Auth runs
+    await t.run(async (ctx) => {
+      const minute = (await ctx.db.query('demo_admission').collect()).find(({ key }) =>
+        key.startsWith('60000:'),
+      )
+      await ctx.db.patch(minute!._id, { count: 10 })
+    })
+    const busy = await signIn()
+    expect(busy.status).toBe(429)
+    expect(busy.headers.get('Retry-After')).toBe('60')
+    expect(JSON.parse(await busy.text())).toEqual({
+      message: 'The demo is busy. Please try again shortly.',
+    })
+    expect((await admissions()).map(({ count }) => count).sort((a, b) => a - b)).toEqual([1, 10])
+    expect(await t.run((ctx) => ctx.db.query('demo_sessions').collect())).toHaveLength(1)
   })
 })
 
@@ -485,6 +636,32 @@ describe('readLimitedBody', () => {
     const read = await readLimitedBody(request(whole), 4, 60_000)
     expect(read.outcome === 'read' && new TextDecoder().decode(read.bytes)).toBe('abcd')
     expect(await readLimitedBody(request(null), 4)).toEqual({ outcome: 'missing' })
+  })
+})
+
+describe('bufferedRequest', () => {
+  it('hands on a GET without the body a client sent with it, and leaves that body unread', async () => {
+    let pulls = 0
+    const body = new ReadableStream<Uint8Array>({
+      pull() {
+        pulls += 1
+        return new Promise<void>(() => {})
+      },
+    })
+    const request = {
+      method: 'GET',
+      url: 'https://example.test/api/auth/get-session',
+      headers: new Headers({ 'Content-Type': 'application/json' }),
+      body,
+    } as unknown as Request
+    const read = await bufferedRequest(request, 4, 60_000)
+    expect(read.outcome).toBe('read')
+    const copy = read.outcome === 'read' ? read.request : null
+    expect(copy).not.toBe(request)
+    expect(copy && bodyOf(copy)).toBeNull()
+    expect(copy?.headers.get('Content-Type')).toBe('application/json')
+    expect(body.locked).toBe(false)
+    expect(pulls).toBeLessThan(2)
   })
 })
 

@@ -2,9 +2,11 @@
  * the 1 MiB REST and MCP cap and well under it, and bodies over 1 MiB on the
  * other routes that refuse a body before reading it (an unknown upload link,
  * the demo metrics and Polar webhook endpoints, an unknown auth endpoint),
+ * bodies over the 64 KiB sign-in cap and sign-in bodies that stop arriving,
  * many at a time, and prints the status counts per case. It sends no
- * credentials and no valid link or signature, so every request is refused
- * and none changes task or customer data. Each REST and MCP request still
+ * credentials and no valid link or signature, and no auth body that reaches
+ * Better Auth, so every request is refused and none changes task or customer
+ * data. Each REST and MCP request still
  * counts at the deployment-wide request limit, which every organization
  * shares, so a run against a hosted deployment needs explicit scope, and a
  * run sends at most MAX_TOTAL requests, a third of that limit's minute.
@@ -31,10 +33,23 @@ const MIB_PLUS_ONE = BODY_MAX + 1
  * accepts. */
 const FAKE_LINK = '00000000-0000-4000-8000-000000000000?e=1&m=probe&t=probe'
 
+/** The sign-in endpoint every auth case but one sends to. */
+const SIGN_IN = '/api/auth/sign-in/email'
+
 /** One kind of request the probe sends, by name, with the statuses it may
  * answer. The demo metrics endpoint answers 404 where it is not set up, the
- * Polar webhook where billing is off, and the demo refuses an unknown auth
- * endpoint with 403. */
+ * Polar webhook where billing is off, and the demo refuses every auth
+ * endpoint these cases use with 403. Elsewhere an auth body over 64 KiB
+ * answers 413 before Better Auth routes it, and one still arriving after
+ * 5 s answers 408.
+ *
+ * A case with `stall` sends its `size` bytes in pieces of `chunk` bytes,
+ * `every` milliseconds apart, and then sends no more until the answer. A
+ * hosted front end holds back the start of the HTTP action until about
+ * 0.5 MiB or 5 s of a body arrived, and resets a body that stops before that
+ * after about 15 s with no answer. So `auth-stall-past-buffer` stops after
+ * 600 KiB, and `auth-stall-slow` sends 48 KiB over 6 s, which a front end
+ * that waits for 0.5 MiB resets instead (UND_ERR_SOCKET or ECONNRESET). */
 export const CASES = {
   'rest-over': { path: '/v1/tasks', size: MIB_PLUS_ONE, chunked: false, expect: ['401'] },
   'rest-over-chunked': { path: '/v1/tasks', size: MIB_PLUS_ONE, chunked: true, expect: ['401'] },
@@ -74,7 +89,28 @@ export const CASES = {
     path: '/api/auth/body-cap-probe',
     size: MIB_PLUS_ONE,
     chunked: false,
-    expect: ['403', '404'],
+    expect: ['403', '413'],
+  },
+  'auth-over': { path: SIGN_IN, size: MIB_PLUS_ONE, chunked: false, expect: ['403', '413'] },
+  'oauth-token-over': {
+    path: '/api/auth/oauth2/token',
+    size: MIB_PLUS_ONE,
+    chunked: false,
+    expect: ['403', '413'],
+  },
+  'auth-stall-past-buffer': {
+    path: SIGN_IN,
+    size: 600 * 1024,
+    chunked: true,
+    stall: { chunk: 65536, every: 0 },
+    expect: ['403', '413'],
+  },
+  'auth-stall-slow': {
+    path: SIGN_IN,
+    size: 48 * 1024,
+    chunked: true,
+    stall: { chunk: 4096, every: 500 },
+    expect: ['403', '408', 'UND_ERR_SOCKET', 'ECONNRESET'],
   },
 }
 
@@ -93,14 +129,19 @@ export function probeBody(path, size) {
 
 /** The status of one answer, or the error code or name of a request that
  * got none. */
-async function sendOne(origin, { path, size, chunked }) {
+async function sendOne(origin, { path, size, chunked, stall }) {
   const bytes = Buffer.from(probeBody(path, size))
+  // ends a stalled body's upload once its answer is in
+  const done = new AbortController()
   const body = chunked
     ? new ReadableStream({
-        start(controller) {
-          for (let i = 0; i < bytes.length; i += 65536)
-            controller.enqueue(bytes.subarray(i, i + 65536))
-          controller.close()
+        async start(controller) {
+          const chunk = stall?.chunk ?? 65536
+          for (let i = 0; i < bytes.length && !done.signal.aborted; i += chunk) {
+            controller.enqueue(bytes.subarray(i, i + chunk))
+            if (stall?.every) await new Promise((resolve) => setTimeout(resolve, stall.every))
+          }
+          if (!stall) controller.close()
         },
       })
     : bytes
@@ -113,7 +154,7 @@ async function sendOne(origin, { path, size, chunked }) {
       },
       body,
       ...(chunked ? { duplex: 'half' } : {}),
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.any([AbortSignal.timeout(60_000), done.signal]),
     })
     await response.arrayBuffer()
     return String(response.status)
@@ -122,6 +163,8 @@ async function sendOne(origin, { path, size, chunked }) {
     // text code counts
     const code = error?.cause?.code ?? error?.code
     return typeof code === 'string' ? code : (error?.name ?? 'error')
+  } finally {
+    done.abort()
   }
 }
 

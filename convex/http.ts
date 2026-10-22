@@ -9,6 +9,7 @@ import { isDemoDeployment } from './lib/demo'
 import { demoVisitorPlatform } from './lib/demoVisitor'
 import { FILE_TOKEN_TTL_SECONDS, type FileTokenKind, verifyFileToken } from './lib/fileTokens'
 import { badRequest } from './lib/functions'
+import { AUTH_BODY_MAX_BYTES } from './lib/limits'
 import { mcpResource, OAUTH_SCOPES, oauthIssuer } from './lib/oauth'
 import {
   manualImageDimensions,
@@ -16,7 +17,13 @@ import {
   validateManualImageFile,
 } from './lib/panoramaImage'
 import { isoWeekForDate } from './lib/panoramaWeeks'
-import { answerAfterBody, discardBody, readLimitedBody } from './lib/requestBody'
+import {
+  answerAfterBody,
+  bufferedRequest,
+  DISCARD_MS,
+  discardBody,
+  readLimitedBody,
+} from './lib/requestBody'
 import { registerCuration } from './machine/curation'
 import { registerMcpRoutes } from './machine/mcp'
 import { conflictRetrying } from './machine/registry'
@@ -33,19 +40,61 @@ const recordDemoVisitor = makeFunctionReference<
   { auth_user_id: string; browser: string; os: string }
 >('demoVisitor:record')
 
+/* Why readAuthBody refused a body, with its status, as a Better Auth error
+ * code and a message naming the kind of request refused. */
+const AUTH_BODY_REFUSALS = {
+  too_large: {
+    status: 413,
+    code: 'PAYLOAD_TOO_LARGE',
+    message: (kind: string) =>
+      `The request body is larger than the ${AUTH_BODY_MAX_BYTES / 1024} KiB ${kind} may hold. Shorten what you sent and try again.`,
+  },
+  too_slow: {
+    status: 408,
+    code: 'REQUEST_TIMEOUT',
+    message: () =>
+      `The request took longer than ${DISCARD_MS / 1000} seconds to arrive. Check your connection and try again.`,
+  },
+} as const
+
+/* Better Auth reads a request body itself, as it arrives and in full, before
+ * it decides anything, so every body it gets is read here first: at most
+ * AUTH_BODY_MAX_BYTES, within DISCARD_MS, the bound any unauthenticated
+ * caller can already hold an answer for (lib/requestBody.ts). This answers
+ * the copy that holds the body (bufferedRequest), or the refusal: 413 or 408
+ * with a JSON `message` and `code`, as Better Auth's own errors carry them,
+ * or for an OAuth client, `error` and `error_description` as OAuth 2.0's
+ * do. */
+async function readAuthBody(request: Request, oauthClient = false): Promise<Request | Response> {
+  const read = await bufferedRequest(request, AUTH_BODY_MAX_BYTES, DISCARD_MS)
+  if (read.outcome === 'read') return read.request
+  const { status, code, message: messageFor } = AUTH_BODY_REFUSALS[read.outcome]
+  const message = messageFor(oauthClient ? 'an authorization server request' : 'a sign-in request')
+  return new Response(
+    JSON.stringify(
+      oauthClient ? { error: 'invalid_request', error_description: message } : { code, message },
+    ),
+    { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } },
+  )
+}
+
 /* Auth lives at /api/auth/* (OAuth callbacks /api/auth/callback/{microsoft,google}).
  * CORS allowedOrigins are concatenated with Better Auth's trusted origins
  * (SITE_URL plus exact ADDITIONAL_APP_ORIGINS), while the explicit localhost
- * entry preserves the original local dev allowance. */
+ * entry preserves the original local dev allowance. The demo's refusals
+ * come before the body is read, and its admission check after, so a body
+ * that never arrives takes no admission. */
 const createHttpAuth: typeof createAuth = (ctx) => {
   const auth = createAuth(ctx)
   return {
     ...auth,
-    handler: async (request: Request) => {
+    handler: async (original: Request) => {
+      const path = new URL(original.url).pathname.replace(/\/$/, '')
+      const anonymous =
+        isDemoDeployment() && original.method === 'POST' && path === '/api/auth/sign-in/anonymous'
       if (isDemoDeployment()) {
-        const path = new URL(request.url).pathname.replace(/\/$/, '')
         const permitted =
-          request.method === 'POST'
+          original.method === 'POST'
             ? ['/api/auth/sign-in/anonymous', '/api/auth/sign-out']
             : [
                 '/api/auth/get-session',
@@ -61,36 +110,35 @@ const createHttpAuth: typeof createAuth = (ctx) => {
               headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
             },
           )
-        if (path === '/api/auth/sign-in/anonymous') {
-          const origin = request.headers.get('Origin')
+        if (anonymous) {
+          const origin = original.headers.get('Origin')
           if (origin !== null && !appOrigins().includes(origin))
             return new Response(null, { status: 403 })
-          if (!request.headers.get('Content-Type')?.toLowerCase().startsWith('application/json'))
+          if (!original.headers.get('Content-Type')?.toLowerCase().startsWith('application/json'))
             return new Response(null, { status: 415 })
-          // Enforced before Better Auth allocates any identity, even when the
-          // caller goes directly to Convex rather than through our website.
-          if (!('runMutation' in ctx) || !(await ctx.runMutation(internal.demoUploads.admit, {})))
-            return new Response(
-              JSON.stringify({ message: 'The demo is busy. Please try again shortly.' }),
-              {
-                status: 429,
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Retry-After': '60',
-                  'Cache-Control': 'no-store',
-                },
-              },
-            )
         }
       }
-      const response = await auth.handler(request)
+      const request = await readAuthBody(original)
+      if (request instanceof Response) return request
+      // Enforced before Better Auth allocates any identity, even when the
+      // caller goes directly to Convex rather than through our website.
       if (
-        isDemoDeployment() &&
-        request.method === 'POST' &&
-        new URL(request.url).pathname.replace(/\/$/, '') === '/api/auth/sign-in/anonymous' &&
-        response.status === 200 &&
-        'runMutation' in ctx
-      ) {
+        anonymous &&
+        (!('runMutation' in ctx) || !(await ctx.runMutation(internal.demoUploads.admit, {})))
+      )
+        return new Response(
+          JSON.stringify({ message: 'The demo is busy. Please try again shortly.' }),
+          {
+            status: 429,
+            headers: {
+              'Content-Type': 'application/json',
+              'Retry-After': '60',
+              'Cache-Control': 'no-store',
+            },
+          },
+        )
+      const response = await auth.handler(request)
+      if (anonymous && response.status === 200 && 'runMutation' in ctx) {
         try {
           const body: unknown = JSON.parse(await response.clone().text())
           const user = body && typeof body === 'object' && 'user' in body ? body.user : null
@@ -191,16 +239,14 @@ const oauthMachineHeaders = {
 }
 const oauthMachine = answerAfterBody(async (ctx, request) => {
   if (isDemoDeployment()) return new Response(null, { status: 403, headers: oauthMachineHeaders })
-  const headers = new Headers(request.headers)
-  headers.delete('Cookie')
-  headers.delete('Better-Auth-Cookie')
-  // the copy takes over the body, so it is the one to drop before answering
-  const forwarded = new Request(request, { headers })
+  const read = await readAuthBody(request, true)
   let response: Response
-  try {
-    response = await createAuth(ctx).handler(forwarded)
-  } finally {
-    await discardBody(forwarded).catch(() => {})
+  if (read instanceof Response) response = read
+  else {
+    const headers = new Headers(read.headers)
+    headers.delete('Cookie')
+    headers.delete('Better-Auth-Cookie')
+    response = await createAuth(ctx).handler(new Request(read, { headers }))
   }
   const responseHeaders = new Headers(response.headers)
   responseHeaders.delete('Set-Cookie')
