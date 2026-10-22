@@ -28,9 +28,9 @@ function MdImage({ alt, src }: { alt: string; src: string }) {
       setUrl(null)
       retried.current = false
       void P.attachmentUrl(attId).then((u) => {
-        if (alive) {
-          u ? setUrl(u) : setGone(true)
-        }
+        if (!alive) return
+        if (u) setUrl(u)
+        else setGone(true)
       })
     } else {
       /* The same swap landing on a plain URL. `external` is recomputed every

@@ -38,8 +38,13 @@ export function useMobile() {
  * A close repeated before its Back step lands is dropped, never a second Back.
  * `onClose` may return false to stay open (a dialog busy with something that
  * must finish). After a Back step the layer then pushes its marker again, so
- * the next Back still closes the layer instead of leaving the page. */
-export function useMobileBackLayer(open: boolean, onClose: () => unknown, enabled?: boolean) {
+ * the next Back still closes the layer instead of leaving the page. `onClose`
+ * gets the layer's close, so a close it holds back can run it again later. */
+export function useMobileBackLayer(
+  open: boolean,
+  onClose: (close: () => void) => unknown,
+  enabled?: boolean,
+) {
   const mobile = useMobile()
   const useHistory = enabled ?? mobile
   const id = useId()
@@ -47,6 +52,13 @@ export function useMobileBackLayer(open: boolean, onClose: () => unknown, enable
   closeRef.current = onClose
   const active = useRef(false)
   const leaving = useRef(false)
+  const close = () => {
+    if (active.current && history.state?.qivoLayer === id) {
+      if (leaving.current) return
+      leaving.current = true
+      history.back()
+    } else closeRef.current(close)
+  }
   useEffect(() => {
     if (!useHistory || !open) return
     let disposed = false
@@ -56,7 +68,7 @@ export function useMobileBackLayer(open: boolean, onClose: () => unknown, enable
       if (history.state?.qivoLayer !== id) {
         active.current = false
         leaving.current = false
-        if (closeRef.current() === false) {
+        if (closeRef.current(close) === false) {
           // refused: restore the marker this Back step used up
           history.pushState({ ...history.state, qivoLayer: id }, '', location.href)
           active.current = true
@@ -83,13 +95,7 @@ export function useMobileBackLayer(open: boolean, onClose: () => unknown, enable
         history.replaceState(previous, '', location.href)
     }
   }, [useHistory, open, id])
-  return () => {
-    if (active.current && history.state?.qivoLayer === id) {
-      if (leaving.current) return
-      leaving.current = true
-      history.back()
-    } else closeRef.current()
-  }
+  return close
 }
 
 /** useMobileBackLayer for a menu whose pick may move the page: `close(then)`

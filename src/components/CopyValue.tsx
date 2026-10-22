@@ -5,7 +5,7 @@
    for two seconds. When the browser refuses the write, the value turns into
    plain text that takes focus already selected, so it can still be copied by
    hand, which matters most for a secret that cannot be shown again. */
-import { useEffect, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { announce } from '@/lib/announce'
 import { copyText } from '@/lib/clipboard'
@@ -23,18 +23,21 @@ type Probe = { [attr: `data-${string}`]: string | undefined }
    than the line still breaks inside its block. */
 function Wrapped({ value }: { value: string }) {
   if (!/\s/.test(value)) return <span className="break-all">{value}</span>
+  const words: ReactNode[] = []
   let at = 0
-  return value.split(/(\s+)/).map((part) => {
-    const key = at
-    at += part.length
-    return /^\s*$/.test(part) ? (
-      part
-    ) : (
-      <span key={key} className="inline-block max-w-full break-all">
-        {part}
-      </span>
+  for (const part of value.split(/(\s+)/)) {
+    words.push(
+      /^\s*$/.test(part) ? (
+        part
+      ) : (
+        <span key={at} className="inline-block max-w-full break-all">
+          {part}
+        </span>
+      ),
     )
-  })
+    at += part.length
+  }
+  return words
 }
 
 const selectAll = (node: Node) => window.getSelection()?.selectAllChildren(node)

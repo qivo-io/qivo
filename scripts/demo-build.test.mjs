@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -71,6 +71,7 @@ describe('demo build output', () => {
     expect(readFileSync(join(directory, 'admin.html'), 'utf8')).toBe(app)
     const root = readFileSync(join(directory, 'index.html'), 'utf8')
     expect(root).toContain('content="0;url=/app"')
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: the page's own script holds this template literal
     expect(root).toContain('location.replace(`/app${location.search}${location.hash}`)')
     expect(root).toContain('<meta name="robots" content="noindex,nofollow">')
     expect(app).toContain('src="/assets/app.js"')

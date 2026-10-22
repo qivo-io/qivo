@@ -311,13 +311,13 @@ export function MentionCtl({
   const noteWindow = useUnsentScope()
   useUnsaved(open && !kept && text.trim() !== '', 'note', noteWindow)
   const letGo = useRef(false)
-  const close = useMobileBackLayer(open, () => {
+  const close = useMobileBackLayer(open, (again) => {
     const meant = letGo.current
     letGo.current = false
     if (!meant && noteWindow.held().length) {
       closeOrAsk([noteWindow], () => {
         letGo.current = true
-        close()
+        again()
       })
       return false
     }

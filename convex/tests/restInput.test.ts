@@ -292,7 +292,7 @@ describe('request bodies', () => {
     expect(eventParamsJson({ ttlMs: -Infinity })).toBeNull()
     expect(eventParamsJson({ arguments: { task_id: [Number.NaN] } })).toBeNull()
     // a wide array, as a 1 MiB body can hold, walks without overflowing
-    expect(eventParamsJson({ arguments: new Array(500_000).fill(0) })).toMatch(
+    expect(eventParamsJson({ arguments: Array.from({ length: 500_000 }, () => 0) })).toMatch(
       /^\{"arguments":\[0,/,
     )
     expect(eventParamsJson({ arguments: { task_id: null }, ttlMs: 60_000 })).toBe(

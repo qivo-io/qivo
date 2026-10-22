@@ -636,7 +636,7 @@ function Roadmap({
     (id) =>
       setCollapsed((s) => {
         const n = new Set(s)
-        n.has(id) ? n.delete(id) : n.add(id)
+        if (!n.delete(id)) n.add(id)
         return n
       }),
     [],

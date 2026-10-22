@@ -449,7 +449,7 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
     }
     // links are mirrored, so a changed blocker reaches the task it blocks;
     // a copy, because the tasks linked to a linked task did not change
-    for (const id of [...fresh])
+    for (const id of Array.from(fresh))
       for (const link of byUuid.get(id)?.links ?? []) {
         const uuid = uuidOf(link.id)
         if (uuid) fresh.add(uuid)
@@ -709,7 +709,7 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
         capacity = from.capacity
       }
       // a group's dates, completion and delay follow its subtasks
-      for (const uuid of [...dirty])
+      for (const uuid of Array.from(dirty))
         for (let at = parentOf.get(uuid); at && !dirty.has(at); at = parentOf.get(at)) dirty.add(at)
       if (!dirty.size && !owners.size && !recheck.size && !loadOwners.size) return moved
 

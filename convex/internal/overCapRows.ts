@@ -225,7 +225,9 @@ function sorted(
   for (const { field, length, value } of changes) {
     const outcome = value === undefined ? 'reported' : write ? 'fixed' : 'would_fix'
     rows.push({ table, id, field: `${prefix}${field}`, length, outcome })
-    if (value !== undefined) patch = { ...(patch ?? {}), [field]: value }
+    if (value === undefined) continue
+    patch ??= {}
+    patch[field] = value
   }
   return { rows, patch }
 }

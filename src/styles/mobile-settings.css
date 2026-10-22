@@ -234,6 +234,16 @@
     flex-direction: column;
     gap: 16px;
   }
+  /* the project's Archive or delete row puts its sentence over a full-width button */
+  [data-project-removal] div:has(> button) {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  [data-project-removal] button {
+    height: auto;
+    white-space: normal;
+  }
   .settings-project-members > [data-project-access] {
     display: contents;
   }
@@ -308,16 +318,6 @@
   }
   .settings-content-scroll [data-fresh-key] {
     flex-basis: 100%;
-  }
-  /* the project's Archive or delete row puts its sentence over a full-width button */
-  [data-project-removal] div:has(> button) {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 12px;
-  }
-  [data-project-removal] button {
-    height: auto;
-    white-space: normal;
   }
   .settings-content-scroll [data-archived-project] > div:first-child {
     flex-wrap: wrap;
