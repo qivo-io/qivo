@@ -435,9 +435,16 @@ async function readBackgroundBody(
   )
 }
 
+/* The answer for an image upload whose write kept conflicting or timing
+ * out. The app cancels a failed upload's ticket, so its next step is a new
+ * upload. */
+const BACKGROUND_UPLOAD_BUSY =
+  'The server was too busy to save the image, and nothing changed. Choose the image again.'
+
 /* The image upload receiver. Its mutations retry write conflicts and time
  * outs like the upload URL's (machine/uploads.ts), and one that outlasts the
- * retries saved nothing and answers 503 with Retry-After. */
+ * retries saved nothing and answers 503. Outside the demo the URL still
+ * works, so the answer carries Retry-After. */
 const receiveBackground = answerAfterBody(async (ctx, request) => {
   const headers = gatewayHeaders(request.headers.get('Origin'))
   if (headers.get('Access-Control-Allow-Origin') !== null)
@@ -514,14 +521,11 @@ const receiveBackground = answerAfterBody(async (ctx, request) => {
         ? (error.data as { code?: string; message?: string; reason?: string })
         : null
     if (data?.reason === WRITE_CONFLICT) {
-      headers.set('Retry-After', String(WRITE_CONFLICT_RETRY_AFTER))
+      // the demo's cleanup spent the URL's reservation, so only a new
+      // upload can work there
+      if (!startedDemoWork) headers.set('Retry-After', String(WRITE_CONFLICT_RETRY_AFTER))
       return new Response(
-        JSON.stringify({
-          error: {
-            code: 'conflict',
-            message: 'The server was too busy to save the image, and nothing changed. Try again.',
-          },
-        }),
+        JSON.stringify({ error: { code: 'conflict', message: BACKGROUND_UPLOAD_BUSY } }),
         { status: 503, headers },
       )
     }

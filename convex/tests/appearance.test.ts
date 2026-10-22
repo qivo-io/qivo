@@ -723,7 +723,8 @@ describe('private custom background uploads', () => {
       expect(JSON.parse(await response.text())).toEqual({
         error: {
           code: 'conflict',
-          message: 'The server was too busy to save the image, and nothing changed. Try again.',
+          message:
+            'The server was too busy to save the image, and nothing changed. Choose the image again.',
         },
       })
       expect(await settings(owner.caller)).toMatchObject({ custom_image: current.image })

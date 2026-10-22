@@ -52,15 +52,33 @@ export const DISCARD_IDLE_MS = 1_000
  * takes, so this is the only bound on the rest. */
 export const DISCARD_MAX_BYTES = 32 * MIB
 
+/** How long a cancel of a body may hold the answer, in milliseconds. A body
+ * shared with a clone (Request.clone, which Better Auth calls) finishes
+ * cancelling only once the clone is cancelled too, so the answer goes out
+ * without waiting for that. */
+export const CANCEL_MS = 100
+
+/* Cancels the body `reader` reads, waiting at most CANCEL_MS for it. */
+async function cancelBody(reader: ReturnType<BodyStream['getReader']>): Promise<void> {
+  let timer: unknown
+  await Promise.race([
+    reader.cancel().catch(() => {}),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, CANCEL_MS)
+    }),
+  ])
+  clearTimeout(timer)
+}
+
 /**
  * Reads and drops whatever is left of a request body, so that the answer
  * goes out only after the client finished uploading. It stops after
  * `waitMs`, after `idleMs` without bytes or past DISCARD_MAX_BYTES, so a
- * slow, stalled or endless upload holds the action at most `waitMs`, and
- * such a client may then still see a reset or a 502. It does not start on a
- * body declared longer than DISCARD_MAX_BYTES, which it could not finish,
- * and leaves alone a body a reader still holds (one cancelled after a
- * timeout).
+ * slow, stalled or endless upload holds the action at most `waitMs` and
+ * CANCEL_MS, and such a client may then still see a reset or a 502. It does
+ * not start on a body declared longer than DISCARD_MAX_BYTES, which it could
+ * not finish, and leaves alone a body a reader still holds (one cancelled
+ * after a timeout).
  */
 export async function discardBody(
   request: Request,
@@ -71,7 +89,7 @@ export async function discardBody(
   if (body === null || body.locked) return
   const reader = body.getReader()
   if (Number(request.headers.get('Content-Length')) > DISCARD_MAX_BYTES) {
-    await reader.cancel().catch(() => {})
+    await cancelBody(reader)
     return
   }
   let timer: unknown
@@ -101,7 +119,7 @@ export async function discardBody(
   } finally {
     clearTimeout(timer)
     clearTimeout(idleTimer)
-    await reader.cancel().catch(() => {})
+    await cancelBody(reader)
   }
 }
 
@@ -179,7 +197,7 @@ export async function readLimitedBody(
   } finally {
     clearTimeout(timer)
     // a read still waits on a body that came too late, so only cancel ends it
-    if (late) await reader.cancel().catch(() => {})
+    if (late) await cancelBody(reader)
     else reader.releaseLock()
   }
 }

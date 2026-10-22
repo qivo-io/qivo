@@ -566,6 +566,25 @@ describe('discardBody', () => {
     await expect(discardBody(requestOf(aborted), 60_000)).resolves.toBeUndefined()
   })
 
+  it("does not wait for a clone's share of a body to cancel too", async () => {
+    // a cancelled branch of a teed stream, as Request.clone makes and Better
+    // Auth calls, settles only once the other branch is cancelled as well
+    const stuck = (length: number | null) => {
+      const [mine] = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(10))
+        },
+      }).tee()
+      const started = Date.now()
+      return Promise.race([
+        discardBody(requestOf(mine, length), 50, 10).then(() => Date.now() - started),
+        new Promise((resolve) => setTimeout(() => resolve('stuck'), 1_000)),
+      ])
+    }
+    expect(await stuck(null)).toBeLessThan(500)
+    expect(await stuck(DISCARD_MAX_BYTES + 1)).toBeLessThan(500)
+  })
+
   it('leaves a body that a reader still holds alone', async () => {
     const held = new ReadableStream<Uint8Array>()
     held.getReader()
