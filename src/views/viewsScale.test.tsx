@@ -10,6 +10,22 @@ import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
    health reads every group's figures in one pass over the tasks. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
+// the Roadmap's work over every task, counted
+const schedule = vi.hoisted(() => ({ moves: 0, pairs: 0 }))
+vi.mock('../lib/schedule', async (original) => {
+  const actual = await original<typeof import('../lib/schedule')>()
+  return {
+    ...actual,
+    autoMoves: (...args: Parameters<typeof actual.autoMoves>) => {
+      schedule.moves++
+      return actual.autoMoves(...args)
+    },
+    dependencyPairs: (...args: Parameters<typeof actual.dependencyPairs>) => {
+      schedule.pairs++
+      return actual.dependencyPairs(...args)
+    },
+  }
+})
 vi.mock('../lib/convex', () => ({ convex: network }))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
@@ -145,6 +161,54 @@ describe('an Overview row', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(row()?.closest('[data-card-live]')).not.toBeNull()
     expect(row()).not.toBe(before)
     expect(document.activeElement).toBe(row())
+  })
+})
+
+describe('a delivery on the desktop Roadmap', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
+  it('renders the rows of the task it changed, not every row', async () => {
+    const board = await loadBoard(network, (snap) => {
+      for (let n = 1; n <= 600; n++) snap.issues.push(taskRow(snap, `t${n}`, 'todo', n))
+    })
+    const { Roadmap } = await import('./Roadmap')
+    const actions = new Proxy({}, { get: () => () => {} }) as Parameters<
+      typeof Roadmap
+    >[0]['actions']
+    await board.renderView(root, (info) => (
+      <Roadmap
+        info={info}
+        filters={{
+          mine: false,
+          assignees: [],
+          priority: null,
+          stale: false,
+          focus: false,
+          search: '',
+        }}
+        actions={actions}
+        filterControls={() => null}
+        focusPlan={null}
+      />
+    ))
+    expect(count('[data-roadmap-task-top]')).toBe(600)
+    // a remote rename of one task
+    const stale = vi.spyOn(board.P, 'isStale')
+    const before = { ...schedule }
+    const row = board.snapshot.issues.find((issue) => issue.id === 't300')
+    if (!row) throw new Error('missing the task')
+    row.title = 'Renamed task'
+    row.updated_at = new Date().toISOString()
+    await board.deliver()
+    expect(document.body.textContent).toContain('Renamed task')
+    // the renamed task's chunk of rows, not all 600
+    expect(stale.mock.calls.length).toBeGreaterThan(0)
+    expect(stale.mock.calls.length).toBeLessThanOrEqual(64)
+    // a title is neither a date nor a link: Auto-move and the arrows stand
+    expect(schedule.moves).toBe(before.moves)
+    expect(schedule.pairs).toBe(before.pairs)
+    // a date is: Auto-move works it out again
+    Object.assign(row, { start_week: '2026-W40', end_week: '2026-W41' })
+    await board.deliver()
+    expect(schedule.moves).toBeGreaterThan(before.moves)
   })
 })
 

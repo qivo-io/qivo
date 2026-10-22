@@ -4,10 +4,10 @@
    and PlanCard shows workload while ResourceStrip shares the same week grid. */
 import type React from 'react'
 import {
+  memo,
   useCallback,
   useEffect as useEffectR,
   useLayoutEffect as useLayoutEffectR,
-  useMemo,
   useRef as useRefR,
   useState as useStateR,
 } from 'react'
@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { REVEAL_MS } from '@/lib/reveal'
 import { isRoadmapTaskVisible } from '@/lib/roadmapVisibility'
+import { useTaskMemo } from '@/lib/taskMemo'
 import { useUpdateBlocker } from '@/lib/updateSafety'
 import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
@@ -36,7 +37,7 @@ import { GRID_X, GUTTER_W, HEAD_STICK, LABEL_W, ROW_H, SUB_STICK } from './roadm
 import { PlanCard, type PlanSession } from './roadmap/PlanCard'
 import { createRowObserver } from './roadmap/rowObserver'
 import { MilestoneFlag } from './roadmap/TimelineMarks'
-import { TimelineRow } from './roadmap/TimelineRow'
+import { type Row, TimelineRow } from './roadmap/TimelineRow'
 import { WinMenu, WinRangePicker } from './roadmap/WindowControls'
 import '../styles/mobile-views.css'
 import './Roadmap.css'
@@ -60,6 +61,88 @@ const CANVAS_PAD_B = 24
    above Team, so the budget and that gap read this number, on phones too.
    Keep it equal to the token. */
 const PANEL_GAP = 8
+
+/** A rail row as laid out: the row, its offset and height, and its bar's
+    start and end weeks with any live drag draft. */
+type LaidRow = {
+  row: Row & { subIds?: string[]; parentPid?: string }
+  top: number
+  h: number
+  start: number | null
+  end: number | null
+}
+
+/* What the Roadmap's memos read of a task: its links for the dependency
+   arrows; its dates, status, hierarchy and links for Auto-move (its
+   project's write access comes with P.contextVersion); and what the
+   headings' remaining hours and My view's narrowing read. The store gives
+   a changed task new arrays, so arrays are compared by their contents. */
+const linksKey = (it: IssueVM) => (it.links ?? []).map((l) => `${l.type}:${l.id}`).join()
+const linkReads = (it: IssueVM) => [linksKey(it)]
+const scheduleReads = (it: IssueVM) => [
+  it.start,
+  it.end,
+  it.status,
+  it.project,
+  it.isGroup,
+  it.hasHiddenSubtasks,
+  (it.children ?? []).join(),
+  linksKey(it),
+]
+const remainingReads = (it: IssueVM) => [
+  it.project,
+  it.status,
+  it.remaining,
+  it.owner,
+  it.assignee,
+  it.reviewer,
+  it.isGroup,
+  it.hasHiddenSubtasks,
+  (it.children ?? []).join(),
+]
+
+/* The most rows one chunk of a track renders. */
+const CHUNK_ROWS = 32
+const chunked = (rows: LaidRow[]) => {
+  const parts: LaidRow[][] = []
+  for (let i = 0; i < rows.length; i += CHUNK_ROWS) parts.push(rows.slice(i, i + CHUNK_ROWS))
+  return parts
+}
+
+/** A stretch of a track's task rows. It renders again only when `deps`
+    changed or one of its rows did: another task, offset, height, bar or
+    ring. `render` draws one row from the rows and deps it was given. */
+const RowChunk = memo(
+  function RowChunk({
+    rows,
+    render,
+  }: {
+    rows: LaidRow[]
+    rings: Record<string, string>
+    deps: readonly unknown[]
+    render: (row: LaidRow) => React.ReactNode
+  }) {
+    return <>{rows.map(render)}</>
+  },
+  (a, b) =>
+    a.deps.length === b.deps.length &&
+    a.deps.every((value, i) => Object.is(value, b.deps[i])) &&
+    a.rows.length === b.rows.length &&
+    a.rows.every((x, i) => {
+      const y = b.rows[i]
+      return (
+        x.row.kind === y.row.kind &&
+        x.row.pid === y.row.pid &&
+        x.row.proj === y.row.proj &&
+        x.row.issue === y.row.issue &&
+        x.top === y.top &&
+        x.h === y.h &&
+        x.start === y.start &&
+        x.end === y.end &&
+        (!x.row.issue || a.rings[x.row.issue.id] === b.rings[x.row.issue.id])
+      )
+    }),
+)
 
 function Roadmap({
   info,
@@ -1173,15 +1256,31 @@ function Roadmap({
      write access canWrite reads, so they are worked out again only when one
      of them changed: P.issues keeps its identity while no task changed, and
      P.contextVersion covers the access. Above the early returns, as hooks. */
-  const allDeps = useMemo(() => dependencyPairs(P.issues), [P.issues])
-  const pendingMoves = useMemo(
-    () =>
+  const allDeps = useTaskMemo(P.issues, linkReads, dependencyPairs, [])
+  const pendingMoves = useTaskMemo(
+    P.issues,
+    scheduleReads,
+    (issues) =>
       autoMoves({
-        issues: P.issues,
+        issues,
         byId: P.issueById,
         canWrite: (it) => P.canWrite(it.project),
       }),
-    [P.issues, P.contextVersion],
+    [P.contextVersion],
+  )
+  /* The remaining hours each heading shows, in one pass over the tasks,
+     again only when a task changed in what the sum reads. Above the early
+     returns, as hooks; the headings are the scope's tracks and their
+     sub-project bands. */
+  const headSubIds = info.groups.flatMap((g) => [g.subIds, ...g.subIds.map((id) => [id])])
+  const headRemaining = useTaskMemo(
+    P.issues,
+    remainingReads,
+    () => {
+      const sums = P.remainingByGroups(headSubIds, info.only)
+      return new Map(headSubIds.map((ids, i) => [ids.join(), sums[i]]))
+    },
+    [headSubIds.map((ids) => ids.join()).join(';'), info.only],
   )
 
   /* ---------- empty state ---------- */
@@ -1289,12 +1388,18 @@ function Roadmap({
   const noMatches = clearable && tracks.length === 0
 
   // vertical layout + bar geometry for dependency arrows (windowed bars only)
-  const laid = []
+  const laid: LaidRow[] = []
   let top = 0
   const geom = {}
   rows.forEach((row) => {
     const h = ROW_H[row.kind]
-    laid.push({ row, top, h })
+    laid.push({
+      row,
+      top,
+      h,
+      start: row.issue ? getS(row.issue) : null,
+      end: row.issue ? getE(row.issue) : null,
+    })
     if (row.kind === 'task' && getS(row.issue) != null) {
       const s = getS(row.issue),
         e = getE(row.issue)
@@ -1364,7 +1469,7 @@ function Roadmap({
     getE(P.issueById[dp.blocker]) >= getS(P.issueById[dp.blocked])
       ? 'var(--danger)'
       : 'var(--success)'
-  const barRing = {}
+  const barRing: Record<string, string> = {}
   deps.forEach((dp) => {
     if (getE(P.issueById[dp.blocker]) >= getS(P.issueById[dp.blocked]))
       barRing[dp.blocked] = 'color-mix(in oklab, var(--danger) 67%, transparent)'
@@ -1876,7 +1981,8 @@ function Roadmap({
                 className="relative min-w-full"
               >
                 {(() => {
-                  const renderRow = ({ row, h, top }) => {
+                  const renderRow = (L: LaidRow) => {
+                    const { row, h, top } = L
                     const isTrack = row.kind === 'track'
                     const isSub = row.kind === 'sub'
                     const isGroup = isTrack || isSub // the two heading kinds
@@ -1884,7 +1990,7 @@ function Roadmap({
                     // planning and a read-only reveal wear the same spotlight
                     const revealing = !isGroup && revealed?.id === row.issue.id
                     const spotlit = planning || revealing
-                    const remH = isGroup ? P.remainingIn(row.subIds, info.only) : 0
+                    const remH = isGroup ? (headRemaining.get(row.subIds.join()) ?? 0) : 0
                     // stale rows fade label contents + timeline cell, NOT the row div:
                     // opacity on the row would wrap the sticky label in a stacking
                     // context and hoist the dependency-arrow overlay above it
@@ -1916,8 +2022,8 @@ function Roadmap({
                         fade={fade}
                         ring={ring}
                         due={due}
-                        start={row.issue ? getS(row.issue) : null}
-                        end={row.issue ? getE(row.issue) : null}
+                        start={L.start}
+                        end={L.end}
                         w0={w0}
                         w1={w1}
                         weekW={weekW}
@@ -1939,14 +2045,49 @@ function Roadmap({
                   /* One container per track, one per band inside it — the nesting the
              pinned headings need. Nothing else about the rail changes: the
              rows come out in exactly the order `laid` put them in. */
+                  /* Task rows render in chunks a delivery skips unless one of
+                     their rows changed, so a change to one task renders its
+                     chunk alone. A chunk reads everything else through
+                     `chunkDeps`. */
+                  const chunkDeps = [
+                    session?.issueId,
+                    revealed?.id,
+                    hl,
+                    w0,
+                    w1,
+                    weekW,
+                    timelineW,
+                    hasSubHeads,
+                    P.contextVersion,
+                    P.TODAY_ISO,
+                    rowObserver,
+                    guidesKey,
+                    toggle,
+                    onScope,
+                    onOpenIssue,
+                    onSched,
+                    commit,
+                    revealEdge,
+                  ]
+                  const chunks = (pid: string, list: LaidRow[]) =>
+                    chunked(list).map((part, i) => (
+                      <RowChunk
+                        // biome-ignore lint/suspicious/noArrayIndexKey: a chunk is a stretch of its track's rows, not one row
+                        key={`${pid}:${i}`}
+                        rows={part}
+                        rings={barRing}
+                        deps={chunkDeps}
+                        render={renderRow}
+                      />
+                    ))
                   return groups.map((g) => (
                     <div key={`track:${g.head.row.pid}`}>
                       {renderRow(g.head)}
-                      {g.own.map((L) => renderRow(L))}
+                      {chunks(g.head.row.pid, g.own)}
                       {g.bands.map((b) => (
                         <div key={`band:${b.head.row.pid}`}>
                           {renderRow(b.head)}
-                          {b.rows.map((L) => renderRow(L))}
+                          {chunks(b.head.row.pid, b.rows)}
                         </div>
                       ))}
                     </div>

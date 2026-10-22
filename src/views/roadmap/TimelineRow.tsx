@@ -10,7 +10,7 @@ import { GUTTER_W, HEAD_STICK, LABEL_W, SUB_STICK } from './layout'
 import type { RowObserver } from './rowObserver'
 import { BAR_RING, Bar, WeekCountEdge } from './TimelineMarks'
 
-type Row = {
+export type Row = {
   kind: 'track' | 'sub' | 'task' | 'unsched'
   pid: string
   proj: ProjectVM
