@@ -40,17 +40,38 @@ export function windowCount(rows: number, each: number): number {
   return n
 }
 
+/** How many times a window of the whole space may be cut in two. A part
+ * accepts only windows of this grid (isIdWindow), so a caller cannot narrow
+ * a window around one row: the rows a part holds back, such as a hidden
+ * task, tell at most which of 4,096 slices their id falls in, the first
+ * three hex digits, and never the id. 4,096 windows of 300 tasks each hold
+ * 1.2 million tasks. */
+export const MAX_DEPTH = 12
+
+/* The width of the narrowest window. */
+const NARROWEST = SPACE / 2 ** MAX_DEPTH
+
 /** The two halves of `w`, or null when it cannot be cut further. */
 export function halve(w: IdWindow): [IdWindow, IdWindow] | null {
   const a = pointOf(w.from)
   const b = pointOf(w.to)
-  const mid = Math.floor((a + b) / 2)
-  if (mid <= a) return null
-  const at = point(mid)
+  if (b - a <= NARROWEST) return null
+  const at = point((a + b) / 2)
   return [
     { from: w.from, to: at },
     { from: at, to: w.to },
   ]
+}
+
+/** Whether `w` is a window of the grid that idWindows and halve make: its
+ * width is the whole space halved at most MAX_DEPTH times, it starts at a
+ * multiple of its width, and its bounds are written as they write them. */
+export function isIdWindow(w: IdWindow): boolean {
+  const a = pointOf(w.from)
+  const b = pointOf(w.to)
+  if (point(a) !== w.from || (w.to !== null && (b >= SPACE || point(b) !== w.to))) return false
+  const width = b - a
+  return width >= NARROWEST && Number.isInteger(Math.log2(width)) && a % width === 0
 }
 
 /** Whether id `id` falls in window `w`. */

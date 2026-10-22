@@ -14,28 +14,32 @@
  *   memberships. Two ranges, and one per person for their memberships.
  * - projects (per window of its project ids): the projects the caller can
  *   see, with grants, team grants and the active ones' milestones. Up to
- *   three ranges per project, beside the caller's project view.
+ *   three ranges per project, beside the caller's levels on it.
  * - tasks (per window of its task ids): the caller's working set, with
  *   links, labels, attachments and follows, and the anonymized load of the
- *   window's tasks the caller is not shown. Six ranges for the window, one
- *   per task outside it that a task names (a parent, a link target) and one
- *   per owner of a hidden task.
+ *   window's tasks the caller is not shown. Six ranges for the window, two
+ *   more per 64 subtasks past the first 64, one per task outside it that a
+ *   task names (a parent, a link target) and one per owner of a hidden task.
  * - inbox (per organization): the caller's messages, at most 3,002 messages
- *   read and one range per task they name.
+ *   read and one range per task they name, cut short where those tasks
+ *   would read too much.
  *
  * Every part reads the caller's own profiles first (lib/functions.ts), so
  * all of them rerun when one of those changes, and answer the same. A part
  * of an organization the caller no longer holds a seat in answers
- * `{state: 'gone'}`, and only a missing sign-in throws. Every part also reads
- * the caller's project view (lib/visibility.ts orgProjectView: the
- * organization's projects and the caller's grants and teams) where it
- * needs to know what the caller can see, so a project or access edit reruns
- * them all. Each windowed part stays inside Convex's limits at any size by
+ * `{state: 'gone'}`, and only a missing sign-in throws. A part that needs to
+ * know what the caller can see reads the projects its rows name, the
+ * caller's grants and team shares on them, the caller's memberships and the
+ * organization's teams (lib/access.ts projectLevelsOf), so an edit of one of
+ * those reruns the parts that read it. Each windowed part stays inside Convex's limits at any size by
  * answering `split` or `overflow` (lib/workspaceParts.ts), and the app
- * chooses the windows from the organization's counters, without asking. */
+ * chooses the windows from the organization's counters, without asking.
+ * A windowed part refuses (bad_request) a window that is not one of
+ * lib/idWindows.ts's grid. */
 
 import { v } from 'convex/values'
-import { authedQuery, seatQuery } from './lib/functions'
+import { authedQuery, badRequest, seatQuery } from './lib/functions'
+import { type IdWindow, isIdWindow } from './lib/idWindows'
 import {
   readCatalog,
   readInbox,
@@ -50,6 +54,15 @@ const GONE = { state: 'gone' as const }
 /* A window's bounds as a part takes them (lib/idWindows.ts). */
 const windowArgs = { from: v.string(), to: v.union(v.string(), v.null()) }
 
+/* `w`, refused unless it is a window of lib/idWindows.ts's grid. A part
+ * holds back rows of its window, such as the ids behind hidden load, so a
+ * caller who could narrow a window at will could find a held-back id by
+ * asking about ever narrower ones. */
+function gridWindow(w: IdWindow): IdWindow {
+  if (!isIdWindow(w)) throw badRequest('this window of ids is not one the app makes')
+  return w
+}
+
 export const root = authedQuery({
   args: {},
   handler: async (ctx) => await readRoot(ctx),
@@ -62,17 +75,19 @@ export const catalog = seatQuery({
 
 export const people = seatQuery({
   args: windowArgs,
-  handler: async (ctx, w) => (ctx.me === null ? GONE : await readPeople(ctx, ctx.me, w)),
+  handler: async (ctx, w) =>
+    ctx.me === null ? GONE : await readPeople(ctx, ctx.me, gridWindow(w)),
 })
 
 export const projects = seatQuery({
   args: windowArgs,
-  handler: async (ctx, w) => (ctx.me === null ? GONE : await readProjects(ctx, ctx.me, w)),
+  handler: async (ctx, w) =>
+    ctx.me === null ? GONE : await readProjects(ctx, ctx.me, gridWindow(w)),
 })
 
 export const tasks = seatQuery({
   args: windowArgs,
-  handler: async (ctx, w) => (ctx.me === null ? GONE : await readTasks(ctx, ctx.me, w)),
+  handler: async (ctx, w) => (ctx.me === null ? GONE : await readTasks(ctx, ctx.me, gridWindow(w))),
 })
 
 export const inbox = seatQuery({

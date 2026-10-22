@@ -110,8 +110,19 @@ export const PAGE = {
   projects: { split: 600, most: 1200 },
   soft: { bytes: 4 * 1024 * 1024, documents: 8000, ranges: 2000 } satisfies Budget,
   hard: { bytes: 8 * 1024 * 1024, documents: 16_000, ranges: 3200 } satisfies Budget,
-  /** how many rows a part reads the per-row reads of at once */
-  batch: 256,
+  /** how many rows a part reads the per-row reads of at once, so one batch
+   * (a few ranges a row) stays inside Convex's 4,096 past PAGE.hard */
+  batch: 128,
+  /** how many subtasks one range of liveKids reads: 64 of the largest
+   * tasks hold about 4 MiB, so the check of PAGE.hard between ranges comes
+   * before Convex's 16 MiB */
+  kids: 64,
+  /** the most relation rows of one kind (labels, attachments, links,
+   * follows) a tasks window reads; a task has no bound on them */
+  relations: 2000,
+  /** how many new tasks the inbox reads between checks of PAGE.hard: 32 of
+   * the largest hold about 2 MiB */
+  inboxCheck: 32,
 }
 
 /** Whether the transaction has read past `limit`. */
@@ -184,6 +195,26 @@ async function inBatches<R>(
     await Promise.all(rows.slice(at, at + PAGE.batch).map((row, i) => step(row, at + i)))
   }
   return true
+}
+
+/** The rows of `query`, or null when it holds more than PAGE.relations. */
+async function atMost<D>(query: { take(n: number): Promise<D[]> }): Promise<D[] | null> {
+  const rows = await query.take(PAGE.relations + 1)
+  return rows.length > PAGE.relations ? null : rows
+}
+
+/** `step` of each of `rows`, in inBatches' batches, or null once the reads
+ * pass PAGE.hard. */
+async function mapInBatches<R, T>(
+  ctx: QueryCtx,
+  rows: readonly R[],
+  step: (row: R) => Promise<T>,
+): Promise<T[] | null> {
+  const out: T[] = []
+  const done = await inBatches(ctx, rows, async (row, at) => {
+    out[at] = await step(row)
+  })
+  return done ? out : null
 }
 
 // --- root -------------------------------------------------------------------
@@ -336,7 +367,8 @@ export async function readProjects(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWind
   )
   if (!read.complete) return overflow(w)
   const caller = accessOf(ctx, me, read.rows)
-  const seen = await Promise.all(read.rows.map((p) => caller.visible(p.id)))
+  const seen = await mapInBatches(ctx, read.rows, (p) => caller.visible(p.id))
+  if (seen === null) return overflow(w)
   const shown = read.rows
     .filter((_, i) => seen[i])
     .sort((a, b) => a._creationTime - b._creationTime)
@@ -409,15 +441,57 @@ const windowTasks = (ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow, most: numb
   )
 
 /** The active subtasks of the tasks of window `w`, by parent, in live
- * projects: one range. */
+ * projects, or null once the reads pass PAGE.hard. A task has no bound on
+ * its subtasks, so they come PAGE.kids at a time, each range after the last
+ * row of the one before (by parent, then creation): one range, and two for
+ * each further PAGE.kids. */
 async function liveKids(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow, access: Access) {
-  const kids = await ctx.db
-    .query('issues')
-    .withIndex('by_org_archived_parent', (q) =>
-      ids(q.eq('org_id', me.org_id).eq('archived_at', undefined), 'parent_id', w),
-    )
-    .collect()
-  const live = await Promise.all(kids.map((kid) => access.live(kid.project_id)))
+  const kids: Doc<'issues'>[] = []
+  let last: Doc<'issues'> | undefined
+  for (;;) {
+    let chunk: Doc<'issues'>[]
+    if (last === undefined)
+      chunk = await ctx.db
+        .query('issues')
+        .withIndex('by_org_archived_parent', (q) =>
+          ids(q.eq('org_id', me.org_id).eq('archived_at', undefined), 'parent_id', w),
+        )
+        .take(PAGE.kids)
+    else {
+      const { parent_id: parent, _creationTime: at } = last
+      if (parent === undefined) break // a window's subtasks all have one
+      if (await readPast(ctx, PAGE.hard)) return null
+      const same = await ctx.db
+        .query('issues')
+        .withIndex('by_org_archived_parent', (q) =>
+          q
+            .eq('org_id', me.org_id)
+            .eq('archived_at', undefined)
+            .eq('parent_id', parent)
+            .gt('_creationTime', at),
+        )
+        .take(PAGE.kids)
+      const later =
+        same.length < PAGE.kids
+          ? await ctx.db
+              .query('issues')
+              .withIndex('by_org_archived_parent', (q) => {
+                const after = q
+                  .eq('org_id', me.org_id)
+                  .eq('archived_at', undefined)
+                  .gt('parent_id', parent)
+                return w.to === null ? after : after.lt('parent_id', w.to)
+              })
+              .take(PAGE.kids - same.length)
+          : []
+      chunk = [...same, ...later]
+    }
+    kids.push(...chunk)
+    if (chunk.length < PAGE.kids) break
+    last = chunk[chunk.length - 1]
+  }
+  const live = await mapInBatches(ctx, kids, (kid) => access.live(kid.project_id))
+  if (live === null) return null
   const byParent = new Map<string, Doc<'issues'>[]>()
   for (const [i, kid] of kids.entries()) {
     if (kid.parent_id === undefined || !live[i]) continue
@@ -439,13 +513,15 @@ function groupBy<T>(rows: readonly T[], key: (row: T) => string): Map<string, T[
  *
  * It reads the window's active tasks, the unmarked label assignments,
  * attachments and links of its ids, and the caller's unmarked follows of
- * them, each in one range by organization (or person) and id. Rows of an
+ * them, each in one range by organization (or person) and id, and answers
+ * overflow past PAGE.relations rows of one kind. Rows of an
  * archived task carry a mark (model/archiveMarks.ts) and stay out; a task
  * restored before its marks were cleared (relations_marked) reads its own
- * rows, marked ones included, and shows its marked follow. A task outside
- * the window that a shown task names (its parent, a link's target) is read
- * by id to see whether the caller is shown it. The window's active subtasks
- * are read in one more range, for has_hidden_subtasks and for the load rows
+ * rows, marked ones included, with the marked links to it, and shows its
+ * marked follow. A task outside the window that a shown task names (its
+ * parent, a link's target) is read by id to see whether the caller is shown
+ * it. The window's active subtasks are read PAGE.kids at a time
+ * (liveKids), for has_hidden_subtasks and for the load rows
  * of the window's tasks the caller is not shown (orgLoad, hiddenLoadOf).
  * Each project these tasks are in is read once, with the caller's levels on
  * it (accessOf). */
@@ -453,116 +529,155 @@ export async function readTasks(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow)
   const read = await windowTasks(ctx, me, w, PAGE.tasks.most)
   if (!read.complete) return overflow(w)
   const access = accessOf(ctx, me)
-  const held = await Promise.all(read.rows.map((t) => access.holds(t)))
+  const held = await mapInBatches(ctx, read.rows, (t) => access.holds(t))
+  if (held === null) return overflow(w)
   const tasks = read.rows.filter((_, i) => held[i])
   const inPage = new Set(tasks.map((t) => t.id))
   const byIdShown = shownById(ctx, me, access)
   const shown = async (id: string) => inPage.has(id) || (await byIdShown(id))
-  const [labels, attachments, links, follows, kids] = await Promise.all([
-    ctx.db
-      .query('issue_labels')
-      .withIndex('by_org_task_archived_issue', (q) =>
-        ids(q.eq('org_id', me.org_id).eq('task_archived', undefined), 'issue_id', w),
-      )
-      .collect(),
-    ctx.db
-      .query('issue_attachments')
-      .withIndex('by_org_task_archived_issue', (q) =>
-        ids(q.eq('org_id', me.org_id).eq('task_archived', undefined), 'issue_id', w),
-      )
-      .collect(),
-    ctx.db
-      .query('issue_links')
-      .withIndex('by_org_task_archived_source', (q) =>
-        ids(q.eq('org_id', me.org_id).eq('task_archived', undefined), 'source_id', w),
-      )
-      .collect(),
-    ctx.db
-      .query('issue_subscriptions')
-      .withIndex('by_profile_task_archived_issue', (q) =>
-        ids(q.eq('profile_id', me.id).eq('task_archived', undefined), 'issue_id', w),
-      )
-      .collect(),
-    liveKids(ctx, me, w, access),
+  const flagged = new Map(read.rows.map((t) => [t.id, t.relations_marked === true]))
+  /* whether the task with this id is shown and carries no relations_marked */
+  const unflaggedShownSource = async (id: string) => {
+    if (!(await shown(id))) return false
+    const known = flagged.get(id)
+    if (known !== undefined) return !known
+    return (await byId(ctx, 'issues', id))?.relations_marked !== true
+  }
+  // The window's relation rows, each kind in one range and at most
+  // PAGE.relations of them, read before its subtasks so that the subtasks'
+  // checks of PAGE.hard count them.
+  const [labels, attachments, links, follows] = await Promise.all([
+    atMost(
+      ctx.db
+        .query('issue_labels')
+        .withIndex('by_org_task_archived_issue', (q) =>
+          ids(q.eq('org_id', me.org_id).eq('task_archived', undefined), 'issue_id', w),
+        ),
+    ),
+    atMost(
+      ctx.db
+        .query('issue_attachments')
+        .withIndex('by_org_task_archived_issue', (q) =>
+          ids(q.eq('org_id', me.org_id).eq('task_archived', undefined), 'issue_id', w),
+        ),
+    ),
+    atMost(
+      ctx.db
+        .query('issue_links')
+        .withIndex('by_org_task_archived_source', (q) =>
+          ids(q.eq('org_id', me.org_id).eq('task_archived', undefined), 'source_id', w),
+        ),
+    ),
+    atMost(
+      ctx.db
+        .query('issue_subscriptions')
+        .withIndex('by_profile_task_archived_issue', (q) =>
+          ids(q.eq('profile_id', me.id).eq('task_archived', undefined), 'issue_id', w),
+        ),
+    ),
   ])
+  if (labels === null || attachments === null || links === null || follows === null)
+    return overflow(w)
+  const kids = await liveKids(ctx, me, w, access)
+  if (kids === null) return overflow(w)
   // a kid in a live project the caller cannot see
-  const hiddenKid = new Map<string, boolean>()
-  await Promise.all(
-    [...kids.values()].flat().map(async (kid) => {
-      hiddenKid.set(kid.id, !(await access.visible(kid.project_id)))
-    }),
+  const allKids = [...kids.values()].flat()
+  const kidHidden = await mapInBatches(
+    ctx,
+    allKids,
+    async (kid) => !(await access.visible(kid.project_id)),
   )
+  if (kidHidden === null) return overflow(w)
+  const hiddenKid = new Map(allKids.map((kid, i) => [kid.id, kidHidden[i]]))
   const labelsOf = groupBy(labels, (r) => r.issue_id)
   const attachmentsOf = groupBy(attachments, (r) => r.issue_id)
   const linksOf = groupBy(links, (r) => r.source_id)
   const followOf = new Map(follows.map((f) => [f.issue_id, f]))
-  const issues: TaskRow[] = []
-  const rows = {
-    links: [] as Doc<'issue_links'>[][],
-    labels: [] as Doc<'issue_labels'>[][],
-    attachments: [] as Doc<'issue_attachments'>[][],
-    follows: [] as (Doc<'issue_subscriptions'> | null)[],
-  }
-  const done = await inBatches(ctx, tasks, async (task, at) => {
-    let own = {
-      labels: labelsOf.get(task.id) ?? [],
-      attachments: attachmentsOf.get(task.id) ?? [],
-      links: linksOf.get(task.id) ?? [],
-      follow: followOf.get(task.id) ?? null,
+  // Each shown task's own rows. A flagged task reads them from its own
+  // indexes, which hold its marked rows too, with the marked links to it: a
+  // marked link from a source without the flag is in no range its source
+  // reads, so it goes out with this task. One from a flagged source goes
+  // out with that source.
+  const ownRows = await mapInBatches(ctx, tasks, async (task) => {
+    if (task.relations_marked !== true)
+      return {
+        labels: labelsOf.get(task.id) ?? [],
+        attachments: attachmentsOf.get(task.id) ?? [],
+        links: linksOf.get(task.id) ?? [],
+        incoming: [],
+        follow: followOf.get(task.id) ?? null,
+      }
+    const [ls, as, lk, incoming, follow] = await Promise.all([
+      atMost(ctx.db.query('issue_labels').withIndex('by_issue', (q) => q.eq('issue_id', task.id))),
+      atMost(
+        ctx.db.query('issue_attachments').withIndex('by_issue', (q) => q.eq('issue_id', task.id)),
+      ),
+      atMost(ctx.db.query('issue_links').withIndex('by_source', (q) => q.eq('source_id', task.id))),
+      atMost(ctx.db.query('issue_links').withIndex('by_target', (q) => q.eq('target_id', task.id))),
+      ctx.db
+        .query('issue_subscriptions')
+        .withIndex('by_issue_profile', (q) => q.eq('issue_id', task.id).eq('profile_id', me.id))
+        .unique(),
+    ])
+    if (ls === null || as === null || lk === null || incoming === null) return null
+    return {
+      labels: ls,
+      attachments: as,
+      links: lk,
+      incoming: incoming.filter((link) => link.task_archived === true),
+      follow,
     }
-    if (task.relations_marked === true) {
-      // its own indexes hold its marked rows too
-      const [ls, as, lk, f] = await Promise.all([
-        ctx.db
-          .query('issue_labels')
-          .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
-          .collect(),
-        ctx.db
-          .query('issue_attachments')
-          .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
-          .collect(),
-        ctx.db
-          .query('issue_links')
-          .withIndex('by_source', (q) => q.eq('source_id', task.id))
-          .collect(),
-        ctx.db
-          .query('issue_subscriptions')
-          .withIndex('by_issue_profile', (q) => q.eq('issue_id', task.id).eq('profile_id', me.id))
-          .unique(),
-      ])
-      own = { labels: ls, attachments: as, links: lk, follow: f }
-    }
-    const parentShown = task.parent_id !== undefined && (await shown(task.parent_id))
-    const targetsShown = await Promise.all(own.links.map((link) => shown(link.target_id)))
-    const { parent_id: _parentId, relations_marked: _marks, ...row } = rowOf(task)
-    issues[at] = {
+  })
+  const own = ownRows?.filter((rows) => rows !== null) ?? []
+  if (own.length !== tasks.length) return overflow(w)
+  // Whether the caller is shown each task the rows name outside the window
+  // (a parent, a link's target) and each source of a marked link to a
+  // flagged task, each read at most once and in batches, as one task can
+  // name thousands.
+  const named = [
+    ...new Set([
+      ...tasks.flatMap((task) => (task.parent_id === undefined ? [] : [task.parent_id])),
+      ...own.flatMap((rows) => rows.links.map((link) => link.target_id)),
+    ]),
+  ]
+  const sources = [...new Set(own.flatMap((rows) => rows.incoming.map((link) => link.source_id)))]
+  const namedShown = await mapInBatches(ctx, named, shown)
+  const sourcesShown = await mapInBatches(ctx, sources, unflaggedShownSource)
+  if (namedShown === null || sourcesShown === null) return overflow(w)
+  const isShown = new Map(named.map((id, i) => [id, namedShown[i]]))
+  const sourceShown = new Map(sources.map((id, i) => [id, sourcesShown[i]]))
+  const issues = tasks.map((task): TaskRow => {
+    const { parent_id: parent, relations_marked: _marks, ...row } = rowOf(task)
+    return {
       ...row,
-      ...parentLink(task, () => parentShown),
+      ...parentLink(task, () => parent !== undefined && isShown.get(parent) === true),
       // an active subtask in a live project the caller cannot see makes
       // this task a group whose subtasks they are not all shown
       has_hidden_subtasks: (kids.get(task.id) ?? []).some((kid) => hiddenKid.get(kid.id)),
     }
-    // A link goes out with its source, once, when the caller is shown both
-    // ends. The other end may be archived, deleted or hidden, and its id must
-    // not leave this query.
-    rows.links[at] = own.links.filter((_, i) => targetsShown[i])
-    rows.labels[at] = own.labels
-    rows.attachments[at] = own.attachments
-    // A follow outlives access, so a manager can still remove it, and one of
-    // an archived task is marked in the background and stays stored, to
-    // return with a restore.
-    rows.follows[at] = own.follow
   })
-  if (!done) return overflow(w)
+  const orgLoad = await hiddenLoadOf(ctx, me, access, read.rows, kids)
+  if (orgLoad === null) return overflow(w)
   return {
     state: 'ok' as const,
     ...chunkLists({
       issues,
-      orgLoad: await hiddenLoadOf(ctx, me, access, read.rows, kids),
-      links: rows.links.flat().map(relationRow),
-      issueLabels: rows.labels.flat().map(relationRow),
-      attachments: rows.attachments.flat().map(relationRow),
-      issueSubs: rows.follows.flatMap((f) => (f === null ? [] : [relationRow(f)])),
+      orgLoad,
+      // A link goes out with its source, once, when the caller is shown both
+      // ends. The other end may be archived, deleted or hidden, and its id
+      // must not leave this query.
+      links: own
+        .flatMap((rows) => [
+          ...rows.links.filter((link) => isShown.get(link.target_id) === true),
+          ...rows.incoming.filter((link) => sourceShown.get(link.source_id) === true),
+        ])
+        .map(relationRow),
+      issueLabels: own.flatMap((rows) => rows.labels).map(relationRow),
+      attachments: own.flatMap((rows) => rows.attachments).map(relationRow),
+      // A follow outlives access, so a manager can still remove it, and one
+      // of an archived task is marked in the background and stays stored, to
+      // return with a restore.
+      issueSubs: own.flatMap((rows) => (rows.follow === null ? [] : [relationRow(rows.follow)])),
     }),
     ...(await softSplit(ctx, w, read.rows.length > PAGE.tasks.split)),
   }
@@ -592,7 +707,7 @@ async function hiddenLoadOf(
   access: Access,
   read: readonly Doc<'issues'>[],
   kids: ReadonlyMap<string, readonly Doc<'issues'>[]>,
-): Promise<OrgLoadRow[]> {
+): Promise<OrgLoadRow[] | null> {
   const staff = isOrgStaff(me)
   const loaded = read.filter(
     (task) =>
@@ -602,12 +717,13 @@ async function hiddenLoadOf(
       (task.remaining_hours ?? 0) > 0 &&
       (staff || taskOwnerId(task) === me.id),
   )
-  const hidden = await Promise.all(
-    loaded.map(
-      async (task) =>
-        (await access.live(task.project_id)) && !(await access.visible(task.project_id)),
-    ),
+  const hidden = await mapInBatches(
+    ctx,
+    loaded,
+    async (task) =>
+      (await access.live(task.project_id)) && !(await access.visible(task.project_id)),
   )
+  if (hidden === null) return null
   const candidates = loaded.filter((_, i) => hidden[i])
   const owners = new Map<string, Promise<boolean>>()
   // the 0065 owner fence: the owner is a profile of this organization
@@ -619,21 +735,19 @@ async function hiddenLoadOf(
     }
     return known
   }
-  const rows = await Promise.all(
-    candidates.map(async (task) => {
-      const owner = taskOwnerId(task)
-      if (owner === undefined || !(await ownerInOrg(owner))) return null
-      return loadRowFor(task, {
-        isGroup: (kids.get(task.id) ?? []).length > 0,
-        projectLive: true,
-        ownerInOrg: () => true,
-        visible: false,
-        staff,
-        meId: me.id,
-      })
-    }),
-  )
-  return rows.filter((row) => row !== null).sort(byLoad)
+  const rows = await mapInBatches(ctx, candidates, async (task) => {
+    const owner = taskOwnerId(task)
+    if (owner === undefined || !(await ownerInOrg(owner))) return null
+    return loadRowFor(task, {
+      isGroup: (kids.get(task.id) ?? []).length > 0,
+      projectLive: true,
+      ownerInOrg: () => true,
+      visible: false,
+      staff,
+      meId: me.id,
+    })
+  })
+  return rows === null ? null : rows.filter((row) => row !== null).sort(byLoad)
 }
 
 // --- inbox --------------------------------------------------------------------
@@ -647,10 +761,29 @@ async function hiddenLoadOf(
  * longer access stay stored and return if the task or access does, unless
  * they were removed meanwhile. An archive marks the rows about its tasks
  * read in the background (model/messages.ts), so the retention sweep and
- * removeRead delete them like any read row. */
+ * removeRead delete them like any read row.
+ *
+ * A task read costs its whole body, and the messages can name 2,000 tasks,
+ * more than 16 MiB of the largest ones. So once the reads pass PAGE.hard,
+ * checked every PAGE.inboxCheck new tasks, a message about a task not read
+ * yet counts as not shown, and the answer says it was cut (truncated, and
+ * both bulk actions stay available). */
 export async function readInbox(ctx: QueryCtx, me: Doc<'profiles'>) {
-  const access = accessOf(ctx, me)
-  const inbox = await loadInbox(ctx, me.id, shownById(ctx, me, access), INBOX_LIMIT, INBOX_LIMIT)
+  const byIdShown = shownById(ctx, me, accessOf(ctx, me))
+  const asked = new Set<string>()
+  let cut = false
+  const shown = async (id: string) => {
+    if (!asked.has(id)) {
+      if (cut) return false
+      if (asked.size % PAGE.inboxCheck === 0 && (await readPast(ctx, PAGE.hard))) {
+        cut = true
+        return false
+      }
+      asked.add(id)
+    }
+    return await byIdShown(id)
+  }
+  const inbox = await loadInbox(ctx, me.id, shown, INBOX_LIMIT, INBOX_LIMIT)
   return {
     state: 'ok' as const,
     unread: inbox.unread.sort(newestFirst).map((m): AppRow<'messages'> => rowOf(m)),
@@ -659,8 +792,8 @@ export async function readInbox(ctx: QueryCtx, me: Doc<'profiles'>) {
     // removeRead also deletes read rows about tasks the caller is not shown,
     // which are not counted because the caller cannot see them.
     readMessageCount: inbox.read.reduce((n, m) => n + (m.snoozed_until === undefined ? 1 : 0), 0),
-    unreadTruncated: inbox.unreadTruncated,
-    readTruncated: inbox.readTruncated,
-    truncated: inbox.truncated,
+    unreadTruncated: cut || inbox.unreadTruncated,
+    readTruncated: cut || inbox.readTruncated,
+    truncated: cut || inbox.truncated,
   }
 }

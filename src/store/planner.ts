@@ -8772,11 +8772,14 @@ function retrySnapshot() {
   parts = startParts(() => epoch === storeEpoch && !demoDisposed)
 }
 
-/** Stops the live parts and the thread riding along. */
+/** Stops the live parts and the thread riding along. No thread delivery
+    holds a write accepted after this, so none counts as current until the
+    next subscription answers. */
 function stopParts() {
   parts?.stop()
   parts = null
   threadWatched = null
+  threadCurrent = false
 }
 
 /** Destroy demo memory before rendering the expired/session-loss screen.

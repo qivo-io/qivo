@@ -41,6 +41,7 @@ describe('snapshot trouble', () => {
   let store: typeof import('./planner')
   let snapshot: Snapshot
   let subscriptions: Subscription[]
+  let threads: { deliver: (page: unknown) => void; unsubscribe: ReturnType<typeof vi.fn> }[]
   let sent: Sent[]
   let showToast: ReturnType<typeof vi.fn>
   let firstDelivery: 'deliver' | 'fail'
@@ -94,6 +95,7 @@ describe('snapshot trouble', () => {
       created_at: '2026-09-14T08:00:00.000Z',
     })
     subscriptions = []
+    threads = []
     sent = []
     firstDelivery = 'deliver'
     network.query.mockResolvedValue(null)
@@ -105,7 +107,8 @@ describe('snapshot trouble', () => {
           if (firstDelivery === 'deliver') deliver(structuredClone(snapshot))
           else fail(new Error(QUERY_FAILURE))
         }
-      }
+      } else if (getFunctionName(ref) === 'snapshot:commentThread')
+        threads.push({ deliver, unsubscribe })
       return unsubscribe
     })
     network.mutation.mockImplementation((ref) => {
@@ -385,6 +388,43 @@ describe('snapshot trouble', () => {
     expect(subscriptions).toHaveLength(3)
     live().deliver(structuredClone(snapshot))
     expect(P.snapshotTrouble()).toBeNull()
+  })
+
+  it('keeps a comment saved while Try again starts every part afresh until the new thread answers', async () => {
+    await boot()
+    const { P } = store
+    const page = {
+      comments: [],
+      earlier: false,
+      events: [],
+      events_earlier: false,
+      events_next: null,
+    }
+    P.watchComments('task-a')
+    await settle()
+    threads[0].deliver(structuredClone(page))
+    await settle()
+    const saved = P.addComment('task-a', 'Measured on the bench')
+    // a thread delivery sent before the save reached the server
+    threads[0].deliver(structuredClone(page))
+    await settle()
+    expect(P.comments.map((c) => c.body)).toEqual(['Measured on the bench'])
+    // trouble, then a recovery the waiting save holds off the screen
+    live().fail(new Error(QUERY_FAILURE))
+    live().deliver(structuredClone(snapshot))
+    await settle()
+    expect(P.snapshotTrouble()).toMatchObject({ kind: 'failed' })
+    // no part failed any more, so Try again starts every part and the
+    // thread afresh, and the new ones have answered nothing yet
+    P.retrySnapshot()
+    expect(subscriptions).toHaveLength(2)
+    expect(threads[0].unsubscribe).toHaveBeenCalled()
+    sent.find((request) => request.name === 'comments:create')?.resolve(null)
+    expect(await saved).toBe(true)
+    await settle()
+    vi.advanceTimersByTime(0)
+    // no delivery after the restart holds the save, so its paint stays
+    expect(P.comments.map((c) => c.body)).toEqual(['Measured on the bench'])
   })
 
   it('does not retry a lost sign-in, which only a reload can fix', async () => {

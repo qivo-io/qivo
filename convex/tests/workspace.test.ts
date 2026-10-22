@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { halve, idWindows, windowCount } from '../lib/idWindows'
+import { halve, idWindows, inIdWindow, windowCount } from '../lib/idWindows'
 import { PAGE } from '../lib/workspaceParts'
 import {
   as,
@@ -16,6 +16,7 @@ import {
   type OrgFixture,
   patchCounters,
   plantIssue,
+  plantMessage,
   type T,
   uuid,
   withOrg,
@@ -43,6 +44,58 @@ async function plantTasks(t: T, f: OrgFixture, n: number, extra: Partial<Doc<'is
 }
 
 const whole = { from: '', to: null }
+
+/* Convex's limits on what one transaction may read. */
+const REAL_LIMITS = {
+  transactionLimits: { bytesRead: 16 * 1024 * 1024, documentsRead: 32_000, databaseQueries: 4096 },
+}
+
+/* The largest description the server accepts, of 3-byte characters: about
+ * 60 KB stored. */
+const LARGEST = '€'.repeat(20_000)
+
+/* Plants `n` active tasks with fields `extra`, in writes of 50. */
+async function plantMany(
+  t: T,
+  n: number,
+  extra: (i: number) => Partial<Doc<'issues'>> & { org_id: string; project_id: string },
+) {
+  const planted: Doc<'issues'>[] = []
+  for (let from = 0; from < n; from += 50)
+    planted.push(
+      ...(await t.run(async (ctx) => {
+        const rows: Doc<'issues'>[] = []
+        for (let i = from; i < Math.min(n, from + 50); i++) {
+          const _id = await ctx.db.insert('issues', {
+            id: uuid(),
+            num: 10_000 + i,
+            title: `Task ${i}`,
+            description: '',
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+            ...extra(i),
+          })
+          rows.push((await ctx.db.get(_id))!)
+        }
+        return rows
+      })),
+    )
+  return planted
+}
+
+/* The narrowest window of the grid that holds `id`, and its sibling. */
+function narrowestOf(id: string) {
+  let pair = halve(whole)
+  for (;;) {
+    const [holds, other] = inIdWindow(id, pair![0]) ? pair! : [pair![1], pair![0]]
+    const next = halve(holds)
+    if (next === null) return { holds, other }
+    pair = next
+  }
+}
 
 describe('a tasks window', () => {
   it('answers split past its rows and keeps answering, so the app cuts it while it shows', async () => {
@@ -83,10 +136,12 @@ describe('a tasks window', () => {
       await plantIssue(t, {
         org_id: f.org.id,
         project_id: f.sub.id,
-        id: `ffffffff-0000-4000-8000-00000000000${i}`,
+        id: `fff00000-0000-4000-8000-00000000000${i}`,
       })
     PAGE.tasks.most = 1
-    const last = { from: 'ffffffff', to: null }
+    // the narrowest window of the grid
+    const last = narrowestOf('ffffffff').holds
+    expect(last).toEqual({ from: 'fff00000', to: null })
     expect(halve(last)).toBeNull()
     const answer = await as(t, f.admin).query(api.workspace.tasks, { org_id: f.org.id, ...last })
     expect(answer).toMatchObject({ state: 'refused', message: expect.stringMatching(/^One part/) })
@@ -135,6 +190,197 @@ describe('a tasks window', () => {
     const snap = await workspaceOf(as(t, f.admin))
     expect(snap?.issues).toHaveLength(1500)
   })
+})
+
+describe('links of a restored task', () => {
+  it('a marked link to a restored target goes out once, before its marks are cleared', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const [a, b, c] = await plantTasks(t, f, 3)
+    const hiddenSource = await plantIssue(t, { org_id: f.org.id, project_id: f.hidden.id })
+    // b was archived, its links marked, then restored before the clear ran
+    const linkIds = await t.run(async (ctx) => {
+      const link = (source_id: string, target_id: string) => ({
+        org_id: f.org.id,
+        id: uuid(),
+        source_id,
+        target_id,
+        type: 'blocks' as const,
+        pair_key: [source_id, target_id].sort().join(':'),
+        created_at: NOW,
+        task_archived: true as const,
+      })
+      await ctx.db.patch(b._id, { relations_marked: true })
+      const ids = [link(a.id, b.id), link(b.id, c.id), link(hiddenSource.id, b.id)]
+      for (const row of ids) await ctx.db.insert('issue_links', row)
+      return ids.map((row) => row.id)
+    })
+    const linksOf = async (who: Doc<'profiles'>) =>
+      (await workspaceOf(as(t, who)))?.links.map((l) => l.id).sort()
+    expect(await linksOf(f.admin)).toEqual([...linkIds].sort())
+    // the guest is not shown the hidden source, so its link stays out
+    expect(await linksOf(f.guest)).toEqual(linkIds.slice(0, 2).sort())
+    // a flagged source sends its marked link itself, so it still goes once
+    await t.run((ctx) => ctx.db.patch(a._id, { relations_marked: true }))
+    expect(await linksOf(f.admin)).toEqual([...linkIds].sort())
+  })
+})
+
+describe('reads a window cannot bound by its rows', () => {
+  it('answers overflow past its relation rows of one kind, flagged tasks included, and its cuts send them all', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const tasks = await plantTasks(t, f, 8)
+    PAGE.relations = 3
+    expect(await as(t, f.admin).query(api.workspace.tasks, { org_id: f.org.id, ...whole })).toEqual(
+      { state: 'overflow' },
+    )
+    const snap = await workspaceOf(as(t, f.admin))
+    expect(snap?.issueLabels).toHaveLength(8)
+    // a flagged task reads its rows from its own indexes, bounded alike
+    await t.run(async (ctx) => {
+      await ctx.db.patch(tasks[0]._id, { relations_marked: true })
+      for (let i = 0; i < 3; i++)
+        await ctx.db.insert('issue_labels', {
+          org_id: f.org.id,
+          issue_id: tasks[0].id,
+          label_id: `marked-${i}`,
+          task_archived: true,
+        })
+    })
+    const w = narrowestOf(tasks[0].id).holds
+    expect(
+      await as(t, f.admin).query(api.workspace.tasks, { org_id: f.org.id, ...w }),
+    ).toMatchObject({
+      state: 'refused',
+    })
+  })
+
+  it('reads subtasks a few at a time without missing one', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const [p1, p2, p3] = await plantTasks(t, f, 3)
+    const kid = (parent: Doc<'issues'>, project: Doc<'projects'>) =>
+      plantIssue(t, { org_id: f.org.id, project_id: project.id, parent_id: parent.id })
+    // the subtask the guest is not shown comes last of its parent's
+    for (let i = 0; i < 4; i++) await kid(p1, f.sub)
+    await kid(p1, f.hidden)
+    await kid(p2, f.sub)
+    await kid(p2, f.sub)
+    await kid(p3, f.hidden)
+    PAGE.kids = 2
+    const snap = await workspaceOf(as(t, f.guest))
+    const hiddenKids = (task: Doc<'issues'>) =>
+      snap?.issues.find((i) => i.id === task.id)?.has_hidden_subtasks
+    expect([p1, p2, p3].map(hiddenKids)).toEqual([true, false, true])
+  })
+
+  it('refuses with a sentence a window whose subtasks would pass the real limits', async () => {
+    const t = newT(REAL_LIMITS)
+    const f = await withOrg(t)
+    // three parents in the narrowest window, with 100 subtasks each of
+    // about 60 KB: about 18 MB of subtasks, which no cut can part
+    const parents = await plantMany(t, 3, (i) => ({
+      id: `a0000000-0000-4000-8000-00000000000${i}`,
+      org_id: f.org.id,
+      project_id: f.sub.id,
+    }))
+    await plantMany(t, 300, (i) => ({
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: parents[i % 3].id,
+      description: LARGEST,
+    }))
+    const w = narrowestOf(parents[0].id).holds
+    const answer = await as(t, f.admin).query(api.workspace.tasks, { org_id: f.org.id, ...w })
+    expect(answer).toMatchObject({ state: 'refused', message: expect.stringMatching(/^One part/) })
+  }, 120_000)
+
+  it('reads tasks shared with many teams within the real limits', async () => {
+    const t = newT(REAL_LIMITS)
+    const f = await withOrg(t)
+    // 25 projects shared with the same 100 teams, the viewer in one
+    const teams = await t.run(async (ctx) => {
+      const ids: string[] = []
+      for (let i = 0; i < 100; i++) {
+        const id = uuid()
+        await ctx.db.insert('teams', {
+          id,
+          org_id: f.org.id,
+          name: `Team ${i}`,
+          track_delay_default: false,
+          created_at: NOW,
+        })
+        ids.push(id)
+      }
+      await ctx.db.insert('team_members', {
+        team_id: ids[99],
+        profile_id: f.viewer.id,
+        is_leader: false,
+      })
+      return ids
+    })
+    const shared: string[] = []
+    for (let n = 0; n < 25; n++)
+      shared.push(
+        await t.run(async (ctx) => {
+          const id = uuid()
+          await ctx.db.insert('projects', {
+            id,
+            org_id: f.org.id,
+            type: 'meta',
+            key: `T${n}`,
+            name: `Shared ${n}`,
+            description: '',
+            sort_order: 2000 + n,
+            num: 2000 + n,
+            track_delay: false,
+            created_at: NOW,
+          })
+          for (const team_id of teams)
+            await ctx.db.insert('project_team_access', { project_id: id, team_id, level: 'viewer' })
+          return id
+        }),
+      )
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: shared[24] })
+    const snap = await workspaceOf(as(t, f.viewer))
+    const shown = new Set(snap?.projects.map((p) => p.id))
+    expect(shared.filter((id) => shown.has(id))).toHaveLength(25)
+    expect(snap?.issues.map((i) => i.id)).toContain(task.id)
+  }, 120_000)
+
+  it('cuts an inbox whose tasks would pass the real limits, and says so', async () => {
+    const t = newT(REAL_LIMITS)
+    const f = await withOrg(t)
+    // 900 archived tasks of about 60 KB each, about 52 MiB, each named by
+    // an unread message, older than one about a task the person is shown
+    const archived = await plantMany(t, 900, () => ({
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      description: LARGEST,
+      archived_at: NOW,
+    }))
+    for (let from = 0; from < archived.length; from += 300)
+      await t.run(async (ctx) => {
+        for (const task of archived.slice(from, from + 300))
+          await ctx.db.insert('messages', {
+            id: uuid(),
+            org_id: f.org.id,
+            recipient_id: f.admin.id,
+            issue_id: task.id,
+            issue_title: task.title,
+            kind: 'change',
+            detail: 'planted',
+            created_at: NOW,
+          })
+      })
+    const [shown] = await plantTasks(t, f, 1)
+    await plantMessage(t, { org_id: f.org.id, recipient_id: f.admin.id, issue_id: shown.id })
+    const answer = await as(t, f.admin).query(api.workspace.inbox, { org_id: f.org.id })
+    if (answer.state !== 'ok') throw new Error(answer.state)
+    expect(answer.unread.map((m) => m.issue_id)).toEqual([shown.id])
+    expect(answer).toMatchObject({ truncated: true, unreadTruncated: true })
+  }, 120_000)
 })
 
 describe('windows', () => {
@@ -237,6 +483,7 @@ describe('what a part reveals', () => {
     const f = await withOrg(t)
     const plan = { start_week: '2026-01-05', end_week: '2026-01-05', remaining_hours: 3 }
     const own = await plantIssue(t, {
+      id: '3fa85f64-5717-4562-b3fc-2c963f66afa6',
       org_id: f.org.id,
       project_id: f.hidden.id,
       assignee_id: f.guest.id,
@@ -258,8 +505,22 @@ describe('what a part reveals', () => {
     ])
     expect(JSON.stringify(await rowsOf(f.guest))).not.toContain(own.id)
     // a window that does not hold the task gives them nothing
-    expect(await rowsOf(f.guest, { from: `${own.id}0`, to: null })).toEqual([])
+    const { holds, other } = narrowestOf(own.id)
+    expect(await rowsOf(f.guest, holds)).toHaveLength(1)
+    expect(await rowsOf(f.guest, other)).toEqual([])
     expect(await rowsOf(f.viewer)).toEqual([])
+    // A window narrower than the grid's, or off it, is refused, so the
+    // window of a row tells at most the first three hex digits of its id.
+    for (const w of [
+      { from: own.id.slice(0, 8), to: null },
+      { from: own.id, to: `${own.id}0` },
+      { from: '00000000', to: null },
+      { from: '20000000', to: '60000000' },
+    ])
+      await expectRefusal(
+        as(t, f.guest).query(api.workspace.tasks, { org_id: f.org.id, ...w }),
+        'bad_request',
+      )
   })
 
   it('answers gone without a seat, and refuses without a sign-in', async () => {
