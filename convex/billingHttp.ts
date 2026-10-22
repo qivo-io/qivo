@@ -21,7 +21,7 @@ export function registerBilling(http: HttpRouter) {
       try {
         // the signature covers these exact bytes
         const read = await readLimitedBody(request, POLAR_MAX_BODY_BYTES, 15_000)
-        if (!read.ok) return new Response(null, { status: 400, headers })
+        if (read.outcome !== 'read') return new Response(null, { status: 400, headers })
         event = await verifyPolarWebhook(read.bytes, request.headers)
       } catch {
         return new Response(null, { status: 400, headers })

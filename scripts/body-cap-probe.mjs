@@ -1,17 +1,26 @@
-/* Probes how an API origin answers unauthenticated request bodies at and
- * over the 1 MiB REST and MCP cap, and on the other routes that refuse a
- * body before reading it (an unknown upload link, the demo metrics and
- * Polar webhook endpoints, an unknown auth endpoint), many at a time, and
- * prints the status counts per case. It sends no credentials and no valid
- * link or signature, so every request is refused and none can change data.
+/* Probes how an API origin answers unauthenticated request bodies just over
+ * the 1 MiB REST and MCP cap and well under it, and bodies over 1 MiB on the
+ * other routes that refuse a body before reading it (an unknown upload link,
+ * the demo metrics and Polar webhook endpoints, an unknown auth endpoint),
+ * many at a time, and prints the status counts per case. It sends no
+ * credentials and no valid link or signature, so every request is refused
+ * and none changes task or customer data. Each REST and MCP request still
+ * counts at the deployment-wide request limit, which every organization
+ * shares, so a run against a hosted deployment needs explicit scope, and a
+ * run sends at most MAX_TOTAL requests, a third of that limit's minute.
  *
  *   node scripts/body-cap-probe.mjs <api origin> [--requests 80] [--concurrency 8] [--case name]...
  *
  * Exits 1 when any request answered a status its case does not expect, or
- * failed. */
+ * failed, and 2 for arguments it cannot use. */
 
-import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
+
+/** The most requests one run sends, over all its cases. */
+export const MAX_TOTAL = 2_000
+
+/** The most requests one run keeps open at once. */
+export const MAX_CONCURRENCY = 16
 
 const BODY_MAX = 1024 * 1024
 const MIB_PLUS_ONE = BODY_MAX + 1
@@ -79,7 +88,8 @@ export function probeBody(path, size) {
   return text + ' '.repeat(size - text.length)
 }
 
-/** The status of one answer, or the error code of a request that got none. */
+/** The status of one answer, or the error code or name of a request that
+ * got none. */
 async function sendOne(origin, { path, size, chunked }) {
   const bytes = Buffer.from(probeBody(path, size))
   const body = chunked
@@ -105,7 +115,10 @@ async function sendOne(origin, { path, size, chunked }) {
     await response.arrayBuffer()
     return String(response.status)
   } catch (error) {
-    return error?.cause?.code ?? error?.code ?? error?.name ?? 'error'
+    // a timeout's DOMException has the numeric legacy code 23, so only a
+    // text code counts
+    const code = error?.cause?.code ?? error?.code
+    return typeof code === 'string' ? code : (error?.name ?? 'error')
   }
 }
 
@@ -125,32 +138,62 @@ export async function probe(origin, kind, { requests, concurrency }) {
   return counts
 }
 
-async function main() {
-  const { values, positionals } = parseArgs({
-    allowPositionals: true,
-    options: {
-      requests: { type: 'string', default: '80' },
-      concurrency: { type: 'string', default: '8' },
-      case: { type: 'string', multiple: true },
-    },
-  })
-  const origin = positionals[0]?.replace(/\/+$/, '')
-  const requests = Number(values.requests)
-  const concurrency = Number(values.concurrency)
+const USAGE = `usage: node scripts/body-cap-probe.mjs <api origin> [--requests 80] [--concurrency 8] [--case ${Object.keys(CASES).join('|')}]...`
+
+/** The run that `argv` asks for, or null when it cannot be used: an origin
+ * that is not a bare http or https origin, an unknown case, a count that is
+ * not a whole number from 1, more than MAX_CONCURRENCY at once or more than
+ * MAX_TOTAL requests in all. */
+export function parseProbeArgs(argv) {
+  let parsed
+  try {
+    parsed = parseArgs({
+      args: argv,
+      allowPositionals: true,
+      options: {
+        requests: { type: 'string', default: '80' },
+        concurrency: { type: 'string', default: '8' },
+        case: { type: 'string', multiple: true },
+      },
+    })
+  } catch {
+    return null
+  }
+  const { values, positionals } = parsed
+  const url = URL.canParse(positionals[0] ?? '') ? new URL(positionals[0]) : null
+  const bare =
+    url !== null &&
+    ['http:', 'https:'].includes(url.protocol) &&
+    url.username === '' &&
+    url.password === '' &&
+    url.pathname === '/' &&
+    url.search === '' &&
+    url.hash === '' &&
+    positionals.length === 1
+  const whole = (text) => (/^[1-9][0-9]*$/.test(text) ? Number(text) : Number.NaN)
+  const requests = whole(values.requests)
+  const concurrency = whole(values.concurrency)
   const names = values.case ?? Object.keys(CASES)
-  const unknown = names.filter((name) => !(name in CASES))
   if (
-    !origin ||
-    !/^https?:\/\/[^/]+$/.test(origin) ||
-    !(requests >= 1) ||
-    !(concurrency >= 1) ||
-    unknown.length > 0
-  ) {
+    !bare ||
+    names.some((name) => !Object.hasOwn(CASES, name)) ||
+    !(concurrency <= MAX_CONCURRENCY) ||
+    !(requests * names.length <= MAX_TOTAL)
+  )
+    return null
+  return { origin: url.origin, requests, concurrency, names }
+}
+
+async function main() {
+  const run = parseProbeArgs(process.argv.slice(2))
+  if (run === null) {
+    console.error(USAGE)
     console.error(
-      `usage: node scripts/body-cap-probe.mjs <api origin> [--requests 80] [--concurrency 8] [--case ${Object.keys(CASES).join('|')}]...`,
+      `--requests and --concurrency are whole numbers from 1, at most ${MAX_CONCURRENCY} at once and ${MAX_TOTAL} requests over all cases`,
     )
     process.exit(2)
   }
+  const { origin, requests, concurrency, names } = run
   let clean = true
   for (const name of names) {
     const counts = await probe(origin, CASES[name], { requests, concurrency })
@@ -164,4 +207,4 @@ async function main() {
   process.exit(clean ? 0 : 1)
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main()
+if (import.meta.main) await main()

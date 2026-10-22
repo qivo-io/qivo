@@ -2,8 +2,8 @@
  * A body over the cap answers 413 after authentication, before any routing or
  * work, so the call is still counted and an unauthenticated caller only ever
  * sees its 401. Every answer of every HTTP route goes out only after the body
- * has arrived (lib/requestBody.ts answerAfterBody), so an early one is never
- * lost to a reset connection. */
+ * has arrived (lib/requestBody.ts answerAfterBody), within 5 s, 1 s without
+ * bytes and 32 MiB, so an early one is not lost to a reset connection. */
 /// <reference types="vite/client" />
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -262,24 +262,61 @@ afterEach(() => {
 })
 
 /* A body the test sends in two parts: the first, of `first` bytes, at once,
- * the rest when it calls `finish`. `read` says whether the handler took the
- * last part. */
+ * the rest when it calls `finish`. With no queue of its own, the stream is
+ * asked for more only when its reader wants it, so `wasRead` says that the
+ * handler asked past the last part, which it therefore took. */
 function heldBody(first = 64 * 1024) {
   let finish = () => {}
-  let read = false
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new Uint8Array(first).fill(32))
-      finish = () => {
-        controller.enqueue(new Uint8Array(BODY_MAX_BYTES).fill(32))
-        controller.close()
-      }
-    },
-    pull() {
-      read = true
-    },
+  const finished = new Promise<void>((resolve) => {
+    finish = resolve
   })
+  let pulls = 0
+  let read = false
+  const body = new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        pulls += 1
+        if (pulls === 1) controller.enqueue(new Uint8Array(first).fill(32))
+        else if (pulls === 2) {
+          await finished
+          controller.enqueue(new Uint8Array(BODY_MAX_BYTES).fill(32))
+        } else {
+          read = true
+          controller.close()
+        }
+      },
+    },
+    { highWaterMark: 0 },
+  )
   return { body, finish: () => finish(), wasRead: () => read }
+}
+
+/* Sends `held` to `path`, checks that no answer comes before the test
+ * finishes the body and that the handler took all of it, and answers the
+ * response. */
+async function answeredAfter(
+  t: T,
+  path: string,
+  init: { method?: string; headers: Record<string, string> },
+  held: ReturnType<typeof heldBody>,
+): Promise<Response> {
+  let answered = false
+  const response = http(t, path, {
+    method: init.method ?? 'POST',
+    headers: init.headers,
+    body: held.body,
+    duplex: 'half',
+  }).then((answer) => {
+    answered = true
+    return answer
+  })
+  // long enough for every handler to decide its answer
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  expect(answered).toBe(false)
+  held.finish()
+  const answer = await response
+  expect(held.wasRead()).toBe(true)
+  return answer
 }
 
 describe('early answers', () => {
@@ -299,56 +336,22 @@ describe('early answers', () => {
   ] as const)('%s waits for the whole body', async (_name, method, path, headers, status) => {
     const t = newT()
     await wireOrg(t)
-    const held = heldBody()
-    let answered = false
-    const response = http(t, path, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(status === 401 ? {} : { Authorization: rest }),
-        ...headers,
+    const response = await answeredAfter(
+      t,
+      path,
+      {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(status === 401 ? {} : { Authorization: rest }),
+          ...headers,
+        },
       },
-      body: held.body,
-      duplex: 'half',
-    }).then((answer) => {
-      answered = true
-      return answer
-    })
-    // long enough for every handler to decide its answer
-    await new Promise((resolve) => setTimeout(resolve, 200))
-    expect(answered).toBe(false)
-    held.finish()
-    expect((await response).status).toBe(status)
-    expect(held.wasRead()).toBe(true)
+      heldBody(),
+    )
+    expect(response.status).toBe(status)
   })
 })
-
-/* Sends `held` to `path`, checks that no answer comes before the test
- * finishes the body, and answers the response. */
-async function answeredAfter(
-  t: T,
-  path: string,
-  headers: Record<string, string>,
-  held: ReturnType<typeof heldBody>,
-): Promise<Response> {
-  let answered = false
-  const response = http(t, path, {
-    method: 'POST',
-    headers,
-    body: held.body,
-    duplex: 'half',
-  }).then((answer) => {
-    answered = true
-    return answer
-  })
-  // long enough for every handler to decide its answer
-  await new Promise((resolve) => setTimeout(resolve, 200))
-  expect(answered).toBe(false)
-  held.finish()
-  const answer = await response
-  expect(held.wasRead()).toBe(true)
-  return answer
-}
 
 describe('early answers outside REST and MCP', () => {
   const METRICS = 'm'.repeat(40)
@@ -404,7 +407,7 @@ describe('early answers outside REST and MCP', () => {
     for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value)
     const t = newT()
     const held = heldBody(first || undefined)
-    expect((await answeredAfter(t, path, headers, held)).status).toBe(status)
+    expect((await answeredAfter(t, path, { headers }, held)).status).toBe(status)
   })
 
   it('leaves no route without the wait', () => {
@@ -450,30 +453,35 @@ describe('readLimitedBody', () => {
 
   it('refuses a body declared past the limit without reading it', async () => {
     const { request, seen } = stalling(5, new Uint8Array(1))
-    expect(await readLimitedBody(request, 4, 60_000)).toEqual({ ok: false, reason: 'too_large' })
+    expect(await readLimitedBody(request, 4, 60_000)).toEqual({ outcome: 'too_large' })
     expect(seen).toEqual({ cancelled: false, released: false })
   })
 
   it('leaves the rest of a body found past the limit to discardBody', async () => {
     const { request, seen } = stalling(null, new Uint8Array(3), new Uint8Array(2))
-    expect(await readLimitedBody(request, 4, 60_000)).toEqual({ ok: false, reason: 'too_large' })
+    expect(await readLimitedBody(request, 4, 60_000)).toEqual({ outcome: 'too_large' })
     expect(seen).toEqual({ cancelled: false, released: true })
   })
 
   it('cancels a body still arriving at the deadline', async () => {
     const { request, seen } = stalling(null, new Uint8Array(2))
-    expect(await readLimitedBody(request, 4, 20)).toEqual({ ok: false, reason: 'too_slow' })
+    expect(await readLimitedBody(request, 4, 20)).toEqual({ outcome: 'too_slow' })
     expect(seen).toEqual({ cancelled: true, released: false })
   })
 
   it('answers the bytes of a body within the limit, and says when there is none', async () => {
-    const whole = new Request('http://x', { method: 'POST', body: 'abcd' })
-    const read = await readLimitedBody(whole, 4, 60_000)
-    expect(read.ok && new TextDecoder().decode(read.bytes)).toBe('abcd')
-    expect(await readLimitedBody(new Request('http://x'), 4)).toEqual({
-      ok: false,
-      reason: 'missing',
+    const whole = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('ab'))
+        controller.enqueue(new TextEncoder().encode('cd'))
+        controller.close()
+      },
     })
+    const request = (body: ReadableStream<Uint8Array> | null) =>
+      ({ body, headers: { get: () => null } }) as unknown as Request
+    const read = await readLimitedBody(request(whole), 4, 60_000)
+    expect(read.outcome === 'read' && new TextDecoder().decode(read.bytes)).toBe('abcd')
+    expect(await readLimitedBody(request(null), 4)).toEqual({ outcome: 'missing' })
   })
 })
 
@@ -517,6 +525,42 @@ describe('discardBody', () => {
     expect(cancelled).toBe(true)
     // the stream fills its queue once before anyone reads
     expect(pulls).toBeLessThan(3)
+  })
+
+  it('stops waiting once no bytes arrive for its idle time', async () => {
+    let cancelled = false
+    // a chunk every 20 ms for 200 ms, then nothing
+    let sent = 0
+    const trickle = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (sent === 10) return new Promise<void>(() => {})
+        sent += 1
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        controller.enqueue(new Uint8Array(10))
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+    const started = Date.now()
+    await discardBody(requestOf(trickle), 60_000, 100)
+    // the trickle kept it waiting past one idle time, and the stall ended it
+    expect(Date.now() - started).toBeGreaterThanOrEqual(200)
+    expect(Date.now() - started).toBeLessThan(1_000)
+    expect(sent).toBe(10)
+    expect(cancelled).toBe(true)
+  })
+
+  it('resolves when the client aborts its upload', async () => {
+    const aborted = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(10))
+      },
+      pull(controller) {
+        controller.error(new TypeError('the client closed the connection'))
+      },
+    })
+    await expect(discardBody(requestOf(aborted), 60_000)).resolves.toBeUndefined()
   })
 
   it('leaves a body that a reader still holds alone', async () => {

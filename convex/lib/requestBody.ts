@@ -38,21 +38,32 @@ export const bodyOf = (request: Request): BodyStream | null =>
  * this long, and HTTP actions share a concurrency limit. */
 export const DISCARD_MS = 5_000
 
+/** How long discardBody waits for the next bytes of a body, in
+ * milliseconds, so a client that stopped sending frees the action at once
+ * while one still uploading keeps its answer. */
+export const DISCARD_IDLE_MS = 1_000
+
 /** The most discardBody reads, in bytes: well over the largest body any
- * Qivo route takes (a 20 MiB attachment). Convex sets no request size
- * limit of its own. */
+ * Qivo route takes (a 20 MiB attachment). Convex limits only
+ * multipart/form-data request bodies, to 20 MiB, which no Qivo route
+ * takes, so this is the only bound on the rest. */
 export const DISCARD_MAX_BYTES = 32 * MIB
 
 /**
  * Reads and drops whatever is left of a request body, so that the answer
  * goes out only after the client finished uploading. It stops after
- * `waitMs` or DISCARD_MAX_BYTES, so a slow or endless upload cannot hold the
- * action, and such a client may then still see a reset. It does not start on
- * a body declared longer than DISCARD_MAX_BYTES, which it could not finish,
+ * `waitMs`, after `idleMs` without bytes or past DISCARD_MAX_BYTES, so a
+ * slow, stalled or endless upload holds the action at most `waitMs`, and
+ * such a client may then still see a reset or a 502. It does not start on a
+ * body declared longer than DISCARD_MAX_BYTES, which it could not finish,
  * and leaves alone a body a reader still holds (one cancelled after a
  * timeout).
  */
-export async function discardBody(request: Request, waitMs = DISCARD_MS): Promise<void> {
+export async function discardBody(
+  request: Request,
+  waitMs = DISCARD_MS,
+  idleMs = DISCARD_IDLE_MS,
+): Promise<void> {
   const body = bodyOf(request)
   if (body === null || body.locked) return
   const reader = body.getReader()
@@ -61,15 +72,22 @@ export async function discardBody(request: Request, waitMs = DISCARD_MS): Promis
     return
   }
   let timer: unknown
+  let idleTimer: unknown
   const late = new Promise<void>((resolve) => {
     timer = setTimeout(resolve, waitMs)
   })
+  // null once `idleMs` pass, restarted for every read
+  const quiet = () =>
+    new Promise<null>((resolve) => {
+      clearTimeout(idleTimer)
+      idleTimer = setTimeout(() => resolve(null), idleMs)
+    })
   const drain = async () => {
     let size = 0
     for (;;) {
-      const { done, value } = await reader.read()
-      if (done) return
-      size += value?.byteLength ?? 0
+      const next = await Promise.race([reader.read(), quiet()])
+      if (next === null || next.done) return
+      size += next.value?.byteLength ?? 0
       if (size > DISCARD_MAX_BYTES) return
     }
   }
@@ -79,28 +97,30 @@ export async function discardBody(request: Request, waitMs = DISCARD_MS): Promis
     // the client gave up on its upload, so nothing is left to wait for
   } finally {
     clearTimeout(timer)
+    clearTimeout(idleTimer)
     await reader.cancel().catch(() => {})
   }
 }
 
 /** An httpAction whose answer, whatever it is and wherever the handler
  * decided it, goes out only after the request body arrived (discardBody).
- * Every route in convex/ is built with it. */
+ * Every route in convex/ is built with it. A failure while dropping the
+ * body never replaces the answer, which may report a committed write. */
 export const answerAfterBody = (handler: Parameters<typeof httpAction>[0]) =>
   httpAction(async (ctx, request) => {
     try {
       return await handler(ctx, request)
     } finally {
-      await discardBody(request)
+      await discardBody(request).catch(() => {})
     }
   })
 
-/** A body readLimitedBody read, or why it did not: `missing` for a request
- * without one, `too_large` for one declared or found longer than the limit
- * and `too_slow` for one still arriving at the deadline. */
+/** A body readLimitedBody read (`read`), or why it did not: `missing` for
+ * a request without one, `too_large` for one declared or found longer than
+ * the limit and `too_slow` for one still arriving at the deadline. */
 export type LimitedBody =
-  | { ok: true; bytes: Uint8Array }
-  | { ok: false; reason: 'missing' | 'too_large' | 'too_slow' }
+  | { outcome: 'read'; bytes: Uint8Array }
+  | { outcome: 'missing' | 'too_large' | 'too_slow' }
 
 /**
  * The request body's bytes when it holds at most `maxBytes`, and arrives
@@ -118,10 +138,10 @@ export async function readLimitedBody(
   waitMs?: number,
 ): Promise<LimitedBody> {
   if (Number(request.headers.get('Content-Length')) > maxBytes) {
-    return { ok: false, reason: 'too_large' }
+    return { outcome: 'too_large' }
   }
   const body = bodyOf(request)
-  if (body === null) return { ok: false, reason: 'missing' }
+  if (body === null) return { outcome: 'missing' }
   const reader = body.getReader()
   let timer: unknown
   let late = false
@@ -129,7 +149,7 @@ export async function readLimitedBody(
     if (waitMs === undefined) return
     timer = setTimeout(() => {
       late = true
-      resolve({ ok: false, reason: 'too_slow' })
+      resolve({ outcome: 'too_slow' })
     }, waitMs)
   })
   const read = async (): Promise<LimitedBody> => {
@@ -140,7 +160,7 @@ export async function readLimitedBody(
       if (done) break
       if (value === undefined) continue
       size += value.byteLength
-      if (size > maxBytes) return { ok: false, reason: 'too_large' }
+      if (size > maxBytes) return { outcome: 'too_large' }
       chunks.push(value)
     }
     const bytes = new Uint8Array(size)
@@ -149,7 +169,7 @@ export async function readLimitedBody(
       bytes.set(chunk, offset)
       offset += chunk.byteLength
     }
-    return { ok: true, bytes }
+    return { outcome: 'read', bytes }
   }
   try {
     return await Promise.race([read(), tooSlow])

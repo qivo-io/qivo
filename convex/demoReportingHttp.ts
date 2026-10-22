@@ -30,7 +30,8 @@ export function registerDemoReporting(http: HttpRouter): void {
       try {
         // A stalled authenticated sender has a fixed deadline.
         const read = await readLimitedBody(request, DEMO_REPORT_MAX_BYTES, 30_000)
-        if (!read.ok) return new Response(null, { status: REFUSED[read.reason], headers })
+        if (read.outcome !== 'read')
+          return new Response(null, { status: REFUSED[read.outcome], headers })
         const payload = new TextDecoder('utf-8', { fatal: true }).decode(read.bytes)
         await ctx.runMutation(receiveRef, { payload })
       } catch {

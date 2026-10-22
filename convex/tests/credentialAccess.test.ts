@@ -1674,7 +1674,7 @@ describe('read-only credentials over HTTP', () => {
         project: c.f.sub.key,
         title: 'Narrowed',
       })
-      expect(spy).toHaveBeenCalled()
+      expect(spy.ran()).toBe(true)
       expect(res.status).toBe(200)
       expect(toolText(res.body)).toEqual({ text: CREDENTIAL_READS_ONLY, isError: true })
     } finally {

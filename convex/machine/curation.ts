@@ -8,11 +8,11 @@ import { internal } from '../_generated/api'
 import { badRequest, type Refusal } from '../lib/functions'
 import { validateCalendarDay } from '../lib/panorama'
 import { CURATION_BODY_LIMIT_BYTES } from '../lib/panoramaCuration'
-import { answerAfterBody } from '../lib/requestBody'
+import { answerAfterBody, readLimitedBody } from '../lib/requestBody'
 import { sha256hex } from './auth'
 
-declare class TextEncoder {
-  encode(text: string): Uint8Array
+declare class TextDecoder {
+  decode(value: Uint8Array): string
 }
 
 const BASE = '/v1/curation'
@@ -82,15 +82,12 @@ async function bodyObject(
   if (req.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
     throw badRequest('Content-Type must be application/json')
   }
-  const length = req.headers.get('Content-Length')
-  if (length !== null && Number(length) > CURATION_BODY_LIMIT_BYTES)
-    throw badRequest(BODY_TOO_LARGE)
-  const text = await req.text()
-  if (new TextEncoder().encode(text).byteLength > CURATION_BODY_LIMIT_BYTES)
-    throw badRequest(BODY_TOO_LARGE)
+  // counted as it arrives, so a chunked body stops being kept at the limit
+  const read = await readLimitedBody(req, CURATION_BODY_LIMIT_BYTES)
+  if (read.outcome === 'too_large') throw badRequest(BODY_TOO_LARGE)
   let body: unknown
   try {
-    body = JSON.parse(text)
+    body = JSON.parse(read.outcome === 'read' ? new TextDecoder().decode(read.bytes) : '')
   } catch {
     throw badRequest('request body must be a JSON object')
   }

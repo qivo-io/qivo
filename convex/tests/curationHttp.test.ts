@@ -8,7 +8,12 @@ import type { ActionCtx } from '../_generated/server'
 import { sha256hex } from '../machine/auth'
 import { registerCuration } from '../machine/curation'
 
-type FetchInit = { method?: string; headers?: Record<string, string>; body?: string }
+type FetchInit = {
+  method?: string
+  headers?: Record<string, string>
+  body?: string | ReadableStream<Uint8Array>
+  duplex?: 'half'
+}
 declare const Request: { new (url: string, init?: FetchInit): Request }
 
 const SECRET = `qvc_${'0123456789abcdef'.repeat(4)}`
@@ -435,6 +440,25 @@ describe('body validation and safe failures', () => {
     const over = await send(`${PREFIX}/submissions`, {
       method: 'POST',
       body: JSON.stringify(input),
+    })
+    expect(over.status).toBe(400)
+    expect(await result(over)).toEqual({ error: 'request body exceeds 16 KiB' })
+  })
+
+  it('stops keeping a chunked body once it passes 16 KiB', async () => {
+    const { send } = fixture()
+    // 64 KiB of spaces per read, forever, so a reader that waits for the
+    // end never answers
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new Uint8Array(64 * 1024).fill(32))
+      },
+    })
+    const over = await send(`${PREFIX}/submissions`, {
+      method: 'POST',
+      body: endless,
+      duplex: 'half',
+      headers: { 'Content-Type': 'application/json' },
     })
     expect(over.status).toBe(400)
     expect(await result(over)).toEqual({ error: 'request body exceeds 16 KiB' })

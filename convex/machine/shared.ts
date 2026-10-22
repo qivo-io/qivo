@@ -253,7 +253,7 @@ export type RequestBody = { text: string; utf8: boolean }
  */
 export async function readBody(request: Request): Promise<RequestBody | null> {
   const read = await readLimitedBody(request, BODY_MAX_BYTES)
-  if (!read.ok) return read.reason === 'missing' ? { text: '', utf8: true } : null
+  if (read.outcome !== 'read') return read.outcome === 'missing' ? { text: '', utf8: true } : null
   try {
     return { text: new TextDecoder('utf-8', { fatal: true }).decode(read.bytes), utf8: true }
   } catch {

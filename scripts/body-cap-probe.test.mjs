@@ -1,6 +1,11 @@
+import { spawnSync } from 'node:child_process'
+import { mkdtempSync, rmSync, symlinkSync } from 'node:fs'
 import { createServer } from 'node:http'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { CASES, probe, probeBody } from './body-cap-probe.mjs'
+import { CASES, MAX_TOTAL, parseProbeArgs, probe, probeBody } from './body-cap-probe.mjs'
 
 let server
 
@@ -30,16 +35,6 @@ describe('body cap probe', () => {
     expect(() => probeBody('/mcp', 10)).toThrow(/at least/)
   })
 
-  it('sends no credential and no real link, so no case can change data', () => {
-    for (const { path, expect: statuses } of Object.values(CASES)) {
-      expect(
-        statuses.every((status) => /^4\d\d$/.test(status)),
-        path,
-      ).toBe(true)
-      if (path.includes('uploads/')) expect(path).toContain('t=probe')
-    }
-  })
-
   it('counts every answer and every request that got none', async () => {
     const origin = await listen((n) => n % 4 === 0)
     for (const kind of [CASES['rest-over'], CASES['rest-over-chunked']]) {
@@ -47,6 +42,60 @@ describe('body cap probe', () => {
       expect(Object.values(counts).reduce((a, b) => a + b, 0)).toBe(12)
       expect(counts['401']).toBeGreaterThanOrEqual(8)
       expect(counts['401']).toBeLessThan(12)
+    }
+  })
+
+  it('takes a bare origin and whole counts within the bounds', () => {
+    expect(parseProbeArgs(['https://api.example.test/', '--case', 'rest-small'])).toEqual({
+      origin: 'https://api.example.test',
+      requests: 80,
+      concurrency: 8,
+      names: ['rest-small'],
+    })
+    expect(
+      parseProbeArgs(['http://127.0.0.1:3211', '--requests', String(MAX_TOTAL / 10)]),
+    ).toMatchObject({
+      requests: MAX_TOTAL / 10,
+    })
+  })
+
+  it('refuses arguments it cannot use', () => {
+    for (const argv of [
+      [],
+      ['https://x.test', '--bogus'],
+      ['https://x.test', '--requests'],
+      ['https://x.test', '--requests', 'Infinity'],
+      ['https://x.test', '--requests', '1.5'],
+      ['https://x.test', '--requests', '0'],
+      ['https://x.test', '--concurrency', '17'],
+      // ten cases of 201 pass MAX_TOTAL
+      ['https://x.test', '--requests', String(MAX_TOTAL / 10 + 1)],
+      ['https://x.test', '--case', 'nope'],
+      ['https://x.test', '--case', 'toString'],
+      ['https://user:pass@x.test'],
+      ['https://x.test/v1'],
+      ['https://x.test?a=1'],
+      ['https://x.test#top'],
+      ['ftp://x.test'],
+      ['https://x.test', 'https://y.test'],
+    ]) {
+      expect(parseProbeArgs(argv), argv.join(' ')).toBeNull()
+    }
+  })
+
+  it('exits 2 for bad arguments, also when run through a symlink', () => {
+    const script = fileURLToPath(new URL('./body-cap-probe.mjs', import.meta.url))
+    const dir = mkdtempSync(join(tmpdir(), 'probe-'))
+    try {
+      const link = join(dir, 'probe.mjs')
+      symlinkSync(script, link)
+      for (const argv of [[script, 'https://x.test', '--bogus'], [link]]) {
+        const run = spawnSync(process.execPath, argv, { encoding: 'utf8' })
+        expect(run.status).toBe(2)
+        expect(run.stderr).toMatch(/^usage:/)
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 })

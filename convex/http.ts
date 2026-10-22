@@ -118,7 +118,7 @@ const createHttpAuthAfterBody: typeof createAuth = (ctx) => {
       try {
         return await auth.handler(request)
       } finally {
-        await discardBody(request)
+        await discardBody(request).catch(() => {})
       }
     },
   }
@@ -196,7 +196,7 @@ const oauthMachine = answerAfterBody(async (ctx, request) => {
   try {
     response = await createAuth(ctx).handler(forwarded)
   } finally {
-    await discardBody(forwarded)
+    await discardBody(forwarded).catch(() => {})
   }
   const responseHeaders = new Headers(response.headers)
   responseHeaders.delete('Set-Cookie')
@@ -421,11 +421,11 @@ async function readBackgroundBody(
   maxBytes = isDemoDeployment() ? DEMO_FILE_BYTES : PANORAMA_MAX_BYTES,
 ): Promise<Uint8Array> {
   const read = await readLimitedBody(request, maxBytes, 30_000)
-  if (read.ok) return read.bytes
+  if (read.outcome === 'read') return read.bytes
   throw badRequest(
-    read.reason === 'missing'
+    read.outcome === 'missing'
       ? 'Choose an image file to upload.'
-      : read.reason === 'too_slow'
+      : read.outcome === 'too_slow'
         ? 'The image upload timed out. Try again.'
         : `Choose a file no larger than ${maxBytes / 1024 / 1024} MiB.`,
   )

@@ -5,7 +5,8 @@ import { isDemoDeployment, requireActiveDemo } from '../lib/demo'
 import { forbidden, rule } from '../lib/functions'
 
 declare const crypto: { randomUUID(): string }
-export const DEMO_FILE_BYTES = 5 * 1024 * 1024
+
+export { DEMO_FILE_BYTES } from '../lib/limits'
 export const DEMO_STORAGE_BYTES = 50 * 1024 * 1024
 export const DEMO_PREVIEW_BYTES = 1024 * 1024
 export const DEMO_UPLOAD_LEASE_MS = 2 * 60 * 1000

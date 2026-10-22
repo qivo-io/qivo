@@ -4,7 +4,7 @@
  * for it (lib/fileTokens.ts attachmentUploadUrl), so it needs no credential,
  * like the Convex upload URL it replaces. Unlike that URL, it stores at most
  * one file: a POST claims the ticket under its own id (beginTicketUpload),
- * and every other POST is refused before anything is read. The receiver
+ * and every other POST is refused before its file is read. The receiver
  * reads exactly the declared number of bytes, stores them and records the
  * file on the ticket (finishTicketUpload), which the confirm call then must
  * name. A POST that fails stores nothing and frees the URL for another try
@@ -134,9 +134,9 @@ export async function readExactly(
   const declared = request.headers.get('Content-Length')
   if (declared !== null && Number(declared) !== size) return null
   const read = await readLimitedBody(request, size, readMs)
-  if (read.ok) return read.bytes.byteLength === size ? read.bytes : null
-  if (read.reason === 'too_slow') throw badRequest(UPLOAD_TOO_SLOW)
-  return read.reason === 'missing' && size === 0 ? new Uint8Array(0) : null
+  if (read.outcome === 'read') return read.bytes.byteLength === size ? read.bytes : null
+  if (read.outcome === 'too_slow') throw badRequest(UPLOAD_TOO_SLOW)
+  return read.outcome === 'missing' && size === 0 ? new Uint8Array(0) : null
 }
 
 /* POST /attachment-uploads/{ticket}?e=&m=&t= stores the ticket's file. */

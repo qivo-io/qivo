@@ -14,6 +14,7 @@ import {
 import { SettingsGroup } from '../components/settingsPage'
 import { ThemeSelector } from '../components/ThemeSelector'
 import { useAppearance } from '../lib/appearanceContext'
+import { assertDemoFileSize } from '../lib/demoMode'
 import { useUnsaved } from '../lib/leaveGuard'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { type AppearancePreferences, P } from '../store/planner'
@@ -77,6 +78,7 @@ function errorText(error: unknown): string {
 
 async function inspectFile(file: File) {
   validateManualImageFile(file.type, file.size)
+  assertDemoFileSize(file.size)
   manualImageDimensions(new Uint8Array(await file.arrayBuffer()), file.type)
   const url = URL.createObjectURL(file)
   try {
