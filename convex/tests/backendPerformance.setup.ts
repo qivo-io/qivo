@@ -1,47 +1,100 @@
-/// <reference types="vite/client" />
-import type { FunctionReturnType } from 'convex/server'
-import type { api } from '../_generated/api'
 import type { QueryCtx } from '../_generated/server'
-import { joinLists } from '../lib/arrayLimit'
+import { idWindows, WINDOW_ROWS, windowCount } from '../lib/idWindows'
 import { logActivity } from '../model/activity'
-import { forMe } from '../snapshot'
+import * as workspace from '../workspace'
 import { NOW, newT, patchCounters, withOrg } from './helpers.setup'
 
 declare const performance: { now(): number }
 
-type Snapshot = FunctionReturnType<typeof api.snapshot.forMe>
-export const invokeSnapshot = (ctx: QueryCtx, snapshot = forMe): Promise<Snapshot> =>
-  (
-    snapshot as unknown as {
-      _handler: (ctx: QueryCtx, args: Record<string, never>) => Promise<Snapshot>
-    }
-  )._handler(ctx, {})
-
 /** What scripts/benchmark-backend.mjs compares the working tree with: a
-    baseline revision's forMe and logActivity, or with `currentOnly` nothing,
-    when only the working tree is measured. */
+    baseline revision's logActivity, or with `currentOnly` nothing, when only
+    the working tree is measured. The workspace parts have no counterpart
+    before them, so they are measured on the working tree alone. */
 type Baseline = {
-  assertEqual: (actual: unknown, expected: unknown) => void
   report: (row: unknown) => void
   guardsOnly?: boolean
-} & (
-  | { currentOnly: true }
-  | { currentOnly?: false; snapshot: typeof forMe; activity: typeof logActivity }
-)
+} & ({ currentOnly: true } | { currentOnly?: false; activity: typeof logActivity })
 
-/** `result` without what may differ between two deliveries of the same data:
-    the delivery time, the activity list an older baseline sends, fields an
-    older baseline returned that the snapshot no longer does, and the parts
-    long lists now arrive in (lib/arrayLimit.ts), joined back. Applied to both
-    sides of a comparison. */
-function comparable(delivered: Snapshot) {
-  if (delivered === null) return delivered
-  const joined = joinLists(delivered)
-  const { activity: _activity, ...result } = joined as typeof joined & { activity?: unknown }
-  for (const rows of [result.links, result.issueLabels, result.attachments]) {
-    for (const row of rows) delete (row as { org_id?: string }).org_id
+/** The id of benchmark task `i`: a UUID whose first part is a hash, spread
+    over the id space as the app's random ids are (lib/idWindows.ts). */
+function taskId(i: number): string {
+  let hash = 0x811c9dc5
+  for (const ch of `task:${i}`) hash = Math.imul(hash ^ ch.charCodeAt(0), 0x01000193) >>> 0
+  return `${hash.toString(16).padStart(8, '0')}-0000-4000-8000-${String(i).padStart(12, '0')}`
+}
+
+/* A caller as convex-test's withIdentity gives one. */
+type Identity = { query: <R>(fn: (ctx: QueryCtx) => Promise<R>) => Promise<R> }
+
+/** Public query `fn` of workspace.ts run inside `ctx`, its wrapper
+    included, so the transaction's metrics after it are the part's. */
+const run = (fn: unknown, ctx: QueryCtx, args: Record<string, unknown>) =>
+  (fn as { _handler: (ctx: QueryCtx, args: Record<string, unknown>) => Promise<unknown> })._handler(
+    ctx,
+    args,
+  )
+
+/** Every part of the caller's workspace in `orgId`, each read in its own
+    transaction as the app subscribes to them: per part its answer as JSON,
+    milliseconds, index ranges, documents and bytes read, in the windows
+    the app would choose. */
+async function readParts(identity: Identity, orgId: string) {
+  const measured = async (name: string, fn: unknown, args: Record<string, unknown>) => {
+    const started = performance.now()
+    const out = await identity.query(async (ctx) => {
+      const answer = await run(fn, ctx, args)
+      const m = await ctx.meta.getTransactionMetrics()
+      return {
+        answer: JSON.stringify(answer),
+        ranges: m.databaseQueries.used,
+        documents: m.documentsRead.used,
+        bytes: m.bytesRead.used,
+      }
+    })
+    return { name, ...out, ms: performance.now() - started }
   }
-  return { ...result, delivered_at: '' }
+  /* The windows of `kind`, as the app chooses them from the counters. */
+  const windowsOf = async (kind: string) => {
+    const root = (await identity.query(async (ctx) => await run(workspace.root, ctx, {}))) as {
+      orgs: { id: string; next_issue_num: number; next_project_num: number }[]
+    }
+    const org = root.orgs.find((o) => o.id === orgId)
+    const n =
+      kind === 'people'
+        ? 1
+        : kind === 'projects'
+          ? windowCount(org?.next_project_num ?? 0, WINDOW_ROWS.projects)
+          : windowCount(org?.next_issue_num ?? 0, WINDOW_ROWS.tasks)
+    return idWindows(n)
+  }
+  const parts = [
+    await measured('root', workspace.root, {}),
+    await measured('catalog', workspace.catalog, { org_id: orgId }),
+    await measured('inbox', workspace.inbox, { org_id: orgId }),
+  ]
+  const windowed = {
+    tasks: workspace.tasks,
+    people: workspace.people,
+    projects: workspace.projects,
+  }
+  for (const [kind, fn] of Object.entries(windowed)) {
+    for (const [i, w] of (await windowsOf(kind)).entries())
+      parts.push(await measured(`${kind} ${i}`, fn, { org_id: orgId, ...w }))
+  }
+  return parts
+}
+
+/** The busiest window of each kind, and how many windows it has. */
+function summary(parts: Awaited<ReturnType<typeof readParts>>) {
+  const kinds = new Map<string, { windows: number; busiest: (typeof parts)[number] }>()
+  for (const part of parts) {
+    const kind = part.name.split(' ')[0]
+    const was = kinds.get(kind)
+    if (!was || part.ms > was.busiest.ms)
+      kinds.set(kind, { windows: (was?.windows ?? 0) + 1, busiest: part })
+    else was.windows++
+  }
+  return kinds
 }
 
 export async function benchmarkBackend(baseline: Baseline) {
@@ -53,7 +106,7 @@ export async function benchmarkBackend(baseline: Baseline) {
       await patchCounters(ctx, f.org.id, { next_issue_num: count })
       for (let i = 0; i < count; i++) {
         await ctx.db.insert('issues', {
-          id: `benchmark-task-${i}`,
+          id: taskId(i),
           org_id: f.org.id,
           project_id: i % 20 === 0 ? f.hidden.id : f.sub.id,
           num: i + 1,
@@ -72,7 +125,7 @@ export async function benchmarkBackend(baseline: Baseline) {
         if (i % 20 === 1) {
           await ctx.db.insert('issue_labels', {
             org_id: f.org.id,
-            issue_id: `benchmark-task-${i}`,
+            issue_id: taskId(i),
             label_id: 'benchmark-label',
           })
         }
@@ -80,10 +133,10 @@ export async function benchmarkBackend(baseline: Baseline) {
           await ctx.db.insert('issue_links', {
             org_id: f.org.id,
             id: `benchmark-link-${i}`,
-            source_id: `benchmark-task-${i}`,
-            target_id: `benchmark-task-${i - 1}`,
+            source_id: taskId(i),
+            target_id: taskId(i - 1),
             type: 'blocks',
-            pair_key: `benchmark-task-${i}:benchmark-task-${i - 1}`,
+            pair_key: `${taskId(i)}:${taskId(i - 1)}`,
             created_at: NOW,
           })
         }
@@ -97,7 +150,7 @@ export async function benchmarkBackend(baseline: Baseline) {
           ts: NOW,
           verb: 'created',
           target_type: 'issue',
-          target_id: `benchmark-task-${i % count}`,
+          target_id: taskId(i % count),
           label: 'Task',
           project_id: f.sub.id,
           named_task_nums: [],
@@ -105,32 +158,45 @@ export async function benchmarkBackend(baseline: Baseline) {
       }
     })
     const authed = t.withIdentity({ subject: f.user.auth_user_id! })
-    const snapshot = async (handler: typeof forMe, identity = authed) => {
-      const started = performance.now()
-      const measured = await identity.query(async (ctx) => ({
-        result: await invokeSnapshot(ctx, handler),
-        metrics: await ctx.meta.getTransactionMetrics(),
-      }))
-      return { ...measured, ms: performance.now() - started }
+    /* One row per kind of part: how many parts it has and its busiest. */
+    const compare = async (operation: string, identity: Identity = authed) => {
+      for (const [kind, { windows, busiest }] of summary(await readParts(identity, f.org.id))) {
+        const row = {
+          operation,
+          tasks: count,
+          part: kind,
+          windows,
+          queries: busiest.ranges,
+          documents: busiest.documents,
+          ms: Math.round(busiest.ms),
+        }
+        results.push(row)
+        baseline.report(row)
+      }
     }
-    const compare = async (operation: string, identity = authed) => {
-      const old = baseline.currentOnly ? null : await snapshot(baseline.snapshot, identity)
-      const current = await snapshot(forMe, identity)
-      if (old !== null) baseline.assertEqual(comparable(current.result), comparable(old.result))
+    if (!baseline.guardsOnly) {
+      await compare('workspace')
+      // what one task rename re-sends: the parts whose answer changed
+      const before = await readParts(authed, f.org.id)
+      await t.run(async (ctx) => {
+        const task = await ctx.db
+          .query('issues')
+          .withIndex('by_uuid', (q) => q.eq('id', taskId(count >> 1)))
+          .unique()
+        if (task) await ctx.db.patch(task._id, { title: 'Renamed by someone else' })
+      })
+      const after = await readParts(authed, f.org.id)
+      const changed = after.filter((part, i) => part.answer !== before[i]?.answer)
       const row = {
-        operation,
+        operation: 'rename re-sends',
         tasks: count,
-        baselineQueries: old?.metrics.databaseQueries.used ?? '—',
-        queries: current.metrics.databaseQueries.used,
-        baselineDocuments: old?.metrics.documentsRead.used ?? '—',
-        documents: current.metrics.documentsRead.used,
-        baselineMs: old === null ? '—' : Math.round(old.ms),
-        ms: Math.round(current.ms),
+        part: changed.map((part) => part.name).join(', '),
+        bytes: changed.reduce((n, part) => n + part.answer.length, 0),
+        of: after.reduce((n, part) => n + part.answer.length, 0),
       }
       results.push(row)
       baseline.report(row)
     }
-    if (!baseline.guardsOnly) await compare('snapshot')
     // only a comparison has a baseline write to time
     const writes = [
       ...(baseline.currentOnly ? [] : [['baseline', baseline.activity] as const]),
@@ -145,7 +211,7 @@ export async function benchmarkBackend(baseline: Baseline) {
           ts: '2026-02-01T00:00:00.000Z',
           verb: 'updated',
           target_type: 'issue',
-          target_id: 'benchmark-task-0',
+          target_id: taskId(0),
           label: 'Task',
           named_task_nums: [],
         })

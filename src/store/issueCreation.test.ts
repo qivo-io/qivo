@@ -7,7 +7,10 @@ import { plannerFixture as fixture, type Snapshot } from './plannerFixture.setup
 type Planner = typeof import('./planner')['P']
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -44,7 +47,7 @@ describe('task creation through the client store', () => {
     network.query.mockResolvedValue(null)
     network.onUpdate.mockImplementation((ref, _args, next) => {
       if (getFunctionName(ref) === 'snapshot:commentThread') deliverThread = next
-      if (getFunctionName(ref) !== 'snapshot:forMe') return () => {}
+      if (getFunctionName(ref) !== 'workspace:whole') return () => {}
       publish = next
       next(structuredClone(snap))
       return () => {}
@@ -247,9 +250,9 @@ describe('task creation through the client store', () => {
     // the snapshot fails before the answer, so no delivery shows the create
     // or the other person's that took number 2
     const subscription = network.onUpdate.mock.calls.find(
-      ([ref]) => getFunctionName(ref) === 'snapshot:forMe',
+      ([ref]) => getFunctionName(ref) === 'workspace:whole',
     )!
-    subscription[3](new Error('[CONVEX Q(snapshot:forMe)] Server Error'))
+    subscription[3](new Error('[CONVEX Q(workspace:whole)] Server Error'))
     requests[0].resolve({ id: uuid, parent_num: 5 })
     await settled()
     expect(P.issues.find((task) => task.title === 'New parent')?.key).toBe(`${P.ISSUE_PREFIX}-5`)

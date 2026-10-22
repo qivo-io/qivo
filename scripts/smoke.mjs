@@ -121,9 +121,12 @@ const noDisabledCopy = async (page, where) => {
 
 // Injected into Vite's real Convex singleton for this one reload. Auth and
 // backend requests remain live; hold selected deliveries to inspect startup.
-function deferWorkspaceBoot(convex, { appearance = false } = {}) {
+// The workspace arrives in live parts (src/lib/liveQueries.ts), so holding
+// it holds the transitions its handler sees.
+function deferWorkspaceBoot(convex, live, { appearance = false } = {}) {
   const originalUpdate = convex.onUpdate
   const originalQuery = convex.query
+  const originalTransition = live.onTransition
   let holdSnapshot = true
   let holdPrefs = true
   let holdAppearance = appearance
@@ -149,6 +152,7 @@ function deferWorkspaceBoot(convex, { appearance = false } = {}) {
       for (const deliver of appearances.splice(0)) deliver()
     },
     restore() {
+      live.onTransition = originalTransition
       convex.onUpdate = originalUpdate
       convex.query = originalQuery
       gate.releaseSnapshot()
@@ -156,20 +160,24 @@ function deferWorkspaceBoot(convex, { appearance = false } = {}) {
       gate.releaseAppearance()
     },
   }
+  live.onTransition = (handle) =>
+    originalTransition.call(live, (transition) => {
+      if (!holdSnapshot) return handle(transition)
+      gate.snapshotHeld = true
+      snapshots.push(() => handle(transition))
+    })
   convex.onUpdate = (query, args, receive, onError) => {
-    const snapshot = name(query) === 'snapshot:forMe'
-    const appearance = name(query) === 'appearance:get'
-    if (!snapshot && !appearance) return originalUpdate.call(convex, query, args, receive, onError)
+    if (name(query) !== 'appearance:get')
+      return originalUpdate.call(convex, query, args, receive, onError)
     let active = true
     const unsubscribe = originalUpdate.call(
       convex,
       query,
       args,
       (value) => {
-        if (!(snapshot ? holdSnapshot : holdAppearance)) return receive(value)
-        gate[snapshot ? 'snapshotHeld' : 'appearanceHeld'] = true
-        const pending = snapshot ? snapshots : appearances
-        pending.push(() => {
+        if (!holdAppearance) return receive(value)
+        gate.appearanceHeld = true
+        appearances.push(() => {
           if (active) receive(value)
         })
       },
@@ -271,7 +279,7 @@ async function checkCompressedCanvas(page) {
     const response = await route.fetch()
     await route.fulfill({
       response,
-      body: `${await response.text()}\n;(${deferWorkspaceBoot.toString()})(convex, { appearance: ${deferAppearance} });`,
+      body: `${await response.text()}\n;(${deferWorkspaceBoot.toString()})(convex, live, { appearance: ${deferAppearance} });`,
     })
   }
   const waitForQuality = (quality) =>
@@ -2188,7 +2196,9 @@ try {
   }
   const savedReporter = await pageA.evaluate(async (title) => {
     const { convex } = await import('/src/lib/convex.ts')
-    const snapshot = await convex.query('snapshot:forMe', {})
+    const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
+      (name, args) => convex.query(name, args),
+    )
     const task = snapshot.issues.find((row) => row.title === title)
     if (!task) throw new Error('Created task is absent from the saved snapshot')
     const actor = snapshot.profiles.find((row) => row.id === task.created_by)
@@ -2276,7 +2286,9 @@ try {
       const { convex } = await import('/src/lib/convex.ts')
       const deadline = Date.now() + 15000
       for (;;) {
-        const snapshot = await convex.query('snapshot:forMe', {})
+        const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
+          (name, args) => convex.query(name, args),
+        )
         const task = snapshot.issues.find((row) => row.title === title)
         if (task && task.reviewer_id === me && task.status === 'review') {
           const sub = snapshot.projects.find((row) => row.id === task.project_id)
@@ -2467,7 +2479,9 @@ try {
     async ({ id, agent, name, title, project }) => {
       const P = window.PLANNER
       const { convex } = await import('/src/lib/convex.ts')
-      const snapshot = await convex.query('snapshot:forMe', {})
+      const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
+        (name, args) => convex.query(name, args),
+      )
       await convex.mutation('profiles:create', {
         org_id: P.org.id,
         id: agent,
@@ -2544,7 +2558,9 @@ try {
       const { convex } = await import('/src/lib/convex.ts')
       const deadline = Date.now() + 15000
       for (;;) {
-        const snapshot = await convex.query('snapshot:forMe', {})
+        const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
+          (name, args) => convex.query(name, args),
+        )
         const task = snapshot.issues.find((row) => row.id === id)
         const stamp = snapshot.profiles.find((row) => row.id === agent)
         if (task?.remaining_hours === 4 && task.remaining_set_at && stamp?.sync_at) {
@@ -2582,7 +2598,14 @@ try {
       const saved = async (test) => {
         const deadline = Date.now() + 15000
         for (;;) {
-          if (test(await convex.query('snapshot:forMe', {}))) return true
+          if (
+            test(
+              await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace((name, args) =>
+                convex.query(name, args),
+              ),
+            )
+          )
+            return true
           if (Date.now() > deadline) return false
           await new Promise((resolve) => setTimeout(resolve, 250))
         }

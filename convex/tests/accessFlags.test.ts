@@ -17,8 +17,10 @@ import {
   LEVELS_READ,
   machineAccess,
   type OrgProjectLevels,
+  projectLevel,
   projectLevelsForOrg,
   projectLevelsForPeople,
+  projectLevelsOf,
 } from '../lib/access'
 import { type AccessFlag, accessFlags, loadCatalogue } from '../lib/core'
 import { type CredentialAccess, ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
@@ -143,6 +145,85 @@ describe('accessFlags', () => {
       })
     }
   }, 60_000)
+
+  it('answers project by project as projectLevel, with and without navigation, for every role, kind and grant shape', async () => {
+    const seen = new Set<string>()
+    for (const [name, plant] of SHAPES) {
+      const t = newT()
+      const f = await withOrg(t)
+      const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+      await t.run((ctx) => plant(ctx, f, subject))
+      await t.run(async (ctx) => {
+        const projects = await ctx.db.query('projects').collect()
+        for (const org_role of ORG_ROLES) {
+          for (const kind of PROFILE_KINDS) {
+            for (const me of [{ ...subject, org_role, kind }, f.viewer, f.guest, f.otherAdmin]) {
+              const levels = projectLevelsOf(ctx, me)
+              for (const p of projects) {
+                for (const navigation of [true, false]) {
+                  const level = await levels.level(p.id, navigation)
+                  expect(
+                    level,
+                    `${name}: ${me.name} as ${me.org_role} ${me.kind} on ${p.key}, navigation ${navigation}`,
+                  ).toBe(await projectLevel(ctx, me, p, navigation))
+                  seen.add(String(level))
+                }
+              }
+            }
+          }
+        }
+      })
+    }
+    // the shapes reach every answer, the parent shown for navigation included
+    expect([...seen].sort()).toEqual(['lead', 'null', 'user', 'viewer'])
+  }, 60_000)
+
+  it('answers null for a missing parent or a cycle where projectLevel refuses, and reads only the projects asked about', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const dangling = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: uuid() })
+    const [one, two] = [uuid(), uuid()]
+    await plantProject(t, { org_id: f.org.id, type: 'project', id: one, parent_id: two })
+    await plantProject(t, { org_id: f.org.id, type: 'meta', id: two, parent_id: one })
+    await t.run(async (ctx) => {
+      for (const p of [
+        dangling,
+        await ctx.db
+          .query('projects')
+          .withIndex('by_uuid', (q) => q.eq('id', one))
+          .unique(),
+      ]) {
+        await expect(projectLevel(ctx, f.admin, p!)).rejects.toThrow(/project not found/)
+        expect(await projectLevelsOf(ctx, f.admin).level(p!.id)).toBeNull()
+      }
+      expect(await projectLevelsOf(ctx, f.admin).level(uuid())).toBeNull()
+    })
+    // many other projects cost one sub-project's answer nothing
+    await t.run(async (ctx) => {
+      for (let n = 0; n < 200; n++)
+        await ctx.db.insert('projects', {
+          id: uuid(),
+          org_id: f.org.id,
+          type: 'project',
+          parent_id: f.meta.id,
+          key: `M${n}`,
+          name: `Many ${n}`,
+          description: '',
+          sort_order: 500 + n,
+          num: 500 + n,
+          track_delay: false,
+          created_at: NOW,
+        })
+    })
+    const read = await t.run(async (ctx) => {
+      expect(await projectLevelsOf(ctx, f.user).level(f.sub.id)).toBe('lead')
+      expect(await projectLevelsOf(ctx, f.viewer).level(f.sub.id)).toBe(
+        await projectLevel(ctx, f.viewer, f.sub),
+      )
+      return (await ctx.meta.getTransactionMetrics()).documentsRead.used
+    })
+    expect(read).toBeLessThan(20)
+  })
 
   it('hides a project outside a top-level meta from everyone, in lists and single reads and writes', async () => {
     const t = newT()

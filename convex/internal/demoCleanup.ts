@@ -257,7 +257,15 @@ async function profileRows(ctx: MutationCtx, orgId: string, budget: Budget): Pro
       .query('profiles')
       .withIndex('by_org', (q) => q.eq('org_id', orgId))
       .first()
-    if (!profile) return true
+    // then a Team sync stamp row left without its profile, by a rollback or
+    // a manual edit
+    if (!profile)
+      return await drain(ctx, budget, (n) =>
+        ctx.db
+          .query('sync_stamps')
+          .withIndex('by_org', (q) => q.eq('org_id', orgId))
+          .take(n),
+      )
     const id = profile.id
     if (
       !(await drain(ctx, budget, (n) =>

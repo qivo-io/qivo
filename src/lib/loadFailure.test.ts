@@ -7,7 +7,7 @@ const PLAIN = 'Something went wrong while loading. Try again in a moment.'
 describe('loadFailureText', () => {
   it('replaces a server fault with a plain sentence', () => {
     const fault = new Error(
-      '[CONVEX Q(snapshot:forMe)] [Request ID: 3f9c2a71] Server Error\n  Called by client',
+      '[CONVEX Q(workspace:tasks)] [Request ID: 3f9c2a71] Server Error\n  Called by client',
     )
     expect(loadFailureText(fault)).toBe(PLAIN)
     expect(loadFailureText('could not reach the sign-in service')).toBe(PLAIN)

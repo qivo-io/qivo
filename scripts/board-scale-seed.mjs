@@ -27,6 +27,7 @@ import { ConvexHttpClient } from 'convex/browser'
 import { makeFunctionReference } from 'convex/server'
 import { LIMITS } from './limits.mjs'
 import { DemoCliError, resolveTarget } from './marketing-demo.mjs'
+import { readWorkspace } from './workspaceJoin.mjs'
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const ACTOR = 'nora@demo.qivo.io'
@@ -92,10 +93,10 @@ const TAILS = [
 ]
 /* What a seeded task's description says, with its number. */
 const MARK = 'Seeded by board-scale-seed as task'
-/* The most seeded tasks. At 10,000 tasks and their 400 parents
-   snapshot:forMe already runs close to Convex's 1s limit on a local
-   backend, so a larger organization would no longer load. */
-const MOST_TASKS = 10_000
+/* The most seeded tasks. The app's workspace parts read an organization of
+   this size in windows (convex/workspace.ts), each far inside Convex's
+   limits, and this keeps the seed's own run a few hours at most. */
+const MOST_TASKS = 30_000
 
 const ref = (name) => makeFunctionReference(name)
 
@@ -238,7 +239,7 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
     issuer: 'board-scale-seed',
     tokenIdentifier: `board-scale-seed|${actor.auth_user_id}`,
   })
-  const snapshot = await client.query(ref('snapshot:forMe'), {})
+  const snapshot = await readWorkspace((name, args) => client.query(ref(name), args))
   const org = snapshot.orgs.find((o) => o.id === actor.org_id)?.id
   if (!org) throw new DemoCliError('Nora cannot see Northstar; seed it again.')
   // Northstar's own rows: the snapshot holds every organization Nora is in

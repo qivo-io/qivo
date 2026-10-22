@@ -14,7 +14,7 @@
  * because a throw would roll the delete back (files.ts header, the probe
  * verdict).
  *
- * Each row carries its task's organization, so the app snapshot reads the
+ * Each row carries its task's organization, so the storage totals read the
  * organization's rows by index. It names no project: the storage totals
  * read each row's project through its task (model/billing.ts storagePage),
  * so moving a task writes none of its rows. A task holds at most

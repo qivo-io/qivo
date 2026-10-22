@@ -6,7 +6,10 @@ type Planner = typeof import('./planner')['P']
 type Task = Snapshot['issues'][number]
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -84,7 +87,7 @@ describe('archiving and deleting from the Archive or delete window', () => {
       task('c', 5),
     )
     network.onUpdate.mockImplementation((ref, _args, next) => {
-      if (getFunctionName(ref) === 'snapshot:forMe') {
+      if (getFunctionName(ref) === 'workspace:whole') {
         next(structuredClone(snap))
         // a later delivery of the server's snapshot, as `edit` leaves it
         deliverSnap = async (edit) => {

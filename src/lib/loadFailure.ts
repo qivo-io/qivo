@@ -3,7 +3,7 @@ import { ConvexError } from 'convex/values'
 /** What the sign-in gate's load-failed card says about a failed boot. A
     refusal (ConvexError) carries the server's own sentence. Any other failure
     is a fault whose text is meant for support, such as Convex's
-    "[CONVEX Q(snapshot:forMe)] [Request ID: …] Server Error", so the card
+    "[CONVEX Q(workspace:tasks)] [Request ID: …] Server Error", so the card
     says it plainly and the caller logs the raw text. */
 export function loadFailureText(e: unknown): string {
   const message = e instanceof ConvexError ? e.data?.message : null

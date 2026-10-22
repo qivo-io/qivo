@@ -18,7 +18,7 @@ export const SYNC_SITTING_MS = 6 * 60 * 60 * 1000
 const FIRST_SINCE_MAX_MS = 14 * 24 * 60 * 60 * 1000
 
 /* A person's stored stamp: their sync_stamps row (model/syncStamps.ts), which
- * the snapshot ships as the profile row's sync_at and sync_since. `since`
+ * the app's people part ships as the profile row's sync_at and sync_since. `since`
  * is either an instant, the last change of the previous sitting (a real
  * sync), or, during a person's first sitting, the calendar day (YYYY-MM-DD)
  * the page was reading from when it began (isReadingDay). */

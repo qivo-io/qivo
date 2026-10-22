@@ -271,10 +271,6 @@ internal/overCapRows:fix action internal {"type":"object","value":{"dry_run":{"f
 internal/overCapRows:page mutation internal {"type":"object","value":{"phase":{"fieldType":{"type":"union","value":[{"type":"literal","value":"projects"},{"type":"literal","value":"teams"},{"type":"literal","value":"milestones"},{"type":"literal","value":"organizations"},{"type":"literal","value":"profiles"},{"type":"literal","value":"agent_keys"},{"type":"literal","value":"mcp_tokens"},{"type":"literal","value":"labels"},{"type":"literal","value":"issue_attachments"},{"type":"literal","value":"issues"},{"type":"literal","value":"comments"},{"type":"literal","value":"emails"},{"type":"literal","value":"deleted_projects"},{"type":"literal","value":"deleted_milestones"},{"type":"literal","value":"deleted_issue_attachments"},{"type":"literal","value":"deleted_issues"},{"type":"literal","value":"deleted_comments"}]},"optional":false},"dry_run":{"fieldType":{"type":"boolean"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"page_size":{"fieldType":{"type":"number"},"optional":true}}}
 internal/storedGrantees:backfill action internal {"type":"object","value":{"dry_run":{"fieldType":{"type":"boolean"},"optional":false},"page_size":{"fieldType":{"type":"number"},"optional":true}}}
 internal/storedGrantees:page mutation internal {"type":"object","value":{"table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"project_access"},{"type":"literal","value":"project_team_access"}]},"optional":false},"dry_run":{"fieldType":{"type":"boolean"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"page_size":{"fieldType":{"type":"number"},"optional":true}}}
-internal/syncStampsBackfill:audit mutation internal {"type":"object","value":{"rows":{"fieldType":{"type":"number"},"optional":false},"moved":{"fieldType":{"type":"number"},"optional":false}}}
-internal/syncStampsBackfill:page mutation internal {"type":"object","value":{"dry_run":{"fieldType":{"type":"boolean"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
-internal/syncStampsBackfill:remaining query internal {"type":"object","value":{"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true}}}
-internal/syncStampsBackfill:run action internal {"type":"object","value":{"dry_run":{"fieldType":{"type":"boolean"},"optional":false}}}
 invites:deliveries query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 invites:reserve mutation internal {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"resend":{"fieldType":{"type":"boolean"},"optional":false},"actor":{"fieldType":{"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":true},"email":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"app":{"fieldType":{"type":"boolean"},"optional":false},"by":{"fieldType":{"type":"string"},"optional":true}}}
 invites:sendAgain mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -513,7 +509,6 @@ roadmap:expire mutation internal {"type":"object","value":{"auth_user_id":{"fiel
 roadmap:undo mutation public {"type":"object","value":{"session_id":{"fieldType":{"type":"string"},"optional":false},"all":{"fieldType":{"type":"boolean"},"optional":false}}}
 snapshot:commentThread query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 snapshot:commentsBefore query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"before":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-snapshot:forMe query public {"type":"object","value":{}}
 snapshot:historyBefore query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"before":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teamSync:lastComments query public {"type":"object","value":{"owner_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teamSync:stamp mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"first_since":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -545,6 +540,12 @@ webhooks:remove mutation internal {"type":"object","value":{"owner":{"fieldType"
 webhooks:removeOrganization mutation internal {"type":"object","value":{"owner":{"fieldType":{"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"credential_table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"agent_keys"},{"type":"literal","value":"mcp_tokens"},{"type":"literal","value":"oauth_connections"}]},"optional":false},"credential_id":{"fieldType":{"type":"string"},"optional":false},"credential_row_id":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false}}}
 webhooks:save mutation internal {"type":"object","value":{"owner":{"fieldType":{"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"credential_table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"agent_keys"},{"type":"literal","value":"mcp_tokens"},{"type":"literal","value":"oauth_connections"}]},"optional":false},"credential_id":{"fieldType":{"type":"string"},"optional":false},"credential_row_id":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"union","value":[{"type":"literal","value":"task.created"},{"type":"literal","value":"task.updated"},{"type":"literal","value":"task.deleted"},{"type":"literal","value":"task.restored"},{"type":"literal","value":"comment.created"}]},"optional":false},"filters":{"fieldType":{"type":"object","value":{"task_id":{"fieldType":{"type":"string"},"optional":true},"project_id":{"fieldType":{"type":"string"},"optional":true}}},"optional":false},"url":{"fieldType":{"type":"string"},"optional":false},"encrypted_secret":{"fieldType":{"type":"string"},"optional":false},"secret_hash":{"fieldType":{"type":"string"},"optional":true},"legacy_secret_hash":{"fieldType":{"type":"string"},"optional":true},"expires_at":{"fieldType":{"type":"number"},"optional":true}}}
 webhooks:sweep mutation internal {"type":"object","value":{}}
+workspace:catalog query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+workspace:inbox query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+workspace:people query public {"type":"object","value":{"from":{"fieldType":{"type":"string"},"optional":false},"to":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+workspace:projects query public {"type":"object","value":{"from":{"fieldType":{"type":"string"},"optional":false},"to":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+workspace:root query public {"type":"object","value":{}}
+workspace:tasks query public {"type":"object","value":{"from":{"fieldType":{"type":"string"},"optional":false},"to":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 `
   .trim()
   .split('\n')
@@ -565,7 +566,8 @@ describe('the function-surface manifest', () => {
 /* ------------------------------------------------------- the public subset */
 
 /* Auth posture per public door, hand-grouped. `org*`/`adminMutation`/
- * `accessRemovalMutation` consume a wrapper-injected org_id wire arg;
+ * `accessRemovalMutation`/`seatQuery` consume a wrapper-injected org_id
+ * wire arg (`seatQuery` answers without a seat instead of refusing);
  * `accessRemovalMutation` lets an org admin past the billing gate for writes
  * that only take access away. `authed*` gate on a login only; `platform*`
  * gate on a platform_admins row. `query` marks the ONE deliberate bare
@@ -578,6 +580,7 @@ type Wrapper =
   | 'accessRemovalMutation'
   | 'authedQuery'
   | 'authedMutation'
+  | 'seatQuery'
   | 'platformQuery'
   | 'platformMutation'
   | 'platformAction'
@@ -846,7 +849,6 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // The task window's thread and its earlier pages of comments and of
   // history.
   snapshot: {
-    forMe: 'authedQuery',
     commentThread: 'orgQuery',
     commentsBefore: 'orgQuery',
     historyBefore: 'orgQuery',
@@ -876,10 +878,21 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     revokeMcpToken: 'authedMutation',
     deleteMcpToken: 'authedMutation',
   },
+  // The workspace in live parts. The root reads every seat of the login;
+  // each other part takes one organization and answers gone,
+  // without throwing, where the caller holds no seat.
+  workspace: {
+    root: 'authedQuery',
+    catalog: 'seatQuery',
+    people: 'seatQuery',
+    projects: 'seatQuery',
+    tasks: 'seatQuery',
+    inbox: 'seatQuery',
+  },
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 169
+const PUBLIC_COUNT = 174
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')
@@ -983,6 +996,7 @@ describe('the wrapper rule', () => {
     'adminMutation',
     'accessRemovalMutation',
     'orgAction',
+    'seatQuery',
   ])
   const NON_ORG_ALLOWLIST = new Set(
     Object.entries(PUBLIC).flatMap(([m, fns]) =>
@@ -1002,6 +1016,7 @@ describe('the wrapper rule', () => {
     accessRemovalMutation: 'mutation',
     authedQuery: 'query',
     authedMutation: 'mutation',
+    seatQuery: 'query',
     platformQuery: 'query',
     platformMutation: 'mutation',
     platformAction: 'action',

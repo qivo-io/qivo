@@ -37,6 +37,7 @@ import {
   TODAY,
   uuid,
   withOrg,
+  workspaceOf,
 } from './helpers.setup'
 
 type Fx = OrgFixture & {
@@ -112,7 +113,7 @@ async function tree(fx: Fx) {
  * organization as the planner shapes them for src/lib/issueGroups.ts, and
  * its projects. */
 async function appView(fx: Fx, person: Doc<'profiles'>) {
-  const snap = await as(fx.t, person).query(api.snapshot.forMe, {})
+  const snap = await workspaceOf(as(fx.t, person))
   if (snap === null) throw new Error(`${person.name} has no snapshot`)
   const rows = snap.issues.filter((i) => i.org_id === fx.org.id)
   const byId: Record<string, GroupIssue> = {}

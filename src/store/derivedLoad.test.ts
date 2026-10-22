@@ -15,7 +15,10 @@ import { plannerFixture, type Snapshot } from './plannerFixture.setup'
    rows (convex/planning.ts orgLoadRows) give. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: { getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }) },
@@ -33,7 +36,7 @@ describe('the load the store derives from the tasks it shows', () => {
   /** Boots the store on `snap`, every write left waiting. */
   async function boot(snap: Snapshot) {
     network.onUpdate.mockImplementation((ref, _args, next) => {
-      if (getFunctionName(ref) === 'snapshot:forMe') {
+      if (getFunctionName(ref) === 'workspace:whole') {
         deliver = (s) => next(structuredClone(s))
         deliver(snap)
       }
@@ -188,7 +191,7 @@ describe('the load the store derives from the tasks it shows', () => {
     const view = { byUuid, visible }
     const active = issues.filter((i) => liveIn(byUuid)(i.project_id))
     const rows = orgLoadRows(me, view, new Set(roster.map((p) => p.id)), active)
-    // the snapshot as forMe shapes it: the working set, and the load rows of
+    // the workspace as the parts shape it: the working set, and the load rows of
     // tasks the reader is not shown
     const workingSet = workingSetOf(active, view)
     const strip = <T extends { _id: unknown; _creationTime: number }>(doc: T) => {

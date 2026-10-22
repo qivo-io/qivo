@@ -1,6 +1,5 @@
-import type { FunctionReturnType } from 'convex/server'
-import type { api } from '../../convex/_generated/api'
-export type Snapshot = NonNullable<FunctionReturnType<typeof api.snapshot.forMe>>
+import type { Workspace } from '../../convex/lib/workspaceJoin'
+export type Snapshot = Workspace
 const NOW = '2026-09-14T08:00:00.000Z'
 
 export function plannerFixture(): Snapshot {
@@ -21,7 +20,6 @@ export function plannerFixture(): Snapshot {
         week_start: 1,
         week_one_rule: 'first4day',
         default_plannable_hours: 40,
-        gravatar_avatars: false,
       },
     ],
     profiles: [

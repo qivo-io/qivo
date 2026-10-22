@@ -13,7 +13,6 @@
 import {
   type DataModelFromSchemaDefinition,
   type FunctionArgs,
-  type FunctionReturnType,
   type GenericMutationCtx,
   makeFunctionReference,
   type WithoutSystemFields,
@@ -21,7 +20,7 @@ import {
 import { ConvexError } from 'convex/values'
 import { convexTest, type TestConvex } from 'convex-test'
 import { onTestFinished, TestRunner, vi } from 'vitest'
-import { type api, internal } from '../_generated/api'
+import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import authSchema from '../betterAuth/schema'
@@ -30,6 +29,7 @@ import type { RestIssueJson } from '../lib/core'
 import type { OrgRole } from '../lib/enums'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { loadRowFor, type OrgLoadRow } from '../lib/loadRows'
+import { readWorkspace, type Workspace } from '../lib/workspaceJoin'
 import { type ActivityEntry, insertActivity } from '../model/activity'
 import { countersOf, countersRow, type OrgCounters } from '../model/orgs'
 import schema from '../schema'
@@ -920,13 +920,24 @@ export async function restArchivedPage(
   return out
 }
 
-/** The load rows the app works with for snapshot `snap`: a row for each
+/* A caller as as() gives one. */
+type Caller = ReturnType<typeof as>
+
+/** The workspace the app holds for `caller` once every part answered
+ * (lib/workspaceJoin.ts readWorkspace), its delivery time blank so two
+ * reads of the same data compare equal. Null without a seat. */
+export async function workspaceOf(caller: Caller): Promise<Workspace | null> {
+  const snap = await readWorkspace((name, args) =>
+    caller.query(makeFunctionReference<'query'>(name), args),
+  )
+  return snap && { ...snap, delivered_at: '' }
+}
+
+/** The load rows the app works with for workspace `snap`: a row for each
  * task it shows that passes the server's fence, taken from the task rows
  * the way the store derives them (src/store/taskIndex.ts), then the rows
- * forMe sends for the tasks the reader is not shown. */
-export function appLoadRows(
-  snap: NonNullable<FunctionReturnType<typeof api.snapshot.forMe>>,
-): OrgLoadRow[] {
+ * the server sends for the tasks the reader is not shown. */
+export function appLoadRows(snap: Workspace): OrgLoadRow[] {
   const parents = new Set(snap.issues.flatMap((task) => task.parent_id ?? []))
   const projects = new Map(snap.projects.map((project) => [project.id, project]))
   const orgOf = new Map(snap.profiles.map((person) => [person.id, person.org_id]))

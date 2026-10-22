@@ -586,6 +586,13 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
     if (pr.avatar_storage_id !== undefined) await ctx.storage.delete(pr.avatar_storage_id)
     await ctx.db.delete(pr._id)
   }
+  // a Team sync stamp row left without its profile, by a rollback or a
+  // manual edit
+  for (const stamp of await ctx.db
+    .query('sync_stamps')
+    .withIndex('by_org', (q) => q.eq('org_id', org.id))
+    .collect())
+    await ctx.db.delete(stamp._id)
 
   // the Northstar importer's ownership receipt names the org (one-row table)
   for (const r of await ctx.db.query('marketing_demo').collect()) {

@@ -64,7 +64,7 @@ export async function loadBoard(
   network.query.mockResolvedValue(null)
   network.onUpdate.mockImplementation((ref, _args, next) => {
     const name = getFunctionName(ref)
-    if (name === 'snapshot:forMe') {
+    if (name === 'workspace:whole') {
       deliver = (snap) => next(structuredClone(snap))
       deliver(snapshot)
     } else if (name === 'snapshot:commentThread') next({ comments: [], earlier: false, events: [] })

@@ -3,7 +3,7 @@
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import { projectLevelsForOrg } from './access'
+import { accessRowsOf, levelsFrom, orgProjects } from './access'
 
 export type OrgProjectView = {
   /* every project of the org, archived included */
@@ -17,15 +17,16 @@ export type OrgProjectView = {
 }
 
 export async function orgProjectView(ctx: QueryCtx, me: Doc<'profiles'>): Promise<OrgProjectView> {
-  const projects = await ctx.db
-    .query('projects')
-    .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
-    .collect()
+  // the projects and the caller's grants and shares, read at once
+  const [projects, { grants, shares }] = await Promise.all([
+    orgProjects(ctx, me.org_id),
+    accessRowsOf(ctx, me),
+  ])
   const byUuid = new Map<string, Doc<'projects'>>()
   for (const p of projects) byUuid.set(p.id, p)
 
   const visibleRootIds = new Set<string>()
-  const { levelOf, navigationOnly } = await projectLevelsForOrg(ctx, me, projects)
+  const { levelOf, navigationOnly } = levelsFrom(me, projects, grants, shares)
   const visibleIds = new Set<string>()
   for (const p of projects) {
     if (levelOf(p) === null) continue

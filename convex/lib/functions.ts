@@ -140,6 +140,20 @@ export const authedQuery = customQuery(query, {
   input: async (ctx) => ({ ctx: await loadAuthed(ctx), args: {} }),
 })
 
+/* authedQuery + an org_id arg (consumed), for the workspace parts
+ * (workspace.ts). Adds ctx.me, the caller's active profile in that org, or
+ * null when the caller holds no active seat there or the org is being
+ * deleted. The handler answers that case without throwing, so a seat that
+ * goes away ends its parts quietly while the app's root part drops the org.
+ * Only a missing sign-in throws (`not signed in`). */
+export const seatQuery = customQuery(query, {
+  args: { org_id: v.string() },
+  input: async (ctx, { org_id }) => {
+    const { authUserId, myProfiles } = await loadAuthed(ctx)
+    return { ctx: { authUserId, myProfiles, me: myProfiles.get(org_id) ?? null }, args: {} }
+  },
+})
+
 /* customFunctions' input receives only its own declared args. Wrap the
  * eventual handler to bound the complete websocket payload as well. Keep the
  * builder's generic validator inference for every existing call site. */

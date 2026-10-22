@@ -8,7 +8,10 @@ type Profile = Snapshot['profiles'][number]
 type Setting = Snapshot['orgs'][number]['project_creators']
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -41,7 +44,7 @@ describe('project creation through the client store', () => {
     requests = []
     network.query.mockResolvedValue(null)
     network.onUpdate.mockImplementation((ref, _args, next) => {
-      if (getFunctionName(ref) === 'snapshot:forMe') deliver = next
+      if (getFunctionName(ref) === 'workspace:whole') deliver = next
       next(structuredClone(snap))
       return () => {}
     })

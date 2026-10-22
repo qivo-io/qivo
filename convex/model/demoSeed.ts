@@ -286,10 +286,6 @@ export async function writeNorthstarStep(
         active: true,
         plannable_hours: p.kind === 'person' ? orgDefaults.default_plannable_hours : undefined,
         message_retention_days: p.kind === 'person' ? DEFAULT_MESSAGE_RETENTION_DAYS : undefined,
-        // The retired Team sync fields (schema.ts) stay clear; the stamp is
-        // set above.
-        sync_at: undefined,
-        sync_since: undefined,
         // Nor may a reset keep a project-creation right granted in the demo.
         can_create_projects: undefined,
       })

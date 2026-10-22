@@ -14,7 +14,10 @@ import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
    stays on its way. The last block leaves the title field unchanged. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -66,7 +69,7 @@ async function open({ embedded = false, title = 'Run the soak test', comment = f
   })
   network.onUpdate.mockImplementation((ref, _args, next) => {
     const name = getFunctionName(ref)
-    if (name === 'snapshot:forMe') next(structuredClone(snap))
+    if (name === 'workspace:whole') next(structuredClone(snap))
     else if (name === 'snapshot:commentThread') next({ comments, earlier: false, events: [] })
     return () => {}
   })
@@ -369,7 +372,10 @@ describe('closing the task window with unsent text', { timeout: 30_000 }, () => 
     expect(document.querySelector('[data-focus-window]')).toBeNull()
     await press('[data-desc-popout]')
     await press('[data-discard-confirm]')
-    expect(document.querySelector('[data-focus-window="Description"]')).not.toBeNull()
+    // the window opens on a later tick
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-focus-window="Description"]')).not.toBeNull(),
+    )
     const lifted = await editorOf('Task description')
     await act(async () => lifted.commands.insertContent(' Three times.'))
     await press('[data-focus-close]')

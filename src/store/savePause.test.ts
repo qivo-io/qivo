@@ -11,7 +11,10 @@ import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const demo = vi.hoisted(() => ({ on: false, ended: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/demoMode', () => ({
   get DEMO_MODE() {
     return demo.on
@@ -161,7 +164,7 @@ describe('the pause while Qivo cannot save', () => {
     sent = []
     network.query.mockResolvedValue(null)
     network.onUpdate.mockImplementation((ref, _args, deliver, fail) => {
-      if (getFunctionName(ref) === 'snapshot:forMe') {
+      if (getFunctionName(ref) === 'workspace:whole') {
         snapshotFail = fail
         deliver(structuredClone(snapshot))
       }
@@ -336,7 +339,7 @@ describe('the pause while Qivo cannot save', () => {
   it('does not say editing is on again while snapshot trouble still pauses it', async () => {
     await boot()
     await goOffline()
-    subscription().fail(new Error('[CONVEX Q(snapshot:forMe)] Server Error'))
+    subscription().fail(new Error('[CONVEX Q(workspace:whole)] Server Error'))
     status.syncStatus.setSocket(UP)
     await answerProbe()
     expect(store.P.savePause()).toBeNull()

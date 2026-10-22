@@ -14,7 +14,10 @@ import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
    2026. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../../lib/convex', () => ({ convex: network }))
+vi.mock('../../lib/convex', async () => ({
+  convex: network,
+  live: (await import('../../store/guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -116,7 +119,7 @@ async function open({ phone = false, initial = 'meta' as 'meta' | 'none' } = {})
     vi.fn(() => ({ matches: phone, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
   )
   network.onUpdate.mockImplementation((ref, _args, next) => {
-    if (getFunctionName(ref) === 'snapshot:forMe') {
+    if (getFunctionName(ref) === 'workspace:whole') {
       publish = next
       next(structuredClone(snap))
     }

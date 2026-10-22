@@ -3,14 +3,17 @@ import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
-/* A refused write rolls back to serverSnap, which stays at the last good
-   delivery while the snapshot is in trouble. The personal writes the server
+/* A refused write rolls back to the server's rows (store/workspaceBase.ts),
+   which stay at the last good delivery while the workspace is in trouble. The personal writes the server
    accepted in the meantime must stay on screen. The network double captures
    the snapshot subscription's callbacks, and every mutation stays pending
    until a test settles it. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: { getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }) },
@@ -20,7 +23,7 @@ vi.mock('../lib/auth', () => ({
 type Subscription = { deliver: (snap: Snapshot | null) => void; fail: (error: Error) => void }
 type Sent = { name: string; resolve: (value: unknown) => void; reject: (error: Error) => void }
 
-const QUERY_FAILURE = '[CONVEX Q(snapshot:forMe)] Server Error'
+const QUERY_FAILURE = '[CONVEX Q(workspace:whole)] Server Error'
 const UNTIL = '2026-09-20T08:00:00.000Z'
 
 describe('rollback during snapshot trouble', () => {
@@ -133,7 +136,7 @@ describe('rollback during snapshot trouble', () => {
     sent = []
     network.query.mockResolvedValue(null)
     network.onUpdate.mockImplementation((ref, _args, deliver, fail) => {
-      if (getFunctionName(ref) === 'snapshot:forMe') {
+      if (getFunctionName(ref) === 'workspace:whole') {
         subscriptions.push({ deliver, fail })
         if (subscriptions.length === 1) {
           booted = structuredClone(snapshot)
@@ -584,43 +587,6 @@ describe('rollback during snapshot trouble', () => {
     expect(task('Replace the gasket')).toBeDefined()
     await refuseFollow()
     expect(task('Replace the gasket')).toBeDefined()
-  })
-
-  it('takes a held result Convex hands Try again for a replay, not a delivery', async () => {
-    live().fail(new Error(QUERY_FAILURE))
-    P().markMessagesRead(['message-a'])
-    await accept()
-    P().retrySnapshot()
-    // the new listener gets the object the client still holds, from before
-    // the read mark (lib/convexOrdering.test.ts)
-    live().deliver(booted)
-    vi.advanceTimersByTime(0)
-    await settle()
-    expect(P().snapshotTrouble()).not.toBeNull()
-    expect(message('message-a')?.read).toBe(true)
-    await refuseFollow()
-    expect(message('message-a')?.read).toBe(true)
-    // the server's own answer is a delivery
-    deliverTruth((snap) => {
-      snap.messages[0].read_at = '2026-09-15T08:30:00.000Z'
-    })
-    expect(P().snapshotTrouble()).toBeNull()
-    expect(message('message-a')?.read).toBe(true)
-  })
-
-  it('keeps a write waiting across a re-init whose new listener gets the held result', async () => {
-    P().markMessagesRead(['message-a'])
-    // a delivery since the read mark was sent, which does not hold it yet
-    deliverTruth(() => {})
-    const booting = store.initStore()
-    await vi.waitFor(() => expect(subscriptions).toHaveLength(2))
-    // Convex hands the new listener the object it still holds from the boot
-    live().deliver(booted)
-    await booting
-    await accept()
-    vi.advanceTimersByTime(0)
-    await settle()
-    expect(message('message-a')?.read).toBe(true)
   })
 
   it('reverts only the refused write outside trouble', async () => {

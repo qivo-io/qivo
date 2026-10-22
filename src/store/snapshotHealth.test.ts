@@ -11,7 +11,10 @@ import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const demo = vi.hoisted(() => ({ on: false, ended: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/demoMode', () => ({
   get DEMO_MODE() {
     return demo.on
@@ -32,7 +35,7 @@ type Subscription = {
 type Sent = { name: string; resolve: (value: unknown) => void; reject: (error: Error) => void }
 
 const QUERY_FAILURE =
-  '[CONVEX Q(snapshot:forMe)] [Request ID: 3f9c2a71] Server Error\n  Called by client'
+  '[CONVEX Q(workspace:whole)] [Request ID: 3f9c2a71] Server Error\n  Called by client'
 
 describe('snapshot trouble', () => {
   let store: typeof import('./planner')
@@ -96,7 +99,7 @@ describe('snapshot trouble', () => {
     network.query.mockResolvedValue(null)
     network.onUpdate.mockImplementation((ref, _args, deliver, fail) => {
       const unsubscribe = vi.fn()
-      if (getFunctionName(ref) === 'snapshot:forMe') {
+      if (getFunctionName(ref) === 'workspace:whole') {
         subscriptions.push({ deliver, fail, unsubscribe })
         if (subscriptions.length === 1) {
           if (firstDelivery === 'deliver') deliver(structuredClone(snapshot))
@@ -126,7 +129,7 @@ describe('snapshot trouble', () => {
       kind: 'failed',
       asOf: snapshot.delivered_at,
       retrying: false,
-      detail: '[CONVEX Q(snapshot:forMe)] [Request ID: 3f9c2a71] Server Error',
+      detail: '[CONVEX Q(workspace:whole)] [Request ID: 3f9c2a71] Server Error',
     })
     expect(P.editsPaused()).toBe(true)
     const next = structuredClone(snapshot)
@@ -370,7 +373,7 @@ describe('snapshot trouble', () => {
     P.retrySnapshot()
     expect(failed.unsubscribe).toHaveBeenCalledTimes(1)
     expect(subscriptions).toHaveLength(2)
-    expect(getFunctionName(network.onUpdate.mock.lastCall?.[0])).toBe('snapshot:forMe')
+    expect(getFunctionName(network.onUpdate.mock.lastCall?.[0])).toBe('workspace:whole')
     expect(P.snapshotTrouble()?.retrying).toBe(true)
     // the fresh run fails again, and the button stays on "Trying again…"
     live().fail(new Error(QUERY_FAILURE))
@@ -559,8 +562,10 @@ describe('snapshot trouble', () => {
     expect(showToast).toHaveBeenCalledWith(store.NO_ACCESS_TEXT, 'error')
     for (const outcome of [await restored, await purged])
       expect(outcome).toMatchObject({ failed: ['item-a'], error: store.NO_ACCESS_TEXT })
-    // with a seat, forbidden still reads as a permission refusal
+    // with a seat, forbidden still reads as a permission refusal, once its
+    // organization's parts loaded again
     live().deliver(structuredClone(snapshot))
+    await settle()
     const again = P.unarchiveProject(snapshot.projects[0].id)
     await settle()
     sent[sent.length - 1].reject(
@@ -656,6 +661,8 @@ describe('snapshot trouble', () => {
     const { P } = store
     live().deliver(null)
     live().deliver(structuredClone(snapshot))
+    // the seat's organization loads its parts again first
+    await settle()
     expect(P.snapshotTrouble()).toBeNull()
     expect(showToast).toHaveBeenCalledWith('Qivo is up to date again.', 'success')
   })

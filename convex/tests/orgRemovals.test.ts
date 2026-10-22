@@ -7,7 +7,16 @@ import { enrollOrganization } from '../model/billing'
 import { REMOVAL_BUDGET } from '../model/cascade'
 import { noCheckoutDue, serviceEndedAt } from '../model/orgRetention'
 import { STALLED_MS, SWEEP_PAGES } from '../orgRemovals'
-import { as, expectRefusal, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
+import {
+  as,
+  expectRefusal,
+  newT,
+  plantIssue,
+  type T,
+  uuid,
+  withOrg,
+  workspaceOf,
+} from './helpers.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 
 /* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
@@ -753,7 +762,7 @@ describe('deleting the organization', () => {
     })
     vi.setSystemTime(Date.parse(at(30)) + 60_000)
     await t.action(internal.orgRemovals.begin, { org_id: f.org.id })
-    const snapshot = await as(t, f.admin).query(api.snapshot.forMe, {})
+    const snapshot = await workspaceOf(as(t, f.admin))
     expect(snapshot?.orgs.map((org) => org.id)).toEqual([f.otherOrg.id])
     await expectRefusal(
       as(t, f.admin).query(api.billing.status, { org_id: f.org.id }),

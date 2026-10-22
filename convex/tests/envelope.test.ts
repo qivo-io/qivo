@@ -27,6 +27,7 @@ import {
   type T,
   uuid,
   withOrg,
+  workspaceOf,
 } from './helpers.setup'
 
 const issueRow = (t: T, id: string): Promise<Doc<'issues'>> =>
@@ -453,7 +454,7 @@ describe('issue scheduling and hierarchy', () => {
         }),
       )
     }
-    const snapshot = await as(t, f.guest).query(api.snapshot.forMe, {})
+    const snapshot = await workspaceOf(as(t, f.guest))
     expect(snapshot?.projects.some((p) => p.id === hiddenSub.id)).toBe(level !== undefined)
     const restore = (id: string) =>
       as(t, f.guest).mutation(api.issues.unarchive, { org_id: f.org.id, id })

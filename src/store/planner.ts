@@ -2,14 +2,16 @@
    across organizations; display keys are org-scoped QN numbers. Relationships,
    project access and week-indexed schedules are derived from the raw rows.
 
-   Every non-null snapshot is staged in the base (store/workspaceBase.ts),
-   which keeps each unchanged row's object, and sets hasSnapshot. A later
-   null (no seat left) keeps the last one's rows. Every write paints its own
+   The workspace arrives in live parts (store/liveParts.ts), and every
+   complete transition of them is staged in the base
+   (store/workspaceBase.ts), which keeps each unchanged row's object, and
+   sets hasSnapshot. A later answer with no seat left keeps the last rows. Every write paints its own
    optimistic layer (store/layers.ts) over the server's rows, copying only
    the rows it reaches (store/rowMap.ts), and a refusal takes away only that
    layer (see the write path below). A repaint reshapes only the view models
    a change reaches (store/taskIndex.ts).
-   Comments and Team sync have separate subscriptions and update channels.
+   The open task's thread rides along with the parts; Team sync has its own
+   subscriptions and update channel.
    Preferences load once and save through their own debounced lifecycle.
    Uploads remain awaited; signed file URLs are minted with one-shot queries. */
 
@@ -22,7 +24,6 @@ import {
 import { ConvexError } from 'convex/values'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
-import { joinLists } from '../../convex/lib/arrayLimit'
 import { AVATAR_COLORS } from '../../convex/lib/avatarColors'
 import { BILLING_READ_ONLY, deletionReadOnly } from '../../convex/lib/billingAccess'
 import { asciiEmail, cleanEmail, emailRefusal as storedEmailRefusal } from '../../convex/lib/email'
@@ -55,7 +56,7 @@ import { armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
 import { avatarCacheScope, createAvatarImageCache } from '../lib/avatarImageCache'
 import { createAvatarSources } from '../lib/avatarSources'
 import { browserBackendUrl, configuredConvexDeploymentUrl } from '../lib/backendUrl'
-import { convex } from '../lib/convex'
+import { convex, live } from '../lib/convex'
 import {
   clampBarDrag,
   DATE_FORMATS,
@@ -124,6 +125,7 @@ import {
   paints,
   type View,
 } from './layers'
+import { createLiveParts, type LiveParts, type PartsReport } from './liveParts'
 import { createPreferences } from './preferences'
 import { createWorkspaceRows, RowMap, rowCopies } from './rowMap'
 import { keep, keepItems, sameData } from './stable'
@@ -131,6 +133,7 @@ import { createTaskIndex, type TaskChanges, type TaskSources } from './taskIndex
 
 export type { UIPrefs } from './preferences'
 
+import type { Workspace } from '../../convex/lib/workspaceJoin'
 import type { Row } from './rows'
 import { createPlannerUpdates, type StoreVersion } from './updates'
 import {
@@ -207,11 +210,12 @@ export type DeletedItemsOutcome<Reason> = {
   error: string | null
 }
 
-/* The wire shape of the one snapshot — derived from the server function so
-   the cache can never drift from what forMe actually emits. Optional columns
-   arrive ABSENT (undefined), never null; every == null / truthiness test
-   below covers both, and no row field is compared with === null. */
-type Snapshot = NonNullable<FunctionReturnType<typeof api.snapshot.forMe>>
+/* The workspace as the parts join into it (convex/lib/workspaceJoin.ts),
+   derived from the server functions so the cache can never drift from what
+   they emit. Optional columns arrive ABSENT (undefined), never null; every
+   == null / truthiness test below covers both, and no row field is compared
+   with === null. */
+type Snapshot = Workspace
 
 /* --- raw row cache --------------------------------------------------------
    Multi-org since 0081: a login holds ONE home profile plus a `guest` profile
@@ -351,16 +355,12 @@ const stopSyncParts = () => {
 }
 
 /* The issue whose comments are subscribed (uuid), or null. Set by the issue
-   modal via watchComments, which owns the second Convex subscription. */
+   modal via watchComments, which owns the thread's side query of the live
+   parts (store/liveParts.ts). */
 let watchedComments: string | null = null
-let commentsUnsub: (() => void) | null = null
+/* The task and organization of the thread the parts watch, or null. */
+let threadWatched: { task: string; org: string } | null = null
 let commentsWatchEpoch = 0
-/* Counts thread subscriptions, so a replaced one (P.retryComments) is
-   ignored even if it calls back once more. */
-let threadSubscription = 0
-/* How long a failure skipped as held (subscribeThread) waits for the
-   server's answer before it shows anyway. */
-const HELD_FAILURE_MS = 5000
 /* The last thread the comments subscription delivered, the anchor the
    thread's rows are built from (buildThreadRows), as the base
    (store/workspaceBase.ts) is for the rest. null = nothing delivered yet for the watched issue. It is the
@@ -438,19 +438,14 @@ function buildThreadRows() {
    alone cannot tell one deleted from the old end from one that slid out
    (checkSlidOut). When the window no longer meets what was loaded, because
    more comments arrived between two deliveries than it holds, the thread
-   starts over from the window. A `replay`, a result held from an earlier
-   listener, may predate edits the server accepted since, so it keeps them
-   remembered. */
-function receiveThread(
-  page: {
-    comments: Row<'comments'>[]
-    earlier: boolean
-    events: Row<'activity_events'>[]
-    events_earlier: boolean
-    events_next: string | null
-  },
-  replay = false,
-): Row<'comments'>[] {
+   starts over from the window. */
+function receiveThread(page: {
+  comments: Row<'comments'>[]
+  earlier: boolean
+  events: Row<'activity_events'>[]
+  events_earlier: boolean
+  events_next: string | null
+}): Row<'comments'>[] {
   receiveHistory(page, commentsSnap === null)
   const prev = commentsSnap
   const first = page.comments[0]
@@ -481,7 +476,7 @@ function receiveThread(
   if (prev === null) threadStart = !page.earlier
   else if (!page.earlier) threadStart = true
   // a fresh window holds the comments in it as the server has them now
-  if (!replay) for (const comment of page.comments) acceptedCommentChanges.delete(comment.id)
+  for (const comment of page.comments) acceptedCommentChanges.delete(comment.id)
   commentsSnap = page.comments
   return slid
 }
@@ -594,38 +589,47 @@ const serverTask = (uuid: string) => base.stagedTask(uuid)
    earlier would refuse with not_found, which the server logs as an error.
    Runs after each snapshot delivery. */
 function subscribeWaitingThread() {
-  if (!watchedComments || commentsUnsub) return
+  if (!watchedComments || threadWatched) return
   const row = serverTask(watchedComments)
   if (row) subscribeThread(watchedComments, row.org_id)
 }
 
-/* Subscribes to the watched thread `issueUuid` in organization `orgId`,
-   replacing any earlier subscription. A delivery is the thread's new
+/* Subscribes to the watched thread `issueUuid` in organization `orgId`, as
+   the side query of the live parts, replacing any earlier one. Its answers
+   come with the transitions that bring them (threadNews), so one that also
+   changes the workspace repaints once. A delivery is the thread's new
    anchor, and the comment writes still waiting paint over it again (owe),
    so a server echo cannot erase an optimistic comment before its write
-   answers. A failed query keeps the comments delivered before it and shows
-   as P.commentsFailure. Convex reruns it when the data it read changes, and
-   the next delivery ends the failure. not_found (the task is gone or hidden)
-   loads the thread empty instead, so it fails closed. forbidden (the
-   sign-in or every seat in this organization is gone) is a failure like
-   the rest. The snapshot notice says access ended, and the comments on
-   screen stay, like the rest of the last snapshot. A task that leaves the
-   snapshot closes its window, which drops the thread. */
+   answers. A fresh subscription always runs the query again, so an answer
+   is never one held from an earlier subscription. */
 function subscribeThread(issueUuid: string, orgId: string) {
-  commentsUnsub?.()
-  const subscription = ++threadSubscription
-  const current = () => watchedComments === issueUuid && threadSubscription === subscription
-  /* ConvexClient holds a query's last result until the server answers the
-     next subscription to it, and hands a held result to a new listener on a
-     0 ms timer that onUpdate queues. This store's one listener to the thread
-     was just dropped, so an error before the timer queued below runs is
-     taken for the dropped run's and skipped, and Retry, or a task opened
-     again at once, waits for the rerun. Should the server's own answer have
-     come that early instead, the client replays nothing after it, so a
-     skipped failure shows once HELD_FAILURE_MS passes with no other answer. */
-  let held = true
-  let skipped: { err: unknown } | null = null
-  const failed = (err: unknown) => {
+  if (!parts) return
+  threadWatched = { task: issueUuid, org: orgId }
+  parts.watchSide(api.snapshot.commentThread, { org_id: orgId, issue_id: issueUuid })
+}
+
+/* Stops the thread's side query. */
+function stopThread() {
+  parts?.stopSide()
+  threadWatched = null
+}
+
+/* The thread's news in one transition. A failed query keeps the comments
+   delivered before it and shows as P.commentsFailure. Convex reruns it when
+   the data it read changes, and the next delivery ends the failure.
+   not_found (the task is gone or hidden) loads the thread empty instead, so
+   it fails closed. forbidden (the sign-in or every seat in this
+   organization is gone) is a failure like the rest. The snapshot notice
+   says access ended, and the comments on screen stay, like the rest of the
+   last snapshot. A task that leaves the snapshot closes its window, which
+   drops the thread. */
+function threadNews(news: NonNullable<PartsReport['side']>) {
+  const watched = threadWatched
+  if (!watched || watchedComments !== watched.task) return
+  const issueUuid = watched.task
+  const current = () => threadWatched === watched && watchedComments === issueUuid
+  if ('error' in news) {
+    const err = news.error
     console.error('[qivo] comments subscription failed:', err)
     const code = errData(err).code
     PLANNER.commentsFailure = code === 'not_found' ? 'none' : 'failed'
@@ -644,46 +648,14 @@ function subscribeThread(issueUuid: string, orgId: string) {
     threadStart = true
     historyStart = true
     threadDelivered(issueUuid)
+    return
   }
-  commentsUnsub = convex.onUpdate(
-    api.snapshot.commentThread,
-    { org_id: orgId, issue_id: issueUuid },
-    (delivered) => {
-      if (!current()) return
-      skipped = null
-      // a result held from an earlier listener, which may predate writes
-      // accepted since (deliveredValues): it ends no failure
-      const replay = deliveredValues.has(delivered)
-      deliveredValues.add(delivered)
-      if (!replay) PLANNER.commentsFailure = 'none'
-      const page = anchor(delivered)
-      const slid = receiveThread(page, replay)
-      if (slid.length && page.comments[0])
-        void checkSlidOut(orgId, issueUuid, page.comments[0].id, slid, current)
-      if (replay) {
-        threadCurrent = false
-        owe('thread')
-      } else threadDelivered(issueUuid)
-    },
-    (err) => {
-      if (!current()) return
-      if (held) {
-        skipped = { err }
-        return
-      }
-      skipped = null
-      failed(err)
-    },
-  )
-  setTimeout(() => {
-    held = false
-  }, 0)
-  setTimeout(() => {
-    if (!current() || !skipped) return
-    const { err } = skipped
-    skipped = null
-    failed(err)
-  }, HELD_FAILURE_MS)
+  PLANNER.commentsFailure = 'none'
+  const page = anchor(news.value as FunctionReturnType<typeof api.snapshot.commentThread>)
+  const slid = receiveThread(page)
+  if (slid.length && page.comments[0])
+    void checkSlidOut(watched.org, issueUuid, page.comments[0].id, slid, current)
+  threadDelivered(issueUuid)
 }
 
 /* Records a live good delivery of task `issueUuid`'s thread, whose anchors
@@ -1221,11 +1193,6 @@ let threadCurrent = false
    timer that paints them at the latest (owe). */
 const owed = { workspace: false, thread: false }
 let payTimer: ReturnType<typeof setTimeout> | null = null
-/* Every raw snapshot and thread value the store received. Convex hands a new
-   listener the result it already holds as the same object, so a value seen
-   before is a replay, which may predate writes accepted since, not a
-   delivery (lib/convexOrdering.test.ts). */
-const deliveredValues = new WeakSet<object>()
 let storeEpoch = 0
 let demoDisposed = false
 
@@ -1975,9 +1942,9 @@ const readOnly = (d: ErrData) =>
    words REST and MCP answer. */
 
 /* --- snapshot health ---------------------------------------------------------
-   The live snapshot (snapshot.forMe) can stop loading mid-session, after a
-   size limit as an organization grows, a lost sign-in or a faulty deploy. It
-   can also come back empty (null) when the person loses every seat: an admin
+   The live workspace (store/liveParts.ts) can stop loading mid-session, after
+   a part refuses a size it cannot load, a lost sign-in or a faulty deploy.
+   It can also come back with no seat when the person loses every seat: an admin
    removed or deactivated them, or their organization's deletion began.
    The last good snapshot stays on screen and the snapshot notice says so.
    While it is stale, edits to shared data pause, because an edit made from
@@ -3002,7 +2969,7 @@ const preferences = createPreferences({
    "me" every existing surface means. `myProfiles` maps org → my profile there,
    so a write into a foreign org is attributed to the guest profile that org
    knows, never to the home one (which it cannot even see). Re-derived from
-   every snapshot delivery: forMe carries auth_user_id + myProfileIds
+   every snapshot delivery: the root part carries auth_user_id + myProfileIds
    explicitly, so the client never has to guess which roster rows are its own. */
 let CURRENT_USER = '' // profile uuid of the signed-in user, in the HOME org
 let HOME_ORG = '' // the org of the non-guest profile ('' for guest-only logins)
@@ -3040,12 +3007,24 @@ const higherLevel = (a: string | null, b: string | null): string | null => {
 /* The parts of a project its levels are read from, so a draft that does not
    exist yet can be asked too (P.seesNewProject). */
 type ProjectGrants = Pick<ProjectVM, 'org' | 'parent' | 'lead' | 'access' | 'teamAccess'>
+/* Each person's teams as a set, so a project's few team shares are checked
+   against them instead of walking hundreds of teams for every project. */
+const teamSets = new WeakMap<UserVM, Set<string>>()
+const teamSetOf = (user: UserVM): Set<string> => {
+  let teams = teamSets.get(user)
+  if (teams === undefined) {
+    teams = new Set(user.teams)
+    teamSets.set(user, teams)
+  }
+  return teams
+}
 const grantOnProject = (p: ProjectGrants, user: UserVM): string | null => {
   let level = p.access?.[user.id] || null
   if (user.orgRole === 'admin' || user.orgRole === 'user' || user.orgRole === 'viewer') {
-    for (const teamId of user.teams) {
-      if (rows.teams.get(teamId)?.org_id === p.org) {
-        level = higherLevel(level, p.teamAccess?.[teamId] || null)
+    const teams = teamSetOf(user)
+    for (const [teamId, teamLevel] of Object.entries(p.teamAccess ?? {})) {
+      if (teams.has(teamId) && rows.teams.get(teamId)?.org_id === p.org) {
+        level = higherLevel(level, teamLevel || null)
       }
     }
   }
@@ -3640,7 +3619,7 @@ const removalOrg = (change: AccessRemoval) =>
    pending deletion, from billing.status (`writable` matches
    lib/billingAccess.ts orgWriteBlock), for each organization whose settings
    page can start a removal (P.watchWriteBlock), with how many pages watch
-   it. The snapshot leaves it out, because forMe would then read the billing
+   it. The workspace leaves it out, because its root part would then read the billing
    row that the billing sync rewrites every minute and rerun for every
    member. `refused` records a read-only refusal the status has not caught up
    with (see removeAtOnce) until the status answers again. `message` is the
@@ -6428,10 +6407,7 @@ export const PLANNER = {
     if (watchedComments === issueUuid) return
     ++commentsWatchEpoch
     watchedComments = issueUuid
-    if (commentsUnsub) {
-      commentsUnsub()
-      commentsUnsub = null
-    }
+    stopThread()
     commentsSnap = null
     eventsSnap = []
     olderComments = []
@@ -6463,8 +6439,8 @@ export const PLANNER = {
 
   /** Retry. A fresh subscription makes the server run the watched thread's
       failed query again (it never caches a failed run), and 'retrying'
-      lasts until the server answers it, or HELD_FAILURE_MS without an
-      answer. The comments on screen stay meanwhile. Does nothing unless the
+      lasts until the server answers it. The comments on screen stay
+      meanwhile. Does nothing unless the
       thread failed. */
   retryComments: () => {
     const row = watchedComments ? rows.issues.get(watchedComments) : undefined
@@ -8572,23 +8548,25 @@ export const PLANNER = {
 }
 
 /* --- loading --------------------------------------------------------------
-   One subscription to snapshot.forMe carries the whole workspace. Its first
-   result settles initStore; every later one is the new anchor the rows are
-   built from (owe). Its error callback fires when the query itself fails, not for
-   network drops, which only delay results until Convex reconnects and
-   resubscribes. A failure after the first result is snapshot trouble (see
-   snapshot health), and so is a later null result, which means no seat is
-   left. The last snapshot stays on screen and shared edits pause until a
-   later snapshot arrives and reaches the screen. */
+   The workspace arrives in live parts (convex/workspace.ts), which the
+   registry (store/liveParts.ts) adopts once per Convex transition. Its first
+   complete transition settles initStore; every later one that changed a
+   part is the new anchor the rows are built from (owe). A part that fails
+   after the first is snapshot trouble (see snapshot health), and so is a
+   later answer with no seat left. Network drops only delay transitions
+   until Convex reconnects and resubscribes. The last workspace stays on
+   screen and shared edits pause until a later complete transition arrives
+   and reaches the screen. */
 
-/* Whether the server delivered a snapshot, never undone by a later null.
-   Its rows are staged in the base (store/workspaceBase.ts), which a repaint
-   applies before it paints every live layer over them, so they run ahead
-   of the rows on screen until then. The delivery itself is not kept: the
-   base keeps each unchanged row's earlier object, so holding the delivery
-   too would keep a second copy of every row. */
+/* Whether the server delivered a workspace, never undone by a later answer
+   with no seat. Its rows are staged in the base (store/workspaceBase.ts),
+   which a repaint applies before it paints every live layer over them, so
+   they run ahead of the rows on screen until then. The parts' answers are
+   not kept beside it: the base keeps each unchanged row's earlier object. */
 let hasSnapshot = false
-let snapUnsub: (() => void) | null = null
+/* The live parts of the running store, null before boot and after
+   disposal. */
+let parts: LiveParts | null = null
 let cancelDemoBoot: (() => void) | null = null
 let stopDayWatch: (() => void) | null = null
 /* Try again resubscribes at most once per window; `retrying` lasts it. */
@@ -8675,97 +8653,105 @@ syncStatus.subscribe((ended) => {
   setTimeout(() => preferences.retry(), 0)
 })
 
-/** Subscribes to the live snapshot. With `first`, the subscription's first
-    result settles it (boot); without, every result updates the store (a
-    retry's fresh subscription). A boot that fails before its first result
-    ignores everything after. initStore drops that subscription, and a later
-    error must not report trouble behind the load-failed screen, where the
-    pause would refuse the next boot's seat claim. */
-function subscribeSnapshot(
+/** Starts the workspace's live parts. With `first`, the first transition
+    that completes or fails the workspace settles it (boot); without, every
+    report updates the store (a retry's or re-init's fresh parts). A boot
+    that fails before its first workspace ignores everything after. initStore
+    stops those parts, and a later error must not report trouble behind the
+    load-failed screen, where the pause would refuse the next boot's seat
+    claim. */
+function startParts(
   stillCurrent: () => boolean,
   first?: { resolve: (snap: Snapshot | null) => void; reject: (err: unknown) => void },
-) {
+): LiveParts {
   let settled = !first
   let bootFailed = false
-  return convex.onUpdate(
-    api.snapshot.forMe,
-    {},
-    (delivered) => {
+  // saves pause offline, and a stalled part is no fault while they do
+  const online = () => savePause()?.kind !== 'offline'
+  return createLiveParts(
+    live,
+    (news) => {
       if (!stillCurrent() || bootFailed) return
-      // a result held from an earlier listener (deliveredValues)
-      const replay = delivered !== null && deliveredValues.has(delivered)
-      if (delivered) deliveredValues.add(delivered)
-      // a large organization's long lists arrive in parts (lib/arrayLimit.ts)
-      const snap = delivered && anchor(joinLists(delivered))
+      const ws = news.workspace
       if (!settled) {
+        if (ws.state === 'held') return
         settled = true
+        if (ws.state === 'failed') {
+          bootFailed = true
+          if (DEMO_MODE && isDemoLifecycleRefusal(ws.error)) notifyDemoEnded()
+          first?.reject(ws.error)
+          return
+        }
+        const snap = ws.value && anchor(ws.value)
         hasSnapshot = snap !== null
-        const entered = snap ? base.stage(snap) : null
-        snapshotCurrent = snap !== null && !replay
-        if (snap && entered && !replay) {
+        if (snap) {
+          snapshotCurrent = true
           snapshotDeliveries++
-          noteDelivery(entered, snap)
+          noteDelivery(base.stage(snap), snap)
         }
         first?.resolve(snap)
         return
       }
-      // A later delivery of null means every seat vanished mid-session. The
-      // last snapshot stays on screen and stays the anchor, so a refused
-      // edit still takes only its own paint away, and the notice says access
-      // ended. A recovering delivery not painted yet ends no trouble now.
-      if (snap === null) {
-        snapshotCurrent = false
-        if (DEMO_MODE) {
-          recoveryHeld = false
-          notifyDemoEnded()
-        } else beginTrouble('no_access', '')
-        return
-      }
-      // A replay can predate writes accepted since: it paints, but no saved
-      // layer goes for it and it ends no trouble.
-      if (replay) {
-        hasSnapshot = true
-        base.stage(snap)
-        snapshotCurrent = false
-        subscribeWaitingThread()
-        owe('workspace')
-        return
-      }
-      hasSnapshot = true
-      const entered = base.stage(snap)
-      snapshotCurrent = true
-      snapshotDeliveries++
-      noteDelivery(entered, snap)
-      subscribeWaitingThread()
-      // a good delivery holds every write accepted before it
-      layers.dropSaved('workspace')
-      // Snapshot trouble ends with the paint of this delivery (endHeldRecovery)
-      if (snapshotTrouble) recoveryHeld = true
-      owe('workspace')
+      // the workspace and the thread of one transition repaint once
+      together(() => {
+        receiveWorkspace(ws, news.at)
+        if (news.side) threadNews(news.side)
+      })
     },
-    (err) => {
-      if (!stillCurrent() || bootFailed) return
-      const demoEnded = DEMO_MODE && isDemoLifecycleRefusal(err)
-      if (demoEnded) notifyDemoEnded()
-      if (!settled) {
-        settled = true
-        bootFailed = true
-        first?.reject(err)
-        return
-      }
-      // The query failed mid-session. Convex keeps the subscription and
-      // reruns the query when the data it read changes, and a later result
-      // ends the trouble. The demo's own ending is handled above.
-      console.error('[qivo] snapshot query failed:', err)
-      snapshotCurrent = false
-      if (!demoEnded) snapshotFailed(err)
-    },
+    online,
   )
 }
 
-/** Try again. A fresh subscription runs the failed query again (Convex never
-    caches a failed run). Does nothing unless the snapshot failed, and at most
-    once per RETRY_GAP_MS; it cannot cure a limit the data itself exceeds. */
+/** Takes in the workspace's state after a transition at `at`, past boot. */
+function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
+  // A part still loading, such as a new seat's organization or a window
+  // after a reconnect, holds the workspace: what is on screen stays, and
+  // writes accepted meanwhile stay saved until a complete transition.
+  if (ws.state === 'held') {
+    snapshotCurrent = false
+    return
+  }
+  if (ws.state === 'failed') {
+    // Convex keeps the subscription and reruns the failed part when the data
+    // it read changes, and a later complete transition ends the trouble.
+    const demoEnded = DEMO_MODE && isDemoLifecycleRefusal(ws.error)
+    if (demoEnded) notifyDemoEnded()
+    console.error('[qivo] workspace part failed:', ws.error)
+    snapshotCurrent = false
+    if (!demoEnded) snapshotFailed(ws.error)
+    return
+  }
+  // No seat left means every seat vanished mid-session. The last workspace
+  // stays on screen and stays the anchor, so a refused edit still takes
+  // only its own paint away, and the notice says access ended. A
+  // recovering delivery not painted yet ends no trouble now.
+  if (ws.value === null) {
+    snapshotCurrent = false
+    if (DEMO_MODE) {
+      recoveryHeld = false
+      notifyDemoEnded()
+    } else beginTrouble('no_access', '')
+    return
+  }
+  hasSnapshot = true
+  snapshotCurrent = true
+  snapshotDeliveries++
+  if (ws.changed) {
+    const snap = anchor(ws.value)
+    noteDelivery(base.stage(snap), snap)
+  } else lastDeliveryAt = new Date(at).toISOString()
+  subscribeWaitingThread()
+  // a complete transition holds every write accepted before it
+  const dropped = layers.dropSaved('workspace')
+  // Snapshot trouble ends with the paint of this delivery (endHeldRecovery)
+  if (snapshotTrouble) recoveryHeld = true
+  if (ws.changed || dropped || recoveryHeld) owe('workspace')
+}
+
+/** Try again. Runs the failed parts again from fresh
+    subscriptions (Convex never caches a failed run). Does nothing unless the
+    workspace failed, and at most once per RETRY_GAP_MS; it cannot cure a
+    limit the data itself exceeds. */
 function retrySnapshot() {
   const trouble = snapshotTrouble
   if (trouble?.kind !== 'failed' || trouble.retrying) return
@@ -8777,11 +8763,20 @@ function retrySnapshot() {
     snapshotTrouble = { ...snapshotTrouble, retrying: false }
     emit('health')
   }, RETRY_GAP_MS)
-  const epoch = storeEpoch
-  snapUnsub?.()
-  // the new subscription has delivered nothing yet
+  // the parts run again have delivered nothing yet
   snapshotCurrent = false
-  snapUnsub = subscribeSnapshot(() => epoch === storeEpoch && !demoDisposed)
+  if (parts?.retry()) return
+  // nothing failed any more, such as a stall: start every part afresh
+  const epoch = storeEpoch
+  stopParts()
+  parts = startParts(() => epoch === storeEpoch && !demoDisposed)
+}
+
+/** Stops the live parts and the thread riding along. */
+function stopParts() {
+  parts?.stop()
+  parts = null
+  threadWatched = null
 }
 
 /** Destroy demo memory before rendering the expired/session-loss screen.
@@ -8794,11 +8789,8 @@ export function disposeDemoStore() {
   stopDayWatch = null
   cancelDemoBoot?.()
   cancelDemoBoot = null
-  snapUnsub?.()
-  snapUnsub = null
+  stopParts()
   resetSnapshotTrouble()
-  commentsUnsub?.()
-  commentsUnsub = null
   watchedComments = null
   commentsSnap = null
   eventsSnap = []
@@ -8999,28 +8991,22 @@ export async function initStore(
   // Both reads use the post-claim seat set. Preferences resolve the home
   // profile on the server, so they do not wait for the snapshot's roster.
   const bootPreferences = preferences.beginBoot()
-  if (snapUnsub) {
-    snapUnsub()
-    snapUnsub = null
-  }
-  // the new subscription has delivered nothing yet
+  stopParts()
+  // the new parts have delivered nothing yet
   snapshotCurrent = false
-  // A new subscription starts from a clean state; its first result settles
-  // the boot, so it never reports recovery from an earlier one's trouble.
+  // New parts start from a clean state; their first complete transition
+  // settles the boot, so it never reports recovery from earlier trouble.
   if (snapshotTrouble) {
     resetSnapshotTrouble()
     emit('health')
   }
-  let bootSub: (() => void) | null = null
+  let bootParts: LiveParts | null = null
   const first = await new Promise<Snapshot | null>((resolve, reject) => {
     if (DEMO_MODE) cancelDemoBoot = () => resolve(null)
-    snapUnsub = bootSub = subscribeSnapshot(stillCurrent, { resolve, reject })
+    parts = bootParts = startParts(stillCurrent, { resolve, reject })
   }).catch((err: unknown) => {
-    // a failed boot keeps no subscription (see subscribeSnapshot)
-    if (snapUnsub === bootSub) {
-      snapUnsub?.()
-      snapUnsub = null
-    }
+    // a failed boot keeps no subscription (see startParts)
+    if (parts === bootParts) stopParts()
     throw err
   })
   if (epoch === storeEpoch) cancelDemoBoot = null
@@ -9028,12 +9014,11 @@ export async function initStore(
   if (first === null) {
     // signed in, no seat anywhere — AuthGate's noProfile screen; the next
     // initStore (after createOrg) subscribes afresh
-    if (snapUnsub) {
-      snapUnsub()
-      snapUnsub = null
-    }
+    stopParts()
     return null
   }
+  // a thread watched before a re-init rides along with the new parts
+  subscribeWaitingThread()
   // the rows, with any layer from before a re-init painted over them
   paintRows(true, false)
   avatarSources.sync(

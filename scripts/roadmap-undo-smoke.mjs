@@ -14,6 +14,7 @@ import {
   purgeDeletedTasks,
   signInDemo,
 } from './browser-demo.mjs'
+import { readWorkspace } from './workspaceJoin.mjs'
 
 const demo = loadBrowserDemo(process.argv[2] ?? 'http://localhost:5199')
 const before = await inspectBrowserDemo(demo)
@@ -60,7 +61,9 @@ async function persisted() {
       return data.token
     }),
   )
-  const snapshot = await client.query(makeFunctionReference('snapshot:forMe'), {})
+  const snapshot = await readWorkspace((name, args) =>
+    client.query(makeFunctionReference(name), args),
+  )
   return {
     tasks: tasks.map(({ id }) => {
       const row = snapshot.issues.find((issue) => issue.id === id)
@@ -138,7 +141,9 @@ async function cleanup() {
       async ({ ids, prefix, orgSlug, initialUI }) => {
         const P = window.PLANNER
         const { convex } = await import('/src/lib/convex.ts')
-        const snapshot = await convex.query('snapshot:forMe', {})
+        const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
+          (name, args) => convex.query(name, args),
+        )
         const org = snapshot.orgs.find((row) => row.slug === orgSlug)
         if (!org) throw new Error('Cleanup organization is unavailable')
         for (const id of [...ids].reverse()) {

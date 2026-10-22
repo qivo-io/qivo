@@ -329,14 +329,12 @@ export const page = orgQuery({
       if (projectId !== undefined && !(await liveProject(projectId))) continue
       const row = exportRow(doc, section)
       // A person's Team sync stamp goes out as sync_at and sync_since, from
-      // their sync_stamps row or, before the backfill moved it, from the
-      // retired profile fields the row already holds.
+      // their sync_stamps row.
       if (section === 'profiles' && typeof row.id === 'string') {
         const stamp = await stampRow(ctx, row.id)
         if (stamp !== null) {
           row.sync_at = stamp.at
-          if (stamp.since === undefined) delete row.sync_since
-          else row.sync_since = stamp.since
+          if (stamp.since !== undefined) row.sync_since = stamp.since
         }
       }
       if (checkParents && typeof row.parent_id === 'string' && !(await liveParent(row.parent_id)))

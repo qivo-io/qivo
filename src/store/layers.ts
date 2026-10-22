@@ -119,8 +119,10 @@ export function createLayers() {
     has: (layer: Layer) => live.includes(layer) || saved.includes(layer),
     /** Drops the saved `part` of every saved layer, once a live delivery
         holds them: every part for the workspace, and for the thread only the
-        parts of task `task`, or of every task but `task` with `except`. */
-    dropSaved(part: Part, task?: string, except = false) {
+        parts of task `task`, or of every task but `task` with `except`.
+        Answers whether it dropped any. */
+    dropSaved(part: Part, task?: string, except = false): boolean {
+      let dropped = false
       // remove() replaces `saved`, so this walks the list as it was
       for (const layer of saved) {
         if (part === 'workspace') {
@@ -131,8 +133,10 @@ export function createLayers() {
           if (!thread || (task !== undefined && (thread.task === task) === except)) continue
           layer.view = { ...layer.view, thread: undefined }
         }
+        dropped = true
         if (!paints(layer.view)) remove(layer)
       }
+      return dropped
     },
     /** Saved layers in acceptance order, then open and pending ones in
         creation order: the order a repaint applies them in. */

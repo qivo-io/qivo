@@ -1,9 +1,10 @@
 /* Archiving a task marks its relation rows (labels, attachments, follows and
- * links) in background steps, so the app snapshot skips them by index, and
- * flags the task relations_marked (model/archiveMarks.ts). The steps check
- * the task when they run, and a project archive marks nothing. A restore
- * writes no relation row: it schedules steps that clear the marks, and until
- * they finish the snapshot reads the flagged task through its own indexes.
+ * links) in background steps, so organization-wide reads skip them by index,
+ * and flags the task relations_marked (model/archiveMarks.ts). The steps
+ * check the task when they run, and a project archive marks nothing. A
+ * restore writes no relation row: it schedules steps that clear the marks,
+ * and until they finish the app's tasks part sends the flagged task's marked
+ * follow (lib/workspaceParts.ts readTasks).
  * The steps run when the test fires the fake timers, so each case can look
  * before and after them. */
 /// <reference types="vite/client" />
@@ -11,7 +12,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { RELATION_READ } from '../lib/snapshotRelations'
 import { ARCHIVE_MARKS, clearMarkedTasks, markArchivedTasks } from '../model/archiveMarks'
 import { scheduleArchivedReads } from '../model/messages'
 import {
@@ -24,17 +24,16 @@ import {
   type T,
   uuid,
   withOrg,
+  workspaceOf,
 } from './helpers.setup'
 
 const DEFAULT_MARKS = { ...ARCHIVE_MARKS }
-const DEFAULT_READ = { ...RELATION_READ }
 
 /* Every case drives the scheduler itself, so none may await real time. */
 beforeEach(() => vi.useFakeTimers())
 afterEach(() => {
   vi.useRealTimers()
   Object.assign(ARCHIVE_MARKS, DEFAULT_MARKS)
-  Object.assign(RELATION_READ, DEFAULT_READ)
 })
 
 /* Runs every scheduled function, and anything they schedule, to completion. */
@@ -138,7 +137,7 @@ const each = (mark: boolean, links = 1) => ({
 
 /* How many of the task's relation rows the admin's snapshot sends, by table. */
 async function shown(t: T, f: OrgFixture, issueId: string) {
-  const snap = (await as(t, f.admin).query(api.snapshot.forMe, {}))!
+  const snap = (await workspaceOf(as(t, f.admin)))!
   return {
     labels: snap.issueLabels.filter((row) => row.issue_id === issueId).length,
     attachments: snap.attachments.filter((row) => row.issue_id === issueId).length,
@@ -536,7 +535,7 @@ describe('the background steps', () => {
 })
 
 describe('rows of tasks archived before marks existed', () => {
-  it('stay out of the snapshot, read in bulk or task by task, until a scheduled step marks them', async () => {
+  it('stay out of the snapshot until a scheduled step marks them', async () => {
     const t = newT()
     const f = await withOrg(t)
     const old = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: NOW })
@@ -545,10 +544,7 @@ describe('rows of tasks archived before marks existed', () => {
     await plantRelations(t, f, active)
 
     expect(await shown(t, f, old.id)).toEqual(NONE)
-    Object.assign(RELATION_READ, { tasks: Number.POSITIVE_INFINITY, ratio: 0 })
-    expect(await shown(t, f, old.id)).toEqual(NONE)
     expect(await shown(t, f, active.id)).toEqual({ ...ALL, links: 0 })
-    Object.assign(RELATION_READ, DEFAULT_READ)
 
     // what a backfill over old archives does
     await t.run((ctx) => scheduleArchivedReads(ctx, { issues: [old.id] }))

@@ -3,7 +3,16 @@ import { api } from '../_generated/api'
 import { canSeeProject, canWriteOrgLabels, hasProjectLevel } from '../lib/access'
 import { byId } from '../lib/db'
 import { orgProjectView } from '../lib/visibility'
-import { as, expectRefusal, messagesFor, newT, plantSeat, uuid, withOrg } from './helpers.setup'
+import {
+  as,
+  expectRefusal,
+  messagesFor,
+  newT,
+  plantSeat,
+  uuid,
+  withOrg,
+  workspaceOf,
+} from './helpers.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 
 async function fixture() {
@@ -35,7 +44,7 @@ async function fixture() {
       patch: { team_access },
     })
   const snapshot = async () => {
-    const snap = await as(t, person).query(api.snapshot.forMe, {})
+    const snap = await workspaceOf(as(t, person))
     if (snap === null) throw new Error('expected signed-in snapshot')
     return snap
   }

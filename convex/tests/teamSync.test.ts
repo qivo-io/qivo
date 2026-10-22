@@ -28,6 +28,7 @@ import {
   tick,
   uuid,
   withOrg,
+  workspaceOf,
 } from './helpers.setup'
 
 /* Local wall-clock instants: previousWorkingDayStart reads local midnight,
@@ -308,7 +309,7 @@ describe('teamSync.stamp', () => {
     await stamp(t, f, f.admin, f.user.id)
     await setStamp(t, f.user, (await stampOf(t, f.user.id)).sync_at!, NOW)
     const row = await stampOf(t, f.user.id)
-    const snap = await as(t, f.viewer).query(api.snapshot.forMe, {})
+    const snap = await workspaceOf(as(t, f.viewer))
     const shipped = snap?.profiles.find((p) => p.id === f.user.id)
     expect(shipped?.sync_at).toBe(row.sync_at)
     expect(shipped?.sync_since).toBe(NOW)

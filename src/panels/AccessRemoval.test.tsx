@@ -16,7 +16,10 @@ import { plannerFixture } from '../store/plannerFixture.setup'
    removal but one that leaves the tasks with `refusal` when one is set. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -106,7 +109,7 @@ async function load({
   network.query.mockResolvedValue(null)
   network.onUpdate.mockImplementation((ref, _args, next) => {
     const name = getFunctionName(ref)
-    if (name === 'snapshot:forMe') next(structuredClone(snap))
+    if (name === 'workspace:whole') next(structuredClone(snap))
     if (name === 'billing:status') {
       status = () => next({ writable })
       status()

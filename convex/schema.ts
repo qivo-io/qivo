@@ -59,15 +59,15 @@ import { vPanoramaStatus } from './lib/panorama'
 import { vEventFilters, vEventName, vEventOwner } from './lib/taskEvents'
 
 /* `task_archived` on a task's relation rows (links, label assignments, follows
- * and attachments) marks a row the app snapshot skips by index
- * (convex/snapshot.ts, lib/snapshotRelations.ts). Only a background step sets
+ * and attachments) marks a row that organization-wide reads (billing's
+ * storage totals) skip by index. Only a background step sets
  * it, for a task it finds archived in its own transaction, and that step also
  * sets the task's `relations_marked`. After a restore, other steps clear the
  * marks, and only the one that finds none left while the task is active
  * unsets the flag (model/archiveMarks.ts). Every marked row therefore belongs
  * to a task with relations_marked, a link through at least one end, and the
- * snapshot reads an active task with the flag through its own indexes, which
- * include marked rows. A row written after the archive, or before marks
+ * app's tasks part (lib/workspaceParts.ts readTasks) shows the marked follow
+ * of an active task with the flag. A row written after the archive, or before marks
  * existed, stays unmarked, and readers filter it as before. Every other
  * reader sees marked rows like any other. */
 const taskArchived = v.optional(v.literal(true))
@@ -106,6 +106,8 @@ const projectsTable = defineTable({
 })
   .index('by_uuid', ['id'])
   .index('by_org', ['org_id'])
+  // the app's project windows: a range of project ids (lib/workspaceParts.ts)
+  .index('by_org_id', ['org_id', 'id'])
   .index('by_org_key', ['org_id', 'key'])
   .index('by_org_num', ['org_id', 'num'])
   .index('by_parent', ['parent_id'])
@@ -178,6 +180,10 @@ const issuesTable = defineTable({
   .index('by_org', ['org_id'])
   // The working snapshot and planning reads do not scan archived task bodies.
   .index('by_org_archived', ['org_id', 'archived_at'])
+  // the app's task and hidden load windows: a range of active task ids
+  // (lib/workspaceParts.ts), and the active subtasks of such a range
+  .index('by_org_archived_id', ['org_id', 'archived_at', 'id'])
+  .index('by_org_archived_parent', ['org_id', 'archived_at', 'parent_id'])
   // The nightly archive reads only Done tasks past the shortest threshold.
   .index('by_org_archived_status_done', ['org_id', 'archived_at', 'status', 'done_at'])
   // The nightly repair finds active tasks still flagged relations_marked.
@@ -219,8 +225,7 @@ const issueLinksTable = defineTable({
   created_at: v.string(),
   task_archived: taskArchived,
 })
-  // The snapshot's org-wide read of unmarked rows (org, mark), and the
-  // archive steps' reads of one end's unmarked or marked rows (all three).
+  // The archive steps' reads of one end's unmarked or marked rows.
   .index('by_org_task_archived_source', ['org_id', 'task_archived', 'source_id'])
   .index('by_org_task_archived_target', ['org_id', 'task_archived', 'target_id'])
   .index('by_uuid', ['id'])
@@ -249,9 +254,11 @@ const issueSubscriptionsTable = defineTable({
 })
   // a task's follows, and the archive steps' unmarked or marked ones
   .index('by_issue_task_archived', ['issue_id', 'task_archived'])
-  // the snapshot reads one's unmarked follows; profile cleanup takes the
-  // whole profile range
+  // one person's unmarked follows; profile cleanup takes the whole profile
+  // range
   .index('by_profile_task_archived', ['profile_id', 'task_archived'])
+  // one person's unmarked follows of a range of task ids (the app's windows)
+  .index('by_profile_task_archived_issue', ['profile_id', 'task_archived', 'issue_id'])
   .index('by_issue_profile', ['issue_id', 'profile_id'])
 
 // A task holds at most LIMITS.attachments.max rows (lib/limits.ts) without a
@@ -764,7 +771,9 @@ export default defineSchema({
     since: v.optional(v.string()),
   })
     .index('by_profile', ['profile_id'])
-    .index('by_org', ['org_id']),
+    .index('by_org', ['org_id'])
+    // the stamps of one of the app's people windows (lib/workspaceParts.ts)
+    .index('by_org_profile', ['org_id', 'profile_id']),
 
   teams: defineTable({
     id: v.string(),
@@ -816,11 +825,6 @@ export default defineSchema({
       ),
     ),
     accepted_at: v.optional(v.string()), // kept from 0118: home-org uniqueness gates on it
-    // Retired Team sync stamp, now in sync_stamps. Nothing writes these any
-    // more; a person without a sync_stamps row is read from them until
-    // internal/syncStampsBackfill moves them, and a later release drops them.
-    sync_at: v.optional(v.string()),
-    sync_since: v.optional(v.string()),
     // The per-user project-creation right. It only counts for a standard
     // user, person or agent, while project_creators is 'selected'; absent =
     // off.
@@ -831,6 +835,8 @@ export default defineSchema({
   })
     .index('by_uuid', ['id'])
     .index('by_org', ['org_id'])
+    // the app's people windows: a range of profile ids (lib/workspaceParts.ts)
+    .index('by_org_id', ['org_id', 'id'])
     .index('by_auth', ['auth_user_id'])
     .index('by_email', ['email']) // cross-org claim scan (identity.ts)
     .index('by_org_email', ['org_id', 'email'])

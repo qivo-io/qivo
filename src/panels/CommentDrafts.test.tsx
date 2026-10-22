@@ -17,7 +17,10 @@ import type { Row } from '../store/rows'
    after START. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -45,11 +48,6 @@ let deliver: (page: Page) => void
 let fail: (e: unknown) => void
 let subscriptions: number
 let writes: { name: string; answer: Answer }[]
-// The failure the client still holds for the thread. ConvexClient keeps a
-// query's last result until the server answers the next subscription to it,
-// and hands it to a new listener on a 0 ms timer unless the server answered
-// that listener first.
-let held: unknown
 
 const comment = (n: number): Row<'comments'> => ({
   id: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
@@ -83,33 +81,15 @@ async function load(description = '') {
   })
   subscriptions = 0
   writes = []
-  held = null
   network.onUpdate.mockImplementation((ref, _args, next, onError) => {
     const name = getFunctionName(ref)
-    if (name === 'snapshot:forMe') next(structuredClone(snap))
+    if (name === 'workspace:whole') next(structuredClone(snap))
     else if (name === 'snapshot:commentThread') {
       subscriptions++
-      let closed = false
-      let answered = false
-      deliver = (page) => {
-        held = null
-        answered = true
-        // a delivery also carries the task's changes, which these tests leave out
-        next({ ...page, events: [] })
-      }
-      fail = (e) => {
-        held = e
-        answered = true
-        onError(e)
-      }
-      const cached = held
-      if (cached !== null)
-        setTimeout(() => {
-          if (!closed && !answered) onError(cached)
-        }, 0)
-      return () => {
-        closed = true
-      }
+      // a delivery also carries the task's changes, which these tests leave out
+      deliver = (page) => next({ ...page, events: [] })
+      fail = (e) => onError(e)
+      return () => {}
     }
     return () => {}
   })
@@ -156,8 +136,8 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-/* Runs the timers queued so far, such as a held result's redelivery, so
-   what the test answers next is the server's. */
+/* Runs the timers queued so far, so what the test answers next comes
+   after the store's own work. */
 const later = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
 
 async function open() {
@@ -403,7 +383,7 @@ describe('a failed thread in the task window', { timeout: 20_000 }, () => {
     await click('Retry')
     expect(subscriptions).toBe(2)
     expect(failure()?.textContent).toBe('Loading comments…')
-    // the old failure the client hands the new subscription is not its answer
+    // only the server's answer to the new subscription ends the wait
     await later()
     expect(failure()?.textContent).toBe('Loading comments…')
     await act(async () => deliver({ comments: range(1, 4), earlier: false }))

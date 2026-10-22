@@ -19,7 +19,10 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    /* lib/workspaceJoin.ts names its imports with .ts, so Node scripts can
+       load it as it is. */
+    "allowImportingTsExtensions": true
   },
   "include": ["./**/*"]
 }

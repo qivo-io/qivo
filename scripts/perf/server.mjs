@@ -6,6 +6,14 @@
 // runs on the worker's thread, so the page's script time holds only what a
 // real client does: decode the text and update the app.
 //
+// It serves the workspace in live parts (convex/workspace.ts), its tasks
+// and projects in the id windows the app asks for, cut from the whole
+// workspace it holds
+// (convex/lib/workspaceJoin.ts splitWorkspace). After a write it sends every
+// part whose JSON changed, and only those, in one transition, as Convex does.
+// It also answers snapshot:forMe, the one query apps before the parts read,
+// for a baseline build.
+//
 // Like Convex, a write's results reach the page before its answer does. A
 // subscription result that waits for its turn takes the writes made
 // meanwhile, as the server sends each result's latest value.
@@ -32,6 +40,8 @@
 //   latency (100)        ms before every answer
 //   mbps (8)             bandwidth every result waits for
 import { chunkLists } from '../../convex/lib/arrayLimit'
+import { idWindows, WINDOW_ROWS, windowCount } from '../../convex/lib/idWindows'
+import { splitWorkspace } from '../../convex/lib/workspaceJoin'
 
 // the page passes its parameters as the worker's name (scripts/perf/transport.mjs)
 const parameters = new URLSearchParams(self.name)
@@ -70,7 +80,13 @@ const random = () => {
   return seed / 2147483648
 }
 const org = '00000000-0000-4000-8000-000000000001'
-const id = (kind, n) => `${kind.padStart(8, '0')}-0000-4000-8000-${String(n).padStart(12, '0')}`
+/* A row id of kind `kind`, the `n`th: a UUID whose first part is a hash,
+   spread like the random ids the app makes (convex/lib/idWindows.ts). */
+export const id = (kind, n) => {
+  let hash = 0x811c9dc5
+  for (const ch of `${kind}:${n}`) hash = Math.imul(hash ^ ch.charCodeAt(0), 0x01000193) >>> 0
+  return `${hash.toString(16).padStart(8, '0')}-000${kind}-4000-8000-${String(n).padStart(12, '0')}`
+}
 const storageId = (n) => `kg2${String(n).padStart(29, '0')}`
 const WORDS =
   'the firmware build signs every image before the bootloader checks it against the key in fuse memory so a field update can never run code nobody approved and the test rig repeats this on each board revision during the prüfstand översikt naïve'.split(
@@ -352,7 +368,6 @@ const snapshot = {
       week_one_rule: 'first4day',
       default_plannable_hours: 40,
       max_attachment_mb: 20,
-      gravatar_avatars: false,
     },
   ],
   profiles,
@@ -487,7 +502,46 @@ const delay = () => new Promise((resolve) => setTimeout(resolve, latency))
 const comments = []
 let messageCount = 0
 const roadmapCounts = new Map()
+/* The windows of the workspace's parts, as the app chooses them from the
+   counters (src/store/liveParts.ts), kept from the first read, so a window
+   keeps its bounds while rows come and go. */
+let windowsOf = null
+/* The parts cut from the workspace as it is now, until the next change. */
+let partsCache = null
+/** The parts of the workspace as convex/workspace.ts answers them. */
+function partsNow() {
+  if (partsCache) return partsCache
+  const [row] = snapshot.orgs
+  windowsOf ??= {
+    tasks: idWindows(windowCount(row.next_issue_num, WINDOW_ROWS.tasks)),
+    people: idWindows(1),
+    projects: idWindows(windowCount(row.next_project_num, WINDOW_ROWS.projects)),
+  }
+  partsCache = splitWorkspace(snapshot, (_org, kind) => windowsOf[kind])[0]
+  return partsCache
+}
+const PART_KINDS = {
+  'workspace:tasks': 'tasks',
+  'workspace:people': 'people',
+  'workspace:projects': 'projects',
+}
+/** What workspace part `name` answers for `args`. */
+function readPart(name, args) {
+  const part = partsNow()
+  if (name === 'workspace:root')
+    return {
+      auth_user_id: snapshot.auth_user_id,
+      myProfileIds: snapshot.myProfileIds,
+      orgs: snapshot.orgs,
+    }
+  if (name === 'workspace:catalog') return { state: 'ok', ...chunkLists(part.catalog) }
+  if (name === 'workspace:inbox') return { state: 'ok', ...part.inbox }
+  const kind = PART_KINDS[name]
+  const at = windowsOf[kind].findIndex((w) => w.from === args.from)
+  return { state: 'ok', ...chunkLists(part[kind][at]) }
+}
 const read = (name, args = {}) => {
+  if (name.startsWith('workspace:')) return readPart(name, args)
   switch (name) {
     case 'snapshot:forMe':
       snapshot.delivered_at = new Date().toISOString()
@@ -525,6 +579,48 @@ const read = (name, args = {}) => {
 function emit(name) {
   return Promise.all([...(listeners.get(name) || [])].map((subscription) => subscription.send()))
 }
+
+/* The watched parts by id, each with its query, args and the JSON it last
+   sent, and the parts watched since the last transition. */
+const watchedParts = new Map()
+/* The timer that answers the parts watched since it was set. */
+let watchTimer = null
+/* The transition waiting for its turn, which takes every part that changed
+   by the time it is sent. */
+let nextTransition = null
+/** Sends one transition with every watched part whose JSON changed, those
+    `fresh` first answered among them, when its turn comes. Resolves once
+    it is sent. */
+function transition() {
+  nextTransition ??= lastDelivery.then(async () => {
+    nextTransition = null
+    const results = []
+    let bytes = 0
+    for (const [to, part] of watchedParts) {
+      let encoded
+      try {
+        encoded = encode(read(part.name, part.args))
+      } catch (error) {
+        results.push({ to, error: String(error?.message ?? error) })
+        continue
+      }
+      if (encoded.text === part.sent) continue
+      part.sent = encoded.text
+      results.push({ to, ...encoded })
+      bytes += encoded.bytes
+    }
+    await transfer(bytes)
+    post({ type: 'transition', at: Date.now(), results })
+  })
+  lastDelivery = nextTransition
+  return nextTransition
+}
+/** Sends the workspace's changes: to an app before the parts its one
+    query, else the parts that changed. */
+function emitWorkspace() {
+  partsCache = null
+  return Promise.all([emit('snapshot:forMe'), watchedParts.size ? transition() : null])
+}
 /* The server's prune of one inbox item after a read (convex/model/messages.ts
    pruneStampedItem): it keeps the newest unread row or, with none, the
    newest read row, and deletes the other read rows. */
@@ -546,7 +642,7 @@ function markRead(marked, at) {
 /* Counts the read rows and delivers the inbox's new state. */
 function settleInbox() {
   snapshot.readMessageCount = snapshot.messages.filter((m) => m.read_at).length
-  return emit('snapshot:forMe')
+  return emitWorkspace()
 }
 /* Writes the scenarios hold until they release them, in order. */
 const held = []
@@ -610,7 +706,7 @@ async function mutate(name, args) {
     return { marked: ids.length, ids, hasMore: due.length > batch.length, before }
   }
   if (name === 'issues:update') {
-    if (patchTask(args.id, args.patch)) await emit('snapshot:forMe')
+    if (patchTask(args.id, args.patch)) await emitWorkspace()
     writes++
     return null
   }
@@ -624,7 +720,7 @@ async function mutate(name, args) {
     }
     const count = (roadmapCounts.get(args.session_id) || 0) + Number(changed)
     roadmapCounts.set(args.session_id, count)
-    if (changed) await emit('snapshot:forMe')
+    if (changed) await emitWorkspace()
     writes++
     return { count }
   }
@@ -639,7 +735,7 @@ const scenarios = {
   seedMessages(n) {
     const created = new Date().toISOString()
     for (let i = 0; i < n; i++) scenarios.addMessage(i % count, created)
-    return emit('snapshot:forMe')
+    return emitWorkspace()
   },
   /* Adds one unread message about task `n`, created at `created`. */
   addMessage(n, created = new Date().toISOString()) {
@@ -662,11 +758,11 @@ const scenarios = {
   /* Another person moves task `n` to `status`, for checks by hand. */
   moveRemote(n, status) {
     patchTask(tasks[n].id, { status })
-    return emit('snapshot:forMe')
+    return emitWorkspace()
   },
   deliverRemote(n) {
     patchTask(tasks[n].id, { title: `Renamed elsewhere ${Date.now()}` })
-    return emit('snapshot:forMe')
+    return emitWorkspace()
   },
   /* Another person creates a task in the first project. */
   deliverCreate() {
@@ -679,7 +775,7 @@ const scenarios = {
     loadRows.set(row.id, loadRow(row))
     snapshot.orgs = [{ ...snapshot.orgs[0], next_issue_num: snapshot.orgs[0].next_issue_num + 1 }]
     settleTasks()
-    return emit('snapshot:forMe')
+    return emitWorkspace()
   },
   /* Another person renames the first project. */
   deliverProjectRename() {
@@ -688,12 +784,12 @@ const scenarios = {
         ? { ...project, name: `Renamed project ${Date.now()}` }
         : project,
     )
-    return emit('snapshot:forMe')
+    return emitWorkspace()
   },
   /* One new message for the signed-in person arrives. */
   deliverMessage() {
     scenarios.addMessage(4)
-    return emit('snapshot:forMe')
+    return emitWorkspace()
   },
   /* A Team sync sitting stamps another person (convex/teamSync.ts stamp). */
   deliverStamp() {
@@ -701,10 +797,13 @@ const scenarios = {
     snapshot.profiles = snapshot.profiles.map((profile, n) =>
       n === 2 ? { ...profile, sync_at: at, sync_since: profile.sync_at ?? day(-7) } : profile,
     )
-    return emit('snapshot:forMe')
+    return emitWorkspace()
   },
   deliverComments() {
-    const active = [...(listeners.get('snapshot:commentThread') || [])]
+    const active = [
+      ...(listeners.get('snapshot:commentThread') || []),
+      ...[...watchedParts.values()].filter((part) => part.name === 'snapshot:commentThread'),
+    ]
     if (active.length !== 1) throw new Error('Benchmark requires one open comment thread')
     const body = `Benchmark delivered comment ${comments.length + 1}`
     comments.push({
@@ -715,6 +814,7 @@ const scenarios = {
       created_at: new Date().toISOString(),
     })
     void emit('snapshot:commentThread')
+    if (watchedParts.size) void transition()
     return body
   },
 }
@@ -780,6 +880,18 @@ self.onmessage = async ({ data }) => {
       }, latency)
       return
     }
+    case 'watch': {
+      watchedParts.set(data.id, { name: data.name, args: data.args, sent: null })
+      // the parts watched in one task are answered in one transition
+      watchTimer ??= setTimeout(() => {
+        watchTimer = null
+        void transition()
+      }, latency)
+      return
+    }
+    case 'unwatch':
+      watchedParts.delete(data.id)
+      return
     case 'unsubscribe': {
       const entry = subscriptions.get(data.id)
       subscriptions.delete(data.id)

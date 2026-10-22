@@ -106,7 +106,7 @@ export function createConvexDouble() {
         `truth`, when given, reaches the listeners first, then the write
         resolves. */
     acceptWith(request: Request, value: unknown, truth?: unknown) {
-      if (truth !== undefined) this.publish('snapshot:forMe', truth)
+      if (truth !== undefined) this.publish('workspace:whole', truth)
       request.resolve(value)
     },
   }

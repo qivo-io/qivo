@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { idWindows, WINDOW_ROWS, windowCount } from '../../convex/lib/idWindows'
 
 /* The browser benchmark's stand-in server (scripts/perf/server.mjs), loaded
    as its worker would be, with the page's parameters as the worker's name. */
+
+/* The id of the stand-in workspace's first task (server.mjs id). */
+let TASK_1 = ''
 
 /** Loads the server for page parameters `params` and answers what it posts
     and a way to send it a message. */
@@ -9,7 +13,8 @@ async function server(params) {
   vi.resetModules()
   const posted = []
   vi.stubGlobal('self', { name: params, postMessage: (message) => posted.push(message) })
-  await import('./server.mjs')
+  const { id } = await import('./server.mjs')
+  TASK_1 = id('4', 1)
   const send = (data) => self.onmessage({ data })
   return { posted, send }
 }
@@ -63,7 +68,7 @@ describe('the benchmark server', () => {
       type: 'mutation',
       id: 'write',
       name: 'issues:update',
-      args: { id: '00000004-0000-4000-8000-000000000001', patch: { status: 'todo' } },
+      args: { id: TASK_1, patch: { status: 'todo' } },
     })
     const order = posted.filter((m) => m.type !== 'state').map((m) => m.id ?? m.type)
     expect(order.slice(0, 2)).toEqual(['result', 'write'])
@@ -74,7 +79,7 @@ describe('the benchmark server', () => {
     await send({ type: 'subscribe', id: 's', name: 'snapshot:forMe', args: {} })
     await vi.waitFor(() => expect(posted.some((m) => m.type === 'result')).toBe(true), 30_000)
     posted.length = 0
-    const task = '00000004-0000-4000-8000-000000000001'
+    const task = TASK_1
     // a write that changes the task, then one that changes nothing
     const changing = send({
       type: 'mutation',
@@ -114,7 +119,7 @@ describe('the benchmark server', () => {
     await send({ type: 'subscribe', id: 's', name: 'snapshot:forMe', args: {} })
     await vi.waitFor(() => expect(posted.some((m) => m.type === 'result')).toBe(true), 30_000)
     posted.length = 0
-    const task = '00000004-0000-4000-8000-000000000001'
+    const task = TASK_1
     const first = send({
       type: 'mutation',
       id: 'first',
@@ -132,4 +137,26 @@ describe('the benchmark server', () => {
     const order = posted.filter((m) => m.type !== 'state').map((m) => m.id ?? m.type)
     expect(order).toEqual(['result', 'first', 'result', 'second'])
   }, 60_000)
+
+  it('serves the workspace in parts and re-sends only the window a remote rename changed, in one transition', async () => {
+    const { posted, send } = await server('tasks=500&latency=0&mbps=100000')
+    await send({ type: 'query', id: 'root', name: 'workspace:root', args: {} })
+    const [org] = JSON.parse(posted.find((m) => m.to === 'root').text).orgs
+    const windows = idWindows(windowCount(org.next_issue_num, WINDOW_ROWS.tasks))
+    expect(windows.length).toBeGreaterThan(2)
+    for (const [i, w] of windows.entries())
+      send({ type: 'watch', id: `w${i}`, name: 'workspace:tasks', args: { org_id: org.id, ...w } })
+    await vi.waitFor(() => expect(posted.some((m) => m.type === 'transition')).toBe(true))
+    const first = posted.filter((m) => m.type === 'transition')
+    expect(first).toHaveLength(1)
+    expect(first[0].results).toHaveLength(windows.length)
+    const issues = first[0].results.flatMap((r) => JSON.parse(r.text).issues)
+    expect(issues.length).toBeGreaterThan(400)
+    expect(issues).toHaveLength(new Set(issues.map((i) => i.id)).size)
+    posted.length = 0
+    await send({ type: 'scenario', id: 'rename', name: 'deliverRemote', args: [250] })
+    await vi.waitFor(() => expect(posted.some((m) => m.type === 'transition')).toBe(true))
+    const [change] = posted.filter((m) => m.type === 'transition')
+    expect(change.results).toHaveLength(1)
+  })
 })

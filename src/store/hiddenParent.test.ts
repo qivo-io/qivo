@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/demoMode', () => ({ DEMO_MODE: true }))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
@@ -71,7 +74,7 @@ describe('a parent outside the working set', () => {
         }),
     )
     network.onUpdate.mockImplementation((ref, _args, receive) => {
-      if (getFunctionName(ref) === 'snapshot:forMe') receive(structuredClone(snapshot))
+      if (getFunctionName(ref) === 'workspace:whole') receive(structuredClone(snapshot))
       return vi.fn()
     })
     store = await import('./planner')

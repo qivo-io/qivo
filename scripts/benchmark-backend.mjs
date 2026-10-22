@@ -1,16 +1,16 @@
-// Hermetic Convex snapshot/activity comparison against a committed revision.
+// Hermetic Convex measurement of the workspace parts (convex/workspace.ts)
+// and activity writes, the activity write compared with a committed revision.
 //
 //   node scripts/benchmark-backend.mjs [revision] [--guards-only] [--current-only]
 //
-// `revision` is the commit the working tree's snapshot.forMe and logActivity
-// are compared with. It defaults to the merge base of HEAD and origin/main,
-// so a branch is measured against the commit it started from, and to HEAD in
-// a checkout without origin/main. --current-only measures the working tree
-// alone and needs no revision. The baseline's snapshot.ts runs against the
-// working tree's other modules, so a revision before v0.1.18 cannot be one,
-// because its snapshot.ts imports helpers that lib/activityVisibility.ts no
-// longer exports.
-import assert from 'node:assert/strict'
+// Each workspace part is read in its own transaction at 100, 1,000 and
+// 10,000 tasks: one row per kind of part with its number of windows and its
+// busiest window's ranges, documents and milliseconds, and the parts a task
+// rename changes with the bytes they re-send. `revision` is the commit the
+// working tree's logActivity is compared with. It defaults to the merge
+// base of HEAD and origin/main, so a branch is measured against the commit
+// it started from, and to HEAD in a checkout without origin/main.
+// --current-only measures the working tree alone and needs no revision.
 import { execFile } from 'node:child_process'
 import { realpathSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -116,16 +116,12 @@ async function main(args) {
     const harness = await server.ssrLoadModule('/convex/tests/backendPerformance.setup.ts')
     const options = {
       guardsOnly: args.includes('--guards-only'),
-      assertEqual: assert.deepStrictEqual,
       report: (row) => console.log(JSON.stringify(row)),
     }
     let compared = { currentOnly: true }
     if (baseline !== null) {
-      const [oldSnapshot, oldActivity] = await Promise.all([
-        oldModule('convex/snapshot.ts'),
-        oldModule('convex/model/activity.ts'),
-      ])
-      compared = { snapshot: oldSnapshot.forMe, activity: oldActivity.logActivity }
+      const oldActivity = await oldModule('convex/model/activity.ts')
+      compared = { activity: oldActivity.logActivity }
     }
     const results = await harness.benchmarkBackend({ ...options, ...compared })
     console.log(

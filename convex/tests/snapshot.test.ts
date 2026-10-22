@@ -1,5 +1,6 @@
-/* snapshot.forMe, the phase-3 read-path gate, and the task history that
- * snapshot.commentThread answers beside a task's comments.
+/* The workspace parts (workspace.ts) joined as the app joins them
+ * (helpers.setup.ts workspaceOf), the read-path gate, and the task history
+ * that snapshot.commentThread answers beside a task's comments.
  *
  * Extra scenery beside withOrg's mini-Testbed:
  * - hiddenSub: a sub under f.hidden (lead: user) — invisible to guest/viewer,
@@ -12,7 +13,7 @@
 /// <reference types="vite/client" />
 
 import type { WithoutSystemFields } from 'convex/server'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
@@ -20,7 +21,6 @@ import { loadInbox } from '../lib/inbox'
 import { INBOX_LIMIT } from '../lib/limits'
 import { insertActivity } from '../model/activity'
 import { startPurge } from '../model/deletedItems'
-import { invokeSnapshot } from './backendPerformance.setup'
 import {
   appLoadRows,
   as,
@@ -34,6 +34,7 @@ import {
   type T,
   uuid,
   withOrg,
+  workspaceOf,
 } from './helpers.setup'
 
 /* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
@@ -68,7 +69,7 @@ beforeEach(async () => {
 })
 
 const snapFor = async (profile: Doc<'profiles'>) => {
-  const snap = await as(t, profile).query(api.snapshot.forMe, {})
+  const snap = await workspaceOf(as(t, profile))
   if (snap === null) throw new Error('expected a snapshot, got the noProfile null')
   return snap
 }
@@ -86,7 +87,7 @@ const plantLabel = (name: string) =>
     return (await ctx.db.get(_id)) as Doc<'labels'>
   })
 
-describe('forMe scoping', () => {
+describe('workspace scoping', () => {
   it('guest: the granted meta family only — hidden absent from projects, access AND issues', async () => {
     const issueHid = await plantIssue(t, {
       org_id: f.org.id,
@@ -215,9 +216,13 @@ describe('forMe scoping', () => {
 
   it('signed in without any seat returns null — the noProfile signal, distinct from forbidden', async () => {
     expect(
-      await t.withIdentity({ subject: 'auth_nobody' }).query(api.snapshot.forMe, {}),
+      await t.withIdentity({ subject: 'auth_nobody' }).query(api.workspace.root, {}),
     ).toBeNull()
-    await expectRefusal(t.query(api.snapshot.forMe, {}), 'forbidden')
+    await expectRefusal(t.query(api.workspace.root, {}), 'forbidden')
+    await expectRefusal(
+      t.query(api.workspace.tasks, { org_id: f.org.id, from: '', to: null }),
+      'forbidden',
+    )
   })
 
   it('rows are pure snake_case app rows — no Convex system fields anywhere', async () => {
@@ -253,49 +258,11 @@ describe('billing redaction', () => {
     expect(guest.orgs[0]?.billing).toBeUndefined()
   })
 
-  it('tells earlier app builds that Gravatar is off, whatever an older row stored', async () => {
-    // Earlier builds read a missing gravatar_avatars as on.
-    expect((await snapFor(f.user)).orgs[0]?.gravatar_avatars).toBe(false)
+  it('leaves out the retired Gravatar setting, whatever an older row stored', async () => {
     await t.run(async (ctx) => {
       await ctx.db.patch(f.org._id, { gravatar_avatars: true })
     })
-    expect((await snapFor(f.user)).orgs[0]?.gravatar_avatars).toBe(false)
-  })
-})
-
-describe('snapshot size log', () => {
-  afterEach(() => vi.restoreAllMocks())
-
-  it('warns when the read uses half of a Convex limit, and only then', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    // What the admin's snapshot of a fresh fixture reads.
-    const free = newT()
-    const fFree = await withOrg(free)
-    const { documentsRead } = await as(free, fFree.admin).query(async (ctx) => {
-      await invokeSnapshot(ctx)
-      return await ctx.meta.getTransactionMetrics()
-    })
-    expect(warn).not.toHaveBeenCalled()
-
-    const roomy = newT({ transactionLimits: { documentsRead: documentsRead.used * 3 } })
-    const fRoomy = await withOrg(roomy)
-    await as(roomy, fRoomy.admin).query(api.snapshot.forMe, {})
-    expect(warn).not.toHaveBeenCalled()
-
-    const tight = newT({
-      transactionLimits: { documentsRead: Math.ceil(documentsRead.used * 1.5) },
-    })
-    const fTight = await withOrg(tight)
-    await as(tight, fTight.admin).query(api.snapshot.forMe, {})
-    expect(warn).toHaveBeenCalledTimes(1)
-    expect(warn).toHaveBeenCalledWith('Snapshot read near Convex limits', {
-      org_ids: [fTight.org.id],
-      seats: 1,
-      tasks: 0,
-      bytes_read: expect.any(Number),
-      documents_read: expect.any(Number),
-      index_ranges: expect.any(Number),
-    })
+    expect((await snapFor(f.user)).orgs[0]).not.toHaveProperty('gravatar_avatars')
   })
 })
 

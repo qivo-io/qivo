@@ -1,6 +1,7 @@
 import { ConvexClient } from 'convex/browser'
 import { anyApi } from 'convex/server'
 import { afterEach, describe, expect, it } from 'vitest'
+import { createLiveQueries } from './liveQueries'
 
 /* The store's optimistic layers (store/planner.ts send) rely on three things
    the Convex client does, pinned here against a real ConvexClient driving a
@@ -165,5 +166,123 @@ describe('Convex client ordering the store relies on', () => {
     await tick()
     expect(replayed).toHaveLength(1)
     expect(replayed[0]).toBe(values[values.length - 1])
+  })
+})
+
+/* lib/liveQueries.ts reads the base client by transition. These pin what it
+   relies on, against the same scripted socket. */
+describe('live queries over the base client', () => {
+  let client: ConvexClient | null = null
+
+  afterEach(async () => {
+    await client?.close()
+    client = null
+  })
+
+  /** A client with tasks:list and tasks:count watched through the
+      transport, both answered in one first transition. */
+  async function start() {
+    client = new ConvexClient('https://happy-otter-123.convex.cloud', {
+      webSocketConstructor: ScriptedSocket as unknown as typeof WebSocket,
+      unsavedChangesWarning: false,
+    })
+    const live = createLiveQueries(client.client, (ref, args) => client!.query(ref, args))
+    const seen: { tokens: string[]; values: unknown[]; connection: number }[] = []
+    live.onTransition((t) =>
+      seen.push({
+        tokens: [...t.tokens],
+        values: [...t.tokens].map((token) => live.read(token)),
+        connection: t.connection,
+      }),
+    )
+    const list = live.watch(anyApi.tasks.list, {})
+    const count = live.watch(anyApi.tasks.count, {})
+    await tick()
+    await tick()
+    const socket = ScriptedSocket.last!
+    // the query set version the client asked for last, which a transition
+    // moves the server to
+    const latest = () =>
+      Math.max(...socket.sent.filter((m) => m.type === 'ModifyQuerySet').map((m) => m.newVersion!))
+    let ts = 0
+    let version = 0
+    const transition = (modifications: { queryId: number; value?: unknown; removed?: true }[]) => {
+      const from = version
+      version = latest()
+      socket.receive({
+        type: 'Transition',
+        startVersion: { querySet: from, ts: u64(ts), identity: 0 },
+        endVersion: { querySet: version, ts: u64(++ts), identity: 0 },
+        modifications: modifications.map((m) =>
+          m.removed
+            ? { type: 'QueryRemoved', queryId: m.queryId }
+            : {
+                type: 'QueryUpdated',
+                queryId: m.queryId,
+                value: m.value,
+                logLines: [],
+                journal: null,
+              },
+        ),
+      })
+    }
+    transition([
+      { queryId: 0, value: 'list 1' },
+      { queryId: 1, value: 3 },
+    ])
+    return { live, list, count, socket, seen, transition, nextTs: () => ts + 1 }
+  }
+
+  it('calls the handler once per transition, naming only the queries that changed', async () => {
+    const { list, count, seen, transition } = await start()
+    expect(seen).toEqual([
+      { tokens: [list.token, count.token], values: ['list 1', 3], connection: 1 },
+    ])
+    transition([{ queryId: 1, value: 4 }])
+    expect(seen.at(-1)).toEqual({ tokens: [count.token], values: [4], connection: 1 })
+  })
+
+  it('tells of a transition that changed nothing, and drops a refused write', async () => {
+    const { seen, transition, socket } = await start()
+    transition([])
+    expect(seen.at(-1)?.tokens).toEqual([])
+    const before = seen.length
+    const done = client!.mutation(anyApi.tasks.rename, {}).catch(() => 'refused')
+    await tick()
+    const request = socket.sent.find((m) => m.type === 'Mutation')!
+    socket.receive({
+      type: 'MutationResponse',
+      requestId: request.requestId,
+      success: false,
+      result: 'no write access',
+      logLines: [],
+    })
+    expect(await done).toBe('refused')
+    expect(seen).toHaveLength(before)
+  })
+
+  it('never reads the old result for a subscription made after the last one stopped', async () => {
+    const { live, list, socket, seen, transition } = await start()
+    list.stop()
+    const again = live.watch(anyApi.tasks.list, {})
+    expect(again.token).toBe(list.token)
+    await tick()
+    // the client asks the server for it under a new query id
+    const adds = socket.sent
+      .filter((m) => m.type === 'ModifyQuerySet')
+      .flatMap((m) => (m.modifications as { type: string; queryId: number }[]) ?? [])
+      .filter((m) => m.type === 'Add')
+    expect(adds.map((m) => m.queryId)).toEqual([0, 1, 2])
+    // The client holds the old run's result only until the next transition,
+    // and names the query again only when the new run's result arrives, so
+    // the transport, which reads a query only when a transition names it,
+    // never reads the old run's (store/liveParts.ts Retry relies on it).
+    transition([])
+    expect(seen.at(-1)?.tokens).toEqual([])
+    expect(live.read(again.token)).toBeUndefined()
+    transition([{ queryId: 0, removed: true }])
+    expect(seen.at(-1)?.tokens).toEqual([])
+    transition([{ queryId: 2, value: 'list 2' }])
+    expect(seen.at(-1)).toMatchObject({ tokens: [again.token], values: ['list 2'] })
   })
 })

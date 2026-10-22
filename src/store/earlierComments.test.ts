@@ -5,7 +5,10 @@ import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 import type { Row } from './rows'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -41,9 +44,6 @@ describe('earlier comments in the store', () => {
     Array.from({ length: to - from }, (_, n) => comment(from + n))
   const bodies = () => store.P.comments.map((c) => c.body)
   let failThread: (error: unknown) => void = () => {}
-  /* Hands the current thread listener the result the last one held, as
-     Convex does for a new subscription to a query it still has. */
-  let replayThread: () => void = () => {}
   const settle = async () => {
     for (let i = 0; i < 8; i++) await Promise.resolve()
   }
@@ -92,17 +92,12 @@ describe('earlier comments in the store', () => {
           writes.push({ name, answer: { resolve, reject } })
         }),
     )
-    let held: Page & { events: [] }
     network.onUpdate.mockImplementation((ref, _args, receive, fail) => {
-      if (getFunctionName(ref) === 'snapshot:forMe') receive(structuredClone(snap))
+      if (getFunctionName(ref) === 'workspace:whole') receive(structuredClone(snap))
       // the live window also carries the task's changes, which these tests leave out
       else if (getFunctionName(ref) === 'snapshot:commentThread') {
-        publish = (page) => {
-          held = { ...page, events: [] }
-          receive(held)
-        }
+        publish = (page) => receive({ ...page, events: [] })
         failThread = fail
-        replayThread = () => receive(held)
       }
       return () => {}
     })
@@ -291,23 +286,6 @@ describe('earlier comments in the store', () => {
     expect(await edited).toBe(true)
     // the recovering window starts one comment later, so #100 slides out of
     // it from the window delivered before the edit
-    publish({ comments: range(101, 151), earlier: true })
-    await settle()
-    expect(bodies()).toContain('Edited while failing')
-    expect(bodies()).not.toContain('#100')
-  })
-
-  it('keeps that edit through a Retry whose new listener gets the held window first', async () => {
-    const { P } = store
-    publish({ comments: range(100, 150), earlier: true })
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    const edited = P.updateComment('comment-100', 'Edited while failing')
-    failThread(new Error('[CONVEX Q(snapshot:commentThread)] Server Error'))
-    writes[0].answer.resolve(null)
-    expect(await edited).toBe(true)
-    P.retryComments()
-    // the held window predates the edit
-    replayThread()
     publish({ comments: range(101, 151), earlier: true })
     await settle()
     expect(bodies()).toContain('Edited while failing')

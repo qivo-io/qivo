@@ -7,7 +7,10 @@ type ProjectRow = Snapshot['projects'][number]
 type NewRow = Partial<ProjectRow> & Pick<ProjectRow, 'name'>
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -47,7 +50,7 @@ describe('archived projects for a member of one sub-project', () => {
       return Promise.resolve(null)
     })
     network.onUpdate.mockImplementation((ref, _args, next) => {
-      if (getFunctionName(ref) === 'snapshot:forMe') deliver = () => next(structuredClone(server))
+      if (getFunctionName(ref) === 'workspace:whole') deliver = () => next(structuredClone(server))
       next(structuredClone(server))
       return () => {}
     })

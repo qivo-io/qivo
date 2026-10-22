@@ -694,7 +694,8 @@ async function writeGrants(
     if (next.has(uid)) continue
     if (mayDrop(uid)) await ctx.db.delete(row._id)
     // a removed person's grant waits for its cleanup (profileRemovals.ts),
-    // and no client lists it (snapshot.ts), so leaving it out removes nothing
+    // and no client lists it (lib/workspaceJoin.ts), so leaving it out
+    // removes nothing
     else if ((await byId(ctx, 'profiles', uid)) !== null) removes = true
   }
   return removes

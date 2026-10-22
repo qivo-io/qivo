@@ -12,7 +12,10 @@ import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
    (lib/syncStatus), driven the way the Convex socket would drive it. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -80,7 +83,7 @@ describe('the automatic read in the task window', { timeout: 20_000 }, () => {
       created_at: '2026-09-14T09:00:00.000Z',
     })
     network.onUpdate.mockImplementation((ref, _args, next) => {
-      if (getFunctionName(ref) === 'snapshot:forMe') next(structuredClone(snap))
+      if (getFunctionName(ref) === 'workspace:whole') next(structuredClone(snap))
       return () => {}
     })
     network.query.mockResolvedValue(null)

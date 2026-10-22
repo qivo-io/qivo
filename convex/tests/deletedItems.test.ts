@@ -52,6 +52,7 @@ import {
   type T,
   uuid,
   withOrg,
+  workspaceOf,
 } from './helpers.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 import {
@@ -650,9 +651,7 @@ describe('a task delete at the caps', () => {
 
   /** The tasks the messages in the guest's app are about. */
   const shownToGuest = async (t: T, f: OrgFixture) =>
-    new Set(
-      ((await as(t, f.guest).query(api.snapshot.forMe, {}))?.messages ?? []).map((m) => m.issue_id),
-    )
+    new Set(((await workspaceOf(as(t, f.guest)))?.messages ?? []).map((m) => m.issue_id))
 
   it('deletes a parent at LIMITS.subtasks.max with every follower holding a full item, in the app', async () => {
     const t = newT({ transactionLimits: TX_LIMITS })

@@ -5,7 +5,9 @@ import { describe, expect, it } from 'vitest'
 import { nodeProblem } from './limits.mjs'
 
 /* Scripts load the TypeScript limits registry only through scripts/limits.mjs,
- * which names the Node to use instead of failing on an unknown extension. */
+ * which names the Node to use instead of failing on an unknown extension, and
+ * the workspace reader through scripts/workspaceJoin.mjs, which checks the
+ * Node through it. */
 describe('the limits registry for Node scripts', () => {
   it('accepts Node 24 or later that loads TypeScript', () => {
     expect(nodeProblem('x.mjs', 'v24.21.0', 'strip')).toBeNull()
@@ -33,7 +35,7 @@ describe('the limits registry for Node scripts', () => {
     }
   })
 
-  it('is the only Node script that imports a TypeScript file', () => {
+  it('are the only Node scripts that import a TypeScript file', () => {
     const importsTs = /(?:from\s*|import\s*\(\s*|import\s+)['"]\.{1,2}\/[^'"]*\.(?:ts|mts|tsx)['"]/
     const scripts = ['scripts', 'website/scripts'].flatMap((dir) =>
       readdirSync(dir)
@@ -41,6 +43,6 @@ describe('the limits registry for Node scripts', () => {
         .map((name) => join(dir, name)),
     )
     const found = scripts.filter((file) => importsTs.test(readFileSync(file, 'utf8')))
-    expect(found).toEqual(['scripts/limits.mjs'])
+    expect(found).toEqual(['scripts/limits.mjs', 'scripts/workspaceJoin.mjs'])
   })
 })

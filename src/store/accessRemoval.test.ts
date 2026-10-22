@@ -9,7 +9,10 @@ type IssueRow = Snapshot['issues'][number]
 type Task = (id: string, num: number, extra?: Partial<IssueRow>) => IssueRow
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -94,7 +97,7 @@ describe('removing someone who has work in the project', () => {
     change?.(snap, task)
     network.onUpdate.mockImplementation((ref, _args, next) => {
       const name = getFunctionName(ref)
-      if (name === 'snapshot:forMe') {
+      if (name === 'workspace:whole') {
         next(structuredClone(snap))
         // another person's change, as the server delivers it
         deliver = (change) => {

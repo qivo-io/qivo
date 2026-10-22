@@ -1,13 +1,16 @@
-import { type FunctionReturnType, getFunctionName } from 'convex/server'
+import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { api } from '../../convex/_generated/api'
+import type { Workspace } from '../../convex/lib/workspaceJoin'
 
-type Snapshot = NonNullable<FunctionReturnType<typeof api.snapshot.forMe>>
+type Snapshot = Workspace
 type Planner = typeof import('./planner')['P']
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -30,7 +33,6 @@ function fixture(): Snapshot {
     week_start: 1,
     week_one_rule: 'first4day',
     default_plannable_hours: 40,
-    gravatar_avatars: false,
   }))
   const profiles: Snapshot['profiles'] = orgs.map((org, index) => ({
     id: crypto.randomUUID(),

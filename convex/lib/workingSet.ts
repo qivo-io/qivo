@@ -5,8 +5,8 @@
  * working set on every surface. A parent, a link, an inbox row or a group
  * total that a read sends goes through these rules, so no read names or
  * counts a task its reader is not shown. It may only say that such a task
- * exists (has_hidden_parent, has_hidden_subtasks). The app's snapshot
- * (convex/snapshot.ts) applies them, and machine outputs reuse them. */
+ * exists (has_hidden_parent, has_hidden_subtasks). The app's workspace
+ * parts (lib/workspaceParts.ts) apply them, and machine outputs reuse them. */
 
 import type { Doc } from '../_generated/dataModel'
 import { countsAsSubtask, layerOf, liveIn, type ProjectLive } from './liveTasks'

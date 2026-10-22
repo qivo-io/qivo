@@ -13,6 +13,7 @@ import {
   TODAY,
   uuid,
   withOrg,
+  workspaceOf,
 } from './helpers.setup'
 
 describe('parent task status', () => {
@@ -132,7 +133,7 @@ describe('parent task status', () => {
       'rule',
       /status cannot be set/,
     )
-    const snapshot = await as(t, f.admin).query(api.snapshot.forMe, {})
+    const snapshot = await workspaceOf(as(t, f.admin))
     expect(snapshot?.issues.map((i) => i.id).sort()).toEqual([root.id, middle.id, leaf.id].sort())
   })
 
@@ -155,7 +156,7 @@ describe('parent task status', () => {
       project_id: f.sub.id,
       parent_id: parent.id,
     })
-    const snapshot = await as(t, f.guest).query(api.snapshot.forMe, {})
+    const snapshot = await workspaceOf(as(t, f.guest))
     expect(snapshot?.issues.find((i) => i.id === parent.id)?.has_hidden_subtasks).toBe(true)
     expect(snapshot?.issues.map((i) => i.id)).toContain(visibleChild.id)
     expect(snapshot?.issues.map((i) => i.id)).not.toContain(hiddenChild.id)
@@ -178,7 +179,7 @@ describe('parent task status', () => {
     )
     // An administrator sees the child, so nothing is hidden from them
     const adminFlag = async () =>
-      (await as(t, f.admin).query(api.snapshot.forMe, {}))?.issues.find((i) => i.id === parent.id)
+      (await workspaceOf(as(t, f.admin)))?.issues.find((i) => i.id === parent.id)
         ?.has_hidden_subtasks
     expect(await adminFlag()).toBe(false)
     // A subtask in an archived project makes a task in an active one no
@@ -189,7 +190,7 @@ describe('parent task status', () => {
     })
     expect(await adminFlag()).toBe(false)
     const guestFlag = async () =>
-      (await as(t, f.guest).query(api.snapshot.forMe, {}))?.issues.find((i) => i.id === parent.id)
+      (await workspaceOf(as(t, f.guest)))?.issues.find((i) => i.id === parent.id)
         ?.has_hidden_subtasks
     expect(await guestFlag()).toBe(false)
     // once the visible subtask is archived too, the parent is a task again
@@ -242,7 +243,7 @@ describe('parent task status', () => {
     const load = await as(t, f.admin).query(api.planning.assigneeLoad, { assignee_id: f.user.id })
     expect(load).toHaveLength(2)
     expect(load.map((r) => r.remaining)).toEqual([3, 3])
-    const snapshot = await as(t, f.admin).query(api.snapshot.forMe, {})
+    const snapshot = await workspaceOf(as(t, f.admin))
     expect(snapshot && appLoadRows(snapshot).map((r) => r.remaining)).toEqual([3, 3])
   })
 
