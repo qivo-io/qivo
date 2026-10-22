@@ -1167,8 +1167,8 @@ textarea {
   height: 0;
   pointer-events: none;
 }
-.md.ProseMirror .ProseMirror-selectednode .mdimg,
-.mdimgwrap.ProseMirror-selectednode .mdimg {
+.mdimgwrap.ProseMirror-selectednode .mdimg,
+.md.ProseMirror .ProseMirror-selectednode .mdimg {
   outline: 2px solid var(--primary);
   outline-offset: 1px;
 }

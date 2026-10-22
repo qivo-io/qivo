@@ -158,7 +158,8 @@ and deleted ones from Deleted items.
 
 ## Keyboard, in brief
 
-- **Esc** closes the topmost popover, dialog or task window.
+- **Esc** closes the topmost popover, dialog or task window. In a description or
+  comment editor it first leaves the text, asking before it discards changes.
 - **Enter** submits single-line fields.
 - **L** opens the label picker in a task window.
 - **Ctrl/Cmd+S** saves a description or comment draft.

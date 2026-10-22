@@ -33,9 +33,6 @@ export type SavePause = { kind: 'offline' | 'slow'; waiting: number }
     still is. */
 export type OfflineWindow = { from: number; to: number | null }
 
-/** How many OfflineWindows the status keeps. */
-const OFFLINE_WINDOWS = 20
-
 /** What the status reads from the Convex socket. */
 export type SocketState = { connected: boolean; everConnected: boolean }
 
@@ -63,11 +60,12 @@ export function createSyncStatus(now = () => Date.now()) {
   let kind: SavePause['kind'] | null = null
   let waiting = 0
   let timer: ReturnType<typeof setTimeout> | null = null
-  const writes = new Map<symbol, { sentAt: number; counted: boolean }>()
+  // `offline` holds every time the socket was down while the write waited
+  const writes = new Map<symbol, { sentAt: number; counted: boolean; offline: OfflineWindow[] }>()
   const listeners = new Set<SyncListener>()
   const downListeners = new Set<() => void>()
-  // when the socket was down, newest last, for "while you were offline"
-  const downs: OfflineWindow[] = []
+  // the time the socket has been down since, while it is
+  let openDown: OfflineWindow | null = null
 
   const countWaiting = () => [...writes.values()].filter((write) => write.counted).length
 
@@ -130,11 +128,14 @@ export function createSyncStatus(now = () => Date.now()) {
     setSocket(next: SocketState) {
       const connecting = next.connected && !socket.connected
       if (connecting) connectedAt = now()
-      const open = downs.at(-1)
-      if (connecting && open && open.to === null) open.to = now()
+      if (connecting && openDown) {
+        openDown.to = now()
+        openDown = null
+      }
       if (!next.connected && socket.connected) {
-        downs.push({ from: now(), to: null })
-        if (downs.length > OFFLINE_WINDOWS) downs.shift()
+        const down: OfflineWindow = { from: now(), to: null }
+        openDown = down
+        for (const write of writes.values()) write.offline.push(down)
       }
       socket = next
       if (connecting) prove()
@@ -153,13 +154,17 @@ export function createSyncStatus(now = () => Date.now()) {
     },
     /** Records a write that was just sent and answers the function to call
         once it settles. `counted` says it is a change the person made, which
-        the notice counts and the close warning protects. */
-    track(counted: boolean): () => void {
+        the notice counts and the close warning protects. The function
+        answers every time the socket was down while the write waited, oldest
+        first, for "while you were offline", and may be called again. */
+    track(counted: boolean): () => OfflineWindow[] {
       const id = Symbol()
-      writes.set(id, { sentAt: now(), counted })
+      const write = { sentAt: now(), counted, offline: openDown ? [openDown] : [] }
+      writes.set(id, write)
       evaluate()
       return () => {
         if (writes.delete(id)) evaluate()
+        return write.offline.map((w) => ({ ...w }))
       }
     },
     /** Calls `listener` whenever `down()` changes. Answers a function that
@@ -170,10 +175,6 @@ export function createSyncStatus(now = () => Date.now()) {
         downListeners.delete(listener)
       }
     },
-    /** The times the socket was down that end at or after `since`, the one
-        still open included, oldest first. */
-    offlineSince: (since: number): OfflineWindow[] =>
-      downs.filter((w) => w.to === null || w.to >= since).map((w) => ({ ...w })),
     /** Calls `listener` on every change (see SyncListener). */
     subscribe(listener: SyncListener) {
       listeners.add(listener)

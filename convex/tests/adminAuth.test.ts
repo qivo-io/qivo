@@ -16,7 +16,7 @@ import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { LOGIN_PURGE } from '../adminAuth'
 import authSchema from '../betterAuth/schema'
-import { expectRefusal, newT, runInAuth, type T, uuid, withOrg } from './helpers.setup'
+import { expectRefusal, newT, plantSeat, runInAuth, type T, uuid, withOrg } from './helpers.setup'
 
 declare const process: { env: Record<string, string | undefined> }
 process.env.BETTER_AUTH_SECRET ??= 'adminAuth-test-secret-not-a-real-deployment'
@@ -317,11 +317,42 @@ describe('deleteOrphanLogin', () => {
     expect(rows[0].detail).toEqual({ email: 'leftover@test.local' })
   })
 
-  it('reaps an orphan whose provider login kept a Unicode domain, typed as the login shows it', async () => {
+  it.each(['Anna@Bücher.de', 'anna@xn--bcher-kva.de', ' ANNA@XN--BCHER-KVA.DE '])(
+    'reaps an orphan whose provider login kept a Unicode domain, typed as %j',
+    async (typed) => {
+      const t = newAuthT()
+      await plantLogin(t, 'anna@bücher.de')
+      // a different address with the same domain is not that login
+      await expectRefusal(
+        t.mutation(internal.adminAuth.deleteOrphanLogin, { email: 'ben@xn--bcher-kva.de' }),
+        'not_found',
+        /no auth account with that email/,
+      )
+      expect(await componentRow(t, 'user', 'email', 'anna@bücher.de')).not.toBeNull()
+      await t.mutation(internal.adminAuth.deleteOrphanLogin, { email: typed })
+      expect(await componentRow(t, 'user', 'email', 'anna@bücher.de')).toBeNull()
+      expect((await auditRows(t))[0].detail).toEqual({ email: 'anna@xn--bcher-kva.de' })
+    },
+  )
+
+  it('finds a login only by its own stored form, so a pending invitation under it keeps it', async () => {
     const t = newAuthT()
-    await plantLogin(t, 'anna@bücher.de')
-    await t.mutation(internal.adminAuth.deleteOrphanLogin, { email: 'Anna@Bücher.de' })
-    expect(await componentRow(t, 'user', 'email', 'anna@bücher.de')).toBeNull()
+    const f = await withOrg(t)
+    await plantLogin(t, 'ivan@правительство.de')
+    // the invitation waits under the stored form of the login's address
+    await plantSeat(t, { org_id: f.org.id, email: 'ivan@xn--80aealotwbjpid2k.de' })
+    // not punycode: a delimiter cannot start a label, so this names no login
+    await expectRefusal(
+      t.mutation(internal.adminAuth.deleteOrphanLogin, { email: 'ivan@xn---80aealotwbjpid2k.de' }),
+      'not_found',
+      /no auth account with that email/,
+    )
+    await expectRefusal(
+      t.mutation(internal.adminAuth.deleteOrphanLogin, { email: 'ivan@xn--80aealotwbjpid2k.de' }),
+      'conflict',
+      /remove the member instead/,
+    )
+    expect(await componentRow(t, 'user', 'email', 'ivan@правительство.de')).not.toBeNull()
   })
 
   /* The MCP OAuth provider's rows and the roadmap undo receipts of `userId`,

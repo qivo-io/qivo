@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { LimitedInput } from '@/components/LimitedField'
 import { PageTitle, SettingsField, SettingsGroup, SettingsSection } from '@/components/settingsPage'
 import {
   AlertDialog,
@@ -13,16 +14,19 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { NativeSelect } from '@/components/ui/native-select'
 import { billingError, billingMoney } from '@/lib/billingDisplay'
 import { convex } from '@/lib/convex'
+import { overLimit } from '@/lib/fieldLimits'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { api } from '../../../convex/_generated/api'
 import type { BillingPlan } from '../../../convex/lib/billingTypes'
+import { LIMITS, PLAN_CURRENCIES } from '../../../convex/lib/limits'
 import { runAction, sendMutation } from '../convex'
 
 const initial = {
   name: '',
-  currency: 'USD',
+  currency: 'usd',
   seatPrice: '1',
   minimumSeats: '5',
   storagePerSeat: '1',
@@ -81,7 +85,7 @@ export function BillingPlans() {
       await runAction(api.billingActions.createPlan, {
         plan: {
           name: form.name.trim(),
-          currency: form.currency.toLowerCase(),
+          currency: form.currency,
           seat_price_cents: Math.round(Number(form.seatPrice) * 100),
           minimum_seats: Number(form.minimumSeats),
           storage_gb_per_seat: Number(form.storagePerSeat),
@@ -114,7 +118,6 @@ export function BillingPlans() {
         min={options.min}
         step={options.step ?? (options.number ? '1' : undefined)}
         required={!['polarProduct', 'apiMeter', 'storageMeter'].includes(key)}
-        maxLength={key === 'currency' ? 3 : key === 'name' ? 80 : undefined}
         value={form[key]}
         disabled={busy}
         onChange={(event) => setForm((value) => ({ ...value, [key]: event.target.value }))}
@@ -259,10 +262,31 @@ export function BillingPlans() {
         description="All amounts are before tax. Plan terms cannot be edited after creation. Without Polar IDs, the plan is a draft that you can connect later."
       >
         <form onSubmit={create}>
-          {field('name', 'Plan name', { hint: 'Use a versioned name, such as Team 2026.' })}
-          {field('currency', 'Currency', {
-            hint: 'USD, EUR, GBP, NOK, SEK, DKK, CAD, AUD, CHF or NZD.',
-          })}
+          <SettingsField label="Plan name" hint="Use a versioned name, such as Team 2026.">
+            <LimitedInput
+              aria-label="Plan name"
+              limit={LIMITS.planName}
+              required
+              value={form.name}
+              disabled={busy}
+              onChange={(event) => setForm((value) => ({ ...value, name: event.target.value }))}
+              className="w-full bg-surface-1"
+            />
+          </SettingsField>
+          <SettingsField label="Currency">
+            <NativeSelect
+              aria-label="Currency"
+              value={form.currency}
+              disabled={busy}
+              onChange={(event) => setForm((value) => ({ ...value, currency: event.target.value }))}
+            >
+              {PLAN_CURRENCIES.map((code) => (
+                <option key={code} value={code}>
+                  {code.toUpperCase()}
+                </option>
+              ))}
+            </NativeSelect>
+          </SettingsField>
           <SettingsGroup legend="Monthly users">
             {field('seatPrice', 'Price per user', { number: true, min: 0.01, step: '0.01' })}
             {field('minimumSeats', 'Minimum billed users', { number: true, min: 1 })}
@@ -292,7 +316,11 @@ export function BillingPlans() {
             {field('storageMeter', 'Storage usage meter ID')}
           </SettingsGroup>
           <div className="mt-6">
-            <Button type="submit" data-create-billing-plan disabled={busy || !form.name.trim()}>
+            <Button
+              type="submit"
+              data-create-billing-plan
+              disabled={busy || !form.name.trim() || overLimit(LIMITS.planName, form.name)}
+            >
               {busy ? 'Saving…' : 'Create plan'}
             </Button>
           </div>

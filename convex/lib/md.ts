@@ -59,110 +59,176 @@ const MARKS: Array<['**' | '~~' | '++' | '*', 'bold' | 'strike' | 'underline' | 
   ['*', 'italic'],
 ]
 
-/** `[label](dest)` scanner; `at` must point at the opening bracket. */
-function matchLinkLike(
-  src: string,
-  at: number,
-): { label: string; dest: string; end: number } | null {
-  let j = at + 1
-  let depth = 1
-  while (j < src.length) {
-    const c = src[j]
-    if (c === '\\') {
-      j += 2
-      continue
+/** A `[label](dest)` construct: its label, its trimmed destination and the
+    index after its closing parenthesis. */
+type LinkLike = { label: string; dest: string; end: number }
+
+/* The partner of each opening `open` in `src`: the index of the `close`
+   that brings its depth back to zero, or -1 when a line break or the end
+   comes first. A character after an odd run of backslashes is escaped and
+   counts for nothing, as a backslash escapes any character inside a link. */
+function partners(src: string, escaped: Uint8Array, open: string, close: string): Int32Array {
+  const partner = new Int32Array(src.length).fill(-1)
+  const stack: number[] = []
+  for (let p = 0; p < src.length; p++) {
+    if (escaped[p]) continue
+    const c = src[p]
+    if (c === '\n') stack.length = 0
+    else if (c === open) stack.push(p)
+    else if (c === close) {
+      const opener = stack.pop()
+      if (opener !== undefined) partner[opener] = p
     }
-    if (c === '\n') return null
-    if (c === '[') depth++
-    else if (c === ']') {
-      depth--
-      if (depth === 0) break
-    }
-    j++
   }
-  if (depth !== 0 || src[j + 1] !== '(') return null
-  let k = j + 2
-  let pdepth = 1
-  while (k < src.length) {
-    const c = src[k]
-    if (c === '\\') {
-      k += 2
-      continue
-    }
-    if (c === '\n') return null
-    if (c === '(') pdepth++
-    else if (c === ')') {
-      pdepth--
-      if (pdepth === 0) break
-    }
-    k++
-  }
-  if (pdepth !== 0) return null
-  return { label: src.slice(at + 1, j), dest: src.slice(j + 2, k).trim(), end: k + 1 }
+  return partner
 }
 
-/** Backtick-run code span at `at` (must point at a backtick): the content
-    runs to the next run of exactly the same length, so code can contain
-    shorter backtick runs (``a`b``). One space is stripped from each end when
-    both are present and the content isn't all spaces — the serializer pads
-    content that starts or ends with a space or backtick. Escapes do not work
-    inside code: content is verbatim (`` `a\` `` is code ending in a
-    backslash). Returns [content, indexAfterCloser] or [null, 0]. */
-function matchCodeSpan(src: string, at: number): [string | null, number] {
-  let n = 1
-  while (src[at + n] === '`') n++
-  let j = at + n
-  while (j < src.length) {
-    if (src[j] !== '`') {
-      j++
-      continue
-    }
-    let m = 1
-    while (src[j + m] === '`') m++
-    if (m === n) {
-      let content = src.slice(at + n, j)
-      if (content.length >= 2 && content.startsWith(' ') && content.endsWith(' ') && content.trim())
-        content = content.slice(1, -1)
-      return [content, j + m]
-    }
-    j += m
+/* Whether each character of `src` follows an odd run of backslashes. */
+function escapes(src: string): Uint8Array {
+  const escaped = new Uint8Array(src.length)
+  let run = 0
+  for (let p = 0; p < src.length; p++) {
+    escaped[p] = run % 2
+    run = src[p] === '\\' ? run + 1 : 0
   }
-  return [null, 0]
+  return escaped
 }
 
-/** Find `marker` scanning from `from`, skipping backslash escapes, complete
-    code spans, and link/image constructs — the same atoms the main scan
-    consumes — so a delimiter inside them ("**a\***", "**`a**b`**") never
-    closes an outer mark. Returns -1 when no closer exists. */
-function scanClose(src: string, from: number, marker: string): number {
-  let i = from
-  while (i < src.length) {
-    const c = src[i]
-    if (c === '\\' && i + 1 < src.length && ESCAPABLE.includes(src[i + 1])) {
-      i += 2
-      continue
-    }
-    if (c === '`') {
-      const [content, end] = matchCodeSpan(src, i)
-      if (content !== null) {
-        i = end
+/** One text's links, code spans and mark closers, each read from a table
+    built in one pass the first time it is asked. Scanning ahead for them
+    at each bracket, backtick or mark costs up to the rest of the text a
+    time, which made text such as 20,000 brackets parse in quadratic time;
+    the tables keep a parse linear in the text length at each nesting
+    depth. Exported for src/lib/md.test.ts, which checks every answer
+    against a scan ahead from the same index. */
+export class Scan {
+  private escaped?: Uint8Array
+  private brackets?: Int32Array
+  private parens?: Int32Array
+  private runEnd?: Int32Array
+  private runClose?: Int32Array
+  private closers = new Map<string, Int32Array>()
+
+  constructor(readonly src: string) {}
+
+  /** The `[label](dest)` whose opening bracket is at `at`, or null. Inside
+      it a backslash escapes any character and a line break ends it; the
+      brackets of the label and the parentheses of the destination nest.
+      `at` must be an unescaped bracket (one after an even run of
+      backslashes, if any), as every parse asks. */
+  link(at: number): LinkLike | null {
+    this.escaped ??= escapes(this.src)
+    this.brackets ??= partners(this.src, this.escaped, '[', ']')
+    const j = this.brackets[at]
+    if (j < 0 || this.src[j + 1] !== '(') return null
+    this.parens ??= partners(this.src, this.escaped, '(', ')')
+    const k = this.parens[j + 1]
+    if (k < 0) return null
+    return { label: this.src.slice(at + 1, j), dest: this.src.slice(j + 2, k).trim(), end: k + 1 }
+  }
+
+  /* The end of each backtick's run, and where the first later run of
+     exactly the length from it to that end starts, or -1. */
+  private codeTables(): { runEnd: Int32Array; runClose: Int32Array } {
+    if (this.runEnd && this.runClose) return { runEnd: this.runEnd, runClose: this.runClose }
+    const { src } = this
+    const runEnd = new Int32Array(src.length).fill(-1)
+    const runClose = new Int32Array(src.length).fill(-1)
+    const runs: [number, number][] = []
+    for (let p = 0; p < src.length; ) {
+      if (src[p] !== '`') {
+        p++
         continue
       }
-      while (src[i] === '`') i++
-      continue
+      let q = p
+      while (src[q] === '`') q++
+      for (let r = p; r < q; r++) runEnd[r] = q
+      runs.push([p, q])
+      p = q
+    }
+    // from the last run back, the nearest run to the right of each length
+    const nearest = new Map<number, number>()
+    for (let r = runs.length - 1; r >= 0; r--) {
+      const [p, q] = runs[r]
+      for (let at = p; at < q; at++) runClose[at] = nearest.get(q - at) ?? -1
+      nearest.set(q - p, p)
+    }
+    this.runEnd = runEnd
+    this.runClose = runClose
+    return { runEnd, runClose }
+  }
+
+  /** The backtick-run code span at `at` (must point at a backtick): the
+      content runs to the next run of exactly the same length, so code can
+      contain shorter backtick runs (``a`b``). One space is stripped from
+      each end when both are present and the content isn't all spaces — the
+      serializer pads content that starts or ends with a space or backtick.
+      Escapes do not work inside code: content is verbatim (`` `a\` `` is
+      code ending in a backslash). Returns [content, indexAfterCloser] or
+      [null, 0]. */
+  code(at: number): [string | null, number] {
+    const { runEnd, runClose } = this.codeTables()
+    const n = runEnd[at] - at
+    const j = runClose[at]
+    if (j < 0) return [null, 0]
+    let content = this.src.slice(at + n, j)
+    if (content.length >= 2 && content.startsWith(' ') && content.endsWith(' ') && content.trim())
+      content = content.slice(1, -1)
+    return [content, j + n]
+  }
+
+  /* Where the closer search (close) moves on from `i`: past an escape, a
+     code span or backtick run, or a link or image, else to the next
+     character. */
+  private step(i: number): number {
+    const { src } = this
+    const c = src[i]
+    if (c === '\\' && i + 1 < src.length && ESCAPABLE.includes(src[i + 1])) return i + 2
+    if (c === '`') {
+      const { runEnd, runClose } = this.codeTables()
+      return runClose[i] < 0 ? runEnd[i] : runClose[i] + runEnd[i] - i
     }
     if (c === '[' || (c === '!' && src[i + 1] === '[')) {
-      const m = matchLinkLike(src, c === '[' ? i : i + 1)
-      if (m) {
-        i = m.end
-        continue
-      }
+      const m = this.link(c === '[' ? i : i + 1)
+      if (m) return m.end
     }
-    if (src.startsWith(marker, i)) return i
-    i++
+    return i + 1
   }
-  return -1
+
+  /** The first `marker` from `from`, skipping backslash escapes, complete
+      code spans, and link/image constructs — the same atoms the main scan
+      consumes — so a delimiter inside them ("**a\***", "**`a**b`**") never
+      closes an outer mark. Returns -1 when no closer exists. Every index
+      the search passes keeps its answer, so no index is walked twice for
+      one marker. */
+  close(from: number, marker: string): number {
+    let known = this.closers.get(marker)
+    if (known === undefined) {
+      // -2: not known yet; the end of the text has no closer
+      known = new Int32Array(this.src.length + 1).fill(-2)
+      known[this.src.length] = -1
+      this.closers.set(marker, known)
+    }
+    const path: number[] = []
+    let i = from
+    while (known[i] === -2) {
+      if (this.src.startsWith(marker, i)) {
+        known[i] = i
+        break
+      }
+      path.push(i)
+      i = this.step(i)
+    }
+    for (const p of path) known[p] = known[i]
+    return known[i]
+  }
 }
+
+/* Whether a mark's inner text is empty or starts or ends with whitespace,
+   which keeps "a * b * c" literal. Reads only the two ends, unlike a trim
+   or a regular expression over the whole inner text. */
+const hugsSpace = (inner: string) =>
+  inner.length === 0 || /\s/.test(inner[0]) || /\s/.test(inner[inner.length - 1])
 
 /* Nested link labels are the one place recursion depth is user-controlled
    ("[[[…]]](u)(u)(u)"); past this depth the rest renders as literal text
@@ -171,6 +237,7 @@ const MAX_DEPTH = 12
 
 export function parseInline(src: string, depth = 0, inLabel = false): MdInline[] {
   if (depth > MAX_DEPTH) return src ? [{ t: 'text', text: src }] : []
+  const tables = new Scan(src)
   const out: MdInline[] = []
   let text = ''
   const flush = () => {
@@ -194,7 +261,7 @@ export function parseInline(src: string, depth = 0, inLabel = false): MdInline[]
       continue
     }
     if (ch === '`') {
-      const [content, end] = matchCodeSpan(src, i)
+      const [content, end] = tables.code(i)
       if (content !== null) {
         flush()
         out.push({ t: 'code', text: content })
@@ -203,7 +270,7 @@ export function parseInline(src: string, depth = 0, inLabel = false): MdInline[]
       }
     }
     if (ch === '!' && src[i + 1] === '[') {
-      const m = matchLinkLike(src, i + 1)
+      const m = tables.link(i + 1)
       if (m) {
         flush()
         out.push({ t: 'image', alt: m.label, src: m.dest })
@@ -212,7 +279,7 @@ export function parseInline(src: string, depth = 0, inLabel = false): MdInline[]
       }
     }
     if (ch === '@' && src[i + 1] === '[') {
-      const m = matchLinkLike(src, i + 1)
+      const m = tables.link(i + 1)
       const u = m && MENTION_DEST.exec(m.dest)
       // a non-user: dest (or a bracketed label) falls through: the "@"
       // stays text, the link parses
@@ -224,7 +291,7 @@ export function parseInline(src: string, depth = 0, inLabel = false): MdInline[]
       }
     }
     if (ch === '[') {
-      const m = matchLinkLike(src, i)
+      const m = tables.link(i)
       if (m) {
         flush()
         out.push({ t: 'link', href: m.dest, children: parseInline(m.label, depth + 1, true) })
@@ -234,10 +301,10 @@ export function parseInline(src: string, depth = 0, inLabel = false): MdInline[]
     }
     // ***both*** — the serializer emits this when bold and italic stack
     if (src.startsWith('***', i) && src[i + 3] !== '*') {
-      const end = scanClose(src, i + 3, '***')
+      const end = tables.close(i + 3, '***')
       if (end > i + 3) {
         const inner = src.slice(i + 3, end)
-        if (inner.trim() && !/^\s|\s$/.test(inner)) {
+        if (!hugsSpace(inner)) {
           flush()
           out.push({
             t: 'bold',
@@ -250,11 +317,11 @@ export function parseInline(src: string, depth = 0, inLabel = false): MdInline[]
     }
     for (const [marker, t] of MARKS) {
       if (!src.startsWith(marker, i)) continue
-      const end = scanClose(src, i + marker.length, marker)
+      const end = tables.close(i + marker.length, marker)
       if (end <= i + marker.length) continue
       const inner = src.slice(i + marker.length, end)
       // "a * b * c" must stay literal: no space hugging the delimiters
-      if (!inner.trim() || /^\s|\s$/.test(inner)) continue
+      if (hugsSpace(inner)) continue
       flush()
       out.push({ t, children: parseInline(inner, depth + 1, inLabel) })
       i = end + marker.length
@@ -291,9 +358,9 @@ const QUOTE = /^>\s?/
 const BULLET = /^[-*]\s+/
 const ORDERED = /^(\d{1,3})[.)]\s+/
 
-/* The inline scanner's nearest-closer searches are quadratic on pathological
-   input (e.g. one long run of asterisks); past this size the text renders as
-   plain paragraphs instead of freezing every viewer of the issue. The editor
+/* The inline scanner reads in time linear in the text length (Scan), but a
+   text no save accepts is not parsed at all: past this size it renders as
+   plain paragraphs. The editor
    checks it too: the fallback AST must never round-trip through a commit
    (re-escaping would corrupt the whole text), so a stored text past it
    opens read-only. The limit equals the server's save cap, so every text

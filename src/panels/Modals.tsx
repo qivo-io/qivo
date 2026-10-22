@@ -139,21 +139,24 @@ function ModalShell({
   const typed = savesAsYouGo ? undefined : unsaved.typed
   const scope = useUnsentScope()
   const mobile = useMobile()
-  // Every close asks first while a field holds unsent text. The answer comes
-  // later, so this close stays open (a phone keeps its Back step) and
-  // Discard closes through the layer again, past the then empty question.
-  const close = () => {
-    const cancelled = cancelling.current
-    cancelling.current = false
-    if (busy) return false
-    if (cancelled || !scope.held().length) return onClose()
-    closeOrAsk([scope], () => closeLayer())
-    return false
-  }
-  const closeLayer = useMobileBackLayer(true, close, mobile || isLandscapeRoadmapOpen())
   // Cancel is the person's own choice to drop what they typed, for the one
   // close it starts; a dialog that refuses that close asks again later
   const cancelling = useRefM(false)
+  // Every close asks first while a field holds unsent text. The answer comes
+  // later, so this close stays open (a phone keeps its Back step) and
+  // Discard closes through the layer again, past the then empty question.
+  const closeLayer = useMobileBackLayer(
+    true,
+    (again) => {
+      const cancelled = cancelling.current
+      cancelling.current = false
+      if (busy) return false
+      if (cancelled || !scope.held().length) return onClose()
+      closeOrAsk([scope], again)
+      return false
+    },
+    mobile || isLandscapeRoadmapOpen(),
+  )
   const cancel = () => {
     cancelling.current = true
     closeLayer()

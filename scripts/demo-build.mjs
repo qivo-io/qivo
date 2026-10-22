@@ -36,6 +36,7 @@ export function finishDemoBuild(directory = 'dist') {
   // other hosts, so this page sends them there too.
   writeFileSync(
     join(directory, 'index.html'),
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: the page's own script holds this template literal
     '<!doctype html><html><head><meta http-equiv="refresh" content="0;url=/app"><script>location.replace(`/app${location.search}${location.hash}`)</script></head></html>\n',
   )
   visit(directory)

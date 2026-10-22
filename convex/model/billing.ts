@@ -11,7 +11,8 @@ import {
 import type { BillingPlan, BillingSummary, BillingUsage } from '../lib/billingTypes'
 import { byId } from '../lib/db'
 import { badRequest, notFound, require, rule } from '../lib/functions'
-import { grouped, LIMITS } from '../lib/limits'
+import { limitedText } from '../lib/limitRules'
+import { grouped, LIMITS, PLAN_CURRENCIES, PLAN_CURRENCY } from '../lib/limits'
 import { polarConfigured } from '../lib/polar'
 import { allowanceSeats, includedApiCalls, usagePeriod } from './billingUsage'
 import { estimateDocumentBytes } from './demoMetrics'
@@ -442,14 +443,8 @@ export async function billingUsageHead(
 }
 
 export function validatePlan(plan: Omit<BillingPlan, 'id' | 'archived' | 'created_at'>) {
-  if (!plan.name.trim() || plan.name.length > 80)
-    throw badRequest('Use a plan name of 1–80 characters.')
-  if (
-    !['usd', 'eur', 'gbp', 'nok', 'sek', 'dkk', 'cad', 'aud', 'chf', 'nzd'].includes(plan.currency)
-  )
-    throw badRequest(
-      'Supported plan currencies: USD, EUR, GBP, NOK, SEK, DKK, CAD, AUD, CHF and NZD.',
-    )
+  if (!limitedText(LIMITS.planName, plan.name)) throw badRequest('Add a plan name.')
+  if (!PLAN_CURRENCIES.some((c) => c === plan.currency)) throw rule(PLAN_CURRENCY)
   for (const key of [
     'seat_price_cents',
     'minimum_seats',

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Id } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
+import { LIMITS } from '../lib/limits'
 import { PANORAMA_MAX_BYTES } from '../lib/panoramaImage'
 import { as, expectRefusal, NOW, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
 
@@ -284,13 +285,38 @@ describe('manual background library uploads', () => {
   )
 
   it.each([
+    { metadata: { title: 'x'.repeat(301) }, limit: LIMITS.imageTitle },
+    { metadata: { creator: ` ${'😀'.repeat(150)}x ` }, limit: LIMITS.imageCreator },
+    { metadata: { location: 'x'.repeat(301) }, limit: LIMITS.imageLocation },
+    {
+      metadata: { source_url: `https://example.com/${'x'.repeat(2048)}` },
+      limit: LIMITS.curationUrl,
+    },
+  ])(
+    'refuses a credit over its limit with its sentence and cleans up the loose file: $limit.label',
+    async ({ metadata, limit }) => {
+      const { t, op } = await setup()
+      const sid = await store(t)
+      const refused = await expectRefusal(upload(op, sid, metadata), 'rule')
+      expect(refused.data.message).toBe(limit.refusal)
+      expect(await exists(t, sid)).toBe(false)
+      expect(await images(t)).toEqual([])
+    },
+  )
+
+  it('stores credits of exactly 300 characters, trimmed', async () => {
+    const { t, op } = await setup()
+    const sid = await store(t)
+    const credit = 'x'.repeat(LIMITS.imageTitle.max)
+    await upload(op, sid, { title: ` ${credit} `, creator: credit, location: credit })
+    expect(await images(t)).toMatchObject([{ title: credit, creator: credit, location: credit }])
+  })
+
+  it.each([
     { title: '' },
     { title: ' ' },
-    { title: 'x'.repeat(301) },
     { creator: '' },
     { creator: ' ' },
-    { creator: 'x'.repeat(301) },
-    { location: 'x'.repeat(301) },
     { rights_confirmed: false },
     { source_url: 'javascript:alert(1)' },
     { source_url: 'http://example.com/photo.jpg' },

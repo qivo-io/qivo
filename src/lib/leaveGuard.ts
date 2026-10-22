@@ -90,7 +90,7 @@ export function createUnsentScope(parent: UnsentScope | null = null): UnsentScop
       if (!own.size) return
       discardedAt = Date.now()
       chosenAt = how === 'chosen' ? discardedAt : null
-      for (const lease of [...own.values()]) lease.onDiscard?.()
+      for (const lease of Array.from(own.values())) lease.onDiscard?.()
     },
   }
 }
@@ -175,7 +175,7 @@ export function useTypedUnsaved(what: string | null = 'text') {
     field (DiscardPrompt) already finds it gone. */
 export function useFieldUnsaved(paused: () => boolean, saved: string, what = 'text') {
   const { typed, reset } = useTypedUnsaved(what)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new saved value is the trigger
+  // a new saved value is the trigger
   useLayoutEffect(reset, [saved])
   return {
     onInput: typed,

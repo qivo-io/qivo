@@ -428,7 +428,7 @@ export async function preflightProjects(config, fetchImpl = fetch) {
 }
 
 /** Deploy one project at the exact commit and wait until it serves. */
-async function deployProject(project, prepared, revision, config, { pause, log }) {
+async function deployProject(prepared, revision, config, { pause, log }) {
   const { vercel, details } = prepared
   const scope = `teamId=${encodeURIComponent(config.team)}`
   const created = await vercel(
@@ -577,7 +577,7 @@ export async function deployEnvironment(config, event, options = {}) {
 
   if (config.environment === 'staging') {
     // A failed run records nothing, so a release can never pick up an unverified commit.
-    await deployProject(config.app, prepared.app, config.sha, config, optionsWithDefaults)
+    await deployProject(prepared.app, config.sha, config, optionsWithDefaults)
     await verifyPublicBuild(config, optionsWithDefaults.fetchImpl, optionsWithDefaults.pause)
     const status = await createReceipt(github, config, { ci_run_id: verified.ciId })
     await status('success', 'App, website, revision and public routes verified.')
@@ -591,9 +591,8 @@ export async function deployEnvironment(config, event, options = {}) {
   })
   await status('in_progress', 'Deploying the exact revision.')
   try {
-    await deployProject(config.app, prepared.app, config.sha, config, optionsWithDefaults)
-    if (config.demo)
-      await deployProject(config.demo, prepared.demo, config.sha, config, optionsWithDefaults)
+    await deployProject(prepared.app, config.sha, config, optionsWithDefaults)
+    if (config.demo) await deployProject(prepared.demo, config.sha, config, optionsWithDefaults)
     await verifyPublicBuild(config, optionsWithDefaults.fetchImpl, optionsWithDefaults.pause)
     await status('success', 'App, website, revision and public routes verified.')
   } catch (error) {

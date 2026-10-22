@@ -8,13 +8,13 @@ import { hasOpenTooltip } from '@/lib/passEscapeOn'
    Editable users load this component lazily.
 
    Save/Mod-S commits; blur retains drafts and dirty unmount discards with a
-   toast, unless the person chose Discard. Escape inside the text is
-   ProseMirror's, which prevents its default, so it leaves the draft and the
-   window as they are. Escape on the editor's controls (toolbar, link pop,
-   buttons) closes popovers, then, once the person confirms the discard
-   (DiscardPrompt), reverts dirty content and clears undo history so redo
-   cannot resurrect reaped attachments, then reaches the modal only when
-   clean. Toolbar mousedown preserves selection. Remote edits replace
+   toast, unless the person chose Discard. Escape, in the text or on the
+   editor's controls (toolbar, link pop, buttons), closes popovers, then,
+   once the person confirms the discard (DiscardPrompt), reverts dirty
+   content and clears undo history so redo cannot resurrect reaped
+   attachments, and takes a comment out of edit mode. A clean editor blurs;
+   from the controls the key then reaches the modal, from the text it waits
+   for the next press. Toolbar mousedown preserves selection. Remote edits replace
    only unfocused clean documents; matching echoes advance committed refs to
    keep finishUpload's text and document patches atomic.
 
@@ -214,9 +214,9 @@ function ImageView({ node, selected }: NodeViewProps) {
       setUrl(null)
       retried.current = false
       void P.attachmentUrl(attId).then((u) => {
-        if (alive) {
-          u ? setUrl(u) : setGone(true)
-        }
+        if (!alive) return
+        if (u) setUrl(u)
+        else setGone(true)
       })
     }
     return () => {
@@ -389,7 +389,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   // the description or comment typed here and not sent yet. One on its way
   // is the store's to keep or report, so closing does not ask about it. It
   // counts in the window's question and in this editor's own, which Escape
-  // on the editor's controls asks before it throws the draft away.
+  // asks before it throws the draft away.
   const draft = useUnsentScope()
   useUnsaved(dirty && !sending, isComment ? 'comment' : 'description', draft)
   const sendingRef = useRef(false)
@@ -445,6 +445,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   const openLinkPopoverRef = useRef(openLinkPopover)
   openLinkPopoverRef.current = openLinkPopover
   const commitRef = useRef<() => void>(() => {}) // assigned below commit()
+  const escapeTextRef = useRef<() => boolean>(() => false) // assigned below onKeyDown
 
   const extensions = useMemo(
     () => [
@@ -608,6 +609,15 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
               return true
             }, // ours, not the browser save dialog
           }
+        },
+      }),
+      Extension.create({
+        name: 'descEscape',
+        // below every other key handler, so an open @-mention list takes
+        // Escape first
+        priority: 1,
+        addKeyboardShortcuts() {
+          return { Escape: () => escapeTextRef.current() }
         },
       }),
     ],
@@ -1263,43 +1273,63 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     reconcile() // a clean editor catches up with any echo held while focused
   }
 
-  /* Escape from the editor's controls. One pressed inside the text arrives
-     with its default prevented (ProseMirror takes Escape), so it ends here
-     and the draft and the window stay as they are. */
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key !== 'Escape' || e.defaultPrevented || hasOpenTooltip()) return
+  /* The steps Escape takes in the text and on the controls alike: an open
+     link popover or heading menu closes, a changed draft asks before it
+     reverts, and a comment in edit mode leaves it. Returns whether a step
+     took the key. */
+  const escapeStep = () => {
     const ed = editorRef.current
     if (linkPopRef.current) {
-      e.preventDefault()
-      e.stopPropagation()
       setLinkPop(null)
       ed?.commands.focus()
-      return
+      return true
     }
     if (headMenu) {
-      e.preventDefault()
-      e.stopPropagation()
       setHeadMenu(false)
-      return
+      return true
     }
     if (ed && dirtyRef.current) {
-      e.preventDefault()
-      e.stopPropagation()
       // a stray Escape must not throw a draft away unasked; the Discard
       // changes button stays the one-press way
       closeOrAsk([draft], revert)
+      return true
+    }
+    if (commentRef.current?.onClose) {
+      // edit-in-place: Esc exits edit mode even when clean, and the modal
+      // only closes from the read view
+      revert()
+      return true
+    }
+    return false
+  }
+
+  /* Escape from the editor's controls. With no step to take, a clean editor
+     blurs and the key bubbles on, so the modal closes. One pressed inside
+     the text arrives with its default prevented (ProseMirror takes Escape)
+     and was handled there (escapeTextRef). One that ends an input method's
+     composition is the input method's: ProseMirror leaves it alone, and it
+     stops here so the window does not close either. */
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) {
+      e.stopPropagation()
       return
     }
-    const cm = commentRef.current
-    if (cm?.onClose) {
-      // edit-in-place: Esc exits edit mode even when clean — the modal only
-      // closes from the read view
+    if (e.key !== 'Escape' || e.defaultPrevented || hasOpenTooltip()) return
+    if (escapeStep()) {
       e.preventDefault()
       e.stopPropagation()
-      revert()
       return
     }
-    ed?.commands.blur() // clean: let it bubble; the modal closes
+    editorRef.current?.commands.blur() // clean: let it bubble; the modal closes
+  }
+  /* Escape inside the text, after ProseMirror's own handlers (an @-mention
+     list closes first). It takes the same steps; with none to take, a clean
+     editor only blurs, so the next Escape reaches the window. An open
+     tooltip takes this one and passes it on (passEscapeOn). */
+  escapeTextRef.current = () => {
+    if (hasOpenTooltip()) return false
+    if (!escapeStep()) editorRef.current?.commands.blur()
+    return true
   }
 
   /* ---- formatting toolbar ---------------------------------------------------- */

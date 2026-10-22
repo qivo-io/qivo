@@ -5,6 +5,7 @@ import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { Check, ImageIcon, Maximize2 } from 'lucide-react'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { LimitedInput, LimitedTextarea } from '@/components/LimitedField'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -27,14 +28,15 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Textarea } from '@/components/ui/textarea'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import {
   type BackgroundImageBatchProgress,
   type BackgroundImageBatchResult,
+  creditsProblem,
   importBackgroundImages,
   prepareBackgroundImage,
 } from '@/lib/backgroundImageUpload'
+import { overLimit } from '@/lib/fieldLimits'
 import type { ImageMetadata } from '@/lib/imageMetadata'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { cn } from '@/lib/utils'
@@ -977,13 +979,13 @@ function ImageCard({ image, preview }: { image: BackgroundImage; preview: () => 
               </p>
               <div className="space-y-2">
                 <Label htmlFor={removeNoteId}>Reason (optional)</Label>
-                <Textarea
+                <LimitedTextarea
                   id={removeNoteId}
+                  limit={LIMITS.imageRemoveNote}
                   value={note}
                   disabled={busy}
                   onChange={(e) => setNote(e.target.value)}
                   rows={2}
-                  maxLength={500}
                   className="bg-surface-1 text-sm"
                 />
               </div>
@@ -993,7 +995,7 @@ function ImageCard({ image, preview }: { image: BackgroundImage; preview: () => 
                   data-image-remove-confirm={image.id}
                   variant="destructive"
                   className="border-red-700 bg-red-700 text-white hover:bg-red-800"
-                  disabled={busy}
+                  disabled={busy || overLimit(LIMITS.imageRemoveNote, note)}
                   onClick={() => void perform('remove')}
                 >
                   {busy ? 'Removing…' : 'Remove image'}
@@ -1132,11 +1134,11 @@ function AgentAccess() {
         <form onSubmit={(event) => void create(event)} className="flex flex-wrap items-end gap-2">
           <div className="min-w-0 flex-1 basis-64 space-y-2">
             <Label htmlFor="curation-key-name">Agent name</Label>
-            <Input
+            <LimitedInput
               id="curation-key-name"
+              limit={LIMITS.curationKeyName}
               value={name}
               onChange={(event) => setName(event.target.value)}
-              maxLength={80}
               disabled={busy || !!revealed}
               className="bg-surface-1"
             />
@@ -1146,7 +1148,7 @@ function AgentAccess() {
             data-curation-mint
             variant="primary"
             className="border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700"
-            disabled={busy || !!revealed || !name.trim()}
+            disabled={busy || !!revealed || !name.trim() || overLimit(LIMITS.curationKeyName, name)}
           >
             {busy ? 'Creating…' : 'Create access key'}
           </Button>
@@ -1350,9 +1352,10 @@ function AgentSubmissions() {
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined])
   const [page, setPage] = useState(0)
   const [failure, setFailure] = useState('')
-  const proposals = useLiveQuery(api.panoramaCuration.submissions, {
-    ...(cursors[page] ? { cursor: cursors[page] } : {}),
-  })
+  const proposals = useLiveQuery(
+    api.panoramaCuration.submissions,
+    cursors[page] ? { cursor: cursors[page] } : {},
+  )
   const calendar = useLiveQuery(api.panoramaImages.calendar, {})
   const { data, error, retry } = proposals
   return (
@@ -1641,12 +1644,12 @@ function SubmissionCard({
             <p className="text-sm text-text-2">Any linked image stays in the library.</p>
             <div className="space-y-2">
               <Label htmlFor={`submission-note-${submission.id}`}>Reason (optional)</Label>
-              <Textarea
+              <LimitedTextarea
                 id={`submission-note-${submission.id}`}
+                limit={LIMITS.proposalDeclineNote}
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
                 rows={2}
-                maxLength={2000}
                 disabled={busy}
                 className="bg-surface-1"
               />
@@ -1657,7 +1660,7 @@ function SubmissionCard({
                 data-curation-decline-confirm={submission.id}
                 variant="destructive"
                 className="border-red-700 bg-red-700 text-white hover:bg-red-800"
-                disabled={busy}
+                disabled={busy || overLimit(LIMITS.proposalDeclineNote, note)}
                 onClick={() => void finalize('decline')}
               >
                 {busy ? 'Declining…' : 'Decline proposal'}
@@ -1770,6 +1773,7 @@ function ImageUpload({ target, cancel }: { target: ImageUploadTarget; cancel: ()
   const [confirmed, setConfirmed] = useState(false)
   const [busy, setBusy] = useState(false)
   const [checking, setChecking] = useState(false)
+  const creditsOver = creditsProblem({ title, creator, location }) !== ''
   const [batchProgress, setBatchProgress] = useState<BackgroundImageBatchProgress | null>(null)
   const [error, setError] = useState('')
   useUpdateBlocker(
@@ -1808,22 +1812,17 @@ function ImageUpload({ target, cancel }: { target: ImageUploadTarget; cancel: ()
       setDimensions(prepared.dimensions)
       const metadata = prepared.metadata
       // Replace the previous file's prefill, while retaining manual entries
-      // when the new file has no corresponding metadata.
+      // when the new file has no corresponding metadata. Embedded text is
+      // kept whole; a credit over its limit shows its count and holds Save.
       const previous = previousMetadata.current
       setTitle(
         (current) =>
-          metadata.title?.slice(0, 300) ??
-          (current === previous.title?.slice(0, 300) ? submission?.title || '' : current),
+          metadata.title ?? (current === previous.title ? submission?.title || '' : current),
       )
-      setLocation(
-        (current) =>
-          metadata.location?.slice(0, 300) ??
-          (current === previous.location?.slice(0, 300) ? '' : current),
-      )
+      setLocation((current) => metadata.location ?? (current === previous.location ? '' : current))
       setCreator(
         (current) =>
-          metadata.creator?.slice(0, 300) ??
-          (current === previous.creator?.slice(0, 300) ? submission?.creator || '' : current),
+          metadata.creator ?? (current === previous.creator ? submission?.creator || '' : current),
       )
       previousMetadata.current = metadata
       setFile(picked)
@@ -1898,7 +1897,15 @@ function ImageUpload({ target, cancel }: { target: ImageUploadTarget; cancel: ()
   }
   const upload = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (!file || (submission && !confirmed) || !title.trim() || !creator.trim() || busy || checking)
+    if (
+      !file ||
+      (submission && !confirmed) ||
+      !title.trim() ||
+      !creator.trim() ||
+      creditsOver ||
+      busy ||
+      checking
+    )
       return
     // Protect the storage POST between the upload-URL mutation and the final
     // action, including when a view is closed while the upload finishes.
@@ -2003,11 +2010,11 @@ function ImageUpload({ target, cancel }: { target: ImageUploadTarget; cancel: ()
       <div className="grid gap-6 sm:grid-cols-3">
         <div className="space-y-2">
           <Label htmlFor={fieldId('title')}>Title</Label>
-          <Input
+          <LimitedInput
             id={fieldId('title')}
+            limit={LIMITS.imageTitle}
             value={title}
             onChange={(event) => setTitle(event.target.value)}
-            maxLength={300}
             required
             disabled={busy || checking}
             className="bg-surface-1"
@@ -2015,22 +2022,22 @@ function ImageUpload({ target, cancel }: { target: ImageUploadTarget; cancel: ()
         </div>
         <div className="space-y-2">
           <Label htmlFor={fieldId('location')}>Location</Label>
-          <Input
+          <LimitedInput
             id={fieldId('location')}
+            limit={LIMITS.imageLocation}
             value={location}
             onChange={(event) => setLocation(event.target.value)}
-            maxLength={300}
             disabled={busy || checking}
             className="bg-surface-1"
           />
         </div>
         <div className="space-y-2">
           <Label htmlFor={fieldId('creator')}>Creator</Label>
-          <Input
+          <LimitedInput
             id={fieldId('creator')}
+            limit={LIMITS.imageCreator}
             value={creator}
             onChange={(event) => setCreator(event.target.value)}
-            maxLength={300}
             required
             disabled={busy || checking}
             className="bg-surface-1"
@@ -2085,6 +2092,7 @@ function ImageUpload({ target, cancel }: { target: ImageUploadTarget; cancel: ()
             !file ||
             !title.trim() ||
             !creator.trim() ||
+            creditsOver ||
             (!!submission && !confirmed)
           }
         >

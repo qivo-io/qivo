@@ -32,9 +32,23 @@ let close: () => Promise<void>
 /** Takes the task window away, as App does once its close goes ahead. */
 let unmountTask: () => Promise<void>
 
-async function open({ embedded = false, title = 'Run the soak test' } = {}) {
+/** The comment the signed-in person wrote on the task, when `open` has one. */
+const COMMENT = '00000000-0000-4000-8000-000000000002'
+
+async function open({ embedded = false, title = 'Run the soak test', comment = false } = {}) {
   vi.resetModules()
   const snap: Snapshot = plannerFixture()
+  const comments = comment
+    ? [
+        {
+          id: COMMENT,
+          issue_id: 'task-a',
+          author: snap.profiles[0].id,
+          body: 'Check 2',
+          created_at: AT,
+        },
+      ]
+    : []
   snap.issues.push({
     id: 'task-a',
     org_id: snap.orgs[0].id,
@@ -53,7 +67,7 @@ async function open({ embedded = false, title = 'Run the soak test' } = {}) {
   network.onUpdate.mockImplementation((ref, _args, next) => {
     const name = getFunctionName(ref)
     if (name === 'snapshot:forMe') next(structuredClone(snap))
-    else if (name === 'snapshot:commentThread') next({ comments: [], earlier: false, events: [] })
+    else if (name === 'snapshot:commentThread') next({ comments, earlier: false, events: [] })
     return () => {}
   })
   network.query.mockResolvedValue(null)
@@ -139,6 +153,9 @@ function editorOf(label: string) {
   )
 }
 const question = () => document.querySelector('[data-discard-prompt] h2')?.textContent ?? null
+/** Waits for the discard question, which a busy worker renders later. */
+const asked = (text: string) =>
+  act(() => vi.waitFor(() => expect(question()).toBe(text), { timeout: 5_000 }))
 /** Presses `selector`, then lets a close's two ticks pass. */
 const press = (selector: string) =>
   act(async () => {
@@ -251,29 +268,33 @@ describe('closing the task window with unsent text', { timeout: 30_000 }, () => 
         await new Promise((resolve) => setTimeout(resolve, 10))
       })
     await act(async () => composer.commands.insertContent('Drift is under 2%'))
+    // an Escape that ends an input method's composition is the input method's
+    await act(async () => {
+      toolbar?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', isComposing: true, bubbles: true }),
+      )
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+    expect(question()).toBeNull()
     await escapeOn()
-    expect(question()).toBe('Discard your unsent comment?')
+    await asked('Discard your unsent comment?')
     await press('[data-discard-confirm]')
     expect(composer.getText()).toBe('')
     await act(async () => composer.commands.insertContent('Drift is under 3%'))
     await escapeOn()
-    expect(question()).toBe('Discard your unsent comment?')
+    await asked('Discard your unsent comment?')
     await press('[data-discard-keep]')
     expect(composer.getText()).toBe('Drift is under 3%')
     // the editor's own question never closes the window
     expect(onClose).not.toHaveBeenCalled()
   })
 
-  it('leaves the draft and the window alone on Escape inside the text', async () => {
-    await open()
-    const composer = await editorOf('Leave a comment')
-    await act(async () => composer.commands.insertContent('Drift is under 2%'))
-    const text = document.querySelector<HTMLElement>(
-      '[role="textbox"][aria-label="Leave a comment"]',
-    )
-    await act(async () => {
-      // ProseMirror reads keyCode, and takes Escape as its own
-      text?.dispatchEvent(
+  /** Escape inside the text of the editor labelled `label`, past the
+      close's two ticks. ProseMirror reads keyCode, and takes Escape as its
+      own. */
+  const escapeIn = (label: string) =>
+    act(async () => {
+      document.querySelector(`[role="textbox"][aria-label="${label}"]`)?.dispatchEvent(
         new KeyboardEvent('keydown', {
           key: 'Escape',
           keyCode: 27,
@@ -283,8 +304,58 @@ describe('closing the task window with unsent text', { timeout: 30_000 }, () => 
       )
       await new Promise((resolve) => setTimeout(resolve, 10))
     })
+
+  it('asks before Escape inside the description throws its draft away', async () => {
+    await open()
+    const description = await editorOf('Task description')
+    await act(async () => description.commands.insertContent(' Twice.'))
+    await escapeIn('Task description')
+    await asked('Discard your unsent description?')
+    await press('[data-discard-keep]')
+    expect(description.getText()).toContain('Twice.')
+    await escapeIn('Task description')
+    await asked('Discard your unsent description?')
+    await press('[data-discard-confirm]')
+    expect(description.getText()).toBe('Measure the drift.')
+    // a clean editor lets go of the text, and the window stays for the next
+    // Escape. The discard's own blur waits a frame, so focus comes after it.
+    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)))
+    await act(async () => description.view.focus())
+    expect(description.view.hasFocus()).toBe(true)
+    await escapeIn('Task description')
     expect(question()).toBeNull()
-    expect(composer.getText()).toBe('Drift is under 2%')
+    await act(() =>
+      vi.waitFor(() => expect(description.view.hasFocus()).toBe(false), { timeout: 5_000 }),
+    )
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('takes a comment out of edit mode on Escape inside its text', async () => {
+    await open({ comment: true })
+    const editing = () => document.querySelector('[role="textbox"][aria-label="Edit comment"]')
+    const edit = `[data-comment="${COMMENT}"] [aria-label="Edit comment"]`
+    await press(edit)
+    await editorOf('Edit comment')
+    // unchanged, it leaves edit mode at once
+    await escapeIn('Edit comment')
+    expect(question()).toBeNull()
+    expect(editing()).toBeNull()
+    await press(edit)
+    const editor = await editorOf('Edit comment')
+    await act(async () => editor.commands.insertContent(' rerun'))
+    await escapeIn('Edit comment')
+    await asked('Discard your unsent comment?')
+    await press('[data-discard-keep]')
+    expect(editing()).not.toBeNull()
+    expect(editor.getText()).toBe('Check 2 rerun')
+    await escapeIn('Edit comment')
+    await asked('Discard your unsent comment?')
+    await press('[data-discard-confirm]')
+    await act(() => vi.waitFor(() => expect(editing()).toBeNull(), { timeout: 5_000 }))
+    expect(document.querySelector(`[data-comment="${COMMENT}"]`)?.textContent).toContain('Check 2')
+    expect(document.querySelector(`[data-comment="${COMMENT}"]`)?.textContent).not.toContain(
+      'rerun',
+    )
     expect(onClose).not.toHaveBeenCalled()
   })
 

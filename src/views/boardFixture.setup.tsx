@@ -1,5 +1,5 @@
 import { getFunctionName } from 'convex/server'
-import { act, type ReactNode, useState } from 'react'
+import { act, type ReactNode, useLayoutEffect, useState } from 'react'
 import type { Root } from 'react-dom/client'
 import { vi } from 'vitest'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
@@ -95,7 +95,9 @@ export async function loadBoard(
     usePlannerVersion()
     const [opened, setOpened] = useState<string | null>(null)
     const [search, typeSearch] = useState('')
-    setSearch = typeSearch
+    useLayoutEffect(() => {
+      setSearch = typeSearch
+    }, [])
     const info = P.scopeInfo(scope)
     if (!info) throw new Error('missing the scope')
     const actions = { openIssue: setOpened as (...args: unknown[]) => void }

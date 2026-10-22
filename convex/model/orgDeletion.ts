@@ -480,18 +480,20 @@ const PHASE_ROWS: Record<
  * organization, its profiles and their logins. */
 const WORK_PHASES = ['tasks', 'projects', 'teams', 'labels', 'activity'] as const
 
-/** Deletes one REMOVAL_BUDGET of an organization's work: its tasks with
- * everything under them and their files, its projects, teams, labels and
- * activity, then the view preferences and messages of `profileIds`. Returns
- * true once all of it is gone. Like a deletion step, it reads every range
- * again from its start, so a repeated step cannot skip a row. It leaves
- * Deleted items alone, so a caller must see them empty first. */
+/** Deletes one `limit` (REMOVAL_BUDGET unless given) of an organization's
+ * work: its tasks with everything under them and their files, its projects,
+ * teams, labels and activity, then the view preferences and messages of
+ * `profileIds`. Returns true once all of it is gone. Like a deletion step,
+ * it reads every range again from its start, so a repeated step cannot skip
+ * a row. It leaves Deleted items alone, so a caller must see them empty
+ * first. */
 export async function wipeWorkStep(
   ctx: MutationCtx,
   orgId: string,
   profileIds: readonly string[],
+  limit: RemovalBudget = REMOVAL_BUDGET,
 ): Promise<boolean> {
-  const budget: RemovalBudget = { ...REMOVAL_BUDGET }
+  const budget: RemovalBudget = { ...limit }
   return await inOrder([
     ...WORK_PHASES.map((phase) => () => PHASE_ROWS[phase](ctx, orgId, budget)),
     ...profileIds.flatMap((profileId) => [

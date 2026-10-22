@@ -18,8 +18,10 @@ import {
   platformQuery,
   rule,
 } from './lib/functions'
+import { limitedText } from './lib/limitRules'
 import { LIMITS } from './lib/limits'
 import {
+  imageCredits,
   jpegDimensions,
   PANORAMA_MAX_BYTES,
   validateCalendarDay,
@@ -136,8 +138,8 @@ export const keys = platformQuery({
 export const mintKey = platformMutation({
   args: { name: v.string() },
   handler: async (ctx, { name }): Promise<{ id: string; secret: string }> => {
-    name = name.trim()
-    if (!name || name.length > 80) throw badRequest('use a key name between 1 and 80 characters')
+    name = limitedText(LIMITS.curationKeyName, name)
+    if (!name) throw badRequest('add the agent name')
     const own = await ctx.db
       .query('panorama_curation_keys')
       .withIndex('by_creator', (q) => q.eq('created_by', ctx.authUserId))
@@ -464,18 +466,18 @@ export const decline = platformMutation({
         'this submission was already accepted; manage its image or date in the library/calendar',
       )
     if (row.status === 'declined') return
-    if (note && note.length > 2000) throw badRequest('keep the review note within 2000 characters')
+    const reason = limitedText(LIMITS.proposalDeclineNote, note ?? '')
     await ctx.db.patch(row._id, {
       status: 'declined',
       reviewed_at: new Date().toISOString(),
       reviewed_by: ctx.authUserId,
-      review_note: note?.trim() || undefined,
+      review_note: reason || undefined,
     })
     await audit(ctx, {
       actor_auth_id: ctx.authUserId,
       actor_email: await operatorEmail(ctx, ctx.authUserId),
       action: 'panorama_submission_declined',
-      detail: { submission_id: id, note: note?.trim() ?? '' },
+      detail: { submission_id: id, note: reason },
     })
   },
 })
@@ -589,13 +591,11 @@ async function retainUnsplashUpload(
     source_url,
     source_id,
     storage_id,
-    title,
-    location,
-    creator,
     license_confirmed,
     width,
     height,
     auth_user_id,
+    ...credits
   }: LicensedUpload,
 ): Promise<{ image: Doc<'panorama_images'>; reused: boolean }> {
   await requireOperator(ctx, auth_user_id)
@@ -603,13 +603,7 @@ async function retainUnsplashUpload(
   if (source.source_id !== source_id || source.source_url !== source_url)
     throw badRequest('use the canonical Unsplash photo reference')
   if (!license_confirmed) throw badRequest('confirm the standard Unsplash license')
-  title = title.trim()
-  location = location?.trim() || undefined
-  creator = creator.trim()
-  if (!title || title.length > 300 || !creator || creator.length > 300)
-    throw badRequest('provide the image title and creator, each within 300 characters')
-  if (location && location.length > 300)
-    throw badRequest('keep the image location within 300 characters')
+  const { title, creator, location } = imageCredits(credits)
   const file = await ctx.db.system.get(storage_id)
   if (file?.contentType !== 'image/jpeg' || file.size > PANORAMA_MAX_BYTES)
     throw badRequest(`choose a JPEG image no larger than ${LIMITS.backgroundSize.max} MiB`)

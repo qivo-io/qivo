@@ -1,6 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { importBackgroundImages, prepareBackgroundImage } from './backgroundImageUpload'
+import { LIMITS } from '../../convex/lib/limits'
+import {
+  creditsProblem,
+  importBackgroundImages,
+  prepareBackgroundImage,
+} from './backgroundImageUpload'
+import { limitSentence } from './fieldLimits'
 import fixture from './fixtures/background-windows-exif.json'
+import { readImageMetadata } from './imageMetadata'
+
+// the real reader, which a test can override once for a file's credits
+vi.mock('./imageMetadata', async (real) => {
+  const actual = await real<typeof import('./imageMetadata')>()
+  return { ...actual, readImageMetadata: vi.fn(actual.readImageMetadata) }
+})
 
 const app1 = Uint8Array.from(atob(fixture.app1Base64), (char) => char.charCodeAt(0))
 
@@ -111,6 +124,34 @@ describe('background image batch upload', () => {
     expect(save).toHaveBeenCalledTimes(2)
     expect(save).toHaveBeenLastCalledWith(files[3], fixture.expected)
     expect(revoke).toHaveBeenCalledTimes(3)
+  })
+
+  it('refuses a file whose embedded credit is over its limit instead of cutting it', async () => {
+    decoder()
+    const long = { title: 'T'.repeat(LIMITS.imageTitle.max + 1), creator: 'Sam Lim' }
+    vi.mocked(readImageMetadata).mockReturnValueOnce(long)
+    const files = [file('long-title.jpg'), file('fits.jpg')]
+    const save = vi.fn().mockResolvedValue({ reused: false })
+    const result = await importBackgroundImages(files, save, vi.fn(), message)
+    expect(result.failed).toEqual([
+      { name: 'long-title.jpg', message: limitSentence(LIMITS.imageTitle) },
+    ])
+    expect(result.added).toBe(1)
+    expect(save).toHaveBeenCalledOnce()
+    expect(save).toHaveBeenCalledWith(files[1], fixture.expected)
+  })
+
+  it('names the first credit over its limit, and nothing for credits that fit', () => {
+    const fits = { title: 'T'.repeat(300), creator: 'C'.repeat(300), location: 'L'.repeat(300) }
+    expect(creditsProblem(fits)).toBe('')
+    expect(creditsProblem({ ...fits, creator: `${fits.creator}C` })).toBe(
+      limitSentence(LIMITS.imageCreator),
+    )
+    expect(creditsProblem({ ...fits, location: ` ${fits.location}L ` })).toBe(
+      limitSentence(LIMITS.imageLocation),
+    )
+    // counted as the server counts it, after trimming
+    expect(creditsProblem({ ...fits, title: `  ${fits.title}  ` })).toBe('')
   })
 
   it('retains the single-file editable workflow for files without credits and releases its original URL', async () => {

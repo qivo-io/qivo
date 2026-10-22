@@ -13,7 +13,7 @@ const textArb = fc
   .string({ unit: fc.constantFrom(...TEXT_CHARS), minLength: 1, maxLength: 14 })
   .map((text): MdInline => ({ t: 'text', text }))
 const codeArb = fc
-  .string({ unit: fc.constantFrom(...[...'ab` *\n\\~']), maxLength: 10 })
+  .string({ unit: fc.constantFrom(...'ab` *\n\\~'), maxLength: 10 })
   .map((text): MdInline => ({ t: 'code', text }))
 const HREFS = [
   'https://a.io/x',
@@ -78,13 +78,13 @@ export const blockArb = fc.oneof(
     })
     .map(({ start, items }): MdBlock => ({ t: 'ol', start, items })),
   fc
-    .string({ unit: fc.constantFrom(...[...'ab`\n *#>-']), maxLength: 20 })
+    .string({ unit: fc.constantFrom(...'ab`\n *#>-'), maxLength: 20 })
     .map((text): MdBlock => ({ t: 'codeblock', text })),
 )
 export const docArb = fc.array(blockArb, { maxLength: 5 })
 
 export const hostileString = fc.oneof(
-  fc.string({ unit: fc.constantFrom(...[...'*~+`\\[]()!#>-. _\nab3:/hts"']), maxLength: 40 }),
+  fc.string({ unit: fc.constantFrom(...'*~+`\\[]()!#>-. _\nab3:/hts"'), maxLength: 40 }),
   fc.string({ maxLength: 40 }),
 )
 

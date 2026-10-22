@@ -31,9 +31,6 @@
   border-radius: 10px;
   background: var(--surface-1);
 }
-.theme-choice-input:not([aria-disabled="true"]):not(:checked):hover + .theme-choice-body {
-  border-color: var(--border-strong);
-}
 /* A palette may name its own checked fill (--theme-choice-checked). */
 .theme-choice-input:checked + .theme-choice-body {
   border-color: var(--primary);
@@ -44,6 +41,9 @@
   + .theme-choice-body {
   outline: 2px solid var(--primary);
   outline-offset: 3px;
+}
+.theme-choice-input:not([aria-disabled="true"]):not(:checked):hover + .theme-choice-body {
+  border-color: var(--border-strong);
 }
 .theme-choice:has(.theme-choice-input[aria-disabled="true"]) {
   cursor: wait;

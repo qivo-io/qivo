@@ -816,7 +816,9 @@ export function EditInviteDialog({
   const emailChanged = cleanedEmail !== (member.email ?? '')
   const changed = cleanedName !== member.name || emailChanged
   const nameIssue = nameProblem(name)
-  const shapeIssue = emailProblem(email)
+  // only a changed address is checked, so an invitation stored before the
+  // address rule can still have its name corrected
+  const shapeIssue = emailChanged ? emailProblem(email) : ''
   /* A changed, well-formed address, checked once typing pauses. */
   const checkable = emailChanged && shapeIssue === '' ? cleanedEmail : ''
   const settled = useSettled(checkable, 300)

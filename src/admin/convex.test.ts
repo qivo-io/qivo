@@ -26,7 +26,7 @@ const client = vi.hoisted(() => {
     setSocket(connected: boolean) {
       if (connected && !double.socket) double.connections++
       double.socket = connected
-      for (const listener of [...listeners]) listener(double.connectionState())
+      for (const listener of Array.from(listeners)) listener(double.connectionState())
     },
   }
   return double

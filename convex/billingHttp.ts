@@ -3,7 +3,6 @@ import { httpAction } from './_generated/server'
 import { billingEnabled } from './lib/billingAccess'
 import { POLAR_MAX_BODY_BYTES, verifyPolarWebhook } from './lib/polar'
 
-declare const AbortSignal: { timeout(ms: number): unknown }
 declare function setTimeout(fn: () => void, ms: number): unknown
 declare function clearTimeout(id: unknown): void
 

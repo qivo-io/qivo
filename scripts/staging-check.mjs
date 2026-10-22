@@ -52,8 +52,8 @@ import { mkdirSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { DEFAULT_PAGE_SIZE, LIMITS, MIB } from '../convex/lib/limits.ts'
 import { signInBrowser } from './browser-demo.mjs'
+import { DEFAULT_PAGE_SIZE, LIMITS, MIB } from './limits.mjs'
 import { fixtureDirectory, loadCredentials, resolveTarget } from './marketing-demo.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')

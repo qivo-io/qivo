@@ -21,7 +21,9 @@
  *   issues       remaining hours over the cap, untrimmed descriptions and
  *                descriptions over TEXT_MAX
  *   comments     bodies over TEXT_MAX
- *   emails       profile addresses not in the form cleanEmail stores
+ *   emails       profile addresses not in the form cleanEmail stores,
+ *                including ones it refuses, such as an address a password
+ *                login cannot use
  *   deleted_projects, deleted_milestones, deleted_issue_attachments,
  *   deleted_issues, deleted_comments   the same rules on stored copies
  *
@@ -71,7 +73,7 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from '../_generated/server'
-import { address, asciiEmail } from '../lib/email'
+import { cleanEmail } from '../lib/email'
 import { cutText, LIMITS, NAME_MAX, TEXT_MAX, trimMarkdown } from '../lib/limits'
 
 /** Rows per page and the bytes one page may read; a page can end early.
@@ -225,7 +227,9 @@ function sorted(
   for (const { field, length, value } of changes) {
     const outcome = value === undefined ? 'reported' : write ? 'fixed' : 'would_fix'
     rows.push({ table, id, field: `${prefix}${field}`, length, outcome })
-    if (value !== undefined) patch = { ...(patch ?? {}), [field]: value }
+    if (value === undefined) continue
+    patch ??= {}
+    patch[field] = value
   }
   return { rows, patch }
 }
@@ -308,12 +312,13 @@ async function walk(
     const given = new Set<string>()
     for (const doc of page.page) {
       if (doc.email === undefined) continue
-      const email = asciiEmail(doc.email)
-      if (email === doc.email && address(email) !== null) continue
+      const email = cleanEmail(doc.email)
+      if (email === doc.email) continue
       const found = { table: 'profiles', id: doc._id, field: 'email', length: doc.email.length }
-      // an address over the limit, or not one address at all, is a
-      // person's to correct: a cut address is a different address
-      if (address(email) === null) {
+      // an address over the limit, not one address at all or one a password
+      // login cannot use is a person's to correct: a cut or rewritten
+      // address is a different address
+      if (email === null) {
         rows.push({ ...found, outcome: 'reported' })
         continue
       }

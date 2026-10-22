@@ -25,7 +25,7 @@ import type { Id } from '../../convex/_generated/dataModel'
 import { joinLists } from '../../convex/lib/arrayLimit'
 import { AVATAR_COLORS } from '../../convex/lib/avatarColors'
 import { BILLING_READ_ONLY, deletionReadOnly } from '../../convex/lib/billingAccess'
-import { asciiEmail, cleanEmail } from '../../convex/lib/email'
+import { asciiEmail, cleanEmail, emailRefusal as storedEmailRefusal } from '../../convex/lib/email'
 import { descriptionForm, FIELD_CHANGED, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
 import type { FieldChange } from '../../convex/lib/functions'
 import { imageRefs, shownImages } from '../../convex/lib/imageRefs'
@@ -99,24 +99,19 @@ import { DEMO_MODE, notifyDemoEnded } from '../lib/demoMode'
 import { sentence as asSentence, cleanName, limitSentence } from '../lib/fieldLimits'
 import { AVATAR_TYPES, avatarImage, compressImage } from '../lib/images'
 import { nameInitials } from '../lib/initials'
-import { groupProgress, groupSpan, isIssueDone, isIssueGroup } from '../lib/issueGroups'
+import { groupProgress, isIssueDone, isIssueGroup } from '../lib/issueGroups'
 import { LABEL_COLORS } from '../lib/labelColors'
 import { hasUnsaved, holdUnsaved, leaveDeliberately } from '../lib/leaveGuard'
 import { watchLocalDay } from '../lib/localDay'
 import { pauseSentence } from '../lib/noticeText'
 import { desktopNotify } from '../lib/notify'
 import { matchesAllWords, taskSearchText } from '../lib/search'
-import { type SavePause, syncStatus } from '../lib/syncStatus'
+import { type OfflineWindow, type SavePause, syncStatus } from '../lib/syncStatus'
 import { attachmentBlock, labelBlock, linkBlock } from '../lib/taskCaps'
 import type { ToastTone } from '../lib/toasts'
 import { type UnconfirmedChange, unconfirmedNote, unconfirmedText } from '../lib/unconfirmedNote'
 import { beginUpdateBlock } from '../lib/updateSafety'
-import {
-  committedByWeek,
-  DEFAULT_PLANNABLE_HOURS,
-  type LoadSpan,
-  plannableHoursOf,
-} from '../lib/workload'
+import { committedByWeek, DEFAULT_PLANNABLE_HOURS, plannableHoursOf } from '../lib/workload'
 import { createEntityLookup } from './entityLookup'
 import { type Refusal as FieldRefusal, noticeText, refusalLine, type Writer } from './fieldNotice'
 import {
@@ -141,7 +136,6 @@ import {
   type ActivityVM,
   type ArchivedIssueVM,
   type ArchivedProjectVM,
-  type AttachmentVM,
   byOrder,
   type CommentVM,
   duplicateNameTags,
@@ -158,9 +152,7 @@ import {
   shapeActivity,
   shapeArchivedIssue,
   shapeArchivedProject,
-  shapeAttachment,
   shapeComment,
-  shapeIssue,
   shapeLabel,
   shapeMessage,
   shapeMessageGroup,
@@ -1511,7 +1503,6 @@ function start<M extends FunctionReference<'mutation'>, T>(
   const layer = batch ?? layers.open(name, view, o.over)
   // read before the paint, which may drop a hidden parent
   const sentArgs = o.over ? ({ ...args, expected: expectedOf(o.over) } as FunctionArgs<M>) : args
-  const sentAt = Date.now()
   layers.send(layer, { snapshot: snapshotDeliveries, thread: threadDeliveries })
   if (!batch) {
     try {
@@ -1569,7 +1560,7 @@ function start<M extends FunctionReference<'mutation'>, T>(
           guarded(() => settleRefused(layer))
           let kept = false
           if (o.keepDraft) guarded(() => (kept = o.keepDraft?.(shownOf(o.over)) !== false))
-          fieldRefusals.set(error, { layer, sentAt, kept, ...o.notice })
+          fieldRefusals.set(error, { layer, kept, ...o.notice })
           guarded(() => onError?.(error))
         } else {
           guarded(() => onError?.(error))
@@ -2154,6 +2145,10 @@ function refusePausedWrite(mutation: FunctionReference<'mutation'>, quiet = fals
    lost seat can tell whether the person still has a seat elsewhere. */
 const refusedOrgs = new WeakMap<object, string>()
 
+/* The times the socket was down while each refused write waited (dispatch),
+   so a field_changed notice can say "while you were offline". */
+const offlineWaits = new WeakMap<object, OfflineWindow[]>()
+
 /** Whether a refusal says the person has no seat in the organization any
     more (convex/lib/functions.ts loadMember), and they hold no seat in
     another one. It can arrive before or after the snapshot delivery that
@@ -2269,7 +2264,6 @@ async function refreshOlderComment(id: string) {
 /** What send() knew about a field_changed refusal, for its notice. */
 type FieldRefusalContext = {
   layer: Layer
-  sentAt: number
   kept: boolean
   deletes?: boolean
   batch?: number
@@ -2335,10 +2329,10 @@ const fieldLookup = {
   },
 }
 
-/* Whether a write sent at `sentAt` waited through a lost connection while
-   one of `changes` was made. */
-function changedWhileOffline(sentAt: number, changes: readonly FieldChange[]): boolean {
-  const windows = syncStatus.offlineSince(sentAt)
+/* Whether refused write `e` waited through a lost connection while one of
+   `changes` was made. */
+function changedWhileOffline(e: unknown, changes: readonly FieldChange[]): boolean {
+  const windows = (typeof e === 'object' && e !== null && offlineWaits.get(e)) || []
   return changes.some((change) => {
     const at = change.at ? Date.parse(change.at) : Number.NaN
     return windows.some(
@@ -2389,7 +2383,7 @@ function noticeFieldChanged(e: unknown) {
       kept: context?.kept,
       deletes: context?.deletes,
       batch: context?.batch,
-      offline: context ? changedWhileOffline(context.sentAt, changes) : false,
+      offline: changedWhileOffline(e, changes),
     },
     box,
   }
@@ -2670,7 +2664,8 @@ const noteScopes = () => [...myProfiles].map(([org, profile]) => `${org}:${profi
    the pause first; the check here is the backstop. A sent write counts as
    waiting (lib/syncStatus), and a change the person made is noted for the
    crash note (lib/unconfirmedNote), until the server answers. A refusal
-   notes a read-only organization and the organization it named. */
+   notes a read-only organization, the organization it named and the times
+   the socket was down while the write waited. */
 function dispatch<M extends FunctionReference<'mutation'>>(
   mutation: M,
   args: FunctionArgs<M>,
@@ -2709,8 +2704,10 @@ function dispatch<M extends FunctionReference<'mutation'>>(
         if (DEMO_MODE && epoch === storeEpoch && isDemoLifecycleRefusal(error)) notifyDemoEnded()
         const orgId = args && 'org_id' in args ? args.org_id : undefined
         noteReadOnlyRefusal(orgId, error)
-        if (typeof orgId === 'string' && typeof error === 'object' && error !== null)
-          refusedOrgs.set(error, orgId)
+        if (typeof error === 'object' && error !== null) {
+          offlineWaits.set(error, settleWaiting())
+          if (typeof orgId === 'string') refusedOrgs.set(error, orgId)
+        }
         throw error
       })
       .finally(releaseUpdate)
@@ -3498,7 +3495,7 @@ function checkTasks(sources: TaskSources) {
     const other = new Map(entries(built))
     const first = entries(kept).find(([key, item]) => !sameData(item, other.get(key)))
     const field =
-      first && first[1] && typeof first[1] === 'object'
+      first?.[1] && typeof first[1] === 'object'
         ? Object.keys(first[1]).find(
             (key) =>
               !sameData(
@@ -3515,17 +3512,19 @@ function checkTasks(sources: TaskSources) {
 
 /* --- email addresses ------------------------------------------------------
    One rule, the server's (convex/lib/email.ts cleanEmail): an address the
-   mail sender can send to, trimmed, lowercased, with a Unicode domain
-   written as punycode, at most LIMITS.email.max characters. Every write
-   stores that form; null is an empty or unusable address. */
+   mail sender can send to and a password login can use, trimmed,
+   lowercased, with a Unicode domain written as punycode, at most
+   LIMITS.email.max characters. Every write stores that form; null is an
+   empty or unusable address. */
 const normalizeEmail = (v: unknown): string | null => cleanEmail(String(v ?? ''))
 
 /** Why `v`, which normalizeEmail refused, cannot be a person's address: the
-    length sentence when its stored form is too long, as the server says. */
-const emailRefusal = (v: unknown): string =>
-  asciiEmail(String(v ?? '')).length > LIMITS.email.max
-    ? limitSentence(LIMITS.email)
-    : 'Enter an email address for sign-in.'
+    server's sentence when its stored form is too long or cannot get a
+    password login. */
+const emailRefusal = (v: unknown): string => {
+  const why = storedEmailRefusal(String(v ?? ''))
+  return why === null ? 'Enter an email address for sign-in.' : asSentence(why)
+}
 
 /* --- sub-issue remaining rollup (0066) — the optimistic mirror ------------
    A task that gains a subtask loses its own hours, at `at`. */
@@ -5115,8 +5114,10 @@ export const PLANNER = {
     const org = orgOfProject(metaId)
     if (!org) return null
     // a seat the address already names: the level it holds on screen, so a
-    // change made meanwhile is not overwritten unseen
-    const address = normalizeEmail(email)
+    // change made meanwhile is not overwritten unseen. Found by the stored
+    // form, as the server finds it, so a seat whose address predates the
+    // address rule is found too.
+    const address = asciiEmail(email)
     const seat = address
       ? [...rows.profiles.values()].find((p) => p.org_id === org && p.email === address)
       : undefined

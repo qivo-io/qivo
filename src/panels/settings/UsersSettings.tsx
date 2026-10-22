@@ -3,14 +3,14 @@ import React, { useEffect as useEffectS, useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
-import { asciiEmail } from '../../../convex/lib/email'
+import { emailRefusal } from '../../../convex/lib/email'
 import { LIMITS } from '../../../convex/lib/limits'
 import { CopyValue } from '../../components/CopyValue'
 import { LimitedInput } from '../../components/LimitedField'
 import { Avatar, Icon, Seg } from '../../components/qivo'
 import { FieldHint, PageTitle, SettingsGroup, SettingsSection } from '../../components/settingsPage'
 import { DEMO_MODE } from '../../lib/demoMode'
-import { cleanName, limitSentence, overLimit } from '../../lib/fieldLimits'
+import { cleanName, overLimit, sentence } from '../../lib/fieldLimits'
 import { useUnsaved } from '../../lib/leaveGuard'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { useConfirmArm } from '../../lib/useConfirmArm'
@@ -240,11 +240,11 @@ export function OrgUsersPage({
   // the field invalid. Agents have no email, so both checks must be bypassed.
   const emailMissing = !agentMode && !addEmail.trim()
   const emailBad = !agentMode && !emailMissing && !P.emailLooksValid(addEmail)
-  // a well-formed address can still be longer than the server stores
+  // a well-formed address can still be longer than the server stores, or
+  // one a password login cannot use
+  const emailRefused = emailRefusal(addEmail)
   const emailWhy =
-    asciiEmail(addEmail).length > LIMITS.email.max
-      ? limitSentence(LIMITS.email)
-      : 'That does not look like an email address'
+    emailRefused === null ? 'That does not look like an email address' : sentence(emailRefused)
   // counted as the server stores it, with whitespace runs collapsed
   const nameTooLong = overLimit(LIMITS.personName, cleanName(addName))
   const addUser = async () => {

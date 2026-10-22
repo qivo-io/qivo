@@ -4,8 +4,8 @@ import { createCanvasImageLoader, imageCreditUrl } from './appearance'
 function deferred() {
   let resolve!: () => void
   let reject!: (error: Error) => void
-  const promise = new Promise<void>((ok, fail) => {
-    resolve = ok
+  const promise = new Promise<string | undefined>((ok, fail) => {
+    resolve = () => ok(undefined)
     reject = fail
   })
   return { promise, resolve, reject }

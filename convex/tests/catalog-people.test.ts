@@ -11,6 +11,7 @@ import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
 import { AVATAR_COLORS } from '../lib/avatarColors'
+import { NO_PASSWORD_LOGIN } from '../lib/email'
 import { LIMITS } from '../lib/limits'
 import { newOrgDefaults } from '../model/orgs'
 import { avatarColor } from '../model/people'
@@ -196,6 +197,40 @@ describe('profiles.create — the org-seat invitation', () => {
     const fits = personArgs(f, { email: at254 })
     await as(t, f.admin).mutation(api.profiles.create, fits)
     expect((await profileById(t, fits.id))?.email).toBe(at254)
+    // an address a password login cannot use is refused with the reason, in
+    // either form of a Unicode top-level domain, while a Unicode domain under
+    // .de is stored in punycode
+    for (const email of ['ivan@правительство.рф', 'ivan@xn--80aealotwbjpid2k.xn--p1ai']) {
+      const noLogin = await expectRefusal(
+        as(t, f.admin).mutation(api.profiles.create, personArgs(f, { email })),
+        'rule',
+      )
+      expect(noLogin.data.message, email).toBe(NO_PASSWORD_LOGIN)
+    }
+    const unicode = personArgs(f, { email: 'Anna@Bücher.de' })
+    await as(t, f.admin).mutation(api.profiles.create, unicode)
+    expect((await profileById(t, unicode.id))?.email).toBe('anna@xn--bcher-kva.de')
+    // a pending seat stored before the rule keeps its address through an
+    // edit that carries it unchanged, and a new address is still checked
+    const legacy = await plantSeat(t, { org_id: f.org.id, email: 'jørn@example.no' })
+    await as(t, f.admin).mutation(api.profiles.update, {
+      org_id: f.org.id,
+      id: legacy.id,
+      patch: { name: 'Jørn Lie', email: 'Jørn@Example.no' },
+    })
+    expect(await profileById(t, legacy.id)).toMatchObject({
+      name: 'Jørn Lie',
+      email: 'jørn@example.no',
+    })
+    const changed = await expectRefusal(
+      as(t, f.admin).mutation(api.profiles.update, {
+        org_id: f.org.id,
+        id: legacy.id,
+        patch: { email: 'jørn@example.se' },
+      }),
+      'rule',
+    )
+    expect(changed.data.message).toBe(NO_PASSWORD_LOGIN)
     const dup = await expectRefusal(
       as(t, f.admin).mutation(api.profiles.create, personArgs(f, { email: f.user.email })),
       'rule',

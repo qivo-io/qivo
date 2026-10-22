@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Id } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
+import { LIMITS } from '../lib/limits'
 import { PANORAMA_MAX_BYTES } from '../lib/panorama'
 import { sha256hex } from '../machine/auth'
 import { as, expectRefusal, NOW, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
@@ -290,6 +291,35 @@ describe('platform-only curation credential management', () => {
       'bad_request',
       /name/,
     )
+  })
+
+  it('takes an agent name of 80 characters, trimmed, and refuses 81 with the limit sentence', async () => {
+    const { t, op, key } = await setup()
+    await op.mutation(api.panoramaCuration.revokeKey, { id: key.id })
+    const name = 'n'.repeat(LIMITS.curationKeyName.max)
+    const refused = await expectRefusal(
+      op.mutation(api.panoramaCuration.mintKey, { name: `${name}n` }),
+      'rule',
+    )
+    expect(refused.data.message).toBe(LIMITS.curationKeyName.refusal)
+    await op.mutation(api.panoramaCuration.mintKey, { name: ` ${name} ` })
+    expect((await keys(t)).map((row) => row.name)).toEqual(['Seasonal curator', name])
+  })
+})
+
+describe('a human decline reason', () => {
+  it('is stored trimmed up to 2,000 characters and refused past it with the limit sentence', async () => {
+    const { t, op, key } = await setup()
+    const link = await submit(t, key.id)
+    const reason = 'r'.repeat(LIMITS.proposalDeclineNote.max)
+    const refused = await expectRefusal(
+      op.mutation(api.panoramaCuration.decline, { id: link.submission.id, note: `${reason}r` }),
+      'rule',
+    )
+    expect(refused.data.message).toBe(LIMITS.proposalDeclineNote.refusal)
+    expect((await submissions(t))[0].status).not.toBe('declined')
+    await op.mutation(api.panoramaCuration.decline, { id: link.submission.id, note: ` ${reason} ` })
+    expect((await submissions(t))[0]).toMatchObject({ status: 'declined', review_note: reason })
   })
 })
 

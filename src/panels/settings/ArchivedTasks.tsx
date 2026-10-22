@@ -302,12 +302,11 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
   }
 
   const now = new Date()
-  let month = ''
-  const rows = visible.map((row) => {
+  const rows = visible.map((row, index) => {
     const at = new Date(row.archivedAt)
     const label = monthLabel(at)
-    const divider = label !== month
-    month = label
+    const before = visible[index - 1]
+    const divider = !before || monthLabel(new Date(before.archivedAt)) !== label
     const canRestore = ['lead', 'user'].includes(P.levelOn(row.project) || '')
     const place = placeOf(row.project)
     const owner = row.owner ? P.user(row.owner)?.name : undefined

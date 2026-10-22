@@ -31,6 +31,9 @@ import { InviteOutcome } from './UserControls'
 // Show home projects first, then foreign organizations. Remember one expanded
 // project for this browser session; access settings determine visibility.
 let lastOpenProject: string | null = null
+const rememberOpenProject = (id: string | null) => {
+  lastOpenProject = id
+}
 
 export function OrgProjectsPage({
   setPage,
@@ -48,7 +51,7 @@ export function OrgProjectsPage({
   const [open, setOpen] = useStateS<string | null>(lastOpenProject)
   const toggle = (id: string) => {
     const next = open === id ? null : id
-    lastOpenProject = next
+    rememberOpenProject(next)
     setOpen(next)
   }
   const foreignOrgs: string[] = []

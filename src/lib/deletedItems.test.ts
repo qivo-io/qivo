@@ -104,7 +104,7 @@ describe('folding a run of deletes', () => {
     const lines = run(12)
     const first = fold(lines, new Set())
     const line = first.find((p) => p.kind === 'fold')
-    if (!line || line.kind !== 'fold') throw new Error('no fold line')
+    if (line?.kind !== 'fold') throw new Error('no fold line')
     const newer: Line = { kind: 'item', row: row('new', { deleted_at: at(14, 31) }) }
     expect(shape(fold([newer, ...lines], new Set([line.key])))).toContain('fewer')
     // a run that lost its oldest row is another run

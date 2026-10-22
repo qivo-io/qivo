@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { NO_PASSWORD_LOGIN } from '../lib/email'
 import { LIMITS } from '../lib/limits'
 import { weekLabel } from '../model/orgs'
 import {
@@ -1208,6 +1209,27 @@ describe('projects.inviteGuest', () => {
         .unique(),
     )
     expect(seat?.message_retention_days).toBe(30)
+  })
+
+  it('grants a member whose stored address the address rule now refuses, and checks only a new seat', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // a provider login's address, or a seat invited before the rule
+    const held = await plantSeat(t, { org_id: f.org.id, email: 'jørn@example.no' })
+    const out = await invite(t, f, { email: 'Jørn@Example.no', project_id: f.sub.id })
+    expect(out.id).toBe(held.id)
+    const grant = await t.run((ctx) =>
+      ctx.db
+        .query('project_access')
+        .withIndex('by_project_profile', (q) =>
+          q.eq('project_id', f.sub.id).eq('profile_id', held.id),
+        )
+        .unique(),
+    )
+    expect(grant?.level).toBe('user')
+    // an address nobody holds yet still has to pass the rule
+    const fresh = await expectRefusal(invite(t, f, { email: 'åsa@example.no' }), 'rule')
+    expect(fresh.data.message).toBe(NO_PASSWORD_LOGIN)
   })
 
   it('refusal sentences, verbatim — including the 0098-missed level sentence', async () => {

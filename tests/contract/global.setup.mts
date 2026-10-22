@@ -18,9 +18,10 @@
  *   1. `node scripts/marketing-demo.mjs reset --dev --anchor <ANCHOR>
  *      --confirm northstar-labs` — the same command a person runs. It
  *      provisions the organization when absent, then wipes and seeds its
- *      work in two transactions (a failed seed exits non-zero and can
- *      leave the demo empty; the next pass's reset refills it); contract
- *      asserts about seeded shapes are only valid immediately after. ANCHOR
+ *      work, each in short calls of its own (a failed seed exits non-zero
+ *      and can leave the demo empty or part seeded; the next pass's reset
+ *      refills it); contract asserts about seeded shapes are only valid
+ *      immediately after. ANCHOR
  *      is the production scenario's Monday (docs/marketing-demo.md) so a
  *      pass never moves the dates local screenshots are matched against;
  *      CONTRACT_ANCHOR overrides it.

@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { sentence } from '@/lib/fieldLimits'
+import { NO_PASSWORD_LOGIN } from '../../convex/lib/email'
 import type { PeopleCheck } from './api'
 import {
   addressIssue,
@@ -50,6 +52,16 @@ describe('person rows', () => {
         incomplete: false,
       },
     ])
+  })
+
+  it('refuses an address a password login cannot use, and says why', () => {
+    const review = reviewPeople(
+      [row('Ivan Petrov', 'ivan@правительство.рф'), row('Jørn Lie', 'jørn@example.no')],
+      { adminFirst: false, checks: none },
+    )
+    expect(review.ready).toBe(false)
+    const refused = { message: sentence(NO_PASSWORD_LOGIN), field: 'email', incomplete: true }
+    expect(review.issues).toEqual([refused, refused])
   })
 
   it('refuses a name over 80 characters at once, and keeps it whole', () => {

@@ -193,7 +193,7 @@ describe('background loading', () => {
   it('goes on after a pass that a drop and return interrupted mid-download', async () => {
     status = connected()
     const order: string[] = []
-    let fail = (_: Error) => {}
+    let fail: (error: Error) => void = () => {}
     const first = preloadModule(
       () =>
         new Promise<{ name: string }>((_, reject) => {

@@ -233,19 +233,30 @@ describe('internal/overCapRows', () => {
     const two = await plantSeat(t, { org_id: f.org.id, email: 'anna,ben@example.test' })
     // the same address in another organization is that organization's seat
     const elsewhere = await plantSeat(t, { org_id: f.otherOrg.id, email: 'anna@bücher.de' })
+    // addresses a password login cannot use, in either domain form
+    const jorn = await plantSeat(t, { org_id: f.org.id, email: 'jørn@example.no' })
+    const ivan = await plantSeat(t, { org_id: f.org.id, email: 'ivan@правительство.рф' })
+    const seats = [anna, ben, two, elsewhere, jorn, ivan]
 
     const { rows } = await fix(t, false)
-    expect(
-      [anna, ben, two, elsewhere].map((seat) => rows.find((r) => r.id === seat._id)?.outcome),
-    ).toEqual(['fixed', 'skipped', 'reported', 'fixed'])
+    expect(seats.map((seat) => rows.find((r) => r.id === seat._id)?.outcome)).toEqual([
+      'fixed',
+      'skipped',
+      'reported',
+      'fixed',
+      'reported',
+      'reported',
+    ])
     const emails = await t.run(async (ctx) =>
-      Promise.all([anna, ben, two, elsewhere].map(async (s) => (await ctx.db.get(s._id))?.email)),
+      Promise.all(seats.map(async (s) => (await ctx.db.get(s._id))?.email)),
     )
     expect(emails).toEqual([
       'anna@xn--bcher-kva.de',
       'ben@bücher.de',
       'anna,ben@example.test',
       'anna@xn--bcher-kva.de',
+      'jørn@example.no',
+      'ivan@правительство.рф',
     ])
   })
 

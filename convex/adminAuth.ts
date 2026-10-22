@@ -33,7 +33,7 @@ import { authComponent, createAuth, createCaptureAuth } from './auth'
 import { claimSeatsForLogin } from './identity'
 import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
-import { asciiEmail } from './lib/email'
+import { asciiEmail, unicodeEmail } from './lib/email'
 import {
   badRequest,
   conflict,
@@ -458,16 +458,21 @@ export const deleteOrphanLogin = internalMutation({
   handler: async (ctx, args) => {
     const email = lookupEmail(args.email)
     /* A login keeps the address its sign-in gave it, which for a provider
-     * sign-in can hold a Unicode domain that profiles store in punycode, so
-     * the login is looked up by the address as typed, lowercased, too. Type
-     * it as the login shows it. */
-    const spellings = [...new Set([email, args.email.trim().toLowerCase()])]
-    let user: { _id: string } | null = null
+     * sign-in can hold a Unicode domain that profiles store in punycode. The
+     * address is put in the stored form (asciiEmail) whichever way it was
+     * typed, and the login is looked up in that form, with its domain
+     * written back in Unicode (unicodeEmail), and as typed, lowercased, for a
+     * login whose Unicode is not in the form unicodeEmail writes. A login
+     * counts only when its own stored form is that address, so the guards
+     * below check the address the login really has. */
+    const spellings = [...new Set([email, unicodeEmail(email), args.email.trim().toLowerCase()])]
+    let user: { _id: string; email: string } | null = null
     for (const value of spellings) {
-      user ??= (await ctx.runQuery(components.betterAuth.adapter.findOne, {
+      const found = (await ctx.runQuery(components.betterAuth.adapter.findOne, {
         model: 'user',
         where: [{ field: 'email', value }],
-      })) as { _id: string } | null
+      })) as { _id: string; email: string } | null
+      if (found !== null && asciiEmail(found.email) === email) user ??= found
     }
     if (user === null) throw notFound('no auth account with that email')
     /* ANY profile — home or guest — means this login is not an orphan; the

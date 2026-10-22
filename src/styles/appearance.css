@@ -293,10 +293,6 @@ html[data-appearance] .board-card {
 html[data-appearance] .board-card:hover {
   border-color: var(--border-strong);
 }
-/* Over a photo every card tints the lane with half the control fill. */
-html[data-appearance][data-background-state="ready"] .board-card {
-  background: var(--board-card-fill);
-}
 /* Light cards are white objects on the lane, opaque with No image. A
    hovered card answers with a contact shadow and a slightly deeper rim, and
    the rows inside it hover at a faint ink (a visible one on a parent card
@@ -306,6 +302,10 @@ html[data-appearance][data-background-state="ready"] .board-card {
 html[data-appearance="light"] .board-card {
   --hover: rgba(25, 39, 56, 0.04);
   background: var(--surface-1);
+}
+/* Over a photo every card tints the lane with half the control fill. */
+html[data-appearance][data-background-state="ready"] .board-card {
+  background: var(--board-card-fill);
 }
 html[data-appearance="light"] .board-card:has(> :nth-child(2)) {
   --hover: rgba(25, 39, 56, 0.07);

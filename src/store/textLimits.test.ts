@@ -1,7 +1,8 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { NO_PASSWORD_LOGIN } from '../../convex/lib/email'
 import { LIMITS, TEXT_MAX } from '../../convex/lib/limits'
-import { limitSentence } from '../lib/fieldLimits'
+import { limitSentence, sentence } from '../lib/fieldLimits'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 import type { Row } from './rows'
 
@@ -232,6 +233,9 @@ describe('the limits in the store', () => {
     expect(toast).toHaveBeenCalledWith(limitSentence(LIMITS.email), 'error')
     P.addUser({ name: 'Anna Berg', email: 'anna@', orgRole: 'user' })
     expect(toast).toHaveBeenLastCalledWith('Enter an email address for sign-in.', 'error')
+    // the mail sender takes it, but a password login cannot use it
+    P.addUser({ name: 'Ivan Petrov', email: 'ivan@правительство.рф', orgRole: 'user' })
+    expect(toast).toHaveBeenLastCalledWith(sentence(NO_PASSWORD_LOGIN), 'error')
     expect(sent).toEqual([])
   })
 

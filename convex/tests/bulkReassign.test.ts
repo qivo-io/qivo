@@ -36,7 +36,7 @@ import { byId } from '../lib/db'
 import type { Refusal } from '../lib/functions'
 import { LIMITS } from '../lib/limits'
 import { type BulkUpdate, holderKey, type IssuePatch, updateIssueCore } from '../model/issues'
-import { newNotifyPreload } from '../model/messages'
+import { FOLLOWER_FANOUT, newNotifyPreload } from '../model/messages'
 import { REMOVAL_FULL, reassignTooLarge } from '../model/projectAccess'
 import {
   as,
@@ -535,14 +535,17 @@ describe('reassigning the tasks of an access removal', () => {
     expect(await fx.t.run((ctx) => ctx.db.query('messages').collect())).toEqual([])
   })
 
-  it('hands over a task with 1,000 followers, whom steps within the limits tell', async () => {
+  it('hands over a task with more followers than one step tells, whom steps within the limits tell', async () => {
     const fx = await crowded(20, { t: newT({ transactionLimits: { databaseQueries: 1000 } }) })
-    // 1,000 more people of Hardware follow only the last task. Told in the
-    // removal, their messages passed a limit of 1,000 index ranges.
+    // More people of Hardware than one background step tells follow only the
+    // last task, so a full step runs inside a limit of 1,000 index ranges and
+    // the next one takes over. No more: convex-test reads every stored
+    // document for each index range, so this test's time grows with the
+    // square of the count.
     const last = fx.tasks[fx.tasks.length - 1]
     const extra = await fx.t.run(async (ctx) => {
       const ids: string[] = []
-      for (let i = 0; i < 1000; i++) {
+      for (let i = 0; i < FOLLOWER_FANOUT.step + 100; i++) {
         const id = uuid()
         await ctx.db.insert('profiles', {
           id,
@@ -571,20 +574,24 @@ describe('reassigning the tasks of an access removal', () => {
       }
       return ids
     })
+    const told = () =>
+      fx.t.run(async (ctx) =>
+        (
+          await ctx.db
+            .query('messages')
+            .withIndex('by_issue_read', (q) => q.eq('issue_id', last.id))
+            .collect()
+        ).map((m) => m.recipient_id),
+      )
     await removeEmil(fx, fx.leo.id)
     expect(await membership(fx)).toBeNull()
+    // the removal tells none of them itself
+    expect(await told()).toEqual([])
     await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
-    const told = await fx.t.run(async (ctx) =>
-      (
-        await ctx.db
-          .query('messages')
-          .withIndex('by_issue_read', (q) => q.eq('issue_id', last.id))
-          .collect()
-      ).map((m) => m.recipient_id),
-    )
+    const heard = await told()
     // each of them once, with the task's other followers and Leo
-    expect(told.filter((id) => extra.includes(id)).sort()).toEqual([...extra].sort())
-    expect(new Set(told).size).toBe(told.length)
+    expect(heard.filter((id) => extra.includes(id)).sort()).toEqual([...extra].sort())
+    expect(new Set(heard).size).toBe(heard.length)
   })
 
   it('hands over a task whose followers see it through one of many teams', async () => {

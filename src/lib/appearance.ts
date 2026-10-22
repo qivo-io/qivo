@@ -28,7 +28,7 @@ export function createCanvasImageLoader(
     url: string,
     image?: CanvasImage,
     quality?: CanvasImageQuality,
-  ) => Promise<void | string>,
+  ) => Promise<string | undefined>,
   receive: (state: CanvasImageState) => void,
 ) {
   let generation = 0
@@ -41,7 +41,7 @@ export function createCanvasImageLoader(
   let previewOnly = false
   let previewFallback = false
   let displayedIdentity: string | null = null
-  const requests = new Map<string, Promise<void | string>>()
+  const requests = new Map<string, Promise<string | undefined>>()
   const publish = () =>
     receive({
       status: displayed ? 'ready' : pending ? 'loading' : 'unavailable',
