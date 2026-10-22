@@ -203,9 +203,11 @@ target. It adds 10,000 tasks and a parent for every 25 of them, as Nora,
 the organization's admin, through the app's own task mutations, one at a
 time. `--tasks` sets a smaller count; a larger organization no longer
 loads. The tasks come in every status, with subtasks, due dates, pauses,
-long titles and unowned tasks. Run it again to add only the task numbers
-still missing; a family it stopped in the middle of stays as it is. It
-writes to that local backend alone.
+long titles and unowned tasks. Their titles read like Northstar's, so the
+Board's card height estimates meet realistic text, and each description
+names the task's number. Run it again to add only the tasks still missing;
+it also finishes a parent and subtasks it stopped in the middle of, under
+the parent it already made. It writes to that local backend alone.
 
 ## Production release
 
