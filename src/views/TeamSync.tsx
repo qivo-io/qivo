@@ -441,6 +441,7 @@ export function TeamSync({
   const onCorrectRef = useRef(onCorrect)
   onCorrectRef.current = onCorrect
 
+  // oxlint-disable-next-line react/purity -- Team sync shows today, read from the clock at each render
   const now = Date.now()
   const day: SyncDay = syncDay(now)
   const world: ScopeWorld = {

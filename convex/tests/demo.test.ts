@@ -5,6 +5,7 @@ import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { createAuthOptions } from '../auth'
 import authSchema from '../betterAuth/schema'
+import { MARKETING_DEMO, MARKETING_DEMO_VERSION } from '../internal/marketingDemoData'
 import { byId } from '../lib/db'
 import {
   DEMO_INSERTS_TOTAL,
@@ -13,6 +14,7 @@ import {
   DEMO_WRITES_PER_MINUTE,
   DEMO_WRITES_TOTAL,
 } from '../lib/demo'
+import { PUBLIC_DEMO_STEPS } from '../model/demoSeed'
 import { expectRefusal, newT, type T, uuid } from './helpers.setup'
 
 const componentModules = import.meta.glob('../betterAuth/**/*.ts')
@@ -101,9 +103,18 @@ const setCounts = (receipt: Doc<'demo_sessions'>, counts: Counts) =>
     else await ctx.db.insert('demo_write_counts', { demo_id: receipt.id, ...counts })
   })
 
+/** Calls ensureMine as the browser does, until the demo is ready, and
+ * answers every reply. */
+async function provision(as: Awaited<ReturnType<typeof anonymousLogin>>['as']) {
+  const answers = [await as.mutation(api.demo.ensureMine, {})]
+  while (answers.at(-1)?.status === 'unprovisioned' && answers.length < 100)
+    answers.push(await as.mutation(api.demo.ensureMine, {}))
+  return answers
+}
+
 async function readyDemo() {
   const login = await anonymousLogin()
-  const demo = await login.as.mutation(api.demo.ensureMine, {})
+  const demo = (await provision(login.as)).at(-1)!
   const snapshot = await login.as.query(api.snapshot.forMe, {})
   if (!snapshot || !demo.orgId) throw new Error('demo did not become ready')
   const receipt = await t.run((ctx) =>
@@ -157,12 +168,14 @@ describe('public demo ownership and authentication', () => {
 
   it('resumes one organization under simultaneous provisioning and later admission closure', async () => {
     const login = await anonymousLogin()
-    const [first, retry] = await Promise.all([
+    const started = await Promise.all([
       login.as.mutation(api.demo.ensureMine, {}),
       login.as.mutation(api.demo.ensureMine, {}),
     ])
+    // the two calls ran one after the other, each one step
+    expect(started.map((answer) => answer.progress?.step).sort()).toEqual([1, 2])
+    const first = (await provision(login.as)).at(-1)!
     expect(first.status).toBe('ready')
-    expect(retry.orgId).toBe(first.orgId)
     expect(await t.run((ctx) => ctx.db.query('organizations').collect())).toHaveLength(1)
     expect(await login.as.query(api.appearance.get, {})).toEqual({
       mode: 'dark',
@@ -578,16 +591,85 @@ describe('demo lifetime and capabilities', () => {
   })
 })
 
-describe('public demo provisioning budget', () => {
-  // The whole Northstar work in one transaction, sharing its uuids, reads
-  // and notify memo across the steps. Before the seed was split into steps
-  // it read 1,612 index ranges and 1,668 documents here; rebuilding them
-  // per step read about twice that.
-  it('provisions a demo within the index ranges and reads of the unsplit seed', async () => {
-    const limited = newT({ transactionLimits: { databaseQueries: 1612, documentsRead: 1668 } })
+describe('public demo provisioning steps', () => {
+  // The whole Northstar work in one transaction read 1,612 index ranges
+  // and 1,668 documents and wrote about 1,400 documents, which could pass
+  // Convex's 1 s mutation limit on a slow backend. Each call now runs one
+  // bounded step, held to the marketing seed's per-call budget.
+  it('provisions a demo in calls of at most 300 index ranges, 350 documents read and 150 written', async () => {
+    const limited = newT({
+      transactionLimits: { databaseQueries: 300, documentsRead: 350, documentsWritten: 150 },
+    })
     limited.registerComponent('betterAuth', authSchema, componentModules)
     const login = await anonymousLogin(limited)
-    const demo = await login.as.mutation(api.demo.ensureMine, {})
-    expect(demo.orgId).toBeTruthy()
+    expect((await login.as.query(api.demo.current, {})).progress).toEqual({
+      step: 0,
+      steps: PUBLIC_DEMO_STEPS,
+    })
+    const answers = await provision(login.as)
+    expect(answers.map((answer) => answer.progress?.step ?? 'ready')).toEqual([
+      ...Array.from({ length: PUBLIC_DEMO_STEPS - 1 }, (_, i) => i + 1),
+      'ready',
+    ])
+    expect(answers.at(-1)).toMatchObject({ status: 'ready', progress: null })
+    const receipt = await limited.run((ctx) => ctx.db.query('demo_sessions').unique())
+    expect(receipt).toMatchObject({ status: 'ready', seed_version: MARKETING_DEMO_VERSION })
+    expect(receipt).not.toHaveProperty('provision')
+    const org = await limited.run((ctx) => ctx.db.query('organizations').unique())
+    expect(org).toMatchObject({ id: answers.at(-1)?.orgId, max_attachment_mb: 5 })
+    const tasks = await limited.run((ctx) => ctx.db.query('issues').collect())
+    expect(tasks).toHaveLength(MARKETING_DEMO.issues.length)
+  })
+
+  it('refuses the workspace until the last step, and resumes at the step a stopped visitor left', async () => {
+    const login = await anonymousLogin()
+    for (let call = 0; call < 3; call++) await login.as.mutation(api.demo.ensureMine, {})
+    const halfway = await t.run((ctx) => ctx.db.query('demo_sessions').unique())
+    expect(halfway).toMatchObject({ status: 'unprovisioned', provision: { step: 3 } })
+    expect(halfway?.org_id).toBeTruthy()
+    await expectRefusal(login.as.query(api.snapshot.forMe, {}), 'forbidden', /prepared/)
+    expect(await login.as.query(api.demo.current, {})).toMatchObject({
+      status: 'unprovisioned',
+      orgId: null,
+      progress: { step: 3, steps: PUBLIC_DEMO_STEPS },
+    })
+    const answers = await provision(login.as)
+    expect(answers[0].progress?.step).toBe(4)
+    expect(answers.at(-1)?.orgId).toBe(halfway?.org_id)
+    expect(await t.run((ctx) => ctx.db.query('organizations').collect())).toHaveLength(1)
+  })
+
+  it('refuses to resume a demo whose steps changed in a deploy, and names the next step', async () => {
+    const login = await anonymousLogin()
+    await login.as.mutation(api.demo.ensureMine, {})
+    await t.run(async (ctx) => {
+      const receipt = (await ctx.db.query('demo_sessions').unique())!
+      await ctx.db.patch(receipt._id, { provision: { ...receipt.provision!, layout: '26:0' } })
+    })
+    const refusal = await expectRefusal(
+      login.as.mutation(api.demo.ensureMine, {}),
+      'forbidden',
+      /updated while your demo was being prepared\. Start a new demo\./,
+    )
+    expect(refusal.data.reason).toBe('demo_unavailable')
+  })
+
+  it('gives a dataset edit without a version bump a new layout, so a demo halfway refuses', async () => {
+    const { PUBLIC_DEMO_LAYOUT } = await import('../model/demoSeed')
+    vi.resetModules()
+    vi.doMock('../internal/marketingDemoData', async (actual) => {
+      const data = await actual<typeof import('../internal/marketingDemoData')>()
+      const [first, ...rest] = data.MARKETING_DEMO.labels
+      const labels = [{ ...first, key: `${first.key}-renamed` }, ...rest]
+      return { ...data, MARKETING_DEMO: { ...data.MARKETING_DEMO, labels } }
+    })
+    try {
+      const edited = await import('../model/demoSeed')
+      expect(edited.PUBLIC_DEMO_STEPS).toBe(PUBLIC_DEMO_STEPS)
+      expect(edited.PUBLIC_DEMO_LAYOUT).not.toBe(PUBLIC_DEMO_LAYOUT)
+    } finally {
+      vi.doUnmock('../internal/marketingDemoData')
+      vi.resetModules()
+    }
   })
 })

@@ -297,7 +297,12 @@ before v0.1.26 calls `labels.toggle` without `on`, which later releases
 refuse, so after such a rollback it cannot add or remove labels. The app at
 v0.1.38 or earlier tells a new Microsoft login that its confirmation email
 was sent, but later backends leave that first email to the app, so the person
-must press **Resend confirmation email**.
+must press **Resend confirmation email**. An app from before demos were
+prepared in steps expects one `demo.ensureMine` call to prepare a whole demo,
+but later backends prepare one step a call, so after such a rollback a new
+demo visitor sees "Your demo is still being prepared" and must press
+**Retry** once for each step after the first, 26 times with the current
+demo data.
 
 The app before v0.1.18 reads an activity list that the snapshot no longer
 sends, so it cannot load at all. Never return the app or the demo to a
@@ -410,6 +415,12 @@ An image a description save took out keeps a `dropped_at` for a day, in
 Deleted items for as long as its task stays there. Releases before the one
 that added it do not accept that field, so a rollback past it fails to
 deploy while such an image exists. Roll forward instead.
+
+A demo that is being prepared keeps its preparation step in `provision` on
+its `demo_sessions` row, also after its visitor leaves partway, until cleanup
+removes the row about a day later. Releases from before demos were prepared
+in steps do not accept that field, so a rollback past it fails to deploy
+while such a row exists. Roll forward instead.
 
 A frontend rollback changes the served application build. It does not roll
 back Convex code, schema changes, stored files or customer writes. A database

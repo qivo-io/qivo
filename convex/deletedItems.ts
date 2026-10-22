@@ -98,8 +98,8 @@ export const matches = authedQuery({
 
 /* ---------------------------------------------------------------- restore
  * Restores up to 25 items (model/deletedItems.ts restoreItems). Each id is
- * restored (an item too large for this call goes on in steps, and its row
- * shows Restoring), refused with its reason, deferred until a project item
+ * restored (an item too large for this call goes on in steps, is in
+ * `stepping` too, and its row shows Restoring), refused with its reason, deferred until a project item
  * in the same call has come back, or not_found. `bulk` marks a call as one
  * of a restore of several items, which the client splits per organization
  * and 25 ids at a time, so that a call holding one task item sends no

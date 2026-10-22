@@ -4,12 +4,14 @@ import { api } from '../convex/_generated/api'
 import { AppearanceProvider } from './AppearanceProvider'
 import { AppUpdates } from './components/AppUpdates'
 import { Button } from './components/ui/button'
+import { Progress } from './components/ui/progress'
 import { armConvexAuth, authClient, clearLocalSession } from './lib/auth'
 import { convex } from './lib/convex'
 import { DEMO_ENDED_EVENT, WORKSPACE_SIGNUP_URL } from './lib/demoMode'
 import {
   DEMO_MARKER_KEY,
   type DemoLifecycle,
+  type DemoProgress,
   DemoSessionEnded,
   demoCountdown,
   demoStartupStep,
@@ -39,6 +41,7 @@ export function DemoGate() {
   const [error, setError] = useState('')
   const [remaining, setRemaining] = useState(0)
   const [attempt, setAttempt] = useState(0)
+  const [progress, setProgress] = useState<DemoProgress | null>(null)
   const lifecycle = useRef<DemoLifecycle | null>(null)
   const active = useRef(true)
   const ended = useRef(false)
@@ -96,7 +99,8 @@ export function DemoGate() {
     }
     setPhase('preparing')
     setError('')
-    void runDemoStartup(async (signal) => {
+    setProgress(null)
+    void runDemoStartup(async (signal, progressed) => {
       if (cancelled) return
       const result = await startDemo(
         {
@@ -118,10 +122,15 @@ export function DemoGate() {
           authenticate: armConvexAuth,
           current: () => convex.query(api.demo.current, {}),
           ensureMine: () => convex.mutation(api.demo.ensureMine, {}),
+          onProgress: (next) => {
+            progressed()
+            if (!cancelled) setProgress(next)
+          },
         },
         signal,
       )
       if (cancelled) return
+      setProgress((shown) => shown && { ...shown, step: shown.steps })
       if (!result) {
         setPhase('intro')
         return
@@ -297,6 +306,13 @@ export function DemoGate() {
             </p>
           )}
         </div>
+        {phase === 'preparing' && progress && (
+          <Progress
+            className="mt-6"
+            value={Math.round((progress.step / progress.steps) * 100)}
+            aria-label="Demo preparation"
+          />
+        )}
         {phase !== 'preparing' && (
           <div className="mt-6 flex flex-wrap items-center gap-4">
             <Button

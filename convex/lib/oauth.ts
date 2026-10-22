@@ -37,11 +37,28 @@ export function clientDisplayName(raw: string | null | undefined): string {
   return name === '' ? 'Unnamed app' : name
 }
 
+/** The refusal of a connection for a login with no active seat. */
+export const NO_ORGANIZATION =
+  'Your Qivo account belongs to no organization yet. Create an organization or accept an invitation, then connect your app again.'
+
+/** The refusal of a connection whose organization seat is no longer an
+ * active person seat of the login. */
+export const ORGANIZATION_GONE =
+  'This organization is no longer available. Reconnect from your app.'
+
+/** The profile a new connection acts as: the login's first active member
+ * seat, else its first active guest seat. Refuses (forbidden,
+ * NO_ORGANIZATION) when the login has no active seat. */
 export function homeProfile(profiles: Doc<'profiles'>[]): Doc<'profiles'> {
-  const active = profiles.filter((p) => p.active && p.kind === 'person' && p.auth_user_id)
-  const home = active.find((p) => ['admin', 'user', 'viewer'].includes(p.org_role)) || active[0]
-  if (!home) throw forbidden('Join an organization before connecting an app.')
+  const home = findHomeProfile(profiles)
+  if (!home) throw forbidden(NO_ORGANIZATION)
   return home
+}
+
+/** homeProfile's seat, or undefined for a login in no organization. */
+export function findHomeProfile(profiles: Doc<'profiles'>[]): Doc<'profiles'> | undefined {
+  const active = profiles.filter((p) => p.active && p.kind === 'person' && p.auth_user_id)
+  return active.find((p) => ['admin', 'user', 'viewer'].includes(p.org_role)) || active[0]
 }
 
 // Social sign-in adds an unsigned one-time cookie token to the callback URL.

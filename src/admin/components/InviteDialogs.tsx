@@ -77,10 +77,11 @@ const ERROR = 'text-sm text-danger'
 const ROW =
   'grid grid-cols-[minmax(0,1fr)_2rem] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_10rem_2rem]'
 
-/* Email fields are plain text with the email keyboard. The browser's own
-   email check refuses addresses the server accepts, such as one with ø
-   before the @. cleanEmail (convex/lib/email.ts) is the only rule, and it
-   writes a Unicode domain as punycode, the form the server stores. */
+/* Email fields are plain text with the email keyboard, so the browser's
+   own email check never stops the form with its own message.
+   cleanEmail (convex/lib/email.ts) is the only rule, the dialog shows its
+   sentence, and it writes a Unicode domain as punycode, the form the server
+   stores. */
 const EMAIL_INPUT = {
   type: 'text',
   inputMode: 'email',

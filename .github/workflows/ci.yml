@@ -17,7 +17,11 @@ jobs:
   # Keep the published check name stable.
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The job takes 5 to 9 minutes. A slow runner ran every test file about
+    # four times slower and hit the old 15-minute limit with every test so
+    # far passing, which cancelled main CI and skipped the staging deploy.
+    # 25 minutes lets such a runner finish and still stops a hung job.
+    timeout-minutes: 25
 
     # Hermetic: no deployment secrets, live contract reset or browser drives.
     steps:

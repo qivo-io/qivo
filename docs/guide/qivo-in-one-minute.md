@@ -24,7 +24,9 @@ workspace** for a private copy of Northstar Labs with sample projects, tasks
 and teammates. Qivo signs you in as Nora without an email address or
 password. Opening the welcome page alone creates nothing. Other visitors
 receive separate copies, and sharing a task link does not give them access
-to yours.
+to yours. A bar shows how far Qivo has got with preparing your copy, which
+can take several seconds. If you leave before it is ready, returning in the
+same browser continues where it stopped.
 
 You can edit the sample work, scheduling and team. Demos start with the Dark
 theme and **Image of the week** as the Canvas background, using the default
@@ -38,8 +40,9 @@ browser is closed. Cleanup may take additional time. **Try again** creates a
 fresh copy. Clearing browser storage loses the login, which cannot be
 recovered by email.
 
-If the demo takes more than 30 seconds to open, use **Retry** on the
-connection message. This keeps the current login and deadline.
+If opening the demo makes no progress for 30 seconds, Qivo shows a
+connection message with **Retry**. Retry keeps the current login and
+deadline. Preparation that keeps moving can take longer than 30 seconds.
 
 Sample people are fictional and cannot sign in. Agent connections, API
 credentials and additional workspaces require a regular account. Demo

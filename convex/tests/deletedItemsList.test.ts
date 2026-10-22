@@ -385,6 +385,7 @@ describe('who sees an item (design 6.1)', () => {
     })
     expect(await restore(t, lena, [item.id])).toEqual({
       restored: [item.id],
+      stepping: [],
       refused: [],
       deferred: [],
     })
@@ -1461,6 +1462,7 @@ describe('restore and purge calls', () => {
 
     expect(await restore(t, f.guest, [a, b, c, unknown, a])).toEqual({
       restored: [a],
+      stepping: [],
       refused: [
         { id: b, reason: 'not_found' },
         { id: c, reason: 'not_found' },

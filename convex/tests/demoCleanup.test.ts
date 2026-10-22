@@ -5,7 +5,7 @@ import type { Doc, TableNames } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
 import { MARKETING_DEMO, marketingId } from '../internal/marketingDemoData'
 import { moveProjectToTrash, moveTasksToTrash, TRASH_BUDGET } from '../model/deletedItems'
-import { demoMonday, provisionPublicDemo } from '../model/demoSeed'
+import { demoMonday, PUBLIC_DEMO_STEPS, provisionPublicDemoStep } from '../model/demoSeed'
 import schema from '../schema'
 import { countersFor, expectRefusal, newT, type T, uuid } from './helpers.setup'
 
@@ -29,8 +29,11 @@ function testBackend(options: Parameters<typeof newT>[0] = {}) {
   return t
 }
 
-async function makeDemo(t: T, provision = true) {
-  return t.run(async (ctx) => {
+/** A demo receipt and its anonymous login, provisioned by `steps` calls of
+ * provisionPublicDemoStep (all of them by default, none when false). */
+async function makeDemo(t: T, provision: boolean | number = true) {
+  const steps = provision === true ? PUBLIC_DEMO_STEPS : provision === false ? 0 : provision
+  const made = await t.run(async (ctx) => {
     const id = uuid()
     const user = (await ctx.runMutation(components.betterAuth.adapter.create, {
       input: {
@@ -52,15 +55,13 @@ async function makeDemo(t: T, provision = true) {
       created_at: NOW,
       expires_at: NOW + 86_400_000,
     })
-    const receipt = (await ctx.db.get(receiptId))!
-    const work = provision ? await provisionPublicDemo(ctx, receipt, user) : undefined
-    if (work) await ctx.db.patch(receiptId, { ...work, status: 'ready' })
-    return {
-      ...receipt,
-      ...work,
-      status: work ? ('ready' as const) : ('unprovisioned' as const),
-    }
+    return { receiptId, user }
   })
+  for (let step = 0; step < steps; step++)
+    await t.run(async (ctx) =>
+      provisionPublicDemoStep(ctx, (await ctx.db.get(made.receiptId))!, made.user),
+    )
+  return t.run(async (ctx) => (await ctx.db.get(made.receiptId))!)
 }
 
 async function rows(t: T, orgId: string) {
@@ -325,7 +326,7 @@ describe('public Northstar provisioning and bounded deletion', () => {
     vi.stubEnv('APP_MODE', 'normal')
     await expectRefusal(
       t.run((ctx) =>
-        provisionPublicDemo(ctx, receipt, {
+        provisionPublicDemoStep(ctx, receipt, {
           _id: receipt.auth_user_id,
           email: 'owner@demo.invalid',
         }),
@@ -337,7 +338,7 @@ describe('public Northstar provisioning and bounded deletion', () => {
     const existing = await makeDemo(t)
     await expectRefusal(
       t.run((ctx) =>
-        provisionPublicDemo(ctx, existing, {
+        provisionPublicDemoStep(ctx, existing, {
           _id: existing.auth_user_id,
           email: 'owner@demo.invalid',
         }),
@@ -736,10 +737,14 @@ describe('public Northstar provisioning and bounded deletion', () => {
   it('recovers abandoned identities and stalled cleanup without touching a live demo', async () => {
     const t = testBackend()
     const abandoned = await makeDemo(t, false)
+    // a visitor who left while the demo was being built
+    const halfway = await makeDemo(t, 5)
+    expect(halfway).toMatchObject({ status: 'unprovisioned', provision: { step: 5 } })
     const stalled = await makeDemo(t, false)
     const live = await makeDemo(t)
     await t.run(async (ctx) => {
       await ctx.db.patch(abandoned._id, { expires_at: NOW - 1 })
+      await ctx.db.patch(halfway._id, { expires_at: NOW - 1 })
       await ctx.db.patch(stalled._id, {
         status: 'deleting',
         cleanup_phase: 'tasks',
@@ -749,6 +754,8 @@ describe('public Northstar provisioning and bounded deletion', () => {
     await t.mutation(recover, {})
     await t.finishAllScheduledFunctions(() => vi.runAllTimers())
     expect(await t.run((ctx) => ctx.db.get(abandoned._id))).toBeNull()
+    expect(await t.run((ctx) => ctx.db.get(halfway._id))).toBeNull()
+    expect(await rows(t, halfway.org_id!)).toMatchObject({ org: null, profiles: [], tasks: [] })
     expect(await t.run((ctx) => ctx.db.get(stalled._id))).toBeNull()
     expect(await t.run((ctx) => ctx.db.get(live._id))).not.toBeNull()
   })

@@ -28,6 +28,9 @@ import {
   UserRoleSelect,
 } from './UserControls'
 
+/* How long typing pauses before the Add row says why an address is refused. */
+const EMAIL_NOTE_DELAY_MS = 500
+
 const agentKeyFingerprint = (stored: string) =>
   stored.includes('...') || stored.includes('…') ? stored : `${stored}…`
 
@@ -245,6 +248,19 @@ export function OrgUsersPage({
   const emailRefused = emailRefusal(addEmail)
   const emailWhy =
     emailRefused === null ? 'That does not look like an email address' : sentence(emailRefused)
+  // A whole address the server refuses says why under the row: the tooltip
+  // shows when the field gains focus, before the typed address is refused.
+  // It first waits until typing pauses, so an address on its way to .com,
+  // refused at bo@example.c, never flashes it. Once shown it stays while
+  // the address stays refused, so editing it neither blinks nor repeats it.
+  const [settledEmail, setSettledEmail] = useStateS(addEmail)
+  useEffectS(() => {
+    const timer = setTimeout(() => setSettledEmail(addEmail), EMAIL_NOTE_DELAY_MS)
+    return () => clearTimeout(timer)
+  }, [addEmail])
+  const emailNote =
+    !agentMode && emailRefused !== null && emailRefusal(settledEmail) !== null ? emailWhy : null
+  const emailNoteId = React.useId()
   // counted as the server stores it, with whitespace runs collapsed
   const nameTooLong = overLimit(LIMITS.personName, cleanName(addName))
   const addUser = async () => {
@@ -500,6 +516,8 @@ export function OrgUsersPage({
                     if (e.key === 'Enter') addUser()
                   }}
                   aria-invalid={emailBad}
+                  // an absent key, not undefined, keeps the tooltip's description
+                  {...(emailNote ? { 'aria-describedby': emailNoteId } : {})}
                   className="h-control flex-[1.4] bg-surface-1 px-2.5 text-base font-sans"
                 />
               )}
@@ -533,6 +551,18 @@ export function OrgUsersPage({
                 <Icon name="plus" size={16} />
                 {agentMode ? 'Add agent' : 'Add'}
               </Button>
+            </div>
+            {/* always present, so a screen reader hears the note when it appears */}
+            <div aria-live="polite">
+              {emailNote && (
+                <p
+                  id={emailNoteId}
+                  data-add-email-refusal
+                  className="mt-2 text-sm leading-normal text-danger"
+                >
+                  {emailNote}
+                </p>
+              )}
             </div>
             <FieldHint>
               Active users, including pending invitations, count toward the next monthly renewal.

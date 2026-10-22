@@ -1246,6 +1246,7 @@ function CurationKeyRow({ item }: { item: CurationKey }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   useUpdateBlocker(armed || busy)
+  // oxlint-disable-next-line react/purity -- a key past its expiry shows as expired at the next render
   const expired = new Date(item.expires_at).getTime() <= Date.now()
   const active = !item.revoked_at && !expired
   return (

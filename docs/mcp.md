@@ -667,7 +667,12 @@ for discovery instead of guessing authorization or token endpoints.
 The initial 401 challenge advertises
 `scope="qivo:read qivo:write offline_access"` so clients following it request
 normal task access and automatic renewal. A client can request a smaller
-scope set, and consent can remove write access.
+scope set, and consent can remove write access. Authorization sends a login
+that belongs to no organization to the consent page, which says why and what
+to do next. Consent refuses such a login, or one whose organization seat left
+after the consent page opened, with `403` and `access_denied`. Its
+`error_description` says why and what to do next, and the refusal grants
+nothing and issues no code.
 
 `MCP_RESOURCE_URL` defaults to `CONVEX_SITE_URL + /mcp`. Set it explicitly to
 `https://api.qivo.io/mcp` for the public custom domain, whose metadata paths

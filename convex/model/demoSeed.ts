@@ -13,6 +13,7 @@ import {
   northstarTaskTimes,
 } from '../internal/marketingDemoData'
 import { byId } from '../lib/db'
+import { demoRefusal } from '../lib/demo'
 import { require, rule } from '../lib/functions'
 import { DEFAULT_MESSAGE_RETENTION_DAYS } from '../lib/limits'
 import { issueKey } from '../lib/taskRefs'
@@ -202,8 +203,8 @@ async function notifyContext(ctx: MutationCtx, org: Doc<'organizations'>, run: N
 }
 
 /** Writes the whole Northstar work in this transaction, every step in
- * order, sharing one NorthstarRun. The public demo provisions this way; the
- * marketing demo runs one step a call (writeNorthstarStep). */
+ * order, sharing one NorthstarRun. Only tests write it this way; the
+ * marketing and public demos run one step a call (writeNorthstarStep). */
 export async function writeNorthstarWork(ctx: MutationCtx, target: NorthstarTarget): Promise<void> {
   const run = await newNorthstarRun(target.namespace)
   for (const step of NORTHSTAR_STEPS) await writeNorthstarStep(ctx, target, step, run)
@@ -538,75 +539,141 @@ export async function writeNorthstarStep(
   }
 }
 
-/** Called only by the authenticated demo provisioner, in its transaction.
- * Nora alone receives the visitor login; every other human is a fictional seat.
- * The receipt id namespaces every UUID, including otherwise identical links. */
-export async function provisionPublicDemo(
+/** The calls that build a public demo, one transaction each: the
+ * organization and its people, then each of NORTHSTAR_STEPS. Each call
+ * stays far inside Convex's 1 s mutation limit, which the whole work in
+ * one transaction could pass on a slow backend. */
+export const PUBLIC_DEMO_STEPS = 1 + NORTHSTAR_STEPS.length
+
+/** A 32-bit FNV-1a hash of `text` in hex: a label for a step layout, not a
+ * secret. */
+export function layoutHash(text: string): string {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193)
+  return (hash >>> 0).toString(16)
+}
+
+/** A fingerprint of the public demo's steps and its whole dataset. A
+ * receipt stores it when provisioning starts, and a later call refuses when
+ * it differs: a step number from another layout would write rows twice or
+ * skip them, and a later step from an edited dataset would miss a renamed
+ * key or mix two revisions of the data. */
+export const PUBLIC_DEMO_LAYOUT = `${PUBLIC_DEMO_STEPS}:${layoutHash(
+  JSON.stringify({ version: MARKETING_DEMO_VERSION, steps: NORTHSTAR_STEPS, data: MARKETING_DEMO }),
+)}`
+
+/** How far a public demo's provisioning got: the next of PUBLIC_DEMO_STEPS
+ * to run, or `done` once the receipt is ready. */
+export type PublicDemoProgress = { done: false; step: number; steps: number } | { done: true }
+
+/** Runs the receipt's next provisioning step (PUBLIC_DEMO_STEPS) and
+ * records it on the receipt; the last step marks the receipt ready. Called
+ * only by the authenticated demo provisioner, once per call. The first step
+ * creates the organization and its people, notes the organization on the
+ * receipt so cleanup can remove a demo that stops halfway, and fixes the
+ * anchor and the write time every later step uses. A call that does not
+ * commit leaves the step for the next call, and two calls at once conflict
+ * on the receipt, so each step runs once. Nothing else writes the
+ * organization meanwhile: every app function refuses a receipt that is not
+ * ready. Nora alone receives the visitor login; every other human is a
+ * fictional seat. The receipt id namespaces every UUID, including
+ * otherwise identical links. */
+export async function provisionPublicDemoStep(
   ctx: MutationCtx,
   receipt: Doc<'demo_sessions'>,
   authUser: { _id: string; email: string },
-): Promise<{ org_id: string; anchor: string; seed_version: number }> {
+): Promise<PublicDemoProgress> {
   require(process.env.APP_MODE === 'demo', rule('Public demos are unavailable here'))
   require(receipt.auth_user_id === authUser._id &&
     receipt.status === 'unprovisioned' &&
-    receipt.expires_at > Date.now() &&
-    receipt.org_id === undefined, rule('This demo cannot be provisioned'))
+    receipt.expires_at > Date.now(), rule('This demo cannot be provisioned'))
   const namespace = `public-demo:${receipt.id}`
   const id = (key: string) => marketingId(namespace, key)
   const orgId = await id('org')
-  const slug = `northstar-${receipt.id.replace(/-/g, '').slice(0, 24)}`
-  const now = new Date().toISOString()
-  const anchor = demoMonday(Date.now())
-  await assertSlugAvailable(ctx, slug)
-  require((await byId(ctx, 'organizations', orgId)) === null, rule(
-    'Demo organization already exists',
-  ))
-  const docId = await insertOrgRows(ctx, {
-    id: orgId,
-    name: cleanOrgName(MARKETING_DEMO.organization.name),
-    slug,
-    ...newOrgDefaults(now),
-    max_attachment_mb: 5,
-  })
-  const org = await ctx.db.get(docId)
-  require(org !== null, rule('Demo organization could not be created'))
-  const profiles: Doc<'profiles'>[] = []
-  for (const person of MARKETING_DEMO.people) {
-    const profileId = await ctx.db.insert('profiles', {
-      id: await id(`person:${person.key}`),
-      org_id: orgId,
-      name: person.name,
-      initials: person.initials,
-      color: person.color,
-      org_role: person.role,
-      kind: person.kind,
-      active: true,
-      created_at: now,
-      sample_avatar: person.key as SampleAvatar,
-      ...(person.kind === 'person'
-        ? {
-            email:
-              person.key === 'nora' ? authUser.email : `${person.key}.${receipt.id}@demo.invalid`,
-            ...(person.key === 'nora' ? { auth_user_id: authUser._id, accepted_at: now } : {}),
-            plannable_hours: org.default_plannable_hours,
-            message_retention_days: DEFAULT_MESSAGE_RETENTION_DAYS,
-          }
-        : {}),
+  if (receipt.provision === undefined) {
+    require(receipt.org_id === undefined, rule('This demo cannot be provisioned'))
+    const slug = `northstar-${receipt.id.replace(/-/g, '').slice(0, 24)}`
+    const now = new Date().toISOString()
+    const anchor = demoMonday(Date.now())
+    await assertSlugAvailable(ctx, slug)
+    require((await byId(ctx, 'organizations', orgId)) === null, rule(
+      'Demo organization already exists',
+    ))
+    const docId = await insertOrgRows(ctx, {
+      id: orgId,
+      name: cleanOrgName(MARKETING_DEMO.organization.name),
+      slug,
+      ...newOrgDefaults(now),
+      max_attachment_mb: 5,
     })
-    const profile = await ctx.db.get(profileId)
-    require(profile !== null, rule('Demo profile could not be created'))
-    profiles.push(profile)
+    const org = await ctx.db.get(docId)
+    require(org !== null, rule('Demo organization could not be created'))
+    for (const person of MARKETING_DEMO.people)
+      await ctx.db.insert('profiles', {
+        id: await id(`person:${person.key}`),
+        org_id: orgId,
+        name: person.name,
+        initials: person.initials,
+        color: person.color,
+        org_role: person.role,
+        kind: person.kind,
+        active: true,
+        created_at: now,
+        sample_avatar: person.key as SampleAvatar,
+        ...(person.kind === 'person'
+          ? {
+              email:
+                person.key === 'nora' ? authUser.email : `${person.key}.${receipt.id}@demo.invalid`,
+              ...(person.key === 'nora' ? { auth_user_id: authUser._id, accepted_at: now } : {}),
+              plannable_hours: org.default_plannable_hours,
+              message_retention_days: DEFAULT_MESSAGE_RETENTION_DAYS,
+            }
+          : {}),
+      })
+    await ctx.db.insert('account_appearance', {
+      auth_user_id: authUser._id,
+      mode: 'dark',
+      image_source: 'daily',
+      revision: receipt.id,
+      updated_at: now,
+    })
+    await ctx.db.patch(receipt._id, {
+      org_id: orgId,
+      anchor,
+      provision: { step: 1, now, layout: PUBLIC_DEMO_LAYOUT },
+    })
+    return { done: false, step: 1, steps: PUBLIC_DEMO_STEPS }
   }
-  await writeNorthstarWork(ctx, { org, profiles, namespace, anchor, now })
-  // Shared writer preserves historical marketing defaults. Public uploads
-  // have the tighter cap, independently enforced by their tracked receiver.
-  await ctx.db.patch(docId, { max_attachment_mb: 5 })
-  await ctx.db.insert('account_appearance', {
-    auth_user_id: authUser._id,
-    mode: 'dark',
-    image_source: 'daily',
-    revision: receipt.id,
-    updated_at: now,
+  const { step, now, layout } = receipt.provision
+  const work = NORTHSTAR_STEPS[step - 1]
+  const anchor = receipt.anchor
+  // A deploy between two calls can change the steps. The visitor starts a
+  // new demo, and cleanup removes this one at its deadline.
+  if (layout !== PUBLIC_DEMO_LAYOUT || work === undefined || anchor === undefined)
+    throw demoRefusal(
+      'Qivo was updated while your demo was being prepared. Start a new demo.',
+      'demo_unavailable',
+    )
+  require(receipt.org_id === orgId, rule('This demo cannot be provisioned'))
+  const org = await byId(ctx, 'organizations', orgId)
+  require(org !== null, rule('This demo cannot be provisioned'))
+  const profiles = await ctx.db
+    .query('profiles')
+    .withIndex('by_org', (q) => q.eq('org_id', orgId))
+    .collect()
+  await writeNorthstarStep(ctx, { org, profiles, namespace, anchor, now }, work)
+  // The setup step writes the shared marketing defaults. Public uploads keep
+  // the tighter cap, which their tracked receiver also enforces.
+  if (work.kind === 'setup') await ctx.db.patch(org._id, { max_attachment_mb: 5 })
+  const next = step + 1
+  if (next < PUBLIC_DEMO_STEPS) {
+    await ctx.db.patch(receipt._id, { provision: { step: next, now, layout } })
+    return { done: false, step: next, steps: PUBLIC_DEMO_STEPS }
+  }
+  await ctx.db.patch(receipt._id, {
+    status: 'ready',
+    seed_version: MARKETING_DEMO_VERSION,
+    provision: undefined,
   })
-  return { org_id: orgId, anchor, seed_version: MARKETING_DEMO_VERSION }
+  return { done: true }
 }

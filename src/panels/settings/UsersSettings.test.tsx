@@ -245,6 +245,42 @@ describe('Add person', () => {
       limitSentence(LIMITS.email),
     )
   })
+
+  it('says under the row why an address a password login cannot use is refused', async () => {
+    await show()
+    await type(nameInput(), 'Jørn Hansen')
+    const email = find<HTMLInputElement>('[data-add-email]')
+    // longer than the 500 ms the note waits for typing to pause
+    const pause = () => act(() => new Promise((done) => setTimeout(done, 600)))
+    // an address on its way to .com is refused at bo@example.c for a moment
+    await type(email, 'bo@example.c')
+    await type(email, 'bo@example.com')
+    await pause()
+    expect(document.querySelector('[data-add-email-refusal]')).toBeNull()
+    await type(email, 'jørn@example.no')
+    expect(addButton().disabled).toBe(true)
+    // the reason waits until typing pauses
+    expect(document.querySelector('[data-add-email-refusal]')).toBeNull()
+    await pause()
+    const note = find('[data-add-email-refusal]')
+    expect(note.textContent).toBe(sentence(NO_PASSWORD_LOGIN))
+    expect(note.textContent).toMatch(
+      /^This address cannot get a password login\..*Use another address\.$/,
+    )
+    expect(email.getAttribute('aria-describedby')).toBe(note.id)
+    expect(note.parentElement?.getAttribute('aria-live')).toBe('polite')
+    // editing a refused address keeps the note in place, without a pause
+    await type(email, 'jørn.hansen@example.no')
+    expect(find('[data-add-email-refusal]')).toBe(note)
+    await type(email, 'jorn@example.no')
+    expect(document.querySelector('[data-add-email-refusal]')).toBeNull()
+    expect(addButton().disabled).toBe(false)
+    // without the note the field keeps its tooltip's description
+    await act(async () => email.focus())
+    const tooltip = document.querySelector('[role="tooltip"]')
+    expect(tooltip?.textContent).toBe('The email address they will use to sign in')
+    expect(email.getAttribute('aria-describedby')).toBe(tooltip?.id)
+  })
 })
 
 describe("An invitation's address", () => {

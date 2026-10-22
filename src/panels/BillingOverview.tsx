@@ -300,6 +300,7 @@ function CancelSubscription({
         <AlertDialogHeader>
           <AlertDialogTitle>Cancel subscription?</AlertDialogTitle>
           <AlertDialogDescription>
+            {/* oxlint-disable-next-line react/purity -- whether the paid period is still ahead when the dialog opens */}
             {endsAt && Date.parse(endsAt) > Date.now()
               ? `The subscription stays active until ${billingDate(endsAt)} and does not renew.`
               : 'The subscription stays active until the paid period ends and does not renew.'}{' '}

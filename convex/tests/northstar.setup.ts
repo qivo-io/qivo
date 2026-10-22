@@ -1,6 +1,6 @@
-/* Northstar Labs inside convex-test — the whole dataset through the same
- * writeNorthstarWork the public demo uses (the importer,
- * internal/marketingDemo, runs the same steps one call at a time through
+/* Northstar Labs inside convex-test — the whole dataset in one transaction
+ * through writeNorthstarWork (the public demo and the importer,
+ * internal/marketingDemo, run the same steps one call at a time through
  * writeNorthstarStep), without the auth component, the ownership receipt or
  * scrypt. The organization and its eight profiles are planted raw, each
  * person carrying

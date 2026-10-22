@@ -25,15 +25,20 @@
       "plugins": ["react"],
       "rules": {
         "react/only-export-components": ["error", { "allowConstantExport": true }],
-        // Off: memo keys name the planner store's version counters, which the rule calls unneeded.
+        // Off: 44 deliberate sites, too many to suppress one by one. Memo keys name the planner
+        // store's version counters (16 "unnecessary" dependencies, 4 memos of a new array),
+        // and effects and callbacks leave out stable setters, refs and values they read fresh
+        // or test only for truthiness (24 "missing").
         "react/exhaustive-deps": "off",
         "react/globals": "warn",
         "react/immutability": "warn",
-        // Off: views read the clock while they render (expiry, today) and the app has no React Compiler.
-        "react/purity": "off",
-        // Off: hooks keep the latest callback in a ref during render, on purpose.
+        // On: a view that reads the clock while it renders (expiry, today) says why inline.
+        "react/purity": "warn",
+        // Off: 100 deliberate sites, too many to suppress one by one. Hooks keep the latest
+        // callback in a ref during render, and the deferred lists and the editor read refs there.
         "react/refs": "off",
-        // Off: effects reset their state when what they subscribe to changes.
+        // Off: 56 deliberate sites, too many to suppress one by one. Effects reset their state
+        // when what they subscribe to changes.
         "react/set-state-in-effect": "off"
       }
     }

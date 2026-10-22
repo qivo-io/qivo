@@ -18,7 +18,7 @@ import {
 } from './lib/demo'
 import { demoBootstrapMutation, demoConfigurationQuery, demoLifecycleQuery } from './lib/functions'
 import { recordDemoCreated } from './model/demoMetrics'
-import { provisionPublicDemo } from './model/demoSeed'
+import { PUBLIC_DEMO_STEPS, provisionPublicDemoStep } from './model/demoSeed'
 
 export const { onCreate, onDelete } = authComponent.triggersApi()
 
@@ -28,6 +28,9 @@ export type DemoCurrent = {
   expiresAt: number | null
   orgId: string | null
   orgSlug: string | null
+  /** While the demo is unprovisioned, the provisioning steps done so far
+   * and how many there are; null otherwise. */
+  progress: { step: number; steps: number } | null
   serverNow: number
 }
 
@@ -45,6 +48,10 @@ async function publicReceipt(
     expiresAt: receipt?.expires_at ?? null,
     orgId: org?.id ?? null,
     orgSlug: org?.slug ?? null,
+    progress:
+      status === 'unprovisioned'
+        ? { step: receipt?.provision?.step ?? 0, steps: PUBLIC_DEMO_STEPS }
+        : null,
     serverNow: now,
   }
 }
@@ -63,6 +70,10 @@ export const current = demoLifecycleQuery({
     publicReceipt(ctx, await demoForAuth(ctx, ctx.authUserId)),
 })
 
+/** Runs the next bounded step of the visitor's demo (model/demoSeed.ts
+ * provisionPublicDemoStep) and answers the demo's state. The browser calls
+ * it again while the answer is 'unprovisioned', each call one step further,
+ * until it answers 'ready'. A ready demo is answered as it is. */
 export const ensureMine = demoBootstrapMutation({
   args: {},
   handler: async (ctx): Promise<DemoCurrent> => {
@@ -76,10 +87,12 @@ export const ensureMine = demoBootstrapMutation({
       await recordDemoCreated(ctx, receipt._id)
       return publicReceipt(ctx, receipt)
     }
-    const seeded = await provisionPublicDemo(ctx, receipt, { _id: user._id, email: user.email })
-    await ctx.db.patch(receipt._id, { ...seeded, status: 'ready' })
-    await recordDemoCreated(ctx, receipt._id, Date.now())
-    return publicReceipt(ctx, { ...receipt, ...seeded, status: 'ready' })
+    const progress = await provisionPublicDemoStep(ctx, receipt, {
+      _id: user._id,
+      email: user.email,
+    })
+    if (progress.done) await recordDemoCreated(ctx, receipt._id, Date.now())
+    return publicReceipt(ctx, await ctx.db.get(receipt._id))
   },
 })
 

@@ -26,6 +26,7 @@ vi.mock('../../lib/auth', () => ({
 
 type Answer = {
   restored?: string[]
+  stepping?: string[]
   purged?: string[]
   refused?: { id: string; reason: string }[]
   deferred?: string[]
@@ -1474,7 +1475,8 @@ describe('windows that wait for the server', () => {
     await open()
     answers['deletedItems:restore'] = async (args) => {
       push([trial({ state: 'restoring', can_restore: false })])
-      return { restored: args.ids as string[], refused: [], deferred: [] }
+      const ids = args.ids as string[]
+      return { restored: ids, stepping: ids, refused: [], deferred: [] }
     }
     await deliver([trial()])
     await click(find('[data-deleted-row="item-trial"] [data-restore]'))
@@ -1488,12 +1490,34 @@ describe('windows that wait for the server', () => {
     await open()
     answers['deletedItems:restore'] = async (args) => {
       push([task(7, { state: 'restoring', can_restore: false })])
-      return { restored: args.ids as string[], refused: [], deferred: [] }
+      const ids = args.ids as string[]
+      return { restored: ids, stepping: ids, refused: [], deferred: [] }
     }
     await deliver([task(7)])
     await click(find('[data-deleted-row="item-7"] [data-restore]'))
     expect(window.showToast).toHaveBeenCalledWith('Restoring QN-7…', undefined)
     expect(window.showToast).not.toHaveBeenCalledWith('Restored QN-7', undefined)
+  })
+
+  it('says Restoring when the Deleted by choice changes while a narrowed restore goes on in steps', async () => {
+    await open()
+    let restored: (answer: Answer) => void = () => {}
+    answers['deletedItems:restore'] = () => new Promise((resolve) => (restored = resolve))
+    // the capped list holds none of Mira's older deletes
+    await deliver([task(1, { deleter: MIRA }), task(2)], true)
+    await deletedByChoice('Mira Holm')
+    await deliverNarrowed('mira', [task(5, { deleter: MIRA })])
+    await click(find('[data-deleted-row="item-5"] [data-restore]'))
+    await deliverNarrowed('mira', [
+      task(5, { deleter: MIRA, state: 'restoring', can_restore: false }),
+    ])
+    await deletedByChoice('Deleted by anyone')
+    await act(async () =>
+      restored({ restored: ['item-5'], stepping: ['item-5'], refused: [], deferred: [] }),
+    )
+    await settle()
+    expect(window.showToast).toHaveBeenCalledWith('Restoring QN-5…', undefined)
+    expect(window.showToast).not.toHaveBeenCalledWith('Restored QN-5', undefined)
   })
 
   it('opens the project window for a sub-project whose project is deleted too', async () => {
@@ -1697,6 +1721,20 @@ describe('search hits follow the list', () => {
     expect(has('[data-deleted-match="QN-12"]')).toBe(false)
     expect(text('[data-deleted-items]')).toContain('No deleted items match the filter.')
     expect(text('[data-deleted-count]')).toBe('0 of 1 item')
+  })
+
+  it('says Restoring for a hit whose project comes back in steps', async () => {
+    await open()
+    answers['deletedItems:restore'] = async (args) => {
+      const ids = args.ids as string[]
+      return { restored: ids, stepping: ids, refused: [], deferred: [] }
+    }
+    await deliver([task(1, { title: 'Book a van' })], true)
+    await found('Book', [hit()])
+    await click(find('[data-deleted-match="QN-12"] [data-restore]'))
+    await click(button('Restore the project and QN-12'))
+    expect(window.showToast).toHaveBeenCalledWith('Restoring QN-12 and its project…', undefined)
+    expect(window.showToast).not.toHaveBeenCalledWith('Restored QN-12 and its project', undefined)
   })
 
   it('shows and restores a hit whose project item a capped list stops before', async () => {

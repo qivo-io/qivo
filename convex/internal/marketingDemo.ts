@@ -16,6 +16,7 @@ import { badRequest, conflict, require, rule } from '../lib/functions'
 import { DEFAULT_MESSAGE_RETENTION_DAYS, LIMITS, MIB } from '../lib/limits'
 import { pendingRemoval } from '../model/cascade'
 import {
+  layoutHash,
   NORTHSTAR_COMMENTS,
   NORTHSTAR_STEPS,
   type NorthstarStep,
@@ -538,10 +539,7 @@ export const SEED_LAYOUT = (() => {
     reserved: RESERVED.map((item) => item.key),
     steps: SEED_STEPS,
   })
-  // 32-bit FNV-1a: a label for the layout, not a secret
-  let hash = 0x811c9dc5
-  for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193)
-  return `${SEED_STEPS.length}:${(hash >>> 0).toString(16)}`
+  return `${SEED_STEPS.length}:${layoutHash(text)}`
 })()
 
 /** Runs part `part` of the reserved-id check (RESERVED_PARTS) for the

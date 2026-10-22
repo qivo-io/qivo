@@ -132,7 +132,14 @@ describe('durable demo creation analytics', () => {
       subject: user._id as string,
       sessionId: session._id as string,
     })
-    expect((await visitor.mutation(api.demo.ensureMine, {})).status).toBe('ready')
+    // the demo is counted once, when its last provisioning step makes it ready
+    let answer = await visitor.mutation(api.demo.ensureMine, {})
+    while (answer.status === 'unprovisioned') {
+      await t.run((ctx) => recordDemoCreated(ctx, pending._id))
+      expect((await t.query(snapshot, {})).totalCreated).toBe(0)
+      answer = await visitor.mutation(api.demo.ensureMine, {})
+    }
+    expect(answer.status).toBe('ready')
     await visitor.mutation(api.demo.ensureMine, {})
     await t.run((ctx) => recordDemoCreated(ctx, pending._id))
     const report = await t.query(snapshot, {})
