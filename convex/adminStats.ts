@@ -159,8 +159,7 @@ type OrgHead = Pick<
 > & { bytes: number }
 
 /** An organization's own fields, billing and newest activity, or null once
- * it is gone. `bytes` covers its organizations and org_counters rows and its
- * sync_stamps rows, one small row per stamped person. */
+ * it is gone. `bytes` covers its organizations and org_counters rows. */
 export const orgHead = internalQuery({
   args: { org_id: v.string() },
   handler: async (ctx, { org_id }): Promise<OrgHead | null> => {
@@ -169,10 +168,6 @@ export const orgHead = internalQuery({
     const subscription = await subscriptionFor(ctx, org.id)
     const plan = subscription ? await byId(ctx, 'billing_plans', subscription.plan_id) : null
     const counters = await countersRow(ctx, org.id)
-    const stamps = await ctx.db
-      .query('sync_stamps')
-      .withIndex('by_org', (q) => q.eq('org_id', org.id))
-      .collect()
     const newest = await ctx.db
       .query('activity_events')
       .withIndex('by_org_ts', (q) => q.eq('org_id', org.id))
@@ -187,10 +182,7 @@ export const orgHead = internalQuery({
       renewal_date:
         subscription?.current_period_end?.slice(0, 10) ?? org.billing?.renewal_date ?? null,
       last_activity: newest?.ts ?? null,
-      bytes:
-        sizeOf(org) +
-        (counters === null ? 0 : sizeOf(counters)) +
-        stamps.reduce((sum, row) => sum + sizeOf(row), 0),
+      bytes: sizeOf(org) + (counters === null ? 0 : sizeOf(counters)),
     }
   },
 })
@@ -239,7 +231,15 @@ export const childPage = internalQuery({
   },
 })
 
-const ORG_PARTS = ['profiles', 'teams', 'projects', 'issues', 'activity', 'deleted'] as const
+const ORG_PARTS = [
+  'profiles',
+  'stamps',
+  'teams',
+  'projects',
+  'issues',
+  'activity',
+  'deleted',
+] as const
 type OrgPart = (typeof ORG_PARTS)[number]
 
 /** Counts of one part of an organization. `rows` counts the part's own
@@ -249,8 +249,8 @@ type PartCounts = { rows: number; bytes: number; members: number; guests: number
  * STATS_PAGE.children rows. */
 type PartPage = PartCounts & { deferred: ChildRange[]; next: string | null }
 
-/** One page of one part of an organization: its profiles, teams with their
- * members, projects with their grants, team grants and milestones, tasks
+/** One page of one part of an organization: its profiles, their Team sync
+ * stamps (sync_stamps), teams with their members, projects with their grants, team grants and milestones, tasks
  * with the links they are the source of, activity, or Deleted items rows. */
 export const orgPart = internalQuery({
   args: { org_id: v.string(), part: literals(...ORG_PARTS), cursor: vCursor },
@@ -284,6 +284,14 @@ export const orgPart = internalQuery({
           else counts.members += 1
           if (p.auth_user_id !== undefined) counts.logins += 1
         }
+        return done(page)
+      }
+      case 'stamps': {
+        const page = await ctx.db
+          .query('sync_stamps')
+          .withIndex('by_org', (q) => q.eq('org_id', org_id))
+          .paginate(opts(STATS_PAGE.rows))
+        for (const row of page.page) counts.bytes += sizeOf(row)
         return done(page)
       }
       case 'teams': {
@@ -383,13 +391,15 @@ async function orgRow(ctx: Runner, org_id: string): Promise<AdminOrgRow | null> 
   const head: OrgHead | null = await ctx.runQuery(internal.adminStats.orgHead, { org_id })
   if (head === null) return null
   const profiles = await partCounts(ctx, org_id, 'profiles')
+  const stamps = await partCounts(ctx, org_id, 'stamps')
   const teams = await partCounts(ctx, org_id, 'teams')
   const projects = await partCounts(ctx, org_id, 'projects')
   const issues = await partCounts(ctx, org_id, 'issues')
   const activity = await partCounts(ctx, org_id, 'activity')
   const deleted = await partCounts(ctx, org_id, 'deleted')
   let bytes = head.bytes
-  for (const part of [profiles, teams, projects, issues, activity, deleted]) bytes += part.bytes
+  for (const part of [profiles, stamps, teams, projects, issues, activity, deleted])
+    bytes += part.bytes
   return {
     id: head.id,
     name: head.name,

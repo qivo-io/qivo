@@ -383,6 +383,32 @@ describe('listOrgs', () => {
     )
   })
 
+  it('pages the Team sync stamps of 3,000 people, under 2,500 documents a read', async () => {
+    const t = newT({ transactionLimits: { documentsRead: 2500 } })
+    const f = await withOrg(t)
+    const asOp = await operator(t)
+    const footprint = async () =>
+      (await asOp.action(api.adminStats.listOrgs, {})).find((row) => row.id === f.org.id)
+        ?.approx_bytes ?? 0
+    const before = await footprint()
+    let added = 0
+    for (let batch = 0; batch < 3; batch++) {
+      added += await t.run(async (ctx) => {
+        let bytes = 0
+        for (let i = 0; i < 1000; i++) {
+          const _id = await ctx.db.insert('sync_stamps', {
+            org_id: f.org.id,
+            profile_id: uuid(),
+            at: NOW,
+          })
+          bytes += JSON.stringify(await ctx.db.get(_id)).length
+        }
+        return bytes
+      })
+    }
+    expect(await footprint()).toBe(before + added)
+  })
+
   /* A page of tasks reads one range for the page and one for each task's
    * links, so pages of 75 tasks need 76 ranges. One page for the whole
    * organization of 1,500 tasks needs 1,501, as the old single query did. */
