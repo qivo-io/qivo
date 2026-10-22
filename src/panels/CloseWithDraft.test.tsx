@@ -268,6 +268,14 @@ describe('closing the task window with unsent text', { timeout: 30_000 }, () => 
         await new Promise((resolve) => setTimeout(resolve, 10))
       })
     await act(async () => composer.commands.insertContent('Drift is under 2%'))
+    // an Escape that ends an input method's composition is the input method's
+    await act(async () => {
+      toolbar?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', isComposing: true, bubbles: true }),
+      )
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+    expect(question()).toBeNull()
     await escapeOn()
     await asked('Discard your unsent comment?')
     await press('[data-discard-confirm]')

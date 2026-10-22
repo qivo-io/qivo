@@ -1306,8 +1306,14 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   /* Escape from the editor's controls. With no step to take, a clean editor
      blurs and the key bubbles on, so the modal closes. One pressed inside
      the text arrives with its default prevented (ProseMirror takes Escape)
-     and was handled there (escapeTextRef). */
+     and was handled there (escapeTextRef). One that ends an input method's
+     composition is the input method's: ProseMirror leaves it alone, and it
+     stops here so the window does not close either. */
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) {
+      e.stopPropagation()
+      return
+    }
     if (e.key !== 'Escape' || e.defaultPrevented || hasOpenTooltip()) return
     if (escapeStep()) {
       e.preventDefault()
