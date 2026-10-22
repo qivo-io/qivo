@@ -10,6 +10,7 @@
  * them from this file. */
 
 import { v } from 'convex/values'
+import { httpAction } from '../_generated/server'
 import type { ProfileKind } from '../lib/enums'
 import { badRequest } from '../lib/functions'
 import { limitedWhole } from '../lib/limitRules'
@@ -229,18 +230,86 @@ export const REST_NOT_UTF8 = 'request body is not valid UTF-8'
  * control characters, which JSON escapes to six bytes each. */
 export const BODY_MAX_BYTES = LIMITS.requestBody.max * MIB
 
-/* convex/tsconfig's lib is ESNext only, which declares neither the decoder
- * nor the request body stream the Convex runtime has. */
+/* convex/tsconfig's lib is ESNext only, which declares neither the decoder,
+ * the timers nor the request body stream the Convex runtime has. */
 declare class TextDecoder {
   constructor(label?: string, options?: { fatal?: boolean })
   decode(value: Uint8Array): string
 }
+declare function setTimeout(callback: () => void, delay: number): unknown
+declare function clearTimeout(timer: unknown): void
 type BodyStream = {
+  readonly locked: boolean
   getReader(): {
     read(): Promise<{ done: boolean; value?: Uint8Array }>
     cancel(): Promise<void>
+    releaseLock(): void
   }
 }
+
+/** How long discardBody waits for the rest of a body, in milliseconds. A
+ * body just over the 1 MiB cap arrives inside it at about 2 Mbit/s or more.
+ * It is short because an unauthenticated caller can make every answer wait
+ * this long, and HTTP actions share a concurrency limit. */
+export const DISCARD_MS = 5_000
+
+/** The most discardBody reads, in bytes: well over the largest body any
+ * Qivo route takes (a 20 MiB attachment). Convex sets no request size
+ * limit of its own. */
+export const DISCARD_MAX_BYTES = 32 * MIB
+
+/**
+ * Reads and drops whatever is left of a request body. An answer sent while
+ * the client is still uploading lets Convex's HTTP front end reset the
+ * connection or answer 502 in its place, so every REST, MCP and upload
+ * answer waits for the body first, even one decided before reading it. It
+ * stops after `waitMs` or DISCARD_MAX_BYTES, so a slow or endless upload
+ * cannot hold the action, and such a client may then still see a reset. It
+ * does not start on a body declared longer than DISCARD_MAX_BYTES, which it
+ * could not finish, and leaves alone a body a reader still holds (one
+ * cancelled after a timeout).
+ */
+export async function discardBody(request: Request, waitMs = DISCARD_MS): Promise<void> {
+  const body = (request as Request & { body: BodyStream | null }).body
+  if (body === null || body.locked) return
+  const reader = body.getReader()
+  if (Number(request.headers.get('Content-Length')) > DISCARD_MAX_BYTES) {
+    await reader.cancel().catch(() => {})
+    return
+  }
+  let timer: unknown
+  const late = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, waitMs)
+  })
+  const drain = async () => {
+    let size = 0
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) return
+      size += value?.byteLength ?? 0
+      if (size > DISCARD_MAX_BYTES) return
+    }
+  }
+  try {
+    await Promise.race([drain(), late])
+  } catch {
+    // the client gave up on its upload, so nothing is left to wait for
+  } finally {
+    clearTimeout(timer)
+    await reader.cancel().catch(() => {})
+  }
+}
+
+/** An httpAction whose answer, whatever it is and wherever the handler
+ * decided it, goes out only after the request body arrived (discardBody). */
+export const answerAfterBody = (handler: Parameters<typeof httpAction>[0]) =>
+  httpAction(async (ctx, request) => {
+    try {
+      return await handler(ctx, request)
+    } finally {
+      await discardBody(request)
+    }
+  })
 
 /** A request body that readBody read. `text` decodes as request.text()
  * would, with each byte sequence that is not UTF-8 replaced by U+FFFD, and
@@ -250,12 +319,13 @@ export type RequestBody = { text: string; utf8: boolean }
 
 /**
  * A REST or MCP request body, or null when it is longer than
- * BODY_MAX_BYTES. A Content-Length over the cap answers before the body is
+ * BODY_MAX_BYTES. A Content-Length over the cap decides before the body is
  * read. Otherwise the bytes are counted as they arrive, before decoding, so
- * a body sent without Content-Length (chunked) stops being read once it
- * passes the cap, and a byte-order mark counts too. Callers read it after
- * authentication, so an unauthenticated caller learns nothing new and an
- * oversized request still counts as a call.
+ * a body sent without Content-Length (chunked) stops being kept once it
+ * passes the cap, and a byte-order mark counts too. Its handler's
+ * answerAfterBody then drops the rest before the 413 goes out. Callers read
+ * it after authentication, so an unauthenticated caller learns nothing new
+ * and an oversized request still counts as a call.
  */
 export async function readBody(request: Request): Promise<RequestBody | null> {
   if (Number(request.headers.get('Content-Length')) > BODY_MAX_BYTES) return null
@@ -285,8 +355,8 @@ export async function readBody(request: Request): Promise<RequestBody | null> {
       return { text: new TextDecoder().decode(bytes), utf8: false }
     }
   } finally {
-    // stops an oversized body; a no-op once the body has been read
-    await reader.cancel().catch(() => {})
+    // leaves the rest of an oversized body to discardBody
+    reader.releaseLock()
   }
 }
 

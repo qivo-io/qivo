@@ -248,8 +248,17 @@ checks the size after authentication, before routing, and answers a longer
 body with `413` `{"error": "a request body must be at most 1 MiB. Send less
 in one request."}`. Such a request
 still counts as a call. A declared `Content-Length` over the limit is refused
-without reading the body. Files never travel in these bodies; see
+without keeping the body. Files never travel in these bodies; see
 [Attachments](#attachments).
+
+Qivo answers every request only after its whole body has arrived, even when
+the answer does not depend on it, such as a `401` or this `413`. Once Qivo
+knows such an answer, it waits at most 5 seconds more for the rest of the
+body, and reads at most 32 MiB of it. If the rest takes longer, which for a
+body just over the limit means an upload slower than about 2 Mbit/s, the
+request can end with the connection closed and no answer. Treat that like
+any network error, and check the body's size before you send it again. A
+body Qivo does use, such as one within the limit, has no such deadline.
 
 A request that takes a JSON body needs a JSON object. Anything else, such as
 invalid JSON, an array or a number, is a `400` (`request body must be
@@ -2025,7 +2034,12 @@ Qivo reads the body of a `POST` to the upload URL in one of its own request
 handlers, which stays busy until the whole file has arrived, for at most the
 5 minutes above. A 20 MiB file therefore needs about 70 KB/s or more. Many
 large uploads at once from one organization share the deployment's handlers
-with every other request, so send them a few at a time.
+with every other request, so send them a few at a time. A refusal, such as
+the `400` for a body of another size, also waits for the rest of the body,
+but only 5 seconds more and 32 MiB, as for
+[every request](#request-limits-and-billing).
+A slower upload that is refused can end with the connection closed and no
+answer.
 
 Only the user that started the upload can confirm it, only for the same
 task, and only once. Any other ticket, including an expired one, answers

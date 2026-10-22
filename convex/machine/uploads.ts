@@ -20,7 +20,7 @@ import type { HttpRouter } from 'convex/server'
 import { ConvexError, v } from 'convex/values'
 import { internal } from '../_generated/api'
 import type { Id } from '../_generated/dataModel'
-import { httpAction, internalMutation } from '../_generated/server'
+import { internalMutation } from '../_generated/server'
 import { verifyFileToken } from '../lib/fileTokens'
 import { badRequest, type Refusal } from '../lib/functions'
 import { LIMITS, overText } from '../lib/limits'
@@ -32,7 +32,7 @@ import {
   UPLOAD_TICKET_MISSING,
   uploadSizeWrong,
 } from '../model/attachments'
-import { internalError } from './shared'
+import { answerAfterBody, internalError } from './shared'
 
 const PREFIX = '/attachment-uploads/'
 
@@ -57,6 +57,7 @@ type BodyStream = {
   getReader(): {
     read(): Promise<{ done: boolean; value?: Uint8Array }>
     cancel(): Promise<void>
+    releaseLock(): void
   }
 }
 
@@ -124,7 +125,8 @@ const answer = (status: number, body: unknown): Response =>
 
 /** The request body's chunks when it holds exactly `size` bytes, else null.
  * It stops reading once the body passes `size`, so a longer body never
- * fills memory, and refuses a body still arriving after `readMs`. */
+ * fills memory, and leaves the rest to receive's discardBody. It refuses a
+ * body still arriving after `readMs`, and stops that one's upload. */
 export async function readExactly(
   request: Request,
   size: number,
@@ -136,8 +138,12 @@ export async function readExactly(
   if (body === null) return size === 0 ? [] : null
   const reader = body.getReader()
   let timer: unknown
+  let late = false
   const tooSlow = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(badRequest(UPLOAD_TOO_SLOW)), readMs)
+    timer = setTimeout(() => {
+      late = true
+      reject(badRequest(UPLOAD_TOO_SLOW))
+    }, readMs)
   })
   const read = async (): Promise<Uint8Array[] | null> => {
     const chunks: Uint8Array[] = []
@@ -156,12 +162,14 @@ export async function readExactly(
     return await Promise.race([read(), tooSlow])
   } finally {
     clearTimeout(timer)
-    await reader.cancel().catch(() => {})
+    // a read still waits on a body that came too late, so only cancel ends it
+    if (late) await reader.cancel().catch(() => {})
+    else reader.releaseLock()
   }
 }
 
 /* POST /attachment-uploads/{ticket}?e=&m=&t= stores the ticket's file. */
-const receive = httpAction(async (ctx, request) => {
+const receive = answerAfterBody(async (ctx, request) => {
   const url = new URL(request.url)
   const ticket = url.pathname.slice(PREFIX.length)
   const minter = url.searchParams.get('m')
@@ -223,7 +231,7 @@ const receive = httpAction(async (ctx, request) => {
 })
 
 /* A browser's preflight for the POST, which sends its own Content-Type. */
-const preflight = httpAction(
+const preflight = answerAfterBody(
   async () =>
     new Response(null, {
       status: 204,

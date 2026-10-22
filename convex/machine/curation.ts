@@ -5,11 +5,11 @@
 import type { HttpRouter } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { internal } from '../_generated/api'
-import { httpAction } from '../_generated/server'
 import { badRequest, type Refusal } from '../lib/functions'
 import { validateCalendarDay } from '../lib/panorama'
 import { CURATION_BODY_LIMIT_BYTES } from '../lib/panoramaCuration'
 import { sha256hex } from './auth'
+import { answerAfterBody } from './shared'
 
 declare class TextEncoder {
   encode(text: string): Uint8Array
@@ -147,7 +147,7 @@ function pathId(encoded: string): string {
   return id
 }
 
-const curationHandler = httpAction(async (ctx, req) => {
+const curationHandler = answerAfterBody(async (ctx, req) => {
   if (req.method === 'OPTIONS') return json({}, 200)
   try {
     const match = /^Bearer (qvc_[0-9a-f]{64})$/.exec(req.headers.get('Authorization') ?? '')

@@ -46,7 +46,7 @@ import { ConvexError, v } from 'convex/values'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { ActionCtx, QueryCtx } from '../_generated/server'
-import { httpAction, internalMutation, internalQuery } from '../_generated/server'
+import { internalMutation, internalQuery } from '../_generated/server'
 import { hasProjectLevel } from '../lib/access'
 import { archiveCursorText } from '../lib/archivedTasks'
 import {
@@ -153,6 +153,7 @@ import { PROJECT_ROUTES, projectDetailJson } from './projects'
 import { RECORD_ROUTES } from './records'
 import { conflictRetrying, type MachineEntry, type Principal, runEntry } from './registry'
 import {
+  answerAfterBody,
   REST_CALLER as CALLER,
   internalError,
   listOffset,
@@ -1622,7 +1623,7 @@ async function webhookResponse(
   return json(reply.result, 201)
 }
 
-const restHandler = httpAction(async (ctx, req) => {
+const restHandler = answerAfterBody(async (ctx, req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
   // who the credential acts as, once it is known; the race sentences use it
   let kind: ProfileKind = 'agent'
