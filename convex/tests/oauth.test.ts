@@ -925,6 +925,47 @@ describe('OAuth organization selection', () => {
     )
   })
 
+  it('sends a login in no organization to the connect page, which says why, and stores nothing', async () => {
+    const f = await fixture()
+    // most apps ask without prompt=consent, so the provider asks for the
+    // connection's reference before it looks for an earlier consent
+    const request = await authorization(f, await register(f))
+    request.query.delete('prompt')
+    await f.t.run((ctx) => ctx.db.patch(f.profile._id, { active: false }))
+    const loginUrl = new URL((await json(await authorize(request, false))).url as string)
+    // a password sign-in on the connect page resumes the authorization
+    const response = await http(f.t, '/api/auth/sign-in/email', {
+      ...body({
+        email: f.profile.email,
+        password: PASSWORD,
+        oauth_query: loginUrl.search.slice(1),
+      }),
+      headers: { 'Content-Type': 'application/json', Origin: APP, 'better-auth-cookie': '' },
+    })
+    const result = await json(response)
+    expect(response.status, JSON.stringify(result)).toBe(200)
+    expect(result.redirect).toBe(true)
+    // so does an app that asks while the login is signed in
+    const oauthQuery = await consentPage(request)
+    for (const url of [result.url as string, `${APP}/?${oauthQuery}`]) {
+      expect(new URL(url).origin).toBe(APP)
+      await expectRefusal(
+        f.as.mutation(api.oauthConnections.getContext, {
+          oauth_query: new URL(url).search.slice(1),
+        }),
+        'forbidden',
+        /belongs to no organization yet\. Create an organization or accept an invitation/,
+      )
+    }
+    const refused = await consent(request, oauthQuery)
+    expect(refused.status).toBe(403)
+    expect(await json(refused)).toMatchObject({
+      error: 'access_denied',
+      error_description: NO_ORGANIZATION,
+    })
+    expect(await f.t.run((ctx) => ctx.db.query('oauth_connections').collect())).toEqual([])
+  })
+
   it('refuses consent once the seat the connect page showed has left, and issues no code', async () => {
     const f = await fixture()
     const request = await authorization(f, await register(f))

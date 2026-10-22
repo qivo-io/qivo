@@ -9,6 +9,7 @@ import { authedMutation, authedQuery, badRequest, forbidden, notFound } from './
 import {
   canonicalOAuthQuery,
   clientDisplayName,
+  findHomeProfile,
   homeProfile,
   mcpResource,
   ORGANIZATION_GONE,
@@ -122,6 +123,21 @@ export const revoke = authedMutation({
       revocation_reason: 'deleted',
     })
     return true
+  },
+})
+
+/* Whether a login has a seat a new connection can act as (lib/oauth.ts
+ * homeProfile). The provider sends a login without one to the connect page,
+ * which says why, rather than answering its authorization with a bare
+ * refusal. Consent still refuses such a login on its own. */
+export const hasHome = internalQuery({
+  args: { authUserId: v.string() },
+  handler: async (ctx, args) => {
+    const profiles = await ctx.db
+      .query('profiles')
+      .withIndex('by_auth', (q) => q.eq('auth_user_id', args.authUserId))
+      .collect()
+    return findHomeProfile(profiles) !== undefined
   },
 })
 

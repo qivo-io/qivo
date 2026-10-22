@@ -36,6 +36,9 @@ const ensureRef = makeFunctionReference<
   },
   string | null
 >('oauthConnections:ensure')
+const hasHomeRef = makeFunctionReference<'query', { authUserId: string }, boolean>(
+  'oauthConnections:hasHome',
+)
 const claimRef = makeFunctionReference<
   'mutation',
   {
@@ -122,7 +125,12 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
     prefix: { opaqueAccessToken: 'qvo_', refreshToken: 'qvr_' },
     postLogin: {
       page: `${siteUrl}/app/~/connect`,
-      shouldRedirect: async () => false,
+      // A login in no organization goes to the connect page, which names the
+      // reason and the next step. Answering the authorization or the sign-in
+      // that resumes it with consentReferenceId's refusal would show a bare
+      // error page or "Sign-in failed". Consent refuses the login anyway.
+      shouldRedirect: async ({ user }) =>
+        !(await ctx.runQuery(hasHomeRef, { authUserId: user.id })),
       consentReferenceId: async ({ user, scopes }) => {
         const endpoint = await getCurrentAuthContext()
         const state = await getOAuthProviderState()

@@ -50,10 +50,15 @@ export const ORGANIZATION_GONE =
  * seat, else its first active guest seat. Refuses (forbidden,
  * NO_ORGANIZATION) when the login has no active seat. */
 export function homeProfile(profiles: Doc<'profiles'>[]): Doc<'profiles'> {
-  const active = profiles.filter((p) => p.active && p.kind === 'person' && p.auth_user_id)
-  const home = active.find((p) => ['admin', 'user', 'viewer'].includes(p.org_role)) || active[0]
+  const home = findHomeProfile(profiles)
   if (!home) throw forbidden(NO_ORGANIZATION)
   return home
+}
+
+/** homeProfile's seat, or undefined for a login in no organization. */
+export function findHomeProfile(profiles: Doc<'profiles'>[]): Doc<'profiles'> | undefined {
+  const active = profiles.filter((p) => p.active && p.kind === 'person' && p.auth_user_id)
+  return active.find((p) => ['admin', 'user', 'viewer'].includes(p.org_role)) || active[0]
 }
 
 // Social sign-in adds an unsigned one-time cookie token to the callback URL.
