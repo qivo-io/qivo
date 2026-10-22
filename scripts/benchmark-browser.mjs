@@ -290,17 +290,31 @@ async function pageSize(page, cdp) {
   }
 }
 
+/** The view switch's `name` button, found before a timed phase clicks it.
+    Playwright finds a button by its role and name by reading every element
+    on the page, which on a page with a large Board or Roadmap takes longer
+    than the app's own work, so a phase that searched inside its timing
+    measured the search. */
+const viewButton = (page, name) =>
+  page
+    .locator('[data-view-switch]')
+    .getByRole('radio', { name, exact: true })
+    .elementHandle({ timeout: timeout * 10 })
+
 /** Opens the Board from another view as `prefix`Navigation, until its first
     card shows, and `prefix`Complete, until every card is in. Returns their
     sum and the longest animation frame that started after the first card
     showed (0 when it all happened in one). */
 async function openBoard({ page, timed }, metrics, prefix) {
   await page.evaluate(() => {
-    const state = { firstCardAt: null, frames: [] }
+    const state = { firstCardAt: null, frames: [], observer: null }
     window.__boardOpen = state
-    new PerformanceObserver((list) => {
+    // held in the state: an observer nothing holds can be collected
+    // while it waits, and then reports no frames
+    state.observer = new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) state.frames.push(entry)
-    }).observe({ type: 'long-animation-frame', buffered: false })
+    })
+    state.observer.observe({ type: 'long-animation-frame', buffered: false })
     const seen = new MutationObserver(() => {
       if (!document.querySelector('[data-card]')) return
       state.firstCardAt = performance.now()
@@ -309,11 +323,9 @@ async function openBoard({ page, timed }, metrics, prefix) {
     seen.observe(document.body, { childList: true, subtree: true })
   })
   phase(`${prefix}Navigation`)
+  const button = await viewButton(page, 'Board')
   const navigation = await timed(async () => {
-    await page
-      .locator('[data-view-switch]')
-      .getByRole('radio', { name: 'Board', exact: true })
-      .click({ timeout: timeout * 10 })
+    await button.click({ timeout: timeout * 10 })
     await page
       .locator('[data-card]')
       .first()
@@ -326,7 +338,10 @@ async function openBoard({ page, timed }, metrics, prefix) {
   )
   metrics[`${prefix}Complete`].push(complete)
   const longest = await page.evaluate(() => {
-    const { firstCardAt, frames } = window.__boardOpen
+    const { firstCardAt, frames, observer } = window.__boardOpen
+    // the frames the observer has not delivered yet
+    frames.push(...observer.takeRecords())
+    observer.disconnect()
     delete window.__boardOpen
     return Math.max(
       0,
@@ -748,12 +763,10 @@ async function runVariedSample(origin, tasks, metrics, query = '') {
   // Back to the Overview until its first screen shows, then until its
   // lists are complete.
   phase('variedOverview')
+  const overview = await viewButton(page, 'Overview')
   metrics.variedOverview.push(
     await timed(async () => {
-      await page
-        .locator('[data-view-switch]')
-        .getByRole('radio', { name: 'Overview', exact: true })
-        .click({ timeout: timeout * 10 })
+      await overview.click({ timeout: timeout * 10 })
       await page.locator('[data-ov-strip]').waitFor({ timeout: timeout * 10 })
       await page
         .locator('[data-atrisk], [data-ovrow]')
