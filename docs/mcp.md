@@ -2098,7 +2098,9 @@ listed**. The task's comments and history still hold what those messages
 announced. A comment or a
 change on a task with more than 128 followers, such as a task from before
 the follower limit, reaches the first 128 at once and the rest moments
-later. The followers of the tasks a roadmap save or an access removal
+later. The same holds when many of the people a write mentions or notifies
+have snoozed a long thread about the task, because each message wakes
+theirs. The followers of the tasks a roadmap save or an access removal
 changes, and of the subtasks a task delete detaches, get their messages
 moments after it saves.
 

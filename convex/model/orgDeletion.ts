@@ -3,8 +3,9 @@
  * Every org-scoped row and stored file goes, children before their parents,
  * as model/cascade.ts deleteOrgDeep lists them, but spread over as many
  * transactions as the data needs. Each step spends one REMOVAL_BUDGET and
- * reads every range again from its start, so no cursor is kept and a
- * repeated step cannot skip a row. The removal row records the phase that
+ * reads every range again from its start, each in one pass
+ * (model/cascade.ts sweep), so no cursor is kept and a repeated step cannot
+ * skip a row. The removal row records the phase that
  * was running when the budget ran out.
  *
  * Profiles go first. Once the removal has a phase, lib/billingAccess.ts
@@ -34,7 +35,7 @@
 
 import type { Doc, Id, TableNames } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
-import { byId, LARGE_ROWS_PER_READ } from '../lib/db'
+import { byId } from '../lib/db'
 import { ORG_REMOVAL_PHASES, type OrgRemovalPhase } from '../lib/enums'
 import { require, rule } from '../lib/functions'
 import { budgetSpent, REMOVAL_BUDGET, type RemovalBudget, sweep } from './cascade'
@@ -42,53 +43,46 @@ import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
 import { deleteOrgBookkeeping } from './orgs'
 
-/* Rows read per index read for small documents. */
-const ROWS_PER_READ = 64
-
 type Row = { _id: Id<TableNames> }
 
-/** Deletes the rows `read` returns until the range is empty (true) or the
- * budget is spent (false), running `before` on each row first. */
+/** Deletes the rows of `rows`, one index range read in one pass, until it
+ * ends (true) or the budget is spent (false), running `before` on each row
+ * first. */
 const drain = <R extends Row>(
   ctx: MutationCtx,
   budget: RemovalBudget,
-  read: (n: number) => Promise<R[]>,
-  options: { perRead?: number; before?: (row: R) => Promise<void> } = {},
+  rows: AsyncIterable<R>,
+  options: { before?: (row: R) => Promise<void> } = {},
 ) =>
-  sweep(
-    budget,
-    read,
-    async (row) => {
-      if (options.before) await options.before(row)
-      await ctx.db.delete(row._id)
-    },
-    options.perRead ?? ROWS_PER_READ,
-  )
+  sweep(budget, rows, async (row) => {
+    if (options.before) await options.before(row)
+    await ctx.db.delete(row._id)
+  })
 
 /** Deletes a stored file if it still exists. */
 async function removeFile(ctx: MutationCtx, id: Id<'_storage'> | undefined) {
   if (id !== undefined && (await ctx.db.system.get(id))) await ctx.storage.delete(id)
 }
 
-/** Deletes the parent rows `first` finds, each after `children` reports its
- * own ranges empty. */
+/** Deletes the parent rows of `rows`, one index range read in one pass,
+ * each after `children` reports its own ranges empty. */
 async function parents<R extends Row>(
   ctx: MutationCtx,
   budget: RemovalBudget,
-  first: () => Promise<R | null>,
+  rows: AsyncIterable<R>,
   children: (row: R) => Promise<boolean>,
   before?: (row: R) => Promise<void>,
 ): Promise<boolean> {
-  while (!budgetSpent(budget)) {
-    const row = await first()
-    if (!row) return true
+  if (budgetSpent(budget)) return false
+  for await (const row of rows) {
     if (!(await children(row))) return false
     if (before) await before(row)
     await ctx.db.delete(row._id)
     budget.rows -= 1
     budget.bytes -= estimateDocumentBytes(row)
+    if (budgetSpent(budget)) return false
   }
-  return false
+  return true
 }
 
 /** Runs each range in order and stops at the first one left unfinished. */
@@ -102,103 +96,105 @@ const profileRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   parents(
     ctx,
     budget,
-    () =>
-      ctx.db
-        .query('profiles')
-        .withIndex('by_org', (q) => q.eq('org_id', orgId))
-        .first(),
+    ctx.db.query('profiles').withIndex('by_org', (q) => q.eq('org_id', orgId)),
     (profile) =>
       inOrder([
         () =>
-          drain(ctx, budget, (n) =>
+          drain(
+            ctx,
+            budget,
             ctx.db
               .query('user_prefs')
-              .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
-              .take(n),
+              .withIndex('by_profile', (q) => q.eq('profile_id', profile.id)),
           ),
         () =>
           drain(
             ctx,
             budget,
-            (n) =>
-              ctx.db
-                .query('messages')
-                .withIndex('by_recipient', (q) => q.eq('recipient_id', profile.id))
-                .take(n),
-            { perRead: LARGE_ROWS_PER_READ },
+
+            ctx.db
+              .query('messages')
+              .withIndex('by_recipient', (q) => q.eq('recipient_id', profile.id)),
           ),
         () =>
-          drain(ctx, budget, (n) =>
+          drain(
+            ctx,
+            budget,
             ctx.db
               .query('issue_subscriptions')
-              .withIndex('by_profile_task_archived', (q) => q.eq('profile_id', profile.id))
-              .take(n),
+              .withIndex('by_profile_task_archived', (q) => q.eq('profile_id', profile.id)),
           ),
         () =>
-          drain(ctx, budget, (n) =>
+          drain(
+            ctx,
+            budget,
             ctx.db
               .query('sync_stamps')
-              .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
-              .take(n),
+              .withIndex('by_profile', (q) => q.eq('profile_id', profile.id)),
           ),
         () =>
-          drain(ctx, budget, (n) =>
+          drain(
+            ctx,
+            budget,
             ctx.db
               .query('team_members')
-              .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
-              .take(n),
+              .withIndex('by_profile', (q) => q.eq('profile_id', profile.id)),
           ),
         () =>
-          drain(ctx, budget, (n) =>
+          drain(
+            ctx,
+            budget,
             ctx.db
               .query('project_access')
-              .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
-              .take(n),
+              .withIndex('by_profile', (q) => q.eq('profile_id', profile.id)),
           ),
         () =>
-          drain(ctx, budget, (n) =>
+          drain(
+            ctx,
+            budget,
             ctx.db
               .query('agent_keys')
-              .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
-              .take(n),
+              .withIndex('by_profile', (q) => q.eq('profile_id', profile.id)),
           ),
         () =>
-          drain(ctx, budget, (n) =>
+          drain(
+            ctx,
+            budget,
             ctx.db
               .query('mcp_tokens')
-              .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
-              .take(n),
+              .withIndex('by_profile', (q) => q.eq('profile_id', profile.id)),
           ),
         () =>
-          drain(ctx, budget, (n) =>
+          drain(
+            ctx,
+            budget,
             ctx.db
               .query('attachment_uploads')
-              .withIndex('by_profile_expiry', (q) => q.eq('profile_id', profile.id))
-              .take(n),
+              .withIndex('by_profile_expiry', (q) => q.eq('profile_id', profile.id)),
           ),
         () =>
           parents(
             ctx,
             budget,
-            () =>
-              ctx.db
-                .query('oauth_connections')
-                .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
-                .first(),
+            ctx.db
+              .query('oauth_connections')
+              .withIndex('by_profile', (q) => q.eq('profile_id', profile.id)),
             (connection) =>
-              drain(ctx, budget, (n) =>
+              drain(
+                ctx,
+                budget,
                 ctx.db
                   .query('oauth_credential_uses')
-                  .withIndex('by_connection', (q) => q.eq('connection_id', connection.id))
-                  .take(n),
+                  .withIndex('by_connection', (q) => q.eq('connection_id', connection.id)),
               ),
           ),
         () =>
-          drain(ctx, budget, (n) =>
+          drain(
+            ctx,
+            budget,
             ctx.db
               .query('machine_rate_limits')
-              .withIndex('by_key', (q) => q.eq('key', `profile:${profile.id}`))
-              .take(n),
+              .withIndex('by_key', (q) => q.eq('key', `profile:${profile.id}`)),
           ),
       ]),
     (profile) => removeFile(ctx, profile.avatar_storage_id),
@@ -219,72 +215,57 @@ const taskRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   parents(
     ctx,
     budget,
-    () =>
-      ctx.db
-        .query('issues')
-        .withIndex('by_org', (q) => q.eq('org_id', orgId))
-        .first(),
+    ctx.db.query('issues').withIndex('by_org', (q) => q.eq('org_id', orgId)),
     (issue) =>
       inOrder([
         () =>
-          drain(ctx, budget, (n) =>
-            ctx.db
-              .query('issue_links')
-              .withIndex('by_source', (q) => q.eq('source_id', issue.id))
-              .take(n),
+          drain(
+            ctx,
+            budget,
+            ctx.db.query('issue_links').withIndex('by_source', (q) => q.eq('source_id', issue.id)),
           ),
         () =>
-          drain(ctx, budget, (n) =>
-            ctx.db
-              .query('issue_links')
-              .withIndex('by_target', (q) => q.eq('target_id', issue.id))
-              .take(n),
+          drain(
+            ctx,
+            budget,
+            ctx.db.query('issue_links').withIndex('by_target', (q) => q.eq('target_id', issue.id)),
           ),
         () =>
-          drain(ctx, budget, (n) =>
-            ctx.db
-              .query('issue_labels')
-              .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
-              .take(n),
+          drain(
+            ctx,
+            budget,
+            ctx.db.query('issue_labels').withIndex('by_issue', (q) => q.eq('issue_id', issue.id)),
           ),
         () =>
-          drain(ctx, budget, (n) =>
+          drain(
+            ctx,
+            budget,
             ctx.db
               .query('issue_subscriptions')
-              .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issue.id))
-              .take(n),
+              .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issue.id)),
           ),
         () =>
           drain(
             ctx,
             budget,
-            (n) =>
-              ctx.db
-                .query('comments')
-                .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
-                .take(n),
-            { perRead: LARGE_ROWS_PER_READ },
+
+            ctx.db.query('comments').withIndex('by_issue', (q) => q.eq('issue_id', issue.id)),
           ),
         () =>
           drain(
             ctx,
             budget,
-            (n) =>
-              ctx.db
-                .query('messages')
-                .withIndex('by_issue_read', (q) => q.eq('issue_id', issue.id))
-                .take(n),
-            { perRead: LARGE_ROWS_PER_READ },
+
+            ctx.db.query('messages').withIndex('by_issue_read', (q) => q.eq('issue_id', issue.id)),
           ),
         () =>
           drain(
             ctx,
             budget,
-            (n) =>
-              ctx.db
-                .query('issue_attachments')
-                .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
-                .take(n),
+
+            ctx.db
+              .query('issue_attachments')
+              .withIndex('by_issue', (q) => q.eq('issue_id', issue.id)),
             { before: (row) => removeFile(ctx, row.storage_id) },
           ),
       ]),
@@ -295,33 +276,32 @@ const projectRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   parents(
     ctx,
     budget,
-    () =>
-      ctx.db
-        .query('projects')
-        .withIndex('by_org', (q) => q.eq('org_id', orgId))
-        .first(),
+    ctx.db.query('projects').withIndex('by_org', (q) => q.eq('org_id', orgId)),
     (project) =>
       inOrder([
         () =>
-          drain(ctx, budget, (n) =>
+          drain(
+            ctx,
+            budget,
             ctx.db
               .query('milestones')
-              .withIndex('by_project', (q) => q.eq('project_id', project.id))
-              .take(n),
+              .withIndex('by_project', (q) => q.eq('project_id', project.id)),
           ),
         () =>
-          drain(ctx, budget, (n) =>
+          drain(
+            ctx,
+            budget,
             ctx.db
               .query('project_access')
-              .withIndex('by_project', (q) => q.eq('project_id', project.id))
-              .take(n),
+              .withIndex('by_project', (q) => q.eq('project_id', project.id)),
           ),
         () =>
-          drain(ctx, budget, (n) =>
+          drain(
+            ctx,
+            budget,
             ctx.db
               .query('project_team_access')
-              .withIndex('by_project', (q) => q.eq('project_id', project.id))
-              .take(n),
+              .withIndex('by_project', (q) => q.eq('project_id', project.id)),
           ),
       ]),
   )
@@ -331,26 +311,22 @@ const teamRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   parents(
     ctx,
     budget,
-    () =>
-      ctx.db
-        .query('teams')
-        .withIndex('by_org', (q) => q.eq('org_id', orgId))
-        .first(),
+    ctx.db.query('teams').withIndex('by_org', (q) => q.eq('org_id', orgId)),
     (team) =>
       inOrder([
         () =>
-          drain(ctx, budget, (n) =>
-            ctx.db
-              .query('team_members')
-              .withIndex('by_team', (q) => q.eq('team_id', team.id))
-              .take(n),
+          drain(
+            ctx,
+            budget,
+            ctx.db.query('team_members').withIndex('by_team', (q) => q.eq('team_id', team.id)),
           ),
         () =>
-          drain(ctx, budget, (n) =>
+          drain(
+            ctx,
+            budget,
             ctx.db
               .query('project_team_access')
-              .withIndex('by_team', (q) => q.eq('team_id', team.id))
-              .take(n),
+              .withIndex('by_team', (q) => q.eq('team_id', team.id)),
           ),
       ]),
   )
@@ -360,17 +336,12 @@ const labelRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   parents(
     ctx,
     budget,
-    () =>
-      ctx.db
-        .query('labels')
-        .withIndex('by_org', (q) => q.eq('org_id', orgId))
-        .first(),
+    ctx.db.query('labels').withIndex('by_org', (q) => q.eq('org_id', orgId)),
     (label) =>
-      drain(ctx, budget, (n) =>
-        ctx.db
-          .query('issue_labels')
-          .withIndex('by_label', (q) => q.eq('label_id', label.id))
-          .take(n),
+      drain(
+        ctx,
+        budget,
+        ctx.db.query('issue_labels').withIndex('by_label', (q) => q.eq('label_id', label.id)),
       ),
   )
 
@@ -379,12 +350,8 @@ const activityRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   drain(
     ctx,
     budget,
-    (n) =>
-      ctx.db
-        .query('activity_events')
-        .withIndex('by_org_ts', (q) => q.eq('org_id', orgId))
-        .take(n),
-    { perRead: LARGE_ROWS_PER_READ },
+
+    ctx.db.query('activity_events').withIndex('by_org_ts', (q) => q.eq('org_id', orgId)),
   )
 
 /** Webhook events, health, deliveries and subscriptions. */
@@ -394,11 +361,10 @@ const webhookRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
       ['webhook_events', 'webhook_health', 'webhook_deliveries', 'webhook_subscriptions'] as const
     ).map(
       (table) => () =>
-        drain(ctx, budget, (n) =>
-          ctx.db
-            .query(table)
-            .withIndex('by_org', (q) => q.eq('org_id', orgId))
-            .take(n),
+        drain(
+          ctx,
+          budget,
+          ctx.db.query(table).withIndex('by_org', (q) => q.eq('org_id', orgId)),
         ),
     ),
   )
@@ -408,20 +374,18 @@ const billingRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   inOrder([
     ...(['billing_usage', 'billing_usage_totals', 'billing_events'] as const).map(
       (table) => () =>
-        drain(ctx, budget, (n) =>
-          ctx.db
-            .query(table)
-            .withIndex('by_org_period', (q) => q.eq('org_id', orgId))
-            .take(n),
+        drain(
+          ctx,
+          budget,
+          ctx.db.query(table).withIndex('by_org_period', (q) => q.eq('org_id', orgId)),
         ),
     ),
     ...(['billing_periods', 'billing_notices', 'billing_subscriptions'] as const).map(
       (table) => () =>
-        drain(ctx, budget, (n) =>
-          ctx.db
-            .query(table)
-            .withIndex('by_org', (q) => q.eq('org_id', orgId))
-            .take(n),
+        drain(
+          ctx,
+          budget,
+          ctx.db.query(table).withIndex('by_org', (q) => q.eq('org_id', orgId)),
         ),
     ),
   ])
@@ -498,22 +462,19 @@ export async function wipeWorkStep(
     ...WORK_PHASES.map((phase) => () => PHASE_ROWS[phase](ctx, orgId, budget)),
     ...profileIds.flatMap((profileId) => [
       () =>
-        drain(ctx, budget, (n) =>
-          ctx.db
-            .query('user_prefs')
-            .withIndex('by_profile', (q) => q.eq('profile_id', profileId))
-            .take(n),
+        drain(
+          ctx,
+          budget,
+          ctx.db.query('user_prefs').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
         ),
       () =>
         drain(
           ctx,
           budget,
-          (n) =>
-            ctx.db
-              .query('messages')
-              .withIndex('by_recipient', (q) => q.eq('recipient_id', profileId))
-              .take(n),
-          { perRead: LARGE_ROWS_PER_READ },
+
+          ctx.db
+            .query('messages')
+            .withIndex('by_recipient', (q) => q.eq('recipient_id', profileId)),
         ),
     ]),
   ])

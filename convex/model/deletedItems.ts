@@ -23,10 +23,11 @@
  * item's milestones among them, and one transaction at the end, the reveal,
  * writes the item's root rows (a task item's tasks; a project item's
  * projects), so the work appears complete in one delivery. A project item's
- * grants and team grants follow the reveal in steps (restoreGrants), so a
- * person whose access comes from them sees the projects moments later. A
- * project item's tasks whose parent is outside it go back without that
- * parent and get it after the reveal and its grants, by the state then
+ * grants and team grants are written back before the reveal too
+ * (restoreAccess), and their stored rows go after it (restoreGrants), so
+ * everyone who had access sees the projects at once. A project item's
+ * tasks whose parent is outside it go back without that parent and get it
+ * after the reveal, by the state then
  * (attachParents). That happens in the reveal's
  * own transaction when they fit in what its budget has left, otherwise in
  * steps just after it, while the tasks show without their parent. A task
@@ -54,11 +55,11 @@
  * count the bytes they read, and a check that runs out of the step's reads
  * waits for the next step, where it comes first and runs whole within
  * COUNT_READ and SIGHT_READ. Progress is counted in rows. A
- * step always moves at least one row, documents without a size cap are
- * read LARGE_ROWS_PER_READ at a time, and most phases read the start of a
- * range again rather than keep a cursor, because moving a row takes it out
- * of the range. The user's mutation spends the first budget itself, so most
- * deletes never schedule a step. Convex drops what a failed step scheduled,
+ * step always moves at least one row, and most phases read a range from
+ * its start, in one pass (drain), rather than keep a cursor, because moving
+ * a row takes it out of the range. The person's own mutation spends a
+ * quarter of a step's budget itself (CALL), so most small deletes never
+ * schedule a step. Convex drops what a failed step scheduled,
  * so `recoverJobs` restarts a stalled job at half the budget, and an item
  * whose step still fails RETRY.atFloor times at the smallest budget becomes
  * stuck, for an admin's Delete now; a restore that fails that often goes
@@ -105,7 +106,7 @@ import {
   projectLevelsForOrg,
 } from '../lib/access'
 import { deletionBegun, orgWriteBlock } from '../lib/billingAccess'
-import { byId, LARGE_ROWS_PER_READ, usedMoreThan } from '../lib/db'
+import { byId, usedMoreThan } from '../lib/db'
 import { demoForOrg, isDemoDeployment, uncountedWriter } from '../lib/demo'
 import {
   type AccessLevel,
@@ -143,6 +144,18 @@ const DAY_MS = 86_400_000
  * A mutable object, so tests can lower it. */
 export const TRASH_BUDGET = { rows: 300, bytes: 4 * 1024 * 1024, tasks: 100, ranges: 2500 }
 
+/* The share of TRASH_BUDGET a person's own delete, restore or Delete now
+ * spends before steps take over. Convex ends a function whose database
+ * calls wait 15 s in all ("too many system operations"), and a step that
+ * does is retried at half its budget (recoverJobs), but a person's call is
+ * not retried. On a local backend busy removing a person with 18,000
+ * tokens, each call of a restore waited 3.8 to 7.6 ms, so a restore of four
+ * 200-project items that made 1,977 calls failed, and so did deleting a
+ * sub-project of 5,000 tasks. A quarter of the budget, about 700 calls with
+ * the writes, stays near 5 s at that rate. A mutable object, so tests can
+ * change it. */
+export const CALL = { scale: 1 / 4 }
+
 /** Adaptive retries: each restart halves budget_scale down to `floor`, and
  * an item whose step failed `atFloor` more times there becomes stuck. */
 export const RETRY = { floor: 1 / 16, atFloor: 5 }
@@ -164,8 +177,6 @@ const RECOVER_BATCH = 32
 const RECOVER_SCAN = 512
 // deleted_tasks rows are small, so a cursor walk reads them in pages.
 const TASK_PAGE = 64
-// No cap of its own: a read takes as many rows as the budget has left.
-const ALL = Number.MAX_SAFE_INTEGER
 
 const stepRef = makeFunctionReference<'mutation', { item_id: string }, null>('deletedItems:step')
 
@@ -289,29 +300,33 @@ function chargeRead(b: Budget, doc: unknown): number {
  * for the next step (liveSubtasks, allSee). */
 const readsSpent = (b: Budget): boolean => b.moved && (b.ranges <= 0 || b.bytes <= 0)
 
-/** Clears the rows `read` returns until the range is empty (true) or the
- * budget is spent (false). `clear` must take each row out of the range,
- * because every read starts at the beginning of the range again
- * (model/cascade.ts sweep, with this file's budget). A `clear` that answers
- * false leaves its row where it is, for the next step, and ends the drain
- * (false). */
+/** Clears the rows of `rows`, an index range read in one pass, until it
+ * ends (true) or the budget is spent (false). `clear` must take each row
+ * out of the range, because the next step reads it from its start again
+ * (model/cascade.ts sweep, which says why one pass, with this file's
+ * budget). A `clear` that answers false leaves its row where it is, for the
+ * next step, and ends the drain (false). */
 async function drain<Row>(
   b: Budget,
-  read: (n: number) => Promise<Row[]>,
+  rows: AsyncIterable<Row>,
   clear: (row: Row) => Promise<void> | Promise<boolean>,
-  perRead: number,
 ): Promise<boolean> {
-  while (!spent(b)) {
-    const n = Math.max(1, Math.min(b.rows, perRead))
-    const rows = await read(n)
-    for (const row of rows) {
-      if ((await clear(row)) === false) return false
-      charge(b, row)
-      if (spent(b)) return false
-    }
-    if (rows.length < n) return true
+  if (spent(b)) return false
+  for await (const row of rows) {
+    if ((await clear(row)) === false) return false
+    charge(b, row)
+    if (spent(b)) return false
   }
-  return false
+  return true
+}
+
+/** The documents of `query`, each tagged with its table `table`, read in
+ * one pass. */
+async function* tagged<T extends StoredTable>(
+  table: T,
+  query: AsyncIterable<Doc<T>>,
+): AsyncGenerator<{ table: T; doc: Doc<T> }> {
+  for await (const doc of query) yield { table, doc }
 }
 
 /* Query methods that read their range. Convex counts each such read, and
@@ -497,117 +512,67 @@ export async function storeRow(
 /** One kind of row that travels with a task or a project, read through the
  * same index as the hard deletes (model/cascade.ts), so rows with archive
  * marks are included. */
-type Relation = {
-  /** Up to `n` rows from the start of the range. */
-  read: (ctx: QueryCtx, ownerId: string, n: number) => Promise<LiveRow[]>
-  /** Rows per read: few for documents without a size cap. */
-  perRead: number
-}
+type Relation = (ctx: QueryCtx, ownerId: string) => AsyncIterable<LiveRow>
 
 /* A task's rows, in the order a move takes them. Links go both ways; a link
  * between two tasks of the item travels with whichever of them moves first. */
 const TASK_ROWS: Relation[] = [
-  {
-    read: async (ctx, id, n) =>
-      (
-        await ctx.db
-          .query('issue_links')
-          .withIndex('by_source', (q) => q.eq('source_id', id))
-          .take(n)
-      ).map((doc) => ({ table: 'issue_links', doc })),
-    perRead: ALL,
-  },
-  {
-    read: async (ctx, id, n) =>
-      (
-        await ctx.db
-          .query('issue_links')
-          .withIndex('by_target', (q) => q.eq('target_id', id))
-          .take(n)
-      ).map((doc) => ({ table: 'issue_links', doc })),
-    perRead: ALL,
-  },
-  {
-    read: async (ctx, id, n) =>
-      (
-        await ctx.db
-          .query('issue_labels')
-          .withIndex('by_issue', (q) => q.eq('issue_id', id))
-          .take(n)
-      ).map((doc) => ({ table: 'issue_labels', doc })),
-    perRead: ALL,
-  },
-  {
-    read: async (ctx, id, n) =>
-      (
-        await ctx.db
-          .query('issue_subscriptions')
-          .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', id))
-          .take(n)
-      ).map((doc) => ({ table: 'issue_subscriptions', doc })),
-    perRead: ALL,
-  },
-  {
-    read: async (ctx, id, n) =>
-      (
-        await ctx.db
-          .query('comments')
-          .withIndex('by_issue', (q) => q.eq('issue_id', id))
-          .take(n)
-      ).map((doc) => ({ table: 'comments', doc })),
-    perRead: LARGE_ROWS_PER_READ,
-  },
-  {
-    read: async (ctx, id, n) =>
-      (
-        await ctx.db
-          .query('issue_attachments')
-          .withIndex('by_issue', (q) => q.eq('issue_id', id))
-          .take(n)
-      ).map((doc) => ({ table: 'issue_attachments', doc })),
-    // file names stored before attachFileCore capped them have no size cap
-    perRead: LARGE_ROWS_PER_READ,
-  },
+  (ctx, id) =>
+    tagged(
+      'issue_links',
+      ctx.db.query('issue_links').withIndex('by_source', (q) => q.eq('source_id', id)),
+    ),
+  (ctx, id) =>
+    tagged(
+      'issue_links',
+      ctx.db.query('issue_links').withIndex('by_target', (q) => q.eq('target_id', id)),
+    ),
+  (ctx, id) =>
+    tagged(
+      'issue_labels',
+      ctx.db.query('issue_labels').withIndex('by_issue', (q) => q.eq('issue_id', id)),
+    ),
+  (ctx, id) =>
+    tagged(
+      'issue_subscriptions',
+      ctx.db
+        .query('issue_subscriptions')
+        .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', id)),
+    ),
+  (ctx, id) =>
+    tagged(
+      'comments',
+      ctx.db.query('comments').withIndex('by_issue', (q) => q.eq('issue_id', id)),
+    ),
+  (ctx, id) =>
+    tagged(
+      'issue_attachments',
+      ctx.db.query('issue_attachments').withIndex('by_issue', (q) => q.eq('issue_id', id)),
+    ),
 ]
 
 /* A project's own rows besides the project row itself. */
 const PROJECT_ROWS: Relation[] = [
-  {
-    read: async (ctx, id, n) =>
-      (
-        await ctx.db
-          .query('milestones')
-          .withIndex('by_project', (q) => q.eq('project_id', id))
-          .take(n)
-      ).map((doc) => ({ table: 'milestones', doc })),
-    perRead: ALL,
-  },
-  {
-    read: async (ctx, id, n) =>
-      (
-        await ctx.db
-          .query('project_access')
-          .withIndex('by_project', (q) => q.eq('project_id', id))
-          .take(n)
-      ).map((doc) => ({ table: 'project_access', doc })),
-    perRead: ALL,
-  },
-  {
-    read: async (ctx, id, n) =>
-      (
-        await ctx.db
-          .query('project_team_access')
-          .withIndex('by_project', (q) => q.eq('project_id', id))
-          .take(n)
-      ).map((doc) => ({ table: 'project_team_access', doc })),
-    perRead: ALL,
-  },
+  (ctx, id) =>
+    tagged(
+      'milestones',
+      ctx.db.query('milestones').withIndex('by_project', (q) => q.eq('project_id', id)),
+    ),
+  (ctx, id) =>
+    tagged(
+      'project_access',
+      ctx.db.query('project_access').withIndex('by_project', (q) => q.eq('project_id', id)),
+    ),
+  (ctx, id) =>
+    tagged(
+      'project_team_access',
+      ctx.db.query('project_team_access').withIndex('by_project', (q) => q.eq('project_id', id)),
+    ),
 ]
 
 /** Whether any of `relations` still holds a row of `ownerId`. */
 async function holdsRows(ctx: QueryCtx, relations: Relation[], ownerId: string): Promise<boolean> {
-  for (const relation of relations)
-    if ((await relation.read(ctx, ownerId, 1)).length > 0) return true
+  for (const relation of relations) for await (const _ of relation(ctx, ownerId)) return true
   return false
 }
 
@@ -633,6 +598,10 @@ export type Memo = {
   teamsOf: Map<string, Promise<Set<string>>>
   /** a person's live grant and team shares on a live parent, keyed `parent:profile` */
   parentAccess: Map<string, Promise<LevelGrants>>
+  /** a person's live grants and their teams' live shares, by profile (pendingAccess) */
+  liveAccess: Map<string, Promise<LiveAccess>>
+  /** an item's stored grants or shares without a grantee, keyed `item:table` (storedFor) */
+  legacyGrants: Map<string, Promise<Doc<'deleted_rows'>[]>>
   /** whether the organization is read-only, by organization (orgReadOnly) */
   readOnly: Map<string, Promise<boolean>>
   /** the item holding a stored project, by project */
@@ -657,6 +626,8 @@ export const newMemo = (): Memo => ({
   live: new Map(),
   teamsOf: new Map(),
   parentAccess: new Map(),
+  liveAccess: new Map(),
+  legacyGrants: new Map(),
   readOnly: new Map(),
   heldBy: new Map(),
   hierarchy: new Map(),
@@ -714,10 +685,24 @@ const emptyTally = (item: Pick<Item, 'projects'>): Tally => ({
   projects: item.projects.map((p) => ({ id: p.id, tasks: 0, archived_tasks: 0 })),
 })
 
-/** Stores `live` (keep) or deletes it for good (purge). */
+/** Stores `live` (keep) or deletes it for good (purge). A grant or share
+ * the item already stores is only deleted (storedAlready). */
 async function clearRow(run: Run, live: LiveRow, ownerId: string, mode: Mode): Promise<void> {
-  if (mode === 'purge') return await discard(run.ctx, live)
+  if (mode === 'purge' || (await storedAlready(run, live, ownerId)))
+    return await discard(run.ctx, live)
   if (!(await storeRow(run.ctx, run.item, live, ownerId))) tallyOf(run).dropped_rows += 1
+}
+
+/** Whether `run`'s item already stores grant or team grant `live` of
+ * project `ownerId`. A restore writes them back before its reveal and keeps
+ * the stored rows until after it (restoreAccess), so a restore sent back to
+ * moving finds both, and only then (restore_by is set). */
+async function storedAlready(run: Run, live: LiveRow, ownerId: string): Promise<boolean> {
+  if (run.item.restore_by === undefined) return false
+  if (live.table !== 'project_access' && live.table !== 'project_team_access') return false
+  const grantee = live.table === 'project_access' ? live.doc.profile_id : live.doc.team_id
+  const stored = await storedFor(run, live.table, grantee)
+  return stored.some((row) => row.owner_id === ownerId)
 }
 
 /** Stores a task row with its deleted_tasks row, and counts it. */
@@ -752,8 +737,9 @@ async function storeTask(
   }
 }
 
-/** The step's NotifyPreload. A step changes no profile, grant, team or
- * project after it starts, so one read serves every detach. */
+/** The step's NotifyPreload. A step changes no profile or team, and no
+ * live project or its grants, after it starts (the grants it moves are of
+ * absent projects), so one read serves every detach. */
 async function preloadOf(run: Run): Promise<NotifyPreload> {
   run.preload ??= newNotifyPreload()
   return run.preload
@@ -784,22 +770,24 @@ function childrenOutside(ctx: QueryCtx, parentId: string, ids: string[]) {
   })
 }
 
+/** Task `taskId`'s activity rows, rows without a list included. */
+const history = (run: Run, taskId: string) =>
+  run.ctx.db
+    .query('activity_events')
+    .withIndex('by_target', (q) =>
+      q.eq('org_id', run.item.org_id).eq('target_type', 'issue').eq('target_id', taskId),
+    )
+
 /** Deletes task `taskId`'s activity rows, rows without a list included,
  * within the step's budget, or with `upTo` only the rows written at or
  * before it. True once none is left. */
 const purgeHistory = (run: Run, taskId: string, upTo?: string): Promise<boolean> =>
   drain(
     run.budget,
-    (n) => {
-      const rows = run.ctx.db
-        .query('activity_events')
-        .withIndex('by_target', (q) =>
-          q.eq('org_id', run.item.org_id).eq('target_type', 'issue').eq('target_id', taskId),
-        )
-      return (upTo === undefined ? rows : rows.filter((q) => q.lte(q.field('ts'), upTo))).take(n)
-    },
+    upTo === undefined
+      ? history(run, taskId)
+      : history(run, taskId).filter((q) => q.lte(q.field('ts'), upTo)),
     (row) => run.ctx.db.delete(row._id),
-    LARGE_ROWS_PER_READ,
   )
 
 /** Deletes the inbox messages about task `taskId` within the step's
@@ -811,13 +799,8 @@ const purgeHistory = (run: Run, taskId: string, upTo?: string): Promise<boolean>
 const dropMessages = (run: Run, taskId: string): Promise<boolean> =>
   drain(
     run.budget,
-    (n) =>
-      run.ctx.db
-        .query('messages')
-        .withIndex('by_issue_read', (q) => q.eq('issue_id', taskId))
-        .take(n),
+    run.ctx.db.query('messages').withIndex('by_issue_read', (q) => q.eq('issue_id', taskId)),
     (message) => run.ctx.db.delete(message._id),
-    ALL,
   )
 
 /** Whether any message about task `taskId` is left. */
@@ -851,22 +834,16 @@ async function idTaken(run: Run, taskId: string): Promise<boolean> {
  * project emit no task.deleted. */
 async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boolean> {
   for (const relation of TASK_ROWS) {
-    const done = await drain(
-      run.budget,
-      (n) => relation.read(run.ctx, task.id, n),
-      (row) => clearRow(run, row, task.id, mode),
-      relation.perRead,
+    const done = await drain(run.budget, relation(run.ctx, task.id), (row) =>
+      clearRow(run, row, task.id, mode),
     )
     if (!done) return false
   }
   if (!(await dropMessages(run, task.id))) return false
   const preload = await preloadOf(run)
   for (const children of childrenOutside(run.ctx, task.id, itemProjectIds(run.item))) {
-    const detached = await drain(
-      run.budget,
-      (n) => children().take(n),
-      (child) => detachChild(run.ctx, child, run.actor, run.now, preload),
-      LARGE_ROWS_PER_READ,
+    const detached = await drain(run.budget, children(), (child) =>
+      detachChild(run.ctx, child, run.actor, run.now, preload),
     )
     if (!detached) return false
   }
@@ -915,27 +892,22 @@ async function takeParent(
   return restoring !== null && waitsFor(restoring, task) ? waiting.parent_id : task.parent_id
 }
 
-/** Clears (keep or purge) the tasks left in project `projectId`. */
+/** Clears (keep or purge) the tasks left in project `projectId`, read in
+ * one pass (drain). */
 async function clearProjectTasks(run: Run, projectId: string, mode: Mode): Promise<boolean> {
-  while (!spent(run.budget)) {
-    const tasks = await run.ctx.db
-      .query('issues')
-      .withIndex('by_project', (q) => q.eq('project_id', projectId))
-      .take(LARGE_ROWS_PER_READ)
-    for (const task of tasks) if (!(await clearTask(run, task, mode))) return false
-    if (tasks.length < LARGE_ROWS_PER_READ) return true
-  }
-  return false
+  if (spent(run.budget)) return false
+  const tasks = run.ctx.db
+    .query('issues')
+    .withIndex('by_project', (q) => q.eq('project_id', projectId))
+  for await (const task of tasks) if (!(await clearTask(run, task, mode))) return false
+  return true
 }
 
 /** Clears (keep or purge) project `projectId`'s milestones and grants. */
 async function clearProjectRows(run: Run, projectId: string, mode: Mode): Promise<boolean> {
   for (const relation of PROJECT_ROWS) {
-    const done = await drain(
-      run.budget,
-      (n) => relation.read(run.ctx, projectId, n),
-      (row) => clearRow(run, row, projectId, mode),
-      relation.perRead,
+    const done = await drain(run.budget, relation(run.ctx, projectId), (row) =>
+      clearRow(run, row, projectId, mode),
     )
     if (!done) return false
   }
@@ -985,13 +957,14 @@ async function moveEdges(run: Run): Promise<boolean> {
   const ids = itemProjectIds(run.item)
   const parents = new Map<string, Doc<'issues'> | null>()
   const cursor = run.state.cursor ?? { index: 0, after: 0 }
-  while (cursor.index < ids.length) {
-    if (spent(run.budget)) {
-      run.state.cursor = cursor
-      return false
-    }
+  const stop = () => {
+    run.state.cursor = cursor
+    return false
+  }
+  for (; cursor.index < ids.length; cursor.index += 1, cursor.after = 0) {
+    if (spent(run.budget)) return stop()
     const projectId = ids[cursor.index]
-    const tasks = await run.ctx.db
+    const tasks = run.ctx.db
       .query('issues')
       .withIndex('by_project_archived', (q) =>
         q
@@ -999,23 +972,13 @@ async function moveEdges(run: Run): Promise<boolean> {
           .eq('archived_at', undefined)
           .gt('_creationTime', cursor.after),
       )
-      .take(LARGE_ROWS_PER_READ)
-    for (const task of tasks) {
+    for await (const task of tasks) {
       chargeRead(run.budget, task)
-      if ((await isEdge(run, task, ids, parents)) && !(await clearTask(run, task, 'keep'))) {
-        run.state.cursor = cursor
-        return false
-      }
+      if ((await isEdge(run, task, ids, parents)) && !(await clearTask(run, task, 'keep')))
+        return stop()
       cursor.after = task._creationTime
       run.budget.moved = true
-      if (spent(run.budget)) {
-        run.state.cursor = cursor
-        return false
-      }
-    }
-    if (tasks.length < LARGE_ROWS_PER_READ) {
-      cursor.index += 1
-      cursor.after = 0
+      if (spent(run.budget)) return stop()
     }
   }
   return true
@@ -1080,11 +1043,8 @@ const moveDrain = async (run: Run): Promise<boolean> => {
   return await eachStoredTask(run, async ({ task_id }) => {
     if (!(await dropMessages(run, task_id))) return false
     for (const relation of TASK_ROWS) {
-      const done = await drain(
-        run.budget,
-        (n) => relation.read(run.ctx, task_id, n),
-        (row) => clearRow(run, row, task_id, 'keep'),
-        relation.perRead,
+      const done = await drain(run.budget, relation(run.ctx, task_id), (row) =>
+        clearRow(run, row, task_id, 'keep'),
       )
       if (!done) return false
     }
@@ -1155,27 +1115,23 @@ async function purgeDependents(run: Run): Promise<boolean> {
   for (const id of itemProjectIds(run.item))
     for (const state of PURGEABLE) {
       const reads = [
-        (n: number) =>
-          run.ctx.db
-            .query('deleted_items')
-            .withIndex('by_org_project_kind_state', (q) =>
-              q.eq('org_id', org_id).eq('project_id', id).eq('kind', 'task').eq('state', state),
-            )
-            .take(n),
-        (n: number) =>
-          run.ctx.db
-            .query('deleted_items')
-            .withIndex('by_org_parent_kind_state', (q) =>
-              q
-                .eq('org_id', org_id)
-                .eq('parent_project_id', id)
-                .eq('kind', 'project')
-                .eq('state', state),
-            )
-            .take(n),
+        run.ctx.db
+          .query('deleted_items')
+          .withIndex('by_org_project_kind_state', (q) =>
+            q.eq('org_id', org_id).eq('project_id', id).eq('kind', 'task').eq('state', state),
+          ),
+        run.ctx.db
+          .query('deleted_items')
+          .withIndex('by_org_parent_kind_state', (q) =>
+            q
+              .eq('org_id', org_id)
+              .eq('parent_project_id', id)
+              .eq('kind', 'project')
+              .eq('state', state),
+          ),
       ]
       for (const read of reads)
-        if (!(await drain(run.budget, read, (dependent) => startPurge(run.ctx, dependent), ALL)))
+        if (!(await drain(run.budget, read, (dependent) => startPurge(run.ctx, dependent))))
           return false
     }
   return true
@@ -1194,11 +1150,8 @@ async function purgeLive(run: Run): Promise<boolean> {
       // a move that got stuck can leave messages, before the id is freed
       if (!(await dropMessages(run, task_id))) return false
       for (const relation of TASK_ROWS) {
-        const drained = await drain(
-          run.budget,
-          (n) => relation.read(run.ctx, task_id, n),
-          (row) => discard(run.ctx, row),
-          relation.perRead,
+        const drained = await drain(run.budget, relation(run.ctx, task_id), (row) =>
+          discard(run.ctx, row),
         )
         if (!drained) return false
       }
@@ -1227,18 +1180,13 @@ async function absentProjects(run: Run): Promise<string[]> {
 const purgeStored = (run: Run, table: StoredTable): Promise<boolean> =>
   drain(
     run.budget,
-    (n) =>
-      run.ctx.db
-        .query('deleted_rows')
-        .withIndex('by_item_table_owner', (q) => q.eq('item_id', run.item.id).eq('table', table))
-        .take(n),
+    run.ctx.db
+      .query('deleted_rows')
+      .withIndex('by_item_table_owner', (q) => q.eq('item_id', run.item.id).eq('table', table)),
     async (row) => {
       if (row.storage_id !== undefined) await run.ctx.storage.delete(row.storage_id)
       await run.ctx.db.delete(row._id)
     },
-    table === 'issues' || table === 'comments' || table === 'issue_attachments'
-      ? LARGE_ROWS_PER_READ
-      : ALL,
   )
 
 /* Each deleted_tasks row once its task's history is gone (purgeHistory),
@@ -1252,18 +1200,13 @@ const purgeStored = (run: Run, table: StoredTable): Promise<boolean> =>
 async function purgeRows(run: Run): Promise<boolean> {
   const tasksDone = await drain(
     run.budget,
-    (n) =>
-      run.ctx.db
-        .query('deleted_tasks')
-        .withIndex('by_item', (q) => q.eq('item_id', run.item.id))
-        .take(n),
+    run.ctx.db.query('deleted_tasks').withIndex('by_item', (q) => q.eq('item_id', run.item.id)),
     async (task) => {
       const upTo = (await idTaken(run, task.task_id)) ? run.item.deleted_at : undefined
       if (!(await purgeHistory(run, task.task_id, upTo))) return false
       await run.ctx.db.delete(task._id)
       return true
     },
-    LARGE_ROWS_PER_READ,
   )
   if (!tasksDone) return false
   for (const table of STORED_TABLES)
@@ -1282,13 +1225,10 @@ async function purgeActivity(run: Run): Promise<boolean> {
   for (const id of itemProjectIds(run.item)) {
     const done = await drain(
       run.budget,
-      (n) =>
-        run.ctx.db
-          .query('activity_events')
-          .withIndex('by_project', (q) => q.eq('org_id', run.item.org_id).eq('project_id', id))
-          .take(n),
+      run.ctx.db
+        .query('activity_events')
+        .withIndex('by_project', (q) => q.eq('org_id', run.item.org_id).eq('project_id', id)),
       (row) => run.ctx.db.patch(row._id, { project_id: undefined }),
-      LARGE_ROWS_PER_READ,
     )
     if (!done) return false
   }
@@ -1371,7 +1311,7 @@ type Revealed = { item: Item; tasks: number }
 
 /** The rows a restore writes back before its links and reveal: a project
  * item's milestones and the relation rows of the item's tasks. Its grants
- * and team grants go back after the reveal (restoreGrants). */
+ * and team grants go back after its tasks (restoreAccess). */
 const RESTORED_ROWS = [
   'milestones',
   'comments',
@@ -1447,7 +1387,7 @@ async function cleanProject(s: Scope, p: Stored<'projects'>): Promise<Stored<'pr
   }
 }
 
-/** A stored grant as its reveal writes it back: none when its profile fails
+/** A stored grant as the restore writes it back: none when its profile fails
  * the reference predicate, a viewer grant for someone who is a viewer now
  * (model/projects.ts assertGrantee). */
 async function cleanGrant(
@@ -1459,7 +1399,7 @@ async function cleanGrant(
   return profile.org_role === 'viewer' ? { ...g, level: 'viewer' } : g
 }
 
-/** A stored team share as its reveal writes it back, or none when its team
+/** A stored team share as the restore writes it back, or none when its team
  * fails the reference predicate. */
 async function cleanShare(
   s: Scope,
@@ -1494,24 +1434,59 @@ function hierarchyOf(s: Scope): Promise<Hierarchy> {
   })
 }
 
+/** The stored tables of a project item's grants and team grants. */
+const GRANT_TABLES = ['project_access', 'project_team_access'] as const
+type GrantTable = (typeof GRANT_TABLES)[number]
+
+/** The grantee a grant or team grant names: its profile or its team. */
+const granteeOf = (row: Doc<'deleted_rows'>['row']): string | undefined =>
+  row.table === 'project_access'
+    ? row.doc.profile_id
+    : row.table === 'project_team_access'
+      ? row.doc.team_id
+      : undefined
+
+/* Items deleted before this can hold grants and shares stored without a
+ * grantee: the release that added deleted_rows.grantee reached every
+ * hosted deployment on 22 October 2026. The expiry purges such items by 22
+ * November 2026, after which no item is older than this. */
+const GRANTEE_SINCE = '2026-10-23T00:00:00.000Z'
+
 /** The item's stored rows of `table` that name `grantee`: a profile's
- * grants or a team's shares. */
-const storedFor = (s: Scope, table: 'project_access' | 'project_team_access', grantee: string) =>
-  s.ctx.db
+ * grants or a team's shares. A row stored before deleted_rows.grantee
+ * existed has none, so for an item deleted before GRANTEE_SINCE the rows
+ * without one are read too, once per item and table, and kept when their
+ * document names `grantee`. internal/storedGrantees backfill sets the field
+ * on them, which leaves that read empty. */
+async function storedFor(s: Scope, table: GrantTable, grantee: string) {
+  const named = await s.ctx.db
     .query('deleted_rows')
     .withIndex('by_item_table_grantee', (q) =>
       q.eq('item_id', s.item.id).eq('table', table).eq('grantee', grantee),
     )
     .collect()
+  if (s.item.deleted_at >= GRANTEE_SINCE) return named
+  const legacy = await memoRead(s.memo.legacyGrants, `${s.item.id}:${table}`, () =>
+    s.ctx.db
+      .query('deleted_rows')
+      .withIndex('by_item_table_grantee', (q) =>
+        q.eq('item_id', s.item.id).eq('table', table).eq('grantee', undefined),
+      )
+      .collect(),
+  )
+  return [...named, ...legacy.filter((row) => granteeOf(row.row) === grantee)]
+}
 
 /** `profile`'s levels on a project item's projects while they are in
  * Deleted items (design 6.1): lib/access.ts levelsFrom over the projects as
  * the reveal writes them back, the profile's stored grants and the stored
  * shares of the teams it belongs to now, as the restore writes them back,
- * and the live grants and shares on a sub-project item's parent. The grants
- * stay stored until the reveal has run (restoreGrants). While a move has not
- * yet stored some of them, those count for nobody, so the item shows to
- * fewer people for those moments, never to more. */
+ * and the live grants and shares on a sub-project item's parent. While the
+ * item moves, the grants and shares its steps have not stored yet are still
+ * live, on projects nobody can grant again while they are absent, so they
+ * count too (pendingAccess), and the item shows to the same people
+ * throughout. A restore keeps the stored rows until after its reveal
+ * (restoreAccess). */
 function storedLevels(s: Scope, profile: Doc<'profiles'>): Promise<OrgProjectLevels> {
   return memoRead(s.memo.levels, `${s.item.id}:${profile.id}`, async () => {
     const h = await hierarchyOf(s)
@@ -1526,6 +1501,11 @@ function storedLevels(s: Scope, profile: Doc<'profiles'>): Promise<OrgProjectLev
         const share = await cleanShare(s, docOf(row, 'project_team_access'))
         if (share !== null) shares.push(share)
       }
+    if (s.item.state === 'moving') {
+      const pending = await pendingAccess(s, profile)
+      grants.push(...pending.grants)
+      shares.push(...pending.shares)
+    }
     if (h.parent === null) return levelsFrom(profile, h.projects, grants, shares)
     const parent = await parentAccess(s, h.parent, profile)
     return levelsFrom(
@@ -1536,6 +1516,42 @@ function storedLevels(s: Scope, profile: Doc<'profiles'>): Promise<OrgProjectLev
     )
   })
 }
+
+/** `profile`'s live grants and its teams' live shares on a moving project
+ * item's projects, as the restore would write them back (cleanGrant,
+ * cleanShare). It reads all of them as lib/access.ts projectLevelsForOrg
+ * does, once per profile for every item of a list read (liveAccess). */
+async function pendingAccess(s: Scope, profile: Doc<'profiles'>): Promise<LevelGrants> {
+  const ids = new Set(itemProjectIds(s.item))
+  const live = await memoRead(s.memo.liveAccess, profile.id, async (): Promise<LiveAccess> => {
+    const grants = await s.ctx.db
+      .query('project_access')
+      .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
+      .collect()
+    const shares: Doc<'project_team_access'>[] = []
+    for (const teamId of await teamsOf(s, profile))
+      shares.push(
+        ...(await s.ctx.db
+          .query('project_team_access')
+          .withIndex('by_team', (q) => q.eq('team_id', teamId))
+          .collect()),
+      )
+    return { grants, shares }
+  })
+  const out: LevelGrants = { grants: [], shares: [] }
+  for (const g of live.grants) {
+    const grant = ids.has(g.project_id) ? await cleanGrant(s, g) : null
+    if (grant !== null) out.grants.push(grant)
+  }
+  for (const g of live.shares) {
+    const share = ids.has(g.project_id) ? await cleanShare(s, g) : null
+    if (share !== null) out.shares.push(share)
+  }
+  return out
+}
+
+/** A person's live grants and their teams' live shares, whole. */
+type LiveAccess = { grants: Doc<'project_access'>[]; shares: Doc<'project_team_access'>[] }
 
 /** Grants and team shares as lib/access.ts levelsFrom takes them. */
 type LevelGrants = {
@@ -1938,16 +1954,11 @@ async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> 
       ? holder
       : null
   for (const relation of TASK_ROWS) {
-    const taken = await drain(
-      run.budget,
-      (n) => relation.read(run.ctx, task.task_id, n),
-      async (live) => {
-        if (into === null) await discard(run.ctx, live)
-        else if (!(await storeRow(run.ctx, into, live, task.task_id)))
-          await droppedInto(run.ctx, into)
-      },
-      relation.perRead,
-    )
+    const taken = await drain(run.budget, relation(run.ctx, task.task_id), async (live) => {
+      if (into === null) await discard(run.ctx, live)
+      else if (!(await storeRow(run.ctx, into, live, task.task_id)))
+        await droppedInto(run.ctx, into)
+    })
     if (!taken) return false
   }
   // deleted for good: its history goes while its stored row still reserves
@@ -1958,16 +1969,11 @@ async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> 
   }
   const done = await drain(
     run.budget,
-    (n) =>
-      run.ctx.db
-        .query('deleted_rows')
-        .withIndex('by_item_owner', (q) =>
-          q.eq('item_id', run.item.id).eq('owner_id', task.task_id),
-        )
-        .take(n),
+    run.ctx.db
+      .query('deleted_rows')
+      .withIndex('by_item_owner', (q) => q.eq('item_id', run.item.id).eq('owner_id', task.task_id)),
     (row) =>
       into === null ? dropStored(run.ctx, row) : run.ctx.db.patch(row._id, { item_id: into.id }),
-    LARGE_ROWS_PER_READ,
   )
   if (!done) return false
   await run.ctx.db.delete(task._id)
@@ -2058,9 +2064,9 @@ async function dropStored(ctx: MutationCtx, row: Doc<'deleted_rows'>): Promise<v
 
 /* A project item's own rows besides its projects, while those projects are
  * still absent, and the rows that travel with the item's tasks, while those
- * tasks are still absent from issues, so readers skip them (design 5.1). A
- * grant or team grant whose profile or team fails the reference predicate
- * stays out (cleanGrant, cleanShare). The relation rows go back in
+ * tasks are still absent from issues, so readers skip them (design 5.1).
+ * The item's grants and team grants go back later (restoreAccess). The
+ * relation rows go back in
  * their original order per task: a move stores a task's rows in the order
  * of the index it reads them by, which for comments and attachments is
  * their creation order, and this reads them back in the order stored. */
@@ -2068,13 +2074,10 @@ async function restoreRows(run: Run): Promise<boolean> {
   for (const table of RESTORED_ROWS) {
     const done = await drain(
       run.budget,
-      (n) =>
-        run.ctx.db
-          .query('deleted_rows')
-          .withIndex('by_item_table_owner', (q) => q.eq('item_id', run.item.id).eq('table', table))
-          .take(n),
+      run.ctx.db
+        .query('deleted_rows')
+        .withIndex('by_item_table_owner', (q) => q.eq('item_id', run.item.id).eq('table', table)),
       (row) => writeRowBack(run, row),
-      table === 'comments' || table === 'issue_attachments' ? LARGE_ROWS_PER_READ : ALL,
     )
     if (!done) return false
   }
@@ -2127,15 +2130,12 @@ async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
 const restoreLinks = (run: Run): Promise<boolean> =>
   drain(
     run.budget,
-    (n) =>
-      run.ctx.db
-        .query('deleted_rows')
-        .withIndex('by_item_table_owner', (q) =>
-          q.eq('item_id', run.item.id).eq('table', 'issue_links'),
-        )
-        .take(n),
+    run.ctx.db
+      .query('deleted_rows')
+      .withIndex('by_item_table_owner', (q) =>
+        q.eq('item_id', run.item.id).eq('table', 'issue_links'),
+      ),
     (row) => placeLink(run, row),
-    ALL,
   )
 
 /** Where stored link `row` goes (design 5.2). Each end, by the reference
@@ -2326,8 +2326,8 @@ async function writeTask(
  * 5.3, asked again for the restorer) sends it back to moving. Otherwise it
  * writes back a task item's tasks, or a project item's own rows, then the
  * links left, deletes the item's deleted_tasks rows, and narrates. A task
- * item is then gone (null). A project item goes on to restore_grants
- * (restoreGrants) and then restore_attach (attachParents), which deletes
+ * item is then gone (null). A project item goes on to restore_grants,
+ * which deletes its stored grants (restoreGrants), and then restore_attach (attachParents), which deletes
  * the item once no task waits for its parent.
  *
  * So a project item's reveal reads none of its tasks, however many it has.
@@ -2370,16 +2370,12 @@ async function reveal(run: Run): Promise<JobState | null> {
     if (back === null) return run.state
     written = back
   } else await revealProjects(run)
-  for (;;) {
-    const links = await run.ctx.db
-      .query('deleted_rows')
-      .withIndex('by_item_table_owner', (q) =>
-        q.eq('item_id', run.item.id).eq('table', 'issue_links'),
-      )
-      .take(TASK_PAGE)
-    for (const row of links) await placeLink(run, row)
-    if (links.length < TASK_PAGE) break
-  }
+  const links = run.ctx.db
+    .query('deleted_rows')
+    .withIndex('by_item_table_owner', (q) =>
+      q.eq('item_id', run.item.id).eq('table', 'issue_links'),
+    )
+  for await (const row of links) await placeLink(run, row)
   const left = await run.ctx.db
     .query('deleted_tasks')
     .withIndex('by_item', (q) => q.eq('item_id', run.item.id))
@@ -2392,54 +2388,99 @@ async function reveal(run: Run): Promise<JobState | null> {
   return null
 }
 
-/* A project item's grants and team grants, written back after its reveal
- * within the step's budget, before the attach. Until the reveal they stay
- * stored, where a level check reads one person's grants of the item by
- * index (storedLevels), however many grants the item holds; the reveal
- * itself writes back only the projects. Between the reveal and this phase
- * the projects show to their admins and leads, and to the people the grants
- * name only once these rows are back. A grant whose profile, or a share
- * whose team, fails the reference predicate stays out (cleanGrant,
- * cleanShare), and so does one that a live row on the same project already
- * holds, written after the reveal. */
+/* A project item's grants and team grants, written back before its reveal
+ * (restore_access), so that the reveal shows the projects to everyone who
+ * had access in one delivery. The stored rows stay until after the reveal
+ * (restoreGrants): until then a level check keeps reading one person's
+ * grants of the item by index (storedLevels), however many grants the item
+ * holds, and the live copies name projects that are still absent, which
+ * readers skip as they do while a move drains. The step walks each
+ * project's stored rows of each table with the job's cursor, because the
+ * rows stay in their range. A grant whose profile, or a share whose team,
+ * fails the reference predicate stays out (cleanGrant, cleanShare), and so
+ * does one a live row on the same project already holds, which a walk
+ * repeated after the reveal sent the item back to an earlier phase finds.
+ * A row the cursor skips on a tie of _creationTime is written by
+ * restoreGrants. */
+async function restoreAccess(run: Run): Promise<boolean> {
+  if (run.item.kind !== 'project') return true
+  const ids = itemProjectIds(run.item)
+  const cursor = run.state.cursor ?? { index: 0, after: 0 }
+  const stop = () => {
+    run.state.cursor = cursor
+    return false
+  }
+  for (; cursor.index < GRANT_TABLES.length * ids.length; cursor.index += 1, cursor.after = 0) {
+    if (spent(run.budget)) return stop()
+    const table = GRANT_TABLES[Math.floor(cursor.index / ids.length)]
+    const owner = ids[cursor.index % ids.length]
+    const rows = run.ctx.db
+      .query('deleted_rows')
+      .withIndex('by_item_table_owner', (q) =>
+        q
+          .eq('item_id', run.item.id)
+          .eq('table', table)
+          .eq('owner_id', owner)
+          .gt('_creationTime', cursor.after),
+      )
+    for await (const row of rows) {
+      await writeGrantBack(run, row)
+      charge(run.budget, row)
+      cursor.after = row._creationTime
+      if (spent(run.budget)) return stop()
+    }
+  }
+  return true
+}
+
+/* After the reveal, deletes a project item's stored grants and team
+ * grants within the step's budget, before the attach, writing back first
+ * any that restore_access did not. A project deleted again since keeps
+ * none: the item that holds it now stored the copies restore_access wrote,
+ * and a grant written now would name a project that is absent. */
 async function restoreGrants(run: Run): Promise<boolean> {
-  const db = uncountedWriter(run.ctx.db)
-  for (const table of ['project_access', 'project_team_access'] as const) {
+  for (const table of GRANT_TABLES) {
     const done = await drain(
       run.budget,
-      (n) =>
-        run.ctx.db
-          .query('deleted_rows')
-          .withIndex('by_item_table_owner', (q) => q.eq('item_id', run.item.id).eq('table', table))
-          .take(n),
+      run.ctx.db
+        .query('deleted_rows')
+        .withIndex('by_item_table_owner', (q) => q.eq('item_id', run.item.id).eq('table', table)),
       async (row) => {
-        const r = row.row
-        if (r.table === 'project_access') {
-          const grant = await cleanGrant(run, r.doc)
-          const held = await run.ctx.db
-            .query('project_access')
-            .withIndex('by_project_profile', (q) =>
-              q.eq('project_id', r.doc.project_id).eq('profile_id', r.doc.profile_id),
-            )
-            .first()
-          if (grant !== null && held === null) await db.insert('project_access', grant)
-        } else if (r.table === 'project_team_access') {
-          const share = await cleanShare(run, r.doc)
-          const held = await run.ctx.db
-            .query('project_team_access')
-            .withIndex('by_project_team', (q) =>
-              q.eq('project_id', r.doc.project_id).eq('team_id', r.doc.team_id),
-            )
-            .first()
-          if (share !== null && held === null) await db.insert('project_team_access', share)
-        }
+        // read now, not from the memo, which may predate the reveal
+        if ((await byId(run.ctx, 'projects', row.owner_id)) !== null) await writeGrantBack(run, row)
         await run.ctx.db.delete(row._id)
       },
-      ALL,
     )
     if (!done) return false
   }
   return true
+}
+
+/** Writes stored grant or team grant `row` back to its live table, unless
+ * it fails the reference predicate (cleanGrant, cleanShare) or a live row
+ * on the same project already holds it. Leaves the stored row. */
+async function writeGrantBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
+  const db = uncountedWriter(run.ctx.db)
+  const r = row.row
+  if (r.table === 'project_access') {
+    const grant = await cleanGrant(run, r.doc)
+    const held = await run.ctx.db
+      .query('project_access')
+      .withIndex('by_project_profile', (q) =>
+        q.eq('project_id', r.doc.project_id).eq('profile_id', r.doc.profile_id),
+      )
+      .first()
+    if (grant !== null && held === null) await db.insert('project_access', grant)
+  } else if (r.table === 'project_team_access') {
+    const share = await cleanShare(run, r.doc)
+    const held = await run.ctx.db
+      .query('project_team_access')
+      .withIndex('by_project_team', (q) =>
+        q.eq('project_id', r.doc.project_id).eq('team_id', r.doc.team_id),
+      )
+      .first()
+    if (share !== null && held === null) await db.insert('project_team_access', share)
+  }
 }
 
 /** A failed reveal: the item goes back to moving, and its steps take what
@@ -2458,7 +2499,8 @@ async function sendBack(run: Run, reason: RestoreBlock): Promise<JobState> {
 
 /* A project item's projects as the hierarchy cleans them, at most
  * LIMITS.projectDeleteSubProjects.max + 1. Their milestones, grants and team shares
- * went back before (restoreRows), so the projects show with them. Each
+ * went back before (restoreRows, restoreAccess), so the projects show with
+ * them. Each
  * counts against the rows and bytes of the budget, so a later item of the
  * same restore call waits for a step when they leave no room for its
  * reveal (revealFits). The attach after it still checks its first parent
@@ -2977,13 +3019,12 @@ async function narrate(
 
 /* ----------------------------------------------------------- the attach */
 
-/** Up to `n` of the tasks a project item's restore wrote back without
- * their parent outside the item (restoreTasks), in task order. */
-const waitingParents = (run: Run, n: number) =>
+/** The tasks a project item's restore wrote back without their parent
+ * outside the item (restoreTasks), in task order. */
+const waitingParents = (run: Run) =>
   run.ctx.db
     .query('deleted_item_parents')
     .withIndex('by_item_task', (q) => q.eq('item_id', run.item.id))
-    .take(n)
 
 /** What one attach step reads once, which is what any parent check reads
  * (ParentReads), with the live tasks as its own attaches leave them, and
@@ -3012,11 +3053,8 @@ type Attach = ParentReads & {
  */
 async function attachParents(run: Run, attach: boolean): Promise<boolean> {
   const step: Attach = { ...newParentReads(), live: new Map(), grouped: new Set() }
-  const done = await drain(
-    run.budget,
-    (n) => waitingParents(run, n),
-    (row) => (attach ? attachParent(run, row, step) : run.ctx.db.delete(row._id)),
-    TASK_PAGE,
+  const done = await drain(run.budget, waitingParents(run), (row) =>
+    attach ? attachParent(run, row, step) : run.ctx.db.delete(row._id),
   )
   // a parent the restorer cannot edit never becomes a group with hours left
   const restorer = run.actor
@@ -3078,8 +3116,10 @@ async function attachParent(
  * restores or defers is deferred, for the client to send again once that
  * item has left the list. Every other item is refused with its
  * RestoreBlock or restored: it becomes restoring, with restore_by, and the
- * call's one shared budget fills, reveals and attaches as much as it can;
- * the rest goes on in steps. The reveals of this call share one activity
+ * call's one shared budget, a quarter of a step's (CALL),
+ * fills, reveals and attaches as much as it can, revealing an item only
+ * when the reveal fits what is left (revealFits); the rest goes on in
+ * steps. The call's checks leave the conflict check to the reveal. The reveals of this call share one activity
  * row, and an item revealed by a later step writes its own.
  * The Restored notice goes out only when the call held a single task item
  * and is not `bulk`, whichever transaction reveals it. A client that sends
@@ -3090,7 +3130,7 @@ export async function restoreItems(
   ctx: MutationCtx,
   a: { me: Doc<'profiles'>; items: Item[]; now: string; bulk?: boolean },
 ): Promise<RestoreResult> {
-  const budget = budgetFor(1)
+  const budget = budgetFor(CALL.scale)
   const counted = metered(ctx, budget)
   const result: RestoreResult = { restored: [], refused: [], deferred: [] }
   const ids = new Set<string>()
@@ -3115,7 +3155,9 @@ export async function restoreItems(
       addComing(item)
       continue
     }
-    const block = await restoreBlock(counted, a.me, item)
+    // the reveal looks for conflicts (blockOf), so the call does not read
+    // two rows per project of each item for them
+    const block = await restoreBlock(counted, a.me, item, { ...newMemo(), conflicts: false })
     if (block !== null) {
       result.refused.push({ id: item.id, reason: block })
       continue
@@ -3166,7 +3208,8 @@ const PHASES: Record<
   restore_split: { run: restoreSplit, next: () => 'restore_rows' },
   restore_rows: { run: restoreRows, next: () => 'restore_links' },
   restore_links: { run: restoreLinks, next: () => 'restore_tasks' },
-  restore_tasks: { run: restoreTasks, next: () => 'restore_reveal' },
+  restore_tasks: { run: restoreTasks, next: () => 'restore_access' },
+  restore_access: { run: restoreAccess, next: () => 'restore_reveal' },
   restore_grants: { run: restoreGrants, next: () => 'restore_attach' },
   purge_dependents: { run: purgeDependents, next: () => 'purge_live' },
   purge_live: { run: purgeLive, next: () => 'purge_rows' },
@@ -3198,9 +3241,10 @@ async function actorOf(
 
 /** Whether what is left of `run`'s budget holds its reveal, which writes a
  * task item's stored tasks back in one transaction whatever their number,
- * or a project item's projects, and, for a project item, the attach of every task that waits for its
- * parent (attachParents), so that a small item comes back whole in one
- * transaction. It counts tasks, not the bytes their parents and subtasks
+ * or a project item's projects, and, for a project item, the attach of every
+ * task that waits for its parent (attachParents), so that an item whose
+ * reveal and attach fit what the transaction has left comes back whole in
+ * it. It counts tasks, not the bytes their parents and subtasks
  * hold. An attach that spends the bytes left stops there, as any step
  * does, and steps finish it. A parent check whose subtask count or people
  * (liveSubtasks, allSee) run out of what is left waits too, a task item's
@@ -3211,7 +3255,8 @@ async function revealFits(run: Run): Promise<boolean> {
   const b = run.budget
   if (spent(b)) return false
   const stored = run.state.tally?.tasks ?? 0
-  const waiting = run.item.kind === 'project' ? (await waitingParents(run, b.tasks + 1)).length : 0
+  const waiting =
+    run.item.kind === 'project' ? (await waitingParents(run).take(b.tasks + 1)).length : 0
   const tasks = stored + waiting
   const projects = run.item.kind === 'project' ? run.item.projects.length : 0
   return (
@@ -3276,7 +3321,9 @@ async function work(
       return null
     }
     if (phase === 'restore_reveal') {
-      if (run.budget.moved && !(await revealFits(run))) return run.state
+      // a step reveals whatever its size; a person's call only what fits
+      const call = run.txn.restorer !== undefined
+      if ((run.budget.moved || call) && !(await revealFits(run))) return run.state
       const next = await reveal(run)
       // restore_reveal again when a parent check ran out of what the
       // transaction had left, for a step of its own
@@ -3366,8 +3413,9 @@ export async function runStep(ctx: MutationCtx, itemId: string): Promise<void> {
  * reveal its projects are live, so neither applies. An attach that fails
  * that often goes on as restore_detach, which leaves the tasks still
  * waiting without their parent and deletes the item. restore_detach only
- * deletes the item's own small rows, and restore_grants writes back small
- * grant rows, so each is retried until it finishes.
+ * deletes the item's own small rows, and restore_grants deletes small
+ * stored grant rows, writing back any still missing, so each is retried
+ * until it finishes.
  * A job of an organization whose deletion has begun stays as it is: its
  * steps stand down (runStep), and the deletion deletes the job with its
  * item (model/orgDeletion.ts). */
@@ -3486,14 +3534,14 @@ export async function expireItems(ctx: MutationCtx, page: ExpiryPage): Promise<s
 /** Starts deleting `item` for good. It leaves Deleted items at once, because
  * purging items are not listed, and its steps delete what it stores. Only
  * ready and stuck items can be purged: the nightly expiry passes ready ones,
- * Delete now either. `inline` spends the first budget in the caller's
- * transaction, for a caller that purges one item. */
+ * Delete now either. `inline` spends a person's call's share of a budget
+ * (CALL) in the caller's transaction, for a caller that purges one item. */
 export async function startPurge(
   ctx: MutationCtx,
   item: Item,
   opts: { inline?: boolean } = {},
 ): Promise<void> {
-  await beginPurge(ctx, item, opts.inline ? budgetFor(1) : undefined)
+  await beginPurge(ctx, item, opts.inline ? budgetFor(CALL.scale) : undefined)
 }
 
 /** startPurge, spending `budget` in this transaction when one is given. */
@@ -3526,7 +3574,7 @@ export type PurgeResult = {
  * per item, never a throw for one item's problem.
  */
 export async function purgeItems(ctx: MutationCtx, items: Item[]): Promise<PurgeResult> {
-  const budget = budgetFor(1)
+  const budget = budgetFor(CALL.scale)
   const result: PurgeResult = { purged: [], refused: [] }
   const ids = new Set<string>()
   for (const { id } of items) {
@@ -3544,14 +3592,15 @@ export async function purgeItems(ctx: MutationCtx, items: Item[]): Promise<Purge
   return result
 }
 
-/** Spends the first budget of `item`'s work in the caller's transaction and
- * schedules a step for what is left. `budget` may already hold what the
+/** Spends the first budget of `item`'s work, by default a person's call's
+ * share (CALL), in the caller's transaction and schedules a step for what
+ * is left. `budget` may already hold what the
  * caller spent on the same work. */
 async function startJob(
   ctx: MutationCtx,
   item: Item,
   state: JobState,
-  budget = budgetFor(1),
+  budget = budgetFor(CALL.scale),
 ): Promise<void> {
   const txn = newTxn()
   const next = await work(metered(ctx, budget), budget, item, state, txn)
@@ -3567,35 +3616,26 @@ async function startJob(
  * stored row can hold a document of almost 1 MB. */
 export type Teardown = { left: number; bytes?: number }
 
-/* The most rows a teardown reads at once. */
-const TEARDOWN_PAGE = 256
-
 /** Whether `budget` has run out of rows or of bytes. */
 const teardownSpent = (budget: Teardown): boolean =>
   budget.left <= 0 || (budget.bytes !== undefined && budget.bytes <= 0)
 
-/** Removes the rows `read` returns (up to `n`, from the start of the range),
- * page by page, until the range is empty (true) or `budget` is spent
- * (false). A budget not yet spent removes at least one row. `remove` must
- * take its row out of the range, and answers false when the budget ran out
- * before it could. */
+/** Removes the rows of `rows`, an index range read in one pass (drain),
+ * until it ends (true) or `budget` is spent (false). A budget not yet spent
+ * removes at least one row. `remove` must take its row out of the range,
+ * and answers false when the budget ran out before it could. */
 async function clearPages<Row>(
   budget: Teardown,
-  read: (n: number) => Promise<Row[]>,
+  rows: AsyncIterable<Row>,
   remove: (row: Row) => Promise<boolean>,
-  perRead = TEARDOWN_PAGE,
 ): Promise<boolean> {
-  for (;;) {
-    if (teardownSpent(budget)) return false
-    const n = Math.min(budget.left, perRead, TEARDOWN_PAGE)
-    const rows = await read(n)
-    for (const row of rows) {
-      if (teardownSpent(budget) || !(await remove(row))) return false
-      budget.left -= 1
-      if (budget.bytes !== undefined) budget.bytes -= estimateDocumentBytes(row)
-    }
-    if (rows.length < n) return true
+  if (teardownSpent(budget)) return false
+  for await (const row of rows) {
+    if (teardownSpent(budget) || !(await remove(row))) return false
+    budget.left -= 1
+    if (budget.bytes !== undefined) budget.bytes -= estimateDocumentBytes(row)
   }
+  return true
 }
 
 /** Deletes the bytes of `storageId` unless a row still names them
@@ -3610,25 +3650,16 @@ async function releaseFile(ctx: MutationCtx, storageId: Id<'_storage'>): Promise
  * bytes with their row unless another row names them, then its messages. */
 async function clearLiveRows(ctx: MutationCtx, taskId: string, budget: Teardown): Promise<boolean> {
   for (const relation of TASK_ROWS) {
-    const cleared = await clearPages(
-      budget,
-      (n) => relation.read(ctx, taskId, n),
-      async (row) => {
-        await ctx.db.delete(row.doc._id)
-        if (row.table === 'issue_attachments') await releaseFile(ctx, row.doc.storage_id)
-        return true
-      },
-      relation.perRead,
-    )
+    const cleared = await clearPages(budget, relation(ctx, taskId), async (row) => {
+      await ctx.db.delete(row.doc._id)
+      if (row.table === 'issue_attachments') await releaseFile(ctx, row.doc.storage_id)
+      return true
+    })
     if (!cleared) return false
   }
   return await clearPages(
     budget,
-    (n) =>
-      ctx.db
-        .query('messages')
-        .withIndex('by_issue_read', (q) => q.eq('issue_id', taskId))
-        .take(n),
+    ctx.db.query('messages').withIndex('by_issue_read', (q) => q.eq('issue_id', taskId)),
     async (message) => {
       await ctx.db.delete(message._id)
       return true
@@ -3662,19 +3693,13 @@ export async function clearOrgTrash(
 ): Promise<boolean> {
   const items = await clearPages(
     budget,
-    (n) =>
-      ctx.db
-        .query('deleted_items')
-        .withIndex('by_org_deleted', (q) => q.eq('org_id', orgId))
-        .take(n),
+    ctx.db.query('deleted_items').withIndex('by_org_deleted', (q) => q.eq('org_id', orgId)),
     async (item) => {
       const waiting = await clearPages(
         budget,
-        (n) =>
-          ctx.db
-            .query('deleted_item_parents')
-            .withIndex('by_item_task', (q) => q.eq('item_id', item.id))
-            .take(n),
+        ctx.db
+          .query('deleted_item_parents')
+          .withIndex('by_item_task', (q) => q.eq('item_id', item.id)),
         async (row) => {
           await ctx.db.delete(row._id)
           return true
@@ -3690,11 +3715,7 @@ export async function clearOrgTrash(
   if (!items) return false
   const tasks = await clearPages(
     budget,
-    (n) =>
-      ctx.db
-        .query('deleted_tasks')
-        .withIndex('by_org_num', (q) => q.eq('org_id', orgId))
-        .take(n),
+    ctx.db.query('deleted_tasks').withIndex('by_org_num', (q) => q.eq('org_id', orgId)),
     async (task) => {
       if (!(await clearLiveRows(ctx, task.task_id, budget))) return false
       await ctx.db.delete(task._id)
@@ -3704,38 +3725,25 @@ export async function clearOrgTrash(
   if (!tasks) return false
   return await clearPages(
     budget,
-    (n) =>
-      ctx.db
-        .query('deleted_rows')
-        .withIndex('by_org', (q) => q.eq('org_id', orgId))
-        .take(n),
+    ctx.db.query('deleted_rows').withIndex('by_org', (q) => q.eq('org_id', orgId)),
     async (row) => {
       if (row.table === 'projects') {
         // the milestones and grants a move had not stored yet
         for (const relation of PROJECT_ROWS) {
-          const cleared = await clearPages(
-            budget,
-            (n) => relation.read(ctx, row.owner_id, n),
-            async (live) => {
-              await ctx.db.delete(live.doc._id)
-              return true
-            },
-          )
+          const cleared = await clearPages(budget, relation(ctx, row.owner_id), async (live) => {
+            await ctx.db.delete(live.doc._id)
+            return true
+          })
           if (!cleared) return false
         }
         const stranded = await clearPages(
           budget,
-          (n) =>
-            ctx.db
-              .query('issues')
-              .withIndex('by_project', (q) => q.eq('project_id', row.owner_id))
-              .take(n),
+          ctx.db.query('issues').withIndex('by_project', (q) => q.eq('project_id', row.owner_id)),
           async (task) => {
             if (!(await clearLiveRows(ctx, task.id, budget))) return false
             await ctx.db.delete(task._id)
             return true
           },
-          LARGE_ROWS_PER_READ,
         )
         if (!stranded) return false
       }
@@ -3743,7 +3751,6 @@ export async function clearOrgTrash(
       if (row.storage_id !== undefined) await releaseFile(ctx, row.storage_id)
       return true
     },
-    LARGE_ROWS_PER_READ,
   )
 }
 
@@ -3946,7 +3953,7 @@ export async function moveTasksToTrash(
   },
 ): Promise<Item> {
   const { actor, root, now } = a
-  const budget = budgetFor(1)
+  const budget = budgetFor(CALL.scale)
   const counted = metered(ctx, budget)
   const tasks = [...a.subtasks, root]
   // the caller read them, and the steps' reads come on top
@@ -4086,7 +4093,11 @@ function cutToCaps(task: Doc<'issues'>): Doc<'issues'> {
  * LIMITS.projectDeleteSubProjects.max sub-projects is refused. This transaction stores
  * the project rows, which hides the projects and so every task, milestone,
  * grant and team grant in them; those then move within the same budget and
- * in steps (moveEdges, moveProjectTasks). Tasks of the item emit no
+ * in steps (moveEdges, moveProjectTasks). The budget is a quarter of a
+ * person's call's share (CALL), because moveEdges reads two ranges for
+ * each open task: with a quarter of a step's budget, a delete of a
+ * sub-project with 5,000 tasks read 684 ranges and failed on a busy local
+ * backend. Tasks of the item emit no
  * task.deleted; children in surviving projects are detached with
  * task.updated. Returns the item.
  */
@@ -4095,7 +4106,7 @@ export async function moveProjectToTrash(
   a: Deletion & { project: Doc<'projects'> },
 ): Promise<Item> {
   const { project } = a
-  const budget = budgetFor(1)
+  const budget = budgetFor(CALL.scale / 4)
   const counted = metered(ctx, budget)
   const subs = await counted.db
     .query('projects')

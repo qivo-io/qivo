@@ -968,9 +968,9 @@ describe('the list (design 6.2)', () => {
     const f = await withOrg(t)
     const lena = await person(t, f.org.id, 'Lena')
     // 1,400 projects Lena led and deleted herself. Finding them reads two
-    // ranges, but her row for each reads its stored projects, grants and
-    // team shares, 3 ranges, so rows for all of them would read 4,200
-    // ranges, past Convex's 4,096.
+    // ranges, but her row for each reads its stored projects and her
+    // stored grants, and here the rows stored without a grantee, 3 ranges,
+    // so rows for all of them would read 4,200 ranges, past Convex's 4,096.
     const ids = await plantLedProjects(t, lena, 1400)
 
     const listed = await list(t, lena)

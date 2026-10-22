@@ -9,6 +9,7 @@ import type { Doc } from '../_generated/dataModel'
 import { FOLLOWER_FANOUT, postMessage } from '../model/messages'
 import {
   as,
+  messagesFor,
   NOW,
   newT,
   type OrgFixture,
@@ -467,5 +468,40 @@ describe('a notice that arrives after newer ones', () => {
     // the arrival woke the item, so it stays, and the oldest other comment goes
     expect(details).toContain('change 1')
     expect(details).not.toContain('comment 3')
+  })
+})
+
+describe('a deferred mention step', () => {
+  /** Runs one mention step about `task`, written in `projectId`. */
+  const mentionStep = (t: T, f: OrgFixture, task: Doc<'issues'>, projectId: string) =>
+    t.mutation(internal.messages.notifyMentions, {
+      org_id: f.org.id,
+      issue_id: task.id,
+      task: task._id,
+      project_id: projectId,
+      actor_id: f.user.id,
+      now: NOW,
+      body: 'Can you check this?',
+      recipients: [f.guest.id, f.admin.id],
+    })
+
+  it('tells only those who see the task where it was written and where it is now', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // written in Skunkworks, which the guest cannot see, and moved to
+    // Firmware, which they can, before the step ran
+    await mentionStep(t, f, task, f.hidden.id)
+    expect(await messagesFor(t, f.guest.id, task.id)).toEqual([])
+    expect(await messagesFor(t, f.admin.id, task.id)).toHaveLength(1)
+  })
+
+  it('tells nobody about a task deleted before it ran', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await t.run((ctx) => ctx.db.delete(task._id))
+    await mentionStep(t, f, task, f.sub.id)
+    for (const who of [f.guest, f.admin]) expect(await messagesFor(t, who.id, task.id)).toEqual([])
   })
 })
