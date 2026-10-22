@@ -87,7 +87,21 @@ const isAscii = (s: string): boolean => [...s].every((c) => c.charCodeAt(0) < 0x
 
 /** The characters UTS 46 maps to nothing in a domain, such as the soft
  * hyphen and the zero-width space: dropped, as url.domainToASCII drops them. */
-const IGNORED = /[\u00ad\u034f\u180b-\u180d\u200b\u2060\ufe00-\ufe0f\ufeff]/gu
+const IGNORED = new Set([
+  0xad,
+  0x34f,
+  0x180b,
+  0x180c,
+  0x180d,
+  0x200b,
+  0x2060,
+  0xfeff,
+  ...Array.from({ length: 16 }, (_, i) => 0xfe00 + i),
+])
+
+/** `domain` without the characters UTS 46 ignores (IGNORED). */
+const withoutIgnored = (domain: string): string =>
+  [...domain].filter((c) => !IGNORED.has(c.codePointAt(0) ?? 0)).join('')
 
 /** Whether a label that is not ASCII may be written as punycode: it holds
  * no control, format or space character and does not start with a
@@ -107,9 +121,7 @@ export function asciiEmail(raw: string): string {
   const text = raw.trim().toLowerCase()
   const at = text.lastIndexOf('@')
   if (at < 0 || text.length > 2 * LIMITS.email.max) return text
-  const domain = text
-    .slice(at + 1)
-    .replace(IGNORED, '')
+  const domain = withoutIgnored(text.slice(at + 1))
     .normalize('NFKC')
     .toLowerCase()
     .split(/[.\u3002\uff0e\uff61]/)
