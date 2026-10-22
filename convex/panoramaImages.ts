@@ -7,14 +7,9 @@ import type { Doc } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import { internalMutation, internalQuery } from './_generated/server'
 import { storageIdInUse } from './files'
-import {
-  badRequest,
-  conflict,
-  notFound,
-  platformMutation,
-  platformQuery,
-  rule,
-} from './lib/functions'
+import { conflict, notFound, platformMutation, platformQuery, rule } from './lib/functions'
+import { limitedText } from './lib/limitRules'
+import { LIMITS } from './lib/limits'
 import {
   calendarDayForDate,
   calendarDays,
@@ -173,7 +168,7 @@ export const approve = platformMutation({
 export const remove = platformMutation({
   args: { id: v.string(), note: v.optional(v.string()) },
   handler: async (ctx, { id, note }) => {
-    if (note && note.length > 500) throw badRequest('keep the review note within 500 characters')
+    const reason = limitedText(LIMITS.imageRemoveNote, note ?? '')
     const image = await imageFor(ctx, id)
     if (!image) throw notFound('image not found')
     if (image.status === 'removed') return
@@ -199,7 +194,7 @@ export const remove = platformMutation({
       preview_version: undefined,
       reviewed_at: new Date().toISOString(),
       reviewed_by: ctx.authUserId,
-      review_note: note?.trim() || undefined,
+      review_note: reason || undefined,
     })
     const state = await ensureState(ctx)
     await ctx.db.patch(state._id, {
@@ -216,7 +211,7 @@ export const remove = platformMutation({
         title: image.title,
         cleared_dates: dates.map((d) => d.day),
         cleared_default: state.default_image_id === id,
-        note: note?.trim() ?? '',
+        note: reason,
       },
     })
   },

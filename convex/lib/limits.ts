@@ -8,7 +8,8 @@
  * trimming, and the trimmed text is what is stored. Most emoji count as two.
  *
  * No imports, so the app, the Convex runtime and Node scripts can all load
- * this file. Internal transaction budgets stay out of it. */
+ * this file. Node scripts load it through scripts/limits.mjs, which first
+ * checks that the Node can. Internal transaction budgets stay out of it. */
 
 /** `n` with a comma between groups of three digits, as people read numbers
  * (20,000 and 99,999.9). Written out because the Convex runtime has no Intl. */
@@ -21,8 +22,9 @@ export function grouped(n: number): string {
 /** Where a limit is met. The REST and MCP docs list the entries marked for
  * them; the guide's Limits page lists every entry marked for any of the
  * three. 'operator' is the operator console, documented nowhere public, and
- * an entry met on no surface (the app splits its own calls by it) is listed
- * nowhere. */
+ * an entry met on no surface (the app splits its own calls by it, or only
+ * the background curation API meets it, which docs/rest-api.md describes in
+ * its own section) is listed nowhere. */
 export type Surface = 'app' | 'rest' | 'mcp' | 'operator'
 
 /** The sections of the Limits page, in order. */
@@ -55,6 +57,7 @@ export type Limit = {
 
 const ALL: readonly Surface[] = ['app', 'rest', 'mcp']
 const MACHINE: readonly Surface[] = ['rest', 'mcp']
+const OPERATOR: readonly Surface[] = ['operator']
 
 /** A text limit whose refusal says `subject` must be at most `max`
  * characters, followed by `next`, the step that gets past it. */
@@ -99,7 +102,8 @@ const whole = (
 export const TEXT_MAX = 20_000
 
 /** The longest name of a project, sub-project, team, milestone,
- * organization, agent key, personal token or person. */
+ * organization, agent key, personal token, person, background curation key
+ * or billing plan. */
 export const NAME_MAX = 80
 
 /** The rows of a list page REST and MCP answer when the call names no limit. */
@@ -135,6 +139,26 @@ export const PARENT_IS_SUBTASK =
  * a subtask with subtasks. */
 export const SUBTASK_WITH_SUBTASKS =
   'this task has subtasks, so it cannot become a subtask; a subtask cannot have subtasks of its own'
+
+/** The currencies a billing plan can be priced in, in Polar's lowercase
+ * ISO 4217 codes. The operator console offers exactly these. */
+export const PLAN_CURRENCIES = [
+  'usd',
+  'eur',
+  'gbp',
+  'nok',
+  'sek',
+  'dkk',
+  'cad',
+  'aud',
+  'chf',
+  'nzd',
+] as const
+
+/** The refusal of a billing plan currency outside PLAN_CURRENCIES. */
+export const PLAN_CURRENCY = `a billing plan must be priced in ${PLAN_CURRENCIES.slice(0, -1)
+  .map((c) => c.toUpperCase())
+  .join(', ')} or ${PLAN_CURRENCIES[PLAN_CURRENCIES.length - 1].toUpperCase()}. Choose one of them.`
 
 /** Bytes in one MiB, for size checks written in MiB. */
 export const MIB = 1024 * 1024
@@ -193,6 +217,23 @@ export const LIMITS = {
     'Send a media type such as application/pdf.',
     'files',
   ),
+  // The background image library in the operator console. The background
+  // curation API (lib/panoramaCuration.ts) takes the same credits.
+  imageTitle: text('Background image title', 300, 'an image title', OPERATOR),
+  imageCreator: text('Background image creator', 300, 'a creator name', OPERATOR),
+  imageLocation: text('Background image location', 300, 'an image location', OPERATOR),
+  imageRemoveNote: text('Background image removal reason', 500, 'a removal reason', OPERATOR),
+  proposalDeclineNote: text(
+    'Background proposal decline reason',
+    2_000,
+    'a decline reason',
+    OPERATOR,
+  ),
+  curationKeyName: text('Background curation key name', NAME_MAX, 'an agent name', OPERATOR),
+  // Only the background curation API meets these two.
+  curationReason: text('Background curation reason', 2_000, 'a reason', []),
+  curationUrl: text('Background image source URL', 2_048, 'a source URL', [], 'Use a shorter URL.'),
+  planName: text('Billing plan name', NAME_MAX, 'a plan name', OPERATOR),
   backgroundName: text(
     'Background image file name',
     255,

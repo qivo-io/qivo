@@ -1,3 +1,4 @@
+import { LIMITS } from '../../convex/lib/limits'
 import {
   jpegDimensions,
   manualImageDimensions,
@@ -6,9 +7,23 @@ import {
   validatePanoramaFile,
 } from '../../convex/lib/panoramaImage'
 import { createBackgroundPreview } from './backgroundPreview'
+import { limitSentence, overLimit } from './fieldLimits'
 import { type ImageMetadata, readImageMetadata } from './imageMetadata'
 
 type ImageCredits = { title: string; creator: string; location?: string }
+
+/** The sentence the server refuses an image's credits with when one is over
+ * its limit (LIMITS.imageTitle, imageCreator, imageLocation), or '' when
+ * they all fit. */
+export function creditsProblem(credits: ImageCredits): string {
+  for (const [text, limit] of [
+    [credits.title, LIMITS.imageTitle],
+    [credits.creator, LIMITS.imageCreator],
+    [credits.location ?? '', LIMITS.imageLocation],
+  ] as const)
+    if (overLimit(limit, text)) return limitSentence(limit)
+  return ''
+}
 
 /** Validate the original before decoding it. Bulk imports require embedded
  * credits; a filename or another image's edited credits cannot supply them. */
@@ -76,11 +91,18 @@ export async function importBackgroundImages(
         continue
       }
       const metadata = prepared.metadata as ImageMetadata & ImageCredits
-      const saved = await save(file, {
-        title: metadata.title.slice(0, 300),
-        creator: metadata.creator.slice(0, 300),
-        location: metadata.location?.slice(0, 300),
-      })
+      const credits = {
+        title: metadata.title,
+        creator: metadata.creator,
+        location: metadata.location,
+      }
+      // a credit over its limit is refused, never cut
+      const problem = creditsProblem(credits)
+      if (problem) {
+        result.failed.push({ name: file.name, message: problem })
+        continue
+      }
+      const saved = await save(file, credits)
       if (saved.reused) result.reused++
       else result.added++
     } catch (error) {

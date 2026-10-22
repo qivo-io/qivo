@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Id } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
+import { LIMITS } from '../lib/limits'
 import { PANORAMA_MAX_BYTES } from '../lib/panorama'
 import { as, expectRefusal, NOW, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
 
@@ -391,11 +392,24 @@ describe('operator-only standalone image upload', () => {
   })
 
   it.each([
+    { changes: { title: 'x'.repeat(301) }, limit: LIMITS.imageTitle },
+    { changes: { creator: 'x'.repeat(301) }, limit: LIMITS.imageCreator },
+    { changes: { location: 'x'.repeat(301) }, limit: LIMITS.imageLocation },
+  ])(
+    'refuses a credit over its limit with its sentence and cleans up the upload: $limit.label',
+    async ({ changes, limit }) => {
+      const { t, op } = await setup()
+      const sid = await store(t)
+      const refused = await expectRefusal(upload(op, sid, changes), 'rule')
+      expect(refused.data.message).toBe(limit.refusal)
+      expect(await exists(t, sid)).toBe(false)
+      expect(await images(t)).toEqual([])
+    },
+  )
+
+  it.each([
     { title: ' ' },
     { creator: ' ' },
-    { title: 'x'.repeat(301) },
-    { creator: 'x'.repeat(301) },
-    { location: 'x'.repeat(301) },
     { license_confirmed: false },
     { url: 'https://images.unsplash.com/photo-123.jpg' },
   ])('refuses invalid metadata and cleans up the unretained upload: %j', async (changes) => {

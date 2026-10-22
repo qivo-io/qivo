@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Id } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
+import { LIMITS } from '../lib/limits'
 import * as panoramaModule from '../panoramaImages'
 import {
   as,
@@ -332,8 +333,8 @@ describe('review, explicit assignment and deletion', () => {
     const p = await pending(t)
     await expectRefusal(
       asOp.mutation(api.panoramaImages.remove, { id: p.image.id, note: 'x'.repeat(501) }),
-      'bad_request',
-      /500/,
+      'rule',
+      new RegExp(`^${LIMITS.imageRemoveNote.refusal}$`),
     )
     await t.run((ctx) => ctx.storage.delete(p.storage_id))
     await expectRefusal(

@@ -5,7 +5,7 @@ import type { Id } from '../_generated/dataModel'
 import { STORAGE_ATTEMPTS, STORAGE_RETRY_MS, STORAGE_STALL_MS } from '../billingSync'
 import { addCalendarMonths } from '../lib/billingAccess'
 import type { BillingPlan, BillingSummary, BillingUsage } from '../lib/billingTypes'
-import { LIMITS } from '../lib/limits'
+import { LIMITS, PLAN_CURRENCIES, PLAN_CURRENCY } from '../lib/limits'
 import { enrollOrganization, STORAGE_PAGE, storageUsage } from '../model/billing'
 import {
   as,
@@ -413,6 +413,27 @@ describe('the plan writers behind the operator actions', () => {
       /requires a regular workspace/,
     )
     expect(await rows()).toEqual(before)
+  })
+
+  it('takes a plan name of 80 characters, trimmed, and only the listed currencies', async () => {
+    const t = newT()
+    const write = (plan: PlanInput) =>
+      t.mutation(insertPlan, { plan, actor: 'billing-operator', email: 'operator@testbed.test' })
+    const name = 'P'.repeat(LIMITS.planName.max)
+    const long = await expectRefusal(write(terms(`${name}P`)), 'rule')
+    expect(long.data.message).toBe(LIMITS.planName.refusal)
+    for (const currency of ['USD', 'xyz', '']) {
+      const refused = await expectRefusal(write({ ...terms(), currency }), 'rule')
+      expect(refused.data.message, currency).toBe(PLAN_CURRENCY)
+    }
+    expect(PLAN_CURRENCY).toBe(
+      'a billing plan must be priced in USD, EUR, GBP, NOK, SEK, DKK, CAD, AUD, CHF or NZD. Choose one of them.',
+    )
+    for (const currency of PLAN_CURRENCIES) await write({ ...terms(` ${name} `), currency })
+    const plans = await t.run((ctx) => ctx.db.query('billing_plans').collect())
+    expect(plans.map((plan) => [plan.name, plan.currency])).toEqual(
+      PLAN_CURRENCIES.map((currency) => [name, currency]),
+    )
   })
 })
 

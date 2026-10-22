@@ -4,6 +4,7 @@
  * uses the standard free license; acquisition and human review are separate.
  */
 import { badRequest } from './functions'
+import { LIMITS, type Limit, overText } from './limits'
 import { validateCalendarDay } from './panorama'
 
 export const CURATION_BODY_LIMIT_BYTES = 16 * 1024
@@ -30,11 +31,13 @@ function objectInput(input: unknown): Record<string, unknown> {
   return input as Record<string, unknown>
 }
 
-function textField(value: unknown, field: string, limit: number): string {
+/** `value` trimmed. Refuses a value that is not text, is blank or is over
+ * `limit`, with the limit's sentence and the API's 400 for invalid input. */
+function textField(value: unknown, field: string, limit: Limit): string {
   if (typeof value !== 'string') throw badRequest(`${field} must be text`)
   const text = value.trim()
   if (!text) throw badRequest(`${field} cannot be blank`)
-  if (text.length > limit) throw badRequest(`${field} must be at most ${limit} characters`)
+  if (overText(limit, text)) throw badRequest(limit.refusal)
   return text
 }
 
@@ -49,7 +52,7 @@ export function parseUnsplashReference(
 ): Pick<CurationSubmission, 'source_url' | 'source_id'> {
   if (typeof value === 'string' && /\p{Cc}/u.test(value))
     throw badRequest('url cannot contain control characters')
-  const url = textField(value, 'url', 2048)
+  const url = textField(value, 'url', LIMITS.curationUrl)
   // Inspect the original path rather than URL.pathname: URL parsing normalizes
   // traversal, backslashes, default ports and some control characters away.
   // Query/fragment data is discarded without being decoded or fetched.
@@ -82,9 +85,15 @@ export function parseCurationSubmission(input: unknown): CurationSubmission {
   return {
     ...parseUnsplashReference(values.url),
     day: annualDay(values.date),
-    ...(values.title === undefined ? {} : { title: textField(values.title, 'title', 300) }),
-    ...(values.creator === undefined ? {} : { creator: textField(values.creator, 'creator', 300) }),
-    ...(values.reason === undefined ? {} : { reason: textField(values.reason, 'reason', 2000) }),
+    ...(values.title === undefined
+      ? {}
+      : { title: textField(values.title, 'title', LIMITS.imageTitle) }),
+    ...(values.creator === undefined
+      ? {}
+      : { creator: textField(values.creator, 'creator', LIMITS.imageCreator) }),
+    ...(values.reason === undefined
+      ? {}
+      : { reason: textField(values.reason, 'reason', LIMITS.curationReason) }),
   }
 }
 
@@ -95,7 +104,7 @@ export function parseCurationReview(input: unknown): CurationReview {
     throw badRequest('decision must be approved or declined')
   return {
     decision: values.decision,
-    reason: textField(values.reason, 'reason', 2000),
+    reason: textField(values.reason, 'reason', LIMITS.curationReason),
     ...(values.day === undefined ? {} : { day: annualDay(values.day) }),
   }
 }

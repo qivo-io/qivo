@@ -1,5 +1,6 @@
 import { ConvexError } from 'convex/values'
 import { describe, expect, it } from 'vitest'
+import { LIMITS } from '../lib/limits'
 import {
   CURATION_BODY_LIMIT_BYTES,
   CURATION_TOKEN_PREFIX,
@@ -90,7 +91,7 @@ describe('external photo references', () => {
   it('rejects an oversized URL instead of storing a truncated reference', () => {
     expectBadRequest(
       () => parseCurationSubmission({ ...valid, url: `${URL}?q=${'x'.repeat(2048)}` }),
-      /2048/,
+      new RegExp(`^${LIMITS.curationUrl.refusal}$`),
     )
   })
 

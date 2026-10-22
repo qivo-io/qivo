@@ -14,6 +14,9 @@ import {
   platformMutation,
   rule,
 } from './lib/functions'
+import { limitedText } from './lib/limitRules'
+import { LIMITS } from './lib/limits'
+import { imageCredits } from './lib/panorama'
 import { parseUnsplashReference } from './lib/panoramaCuration'
 import { panoramaFilename } from './lib/panoramaFilename'
 import {
@@ -47,17 +50,11 @@ type UploadResult = { image: Awaited<ReturnType<typeof imageRow>>; reused: boole
 function validateDetails(args: Upload) {
   if (!args.rights_confirmed)
     throw badRequest('confirm that you have permission to use this image in Qivo')
-  const title = args.title.trim()
-  const creator = args.creator.trim()
-  const location = args.location?.trim() || undefined
-  if (!title || title.length > 300 || !creator || creator.length > 300)
-    throw badRequest('provide the image title and creator, each within 300 characters')
-  if (location && location.length > 300)
-    throw badRequest('keep the image location within 300 characters')
-  let source_url = args.source_url?.trim() || ''
+  const { title, creator, location } = imageCredits(args)
+  let source_url = limitedText(LIMITS.curationUrl, args.source_url ?? '')
   let source_id: string | undefined
   if (source_url) {
-    if (source_url.length > 2048 || !/^https:\/\/[^\s/@:?#]+(?:[/?#][^\s]*)?$/.test(source_url))
+    if (!/^https:\/\/[^\s/@:?#]+(?:[/?#][^\s]*)?$/.test(source_url))
       throw badRequest('use an HTTPS source URL or leave the source blank')
     let url: URL
     try {
