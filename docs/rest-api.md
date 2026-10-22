@@ -2047,7 +2047,9 @@ one file:
   made at the same time and changed nothing; send it again"}`, like any
   other request that keeps conflicting. It stores nothing and leaves the
   URL free, so wait the `Retry-After` seconds and send the same `POST`
-  again.
+  again. If Qivo could not free the URL either, which is rare, the `POST`
+  answers `409` (`this upload URL has already been used; start a new
+  upload`) instead.
 - An expired or altered upload URL, and one whose upload was confirmed,
   answers `404` (`upload not found or expired; start a new upload`).
 

@@ -50,6 +50,7 @@ import {
   WRITE_CONFLICT_RETRY_AFTER,
   WRITE_TIMEOUT_MESSAGE,
 } from '../machine/shared'
+import { UPLOAD_URL_USED } from '../model/attachments'
 import { NOW, newT, type OrgFixture, plantIssue, type T, uuid, withOrg } from './helpers.setup'
 
 /* What ctx.runMutation rejects with when a mutation kept conflicting on a
@@ -119,9 +120,13 @@ vi.mock('../model/attachments', async (importOriginal) => {
       }
       return await real.attachFileCore(...a)
     },
-    beginTicketUpload: faulty('claim', real.beginTicketUpload),
-    finishTicketUpload: faulty('finish', real.finishTicketUpload),
-    abandonTicketUpload: faulty('abandon', real.abandonTicketUpload),
+    // wrapped at call time, since the mock runs before `faulty` is defined
+    beginTicketUpload: (...a: Parameters<typeof real.beginTicketUpload>) =>
+      faulty('claim', real.beginTicketUpload)(...a),
+    finishTicketUpload: (...a: Parameters<typeof real.finishTicketUpload>) =>
+      faulty('finish', real.finishTicketUpload)(...a),
+    abandonTicketUpload: (...a: Parameters<typeof real.abandonTicketUpload>) =>
+      faulty('abandon', real.abandonTicketUpload)(...a),
   }
 })
 
@@ -605,6 +610,7 @@ describe('the attachment upload URL', () => {
     expect(res.status).toBe(503)
     expect(res.headers.get('Retry-After')).toBe(String(WRITE_CONFLICT_RETRY_AFTER))
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
+    expect(res.headers.get('Access-Control-Expose-Headers')).toBe('Retry-After')
     expect(res.json).toEqual({ error: WRITE_CONFLICT_MESSAGE })
     expect(await stored(fx)).toBe(0)
     // sending it again stores the file
@@ -643,6 +649,16 @@ describe('the attachment upload URL', () => {
     const other = await ticket(fx)
     faults.abandon = CONFLICT_RETRIES + 1
     expect(await post(fx, other, 3)).toMatchObject({ status: 400 })
+    // a conflict whose cleanup failed too leaves the URL held, so it does
+    // not say to send the POST again
+    const third = await ticket(fx)
+    faults.finish = CONFLICT_RETRIES + 1
+    faults.abandon = CONFLICT_RETRIES + 1
+    expect(await post(fx, third)).toMatchObject({
+      status: 409,
+      json: { error: UPLOAD_URL_USED },
+    })
+    expect(await post(fx, third)).toMatchObject({ status: 409, json: { error: UPLOAD_URL_USED } })
     expect(log).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ reason: WRITE_CONFLICT }) }),
     )

@@ -36,6 +36,7 @@ import {
   finishTicketUpload,
   UPLOAD_CLAIM_MS,
   UPLOAD_TICKET_MISSING,
+  UPLOAD_URL_USED,
   uploadSizeWrong,
 } from '../model/attachments'
 import { conflictRetrying } from './registry'
@@ -108,13 +109,14 @@ export const abandon = internalMutation({
     }),
 })
 
-/* Every answer allows any origin, as a Convex upload URL does, and is never
- * cached. */
+/* Every answer allows any origin, as a Convex upload URL does, lets a
+ * browser read a 503's Retry-After and is never cached. */
 const answer = (status: number, body: unknown, headers: Record<string, string> = {}): Response =>
   new Response(JSON.stringify(body), {
     status,
     headers: {
       'Access-Control-Allow-Origin': '*',
+      'Access-Control-Expose-Headers': 'Retry-After',
       'Cache-Control': 'no-store',
       'Content-Type': 'application/json',
       'Referrer-Policy': 'no-referrer',
@@ -165,12 +167,14 @@ const receive = answerAfterBody(async (ctx, request) => {
   const attempt = crypto.randomUUID()
   const runMutation = conflictRetrying(ctx)
   let storageId: Id<'_storage'> | undefined
+  let claimed = false
   try {
     const { size } = await runMutation(internal.machine.uploads.begin, {
       ticket,
       minter,
       attempt,
     })
+    claimed = true
     const bytes = await readExactly(request, size)
     if (bytes === null) throw badRequest(uploadSizeWrong(size))
     storageId = await ctx.storage.store(new Blob([bytes], { type }))
@@ -185,6 +189,7 @@ const receive = answerAfterBody(async (ctx, request) => {
     return answer(200, { storageId })
   } catch (e) {
     // also when begin's answer was lost after it committed the claim
+    let held = false
     const stored = await runMutation(internal.machine.uploads.abandon, {
       ticket,
       minter,
@@ -194,12 +199,15 @@ const receive = answerAfterBody(async (ctx, request) => {
       // the URL stays held for UPLOAD_CLAIM_MS, and an unkept file waits
       // for the storage sweep
       console.error(cleanup)
+      held = claimed
       return null
     })
     // finish committed but its answer was lost: the file is the ticket's
     if (stored !== null) return answer(200, { storageId: stored })
     if (!(e instanceof ConvexError)) return answer(500, { error: internalError(e) })
     const refusal = e.data as Refusal
+    // sending it again would only find this POST's claim
+    if (refusal.reason === WRITE_CONFLICT && held) return answer(409, { error: UPLOAD_URL_USED })
     if (refusal.reason === WRITE_CONFLICT) {
       return answer(
         503,
