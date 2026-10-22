@@ -232,6 +232,65 @@ describe('bounded private demo startup', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  it('restarts a waiting tab’s deadline while the tab holding the lock moves a step at a time', async () => {
+    vi.useFakeTimers()
+    // one browser: a lock that queues the second tab, and a channel between tabs
+    let held = Promise.resolve()
+    vi.stubGlobal('navigator', {
+      locks: {
+        request: (_name: string, _options: object, operation: () => Promise<unknown>) => {
+          const run = held.then(operation)
+          held = run.then(
+            () => {},
+            () => {},
+          )
+          return run
+        },
+      },
+    })
+    const open = new Set<EventTarget>()
+    class Channel extends EventTarget {
+      constructor() {
+        super()
+        open.add(this)
+      }
+      postMessage(data: unknown) {
+        for (const tab of open)
+          if (tab !== this) tab.dispatchEvent(new MessageEvent('message', { data }))
+      }
+      close() {
+        open.delete(this)
+      }
+    }
+    vi.stubGlobal('BroadcastChannel', Channel)
+    const { deps, ready } = scenario()
+    const answers: DemoLifecycle[] = [1, 2].map((step) => ({
+      ...ready,
+      status: 'unprovisioned',
+      orgId: null,
+      orgSlug: null,
+      progress: { step, steps: 3 },
+    }))
+    deps.ensureMine.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, DEMO_STARTUP_TIMEOUT_MS * 0.6))
+      const answer = answers.shift()
+      if (answer) return answer
+      deps.current.mockResolvedValue(ready)
+      return ready
+    })
+    const tab = () =>
+      runDemoStartup((signal, progressed) =>
+        startDemo({ ...deps, create: true, onProgress: progressed }, signal),
+      )
+    const first = tab()
+    const second = tab()
+    await vi.advanceTimersByTimeAsync(DEMO_STARTUP_TIMEOUT_MS * 1.8)
+    expect(await first).toEqual(ready)
+    expect(await second).toEqual(ready)
+    expect(deps.ensureMine).toHaveBeenCalledTimes(3)
+    expect(open.size).toBe(0)
+  })
+
   it('still times out one provisioning step that stalls', async () => {
     vi.useFakeTimers()
     const { deps } = scenario()

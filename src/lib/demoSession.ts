@@ -76,11 +76,17 @@ export function demoStartupStep<T>(operation: () => Promise<T>, signal?: AbortSi
   })
 }
 
+/* The channel on which the tab preparing a demo tells the others it moved. */
+const DEMO_STARTUP_CHANNEL = 'qivo-demo-startup'
+
 /** One deadline includes both queued Web Lock time and work performed while
  * holding it. The operation's `progressed` restarts it, so provisioning
  * that keeps moving a step at a time may take longer than one deadline
- * while a stalled step still times out. Cancelling the active callback
- * releases the lock even if its underlying transport never settles. */
+ * while a stalled step still times out. It also tells tabs waiting for the
+ * lock, which restart theirs, so a tab opened during a slow preparation
+ * waits for it while a stalled one still times them out. Cancelling the
+ * active callback releases the lock even if its underlying transport never
+ * settles. */
 export async function runDemoStartup<T>(
   operation: (signal: AbortSignal, progressed: () => void) => Promise<T>,
   signal?: AbortSignal,
@@ -96,13 +102,21 @@ export async function runDemoStartup<T>(
     timer = setTimeout(() => controller.abort(new DemoStartupTimeout()), DEMO_STARTUP_TIMEOUT_MS)
   }
   arm()
+  const tabs =
+    typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(DEMO_STARTUP_CHANNEL)
+  tabs?.addEventListener('message', arm)
+  const progressed = () => {
+    arm()
+    tabs?.postMessage('progressed')
+  }
   try {
     return await withDemoStartupLock(
-      () => demoStartupStep(() => operation(controller.signal, arm), controller.signal),
+      () => demoStartupStep(() => operation(controller.signal, progressed), controller.signal),
       controller.signal,
     )
   } finally {
     clearTimeout(timer)
+    tabs?.close()
     signal?.removeEventListener('abort', cancel)
   }
 }
