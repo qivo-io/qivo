@@ -52,7 +52,8 @@ const reducedMotion = () =>
 /** Shows the task a request names in the list `pane` holds, and rings it
     with `data-board-revealed` for REVEAL_MS of the time the pane is in
     view: while a task window over it makes it inert, the ring waits, so it
-    still shows when the window closes. `mount` mounts the task's card
+    still shows when the window closes, on the task's card wherever a
+    change made meanwhile moved it. `mount` mounts the task's card
     first when its list still waits for it; it may commit a render. Two
     frames later the pane scrolls the card to its middle, smoothly unless
     reduced motion is on or the card is more than two screens away, and
@@ -102,13 +103,21 @@ export function useReveal(
             scroller.scrollTo({ ...place, behavior })
             ringed = target
             target.setAttribute('data-board-revealed', '')
-            // the ring's time runs while nothing makes the pane inert
+            /* The ring's time runs while nothing makes the pane inert. A
+               change made in the task window can move the task to another
+               cell, a new card, so the ring follows it when the window
+               closes. */
             const time = () => {
               window.clearTimeout(timer)
               if (scroller.closest('[inert]')) return
+              if (ringed && !ringed.isConnected) {
+                mountTask(request.id)
+                ringed = revealTarget(scroller, request.id)
+                ringed?.setAttribute('data-board-revealed', '')
+              }
               timer = window.setTimeout(() => {
                 inertWatch?.disconnect()
-                target.removeAttribute('data-board-revealed')
+                ringed?.removeAttribute('data-board-revealed')
                 ringed = null
               }, REVEAL_MS)
             }

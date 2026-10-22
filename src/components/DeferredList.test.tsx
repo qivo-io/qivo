@@ -334,3 +334,55 @@ describe('DeferredList', () => {
     expect(spacer()).not.toBeNull()
   })
 })
+
+describe('Tab into the waiting space', () => {
+  /* rows whose own element is their first tab stop, with an owner button
+     that is disabled on every other row, as on a read-only project */
+  const row = (item: Item) => (
+    <div key={item.key} data-k={item.key}>
+      <button type="button" data-focus-key="row">
+        {item.key}
+      </button>
+      <button type="button" data-focus-key="owner" disabled={Number(item.key.slice(1)) % 2 === 1}>
+        owner
+      </button>
+    </div>
+  )
+  const showRows = (items: Item[]) =>
+    act(async () =>
+      root.render(
+        <DeferredList
+          id="list"
+          items={items}
+          keyOf={keyOf}
+          render={row}
+          estimate={estimate}
+          gap={8}
+          initial={4}
+          scheduler={scheduler}
+          label={label}
+        />,
+      ),
+    )
+  const items = Array.from({ length: 20 }, (_, n) => ({ key: `k${n}` }))
+
+  it('lands on the next row coming from above', async () => {
+    await showRows(items)
+    // k3's owner is disabled, so its row button is the last tab stop
+    const last = nodes()[3].querySelector<HTMLElement>('[data-focus-key="row"]')
+    await act(async () => last?.focus())
+    await act(async () => spacer()?.focus())
+    expect(document.activeElement?.textContent).toBe('k4')
+  })
+
+  it('lands on the last enabled control coming from below', async () => {
+    const below = document.createElement('button')
+    container.after(below)
+    await showRows(items)
+    await act(async () => below.focus())
+    await act(async () => spacer()?.focus())
+    // k19's owner is disabled, so its row button
+    expect(document.activeElement?.textContent).toBe('k19')
+    below.remove()
+  })
+})

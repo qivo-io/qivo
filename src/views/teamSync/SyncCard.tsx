@@ -139,6 +139,7 @@ export function TitleButton({
       type="button"
       variant="unstyled"
       data-sync-open={it.id}
+      data-focus-key="title"
       onClick={() => ctx.onOpenTask(it.id)}
       title={clamp ? clampedTitleTip(it.title) : undefined}
       className={cn(

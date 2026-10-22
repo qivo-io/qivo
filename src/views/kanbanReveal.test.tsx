@@ -163,6 +163,28 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
     expect(target?.hasAttribute('data-board-revealed')).toBe(false)
   })
 
+  it("rings the task's new card when a change in its window moved it", async () => {
+    const board = await loadBoard(network, lanes, { scope: 'plan' })
+    await board.render(root)
+    const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
+    far = id
+    container.setAttribute('inert', '')
+    await board.reveal(id)
+    await run(() => scrolled.mock.calls.length > 0)
+    const first = card(id)?.closest('.board-card')
+    expect(first?.hasAttribute('data-board-revealed')).toBe(true)
+    // the window moves the task to In Progress, a card in another cell
+    const row = board.snapshot.issues.find((issue) => issue.id === 't900')
+    if (!row) throw new Error('missing the task')
+    row.status = 'progress'
+    await board.deliver()
+    await act(async () => container.removeAttribute('inert'))
+    const moved = card(id)?.closest('.board-card')
+    expect(moved).not.toBe(first)
+    expect(moved?.closest('[data-status]')?.getAttribute('data-status')).toBe('progress')
+    expect(moved?.hasAttribute('data-board-revealed')).toBe(true)
+  })
+
   it('rings the row on the phone task list', async () => {
     const board = await loadBoard(network, lanes, { scope: 'plan', phone: true })
     await board.render(root)

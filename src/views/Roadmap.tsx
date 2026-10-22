@@ -13,6 +13,7 @@ import {
 } from 'react'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
+import { keptOwners } from '@/lib/keptOwners'
 import { REVEAL_MS } from '@/lib/reveal'
 import { isRoadmapTaskVisible } from '@/lib/roadmapVisibility'
 import { useTaskMemo } from '@/lib/taskMemo'
@@ -101,12 +102,52 @@ const remainingReads = (it: IssueVM) => [
   (it.children ?? []).join(),
 ]
 
-/* The most rows one chunk of a track renders. */
+/* The rows a new chunk of a track takes before the next one opens. */
 const CHUNK_ROWS = 32
-const chunked = (rows: LaidRow[]) => {
-  const parts: LaidRow[][] = []
-  for (let i = 0; i < rows.length; i += CHUNK_ROWS) parts.push(rows.slice(i, i + CHUNK_ROWS))
-  return parts
+const rowKey = (L: LaidRow) => `${L.row.kind}:${L.row.issue?.uuid ?? L.row.pid}`
+
+/** A track's rows in chunks that keep their rows: a row stays in the chunk
+    that held it while the order allows (keptOwners), so a row that only
+    shifts as others come and go is not remounted with its open menus and
+    focus. A new or moved row joins the chunk before it, or a chunk of its
+    own at the start; a chunk made new takes CHUNK_ROWS rows. Chunk ids
+    rise down the list; `owners` holds each row's chunk and is updated. */
+function stableChunks(rows: LaidRow[], owners: Map<string, number>) {
+  const keys = rows.map(rowKey)
+  const known = keys.map((key) => owners.get(key))
+  const kept = keptOwners(known)
+  // the first kept chunk after each row, which new chunks stay below
+  const keptAfter: (number | undefined)[] = []
+  for (let i = rows.length - 1, next: number | undefined; i >= 0; i--) {
+    keptAfter[i] = next
+    if (kept[i]) next = known[i]
+  }
+  const chunks: { id: number; rows: LaidRow[]; fresh: boolean }[] = []
+  let current: (typeof chunks)[number] | null = null
+  for (const [i, row] of rows.entries()) {
+    const owner = kept[i] ? known[i] : undefined
+    if (owner !== undefined) {
+      if (current?.id !== owner) {
+        current = { id: owner, rows: [], fresh: false }
+        chunks.push(current)
+      }
+    } else if (!current || (current.fresh && current.rows.length >= CHUNK_ROWS)) {
+      const high = keptAfter[i]
+      const id = current
+        ? high === undefined
+          ? current.id + 1
+          : (current.id + high) / 2
+        : high === undefined
+          ? 0
+          : high - 1
+      current = { id, rows: [], fresh: true }
+      chunks.push(current)
+    }
+    current.rows.push(row)
+  }
+  owners.clear()
+  for (const chunk of chunks) for (const row of chunk.rows) owners.set(rowKey(row), chunk.id)
+  return chunks
 }
 
 /** A stretch of a track's task rows. It renders again only when `deps`
@@ -1256,6 +1297,8 @@ function Roadmap({
      write access canWrite reads, so they are worked out again only when one
      of them changed: P.issues keeps its identity while no task changed, and
      P.contextVersion covers the access. Above the early returns, as hooks. */
+  // each track's rows by chunk (stableChunks), kept across renders
+  const chunkOwners = useRefR(new Map<string, Map<string, number>>())
   const allDeps = useTaskMemo(P.issues, linkReads, dependencyPairs, [])
   const pendingMoves = useTaskMemo(
     P.issues,
@@ -2069,17 +2112,22 @@ function Roadmap({
                     commit,
                     revealEdge,
                   ]
-                  const chunks = (pid: string, list: LaidRow[]) =>
-                    chunked(list).map((part, i) => (
+                  const chunks = (pid: string, list: LaidRow[]) => {
+                    let owners = chunkOwners.current.get(pid)
+                    if (!owners) {
+                      owners = new Map()
+                      chunkOwners.current.set(pid, owners)
+                    }
+                    return stableChunks(list, owners).map((chunk) => (
                       <RowChunk
-                        // biome-ignore lint/suspicious/noArrayIndexKey: a chunk is a stretch of its track's rows, not one row
-                        key={`${pid}:${i}`}
-                        rows={part}
+                        key={`${pid}:${chunk.id}`}
+                        rows={chunk.rows}
                         rings={barRing}
                         deps={chunkDeps}
                         render={renderRow}
                       />
                     ))
+                  }
                   return groups.map((g) => (
                     <div key={`track:${g.head.row.pid}`}>
                       {renderRow(g.head)}

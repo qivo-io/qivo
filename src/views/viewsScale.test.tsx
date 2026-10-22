@@ -210,6 +210,44 @@ describe('a delivery on the desktop Roadmap', { timeout: BOARD_TEST_TIMEOUT * 2 
     await board.deliver()
     expect(schedule.moves).toBeGreaterThan(before.moves)
   })
+
+  it('keeps the rows that only shift when another task goes', async () => {
+    const board = await loadBoard(network, (snap) => {
+      for (let n = 1; n <= 100; n++) snap.issues.push(taskRow(snap, `t${n}`, 'todo', n))
+    })
+    const { Roadmap } = await import('./Roadmap')
+    const actions = new Proxy({}, { get: () => () => {} }) as Parameters<
+      typeof Roadmap
+    >[0]['actions']
+    await board.renderView(root, (info) => (
+      <Roadmap
+        info={info}
+        filters={{
+          mine: false,
+          assignees: [],
+          priority: null,
+          stale: false,
+          focus: false,
+          search: '',
+        }}
+        actions={actions}
+        filterControls={() => null}
+        focusPlan={null}
+      />
+    ))
+    const rows = () => [...document.querySelectorAll<HTMLElement>('[data-roadmap-task-top]')]
+    const before = rows()
+    expect(before).toHaveLength(100)
+    // the first task goes; the 99 after it move up one place, across chunks
+    board.snapshot.issues.splice(
+      board.snapshot.issues.findIndex((issue) => issue.id === 't1'),
+      1,
+    )
+    await board.deliver()
+    const after = rows()
+    expect(after).toHaveLength(99)
+    for (const row of after) expect(before).toContain(row)
+  })
 })
 
 /* Plan, a parent project over 1,000 sub-projects with a task each. */

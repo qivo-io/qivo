@@ -73,6 +73,7 @@ const MobileRoadmapRow = memo(function MobileRoadmapRow({
       variant="unstyled"
       noTooltip
       data-roadmap-row={it.id}
+      data-focus-key="row"
       className="mobile-roadmap-row"
       onClick={() => onOpen(it.id)}
     >

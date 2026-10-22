@@ -24,8 +24,9 @@ const at = process.argv.indexOf('--tasks')
 const tasks = at < 0 ? 10_000 : Number(process.argv[at + 1])
 /* The checks below need a Board that mounts in slices (over 300 cards, and
    the parents of the generated workspace are no cards of their own) with
-   cards still waiting in the first lane's To Do when they start: the focus
-   and drag checks after the Tab check run on that cell while slices go on.
+   cards still waiting in the first lane's To Do when they start: the drag
+   check after the Tab and focus checks runs on that cell while slices go
+   on.
    Cells near the view mount first, so at 2,000 tasks that cell is often
    whole by then; 3,000 tasks put about 100 cards there. */
 const LEAST_TASKS = 3000
@@ -130,10 +131,11 @@ try {
 
   // Tab from the last mounted card of a cell into its waiting space lands
   // on the next card's first control: a task's title, or a parent card's
-  // heading. The page's animation frames are held meanwhile: slices wait
-  // for a frame once they used theirs (src/lib/mountScheduler.ts), so the
-  // Board stops mounting and the cell keeps its waiting space through the
-  // check, however fast the machine is.
+  // heading. The page's animation frames are held meanwhile, also for the
+  // focus check after it: slices wait for a frame once they used theirs
+  // (src/lib/mountScheduler.ts), so the Board stops mounting and the cells
+  // keep their waiting space through the checks, however fast the machine
+  // is.
   await page.evaluate(() => {
     const held = []
     window.__frames = { held, original: window.requestAnimationFrame }
@@ -173,6 +175,36 @@ try {
     { index: waiting, first: true },
     'Tab into the waiting space must land on the next card',
   )
+  log('Tab through the waiting space lands on the next card')
+
+  // Focus stays on a card that moves into a cell whose cards still wait:
+  // a card of the same lane, into a status cell of that lane that waits.
+  const move = await page.evaluate(() => {
+    const from = document.querySelector('[data-smoke-cell]')
+    const lane = from.getAttribute('data-board-cell')
+    const to = [...document.querySelectorAll('[data-board-cell]')].find(
+      (cell) =>
+        cell.getAttribute('data-board-cell') === lane &&
+        cell !== from &&
+        cell.querySelector('[data-board-pending]'),
+    )
+    const card = from.querySelectorAll('[data-card]')[1]
+    return to && card
+      ? { id: card.getAttribute('data-card'), status: to.getAttribute('data-status') }
+      : null
+  })
+  assert.ok(move, 'A cell of the same lane must still wait for cards')
+  await page.locator(`[data-card="${move.id}"] [data-focus-key="title"]`).focus()
+  await page.evaluate(({ id, status }) => window.PLANNER.updateIssue(id, { status }), move)
+  await page.waitForFunction(
+    ({ id, status }) =>
+      document.activeElement
+        ?.closest(`[data-status="${status}"] [data-card]`)
+        ?.getAttribute('data-card') === id,
+    move,
+    { polling: 20 },
+  )
+  log('focus follows a card into a waiting cell')
   // the frames go back, and the ones held run
   await page.evaluate(() => {
     const { held, original } = window.__frames
@@ -180,21 +212,6 @@ try {
     delete window.__frames
     for (const callback of held) original(callback)
   })
-  log('Tab through the waiting space lands on the next card')
-
-  // Focus stays on a card that moves into a cell whose cards still wait.
-  const moved = await todo.locator('[data-card]').nth(2).getAttribute('data-card')
-  await todo.locator(`[data-card="${moved}"] [data-focus-key="title"]`).focus()
-  assert.ok(await page.evaluate(pending), 'The Board must still be mounting')
-  await page.evaluate((id) => window.PLANNER.updateIssue(id, { status: 'review' }), moved)
-  await page.waitForFunction(
-    (id) =>
-      document.activeElement
-        ?.closest('[data-status="review"] [data-card]')
-        ?.getAttribute('data-card') === id,
-    moved,
-  )
-  log('focus follows a card into a waiting cell')
 
   // A drag while the Board mounts writes once.
   const dragged = todo.locator('[data-card][draggable="true"]').first()
