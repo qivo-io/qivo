@@ -2,8 +2,9 @@
 import type React from 'react'
 import { useEffect as useEffectS, useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
+import { limitSentence, overLimit } from '@/lib/fieldLimits'
+import type { Limit } from '../../../convex/lib/limits'
+import { LimitedInput, LimitedTextarea } from '../../components/LimitedField'
 import { Icon } from '../../components/qivo'
 import { SettingsField } from '../../components/settingsPage'
 import { WORKSPACE_SIGNUP_URL } from '../../lib/demoMode'
@@ -41,6 +42,9 @@ export function BackLink({ onClick, to }: { onClick: () => void; to: string }) {
   )
 }
 
+/** A settings text that saves on blur or Enter. A text over `limit` is not
+    saved: the field keeps it, shows it invalid and says why. Leaving the
+    stored text unchanged says nothing. */
 export function TextField({
   label,
   value,
@@ -50,7 +54,7 @@ export function TextField({
   width,
   probe,
   multiline = false,
-  maxLength,
+  limit,
   disabled = false,
 }: {
   label: string
@@ -61,7 +65,7 @@ export function TextField({
   width?: number
   probe?: string
   multiline?: boolean
-  maxLength?: number
+  limit: Limit
   disabled?: boolean
 }) {
   const [v, setV] = useStateS(value)
@@ -72,17 +76,19 @@ export function TextField({
   }, [value])
   const commit = () => {
     const t = v.trim()
-    if (!disabled && (t || multiline) && t !== value) onCommit(t)
+    if (disabled || t === value) setV(value)
+    else if (overLimit(limit, t)) window.showToast?.(limitSentence(limit), 'error')
+    else if (t || multiline) onCommit(t)
     else setV(value)
   }
-  const Control = multiline ? Textarea : Input
+  const Control = multiline ? LimitedTextarea : LimitedInput
   return (
     <SettingsField label={label} hint={hint} width={width}>
       <Control
         aria-label={label}
+        limit={limit}
         value={v}
         rows={multiline ? 1 : undefined}
-        maxLength={maxLength}
         disabled={disabled}
         onChange={(e) => setV(e.target.value)}
         onBlur={commit}

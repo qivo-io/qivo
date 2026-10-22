@@ -57,7 +57,6 @@ import {
   CALLER_DEACTIVATED,
   CALLER_GONE,
   type Caller,
-  COMMENT_PAGE_MAX,
   childProjectsCore,
   commentOut,
   credentialVia,
@@ -81,13 +80,17 @@ import {
 import { byId } from '../lib/db'
 import {
   type CredentialAccess,
+  ISSUE_STATUSES,
   vCredentialAccess,
   vIssuePriority,
   vIssueStatus,
 } from '../lib/enums'
 import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
+import { limitedText } from '../lib/limitRules'
+import { DEFAULT_PAGE_SIZE, LIMITS, serviceBusy, tooManyRequests } from '../lib/limits'
 import { utcToday } from '../lib/machineDelay'
 import { mcpResource, mcpResourceMetadata, OAUTH_SCOPES } from '../lib/oauth'
+import { DEFAULT_REVIEW_HOURS } from '../lib/review'
 import {
   EVENT_PARAMS_NOT_FINITE,
   type EventOwner,
@@ -96,9 +99,8 @@ import {
   vEventOwner,
   WEBHOOK_MAX_TTL_MS,
 } from '../lib/taskEvents'
-import { DELETE_REASON_MAX, LABEL_NAME_MAX, TEXT_MAX } from '../lib/textLimits'
-import { ingressShard } from '../model/billingUsage'
-import { assertArchiveReasonFits, postComment } from '../model/comments'
+import { ingressShard, machineRetryAfter } from '../model/billingUsage'
+import { postComment } from '../model/comments'
 import { moveTasksToTrash } from '../model/deletedItems'
 import {
   createExpectedSentence,
@@ -146,7 +148,7 @@ import {
 } from '../model/links'
 import { newUuid, setPlannableHoursCore } from '../model/orgs'
 import { PLANNABLE_FIELDS } from '../model/people'
-import { assertRemainingShape, REMAINING_HOURS_MAX } from '../model/taskValues'
+import { assertRemainingShape } from '../model/taskValues'
 import { teamsJson } from '../model/teams'
 import { authenticateSecret, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
 import { DISCUSSION_TOOLS } from './discussion'
@@ -163,8 +165,10 @@ import {
   hasLoneSurrogate,
   internalError,
   LONE_SURROGATE,
+  listOffset,
   MCP_NO_WRITE,
   MCP_PROVENANCE as PROVENANCE,
+  pageLimit,
   pretty,
   readBody,
   WRITE_CONFLICT,
@@ -336,7 +340,7 @@ export const TOOLS: McpTool[] = [
       name: 'update_user',
       title: 'Update user',
       description:
-        'Set how many hours a week someone can be planned for, as a WHOLE number of hours from 1 to 168. Allowed for an organization admin, or a leader of a team that user belongs to, and nobody else, your own account included; the database decides, so a refusal here is the same refusal the app would give. An AGENT has no plannable week and cannot be given one (its capacity is unbounded), so this tool applies to people only. ' +
+        `Set how many hours a week someone can be planned for, as a WHOLE number of hours from ${LIMITS.plannableHours.min} to ${LIMITS.plannableHours.max}. Allowed for an organization admin, or a leader of a team that user belongs to, and nobody else, your own account included; the database decides, so a refusal here is the same refusal the app would give. An AGENT has no plannable week and cannot be given one (its capacity is unbounded), so this tool applies to people only. ` +
         EXPECTED_SENTENCE,
       inputSchema: {
         type: 'object',
@@ -345,13 +349,12 @@ export const TOOLS: McpTool[] = [
           user_id: {
             type: 'string',
             format: 'uuid',
-            pattern:
-              '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
+            pattern: UUID_PATTERN,
           },
           plannable_hours: {
             type: 'integer',
-            minimum: 1,
-            maximum: 168,
+            minimum: LIMITS.plannableHours.min,
+            maximum: LIMITS.plannableHours.max,
           },
           expected: expectedSchema(PLANNABLE_FIELDS),
         },
@@ -377,8 +380,7 @@ export const TOOLS: McpTool[] = [
     def: {
       name: 'list_tasks',
       title: 'List tasks',
-      description:
-        "Tasks you can see, optionally filtered, oldest first by creation. `is_group: true` identifies a parent whose stored status is dormant; status filters exclude groups. Every task identifies its reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on, and `owner_id` names whose work it is. A group's `progress` counts the done and total tasks without subtasks under it that you can see, `delay` is the app's projected delay when the task's project tracks it, and `last_comment_at` is when a task was last commented on. `project` accepts a project number, a key like ENC, or a uuid; a meta project includes its sub-projects. `status` takes one status or a list. `search` matches every whitespace-separated fragment across task ID, title, description, status, priority, assignee name and label names, case-insensitively and in any order. `offset` skips that many results. Active tasks only by default. `archived: true` lists archived tasks instead and needs `project`, which then includes all its sub-projects you can read, archived ones too; to cover them all, name each top-level project that `list_projects` returns with and without `archived: true`. That answer is `{next_cursor, tasks}`, most recently archived first; pass `next_cursor` back as `cursor` until it is null, because a page may hold fewer than `limit` tasks, even none. Tasks in an ARCHIVED PROJECT are left out of active lists unless `project` names that project. Archiving a project and archiving a task are separate things, and only the second has a flag here.",
+      description: `Tasks you can see, optionally filtered, oldest first by creation. \`is_group: true\` identifies a parent whose stored status is dormant; status filters exclude groups. Every task identifies its reporter (\`reporter_id\`, \`reporter_name\`), assignee (\`assignee_id\`, \`assignee_name\`) and reviewer (\`reviewer_id\`, \`reviewer_name\`); while a task is in \`review\` with a reviewer set, it is the reviewer's to act on, and \`owner_id\` names whose work it is. A group's \`progress\` counts the done and total tasks without subtasks under it that you can see, \`delay\` is the app's projected delay when the task's project tracks it, and \`last_comment_at\` is when a task was last commented on. \`project\` accepts a project number, a key like ENC, or a uuid; a meta project includes its sub-projects. \`status\` takes one status or a list. \`search\` matches every whitespace-separated fragment across task ID, title, description, status, priority, assignee name and label names, case-insensitively and in any order. \`limit\` sets how many tasks a page holds (${DEFAULT_PAGE_SIZE} by default, at most ${LIMITS.listTasks.max}) and \`offset\` skips that many results. Active tasks only by default. \`archived: true\` lists archived tasks instead and needs \`project\`, which then includes all its sub-projects you can read, archived ones too; to cover them all, name each top-level project that \`list_projects\` returns with and without \`archived: true\`. That answer is \`{next_cursor, tasks}\`, most recently archived first; pass \`next_cursor\` back as \`cursor\` until it is null, because a page may hold fewer than \`limit\` tasks, even none. Tasks in an ARCHIVED PROJECT are left out of active lists unless \`project\` names that project. Archiving a project and archiving a task are separate things, and only the second has a flag here.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -418,14 +420,15 @@ export const TOOLS: McpTool[] = [
           },
           search: {
             type: 'string',
+            maxLength: LIMITS.search.max,
           },
           archived: {
             type: 'boolean',
           },
           limit: {
             type: 'integer',
-            minimum: 1,
-            maximum: 200,
+            minimum: LIMITS.listTasks.min,
+            maximum: LIMITS.listTasks.max,
           },
           offset: {
             type: 'integer',
@@ -488,7 +491,7 @@ export const TOOLS: McpTool[] = [
     def: {
       name: 'list_comments',
       title: 'List comments',
-      description: `The newest comments on a task, oldest first. \`ref\` is a task ID like QN-482 (bare 482 works too) or a uuid. \`limit\` caps how many (${COMMENT_PAGE_MAX} by default and at most), and long comments can make a page shorter. To read further back, pass the first comment's \`id\` as \`before\`. An empty list means there are no earlier comments.`,
+      description: `The newest comments on a task, oldest first. \`ref\` is a task ID like QN-482 (bare 482 works too) or a uuid. \`limit\` caps how many (${DEFAULT_PAGE_SIZE} by default, at most ${LIMITS.listComments.max}), and long comments can make a page shorter. To read further back, pass the first comment's \`id\` as \`before\`. An empty list means there are no earlier comments.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -498,8 +501,8 @@ export const TOOLS: McpTool[] = [
           },
           limit: {
             type: 'integer',
-            minimum: 1,
-            maximum: COMMENT_PAGE_MAX,
+            minimum: LIMITS.listComments.min,
+            maximum: LIMITS.listComments.max,
           },
           before: {
             type: 'string',
@@ -531,7 +534,7 @@ export const TOOLS: McpTool[] = [
           body: {
             type: 'string',
             minLength: 1,
-            maxLength: TEXT_MAX,
+            maxLength: LIMITS.comment.max,
           },
         },
         required: ['ref', 'body'],
@@ -549,8 +552,7 @@ export const TOOLS: McpTool[] = [
     def: {
       name: 'create_task',
       title: 'Create task',
-      description:
-        'Create a task in a sub-project you can write to. `project` is a project number, a key like ENC, or a uuid; when it names a type "meta" project, `sub_project` must name one of ITS sub-projects. A task is never created under another project\'s sub-project (create it in the right project, or move it later with update_task). `parent` (a task ref) makes it a subtask of that task; the parent must be in the same top-level project, in any of its sub-projects. A task has one level of subtasks, at most 100 active ones (archived subtasks do not count): the parent cannot be a subtask itself, nor have 100 active subtasks already. `start_week` and `end_week` plan it as week starts in YYYY-MM-DD, both or neither. Description is markdown. `reporter_id` attributes the task to a real Qivo user who can see the destination project; omit it to use your authenticated user. Null is not accepted, and the reporter cannot be changed after creation. A non-null `assignee_id` must name an active Qivo user with effective Edit or Lead permission on the destination project; use `list_project_users` and select a row with `assignable: true`. `reviewer_id` follows the same rule as `assignee_id` (a row with `assignable: true`); null clears it; a task with subtasks takes no reviewer. A task that enters `review`, created there or moved there, gets its project\'s review time as `remaining_hours` (2 hours unless the project sets another) unless the same call sends a non-null `remaining_hours`; leaving `review` keeps whatever is left.',
+      description: `Create a task in a sub-project you can write to. \`project\` is a project number, a key like ENC, or a uuid; when it names a type "meta" project, \`sub_project\` must name one of ITS sub-projects. A task is never created under another project's sub-project (create it in the right project, or move it later with update_task). \`parent\` (a task ref) makes it a subtask of that task; the parent must be in the same top-level project, in any of its sub-projects. A task has one level of subtasks, at most ${LIMITS.subtasks.max} active ones (archived subtasks do not count): the parent cannot be a subtask itself, nor have ${LIMITS.subtasks.max} active subtasks already. \`start_week\` and \`end_week\` plan it as week starts in YYYY-MM-DD, both or neither. Description is markdown. \`reporter_id\` attributes the task to a real Qivo user who can see the destination project; omit it to use your authenticated user. Null is not accepted, and the reporter cannot be changed after creation. A non-null \`assignee_id\` must name an active Qivo user with effective Edit or Lead permission on the destination project; use \`list_project_users\` and select a row with \`assignable: true\`. \`reviewer_id\` follows the same rule as \`assignee_id\` (a row with \`assignable: true\`); null clears it; a task with subtasks takes no reviewer. A task that enters \`review\`, created there or moved there, gets its project's review time as \`remaining_hours\` (${DEFAULT_REVIEW_HOURS} hours unless the project sets another) unless the same call sends a non-null \`remaining_hours\`; leaving \`review\` keeps whatever is left.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -567,11 +569,11 @@ export const TOOLS: McpTool[] = [
           title: {
             type: 'string',
             minLength: 1,
-            maxLength: 80,
+            maxLength: LIMITS.title.max,
           },
           description: {
             type: 'string',
-            maxLength: TEXT_MAX,
+            maxLength: LIMITS.description.max,
           },
           status: {
             type: 'string',
@@ -586,8 +588,7 @@ export const TOOLS: McpTool[] = [
               {
                 type: 'string',
                 format: 'uuid',
-                pattern:
-                  '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
+                pattern: UUID_PATTERN,
               },
               {
                 type: 'null',
@@ -599,8 +600,7 @@ export const TOOLS: McpTool[] = [
               {
                 type: 'string',
                 format: 'uuid',
-                pattern:
-                  '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
+                pattern: UUID_PATTERN,
               },
               {
                 type: 'null',
@@ -612,8 +612,7 @@ export const TOOLS: McpTool[] = [
               'Real Qivo user who can see the destination project; omit to use the authenticated caller. Cannot be changed after creation.',
             type: 'string',
             format: 'uuid',
-            pattern:
-              '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
+            pattern: UUID_PATTERN,
           },
           start_week: NULLABLE_DATE,
           end_week: NULLABLE_DATE,
@@ -632,8 +631,8 @@ export const TOOLS: McpTool[] = [
             anyOf: [
               {
                 type: 'number',
-                minimum: 0,
-                maximum: REMAINING_HOURS_MAX,
+                minimum: LIMITS.remainingHours.min,
+                maximum: LIMITS.remainingHours.max,
               },
               {
                 type: 'null',
@@ -680,7 +679,7 @@ export const TOOLS: McpTool[] = [
       name: 'update_task',
       title: 'Update task',
       description:
-        "Patch fields on a task in a project you can write to. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid. Omitted fields stay unchanged. A task with subtasks is a group. Its stored status and dates are dormant, and `status`, `start_week` and `end_week` cannot be changed until its last active subtask is removed. The reporter is set at creation and cannot be changed or cleared. A non-null `assignee_id` must name an active Qivo user with effective Edit or Lead permission on the task's project; use `list_project_users` and select a row with `assignable: true`. `archived: true/false` archives / restores the task (archiving carries its subtasks along; restoring surfaces its parents, and a subtask whose parent already has 100 active subtasks comes back without it); `archive_reason` with `archived: true` posts the reason as a comment. `reviewer_id` follows the same rule as `assignee_id` (a row with `assignable: true`); null clears it; a task with subtasks takes no reviewer. `project` and `sub_project` move the task, named as in create_task; a move to another top-level project carries its subtasks along, and a subtask moved there must leave its parent in the same call (`parent` null, or a task in that project). `parent` (a task ref) makes it a subtask, null detaches it; a task with subtasks cannot get a parent, and the parent follows create_task's rules. `add_labels` and `remove_labels` take label ids or names. A task that enters `review`, created there or moved there, gets its project's review time as `remaining_hours` (2 hours unless the project sets another) unless the same call sends a non-null `remaining_hours`; leaving `review` keeps whatever is left. " +
+        `Patch fields on a task in a project you can write to. \`ref\` is a task ID like QN-482 (bare 482 works too) or a uuid. Omitted fields stay unchanged. A task with subtasks is a group. Its stored status and dates are dormant, and \`status\`, \`start_week\` and \`end_week\` cannot be changed until its last active subtask is removed. The reporter is set at creation and cannot be changed or cleared. A non-null \`assignee_id\` must name an active Qivo user with effective Edit or Lead permission on the task's project; use \`list_project_users\` and select a row with \`assignable: true\`. \`archived: true/false\` archives / restores the task (archiving carries its subtasks along; restoring surfaces its parents, and a subtask whose parent already has ${LIMITS.subtasks.max} active subtasks comes back without it); \`archive_reason\` with \`archived: true\` posts the reason as a comment. \`reviewer_id\` follows the same rule as \`assignee_id\` (a row with \`assignable: true\`); null clears it; a task with subtasks takes no reviewer. \`project\` and \`sub_project\` move the task, named as in create_task; a move to another top-level project carries its subtasks along, and a subtask moved there must leave its parent in the same call (\`parent\` null, or a task in that project). \`parent\` (a task ref) makes it a subtask, null detaches it; a task with subtasks cannot get a parent, and the parent follows create_task's rules. \`add_labels\` and \`remove_labels\` take label ids or names. A task that enters \`review\`, created there or moved there, gets its project's review time as \`remaining_hours\` (${DEFAULT_REVIEW_HOURS} hours unless the project sets another) unless the same call sends a non-null \`remaining_hours\`; leaving \`review\` keeps whatever is left. ` +
         EXPECTED_SENTENCE +
         ' Its keys are the fields as get_task reads them: `parent_id` with `has_hidden_parent` for `parent`, and `project_id` for a move.',
       inputSchema: {
@@ -693,11 +692,11 @@ export const TOOLS: McpTool[] = [
           title: {
             type: 'string',
             minLength: 1,
-            maxLength: 80,
+            maxLength: LIMITS.title.max,
           },
           description: {
             type: 'string',
-            maxLength: TEXT_MAX,
+            maxLength: LIMITS.description.max,
           },
           status: {
             type: 'string',
@@ -712,8 +711,7 @@ export const TOOLS: McpTool[] = [
               {
                 type: 'string',
                 format: 'uuid',
-                pattern:
-                  '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
+                pattern: UUID_PATTERN,
               },
               {
                 type: 'null',
@@ -725,8 +723,7 @@ export const TOOLS: McpTool[] = [
               {
                 type: 'string',
                 format: 'uuid',
-                pattern:
-                  '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
+                pattern: UUID_PATTERN,
               },
               {
                 type: 'null',
@@ -750,8 +747,8 @@ export const TOOLS: McpTool[] = [
             anyOf: [
               {
                 type: 'number',
-                minimum: 0,
-                maximum: REMAINING_HOURS_MAX,
+                minimum: LIMITS.remainingHours.min,
+                maximum: LIMITS.remainingHours.max,
               },
               {
                 type: 'null',
@@ -766,7 +763,7 @@ export const TOOLS: McpTool[] = [
           },
           archive_reason: {
             type: 'string',
-            maxLength: DELETE_REASON_MAX,
+            maxLength: LIMITS.archiveReason.max,
           },
           project: {
             type: 'string',
@@ -914,7 +911,7 @@ export const TOOLS: McpTool[] = [
           },
           name: {
             type: 'string',
-            maxLength: LABEL_NAME_MAX,
+            maxLength: LIMITS.labelName.max,
           },
           color: {
             type: 'string',
@@ -1005,7 +1002,7 @@ const INVALID_MESSAGE = {
  * INVALID_MESSAGE's form. */
 const TOO_LARGE = {
   jsonrpc: '2.0',
-  error: { code: -32600, message: 'Bad Request: the request body is too large' },
+  error: { code: -32600, message: `Bad Request: ${LIMITS.requestBody.refusal}` },
   id: null,
 }
 
@@ -1039,6 +1036,9 @@ const LEGACY_INIT_NO_PARAMS = JSON.stringify(
  * for tool <name>: `. Only the wrong-primitive-type message is byte-pinned by
  * the capture (`limit: Invalid input: expected number, received string`); the
  * other messages follow zod v4's grammar as closely as hand-rolling allows.
+ * The schemas publish their lengths and ranges for clients, from the limits
+ * registry (lib/limits.ts), but validation leaves them to the server, which
+ * trims text first and answers each limit's own sentence, as REST does.
  * A tool that takes arguments refuses one its schema does not know, as zod's
  * strict objects do, so a misspelled argument never changes what a call does.
  * An immutable reporter on update_task is refused with its own sentence.
@@ -1075,46 +1075,19 @@ function hasType(p: SchemaProp, x: unknown): boolean {
   }
 }
 
-/* Arguments whose minLength and maxLength count code points, as the server's
- * rules for them do (cleanTitle, NAME_MAX), so most single emoji count once.
- * Every other argument counts UTF-16 code units, the unit of the long text
- * caps (TEXT_MAX) and of zod's string checks. */
-const CODE_POINT_ARGS: ReadonlySet<string> = new Set(['title', 'name'])
-
-/* Arguments whose bounds the server checks itself, as `tool.argument`, so
- * the app, REST and MCP accept the same values with the same sentence. Their
- * schemas keep maxLength, minimum and maximum for clients, but validateArgs
- * does not apply them. The server caps a comment body and an archive reason
- * after trimming them, and lets an unchanged description saved before the
- * cap through (model/comments.ts, model/issues.ts cleanDescription, and the
- * archive_reason check of updateIssue below). It keeps remaining_hours from
- * 0 to REMAINING_HOURS_MAX, letting unchanged hours stored above it through
- * (model/taskValues.ts cleanRemaining). */
-const SERVER_BOUND_ARGS: ReadonlySet<string> = new Set([
-  'add_comment.body',
-  'update_comment.body',
-  'update_task.description',
-  'update_task.archive_reason',
-  'create_task.remaining_hours',
-  'update_task.remaining_hours',
-])
-
-/* `p` without maxLength, minimum and maximum, in its anyOf alternatives too. */
-function withoutBounds(p: SchemaProp): SchemaProp {
-  const { maxLength: _length, minimum: _min, maximum: _max, ...rest } = p
-  return rest.anyOf === undefined ? rest : { ...rest, anyOf: rest.anyOf.map(withoutBounds) }
-}
-
 /* The issue for a string holding an unpaired surrogate, which is not text
  * (shared.ts LONE_SURROGATE). */
 const UNPAIRED_SURROGATE = 'Invalid string: has an unpaired surrogate, which UTF-8 cannot encode'
 
-/* `codePoints` says how a string's length counts (CODE_POINT_ARGS). */
-function checkValue(p: SchemaProp, x: unknown, codePoints = false): string | null {
+/* The issue with `x` against `p`, or null. It checks the type, an enum, a
+ * uuid's or date's pattern and the items of an array. A length, a range or
+ * an array's size is the server's check, which answers its limit's sentence
+ * (lib/limits.ts) on REST and MCP alike, so this leaves them to it. */
+function checkValue(p: SchemaProp, x: unknown): string | null {
   if (p.anyOf !== undefined) {
     // the alternative of the value's own type decides, else the first one
     const alternative = p.anyOf.find((option) => hasType(option, x)) ?? p.anyOf[0]
-    return alternative.type === 'null' && x === null ? null : checkValue(alternative, x, codePoints)
+    return alternative.type === 'null' && x === null ? null : checkValue(alternative, x)
   }
   switch (p.type) {
     case 'string': {
@@ -1124,13 +1097,6 @@ function checkValue(p: SchemaProp, x: unknown, codePoints = false): string | nul
       if (LONE_SURROGATE.test(x)) return UNPAIRED_SURROGATE
       if (p.enum !== undefined && !p.enum.includes(x)) {
         return `Invalid option: expected one of ${p.enum.map((e) => `"${e}"`).join('|')}`
-      }
-      const length = codePoints ? [...x].length : x.length
-      if (p.minLength !== undefined && length < p.minLength) {
-        return `Too small: expected string to have >=${p.minLength} characters`
-      }
-      if (p.maxLength !== undefined && length > p.maxLength) {
-        return `Too big: expected string to have <=${p.maxLength} characters`
       }
       if (p.format === 'uuid') {
         if (p.pattern !== undefined && !new RegExp(p.pattern).test(x)) return 'Invalid UUID'
@@ -1149,12 +1115,6 @@ function checkValue(p: SchemaProp, x: unknown, codePoints = false): string | nul
       if (p.type === 'integer' && !Number.isInteger(x)) {
         return 'Invalid input: expected int, received number'
       }
-      if (p.minimum !== undefined && x < p.minimum) {
-        return `Too small: expected ${expectedName(p)} to be >=${p.minimum}`
-      }
-      if (p.maximum !== undefined && x > p.maximum) {
-        return `Too big: expected ${expectedName(p)} to be <=${p.maximum}`
-      }
       return null
     }
     case 'boolean': {
@@ -1163,15 +1123,9 @@ function checkValue(p: SchemaProp, x: unknown, codePoints = false): string | nul
     }
     case 'array': {
       if (!Array.isArray(x)) return `Invalid input: expected array, received ${typeName(x)}`
-      if (p.minItems !== undefined && x.length < p.minItems) {
-        return `Too small: expected array to have >=${p.minItems} items`
-      }
-      if (p.maxItems !== undefined && x.length > p.maxItems) {
-        return `Too big: expected array to have <=${p.maxItems} items`
-      }
       if (p.items === undefined) return null
       for (const item of x) {
-        const problem = checkValue(p.items, item, codePoints)
+        const problem = checkValue(p.items, item)
         if (problem !== null) return problem
       }
       return null
@@ -1232,8 +1186,7 @@ function validateArgs(tool: ToolDef, raw: unknown): string | null {
       }
       continue
     }
-    const checked = SERVER_BOUND_ARGS.has(`${tool.name}.${key}`) ? withoutBounds(prop) : prop
-    const msg = checkValue(checked, value, CODE_POINT_ARGS.has(key))
+    const msg = checkValue(prop, value)
     if (msg !== null) problems.push(`${key}: ${msg}`)
   }
   // Arguments the schema does not know are refused rather than dropped.
@@ -1755,6 +1708,11 @@ export const listIssues = internalQuery({
         throw notFound(`project "${a.project}" not found (or not visible to you)`)
       }
     }
+    // the schema's minItems, checked here so an empty list never reads as
+    // no filter
+    if (Array.isArray(a.status) && a.status.length === 0) {
+      throw badRequest(`status must name at least one of ${ISSUE_STATUSES.join(', ')}`)
+    }
     const filters = {
       statuses: typeof a.status === 'string' ? [a.status] : a.status,
       priority: a.priority,
@@ -1762,7 +1720,7 @@ export const listIssues = internalQuery({
       owner: a.owner_id?.toLowerCase(),
       search: a.search,
       stars: false, // MCP has no wildcard, so a literal `*` must not widen
-      limit: Math.min(a.limit ?? 50, 200),
+      limit: pageLimit(LIMITS.listTasks, a.limit),
     }
     const view = { surface: 'mcp', cat, readable } as const
     // naming a LIVE meta asks for its active tasks as it stands, so a
@@ -1773,7 +1731,7 @@ export const listIssues = internalQuery({
       flag: 'archived: true',
       archived: a.archived === true,
       project,
-      offset: a.offset ?? 0,
+      offset: listOffset(a.offset, a.archived === true),
       cursor: a.cursor,
     })
     if (req.archived === false) {
@@ -1815,7 +1773,8 @@ export const getIssue = internalQuery({
 
 /* list_comments answers a page of the thread, the newest comments or those
  * before the comment `before` names, oldest first (lib/core.ts
- * listCommentsCore). The schema holds `limit` to 1 to COMMENT_PAGE_MAX. */
+ * listCommentsCore). `limit` is checked as REST checks it (shared.ts
+ * pageLimit). */
 export const listComments = internalQuery({
   args: {
     callerId: v.string(),
@@ -1828,7 +1787,7 @@ export const listComments = internalQuery({
     const me = await asMachineCaller(ctx, callerId, access)
     const issue = await mustFindIssue(ctx, me, ref)
     const rows = await listCommentsCore(ctx, issue.id, {
-      limit: limit ?? COMMENT_PAGE_MAX,
+      limit: pageLimit(LIMITS.listComments, limit),
       before,
     })
     const names = await orgNames(ctx, me)
@@ -2045,7 +2004,7 @@ export const updateIssue = internalMutation({
     }
     // REST's parse-time cap, after trimming, also for a task that is
     // already archived and so posts no comment
-    if (a.archive_reason !== undefined) assertArchiveReasonFits(a.archive_reason)
+    if (a.archive_reason !== undefined) limitedText(LIMITS.archiveReason, a.archive_reason)
     if (moves && a.project === undefined) {
       throw badRequest(
         'project is required to move a task; sub_project names one of its sub-projects',
@@ -2283,11 +2242,17 @@ const unauthorized = (message: string): Response =>
     }),
   })
 
-const rateLimited = (): Response =>
-  new Response(JSON.stringify({ error: 'Too many requests. Try again in 60 seconds.' }), {
+/* The 429 for a request past the rate limit, which names the seconds left
+ * in the minute's window in its sentence and in Retry-After. The
+ * per-profile limit answers tooManyRequests; the deployment-wide ingress
+ * limit answers serviceBusy, which does not blame the caller's own rate. */
+const rateLimited = (sentence: (seconds: number) => string = tooManyRequests): Response => {
+  const seconds = machineRetryAfter()
+  return new Response(JSON.stringify({ error: sentence(seconds) }), {
     status: 429,
-    headers: withCors({ 'Content-Type': 'application/json', 'Retry-After': '60' }),
+    headers: withCors({ 'Content-Type': 'application/json', 'Retry-After': String(seconds) }),
   })
+}
 
 /* The 503 for a write before dispatch, such as the per-call stamp, that kept
  * conflicting with other writes or running out of time (WRITE_CONFLICT),
@@ -2394,7 +2359,7 @@ const mcpPost = httpAction(async (ctx, request) => {
 async function mcpResponse(ctx: ActionCtx, request: Request): Promise<Response> {
   const runMutation = conflictRetrying(ctx)
   if (!(await runMutation(internal.billingMetering.ingress, { shard: ingressShard() })))
-    return rateLimited()
+    return rateLimited(serviceBusy)
   // Bearer only — no X-Api-Key on MCP; the 'Bearer ' prefix match is
   // case-sensitive with one space (a lowercase `bearer` falls to `missing`)
   const auth = request.headers.get('Authorization') ?? ''

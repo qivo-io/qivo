@@ -53,6 +53,8 @@ import {
   require,
   rule,
 } from './lib/functions'
+import { limitedEmail } from './lib/limitRules'
+import { cutText, DEFAULT_MESSAGE_RETENTION_DAYS, LIMITS } from './lib/limits'
 import { logActivity } from './model/activity'
 import { cleanReason, moveProjectToTrash } from './model/deletedItems'
 import {
@@ -63,6 +65,7 @@ import {
   vMilestoneExpected,
 } from './model/milestones'
 import { newUuid } from './model/orgs'
+import { cleanName } from './model/people'
 import {
   type AccessSubject,
   assertGrantExpected,
@@ -290,7 +293,7 @@ export const unarchive = orgMutation({
  * hides the projects, and bounded steps move the tasks. Deleting an ARCHIVED
  * project is allowed (0106 deliberately left the delete policies alone).
  * `reason` is shown in Deleted items, trimmed and refused past
- * DELETE_REASON_MAX (lib/textLimits.ts, 500 characters). The 'deleted'
+ * LIMITS.deleteReason (model/deletedItems.ts cleanReason). The 'deleted'
  * event is written AFTER the move and hangs on the parent (for a
  * sub) or the team (for a meta) — the project it names is gone, which is
  * exactly why (bc022c2:2952-2958). Project rows reach no client;
@@ -369,10 +372,7 @@ export const inviteGuest = orgMutation({
     if (level !== 'user' && level !== 'viewer') {
       throw rule('a project role is lead, member or viewer')
     }
-    const em = email.trim().toLowerCase()
-    if (em === '' || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) {
-      throw rule('that does not look like an email address')
-    }
+    const em = limitedEmail(email, 'that does not look like an email address')
     const existing = await ctx.db
       .query('profiles')
       .withIndex('by_org_email', (q) => q.eq('org_id', ctx.me.org_id).eq('email', em))
@@ -401,7 +401,9 @@ export const inviteGuest = orgMutation({
       pid = existing.id
     } else {
       pid = newUuid()
-      const nm = em.split('@')[0]
+      // the address's local part, cut to a name's length rather than
+      // refused, because the inviter did not choose it
+      const nm = cutText(cleanName(em.slice(0, em.lastIndexOf('@'))), LIMITS.personName.max)
       // 0082/0096 verbatim: upper(left(name, 2)) of the address's local part —
       // deliberately NOT nameInitials ('anna.k' → 'AN', not 'A'); trap T13
       const initials = [...(nm === '' ? 'G' : nm)].slice(0, 2).join('').toUpperCase()
@@ -415,7 +417,8 @@ export const inviteGuest = orgMutation({
         .withIndex('by_email', (q) => q.eq('email', em))
         .collect()
       sibs.sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0))
-      const retention = sibs.length > 0 ? sibs[0].message_retention_days : 7
+      const retention =
+        sibs.length > 0 ? sibs[0].message_retention_days : DEFAULT_MESSAGE_RETENTION_DAYS
       await ctx.db.insert('profiles', {
         id: pid,
         org_id: ctx.me.org_id,

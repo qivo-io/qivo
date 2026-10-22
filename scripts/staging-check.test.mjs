@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HISTORY_PAGE_MAX } from '../convex/lib/activityVisibility'
-import { LABEL_MAX } from '../convex/lib/taskLimits'
 import {
   ACCESS_PUT_FIELDS,
   HELD_TASKS_FIELDS,
@@ -20,13 +19,13 @@ import {
   parseArgs,
   RATE_BUDGET,
   REST_BODY_FIELDS,
+  rateLimitWait,
   redact,
   request,
   resolveConfig,
   send,
   syncsWith,
   TAG_ANY,
-  TASK_LABEL_MAX,
   THREAD_PAGE,
   WAITS,
   WRITE_CONFLICT,
@@ -43,7 +42,6 @@ describe('staging check REST contract', () => {
   })
   it('fills a task to the page sizes of its thread', () => {
     expect(THREAD_PAGE).toEqual({ comments: COMMENT_PAGE_MAX, history: HISTORY_PAGE_MAX })
-    expect(TASK_LABEL_MAX).toBe(LABEL_MAX)
   })
 })
 
@@ -404,6 +402,14 @@ describe('staging check requests', () => {
     it('waits out one 429 and answers what comes next', async () => {
       expect(await exchange([[429], [200]], true)).toEqual({ status: 200, hits: 2 })
       expect(console.log).toHaveBeenCalledWith(expect.stringContaining('waiting 0.02 seconds'))
+    })
+    it("waits a 429's Retry-After seconds and one more, else the most it waits", () => {
+      Object.assign(WAITS, { rateLimit: 61_000 })
+      expect(rateLimitWait('17')).toBe(18_000)
+      expect(rateLimitWait('1')).toBe(2_000)
+      expect(rateLimitWait('60')).toBe(61_000)
+      for (const header of [null, '', '0', '61', '2.5', 'soon', '-3'])
+        expect(rateLimitWait(header), String(header)).toBe(61_000)
     })
     it('returns a second 429 as it is', async () => {
       expect(await exchange([[429]], true)).toEqual({ status: 429, hits: 2 })

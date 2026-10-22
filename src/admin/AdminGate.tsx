@@ -9,6 +9,7 @@ import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api } from '../../convex/_generated/api'
+import { asciiEmail } from '../../convex/lib/email'
 import { convex } from '../lib/convex'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { AdminApp } from './AdminApp'
@@ -88,7 +89,9 @@ export function AdminGate() {
     e.preventDefault()
     setBusy(true)
     setError('')
-    const { error } = await authClient.signIn.email({ email: email.trim(), password })
+    // the account's address as stored (lib/email.ts), so a Unicode domain
+    // signs in as the punycode one the account was created with
+    const { error } = await authClient.signIn.email({ email: asciiEmail(email), password })
     if (error) {
       setError(error.message || 'Could not sign in.')
       setBusy(false)

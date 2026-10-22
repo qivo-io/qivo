@@ -18,9 +18,8 @@ import {
   marketingWeek,
   northstarTaskTimes,
 } from '../internal/marketingDemoData'
+import { LIMITS, type Limit } from '../lib/limits'
 import { taskOwnerId } from '../lib/review'
-import { FOLLOWER_MAX, SUBTASK_MAX } from '../lib/taskLimits'
-import { nameTooLong, TEXT_MAX } from '../lib/textLimits'
 import { isLabelColor } from '../model/labels'
 import { newOrgDefaults } from '../model/orgs'
 import { avatarColor } from '../model/people'
@@ -169,10 +168,10 @@ describe('the versioned Northstar marketing scenario', () => {
     // archived subtasks count too
     for (const issue of issues)
       expect(subtasks.filter((kid) => kid.parent === issue.key).length).toBeLessThanOrEqual(
-        SUBTASK_MAX,
+        LIMITS.subtasks.max,
       )
     // a task's followers are people of the organization
-    expect(people.length).toBeLessThanOrEqual(FOLLOWER_MAX)
+    expect(people.length).toBeLessThanOrEqual(LIMITS.followers.max)
   })
 
   it('archives exactly two completed leaf tasks in each main project', () => {
@@ -263,7 +262,6 @@ describe('the versioned Northstar marketing scenario', () => {
     }
     for (const issue of issues) {
       expect(projectByKey.get(issue.project)?.parent).toBeTruthy()
-      expect([...issue.title].length).toBeLessThanOrEqual(80)
       expect(issue.description).toContain('Acceptance criteria')
       const criteria = parseMd(issue.description).find((block) => block.t === 'ul')
       expect(criteria?.items.length).toBeGreaterThanOrEqual(2)
@@ -675,23 +673,26 @@ describe('marketing text uses the application Markdown dialect', () => {
     }
   })
 
-  it('keeps every description and comment within the text limit', () => {
-    for (const issue of issues)
-      expect(issue.description.length, issue.key).toBeLessThanOrEqual(TEXT_MAX)
-    for (const comment of comments)
-      expect(comment.body.length, comment.key).toBeLessThanOrEqual(TEXT_MAX)
-  })
-
-  it('keeps the organization, team, project and milestone names trimmed and within the name limit', () => {
-    const names = [
-      MARKETING_DEMO.organization.name,
-      ...teams.map((t) => t.name),
-      ...projects.map((p) => p.name),
-      ...milestones.map((m) => m.name),
+  it('keeps every seed text trimmed and within its limit, counted as the server counts', () => {
+    const checks: [Limit, string[]][] = [
+      [LIMITS.orgName, [MARKETING_DEMO.organization.name]],
+      [LIMITS.teamName, teams.map((team) => team.name)],
+      [LIMITS.projectName, projects.map((project) => project.name)],
+      [LIMITS.projectDescription, projects.map((project) => project.description)],
+      [LIMITS.milestoneName, milestones.map((milestone) => milestone.name)],
+      [LIMITS.personName, people.map((person) => person.name)],
+      [LIMITS.labelName, labels.map((label) => label.name)],
+      [LIMITS.title, issues.map((issue) => issue.title)],
+      [LIMITS.description, issues.map((issue) => issue.description)],
+      [LIMITS.comment, comments.map((comment) => comment.body)],
     ]
-    for (const name of names) {
-      expect(name, name).toBe(name.trim())
-      expect(nameTooLong(name), name).toBe(false)
+    for (const [limit, texts] of checks) {
+      expect(texts.length, limit.label).toBeGreaterThan(0)
+      for (const text of texts) {
+        // names and titles are stored as written, so they carry no padding
+        if (limit.max <= LIMITS.title.max) expect(text, limit.label).toBe(text.trim())
+        expect(text.trim().length, `${limit.label}: ${text}`).toBeLessThanOrEqual(limit.max)
+      }
     }
   })
 })

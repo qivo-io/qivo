@@ -47,9 +47,8 @@ Tasks have these fields:
   notification. The reporter cannot be changed or cleared afterward, except
   when their profile is removed from the organization. Moving the task or
   losing project access does not change it.
-- **Remaining**. Hours of work left, from 0 to 99999.9, saved to one decimal
-  place. A task given more before this limit keeps its hours until someone
-  changes them.
+- **Remaining**. Hours of work left, from 0 to 99,999.9, saved to one decimal
+  place.
   Qivo uses the time of the estimate, or the planned start if later, to
   project progress ([Delay status](./will-it-be-ready-in-time-the-delay-status.md)). Empty means unestimated and displays “—”; **0**
   means no work remains. Gaining a first subtask clears the parent's own
@@ -218,8 +217,8 @@ they go before anything changes. Restored work keeps its keys, such as
 `QN-142`, because Qivo never reuses a number
 ([Permanent task IDs](#permanent-task-ids)). A task saved before the current
 length limits whose text was too large to keep in Deleted items, about 1 MB,
-comes back with its title cut to 80 characters and its description to
-20,000. Labels deleted since then are
+comes back with its title cut to 255 characters and its description to
+20,000 ([Limits](./limits.md)). Labels deleted since then are
 gone, and so are links to work deleted for good and links to a task that has
 reached 100 links since. A subtask deleted on its own
 returns under its parent when the parent still exists, is not a subtask

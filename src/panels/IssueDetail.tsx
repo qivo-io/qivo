@@ -18,13 +18,14 @@ import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
-import { Textarea } from '@/components/ui/textarea'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { hasOpenTooltip } from '@/lib/passEscapeOn'
 import { cn } from '@/lib/utils'
 import { usePlannerVersion } from '@/store/usePlannerVersion'
+import { LIMITS, type Limit, MIB } from '../../convex/lib/limits'
 import type { DescEditorHandle } from '../components/descEditor'
 import { IssueSubscribers } from '../components/IssueSubscribers'
+import { LimitedTextarea } from '../components/LimitedField'
 import { Markdown } from '../components/markdown'
 import {
   AnchoredPop,
@@ -49,6 +50,7 @@ import { fmtSize, useWindowDropGuard } from '../lib/attachments'
 import { copyText } from '../lib/clipboard'
 import { DELAY_MARK } from '../lib/delay'
 import { closeOrAsk, questionOpen } from '../lib/discardQuestion'
+import { limitSentence, overLimit } from '../lib/fieldLimits'
 import { roomBeside, useFloatInsets } from '../lib/floatStack'
 import { lastInputWasPointer, restoreFocus } from '../lib/focusVisibility'
 import { lazyFromModule } from '../lib/lazyModule'
@@ -382,7 +384,7 @@ function AttachmentsSection({ it, canEdit }: { it: IssueVM; canEdit: boolean }) 
   const [uploading, setUploading] = useStateID([] as string[])
   const inputRef = useRefID<HTMLInputElement>(null)
   useWindowDropGuard()
-  const limitMb = Math.round(P.attachmentLimit(it.id) / 1048576)
+  const limitMb = Math.round(P.attachmentLimit(it.id) / MIB)
   const list = it.attachments || []
   // the per-task cap, files and description images together
   const full = attachmentBlock(it.attachmentCount)
@@ -467,7 +469,7 @@ function AttachmentsSection({ it, canEdit }: { it: IssueVM; canEdit: boolean }) 
             browse
           </Button>
           <div className="[font-size:var(--fs-xs)] [margin-top:3px]">
-            {full ? `${full}. Remove one to add another.` : `Max ${limitMb} MiB per file`}
+            {full ?? `Max ${limitMb} MiB per file`}
           </div>
           <Input
             ref={inputRef}
@@ -493,7 +495,9 @@ function AttachmentsSection({ it, canEdit }: { it: IssueVM; canEdit: boolean }) 
    Labels heading. Searches the organization's shared label list, toggles on
    click; stays open for multiple toggles, closes on Escape or outside click.
    When the query matches nothing exactly, a clearly-marked "Create new
-   label" row appears — creating is deliberate, never accidental. */
+   label" row appears — creating is deliberate, never accidental. A query
+   longer than a label name may be gets the cap's sentence in its place, so
+   nothing is created from a cut name. */
 export function LabelPickerPopup({
   it,
   anchor,
@@ -518,10 +522,12 @@ export function LabelPickerPopup({
     it.org === P.homeOrg &&
     P.canWriteOrgLabels() &&
     !all.some((l) => l.name.toLowerCase() === ql)
+  const tooLong = overLimit(LIMITS.labelName, q)
   const create = () => {
     // A paused create keeps the typed name in the search field, and a
     // refused one puts it back when the field is still empty. The field
     // clears at once otherwise, so a second Enter cannot create it twice.
+    if (tooLong) return
     const name = q.trim()
     const made = P.addLabel({ name })
     if (!made) return
@@ -606,10 +612,11 @@ export function LabelPickerPopup({
         )}
         {full && (
           <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [padding:4px_5px]">
-            {full}. Remove one to add another.
+            {full}
           </div>
         )}
-        {canCreate && (
+        {canCreate && tooLong && <PickerRefusal limit={LIMITS.labelName} />}
+        {canCreate && !tooLong && (
           <Button
             type="button"
             onClick={create}
@@ -631,6 +638,16 @@ export function LabelPickerPopup({
         )}
       </div>
     </AnchoredPop>
+  )
+}
+
+/* In a picker, where its create row would be: why a query too long to
+   name the new record creates nothing. */
+function PickerRefusal({ limit }: { limit: Limit }) {
+  return (
+    <p data-picker-refusal role="status" className="px-2 py-1.5 text-sm text-danger">
+      {limitSentence(limit)}
+    </p>
   )
 }
 
@@ -676,6 +693,8 @@ function IssuePickerPopup({
   // like the label picker: no create row when the query IS an existing issue,
   // so an exact search can't accidentally create a duplicate
   const canCreate = !!ql && !!onCreate && !pool.some((x) => x.title.toLowerCase() === ql)
+  // the query becomes the new task's title, so a longer one creates nothing
+  const tooLong = overLimit(LIMITS.title, q)
   const pick = (x: IssueVM) => {
     onPick(x)
     if (single) onDone()
@@ -683,7 +702,7 @@ function IssuePickerPopup({
   }
   const create = () => {
     // a paused create keeps the typed title and the picker open
-    if (P.refusePausedEdit()) return
+    if (tooLong || P.refusePausedEdit()) return
     onCreate?.(q.trim())
     if (single) onDone()
     else setQ('')
@@ -701,7 +720,6 @@ function IssuePickerPopup({
         <Input
           autoFocus
           value={q}
-          maxLength={P.TITLE_MAX}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
@@ -748,7 +766,8 @@ function IssuePickerPopup({
             {ql ? 'No matching tasks.' : 'No eligible tasks.'}
           </div>
         )}
-        {canCreate && (
+        {canCreate && tooLong && <PickerRefusal limit={LIMITS.title} />}
+        {canCreate && !tooLong && (
           <Button
             type="button"
             onClick={create}
@@ -856,7 +875,7 @@ function EventRow({ e }: { e: ActivityVM }) {
       >
         <Icon name={evIcon(e.verb)} size={11} />
       </span>
-      <span className="[font-size:var(--fs-sm)] [color:var(--text-3)] [min-width:0]">
+      <span className="[font-size:var(--fs-sm)] [color:var(--text-3)] [min-width:0] [overflow-wrap:anywhere]">
         {/* same grammar as the activity bell (actor · verb · object · detail),
             with "this issue" for the object — the title is the modal itself */}
         <b className="[color:var(--text-1)] [font-weight:500]">{u ? u.name : 'Someone'}</b> {e.verb}{' '}
@@ -1789,7 +1808,7 @@ function IssueDetail({
   }
   const subCandidates = it && subAnchor ? subtaskCandidatesFor(it, P.issues, relationView) : []
   const parentCandidates = it && parentAnchor ? parentCandidatesFor(it, P.issues, relationView) : []
-  // one level of subtasks, at most SUBTASK_MAX of them: why this task can
+  // one level of subtasks, at most LIMITS.subtasks.max active ones: why this task can
   // take no subtask, or no parent, if it cannot
   const noSubtask = it ? subtaskBlock(it) : undefined
   const noParent = it ? parentBlock(it) : undefined
@@ -2200,7 +2219,7 @@ function IssueDetail({
               .map((p, i) => (
                 <React.Fragment key={p.id}>
                   {i > 0 && <Icon name="chevronRight" size={12} color="var(--text-3)" />}
-                  <HoverTooltip content={`Show ${P.projectName(p)} on the board`}>
+                  <HoverTooltip content={`Show ${p.name} on the board`}>
                     <a
                       href={buildPath({ scope: p.id, view: 'kanban' })}
                       data-task-crumb-project={p.id}
@@ -2253,15 +2272,21 @@ function IssueDetail({
             about the TASK, not the window. */}
         <div className="[flex:1] [min-width:0] [display:flex] [align-items:center] [gap:6px]">
           {live && editTitle ? (
-            <Textarea
+            <LimitedTextarea
+              limit={LIMITS.title}
               autoFocus
               aria-label="Task title"
               rows={1}
               value={titleDraft}
-              maxLength={P.TITLE_MAX}
               onChange={(e) => setTitleDraft(e.target.value)}
               onBlur={() => {
                 const v = titleDraft.trim()
+                // a title over the cap keeps the field open with the draft,
+                // unless it is the title as it was
+                if (v !== titleSeen && overLimit(LIMITS.title, v)) {
+                  window.showToast?.(limitSentence(LIMITS.title), 'error')
+                  return
+                }
                 if (v && v !== titleSeen) {
                   // a paused save keeps the field open with the draft
                   if (P.refusePausedEdit()) return
@@ -2305,7 +2330,8 @@ function IssueDetail({
                   setEditTitle(false)
                 }
               }}
-              className="min-h-0 [flex:1] [min-width:0] [margin:0] [font-size:var(--fs-xl)] [font-weight:600] [line-height:1.3] [letter-spacing:-0.01em] [font-family:var(--sans)] [color:var(--text-1)] [background:var(--surface-1)] [border:1px_solid_var(--border-strong)] [border-radius:var(--r-sm)] [padding:3px_8px] [outline:none] [resize:none]"
+              wrapperClassName="[flex:1]"
+              className="min-h-0 [margin:0] [font-size:var(--fs-xl)] [font-weight:600] [line-height:1.3] [letter-spacing:-0.01em] [font-family:var(--sans)] [color:var(--text-1)] [background:var(--surface-1)] [border:1px_solid_var(--border-strong)] [border-radius:var(--r-sm)] [padding:3px_8px] [outline:none] [resize:none]"
             />
           ) : (
             <HoverTooltip content={live ? 'Edit title' : undefined}>
@@ -2902,7 +2928,8 @@ function IssueDetail({
                                 data-remaining-input
                                 aria-label="Remaining hours"
                                 type="number"
-                                min="0"
+                                min={LIMITS.remainingHours.min}
+                                max={LIMITS.remainingHours.max}
                                 placeholder="—"
                                 key={`${it.id}:${it.remaining != null ? it.remaining : ''}`}
                                 defaultValue={remainingValue(it.remaining)}
@@ -3441,7 +3468,7 @@ function IssueDetail({
             // the handle is a uuid for another organization's tasks — toasts
             // and every other human-facing string name the readable key
             window.showToast?.(
-              `Moved ${P.issueById[key]?.key || key} to ${t ? P.projectName(t) : 'the sub-project'}`,
+              `Moved ${P.issueById[key]?.key || key} to ${t ? t.name : 'the sub-project'}`,
             )
           }}
         />

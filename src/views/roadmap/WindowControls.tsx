@@ -1,14 +1,10 @@
 import { useState as useStateR } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { LIMITS } from '../../../convex/lib/limits'
 import { AnchoredPop, DateInput, Icon, MenuItem, Seg } from '../../components/qivo'
-import {
-  type RoadmapWin,
-  WIN_TOO_WIDE,
-  WIN_WEEKS_MAX,
-  type WinEndpoint,
-  winWeeks,
-} from '../../lib/dates'
+import { type RoadmapWin, type WinEndpoint, winWeeks } from '../../lib/dates'
+import { limitSentence } from '../../lib/fieldLimits'
 import { P } from '../../store/planner'
 
 // Preset widths; Custom range supports any valid pair of endpoints.
@@ -127,7 +123,7 @@ function EndpointFields({
 }
 
 // Edit both relative-or-pinned endpoints together. The picker keeps the pair
-// the fields show, and applies it whole; a pair wider than WIN_WEEKS_MAX is
+// the fields show, and applies it whole; a pair wider than LIMITS.roadmapWeeks is
 // not applied, and the picker says why until the fields show one that fits.
 export function WinRangePicker({
   x,
@@ -143,11 +139,11 @@ export function WinRangePicker({
   onClose: () => void
 }) {
   const [draft, setDraft] = useStateR(win)
-  const tooWide = winWeeks(draft) > WIN_WEEKS_MAX
+  const tooWide = winWeeks(draft) > LIMITS.roadmapWeeks.max
   const apply = (which: 'start' | 'end', ep: WinEndpoint) => {
     const next = { ...draft, [which]: ep }
     setDraft(next)
-    if (winWeeks(next) <= WIN_WEEKS_MAX) onApply(next)
+    if (winWeeks(next) <= LIMITS.roadmapWeeks.max) onApply(next)
   }
   return (
     // stayOnScroll: applying a shrink can clamp the pane's scrollLeft, and that
@@ -166,7 +162,7 @@ export function WinRangePicker({
             data-win-too-wide
             className="[font-size:var(--fs-sm)] [color:var(--danger)] [line-height:1.5]"
           >
-            {WIN_TOO_WIDE}
+            {limitSentence(LIMITS.roadmapWeeks)}
           </div>
         )}
       </div>

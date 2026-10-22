@@ -57,10 +57,8 @@ import {
   vCredentialAccess,
   vGrantLevel,
 } from '../lib/enums'
-import { badRequest, notFound, type Refusal } from '../lib/functions'
-import { PROJECT_DESCRIPTION_MAX } from '../lib/projectLimits'
-import { REVIEW_HOURS_MAX } from '../lib/review'
-import { NAME_MAX } from '../lib/textLimits'
+import { badRequest, notFound, type Refusal, rule } from '../lib/functions'
+import { LIMITS } from '../lib/limits'
 import {
   createExpectedSentence,
   EXPECTED_DELETE_SENTENCE,
@@ -768,11 +766,7 @@ export const restUpdateProject = internalMutation({
     if (description !== undefined) input.description = description
     if ('review_hours' in b) {
       const hours = b.review_hours
-      if (hours !== null && typeof hours !== 'number') {
-        throw badRequest(
-          `review_hours must be a number of hours from 0 to ${REVIEW_HOURS_MAX}, or null`,
-        )
-      }
+      if (hours !== null && typeof hours !== 'number') throw rule(LIMITS.reviewHours.refusal)
       input.review_hours = hours as number | null
     }
     if ('track_delay' in b) {
@@ -1045,7 +1039,7 @@ export const PROJECT_TOOLS: McpTool[] = [
         properties: {
           name: {
             type: 'string',
-            maxLength: NAME_MAX,
+            maxLength: LIMITS.projectName.max,
           },
           parent: {
             type: 'string',
@@ -1055,7 +1049,7 @@ export const PROJECT_TOOLS: McpTool[] = [
           },
           description: {
             type: 'string',
-            maxLength: PROJECT_DESCRIPTION_MAX,
+            maxLength: LIMITS.projectDescription.max,
           },
         },
         required: ['name'],
@@ -1086,14 +1080,21 @@ export const PROJECT_TOOLS: McpTool[] = [
           },
           name: {
             type: 'string',
-            maxLength: NAME_MAX,
+            maxLength: LIMITS.projectName.max,
           },
           description: {
             type: 'string',
-            maxLength: PROJECT_DESCRIPTION_MAX,
+            maxLength: LIMITS.projectDescription.max,
           },
           review_hours: {
-            anyOf: [{ type: 'number', minimum: 0, maximum: REVIEW_HOURS_MAX }, { type: 'null' }],
+            anyOf: [
+              {
+                type: 'number',
+                minimum: LIMITS.reviewHours.min,
+                maximum: LIMITS.reviewHours.max,
+              },
+              { type: 'null' },
+            ],
           },
           track_delay: {
             type: 'boolean',
@@ -1204,7 +1205,7 @@ export const PROJECT_TOOLS: McpTool[] = [
           },
           name: {
             type: 'string',
-            maxLength: NAME_MAX,
+            maxLength: LIMITS.milestoneName.max,
           },
           date: {
             type: 'string',

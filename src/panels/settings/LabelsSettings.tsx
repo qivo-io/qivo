@@ -1,11 +1,12 @@
 /* Organization label names, persisted colors and deletion controls. */
 import { useEffect as useEffectS, useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
-import { LABEL_NAME_MAX } from '../../../convex/lib/textLimits'
+import { LIMITS } from '../../../convex/lib/limits'
+import { LimitedInput } from '../../components/LimitedField'
 import { Icon, Popover } from '../../components/qivo'
 import { FieldHint, PageTitle, SettingsGroup, SettingsSection } from '../../components/settingsPage'
+import { limitSentence, overLimit } from '../../lib/fieldLimits'
 import { LABEL_COLORS } from '../../lib/labelColors'
 import { useUnsaved } from '../../lib/leaveGuard'
 import { useUpdateBlocker } from '../../lib/updateSafety'
@@ -32,10 +33,13 @@ function LabelRow({
     setName(label.name)
   }, [label.name])
   const used = P.issues.filter((i) => (i.labels || []).includes(label.id)).length
-  // an empty, unchanged or refused name puts the stored one back
+  // an empty, unchanged or refused name puts the stored one back; one over
+  // the cap stays typed, invalid and unsaved
   const commit = () => {
     const v = name.trim()
     if (!v || v === label.name) setName(label.name)
+    else if (overLimit(LIMITS.labelName, v))
+      window.showToast?.(limitSentence(LIMITS.labelName), 'error')
     // a paused rename keeps the typed name
     else if (!P.refusePausedEdit() && !P.updateLabel(label.id, { name: v })) setName(label.name)
   }
@@ -95,16 +99,17 @@ function LabelRow({
         )}
       </Popover>
       {canEdit ? (
-        <Input
+        <LimitedInput
+          limit={LIMITS.labelName}
           value={name}
-          maxLength={LABEL_NAME_MAX}
           aria-label={`Name of label ${label.name}`}
           onChange={(e) => setName(e.target.value)}
           onBlur={commit}
           onKeyDown={(e) => {
             if (e.key === 'Enter') e.currentTarget.blur()
           }}
-          className="h-control-sm flex-1 border-transparent bg-transparent px-[7px] py-0 font-sans text-base font-medium text-text-1 hover:border-border focus:bg-hover"
+          wrapperClassName="flex-1"
+          className="h-control-sm w-full border-transparent bg-transparent px-[7px] py-0 font-sans text-base font-medium text-text-1 hover:border-border focus:bg-hover"
         />
       ) : (
         <span className="[flex:1] [font-size:var(--fs-base)] [font-weight:500]">{label.name}</span>
@@ -163,9 +168,10 @@ export function OrgLabelsPage() {
   useUnsaved(!!newLabel.trim(), 'label name')
   const confirm = useConfirmArm<string>()
   const dup = labels.some((l) => l.name.toLowerCase() === newLabel.trim().toLowerCase())
+  const tooLong = overLimit(LIMITS.labelName, newLabel)
   const addLabel = () => {
     const v = newLabel.trim()
-    if (!v || dup || adding) return
+    if (!v || dup || tooLong || adding) return
     // The typed name stays until the server creates the label, and after a
     // refusal, so a paused or refused create can be sent again.
     const made = P.addLabel({ name: v })
@@ -201,19 +207,20 @@ export function OrgLabelsPage() {
         {canEdit && (
           <SettingsGroup legend="New label">
             <div className="[display:flex] [gap:8px]">
-              <Input
+              <LimitedInput
+                limit={LIMITS.labelName}
                 value={newLabel}
                 onChange={(e) => setNewLabel(e.target.value)}
                 placeholder="New label name"
-                maxLength={LABEL_NAME_MAX}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') addLabel()
                 }}
-                className="h-control w-full bg-surface-1 px-2.5 text-base font-sans [flex:1]"
+                wrapperClassName="[flex:1]"
+                className="h-control w-full bg-surface-1 px-2.5 text-base font-sans"
               />
               <Button
                 type="button"
-                disabled={!newLabel.trim() || dup || adding}
+                disabled={!newLabel.trim() || dup || tooLong || adding}
                 title={dup && !adding ? 'A label with that name already exists' : 'Add label'}
                 onClick={addLabel}
               >

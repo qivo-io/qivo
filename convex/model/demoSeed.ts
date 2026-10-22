@@ -14,6 +14,7 @@ import {
 } from '../internal/marketingDemoData'
 import { byId } from '../lib/db'
 import { require, rule } from '../lib/functions'
+import { DEFAULT_MESSAGE_RETENTION_DAYS } from '../lib/limits'
 import { issueKey } from '../lib/taskRefs'
 import { insertActivity, issueChanges, machineDetail } from './activity'
 import { markArchivedTask } from './archiveMarks'
@@ -126,7 +127,7 @@ export async function writeNorthstarWork(
       org_role: p.role,
       active: true,
       plannable_hours: p.kind === 'person' ? orgDefaults.default_plannable_hours : undefined,
-      message_retention_days: p.kind === 'person' ? 7 : undefined,
+      message_retention_days: p.kind === 'person' ? DEFAULT_MESSAGE_RETENTION_DAYS : undefined,
       // A wipe keeps profiles, so set or clear the Team sync stamp every time:
       // a reset must not keep stamps from interactive use.
       sync_at:
@@ -417,7 +418,7 @@ export async function provisionPublicDemo(
               person.key === 'nora' ? authUser.email : `${person.key}.${receipt.id}@demo.invalid`,
             ...(person.key === 'nora' ? { auth_user_id: authUser._id, accepted_at: now } : {}),
             plannable_hours: org.default_plannable_hours,
-            message_retention_days: 7,
+            message_retention_days: DEFAULT_MESSAGE_RETENTION_DAYS,
           }
         : {}),
     })

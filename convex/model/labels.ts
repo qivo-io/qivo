@@ -15,8 +15,8 @@ import { canManageOrgLabels, canWriteOrgLabels } from '../lib/access'
 import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, rule } from '../lib/functions'
-import { LABEL_MAX, LABELS_FULL } from '../lib/taskLimits'
-import { LABEL_NAME_MAX } from '../lib/textLimits'
+import { limitedText } from '../lib/limitRules'
+import { LIMITS } from '../lib/limits'
 import { logActivity, signedDetail } from './activity'
 import { assertExpected, DELETES, type Fields, filledText, type Next } from './expected'
 import { assertCanEdit } from './issues'
@@ -36,14 +36,10 @@ export function assertLabelManager(me: Doc<'profiles'>): void {
   }
 }
 
-/** Trims the name and refuses it when blank or longer than LABEL_NAME_MAX
- * code points (0010's CHECK, Postgres char_length semantics). */
+/** Trims the name and refuses it when blank or past LIMITS.labelName. */
 export function labelName(raw: string): string {
-  const name = raw.trim()
-  if (name === '') throw badRequest('a label name cannot be blank')
-  if ([...name].length > LABEL_NAME_MAX) {
-    throw badRequest(`a label name is at most ${LABEL_NAME_MAX} characters`)
-  }
+  const name = limitedText(LIMITS.labelName, raw)
+  if (name === '') throw rule('a label name cannot be blank')
   return name
 }
 
@@ -161,7 +157,7 @@ export async function createLabelCore(
  * shows it (shownLabelColor). */
 export const LABEL_FIELDS: Fields<Doc<'labels'>> = {
   // labelName's rule
-  name: { sends: 'name', type: filledText(LABEL_NAME_MAX), form: trimmedForm },
+  name: { sends: 'name', type: filledText(LIMITS.labelName), form: trimmedForm },
   color: {
     sends: 'color',
     // the rule of the field itself (labelColor)
@@ -334,7 +330,7 @@ export async function deleteLabelCore(
  * from' activity row, signed with `provenance` for a machine caller; asking
  * for the current state writes nothing. Refuses an actor without Edit on the
  * task's project, a label of another organization and a new label on a task
- * that carries LABEL_MAX already (LABELS_FULL).
+ * that carries LIMITS.labels.max already.
  */
 export async function setTaskLabel(
   ctx: MutationCtx,
@@ -362,8 +358,8 @@ export async function setTaskLabel(
     const held = await ctx.db
       .query('issue_labels')
       .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
-      .take(LABEL_MAX)
-    if (held.length >= LABEL_MAX) throw rule(LABELS_FULL)
+      .take(LIMITS.labels.max)
+    if (held.length >= LIMITS.labels.max) throw rule(LIMITS.labels.refusal)
     await ctx.db.insert('issue_labels', {
       org_id: issue.org_id,
       issue_id: issue.id,

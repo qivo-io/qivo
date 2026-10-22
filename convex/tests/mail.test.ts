@@ -182,12 +182,12 @@ describe('invitation mail', () => {
     expect(fetch).toHaveBeenCalledOnce()
   })
 
-  it('folds a long or multi-line organization name into one capped line', async () => {
+  it('folds a multi-line organization name into one line', async () => {
     const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ message_id: 'm' }) })
     vi.stubGlobal('fetch', fetch)
     const outcome = await sendInviteEmail({
       to: letter.to,
-      org_name: `Acme\n\nVisit   example.test ${'x'.repeat(100)}`,
+      org_name: `Acme\n\nVisit   example.test ${'x'.repeat(56)}`,
       as_guest: true,
       url: 'https://app.example.test/app',
       send_key: 'test-only-invite',
@@ -196,7 +196,7 @@ describe('invitation mail', () => {
     expect(outcome).toBe('sent')
     const { text } = JSON.parse(fetch.mock.calls[0][1].body)
     expect(text.split('\n')[2]).toMatch(
-      /^Acme Visit example\.test x{56}… has invited you to join their organization as a guest\. /,
+      /^Acme Visit example\.test x{56} has invited you to join their organization as a guest\. /,
     )
   })
 

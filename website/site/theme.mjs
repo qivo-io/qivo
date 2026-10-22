@@ -161,6 +161,16 @@ footer.site a { color: var(--text-1); }
 }
 .prose blockquote p:last-child { margin-bottom: 0; }
 .prose hr { border: 0; border-top: 1px solid var(--border); margin: 36px 0; }
+/* Markdown tables, such as the Limits page's. A wide table scrolls on its
+   own instead of widening the page on a phone; the docs grid lets the prose
+   column shrink below its widest table for that. */
+.docs .prose { min-width: 0; }
+.prose table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: 15px; line-height: 1.5; margin: 0 0 24px; }
+.prose th, .prose td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.prose th { color: var(--text-3); font-weight: 600; font-size: 12.5px; letter-spacing: .05em; white-space: nowrap; }
+.prose td:first-child { color: var(--text-1); min-width: 9em; }
+.prose td:nth-child(2) { min-width: 8em; }
+.prose td:nth-child(3) { min-width: 18em; }
 .prose h2 a.anchor, .prose h3 a.anchor { color: var(--text-3); opacity: 0; margin-left: 8px; font-weight: 400; }
 .prose h2:hover a.anchor, .prose h3:hover a.anchor { opacity: 1; }
 

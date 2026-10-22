@@ -114,10 +114,17 @@
       "description": "Organization admins manage users, project access and billing in Settings. Qivo Admin is a separate area for platform operators."
     },
     {
+      "file": "limits.md",
+      "slug": "limits",
+      "title": "Limits",
+      "order": 16,
+      "description": "Every limit in Qivo, from text lengths and file sizes to counts, number ranges and REST and MCP requests, and what happens past each one."
+    },
+    {
       "file": "what-sets-qivo-apart-the-marketing-summary.md",
       "slug": "what-sets-qivo-apart-the-marketing-summary",
       "title": "What sets Qivo apart. The marketing summary",
-      "order": 16,
+      "order": 17,
       "description": "Qivo combines task tracking with weekly planning for people and AI agents. Its main features are:"
     }
   ]

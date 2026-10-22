@@ -7,6 +7,7 @@ import { profileCanSeeProject, readOnlyRefusal } from './lib/access'
 import { byId } from './lib/db'
 import type { CredentialAccess } from './lib/enums'
 import { badRequest, forbidden, notFound } from './lib/functions'
+import { LIMITS } from './lib/limits'
 import {
   type EventFilters,
   type EventOwner,
@@ -34,8 +35,8 @@ const internalSweepRef = makeFunctionReference<'mutation', Record<string, never>
   'webhooks:sweep',
 )
 
-const MAX_ORG_SUBSCRIPTIONS = 100
-const MAX_OWNER_SUBSCRIPTIONS = 20
+const MAX_ORG_SUBSCRIPTIONS = LIMITS.webhooksPerOrg.max
+const MAX_OWNER_SUBSCRIPTIONS = LIMITS.webhooksPerKey.max
 const FAILURE_WINDOW = WEBHOOK_MAX_TTL_MS
 
 /* The owner's live profile and what its credential may do. Subscribing,
@@ -128,9 +129,9 @@ export const save = internalMutation({
           MAX_OWNER_SUBSCRIPTIONS)
     )
       throw new ConvexError({
-        code: 'bad_request',
+        code: 'rule',
         reason: 'webhook_subscription_limit',
-        message: 'Webhook subscription limit reached',
+        message: LIMITS.webhooksPerOrg.refusal,
       })
     if (
       existing &&

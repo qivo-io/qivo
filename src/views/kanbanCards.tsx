@@ -4,6 +4,7 @@ import { Icon, PausedMark, PriorityIcon, ProjectName } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import type { BoardCellGroup } from '@/lib/boardGroups'
+import { clampedTitleTip } from '@/lib/clampedTitle'
 import { StaticControlsContext, useLiveControls } from '@/lib/liveControls'
 import { type IssueVM, P, type ProjectPlace } from '@/store/planner'
 import type { StoreVersion } from '@/store/updates'
@@ -72,6 +73,20 @@ function DueDate({ it, inButton = false }: { it: IssueVM; inButton?: boolean }) 
   )
 }
 
+/** A card title clamped to four lines. Only a title long enough to be cut
+    gets a tooltip with its whole text, so a card adds no tooltip root for a
+    short title. The span takes no tab stop: its button already names the
+    whole title. */
+function ClampedTitle({ title, className }: { title: string; className: string }) {
+  const tip = clampedTitleTip(title)
+  const text = (
+    <span tabIndex={tip ? -1 : undefined} className={className}>
+      {title}
+    </span>
+  )
+  return tip ? <HoverTooltip content={tip}>{text}</HoverTooltip> : text
+}
+
 /** Parent context uses a small inline portrait, leaving the larger right-hand
  * portrait exclusively for the child whose row can be moved independently.
  * A group's owner is always its assignee. */
@@ -100,9 +115,10 @@ function ParentHeading({ it, place }: { it: IssueVM; place: ProjectPlace | null 
         className="flex min-w-0 items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary"
       >
         <PausedGlyph it={it} />
-        <span className="min-w-0 break-words text-base font-semibold leading-[1.4] text-[var(--board-parent-text)]">
-          {it.title}
-        </span>
+        <ClampedTitle
+          title={it.title}
+          className="line-clamp-4 min-w-0 break-words text-base font-semibold leading-[1.4] text-[var(--board-parent-text)]"
+        />
       </Button>
       <span id={meta} className="sr-only">
         {summary}
@@ -200,9 +216,10 @@ function TaskRow({
             >
               <span className="flex min-w-0 items-start gap-2">
                 <PausedGlyph it={it} id={`${ids}paused`} />
-                <span className="min-w-0 break-words text-base font-medium leading-[1.35]">
-                  {it.title}
-                </span>
+                <ClampedTitle
+                  title={it.title}
+                  className="line-clamp-4 min-w-0 break-words text-base font-medium leading-[1.35]"
+                />
               </span>
               <span
                 id={`${ids}meta`}

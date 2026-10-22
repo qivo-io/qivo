@@ -3,10 +3,14 @@ import React, { useEffect as useEffectS, useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
+import { asciiEmail } from '../../../convex/lib/email'
+import { LIMITS } from '../../../convex/lib/limits'
 import { CopyValue } from '../../components/CopyValue'
+import { LimitedInput } from '../../components/LimitedField'
 import { Avatar, Icon, Seg } from '../../components/qivo'
 import { FieldHint, PageTitle, SettingsGroup, SettingsSection } from '../../components/settingsPage'
 import { DEMO_MODE } from '../../lib/demoMode'
+import { cleanName, limitSentence, overLimit } from '../../lib/fieldLimits'
 import { useUnsaved } from '../../lib/leaveGuard'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { useConfirmArm } from '../../lib/useConfirmArm'
@@ -49,7 +53,7 @@ function AgentKeyPanel({
   const mine = (keys || []).filter((k) => k.agentId === agent.id)
   const mint = async () => {
     // a paused create keeps the typed name and says why
-    if (busy || P.refusePausedEdit()) return
+    if (busy || overLimit(LIMITS.keyName, name) || P.refusePausedEdit()) return
     setBusy(true)
     const res = await P.createAgentKey(agent.id, name.trim() || 'Key')
     setBusy(false)
@@ -158,17 +162,23 @@ function AgentKeyPanel({
         })}
       </div>
       <div className="[display:flex] [gap:8px] [align-items:center]">
-        <Input
+        <LimitedInput
+          limit={LIMITS.keyName}
           value={name}
-          maxLength={P.NAME_MAX}
           onChange={(e) => setName(e.target.value)}
           placeholder="Key name, e.g. CI runner"
           onKeyDown={(e) => {
             if (e.key === 'Enter') mint()
           }}
-          className="h-control w-full bg-surface-1 px-2.5 text-base font-sans [flex:1] [font-size:var(--fs-sm)]"
+          wrapperClassName="[flex:1]"
+          className="h-control w-full bg-surface-1 px-2.5 text-base font-sans [font-size:var(--fs-sm)]"
         />
-        <Button type="button" data-new-agent-key={agent.id} disabled={busy} onClick={mint}>
+        <Button
+          type="button"
+          data-new-agent-key={agent.id}
+          disabled={busy || overLimit(LIMITS.keyName, name)}
+          onClick={mint}
+        >
           <Icon name="plus" size={16} />
           New key
         </Button>
@@ -230,16 +240,23 @@ export function OrgUsersPage({
   // the field invalid. Agents have no email, so both checks must be bypassed.
   const emailMissing = !agentMode && !addEmail.trim()
   const emailBad = !agentMode && !emailMissing && !P.emailLooksValid(addEmail)
+  // a well-formed address can still be longer than the server stores
+  const emailWhy =
+    asciiEmail(addEmail).length > LIMITS.email.max
+      ? limitSentence(LIMITS.email)
+      : 'That does not look like an email address'
+  // counted as the server stores it, with whitespace runs collapsed
+  const nameTooLong = overLimit(LIMITS.personName, cleanName(addName))
   const addUser = async () => {
-    if (!addName.trim() || emailBad || emailMissing) return
+    if (!addName.trim() || nameTooLong || emailBad || emailMissing) return
     // Preserve the entered fields when addUser refuses a duplicate seat.
     const added = P.addUser(
       agentMode
-        ? { name: addName.trim(), kind: 'agent', orgRole: addRole }
-        : { name: addName.trim(), email: addEmail, orgRole: addRole },
+        ? { name: cleanName(addName), kind: 'agent', orgRole: addRole }
+        : { name: cleanName(addName), email: addEmail, orgRole: addRole },
     )
     if (!added) return
-    const name = addName.trim()
+    const name = cleanName(addName)
     setAddName('')
     setAddEmail('')
     setAddRole('user')
@@ -454,16 +471,18 @@ export function OrgUsersPage({
               />
             </div>
             <div className="settings-add-user-form [display:flex] [gap:8px] [align-items:center]">
-              <Input
+              <LimitedInput
+                limit={LIMITS.personName}
+                clean={cleanName}
                 value={addName}
-                maxLength={P.NAME_MAX}
                 onChange={(e) => setAddName(e.target.value)}
                 placeholder={agentMode ? 'Agent name, e.g. Release Bot' : 'Full name'}
                 aria-label={agentMode ? 'New agent name' : 'New person name'}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') addUser()
                 }}
-                className="h-control w-full bg-surface-1 px-2.5 text-base font-sans [flex:1.2]"
+                wrapperClassName="[flex:1.2]"
+                className="h-control w-full bg-surface-1 px-2.5 text-base font-sans"
               />
               {!agentMode && (
                 <Input
@@ -476,11 +495,7 @@ export function OrgUsersPage({
                   required
                   spellCheck={false}
                   autoCapitalize="off"
-                  title={
-                    emailBad
-                      ? 'That does not look like an email address'
-                      : 'The email address they will use to sign in'
-                  }
+                  title={emailBad ? emailWhy : 'The email address they will use to sign in'}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') addUser()
                   }}
@@ -503,10 +518,10 @@ export function OrgUsersPage({
               <Button
                 type="button"
                 data-add-user
-                disabled={!addName.trim() || emailBad || emailMissing}
+                disabled={!addName.trim() || nameTooLong || emailBad || emailMissing}
                 title={
                   emailBad
-                    ? 'That does not look like an email address'
+                    ? emailWhy
                     : emailMissing
                       ? 'Email address required'
                       : agentMode

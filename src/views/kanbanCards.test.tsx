@@ -120,6 +120,25 @@ describe('static Board cards', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(cards().filter((card) => card.hasAttribute('data-card-live'))).toHaveLength(1)
   })
 
+  it('give only a title long enough to be clamped a tooltip with its whole text', async () => {
+    const long = `Investigate ${'intermittent pairing failures '.repeat(8)}`.trim()
+    const board = await loadBoard(network, (snap) => {
+      snap.issues.push({ ...taskRow(snap, 'short', 'todo', 1) })
+      snap.issues.push({ ...taskRow(snap, 'long', 'todo', 2), title: long })
+    })
+    await board.render(root)
+    const titles = [
+      ...container.querySelectorAll<HTMLElement>('[data-focus-key="title"] .line-clamp-4'),
+    ]
+    // only the long title is a tooltip trigger
+    expect(titles.map((el) => [el.textContent, el.hasAttribute('data-tooltip-trigger')])).toEqual([
+      ['Task short', false],
+      [long, true],
+    ])
+    // the button carries the title for keyboard users, so the text takes no tab stop
+    expect(titles[1].getAttribute('tabindex')).toBe('-1')
+  })
+
   it('stay static under a touch', async () => {
     const board = await loadBoard(network, twenty)
     await board.render(root)

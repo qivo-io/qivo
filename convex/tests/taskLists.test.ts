@@ -30,7 +30,7 @@ import {
 } from '../lib/core'
 import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
-import { TEXT_MAX } from '../lib/textLimits'
+import { TEXT_MAX } from '../lib/limits'
 import {
   expectRefusal,
   NOW,
@@ -617,7 +617,12 @@ describe('archived task lists page one project with a cursor', () => {
     for (const value of ['5', '-5', 'abc']) {
       await refused(rest({ archived: 'true', project: 'FW', offset: value }), 'bad_request', offset)
     }
-    expect(await rest({ offset: 'abc' })).toEqual([])
+    // an active list refuses an offset that is not a whole number
+    await refused(
+      rest({ offset: 'abc' }),
+      'bad_request',
+      'offset must be a whole number, 0 or more',
+    )
     await refused(mcp({ archived: true, project: 'FW', offset: 5 }), 'bad_request', offset)
     // a plain position is refused too, so a caller cannot choose where a page starts
     for (const cursor of ['abc', '2~1~x', '1~-1~x', '1~1~', '1~5~k1~2026-03-01T09:00:00.000Z']) {

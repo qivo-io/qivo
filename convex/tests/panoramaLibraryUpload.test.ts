@@ -481,7 +481,7 @@ describe('operator-only standalone image upload', () => {
       description: 'oversized file',
       bytes: () => new Uint8Array(PANORAMA_MAX_BYTES + 1),
       mime: 'image/jpeg',
-      reason: /8 MB/,
+      reason: /8 MiB/,
     },
   ])(
     'refuses $description with a specific reason and deletes only the unretained upload',

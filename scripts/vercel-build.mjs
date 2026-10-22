@@ -87,11 +87,13 @@ function setPreviewSiteUrl(env, run) {
   }
 }
 
-/* One bare address, the rule of ADDR in convex/lib/mailConfig.ts, which
- * the mail code applies to MAIL_FROM. vercel-build.test.mjs keeps the two in
- * step, since this script cannot import TypeScript. */
+/* One bare address, the rule of ADDR in convex/lib/email.ts, which
+ * the mail code applies to MAIL_FROM. Node 24 loads a TypeScript file, but
+ * email.ts imports './limits' without the .ts extension that Node's module
+ * resolution needs (the Convex bundler and Vite resolve it without one), so
+ * this script keeps a copy, and vercel-build.test.mjs keeps the two in step. */
 const ONE_ADDRESS =
-  /^[^\s@,;:<>"'\\]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i
+  /^[^\s@,;:<>"\\]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i
 export const isOneAddress = (s) => s.length <= 254 && ONE_ADDRESS.test(s)
 
 /* Production sends sign-up, password reset, invitation, billing and deletion

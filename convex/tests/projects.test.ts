@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { PROJECT_DESCRIPTION_MAX } from '../lib/projectLimits'
+import { LIMITS } from '../lib/limits'
 import { weekLabel } from '../model/orgs'
 import {
   activityFor,
@@ -755,7 +755,6 @@ describe('projects.setAccess', () => {
 })
 
 describe('project review time', () => {
-  const REVIEW_HOURS_SENTENCE = /^review_hours must be a number of hours from 0 to 999, or null$/
   const setReviewHours = (
     t: T,
     f: OrgFixture,
@@ -789,8 +788,10 @@ describe('project review time', () => {
   it('refuses out-of-range values and non-leads; a new project inherits (absent)', async () => {
     const t = newT()
     const f = await withOrg(t)
-    for (const bad of [-1, 1000]) {
-      await expectRefusal(setReviewHours(t, f, f.sub.id, bad), 'bad_request', REVIEW_HOURS_SENTENCE)
+    // just past the cap counts, though it would round to the cap
+    for (const bad of [-1, -0.01, LIMITS.reviewHours.max + 0.01, LIMITS.reviewHours.max + 1]) {
+      const e = await expectRefusal(setReviewHours(t, f, f.sub.id, bad), 'rule')
+      expect(e.data.message, String(bad)).toBe(LIMITS.reviewHours.refusal)
     }
     await expectRefusal(setReviewHours(t, f, f.meta.id, 3, f.guest), 'forbidden')
     expect((await stored(t, f.sub.id))?.review_hours).toBeUndefined()
@@ -811,12 +812,13 @@ describe('project description limits', () => {
     }))
 
   it.each(['meta', 'project'] as const)(
-    'creates %s descriptions through the 500-unit boundary without trimming, including null and omission',
+    'creates %s descriptions trimmed through the 500-unit boundary, including null and omission',
     async (type) => {
       const t = newT()
       const f = await withOrg(t)
-      expect(PROJECT_DESCRIPTION_MAX).toBe(500)
-      const boundary = ` \n${'x'.repeat(496)}\n `
+      expect(LIMITS.projectDescription.max).toBe(500)
+      // the cap counts the text once trimmed, and an emoji counts two
+      const boundary = ` \n${'x'.repeat(500)}\n `
       const unicodeBoundary = '😀'.repeat(250)
       for (const [index, description] of [
         undefined,
@@ -840,7 +842,7 @@ describe('project description limits', () => {
             .withIndex('by_uuid', (q) => q.eq('id', created.id))
             .unique(),
         )
-        expect(row?.description).toBe(description ?? '')
+        expect(row?.description).toBe(description?.trim() ?? '')
       }
     },
   )
@@ -852,7 +854,7 @@ describe('project description limits', () => {
       const f = await withOrg(t)
       const before = await snapshot(t)
       for (const description of ['x'.repeat(501), `${'😀'.repeat(250)}x`]) {
-        await expectRefusal(
+        const e = await expectRefusal(
           as(t, f.admin).mutation(
             api.projects.create,
             createArgs(f, {
@@ -863,27 +865,29 @@ describe('project description limits', () => {
               team_access: { [f.team.id]: 'user' },
             }),
           ),
-          'bad_request',
-          /^a project description must be 500 characters or fewer$/,
+          'rule',
         )
+        expect(e.data.message).toBe(LIMITS.projectDescription.refusal)
         expect(await snapshot(t)).toEqual(before)
       }
     },
   )
 
   it.each(['meta', 'project'] as const)(
-    'updates %s descriptions at the boundary and preserves empty-string semantics',
+    'updates %s descriptions trimmed at the boundary and preserves empty-string semantics',
     async (type) => {
       const t = newT()
       const f = await withOrg(t)
       const project = type === 'meta' ? f.meta : f.sub
-      for (const description of [` \n${'x'.repeat(496)}\n `, '😀'.repeat(250), '', null]) {
+      for (const description of [` \n${'x'.repeat(500)}\n `, '😀'.repeat(250), '', null]) {
         await as(t, f.admin).mutation(api.projects.update, {
           org_id: f.org.id,
           id: project.id,
           patch: { description },
         })
-        expect((await t.run((ctx) => ctx.db.get(project._id)))?.description).toBe(description ?? '')
+        expect((await t.run((ctx) => ctx.db.get(project._id)))?.description).toBe(
+          description?.trim() ?? '',
+        )
       }
     },
   )
@@ -896,7 +900,7 @@ describe('project description limits', () => {
       const project = type === 'meta' ? f.meta : f.sub
       const before = await snapshot(t)
       for (const description of ['x'.repeat(501), `${'😀'.repeat(250)}x`]) {
-        await expectRefusal(
+        const e = await expectRefusal(
           as(t, f.admin).mutation(api.projects.update, {
             org_id: f.org.id,
             id: project.id,
@@ -915,35 +919,12 @@ describe('project description limits', () => {
               description,
             },
           }),
-          'bad_request',
-          /^a project description must be 500 characters or fewer$/,
+          'rule',
         )
+        expect(e.data.message).toBe(LIMITS.projectDescription.refusal)
         expect(await snapshot(t)).toEqual(before)
         expect((await t.run((ctx) => ctx.db.get(project._id)))?.review_hours).toBeUndefined()
       }
-    },
-  )
-
-  it.each(['meta', 'project'] as const)(
-    'leaves an existing oversized %s description untouched when omitted and accepts null to clear it',
-    async (type) => {
-      const t = newT()
-      const f = await withOrg(t)
-      const project = type === 'meta' ? f.meta : f.sub
-      const existing = 'legacy text '.repeat(50)
-      await t.run((ctx) => ctx.db.patch(project._id, { description: existing }))
-      await as(t, f.admin).mutation(api.projects.update, {
-        org_id: f.org.id,
-        id: project.id,
-        patch: { name: 'Renamed' },
-      })
-      expect((await t.run((ctx) => ctx.db.get(project._id)))?.description).toBe(existing)
-      await as(t, f.admin).mutation(api.projects.update, {
-        org_id: f.org.id,
-        id: project.id,
-        patch: { description: null },
-      })
-      expect((await t.run((ctx) => ctx.db.get(project._id)))?.description).toBe('')
     },
   )
 
@@ -1370,7 +1351,7 @@ describe('milestones', () => {
         id,
         patch: { name: ' ', week: '2026-05-18' },
       }),
-      'bad_request',
+      'rule',
       /^a milestone name cannot be blank$/,
     )
     expect(await rows()).toBe(before)

@@ -228,9 +228,7 @@ export function TeamOpening({
           <div className="text-sm text-text-2">Next milestone</div>
           {next ? (
             <>
-              <div className="truncate text-base font-semibold text-text-1">
-                {P.milestoneLabel(next)}
-              </div>
+              <div className="truncate text-base font-semibold text-text-1">{next.name}</div>
               <div className="text-xs text-text-3">
                 {P.projectLabelOf(next.project)}, {P.weekLabel(next.week)}
               </div>
@@ -271,7 +269,7 @@ export function TeamOpening({
                     strokeWidth={2}
                   />
                   <span className={cn('min-w-0 truncate text-text-1', lead && 'font-semibold')}>
-                    {P.milestoneLabel(m)}
+                    {m.name}
                   </span>
                   <span className="truncate text-xs text-text-3">
                     <ProjectNameOf id={m.project} />

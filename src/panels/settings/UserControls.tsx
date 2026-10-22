@@ -5,8 +5,12 @@ import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { asciiEmail } from '../../../convex/lib/email'
+import { LIMITS } from '../../../convex/lib/limits'
+import { LimitedInput } from '../../components/LimitedField'
 import { fmtTime } from '../../lib/dates'
 import { DEMO_MODE } from '../../lib/demoMode'
+import { cleanName, limitSentence, overLimit, wholeIn } from '../../lib/fieldLimits'
 import {
   type InviteDelivery,
   type InviteDeliveryRow,
@@ -23,7 +27,8 @@ import { P } from '../../store/planner'
 
 // Roster renames commit on blur and affect this organization only. Account
 // name changes use the explicit-save field and update the login's other seats.
-// Refusals restore the server value through the store.
+// Refusals restore the server value through the store. A name over the cap
+// stays typed and invalid, with the cap's sentence, until it is shortened.
 export function UserName({ user, isSelf }: { user: UserVM; isSelf: boolean }) {
   const canEdit = P.isAdmin()
   const [v, setV] = useStateS(user.name)
@@ -44,12 +49,16 @@ export function UserName({ user, isSelf }: { user: UserVM; isSelf: boolean }) {
     fontFamily: 'var(--sans)',
   }
   const commit = () => {
-    const next = v.replace(/\s+/g, ' ').trim()
+    const next = cleanName(v)
     if (next === user.name) {
       setV(user.name)
       return
     }
-    if (!next || [...next].length > P.NAME_MAX) {
+    if (overLimit(LIMITS.personName, next)) {
+      window.showToast?.(limitSentence(LIMITS.personName), 'error')
+      return
+    }
+    if (!next) {
       setV(user.name)
       return
     }
@@ -97,12 +106,13 @@ export function UserName({ user, isSelf }: { user: UserVM; isSelf: boolean }) {
       >
         {v || ' '}
       </span>
-      <Input
+      <LimitedInput
+        limit={LIMITS.personName}
+        clean={cleanName}
         value={v}
         onChange={(e) => setV(e.target.value)}
         data-user-name={user.id}
         aria-label={`Display name for ${user.name}`}
-        maxLength={P.NAME_MAX}
         spellCheck={false}
         title={
           user.isAgent
@@ -120,9 +130,10 @@ export function UserName({ user, isSelf }: { user: UserVM; isSelf: boolean }) {
           }
         }}
         style={{ ...nameFace, width: Math.min(320, w + 13) }}
+        wrapperClassName="flex-[0_1_auto]"
         // quiet until hovered (a hairline), and the standard active field look
         // from tokens.css once it has focus — like every other text box
-        className="h-control-sm min-w-0 flex-[0_1_auto] border-transparent bg-transparent px-[5px] py-0 text-ellipsis hover:border-border focus:bg-hover"
+        className="h-control-sm min-w-0 border-transparent bg-transparent px-[5px] py-0 text-ellipsis hover:border-border focus:bg-hover"
       />
       <span className="[font-size:var(--fs-base)] [font-weight:600] [white-space:nowrap]">
         {chips}
@@ -207,10 +218,10 @@ function SendAgain({
 const NO_ROW_WAIT_MS = 2 * 60_000
 
 /** Under an invite form: whether the invitation email to the seat just
-    created went out, live, in a full sentence. Only the send to `email`
-    counts, so a correction made elsewhere is not reported as this one. When
-    the seat stops being pending (claimed or cancelled), the last result
-    seen stays. Key it by seat. */
+    created went out, live, in a full sentence. Only the send to `email`,
+    compared in its stored form, counts, so a correction made elsewhere is
+    not reported as this one. When the seat stops being pending (claimed or
+    cancelled), the last result seen stays. Key it by seat. */
 export function InviteOutcome({
   orgId,
   seat,
@@ -222,7 +233,9 @@ export function InviteOutcome({
 }) {
   const rows = useInviteDeliveries(orgId)
   const row = rows?.get(seat)
-  const current = row?.email === email.trim().toLowerCase() ? row.state : undefined
+  // the row holds the address as stored (asciiEmail), so Anna@Bücher.DE
+  // matches anna@xn--bcher-kva.de
+  const current = row?.email === asciiEmail(email) ? row.state : undefined
   const [last, setLast] = useStateS<InviteDelivery>()
   useEffectS(() => {
     if (current !== undefined) setLast(current)
@@ -273,11 +286,12 @@ export function UserEmail({ user }: { user: UserVM }) {
   useEffectS(() => {
     setV(user.email || '')
   }, [user.email])
-  // Stored addresses are lowercase, so a case-only edit changes nothing.
+  // Addresses are stored as asciiEmail writes them, so an edit that only
+  // changes case or writes the domain in Unicode changes nothing.
   const commit = () => {
     const saved = user.email || ''
     const next = v.trim()
-    if (next.toLowerCase() === saved || !P.emailLooksValid(next)) setV(saved)
+    if (asciiEmail(next) === saved || !P.emailLooksValid(next)) setV(saved)
     // a paused change keeps the typed address
     else if (!P.refusePausedEdit() && !P.updateUser(user.id, { email: next })) setV(saved)
   }
@@ -320,8 +334,10 @@ export function UserEmail({ user }: { user: UserVM }) {
   )
 }
 
-// Capacity commits whole hours on blur (1–168); an empty or invalid edit
-// restores the saved value. Team leaders may edit this field, not other profile data.
+// Capacity commits whole hours on blur (LIMITS.plannableHours); an empty edit
+// restores the saved value, and one outside the range stays typed and invalid
+// with the range's sentence. Team leaders may edit this field, not other
+// profile data.
 export function PlannableHoursInput({
   user,
   canEdit,
@@ -337,6 +353,8 @@ export function PlannableHoursInput({
     `${user.id}:${user.plannableHours ?? ''}`,
     'plannable hours',
   )
+  // a number refused on blur stays typed and marked until it changes
+  const [refused, setRefused] = useStateS(false)
   // Agents have unlimited capacity and cannot receive a weekly-hour value.
   if (user.isAgent) {
     return (
@@ -366,26 +384,32 @@ export function PlannableHoursInput({
         <Input
           id={inputId}
           type="number"
-          min={1}
-          max={168}
+          min={LIMITS.plannableHours.min}
+          max={LIMITS.plannableHours.max}
           step={1}
           data-plannable-for={user.id}
           aria-label={`Plannable hours per week for ${user.name}`}
+          aria-invalid={refused || undefined}
           {...hoursUnsaved}
           key={`ph${user.id}${stored}`}
           defaultValue={stored}
           disabled={!canEdit}
+          onChange={() => setRefused(false)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') e.currentTarget.blur()
           }}
           onBlur={(e) => {
             const raw = e.target.value.trim()
-            if (!raw || !Number(raw)) {
+            if (!raw) {
               e.target.value = String(stored)
               return
             }
-            const h = Math.max(1, Math.min(168, Math.round(Number(raw))))
-            e.target.value = String(h)
+            const h = wholeIn(LIMITS.plannableHours, raw)
+            if (h === null) {
+              setRefused(true)
+              window.showToast?.(limitSentence(LIMITS.plannableHours), 'error')
+              return
+            }
             if (h === stored || P.refusePausedEdit()) return
             P.updateUser(user.id, { plannableHours: h })
             window.showToast?.(`${user.name} plans ${h} h per week`)

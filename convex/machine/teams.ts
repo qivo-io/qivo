@@ -36,7 +36,7 @@ import { isTeamLeader } from '../lib/access'
 import { asMachineCaller, type Caller } from '../lib/core'
 import { vCredentialAccess } from '../lib/enums'
 import { badRequest, notFound, type Refusal } from '../lib/functions'
-import { NAME_MAX } from '../lib/textLimits'
+import { LIMITS } from '../lib/limits'
 import {
   createExpectedSentence,
   EXPECTED_SENTENCE,
@@ -395,7 +395,7 @@ export const TEAM_TOOLS: McpTool[] = [
           },
           name: {
             type: 'string',
-            maxLength: NAME_MAX,
+            maxLength: LIMITS.teamName.max,
           },
           expected: expectedSchema(TEAM_MACHINE_FIELDS),
         },

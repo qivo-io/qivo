@@ -1,23 +1,26 @@
 /* Pure image suitability rules shared by the browser and Convex ingestion.
  * These are limits for the delivered image. Providers may screen originals
- * more strictly before fetching a resized rendition. */
-export const PANORAMA_MAX_BYTES = 8 * 1024 * 1024
+ * more strictly before fetching a resized rendition. Imports only the
+ * import-free limits registry. */
+
+import { LIMITS, MIB } from './limits'
+
+const MAX_MIB = LIMITS.backgroundSize.max
+export const PANORAMA_MAX_BYTES = MAX_MIB * MIB
 export const PANORAMA_MIN_WIDTH = 1600
 export const PANORAMA_MIN_HEIGHT = 800
 export const PANORAMA_MIN_RATIO = 1.3
 export const PANORAMA_MAX_RATIO = 3
 export const PANORAMA_MAX_PIXELS = 32_000_000
-export const PANORAMA_IMAGE_REQUIREMENTS =
-  'JPEG, at least 1600 × 800 pixels, landscape ratio 1.3:1–3:1, up to 32 megapixels and 8 MB'
-export const MANUAL_IMAGE_REQUIREMENTS =
-  'JPEG, PNG or WebP, at least 1600 × 800 pixels, landscape ratio 1.3:1–3:1, up to 32 megapixels and 8 MB, still images only'
+export const PANORAMA_IMAGE_REQUIREMENTS = `JPEG, at least 1600 × 800 pixels, landscape ratio 1.3:1–3:1, up to 32 megapixels and ${MAX_MIB} MiB`
+export const MANUAL_IMAGE_REQUIREMENTS = `JPEG, PNG or WebP, at least 1600 × 800 pixels, landscape ratio 1.3:1–3:1, up to 32 megapixels and ${MAX_MIB} MiB, still images only`
 
 export function validateManualImageFile(mime: string | undefined, size: number) {
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime ?? ''))
     throw new Error('Choose a JPEG, PNG or WebP image.')
   if (!Number.isSafeInteger(size) || size <= 0)
     throw new Error('The image file is empty or has an invalid size.')
-  if (size > PANORAMA_MAX_BYTES) throw new Error('Choose an image no larger than 8 MB.')
+  if (size > PANORAMA_MAX_BYTES) throw new Error(`Choose an image no larger than ${MAX_MIB} MiB.`)
 }
 
 /* Header inspection bounds the pixels before browser decoding. It does not
@@ -123,7 +126,7 @@ export function validatePanoramaFile(mime: string | undefined, size: number) {
     throw new Error('Choose a JPEG image. Other formats are not supported.')
   if (!Number.isSafeInteger(size) || size <= 0)
     throw new Error('The image file is empty or has an invalid size.')
-  if (size > PANORAMA_MAX_BYTES) throw new Error('Choose a JPEG no larger than 8 MB.')
+  if (size > PANORAMA_MAX_BYTES) throw new Error(`Choose a JPEG no larger than ${MAX_MIB} MiB.`)
 }
 
 export function validatePanoramaDimensions(width: number, height: number) {

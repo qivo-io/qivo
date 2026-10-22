@@ -12,6 +12,7 @@ import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
 import { printOf, trimmedForm } from '../lib/fieldPrints'
 import type { Refusal } from '../lib/functions'
+import { LIMITS } from '../lib/limits'
 import { sha256hex } from '../machine/auth'
 import {
   as,
@@ -125,6 +126,24 @@ const task = (fx: Fx, id: string) => fx.t.run((ctx) => byId(ctx, 'issues', id))
 const key = (row: Doc<'issues'>) => `QN-${row.num}`
 const stale = (who: string, what: string, label: string) =>
   `${who} changed ${what} of ${label} since you read it, so nothing was saved; read ${label} again and resend your change`
+
+/* An organization admin's MCP token, which may rename teams, projects and
+ * labels over REST and MCP. Answers the Authorization header. */
+async function adminAuth(fx: Fx, secret: string): Promise<Record<string, string>> {
+  const token_hash = await sha256hex(secret)
+  await fx.t.run((ctx) =>
+    ctx.db.insert('mcp_tokens', {
+      id: uuid(),
+      profile_id: fx.admin.id,
+      name: 'admin',
+      token_prefix: secret.slice(0, 11),
+      token_hash,
+      access: 'write',
+      created_at: NOW,
+    }),
+  )
+  return { Authorization: `Bearer ${secret}` }
+}
 
 describe('REST task edits', () => {
   it('answers a stale field 409 with one sentence and saves a current one', async () => {
@@ -295,6 +314,7 @@ describe('typed values in expected', () => {
     const fx = await setup()
     const row = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, title: 'One' })
     const DAY = 'a calendar date as YYYY-MM-DD or null'
+    const HOURS = 'a number from 0 to 99,999.9, or null'
     const cases: [Record<string, unknown>, string][] = [
       [
         { due_date: '2026-07-01', expected: { due_date: 'soon' } },
@@ -315,7 +335,29 @@ describe('typed values in expected', () => {
       ],
       [
         { remaining_hours: 3, expected: { remaining_hours: -1 } },
-        'expected.remaining_hours must be a non-negative number or null',
+        `expected.remaining_hours must be ${HOURS}`,
+      ],
+      // above the cap no task stores, so no read answers it
+      [
+        { remaining_hours: 3, expected: { remaining_hours: LIMITS.remainingHours.max + 0.1 } },
+        `expected.remaining_hours must be ${HOURS}`,
+      ],
+      // every id is a uuid, so a value no id is refuses
+      [
+        { assignee_id: null, expected: { assignee_id: 'Legacy-Ann' } },
+        'expected.assignee_id must be a profile uuid or null',
+      ],
+      [
+        { reviewer_id: null, expected: { reviewer_id: 7 } },
+        'expected.reviewer_id must be a profile uuid or null',
+      ],
+      [
+        { parent: null, expected: { parent_id: 'Task-First', has_hidden_parent: false } },
+        'expected.parent_id must be a task uuid or null',
+      ],
+      [
+        { project: 'TBED', sub_project: 'PCB', expected: { project_id: 'Project-Old' } },
+        'expected.project_id must be a project uuid',
       ],
     ]
     for (const [body, error] of cases) {
@@ -328,11 +370,26 @@ describe('typed values in expected', () => {
       )
     }
     const kept = await task(fx, row.id)
-    expect([kept?.due_date, kept?.start_week, kept?.remaining_hours]).toEqual([
+    expect([kept?.due_date, kept?.start_week, kept?.remaining_hours, kept?.project_id]).toEqual([
       undefined,
       undefined,
       undefined,
+      fx.sub.id,
     ])
+    // a uuid compares in any case, and the cap itself is hours
+    expect(
+      await send(fx, 'PATCH', `/v1/tasks/${row.id}`, {
+        project: 'TBED',
+        sub_project: 'PCB',
+        expected: { project_id: fx.sub.id.toUpperCase() },
+      }),
+    ).toMatchObject({ status: 200 })
+    expect(
+      await send(fx, 'PATCH', `/v1/tasks/${row.id}`, {
+        remaining_hours: 3,
+        expected: { remaining_hours: LIMITS.remainingHours.max },
+      }),
+    ).toMatchObject({ status: 409 })
     // a real day still compares, and saves when it matches
     const saved = await send(fx, 'PATCH', `/v1/tasks/${row.id}`, {
       due_date: '2026-07-01',
@@ -435,10 +492,10 @@ describe('text values in expected', () => {
   it('refuses text its field would refuse with a 400 sentence, before any comparison', async () => {
     const fx = await setup()
     const row = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, title: 'One' })
-    // every write of a title has held this rule, so no task stores a blank
-    // or longer one, unlike a team, project or milestone name
-    const TITLE = 'expected.title must be a string that is not blank, of at most 80 characters'
-    for (const seen of ['', '   ', 'x'.repeat(81), '\u{1F680}'.repeat(81)]) {
+    const TITLE = 'expected.title must be a string that is not blank, of at most 255 characters'
+    const max = LIMITS.title.max
+    // an emoji counts two, so the last one is one too many
+    for (const seen of ['', '   ', 'x'.repeat(max + 1), `${'x'.repeat(max - 1)}\u{1F600}`]) {
       const body = { title: 'Two', expected: { title: seen } }
       expect(await send(fx, 'PATCH', `/v1/tasks/${row.id}`, body), seen).toEqual({
         status: 400,
@@ -449,46 +506,45 @@ describe('text values in expected', () => {
       )
     }
     expect((await task(fx, row.id))?.title).toBe('One')
-    // 80 code points is a title, so it compares
-    expect(
-      await send(fx, 'PATCH', `/v1/tasks/${row.id}`, {
-        title: 'Two',
-        expected: { title: ` ${'\u{1F680}'.repeat(80)} ` },
-      }),
-    ).toMatchObject({ status: 409 })
+    // 255 once trimmed is a title, so it compares
+    for (const seen of [` ${'x'.repeat(max)} `, `${'x'.repeat(max - 2)}\u{1F600}`]) {
+      expect(
+        await send(fx, 'PATCH', `/v1/tasks/${row.id}`, { title: 'Two', expected: { title: seen } }),
+        seen,
+      ).toMatchObject({ status: 409 })
+    }
 
     const commented = await send(fx, 'POST', `/v1/tasks/${row.id}/comments`, { body: 'First' })
     const comment = (JSON.parse(commented.text) as { id: string }).id
     const label = uuid()
     // only an organization admin reaches a label's body over REST
-    const ADMIN = `qvt_${'textadmn'.repeat(6)}`
-    const token_hash = await sha256hex(ADMIN)
-    await fx.t.run(async (ctx) => {
-      await ctx.db.insert('mcp_tokens', {
-        id: uuid(),
-        profile_id: fx.admin.id,
-        name: 'admin',
-        token_prefix: ADMIN.slice(0, 11),
-        token_hash,
-        access: 'write',
-        created_at: NOW,
-      })
-      await ctx.db.insert('labels', {
+    const admin = await adminAuth(fx, `qvt_${'textadmn'.repeat(6)}`)
+    await fx.t.run((ctx) =>
+      ctx.db.insert('labels', {
         id: label,
         org_id: fx.org.id,
         name: 'Hardware',
         name_lower: 'hardware',
         color: '#336699',
         created_at: NOW,
-      })
-    })
+      }),
+    )
+    const BODY = 'expected.body must be a string that is not blank, of at most 20,000 characters'
+    const longBody = 'x'.repeat(LIMITS.comment.max + 1)
     const other: [string, Record<string, unknown>, string, Record<string, unknown>, string][] = [
       [
         `/v1/comments/${comment}`,
         { body: 'Second', expected: { body: ' ' } },
         'update_comment',
         { comment, body: 'Second', expected: { body: '' } },
-        'expected.body must be a string that is not blank',
+        BODY,
+      ],
+      [
+        `/v1/comments/${comment}`,
+        { body: 'Second', expected: { body: longBody } },
+        'update_comment',
+        { comment, body: 'Second', expected: { body: ` ${longBody} ` } },
+        BODY,
       ],
       [
         `/v1/labels/${label}`,
@@ -499,7 +555,6 @@ describe('text values in expected', () => {
       ],
     ]
     for (const [path, body, name, args, error] of other) {
-      const admin = { Authorization: `Bearer ${ADMIN}` }
       expect(await send(fx, 'PATCH', path, body, admin), `${path} ${error}`).toEqual({
         status: 400,
         text: JSON.stringify({ error }),
@@ -508,102 +563,119 @@ describe('text values in expected', () => {
     }
   })
 
-  it('compares a name or description longer than its cap, which one saved before the cap reads as', async () => {
+  /* Every write of a name or description holds its cap and refuses a blank
+   * name, so no read answers a longer or blank one. */
+  it('refuses a name or description its field would refuse, over REST and MCP', async () => {
     const fx = await setup()
-    const long = 'Hardware '.repeat(10).trim()
-    await fx.t.run(async (ctx) => {
-      const team = await byId(ctx, 'teams', fx.team.id)
-      if (team) await ctx.db.patch(team._id, { name: long })
-    })
-    const ADMIN = `qvt_${'longname'.repeat(6)}`
-    const token_hash = await sha256hex(ADMIN)
+    const admin = await adminAuth(fx, `qvt_${'longname'.repeat(6)}`)
+    const milestone = uuid()
     await fx.t.run((ctx) =>
-      ctx.db.insert('mcp_tokens', {
-        id: uuid(),
-        profile_id: fx.admin.id,
-        name: 'admin',
-        token_prefix: ADMIN.slice(0, 11),
-        token_hash,
-        access: 'write',
+      ctx.db.insert('milestones', {
+        id: milestone,
+        project_id: fx.meta.id,
+        name: 'Prototype',
+        week: '2026-06-01',
         created_at: NOW,
       }),
     )
-    const path = `/v1/teams/${fx.team.id}`
-    const admin = { Authorization: `Bearer ${ADMIN}` }
-    expect(
-      await send(fx, 'PATCH', path, { name: 'Firmware', expected: { name: `${long}!` } }, admin),
-    ).toMatchObject({ status: 409 })
-    expect(
-      await send(fx, 'PATCH', path, { name: 'Firmware', expected: { name: long } }, admin),
-    ).toMatchObject({ status: 200 })
-
-    // a milestone or project name and a comment body saved before their
-    // caps compare too
-    const milestone = uuid()
-    const longer = `Prototype ${'validated '.repeat(9)}`.trim()
-    await fx.t.run(async (ctx) => {
-      await ctx.db.insert('milestones', {
-        id: milestone,
-        project_id: fx.meta.id,
-        name: longer,
-        week: '2026-06-01',
-        created_at: NOW,
-      })
-      await ctx.db.patch(fx.meta._id, { name: longer })
+    const row = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      description: 'Plan',
     })
+    const NAME = 'expected.name must be a string that is not blank, of at most 80 characters'
+    const TASK_TEXT = 'expected.description must be a string of at most 20,000 characters, or null'
+    const PROJECT_TEXT = 'expected.description must be a string of at most 500 characters, or null'
+    const over = (max: number) => 'x'.repeat(max + 1)
+    const teamPath = `/v1/teams/${fx.team.id}`
     const milestonePath = `/v1/projects/TBED/milestones/${milestone}`
-    expect(
-      await send(fx, 'PATCH', milestonePath, { name: 'Pilot', expected: { name: longer } }, admin),
-    ).toMatchObject({ status: 200 })
+    const cases: [string, Record<string, unknown>, string, Record<string, unknown>, string][] = [
+      [
+        teamPath,
+        { name: 'Firmware', expected: { name: over(LIMITS.teamName.max) } },
+        'set_team',
+        { team_id: fx.team.id, name: 'Firmware', expected: { name: over(LIMITS.teamName.max) } },
+        NAME,
+      ],
+      [
+        teamPath,
+        { name: 'Firmware', expected: { name: '  ' } },
+        'set_team',
+        { team_id: fx.team.id, name: 'Firmware', expected: { name: '' } },
+        NAME,
+      ],
+      [
+        '/v1/projects/TBED',
+        { name: 'Testbed', expected: { name: over(LIMITS.projectName.max) } },
+        'update_project',
+        { project: 'TBED', name: 'Testbed', expected: { name: over(LIMITS.projectName.max) } },
+        NAME,
+      ],
+      [
+        milestonePath,
+        { name: 'Pilot', expected: { name: over(LIMITS.milestoneName.max) } },
+        'set_milestone',
+        {
+          project: 'TBED',
+          milestone,
+          name: 'Pilot',
+          expected: { name: over(LIMITS.milestoneName.max) },
+        },
+        NAME,
+      ],
+      [
+        `/v1/tasks/${row.id}`,
+        { description: 'Short', expected: { description: over(LIMITS.description.max) } },
+        'update_task',
+        {
+          ref: row.id,
+          description: 'Short',
+          expected: { description: over(LIMITS.description.max) },
+        },
+        TASK_TEXT,
+      ],
+      [
+        '/v1/projects/TBED',
+        { description: 'Short', expected: { description: over(LIMITS.projectDescription.max) } },
+        'update_project',
+        {
+          project: 'TBED',
+          description: 'Short',
+          expected: { description: over(LIMITS.projectDescription.max) },
+        },
+        PROJECT_TEXT,
+      ],
+    ]
+    for (const [path, body, name, args, error] of cases) {
+      expect(await send(fx, 'PATCH', path, body, admin), `${path} ${error}`).toEqual({
+        status: 400,
+        text: JSON.stringify({ error }),
+      })
+      expect(await tool(fx, name, args, admin), `${name} ${error}`).toMatchObject(toolError(error))
+    }
+    const saved = await fx.t.run(async (ctx) => [
+      (await byId(ctx, 'teams', fx.team.id))?.name,
+      (await byId(ctx, 'projects', fx.meta.id))?.name,
+      (await byId(ctx, 'milestones', milestone))?.name,
+      (await byId(ctx, 'issues', row.id))?.description,
+    ])
+    expect(saved).toEqual(['Hardware', fx.meta.name, 'Prototype', 'Plan'])
+    // at the cap once trimmed it is a value, so it compares
     expect(
       await send(
         fx,
         'PATCH',
-        '/v1/projects/TBED',
-        { name: 'Testbed', expected: { name: longer } },
+        teamPath,
+        { name: 'Firmware', expected: { name: ` ${'x'.repeat(LIMITS.teamName.max)} ` } },
         admin,
       ),
-    ).toMatchObject({ status: 200 })
-    const row = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
-    const posted = await send(fx, 'POST', `/v1/tasks/${row.id}/comments`, { body: 'First' })
-    const comment = (JSON.parse(posted.text) as { id: string }).id
-    const body = 'x'.repeat(20_001)
-    await fx.t.run(async (ctx) => {
-      const stored = await byId(ctx, 'comments', comment)
-      if (stored) await ctx.db.patch(stored._id, { body })
-    })
+    ).toMatchObject({ status: 409 })
     expect(
-      await send(fx, 'PATCH', `/v1/comments/${comment}`, {
-        body: 'Short',
-        expected: { body: `${body}!` },
+      await send(fx, 'PATCH', `/v1/tasks/${row.id}`, {
+        description: 'Short',
+        expected: { description: 'x'.repeat(LIMITS.description.max) },
       }),
     ).toMatchObject({ status: 409 })
-    expect(
-      await send(fx, 'PATCH', `/v1/comments/${comment}`, { body: 'Short', expected: { body } }),
-    ).toMatchObject({ status: 200 })
-
-    // a project description saved before its 500-character cap, too
-    const legacy = 'legacy text '.repeat(50)
-    await fx.t.run((ctx) => ctx.db.patch(fx.meta._id, { description: legacy }))
-    const project = '/v1/projects/TBED'
-    expect(
-      await send(
-        fx,
-        'PATCH',
-        project,
-        { description: 'Short', expected: { description: `${legacy}!` } },
-        admin,
-      ),
-    ).toMatchObject({ status: 409 })
-    expect(
-      await send(
-        fx,
-        'PATCH',
-        project,
-        { description: 'Short', expected: { description: legacy } },
-        admin,
-      ),
-    ).toMatchObject({ status: 200 })
   })
 
   it('compares a well-formed id that names nobody, so a refusal tells no id exists', async () => {
@@ -618,159 +690,6 @@ describe('text values in expected', () => {
 })
 
 describe('values saved before their rule', () => {
-  /* An organization admin's MCP token, which may rename teams and projects
-   * over REST and MCP. */
-  async function adminAuth(fx: Fx, secret: string): Promise<Record<string, string>> {
-    const token_hash = await sha256hex(secret)
-    await fx.t.run((ctx) =>
-      ctx.db.insert('mcp_tokens', {
-        id: uuid(),
-        profile_id: fx.admin.id,
-        name: 'admin',
-        token_prefix: secret.slice(0, 11),
-        token_hash,
-        access: 'write',
-        created_at: NOW,
-      }),
-    )
-    return { Authorization: `Bearer ${secret}` }
-  }
-
-  /* Until 2026-10-16 a team, project or milestone took any name, so a
-   * stored one may be blank, and every read answers it as stored. */
-  it('compares a blank name in the app, over REST and over MCP', async () => {
-    const fx = await setup()
-    const admin = await adminAuth(fx, `qvt_${'blanknam'.repeat(6)}`)
-    const milestone = uuid()
-    await fx.t.run((ctx) =>
-      ctx.db.insert('milestones', {
-        id: milestone,
-        project_id: fx.meta.id,
-        name: 'Prototype',
-        week: '2026-06-01',
-        created_at: NOW,
-      }),
-    )
-    /* Stores blank names on the team, the project TBED and the milestone,
-     * the team's only spaces, as a write before the rule could. */
-    const blank = () =>
-      fx.t.run(async (ctx) => {
-        const team = await byId(ctx, 'teams', fx.team.id)
-        const stored = await byId(ctx, 'milestones', milestone)
-        if (team === null || stored === null) throw new Error('fixture rows are missing')
-        await ctx.db.patch(team._id, { name: '  ' })
-        await ctx.db.patch(fx.meta._id, { name: '' })
-        await ctx.db.patch(stored._id, { name: '' })
-      })
-    const names = () =>
-      fx.t.run(async (ctx) => [
-        (await byId(ctx, 'teams', fx.team.id))?.name,
-        (await byId(ctx, 'projects', fx.meta.id))?.name,
-        (await byId(ctx, 'milestones', milestone))?.name,
-      ])
-    const teamPath = `/v1/teams/${fx.team.id}`
-    const milestonePath = `/v1/projects/TBED/milestones/${milestone}`
-
-    await blank()
-    // a name read before someone blanked it is stale
-    for (const [path, name] of [
-      [teamPath, 'Firmware'],
-      ['/v1/projects/TBED', 'Testbed'],
-      [milestonePath, 'Pilot'],
-    ]) {
-      expect(
-        await send(fx, 'PATCH', path, { name, expected: { name: 'Hardware' } }, admin),
-        path,
-      ).toMatchObject({ status: 409 })
-    }
-    expect(await names()).toEqual(['  ', '', ''])
-    // a blank name gives the sentence nothing to quote, so it names the id
-    const changed = (what: string, label: string) => ({
-      status: 409,
-      text: JSON.stringify({
-        error: `${what} of ${label} changed since you read it, so nothing was saved; read ${label} again and resend your change`,
-      }),
-    })
-    expect(
-      await send(
-        fx,
-        'PATCH',
-        teamPath,
-        { name: 'Firmware', expected: { name: 'Hardware' } },
-        admin,
-      ),
-    ).toEqual(changed('name', `team ${fx.team.id}`))
-    expect(
-      await send(fx, 'PATCH', milestonePath, { name: 'Pilot', expected: { name: 'Beta' } }, admin),
-    ).toEqual(changed('name', `milestone ${milestone}`))
-    // and so does the access of a team named blank
-    expect(
-      await send(
-        fx,
-        'PUT',
-        `/v1/projects/TBED/access/teams/${fx.team.id}`,
-        { level: 'viewer', expected: { level: 'user' } },
-        admin,
-      ),
-    ).toEqual(changed('level', `the access of team ${fx.team.id} to project TBED`))
-
-    // REST, blank as read or with spaces
-    for (const [path, name, seen] of [
-      [teamPath, 'Firmware', ''],
-      ['/v1/projects/TBED', 'Testbed', ' '],
-      [milestonePath, 'Pilot', ''],
-    ]) {
-      expect(
-        await send(fx, 'PATCH', path, { name, expected: { name: seen } }, admin),
-        path,
-      ).toMatchObject({ status: 200 })
-    }
-    expect(await names()).toEqual(['Firmware', 'Testbed', 'Pilot'])
-    // a name saved with spaces around it is quoted without them
-    await fx.t.run(async (ctx) => {
-      const team = await byId(ctx, 'teams', fx.team.id)
-      if (team) await ctx.db.patch(team._id, { name: ' Hardware ' })
-    })
-    expect(
-      await send(fx, 'PATCH', teamPath, { name: 'Firmware', expected: { name: 'Old' } }, admin),
-    ).toEqual(changed('name', 'team "Hardware"'))
-
-    await blank()
-    const calls: [string, Record<string, unknown>][] = [
-      ['set_team', { team_id: fx.team.id, name: 'Firmware 2' }],
-      ['update_project', { project: 'TBED', name: 'Testbed 2' }],
-      ['set_milestone', { project: 'TBED', milestone, name: 'Pilot 2' }],
-    ]
-    for (const [name, args] of calls) {
-      const result = await tool(fx, name, { ...args, expected: { name: '' } }, admin)
-      expect(result.isError, `${name} ${JSON.stringify(result)}`).toBeUndefined()
-    }
-    expect(await names()).toEqual(['Firmware 2', 'Testbed 2', 'Pilot 2'])
-
-    // the app sends the name it shows
-    await blank()
-    const org_id = fx.org.id
-    await as(fx.t, fx.admin).mutation(api.teams.update, {
-      org_id,
-      id: fx.team.id,
-      patch: { name: 'Firmware 3' },
-      expected: { name: '  ' },
-    })
-    await as(fx.t, fx.admin).mutation(api.projects.update, {
-      org_id,
-      id: fx.meta.id,
-      patch: { name: 'Testbed 3' },
-      expected: { name: '' },
-    })
-    await as(fx.t, fx.admin).mutation(api.projects.updateMilestone, {
-      org_id,
-      id: milestone,
-      patch: { name: 'Pilot 3' },
-      expected: { name: '' },
-    })
-    expect(await names()).toEqual(['Firmware 3', 'Testbed 3', 'Pilot 3'])
-  })
-
   /* Until 2026-10-16 a milestone took any day written YYYY-MM-DD, one that
    * does not exist included, and REST and MCP read it back as its date. */
   it('compares a milestone date that does not exist, and refuses one of another shape', async () => {
@@ -811,160 +730,6 @@ describe('values saved before their rule', () => {
     const moved = await tool(fx, 'set_milestone', { ...args, expected: { date: '2026-02-31' } })
     expect(moved.isError, JSON.stringify(moved)).toBeUndefined()
     expect(await week()).toBe('2026-03-09')
-  })
-
-  /* Until 2026-10-19 the app took any string as the id of a new person,
-   * project or task, so a task's people, parent and project and a
-   * project's lead may name a row by an id that is not a uuid, and every
-   * read answers it as stored. */
-  it('compares an id that is not a uuid, as one made before ids had to be uuids', async () => {
-    const fx = await setup()
-    const admin = await adminAuth(fx, `qvt_${'legacyid'.repeat(6)}`)
-    const ann = 'Legacy-Ann'
-    await fx.t.run(async (ctx) => {
-      const { _id, _creationTime, auth_user_id, ...guest } = fx.guest
-      await ctx.db.insert('profiles', {
-        ...guest,
-        id: ann,
-        email: 'ann@testbed.test',
-        name: 'Ann',
-      })
-    })
-    const old = await plantProject(fx.t, {
-      org_id: fx.org.id,
-      id: 'Project-Old',
-      key: 'OLD',
-      type: 'project',
-      parent_id: fx.meta.id,
-      lead_id: ann,
-    })
-    const [first, second] = await Promise.all(
-      ['Task-First', 'Task-Second'].map((id) =>
-        plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, id }),
-      ),
-    )
-    const row = await plantIssue(fx.t, {
-      org_id: fx.org.id,
-      project_id: old.id,
-      assignee_id: ann,
-      reviewer_id: ann,
-      parent_id: first.id,
-    })
-    const ref = `/v1/tasks/${key(row)}`
-    const read = JSON.parse((await send(fx, 'GET', ref)).text) as Record<string, unknown>
-    expect([read.assignee_id, read.reviewer_id, read.parent_id, read.project_id]).toEqual([
-      ann,
-      ann,
-      first.id,
-      old.id,
-    ])
-    const parentNow = (id: string) =>
-      fx.t.run(async (ctx) => {
-        const live = await byId(ctx, 'issues', row.id)
-        if (live) await ctx.db.patch(live._id, { parent_id: id })
-      })
-
-    // a stale one is a conflict, the parent included when both are shown
-    await parentNow(second.id)
-    expect(
-      await send(fx, 'PATCH', ref, {
-        parent: null,
-        expected: { parent_id: first.id, has_hidden_parent: false },
-      }),
-    ).toMatchObject({ status: 409 })
-    expect(
-      await send(fx, 'PATCH', ref, {
-        assignee_id: null,
-        expected: { assignee_id: 'Legacy-Bo' },
-      }),
-    ).toMatchObject({ status: 409 })
-    expect((await task(fx, row.id))?.assignee_id).toBe(ann)
-    await parentNow(first.id)
-
-    // the values as read compare, in any case
-    for (const [body, expected] of [
-      [{ assignee_id: null }, { assignee_id: read.assignee_id }],
-      [{ reviewer_id: null }, { reviewer_id: ann.toUpperCase() }],
-      [{ parent: null }, { parent_id: read.parent_id, has_hidden_parent: false }],
-      [{ project: 'TBED', sub_project: 'FW' }, { project_id: read.project_id }],
-    ]) {
-      expect(
-        await send(fx, 'PATCH', ref, { ...body, expected }),
-        JSON.stringify(body),
-      ).toMatchObject({ status: 200 })
-    }
-    const saved = await task(fx, row.id)
-    expect([saved?.assignee_id, saved?.reviewer_id, saved?.parent_id, saved?.project_id]).toEqual([
-      undefined,
-      undefined,
-      undefined,
-      fx.sub.id,
-    ])
-    expect(
-      await send(
-        fx,
-        'PATCH',
-        '/v1/projects/OLD',
-        { lead_id: fx.admin.id, expected: { lead_id: ann } },
-        admin,
-      ),
-    ).toMatchObject({ status: 200 })
-
-    // over MCP alike
-    await fx.t.run(async (ctx) => {
-      const live = await byId(ctx, 'issues', row.id)
-      const project = await byId(ctx, 'projects', old.id)
-      if (live === null || project === null) throw new Error('fixture rows are missing')
-      await ctx.db.patch(live._id, {
-        assignee_id: ann,
-        parent_id: first.id,
-        project_id: old.id,
-      })
-      await ctx.db.patch(project._id, { lead_id: ann })
-    })
-    const update = (args: Record<string, unknown>) =>
-      tool(fx, 'update_task', { ref: key(row), ...args })
-    expect(
-      await update({
-        assignee_id: null,
-        expected: { assignee_id: 'Legacy-Bo' },
-      }),
-    ).toMatchObject({ isError: true })
-    for (const args of [
-      { assignee_id: null, expected: { assignee_id: ann } },
-      {
-        parent: null,
-        expected: { parent_id: first.id, has_hidden_parent: false },
-      },
-      { project: 'TBED', sub_project: 'FW', expected: { project_id: old.id } },
-    ]) {
-      const result = await update(args)
-      expect(result.isError, JSON.stringify(result)).toBeUndefined()
-    }
-    const lead = await tool(
-      fx,
-      'update_project',
-      { project: 'OLD', lead_id: fx.admin.id, expected: { lead_id: ann } },
-      admin,
-    )
-    expect(lead.isError, JSON.stringify(lead)).toBeUndefined()
-
-    // a value no id can be is still a 400
-    for (const [body, error] of [
-      [
-        { assignee_id: null, expected: { assignee_id: 7 } },
-        'expected.assignee_id must be a profile id or null',
-      ],
-      [
-        { project: 'TBED', sub_project: 'PCB', expected: { project_id: null } },
-        'expected.project_id must be a project id',
-      ],
-    ] as const) {
-      expect(await send(fx, 'PATCH', ref, body), error).toEqual({
-        status: 400,
-        text: JSON.stringify({ error }),
-      })
-    }
   })
 })
 
@@ -1058,48 +823,6 @@ describe('a parent the caller cannot read', () => {
       })
       expect(probe.status, seen).toBe(409)
     }
-  })
-})
-
-describe('parents made before ids had to be uuids', () => {
-  /* Tasks made until 2026-10-19 may have ids that are not uuids, and two
-   * of them may differ in case only. */
-  async function legacy() {
-    const fx = await setup()
-    const elsewhere = await plantProject(fx.t, { org_id: fx.org.id, key: 'HID' })
-    const away = await plantProject(fx.t, {
-      org_id: fx.org.id,
-      key: 'HIDS',
-      type: 'project',
-      parent_id: elsewhere.id,
-    })
-    const plant = (id: string, project_id: string) =>
-      plantIssue(fx.t, { org_id: fx.org.id, project_id, id })
-    const shown = await plant('Task-A', fx.sub.id)
-    const twin = await plant('task-a', away.id)
-    const other = await plant('Task-B', away.id)
-    const row = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
-    const parentNow = (id: string) =>
-      fx.t.run(async (ctx) => {
-        const live = await byId(ctx, 'issues', row.id)
-        if (live) await ctx.db.patch(live._id, { parent_id: id })
-      })
-    const detach = (seen: string) =>
-      send(fx, 'PATCH', `/v1/tasks/${key(row)}`, {
-        parent: null,
-        expected: { parent_id: seen, has_hidden_parent: false },
-      })
-    return { shown, twin, other, parentNow, detach }
-  }
-
-  it('answers alike whichever hidden task is the parent, and matches one that stayed in any case', async () => {
-    const { shown, twin, other, parentNow, detach } = await legacy()
-    for (const hidden of [twin.id, other.id]) {
-      await parentNow(hidden)
-      expect((await detach(shown.id)).status, hidden).toBe(409)
-    }
-    await parentNow(shown.id)
-    expect((await detach(shown.id.toLowerCase())).status).toBe(200)
   })
 })
 

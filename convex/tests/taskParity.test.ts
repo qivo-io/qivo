@@ -30,9 +30,9 @@ import {
 } from '../lib/core'
 import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
+import { SUBTASK_WITH_SUBTASKS } from '../lib/limits'
 import { liveIn } from '../lib/liveTasks'
 import { delayClock, taskForecaster } from '../lib/machineDelay'
-import { SUBTASK_WITH_SUBTASKS } from '../lib/taskLimits'
 import { sha256hex } from '../machine/auth'
 import { taskAttachments } from '../model/attachments'
 import {
@@ -1274,14 +1274,12 @@ describe('MCP task parity', () => {
     expect((await row(fx.t, t1.id)).title).toBe('Again')
     // lists are checked item by item, and a list where one value goes fails
     for (const [name, args, problem] of [
-      ['list_tasks', { status: [] }, 'status: Too small: expected array to have >=1 items'],
       [
         'list_tasks',
         { status: ['todo', 'later'] },
         'status: Invalid option: expected one of "backlog"|"todo"|"progress"|"review"|"done"',
       ],
       ['list_tasks', { status: null }, 'status: Invalid input: expected string, received null'],
-      ['list_tasks', { offset: -1 }, 'offset: Too small: expected int to be >=0'],
       [
         'update_task',
         { ref: t1.id, add_labels: ['Bug', 2] },
@@ -1300,6 +1298,13 @@ describe('MCP task parity', () => {
     ] as const) {
       expect(await call(name, args)).toBe(`${invalid} ${name}: ${problem}`)
     }
+    // bounds are the server's, so they answer its sentence, not the schema's
+    expect(await call('list_tasks', { status: [] })).toBe(
+      'status must name at least one of backlog, todo, progress, review, done',
+    )
+    expect(await call('list_tasks', { offset: -1 })).toBe(
+      'offset must be a whole number, 0 or more',
+    )
     // null detaches, so it passes
     expect(await callJson('update_task', { ref: t1.id, parent: null })).toMatchObject({
       updated: ['parent_id'],

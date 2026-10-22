@@ -7,6 +7,7 @@ import type { Id } from '../_generated/dataModel'
 import type { ActionCtx } from '../_generated/server'
 import authSchema from '../betterAuth/schema'
 import http from '../http'
+import { LIMITS } from '../lib/limits'
 import { PANORAMA_MAX_BYTES } from '../lib/panoramaImage'
 import {
   as,
@@ -466,17 +467,22 @@ describe('approved weekly Canvas images', () => {
 })
 
 describe('private custom background uploads', () => {
-  it.each(['', ' ', '../Lake.jpg', 'x'.repeat(256), 'Lake\n.jpg'])(
-    'refuses an invalid upload name without creating a ticket: %j',
-    async (name) => {
-      const { t, owner } = await setup()
-      await expectRefusal(
-        owner.caller.mutation(api.appearance.createUpload, { name }),
-        'bad_request',
-      )
-      expect(await t.run((ctx) => ctx.db.query('background_uploads').collect())).toEqual([])
-    },
-  )
+  const BAD_NAME = 'choose an image filename without paths or control characters'
+  it.each([
+    ['', BAD_NAME],
+    [' ', BAD_NAME],
+    ['../Lake.jpg', BAD_NAME],
+    ['x'.repeat(256), LIMITS.backgroundName.refusal],
+    ['Lake\n.jpg', BAD_NAME],
+  ])('refuses an invalid upload name without creating a ticket: %j', async (name, sentence) => {
+    const { t, owner } = await setup()
+    const refusal = await expectRefusal(
+      owner.caller.mutation(api.appearance.createUpload, { name }),
+      'rule',
+    )
+    expect(refusal.data.message).toBe(sentence)
+    expect(await t.run((ctx) => ctx.db.query('background_uploads').collect())).toEqual([])
+  })
 
   it.each([
     { name: 'JPEG', mime: 'image/jpeg', bytes: jpeg },

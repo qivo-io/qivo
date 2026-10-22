@@ -14,17 +14,16 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect } from '@/components/ui/native-select'
-import { Textarea } from '@/components/ui/textarea'
 import { hasOpenTooltip } from '@/lib/passEscapeOn'
 import { cn } from '@/lib/utils'
-import { REASSIGN_MAX } from '../../convex/lib/projectGrants'
+import { grouped, LIMITS } from '../../convex/lib/limits'
 import { projectKeyBase, projectKeyCandidate } from '../../convex/lib/projectKeys'
-import { PROJECT_DESCRIPTION_MAX } from '../../convex/lib/projectLimits'
-import { DELETE_REASON_MAX, NAME_MAX } from '../../convex/lib/textLimits'
+import { LimitedInput, LimitedTextarea } from '../components/LimitedField'
 import { ProjectAccessSelect } from '../components/ProjectAccessSelect'
 import { Avatar, DateSelect, FieldSelect, Icon } from '../components/qivo'
 import { relativeWeek, weekToISO } from '../lib/dates'
 import { closeOrAsk } from '../lib/discardQuestion'
+import { limitSentence, overLimit } from '../lib/fieldLimits'
 import { restoreFocus } from '../lib/focusVisibility'
 import { isLandscapeRoadmapOpen } from '../lib/landscape'
 import { UnsentScopeContext, useTypedUnsaved, useUnsaved, useUnsentScope } from '../lib/leaveGuard'
@@ -343,7 +342,8 @@ function NewIssueModal({
   const canSave =
     metas.some((meta) => meta.id === metaId) &&
     subProjects.some((project) => project.id === projId) &&
-    title.trim().length > 0
+    title.trim().length > 0 &&
+    !overLimit(LIMITS.title, title)
 
   // Switching project carries the sub-project with it: the one held in state
   // belongs to the project being left, and leaving it there would submit a
@@ -418,12 +418,12 @@ function NewIssueModal({
         </NativeSelect>
       </MField>
       <MField label="Title">
-        <Input
+        <LimitedInput
+          limit={LIMITS.title}
           aria-label="Title"
           data-autofocus
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          maxLength={P.TITLE_MAX}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.nativeEvent.isComposing) submit()
           }}
@@ -484,11 +484,11 @@ function CreatorNote({ note, lead }: { note: ReturnType<typeof creatorNote>; lea
 function NameRow({ nameRef, name, setName, submit }) {
   return (
     <MField label="Name">
-      <Input
+      <LimitedInput
+        limit={LIMITS.projectName}
         aria-label="Name"
         ref={nameRef}
         value={name}
-        maxLength={NAME_MAX}
         onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') submit()
@@ -537,7 +537,11 @@ function NewProjectModal({
   useEffectM(() => {
     if (!leadValid) changeLead(leadCandidates[0]?.id || '')
   }, [leadValid])
-  const canSave = name.trim().length > 0 && leadValid
+  const canSave =
+    name.trim().length > 0 &&
+    !overLimit(LIMITS.projectName, name) &&
+    !overLimit(LIMITS.projectDescription, desc) &&
+    leadValid
   const note = creatorNote({
     creator,
     lead,
@@ -590,9 +594,9 @@ function NewProjectModal({
         </NativeSelect>
       </MField>
       <MField label="Description">
-        <Input
+        <LimitedInput
+          limit={LIMITS.projectDescription}
           aria-label="Description"
-          maxLength={PROJECT_DESCRIPTION_MAX}
           value={desc}
           onChange={(e) => setDesc(e.target.value)}
           className={ctlClass}
@@ -660,7 +664,8 @@ function NewSubProjectModal({
   // parentValid: an init.parent the caller doesn't lead (openNewIssue's
   // redirect, the views' empty-state buttons) isn't among the options.
   const parentValid = metas.some((m) => m.id === parent)
-  const canSave = name.trim().length > 0 && parentValid && leadValid
+  const canSave =
+    name.trim().length > 0 && !overLimit(LIMITS.projectName, name) && parentValid && leadValid
 
   const submit = () => {
     if (!canSave) return
@@ -1111,10 +1116,10 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
               </span>
               <span className="text-sm text-text-2">
                 Reviewer roles move to the same person.
-                {/* the server's fixed cap; its room for one request cannot be
-                    known here, so only the count is checked */}
-                {count > REASSIGN_MAX &&
-                  ` One removal reassigns at most ${REASSIGN_MAX} tasks, so ${canKeep ? `keep ${names.length === 1 ? `${names[0].split(' ')[0]} as a Viewer` : 'them as Viewers'} or ` : ''}reassign some of ${these} first.`}
+                {/* the server's fixed cap (LIMITS.reassign); its room for one
+                    request cannot be known here, so only the count is checked */}
+                {count > LIMITS.reassign.max &&
+                  ` One removal reassigns at most ${grouped(LIMITS.reassign.max)} tasks, so ${canKeep ? `keep ${names.length === 1 ? `${names[0].split(' ')[0]} as a Viewer` : 'them as Viewers'} or ` : ''}reassign some of ${these} first.`}
               </span>
             </span>
           </Label>
@@ -1298,11 +1303,19 @@ const refusedOnThrow = (sent: Promise<boolean>) =>
     return false
   })
 
+/** The reason field's limit. An archive's reason is saved as a comment on
+    the task (LIMITS.archiveReason); a delete's is shown on its Deleted items
+    row (LIMITS.deleteReason). A reason typed for one stays when the person
+    switches to the other, and holds it while it is too long. */
+const reasonLimit = (archiving: boolean) => (archiving ? LIMITS.archiveReason : LIMITS.deleteReason)
+const reasonTooLong = (archiving: boolean, reason: string) =>
+  overLimit(reasonLimit(archiving), reason)
+
 /** The reason field under the cards. Archive's is a comment on the task and
     is required, since the field shows for an archive only when work is
-    unfinished. Delete's is optional and shown in Deleted items. Both hold at
-    most DELETE_REASON_MAX characters, the server's cap for either, so a
-    reason typed for one fits the other. The field tells assistive
+    unfinished. Delete's is optional and shown in Deleted items. The hint
+    names the limit, and a reason over it says so and holds the archive or
+    delete rather than cut what was typed. The field tells assistive
     technology both, and its hint. */
 function FateReason({
   archiving,
@@ -1314,15 +1327,17 @@ function FateReason({
   onChange: (value: string) => void
 }) {
   const hint = useIdM()
+  const limit = reasonLimit(archiving)
+  const tooLong = reasonTooLong(archiving, value)
   return (
     <MField data-fate-reason-field label={archiving ? 'Reason (required)' : 'Reason (optional)'}>
-      <Textarea
+      <LimitedTextarea
+        limit={limit}
         data-fate-reason
         aria-label={archiving ? 'Reason for archiving' : 'Reason for deleting'}
         aria-required={archiving}
         aria-describedby={hint}
         rows={archiving ? 3 : 2}
-        maxLength={DELETE_REASON_MAX}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className={cn(
@@ -1331,9 +1346,13 @@ function FateReason({
           archiving ? 'min-h-[72px]' : 'min-h-[56px]',
         )}
       />
-      <p id={hint} className="mt-2 text-sm text-text-2">
-        {archiving ? "Saved to the task's comments." : 'Shown in Deleted items.'} At most{' '}
-        {DELETE_REASON_MAX} characters.
+      <p
+        id={hint}
+        className={cn('mt-2 text-sm', tooLong ? '[color:var(--danger)]' : 'text-text-2')}
+      >
+        {tooLong
+          ? limitSentence(limit)
+          : `${archiving ? "Saved to the task's comments." : 'Shown in Deleted items.'} At most ${grouped(limit.max)} characters.`}
       </p>
     </MField>
   )
@@ -1440,7 +1459,11 @@ function ArchiveOrDeleteTaskModal({
   const showReason = !archiving || unfinished
   const archiveBlocked = archiving && withSubtasks && readOnly
   const canSubmit =
-    !saving && (!archiving || (!archiveBlocked && (!unfinished || reason.trim().length > 0)))
+    !saving &&
+    (archiving
+      ? !archiveBlocked &&
+        (!unfinished || (reason.trim().length > 0 && !reasonTooLong(true, reason)))
+      : !reasonTooLong(false, reason))
   const viewOnly = plan.rows.some((r) => !r.deletable)
   const suffix = !withSubtasks
     ? ''
@@ -1717,7 +1740,7 @@ function ArchiveOrDeleteProjectModal({
         : `Moves the ${noun} to Deleted items. You can restore it from there.`
   const listed = archiving ? subs.filter((s) => !s.archived) : subs
   const submit = () => {
-    if (!summary || saving) return
+    if (!summary || saving || (!archiving && reasonTooLong(false, reason))) return
     if (archiving) {
       onArchive?.()
       return
@@ -1735,7 +1758,7 @@ function ArchiveOrDeleteProjectModal({
       busy={saving}
       unsent={[!saving && !!reason.trim() && 'reason']}
       onSubmit={submit}
-      canSubmit={!!summary && !saving}
+      canSubmit={!!summary && !saving && (archiving || !reasonTooLong(false, reason))}
       dangerSubmit={!archiving}
       focusAfterClose={focusAfterClose}
       submitLabel={
@@ -1779,9 +1802,7 @@ function ArchiveOrDeleteProjectModal({
             {listed.map((s) => (
               <div key={s.id} data-fate-subproject={s.id} className={fateRow}>
                 <Icon name="layers" size={14} className="self-center text-text-3" />
-                <span className="min-w-0 flex-1 truncate text-text-1">
-                  {P.projectName({ name: s.name, type: 'project' })}
-                </span>
+                <span className="min-w-0 flex-1 truncate text-text-1">{s.name}</span>
                 {s.archived && <span className="shrink-0 text-text-3">Archived</span>}
                 <span className="shrink-0 text-text-2">
                   {/* a count that stopped before this sub-project read none of it */}
@@ -1870,10 +1891,11 @@ function MilestoneModal({
   const list = project
     ? P.milestonesIn(project.id)
         .slice()
-        .sort((a, b) => a.week - b.week || P.milestoneLabel(a).localeCompare(P.milestoneLabel(b)))
+        .sort((a, b) => a.week - b.week || a.name.localeCompare(b.name))
     : []
   const next = list.find((m) => m.week >= P.TODAY_WEEK) ?? null
-  const canAdd = canWrite && name.trim().length > 0 && !adding
+  const canAdd =
+    canWrite && name.trim().length > 0 && !overLimit(LIMITS.milestoneName, name) && !adding
   const add = () => {
     if (!canAdd || !project) return
     // The typed name and date stay until the server creates the milestone,
@@ -1902,7 +1924,7 @@ function MilestoneModal({
       // a new milestone's name, typed and not added yet
       unsent={[!!name.trim() && 'milestone name']}
       // the shell's chip is set in mono for task keys; a project name is prose
-      badge={project && <span className="font-sans">{P.projectName(project)}</span>}
+      badge={project && <span className="font-sans">{project.name}</span>}
       onClose={onClose}
       width={600}
       footer={(close) => (
@@ -1920,18 +1942,19 @@ function MilestoneModal({
         <>
           {canWrite && (
             <div className="flex flex-wrap items-center gap-3">
-              <Input
+              <LimitedInput
+                limit={LIMITS.milestoneName}
                 aria-label="New milestone"
                 placeholder="New milestone"
                 data-milestone-new
                 data-autofocus={init.id ? undefined : ''}
                 value={name}
-                maxLength={NAME_MAX}
                 onChange={(e) => setName(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') add()
                 }}
-                className={cn(ctlClass, 'min-w-[160px] flex-1 font-medium')}
+                wrapperClassName="min-w-[160px] flex-1"
+                className={cn(ctlClass, 'font-medium')}
               />
               {/* the week and Add stay together when a phone wraps the row */}
               <span className="flex shrink-0 items-center gap-3">
@@ -2007,8 +2030,8 @@ function MilestoneRowView({
       type="button"
       variant="ghost"
       size="icon-xs"
-      title={`Edit “${P.milestoneLabel(m)}”`}
-      aria-label={`Edit ${P.milestoneLabel(m)}`}
+      title={`Edit “${m.name}”`}
+      aria-label={`Edit ${m.name}`}
       onClick={onEdit}
       className="text-text-2 hover:text-text-1"
     >
@@ -2030,7 +2053,7 @@ function MilestoneRowView({
       <span
         className={cn('min-w-0 flex-1 truncate text-base', past ? 'text-text-2' : 'text-text-1')}
       >
-        {P.milestoneLabel(m)}
+        {m.name}
       </span>
       {mobile && edit}
       <span className={cn('flex items-center gap-3', mobile && 'basis-full pl-6')}>
@@ -2088,7 +2111,7 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
   // a save in flight: the editor stays open, its fields read-only, until
   // the server answers
   const [saving, setSaving] = useStateM(false)
-  const canSave = name.trim().length > 0 && !saving
+  const canSave = name.trim().length > 0 && !overLimit(LIMITS.milestoneName, name) && !saving
   // an answer that comes after this editor closed, for example because
   // another milestone's editor opened, closes nothing
   const mounted = useRefM(true)
@@ -2164,18 +2187,19 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
           aria-hidden="true"
           className="size-[9px] shrink-0 rotate-45 rounded-[var(--r-2xs)] bg-[var(--milestone)]"
         />
-        <Input
+        <LimitedInput
+          limit={LIMITS.milestoneName}
           aria-label="Name"
           data-autofocus
           autoFocus
           value={name}
-          maxLength={NAME_MAX}
           readOnly={saving}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') save()
           }}
-          className={cn(ctlClass, 'min-w-[160px] flex-1 font-medium')}
+          wrapperClassName="min-w-[160px] flex-1"
+          className={cn(ctlClass, 'font-medium')}
         />
         <DateSelect
           value={week}
@@ -2231,7 +2255,7 @@ function CreateOrgModal({ onClose }: { onClose: () => void }) {
   useEffectM(() => {
     ref.current?.focus()
   }, [])
-  const canSave = name.trim().length > 0 && !busy
+  const canSave = name.trim().length > 0 && !overLimit(LIMITS.orgName, name) && !busy
   const submit = async () => {
     if (!canSave) return
     setBusy(true)
@@ -2254,12 +2278,12 @@ function CreateOrgModal({ onClose }: { onClose: () => void }) {
       width={440}
     >
       <MField label="Organization name">
-        <Input
+        <LimitedInput
+          limit={LIMITS.orgName}
           aria-label="Organization name"
           ref={ref}
           data-create-org
           value={name}
-          maxLength={NAME_MAX}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') submit()

@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { EMAIL_SHAPE as SERVER_EMAIL_SHAPE } from '../../convex/model/people'
 import type { PeopleCheck } from './api'
 import {
+  addressIssue,
   addressMessage,
   cleanAddress,
   conflictMessage,
   createLabel,
-  EMAIL_SHAPE,
   freeUntil,
   isCompleteRow,
   type PersonDraft,
@@ -26,9 +25,46 @@ const messages = (rows: PersonDraft[], adminFirst = false, checks = none) =>
   reviewPeople(rows, { adminFirst, checks }).issues.map((issue) => issue?.message ?? null)
 
 describe('person rows', () => {
-  it('uses the server email shape', () => {
-    expect(EMAIL_SHAPE.source).toBe(SERVER_EMAIL_SHAPE.source)
-    expect(EMAIL_SHAPE.flags).toBe(SERVER_EMAIL_SHAPE.flags)
+  it('sends an address as the server stores it, lowercased with a punycode domain', () => {
+    const review = reviewPeople(
+      [row('Anna Berg', ' Anna@Bücher.DE '), row('Jörn Lie', 'JORN@Example.com')],
+      { adminFirst: false, checks: none },
+    )
+    expect(review.ready).toBe(true)
+    expect(review.people.map((p) => p.email)).toEqual(['anna@xn--bcher-kva.de', 'jorn@example.com'])
+  })
+
+  it('refuses an address the mail sender cannot send to, and one over 254 characters', () => {
+    const long = `${'a'.repeat(64)}@${'b'.repeat(186)}.com`
+    expect(long).toHaveLength(255)
+    const review = reviewPeople([row('A', 'a@b.c, d@e.f'), row('B', long)], {
+      adminFirst: false,
+      checks: none,
+    })
+    expect(review.ready).toBe(false)
+    expect(review.issues).toEqual([
+      { message: 'Enter a full email address.', field: 'email', incomplete: true },
+      {
+        message: 'An email address must be at most 254 characters. Use a shorter address.',
+        field: 'email',
+        incomplete: false,
+      },
+    ])
+  })
+
+  it('refuses a name over 80 characters at once, and keeps it whole', () => {
+    const review = reviewPeople([row('n'.repeat(81), 'elin@x.io')], {
+      adminFirst: false,
+      checks: none,
+    })
+    expect(review.issues).toEqual([
+      {
+        message: 'A name must be at most 80 characters. Shorten it.',
+        field: 'name',
+        incomplete: false,
+      },
+    ])
+    expect(review.people[0].name).toHaveLength(81)
   })
 
   it('accepts complete rows and sends them cleaned, ignoring blank rows', () => {
@@ -123,9 +159,13 @@ describe('person rows', () => {
 })
 
 describe('organization address', () => {
-  it('lowercases typing and stops at 40 characters', () => {
+  it('lowercases typing and keeps an address over 40 characters, refused with its sentence', () => {
     expect(cleanAddress('Halden-Labs')).toBe('halden-labs')
-    expect(cleanAddress('a'.repeat(45))).toHaveLength(40)
+    expect(cleanAddress('a'.repeat(45))).toHaveLength(45)
+    expect(addressIssue('a'.repeat(40))).toBe('')
+    expect(addressIssue('a'.repeat(41))).toBe(
+      'An organization address must be at most 40 characters of lowercase letters, digits and single hyphens between them. Choose another address.',
+    )
   })
 
   it('maps every refusal reason to a sentence', () => {

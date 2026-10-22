@@ -16,6 +16,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { Doc } from '../_generated/dataModel'
+import { LIMITS } from '../lib/limits'
 import { sha256hex } from '../machine/auth'
 import { ROUTES } from '../machine/rest'
 import {
@@ -641,7 +642,7 @@ describe('PATCH /v1/users/{id}', () => {
         body: { error: 'user not found' },
       })
     }
-    const whole = 'plannable hours must be a whole number of hours from 1 to 168'
+    const whole = LIMITS.plannableHours.refusal
     for (const [body, error] of [
       [{ plannable_hours: 31.5 }, whole],
       [{ plannable_hours: '30' }, whole],

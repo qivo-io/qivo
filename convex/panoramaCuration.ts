@@ -18,6 +18,7 @@ import {
   platformQuery,
   rule,
 } from './lib/functions'
+import { LIMITS } from './lib/limits'
 import {
   jpegDimensions,
   PANORAMA_MAX_BYTES,
@@ -611,7 +612,7 @@ async function retainUnsplashUpload(
     throw badRequest('keep the image location within 300 characters')
   const file = await ctx.db.system.get(storage_id)
   if (file?.contentType !== 'image/jpeg' || file.size > PANORAMA_MAX_BYTES)
-    throw badRequest('choose a JPEG image no larger than 8 MB')
+    throw badRequest(`choose a JPEG image no larger than ${LIMITS.backgroundSize.max} MiB`)
   if (await storageIdInUse(ctx, storage_id)) throw badRequest('this file is already in use')
   const existing =
     (await ctx.db

@@ -32,7 +32,7 @@ let snap: Snapshot
 let container: HTMLDivElement
 let root: Root
 
-function fixture(myRole: Profile['org_role'], crewName: string) {
+function fixture(myRole: Profile['org_role']) {
   const next = plannerFixture()
   const org = next.orgs[0].id
   const me = next.profiles[0]
@@ -49,7 +49,7 @@ function fixture(myRole: Profile['org_role'], crewName: string) {
   next.teams.push({
     id: 'crew',
     org_id: org,
-    name: crewName,
+    name: 'Crew',
     track_delay_default: false,
     created_at: NOW,
   })
@@ -70,10 +70,9 @@ function fixture(myRole: Profile['org_role'], crewName: string) {
   return next
 }
 
-/* Loads the store as `myRole`, with the Crew team named `crewName`. */
-async function load(myRole: Profile['org_role'], crewName = 'Crew') {
+async function load(myRole: Profile['org_role']) {
   vi.resetModules()
-  snap = fixture(myRole, crewName)
+  snap = fixture(myRole)
   network.query.mockResolvedValue(null)
   network.onUpdate.mockImplementation((_ref, _args, next) => {
     next(structuredClone(snap))
@@ -140,27 +139,22 @@ async function click(selector: string) {
   await act(async () => element.click())
 }
 
+/* Types `value` into `input` as one change, the way a paste lands. */
+async function type(input: HTMLInputElement, value: string) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
+function button(label: string) {
+  const found = [...document.querySelectorAll('button')].find((b) => b.textContent === label)
+  if (!found) throw new Error(`Missing button ${label}`)
+  return found
+}
+
 const note = () => document.querySelector('[data-footer-note]')
 const accessField = () => find('[data-new-project-access]').textContent
-
-describe('a team saved with a blank name', () => {
-  it('is found in the access picker by the label it shows', async () => {
-    await load('user', '  ')
-    await render(<dialogs.NewProjectModal onClose={vi.fn()} onCreate={vi.fn()} />)
-    await click('[data-new-project-access]')
-    const search = find<HTMLInputElement>('[data-project-access-search]')
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
-        search,
-        'unnamed',
-      )
-      search.dispatchEvent(new Event('input', { bubbles: true }))
-    })
-    expect(find('[data-project-access-team-option="crew"]').getAttribute('aria-label')).toBe(
-      'Unnamed team',
-    )
-  })
-})
 
 describe('New project for a standard user', () => {
   beforeEach(() => load('user'))
@@ -185,15 +179,41 @@ describe('New project for a standard user', () => {
     expect(checkbox.closest('div')?.textContent).toContain('Aisha Rahman (you)')
   })
 
-  it('stops the name and description at the server limits of 80 and 500 characters', async () => {
+  it('keeps a pasted name and description over their caps, marks them and holds Create', async () => {
     await render(<dialogs.NewProjectModal onClose={vi.fn()} onCreate={vi.fn()} />)
-    expect(find<HTMLInputElement>('input[aria-label="Name"]').maxLength).toBe(80)
-    expect(find<HTMLInputElement>('input[aria-label="Description"]').maxLength).toBe(500)
+    const name = find<HTMLInputElement>('input[aria-label="Name"]')
+    const description = find<HTMLInputElement>('input[aria-label="Description"]')
+    await type(name, 'n'.repeat(81))
+    await type(description, 'd'.repeat(501))
+    expect(name.value).toHaveLength(81)
+    expect(description.value).toHaveLength(501)
+    expect(name.getAttribute('aria-invalid')).toBe('true')
+    expect(description.getAttribute('aria-invalid')).toBe('true')
+    const counts = [...document.querySelectorAll('[data-limit-count]')].map((c) => c.textContent)
+    expect(counts).toEqual([
+      '81/80 A project name must be at most 80 characters. Shorten it.',
+      '501/500 A project description must be at most 500 characters. Shorten it.',
+    ])
+    expect(button('Create project').disabled).toBe(true)
+    await type(name, 'n'.repeat(80))
+    await type(description, 'd'.repeat(500))
+    expect(name.getAttribute('aria-invalid')).toBeNull()
+    expect(document.querySelector('[data-limit-count]')?.getAttribute('data-limit-count')).toBe(
+      'near',
+    )
+    expect(button('Create project').disabled).toBe(false)
   })
 
-  it('stops a new organization name at the server limit of 80 characters', async () => {
+  it('shows no count far from the cap and holds Create for a new organization over it', async () => {
     await render(<dialogs.CreateOrgModal onClose={vi.fn()} />)
-    expect(find<HTMLInputElement>('input[aria-label="Organization name"]').maxLength).toBe(80)
+    const name = find<HTMLInputElement>('input[aria-label="Organization name"]')
+    await type(name, 'n'.repeat(71))
+    expect(document.querySelector('[data-limit-count]')).toBeNull()
+    await type(name, 'n'.repeat(72))
+    expect(document.querySelector('[data-limit-count]')?.textContent).toBe('72/80')
+    await type(name, 'n'.repeat(81))
+    expect(name.maxLength).toBe(-1)
+    expect(button('Create').disabled).toBe(true)
   })
 
   it('names the creator first beside other shares', async () => {

@@ -36,10 +36,9 @@ import {
 import { byId } from '../lib/db'
 import type { MessageKind } from '../lib/enums'
 import { badRequest, forbidden, rule } from '../lib/functions'
-import { MENTION_MAX, mentionIds } from '../lib/mentions'
-import { projectName } from '../lib/recordNames'
+import { LIMITS } from '../lib/limits'
+import { mentionIds } from '../lib/mentions'
 import { reviewerOwns, taskOwnerId } from '../lib/review'
-import { FOLLOWER_MAX, FOLLOWERS_FULL } from '../lib/taskLimits'
 import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { scheduleArchiveMarks } from './archiveMarks'
 import { newUuid } from './orgs'
@@ -631,21 +630,21 @@ export async function scheduleItemTrims(
   }
 }
 
-/** How a new follow meets FOLLOWER_MAX (lib/taskLimits.ts). 'refuse'
- * throws FOLLOWERS_FULL, for a follow by hand. 'skip' adds no follower, for
+/** How a new follow meets LIMITS.followers.max (lib/limits.ts). 'refuse'
+ * throws LIMITS.followers.refusal, for a follow by hand. 'skip' adds no follower, for
  * a comment's author and a mentioned person, whose comment or mention still
  * goes ahead. 'pass' adds the follower anyway, for a new assignee or
  * reviewer, who must hear about their own task. */
 export type FollowCap = 'refuse' | 'skip' | 'pass'
 
-/** Whether the task already has FOLLOWER_MAX followers, read with a bound.
+/** Whether the task already has LIMITS.followers.max followers, read with a bound.
  * A task followed before the cap can have more. */
 export async function followersFull(ctx: QueryCtx, issueId: string): Promise<boolean> {
   const rows = await ctx.db
     .query('issue_subscriptions')
     .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issueId))
-    .take(FOLLOWER_MAX)
-  return rows.length >= FOLLOWER_MAX
+    .take(LIMITS.followers.max)
+  return rows.length >= LIMITS.followers.max
 }
 
 /* --------------------------------------------------------------- subscribe
@@ -679,7 +678,7 @@ export async function subscribeToIssue(
     .unique()
   if (existing !== null) return false
   if (a.cap !== 'pass' && (await followersFull(ctx, a.issue_id))) {
-    if (a.cap === 'refuse') throw rule(FOLLOWERS_FULL)
+    if (a.cap === 'refuse') throw rule(LIMITS.followers.refusal)
     return false
   }
   await ctx.db.insert('issue_subscriptions', {
@@ -699,7 +698,7 @@ export async function subscribeToIssue(
 
 /**
  * Starts `me` following `issue`. Refuses a task whose project `me` cannot
- * see, and one with FOLLOWER_MAX followers that `me` does not follow yet.
+ * see, and one with LIMITS.followers.max followers that `me` does not follow yet.
  * Returns whether `me` was not following it before.
  */
 export async function followTask(
@@ -994,8 +993,8 @@ export async function removeReadMessages(
   return { removed: batch, hasMore: rows.length > INBOX_BATCH }
 }
 
-/* The farthest ahead a snooze may reach. */
-const MAX_SNOOZE_MS = 366 * 86_400_000
+/* The farthest ahead a snooze may reach (LIMITS.snooze, in days). */
+const MAX_SNOOZE_MS = LIMITS.snooze.max * 86_400_000
 
 /* The scheduled end of a snooze, convex/messages.ts wake, referenced by
  * name so this module does not import the app module. */
@@ -1007,7 +1006,7 @@ const wakeRef = makeFunctionReference<
 
 /**
  * Snoozes the items the rows belong to until `until`, an ISO instant at
- * most a year ahead, or with null lifts their snooze now. Either way the
+ * most LIMITS.snooze days ahead, or with null lifts their snooze now. Either way the
  * item ends up unread, because a snoozed row is a reminder, and a reminder
  * that returns already read is easy to miss. The write covers every row of each
  * item, so all of them keep the same stamp, and schedules the wake that
@@ -1032,7 +1031,7 @@ export async function snoozeMessages(
     const ms = Date.parse(until)
     if (Number.isNaN(ms)) throw badRequest('snooze: until must be an ISO instant')
     if (ms <= Date.now()) throw badRequest('snooze: until must be in the future')
-    if (ms > Date.now() + MAX_SNOOZE_MS) throw badRequest('snooze: at most a year ahead')
+    if (ms > Date.now() + MAX_SNOOZE_MS) throw rule(LIMITS.snooze.refusal)
     at = new Date(ms).toISOString() // normalized, so the wake's equality holds
   }
   const changed = new Set<string>()
@@ -1240,9 +1239,8 @@ export async function readArchivedTaskMessages(
 }
 
 /* The most bytes of tasks one project walk step reads. Descriptions hold up
- * to TEXT_MAX characters (lib/textLimits.ts, about 60 KB stored), and tasks
- * saved before that cap can be near the 1 MiB document limit, so the page
- * also ends early on bytes. */
+ * to TEXT_MAX characters (lib/limits.ts, at most about 60 KB stored), so
+ * the page also ends early on bytes. */
 const ARCHIVED_READ_TASK_BYTES = 8 * 1024 * 1024
 
 /**
@@ -1304,19 +1302,19 @@ export async function readArchivedProjectMessages(
  * lib/mentions.ts reads the mentions out of a text. They map onto the
  * supplied profile list (callers pass the org's profiles — active or not,
  * the SQL org fence never filtered on active); unknown uuids drop. Every
- * write refuses a text with more than MENTION_MAX mentions, so each one
- * reads at most that many profiles. */
+ * write refuses a text with more than LIMITS.mentions.max mentions, so each
+ * one reads at most that many profiles. */
 
 /** The profiles among `profiles` that `text` mentions (lib/mentions.ts
- * mentionIds), at most MENTION_MAX of them. */
+ * mentionIds), at most LIMITS.mentions.max of them. */
 export function extractMentions(text: string, profiles: Doc<'profiles'>[]): Doc<'profiles'>[] {
-  return mentionIds(text, MENTION_MAX).flatMap((id) => profiles.filter((p) => p.id === id))
+  return mentionIds(text, LIMITS.mentions.max).flatMap((id) => profiles.filter((p) => p.id === id))
 }
 
 /* The profiles of organization `orgId` that `text` mentions, read by uuid
  * through `cache`. Unknown and foreign uuids drop. Writes refuse a text with
- * more than MENTION_MAX mentions, and the bound here keeps the reads to that
- * many regardless. */
+ * more than LIMITS.mentions.max mentions, and the bound here keeps the reads
+ * to that many regardless. */
 async function mentionedIn(
   ctx: QueryCtx,
   text: string,
@@ -1324,7 +1322,7 @@ async function mentionedIn(
   orgId: string,
 ): Promise<Doc<'profiles'>[]> {
   const out: Doc<'profiles'>[] = []
-  for (const id of mentionIds(text, MENTION_MAX)) {
+  for (const id of mentionIds(text, LIMITS.mentions.max)) {
     const profile = await orgProfile(ctx, cache, orgId, id)
     if (profile !== undefined) out.push(profile)
   }
@@ -1346,9 +1344,9 @@ async function mentionedIn(
  * (`inline`), and how many each background step tells after that (`step`).
  * A follower costs about two index ranges, a few writes and about a
  * millisecond, so a task followed by some thousands of people before
- * FOLLOWER_MAX existed passed Convex's 4,096 ranges, and a bulk save of
+ * LIMITS.followers.max existed passed Convex's 4,096 ranges, and a bulk save of
  * tasks with many followers passed its 1 s. A task gains no followers past
- * FOLLOWER_MAX now, besides owners who still follow. A follower whose item
+ * LIMITS.followers.max now, besides owners who still follow. A follower whose item
  * holds snoozed rows also costs one write for each row the notice wakes
  * (postMessage), so a step stops once it has made `stepRoom` database calls
  * and leaves the rest to the next. An inline fan-out has no such stop.
@@ -1941,7 +1939,7 @@ export async function notifyIssueUpdate(
   }
   if (after.paused !== before.paused) parts.push(after.paused ? 'Paused' : 'Resumed')
   if (after.project_id !== before.project_id) {
-    parts.push(`Moved to ${project ? projectName(project) : 'another project'}`)
+    parts.push(`Moved to ${project?.name ?? 'another project'}`)
   }
   // the new parent, for the attach line each reader reads from their side
   let parent: { id: string; project_id: string; key: string } | undefined

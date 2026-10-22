@@ -267,6 +267,14 @@
     line-height: 1.4;
     font-weight: 500;
   }
+  /* a 255-character title holds three lines; the task opens on a tap */
+  .mobile-task-title-text {
+    min-width: 0;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+  }
   .mobile-task-meta {
     display: flex;
     flex-wrap: wrap;

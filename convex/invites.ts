@@ -32,12 +32,7 @@ import { canManageProjectUsers } from './lib/access'
 import { byId } from './lib/db'
 import { isDemoDeployment, refuseDemoFeature } from './lib/demo'
 import { forbidden, notFound, orgMutation, orgQuery, rule } from './lib/functions'
-import {
-  APP_SENDS_PER_ORG_HOUR,
-  INVITE_NOT_HELD,
-  INVITE_SENDING,
-  INVITES_HELD,
-} from './lib/inviteLimits'
+import { INVITE_NOT_HELD, INVITE_SENDING, LIMITS } from './lib/limits'
 import { sendInviteEmail } from './mail'
 import { audit } from './model/admin'
 import { newUuid } from './model/orgs'
@@ -63,8 +58,8 @@ export type ScheduledInvite = Infer<typeof vInvite>
 const vActor = v.object({ auth_user_id: v.optional(v.string()), email: v.string() })
 type Actor = Infer<typeof vActor>
 
-/* The rolling window of the app's cap (lib/inviteLimits.ts
- * APP_SENDS_PER_ORG_HOUR), which counts console sends too. Sends in flight,
+/* The rolling window of the app's cap (lib/limits.ts
+ * LIMITS.invitesPerHour), which counts console sends too. Sends in flight,
  * delivered or uncertain count. Attempts held back by the cap and sends the
  * provider never accepted (refused, or never reached) do not, because no
  * email went out. */
@@ -132,8 +127,8 @@ async function capFreesAt(ctx: QueryCtx, orgId: string): Promise<string | null> 
     .filter(countsTowardCap)
     .map((r) => r.ts)
     .sort()
-  if (counted.length < APP_SENDS_PER_ORG_HOUR) return null
-  const keeping = counted[counted.length - APP_SENDS_PER_ORG_HOUR]
+  if (counted.length < LIMITS.invitesPerHour.max) return null
+  const keeping = counted[counted.length - LIMITS.invitesPerHour.max]
   return new Date(Date.parse(keeping) + CAP_WINDOW_MS).toISOString()
 }
 
@@ -489,10 +484,10 @@ async function mayInviteAgain(
  * a grant on. Only a send held back by the cap or one that failed goes
  * again (INVITE_NOT_HELD otherwise), so nobody can email one address over
  * and over. Refuses with INVITE_SENDING while the seat's newest send is in
- * flight, so two requests send one email, with INVITES_HELD while the hour
- * is full, so a held send is not recorded again, and anything that is not a
- * pending invitation as not found. A public demo refuses it, as every other
- * invitation write.
+ * flight, so two requests send one email, with LIMITS.invitesPerHour's
+ * refusal while the hour is full, so a held send is not recorded again, and
+ * anything that is not a pending invitation as not found. A public demo
+ * refuses it, as every other invitation write.
  */
 export const sendAgain = orgMutation({
   args: { profile_id: v.string() },
@@ -510,7 +505,7 @@ export const sendAgain = orgMutation({
     // only a send that did not go out goes again, so nobody can email one
     // address over and over through this
     if (state !== 'held' && state !== 'unsent') throw rule(INVITE_NOT_HELD)
-    if ((await capFreesAt(ctx, seat.org_id)) !== null) throw rule(INVITES_HELD)
+    if ((await capFreesAt(ctx, seat.org_id)) !== null) throw rule(LIMITS.invitesPerHour.refusal)
     // Reserved here, in the same transaction as the checks, so the seat
     // shows the send in flight at once and a second request sees it.
     const { row } = await reserveSend(ctx, {

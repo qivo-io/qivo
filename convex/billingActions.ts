@@ -8,6 +8,7 @@ import { billingEnabled, subscriptionFor } from './lib/billingAccess'
 import { billingPlanFields } from './lib/billingTypes'
 import { byId } from './lib/db'
 import { badRequest, notFound, orgAction, platformAction, require, rule } from './lib/functions'
+import { LIMITS } from './lib/limits'
 import {
   CANCELABLE_POLAR_STATUSES,
   cancelPolarSubscription,
@@ -148,7 +149,7 @@ export const reserveCheckout = internalMutation({
       'This organization already has a subscription. Use Manage billing.',
     ))
     const seats = Math.max(plan.minimum_seats, (await getBillableUsers(ctx, org_id)).total)
-    require(seats <= 1000, rule('Online billing supports up to 1,000 active billable users.'))
+    require(seats <= LIMITS.billingSeats.max, rule(LIMITS.billingSeats.refusal))
     if (
       sub.checkout_id &&
       sub.checkout_url &&

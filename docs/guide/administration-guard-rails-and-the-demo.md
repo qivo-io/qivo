@@ -114,8 +114,8 @@ can choose **New project** and set its name, lead and optional team/user
 shares ([Creating projects and sub-projects](./who-sees-what-the-access-model.md#creating-projects-and-sub-projects)).
 
 Project settings includes the name, description, lead, access, delay tracking
-and review time. Names allow up to 80 characters. Descriptions allow up to
-500 characters and save when you click outside; clearing the field removes
+and review time. Names allow up to 80 characters and descriptions up to 500
+([Limits](./limits.md)). A description saves when you click outside; clearing the field removes
 the description. Lead access is required to change **Review time**. An empty
 sub-project value follows its parent project ([Review time](./will-it-be-ready-in-time-the-delay-status.md#review-time)).
 Its last section, **Archive or delete**, archives the project or moves it to
@@ -193,6 +193,12 @@ user per month, with a five-user minimum. People, viewers and agents count,
 including pending invitations. Guests with an active home membership are
 exempt. The count at renewal sets the next month's charge, with no mid-month
 proration or credit.
+
+Online billing supports up to 1,000 active billable users. Checkout refuses a
+larger organization. An organization that grows past 1,000 users keeps its
+last billed count, and the Billing page says it passed the limit. Email
+[support@qivo.io](mailto:support@qivo.io) to arrange billing for a larger
+organization ([Limits](./limits.md)).
 
 Billing lists active and inactive accounts and guests with their own billing.
 It also shows shared storage and API allowances, API usage by account and

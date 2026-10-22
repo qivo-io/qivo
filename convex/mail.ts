@@ -10,7 +10,6 @@
 
 import type { AuthMailOutcome } from './lib/authMail'
 import { address, localAuthEmailLogging, mailFrom, mailSendUrl } from './lib/mailConfig'
-import { cutName } from './lib/textLimits'
 
 /* Web-platform globals the Convex isolate provides; convex/tsconfig's lib is
  * ESNext only, which does not declare them (same move as model/orgs). */
@@ -394,8 +393,7 @@ export async function sendInviteEmail(input: {
 }): Promise<InviteOutcome> {
   const configured = sender()
   if (configured === null) return 'unsent'
-  // a name stored before the NAME_MAX cap can be longer, so it is cut here
-  const org = cutName(input.org_name.replace(/\s+/g, ' ').trim())
+  const org = input.org_name.replace(/\s+/g, ' ').trim()
   const join = (name: string) =>
     `${name} has invited you to join their organization${input.as_guest ? ' as a guest' : ''}.`
   const letter: Letter = {
@@ -444,7 +442,7 @@ export async function sendDeletionNotice(input: {
 }): Promise<boolean> {
   const configured = sender()
   if (configured === null) return false
-  const org = cutName(input.org_name.replace(/\s+/g, ' ').trim())
+  const org = input.org_name.replace(/\s+/g, ' ').trim()
   const lead = (name: string) =>
     `${name} is read-only and will be deleted on ${input.delete_after.slice(0, 10)}, with all of its projects, tasks, comments and files.`
   const rest = [

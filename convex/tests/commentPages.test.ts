@@ -14,8 +14,8 @@
  *   3. Ties: comments that share a _creationTime are neither skipped nor
  *      repeated at a read or page boundary, and long ones keep a page
  *      within its byte bound.
- *   4. Over HTTP: the REST route passes its query parameters, and the MCP
- *      schema refuses an out-of-range `limit`. */
+ *   4. Over HTTP: the REST route passes its query parameters, and MCP
+ *      answers an out-of-range `limit` with the same sentence as REST. */
 /// <reference types="vite/client" />
 
 import { getDocumentSize } from 'convex/values'
@@ -25,6 +25,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { BEFORE_NOT_A_COMMENT } from '../lib/core'
 import type { Refusal, RefusalCode } from '../lib/functions'
+import { LIMITS } from '../lib/limits'
 import { sha256hex } from '../machine/auth'
 import { COMMENT_PAGE_BYTES, COMMENT_PAGE_MAX, newestComments, threadPage } from '../model/comments'
 import {
@@ -167,9 +168,8 @@ describe('paging a thread', () => {
         .withIndex('by_issue', (q) => q.eq('issue_id', other.id))
         .first(),
     )
-    const limitSentence = `limit must be a whole number from 1 to ${COMMENT_PAGE_MAX}`
     for (const limit of ['0', '51', 'abc', '', '1.5', '-1']) {
-      await refused(restPage(fx, { limit }), 'bad_request', limitSentence)
+      await refused(restPage(fx, { limit }), 'rule', LIMITS.listComments.refusal)
     }
     for (const before of [elsewhere?.id ?? '', uuid(), 'xyz', '']) {
       await refused(restPage(fx, { before }), 'bad_request', BEFORE_NOT_A_COMMENT)
@@ -283,18 +283,6 @@ describe('paging a thread', () => {
       await refused(appPage(fx, before), 'bad_request', BEFORE_NOT_A_COMMENT)
     }
   })
-
-  it('the app loads the newest COMMENT_PAGE_MAX comments, oldest first', async () => {
-    const fx = await setup()
-    await plantThread(fx, COMMENT_PAGE_MAX + 5)
-    const thread = await as(fx.t, fx.guest).query(api.snapshot.commentsForIssue, {
-      org_id: fx.org.id,
-      issue_id: fx.task.id,
-    })
-    expect(thread).toHaveLength(COMMENT_PAGE_MAX)
-    expect(thread[0].body).toBe('#5')
-    expect(thread[thread.length - 1].body).toBe(`#${COMMENT_PAGE_MAX + 4}`)
-  })
 })
 
 /* ---------------------------------------------------------------- 2. bytes */
@@ -373,13 +361,11 @@ describe('pages bounded by bytes', () => {
 
   it("the app's thread loads the newest comments that fit", async () => {
     const fx = await largeThread()
-    const thread = await as(fx.t, fx.guest).query(api.snapshot.commentsForIssue, {
-      org_id: fx.org.id,
-      issue_id: fx.task.id,
-    })
-    expect(thread.length).toBeGreaterThan(0)
-    expect(thread.length).toBeLessThan(20)
-    expect(thread[thread.length - 1].created_at).toBe(
+    const { comments, earlier } = await appPage(fx)
+    expect(comments.length).toBeGreaterThan(0)
+    expect(comments.length).toBeLessThan(20)
+    expect(earlier).toBe(true)
+    expect(comments[comments.length - 1].created_at).toBe(
       new Date(Date.parse(NOW) + 19 * 1000).toISOString(),
     )
   })
@@ -543,7 +529,7 @@ async function plantKey(fx: Fx): Promise<string> {
 }
 
 describe('over HTTP', () => {
-  it('REST passes limit and before; MCP checks limit against its schema', async () => {
+  it('REST and MCP pass limit and before and answer the same limit sentence', async () => {
     const fx = await setup()
     await plantThread(fx, 5)
     const secret = await plantKey(fx)
@@ -562,7 +548,7 @@ describe('over HTTP', () => {
     expect(earlier.body.map((c: { body: string }) => c.body)).toEqual(['#1', '#2'])
     expect(await get('?limit=500')).toEqual({
       status: 400,
-      body: { error: `limit must be a whole number from 1 to ${COMMENT_PAGE_MAX}` },
+      body: { error: LIMITS.listComments.refusal },
     })
     expect(await get(`?before=${uuid()}`)).toEqual({
       status: 400,
@@ -604,17 +590,19 @@ describe('over HTTP', () => {
     const one = await call({ limit: 1 })
     expect(one.isError).toBeUndefined()
     expect(JSON.parse(one.content[0].text).map((c: { body: string }) => c.body)).toEqual(['#4'])
-    for (const [limit, problem] of [
-      [51, 'Too big: expected int to be <=50'],
-      [0, 'Too small: expected int to be >=1'],
-      ['2', 'Invalid input: expected number, received string'],
-    ] as const) {
-      const out = await call({ limit })
-      expect(out.isError).toBe(true)
-      expect(out.content[0].text).toBe(
-        `Input validation error: Invalid arguments for tool list_comments: limit: ${problem}`,
-      )
+    // the server checks the range and answers the limit's sentence, as REST does
+    for (const limit of [51, 0]) {
+      expect(await call({ limit })).toMatchObject({
+        content: [{ type: 'text', text: LIMITS.listComments.refusal }],
+        isError: true,
+      })
     }
+    // the schema still refuses a limit that is not a number
+    const text = await call({ limit: '2' })
+    expect(text.isError).toBe(true)
+    expect(text.content[0].text).toBe(
+      'Input validation error: Invalid arguments for tool list_comments: limit: Invalid input: expected number, received string',
+    )
     const wrong = await call({ before: uuid() })
     expect(wrong).toMatchObject({
       content: [{ type: 'text', text: BEFORE_NOT_A_COMMENT }],

@@ -1,14 +1,9 @@
 import { isLocalDevelopment } from './deployment'
+import { address } from './email'
 
-/* ONE address, and nothing that could be read as two — the recipient is
- * user-typed at sign-up, and whether a comma fans out or a `<` rewrites the
- * From is the provider's business, which is precisely why it must not be
- * decided there. 254 is the RFC 5321 ceiling on a path. */
-const ADDR =
-  /^[^\s@,;:<>"'\\]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i
-
-/** `s` itself when it is one bare email address, otherwise null. */
-export const address = (s: string): string | null => (s.length <= 254 && ADDR.test(s) ? s : null)
+/** `s` itself when it is one bare email address, otherwise null
+ * (lib/email.ts, the rule every stored address follows). */
+export { address }
 
 /** MAIL_FROM without surrounding whitespace when it is one bare address,
  * otherwise null. */

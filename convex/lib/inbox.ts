@@ -2,9 +2,10 @@
  * (convex/snapshot.ts forMe) and the machine inbox (machine/discussion.ts
  * inboxItems). Both read with INBOX_LIMIT, so they walk the same rows in the
  * same order and keep the same ones. The machine inbox folds all of them
- * into items, and the snapshot delivers the first 500 across a person's
- * seats, unread rows first, so the messages the app lists for a seat are
- * always among the ones the machine inbox lists for that profile.
+ * into items, and the snapshot delivers the first LIMITS.inboxShown
+ * (lib/limits.ts) across a person's seats, unread rows first, so the
+ * messages the app lists for a seat are always among the ones the machine
+ * inbox lists for that profile.
  *
  * Unread rows are never retired by retention, and read rows stay while a
  * person keeps retention at Never, so an inbox nobody clears grows without
@@ -18,10 +19,9 @@
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 
-/**
- * The most unread rows, and separately the most read rows, that one inbox
- * read keeps. The snapshot (per seat) and the machine inbox both read with
- * it, so the two surfaces select alike.
+/* INBOX_LIMIT (lib/limits.ts) is the most unread rows, and separately the
+ * most read rows, that one inbox read keeps. The snapshot (per seat) and the
+ * machine inbox both read with it, so the two surfaces select alike.
  *
  * Each walk examines at most 2 * INBOX_LIMIT rows plus one that shows it
  * stopped early, so one read fetches at most 2,002 messages. The snapshot
@@ -31,9 +31,7 @@ import type { QueryCtx } from '../_generated/server'
  * most 2,000 task lookups, plus a handful of access lookups per distinct
  * project, each project checked once. That stays well under Convex's 4,096
  * index ranges per transaction unless the examined rows span a few hundred
- * projects. Raising the limit raises those counts in step.
- */
-export const INBOX_LIMIT = 500
+ * projects. Raising the limit raises those counts in step. */
 
 /** Whether the reader is shown the task with this id, answered at once or
  * after a read (the machine inbox reads each task as it is asked). */

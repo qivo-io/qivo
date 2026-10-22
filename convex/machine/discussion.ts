@@ -53,9 +53,9 @@ import {
 } from '../lib/core'
 import { byId } from '../lib/db'
 import { vCredentialAccess } from '../lib/enums'
-import { badRequest, notFound, type Refusal } from '../lib/functions'
-import { INBOX_LIMIT, loadInbox } from '../lib/inbox'
-import { TEXT_MAX } from '../lib/textLimits'
+import { badRequest, notFound, type Refusal, rule } from '../lib/functions'
+import { loadInbox } from '../lib/inbox'
+import { DEFAULT_PAGE_SIZE, INBOX_LIMIT, LIMITS } from '../lib/limits'
 import { inWorkingSet } from '../lib/workingSet'
 import { COMMENT_FIELDS, deleteComment, editComment } from '../model/comments'
 import {
@@ -81,7 +81,14 @@ import {
 } from '../model/messages'
 import type { TOOLS } from './mcp'
 import type { ROUTES, route as restRoute } from './rest'
-import { needJson, optionalJson, pretty, refuseUnknownFields, wholeParam } from './shared'
+import {
+  needJson,
+  optionalJson,
+  pageLimit,
+  pageOffset,
+  pretty,
+  refuseUnknownFields,
+} from './shared'
 
 type McpTool = (typeof TOOLS)[number]
 type RestRoute = (typeof ROUTES)[number]
@@ -162,7 +169,7 @@ const newerThan = (a: Doc<'messages'>, b: Doc<'messages'>): boolean =>
  * snapshot shows them. Each task and project is read once, and `tasks`
  * keeps the shown tasks for the fold. One inbox read asks about at most
  * 2 * INBOX_LIMIT rows per walk, which bounds these lookups (see
- * INBOX_LIMIT in lib/inbox.ts).
+ * INBOX_LIMIT in lib/limits.ts).
  */
 function inboxShown(
   ctx: QueryCtx,
@@ -290,9 +297,9 @@ async function inboxItems(
  * one (model/messages.ts refuseArchivedItems), once for the refs and once
  * for the rows, so they use about 1,300 and stay inside with up to 13 such
  * teams. Snooze schedules one wake per item, 100 of the 1,000 allowed.
- * Duplicate refs count too.
+ * Duplicate refs count too. The value is the registry's (lib/limits.ts).
  */
-export const INBOX_TASKS_MAX = 100
+export const INBOX_TASKS_MAX = LIMITS.inboxTasks.max
 
 /** What an inbox change does to the items it names. */
 const INBOX_ACTIONS = ['read', 'unread', 'remove', 'snooze'] as const
@@ -326,9 +333,7 @@ function inboxRequest(
     if (!Array.isArray(tasks) || tasks.length === 0 || tasks.some((t) => typeof t !== 'string')) {
       throw badRequest('tasks must be a non-empty list of task refs')
     }
-    if (tasks.length > INBOX_TASKS_MAX) {
-      throw badRequest(`tasks must name at most ${INBOX_TASKS_MAX} tasks per call`)
-    }
+    if (tasks.length > INBOX_TASKS_MAX) throw rule(LIMITS.inboxTasks.refusal)
     refs = tasks as string[]
   }
   if (all && refs !== null) throw badRequest('name tasks or set all, not both')
@@ -514,7 +519,8 @@ export const mcpDeleteComment = internalMutation({
   },
 })
 
-/* list_inbox answers the caller's items, 50 by default and at most 200. */
+/* list_inbox answers a page of the caller's items, its `limit` and `offset`
+ * checked as REST checks them (shared.ts pageLimit, pageOffset). */
 export const mcpListInbox = internalQuery({
   args: {
     callerId: v.string(),
@@ -529,8 +535,8 @@ export const mcpListInbox = internalQuery({
     const page = await inboxItems(ctx, me, {
       unreadOnly: a.unread_only === true,
       includeSnoozed: a.include_snoozed === true,
-      limit: Math.min(a.limit ?? 50, 200),
-      offset: a.offset ?? 0,
+      limit: pageLimit(LIMITS.listInbox, a.limit),
+      offset: pageOffset(a.offset),
     })
     return pretty(page)
   },
@@ -633,8 +639,8 @@ export const restListInbox = internalQuery({
     return await inboxItems(ctx, me, {
       unreadOnly: flagParam(a.unread_only, 'unread_only'),
       includeSnoozed: flagParam(a.include_snoozed, 'include_snoozed'),
-      limit: wholeParam(a.limit, 'limit', 50, 1, 200),
-      offset: wholeParam(a.offset, 'offset', 0, 0, Number.MAX_SAFE_INTEGER),
+      limit: pageLimit(LIMITS.listInbox, a.limit),
+      offset: pageOffset(a.offset),
     })
   },
 })
@@ -741,7 +747,7 @@ export const DISCUSSION_TOOLS: McpTool[] = [
           body: {
             type: 'string',
             minLength: 1,
-            maxLength: TEXT_MAX,
+            maxLength: LIMITS.comment.max,
           },
           expected: expectedSchema(COMMENT_FIELDS),
         },
@@ -793,7 +799,7 @@ export const DISCUSSION_TOOLS: McpTool[] = [
     def: {
       name: 'list_inbox',
       title: 'List inbox',
-      description: `Your inbox as the app shows it: \`items\`, one per active task you can read, with its unread count, its messages (oldest first) and \`dropped_count\`, how many earlier unread messages it no longer holds because an item keeps at most ${ITEM_UNREAD_CAP} unread, latest activity first. \`unread_only\` keeps items with unread messages. Snoozed items are left out unless \`include_snoozed\`. \`limit\` (50 by default) and \`offset\` page through the items. One call lists up to ${INBOX_LIMIT} unread messages (newest first) and ${INBOX_LIMIT} read ones (most recently read first), looking at no more than ${2 * INBOX_LIMIT} of each, counting messages about tasks it does not list; \`truncated: true\` means some were not looked at. Mark items read to shrink the inbox.`,
+      description: `Your inbox as the app shows it: \`items\`, one per active task you can read, with its unread count, its messages (oldest first) and \`dropped_count\`, how many earlier unread messages it no longer holds because an item keeps at most ${ITEM_UNREAD_CAP} unread, latest activity first. \`unread_only\` keeps items with unread messages. Snoozed items are left out unless \`include_snoozed\`. \`limit\` (${DEFAULT_PAGE_SIZE} by default, at most ${LIMITS.listInbox.max}) and \`offset\` page through the items. One call lists up to ${INBOX_LIMIT} unread messages (newest first) and ${INBOX_LIMIT} read ones (most recently read first), looking at no more than ${2 * INBOX_LIMIT} of each, counting messages about tasks it does not list; \`truncated: true\` means some were not looked at. Mark items read to shrink the inbox.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -806,8 +812,8 @@ export const DISCUSSION_TOOLS: McpTool[] = [
           },
           limit: {
             type: 'integer',
-            minimum: 1,
-            maximum: 200,
+            minimum: LIMITS.listInbox.min,
+            maximum: LIMITS.listInbox.max,
           },
           offset: {
             type: 'integer',
@@ -833,7 +839,7 @@ export const DISCUSSION_TOOLS: McpTool[] = [
     def: {
       name: 'update_inbox',
       title: 'Update inbox',
-      description: `Apply \`action\` to your inbox items about \`tasks\` (up to ${INBOX_TASKS_MAX} task refs): \`read\`, \`unread\`, \`remove\` or \`snooze\`. With \`all: true\` instead, \`read\` marks every item read and \`remove\` removes every read item; repeat while \`has_more\` is true, and with \`read\` pass back the \`before\` each answer returns, so messages that arrive meanwhile stay unread. \`snooze\` needs \`until\`, an ISO date-time at most a year ahead, or null to bring the items back now; a snoozed item returns unread. The result lists the tasks whose items changed.`,
+      description: `Apply \`action\` to your inbox items about \`tasks\` (up to ${INBOX_TASKS_MAX} task refs): \`read\`, \`unread\`, \`remove\` or \`snooze\`. With \`all: true\` instead, \`read\` marks every item read and \`remove\` removes every read item; repeat while \`has_more\` is true, and with \`read\` pass back the \`before\` each answer returns, so messages that arrive meanwhile stay unread. \`snooze\` needs \`until\`, an ISO date-time at most ${LIMITS.snooze.max} days ahead, or null to bring the items back now; a snoozed item returns unread. The result lists the tasks whose items changed.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -880,8 +886,7 @@ export const DISCUSSION_TOOLS: McpTool[] = [
     def: {
       name: 'set_following',
       title: 'Follow task',
-      description:
-        'Follow a task (`following: true`) to receive its updates in your inbox, or stop following it. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid. A task has at most 100 followers, so following one that has 100 is refused. get_task shows `following` and `followers`.',
+      description: `Follow a task (\`following: true\`) to receive its updates in your inbox, or stop following it. \`ref\` is a task ID like QN-482 (bare 482 works too) or a uuid. A task has at most ${LIMITS.followers.max} followers, so following one that has ${LIMITS.followers.max} is refused. get_task shows \`following\` and \`followers\`.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',

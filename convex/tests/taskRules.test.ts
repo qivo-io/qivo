@@ -222,7 +222,7 @@ describe('postComment', () => {
     )
     await expectRefusal(
       t.run((ctx) => postComment(ctx, { issue: task, author: f.guest, body: '  ', now: NOW })),
-      'bad_request',
+      'rule',
       /^a comment cannot be empty$/,
     )
   })

@@ -13,12 +13,13 @@
 import { Fragment, type ReactNode, useEffect, useRef, useState } from 'react'
 import { PageTitle } from '@/components/settingsPage'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { HoverTooltip } from '@/components/ui/tooltip'
-import { ARCHIVED_SEARCH_MAX } from '../../../convex/lib/textLimits'
+import { LIMITS } from '../../../convex/lib/limits'
+import { LimitedInput } from '../../components/LimitedField'
 import { Icon, StatusDot } from '../../components/qivo'
 import { archivedAtLabel, deletedAtFull, monthLabel } from '../../lib/deletedTime'
+import { limitSentence, overLimit } from '../../lib/fieldLimits'
 import { restoreFocus } from '../../lib/focusVisibility'
 import { useMobile } from '../../lib/useMobile'
 import { type ArchivedIssueVM, P } from '../../store/planner'
@@ -55,7 +56,7 @@ function placeOf(projectId: string): string {
   const project = P.project(projectId)
   if (!project) return ''
   const parent = project.parent ? P.project(project.parent) : undefined
-  return parent ? `${P.projectName(parent)} › ${P.projectName(project)}` : P.projectName(project)
+  return parent ? `${parent.name} › ${project.name}` : project.name
 }
 
 /** The Archived tasks page, opened on `initialProject` when it is a project
@@ -79,14 +80,17 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
   // rests, and empty at once when the box is cleared
   const [query, setQuery] = useState('')
   const text = search.trim()
+  // a search over the server's cap is not sent; the list says why instead
+  const tooLong = overLimit(LIMITS.search, text)
   useEffect(() => {
     if (!text) {
       setQuery('')
       return
     }
+    if (tooLong) return
     const timer = window.setTimeout(() => setQuery(text), SEARCH_DELAY_MS)
     return () => window.clearTimeout(timer)
-  }, [text])
+  }, [text, tooLong])
 
   const [list, setList] = useState<Listing>(START)
   const [attempt, setAttempt] = useState(0)
@@ -224,13 +228,12 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
 
   const searching = query !== ''
   const ended = list.nextCursor === null
-  const shown = project ? P.project(project) : undefined
-  const projectName = shown && P.projectName(shown)
+  const projectName = project ? P.project(project)?.name : undefined
   const reach = count(list.scanned)
 
   // the count line under the filters, once the first page is in
   let countText = ''
-  if (list.phase !== 'first' && list.phase !== 'failedFirst' && visible.length > 0) {
+  if (!tooLong && list.phase !== 'first' && list.phase !== 'failedFirst' && visible.length > 0) {
     if (searching)
       countText = ended
         ? `${count(visible.length)} found`
@@ -240,6 +243,7 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
 
   let body: ReactNode = null
   if (!project) body = <ListNote>Choose a project to see its archived tasks.</ListNote>
+  else if (tooLong) body = <ListNote>{limitSentence(LIMITS.search)}</ListNote>
   else if (list.phase === 'first')
     body = (
       <ListNote>{searching ? 'Searching archived tasks…' : 'Loading archived tasks…'}</ListNote>
@@ -380,12 +384,12 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
             className="archived-search flex h-control items-center gap-2 rounded-md border border-border bg-surface-1 px-2"
           >
             <Icon name="search" size={16} color="var(--text-3)" />
-            <Input
+            <LimitedInput
+              limit={LIMITS.search}
               ref={searchRef}
               data-archive-search
               aria-label="Search archived tasks"
               placeholder="Search archived tasks…"
-              maxLength={ARCHIVED_SEARCH_MAX}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => {
@@ -396,7 +400,8 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
                   setSearch('')
                 }
               }}
-              className="h-full min-w-0 flex-1 rounded-none border-none bg-transparent p-0 text-base text-text-1 shadow-none focus-visible:ring-0"
+              wrapperClassName="h-full flex-1"
+              className="h-full rounded-none border-none bg-transparent p-0 text-base text-text-1 shadow-none focus-visible:ring-0"
             />
             {search && (
               <Button
@@ -453,8 +458,10 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
           </div>
         )}
         {body}
-        {rows.length > 0 && <div className="archived-list flex flex-col gap-2">{rows}</div>}
-        {fold}
+        {!tooLong && rows.length > 0 && (
+          <div className="archived-list flex flex-col gap-2">{rows}</div>
+        )}
+        {!tooLong && fold}
       </div>
     </>
   )

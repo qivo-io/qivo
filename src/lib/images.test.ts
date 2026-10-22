@@ -130,10 +130,13 @@ describe('webpName', () => {
     expect(webpName('')).toBe('image.webp')
   })
 
-  it("keeps the name within the server's 255 characters, counted as characters", () => {
+  it("keeps the name within the server's 255 characters, counted as UTF-16 units", () => {
     const stem = `${'é'.repeat(250)}😀`
     expect(webpName(`${stem}.png`)).toBe(`${'é'.repeat(250)}.webp`)
-    expect([...webpName(`${'a'.repeat(251)}.png`)]).toHaveLength(255)
+    expect(webpName(`${'a'.repeat(251)}.png`)).toHaveLength(255)
+    // an emoji is two units and is never split
+    expect(webpName(`${'a'.repeat(249)}😀😀.png`)).toBe(`${'a'.repeat(249)}.webp`)
+    expect(webpName(`${'😀'.repeat(200)}.png`)).toBe(`${'😀'.repeat(125)}.webp`)
     expect(webpName(`${'a'.repeat(300)}`)).toBe(`${'a'.repeat(250)}.webp`)
     expect(webpName(`${'a'.repeat(250)}.jpeg`)).toBe(`${'a'.repeat(250)}.webp`)
   })

@@ -91,9 +91,13 @@
       ".    meta  meta"
       ".    time  actions";
   }
+  /* wrapped to three lines; the hover still shows the whole title */
   .archived-row-name {
     white-space: normal;
     overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
   }
   .archived-row-time {
     margin-top: 4px;
@@ -120,9 +124,13 @@
       ".    meta  meta"
       ".    time  actions";
   }
+  /* wrapped to three lines; the hover still shows the whole title */
   .archived-row-name {
     white-space: normal;
     overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
   }
   .archived-row-time {
     margin-top: 4px;

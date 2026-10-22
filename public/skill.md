@@ -59,8 +59,8 @@ own comments need only read access to the task.
   archive/restore. The endpoint is
   `https://api.qivo.io/mcp`. Use the client's discovered tools and current
   `tools/list` schemas for arguments. `list_tasks` defaults to 50 results and
-  allows at most 200; page active lists with `offset` until a shorter page
-  arrives. Archived tasks need `project` and page with `cursor`; pass back
+  allows at most 200, and refuses a `limit` outside 1 to 200 as REST does;
+  page active lists with `offset` until a shorter page arrives. Archived tasks need `project` and page with `cursor`; pass back
   `next_cursor` until it is null. A tool refuses an argument it does not
   know and names it. Refresh the tool list and retry with current names.
 - **REST:** Use `https://api.qivo.io/v1` with an agent key or a personal
@@ -70,7 +70,8 @@ own comments need only read access to the task.
   their name. OAuth tokens work only on the REST webhook management routes,
   not these task and project routes.
   `GET /v1/tasks?project=<ref>&limit=200&offset=0` returns an
-  array; increment `offset` by the page size until a shorter page arrives.
+  array of at most 50 tasks when `limit` is left out; increment `offset` by
+  the page size until a shorter page arrives.
   `archived=true` needs `project` and returns `{next_cursor, tasks}`; pass
   `next_cursor` back as `cursor` until it is null, even after an empty page.
 - **Browser:** Use it for the actions under
@@ -191,12 +192,17 @@ each value as the last read showed it, such as `parent_id` with
 
 Useful field rules:
 
+- Every text limit counts JavaScript string length (UTF-16 code units) once
+  spaces at both ends are trimmed (a description or comment keeps the spaces
+  that start its first line), so most emoji count as two, and Qivo stores
+  the trimmed text. A value past a limit is refused with a sentence
+  that names the limit, and nothing changes.
+  [Limits](https://qivo.io/docs/limits/) lists every limit.
 - Status: `backlog`, `todo`, `progress`, `review`, `done`. Priority: `urgent`,
-  `high`, `medium`, `low`. Titles, and project, milestone and team names, must
-  be nonblank and at most 80 characters, counted as Unicode code points (most
-  single emoji count as one, a flag or a skin-tone emoji as two).
-- Descriptions and comments use Markdown, up to 20,000 characters each
-  (JavaScript string length, so an emoji can count as two). Omitted update
+  `high`, `medium`, `low`. Titles must be nonblank and at most 255
+  characters, and project, milestone and team names nonblank and at most 80.
+- Descriptions and comments use Markdown, up to 20,000 characters each,
+  formatting included. Omitted update
   fields stay unchanged. Use `null` to clear `assignee_id`, `reviewer_id`, `due_date`, or
   `remaining_hours`; use `""` to clear a description.
 - While a task is in `review` with a reviewer set, it is the reviewer's to act
@@ -335,16 +341,16 @@ Useful field rules:
   comment's `id` from `list_comments`, or REST `PATCH` and `DELETE
   /v1/comments/{id}`. Only the comment's author or a lead of the task's
   project may. An edit that adds a mention notifies that person. A
-  description or comment can mention at most 100 people; more is refused
-  with `a text can mention at most 100 people; remove some mentions and save
-  again`.
+  description or comment can mention at most 100 people. More is refused
+  with `a text can mention at most 100 people. Remove some mentions and save
+  again.`
 - **Follow a task:** `set_following` with `ref` and `following`, or REST `PUT`
   (follow) and `DELETE` (stop) on `/v1/tasks/{ref}/following`. Followers get
   the task's updates in their inbox. `get_task` shows `following` and
   `followers`. You are also made a follower when you are assigned, mentioned
   or comment. A task has at most 100 followers: following one that has 100 is
   a `400` with `this task already has 100 followers, the most a task can
-  have`, and comments and mentions add no follower there, though a mention
+  have. Someone must unfollow it first.`, and comments and mentions add no follower there, though a mention
   still notifies. A new assignee or reviewer still becomes a follower.
 - **Read your inbox:** `list_inbox` or `GET /v1/inbox` answers `items`, one
   per active task you can read, latest activity first, with its unread count
@@ -366,8 +372,8 @@ Useful field rules:
   marks everything read, and with `remove` removes every read item; repeat
   while `has_more` is `true`. With `read`, send back the `before` each
   answer returns, so messages that arrive meanwhile stay unread.
-  `snooze` needs `until` (an ISO date-time within a year, or `null` to bring
-  items back). `unread` and `snooze` refuse an archived task, or a task in an
+  `snooze` needs `until` (an ISO date-time at most 366 days ahead, or `null`
+  to bring items back). `unread` and `snooze` refuse an archived task, or a task in an
   archived project, until whatever is archived (the task, its project or both)
   is restored, while `read` and `remove` still work on it. Mark items read
   once you have handled them, so new updates stand out. Retention never
@@ -496,8 +502,11 @@ Use the client's supported MCP Events interface when available. A tool-only
 client can use REST webhook management with its credential instead.
 
 On REST, omit `ttlMs` or send null for no expiry. On MCP, omission requests seven
-days; send `ttlMs: null` for no expiry. A positive integer TTL is clamped between
-60 seconds and seven days.
+days; send `ttlMs: null` for no expiry. A `ttlMs` is a whole number of
+milliseconds from 60,000 (one minute) to 604,800,000 (seven days), and any
+other number is refused. A full subscription quota, 100 per organization
+and 20 per credential, is refused (REST `409`, MCP `-32013`); delete an
+unused subscription first.
 Renew finite subscriptions before `refreshBefore`; `refreshBefore: null` means
 renewal is unnecessary. Existing subscriptions keep their stored expiry until
 registered again. Each renewal applies the same rules, so omitting `ttlMs` in an

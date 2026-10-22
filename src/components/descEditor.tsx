@@ -62,7 +62,9 @@ import { createPortal } from 'react-dom'
 import { Input } from '@/components/ui/input'
 import { DropdownChevron } from '@/components/ui/select'
 import { closeOrAsk } from '@/lib/discardQuestion'
-import { TEXT_MAX, TEXT_MAX_LABEL } from '../../convex/lib/textLimits'
+import { countText, limitSentence, nearLimit } from '@/lib/fieldLimits'
+import { cn } from '@/lib/utils'
+import { grouped, LIMITS, TEXT_MAX, trimMarkdown } from '../../convex/lib/limits'
 import { compressImage } from '../lib/images'
 import { useUnsaved, useUnsentScope } from '../lib/leaveGuard'
 import type { MdBlock, MdInline } from '../lib/md'
@@ -135,11 +137,15 @@ function stripForeignImages(
 }
 
 const canonical = (text: string) => astToMd(parseMd(text))
+
+/** How long typing rests before the editor counts its draft. */
+const COUNT_DELAY_MS = 150
 /** Commit form: canonical AND a parse fixpoint (one extra parse catches the
     cases docToAst can't know about, e.g. bare URLs autolinking on reparse).
-    Past the parse cap the re-parse would hit parseMd's literal fallback and
-    re-escape everything, so the single-pass form is returned as is. commit
-    then refuses it, because the parse cap is also the save cap (TEXT_MAX). */
+    A draft past the parse cap would hit parseMd's literal fallback on the
+    re-parse and re-escape everything, so the single-pass form is returned as
+    is. commit then refuses it, because the parse cap is also the save cap
+    (TEXT_MAX), and a kept draft (getText) stays as typed. */
 const serialize = (editor: Editor) => {
   const md = astToMd(docToAst(editor.getJSON() as PMNode))
   return md.length > MAX_PARSE ? md : canonical(md)
@@ -179,7 +185,9 @@ function finishUpload(uuid: string, src: string, attId: string | null, alt: stri
   if (committed && issueKey)
     P.updateIssue(issueKey, { description: patched(overflow ? '' : ref) || null })
   if (overflow) {
-    toast(`Image not added. The description would go over the ${TEXT_MAX_LABEL} character limit.`)
+    toast(
+      `Image not added. The description would go over the ${grouped(TEXT_MAX)} character limit.`,
+    )
   }
   // in neither the draft nor the committed text (the paste was discarded
   // before the upload landed), or too long to keep, so drop the attachment
@@ -366,6 +374,11 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   // the task this editor writes to, which a moving handle keeps
   const taskUuid = issueKey === null ? undefined : P.issueById[issueKey]?.uuid
   const sessionUploadsRef = useRef<string[]>([])
+  // the cap this text saves under, and the draft's trimmed length as the
+  // store sends it, taken once typing rests (a serialize per keystroke would
+  // cost a long text too much)
+  const limit = isComment ? LIMITS.comment : LIMITS.description
+  const [count, setCount] = useState(() => trimMarkdown(value).length)
   const [linkPop, setLinkPop] = useState<LinkPop | null>(null)
   const [headMenu, setHeadMenu] = useState(false)
   const [dirty, setDirty] = useState(false)
@@ -787,6 +800,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     const doc = ed.schema.nodeFromJSON(astToDoc(parseMd(text)))
     ed.view.updateState(EditorState.create({ doc, plugins: ed.state.plugins }))
     committedDocRef.current = ed.state.doc
+    setCount(trimMarkdown(text).length)
   }
 
   /* The DraftKeep of a save from baseline `seen`. Its keepDraft gets the
@@ -831,11 +845,9 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       if (sendingRef.current) return // one commit at a time
       const text = serialize(ed)
       if (!text.trim()) return // an empty comment isn't a thing — Discard is the way out
-      // the server's caps, on the trimmed text the store sends; a comment's
-      // unchanged text goes back as the store and the server accept it.
-      // Refusing here keeps the draft and the edit mode
-      const refusal =
-        text.trim() === canonRef.current.trim() ? null : textRefusal('comment', text.trim())
+      // the server's caps, on the trimmed text the store sends; refusing
+      // here keeps the draft and the edit mode
+      const refusal = textRefusal(LIMITS.comment, text)
       if (refusal) {
         toast(refusal)
         return
@@ -896,7 +908,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     const text = serialize(ed)
     if (text !== canonRef.current) {
       // no-op otherwise (undo-back-to-original too)
-      const refusal = textRefusal('description', text)
+      const refusal = textRefusal(LIMITS.description, text)
       if (refusal) {
         // the server's caps. Returning before the baseline moves keeps the
         // draft dirty, with the Save bar up, as a refused comment does
@@ -1062,14 +1074,20 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   // a change landing back on the committed doc (undo) may unblock a held echo
   useEffect(() => {
     if (!editor) return
+    let counting: ReturnType<typeof setTimeout> | undefined
     const onUpd = () => {
       refreshDirtyRef.current()
       if (!dirtyRef.current) reconcileRef.current()
       // after the browser has laid the new line out, not before it
       if (editor.isFocused) requestAnimationFrame(() => keepFloorRef.current())
+      clearTimeout(counting)
+      counting = setTimeout(() => {
+        if (!editor.isDestroyed) setCount(trimMarkdown(serialize(editor)).length)
+      }, COUNT_DELAY_MS)
     }
     editor.on('update', onUpd)
     return () => {
+      clearTimeout(counting)
       editor.off('update', onUpd)
     }
   }, [editor])
@@ -1549,6 +1567,18 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
           visible way out of edit mode, like the mockup */}
       {(comment && !comment.reset ? true : (isComment || issueKey !== null) && dirty) && (
         <div className="mdactions animate-in fade-in zoom-in-95" data-mdactions>
+          {nearLimit(limit, count) && (
+            <span
+              data-limit-count={count > limit.max ? 'over' : 'near'}
+              className={cn(
+                'mr-auto text-xs tabular-nums',
+                count > limit.max ? 'text-danger' : 'text-text-3',
+              )}
+            >
+              {countText(limit, count)}
+              {count > limit.max && <span className="sr-only"> {limitSentence(limit)}</span>}
+            </span>
+          )}
           <Button
             type="button"
             variant="ghost"
@@ -1563,7 +1593,9 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
             type="button"
             className="h-control-sm [font-size:var(--fs-sm)] [font-weight:600] [background:var(--primary)] [border-color:var(--primary)] [color:#fff]"
             title={comment ? `${comment.label} (${MOD}S)` : `Save description (${MOD}S)`}
-            disabled={sending}
+            // off while the counted text is over the cap; commit refuses a
+            // keyboard save of a text counted before the last keystrokes
+            disabled={sending || count > limit.max}
             onClick={commit}
           >
             {comment ? comment.label : 'Save'}
@@ -1671,8 +1703,11 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   )
 })
 
-/** Outer guard: oversized texts render read-only (the parser's literal
-    fallback must never round-trip through a commit). */
+/** Outer guard: a stored text longer than the parse cap (lib/md.ts
+    MAX_PARSE, TEXT_MAX) renders read-only, because the parser's literal
+    fallback must never round-trip through a commit, which would escape all
+    of its Markdown. New writes cannot pass TEXT_MAX; a text saved before the
+    cap is shortened over REST or MCP (internal/overCapRows.ts reports it). */
 const DescEditor = forwardRef<DescEditorHandle, DescEditorProps>(function DescEditor(props, ref) {
   if (props.value.length > MAX_PARSE) {
     const onClose = props.comment?.onClose

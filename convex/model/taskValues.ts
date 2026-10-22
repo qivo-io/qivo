@@ -1,6 +1,6 @@
 import { badRequest, rule } from '../lib/functions'
+import { LIMITS } from '../lib/limits'
 import { roundTenths } from '../lib/numbers'
-import { REMAINING_HOURS_MAX, REMAINING_HOURS_RULE } from '../lib/taskLimits'
 
 type TaskDateField = 'start_week' | 'end_week' | 'due_date'
 
@@ -54,31 +54,26 @@ export function assertWeekPair(start: string | undefined, end: string | undefine
 
 export { roundTenths } from '../lib/numbers'
 
-export { REMAINING_HOURS_MAX, REMAINING_HOURS_RULE }
-
 /** Refuses remaining hours no task can hold, anything but a finite number
- * of at least 0 or null, with REMAINING_HOURS_RULE. These are cleanRemaining's
- * checks that need no stored row. REST and MCP run it as they parse the
+ * of at least 0 or null, with LIMITS.remainingHours.refusal. These are
+ * cleanRemaining's checks short of the maximum. REST and MCP run it as they parse the
  * request, after finding the task an edit names, so such a value is refused
  * before the field check and the task's other rules. */
 export function assertRemainingShape(value: unknown): asserts value is number | null | undefined {
   if (value == null) return
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-    throw rule(REMAINING_HOURS_RULE)
+    throw rule(LIMITS.remainingHours.refusal)
   }
 }
 
 /** Estimates are finite hours from 0, stored to one decimal place, that
- * round to at most REMAINING_HOURS_MAX; null clears them. The cap applies to
- * the rounded hours, because the app rounds what a person types before it
- * sends it. More than the cap passes when it rounds to `current`, the task's
- * stored hours, so a task given more before the cap keeps them through
- * writes that send them back unchanged. The cores run it after the field
- * check, so a stale resend of such hours answers as a changed field. */
-export function cleanRemaining(value: unknown, current?: number): number | undefined {
+ * round to at most LIMITS.remainingHours.max; null clears them. The cap
+ * applies to the rounded hours, because the app rounds what a person types
+ * before it sends it. */
+export function cleanRemaining(value: unknown): number | undefined {
   assertRemainingShape(value)
   if (value == null) return undefined
   const hours = roundTenths(value)
-  if (hours > REMAINING_HOURS_MAX && hours !== current) throw rule(REMAINING_HOURS_RULE)
+  if (hours > LIMITS.remainingHours.max) throw rule(LIMITS.remainingHours.refusal)
   return hours
 }

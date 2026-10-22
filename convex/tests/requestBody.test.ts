@@ -5,15 +5,16 @@
 
 import { describe, expect, it } from 'vitest'
 import type { Doc } from '../_generated/dataModel'
+import { LIMITS } from '../lib/limits'
 import { sha256hex } from '../machine/auth'
 import { BODY_MAX_BYTES } from '../machine/shared'
 import { NOW, newT, type OrgFixture, type T, uuid, withOrg } from './helpers.setup'
 
 const SECRET = `qva_${'3'.repeat(48)}`
-const TOO_LARGE_REST = { error: 'request body is too large' }
+const TOO_LARGE_REST = { error: LIMITS.requestBody.refusal }
 const TOO_LARGE_MCP = {
   jsonrpc: '2.0',
-  error: { code: -32600, message: 'Bad Request: the request body is too large' },
+  error: { code: -32600, message: `Bad Request: ${LIMITS.requestBody.refusal}` },
   id: null,
 }
 

@@ -16,6 +16,8 @@ import {
   mintFileToken,
 } from './lib/fileTokens'
 import { authedMutation, authedQuery, badRequest, conflict, notFound, rule } from './lib/functions'
+import { limitedText } from './lib/limitRules'
+import { LIMITS } from './lib/limits'
 import { validateManualImageFile, validatePanoramaDimensions } from './lib/panoramaImage'
 import {
   type AppearanceSettings,
@@ -115,11 +117,9 @@ export const createUpload = authedMutation({
     { name },
   ): Promise<{ ticket_id: string; upload_url: string; expires_at: number }> => {
     await requireAppearanceAccount(ctx, ctx.authUserId)
-    name = name.trim()
-    if (!name || name.length > 255 || /[\p{Cc}\\/]/u.test(name))
-      throw badRequest(
-        'choose an image filename within 255 characters, without paths or control characters',
-      )
+    name = limitedText(LIMITS.backgroundName, name)
+    if (!name || /[\p{Cc}\\/]/u.test(name))
+      throw rule('choose an image filename without paths or control characters')
     const tickets = await ctx.db
       .query('background_uploads')
       .withIndex('by_auth_user', (q) => q.eq('auth_user_id', ctx.authUserId))

@@ -53,6 +53,7 @@ import { AVATAR_COLORS } from './lib/avatarColors'
 import { markBillingMembershipChanged } from './lib/billableUsers'
 import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
+import { cleanEmail } from './lib/email'
 import {
   notFound,
   platformAction,
@@ -62,6 +63,8 @@ import {
   require,
   rule,
 } from './lib/functions'
+import { limitedEmail } from './lib/limitRules'
+import { LIMITS } from './lib/limits'
 import { audit, operatorEmail } from './model/admin'
 import { enrollOrganization, grantComplimentaryMonths } from './model/billing'
 import { removeProfile } from './model/cascade'
@@ -82,7 +85,6 @@ import {
   assertNameShape,
   assertViewerLeadsNothing,
   cleanName,
-  EMAIL_SHAPE,
   homeElsewhere,
   inheritedRetention,
   normalizeEmail,
@@ -95,9 +97,6 @@ const vPerson = v.object({ name: v.string(), email: v.string(), role: vRole })
 const vActor = v.object({ auth_user_id: v.string(), email: v.string() })
 type Person = Infer<typeof vPerson>
 type Actor = Infer<typeof vActor>
-
-/* People per request. Their mail sends share one time budget (sendInvites). */
-const MAX_PEOPLE = 50
 
 /* ----------------------------------------------------------------- lookups */
 
@@ -127,16 +126,17 @@ async function addPeople(
   people: Person[],
   actor: Actor,
 ): Promise<string[]> {
-  require(people.length <= MAX_PEOPLE, rule(`Invite at most ${MAX_PEOPLE} people at a time.`))
+  // their mail sends share one time budget (sendInvites)
+  require(people.length <= LIMITS.invitePeople.max, rule(LIMITS.invitePeople.refusal))
   const rows: Person[] = []
   const seen = new Set<string>()
   let admin = await hasActiveAdmin(ctx, org.id)
   for (const person of people) {
     const name = cleanName(person.name)
     assertNameShape(name)
-    const email = normalizeEmail(person.email)
-    if (email === undefined) throw rule(`${name} needs an email address.`)
-    if (!EMAIL_SHAPE.test(email)) throw rule(`${email} is not an email address.`)
+    const typed = normalizeEmail(person.email)
+    if (typed === undefined) throw rule(`${name} needs an email address.`)
+    const email = limitedEmail(typed, `${typed} is not an email address.`)
     if (seen.has(email)) throw rule(`${email} is listed twice.`)
     seen.add(email)
     const dup = await ctx.db
@@ -342,9 +342,9 @@ export const updateInvite = internalMutation({
       seat.org_role !== 'guest', notFound('invitation not found'))
     const name = cleanName(a.name)
     assertNameShape(name)
-    const email = normalizeEmail(a.email)
-    if (email === undefined) throw rule(`${name} needs an email address.`)
-    if (!EMAIL_SHAPE.test(email)) throw rule(`${email} is not an email address.`)
+    const typed = normalizeEmail(a.email)
+    if (typed === undefined) throw rule(`${name} needs an email address.`)
+    const email = limitedEmail(typed, `${typed} is not an email address.`)
     const patch: { name?: string; initials?: string; email?: string } = {}
     if (name !== seat.name) {
       patch.name = name
@@ -512,18 +512,22 @@ export const checkAddress = platformQuery({
 /* For each address, the organization that would be its home instead of
  * `org_id` (such an address cannot be invited here, and the console says so
  * before sending) and whether it already has a seat in `org_id`. Omit org_id
- * for a new organization. */
+ * for a new organization. Each address answers in the form Qivo stores
+ * (lib/email.ts cleanEmail); one Qivo cannot mail is left out. */
 export const checkPeople = platformQuery({
   args: { org_id: v.optional(v.string()), emails: v.array(v.string()) },
   handler: async (
     ctx,
     { org_id, emails },
   ): Promise<Array<{ email: string; home_org_name: string | null; in_org: boolean }>> => {
-    require(emails.length <= MAX_PEOPLE, rule(`Check at most ${MAX_PEOPLE} addresses at a time.`))
+    require(emails.length <= LIMITS.invitePeople.max, rule(
+      `Check at most ${LIMITS.invitePeople.max} addresses at a time.`,
+    ))
     const out: Array<{ email: string; home_org_name: string | null; in_org: boolean }> = []
     for (const raw of emails) {
-      const email = normalizeEmail(raw)
-      if (email === undefined) continue
+      // the stored form (lib/email.ts), which the console compares too
+      const email = cleanEmail(raw)
+      if (email === null) continue
       const home = await homeElsewhere(ctx, email, org_id)
       const inOrg =
         org_id !== undefined &&

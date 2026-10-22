@@ -165,12 +165,14 @@ export function useTypedUnsaved(what: string | null = 'text') {
 /** Props for an uncontrolled field that saves on blur and is keyed by its
     `saved` value. They hold a lease from the first keystroke until a blur
     leaves nothing unsent, which they check once the field's own blur
-    handler has run. A blur while `paused()` holds keeps the lease when the
-    field still shows another value than the saved one, because the save
-    was refused and the draft stays. A new saved value remounts the field
-    and ends the draft, and the lease with it. `what` names the field in a
-    window's question. The lease ends in the same task as the blur's check,
-    so a close that left the field (DiscardPrompt) already finds it gone. */
+    handler has run. A blur keeps the lease when the field still shows
+    another value than the saved one and the save did not go out, either
+    because `paused()` holds or because the field's handler refused the
+    value and marked the field `aria-invalid`, such as a number out of
+    range. A new saved value remounts the field and ends the draft, and the
+    lease with it. `what` names the field in a window's question. The lease
+    ends in the same task as the blur's check, so a close that left the
+    field (DiscardPrompt) already finds it gone. */
 export function useFieldUnsaved(paused: () => boolean, saved: string, what = 'text') {
   const { typed, reset } = useTypedUnsaved(what)
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new saved value is the trigger
@@ -185,7 +187,10 @@ export function useFieldUnsaved(paused: () => boolean, saved: string, what = 'te
           (field.type === 'number' &&
             field.value.trim() !== '' &&
             Number(field.value) === Number(field.defaultValue))
-        if (!paused() || same) flushSync(reset)
+        // the handler's refusal mark has rendered by now, because React
+        // commits a blur's state update before this timer runs
+        const refused = field.getAttribute('aria-invalid') === 'true'
+        if (same || (!paused() && !refused)) flushSync(reset)
       }, 0)
     },
   }

@@ -11,8 +11,8 @@
  * refusals carry the documented status and sentence, and that activity rows
  * name the credential. It uploads, downloads and deletes attachments, one of
  * them at the per-file limit, checks that an upload URL stores one file, checks
- * the text, name and request size limits, unknown arguments, comment paging,
- * the archived task lists, task progress, last comment times, delay and
+ * the text, name, list and request size limits, unknown arguments, comment
+ * paging, the archived task lists, task progress, last comment times, delay and
  * project completion, and the live group rule. It fills one task with a
  * little more than a page of comments and of history, pages that history
  * over REST and MCP, and in the browser presses Show earlier comments and
@@ -52,6 +52,7 @@ import { mkdirSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { DEFAULT_PAGE_SIZE, LIMITS, MIB } from '../convex/lib/limits.ts'
 import { signInBrowser } from './browser-demo.mjs'
 import { fixtureDirectory, loadCredentials, resolveTarget } from './marketing-demo.mjs'
 
@@ -86,14 +87,12 @@ const MCP_VERSION = '2026-07-28'
 export const STAGING_APP_ORIGIN = 'https://preview.qivo.io'
 const PRODUCTION_HOSTS = new Set(['qivo.io', 'www.qivo.io', 'demo.qivo.io', 'api.qivo.io'])
 /** The longest REST or MCP request body (convex/machine/shared.ts BODY_MAX_BYTES). */
-const BODY_MAX = 1024 * 1024
+const BODY_MAX = LIMITS.requestBody.max * MIB
 /** The comments and history rows one page of a task's thread holds
  *  (convex/model/comments.ts COMMENT_PAGE_MAX and
  *  convex/lib/activityVisibility.ts HISTORY_PAGE_MAX). The task window opens
  *  with one page of each, and REST and MCP answer one a call. */
-export const THREAD_PAGE = { comments: 50, history: 500 }
-/** The most labels one task carries (convex/lib/taskLimits.ts LABEL_MAX). */
-export const TASK_LABEL_MAX = 20
+export const THREAD_PAGE = { comments: LIMITS.listComments.max, history: 500 }
 
 /** Checks that need a condition the run cannot create everywhere, which
  *  report SKIP without it, or FAIL when --require names them. */
@@ -445,13 +444,25 @@ export async function request(url, init = {}, timeoutMs = 120_000) {
 }
 
 /** How many milliseconds send() waits before it sends a request again after
- *  a 429, after a read's server or network error, and after a write
+ *  a 429 at most, after a read's server or network error, and after a write
  *  conflict or time out. Tests lower them. */
 export const WAITS = { rateLimit: 61_000, readRetry: 2_000, conflictRetry: 1_000 }
 
-/** One authenticated request. A 429 waits WAITS.rateLimit (61 seconds) once,
- *  which happens only when something else uses the same profile at the same
- *  time or the deployment's own limit is reached. A read that answers a
+/** The milliseconds to wait after a 429 whose Retry-After header is
+ *  `header`: the seconds it names, which are those left in the server's
+ *  minute, plus one, or WAITS.rateLimit when it names no whole number of
+ *  seconds from 1 to 60. */
+export function rateLimitWait(header) {
+  const seconds = header === null || header.trim() === '' ? Number.NaN : Number(header)
+  return Number.isInteger(seconds) && seconds >= 1 && seconds <= 60
+    ? (seconds + 1) * 1000
+    : WAITS.rateLimit
+}
+
+/** One authenticated request. A 429 waits once, for its Retry-After seconds
+ *  and one more (rateLimitWait), at most WAITS.rateLimit (61 seconds). That
+ *  happens only when something else uses the same profile at the same time
+ *  or the deployment's own limit is reached. A read that answers a
  *  server error (5xx) or fails on the network is sent once more after
  *  WAITS.readRetry (two seconds), with a NOTE, because a read changes
  *  nothing. A write answered with the 503 of a write conflict or time out,
@@ -478,13 +489,10 @@ export async function send(profile, url, init, { read = false } = {}) {
     }
     if (response.status === 429 && !waited) {
       waited = true
-      say(
-        'NOTE',
-        'rate-limit',
-        `${profile} hit the request limit; waiting ${WAITS.rateLimit / 1000} seconds`,
-      )
+      const wait = Math.min(WAITS.rateLimit, rateLimitWait(response.headers.get('Retry-After')))
+      say('NOTE', 'rate-limit', `${profile} hit the request limit; waiting ${wait / 1000} seconds`)
       await response.arrayBuffer().catch(() => {})
-      await sleep(WAITS.rateLimit)
+      await sleep(wait)
       continue
     }
     if (response.status >= 500 && read && !retried) {
@@ -1601,8 +1609,6 @@ export const WRITE_CONFLICT =
 const WRITE_TIMEOUT =
   'the request took too long and changed nothing; send it again, or change less at once if it keeps happening'
 const changedNothing = (error) => error === WRITE_CONFLICT || error === WRITE_TIMEOUT
-/** The archive reason's cap (convex/model/comments.ts ARCHIVE_REASON_TOO_LONG). */
-const ARCHIVE_REASON_TOO_LONG = 'an archive reason must be at most 500 characters'
 const NOT_SAME_FAMILY =
   'a subtask must be in the same project as its parent task, in any of its sub-projects'
 const UPLOAD_MISSING = 'upload not found or expired; start a new upload'
@@ -2223,9 +2229,9 @@ async function uploadChecks() {
       await toolRefusal(w, 'attach_text_file', {
         ref: task.key,
         name: `${run.tag} too long.txt`,
-        text: 'x'.repeat(256 * 1024 + 1),
+        text: 'x'.repeat(LIMITS.textFile.max * 1024 + 1),
       }),
-      'text must be at most 256 KiB (262144 bytes) as UTF-8',
+      LIMITS.textFile.refusal,
       'refusal',
     )
     eq((await toolOk(w, 'get_task', { ref: task.key })).attachments.length, before, 'files')
@@ -2396,17 +2402,53 @@ async function uploadChecks() {
 
 const schemaOf = (name) => run.tools.get(name)?.inputSchema?.properties ?? {}
 
-/** `n` code points starting with the run tag. */
-const nameOf = (n, fill = 'n') => `${run.tag} ${fill.repeat(n - run.tag.length - 1)}`
+/** A name of `n` UTF-16 code units, the run tag and a space followed by
+ *  `fill` repeated. Most emoji are two code units. */
+const nameOf = (n, fill = 'n') => {
+  const name = `${run.tag} ${fill.repeat((n - run.tag.length - 1) / fill.length)}`
+  eq(name.length, n, 'the built name length')
+  return name
+}
 
-/** 20,000 characters on descriptions and comments (#114), and 500 on archive
- *  reasons, the delete reason's cap. */
+/** The limits of titles, descriptions, comments and archive reasons, counted
+ *  in UTF-16 code units once trimmed (convex/lib/limits.ts). */
 async function textCapChecks() {
   const w = run.creds.writeToken
   const A = run.projects.A
-  const over = 'a'.repeat(20001)
+  const TEXT = LIMITS.description.max
+  const over = 'a'.repeat(TEXT + 1)
   const title = `${run.tag} text caps`
   let key
+  await check('text-caps/title', async () => {
+    // padded with spaces past the limit, but within it once trimmed
+    const atCap = nameOf(LIMITS.title.max)
+    const made = await restOk(w, 'POST', '/tasks', { project: A.id, title: `  ${atCap}  ` })
+    run.created.push(made)
+    eq(made.title, atCap, 'the trimmed REST title')
+    const viaMcp = await toolOk(w, 'create_task', { project: A.id, title: ` ${atCap} ` })
+    run.created.push(viaMcp)
+    eq((await restOk(w, 'GET', `/tasks/${viaMcp.key}`)).title, atCap, 'the trimmed MCP title')
+    const long = `${atCap}x`
+    await restRefusal(
+      w,
+      'POST',
+      '/tasks',
+      { project: A.id, title: long },
+      400,
+      LIMITS.title.refusal,
+    )
+    await restRefusal(w, 'PATCH', `/tasks/${made.key}`, { title: long }, 400, LIMITS.title.refusal)
+    eq(
+      await toolRefusal(w, 'create_task', { project: A.id, title: long }),
+      LIMITS.title.refusal,
+      'create_task',
+    )
+    eq(
+      await toolRefusal(w, 'update_task', { ref: made.key, title: long }),
+      LIMITS.title.refusal,
+      'update_task',
+    )
+  })
   await check('text-caps/rest/description', async () => {
     await restRefusal(
       w,
@@ -2414,26 +2456,26 @@ async function textCapChecks() {
       '/tasks',
       { project: A.id, title, description: over },
       400,
-      'description must be at most 20,000 characters',
+      LIMITS.description.refusal,
     )
     const made = await restOk(w, 'POST', '/tasks', {
       project: A.id,
       title,
-      description: 'a'.repeat(20000),
+      description: 'a'.repeat(TEXT),
     })
     run.created.push(made)
     key = made.key
     const titled = (await restOk(w, 'GET', `/tasks?project=${A.id}&limit=200`)).filter(
       (t) => t.title === title,
     )
-    eq(titled.length, 1, 'tasks with the cap title (only the 20,000 one)')
+    eq(titled.length, 1, 'tasks with the cap title (only the one at the limit)')
     await restRefusal(
       w,
       'PATCH',
       `/tasks/${key}`,
       { description: over },
       400,
-      'description must be at most 20,000 characters',
+      LIMITS.description.refusal,
     )
   })
   if (!key) return
@@ -2442,18 +2484,18 @@ async function textCapChecks() {
       w,
       'POST',
       `/tasks/${key}/comments`,
-      { body: 'b'.repeat(20001) },
+      { body: 'b'.repeat(TEXT + 1) },
       400,
-      'a comment must be at most 20,000 characters',
+      LIMITS.comment.refusal,
     )
-    const c = await restOk(w, 'POST', `/tasks/${key}/comments`, { body: 'b'.repeat(20000) })
+    const c = await restOk(w, 'POST', `/tasks/${key}/comments`, { body: 'b'.repeat(TEXT) })
     await restRefusal(
       w,
       'PATCH',
       `/comments/${c.id}`,
-      { body: 'c'.repeat(20001) },
+      { body: 'c'.repeat(TEXT + 1) },
       400,
-      'a comment must be at most 20,000 characters',
+      LIMITS.comment.refusal,
     )
   })
   await check('text-caps/rest/archive-reason', async () => {
@@ -2461,9 +2503,9 @@ async function textCapChecks() {
       w,
       'PATCH',
       `/tasks/${key}`,
-      { archived: true, archive_reason: 'c'.repeat(501) },
+      { archived: true, archive_reason: 'c'.repeat(LIMITS.archiveReason.max + 1) },
       400,
-      ARCHIVE_REASON_TOO_LONG,
+      LIMITS.archiveReason.refusal,
     )
     eq((await restOk(w, 'GET', `/tasks/${key}`)).archived, false, 'archived after the refusal')
   })
@@ -2474,7 +2516,7 @@ async function textCapChecks() {
         title: `${title} MCP`,
         description: over,
       }),
-      schemaText('create_task', 'description: Too big: expected string to have <=20000 characters'),
+      LIMITS.description.refusal,
       'refusal',
     )
     const listed = await toolOk(w, 'list_tasks', { project: A.id, limit: 200 })
@@ -2482,8 +2524,8 @@ async function textCapChecks() {
   })
   await check('text-caps/mcp/comment', async () => {
     eq(
-      await toolRefusal(w, 'add_comment', { ref: key, body: 'b'.repeat(20001) }),
-      'a comment must be at most 20,000 characters',
+      await toolRefusal(w, 'add_comment', { ref: key, body: 'b'.repeat(TEXT + 1) }),
+      LIMITS.comment.refusal,
       'refusal',
     )
   })
@@ -2492,12 +2534,60 @@ async function textCapChecks() {
       await toolRefusal(w, 'update_task', {
         ref: key,
         archived: true,
-        archive_reason: 'c'.repeat(501),
+        archive_reason: 'c'.repeat(LIMITS.archiveReason.max + 1),
       }),
-      ARCHIVE_REASON_TOO_LONG,
+      LIMITS.archiveReason.refusal,
       'refusal',
     )
     eq((await restOk(w, 'GET', `/tasks/${key}`)).archived, false, 'archived after the refusal')
+  })
+}
+
+/** Page sizes and searches past their limits are refused on REST and MCP
+ *  alike, never moved into range, and a list without a limit holds
+ *  DEFAULT_PAGE_SIZE tasks at most. */
+async function listLimitChecks() {
+  const w = run.creds.writeToken
+  const { M } = run.projects
+  await check('list-limits/rest', async () => {
+    for (const limit of ['0', '-5', 'abc', String(LIMITS.listTasks.max + 1), '500'])
+      await restRefusal(
+        w,
+        'GET',
+        `/tasks?project=${M.id}&limit=${limit}`,
+        undefined,
+        400,
+        LIMITS.listTasks.refusal,
+      )
+    const search = 's'.repeat(LIMITS.search.max + 1)
+    for (const archived of ['', '&archived=true'])
+      await restRefusal(
+        w,
+        'GET',
+        `/tasks?project=${M.id}${archived}&search=${search}`,
+        undefined,
+        400,
+        LIMITS.search.refusal,
+      )
+    const page = await restOk(w, 'GET', `/tasks?project=${M.id}`)
+    expect(page.length <= DEFAULT_PAGE_SIZE, `a default page held ${page.length} tasks`)
+  })
+  await check('list-limits/mcp', async () => {
+    for (const limit of [0, LIMITS.listTasks.max + 1])
+      eq(
+        await toolRefusal(w, 'list_tasks', { project: M.id, limit }),
+        LIMITS.listTasks.refusal,
+        `limit ${limit}`,
+      )
+    const search = 's'.repeat(LIMITS.search.max + 1)
+    for (const archived of [false, true])
+      eq(
+        await toolRefusal(w, 'list_tasks', { project: M.id, archived, search }),
+        LIMITS.search.refusal,
+        `search, archived ${archived}`,
+      )
+    const page = await toolOk(w, 'list_tasks', { project: M.id })
+    expect(page.length <= DEFAULT_PAGE_SIZE, `a default page held ${page.length} tasks`)
   })
 }
 
@@ -2544,16 +2634,16 @@ async function commentPageChecks() {
       'the end',
     )
     eq((await restOk(w, 'GET', `/tasks/${task.key}/comments`)).length, 3, 'default page')
-    for (const limit of ['0', '51', 'x'])
+    for (const limit of ['0', String(LIMITS.listComments.max + 1), 'x'])
       await restRefusal(
         w,
         'GET',
         `/tasks/${task.key}/comments?limit=${limit}`,
         undefined,
         400,
-        'limit must be a whole number from 1 to 50',
+        LIMITS.listComments.refusal,
       )
-    await restOk(w, 'GET', `/tasks/${task.key}/comments?limit=50`)
+    await restOk(w, 'GET', `/tasks/${task.key}/comments?limit=${LIMITS.listComments.max}`)
     for (const other of [randomUUID(), fixtureComment?.id].filter(Boolean))
       await restRefusal(
         w,
@@ -2583,9 +2673,9 @@ async function commentPageChecks() {
       'foreign before',
     )
     eq(
-      await toolRefusal(w, 'list_comments', { ref: task.key, limit: 51 }),
-      schemaText('list_comments', 'limit: Too big: expected int to be <=50'),
-      'limit 51',
+      await toolRefusal(w, 'list_comments', { ref: task.key, limit: LIMITS.listComments.max + 1 }),
+      LIMITS.listComments.refusal,
+      'a limit over the most',
     )
   })
 }
@@ -2616,7 +2706,7 @@ async function threadPageChecks() {
     // Each label a PATCH adds or removes writes its own history row, so
     // putting all of them on and taking them off again fills the history
     // with few requests.
-    const labels = (await readList(w, '/labels')).slice(0, TASK_LABEL_MAX).map((l) => l.id)
+    const labels = (await readList(w, '/labels')).slice(0, LIMITS.labels.max).map((l) => l.id)
     expect(labels.length > 0, 'the organization has no labels to put on the task')
     const rounds = Math.ceil((THREAD_PAGE.history + 10) / (2 * labels.length))
     for (let i = 0; i < rounds; i++) {
@@ -2764,57 +2854,66 @@ async function earlierThreadChecks(task, comments, created) {
   })
 }
 
-/** 80 code points on project, sub-project, milestone, team, organization,
- *  agent key and personal token names (#127). Creates the run's team. */
+/** Whether `seen`, the app's messages, holds `sentence` in any case, as the
+ *  app shows a refusal with a capital letter. */
+const showed = (seen, sentence) =>
+  seen.some((m) => m.toLowerCase().includes(sentence.toLowerCase()))
+
+/** 80 UTF-16 code units on project, sub-project, milestone, team,
+ *  organization, agent key and personal token names, where most emoji count
+ *  as two (convex/lib/limits.ts). Creates the run's team. */
 async function nameCapChecks() {
   const w = run.creds.writeToken
   const M = run.projects.M
-  const PROJECT = 'a project name must be at most 80 characters'
+  const PROJECT = LIMITS.projectName.refusal
   const over = nameOf(81)
+  // the tag, a space and 33 emoji are 80 code units
   const emoji = nameOf(80, '🙂')
+  // 34 emoji are 82
+  const emojiOver = `${emoji}🙂`
   let sub
   await check('name-caps/rest/project', async () => {
     await restRefusal(w, 'POST', '/projects', { name: over }, 400, PROJECT)
     await restRefusal(w, 'POST', '/projects', { name: over, parent: M.id }, 400, PROJECT)
-    // the tag, a space and 66 emoji are 80 code points but 146 UTF-16 code
-    // units, and still fit
-    sub = await restOk(w, 'POST', '/projects', { name: emoji, parent: M.id })
-    eq(sub.name, emoji, 'the 80 code point name')
+    await restRefusal(w, 'POST', '/projects', { name: emojiOver, parent: M.id }, 400, PROJECT)
+    sub = await restOk(w, 'POST', '/projects', { name: ` ${emoji} `, parent: M.id })
+    eq(sub.name, emoji, 'the 80 code unit name, trimmed')
     await restRefusal(w, 'PATCH', `/projects/${sub.id}`, { name: over }, 400, PROJECT)
     eq((await restOk(w, 'PATCH', `/projects/${sub.id}`, { name: emoji })).name, emoji, 'resent')
   })
   await check('name-caps/mcp/project', async () => {
     eq(
       await toolRefusal(w, 'create_project', { name: over, parent: M.id }),
-      schemaText('create_project', 'name: Too big: expected string to have <=80 characters'),
+      PROJECT,
       'create_project',
     )
     if (sub) {
       eq(
-        await toolRefusal(w, 'update_project', { project: sub.id, name: over }),
-        schemaText('update_project', 'name: Too big: expected string to have <=80 characters'),
+        await toolRefusal(w, 'update_project', { project: sub.id, name: emojiOver }),
+        PROJECT,
         'update_project',
       )
       const party = nameOf(80, '🎉')
       eq(
-        (await toolOk(w, 'update_project', { project: sub.id, name: party })).name,
+        (await toolOk(w, 'update_project', { project: sub.id, name: `${party}  ` })).name,
         party,
-        'update_project with 80 code points',
+        'update_project with 80 code units, trimmed',
       )
     }
   })
   await check('name-caps/milestone', async () => {
+    const MILESTONE = LIMITS.milestoneName.refusal
     await restRefusal(
       w,
       'POST',
       `/projects/${M.id}/milestones`,
       { name: over, date: '2026-11-02' },
       400,
-      'a milestone name must be at most 80 characters',
+      MILESTONE,
     )
     eq(
       await toolRefusal(w, 'set_milestone', { project: M.id, name: over, date: '2026-11-02' }),
-      schemaText('set_milestone', 'name: Too big: expected string to have <=80 characters'),
+      MILESTONE,
       'set_milestone',
     )
     const made = await restOk(w, 'POST', `/projects/${M.id}/milestones`, {
@@ -2835,13 +2934,9 @@ async function nameCapChecks() {
     )
   })
   await check('name-caps/team', async () => {
-    const TEAM = 'a team name must be at most 80 characters'
+    const TEAM = LIMITS.teamName.refusal
     await restRefusal(w, 'POST', '/teams', { name: over }, 400, TEAM)
-    eq(
-      await toolRefusal(w, 'set_team', { name: over }),
-      schemaText('set_team', 'name: Too big: expected string to have <=80 characters'),
-      'set_team',
-    )
+    eq(await toolRefusal(w, 'set_team', { name: over }), TEAM, 'set_team')
     run.team = await restOk(w, 'POST', '/teams', { name: `${run.tag} team` })
     await restRefusal(w, 'PATCH', `/teams/${run.team.id}`, { name: over }, 400, TEAM)
     const teams = await restOk(w, 'GET', '/teams')
@@ -2850,12 +2945,9 @@ async function nameCapChecks() {
   await check('name-caps/app/organization', async () => {
     const out = await appMessages(
       (name) => window.PLANNER.setOrg({ name }),
-      `${run.orgName} ${'n'.repeat(80)}`,
+      `${run.orgName} ${'n'.repeat(LIMITS.orgName.max)}`,
     )
-    expect(
-      out.seen.some((m) => /organization name must be at most 80 characters/i.test(m)),
-      'the app showed no organization name refusal',
-    )
+    expect(showed(out.seen, LIMITS.orgName.refusal), 'the app showed no organization name refusal')
     eq((await restOk(w, 'GET', '/me')).organization.name, run.orgName, 'the organization name')
     expect(
       await until(
@@ -2883,10 +2975,7 @@ async function nameCapChecks() {
       over,
     )
     eq(out.value, null, 'the app answer')
-    expect(
-      out.seen.some((m) => m.includes('a token name must be at most 80 characters')),
-      'the app logged no token name refusal',
-    )
+    expect(showed(out.seen, LIMITS.tokenName.refusal), 'the app logged no token name refusal')
     const made = await evaluate(
       app,
       (name) => window.PLANNER.createMcpToken(name, { access: 'read' }),
@@ -2910,10 +2999,7 @@ async function nameCapChecks() {
       [run.agents.viewer.id, over],
     )
     eq(out.value, null, 'the app answer')
-    expect(
-      out.seen.some((m) => m.includes('a key name must be at most 80 characters')),
-      'the app logged no key name refusal',
-    )
+    expect(showed(out.seen, LIMITS.keyName.refusal), 'the app logged no key name refusal')
     const keys = (await evaluate(app, () => window.PLANNER.listAgentKeys())) ?? []
     expect(!keys.some((k) => k.name === over), 'the over-long key exists')
   })
@@ -2942,7 +3028,7 @@ async function bodyCapChecks() {
   await check('body-cap/rest', async () => {
     const over = await rest(w, 'POST', '/tasks', sized(BODY_MAX + 1, restBody), { raw: true })
     eq(over.status, 413, 'a body one byte over the cap')
-    eq(over.json?.error, 'request body is too large', 'the 413 sentence')
+    eq(over.json?.error, LIMITS.requestBody.refusal, 'the 413 sentence')
     // at the cap the route reads the body and refuses the unknown project
     const at = await rest(w, 'POST', '/tasks', sized(BODY_MAX, restBody), {
       raw: true,
@@ -2988,7 +3074,7 @@ async function bodyCapChecks() {
       over.json,
       {
         jsonrpc: '2.0',
-        error: { code: -32600, message: 'Bad Request: the request body is too large' },
+        error: { code: -32600, message: `Bad Request: ${LIMITS.requestBody.refusal}` },
         id: null,
       },
       'the 413 body',
@@ -4446,7 +4532,11 @@ async function setup() {
         'attach_text_file',
       ])
         expect(run.tools.has(name), `tools/list lacks ${name}`)
-      eq(schemaOf('list_comments').limit?.maximum, 50, 'list_comments limit maximum')
+      eq(
+        schemaOf('list_comments').limit?.maximum,
+        LIMITS.listComments.max,
+        'list_comments limit maximum',
+      )
       return list.length
     },
     (count) => `${count} tools`,
@@ -4560,6 +4650,7 @@ async function main() {
   })
   // limits and rules that merged
   await textCapChecks()
+  await listLimitChecks()
   await commentPageChecks()
   await threadPageChecks()
   await nameCapChecks()

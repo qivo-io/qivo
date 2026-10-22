@@ -14,13 +14,14 @@
  * with "Board scale" and their number, and a second run adds only the
  * numbers still missing, up to --tasks. The mix follows the benchmark's varied workspace: every
  * status, a parent with three subtasks every 25th task, a due date every 7th
- * (every other one past), a pause every 31st, an 80-character title (the
- * most a title holds) every 13th and no owner every 11th. */
+ * (every other one past), a pause every 31st, a title of the most characters
+ * a title holds (LIMITS.title) every 13th and no owner every 11th. */
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { ConvexHttpClient } from 'convex/browser'
 import { makeFunctionReference } from 'convex/server'
+import { LIMITS } from '../convex/lib/limits.ts'
 import { DemoCliError, resolveTarget } from './marketing-demo.mjs'
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -69,7 +70,10 @@ export function seededTask(n, org, project, owner) {
   const status = STATUSES[n % STATUSES.length]
   let title = `${PREFIX} ${WORDS[n % WORDS.length]} task ${n + 1}`
   if (n % 13 === 0)
-    title = `${title} with a longer note on the work it covers `.repeat(2).slice(0, 80).trim()
+    title = `${title} with a longer note on the work it covers `
+      .repeat(8)
+      .slice(0, LIMITS.title.max)
+      .trim()
   return {
     id: crypto.randomUUID(),
     org_id: org,

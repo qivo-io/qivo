@@ -40,8 +40,8 @@ async function deleteProfileRateLimit(ctx: MutationCtx, profileId: string): Prom
  * (teams.deleteDeep, model/teams.ts deleteTeamCore), which also settle the
  * members' open tasks and narrate no deletion (the old client wrote no
  * event). A deployment counts each row it changes as one of Convex's 4,096
- * reads, so the callers bound the rows first (model/teams.ts
- * TEAM_DELETE_ROWS_MAX). `guard`, when given, runs before every
+ * reads, so the callers bound the rows first (model/teams.ts assertTeamFits,
+ * LIMITS.teamDeleteRows). `guard`, when given, runs before every
  * TEAM_DELETE_GUARD_ROWS rows, so a deletion that shares its transaction with
  * other reads can stop before it fills it. `owned`, when given, is the
  * team's legacy owned projects as the caller already read them, so a large

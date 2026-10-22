@@ -19,6 +19,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
 import type { Refusal, RefusalCode } from '../lib/functions'
+import { LIMITS } from '../lib/limits'
 import { creatorGrant, grantsAfterHandover } from '../lib/projectGrants'
 import { sha256hex } from '../machine/auth'
 import {
@@ -503,7 +504,7 @@ describe('creating projects and sub-projects', () => {
     const fx = await setup()
     await refused(
       fx.t.mutation(internal.machine.projects.mcpCreateProject, { ...as_(fx.admin), name: '  ' }),
-      'bad_request',
+      'rule',
       'a project name cannot be blank',
     )
     const post = (body: unknown) =>
@@ -569,7 +570,7 @@ describe('changing a project', () => {
       })
     const out = await patch(fx.user, {
       name: ' Testbed ',
-      description: 'Rig',
+      description: ' Rig\n',
       review_hours: 1.25,
       track_delay: true,
     })
@@ -596,12 +597,11 @@ describe('changing a project', () => {
       'bad_request',
       'unknown field "unknown"; this request takes name, description, review_hours, track_delay, lead_id, archived, expected',
     )
-    await refused(patch(fx.user, { name: ' ' }), 'bad_request', 'a project name cannot be blank')
-    await refused(
-      patch(fx.user, { review_hours: '2' }),
-      'bad_request',
-      'review_hours must be a number of hours from 0 to 999, or null',
-    )
+    await refused(patch(fx.user, { name: ' ' }), 'rule', 'a project name cannot be blank')
+    // review hours outside 0 to 999, or not a number, are refused alike
+    for (const review_hours of ['2', -1, LIMITS.reviewHours.max + 1]) {
+      await refused(patch(fx.user, { review_hours }), 'rule', LIMITS.reviewHours.refusal)
+    }
     await refused(
       patch(fx.user, { parent_id: fx.hidden.id }),
       'bad_request',
@@ -614,6 +614,18 @@ describe('changing a project', () => {
       "a project's parent is set when it is created, with parent",
     )
     expect((await projectRow(fx.t, fx.meta.id))?.name).toBe('Testbed')
+    await refused(
+      patch(fx.user, { description: 'x'.repeat(LIMITS.projectDescription.max + 1) }),
+      'rule',
+      LIMITS.projectDescription.refusal,
+    )
+    expect(await projectRow(fx.t, fx.meta.id)).toMatchObject({
+      description: 'Rig',
+      review_hours: 1.3,
+    })
+    expect((await patch(fx.user, { review_hours: LIMITS.reviewHours.max })).review_hours).toBe(
+      LIMITS.reviewHours.max,
+    )
     expect((await patch(fx.user, { review_hours: null })).review_hours).toBeNull()
   })
 
@@ -1264,7 +1276,7 @@ describe('milestones', () => {
     )
     await refused(
       setMilestone(fx, fx.agent, { name: ' ', date: '2026-03-02' }),
-      'bad_request',
+      'rule',
       'a milestone name cannot be blank',
     )
     await refused(
@@ -1285,7 +1297,7 @@ describe('milestones', () => {
     expect((await lastEvent(fx.t, fx.org.id))?.verb).toBe('renamed milestone')
     await refused(
       setMilestone(fx, fx.agent, { milestone: made.id, name: '  ' }),
-      'bad_request',
+      'rule',
       'a milestone name cannot be blank',
     )
     expect(
@@ -1353,7 +1365,7 @@ describe('milestones', () => {
         name: '   ',
         week: '2026-03-02',
       }),
-      'bad_request',
+      'rule',
       'a milestone name cannot be blank',
     )
     // the roadmap's batch adds and changes milestones by the same rule
@@ -1365,12 +1377,12 @@ describe('milestones', () => {
     const add = (id: string, name: string) =>
       change({ kind: 'milestone_create', id, project_id: fx.sub.id, name, week: '2026-03-02' })
     const id = uuid()
-    await refused(add(id, '  '), 'bad_request', 'a milestone name cannot be blank')
+    await refused(add(id, '  '), 'rule', 'a milestone name cannot be blank')
     await add(id, ' Gate ')
     const stored = () => fx.t.run((ctx) => ctx.db.query('milestones').collect())
     expect(await stored()).toMatchObject([{ id, name: 'Gate', project_id: fx.meta.id }])
     const rename = (name: string) => change({ kind: 'milestone_update', id, patch: { name } })
-    await refused(rename(' '), 'bad_request', 'a milestone name cannot be blank')
+    await refused(rename(' '), 'rule', 'a milestone name cannot be blank')
     await rename(' Freeze ')
     expect(await stored()).toMatchObject([{ id, name: 'Freeze' }])
   })

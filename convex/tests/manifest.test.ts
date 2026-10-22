@@ -265,6 +265,9 @@ internal/oauthSmoke:cleanup mutation internal {"type":"object","value":{"expecte
 internal/operator:provisionOperator mutation internal {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false},"password_hash":{"fieldType":{"type":"string"},"optional":false}}}
 internal/operator:retireLegacyFixtures mutation internal {"type":"object","value":{"expected_site_url":{"fieldType":{"type":"string"},"optional":false},"dry_run":{"fieldType":{"type":"boolean"},"optional":true}}}
 internal/operator:testOperator action internal {"type":"object","value":{}}
+internal/overCapRows:check query internal {"type":"object","value":{"phase":{"fieldType":{"type":"union","value":[{"type":"literal","value":"projects"},{"type":"literal","value":"teams"},{"type":"literal","value":"milestones"},{"type":"literal","value":"organizations"},{"type":"literal","value":"profiles"},{"type":"literal","value":"agent_keys"},{"type":"literal","value":"mcp_tokens"},{"type":"literal","value":"labels"},{"type":"literal","value":"issue_attachments"},{"type":"literal","value":"issues"},{"type":"literal","value":"comments"},{"type":"literal","value":"emails"},{"type":"literal","value":"deleted_projects"},{"type":"literal","value":"deleted_milestones"},{"type":"literal","value":"deleted_issue_attachments"},{"type":"literal","value":"deleted_issues"},{"type":"literal","value":"deleted_comments"}]},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"page_size":{"fieldType":{"type":"number"},"optional":true}}}
+internal/overCapRows:fix action internal {"type":"object","value":{"dry_run":{"fieldType":{"type":"boolean"},"optional":false},"page_size":{"fieldType":{"type":"number"},"optional":true}}}
+internal/overCapRows:page mutation internal {"type":"object","value":{"phase":{"fieldType":{"type":"union","value":[{"type":"literal","value":"projects"},{"type":"literal","value":"teams"},{"type":"literal","value":"milestones"},{"type":"literal","value":"organizations"},{"type":"literal","value":"profiles"},{"type":"literal","value":"agent_keys"},{"type":"literal","value":"mcp_tokens"},{"type":"literal","value":"labels"},{"type":"literal","value":"issue_attachments"},{"type":"literal","value":"issues"},{"type":"literal","value":"comments"},{"type":"literal","value":"emails"},{"type":"literal","value":"deleted_projects"},{"type":"literal","value":"deleted_milestones"},{"type":"literal","value":"deleted_issue_attachments"},{"type":"literal","value":"deleted_issues"},{"type":"literal","value":"deleted_comments"}]},"optional":false},"dry_run":{"fieldType":{"type":"boolean"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"page_size":{"fieldType":{"type":"number"},"optional":true}}}
 invites:deliveries query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 invites:reserve mutation internal {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"resend":{"fieldType":{"type":"boolean"},"optional":false},"actor":{"fieldType":{"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":true},"email":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"app":{"fieldType":{"type":"boolean"},"optional":false},"by":{"fieldType":{"type":"string"},"optional":true}}}
 invites:sendAgain mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -501,7 +504,6 @@ roadmap:expire mutation internal {"type":"object","value":{"auth_user_id":{"fiel
 roadmap:undo mutation public {"type":"object","value":{"session_id":{"fieldType":{"type":"string"},"optional":false},"all":{"fieldType":{"type":"boolean"},"optional":false}}}
 snapshot:commentThread query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 snapshot:commentsBefore query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"before":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-snapshot:commentsForIssue query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 snapshot:forMe query public {"type":"object","value":{}}
 snapshot:historyBefore query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"before":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teamSync:lastComments query public {"type":"object","value":{"owner_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -830,15 +832,13 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     updateMilestone: 'orgMutation',
     removeMilestone: 'orgMutation',
   },
-  // The task window's thread, its earlier pages of comments and of history,
-  // and the thread as tabs loaded before commentThread read it (remove the
-  // release after).
+  // The task window's thread and its earlier pages of comments and of
+  // history.
   snapshot: {
     forMe: 'authedQuery',
     commentThread: 'orgQuery',
     commentsBefore: 'orgQuery',
     historyBefore: 'orgQuery',
-    commentsForIssue: 'orgQuery',
   },
   // Team sync: staff stamp the person a change was made on (often not
   // themselves); any member reads the latest comment per visible open task.
@@ -868,7 +868,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 170
+const PUBLIC_COUNT = 169
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

@@ -28,7 +28,7 @@ import {
   olderRows,
   taskHistoryPage,
 } from '../lib/activityVisibility'
-import { SUBTASK_MAX } from '../lib/taskLimits'
+import { LIMITS } from '../lib/limits'
 import { type ActivityEntry, insertActivity, issueChanges, logActivity } from '../model/activity'
 import { pendingRemoval } from '../model/cascade'
 import {
@@ -126,10 +126,30 @@ describe('issueChanges — machine narration, verbatim', () => {
     )
   })
 
-  it('free text excerpts at 80 codepoints: slice at 79 plus the ellipsis', () => {
+  it('free text excerpts at 80 UTF-16 units: cut to 79 plus the ellipsis', () => {
     const long = 'a'.repeat(90)
     expect(issueChanges(row(), row({ description: long }))).toBe(
       `(description unset → “${'a'.repeat(79)}…”)`,
+    )
+  })
+
+  it('an emoji counts two units: 80 units stay whole, 81 are cut', () => {
+    // 80 units but 79 code points
+    const whole = `${'a'.repeat(78)}😀`
+    expect(issueChanges(row(), row({ description: whole }))).toBe(
+      `(description unset → “${whole}”)`,
+    )
+    // 81 units but 80 code points
+    expect(issueChanges(row(), row({ description: `${'a'.repeat(79)}😀` }))).toBe(
+      `(description unset → “${'a'.repeat(79)}…”)`,
+    )
+  })
+
+  it('the cut never splits an emoji that straddles unit 79: 78 units stay', () => {
+    // the emoji fills units 79 and 80
+    const long = `${'a'.repeat(78)}😀${'b'.repeat(5)}`
+    expect(issueChanges(row(), row({ description: long }))).toBe(
+      `(description unset → “${'a'.repeat(78)}…”)`,
     )
   })
 
@@ -527,7 +547,7 @@ describe('per-subject history, kept whole and read a page at a time', () => {
     const f = await withOrg(t)
     const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const subtasks: string[] = []
-    for (let i = 0; i < SUBTASK_MAX; i++)
+    for (let i = 0; i < LIMITS.subtasks.max; i++)
       subtasks.push(
         (await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: root.id })).id,
       )
@@ -551,7 +571,7 @@ describe('per-subject history, kept whole and read a page at a time', () => {
     })
     await t.finishAllScheduledFunctions(vi.runAllTimers)
     const deleted = (await activityFor(t, f.org.id)).filter((row) => row.verb === 'deleted')
-    expect(deleted).toHaveLength(SUBTASK_MAX + 1)
+    expect(deleted).toHaveLength(LIMITS.subtasks.max + 1)
     const left = await t.run((ctx) => ctx.db.query('issues').collect())
     expect(left.map((row) => row.id).sort()).toEqual([...archived].sort())
     expect(left.every((row) => row.parent_id === undefined)).toBe(true)
@@ -596,7 +616,7 @@ describe('atomicity — a refused write leaves zero rows', () => {
         project_id: f.sub.id,
         title: '   ',
       }),
-      'bad_request',
+      'rule',
       /blank/,
     )
     // bumped before the title guard, rolled back with it

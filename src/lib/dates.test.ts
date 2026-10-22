@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { LIMITS } from '../../convex/lib/limits'
 import {
   clampBarDrag,
   DEFAULT_WIN,
@@ -19,7 +20,6 @@ import {
   TODAY_POS,
   TODAY_WEEK,
   WEEKS,
-  WIN_WEEKS_MAX,
   weekNumberOf,
   weekStartOf,
   weekToDate,
@@ -196,7 +196,7 @@ describe('roadmap view window', () => {
     })
     expect(back).toEqual({ w0: TODAY_WEEK - 2, w1: TODAY_WEEK + 6, capped: false })
     const most = { start: { mode: 'weeks', value: 0 }, end: { mode: 'weeks', value: 259 } } as const
-    expect(winWeeks(most)).toBe(WIN_WEEKS_MAX)
+    expect(winWeeks(most)).toBe(LIMITS.roadmapWeeks.max)
     expect(resolveWin(most).capped).toBe(false)
     const huge = {
       start: { mode: 'weeks', value: 0 },
@@ -205,7 +205,7 @@ describe('roadmap view window', () => {
     expect(winWeeks(huge)).toBe(10_000)
     expect(resolveWin(huge)).toEqual({
       w0: TODAY_WEEK,
-      w1: TODAY_WEEK + WIN_WEEKS_MAX - 1,
+      w1: TODAY_WEEK + LIMITS.roadmapWeeks.max - 1,
       capped: true,
     })
   })

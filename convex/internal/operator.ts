@@ -4,6 +4,7 @@ import { v } from 'convex/values'
 import { components, internal } from '../_generated/api'
 import { internalAction, internalMutation } from '../_generated/server'
 import { deploymentEnvironment, deploymentOrigin, refuseProduction } from '../lib/deployment'
+import { cleanEmail } from '../lib/email'
 import { audit } from '../model/admin'
 import { MARKETING_DEMO, marketingId } from './marketingDemoData'
 
@@ -18,9 +19,9 @@ type AuthUser = {
 }
 
 function operatorCredentials() {
-  const email = process.env.QIVO_ADMIN_EMAIL?.trim().toLowerCase()
+  const email = cleanEmail(process.env.QIVO_ADMIN_EMAIL ?? '')
   const password = process.env.QIVO_ADMIN_PW
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  if (email === null) {
     throw new Error('Set a private QIVO_ADMIN_EMAIL before provisioning a fixture operator')
   }
   if (!password || password.length < 32 || password.length > 128) {

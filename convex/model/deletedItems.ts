@@ -110,15 +110,15 @@ import {
   type StoredTable,
   type TrashPhase,
 } from '../lib/enums'
-import { notFound, rule } from '../lib/functions'
+import { notFound } from '../lib/functions'
+import { limitedText } from '../lib/limitRules'
+import { cutText, LIMITS, TEXT_MAX } from '../lib/limits'
 import { countsAsSubtask } from '../lib/liveTasks'
-import { SUBTASK_MAX } from '../lib/taskLimits'
-import { DELETE_REASON_MAX, TEXT_MAX } from '../lib/textLimits'
 import { insertActivity, logActivity } from './activity'
 import { storageIdInUse } from './attachments'
 import { estimateDocumentBytes } from './demoMetrics'
 import { scheduleImageReap } from './descriptionImages'
-import { assertCanEdit, clearParentRemaining, detachChild, sameTopLevel, TITLE_MAX } from './issues'
+import { assertCanEdit, clearParentRemaining, detachChild, sameTopLevel } from './issues'
 import { linksFullAt } from './links'
 import {
   type NotifyPreload,
@@ -1328,9 +1328,6 @@ async function purgeLeft(run: Run): Promise<boolean> {
 
 /* --------------------------------------------------------------- restores */
 
-/** The most items one restore call takes. */
-export const RESTORE_MAX = 25
-
 /* The index ranges a reveal may read per task it writes back or attaches.
  * A task item of 41 tasks with holders, a parent outside, task.restored
  * subscriptions and the Restored notice measured about 6. With a different
@@ -2135,7 +2132,8 @@ const restoreLinks = (run: Run): Promise<boolean> =>
  * takes it back with its task (move_drain). An end in another item that is
  * ready or moving: the link moves to that item, owned by that end.
  * Otherwise it is dropped, and so is a link one of whose ends is an end of
- * LINK_MAX links already (model/links.ts linksFullAt). A link never moves to an item that restores,
+ * LIMITS.links.max links already (model/links.ts linksFullAt). A link never
+ * moves to an item that restores,
  * because that item's own restore_links would hand it straight back, and
  * two items restoring together would trade their links for ever. */
 async function placeLink(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
@@ -2183,8 +2181,8 @@ async function placeLinkBy(
     .query('issue_links')
     .withIndex('by_pair', (q) => q.eq('pair_key', link.pair_key))
     .first()
-  // an end that reached LINK_MAX while this link was in Deleted items takes
-  // no more (lib/taskLimits.ts), so the link stays out, as one to a task
+  // an end that reached LIMITS.links.max while this link was in Deleted
+  // items takes no more, so the link stays out, as one to a task
   // deleted for good does. An end of this item counts the links written
   // back before this one.
   let full = false
@@ -2624,10 +2622,10 @@ type Kept = { id: string; grouped: boolean } | undefined | 'later'
  * `home`, the live project the task comes back in, by the subtask rule
  * (model/issues.ts sameTopLevel). A parent that moved to another top-level
  * project since the delete fails it, as can a subtask stored before the
- * rule. The one level of subtasks (lib/taskLimits.ts) also clears a
+ * rule. The one level of subtasks (lib/limits.ts) also clears a
  * parent that is a subtask itself, the parent of a task that comes back
  * with subtasks, and, for an active task, a parent that already has
- * SUBTASK_MAX active subtasks, as a restore from the archive does
+ * LIMITS.subtasks.max active subtasks, as a restore from the archive does
  * (model/issues.ts unarchiveIssueCore). An
  * active parent stays when the restorer may change it; an archived one only
  * for an archived task.
@@ -2663,7 +2661,7 @@ async function keptParent(
   reads: ParentReads,
 ): Promise<Kept> {
   if (outside === null || !sameTopLevel(home, outside.project)) return undefined
-  // one level of subtasks (lib/taskLimits.ts): no parent that is a subtask
+  // one level of subtasks (lib/limits.ts): no parent that is a subtask
   if (outside.parent.parent_id !== undefined) return undefined
   const active = outside.parent.archived_at === undefined
   const taskActive = task.archived_at === undefined
@@ -2672,10 +2670,10 @@ async function keptParent(
   // nor a task with subtasks under one
   const workers = await workersOf(run, task, children)
   if (workers === null) return undefined
-  // only an active task counts toward the parent's SUBTASK_MAX
+  // only an active task counts toward the parent's LIMITS.subtasks.max
   const subtasks = taskActive ? await liveSubtasks(run, reads, outside.parent.id) : 0
   if (subtasks === 'later') return 'later'
-  if (subtasks >= SUBTASK_MAX) return undefined
+  if (subtasks >= LIMITS.subtasks.max) return undefined
   const sees = await allSee(run, reads, task, workers, outside.parent.project_id)
   if (sees === 'later') return 'later'
   if (sees && taskActive) reads.subtasks.set(outside.parent.id, subtasks + 1)
@@ -2688,17 +2686,18 @@ async function keptParent(
 }
 
 /** The most bytes one count of a parent's subtasks (liveSubtasks) reads.
- * A subtask within TEXT_MAX stores up to about 120 KB, so a parent's 100
- * active subtasks can pass what a step can read. A count past it stops,
- * counts the parent as full, with a warning, and its task comes back
- * without it. Someone with Edit can still give the task that parent by
- * hand. A mutable object, so tests can lower it. */
+ * A subtask within TEXT_MAX stores up to about 120 KB as JSON
+ * (chargeRead), so a parent's 100 active subtasks can pass what a step can
+ * read. A count past it stops, counts the parent as full, with a warning,
+ * and its task comes back without it. Someone with Edit can still give the
+ * task that parent by hand. A mutable object, so tests can lower it. */
 export const COUNT_READ = { bytes: 8 * 1024 * 1024 }
 
 /** How many active subtasks live task `parentId` has, counted up to
- * SUBTASK_MAX, with the ones the step gave it, or SUBTASK_MAX for a count
- * past COUNT_READ. Read once per step and charged to its budget; 'later'
- * when the step's reads are spent before it is read. */
+ * LIMITS.subtasks.max, with the ones the step gave it, or
+ * LIMITS.subtasks.max for a count past COUNT_READ. Read once per step and
+ * charged to its budget; 'later' when the step's reads are spent before it
+ * is read. */
 async function liveSubtasks(
   run: Run,
   reads: ParentReads,
@@ -2717,13 +2716,13 @@ async function liveSubtasks(
   for await (const kid of kids) {
     count += 1
     bytes += chargeRead(run.budget, kid)
-    if (count >= SUBTASK_MAX) break
+    if (count >= LIMITS.subtasks.max) break
     if (bytes > COUNT_READ.bytes) {
       console.warn('A deleted item restore cannot count the subtasks of a parent', {
         item_id: run.item.id,
         parent_id: parentId,
       })
-      count = SUBTASK_MAX
+      count = LIMITS.subtasks.max
       break
     }
   }
@@ -2789,7 +2788,7 @@ async function allSee(
  * The people who work on task `task` once it is back, as model/issues.ts
  * holdersUnder names them for a reparent: its assignee and reviewer. Null
  * when the task has a subtask, because one level of subtasks
- * (lib/taskLimits.ts) keeps a task with subtasks from taking a parent. Its
+ * (lib/limits.ts) keeps a task with subtasks from taking a parent. Its
  * subtasks are its children among the tasks the reveal writes (`children`)
  * and, for a project item, the tasks under it in issues, which restore_tasks
  * wrote back or, after the reveal, anyone attached. Only the first one
@@ -3034,8 +3033,6 @@ export async function restoreItems(
   ctx: MutationCtx,
   a: { me: Doc<'profiles'>; items: Item[]; now: string; bulk?: boolean },
 ): Promise<RestoreResult> {
-  if (a.items.length > RESTORE_MAX)
-    throw rule(`at most ${RESTORE_MAX} items can be restored at a time`)
   const budget = budgetFor(1)
   const counted = metered(ctx, budget)
   const result: RestoreResult = { restored: [], refused: [], deferred: [] }
@@ -3445,9 +3442,6 @@ async function beginPurge(ctx: MutationCtx, item: Item, budget?: Budget): Promis
   else await saveJob(ctx, purging, state, null)
 }
 
-/** The most items one Delete now takes. */
-export const PURGE_MAX = RESTORE_MAX
-
 /** What one Delete now answers per item (deletedItems.purge). A purged item
  * left the list; its steps finish deleting it. */
 export type PurgeResult = {
@@ -3464,8 +3458,6 @@ export type PurgeResult = {
  * per item, never a throw for one item's problem.
  */
 export async function purgeItems(ctx: MutationCtx, items: Item[]): Promise<PurgeResult> {
-  if (items.length > PURGE_MAX)
-    throw rule(`at most ${PURGE_MAX} items can be deleted for good at a time`)
   const budget = budgetFor(1)
   const result: PurgeResult = { purged: [], refused: [] }
   const ids = new Set<string>()
@@ -3677,18 +3669,11 @@ export async function clearOrgTrash(
 
 /* ------------------------------------------------------------- deleting */
 
-/* Counts the trimmed text, which is what is stored, in UTF-16 code units
- * like the other text caps (lib/textLimits.ts). A `rule` refusal, so the app
- * shows the sentence. */
-export const DELETE_REASON_TOO_LONG = `a delete reason must be at most ${DELETE_REASON_MAX} characters`
-
 /** The reason a delete window sent: trimmed, absent when blank, refused
- * past DELETE_REASON_MAX characters. */
+ * past LIMITS.deleteReason. */
 export function cleanReason(raw: string | undefined): string | undefined {
-  const reason = raw?.trim()
-  if (reason === undefined || reason === '') return undefined
-  if (reason.length > DELETE_REASON_MAX) throw rule(DELETE_REASON_TOO_LONG)
-  return reason
+  const reason = limitedText(LIMITS.deleteReason, raw ?? '')
+  return reason === '' ? undefined : reason
 }
 
 type Deletion = {
@@ -3779,7 +3764,7 @@ async function startArchivedDetach(
  * which the job `jobId` (archived_detaches) names, a page per step, as the
  * delete detaches its active children: each becomes a top-level task, and
  * its followers read that it left its parent, told in background steps
- * (NotifyPreload.deferFollowers). SUBTASK_MAX does not bound archived
+ * (NotifyPreload.deferFollowers). LIMITS.subtasks.max does not bound archived
  * subtasks, so the delete's own transaction leaves them to these steps.
  * Only subtasks archived by the delete go, so a restore of the parent from
  * Deleted items in the meantime keeps a subtask archived under it later,
@@ -3922,7 +3907,7 @@ export async function moveTasksToTrash(
   // This transaction changes no profile, project, grant or team, so one
   // preload, read at the first detach, serves every detach notice
   // (NotifyPreload). Without it each notice reads every profile again. It
-  // leaves the followers to background steps, because up to SUBTASK_MAX
+  // leaves the followers to background steps, because up to LIMITS.subtasks.max
   // children with FOLLOWER_FANOUT.inline followers each would pass the
   // transaction's limits.
   let preload: NotifyPreload | undefined
@@ -3934,7 +3919,7 @@ export async function moveTasksToTrash(
       editable.add(task.project_id)
     }
     // A subtask has no subtasks of its own, so only a top-level task has
-    // children to leave behind. The active ones, at most SUBTASK_MAX, are
+    // children to leave behind. The active ones, at most LIMITS.subtasks.max, are
     // detached here, and the archived ones, which have no bound, in
     // background steps.
     if (task.parent_id === undefined) {
@@ -3946,7 +3931,7 @@ export async function moveTasksToTrash(
               .withIndex('by_parent_archived', (q) =>
                 q.eq('parent_id', task.id).eq('archived_at', undefined),
               )
-              .take(SUBTASK_MAX)
+              .take(LIMITS.subtasks.max)
       for (const kid of kids) {
         chargeRead(budget, kid)
         if (doomed.has(kid.id)) continue
@@ -3989,10 +3974,10 @@ export async function moveTasksToTrash(
 }
 
 /** `task` as a task item stores it. Only a task stored before the caps can
- * be too large to store (STORED_ROW_MAX_BYTES), because an 80-character
- * title and a TEXT_MAX description are at most about 120 KB as
+ * be too large to store (STORED_ROW_MAX_BYTES), because a LIMITS.title title
+ * and a TEXT_MAX description are at most about 120 KB as
  * estimateDocumentBytes counts them. Such a task goes in with its title and
- * description cut to TITLE_MAX and TEXT_MAX, so its rows and messages follow
+ * description cut to those limits, so its rows and messages follow
  * in steps and it comes back as the others do, and that is logged with the
  * item id. */
 function fitToStore(item: Pick<Item, 'id' | 'org_id'>, task: Doc<'issues'>): Doc<'issues'> {
@@ -4004,14 +3989,13 @@ function fitToStore(item: Pick<Item, 'id' | 'org_id'>, task: Doc<'issues'>): Doc
   return cutToCaps(task)
 }
 
-/** `task` with its title cut to TITLE_MAX code points and its description
- * to TEXT_MAX UTF-16 units, neither cut splitting a surrogate pair. */
+/** `task` with its title cut to LIMITS.title and its description to
+ * TEXT_MAX UTF-16 units, neither cut splitting a surrogate pair. */
 function cutToCaps(task: Doc<'issues'>): Doc<'issues'> {
-  const units = task.description.slice(0, TEXT_MAX)
   return {
     ...task,
-    title: [...task.title].slice(0, TITLE_MAX).join(''),
-    description: /[\uD800-\uDBFF]$/.test(units) ? units.slice(0, -1) : units,
+    title: cutText(task.title, LIMITS.title.max),
+    description: cutText(task.description, TEXT_MAX),
   }
 }
 

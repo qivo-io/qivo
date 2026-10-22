@@ -65,8 +65,8 @@ import {
   orgQuery,
   rule,
 } from './lib/functions'
-import { PARENT_FULL, SUBTASK_MAX } from './lib/taskLimits'
-import { ARCHIVED_SEARCH_MAX } from './lib/textLimits'
+import { limitedText } from './lib/limitRules'
+import { LIMITS } from './lib/limits'
 import { postArchiveReason } from './model/comments'
 import { cleanReason, moveTasksToTrash } from './model/deletedItems'
 import {
@@ -166,10 +166,7 @@ export const archivedPage = authedQuery({
     if (!Number.isInteger(limit) || limit < 1 || limit > ARCHIVED_PAGE_ROWS) {
       throw badRequest(`limit must be a whole number from 1 to ${ARCHIVED_PAGE_ROWS}`)
     }
-    const search = (a.search ?? '').trim()
-    if (search.length > ARCHIVED_SEARCH_MAX) {
-      throw badRequest(`search must be at most ${ARCHIVED_SEARCH_MAX} characters`)
-    }
+    const search = limitedText(LIMITS.search, a.search ?? '')
     const cursor = a.cursor === undefined ? null : await parseArchiveCursor(a.cursor, a.project_id)
     if (a.cursor !== undefined && cursor === null) {
       throw badRequest('cursor must be the next_cursor of an earlier page')
@@ -360,9 +357,10 @@ export const createParent = orgMutation({
  * P.createLinked, the Link picker's Create new linked task: a new task
  * `new_id` titled `title` in task `id`'s sub-project, and the link `link_id`
  * of `kind` as seen from task `id` between the two, in one transaction. A
- * refused link, such as to a task whose LINK_MAX links include tasks the app
- * cannot see, rolls the new task back too, so no unlinked task is left.
- * Both writes run their usual cores and checks. Answers the new task. */
+ * refused link, such as to a task whose LIMITS.links.max links include
+ * tasks the app cannot see, rolls the new task back too, so no unlinked
+ * task is left. Both writes run their usual cores and checks. Answers the
+ * new task. */
 export const createLinked = orgMutation({
   args: {
     id: v.string(),
@@ -487,9 +485,9 @@ export const archive = orgMutation({
  * reactively. `left_parent` says the task came back as a top-level task
  * beside a parent that is there (model/issues.ts unarchiveIssueCore), so the
  * app can tell the person why: 'full' when the parent already had
- * SUBTASK_MAX active subtasks, 'deleted' when the parent's delete after the
- * task was archived still had to detach it, though the parent came back
- * from Deleted items since. A parent that is gone (in Deleted items) was
+ * LIMITS.subtasks.max active subtasks, 'deleted' when the parent's delete
+ * after the task was archived still had to detach it, though the parent came
+ * back from Deleted items since. A parent that is gone (in Deleted items) was
  * left as its delete leaves every subtask, so it answers false. */
 export const unarchive = orgMutation({
   args: { id: v.string() },
@@ -503,7 +501,7 @@ export const unarchive = orgMutation({
       left !== undefined && parentId !== undefined && (await byId(ctx, 'issues', parentId)) !== null
     const left_parent: 'full' | 'deleted' | false = !shown
       ? false
-      : left === PARENT_FULL
+      : left === LIMITS.subtasks.refusal
         ? 'full'
         : 'deleted'
     return { issue: await pubFor(ctx, ctx.me, after), left_parent }
@@ -517,7 +515,7 @@ export const unarchive = orgMutation({
  * detached and touched, their followers told moments later, and each task
  * writes the 'deleted' activity row the old client wrote, with no detail.
  * `reason` is shown in Deleted items, trimmed and refused past
- * DELETE_REASON_MAX (lib/textLimits.ts, 500 characters).
+ * LIMITS.deleteReason (model/deletedItems.ts cleanReason).
  *
  * `subtask_ids` names the subtasks the caller chose to delete with it, as
  * the delete window listed them. Each must still be an active task under one
@@ -527,7 +525,7 @@ export const unarchive = orgMutation({
  * Every subtask left behind (archived, in a project the caller cannot edit
  * or see, or not chosen) is detached and becomes a top-level task. A chosen
  * subtask keeps its parent in Deleted items. A subtask has no subtasks of
- * its own, so the choice reads one range of at most SUBTASK_MAX active
+ * its own, so the choice reads one range of at most LIMITS.subtasks.max active
  * subtasks. */
 export const SUBTASKS_CHANGED =
   'the subtasks changed while the window was open; check them and delete again'
@@ -552,7 +550,7 @@ export const deleteDeep = orgMutation({
         .withIndex('by_parent_archived', (q) =>
           q.eq('parent_id', issue.id).eq('archived_at', undefined),
         )
-        .take(SUBTASK_MAX)
+        .take(LIMITS.subtasks.max)
       // whether the caller may delete a subtask in each project, read once
       // per project rather than once per subtask
       const usable = new Map<string, boolean>()

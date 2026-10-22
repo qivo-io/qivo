@@ -29,11 +29,15 @@ import { flushSync } from 'react-dom'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api } from '../convex/_generated/api'
+import { asciiEmail } from '../convex/lib/email'
+import { LIMITS } from '../convex/lib/limits'
 import { AppearanceProvider } from './AppearanceProvider'
+import { LimitedInput } from './components/LimitedField'
 import { OAuthConnect } from './components/OAuthConnect'
 import { Icon } from './components/qivo'
 import { authClient, signOut as authSignOut, handleOAuthReturn } from './lib/auth'
 import { convex } from './lib/convex'
+import { overLimit } from './lib/fieldLimits'
 import { lazyFromModule } from './lib/lazyModule'
 import { leaveDeliberately, useUnsaved } from './lib/leaveGuard'
 import { loadFailureText } from './lib/loadFailure'
@@ -456,8 +460,10 @@ export function AuthGate() {
       // Better Auth requires a display name at sign-up; the address's local
       // part is the same fallback createOrganization uses server-side, so the
       // name a password sign-up starts with matches what the org creator
-      // screen would derive anyway. People rename via Settings (0116).
-      const addr = email.trim()
+      // screen would derive anyway. People rename via Settings (0116). The
+      // address goes in the form Qivo stores and mails (lib/email.ts), so a
+      // Unicode domain signs up as the punycode one an invitation used.
+      const addr = asciiEmail(email)
       const { data, error } = await authClient.signUp.email({
         email: addr,
         password,
@@ -488,7 +494,7 @@ export function AuthGate() {
          hand-off to the app. The resend it would have addressed goes out with
          better-auth's own default landing; the confirm screen's own resend
          (sendVerification) is the one that carries /app. */
-      const { data, error } = await authClient.signIn.email({ email: email.trim(), password })
+      const { data, error } = await authClient.signIn.email({ email: asciiEmail(email), password })
       setShowPw(false)
       if (error) {
         showError(authErrorText(error, 'Sign-in failed. Try again.'), 'form')
@@ -556,7 +562,7 @@ export function AuthGate() {
     const returnURL = new URL(authReturnURL)
     returnURL.searchParams.set('reset', '1')
     const { error } = await authClient.requestPasswordReset({
-      email: email.trim(),
+      email: asciiEmail(email),
       redirectTo: returnURL.href,
     })
     setBusy(false)
@@ -623,6 +629,7 @@ export function AuthGate() {
 
   async function createOrg(e: React.FormEvent) {
     e.preventDefault()
+    if (overLimit(LIMITS.orgName, orgName)) return
     setBusy(true)
     clearMessages()
     let createdOrgId: string
@@ -828,11 +835,13 @@ export function AuthGate() {
           <Label htmlFor="organization-name" className={labelClass}>
             Organization name
           </Label>
-          <Input
+          <LimitedInput
+            limit={LIMITS.orgName}
             id="organization-name"
-            className={fieldClass}
+            // the wrapper holds the counter, so it takes the label's gap
+            wrapperClassName="mt-2"
+            className="h-control bg-surface-2 px-2.5 text-base"
             value={orgName}
-            maxLength={P.NAME_MAX}
             autoFocus
             data-create-org
             onChange={(e) => setOrgName(e.target.value)}
@@ -846,7 +855,7 @@ export function AuthGate() {
         <Button
           variant="primary"
           className="[width:100%] [justify-content:center]"
-          disabled={busy || !orgName.trim()}
+          disabled={busy || !orgName.trim() || overLimit(LIMITS.orgName, orgName)}
           type="submit"
         >
           {busy ? 'Creating…' : 'Create organization'}

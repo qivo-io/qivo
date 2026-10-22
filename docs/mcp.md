@@ -62,12 +62,7 @@ tool list.
 The text limits added `maxLength` 20,000 to `description` on `create_task`
 and `update_task`, to `archive_reason` on `update_task` and to `body` on
 `add_comment` and `update_comment`. A client holding the older catalogue
-keeps working. `create_task` refuses a longer description with the schema
-message. Since October 2026 the other four are checked by the server, as for
-REST and the app: a comment body and an archive reason count after trimming,
-and `update_task` takes the unchanged text of a longer description saved
-earlier. Before, the schema checked them as sent, so it refused text padded
-past the limit with spaces and the unchanged longer description.
+keeps working.
 
 Comment paging added `limit` and `before` to `list_comments`, which now
 answers a task's newest 50 comments unless asked for fewer, and
@@ -77,14 +72,8 @@ newest comments, but its model does not learn how to read further back, or
 about the limit, until the client refreshes its tool list.
 
 The name limits added `maxLength` 80 to `name` on `create_project`,
-`update_project`, `set_milestone` and `set_team`. The schema check of `title`
-and `name` now counts Unicode code points, as the server's rules do, so most
-single emoji count as one character there, while flags, skin tones and
-joined emoji count as several; longer text keeps counting UTF-16 code
-units. A client holding the older catalogue keeps working, and the server
-refuses a longer name with the schema message. A project, milestone or team
-named before the limit keeps its longer name while the call leaves `name`
-out.
+`update_project`, `set_milestone` and `set_team`. A client holding the older
+catalogue keeps working.
 
 In October 2026 `list_tasks` changed in two ways. It returns active tasks in
 creation order, oldest first, like REST, instead of by project key and task
@@ -177,11 +166,8 @@ Later in October 2026 every `list_tasks` and `get_task` result gained
 older catalogue reads it too, but its model does not learn what it means
 until the client refreshes its tool list.
 
-The label limit added `maxLength` 40 to `name` on `set_label`, counted in
-code points like the other names. A client holding the older catalogue keeps
-working, and the server refuses a longer name with the schema message. The
-schema checks the name as sent, so a name of at most 40 characters padded
-with spaces past 40 is now refused before the server trims it.
+The label limit added `maxLength` 40 to `name` on `set_label`. A client
+holding the older catalogue keeps working.
 
 In October 2026 the server's sentences lost their em dashes. A refusal
 that read `that project is archived — restore it first` now reads `that
@@ -238,32 +224,47 @@ outside it, `1e309` and negative numbers included, with REST's
 `remaining_hours must be a number of hours from 0 to 99999.9, or null`
 instead of a schema message such as `Input validation error: …
 remaining_hours: Too big: expected number to be <=99999.9`. A value that is
-neither a number nor `null` still gets the schema message. A task given
-more before the cap reads them back, and `update_task` takes them
-unchanged or any value from 0 to 99999.9. Any other value above the cap is
-refused, a lower one included.
+neither a number nor `null` still gets the schema message.
 
-Hours later, `expected.name` of a team, project or milestone took any
-string again, blank included, and lost its `minLength`. Until 2026-10-16
-these records took a blank name, so one can read back blank, and
-`set_team`, `update_project`, `set_milestone` and `delete_milestone`
-refused the name a client read with `expected.name must be a string that is
-not blank`. A milestone's `expected.date` on `set_milestone` and
-`delete_milestone` is checked for the `YYYY-MM-DD` shape only for the same
-reason, because a milestone saved until 2026-10-16 can hold a day that does
-not exist, such as `2026-02-31`. Such a day is compared, and text of another
-shape is refused with `expected.date must be a date as YYYY-MM-DD` instead
-of `expected.date must be a calendar date as YYYY-MM-DD`, which these tools
-answered from 2026-10-20.
+Hours later, a milestone's `expected.date` on `set_milestone` and
+`delete_milestone` became checked for the `YYYY-MM-DD` shape only, because a
+milestone saved until 2026-10-16 can hold a day that does not exist, such as
+`2026-02-31`. Such a day is compared, and text of another shape is refused
+with `expected.date must be a date as YYYY-MM-DD` instead of `expected.date
+must be a calendar date as YYYY-MM-DD`, which these tools answered from
+2026-10-20.
 
-Later, an id key of `expected`, such as `assignee_id`, `parent_id`,
-`project_id` or `lead_id`, took any string and lost its `uuid` format.
-A person, project or task made until 2026-10-19 can have an id that is not a
-uuid, and from 2026-10-20 `update_task` and `update_project` refused such an
-id as read with `expected.assignee_id must be a profile uuid or null` and
-the like. A value that is not a string, or `null` where the field cannot be
-unset, is still refused, now with `expected.assignee_id must be a profile id
-or null` and the like.
+Late in October 2026 every limit got one definition, which the
+[Limits](#limits) table lists, and one rule for text: a text counts UTF-16
+code units once trimmed, and the trimmed text is stored. A title or name
+padded with spaces within its limit is now taken on every interface, and an
+emoji counts as two characters in a title or name too, where it counted as
+one. A task's `title` holds at most 255 characters, where it held 80, and
+the `title` schemas of `create_task` and `update_task` say so. The schema
+check stopped applying `maxLength`, `minLength`, `minimum`, `maximum`,
+`minItems` and `maxItems`. The schemas still carry them as hints, and the
+server checks each one with the limit's own sentence, the one REST answers, such as
+`a task title must be at most 255 characters. Shorten it.` or `limit must be
+a whole number of tasks from 1 to 200.`, instead of a schema message such as
+`Input validation error: … title: Too big: expected string to have <=80
+characters`. A JSON Schema validator counts a string's `maxLength` in code
+points, so a client that checks arguments itself can accept a title of
+emoji that the server, counting UTF-16 code units, refuses; the server's
+answer decides. `list_tasks` gained `maxLength` 200 on `search`, and its
+description and `list_inbox`'s now give the page size, 50 by default and at
+most 200. `update_inbox` says a snooze reaches at most 366 days ahead. An
+events/subscribe `ttlMs` outside one minute to seven days is refused
+instead of moved into the range, a full subscription quota names both
+quotas, and a rate-limited request's `Retry-After` is the seconds left in the
+current minute instead of 60. The keys of `expected` follow their fields'
+limits too: a `title` has at most 255 characters, a team's, project's or
+milestone's `name` is not blank and has at most 80, a comment's `body` and a
+task's or project's `description` have their fields' limits, and
+`remaining_hours` is at most 99999.9. An id key such as `assignee_id`,
+`parent_id`, `project_id` or `lead_id` takes a uuid, and its schema carries
+`format: "uuid"`. A client holding the older catalogue keeps working, but
+its model reads the old title limit until the client refreshes its tool
+list.
 
 ## Access model: the credential is a user
 
@@ -419,8 +420,7 @@ So is `update_user`: capacity is a setting on a person, not an event in a
 project's history, and the app writes no feed row for it either.
 
 The feed never names the credential. `delete_task` also records it in
-Deleted items, with a name longer than 80 characters cut to its first 80
-followed by `…`. Everyone who sees the deleted task there sees an agent key's
+Deleted items. Everyone who sees the deleted task there sees an agent key's
 name, while a personal token's or connected app's name shows only to
 organization admins and to the person who deleted.
 
@@ -435,7 +435,12 @@ minute can be refused a little before 6,000. Both limits use fixed minute
 windows. MCP limits apply
 to POST requests; CORS preflights do not consume them.
 
-Rate limiting returns HTTP `429` with `Retry-After: 60`. Wait 60 seconds before
+Rate limiting returns HTTP `429` with `Retry-After` set to the whole seconds
+left in the current minute, from 1 to 60, and the same number in its
+sentence. The per-profile limit answers such as `{"error": "too many requests,
+at most 300 a minute for one person or agent. Try again in 17 seconds."}`, and
+the deployment-wide limit such as `{"error": "Qivo is receiving too many
+requests right now. Try again in 17 seconds."}`. Wait that long before
 retrying. Each authenticated POST that passes rate limiting counts as one API
 call, including discovery, invalid tool arguments, permission refusals and
 other protocol or routing errors. A batch is still one HTTP request. During a
@@ -450,8 +455,8 @@ calls.
 A request body may hold at most **1 MiB** (1,048,576 bytes of UTF-8). Qivo
 checks the size after authentication and answers a longer body with HTTP
 `413` and `{"jsonrpc": "2.0", "error": {"code": -32600, "message": "Bad
-Request: the request body is too large"}, "id": null}`. Such a request still
-counts as a call.
+Request: a request body must be at most 1 MiB. Send less in one request."},
+"id": null}`. Such a request still counts as a call.
 
 MCP messages must be UTF-8. A body holding bytes that are not UTF-8, such as
 text a client encoded as Latin-1 or Windows-1252, is answered with HTTP
@@ -482,6 +487,87 @@ with `member: false` removes someone from a team, when `on_held_tasks` is
 writes more, so it gets the same refusal as any other writing tool until
 writes are allowed again, and so does the same removal by anyone who is not
 an organization admin.
+
+## Limits
+
+Each limit below is the same here, over REST and in the app, and the
+[Limits](guide/limits.md) guide page lists every one. A text counts UTF-16
+code units, the count a browser's text field uses, after Qivo trims spaces
+and line breaks from both ends, and Qivo stores the trimmed text. A task
+description or comment keeps the spaces that start its first line, because
+Markdown reads them. Most emoji count as two. The tool schemas carry these limits as `maxLength`, `minimum`
+and `maximum`, but the server checks them, so a call past one gets the
+sentence in the table as its error result, the same sentence REST answers,
+and changes nothing. A number outside its range is refused, never moved into
+the range.
+
+<!-- limits:start (written by scripts/limits-docs.mjs) -->
+
+### Text
+
+| Limit | Value | Past the limit |
+| --- | --- | --- |
+| Task title | 255 characters | a task title must be at most 255 characters. Shorten it. |
+| Task description | 20,000 characters | a task description must be at most 20,000 characters. Formatting counts too. Shorten it. |
+| Comment | 20,000 characters | a comment must be at most 20,000 characters. Formatting counts too. Shorten it. |
+| Project or sub-project name | 80 characters | a project name must be at most 80 characters. Shorten it. |
+| Project description | 500 characters | a project description must be at most 500 characters. Shorten it. |
+| Team name | 80 characters | a team name must be at most 80 characters. Shorten it. |
+| Milestone name | 80 characters | a milestone name must be at most 80 characters. Shorten it. |
+| Label name | 40 characters | a label name must be at most 40 characters. Shorten it. |
+| Archive reason | 500 characters | an archive reason must be at most 500 characters. Shorten it. |
+| Search text | 200 characters | a search must be at most 200 characters. Search for fewer words. |
+
+### Files and images
+
+| Limit | Value | Past the limit |
+| --- | --- | --- |
+| Attachment file name | 255 characters | a file name must be at most 255 characters. Rename the file and attach it again. |
+| Attachment media type | 255 characters | a file's media type must be at most 255 characters. Send a media type such as application/pdf. |
+| Attachment size | 20 MiB per file | a file must be at most 20 MiB, this organization's attachment limit. Attach a smaller file. |
+| Text file from attach_text_file | 256 KiB as UTF-8 | text must be at most 256 KiB (262,144 bytes) as UTF-8. Split it into several files. |
+
+### Tasks and organizations
+
+| Limit | Value | Past the limit |
+| --- | --- | --- |
+| Active subtasks per task | 100 active subtasks | the parent task already has 100 active subtasks, the most a task can have. Archive or remove one of them first. |
+| Subtasks a move to another project carries | 200 subtasks, archived ones included | this task has more than 200 subtasks, archived ones included, and a move to another project carries them all. Restore some archived subtasks and remove them from this task first, or move it within its project. |
+| Attachments per task | 100 attachments, description images included | this task already has 100 attachments, images in its description included, the most a task can have. Remove one first. |
+| Links per task | 100 links | this task already has 100 links, the most a task can have. Remove one of its links first. |
+| Labels per task | 20 labels | this task already has 20 labels, the most a task can have. Remove one first. |
+| Followers per task | 100 followers | this task already has 100 followers, the most a task can have. Someone must unfollow it first. |
+| People mentioned in one text | 100 people | a text can mention at most 100 people. Remove some mentions and save again. |
+| Tasks one access removal reassigns | 120 tasks | a removal can reassign at most 120 tasks at once, fewer when the change is too large for one request. Keep the people as Viewers or reassign some of the tasks first. |
+| People with open tasks one access removal settles | 700 people | a removal that keeps people as Viewers or reassigns their tasks can take access from at most 700 people with open tasks at once. Leave the tasks with them, or remove some of the team's members first. |
+
+### Numbers and settings
+
+| Limit | Value | Past the limit |
+| --- | --- | --- |
+| Plannable hours per week | 1 to 168 hours | plannable hours per week must be a whole number of hours from 1 to 168. |
+| Remaining hours of a task | 0 to 99,999.9 hours | remaining hours must be a number from 0 to 99,999.9. Enter a number in that range. |
+| Review hours of a project | 0 to 999 hours | review hours must be a number from 0 to 999. Enter a number in that range. |
+| Snooze | 366 days ahead | a snooze can be at most 366 days ahead. Pick an earlier time. |
+
+### REST and MCP requests
+
+| Limit | Value | Past the limit |
+| --- | --- | --- |
+| Tasks per list page | 1 to 200 tasks | limit must be a whole number of tasks from 1 to 200. |
+| Inbox items per list page | 1 to 200 items | limit must be a whole number of items from 1 to 200. |
+| Comments per list page | 1 to 50 comments | limit must be a whole number of comments from 1 to 50. |
+| Workload weeks | 1 to 52 weeks | weeks must be a whole number from 1 to 52. |
+| Tasks per inbox change | 100 tasks | tasks must name at most 100 tasks per call. Send the rest in another call. |
+| Webhook subscription lifetime | 60,000 to 604,800,000 milliseconds | ttlMs must be a whole number of milliseconds from 60,000 (1 minute) to 604,800,000 (7 days), or null for no expiry. |
+| Webhook subscriptions per organization | 100 subscriptions | an organization can have at most 100 unexpired webhook subscriptions, and one agent key, token or OAuth connection at most 20. Delete an unused subscription first. |
+| Webhook subscriptions per agent key, token or OAuth connection | 20 subscriptions | an organization can have at most 100 unexpired webhook subscriptions, and one agent key, token or OAuth connection at most 20. Delete an unused subscription first. |
+| Webhook callback URL | 2,048 characters | a callback URL must be at most 2,048 characters. Use a shorter URL. |
+| Event subscription request | 16,384 characters | an event subscription request must be at most 16,384 characters. Send fewer or shorter parameters. |
+| Request body | 1 MiB | a request body must be at most 1 MiB. Send less in one request. |
+| Requests per person or agent | 300 requests per minute | too many requests, at most 300 a minute for one person or agent. Try again in 60 seconds. |
+
+<!-- limits:end -->
 
 ## Connecting Claude
 
@@ -777,13 +863,16 @@ Registering after deletion or expiry starts a new registration, so queued events
 from the previous registration cannot be delivered through its replacement.
 
 The response includes `id`, `refreshBefore`, `cursor: null` and `truncated: false`.
-On MCP, omitting `ttlMs` requests seven days. A positive integer `ttlMs` is
-clamped to a minimum of 60 seconds and a maximum of seven days. Zero, negative
-and non-integer values are refused, and so are params that hold a number too
-large for a double, such as `1e309` (`-32602`, `Invalid params: a number is
-too large to represent`). Send `ttlMs: null` for no expiry. Qivo returns
-`refreshBefore: null` for these subscriptions, which need no renewal.
-REST defaults to no expiry when `ttlMs` is omitted. Existing subscriptions keep
+On MCP, omitting `ttlMs` requests seven days. `ttlMs` is a whole number of
+milliseconds from 60,000 (one minute) to 604,800,000 (seven days). Any other
+number is refused with `-32602` and `ttlMs must be a whole number of
+milliseconds from 60,000 (1 minute) to 604,800,000 (7 days), or null for no
+expiry.`, and so are params that hold a number too large for a double, such
+as `1e309` (`-32602`, `Invalid params: a number is too large to represent`).
+Until October 2026 Qivo moved a value outside the range to its nearer end.
+Send `ttlMs: null` for no expiry. Qivo returns `refreshBefore: null` for
+these subscriptions, which need no renewal. REST defaults to no expiry when
+`ttlMs` is omitted, as webhook APIs usually do. Existing subscriptions keep
 their stored expiry until registered again.
 Each registration applies these rules, so an MCP renewal that omits `ttlMs` sets
 a new seven-day expiry even if the subscription previously had no expiry.
@@ -791,7 +880,11 @@ Renew finite subscriptions before `refreshBefore`. There is no replay; non-null
 cursors are refused. Events occurring without an active subscription cannot be
 recovered through this interface. Limits are 20 unexpired subscriptions per
 credential or OAuth grant and 100 per organization, including disabled
-subscriptions retained for inspection.
+subscriptions retained for inspection. A subscription past either is
+refused with `-32013`, `data: {"limit": "subscriptions"}` and `an organization
+can have at most 100 unexpired webhook subscriptions, and one agent key, token
+or OAuth connection at most 20. Delete an unused subscription first.` REST
+answers it as HTTP `409`.
 Delete unwanted subscriptions to release that capacity. Registration automatically
 removes expired registrations and reclaims capacity held by subscriptions whose
 credential was revoked, expired or deleted, or whose account was removed. Temporary
@@ -1006,7 +1099,11 @@ arguments read `Unrecognized keys: "a", "b"`. `arguments` must be a JSON
 object, or absent or `null` for none. Any other value is refused, for
 example `Invalid input: expected object, received string`. Only the
 tools that take no arguments, `get_me`, `list_teams`, `list_users` and
-`list_labels`, ignore what they are sent.
+`list_labels`, ignore what they are sent. The schema check covers each
+argument's type, its allowed values and the pattern of a uuid or a date. A
+text's length, a number's range and a list's size are the server's checks,
+which answer the limit's sentence from [Limits](#limits) as REST does, such
+as `a task title must be at most 255 characters. Shorten it.`
 
 | Tool | What it does |
 |---|---|
@@ -1027,10 +1124,10 @@ tools that take no arguments, `get_me`, `list_teams`, `list_users` and
 | `get_task` | One task with full description and reporter, assignee and reviewer, `progress` for a group, `delay` and `last_comment_at`, plus its `labels`, `subtasks` (with `has_more_subtasks` when an archived task has more than one call lists), `links`, `following`, `followers`, `attachments` with download links and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
 | `list_comments` | The task's newest comments, oldest first, with author and edit attribution. `limit` (50 by default, at most 50) caps how many, and `before`, a comment's `id`, reads the comments posted before it. See [Comments, inbox and following](#comments-inbox-and-following) |
 | `add_comment` | Comment on a task **as yourself** (the credential's user is the pinned author); markdown body of at most 20,000 characters; returns the comment `id`, task reference as `task`, and `created_at`; leaves no activity row, because the comment is its own feed entry |
-| `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs. Another project's sub-project is a hard error; move a task later with `update_task`. `parent` (a task ref) makes it a subtask; you need Edit access on the parent's project, because the parent becomes a group, and the parent must be in the same top-level project, in any of its sub-projects. `start_week` and `end_week` plan it (week starts, both or neither), and `paused` holds it. Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` is capped at 80 characters and `description` at 20,000. Returns `id` and `key` |
-| `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain, and a subtask whose parent already has 100 active subtasks comes back without it) and `archive_reason`, posted as your comment when the call archives the task. It also moves the task (`project`, `sub_project`; to another top-level project its subtasks move along, and a subtask must leave its parent in the same call), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. A subtask or parent in a project being moved to Deleted items refuses the toggle for everyone, admins included, with `a subtask of this task is being moved to Deleted items; try again when that finishes` or `a parent of this task is being moved to Deleted items; try again when that finishes`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` is capped at 80 characters, `description` at 20,000 and `archive_reason` at 500. The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time. `expected` holds what you last read of the fields the call changes, keyed as `get_task` reads them, with `parent_id` and `has_hidden_parent` for `parent` and `project_id` for a move. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
+| `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs. Another project's sub-project is a hard error; move a task later with `update_task`. `parent` (a task ref) makes it a subtask; you need Edit access on the parent's project, because the parent becomes a group, and the parent must be in the same top-level project, in any of its sub-projects. `start_week` and `end_week` plan it (week starts, both or neither), and `paused` holds it. Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` holds at most 255 characters and `description` 20,000 (see [Limits](#limits)). Returns `id` and `key` |
+| `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain, and a subtask whose parent already has 100 active subtasks comes back without it) and `archive_reason`, posted as your comment when the call archives the task. It also moves the task (`project`, `sub_project`; to another top-level project its subtasks move along, and a subtask must leave its parent in the same call), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. A subtask or parent in a project being moved to Deleted items refuses the toggle for everyone, admins included, with `a subtask of this task is being moved to Deleted items; try again when that finishes` or `a parent of this task is being moved to Deleted items; try again when that finishes`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` holds at most 255 characters, `description` 20,000 and `archive_reason` 500 (see [Limits](#limits)). The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time. `expected` holds what you last read of the fields the call changes, keyed as `get_task` reads them, with `parent_id` and `has_hidden_parent` for `parent` and `project_id` for a move. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `delete_task` | Move a task to Deleted items with its comments, attachments, links, labels and follows; its subtasks become top-level tasks, the active ones at once and the archived ones a moment later, and their followers hear of it moments later; its inbox messages are deleted. A person can restore it in the app for 30 days, and no tool restores. Answers `{deleted: true, key}` |
-| `set_task_link` | Add (`linked: true`) or remove (`linked: false`) the link between `ref` and `other`, with `kind` `blocks`, `blocked_by` or `relates` as seen from `ref`. Two tasks share at most one link. It needs read access to both tasks and Edit access on either, the app's rule. Adding the link that exists, or removing one that does not, changes nothing; `changed` in the result says whether the call did. A different link between the same tasks is refused with `these tasks are already linked`. A task is an end of at most 100 links, and a new link to a full task is refused naming it, such as `QN-9 already has 100 links, the most a task can have; remove one of its links first`. `get_task` lists the links |
+| `set_task_link` | Add (`linked: true`) or remove (`linked: false`) the link between `ref` and `other`, with `kind` `blocks`, `blocked_by` or `relates` as seen from `ref`. Two tasks share at most one link. It needs read access to both tasks and Edit access on either, the app's rule. Adding the link that exists, or removing one that does not, changes nothing; `changed` in the result says whether the call did. A different link between the same tasks is refused with `these tasks are already linked`. A task is an end of at most 100 links, and a new link to a full task is refused naming it, such as `QN-9 already has 100 links, the most a task can have. Remove one of its links first.`. `get_task` lists the links |
 | `list_labels` | The organization's labels as `id`, `name` and `color`, ordered by name |
 | `set_label` | Without `label`, create a label from `name` (at most 40 characters) and `color` (`#` and six hex digits); this needs an organization admin, or a user (person or agent) with the User role and Edit access to a top-level project. With `label` (an id or name), rename or recolor that label; only organization admins may, as on the app's Labels settings page, and `expected` holds the `name` and `color` you last read of the fields it changes. Returns the label with `created`. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `delete_attachment` | Delete a file attached to the task `ref`; `attachment` is an id from `get_task`'s `attachments`. It needs Edit access to the task's project, as in the app, and leaves description images (`inline: true`) to the app. See [Attachments](#attachments) |
@@ -1088,13 +1185,9 @@ refuses it with the sentence below.
 Send each value as a read tool answered it:
 
 - `get_task` gives a task's fields. Send `parent_id` and `has_hidden_parent`
-  together, as the parent's id with `false`, `null` with `true` for a
-  parent you cannot read, or `null` with `false` for no parent. Send a
-  parent's id as you read it: an id that is not a uuid, which a task made
-  until 2026-10-19 can have, is only recognized as a parent you can read in
-  the case you read it, and in another case it counts as a parent you cannot
-  read. A parent you read as
-  hidden matches any parent you cannot read, so a move from one hidden parent
+  together, as the parent's uuid with `false`, `null` with `true` for a
+  parent you cannot read, or `null` with `false` for no parent. A parent you
+  read as hidden matches any parent you cannot read, so a move from one hidden parent
   to another is not detected, because telling you would reveal tasks you
   cannot see. An active task with subtasks reads `remaining_hours: null`,
   also while it stores hours of its own, so send `null`.
@@ -1108,35 +1201,26 @@ Send each value as a read tool answered it:
   team's `name` and a person's `plannable_hours`.
 
 A value also follows the rule of its field. `start_week`, `end_week` and
-`due_date` are real calendar dates written `YYYY-MM-DD`, and a milestone's
-`date` is written `YYYY-MM-DD`. `remaining_hours` is at least 0,
-`review_hours` is from 0 to 999, `plannable_hours` is a whole number from 1
-to 168, and a label's `color` is `#` followed by six hex digits. A task's
-`title`, a label's `name` and a comment's `body` are not blank once
-trimmed. A `title` has at most 80 characters and a label's `name` at most
-40, counted as code points once trimmed.
+`due_date` are real calendar dates written `YYYY-MM-DD`. `remaining_hours`
+is from 0 to 99999.9, `review_hours` from 0 to 999, `plannable_hours` a
+whole number from 1 to 168, and a label's `color` is `#` followed by six hex
+digits. A task's `title`, a name and a comment's `body` are not blank once
+trimmed, and a text has its field's limit from [Limits](#limits), counted
+the same way: a `title` at most 255 characters, a team's, project's or
+milestone's `name` at most 80, a label's `name` at most 40, and a comment's
+`body` and a task's or project's `description` their fields' limits. The
+schema of `expected` in the tool list carries the date shape, the hour
+ranges, the color pattern, the text lengths and the `uuid` format of the
+id keys, and Qivo also checks that a task date exists and that text is not
+blank. Every read answers values that follow these rules.
 
-Some rules are looser here than for the field itself, because a record
-saved before its field's rule reads back as stored and a stale read of it
-must compare. A team's, project's or milestone's `name` takes any string,
-blank or long, because these names could be blank until 2026-10-16 and
-longer than 80 characters until 2026-10-19. A milestone's `date` may name a
-day that does not exist, such as `2026-02-31`, because one saved until
-2026-10-16 can. `remaining_hours` has
-no upper limit, because a task given more than 99999.9 hours before the cap
-reads them back. A comment's `body` and a task's or project's `description`
-have no length limit, because a record saved before their caps reads back
-longer. The schema of `expected` in the tool list carries the date shape,
-the hour ranges, the color pattern and the text lengths, and Qivo also
-checks that a task date exists and that a title, a label name or a comment
-body is not blank. An id takes any string, and its schema carries no `uuid`
-format, because a person, project or task made until 2026-10-19 may have an
-id that is not a uuid, and so may every field that names it. Every read
-answers values that follow these rules.
+A milestone's `date` is checked for the `YYYY-MM-DD` shape only, because a
+milestone saved until 2026-10-16 can hold a day that does not exist, such
+as `2026-02-31`, and a stale read of it must compare.
 
-An id key is checked for its type only. An id that names no person, task or
-project is compared like any other value and can answer as a changed
-field. Qivo does not check that it exists, because a refusal that
+An id key is checked for its shape only. A well-formed uuid that names no
+person, task or project is compared like any other value and can answer as
+a changed field. Qivo does not check that it exists, because a refusal that
 did would tell you which ids exist.
 
 Values compare in a normalized form, so formatting alone never refuses a
@@ -1149,11 +1233,12 @@ with the sentences [REST](rest-api.md#refusing-a-change-when-a-field-changed-sin
 gives, such as `expected must be an object of the fields as you last read
 them` (also for `null`), `expected must name at least one field`, `unknown
 field "expected.colour"; expected takes name, color`,
-`expected.remaining_hours must be a non-negative number or null`,
+`expected.remaining_hours must be a number from 0 to 99,999.9, or null`,
 `expected.due_date must be a calendar date as YYYY-MM-DD or null`,
-`expected.title must be a string that is not blank, of at most 80
+`expected.title must be a string that is not blank, of at most 255
 characters`, `expected.name must be a string that is not blank, of at most
-40 characters` (a label's), `expected.date must be a date as YYYY-MM-DD`,
+40 characters` (a label's), `expected.assignee_id must be a profile uuid or
+null`, `expected.date must be a date as YYYY-MM-DD`,
 `expected.parent_id applies only when the request sends parent` and
 `expected.parent_id and expected.has_hidden_parent go together`. `expected`
 on a call that creates is refused with `expected applies only when changing
@@ -1321,8 +1406,10 @@ read answers `project "<ref>" not found (or not visible to you)`, exactly
 like an unknown one.
 
 **Names.** Project and milestone names are trimmed, may not be blank and hold
-at most 80 characters, counted as Unicode code points. The schema refuses a
-longer one. A name stored before the limit stays until it is renamed.
+at most 80 characters, counted as in [Limits](#limits), so most emoji count
+as two. A longer one is refused with `a project name must be at most 80
+characters. Shorten it.` or `a milestone name must be at most 80
+characters. Shorten it.`
 
 **Creating.** `create_project` without `parent` makes a top-level project,
 which follows the organization's **Who can create new projects?** setting
@@ -1382,8 +1469,8 @@ or Viewer grants too many for one call, is refused and nothing changes. A
 team's removal that keeps people as Viewers or reassigns their tasks is
 refused the same way when more than 700 of its members hold open tasks in
 those projects, with `a removal that keeps people as Viewers or reassigns their tasks can take
-access from at most 700 people with open tasks at once, so leave the tasks
-with them, or remove some of the team's members first`. Leaving the tasks has no such number.
+access from at most 700 people with open tasks at once. Leave the tasks
+with them, or remove some of the team's members first.` Leaving the tasks has no such number.
 Any removal whose people and tasks are too many to check in one call is
 refused with `a removal can check only as many people and tasks as fit in one request, so
 remove fewer people at once, such as some of a team's members, or reassign
@@ -1471,7 +1558,7 @@ MCP`.
 columns: `owner_id` (whose work it is, the reviewer while the task is in
 `review` with one, else the assignee, and always the assignee on a group),
 `parent_id` with `has_hidden_parent`, `start_week` and `end_week`, and `url`,
-the address the app's **Copy link** gives. `parent_id` is the parent's id
+the address the app's **Copy link** gives. `parent_id` is the parent's uuid
 when you can read the parent. Otherwise it is `null` and `has_hidden_parent`
 is `true`, so a subtask under a task hidden from you is not mistaken for a
 top-level task. A group's `start_week` and `end_week` come from the subtasks
@@ -1552,7 +1639,12 @@ sub-projects, where each one's `parent_id` names the group.
 
 `list_tasks` returns active tasks as an array, oldest first by creation,
 with tasks created at the same moment ordered by number, so `offset` pages
-through them until a page holds fewer tasks than `limit`. Each row's
+through them until a page holds fewer tasks than `limit`. `limit` is 50 by
+default, and one that is not a whole number from 1 to 200 is refused with
+`limit must be a whole number of tasks from 1 to 200.`, as on REST. A
+`search` holds at most 200 characters, on active and archived lists alike,
+and a longer one is refused with `a search must be at most 200 characters.
+Search for fewer words.` Each row's
 `last_comment_at` reads the task's newest comment, and a row whose parent is
 in an archived project reads that parent. When those reads do not fit in
 one request beside the rest of the page, the call is refused
@@ -1561,12 +1653,10 @@ limit`; call again with a smaller `limit`. A list also reads every active
 task in the organization's active projects, or every active task of the
 organization when it names an archived project or the organization has more
 than 1,000 active projects. When those alone leave no
-room for a single comment, the call is refused with `this organization's
-active tasks are too large to list in one request`, and a smaller `limit`
+room for a single comment, the call is refused with `this organization's active tasks are too large to list in one request; archive done tasks and finished projects so fewer stay active`, and a smaller `limit`
 does not help. When the call instead runs out of index reads, which follow
 the active projects, your team memberships and the labels a search matches,
-it is refused with `this organization has too many projects, teams or labels
-to list its tasks in one request`. A `search` whose label names it would have
+it is refused with `this organization has too many projects, teams or labels to list its tasks in one request; archive finished projects or search with fewer words`. A `search` whose label names it would have
 to read for too many tasks at once is refused with `this search reads too
 many label assignments to answer in one request; name a project or add a
 filter`.
@@ -1642,8 +1732,8 @@ change who works on that subtask first`); a group's own reviewer who cannot
 is cleared. A task with more than 200 subtasks, archived ones included,
 cannot move to another top-level project (otherwise `this task has more than
 200 subtasks, archived ones included, and a move to another project carries
-them all; restore some archived subtasks and remove them from this task
-first, or move it within its project`). A move whose task and subtasks are
+them all. Restore some archived subtasks and remove them from this task
+first, or move it within its project.`). A move whose task and subtasks are
 too large for one call, such as about 120 or more subtasks whose
 descriptions hold 20,000 characters of a script that takes three bytes a
 character, such as Japanese, is refused with `this task and its subtasks
@@ -1664,8 +1754,8 @@ subtasks do not count. `parent` is refused with `the parent task is a
 subtask, and a subtask cannot have subtasks of its own` for a parent that is
 a subtask, with `this task has subtasks, so it cannot become a subtask; a
 subtask cannot have subtasks of its own` for a task with subtasks, and with
-`the parent task already has 100 active subtasks, the most a task can have;
-archive or remove one of them first` for a full parent. `parent: null`
+`the parent task already has 100 active subtasks, the most a task can have.
+Archive or remove one of them first.` for a full parent. `parent: null`
 always detaches. Restoring a subtask (`archived: false`) whose parent
 already has 100 active subtasks brings it back as a top-level task: the
 task you read back has no parent, and its followers are told it left its
@@ -1697,7 +1787,7 @@ asking for a label the task already has, or removing one it lacks, changes
 nothing. An unknown label, or one in both lists, is refused. A task carries
 at most 20 labels. `remove_labels` applies before `add_labels`, so one call
 can swap labels on a full task, and a label past 20 is refused with `this
-task already has 20 labels, the most a task can have; remove one first`.
+task already has 20 labels, the most a task can have. Remove one first.`
 
 One call may combine all of it. It applies the move, then the parent, then
 the other fields with the archive toggle, then the labels, then
@@ -1761,12 +1851,12 @@ Uploading a file takes three steps, the same as on REST:
    holds at most 100 attachments, images in its description included, so a
    full task is refused before any bytes are sent, with `this task already
    has 100 attachments, images in its description included, the most a task
-   can have; remove one first`, and the confirm checks it again. A `size`
+   can have. Remove one first.`, and the confirm checks it again. A `size`
    over the organization's per-file limit (`max_attachment_mb` in `get_me`,
-   at most 20 MiB) is refused with `attachment exceeds the organization limit
-   of 20 MiB`. The 20 MiB ceiling is Qivo's product rule: attachments are
-   for images, PDF files and similar documents, and Qivo is not a file
-   store. It answers `{ "ticket": "…uuid…", "upload_url": "…",
+   at most 20 MiB) is refused with `a file must be at most 20 MiB, this
+   organization's attachment limit. Attach a smaller file.` The 20 MiB
+   ceiling is Qivo's product rule: attachments are for images, PDF files and
+   similar documents, and Qivo is not a file store. It answers `{ "ticket": "…uuid…", "upload_url": "…",
    "expires_at": "…" }`.
 2. `POST` the file's bytes, exactly `size` of them, to `upload_url`, with
    the file's type as `Content-Type` and no Authorization header, for example
@@ -1810,7 +1900,8 @@ and an optional `content_type` (`text/plain; charset=utf-8` by default) and
 stores the text as a UTF-8 file in one call. The text may hold at most 256
 KiB once encoded, and the organization's per-file limit and the 100
 attachments per task apply too, both checked before the text is stored. Longer
-text is refused with `text must be at most 256 KiB (262144 bytes) as UTF-8`.
+text is refused with `text must be at most 256 KiB (262,144 bytes) as UTF-8.
+Split it into several files.`
 The request body limit of 1 MiB counts the text as JSON escapes it, so text
 made mostly of control characters, which JSON writes as six bytes each, can
 meet the body limit's `413` first.
@@ -1902,9 +1993,10 @@ they were posted. It holds at most `limit` comments (50 by default and at
 most), and fewer when they are long, because one call reads at most about 8
 MiB of comments. To read further back, pass the `id` of the first comment in
 the result as `before`, and repeat until the result is an empty list. Only
-an empty list means there are no earlier comments. A `before` that is not
-the id of a comment on this task is refused with `before must be the id of a
-comment on this task`.
+an empty list means there are no earlier comments. A `limit` that is not a
+whole number from 1 to 50 is refused with `limit must be a whole number of
+comments from 1 to 50.`, and a `before` that is not the id of a comment on
+this task with `before must be the id of a comment on this task`.
 
 `update_comment` and `delete_comment` take the comment's `id` from
 `list_comments`. As in the app, the comment's author may edit or delete it,
@@ -1919,11 +2011,10 @@ the task and get an inbox message. Neither tool writes an activity row or a
 task event.
 
 Comment bodies, like task descriptions, hold at most 20,000 characters,
-counted as UTF-16 code units (JavaScript string length), so most emoji count
-as two. The server counts the body after trimming, as for REST and the app,
-and refuses a longer one with `a comment must be at most 20,000 characters`.
-Sending the unchanged text of a longer comment saved earlier changes
-nothing.
+counted as UTF-16 code units (JavaScript string length) after trimming, so
+most emoji count as two, and the server refuses a longer one with `a comment
+must be at most 20,000 characters. Formatting counts too. Shorten it.`, as
+for REST and the app.
 
 A task has no limit on the number of comments.
 `set_following` follows a task (`following: true`) or stops following it.
@@ -1933,12 +2024,11 @@ their inbox. Qivo also makes you follow a task when you are assigned or
 handed it, mentioned on it or comment on it. You can change only your own
 follow. A task has at most 100 followers. Following one that has 100 is
 refused with `this task already has 100 followers, the most a task can
-have`, and a comment or a mention there adds no follower, though the
+have. Someone must unfollow it first.`, and a comment or a mention there adds no follower, though the
 mention still notifies. A new assignee or reviewer still becomes a follower.
 A comment or description can mention at most 100 distinct people. A tool
 call whose text mentions more is refused with `a text can mention at most
-100 people; remove some mentions and save again` and saves nothing. Sending a
-stored text back unchanged is accepted, as for the length limit.
+100 people. Remove some mentions and save again.` and saves nothing.
 
 `list_inbox` answers your inbox as the app's **Inbox** shows it, one item per
 task, latest activity first:
@@ -2015,8 +2105,9 @@ keeps only each item's latest message, so `update_inbox` with
 shrinks the inbox until it fits.
 
 `update_inbox` applies `action` to your items about `tasks`, at most 100
-task refs per call with repeats counted (a longer list is refused), or with
-`all: true` to every item:
+task refs per call with repeats counted (a longer list is refused with
+`tasks must name at most 100 tasks per call. Send the rest in another
+call.`), or with `all: true` to every item:
 
 - `read` marks the items read and, like opening an item in the app, keeps
   only each item's latest message. With `all`, it marks every item read
@@ -2028,7 +2119,7 @@ task refs per call with repeats counted (a longer list is refused), or with
 - `remove` removes the items. With `all`, it removes every read message
   except snoozed ones and leaves unread messages alone.
 - `snooze` hides the items until `until`, an ISO date-time in the future and
-  at most a year ahead, and marks them unread, so they return bold.
+  at most 366 days ahead, and marks them unread, so they return bold.
   `until: null` brings snoozed items back now. A new update on the task
   brings its item back too.
 
@@ -2180,7 +2271,7 @@ task, so not for a task that is already archived, and a blank reason posts
 nothing. `archive_reason` without `archived: true` is refused. It is at most
 500 characters after trimming, the same limit as the app's delete reason, and
 a longer one is refused with `an archive reason must be at most 500
-characters` before the call changes anything, also for a task that is
+characters. Shorten it.` before the call changes anything, also for a task that is
 already archived.
 
 Archived **projects** (0106) are the same idea one altitude up, and a
@@ -2258,15 +2349,11 @@ layer looks like the object not existing, matching the app.
   any authentication or work: an old client probing for the removed GET
   stream costs nothing.
 - **Numbers are numbers.** `remaining_hours` is a finite JSON number from
-  0 that rounds to at most 99999.9, rounded to one decimal place (or `null`
+  0 that rounds to at most 99,999.9, rounded to one decimal place (or `null`
   to clear), the same limit REST and the app use. So `99999.94` saves
   `99999.9`. Any other number, numeric overflow such as `1e309` included,
-  is refused with `remaining_hours must be a number of hours from 0 to
-  99999.9, or null`, before anything is compared. A task given more before
-  the cap reads them back, and `update_task` takes them unchanged or any
-  value from 0 to 99999.9; any other value above the cap is refused, a lower
-  one included. Sent unchanged with a stale `expected`, they answer as a
-  changed field. Task dates are real calendar days in `YYYY-MM-DD`
+  is refused with `remaining hours must be a number from 0 to 99,999.9.
+  Enter a number in that range.`, before anything is compared. Task dates are real calendar days in `YYYY-MM-DD`
   form (or `null` to clear), so impossible dates are refused instead of
   rolling into the next month. Timestamps are full ISO strings.
   `plannable_hours` is integer-or-null — for an agent it is `null` (0103),

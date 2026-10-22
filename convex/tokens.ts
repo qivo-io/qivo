@@ -44,7 +44,8 @@ import {
   orgMutation,
   rule,
 } from './lib/functions'
-import { NAME_MAX, nameTooLong } from './lib/textLimits'
+import { limitedText } from './lib/limitRules'
+import { LIMITS } from './lib/limits'
 import { logActivity } from './model/activity'
 
 type MeCtx = MutationCtx & { me: Doc<'profiles'> }
@@ -60,12 +61,11 @@ const KEY_PREFIX_RE = /^qva_[0-9a-f]{3}\.\.\.[0-9a-f]{5}$/
 const TOKEN_PREFIX_RE = /^qvt_[0-9a-f]{7}$/
 
 /** A key or token name as stored: trimmed, and refused when nothing is left
- * or when it has more than NAME_MAX code points. `what` names the credential
+ * or past LIMITS.keyName or LIMITS.tokenName. `what` names the credential
  * in the sentences. */
 function credentialName(raw: string, what: 'key' | 'token'): string {
-  const name = raw.trim()
-  if (name === '') throw badRequest(`a ${what} needs a name`)
-  if (nameTooLong(name)) throw rule(`a ${what} name must be at most ${NAME_MAX} characters`)
+  const name = limitedText(what === 'key' ? LIMITS.keyName : LIMITS.tokenName, raw)
+  if (name === '') throw rule(`a ${what} needs a name`)
   return name
 }
 

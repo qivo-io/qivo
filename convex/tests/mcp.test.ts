@@ -11,6 +11,7 @@ import type { WithoutSystemFields } from 'convex/server'
 import { describe, expect, test } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { LIMITS } from '../lib/limits'
 import { sha256hex } from '../machine/auth'
 import {
   activityFor,
@@ -133,8 +134,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = '1ad567ec96f79da0f3ea76208ef8c89eaa3fb0765695de3dc5f2d3d5793a7bcf'
-const SHA_TOOLS_MODERN = 'b5d2ea8c55c3ef26dacd723ef7f6d26004a7852f9de7fcc0860186577052632e'
+const SHA_TOOLS_LEGACY = 'b0f8ae8edb17714d0897f51d18fdb33c53d1d669606e14a8d59d1dd4f0aca71b'
+const SHA_TOOLS_MODERN = 'bc1e01f580186ea4a09a4bdb5fa2b6deb72c3082ff7415a9e61fe62bbf62dda9'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -1628,7 +1629,7 @@ describe('write tools', () => {
     // blank title fires before the project lookup
     await expectRefusal(
       create(fx.agent.id, { project: 'NOPE', title: '  ' }),
-      'bad_request',
+      'rule',
       /^title must not be blank$/,
     )
     // unknown / invisible project — the uniform sentence
@@ -2223,13 +2224,11 @@ describe('write tools', () => {
         `^user "${fx.agent.id}" is an agent, which has no plannable week because its capacity is unbounded$`,
       ),
     )
-    // the whole-hours range rule (wire zod catches 0..168 first; the model
-    // sentence stands for anything that slips past)
-    await expectRefusal(
-      set(fx.admin.id, fx.user.id, 169),
-      'rule',
-      /^plannable hours must be a whole number of hours from 1 to 168$/,
-    )
+    // the whole-hours range is the model's rule, with the registry sentence
+    for (const hours of [0, 169]) {
+      const e = await expectRefusal(set(fx.admin.id, fx.user.id, hours), 'rule')
+      expect(e.data.message).toBe(LIMITS.plannableHours.refusal)
+    }
     // no activity row for capacity changes
     expect(await activityFor(fx.t, fx.org.id)).toHaveLength(0)
   })
@@ -2251,7 +2250,7 @@ describe('write tools', () => {
     expect(err.data.reason).toBe('caller_deactivated')
   })
 
-  test('update_inbox over the transport: the schema checks before and the task count, and the answered before goes back', async () => {
+  test('update_inbox over the transport: the schema checks types, the server before and the task count, and the answered before goes back', async () => {
     const fx = await machineOrg()
     await mintKey(fx.t, fx.agent, QVA)
     const task = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
@@ -2296,16 +2295,19 @@ describe('write tools', () => {
     expect(again.isError).toBeUndefined()
     expect(JSON.parse(again.content[0].text)).toEqual({ ...answer, tasks: [] })
     const ref = `QN-${task.num}`
-    for (const [args, problem] of [
-      [{ all: true, before: '1' }, 'before: Invalid input: expected number, received string'],
-      [{ all: true, before: -1 }, 'before: Too small: expected number to be >=0'],
-      [{ tasks: Array(101).fill(ref) }, 'tasks: Too big: expected array to have <=100 items'],
+    const typeRefused = await call({ action: 'read', all: true, before: '1' })
+    expect(typeRefused.isError).toBe(true)
+    expect(typeRefused.content[0].text).toBe(
+      'Input validation error: Invalid arguments for tool update_inbox: before: Invalid input: expected number, received string',
+    )
+    // a range or a count is the server's, answered with its own sentence
+    for (const [args, sentence] of [
+      [{ all: true, before: -1 }, 'before must be the number an earlier call returned'],
+      [{ tasks: Array(101).fill(ref) }, LIMITS.inboxTasks.refusal],
     ] as const) {
       const refused = await call({ action: 'read', ...args })
       expect(refused.isError).toBe(true)
-      expect(refused.content[0].text).toBe(
-        `Input validation error: Invalid arguments for tool update_inbox: ${problem}`,
-      )
+      expect(refused.content[0].text).toBe(sentence)
     }
     // 100 refs pass both the schema and the handler
     const atLimit = await call({ action: 'unread', tasks: Array(100).fill(ref) })

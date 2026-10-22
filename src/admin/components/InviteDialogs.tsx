@@ -15,6 +15,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { LimitedInput } from '@/components/LimitedField'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -27,9 +28,11 @@ import {
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { billingDate, billingMoney } from '@/lib/billingDisplay'
+import { overLimit } from '@/lib/fieldLimits'
 import { restoreFocus } from '@/lib/focusVisibility'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { cn } from '@/lib/utils'
+import { LIMITS } from '../../../convex/lib/limits'
 import {
   type BillingPlans,
   checkAddress,
@@ -44,20 +47,20 @@ import {
 } from '../api'
 import { beginChange } from '../convex'
 import {
-  ADDRESS_MAX,
+  addressIssue,
   addressMessage,
+  asciiEmail,
   cleanAddress,
   cleanEmail,
   cleanName,
   conflictMessage,
   createLabel,
-  EMAIL_SHAPE,
+  emailProblem,
   FREE_MONTHS,
   freeUntil,
   isBlankRow,
   isCompleteRow,
-  MAX_PEOPLE,
-  NAME_MAX,
+  nameProblem,
   type PeopleReview,
   type PersonDraft,
   reviewPeople,
@@ -76,8 +79,8 @@ const ROW =
 
 /* Email fields are plain text with the email keyboard. The browser's own
    email check refuses addresses the server accepts, such as one with ø
-   before the @, and turns a Unicode domain into punycode. EMAIL_SHAPE in
-   ../invites.ts is the only rule. */
+   before the @. cleanEmail (convex/lib/email.ts) is the only rule, and it
+   writes a Unicode domain as punycode, the form the server stores. */
 const EMAIL_INPUT = {
   type: 'text',
   inputMode: 'email',
@@ -152,7 +155,7 @@ function usePeopleRows({ adminFirst, orgId }: { adminFirst: boolean; orgId?: str
   const [checks, setChecks] = useState<ReadonlyMap<string, PeopleCheck>>(() => new Map())
 
   const emails = [
-    ...new Set(rows.map((row) => cleanEmail(row.email)).filter((e) => EMAIL_SHAPE.test(e))),
+    ...new Set(rows.map((row) => cleanEmail(row.email)).filter((e) => e !== null)),
   ].sort()
   const settled = useSettled(emails.join('\n'), 300)
   useEffect(() => {
@@ -269,7 +272,9 @@ function PeopleRows({
               }}
             >
               <div className={ROW}>
-                <Input
+                <LimitedInput
+                  limit={LIMITS.personName}
+                  clean={cleanName}
                   id={fieldId('name', row.id)}
                   value={row.name}
                   onChange={(event) => people.update(row.id, { name: event.target.value })}
@@ -277,10 +282,10 @@ function PeopleRows({
                   aria-label={`Name, ${person}`}
                   aria-invalid={shown?.field === 'name' ? true : undefined}
                   aria-describedby={noteIds(noteId)}
-                  maxLength={NAME_MAX}
                   autoFocus={row.id === people.addedId}
                   disabled={disabled}
-                  className="col-span-2 bg-surface-1 sm:col-span-1"
+                  wrapperClassName="col-span-2 sm:col-span-1"
+                  className="bg-surface-1"
                 />
                 <Input
                   {...EMAIL_INPUT}
@@ -334,7 +339,7 @@ function PeopleRows({
         variant="ghost"
         size="sm"
         className="mt-2 -ml-2.5"
-        disabled={disabled || !firstReady || rows.length >= MAX_PEOPLE}
+        disabled={disabled || !firstReady || rows.length >= LIMITS.invitePeople.max}
         onClick={people.add}
       >
         <Plus />
@@ -458,7 +463,8 @@ function useAddress(name: string) {
 
   const settledTyped = useSettled(typed ?? '', 300)
   useEffect(() => {
-    if (settledTyped === '') return
+    // one too long is refused here already (addressIssue)
+    if (settledTyped === '' || addressIssue(settledTyped)) return
     let active = true
     checkAddress(settledTyped)
       .then((result) => {
@@ -482,7 +488,8 @@ function useAddress(name: string) {
     /* The address to send, or '' to let the server derive it. */
     slug: typed ?? '',
     edited: typed !== null,
-    issue: typed && refusal?.slug === typed ? refusal.message : '',
+    issue:
+      (typed && addressIssue(typed)) || (typed && refusal?.slug === typed ? refusal.message : ''),
     /* Takes the field's change. The field is lowercased in place, so the
        caret stays where the operator is typing. */
     type(event: ChangeEvent<HTMLInputElement>) {
@@ -550,7 +557,12 @@ export function NewOrganizationDialog({
 
   const plan = plans.find((p) => p.id === planId)
   const count = people.review.people.length
-  const canSubmit = !busy && name.trim() !== '' && !address.issue && people.review.ready
+  const canSubmit =
+    !busy &&
+    name.trim() !== '' &&
+    !overLimit(LIMITS.orgName, name) &&
+    !address.issue &&
+    people.review.ready
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -597,10 +609,10 @@ export function NewOrganizationDialog({
             <label htmlFor={`${ids}-name`} className={LABEL}>
               Organization name
             </label>
-            <Input
+            <LimitedInput
+              limit={LIMITS.orgName}
               id={`${ids}-name`}
               value={name}
-              maxLength={NAME_MAX}
               onChange={(event) => setName(event.target.value)}
               aria-describedby={`${ids}-name-hint`}
               disabled={busy}
@@ -623,18 +635,19 @@ export function NewOrganizationDialog({
               <span className="flex shrink-0 items-center border-r border-input px-2.5 font-mono text-base text-text-2 select-none">
                 {`${location.host}/app/`}
               </span>
-              <Input
+              <LimitedInput
+                limit={LIMITS.slug}
                 id={`${ids}-address`}
                 value={address.value}
                 placeholder={address.placeholder}
                 onChange={address.type}
-                maxLength={ADDRESS_MAX}
                 spellCheck={false}
                 autoCapitalize="off"
                 autoCorrect="off"
                 aria-invalid={address.issue ? true : undefined}
                 aria-describedby={noteIds(`${ids}-address`)}
                 disabled={busy}
+                wrapperClassName="h-full flex-1"
                 className="h-full rounded-none border-0 bg-transparent !font-mono shadow-none"
               />
             </div>
@@ -798,16 +811,12 @@ export function EditInviteDialog({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const cleanedName = cleanName(name)
-  const cleanedEmail = cleanEmail(email)
+  // the address as the server stores it; checked by shapeIssue
+  const cleanedEmail = asciiEmail(email)
   const emailChanged = cleanedEmail !== (member.email ?? '')
   const changed = cleanedName !== member.name || emailChanged
-  const nameIssue = cleanedName === '' ? 'Add a name.' : ''
-  const shapeIssue =
-    cleanedEmail === ''
-      ? 'Add an email address.'
-      : EMAIL_SHAPE.test(cleanedEmail)
-        ? ''
-        : 'Enter a full email address.'
+  const nameIssue = nameProblem(name)
+  const shapeIssue = emailProblem(email)
   /* A changed, well-formed address, checked once typing pauses. */
   const checkable = emailChanged && shapeIssue === '' ? cleanedEmail : ''
   const settled = useSettled(checkable, 300)
@@ -862,11 +871,12 @@ export function EditInviteDialog({
             <label htmlFor={`${ids}-name`} className={LABEL}>
               Name
             </label>
-            <Input
+            <LimitedInput
+              limit={LIMITS.personName}
+              clean={cleanName}
               id={`${ids}-name`}
               value={name}
               onChange={(event) => setName(event.target.value)}
-              maxLength={NAME_MAX}
               aria-invalid={nameIssue ? true : undefined}
               aria-describedby={noteIds(`${ids}-name`)}
               disabled={busy}

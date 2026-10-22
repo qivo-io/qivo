@@ -1,7 +1,7 @@
 Open **Settings → Organization → General** to change the organization's name,
 address, attachment limit, calendar, who can create projects and default
 planning hours. Organization, team, project and milestone names allow up to
-80 characters.
+80 characters ([Limits](./limits.md)).
 
 - **Date format** offers six formats with a preview.
 - **Workdays start on** sets the first day of each roadmap week.
@@ -11,8 +11,9 @@ planning hours. Organization, team, project and milestone names allow up to
 **Max attachment size** limits each new task attachment or description image
 to **1–20 MiB**, with a default of **20 MiB**. The task's organization sets the
 limit, including for guest uploads. Lowering it leaves existing files intact.
-It does not set a combined storage quota. Only organization admins can change it.
-A file name can have up to 255 characters.
+It does not set a combined storage quota. Only organization admins can change it,
+and a value outside 1 to 20 is refused instead of changed. A file name can have
+up to 255 characters.
 
 Attachments are for images, PDF files and similar documents that belong
 with a task. Qivo is not a file store, so 20 MiB is the most any
@@ -158,7 +159,7 @@ asks you to confirm before opening it.
 **Plannable hours per week** means time available for planned project work,
 excluding meetings and other overhead. It sets the person's full capacity in
 the Team strip, auto-fit and delay projections. Enter a whole number from
-**1–168 hours**.
+**1–168 hours**. Qivo refuses any other value and keeps the saved one.
 
 **Default plannable hours per week** in **Organization → General** starts at
 **32** and applies to new users. Changing it leaves existing users' hours intact.

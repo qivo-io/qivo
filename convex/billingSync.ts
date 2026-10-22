@@ -11,6 +11,7 @@ import { getBillableUsers } from './lib/billableUsers'
 import { billingEnabled, subscriptionFor } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { badRequest, notFound, require, rule } from './lib/functions'
+import { LIMITS } from './lib/limits'
 import {
   getPolarCheckout,
   getPolarSubscription,
@@ -523,6 +524,17 @@ export const reconcile = internalAction({
         // Replace an earlier pending quantity even when it returns to the
         // current billed quantity (8→11→8). Never retain a stale pending 11.
         const expected = remote.pendingSeats ?? remote.seats
+        if (expected !== work.seats && work.seats > LIMITS.billingSeats.max) {
+          // Polar takes no larger quantity, so this is no failure to retry:
+          // the sentence stays until the count is back within the ceiling,
+          // and each reconcile checks again without asking Polar
+          await ctx.runMutation(releaseRef, {
+            org_id,
+            token: work.token,
+            error: LIMITS.billingSeats.refusal,
+          })
+          return null
+        }
         if (expected !== work.seats) {
           const plan = work.plan
           require(plan.api_meter_id && plan.storage_meter_id, badRequest('Missing usage meters.'))

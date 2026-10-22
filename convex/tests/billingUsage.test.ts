@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { serviceBusy, tooManyRequests } from '../lib/limits'
 import { sha256hex } from '../machine/auth'
 import {
   consumeIngress,
@@ -9,6 +10,7 @@ import {
   ingressShard,
   MACHINE_INGRESS_LIMIT,
   MACHINE_INGRESS_SHARDS,
+  machineRetryAfter,
   recordApiCall,
   usageKeyRange,
 } from '../model/billingUsage'
@@ -544,6 +546,15 @@ describe('machine request limits', () => {
     ])
   })
 
+  it('counts Retry-After as the whole seconds left in the minute, at least 1', () => {
+    expect(machineRetryAfter(NOW)).toBe(60)
+    expect(machineRetryAfter(NOW + 1)).toBe(60)
+    expect(machineRetryAfter(NOW + 27_500)).toBe(33)
+    expect(machineRetryAfter(NOW + 59_000)).toBe(1)
+    expect(machineRetryAfter(NOW + 59_999)).toBe(1)
+    expect(machineRetryAfter(NOW + 60_000)).toBe(60)
+  })
+
   it('returns consistent REST/MCP 429 responses before lookup once ingress is full', async () => {
     const t = newT()
     await t.run(async (ctx) => {
@@ -558,12 +569,16 @@ describe('machine request limits', () => {
     const http = t as unknown as {
       fetch(path: string, init: { method: string; body?: string }): Promise<Response>
     }
+    // 27.5 seconds into the minute, so 33 whole seconds are left
+    vi.mocked(Date.now).mockReturnValue(NOW + 27_500)
     const rest = await http.fetch('/v1/tasks', { method: 'GET' })
     const mcp = await http.fetch('/mcp', { method: 'POST', body: '{}' })
     for (const response of [rest, mcp]) {
       expect(response.status).toBe(429)
-      expect(response.headers.get('Retry-After')).toBe('60')
+      expect(response.headers.get('Retry-After')).toBe('33')
       expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*')
+      // every caller together passed the limit, so the sentence blames none
+      expect(JSON.parse(await response.text())).toEqual({ error: serviceBusy(33) })
     }
     expect(await totals(t)).toHaveLength(0)
   })
@@ -602,6 +617,8 @@ describe('machine request limits', () => {
         .unique(),
     )
     await t.run((ctx) => ctx.db.patch(rate!._id, { count: 300 }))
+    // the last second of the minute
+    vi.mocked(Date.now).mockReturnValue(NOW + 59_200)
     for (const [path, method] of [
       ['/v1/tasks', 'GET'],
       ['/mcp', 'POST'],
@@ -612,7 +629,8 @@ describe('machine request limits', () => {
         body: method === 'POST' ? '{}' : undefined,
       })
       expect(response.status).toBe(429)
-      expect(response.headers.get('Retry-After')).toBe('60')
+      expect(response.headers.get('Retry-After')).toBe('1')
+      expect(JSON.parse(await response.text())).toEqual({ error: tooManyRequests(1) })
     }
     expect(await totals(t)).toMatchObject([{ calls: 2 }])
   })

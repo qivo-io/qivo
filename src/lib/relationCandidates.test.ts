@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { SUBTASK_MAX } from '../../convex/lib/taskLimits'
+import { LIMITS } from '../../convex/lib/limits'
 import {
   parentBlock,
   parentCandidatesFor,
@@ -58,7 +58,7 @@ describe('parent candidates', () => {
   })
 
   it('leaves out a task that already has the most subtasks', () => {
-    const full = Array.from({ length: SUBTASK_MAX }, (_, i) => `kid${i}`)
+    const full = Array.from({ length: LIMITS.subtasks.max }, (_, i) => `kid${i}`)
     const { tasks, byId, view } = scene([
       task('full', 'FE', { children: full }),
       task('roomy', 'FE', { children: full.slice(1) }),
@@ -106,7 +106,7 @@ describe('subtask candidates', () => {
   })
 
   it('offers a full task only its current subtasks', () => {
-    const kids = Array.from({ length: SUBTASK_MAX }, (_, i) => `kid${i}`)
+    const kids = Array.from({ length: LIMITS.subtasks.max }, (_, i) => `kid${i}`)
     const { tasks, byId, view } = scene([
       task('full', 'FE', { children: kids }),
       ...kids.map((id) => task(id, 'FE', { parent: 'full' })),
@@ -114,7 +114,7 @@ describe('subtask candidates', () => {
     const offered = ids(subtaskCandidatesFor(byId.full, tasks, view))
     expect(offered).toEqual(kids)
     expect(subtaskBlock(byId.full)).toBe(
-      `This task has ${SUBTASK_MAX} active subtasks, the most a task can have`,
+      'This task has 100 active subtasks, the most a task can have. Archive or remove one of them first.',
     )
   })
 

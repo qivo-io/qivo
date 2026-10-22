@@ -1,7 +1,9 @@
 import { type Infer, v } from 'convex/values'
+import { LIMITS } from './limits'
 
-export const WEBHOOK_MIN_TTL_MS = 60_000
-export const WEBHOOK_MAX_TTL_MS = 7 * 24 * 60 * 60_000
+/** The longest lifetime a subscription may request (LIMITS.webhookTtl), and
+ * MCP's default. */
+export const WEBHOOK_MAX_TTL_MS = LIMITS.webhookTtl.max
 export const WEBHOOK_MAX_ATTEMPTS = 8
 export const WEBHOOK_RETRY_BASE_MS = 10_000
 export const WEBHOOK_LEASE_MS = 60_000

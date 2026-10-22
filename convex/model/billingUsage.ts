@@ -4,10 +4,18 @@ import { billingEnabled, subscriptionFor } from '../lib/billingAccess'
 import type { BillingUsage } from '../lib/billingTypes'
 import { byId } from '../lib/db'
 import { isDemoDeployment } from '../lib/demo'
+import { LIMITS } from '../lib/limits'
 
 export const MACHINE_WINDOW_MS = 60_000
-export const MACHINE_PROFILE_LIMIT = 300
+export const MACHINE_PROFILE_LIMIT = LIMITS.requestRate.max
 export const MACHINE_INGRESS_LIMIT = 6_000
+
+/** The whole seconds from `now` to the end of the fixed minute window it
+ * falls in (consumeMachineRequest), at least 1. A refused REST or MCP
+ * request answers it as Retry-After, because every machine window, the
+ * profile's and the ingress fence's alike, starts on the same minute. */
+export const machineRetryAfter = (now = Date.now()): number =>
+  Math.max(1, Math.ceil((MACHINE_WINDOW_MS - (now % MACHINE_WINDOW_MS)) / 1000))
 
 /** How many counter rows the deployment-wide ingress limit is spread over.
  * Every REST and MCP request in every organization passes the fence, so one

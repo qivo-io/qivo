@@ -57,10 +57,10 @@ import { asMachineCaller, type Caller, findIssue, findProject, issueKey, UUID } 
 import { byId } from '../lib/db'
 import { vCredentialAccess } from '../lib/enums'
 import { badRequest, forbidden, notFound, type Refusal, rule } from '../lib/functions'
+import { limitedText, limitedWhole } from '../lib/limitRules'
+import { LIMITS } from '../lib/limits'
 import { utcToday } from '../lib/machineDelay'
 import {
-  ATTACHMENT_NAME_MAX,
-  ATTACHMENT_TYPE_MAX,
   type AttachmentJson,
   type AttachResult,
   assertAttachmentRoom,
@@ -125,8 +125,8 @@ const canEdit = (ctx: QueryCtx, me: Caller, issue: Doc<'issues'>): Promise<boole
   hasProjectLevel(ctx, me, issue.project_id, 'user')
 
 /* The shape of a media type an upload may declare. The file name rule and
- * the type's length limit are model/attachments.ts's, which every attach
- * checks again. */
+ * the type's length limit (LIMITS.mediaType) are model/attachments.ts's,
+ * which every attach checks again. */
 const MEDIA_TYPE = /^[A-Za-z0-9][\w!#$&^.+-]*\/[A-Za-z0-9][\w!#$&^.+-]*(?:\s*;.*)?$/
 
 /* An upload's file name, media type and byte size, from a REST body or MCP
@@ -139,8 +139,11 @@ function uploadFields(b: Record<string, unknown>): {
   const name = cleanAttachmentName(typeof b.name === 'string' ? b.name : '')
   let content_type: string | undefined
   if (b.content_type !== undefined && b.content_type !== null) {
-    const value = typeof b.content_type === 'string' ? b.content_type.trim() : ''
-    if (value.length > ATTACHMENT_TYPE_MAX || !MEDIA_TYPE.test(value)) {
+    const value = limitedText(
+      LIMITS.mediaType,
+      typeof b.content_type === 'string' ? b.content_type : '',
+    )
+    if (!MEDIA_TYPE.test(value)) {
       throw badRequest('content_type must be a media type such as application/pdf')
     }
     content_type = value
@@ -285,9 +288,9 @@ export const mcpConfirmUpload = internalMutation({
   },
 })
 
-/* The largest text attach_text_file stores, in UTF-8 bytes (256 KiB). The
- * organization's per-file limit applies too. */
-export const TEXT_FILE_MAX_BYTES = 256 * 1024
+/* The largest text attach_text_file stores, in UTF-8 bytes (LIMITS.textFile,
+ * in KiB). The organization's per-file limit applies too. */
+export const TEXT_FILE_MAX_BYTES = LIMITS.textFile.max * 1024
 
 /* The media type of a text file attached without one. */
 const TEXT_FILE_TYPE = 'text/plain; charset=utf-8'
@@ -322,14 +325,12 @@ async function textFileTarget(
   if (issue === null) throw notFound(`task "${a.ref}" not found (or not visible to you)`)
   if (!(await canEdit(ctx, me, issue))) throw forbidden(MCP_NO_WRITE)
   const fields = uploadFields(a)
-  if (fields.size > TEXT_FILE_MAX_BYTES) {
-    throw badRequest(`text must be at most 256 KiB (${TEXT_FILE_MAX_BYTES} bytes) as UTF-8`)
-  }
+  if (fields.size > TEXT_FILE_MAX_BYTES) throw rule(LIMITS.textFile.refusal)
   return { me, issue, ...fields }
 }
 
 /* attach_text_file's check before the text is stored, so a call it refuses
- * stores nothing, a task with ATTACHMENT_MAX attachments included. */
+ * stores nothing, a task with LIMITS.attachments.max attachments included. */
 export const mcpCheckTextFile = internalMutation({
   args: vTextFile,
   handler: async (ctx, a): Promise<null> => {
@@ -410,7 +411,7 @@ export const mcpAttachTextFile = internalAction({
       runMutation(internal.machine.records.mcpAttachStoredText, { ...target, storage_id }),
     )
     // the refusal's byte delete has committed, and an action rolls nothing back
-    if ('refused' in out) throw badRequest(out.refused)
+    if ('refused' in out) throw rule(out.refused)
     return out.text
   },
 })
@@ -564,10 +565,9 @@ export const mcpTaskActivity = internalQuery({
 
 /* ------------------------------------------------------------ workload */
 
-/* How many weeks a workload read covers by default, and at most. */
+/* How many weeks a workload read covers by default. LIMITS.workloadWeeks
+ * holds the range. */
 const WORKLOAD_WEEKS = 8
-const WORKLOAD_WEEKS_MAX = 52
-const weeksSentence = `weeks must be a whole number from 1 to ${WORKLOAD_WEEKS_MAX}`
 
 /* The workload window, which starts at `from_week` (any day of the first
  * week) or else the week of `today`, the request's UTC day, and runs for
@@ -584,11 +584,7 @@ function workloadWindow(
           shape: 'from_week must be YYYY-MM-DD',
           date: 'from_week must be a valid calendar date',
         })
-  const count = weeks ?? WORKLOAD_WEEKS
-  if (!Number.isInteger(count) || count < 1 || count > WORKLOAD_WEEKS_MAX) {
-    throw badRequest(weeksSentence)
-  }
-  return { fromDay, weeks: count }
+  return { fromDay, weeks: limitedWhole(LIMITS.workloadWeeks, weeks ?? WORKLOAD_WEEKS) }
 }
 
 /* A project the caller can see, by uuid, number or key, or null when the
@@ -698,7 +694,7 @@ export const RECORD_TOOLS: McpTool[] = [
           name: {
             type: 'string',
             minLength: 1,
-            maxLength: ATTACHMENT_NAME_MAX,
+            maxLength: LIMITS.attachmentName.max,
           },
           size: {
             type: 'integer',
@@ -706,7 +702,7 @@ export const RECORD_TOOLS: McpTool[] = [
           },
           content_type: {
             type: 'string',
-            maxLength: ATTACHMENT_TYPE_MAX,
+            maxLength: LIMITS.mediaType.max,
           },
         },
         required: ['ref', 'name', 'size'],
@@ -750,7 +746,7 @@ export const RECORD_TOOLS: McpTool[] = [
         ...(args as { ref: string; ticket: string; storage_id: string }),
       })
       // the refusal's byte delete has committed; answer it as an error result
-      if ('refused' in out) throw badRequest(out.refused)
+      if ('refused' in out) throw rule(out.refused)
       return out.text
     },
   },
@@ -759,8 +755,7 @@ export const RECORD_TOOLS: McpTool[] = [
     def: {
       name: 'attach_text_file',
       title: 'Attach text file',
-      description:
-        "Attach a text file you write yourself, such as notes, a CSV table or a log, to the task `ref`. Give the file `name`, its `text` and optionally its `content_type` (default `text/plain; charset=utf-8`). Qivo stores the text as UTF-8, at most 256 KiB and within the organization's per-file limit. To attach a file that already exists, use start_attachment_upload. Needs Edit access to the task's project. Answers the attachment as get_task lists it.",
+      description: `Attach a text file you write yourself, such as notes, a CSV table or a log, to the task \`ref\`. Give the file \`name\`, its \`text\` and optionally its \`content_type\` (default \`text/plain; charset=utf-8\`). Qivo stores the text as UTF-8, at most ${LIMITS.textFile.max} KiB and within the organization's per-file limit. To attach a file that already exists, use start_attachment_upload. Needs Edit access to the task's project. Answers the attachment as get_task lists it.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -771,14 +766,14 @@ export const RECORD_TOOLS: McpTool[] = [
           name: {
             type: 'string',
             minLength: 1,
-            maxLength: ATTACHMENT_NAME_MAX,
+            maxLength: LIMITS.attachmentName.max,
           },
           text: {
             type: 'string',
           },
           content_type: {
             type: 'string',
-            maxLength: ATTACHMENT_TYPE_MAX,
+            maxLength: LIMITS.mediaType.max,
           },
         },
         required: ['ref', 'name', 'text'],
@@ -823,8 +818,7 @@ export const RECORD_TOOLS: McpTool[] = [
     def: {
       name: 'get_workload',
       title: 'Get workload',
-      description:
-        "Each person's planned hours per week against their `plannable_hours`, from the week holding `from_week` (default this week) for `weeks` weeks (default 8). `project` limits it to one project. `hours` includes work in projects hidden from you; `hidden_hours` is that part, unnamed.",
+      description: `Each person's planned hours per week against their \`plannable_hours\`, from the week holding \`from_week\` (default this week) for \`weeks\` weeks (default ${WORKLOAD_WEEKS}). \`project\` limits it to one project. \`hours\` includes work in projects hidden from you; \`hidden_hours\` is that part, unnamed.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -835,8 +829,8 @@ export const RECORD_TOOLS: McpTool[] = [
           },
           weeks: {
             type: 'integer',
-            minimum: 1,
-            maximum: WORKLOAD_WEEKS_MAX,
+            minimum: LIMITS.workloadWeeks.min,
+            maximum: LIMITS.workloadWeeks.max,
           },
           project: {
             type: 'string',
@@ -895,7 +889,7 @@ export const RECORD_ROUTES: RestRoute[] = [
         body,
       })
       // the refusal's byte delete has committed; answer it like any 400
-      if ('refused' in out) throw badRequest(out.refused)
+      if ('refused' in out) throw rule(out.refused)
       return out.attachment
     },
   }),

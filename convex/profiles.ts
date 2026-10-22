@@ -58,6 +58,8 @@ import {
   require,
   rule,
 } from './lib/functions'
+import { limitedEmail, limitedWhole } from './lib/limitRules'
+import { LIMITS, overText } from './lib/limits'
 import { projectRightAfterUpdate } from './lib/projectCreators'
 import { logActivity } from './model/activity'
 import { pendingRemoval, removeProfile } from './model/cascade'
@@ -69,7 +71,6 @@ import {
   avatarColor,
   byCreated,
   cleanName,
-  EMAIL_SHAPE,
   inheritedRetention,
   normalizeEmail,
   vProfileExpected,
@@ -142,10 +143,10 @@ export const create = adminMutation({
       if (args.org_role === 'guest')
         throw badRequest('an agent is a user or a viewer, never a guest')
     } else {
-      email = normalizeEmail(args.email)
-      if (email === undefined || !EMAIL_SHAPE.test(email)) {
-        throw rule('A person needs an email address. It is what they sign in with')
-      }
+      email = limitedEmail(
+        args.email ?? '',
+        'A person needs an email address. It is what they sign in with',
+      )
       const held = email
       const dup = await ctx.db
         .query('profiles')
@@ -328,10 +329,10 @@ async function updateProfile(
     if (row.auth_user_id !== undefined) {
       throw rule('This seat has been claimed. Its address is the one they signed in with')
     }
-    const email = normalizeEmail(patch.email)
-    if (email === undefined || !EMAIL_SHAPE.test(email)) {
-      throw rule('A person needs an email address. It is what they sign in with')
-    }
+    const email = limitedEmail(
+      patch.email ?? '',
+      'A person needs an email address. It is what they sign in with',
+    )
     if (email !== row.email) {
       const dup = await ctx.db
         .query('profiles')
@@ -502,7 +503,7 @@ export const setDisplayName = authedMutation({
     const now = new Date().toISOString()
     const name = cleanName(args.name)
     if (name === '') return 'a name cannot be blank'
-    if ([...name].length > 80) return 'a name is at most 80 characters'
+    if (overText(LIMITS.personName, name)) return LIMITS.personName.refusal
     const matched = await myMatchedSeats(ctx)
     if (matched.length === 0) return 'no profile for this account'
     const seen = args.expected
@@ -543,9 +544,7 @@ export const setDisplayName = authedMutation({
 export const setMessageRetention = authedMutation({
   args: { days: v.union(v.number(), v.null()) },
   handler: async (ctx, { days }) => {
-    if (days !== null && (!Number.isInteger(days) || days < 1 || days > 3650)) {
-      throw rule('message retention must be NULL (never) or a whole number of days from 1 to 3650')
-    }
+    if (days !== null) limitedWhole(LIMITS.messageRetention, days)
     const matched = await myMatchedSeats(ctx)
     if (matched.length === 0) throw rule('no profile for this account')
     const value = days ?? undefined

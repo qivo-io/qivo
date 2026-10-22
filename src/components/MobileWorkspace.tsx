@@ -256,7 +256,7 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
   const query = mobile ? '' : search
   const projects = P.visibleProjects().filter((project) =>
     matchesAllWords(
-      `${P.projectName(project)} ${P.orgs.find((org) => org.id === project.org)?.name || ''}`,
+      `${project.name} ${P.orgs.find((org) => org.id === project.org)?.name || ''}`,
       query,
     ),
   )
@@ -316,7 +316,7 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
                   <Button
                     variant="ghost"
                     size="icon"
-                    aria-label={`${P.projectName(project)} actions`}
+                    aria-label={`${project.name} actions`}
                     onClick={toggle}
                   >
                     <Icon name="more" size={16} />
@@ -429,7 +429,7 @@ const MobileTaskRow = memo(function MobileTaskRow({
         <span className="min-w-0 flex-1">
           <span className="mobile-task-title">
             {P.isPaused(task) && <PausedMark size={14} />}
-            {task.title}
+            <span className="mobile-task-title-text">{task.title}</span>
           </span>
           <span className="mobile-task-meta">
             <span>

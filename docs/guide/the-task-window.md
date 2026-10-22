@@ -30,8 +30,9 @@ double-click for full size. Inline images cannot be pasted across tasks.
 **Save / Discard** appears when the draft changes. Press **Save** or
 Ctrl/Cmd+S to save. The formatting row and save controls remain visible while
 long drafts scroll. Descriptions and comments can hold up to 20,000
-characters, including formatting. A longer draft cannot be saved until you
-shorten it. Older text over this limit can be read but not edited.
+characters, including formatting. Near the limit the editor shows how many
+characters the draft holds, and a longer draft cannot be saved until you
+shorten it. Older text saved over this limit can be read but not edited.
 
 **Comments** use the same editor but accept text only. Add images as
 attachments. The composer sits below the newest message, or below the scrolling
@@ -105,9 +106,9 @@ A task has at most 20 labels, 100 links and 100 attachments, with images in
 its description counted as attachments while the description shows them.
 Taking an image out of the description and saving frees its place at once,
 and an undo that brings the image back within a day keeps it. A task keeps
-the 100 images most recently taken out this way. At a limit the
-control is disabled
-with a sentence such as **This task has 20 labels, the most a task can have**,
+the 100 images most recently taken out this way. At a limit the control is
+disabled with a sentence such as **This task already has 20 labels, the most
+a task can have. Remove one first.**,
 and the label picker only takes labels off. A file you drop or paste on a
 full task is refused before it uploads. A link also needs room on the other
 task, so picking a task that has 100 links is refused with a sentence that
@@ -129,7 +130,7 @@ and a task has at most 100 active subtasks. Archived subtasks do not count,
 so a task whose Done subtasks archive keeps taking new ones. On a subtask,
 the **Subtasks** button is disabled with **A subtask cannot have subtasks**,
 and when the window lists 100 subtasks with **This task has 100 active
-subtasks, the most a task can have**. A task with subtasks cannot become a
+subtasks, the most a task can have. Archive or remove one of them first.** A task with subtasks cannot become a
 subtask, so when the window lists any, its **Parent** button is disabled with
 **A task with subtasks cannot become a subtask**. The window does not list
 archived subtasks, or subtasks you cannot see, so Qivo refuses those choices

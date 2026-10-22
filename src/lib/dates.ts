@@ -8,6 +8,8 @@
    dates; ISO strings are built manually (never via toISOString) to avoid
    timezone drift on date-only values. */
 
+import { LIMITS } from '../../convex/lib/limits'
+
 export const WEEKS = 28 // the prototype grid's nominal span; nothing bounds a week by it
 export const TODAY_WEEK = 11
 const DAY = 86400000
@@ -378,20 +380,13 @@ export function sameWin(a: RoadmapWin, b: RoadmapWin): boolean {
   return eq(a.start, b.start) && eq(a.end, b.end)
 }
 
-/** The most weeks the Roadmap shows at once, 5 years, so the grid stays
-    renderable. */
-export const WIN_WEEKS_MAX = 260
-
-/** The custom range picker's refusal of a window wider than WIN_WEEKS_MAX. */
-export const WIN_TOO_WIDE = `The Roadmap shows at most ${WIN_WEEKS_MAX} weeks (5 years). Move the start or the end closer.`
-
 /** How many weeks `win` spans, before resolveWin's cap. */
 export const winWeeks = (win: RoadmapWin): number =>
   Math.abs(endpointWeek(win.end) - endpointWeek(win.start)) + 1
 
 /** Resolve to inclusive week indexes [w0, w1]. Swaps a backwards pair. A
-    window wider than WIN_WEEKS_MAX shows its first WIN_WEEKS_MAX weeks, and
-    `capped` says so, for the header to tell. The range picker refuses such a
+    window wider than LIMITS.roadmapWeeks shows its first weeks up to that
+    cap, so the grid stays renderable, and `capped` says so, for the header to tell. The range picker refuses such a
     window, but a pinned start drifts away from a relative end as the weeks
     pass, and a jump to a very long task can ask for one. */
 export function resolveWin(win: RoadmapWin): { w0: number; w1: number; capped: boolean } {
@@ -402,8 +397,8 @@ export function resolveWin(win: RoadmapWin): { w0: number; w1: number; capped: b
     w0 = w1
     w1 = t
   }
-  const capped = w1 - w0 + 1 > WIN_WEEKS_MAX
-  if (capped) w1 = w0 + WIN_WEEKS_MAX - 1
+  const capped = w1 - w0 + 1 > LIMITS.roadmapWeeks.max
+  if (capped) w1 = w0 + LIMITS.roadmapWeeks.max - 1
   return { w0, w1, capped }
 }
 

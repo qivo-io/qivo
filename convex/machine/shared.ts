@@ -12,7 +12,9 @@
 import { v } from 'convex/values'
 import type { ProfileKind } from '../lib/enums'
 import { badRequest } from '../lib/functions'
-import { cutName, plainText } from '../lib/textLimits'
+import { limitedWhole } from '../lib/limitRules'
+import { DEFAULT_PAGE_SIZE, LIMITS, type Limit, MIB } from '../lib/limits'
+import { plainText } from '../model/activity'
 import { REST_AUTH_401, REST_PERSON_AUTH_401 } from './auth'
 
 /** MCP's refusal for a readable project the caller cannot write, which
@@ -83,19 +85,17 @@ export const WRITE_CONFLICT_RETRY_AFTER = 1
 export const MCP_PROVENANCE = 'via MCP'
 
 /** The provenance a REST write's activity row carries. An agent key's writes
- * name the key, cut to NAME_MAX code points, because a key named before that
- * cap would otherwise repeat a long name in every write's row. A personal
- * token's writes name no token, because the person is the actor and only
- * they and organization admins (on API access) see their tokens, while the
- * activity row reaches other members too. A delete records its credential
- * in Deleted items as well, where a personal token's name shows only to
- * organization admins and to the person who deleted
+ * name the key. A personal token's writes name no token, because the person
+ * is the actor and only they and organization admins (on API access) see
+ * their tokens, while the activity row reaches other members too. A delete
+ * records its credential in Deleted items as well, where a personal token's
+ * name shows only to organization admins and to the person who deleted
  * (model/deletedItemsList.ts). The name is written as plain text
- * (lib/textLimits.ts plainText), as an activity diff's free text is, so it
+ * (model/activity.ts plainText), as an activity diff's free text is, so it
  * cannot add a status or reviewer clause that the app's feed reader finds
  * (src/lib/teamSync.ts). */
 export const restProvenance = (keyName: string | null): string =>
-  keyName === null ? 'via the REST API' : `via the REST API (${cutName(plainText(keyName))})`
+  keyName === null ? 'via the REST API' : `via the REST API (${plainText(keyName)})`
 
 /** The agent key's name for its writes' provenance, or null for a personal
  * token. */
@@ -149,21 +149,38 @@ export function needJson(raw: string): Record<string, unknown> {
   return body as Record<string, unknown>
 }
 
-/** A whole-number REST query parameter from `min` to `max`; absent is
- * `fallback`. */
-export function wholeParam(
-  raw: string | undefined,
-  name: string,
-  fallback: number,
-  min: number,
-  max: number,
-): number {
-  if (raw === undefined) return fallback
-  const n = Number(raw)
-  if (raw.trim() === '' || !Number.isInteger(n) || n < min || n > max) {
-    throw badRequest(`${name} must be a whole number from ${min} to ${max}`)
-  }
+/* A REST query parameter, which arrives as text, or an MCP argument, which
+ * arrives as a number, as a number. A blank parameter reads as NaN, which
+ * every whole-number check refuses. */
+const numberOf = (raw: string | number): number =>
+  typeof raw === 'number' ? raw : raw.trim() === '' ? Number.NaN : Number(raw)
+
+/** A list's `limit`, the rows of one page, from a REST query parameter or an
+ * MCP argument, checked against `range`, the list's registry entry
+ * (LIMITS.listTasks, listInbox or listComments), and refused with its
+ * sentence on both surfaces. Absent is DEFAULT_PAGE_SIZE. */
+export function pageLimit(range: Limit, raw: string | number | undefined): number {
+  return raw === undefined ? DEFAULT_PAGE_SIZE : limitedWhole(range, numberOf(raw))
+}
+
+/** The refusal of an `offset` that is not a whole number from 0 up. */
+export const OFFSET_SENTENCE = 'offset must be a whole number, 0 or more'
+
+/** A list's `offset`, the rows to skip, from a REST query parameter or an
+ * MCP argument. Absent is 0. */
+export function pageOffset(raw: string | number | undefined): number {
+  if (raw === undefined) return 0
+  const n = numberOf(raw)
+  if (!Number.isSafeInteger(n) || n < 0) throw badRequest(OFFSET_SENTENCE)
   return n
+}
+
+/** A task list's `offset`. An archived list takes none, so its raw value
+ * goes to taskListRequest unchecked, which refuses any but 0 with the
+ * sentence that says to pass a cursor instead. */
+export function listOffset(raw: string | number | undefined, archived: boolean): number {
+  if (!archived) return pageOffset(raw)
+  return raw === undefined ? 0 : numberOf(raw)
 }
 
 /** A REST request body that may be left out, such as a DELETE's. An empty
@@ -204,13 +221,13 @@ export function refuseUnknownParams(names: Iterable<string>, known: readonly str
  * body holding an unpaired surrogate. */
 export const REST_NOT_UTF8 = 'request body is not valid UTF-8'
 
-/** The largest REST or MCP request body, in bytes (1 MiB). A field at the
- * 20,000-character text cap is at most about 120 KB of JSON. Uploaded files
- * go to signed upload URLs, never through these bodies. The at most 256 KiB
- * of UTF-8 that MCP's attach_text_file takes fits as JSON even with every
- * non-ASCII character escaped, unless it is mostly control characters,
- * which JSON escapes to six bytes each. */
-export const BODY_MAX_BYTES = 1024 * 1024
+/** The largest REST or MCP request body, in bytes (LIMITS.requestBody, in
+ * MiB). A field at the 20,000-character text cap is at most about 120 KB of
+ * JSON. Uploaded files go to signed upload URLs, never through these bodies.
+ * The at most 256 KiB of UTF-8 that MCP's attach_text_file takes fits as
+ * JSON even with every non-ASCII character escaped, unless it is mostly
+ * control characters, which JSON escapes to six bytes each. */
+export const BODY_MAX_BYTES = LIMITS.requestBody.max * MIB
 
 /* convex/tsconfig's lib is ESNext only, which declares neither the decoder
  * nor the request body stream the Convex runtime has. */

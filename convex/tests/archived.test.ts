@@ -13,6 +13,7 @@ import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { ARCHIVE_PAGE } from '../lib/archivedTasks'
 import type { Refusal } from '../lib/functions'
+import { LIMITS } from '../lib/limits'
 import { matchesAllWords, taskSearchText } from '../lib/search'
 import { issueKey } from '../lib/taskRefs'
 import {
@@ -673,7 +674,7 @@ describe('issues.archivedPage', () => {
     ])
   })
 
-  it('refuses a malformed cursor, limit or search', async () => {
+  it('refuses a malformed cursor or limit, and a search past its limit', async () => {
     const t = newT()
     const f = await withOrg(t)
     const project_id = f.meta.id
@@ -690,15 +691,18 @@ describe('issues.archivedPage', () => {
         'limit must be a whole number from 1 to 100',
       )
     }
-    await badRequest(
-      pageOf(t, f.admin, { project_id, search: 'x'.repeat(201) }),
-      'search must be at most 200 characters',
+    // a search counts after trimming and is refused past LIMITS.search as a rule
+    const long = await expectRefusal(
+      pageOf(t, f.admin, { project_id, search: 'x'.repeat(LIMITS.search.max + 1) }),
+      'rule',
     )
+    expect(long.data.message).toBe(LIMITS.search.refusal)
     // the refusals come before the fence, the same for any project
     await badRequest(
       pageOf(t, f.guest, { project_id: f.hidden.id, limit: 0 }),
       'limit must be a whole number from 1 to 100',
     )
-    expect((await pageOf(t, f.admin, { project_id, search: 'x'.repeat(200) })).rows).toEqual([])
+    const atCap = ` ${'x'.repeat(LIMITS.search.max)} `
+    expect((await pageOf(t, f.admin, { project_id, search: atCap })).rows).toEqual([])
   })
 })

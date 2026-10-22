@@ -372,7 +372,7 @@ function LaneHeader({
 }) {
   const leadId = proj ? P.leadOf(proj.id) : owner
   const lead = leadId ? P.user(leadId) : null
-  const name = proj ? P.projectName(proj) : lead?.name || (owner ? 'Unknown user' : 'Unassigned')
+  const name = proj?.name || lead?.name || (owner ? 'Unknown user' : 'Unassigned')
   return (
     <div
       data-lane={proj?.id || `assignee:${owner || 'unassigned'}`}
@@ -740,7 +740,7 @@ function Kanban({
   /** The name a lane's heading shows, or null for a lane without one. */
   const laneName = (lane: Lane) =>
     lane.proj
-      ? P.projectName(lane.proj)
+      ? lane.proj.name
       : lane.owner !== undefined
         ? P.user(lane.owner)?.name || (lane.owner ? 'Unknown user' : 'Unassigned')
         : null
@@ -1031,8 +1031,8 @@ function Kanban({
                           variant="ghost"
                           size="icon"
                           className="w-control-xs h-control-xs"
-                          aria-label={`New task in ${P.projectName(proj)}`}
-                          title={`New task in ${P.projectName(proj)}`}
+                          aria-label={`New task in ${proj.name}`}
+                          title={`New task in ${proj.name}`}
                           onClick={() => actions.newIssue({ project: proj.id })}
                         >
                           <Icon name="plus" size={16} />
@@ -1068,7 +1068,7 @@ function Kanban({
                             {/* biome-ignore lint/a11y/useSemanticElements: a styled flex div inside the cell that takes drops */}
                             <div
                               role="list"
-                              aria-label={`${s.name}, ${P.projectName(proj)}`}
+                              aria-label={`${s.name}, ${proj.name}`}
                               className="[display:flex] [flex-direction:column] [gap:8px] [min-height:8px]"
                             >
                               {cardList(cell, sidePlace, sideCardWidth)}

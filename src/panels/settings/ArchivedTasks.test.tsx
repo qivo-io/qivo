@@ -252,8 +252,6 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
     await open()
     expect(calls.map((c) => c.args)).toEqual([{ project_id: META, limit: 100 }])
     expect(document.activeElement).toBe(find('[data-archive-search]'))
-    // the box holds no more than the server searches
-    expect(find<HTMLInputElement>('[data-archive-search]').maxLength).toBe(200)
     // search comes first in the filters
     expect(
       find('.archived-filters').firstElementChild?.hasAttribute('data-archive-search-box'),
@@ -306,6 +304,21 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
     expect(rowIds()).toEqual(['archived-7', 'archived-9', 'archived-400'])
     expect(text('[data-archive-count]')).toBe('3 found')
     expect(has('[data-archive-fold]')).toBe(false)
+  })
+
+  it('keeps a search over the cap, sends nothing for it and says why', async () => {
+    await open()
+    await last().answer(many(1, 3), null)
+    const sent = calls.length
+    await type(`  ${'q'.repeat(201)} `)
+    expect(find<HTMLInputElement>('[data-archive-search]').value).toHaveLength(204)
+    expect(calls).toHaveLength(sent)
+    expect(text('[data-archived-tasks]')).toContain(
+      'A search must be at most 200 characters. Search for fewer words.',
+    )
+    expect(rowIds()).toEqual([])
+    await type('q'.repeat(200))
+    expect(last().args).toEqual({ project_id: META, search: 'q'.repeat(200), limit: 100 })
   })
 
   it('says how far a search looked when it found nothing yet, and when it found nothing', async () => {

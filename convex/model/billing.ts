@@ -11,6 +11,7 @@ import {
 import type { BillingPlan, BillingSummary, BillingUsage } from '../lib/billingTypes'
 import { byId } from '../lib/db'
 import { badRequest, notFound, require, rule } from '../lib/functions'
+import { grouped, LIMITS } from '../lib/limits'
 import { polarConfigured } from '../lib/polar'
 import { allowanceSeats, includedApiCalls, usagePeriod } from './billingUsage'
 import { estimateDocumentBytes } from './demoMetrics'
@@ -460,8 +461,10 @@ export function validatePlan(plan: Omit<BillingPlan, 'id' | 'archived' | 'create
     if (!Number.isSafeInteger(plan[key]) || plan[key] < 1 || plan[key] > 1_000_000_000)
       throw badRequest(`${key} must be a positive whole number.`)
   }
-  if (plan.minimum_seats > 1000)
-    throw badRequest('Polar supports at most 1,000 seats per subscription.')
+  if (plan.minimum_seats > LIMITS.billingSeats.max)
+    throw badRequest(
+      `Polar supports at most ${grouped(LIMITS.billingSeats.max)} seats per subscription.`,
+    )
   for (const key of ['storage_gb_per_seat', 'minimum_storage_gb'] as const)
     if (!Number.isSafeInteger(plan[key]) || plan[key] < 0 || plan[key] > 1_000_000)
       throw badRequest(`${key} must be a nonnegative whole number.`)

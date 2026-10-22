@@ -33,7 +33,8 @@ import { assertOrgWritable } from '../lib/billingAccess'
 import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, rule } from '../lib/functions'
-import { NAME_MAX, nameOverCap } from '../lib/textLimits'
+import { limitedText } from '../lib/limitRules'
+import { LIMITS } from '../lib/limits'
 import { logActivity, signedDetail } from './activity'
 import { deleteTeamDeep } from './cascade'
 import {
@@ -42,9 +43,8 @@ import {
   DELETES,
   exact,
   type Fields,
+  filledText,
   type Next,
-  namedRecord,
-  TEXT,
 } from './expected'
 import { assertNotLastTeam, newTeamDefaults } from './orgs'
 import {
@@ -58,25 +58,15 @@ import {
   withinRoom,
 } from './projectAccess'
 
-/** The most memberships, project shares and legacy owned projects a team
- * deletion changes (model/cascade.ts deleteTeamDeep). A deployment counts
- * each changed row as one of Convex's 4,096 reads: a local backend read
- * 3,062 ranges deleting a team with 3,000 memberships, and refused one with
- * 5,000. */
-export const TEAM_DELETE_ROWS_MAX = 3000
-
-/** TEAM_DELETE_ROWS_MAX as people read it, written out because the Convex
- * runtime has no Intl (as lib/textLimits.ts TEXT_MAX_LABEL). */
-export const TEAM_DELETE_ROWS_MAX_LABEL = '3,000'
-
-/** The refusal of a team deletion with more than TEAM_DELETE_ROWS_MAX rows. */
-export const TEAM_TOO_LARGE = `deleting a team can remove at most ${TEAM_DELETE_ROWS_MAX_LABEL} of its memberships and project shares at once, so remove some of its members or project shares first`
-
-/* Refuses a team deletion that changes more than TEAM_DELETE_ROWS_MAX rows,
- * read before anything else so the refusal itself fits. Answers the team's
- * legacy owned projects it read, for deleteTeamDeep. */
+/* Refuses with LIMITS.teamDeleteRows' sentence a team deletion that changes
+ * more than LIMITS.teamDeleteRows.max memberships, project shares and legacy
+ * owned projects (model/cascade.ts deleteTeamDeep), read before anything
+ * else so the refusal itself fits. A deployment counts each changed row as
+ * one of Convex's 4,096 reads: a local backend read 3,062 ranges deleting a
+ * team with 3,000 memberships, and refused one with 5,000. Answers the
+ * team's legacy owned projects it read, for deleteTeamDeep. */
 async function assertTeamFits(ctx: QueryCtx, team: Doc<'teams'>): Promise<Doc<'projects'>[]> {
-  const over = TEAM_DELETE_ROWS_MAX + 1
+  const over = LIMITS.teamDeleteRows.max + 1
   const memberships = await ctx.db
     .query('team_members')
     .withIndex('by_team', (q) => q.eq('team_id', team.id))
@@ -89,23 +79,18 @@ async function assertTeamFits(ctx: QueryCtx, team: Doc<'teams'>): Promise<Doc<'p
     .query('projects')
     .withIndex('by_team', (q) => q.eq('team_id', team.id))
     .take(over)
-  if (memberships.length + shares.length + owned.length > TEAM_DELETE_ROWS_MAX)
-    throw rule(TEAM_TOO_LARGE)
+  if (memberships.length + shares.length + owned.length > LIMITS.teamDeleteRows.max)
+    throw rule(LIMITS.teamDeleteRows.refusal)
   return owned
 }
 
 export const TEAM_RUNS_RULE = 'requires an organization admin or a leader of this team'
 
-export const TEAM_NAME_TOO_LONG = `a team name must be at most ${NAME_MAX} characters`
-
-/** A team name as stored: trimmed, and refused when nothing is left or when
- * it has more than NAME_MAX code points. A name equal to `current`, the
- * team's stored one, passes, so a team named before the cap keeps its name
- * through writes that resend it. */
-export function cleanTeamName(raw: string, current?: string): string {
-  const name = raw.trim()
-  if (name === '') throw badRequest('a team name cannot be blank')
-  if (nameOverCap(name, current)) throw rule(TEAM_NAME_TOO_LONG)
+/** A team name as stored: trimmed, and refused when nothing is left or past
+ * LIMITS.teamName. */
+export function cleanTeamName(raw: string): string {
+  const name = limitedText(LIMITS.teamName, raw)
+  if (name === '') throw rule('a team name cannot be blank')
   return name
 }
 
@@ -233,9 +218,8 @@ export type TeamPatch = {
 
 /** The keys of a team's `expected`. REST and MCP change only the name. */
 export const TEAM_FIELDS: Fields<Doc<'teams'>> = {
-  // any text: a team took a blank name until 2026-10-16 and a longer one
-  // until 2026-10-19, and a read answers it as stored
-  name: { sends: 'name', type: TEXT, form: trimmedForm },
+  // cleanTeamName's rule
+  name: { sends: 'name', type: filledText(LIMITS.teamName), form: trimmedForm },
   track_delay_default: { sends: 'track_delay_default', type: BOOLEAN, form: exact },
 }
 
@@ -263,7 +247,7 @@ export async function assertTeamExpected(
     fields: TEAM_FIELDS,
     record: 'team',
     id: team.id,
-    label: namedRecord('team', team.name, team.id),
+    label: `team "${team.name}"`,
     row: team,
     expected,
     next,
@@ -296,7 +280,7 @@ export async function updateTeamCore(
   )
   const upd: Partial<WithoutSystemFields<Doc<'teams'>>> = {}
   if (patch.name !== undefined) {
-    const name = cleanTeamName(patch.name, team.name)
+    const name = cleanTeamName(patch.name)
     if (name !== team.name) upd.name = name
   }
   if (
@@ -508,10 +492,10 @@ export async function removeTeamMemberCore(
  * working out who loses sight of what. 'keep_as_viewer' gives each of those
  * people a Viewer grant on each project the team shared that showed their own
  * tasks, as removing a member does. `reassign_to` hands the tasks over by the
- * task update rules, at most REASSIGN_MAX of them (reassignTooLarge). Only an
- * organization admin deletes a team, and never the organization's last one,
- * nor one with more than TEAM_DELETE_ROWS_MAX memberships and project shares
- * (TEAM_TOO_LARGE). A deletion that settles tasks checks the room as it
+ * task update rules, at most LIMITS.reassign.max of them (reassignTooLarge).
+ * Only an organization admin deletes a team, and never the organization's
+ * last one, nor one with more than LIMITS.teamDeleteRows.max memberships and
+ * project shares (assertTeamFits). A deletion that settles tasks checks the room as it
  * deletes too, since the holders' sight shares its transaction.
  * `expected` refuses the delete over a field someone else changed since it was
  * read. The caller refuses a read-only organization (teams.deleteDeep is an

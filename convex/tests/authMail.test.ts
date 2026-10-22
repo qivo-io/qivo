@@ -143,9 +143,11 @@ it('mails an existing sign-up address a note instead of a link, and an unknown r
 
 it('refuses an address the sender would never mail before creating anything', async () => {
   const { post, signUp, provider } = backend()
+  // Better Auth takes a domain label that ends in a hyphen; the sender does not
+  const unmailable = 'anna@exam-.test'
   for (const answer of [
-    await signUp("o'brien@example.test"),
-    await post('request-password-reset', { email: "o'brien@example.test" }),
+    await signUp(unmailable),
+    await post('request-password-reset', { email: unmailable }),
   ]) {
     expect(answer.status).toBe(400)
     expect(await json(answer)).toEqual({
@@ -155,9 +157,7 @@ it('refuses an address the sender would never mail before creating anything', as
   }
   expect(provider).not.toHaveBeenCalled()
   // no account was created: sign-in finds none
-  expect(
-    (await post('sign-in/email', { email: "o'brien@example.test", password: PASSWORD })).status,
-  ).toBe(401)
+  expect((await post('sign-in/email', { email: unmailable, password: PASSWORD })).status).toBe(401)
 })
 
 it('mails nothing for a reset request that fails validation', async () => {

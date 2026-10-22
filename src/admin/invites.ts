@@ -1,21 +1,11 @@
 /* Pure rules behind the operator's invitation dialogs (components/InviteDialogs.tsx).
    The server repeats every check in convex/adminOrgs.ts. These let a dialog
    point at the row to fix before anything is sent. */
+import { cleanName, limitSentence, overLimit } from '@/lib/fieldLimits'
 import { addCalendarMonths } from '../../convex/lib/billingAccess'
-import { NAME_MAX } from '../../convex/lib/textLimits'
+import { asciiEmail, cleanEmail } from '../../convex/lib/email'
+import { LIMITS } from '../../convex/lib/limits'
 import type { InviteRole, PeopleCheck, PersonInput } from './api'
-
-/* convex/model/people.ts EMAIL_SHAPE, copied so the console bundle does not
-   load server modules. invites.test.ts keeps the two equal. */
-export const EMAIL_SHAPE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
-
-/* The server allows an address of at most 40 characters
-   (convex/model/orgs.ts SLUG_MAX), a person or organization name of at most
-   80 (convex/lib/textLimits.ts NAME_MAX) and at most 50 people in one
-   request. */
-export const ADDRESS_MAX = 40
-export { NAME_MAX }
-export const MAX_PEOPLE = 50
 
 /* The complimentary months offered while creating an organization. */
 export const FREE_MONTHS = 6
@@ -37,19 +27,40 @@ export type PeopleReview = {
   ready: boolean
 }
 
-/* The server's normalization (convex/model/people.ts cleanName and normalizeEmail). */
-export const cleanName = (raw: string) => raw.replace(/\s+/g, ' ').trim()
-export const cleanEmail = (raw: string) => raw.trim().toLowerCase()
+/* The server's normalization: convex/model/people.ts cleanName (the app's
+   copy is in lib/fieldLimits.ts), and for addresses convex/lib/email.ts,
+   whose asciiEmail lowercases and writes a Unicode domain as punycode, and
+   whose cleanEmail also checks the result. */
+export { asciiEmail, cleanEmail, cleanName }
+
+/* Why a typed name cannot be sent, or '' when it can. */
+export function nameProblem(raw: string): string {
+  const name = cleanName(raw)
+  if (name === '') return 'Add a name.'
+  return overLimit(LIMITS.personName, name) ? limitSentence(LIMITS.personName) : ''
+}
+
+/* Why a typed address cannot be sent, or '' when cleanEmail takes it. */
+export function emailProblem(raw: string): string {
+  if (raw.trim() === '') return 'Add an email address.'
+  if (asciiEmail(raw).length > LIMITS.email.max) return limitSentence(LIMITS.email)
+  return cleanEmail(raw) === null ? 'Enter a full email address.' : ''
+}
 
 export const isBlankRow = (row: PersonDraft) => row.name.trim() === '' && row.email.trim() === ''
 
 /* A row with a name and a well-formed address. Add person waits for this on row 1. */
 export const isCompleteRow = (row: PersonDraft) =>
-  cleanName(row.name) !== '' && EMAIL_SHAPE.test(cleanEmail(row.email))
+  nameProblem(row.name) === '' && emailProblem(row.email) === ''
 
-/* Typing in the address field. Organization addresses are lowercase, and the
-   server refuses anything longer than 40 characters. */
-export const cleanAddress = (raw: string) => raw.toLowerCase().slice(0, ADDRESS_MAX)
+/* Typing in the address field. Organization addresses are lowercase; one
+   longer than the server takes is kept and refused (addressIssue). */
+export const cleanAddress = (raw: string) => raw.toLowerCase()
+
+/* The sentence under a typed organization address that is longer than the
+   server takes, or ''. */
+export const addressIssue = (slug: string) =>
+  overLimit(LIMITS.slug, slug) ? limitSentence(LIMITS.slug) : ''
 
 /* checkAddress reason codes, as the sentence under the address field. */
 export function addressMessage(reason: string): string {
@@ -78,14 +89,21 @@ export function reviewPeople(
         : null
     }
     const name = cleanName(row.name)
-    const email = cleanEmail(row.email)
-    const shaped = EMAIL_SHAPE.test(email)
+    const email = asciiEmail(row.email)
+    const shaped = cleanEmail(row.email) !== null
     const repeated = shaped && seen.has(email)
     if (shaped) seen.add(email)
     people.push({ name, email, role: row.role })
-    if (name === '') return { message: 'Add a name.', field: 'name', incomplete: true }
-    if (email === '') return { message: 'Add an email address.', field: 'email', incomplete: true }
-    if (!shaped) return { message: 'Enter a full email address.', field: 'email', incomplete: true }
+    const named = nameProblem(row.name)
+    if (named) return { message: named, field: 'name', incomplete: name === '' }
+    const addressed = emailProblem(row.email)
+    if (addressed)
+      return {
+        message: addressed,
+        field: 'email',
+        // a blank or half-typed address waits; one too long is said at once
+        incomplete: email.length <= LIMITS.email.max,
+      }
     if (repeated)
       return { message: 'This address is listed twice.', field: 'email', incomplete: false }
     const conflict = conflictMessage(opts.checks.get(email))

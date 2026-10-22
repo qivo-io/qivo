@@ -17,7 +17,8 @@ import { canSeeProject, hasProjectLevel, rootMetaOf } from '../lib/access'
 import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
-import { NAME_MAX, nameOverCap } from '../lib/textLimits'
+import { limitedText } from '../lib/limitRules'
+import { LIMITS } from '../lib/limits'
 import { logActivity, signedDetail } from './activity'
 import {
   assertExpected,
@@ -25,8 +26,8 @@ import {
   DELETES,
   exact,
   type Fields,
+  filledText,
   type Next,
-  namedRecord,
   TEXT,
   type View,
 } from './expected'
@@ -99,17 +100,12 @@ export function cleanMilestoneDate(raw: unknown): string {
   })
 }
 
-export const MILESTONE_NAME_TOO_LONG = `a milestone name must be at most ${NAME_MAX} characters`
-
 /** A milestone name as stored: trimmed, and refused when nothing is left, as
- * the app's Milestones window does before it saves, or when it has more than
- * NAME_MAX code points. A name equal to `current`, the milestone's stored
- * one, passes, so a milestone named before the cap keeps its name through a
- * move that resends it. */
-export function cleanMilestoneName(raw: string, current?: string): string {
-  const name = raw.trim()
-  if (name === '') throw badRequest('a milestone name cannot be blank')
-  if (nameOverCap(name, current)) throw rule(MILESTONE_NAME_TOO_LONG)
+ * the app's Milestones window does before it saves, or past
+ * LIMITS.milestoneName. */
+export function cleanMilestoneName(raw: string): string {
+  const name = limitedText(LIMITS.milestoneName, raw)
+  if (name === '') throw rule('a milestone name cannot be blank')
   return name
 }
 
@@ -170,9 +166,8 @@ export async function addMilestoneCore(
 /** The keys of a milestone's `expected` in the app, which reads its day as
  * `week`. */
 export const MILESTONE_FIELDS: Fields<Doc<'milestones'>> = {
-  // any text: a milestone took a blank name until 2026-10-16 and a longer
-  // one until 2026-10-19, and a read answers it as stored
-  name: { sends: 'name', type: TEXT, form: trimmedForm },
+  // cleanMilestoneName's rule
+  name: { sends: 'name', type: filledText(LIMITS.milestoneName), form: trimmedForm },
   week: { sends: 'week', type: TEXT, form: exact },
 }
 
@@ -209,7 +204,7 @@ export async function assertMilestoneExpected(
     fields: a.view === 'app' ? MILESTONE_FIELDS : MILESTONE_MACHINE_FIELDS,
     record: 'milestone',
     id: a.milestone.id,
-    label: namedRecord('milestone', a.milestone.name, a.milestone.id),
+    label: `milestone "${a.milestone.name}"`,
     row: a.milestone,
     expected: a.expected,
     next: a.next,
@@ -251,7 +246,7 @@ export async function updateMilestoneCore(
     },
   })
   const db: Partial<Doc<'milestones'>> = {}
-  if (a.patch.name !== undefined) db.name = cleanMilestoneName(a.patch.name, milestone.name)
+  if (a.patch.name !== undefined) db.name = cleanMilestoneName(a.patch.name)
   if (a.patch.week !== undefined) db.week = cleanMilestoneWeek(a.patch.week)
   const weekChanged = db.week !== undefined && db.week !== milestone.week
   const renamed = db.name !== undefined && db.name !== milestone.name

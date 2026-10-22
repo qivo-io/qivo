@@ -3,8 +3,7 @@ import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { descriptionForm, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
 import type { FieldChange } from '../../convex/lib/functions'
-import { REMAINING_HOURS_RULE } from '../../convex/lib/taskLimits'
-import { DESCRIPTION_TOO_LONG } from '../../convex/lib/textLimits'
+import { LIMITS } from '../../convex/lib/limits'
 import { plannerFixture as fixture, type Snapshot } from './plannerFixture.setup'
 
 /* The field check in the app's store: every edit of an existing record
@@ -366,19 +365,25 @@ describe('the field check in the store', () => {
     expect(calls).toEqual(['keepUnsaved'])
   })
 
-  it("says a field rule the server refuses in the app's words", async () => {
+  it("shows a limit's refusal in the registry's words, not Couldn't save", async () => {
     const refuse = (message: string) => new ConvexError({ code: 'rule', message })
     P.updateIssue(key('task-1'), { remaining: 120_000 })
-    latest().reject(refuse(REMAINING_HOURS_RULE))
+    latest().reject(refuse(LIMITS.remainingHours.refusal))
     await settle()
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
-      'Remaining time must be between 0 and 99,999.9 hours. Change reverted.',
+      'Remaining hours must be a number from 0 to 99,999.9. Enter a number in that range. Change reverted.',
     )
     P.updateIssue(key('task-1'), { description: 'Long text' })
-    latest().reject(refuse(DESCRIPTION_TOO_LONG))
+    latest().reject(refuse(LIMITS.description.refusal))
     await settle()
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
-      'Description too long to save. The limit is 20,000 characters, including formatting. Change reverted.',
+      'A task description must be at most 20,000 characters. Formatting counts too. Shorten it. Change reverted.',
+    )
+    P.updateIssue(key('task-1'), { title: 'A title' })
+    latest().reject(refuse(LIMITS.title.refusal))
+    await settle()
+    expect(showToast.mock.calls.at(-1)?.[0]).toBe(
+      'A task title must be at most 255 characters. Shorten it. Change reverted.',
     )
     // a rule without words of the app's own reads as the server says it
     P.updateIssue(key('task-1'), { status: 'progress' })

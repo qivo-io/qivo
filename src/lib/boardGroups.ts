@@ -240,9 +240,13 @@ function metaHeight(items: readonly MetaItem[], width: number) {
   return height + row
 }
 
+/** The most lines a card shows of a title (views/kanbanCards.tsx clamps
+    titles with line-clamp-4). */
+const TITLE_LINES_MAX = 4
+
 /** The lines a title of `length` characters takes in `width` pixels. */
 const titleLines = (length: number, width: number) =>
-  Math.min(6, Math.max(1, Math.ceil((length * TITLE_CHAR_PX) / Math.max(1, width))))
+  Math.min(TITLE_LINES_MAX, Math.max(1, Math.ceil((length * TITLE_CHAR_PX) / Math.max(1, width))))
 
 /** The height in pixels a card of `group` takes `cardWidth` pixels wide,
     for a card that has not rendered yet. `banner` says whether a task row

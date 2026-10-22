@@ -5,6 +5,7 @@ import { ConvexError, v } from 'convex/values'
 import { internal } from './_generated/api'
 import { internalAction } from './_generated/server'
 import type { Refusal } from './lib/functions'
+import { LIMITS, outsideWhole } from './lib/limits'
 import {
   EVENT_CATALOG,
   EVENT_NAMES,
@@ -12,8 +13,6 @@ import {
   type EventName,
   type EventReply,
   vEventOwner,
-  WEBHOOK_MAX_TTL_MS,
-  WEBHOOK_MIN_TTL_MS,
 } from './lib/taskEvents'
 import {
   type CallbackFailureReason,
@@ -73,7 +72,7 @@ export const manage = internalAction({
   handler: async (ctx, { owner, method, params_json }): Promise<EventReply> => {
     let phase: 'input' | 'authorization' | 'callback' | 'save' = 'input'
     try {
-      if (params_json.length > 16_384) throw new Error('Event subscription request is too large')
+      if (params_json.length > LIMITS.eventParams.max) throw new Error(LIMITS.eventParams.refusal)
       const params = object(JSON.parse(params_json))
       if (method === 'events/list') {
         phase = 'authorization'
@@ -121,17 +120,16 @@ export const manage = internalAction({
         throw new EventRequestError(-32014, 'Event replay is not supported. Use cursor null.', {
           feature: 'cursor',
         })
+      // a lifetime outside the range is refused rather than moved into it;
+      // absent or null is no expiry (MCP sends its seven-day default itself)
       const ttl = params.ttlMs
       if (
         ttl !== undefined &&
         ttl !== null &&
-        (typeof ttl !== 'number' || !Number.isSafeInteger(ttl) || ttl <= 0)
+        (typeof ttl !== 'number' || outsideWhole(LIMITS.webhookTtl, ttl))
       )
-        throw new Error('ttlMs must be a positive integer or null')
-      const lifetime =
-        typeof ttl === 'number'
-          ? Math.max(WEBHOOK_MIN_TTL_MS, Math.min(ttl, WEBHOOK_MAX_TTL_MS))
-          : undefined
+        throw new Error(LIMITS.webhookTtl.refusal)
+      const lifetime = typeof ttl === 'number' ? ttl : undefined
       phase = 'authorization'
       await ctx.runQuery(internal.webhooks.authorize, { owner, filters })
       phase = 'save'

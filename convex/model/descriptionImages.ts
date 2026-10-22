@@ -1,6 +1,6 @@
 /* Images in a task's description: attachments marked `inline` that the
  * description names as `att:<id>` (model/attachments.ts). The app's
- * attachment list hides them, so each counts toward ATTACHMENT_MAX only
+ * attachment list hides them, so each counts toward LIMITS.attachments.max only
  * while the description shows it, or while a draft that pasted it may
  * still save it. Every description save settles them the same way for the
  * app, REST and MCP (settleDescriptionImages, from model/issues.ts):
@@ -31,7 +31,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import { rule } from '../lib/functions'
 import { imageRefs, shownImages } from '../lib/imageRefs'
-import { ATTACHMENT_MAX, ATTACHMENTS_FULL } from '../lib/taskLimits'
+import { LIMITS } from '../lib/limits'
 import { logActivity, signedDetail } from './activity'
 
 /** How long an image a save took out of the description stays, uncounted,
@@ -43,10 +43,10 @@ export const DROPPED_KEEP_MS = 24 * 60 * 60 * 1000
  * draft a person keeps open. */
 export const ORPHAN_AFTER_MS = 24 * 60 * 60 * 1000
 
-/** The most dropped images one task keeps. A save that would keep more
- * deletes the oldest at once, so a task holds at most ATTACHMENT_MAX
- * counted rows and this many dropped ones. */
-export const DROPPED_IMAGES_MAX = ATTACHMENT_MAX
+/** The most dropped images one task keeps, a bound rather than a refusal.
+ * A save that would keep more deletes the oldest at once, so a task holds
+ * at most LIMITS.attachments.max counted rows and this many dropped ones. */
+export const DROPPED_IMAGES_MAX = LIMITS.attachments.max
 
 /** The refusal of a description that adds an image that is not one of the
  * task's attachments, such as one copied from another task's description
@@ -86,10 +86,10 @@ async function deleteImage(ctx: MutationCtx, row: Doc<'issue_attachments'>): Pro
  * imageRefs), so an image is dropped only once no `att:` of either text
  * names it; what a text shows is read as the app renders it (shownImages).
  * Refuses with IMAGE_NOT_ATTACHED a newly shown image that is not the
- * task's, and with ATTACHMENTS_FULL one that would bring an image back to a
- * task with ATTACHMENT_MAX attachments. A dropped or returned image
- * writes the activity row a removal or an attach writes, signed with
- * `provenance` for a machine caller.
+ * task's, and with LIMITS.attachments.refusal one that would bring an image
+ * back to a task with LIMITS.attachments.max attachments. A dropped or
+ * returned image writes the activity row a removal or an attach writes,
+ * signed with `provenance` for a machine caller.
  */
 export async function settleDescriptionImages(
   ctx: MutationCtx,
@@ -108,7 +108,7 @@ export async function settleDescriptionImages(
   const rows = await ctx.db
     .query('issue_attachments')
     .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
-    .take(ATTACHMENT_MAX + DROPPED_IMAGES_MAX)
+    .take(LIMITS.attachments.max + DROPPED_IMAGES_MAX)
   const byId = new Map(rows.map((row) => [row.id, row]))
   // an image the saved text already showed may stay, even one deleted
   // since; an id it only named in prose or code is no such image. The old
@@ -153,7 +153,7 @@ export async function settleDescriptionImages(
   for (const id of shown) {
     const row = byId.get(id)
     if (row === undefined || row.dropped_at === undefined) continue
-    if (counted >= ATTACHMENT_MAX) throw rule(ATTACHMENTS_FULL)
+    if (counted >= LIMITS.attachments.max) throw rule(LIMITS.attachments.refusal)
     counted += 1
     await ctx.db.patch(row._id, { dropped_at: undefined })
     dropped.set(row.id, undefined)

@@ -16,14 +16,12 @@ import { PURGE_ORG } from '../deletedItems'
 import { REAP_PAGES } from '../files'
 import { byId } from '../lib/db'
 import { ORG_REMOVAL_PHASES, type OrgRemovalPhase } from '../lib/enums'
+import { LIMITS, TEXT_MAX } from '../lib/limits'
 import type { EventOwner } from '../lib/taskEvents'
-import { FOLLOWER_MAX, SUBTASK_MAX } from '../lib/taskLimits'
-import { TEXT_MAX } from '../lib/textLimits'
 import { storageIdInUse } from '../model/attachments'
 import { storageUsage } from '../model/billing'
 import { deleteOrgDeep, REMOVAL_BUDGET } from '../model/cascade'
 import {
-  DELETE_REASON_TOO_LONG,
   EXPIRY,
   moveTasksToTrash,
   STALLED_MS,
@@ -305,7 +303,7 @@ describe('moving a task to Deleted items', () => {
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     for (const reason of ['é'.repeat(501), `${'😀'.repeat(250)}a`, ` ${'a'.repeat(501)} `]) {
       const e = await expectRefusal(deleteTask(t, f, task.id, { reason }), 'rule')
-      expect(e.data.message).toBe(DELETE_REASON_TOO_LONG)
+      expect(e.data.message).toBe(LIMITS.deleteReason.refusal)
     }
     expect(await liveTask(t, task.id)).not.toBeNull()
     await deleteTask(t, f, task.id, { reason: ` ${'😀'.repeat(250)} ` })
@@ -397,9 +395,10 @@ describe('moving a task to Deleted items', () => {
     await runSteps(t)
 
     const item = await itemFor(t, huge.id)
-    expect(item).toMatchObject({ state: 'ready', counts: { tasks: 1 }, name: '😀'.repeat(80) })
+    expect(item).toMatchObject({ state: 'ready', counts: { tasks: 1 }, name: '😀'.repeat(127) })
     const stored = await storedIssue(t, huge.id)
-    expect(stored?.title).toBe('😀'.repeat(80))
+    // 255 units end inside the 128th emoji, so 127 stay whole
+    expect(stored?.title).toBe('😀'.repeat(127))
     expect(stored?.description).toBe('x'.repeat(TEXT_MAX - 1))
     expect((await storedRows(t, item.id)).filter((row) => row.table === 'comments')).toHaveLength(
       4500,
@@ -410,7 +409,7 @@ describe('moving a task to Deleted items', () => {
     await as(t, f.user).mutation(api.deletedItems.restore, { org_id, ids: [item.id] })
     await runSteps(t)
     expect(await liveTask(t, huge.id)).toMatchObject({
-      title: '😀'.repeat(80),
+      title: '😀'.repeat(127),
       description: 'x'.repeat(TEXT_MAX - 1),
     })
   }, 120_000)
@@ -420,7 +419,7 @@ describe('moving a task to Deleted items', () => {
     const f = await withOrg(t)
     const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // 100 subtasks of 20,000 three-byte characters pass the 4 MiB a step reads
-    const ids = await plantChildren(t, root, f.sub.id, SUBTASK_MAX, '中'.repeat(TEXT_MAX))
+    const ids = await plantChildren(t, root, f.sub.id, LIMITS.subtasks.max, '中'.repeat(TEXT_MAX))
     const notes = await t.run(async (ctx) => {
       const out: string[] = []
       for (const issue_id of ids) {
@@ -540,10 +539,10 @@ describe('moving a task to Deleted items', () => {
  * detaches tell their followers from steps. convex-test does not count the
  * index range a backend reads to delete a row, so these suites hold each
  * transaction to 4,096 writes instead, which every delete also spends.
- * Two followers per task keep convex-test fast; FOLLOWER_MAX per task was
+ * Two followers per task keep convex-test fast; LIMITS.followers.max per task was
  * checked on a local backend. */
 describe('a task delete at the caps', () => {
-  const LIMITS = { documentsWritten: 4096 }
+  const TX_LIMITS = { documentsWritten: 4096 }
 
   /** `n` people who see TBED, the guest first and then readers with their
    * own grant. */
@@ -614,7 +613,7 @@ describe('a task delete at the caps', () => {
       })
   }
 
-  /** A parent with SUBTASK_MAX subtasks, the parent and each subtask
+  /** A parent with LIMITS.subtasks.max subtasks, the parent and each subtask
    * followed by `people` with a full inbox item. */
   async function plantFamily(t: T, f: OrgFixture, people: string[]) {
     const root = await plantIssue(t, {
@@ -622,7 +621,7 @@ describe('a task delete at the caps', () => {
       project_id: f.sub.id,
       title: 'Sensor rig',
     })
-    const ids = await plantChildren(t, root, f.sub.id, SUBTASK_MAX, '')
+    const ids = await plantChildren(t, root, f.sub.id, LIMITS.subtasks.max, '')
     const kids = await t.run(async (ctx) =>
       Promise.all(ids.map(async (id) => (await byId(ctx, 'issues', id)) as Doc<'issues'>)),
     )
@@ -652,8 +651,8 @@ describe('a task delete at the caps', () => {
       ((await as(t, f.guest).query(api.snapshot.forMe, {}))?.messages ?? []).map((m) => m.issue_id),
     )
 
-  it('deletes a parent at SUBTASK_MAX with every follower holding a full item, in the app', async () => {
-    const t = newT({ transactionLimits: LIMITS })
+  it('deletes a parent at LIMITS.subtasks.max with every follower holding a full item, in the app', async () => {
+    const t = newT({ transactionLimits: TX_LIMITS })
     const f = await withOrg(t)
     const { root, kids } = await plantFamily(t, f, await plantPeople(t, f, 2))
     const doomed = [root, ...kids].map((task) => task.id)
@@ -678,7 +677,7 @@ describe('a task delete at the caps', () => {
   it.each(['rest', 'mcp'] as const)(
     'deletes the same parent alone over %s, and the detached subtasks tell their followers from steps',
     async (surface) => {
-      const t = newT({ transactionLimits: LIMITS })
+      const t = newT({ transactionLimits: TX_LIMITS })
       const f = await withOrg(t)
       const { root, kids } = await plantFamily(t, f, await plantPeople(t, f, 2))
       const credential = await plantCredential(t, f.user, 'mcp_tokens', 'Laptop script')
@@ -711,12 +710,12 @@ describe('a task delete at the caps', () => {
     300_000,
   )
 
-  it('deletes a single task whose FOLLOWER_MAX followers each hold a full item, in steps', async () => {
-    const t = newT({ transactionLimits: LIMITS })
+  it('deletes a single task whose LIMITS.followers.max followers each hold a full item, in steps', async () => {
+    const t = newT({ transactionLimits: TX_LIMITS })
     const f = await withOrg(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    await plantInbox(t, f, [task], await plantPeople(t, f, FOLLOWER_MAX))
-    expect(await messagesAbout(t, [task.id])).toBe(FOLLOWER_MAX * (ITEM_UNREAD_CAP + 1))
+    await plantInbox(t, f, [task], await plantPeople(t, f, LIMITS.followers.max))
+    expect(await messagesAbout(t, [task.id])).toBe(LIMITS.followers.max * (ITEM_UNREAD_CAP + 1))
 
     await deleteTask(t, f, task.id)
 
@@ -823,7 +822,7 @@ describe('moving a project to Deleted items', () => {
       deleteProject(t, f, f.sub2.id, { reason: `${'😀'.repeat(250)}a` }),
       'rule',
     )
-    expect(e.data.message).toBe(DELETE_REASON_TOO_LONG)
+    expect(e.data.message).toBe(LIMITS.deleteReason.refusal)
     expect(await t.run((ctx) => byId(ctx, 'projects', f.sub2.id))).not.toBeNull()
     await deleteProject(t, f, f.sub2.id, { reason: 'é'.repeat(500) })
     expect((await itemFor(t, f.sub2.id)).reason).toBe('é'.repeat(500))

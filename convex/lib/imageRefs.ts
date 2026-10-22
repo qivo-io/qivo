@@ -1,7 +1,7 @@
 /* Which attachments a task description names, shared by the server's
  * description saves (model/descriptionImages.ts) and the app's paint of
  * them (src/store/planner.ts). It imports only the description parser, so
- * the app can import it as it does taskLimits.ts.
+ * the app can import it as it does limits.ts.
  *
  * Two readings, for two jobs:
  * - shownImages: the images the app shows, read by the app's own parser

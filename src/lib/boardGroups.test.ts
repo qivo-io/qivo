@@ -404,11 +404,11 @@ describe('estimateCardHeight', () => {
       expect(height(base, width - 7)).toBeGreaterThanOrEqual(height(base, width))
   })
 
-  it('caps a title at six lines', () => {
+  it('caps a title at the four lines a card shows', () => {
     const long = height(card([task('a', 'word '.repeat(200))]))
     expect(height(card([task('a', 'word '.repeat(400))]))).toBe(long)
-    // the two-line card and four more 18.9px lines
-    expect(long).toBe(Math.ceil(81.17 + 4 * 18.9))
+    // the two-line card and two more 18.9px lines
+    expect(long).toBe(Math.ceil(81.17 + 2 * 18.9))
   })
 })
 

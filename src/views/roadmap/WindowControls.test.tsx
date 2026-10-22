@@ -2,8 +2,9 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { LIMITS } from '../../../convex/lib/limits'
 import { TooltipProvider } from '../../components/ui/tooltip'
-import { DEFAULT_WIN, type RoadmapWin, WIN_TOO_WIDE, WIN_WEEKS_MAX } from '../../lib/dates'
+import { DEFAULT_WIN, type RoadmapWin } from '../../lib/dates'
 import { WinRangePicker } from './WindowControls'
 
 vi.mock('../../lib/convex', () => ({
@@ -50,8 +51,10 @@ async function typeWeeks(which: 'start' | 'end', value: string) {
   })
 }
 
+const MOST_WEEKS = LIMITS.roadmapWeeks.max
+
 describe('the Roadmap range picker', () => {
-  it(`applies a window of ${WIN_WEEKS_MAX} weeks and refuses a wider one with a sentence`, async () => {
+  it(`applies a window of ${MOST_WEEKS} weeks and refuses a wider one with a sentence`, async () => {
     const applied: RoadmapWin[] = []
     const start = DEFAULT_WIN.start.value as number
     await act(async () =>
@@ -68,16 +71,18 @@ describe('the Roadmap range picker', () => {
       ),
     )
     const alert = () => document.querySelector('[data-win-too-wide]')
-    await typeWeeks('end', String(start + WIN_WEEKS_MAX))
+    await typeWeeks('end', String(start + MOST_WEEKS))
     expect(applied).toEqual([])
-    expect(alert()?.textContent).toBe(WIN_TOO_WIDE)
+    expect(alert()?.textContent).toBe(
+      'The Roadmap shows at most 260 weeks (5 years). Move the start or the end closer.',
+    )
     // the field keeps what was typed
     expect(document.querySelector<HTMLInputElement>('[data-win-weeks="end"]')?.value).toBe(
-      String(start + WIN_WEEKS_MAX),
+      String(start + MOST_WEEKS),
     )
-    await typeWeeks('end', String(start + WIN_WEEKS_MAX - 1))
+    await typeWeeks('end', String(start + MOST_WEEKS - 1))
     expect(applied).toEqual([
-      { ...DEFAULT_WIN, end: { mode: 'weeks', value: start + WIN_WEEKS_MAX - 1 } },
+      { ...DEFAULT_WIN, end: { mode: 'weeks', value: start + MOST_WEEKS - 1 } },
     ])
     expect(alert()).toBeNull()
   })

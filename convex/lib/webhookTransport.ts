@@ -16,6 +16,7 @@ import { isIP } from 'node:net'
 import { URL } from 'node:url'
 import ipaddr from 'ipaddr.js'
 import { Webhook } from 'standardwebhooks'
+import { LIMITS } from './limits'
 
 /** HTTPS destinations must resolve only to public addresses on every connection. */
 export function publicAddress(address: string): boolean {
@@ -69,9 +70,17 @@ export function callbackError(error: unknown): CallbackError {
   return new CallbackError('connection_refused')
 }
 
+/** The callback URL a subscription stores: `value` trimmed and checked as a
+ * public HTTPS address. A URL past LIMITS.webhookUrl is refused with its
+ * sentence, counted after trimming as every text limit is, and again in the
+ * normalized form it returns, which percent-encoding can lengthen. Each
+ * delivery checks the stored URL again, so a URL accepted once is never
+ * refused later. */
 export function callbackUrl(value: unknown): string {
-  if (typeof value !== 'string' || value.length > 2048) throw new Error('Invalid callback URL')
-  const url = new URL(value)
+  if (typeof value !== 'string') throw new Error('Invalid callback URL')
+  const text = value.trim()
+  if (text.length > LIMITS.webhookUrl.max) throw new Error(LIMITS.webhookUrl.refusal)
+  const url = new URL(text)
   if (
     url.protocol !== 'https:' ||
     url.username ||
@@ -88,7 +97,9 @@ export function callbackUrl(value: unknown): string {
     (isIP(hostname) && !publicAddress(hostname))
   )
     throw new Error('Callback address is not public')
-  return url.toString()
+  const normalized = url.toString()
+  if (normalized.length > LIMITS.webhookUrl.max) throw new Error(LIMITS.webhookUrl.refusal)
+  return normalized
 }
 
 export function signingSecret(value: unknown): string {

@@ -38,8 +38,8 @@ import { assertOrgWritable } from '../lib/billingAccess'
 import { usedMoreThan } from '../lib/db'
 import { GRANT_LEVELS, type GrantLevel, vGrantLevel } from '../lib/enums'
 import { badRequest, forbidden, type Refusal, rule } from '../lib/functions'
+import { grouped, LIMITS } from '../lib/limits'
 import { liveIn } from '../lib/liveTasks'
-import { REASSIGN_MAX, REMOVAL_HOLDERS_MAX } from '../lib/projectGrants'
 import { logActivity, signedDetail } from './activity'
 import { assertExpected, exact, type Fields, oneOf } from './expected'
 import { assertAssigneeRule, hasSubtasks, holderKey, updateIssueCore } from './issues'
@@ -241,11 +241,7 @@ export async function setProjectGrantCore(
   await assertGrantExpected(ctx, {
     me: a.me,
     project,
-    // a team saved blank before names were required is named by its id
-    of:
-      'team' in subject
-        ? { id: subject.team.id, name: subject.team.name.trim() || `team ${subject.team.id}` }
-        : subject.profile,
+    of: 'team' in subject ? subject.team : subject.profile,
     level: row?.level ?? null,
     expected: a.expected,
     next: level,
@@ -306,23 +302,37 @@ type Lost = Holding & { project: Doc<'projects'> }
 export const REASSIGN_ROOM = 0.95
 
 /** The refusal of a handover too large for one removal: more than
- * REASSIGN_MAX tasks, or fewer that fill REASSIGN_ROOM. It suggests keeping
- * the people as Viewers only when the removal would accept that choice
- * (`canKeep`). */
+ * LIMITS.reassign.max tasks, or fewer that fill REASSIGN_ROOM. It is
+ * LIMITS.reassign's sentence, which suggests keeping the people as Viewers,
+ * only when the removal would accept that choice (`canKeep`).
+ *
+ * Where the cap sits: each task's reassignment runs every rule of a task
+ * update inside the removal's one transaction, so a larger handover would
+ * pass Convex's limits for one transaction. It is about 60% of the largest
+ * count that passed the measurement behind tests/bulkReassign.test.ts (196
+ * tasks with four followers each, in an organization of 100 people), taken
+ * when the removal still told each follower itself. Background steps tell
+ * them now (model/messages.ts NotifyPreload.deferFollowers). */
 export const reassignTooLarge = (canKeep: boolean): string =>
-  `a removal can reassign at most ${REASSIGN_MAX} tasks at once, fewer when the change is too large for one request, so ${canKeep ? 'keep the people as Viewers or ' : ''}reassign some of the tasks first`
+  canKeep
+    ? LIMITS.reassign.refusal
+    : `a removal can reassign at most ${grouped(LIMITS.reassign.max)} tasks at once, fewer when the change is too large for one request. Reassign some of the tasks first.`
 
 /** The refusal of Viewer grants too many for one removal: they would fill
  * REASSIGN_ROOM of the transaction before the last one is saved. */
 export const KEEP_TOO_LARGE =
   'a removal can keep only as many people as Viewers as fit in one request, so remove some of these people first or reassign the tasks'
 
-/** The refusal of a removal that keeps people as Viewers or reassigns their
- * tasks while more than REMOVAL_HOLDERS_MAX people hold open tasks in the
- * projects it reaches. Only a team's removal or deletion has that many, so
- * the next steps are leaving the tasks or removing some of the team's
- * members first. */
-export const REMOVAL_TOO_LARGE = `a removal that keeps people as Viewers or reassigns their tasks can take access from at most ${REMOVAL_HOLDERS_MAX} people with open tasks at once, so leave the tasks with them, or remove some of the team's members first`
+/* A removal that keeps people as Viewers or reassigns their tasks is
+ * refused with LIMITS.removalHolders' sentence while more than
+ * LIMITS.removalHolders.max people hold open tasks in the projects it
+ * reaches. Only a team's removal or deletion has that many. The removal
+ * works out each such person's sight before and after, and keeping them as
+ * Viewers looks up each one's grant, which cost at most five index ranges a
+ * person when convex-test counted every query (tests/bulkReassign.test.ts).
+ * LIMITS.removalHolders.max people use about 3,500 of Convex's 4,096 and
+ * leave the rest for the removal's other reads. A removal that leaves the tasks costs less and is
+ * bounded only by the room it checks as it reads. */
 
 /** The refusal of a removal whose reads to work out who loses sight would
  * pass REASSIGN_ROOM of the transaction, whatever it does with the tasks. */
@@ -356,7 +366,7 @@ export async function withinRoom<T>(step: () => Promise<T>): Promise<T> {
 }
 
 /* How many tasks the scan for held work reads between two room checks: ten
- * descriptions at their cap (lib/textLimits.ts TEXT_MAX) stay well under the
+ * descriptions at their cap (lib/limits.ts TEXT_MAX) stay well under the
  * 5% of Convex's 16 MiB a removal keeps. */
 const TASK_GUARD_ROWS = 10
 
@@ -377,11 +387,12 @@ const ROW_GUARD_ROWS = 500
  * (lib/access.ts projectLevelsForPeople, over one read of the organization's
  * projects). Only a reviewer who lost sight costs a subtask lookup. A
  * removal that keeps people as Viewers or reassigns their tasks is refused
- * with REMOVAL_TOO_LARGE before their sight is read when more than
- * REMOVAL_HOLDERS_MAX people hold such tasks. The room (REASSIGN_ROOM) is
- * checked before and during each read, the task scan included, and before
- * each subtask lookup, so any removal too large for one request is refused
- * with REMOVAL_FULL before a read passes Convex's limits.
+ * with LIMITS.removalHolders' sentence before their sight is read when more
+ * than LIMITS.removalHolders.max people hold such tasks. The room
+ * (REASSIGN_ROOM) is checked before and during each read, the task scan
+ * included, and before each subtask lookup, so any removal too large for
+ * one request is refused with REMOVAL_FULL before a read passes Convex's
+ * limits.
  */
 async function removeAndFindLost(
   ctx: MutationCtx,
@@ -414,7 +425,9 @@ async function removeAndFindLost(
       }
     }
     const holders = [...new Set(candidates.map((h) => h.profile_id))]
-    if (a.held !== 'leave' && holders.length > REMOVAL_HOLDERS_MAX) throw rule(REMOVAL_TOO_LARGE)
+    if (a.held !== 'leave' && holders.length > LIMITS.removalHolders.max) {
+      throw rule(LIMITS.removalHolders.refusal)
+    }
     const orgProjects: Doc<'projects'>[] = []
     if (holders.length > 0) {
       await assertRoom(ctx)
@@ -553,13 +566,13 @@ export type Settlement = Omit<AccessRemoval, 'removed'> & { viewer_grants: Doc<'
  * each of those tasks, by role, to that user or to nobody, with every rule of
  * a task update (model/issues.ts updateIssueCore), so the new holder needs
  * Edit access and sight of every task above once the access is gone. A
- * handover of more than REASSIGN_MAX tasks, or one that fills REASSIGN_ROOM
- * of the transaction before its last task, is refused with
+ * handover of more than LIMITS.reassign.max tasks, or one that fills
+ * REASSIGN_ROOM of the transaction before its last task, is refused with
  * reassignTooLarge, which blames its size rather than the tasks. Viewer
  * grants that fill REASSIGN_ROOM before the last one is saved are refused
  * the same way with KEEP_TOO_LARGE. A removal whose people are too many to
- * work out who loses sight is refused with REMOVAL_TOO_LARGE or REMOVAL_FULL
- * before it reads past Convex's limits (removeAndFindLost). Any refusal
+ * work out who loses sight is refused with LIMITS.removalHolders' sentence
+ * or REMOVAL_FULL before it reads past Convex's limits (removeAndFindLost). Any refusal
  * throws, so the removal and its settlement land together or not at all, and
  * one while settling the tasks carries HELD_TASKS_REFUSED. Project grant
  * removal, team member removal and team deletion (model/teams.ts) all run
@@ -649,7 +662,7 @@ export async function removeAndSettle(
     // were reassigned rolls them back with the removal. The advice is worked
     // out first, because a refusal from the guard leaves little room to read.
     const tooLarge = rule(reassignTooLarge(await canKeepAsViewers(ctx, a, lost)))
-    if (byTask.size > REASSIGN_MAX) throw tooLarge
+    if (byTask.size > LIMITS.reassign.max) throw tooLarge
     // The access is gone and the loop below writes only tasks, follows,
     // messages and activity, so one preload serves every task update. The
     // followers hear from background steps (NotifyPreload.deferFollowers).

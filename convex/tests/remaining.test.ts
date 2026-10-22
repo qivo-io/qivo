@@ -8,8 +8,8 @@
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { LIMITS } from '../lib/limits'
 import { assertNoSubtasks, type IssuePatch } from '../model/issues'
-import { REMAINING_HOURS_RULE } from '../model/taskValues'
 import {
   as,
   expectRefusal,
@@ -189,7 +189,7 @@ describe('remaining time', () => {
     )
     const childless = await plantIssue(t, { ...base })
     const neg = await expectRefusal(updateAs(t, f, childless.id, { remaining_hours: -1 }), 'rule')
-    expect(neg.data.message).toBe(REMAINING_HOURS_RULE)
+    expect(neg.data.message).toBe(LIMITS.remainingHours.refusal)
   })
 
   it('done stamp (0071): set on entering done, kept on unrelated edits, never invented, cleared on leaving', async () => {

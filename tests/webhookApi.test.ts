@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { components, internal } from '../convex/_generated/api'
 import authSchema from '../convex/betterAuth/schema'
+import { LIMITS } from '../convex/lib/limits'
 import { mcpResource } from '../convex/lib/oauth'
 import { CallbackError, decryptSecret } from '../convex/lib/webhookTransport'
 import { sha256hex } from '../convex/machine/auth'
@@ -544,11 +545,15 @@ describe('MCP Events and generic REST webhooks', { timeout: 20_000 }, () => {
     ])
   })
 
-  it('clamps finite TTLs and reapplies the MCP default on renewal', async () => {
+  it('refuses TTLs outside a minute to a week and reapplies the MCP default on renewal', async () => {
     const f = await fixture()
-    const minute = await f.mcp('events/subscribe', { ...f.params, ttlMs: 1 })
+    for (const ttlMs of [1, 59_999, 30 * 24 * 60 * 60_000]) {
+      const refused = await f.mcp('events/subscribe', { ...f.params, ttlMs })
+      expect(refused.body.error?.message).toBe(LIMITS.webhookTtl.refusal)
+    }
+    const minute = await f.mcp('events/subscribe', { ...f.params, ttlMs: 60_000 })
     expect(minute.body.result?.refreshBefore).toBe(new Date(Date.now() + 60_000).toISOString())
-    const week = await f.mcp('events/subscribe', { ...f.params, ttlMs: 30 * 24 * 60 * 60_000 })
+    const week = await f.mcp('events/subscribe', { ...f.params, ttlMs: 7 * 24 * 60 * 60_000 })
     expect(week.body.result?.refreshBefore).toBe(
       new Date(Date.now() + 7 * 24 * 60 * 60_000).toISOString(),
     )

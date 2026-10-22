@@ -1,15 +1,16 @@
-/* The size limits of one task's family and followers (lib/taskLimits.ts),
+/* The size limits of one task's family and followers (lib/limits.ts),
  * on the app's mutations, REST and MCP, which share one model rule each.
  *
  *   1. One level of subtasks: no subtask as a parent, no parent for a task
- *      with subtasks, archived ones included, and at most SUBTASK_MAX
- *      active subtasks. A restore under a full parent brings the task back
- *      as a top-level task, and a move carries at most MOVE_SUBTREE_MAX
- *      subtasks. At most ATTACHMENT_MAX attachments, LINK_MAX links and
- *      LABEL_MAX labels per task, on every write path.
- *   2. At most FOLLOWER_MAX followers: a follow by hand is refused there, a
- *      comment or a mention adds no follower but still goes through, and a
- *      new assignee or reviewer still follows.
+ *      with subtasks, archived ones included, and at most
+ *      LIMITS.subtasks.max active subtasks. A restore under a full parent
+ *      brings the task back as a top-level task, and a move carries at most
+ *      LIMITS.moveSubtree.max subtasks. At most LIMITS.attachments.max
+ *      attachments, LIMITS.links.max links and LIMITS.labels.max labels per
+ *      task, on every write path.
+ *   2. At most LIMITS.followers.max followers: a follow by hand is refused
+ *      there, a comment or a mention adds no follower but still goes
+ *      through, and a new assignee or reviewer still follows.
  *   3. A comment on a task with many followers whose items sit at the item
  *      cap reads a bounded share of each item and trims the rest in the
  *      background. */
@@ -19,31 +20,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { Refusal, RefusalCode } from '../lib/functions'
-import { MENTION_MAX, TOO_MANY_MENTIONS } from '../lib/mentions'
 import {
-  ATTACHMENT_MAX,
-  ATTACHMENTS_FULL,
-  FOLLOWER_MAX,
-  FOLLOWERS_FULL,
-  LABEL_MAX,
-  LABELS_FULL,
-  LINK_MAX,
+  LIMITS,
   linksFull,
-  PARENT_FULL,
   PARENT_IS_SUBTASK,
-  SUBTASK_MAX,
   SUBTASK_WITH_SUBTASKS,
-} from '../lib/taskLimits'
-import { TEXT_MAX } from '../lib/textLimits'
+  TEXT_MAX,
+} from '../lib/limits'
 import { ARCHIVED_DETACH, STALLED_MS } from '../model/deletedItems'
 import { DROPPED_IMAGES_MAX, DROPPED_KEEP_MS, IMAGE_NOT_ATTACHED } from '../model/descriptionImages'
-import {
-  MOVE_SUBTREE_MAX,
-  MOVE_SUBTREE_TOO_LARGE,
-  MOVE_TOO_LARGE,
-  PARENT_DELETED_SINCE,
-  TITLE_MAX,
-} from '../model/issues'
+import { MOVE_TOO_LARGE, PARENT_DELETED_SINCE } from '../model/issues'
 import { INLINE_TRIMS, ITEM_UNREAD_CAP, notifyCommentInsert } from '../model/messages'
 import {
   as,
@@ -290,20 +276,20 @@ describe('one level of subtasks', () => {
     )
   })
 
-  it(`counts only active subtasks toward ${SUBTASK_MAX} and refuses the next active one`, async () => {
+  it(`counts only active subtasks toward ${LIMITS.subtasks.max} and refuses the next active one`, async () => {
     const fx = await setup()
     const parent = await task(fx, { title: 'Recurring' })
     // a full archive of Done subtasks takes nothing from the limit
-    await plantSubtasks(fx, parent, SUBTASK_MAX, { archived_at: NOW })
+    await plantSubtasks(fx, parent, LIMITS.subtasks.max, { archived_at: NOW })
     const kit = creates(fx, parent)
     await kit.app()
-    await plantSubtasks(fx, parent, SUBTASK_MAX - 2)
+    await plantSubtasks(fx, parent, LIMITS.subtasks.max - 2)
     // the hundredth active one fits
     await kit.rest()
-    for (const make of Object.values(kit)) await refused(make(), 'rule', PARENT_FULL)
+    for (const make of Object.values(kit)) await refused(make(), 'rule', LIMITS.subtasks.refusal)
     const lone = await task(fx)
     for (const change of Object.values(reparents(fx, lone, parent))) {
-      await refused(change(), 'rule', PARENT_FULL)
+      await refused(change(), 'rule', LIMITS.subtasks.refusal)
     }
     expect(await row(fx.t, lone.id)).toEqual(lone)
   })
@@ -345,10 +331,10 @@ describe('restoring a subtask under a parent with the most active subtasks', () 
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
 
-  /* A parent with SUBTASK_MAX active subtasks and one archived subtask. */
+  /* A parent with LIMITS.subtasks.max active subtasks and one archived subtask. */
   async function fullParent(fx: Fx) {
     const parent = await task(fx, { title: 'Full' })
-    await plantSubtasks(fx, parent, SUBTASK_MAX)
+    await plantSubtasks(fx, parent, LIMITS.subtasks.max)
     const [old] = await plantSubtasks(fx, parent, 1, { archived_at: NOW, title: 'Old step' })
     return { parent, old }
   }
@@ -416,7 +402,7 @@ describe('restoring a subtask under a parent with the most active subtasks', () 
         parent: key(named.parent),
       }),
       'rule',
-      PARENT_FULL,
+      LIMITS.subtasks.refusal,
     )
     expect(await row(fx.t, named.old.id)).toEqual(named.old)
   })
@@ -426,7 +412,7 @@ describe('restoring a subtask under a parent with the most active subtasks', () 
     // the parent sits in a sub-project the guest cannot see
     const hidden = await plantHiddenSibling(fx.t, fx, fx.guest)
     const parent = await task(fx, { project_id: hidden.id, title: 'Full elsewhere' })
-    await plantSubtasks(fx, parent, SUBTASK_MAX, { project_id: hidden.id })
+    await plantSubtasks(fx, parent, LIMITS.subtasks.max, { project_id: hidden.id })
     const [old] = await plantSubtasks(fx, parent, 1, { archived_at: NOW, title: 'Old step' })
     const restored = await fx.t.mutation(internal.machine.rest.updateIssue, {
       callerId: fx.agent.id,
@@ -464,8 +450,8 @@ describe('restoring a subtask under a parent with the most active subtasks', () 
   it('keeps the parent when it has room, archived subtasks aside', async () => {
     const fx = await setup()
     const parent = await task(fx, { title: 'Roomy' })
-    await plantSubtasks(fx, parent, SUBTASK_MAX - 1)
-    const [old] = await plantSubtasks(fx, parent, SUBTASK_MAX, { archived_at: NOW })
+    await plantSubtasks(fx, parent, LIMITS.subtasks.max - 1)
+    const [old] = await plantSubtasks(fx, parent, LIMITS.subtasks.max, { archived_at: NOW })
     const answer = await as(fx.t, fx.admin).mutation(api.issues.unarchive, {
       org_id: fx.org.id,
       id: old.id,
@@ -480,7 +466,7 @@ describe('restoring a subtask under a parent with the most active subtasks', () 
     const [child] = await plantSubtasks(fx, parent, 1, { status: 'todo', title: 'Deleted step' })
     await deleteTask(fx.t, fx, child.id)
     await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
-    await plantSubtasks(fx, parent, SUBTASK_MAX, { archived_at: NOW })
+    await plantSubtasks(fx, parent, LIMITS.subtasks.max, { archived_at: NOW })
     const item = await itemFor(fx.t, child.id)
     await as(fx.t, fx.user).mutation(api.deletedItems.restore, {
       org_id: fx.org.id,
@@ -492,10 +478,10 @@ describe('restoring a subtask under a parent with the most active subtasks', () 
 })
 
 describe('a move that carries archived subtasks', () => {
-  it(`refuses past ${MOVE_SUBTREE_MAX} subtasks, archived ones included, with what to do`, async () => {
+  it(`refuses past ${LIMITS.moveSubtree.max} subtasks, archived ones included, with what to do`, async () => {
     const fx = await setup()
     const parent = await task(fx, { title: 'Long history' })
-    await plantSubtasks(fx, parent, MOVE_SUBTREE_MAX + 1, { archived_at: NOW })
+    await plantSubtasks(fx, parent, LIMITS.moveSubtree.max + 1, { archived_at: NOW })
     const other = await plantProject(fx.t, { org_id: fx.org.id, type: 'meta' })
     const dest = await plantProject(fx.t, {
       org_id: fx.org.id,
@@ -509,7 +495,7 @@ describe('a move that carries archived subtasks', () => {
         project_id: dest.id,
       }),
       'rule',
-      MOVE_SUBTREE_TOO_LARGE,
+      LIMITS.moveSubtree.refusal,
     )
   })
 
@@ -529,7 +515,7 @@ describe('a move that carries archived subtasks', () => {
   /* Plants `n` subtasks of `parent` with the longest title and description,
    * about 60 KB each, every other fifty archived, fifty per write. */
   const plantLong = async (fx: Fx, parent: Doc<'issues'>, n: number) => {
-    const long = { description: 'あ'.repeat(TEXT_MAX), title: 'あ'.repeat(TITLE_MAX) }
+    const long = { description: 'あ'.repeat(TEXT_MAX), title: 'あ'.repeat(LIMITS.title.max) }
     const kids: Doc<'issues'>[] = []
     for (let i = 0; i < n / 50; i++) {
       const archived = i % 2 === 0 ? { archived_at: NOW } : {}
@@ -554,10 +540,10 @@ describe('a move that carries archived subtasks', () => {
     for (const kid of kids) expect((await row(fx.t, kid.id)).project_id).toBe(dest.id)
   }, 120_000)
 
-  it(`refuses a move of ${MOVE_SUBTREE_MAX} such subtasks with what to do, on every surface`, async () => {
+  it(`refuses a move of ${LIMITS.moveSubtree.max} such subtasks with what to do, on every surface`, async () => {
     const fx = await setup(newT({ transactionLimits: true }))
     const parent = await task(fx, { title: 'Longer family' })
-    const kids = await plantLong(fx, parent, MOVE_SUBTREE_MAX)
+    const kids = await plantLong(fx, parent, LIMITS.moveSubtree.max)
     const dest = await elsewhere(fx)
     await refused(
       as(fx.t, fx.admin).mutation(api.issues.move, {
@@ -589,7 +575,7 @@ describe('a move that carries archived subtasks', () => {
       'rule',
       MOVE_TOO_LARGE,
     )
-    for (const t of [parent, kids[0], kids[MOVE_SUBTREE_MAX - 1]]) {
+    for (const t of [parent, kids[0], kids[LIMITS.moveSubtree.max - 1]]) {
       expect((await row(fx.t, t.id)).project_id).toBe(fx.sub.id)
     }
   }, 120_000)
@@ -733,10 +719,10 @@ describe('the attachment, link and label limits', () => {
         })
     })
 
-  it(`refuses an attachment past ${ATTACHMENT_MAX} before any bytes are sent, on every surface`, async () => {
+  it(`refuses an attachment past ${LIMITS.attachments.max} before any bytes are sent, on every surface`, async () => {
     const fx = await setup()
     const issue = await task(fx, { title: 'Scans' })
-    await plantAttachments(fx, issue, ATTACHMENT_MAX - 1)
+    await plantAttachments(fx, issue, LIMITS.attachments.max - 1)
     // the hundredth fits, description images counted
     await as(fx.t, fx.admin).mutation(api.files.uploadUrl, {
       org_id: fx.org.id,
@@ -746,7 +732,7 @@ describe('the attachment, link and label limits', () => {
     await refused(
       as(fx.t, fx.admin).mutation(api.files.uploadUrl, { org_id: fx.org.id, issue_id: issue.id }),
       'rule',
-      ATTACHMENTS_FULL,
+      LIMITS.attachments.refusal,
     )
     const stored = await fx.t.run((ctx) => ctx.storage.store(new Blob(['late']) as never))
     await refused(
@@ -759,7 +745,7 @@ describe('the attachment, link and label limits', () => {
         inline: false,
       }),
       'rule',
-      ATTACHMENTS_FULL,
+      LIMITS.attachments.refusal,
     )
     await refused(
       fx.t.mutation(internal.machine.records.restStartUpload, {
@@ -769,7 +755,7 @@ describe('the attachment, link and label limits', () => {
         body: JSON.stringify({ name: 'wiring.pdf', size: 10 }),
       }),
       'rule',
-      ATTACHMENTS_FULL,
+      LIMITS.attachments.refusal,
     )
     await refused(
       fx.t.mutation(internal.machine.records.mcpStartUpload, {
@@ -780,7 +766,7 @@ describe('the attachment, link and label limits', () => {
         size: 10,
       }),
       'rule',
-      ATTACHMENTS_FULL,
+      LIMITS.attachments.refusal,
     )
     await refused(
       fx.t.action(internal.machine.records.mcpAttachTextFile, {
@@ -791,7 +777,7 @@ describe('the attachment, link and label limits', () => {
         text: 'notes',
       }),
       'rule',
-      ATTACHMENTS_FULL,
+      LIMITS.attachments.refusal,
     )
     const files = await fx.t.run((ctx) =>
       ctx.db
@@ -799,7 +785,7 @@ describe('the attachment, link and label limits', () => {
         .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
         .collect(),
     )
-    expect(files).toHaveLength(ATTACHMENT_MAX)
+    expect(files).toHaveLength(LIMITS.attachments.max)
   })
 
   /* Plants a description image on `issue`, uploaded at `at`, or `n` files. */
@@ -857,10 +843,10 @@ describe('the attachment, link and label limits', () => {
     const image = await plantImage(fx, issue)
     const shown = `Wiring ![photo](att:${image})`
     await saveDescription(fx, issue, shown)
-    const files = await plantFiles(fx, issue, ATTACHMENT_MAX - 1)
+    const files = await plantFiles(fx, issue, LIMITS.attachments.max - 1)
     const upload = () =>
       as(fx.t, fx.admin).mutation(api.files.uploadUrl, { org_id: fx.org.id, issue_id: issue.id })
-    await refused(upload(), 'rule', ATTACHMENTS_FULL)
+    await refused(upload(), 'rule', LIMITS.attachments.refusal)
     // the save that takes the image out frees its place at once
     await saveDescription(fx, issue, 'Wiring')
     expect((await attachment(fx, image))?.dropped_at).toBeDefined()
@@ -876,7 +862,7 @@ describe('the attachment, link and label limits', () => {
     expect(read.attachments.map((a) => a.id)).not.toContain(image)
     // a file takes the place, so a save that shows the image again is refused
     const [late] = await plantFiles(fx, issue, 1)
-    await refused(saveDescription(fx, issue, shown), 'rule', ATTACHMENTS_FULL)
+    await refused(saveDescription(fx, issue, shown), 'rule', LIMITS.attachments.refusal)
     await fx.t.run(async (ctx) => {
       const row = await ctx.db
         .query('issue_attachments')
@@ -886,8 +872,8 @@ describe('the attachment, link and label limits', () => {
     })
     await saveDescription(fx, issue, shown)
     expect((await attachment(fx, image))?.dropped_at).toBeUndefined()
-    await refused(upload(), 'rule', ATTACHMENTS_FULL)
-    expect(files).toHaveLength(ATTACHMENT_MAX - 1)
+    await refused(upload(), 'rule', LIMITS.attachments.refusal)
+    expect(files).toHaveLength(LIMITS.attachments.max - 1)
   })
 
   it('keeps an image no saved description names yet until a day after its upload', async () => {
@@ -1070,10 +1056,12 @@ describe('the attachment, link and label limits', () => {
     }
   })
 
-  it(`refuses a link to a task that is an end of ${LINK_MAX} links, naming it, on every surface`, async () => {
+  it(`refuses a link to a task that is an end of ${LIMITS.links.max} links, naming it, on every surface`, async () => {
     const fx = await setup()
     const hub = await task(fx, { title: 'Hub' })
-    const ends = await plantSubtasks(fx, await task(fx), LINK_MAX - 1, { parent_id: undefined })
+    const ends = await plantSubtasks(fx, await task(fx), LIMITS.links.max - 1, {
+      parent_id: undefined,
+    })
     await fx.t.run(async (ctx) => {
       for (const [i, end] of ends.entries()) {
         // both directions count
@@ -1137,7 +1125,7 @@ describe('the attachment, link and label limits', () => {
     )
   })
 
-  it(`leaves out a restored link to a task that reached ${LINK_MAX} links meanwhile`, async () => {
+  it(`leaves out a restored link to a task that reached ${LIMITS.links.max} links meanwhile`, async () => {
     vi.useFakeTimers()
     try {
       const fx = await setup()
@@ -1149,7 +1137,7 @@ describe('the attachment, link and label limits', () => {
       await plantLinks(
         fx,
         hub,
-        await plantSubtasks(fx, await task(fx), LINK_MAX, { parent_id: undefined }),
+        await plantSubtasks(fx, await task(fx), LIMITS.links.max, { parent_id: undefined }),
       )
       const item = await itemFor(fx.t, gone.id)
       await as(fx.t, fx.user).mutation(api.deletedItems.restore, {
@@ -1164,19 +1152,19 @@ describe('the attachment, link and label limits', () => {
           .withIndex('by_source', (q) => q.eq('source_id', hub.id))
           .collect(),
       )
-      expect(links).toHaveLength(LINK_MAX)
+      expect(links).toHaveLength(LIMITS.links.max)
       expect(links.some((l) => l.target_id === gone.id)).toBe(false)
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it(`refuses a label past ${LABEL_MAX}, and lets one update swap labels on a full task`, async () => {
+  it(`refuses a label past ${LIMITS.labels.max}, and lets one update swap labels on a full task`, async () => {
     const fx = await setup()
     const issue = await task(fx, { title: 'Tagged' })
     const labels = await fx.t.run(async (ctx) => {
       const out: string[] = []
-      for (let i = 0; i < LABEL_MAX + 1; i++) {
+      for (let i = 0; i < LIMITS.labels.max + 1; i++) {
         const id = uuid()
         await ctx.db.insert('labels', {
           id,
@@ -1188,7 +1176,7 @@ describe('the attachment, link and label limits', () => {
         })
         out.push(id)
       }
-      for (const label_id of out.slice(0, LABEL_MAX - 1))
+      for (const label_id of out.slice(0, LIMITS.labels.max - 1))
         await ctx.db.insert('issue_labels', { org_id: fx.org.id, issue_id: issue.id, label_id })
       return out
     })
@@ -1200,8 +1188,8 @@ describe('the attachment, link and label limits', () => {
         on,
       })
     // the twentieth fits
-    await toggle(labels[LABEL_MAX - 1], true)
-    await refused(toggle(labels[LABEL_MAX], true), 'rule', LABELS_FULL)
+    await toggle(labels[LIMITS.labels.max - 1], true)
+    await refused(toggle(labels[LIMITS.labels.max], true), 'rule', LIMITS.labels.refusal)
     const patch = (body: object) =>
       fx.t.mutation(internal.machine.rest.updateIssue, {
         callerId: fx.agent.id,
@@ -1210,18 +1198,18 @@ describe('the attachment, link and label limits', () => {
         ref: key(issue),
         body: JSON.stringify(body),
       })
-    await refused(patch({ add_labels: [labels[LABEL_MAX]] }), 'rule', LABELS_FULL)
+    await refused(patch({ add_labels: [labels[LIMITS.labels.max]] }), 'rule', LIMITS.labels.refusal)
     await refused(
       fx.t.mutation(internal.machine.mcp.updateIssue, {
         callerId: fx.agent.id,
         access: 'write',
         ref: key(issue),
-        add_labels: [labels[LABEL_MAX]],
+        add_labels: [labels[LIMITS.labels.max]],
       }),
       'rule',
-      LABELS_FULL,
+      LIMITS.labels.refusal,
     )
-    await patch({ remove_labels: [labels[0]], add_labels: [labels[LABEL_MAX]] })
+    await patch({ remove_labels: [labels[0]], add_labels: [labels[LIMITS.labels.max]] })
     const held = await fx.t.run((ctx) =>
       ctx.db
         .query('issue_labels')
@@ -1279,16 +1267,16 @@ const followers = (t: T, issueId: string) =>
   )
 
 describe('the follower limit', () => {
-  it(`refuses a follow by hand past ${FOLLOWER_MAX} on every surface, and never refuses a follower`, async () => {
+  it(`refuses a follow by hand past ${LIMITS.followers.max} on every surface, and never refuses a follower`, async () => {
     const fx = await setup()
     const issue = await task(fx)
-    await plantFollowers(fx, issue, FOLLOWER_MAX - 1)
+    await plantFollowers(fx, issue, LIMITS.followers.max - 1)
     const app = (who: Doc<'profiles'>) =>
       as(fx.t, who).mutation(api.issues.subscribe, { org_id: fx.org.id, issue_id: issue.id })
     // the hundredth follows
     await app(fx.user)
-    expect(await followers(fx.t, issue.id)).toHaveLength(FOLLOWER_MAX)
-    await refused(app(fx.admin), 'rule', FOLLOWERS_FULL)
+    expect(await followers(fx.t, issue.id)).toHaveLength(LIMITS.followers.max)
+    await refused(app(fx.admin), 'rule', LIMITS.followers.refusal)
     await refused(
       as(fx.t, fx.admin).mutation(api.issues.setSubscriber, {
         org_id: fx.org.id,
@@ -1297,7 +1285,7 @@ describe('the follower limit', () => {
         subscribed: true,
       }),
       'rule',
-      FOLLOWERS_FULL,
+      LIMITS.followers.refusal,
     )
     await refused(
       fx.t.mutation(internal.machine.discussion.restFollowTask, {
@@ -1306,7 +1294,7 @@ describe('the follower limit', () => {
         ref: key(issue),
       }),
       'rule',
-      FOLLOWERS_FULL,
+      LIMITS.followers.refusal,
     )
     await refused(
       fx.t.mutation(internal.machine.discussion.mcpSetFollowing, {
@@ -1316,7 +1304,7 @@ describe('the follower limit', () => {
         following: true,
       }),
       'rule',
-      FOLLOWERS_FULL,
+      LIMITS.followers.refusal,
     )
     // following again changes nothing and is no refusal; leaving makes room
     await app(fx.user)
@@ -1326,7 +1314,7 @@ describe('the follower limit', () => {
     })
     await app(fx.admin)
     const now = await followers(fx.t, issue.id)
-    expect(now).toHaveLength(FOLLOWER_MAX)
+    expect(now).toHaveLength(LIMITS.followers.max)
     expect(now).toContain(fx.admin.id)
     expect(now).not.toContain(fx.user.id)
   })
@@ -1334,7 +1322,7 @@ describe('the follower limit', () => {
   it('adds no follower on a comment or a mention past the limit, and still delivers both', async () => {
     const fx = await setup()
     const full = await task(fx, { title: 'Full' })
-    const crowd = await plantFollowers(fx, full, FOLLOWER_MAX)
+    const crowd = await plantFollowers(fx, full, LIMITS.followers.max)
     const comment = (issue: Doc<'issues'>) =>
       as(fx.t, fx.user).mutation(api.comments.create, {
         org_id: fx.org.id,
@@ -1344,7 +1332,7 @@ describe('the follower limit', () => {
       })
     await comment(full)
     const after = await followers(fx.t, full.id)
-    expect(after).toHaveLength(FOLLOWER_MAX)
+    expect(after).toHaveLength(LIMITS.followers.max)
     expect(after).not.toContain(fx.user.id)
     expect(after).not.toContain(fx.admin.id)
     expect((await messagesFor(fx.t, fx.admin.id, full.id)).map((m) => m.detail)).toEqual([
@@ -1355,7 +1343,7 @@ describe('the follower limit', () => {
     ])
     // below the limit both the author and the mentioned person follow
     const roomy = await task(fx, { title: 'Roomy' })
-    await plantFollowers(fx, roomy, FOLLOWER_MAX - 2)
+    await plantFollowers(fx, roomy, LIMITS.followers.max - 2)
     await comment(roomy)
     expect(await followers(fx.t, roomy.id)).toEqual(
       expect.arrayContaining([fx.user.id, fx.admin.id]),
@@ -1366,7 +1354,7 @@ describe('the follower limit', () => {
     // one sight check per person passed 4,096 index ranges here
     const fx = await setup(newT({ transactionLimits: true }))
     const issue = await task(fx)
-    const crowd = await plantFollowers(fx, issue, FOLLOWER_MAX)
+    const crowd = await plantFollowers(fx, issue, LIMITS.followers.max)
     // 4,500 more people, 1,200 of them in a team that shares TBED, more
     // than a bulk sight check reads in full (lib/access.ts SIGHT_READ)
     const team = await fx.t.run(async (ctx) => {
@@ -1409,7 +1397,7 @@ describe('the follower limit', () => {
       issue_id: issue.id,
     })
     expect(roster.canManage).toBe(true)
-    expect(roster.subscribers).toHaveLength(FOLLOWER_MAX)
+    expect(roster.subscribers).toHaveLength(LIMITS.followers.max)
     expect(roster.subscribers).toEqual(expect.arrayContaining(crowd.map((p) => p.id)))
     // people who see TBED, the team's 1,200 included, and none of the 3,300
     // who do not
@@ -1420,14 +1408,14 @@ describe('the follower limit', () => {
   it('lets a new assignee and a new reviewer pass the limit', async () => {
     const fx = await setup()
     const issue = await task(fx, { status: 'progress' })
-    await plantFollowers(fx, issue, FOLLOWER_MAX)
+    await plantFollowers(fx, issue, LIMITS.followers.max)
     const update = (patch: Record<string, unknown>) =>
       as(fx.t, fx.admin).mutation(api.issues.update, { org_id: fx.org.id, id: issue.id, patch })
     await update({ assignee_id: fx.user.id })
-    expect(await followers(fx.t, issue.id)).toHaveLength(FOLLOWER_MAX + 1)
+    expect(await followers(fx.t, issue.id)).toHaveLength(LIMITS.followers.max + 1)
     await update({ reviewer_id: fx.admin.id, status: 'review' })
     const now = await followers(fx.t, issue.id)
-    expect(now).toHaveLength(FOLLOWER_MAX + 2)
+    expect(now).toHaveLength(LIMITS.followers.max + 2)
     expect(now).toEqual(expect.arrayContaining([fx.user.id, fx.admin.id]))
     expect((await messagesFor(fx.t, fx.admin.id, issue.id)).map((m) => m.detail)).toEqual([])
     expect((await messagesFor(fx.t, fx.user.id, issue.id)).map((m) => m.detail)[0]).toBe(
@@ -1506,14 +1494,14 @@ describe('a comment on a task with many followers', () => {
 describe('mentions', () => {
   const at = (p: Doc<'profiles'>) => `@[${p.name}](user:${p.id})`
 
-  it(`reach all of ${MENTION_MAX} people, and a text that mentions more is refused on every surface`, async () => {
+  it(`reach all of ${LIMITS.mentions.max} people, and a text that mentions more is refused on every surface`, async () => {
     const fx = await setup()
     const issue = await task(fx)
-    const people = await plantFollowers(fx, await task(fx), MENTION_MAX + 1)
-    const full = people.slice(0, MENTION_MAX).map(at).join(' ')
+    const people = await plantFollowers(fx, await task(fx), LIMITS.mentions.max + 1)
+    const full = people.slice(0, LIMITS.mentions.max).map(at).join(' ')
     // a repeated mention, one in a code span and a plain link count no one more
     const over = `${people.map(at).join(' ')}`
-    const fine = `${full} ${at(people[0])} \`${at(people[MENTION_MAX])}\` [x](user:${people[MENTION_MAX].id})`
+    const fine = `${full} ${at(people[0])} \`${at(people[LIMITS.mentions.max])}\` [x](user:${people[LIMITS.mentions.max].id})`
     await as(fx.t, fx.user).mutation(api.comments.create, {
       org_id: fx.org.id,
       id: uuid(),
@@ -1522,8 +1510,8 @@ describe('mentions', () => {
     })
     const mentioned = async (p: Doc<'profiles'>, on = issue) =>
       (await messagesFor(fx.t, p.id, on.id)).filter((m) => m.kind === 'mention').length
-    expect(await mentioned(people[MENTION_MAX - 1])).toBe(1)
-    expect(await mentioned(people[MENTION_MAX])).toBe(0)
+    expect(await mentioned(people[LIMITS.mentions.max - 1])).toBe(1)
+    expect(await mentioned(people[LIMITS.mentions.max])).toBe(0)
 
     const comment = (await fx.t.run((ctx) => ctx.db.query('comments').collect()))[0]
     const described = await task(fx)
@@ -1586,16 +1574,17 @@ describe('mentions', () => {
           description: over,
         }),
     }
-    for (const write of Object.values(writes)) await refused(write(), 'rule', TOO_MANY_MENTIONS)
+    for (const write of Object.values(writes))
+      await refused(write(), 'rule', LIMITS.mentions.refusal)
     // nothing saved and nobody heard
     expect((await row(fx.t, described.id)).description).toBe(described.description)
-    expect(await mentioned(people[MENTION_MAX])).toBe(0)
+    expect(await mentioned(people[LIMITS.mentions.max])).toBe(0)
     expect(await mentioned(people[0], described)).toBe(0)
   })
 
   it('re-notify no one who stayed mentioned when an edit drops another', async () => {
     const fx = await setup()
-    const people = await plantFollowers(fx, await task(fx), MENTION_MAX)
+    const people = await plantFollowers(fx, await task(fx), LIMITS.mentions.max)
     const described = await task(fx, { description: people.map(at).join(' ') })
     await as(fx.t, fx.admin).mutation(api.issues.update, {
       org_id: fx.org.id,
@@ -1607,11 +1596,11 @@ describe('mentions', () => {
     ).toEqual([])
   })
 
-  it('takes a stored text over the limit back unchanged, and an edit of it re-notifies no one past the 100th', async () => {
+  it('refuses a stored text over the limit even when sent back unchanged, and an edit within it re-notifies no one', async () => {
     const fx = await setup()
-    const people = await plantFollowers(fx, await task(fx), MENTION_MAX + 2)
+    const people = await plantFollowers(fx, await task(fx), LIMITS.mentions.max + 2)
     const stored = people.map(at).join(' ')
-    // planted, as a text saved before the limit would be
+    // planted past the limit, which no write can store
     const described = await task(fx, { description: stored })
     const update = (description: string) =>
       as(fx.t, fx.admin).mutation(api.issues.update, {
@@ -1619,14 +1608,15 @@ describe('mentions', () => {
         id: described.id,
         patch: { description },
       })
-    await update(stored)
-    // dropping the first mention leaves 101, still over the limit
-    await refused(update(people.slice(1).map(at).join(' ')), 'rule', TOO_MANY_MENTIONS)
-    // dropping two leaves 100: the person who moved into the first 100 was
-    // mentioned before, so hears nothing new
+    // the limit comes before the check for an unchanged text
+    await refused(update(stored), 'rule', LIMITS.mentions.refusal)
+    // dropping the first mention leaves one past the limit
+    await refused(update(people.slice(1).map(at).join(' ')), 'rule', LIMITS.mentions.refusal)
+    // dropping two fits: everyone left was mentioned before, so hears
+    // nothing new
     await update(people.slice(2).map(at).join(' '))
     expect(
-      (await messagesFor(fx.t, people[MENTION_MAX].id, described.id)).filter(
+      (await messagesFor(fx.t, people[LIMITS.mentions.max].id, described.id)).filter(
         (m) => m.kind === 'mention',
       ),
     ).toEqual([])

@@ -121,3 +121,22 @@ describe('the operator gate when Convex gets no token for the session', () => {
     expect(field('admin-password')?.value).toBe('')
   })
 })
+
+describe('the operator sign-in', () => {
+  it('sends the address in the form the account stores, with a punycode domain', async () => {
+    await render()
+    await type(field('admin-email'), ' Ops@Bücher.DE ')
+    await type(field('admin-password'), 'correct horse')
+    // dispatched, since jsdom's email check refuses a Unicode domain that
+    // a browser such as Firefox lets through
+    await act(async () =>
+      field('admin-password')?.form?.dispatchEvent(
+        new Event('submit', { bubbles: true, cancelable: true }),
+      ),
+    )
+    expect(auth.signIn).toHaveBeenLastCalledWith({
+      email: 'ops@xn--bcher-kva.de',
+      password: 'correct horse',
+    })
+  })
+})
