@@ -740,7 +740,7 @@ function Kanban({
   /** The name a lane's heading shows, or null for a lane without one. */
   const laneName = (lane: Lane) =>
     lane.proj
-      ? P.projectName(lane.proj)
+      ? lane.proj.name
       : lane.owner !== undefined
         ? P.user(lane.owner)?.name || (lane.owner ? 'Unknown user' : 'Unassigned')
         : null
@@ -1068,7 +1068,7 @@ function Kanban({
                             {/* biome-ignore lint/a11y/useSemanticElements: a styled flex div inside the cell that takes drops */}
                             <div
                               role="list"
-                              aria-label={`${s.name}, ${P.projectName(proj)}`}
+                              aria-label={`${s.name}, ${proj.name}`}
                               className="[display:flex] [flex-direction:column] [gap:8px] [min-height:8px]"
                             >
                               {cardList(cell, sidePlace, sideCardWidth)}
