@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { components, internal } from '../_generated/api'
 import type { Doc, Id, TableNames } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
+import { RESERVED_PARTS } from '../internal/marketingDemo'
 import {
   DEMO_SYNC_TIME,
   MARKETING_DEMO,
@@ -19,6 +20,7 @@ import { canSeeProject, hasProjectLevel } from '../lib/access'
 import { MCP_PROVENANCE } from '../machine/shared'
 import { logActivity, machineDetail } from '../model/activity'
 import { moveProjectToTrash, moveTasksToTrash, TRASH_BUDGET } from '../model/deletedItems'
+import { NORTHSTAR_STEPS } from '../model/demoSeed'
 import { newOrgDefaults, newTeamDefaults } from '../model/orgs'
 import schema from '../schema'
 import {
@@ -52,7 +54,7 @@ const demoId = (key: string) => marketingId('northstar-labs', key)
 
 type Inspection = {
   org_id: string
-  state: 'absent' | 'empty' | 'ready'
+  state: 'absent' | 'empty' | 'seeding' | 'ready'
   anchor?: string
   version: number
   credential_set_id?: string
@@ -70,7 +72,12 @@ const provisionRef = makeFunctionReference<
 const applyRef = makeFunctionReference<
   'mutation',
   typeof TARGET & { anchor: string; mode: 'seed' | 'wipe' },
-  Inspection & { wipe_done?: boolean }
+  Inspection & {
+    wipe_done?: boolean
+    seed_done?: boolean
+    seed_step?: number
+    seed_steps?: number
+  }
 >('internal/marketingDemo:apply')
 const avatarRef = makeFunctionReference<
   'mutation',
@@ -78,8 +85,8 @@ const avatarRef = makeFunctionReference<
   null
 >('internal/marketingDemo:adoptAvatar')
 
-const newAuthT = (): T => {
-  const t = newT()
+const newAuthT = (options: Parameters<typeof newT>[0] = {}): T => {
+  const t = newT(options)
   t.registerComponent('betterAuth', authSchema, import.meta.glob('../betterAuth/**/*.*s'))
   return t
 }
@@ -92,17 +99,38 @@ const provision = (t: T, credentialSet = CREDENTIAL_SET) =>
 const apply = (t: T, mode: 'seed' | 'wipe', anchor = ANCHOR) =>
   t.mutation(applyRef, { ...TARGET, mode, anchor })
 // The CLI's wipe: one bounded batch a call, until the backend says it is done.
+const checkReservedRef = makeFunctionReference<
+  'query',
+  typeof TARGET & { part: number },
+  { parts: number }
+>('internal/marketingDemo:checkReserved')
+// The CLI's reserved-id check before a wipe, one read-only part a call.
+const checkReserved = async (t: T) => {
+  let parts = 1
+  for (let part = 0; part < parts; part++)
+    parts = (await t.query(checkReservedRef, { ...TARGET, part })).parts
+}
+// The CLI's wipe: the check, then one bounded batch a call until done.
 const wipe = async (t: T, anchor = ANCHOR) => {
+  await checkReserved(t)
   for (let step = 0; step < 100; step++) {
     const result = await apply(t, 'wipe', anchor)
     if (result.wipe_done !== false) return result
   }
   throw new Error('the wipe did not finish in 100 calls')
 }
-// The CLI's reset: a wipe and then a seed in its own transaction.
+// The CLI's seed: one step a call, until the backend says it is done.
+const seed = async (t: T, anchor = ANCHOR) => {
+  for (let step = 0; step < 200; step++) {
+    const result = await apply(t, 'seed', anchor)
+    if (result.seed_done !== false) return result
+  }
+  throw new Error('the seed did not finish in 200 calls')
+}
+// The CLI's reset: a wipe and then a seed, each in its own transactions.
 const reset = async (t: T, anchor = ANCHOR) => {
   await wipe(t, anchor)
-  return await apply(t, 'seed', anchor)
+  return await seed(t, anchor)
 }
 const profiles = (t: T, orgId: string) =>
   t.run(async (ctx) =>
@@ -140,7 +168,7 @@ const storeImage = (t: T): Promise<Id<'_storage'>> =>
 
 async function seeded(t: T) {
   await provision(t)
-  return await apply(t, 'seed')
+  return await seed(t)
 }
 
 async function fixtureSnapshot(t: T) {
@@ -1196,7 +1224,7 @@ describe('marketing demo rebuild ownership', () => {
     })
     // the wipe rewinds the counters, so the reseed numbers tasks from 1
     expect(await countersFor(t, result.org_id)).toEqual({ next_issue_num: 0, next_project_num: 0 })
-    await apply(t, 'seed', NEXT_ANCHOR)
+    await seed(t, NEXT_ANCHOR)
     expect((await t.run(async (ctx) => ctx.db.query('issues').collect())).map((i) => i.id)).toEqual(
       issueIds,
     )
@@ -1510,13 +1538,73 @@ describe('marketing demo Deleted items', () => {
         },
       }),
     )
+    // the check steps come before any step that writes work
     const refusal = await expectRefusal(
-      apply(t, 'seed', NEXT_ANCHOR),
+      seed(t, NEXT_ANCHOR),
       'conflict',
       /reserved task id belongs to another organization/,
     )
     expect(refusal.data.reason).toBe('demo_id_collision')
-    expect(await t.query(inspectRef, TARGET)).toMatchObject({ state: 'empty' })
+    expect(await t.query(inspectRef, TARGET)).toMatchObject({
+      state: 'seeding',
+      counts: { projects: 0, subprojects: 0, tasks: 0 },
+    })
+    await expectRefusal(apply(t, 'seed', NEXT_ANCHOR), 'conflict', /reserved task id/)
+  }, 60_000)
+})
+
+describe('marketing demo seed steps', () => {
+  // The whole seed in one transaction wrote about 1,400 documents and read
+  // about 2,500 index ranges, and the reserved-id check alone took up to 2 s
+  // on a loaded machine. Every call of a seed, a check or a wipe now does a
+  // small, bounded part of that.
+  it('seeds, checks and wipes in calls of at most 300 index ranges, 350 documents read and 150 written', async () => {
+    const t = newAuthT({
+      transactionLimits: { databaseQueries: 300, documentsRead: 350, documentsWritten: 150 },
+    })
+    await provision(t)
+    const answers = [await apply(t, 'seed')]
+    while (answers.at(-1)?.seed_done === false && answers.length < 200)
+      answers.push(await apply(t, 'seed'))
+    const steps = answers[0].seed_steps ?? 0
+    expect(steps).toBe(RESERVED_PARTS + NORTHSTAR_STEPS.length)
+    expect(answers.slice(0, -1).map((a) => [a.state, a.seed_step])).toEqual(
+      Array.from({ length: steps }, (_, step) => ['seeding', step]),
+    )
+    expect(answers.at(-1)).toMatchObject({
+      state: 'ready',
+      seed_done: true,
+      anchor: ANCHOR,
+      counts: { projects: 3, subprojects: 12, tasks: MARKETING_DEMO.issues.length, users: 8 },
+    })
+    expect(await t.run(async (ctx) => ctx.db.query('marketing_demo').unique())).not.toHaveProperty(
+      'seed',
+    )
+    expect(await wipe(t)).toMatchObject({ state: 'empty', counts: { tasks: 0 } })
+  }, 60_000)
+
+  it('resumes a stopped seed at its next step, refuses another anchor until a reset, and wipes a half-seeded demo', async () => {
+    const t = newAuthT()
+    await provision(t)
+    await apply(t, 'seed')
+    await apply(t, 'seed')
+    expect(await t.query(inspectRef, TARGET)).toMatchObject({ state: 'seeding', anchor: ANCHOR })
+    await expectRefusal(apply(t, 'seed', NEXT_ANCHOR), 'rule', /use reset to change dates/)
+    // the refused call wrote nothing, and the same anchor carries on
+    expect(await apply(t, 'seed')).toMatchObject({ state: 'seeding', seed_step: 2 })
+    expect(await seed(t)).toMatchObject({
+      state: 'ready',
+      counts: { tasks: MARKETING_DEMO.issues.length },
+    })
+    // a seed stopped part way, then a reset to another week
+    await wipe(t)
+    await apply(t, 'seed', NEXT_ANCHOR)
+    expect(await wipe(t, NEXT_ANCHOR)).toMatchObject({ state: 'empty', counts: { tasks: 0 } })
+    expect(await t.run(async (ctx) => ctx.db.query('marketing_demo').unique())).not.toHaveProperty(
+      'seed',
+    )
+    expect(await seed(t, NEXT_ANCHOR)).toMatchObject({ state: 'ready', anchor: NEXT_ANCHOR })
+    await assertNoDanglingRefs(t, 'marketing demo resumed seed')
   }, 60_000)
 })
 

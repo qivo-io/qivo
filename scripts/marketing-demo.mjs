@@ -54,7 +54,7 @@ const SAFE_REFUSALS = new Set([
   'marketing demo: Deleted items must be empty; run the same command again',
 ])
 const references = Object.fromEntries(
-  ['inspect', 'provision', 'apply', 'avatarUpload', 'adoptAvatar'].map((name) => [
+  ['inspect', 'provision', 'apply', 'avatarUpload', 'adoptAvatar', 'checkReserved'].map((name) => [
     name,
     makeFunctionReference(`internal/marketingDemo:${name}`),
   ]),
@@ -66,12 +66,17 @@ const TRASH_BATCHES = 400
 // Calls of apply('wipe') before the CLI gives up; each deletes one bounded
 // batch of the demo's work.
 const WIPE_STEPS = 2000
+// Calls of apply('seed') before the CLI gives up; each writes one bounded
+// step of the demo's work (convex/model/demoSeed.ts NORTHSTAR_STEPS).
+const SEED_STEPS = 100
 /** A loopback HTTP origin, the only kind a --local run talks to. */
 const LOOPBACK_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):[0-9]{1,5}$/
 /** Whether `value` is a loopback HTTP origin with a valid port. */
 const isLoopbackOrigin = (value) => LOOPBACK_ORIGIN.test(value) && URL.canParse(value)
 
 export class DemoCliError extends Error {}
+/** A known refusal from the backend, which repeating the call cannot pass. */
+class DemoRefusal extends DemoCliError {}
 
 export function mondayAnchor(value, now = new Date()) {
   if (value === undefined) {
@@ -515,7 +520,7 @@ async function remote(stage, operation) {
   } catch (error) {
     if (error instanceof DemoCliError) throw error
     if (SAFE_REFUSALS.has(error?.data?.message)) {
-      throw new DemoCliError(`Request refused during ${stage}: ${error.data.message}.`)
+      throw new DemoRefusal(`Request refused during ${stage}: ${error.data.message}.`)
     }
     // Match only the two fixed permission names this importer needs. Never
     // echo an arbitrary server-provided scope or its surrounding error text.
@@ -530,6 +535,18 @@ async function remote(stage, operation) {
     if (deniedPermission) {
       throw new DemoCliError(
         `Demo request denied during ${stage}: ${deniedPermission}. Grant this permission to the selected deployment key and rerun the same command. Raw server details are withheld.`,
+      )
+    }
+    // Convex's own words when a call passes its time limit (on a loaded
+    // machine, say). Matched, never echoed, like the permission names above.
+    const timedOut = [error?.message, error?.data?.message].some(
+      (message) =>
+        typeof message === 'string' &&
+        /Function execution timed out \(maximum duration|Your request timed out/.test(message),
+    )
+    if (timedOut) {
+      throw new DemoCliError(
+        `Demo request timed out during ${stage}: the call passed Convex's time limit, so nothing it wrote was kept.`,
       )
     }
     const code = error?.data?.code
@@ -562,6 +579,9 @@ function printPlan(options, target, log) {
   )
   log(
     'Reset runs two steps, wipe then seed. The demo is empty between them; if the seed step fails, re-run the same reset.',
+  )
+  log(
+    'Seed checks and writes the work in many short calls. If one fails, re-run seed with the same anchor to continue from that call.',
   )
   log(
     "Reset and wipe first delete everything in the demo organization's Deleted items for good, which the wipe requires.",
@@ -606,6 +626,8 @@ git-ignored dev-temp/.
 Credentials are stored under <directory>/<deployment>/credentials.json (0600).
 No secret command-line flags are supported. plan is fully offline.
 Wipe preserves logins and portraits; it removes all demo organization work.
+Seed checks and writes the work in many short calls; if one fails, re-run seed
+with the same anchor to continue from it.
 Reset is a wipe followed by a seed; if the seed fails, re-run the same reset.`)
     return { kind: 'help' }
   }
@@ -620,7 +642,7 @@ Reset is a wipe followed by a seed; if the seed fails, re-run the same reset.`)
   client.setAdminAuth(target.key)
   const guard = { expected_site_url: target.siteUrl }
   let state = await remote('inspection', () => client.query(references.inspect, guard))
-  if (!['absent', 'empty', 'ready'].includes(state?.state))
+  if (!['absent', 'empty', 'seeding', 'ready'].includes(state?.state))
     throw new DemoCliError(
       'Unexpected demo state. Check client/backend compatibility before retrying.',
     )
@@ -696,6 +718,18 @@ Reset is a wipe followed by a seed; if the seed fails, re-run the same reset.`)
     remote(`demo work ${mode}`, () =>
       client.mutation(references.apply, { ...guard, anchor: options.anchor, mode }),
     )
+  if (options.command === 'wipe' || options.command === 'reset') {
+    // Before anything is deleted, the reserved-id check the seed runs too,
+    // one read-only part a call: a reset must not wipe a demo its seed
+    // would then refuse.
+    let parts = 1
+    for (let part = 0; part < parts; part++) {
+      const result = await remote('reserved id check', () =>
+        client.query(references.checkReserved, { ...guard, part }),
+      )
+      parts = result?.parts ?? 0
+    }
+  }
   // The wipe refuses while Deleted items hold anything, so empty them first.
   if (options.command === 'wipe' || options.command === 'reset') {
     let done = false
@@ -717,19 +751,33 @@ Reset is a wipe followed by a seed; if the seed fails, re-run the same reset.`)
       if ((await apply('wipe'))?.wipe_done !== false) return
     throw new DemoCliError('The demo work is not wiped yet. Re-run the same command to continue.')
   }
+  // Each seed call writes one bounded step and says whether steps remain.
+  // A failed call changed nothing, and the next seed call with the same
+  // anchor starts at the step it did not finish; `resume` says so.
+  const seed = async (resume) => {
+    for (let call = 0; call < SEED_STEPS; call++) {
+      const result = await apply('seed').catch((error) => {
+        throw error instanceof DemoRefusal ? error : new DemoCliError(`${error.message}${resume}`)
+      })
+      if (result?.seed_done !== false) return
+    }
+    throw new DemoCliError(`The demo work is not seeded yet.${resume}`)
+  }
+  const resumeSeed = ' Re-run seed with the same anchor to continue from the step that failed.'
   if (options.command === 'reset') {
-    // A wipe, then a seed in its own transaction: together they come too
-    // close to Convex's 1 s mutation limit. Repeating the reset is always safe.
+    // A wipe, then a seed, each in calls of their own: together in one call
+    // they came too close to Convex's 1 s mutation limit. Repeating the reset
+    // is always safe.
     await wipe()
-    await apply('seed').catch((error) => {
+    await seed('').catch((error) => {
       throw new DemoCliError(
-        `${error.message} The wipe step completed, so the demo may now be empty. Re-run the same reset command to seed it.`,
+        `${error.message} The wipe step completed, so the demo may now be empty or part seeded. Re-run the same reset command to seed it.`,
       )
     })
   } else if (options.command === 'wipe') {
     await wipe()
   } else {
-    await apply(options.command)
+    await seed(resumeSeed)
   }
   const result = await remote('final verification', () => client.query(references.inspect, guard))
   assertCredentialSet(credentials, result)

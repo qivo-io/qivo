@@ -319,7 +319,8 @@ export async function trimUnreadMessages(
  * or team memberships after it is built, because its answers would then be
  * stale. A
  * bulk writer that meets this may pass one:
- *   - the Northstar seed (demoSeed.ts writeNorthstarWork);
+ *   - a task or comment step of the Northstar seed (demoSeed.ts
+ *     writeNorthstarStep);
  *   - a Deleted items step (model/deletedItems.ts), which reads it after any
  *     project rows moved and then only detaches tasks;
  *   - the detach loop of a task delete (model/deletedItems.ts

@@ -694,6 +694,112 @@ describe('resumable seed execution', () => {
     expect(endless.modes).not.toContain('seed')
   })
 
+  it('runs every part of the reserved id check before anything is deleted, and stops at a refused part', async () => {
+    const run = async (command, refusedPart) => {
+      const calls = []
+      const client = {
+        setAdminAuth: vi.fn(),
+        query: vi.fn(async (reference, args) => {
+          const name = getFunctionName(reference).split(':').at(-1)
+          if (name !== 'checkReserved')
+            return {
+              state: 'ready',
+              org_id: 'northstar-org',
+              people: PERSON_KEYS.map((key) => ({ key, avatar_storage_id: 'existing-avatar' })),
+            }
+          calls.push(`check ${args.part}`)
+          if (args.part === refusedPart)
+            throw Object.assign(new Error('refused'), {
+              data: {
+                code: 'conflict',
+                message: 'marketing demo: reserved task id belongs to another organization',
+              },
+            })
+          return { parts: 3 }
+        }),
+        mutation: vi.fn(async (reference, args) => {
+          const name = getFunctionName(reference)
+          calls.push(name === 'deletedItems:purgeOrg' ? 'purge' : args.mode)
+          return name === 'deletedItems:purgeOrg' ? { done: true } : null
+        }),
+      }
+      const outcome = await runMarketingDemo([command, '--dev', '--confirm', 'northstar-labs'], {
+        cwd: folder(),
+        env: DEV_ENV,
+        clientFactory: () => client,
+        log: vi.fn(),
+      }).catch((error) => error)
+      return { outcome, calls }
+    }
+    for (const command of ['wipe', 'reset']) {
+      const passed = await run(command)
+      expect(passed.outcome).toMatchObject({ kind: 'complete' })
+      expect(passed.calls.slice(0, 4)).toEqual(['check 0', 'check 1', 'check 2', 'purge'])
+      const refused = await run(command, 1)
+      expect(refused.calls).toEqual(['check 0', 'check 1'])
+      expect(refused.outcome.message).toContain('reserved id check (conflict)')
+    }
+  })
+
+  it('repeats the seed until the backend says it is done, resumes after a failed step, and names a timeout', async () => {
+    const run = async (command, answer) => {
+      const client = {
+        setAdminAuth: vi.fn(),
+        query: vi.fn(async () => ({
+          state: 'seeding',
+          org_id: 'northstar-org',
+          people: PERSON_KEYS.map((key) => ({ key, avatar_storage_id: 'existing-avatar' })),
+        })),
+        mutation: vi.fn(async (reference, args) => {
+          if (getFunctionName(reference) === 'deletedItems:purgeOrg') return { done: true }
+          return args.mode === 'seed'
+            ? answer(client.mutation.mock.calls.filter(([, a]) => a.mode === 'seed').length)
+            : null
+        }),
+      }
+      const outcome = await runMarketingDemo([command, '--dev', '--confirm', 'northstar-labs'], {
+        cwd: folder(),
+        env: DEV_ENV,
+        clientFactory: () => client,
+        log: vi.fn(),
+      }).catch((error) => error)
+      return { outcome, modes: client.mutation.mock.calls.map(([, args]) => args.mode) }
+    }
+    const steps = (n) => (n < 4 ? { state: 'seeding', seed_done: false, seed_step: n } : null)
+    // a half-seeded demo continues: the fourth seed call finishes
+    const batched = await run('seed', steps)
+    expect(batched.outcome).toMatchObject({ kind: 'complete' })
+    expect(batched.modes).toEqual(['seed', 'seed', 'seed', 'seed'])
+    const endless = await run('seed', () => ({ state: 'seeding', seed_done: false }))
+    expect(endless.outcome.message).toContain('not seeded yet. Re-run seed with the same anchor')
+    expect(endless.modes).toHaveLength(100)
+    // a step past Convex's time limit says so, without the raw server text
+    const timeout = (n) => {
+      if (n === 3)
+        throw new Error('[Request ID: 1] Function execution timed out (maximum duration: 1s)')
+      return steps(n)
+    }
+    const timedOut = await run('seed', timeout)
+    expect(timedOut.modes).toEqual(['seed', 'seed', 'seed'])
+    expect(timedOut.outcome.message).toBe(
+      "Demo request timed out during demo work seed: the call passed Convex's time limit, so nothing it wrote was kept. Re-run seed with the same anchor to continue from the step that failed.",
+    )
+    // a reset's seed says to re-run the reset instead
+    const resetTimedOut = await run('reset', timeout)
+    expect(resetTimedOut.outcome.message).toContain("passed Convex's time limit")
+    expect(resetTimedOut.outcome.message).toContain('Re-run the same reset command')
+    expect(resetTimedOut.outcome.message).not.toContain('Re-run seed')
+    // a refusal is not a step to repeat, so it gets no resume advice
+    const refused = await run('seed', () => {
+      throw Object.assign(new Error('refused'), {
+        data: { message: 'marketing demo: use reset to change dates or dataset version' },
+      })
+    })
+    expect(refused.outcome.message).toBe(
+      'Request refused during demo work seed: marketing demo: use reset to change dates or dataset version.',
+    )
+  })
+
   it('says the demo may be empty and to re-run reset only when the seed fails after the wipe', async () => {
     const run = async (failing) => {
       const client = {

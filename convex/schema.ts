@@ -518,9 +518,12 @@ export default defineSchema({
     org_id: v.string(),
     auth_ids: v.record(v.string(), v.string()),
     credential_set_id: v.string(), // binds the receipt to one private CLI stash
-    state: v.union(v.literal('empty'), v.literal('ready')),
+    state: v.union(v.literal('empty'), v.literal('seeding'), v.literal('ready')),
     version: v.number(),
     anchor: v.optional(v.string()),
+    // While 'seeding': the next step of model/demoSeed.ts NORTHSTAR_STEPS
+    // and the write time every step of this seed uses.
+    seed: v.optional(v.object({ step: v.number(), now: v.string() })),
     created_at: v.string(),
     updated_at: v.string(),
   }).index('by_key', ['key']),

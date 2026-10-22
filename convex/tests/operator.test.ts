@@ -100,11 +100,15 @@ describe('legacy fixture retirement', () => {
     const t = newAuthT()
     const customer = await withOrg(t)
     await legacyRoster(t)
-    await t.mutation(internal.internal.marketingDemo.apply, {
-      expected_site_url: SITE,
-      anchor: '2026-09-07',
-      mode: 'seed',
-    })
+    // the CLI's seed: one step a call until the last
+    for (let step = 0; step < 100; step++) {
+      const answer = await t.mutation(internal.internal.marketingDemo.apply, {
+        expected_site_url: SITE,
+        anchor: '2026-09-07',
+        mode: 'seed',
+      })
+      if (!('seed_done' in answer) || answer.seed_done !== false) break
+    }
     const tasks = await t.run((ctx) => ctx.db.query('issues').collect())
     expect(tasks.length).toBeGreaterThan(0)
     expect(await retire(t)).toMatchObject({ dry_run: true, accounts: 7, profiles: 8 })
@@ -269,6 +273,14 @@ describe('Northstar wipe', () => {
       anchor: '2026-09-07',
       mode,
     })
+  // The CLI's seed: one step a call until the last.
+  const seed = async (t: T) => {
+    for (let step = 0; step < 100; step++) {
+      const answer = await apply(t, 'seed')
+      if (!('seed_done' in answer) || answer.seed_done !== false) return
+    }
+    throw new Error('the seed did not finish in 100 calls')
+  }
   const orgRows = (t: T, orgId: string) =>
     t.run(async (ctx) => {
       const count = async (table: 'issues' | 'projects' | 'teams' | 'labels' | 'profiles') =>
@@ -304,7 +316,7 @@ describe('Northstar wipe', () => {
         ['nora', 'leo', 'aisha', 'emil', 'daniel', 'sofia', 'ben'].map((key) => [key, HASH]),
       ),
     })
-    await apply(t, 'seed')
+    await seed(t)
     const seeded = await orgRows(t, org_id)
     expect(seeded.issues).toBeGreaterThan(0)
     // manual or contract-test work: 500 more tasks, each with a comment
@@ -362,7 +374,11 @@ describe('Northstar wipe', () => {
     expect(await apply(t, 'wipe')).toEqual({ state: 'empty', wipe_done: false })
     await expect(apply(t, 'seed')).rejects.toThrow(/work was added after wipe/)
     let steps = 1
-    while (!(await apply(t, 'wipe')).wipe_done) expect(++steps).toBeLessThan(50)
+    const wiped = async () => {
+      const answer = await apply(t, 'wipe')
+      return 'wipe_done' in answer && answer.wipe_done === true
+    }
+    while (!(await wiped())) expect(++steps).toBeLessThan(50)
     expect(steps).toBeGreaterThan(2)
     expect(await orgRows(t, org_id)).toEqual({
       issues: 0,
@@ -374,7 +390,7 @@ describe('Northstar wipe', () => {
     })
     expect(await apply(t, 'wipe')).toMatchObject({ wipe_done: true })
 
-    await apply(t, 'seed')
+    await seed(t)
     expect(await orgRows(t, org_id)).toEqual(seeded)
   }, 60_000)
 })
