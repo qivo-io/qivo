@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { getFunctionName } from 'convex/server'
+import { describe, expect, it, vi } from 'vitest'
 import { LIMITS } from '../convex/lib/limits'
 import {
   parseSeedArgs,
@@ -7,6 +8,32 @@ import {
   seededTask,
   seededTasks,
 } from './board-scale-seed.mjs'
+
+/* A local backend the seed talks to: Nora, Northstar with one sub-project,
+   the tasks `fake.issues` holds, and every mutation it receives. */
+const fake = vi.hoisted(() => ({ issues: [], calls: [] }))
+vi.mock('convex/browser', () => ({
+  ConvexHttpClient: class {
+    setAdminAuth() {}
+    async query(ref) {
+      const name = getFunctionName(ref)
+      if (name === '_system/cli/tableData')
+        return {
+          page: [
+            { email: 'nora@demo.qivo.io', auth_user_id: 'nora-login', id: 'nora', org_id: 'org' },
+          ],
+        }
+      return {
+        orgs: [{ id: 'org' }],
+        projects: [{ id: 'sub', org_id: 'org', type: 'project' }],
+        issues: fake.issues,
+      }
+    }
+    async mutation(ref, fields) {
+      fake.calls.push([getFunctionName(ref), fields])
+    }
+  },
+}))
 
 const local = ['--local', '--deployment', 'local-scale-3214', '--url', 'http://127.0.0.1:3214']
 const env = { QIVO_FIXTURE_LOCAL: 'true', QIVO_LOCAL_ADMIN_KEY: 'local-admin-key-1111' }
@@ -137,3 +164,30 @@ function doneUpTo(n) {
     { task: { id: `t${i}` }, parent: i % 25 ? null : 'p0' },
   ])
 }
+
+describe('a rerun of board-scale-seed', () => {
+  it('finishes a partial family under the parent it made, with the existing task', async () => {
+    // tasks 0 to 29 are all there but family 25: its first task alone
+    const seeded = (n, more = {}) => ({
+      ...seededTask(n, 'org', 'sub', 'owner'),
+      id: `task${n}`,
+      parent_id: n === 0 ? 'parent0' : null,
+      ...more,
+    })
+    fake.issues = Array.from({ length: 30 }, (_, n) => seeded(n)).filter((_, n) => n < 26 || n > 28)
+    // Family 0's subtasks name their parent
+    for (const task of fake.issues)
+      if (/as task [234]\./.test(task.description)) task.parent_id = 'parent0'
+    fake.calls = []
+    await runBoardScaleSeed([...local, '--tasks', '30'], { env, log: () => {} })
+    const [parent, ...rest] = fake.calls
+    expect(parent[0]).toBe('issues:createParent')
+    expect(parent[1]).toMatchObject({ id: 'task25', org_id: 'org' })
+    expect(rest.map(([name, fields]) => [name, fields.description, fields.parent_id])).toEqual([
+      ['issues:create', 'Seeded by board-scale-seed as task 27.', parent[1].parent_id],
+      ['issues:create', 'Seeded by board-scale-seed as task 28.', parent[1].parent_id],
+      ['issues:create', 'Seeded by board-scale-seed as task 29.', parent[1].parent_id],
+    ])
+    for (const [, fields] of rest) expect(fields.project_id).toBe('sub')
+  })
+})

@@ -103,23 +103,43 @@ export function useReveal(
             scroller.scrollTo({ ...place, behavior })
             ringed = target
             target.setAttribute('data-board-revealed', '')
-            /* The ring's time runs while nothing makes the pane inert. A
-               change made in the task window can move the task to another
-               cell, a new card, so the ring follows it when the window
-               closes. */
-            const time = () => {
-              window.clearTimeout(timer)
-              if (scroller.closest('[inert]')) return
-              if (ringed && !ringed.isConnected) {
-                mountTask(request.id)
-                ringed = revealTarget(scroller, request.id)
-                ringed?.setAttribute('data-board-revealed', '')
-              }
+            /* The ring's time runs once the pane is out from under the
+               window the jump opened: while it is inert the ring waits, and
+               when it comes back, later windows (another task opened
+               meanwhile) no longer hold it. A change made in that window
+               can move the task to another cell, a new card, so the ring
+               and the scroll follow it. */
+            let phase: 'start' | 'held' | 'released' = 'start'
+            const ring = () => {
               timer = window.setTimeout(() => {
                 inertWatch?.disconnect()
                 ringed?.removeAttribute('data-board-revealed')
                 ringed = null
               }, REVEAL_MS)
+            }
+            const time = () => {
+              if (phase === 'released') return
+              if (scroller.closest('[inert]')) {
+                if (phase === 'start') {
+                  window.clearTimeout(timer)
+                  phase = 'held'
+                }
+                return
+              }
+              if (phase === 'start') {
+                if (!timer) ring()
+                return
+              }
+              phase = 'released'
+              if (ringed && !ringed.isConnected) {
+                mountTask(request.id)
+                ringed = revealTarget(scroller, request.id)
+                if (ringed) {
+                  ringed.setAttribute('data-board-revealed', '')
+                  scroller.scrollTo({ ...placeOf(scroller, ringed), behavior: 'instant' })
+                }
+              }
+              ring()
             }
             if (typeof MutationObserver === 'function') {
               inertWatch = new MutationObserver(time)

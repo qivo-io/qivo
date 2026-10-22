@@ -13,7 +13,6 @@ import {
 } from 'react'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
-import { keptOwners } from '@/lib/keptOwners'
 import { REVEAL_MS } from '@/lib/reveal'
 import { isRoadmapTaskVisible } from '@/lib/roadmapVisibility'
 import { useTaskMemo } from '@/lib/taskMemo'
@@ -34,11 +33,12 @@ import { LandscapeRoadmap } from './LandscapeRoadmap'
 import { MobileRoadmap } from './MobileRoadmap'
 import { ResourceStrip } from './Resources'
 import { STRIP_HEAD_H, stripHeight } from './resourcesLayout'
+import { type ChunkMemory, type LaidRow, stableChunks } from './roadmap/chunks'
 import { GRID_X, GUTTER_W, HEAD_STICK, LABEL_W, ROW_H, SUB_STICK } from './roadmap/layout'
 import { PlanCard, type PlanSession } from './roadmap/PlanCard'
 import { createRowObserver } from './roadmap/rowObserver'
 import { MilestoneFlag } from './roadmap/TimelineMarks'
-import { type Row, TimelineRow } from './roadmap/TimelineRow'
+import { TimelineRow } from './roadmap/TimelineRow'
 import { WinMenu, WinRangePicker } from './roadmap/WindowControls'
 import '../styles/mobile-views.css'
 import './Roadmap.css'
@@ -62,16 +62,6 @@ const CANVAS_PAD_B = 24
    above Team, so the budget and that gap read this number, on phones too.
    Keep it equal to the token. */
 const PANEL_GAP = 8
-
-/** A rail row as laid out: the row, its offset and height, and its bar's
-    start and end weeks with any live drag draft. */
-type LaidRow = {
-  row: Row & { subIds?: string[]; parentPid?: string }
-  top: number
-  h: number
-  start: number | null
-  end: number | null
-}
 
 /* What the Roadmap's memos read of a task: its links for the dependency
    arrows; its dates, status, hierarchy and links for Auto-move (its
@@ -101,54 +91,6 @@ const remainingReads = (it: IssueVM) => [
   it.hasHiddenSubtasks,
   (it.children ?? []).join(),
 ]
-
-/* The rows a new chunk of a track takes before the next one opens. */
-const CHUNK_ROWS = 32
-const rowKey = (L: LaidRow) => `${L.row.kind}:${L.row.issue?.uuid ?? L.row.pid}`
-
-/** A track's rows in chunks that keep their rows: a row stays in the chunk
-    that held it while the order allows (keptOwners), so a row that only
-    shifts as others come and go is not remounted with its open menus and
-    focus. A new or moved row joins the chunk before it, or a chunk of its
-    own at the start; a chunk made new takes CHUNK_ROWS rows. Chunk ids
-    rise down the list; `owners` holds each row's chunk and is updated. */
-function stableChunks(rows: LaidRow[], owners: Map<string, number>) {
-  const keys = rows.map(rowKey)
-  const known = keys.map((key) => owners.get(key))
-  const kept = keptOwners(known)
-  // the first kept chunk after each row, which new chunks stay below
-  const keptAfter: (number | undefined)[] = []
-  for (let i = rows.length - 1, next: number | undefined; i >= 0; i--) {
-    keptAfter[i] = next
-    if (kept[i]) next = known[i]
-  }
-  const chunks: { id: number; rows: LaidRow[]; fresh: boolean }[] = []
-  let current: (typeof chunks)[number] | null = null
-  for (const [i, row] of rows.entries()) {
-    const owner = kept[i] ? known[i] : undefined
-    if (owner !== undefined) {
-      if (current?.id !== owner) {
-        current = { id: owner, rows: [], fresh: false }
-        chunks.push(current)
-      }
-    } else if (!current || (current.fresh && current.rows.length >= CHUNK_ROWS)) {
-      const high = keptAfter[i]
-      const id = current
-        ? high === undefined
-          ? current.id + 1
-          : (current.id + high) / 2
-        : high === undefined
-          ? 0
-          : high - 1
-      current = { id, rows: [], fresh: true }
-      chunks.push(current)
-    }
-    current.rows.push(row)
-  }
-  owners.clear()
-  for (const chunk of chunks) for (const row of chunk.rows) owners.set(rowKey(row), chunk.id)
-  return chunks
-}
 
 /** A stretch of a track's task rows. It renders again only when `deps`
     changed or one of its rows did: another task, offset, height, bar or
@@ -180,6 +122,7 @@ const RowChunk = memo(
         x.h === y.h &&
         x.start === y.start &&
         x.end === y.end &&
+        x.stale === y.stale &&
         (!x.row.issue || a.rings[x.row.issue.id] === b.rings[x.row.issue.id])
       )
     }),
@@ -1297,8 +1240,8 @@ function Roadmap({
      write access canWrite reads, so they are worked out again only when one
      of them changed: P.issues keeps its identity while no task changed, and
      P.contextVersion covers the access. Above the early returns, as hooks. */
-  // each track's rows by chunk (stableChunks), kept across renders
-  const chunkOwners = useRefR(new Map<string, Map<string, number>>())
+  // each track's chunks (stableChunks), kept across renders
+  const chunkMemory = useRefR(new Map<string, ChunkMemory>())
   const allDeps = useTaskMemo(P.issues, linkReads, dependencyPairs, [])
   const pendingMoves = useTaskMemo(
     P.issues,
@@ -1442,6 +1385,7 @@ function Roadmap({
       h,
       start: row.issue ? getS(row.issue) : null,
       end: row.issue ? getE(row.issue) : null,
+      stale: row.kind !== 'track' && row.kind !== 'sub' && !!row.issue && P.isStale(row.issue),
     })
     if (row.kind === 'task' && getS(row.issue) != null) {
       const s = getS(row.issue),
@@ -2037,7 +1981,7 @@ function Roadmap({
                     // stale rows fade label contents + timeline cell, NOT the row div:
                     // opacity on the row would wrap the sticky label in a stacking
                     // context and hoist the dependency-arrow overlay above it
-                    const stale = !isGroup && P.isStale(row.issue)
+                    const stale = !isGroup && L.stale
                     // a person highlighted in the strip fades everyone else's rows the
                     // same way; the planning row stays fully visible.
                     const hlDim = hl && !isGroup && row.issue.owner !== hl && !spotlit
@@ -2113,14 +2057,14 @@ function Roadmap({
                     revealEdge,
                   ]
                   const chunks = (pid: string, list: LaidRow[]) => {
-                    let owners = chunkOwners.current.get(pid)
-                    if (!owners) {
-                      owners = new Map()
-                      chunkOwners.current.set(pid, owners)
+                    let memory = chunkMemory.current.get(pid)
+                    if (!memory) {
+                      memory = { owners: new Map(), places: new Map(), next: 0 }
+                      chunkMemory.current.set(pid, memory)
                     }
-                    return stableChunks(list, owners).map((chunk) => (
+                    return stableChunks(list, memory).map((chunk) => (
                       <RowChunk
-                        key={`${pid}:${chunk.id}`}
+                        key={`${pid}:${chunk.key}`}
                         rows={chunk.rows}
                         rings={barRing}
                         deps={chunkDeps}

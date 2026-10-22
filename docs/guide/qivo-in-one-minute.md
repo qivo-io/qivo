@@ -171,7 +171,8 @@ controls. Project actions also include sub-project creation and archived
 tasks. Your permissions determine which actions are available.
 
 **Overview** shows sortable health cards. **Roadmap** starts on milestones;
-**Task schedule** lists planned and unplanned work. Backlog is hidden, and
+**Task schedule** lists planned and unplanned work; a very long schedule
+fills in below the first screen as **My tasks** does. Backlog is hidden, and
 Done appears only when its planned period overlaps the Roadmap window ([The Roadmap](./the-roadmap.md)).
 **Timeline & team** opens a full-screen landscape view, turned sideways
 while the phone is upright. Rotate the phone to read it upright; you do not

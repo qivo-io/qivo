@@ -178,22 +178,25 @@ try {
   log('Tab through the waiting space lands on the next card')
 
   // Focus stays on a card that moves into a cell whose cards still wait:
-  // a card of the same lane, into a status cell of that lane that waits.
+  // the first waiting cell, and a card from another cell of its lane.
   const move = await page.evaluate(() => {
-    const from = document.querySelector('[data-smoke-cell]')
-    const lane = from.getAttribute('data-board-cell')
-    const to = [...document.querySelectorAll('[data-board-cell]')].find(
-      (cell) =>
-        cell.getAttribute('data-board-cell') === lane &&
-        cell !== from &&
-        cell.querySelector('[data-board-pending]'),
-    )
-    const card = from.querySelectorAll('[data-card]')[1]
-    return to && card
-      ? { id: card.getAttribute('data-card'), status: to.getAttribute('data-status') }
-      : null
+    const cells = [...document.querySelectorAll('[data-board-cell]')]
+    for (const to of cells) {
+      if (!to.querySelector('[data-board-pending]')) continue
+      const lane = to.getAttribute('data-board-cell')
+      const from = cells.find(
+        (cell) =>
+          cell !== to &&
+          cell.getAttribute('data-board-cell') === lane &&
+          cell.querySelectorAll('[data-card]').length > 1,
+      )
+      const card = from?.querySelectorAll('[data-card]')[1]
+      if (card)
+        return { id: card.getAttribute('data-card'), status: to.getAttribute('data-status') }
+    }
+    return null
   })
-  assert.ok(move, 'A cell of the same lane must still wait for cards')
+  assert.ok(move, 'A waiting cell must have a card of its lane to take')
   await page.locator(`[data-card="${move.id}"] [data-focus-key="title"]`).focus()
   await page.evaluate(({ id, status }) => window.PLANNER.updateIssue(id, { status }), move)
   await page.waitForFunction(

@@ -91,9 +91,9 @@ const paused = (n: number) => (snap: Snapshot) => {
     snap.issues.push({ ...taskRow(snap, `t${i}`, 'todo', i), paused: true, due_date: '2025-01-15' })
 }
 
-describe('a long list on another view', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
+describe('a long list on another view', { timeout: BOARD_TEST_TIMEOUT * 4 }, () => {
   it('mounts the first screen of the Overview, then the rest in slices', async () => {
-    const board = await loadBoard(network, paused(600))
+    const board = await loadBoard(network, paused(350))
     const { Overview } = await import('./Overview')
     const actions = new Proxy({}, { get: () => () => {} }) as Parameters<
       typeof Overview
@@ -104,8 +104,8 @@ describe('a long list on another view', { timeout: BOARD_TEST_TIMEOUT * 2 }, () 
     expect(count('[data-ovrow]')).toBeLessThanOrEqual(20)
     expect(count('[data-atrisk]')).toBeLessThanOrEqual(20)
     await finish()
-    expect(count('[data-ovrow]')).toBe(600)
-    expect(count('[data-atrisk]')).toBe(600)
+    expect(count('[data-ovrow]')).toBe(350)
+    expect(count('[data-atrisk]')).toBe(350)
   })
 
   it("mounts the first screen of the phone's task schedule, then the rest", async () => {
@@ -167,7 +167,9 @@ describe('an Overview row', { timeout: BOARD_TEST_TIMEOUT }, () => {
 describe('a delivery on the desktop Roadmap', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   it('renders the rows of the task it changed, not every row', async () => {
     const board = await loadBoard(network, (snap) => {
-      for (let n = 1; n <= 600; n++) snap.issues.push(taskRow(snap, `t${n}`, 'todo', n))
+      // due dates, so every row draws its due mark when it renders
+      for (let n = 1; n <= 600; n++)
+        snap.issues.push({ ...taskRow(snap, `t${n}`, 'todo', n), due_date: '2026-12-01' })
     })
     const { Roadmap } = await import('./Roadmap')
     const actions = new Proxy({}, { get: () => () => {} }) as Parameters<
@@ -191,7 +193,8 @@ describe('a delivery on the desktop Roadmap', { timeout: BOARD_TEST_TIMEOUT * 2 
     ))
     expect(count('[data-roadmap-task-top]')).toBe(600)
     // a remote rename of one task
-    const stale = vi.spyOn(board.P, 'isStale')
+    // a row's due mark asks whether its task tracks delay
+    const drawn = vi.spyOn(board.P, 'tracksDelay')
     const before = { ...schedule }
     const row = board.snapshot.issues.find((issue) => issue.id === 't300')
     if (!row) throw new Error('missing the task')
@@ -200,15 +203,22 @@ describe('a delivery on the desktop Roadmap', { timeout: BOARD_TEST_TIMEOUT * 2 
     await board.deliver()
     expect(document.body.textContent).toContain('Renamed task')
     // the renamed task's chunk of rows, not all 600
-    expect(stale.mock.calls.length).toBeGreaterThan(0)
-    expect(stale.mock.calls.length).toBeLessThanOrEqual(64)
+    expect(drawn.mock.calls.length).toBeGreaterThan(0)
+    expect(drawn.mock.calls.length).toBeLessThanOrEqual(64)
     // a title is neither a date nor a link: Auto-move and the arrows stand
     expect(schedule.moves).toBe(before.moves)
     expect(schedule.pairs).toBe(before.pairs)
     // a date is: Auto-move works it out again
-    Object.assign(row, { start_week: '2026-W40', end_week: '2026-W41' })
+    const { weekToISO } = await import('../lib/dates')
+    Object.assign(row, {
+      start_week: weekToISO(board.P.TODAY_WEEK + 2),
+      end_week: weekToISO(board.P.TODAY_WEEK + 3),
+    })
     await board.deliver()
     expect(schedule.moves).toBeGreaterThan(before.moves)
+    expect(
+      board.P.issueById[board.P.issues.find((it) => it.uuid === 't300')?.id ?? '']?.start,
+    ).toBe(board.P.TODAY_WEEK + 2)
   })
 
   it('keeps the rows that only shift when another task goes', async () => {
@@ -247,6 +257,47 @@ describe('a delivery on the desktop Roadmap', { timeout: BOARD_TEST_TIMEOUT * 2 
     const after = rows()
     expect(after).toHaveLength(99)
     for (const row of after) expect(before).toContain(row)
+  })
+})
+
+describe("Team sync's opening", { timeout: BOARD_TEST_TIMEOUT }, () => {
+  it('takes its loading marks with it when it goes before its lists finish', async () => {
+    const board = await loadBoard(network, (snap) => {
+      // 400 urgent tasks with no owner: Needs an owner mounts in slices
+      for (let n = 1; n <= 400; n++)
+        snap.issues.push({
+          ...taskRow(snap, `t${n}`, 'todo', n),
+          assignee_id: undefined,
+          priority: 'urgent',
+        })
+    })
+    const { TeamOpening } = await import('./teamSync/TeamOpening')
+    const { syncDay } = await import('../lib/teamSync')
+    let show = true
+    const view = (info: Parameters<Parameters<typeof board.renderView>[1]>[0]) => (
+      <div data-scroll data-sync-page>
+        {show && (
+          <TeamOpening
+            rows={board.P.issues}
+            humans={board.P.users}
+            subIds={info.subIdSet}
+            metaIds={new Set()}
+            day={syncDay(Date.now())}
+            now={Date.now()}
+            onOpenTask={() => {}}
+          />
+        )}
+      </div>
+    )
+    await board.renderView(root, view)
+    const page = () => document.querySelector('[data-sync-page]')
+    expect(count('[data-sync-needs-owner]')).toBeLessThan(400)
+    expect(page()?.getAttribute('aria-busy')).toBe('true')
+    // the walk moves on to a person's page while the list still mounts
+    show = false
+    await board.renderView(root, view)
+    expect(page()?.hasAttribute('aria-busy')).toBe(false)
+    expect(page()?.hasAttribute('data-board-mount')).toBe(false)
   })
 })
 

@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMountScheduler } from '@/lib/mountScheduler'
 import { DeferredList } from './DeferredList'
+import { Button } from './ui/button'
 
 /* A DeferredList under random inserts, deletes, reorders and slices. */
 
@@ -340,12 +341,17 @@ describe('Tab into the waiting space', () => {
      that is disabled on every other row, as on a read-only project */
   const row = (item: Item) => (
     <div key={item.key} data-k={item.key}>
-      <button type="button" data-focus-key="row">
+      <Button type="button" noTooltip data-focus-key="row">
         {item.key}
-      </button>
-      <button type="button" data-focus-key="owner" disabled={Number(item.key.slice(1)) % 2 === 1}>
+      </Button>
+      <Button
+        type="button"
+        noTooltip
+        data-focus-key="owner"
+        disabled={Number(item.key.slice(1)) % 2 === 1}
+      >
         owner
-      </button>
+      </Button>
     </div>
   )
   const showRows = (items: Item[]) =>
@@ -376,7 +382,7 @@ describe('Tab into the waiting space', () => {
   })
 
   it('lands on the last enabled control coming from below', async () => {
-    const below = document.createElement('button')
+    const below = document.createElement('input')
     container.after(below)
     await showRows(items)
     await act(async () => below.focus())

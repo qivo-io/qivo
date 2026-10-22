@@ -222,7 +222,8 @@ On desktop, selecting a row opens the task's discussion pane. Click
 current assignee or reviewer, Activity and comment box. Use the pop-out button
 for editable details, attachments and links, or **Open task in board** to
 open the full task window over its Board, which scrolls to the task's card
-and rings it for a moment. The project breadcrumb does the same.
+and rings it until a moment after the window closes. The project breadcrumb
+does the same ([Showing a task on the Board](./the-board.md#showing-a-task-on-the-board)).
 
 The address follows the selected task, such as `/app/<org>/inbox/tasks/qn-14`,
 so saved links and reloads reopen it. **Esc** closes a pop-out first, then the

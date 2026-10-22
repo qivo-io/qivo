@@ -176,9 +176,9 @@ const askKey = (it: IssueVM) => it.uuid
 const askEstimate = () => ASK_ESTIMATE_PX
 const pendingAsks = (n: number) => `Loading ${n} more ${n === 1 ? 'task' : 'tasks'}`
 /* A long list mounts in blocks (DeferredList.css); the rows keep their
-   rule where one block meets the next. */
+   rule where a block follows a block or a row. */
 const ASK_LIST =
-  'overflow-hidden rounded-lg border border-border [&>.deferred-block+.deferred-block>*:first-child]:border-t'
+  'overflow-hidden rounded-lg border border-border [&>*+.deferred-block>*:first-child]:border-t'
 
 export function TeamOpening({
   rows,
@@ -214,10 +214,11 @@ export function TeamOpening({
   const opening = useRef<HTMLDivElement>(null)
   const [scheduler] = useState(createMountScheduler)
   useMountGuards(scheduler)
-  useLayoutEffect(
-    () => scheduler.setRoot(opening.current?.closest<HTMLElement>('[data-scroll]') ?? null),
-    [scheduler],
-  )
+  // the page's pane outlives the opening, so the marks go with the opening
+  useLayoutEffect(() => {
+    scheduler.setRoot(opening.current?.closest<HTMLElement>('[data-scroll]') ?? null)
+    return () => scheduler.setRoot(null)
+  }, [scheduler])
   const [firstScreen] = useState(() => Math.ceil((window.innerHeight + 500) / ASK_MIN_PX))
   const initialOf = (count: number) =>
     count <= SYNC_LIMIT ? Number.POSITIVE_INFINITY : firstScreen

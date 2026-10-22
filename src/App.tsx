@@ -1231,11 +1231,14 @@ function App() {
 
   // Task breadcrumb clicks and the Inbox's Open task in board switch to the
   // Board scoped to the project or sub-project, with the task's window open
-  // over the Board and its card revealed behind it.
-  const showOnBoard = (projectId: string, issueKey?: string) => {
+  // over the Board and its card revealed behind it. `keepOpen` false closes
+  // the window and reveals the card at once (the crumb on a phone, whose
+  // window covers the list).
+  const showOnBoard = (projectId: string, issueKey?: string, keepOpen = true) => {
     const p = P.project(projectId)
     if (!p) return
-    const target = issueKey || null
+    const revealed = issueKey || null
+    const target = keepOpen ? revealed : null
     move(
       {
         scope: projectId,
@@ -1252,7 +1255,7 @@ function App() {
         setInboxOpen(false)
         setSync(null)
         setOpenIssue(target)
-        if (target) reveal(target)
+        if (revealed) reveal(revealed)
       },
     )
   }

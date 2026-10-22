@@ -1177,7 +1177,9 @@ function IssueDetail({
   embedded?: boolean
   unreadTs?: number | null
   onPopOut?: () => void
-  onShowOnBoard?: (projectId: string, issueKey?: string) => void
+  /** Shows the project's Board and reveals `issueKey`'s card, with the
+      task's window open over it unless `keepOpen` is false */
+  onShowOnBoard?: (projectId: string, issueKey?: string, keepOpen?: boolean) => void
   holdThread?: boolean
   closeLabel?: string
   modalActive?: boolean
@@ -2221,7 +2223,14 @@ function IssueDetail({
                   {i > 0 && <Icon name="chevronRight" size={12} color="var(--text-3)" />}
                   <HoverTooltip content={`Show ${p.name} on the board`}>
                     <a
-                      href={buildPath({ scope: p.id, view: 'kanban' })}
+                      // the place a plain click goes: the Board with this task's
+                      // window over it, or on a phone, where the window fills
+                      // the screen, the task list without it
+                      href={buildPath({
+                        scope: p.id,
+                        view: 'kanban',
+                        openIssue: mobile ? null : it.id,
+                      })}
                       data-task-crumb-project={p.id}
                       onClick={(e) => {
                         if (
@@ -2235,7 +2244,7 @@ function IssueDetail({
                         )
                           return
                         e.preventDefault()
-                        onShowOnBoard(p.id, it.id)
+                        onShowOnBoard(p.id, it.id, !mobile)
                       }}
                       className="max-w-60 overflow-hidden text-ellipsis whitespace-nowrap rounded-sm px-1 py-0.5 text-sm text-text-3 no-underline hover:bg-hover hover:text-text-1 focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
                     >

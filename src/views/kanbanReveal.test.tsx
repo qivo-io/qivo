@@ -163,6 +163,24 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
     expect(target?.hasAttribute('data-board-revealed')).toBe(false)
   })
 
+  it('does not hold the ring for another task window opened after the first closed', async () => {
+    const board = await loadBoard(network, lanes, { scope: 'plan' })
+    await board.render(root)
+    const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
+    far = id
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    container.setAttribute('inert', '')
+    await board.reveal(id)
+    await run(() => scrolled.mock.calls.length > 0)
+    const target = card(id)?.closest('.board-card')
+    await act(async () => container.removeAttribute('inert'))
+    // another task's window opens a moment later
+    await act(async () => vi.advanceTimersByTime(500))
+    await act(async () => container.setAttribute('inert', ''))
+    await act(async () => vi.advanceTimersByTime(REVEAL_MS))
+    expect(target?.hasAttribute('data-board-revealed')).toBe(false)
+  })
+
   it("rings the task's new card when a change in its window moved it", async () => {
     const board = await loadBoard(network, lanes, { scope: 'plan' })
     await board.render(root)
@@ -183,6 +201,9 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
     expect(moved).not.toBe(first)
     expect(moved?.closest('[data-status]')?.getAttribute('data-status')).toBe('progress')
     expect(moved?.hasAttribute('data-board-revealed')).toBe(true)
+    // and the Board scrolls to it
+    expect(scrolled.mock.calls.at(-1)?.[0]).toMatchObject({ behavior: 'instant' })
+    expect(scrolled.mock.calls.length).toBeGreaterThan(1)
   })
 
   it('rings the row on the phone task list', async () => {
