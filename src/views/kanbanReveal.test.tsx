@@ -181,6 +181,23 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
     expect(target?.hasAttribute('data-board-revealed')).toBe(false)
   })
 
+  it('does not hold a ring that starts at once for a task window opened after it', async () => {
+    const board = await loadBoard(network, lanes, { scope: 'plan', phone: true })
+    await board.render(root)
+    const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
+    far = id
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    // the crumb closed the window and reveals the row
+    await board.reveal(id, true)
+    await run(() => scrolled.mock.calls.length > 0)
+    expect(card(id)?.hasAttribute('data-board-revealed')).toBe(true)
+    // another task's window opens a moment later
+    await act(async () => vi.advanceTimersByTime(500))
+    await act(async () => container.setAttribute('inert', ''))
+    await act(async () => vi.advanceTimersByTime(REVEAL_MS))
+    expect(document.querySelector('[data-board-revealed]')).toBeNull()
+  })
+
   it("rings the task's new card when a change in its window moved it", async () => {
     const board = await loadBoard(network, lanes, { scope: 'plan' })
     await board.render(root)

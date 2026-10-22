@@ -5,8 +5,10 @@ import { useLatest } from './useLatest'
 export const REVEAL_MS = 2400
 
 /** A request to show one task: `n` is a nonce, so asking again for the
-    same task reveals it again. */
-export type RevealRequest = { id: string; n: number }
+    same task reveals it again. `atOnce` says the jump opens no task window
+    over the pane (the crumb on a phone closes it), so the ring's time runs
+    from the start and no later window holds it. */
+export type RevealRequest = { id: string; n: number; atOnce?: boolean }
 
 const ROWS = '[data-card], [data-parent-heading]'
 
@@ -52,7 +54,7 @@ const reducedMotion = () =>
 /** Shows the task a request names in the list `pane` holds, and rings it
     with `data-board-revealed` for REVEAL_MS of the time the pane is in
     view: while a task window over it makes it inert, the ring waits, so it
-    still shows when the window closes, on the task's card wherever a
+    still shows when the window closes (unless the request is `atOnce`), on the task's card wherever a
     change made meanwhile moved it. `mount` mounts the task's card
     first when its list still waits for it; it may commit a render. Two
     frames later the pane scrolls the card to its middle, smoothly unless
@@ -141,15 +143,18 @@ export function useReveal(
               }
               ring()
             }
-            if (typeof MutationObserver === 'function') {
-              inertWatch = new MutationObserver(time)
-              inertWatch.observe(document.body, {
-                attributes: true,
-                attributeFilter: ['inert'],
-                subtree: true,
-              })
+            if (request.atOnce) ring()
+            else {
+              if (typeof MutationObserver === 'function') {
+                inertWatch = new MutationObserver(time)
+                inertWatch.observe(document.body, {
+                  attributes: true,
+                  attributeFilter: ['inert'],
+                  subtree: true,
+                })
+              }
+              time()
             }
-            time()
             stopCorrection = correctOnce(scroller, target, behavior === 'smooth')
           }),
         )

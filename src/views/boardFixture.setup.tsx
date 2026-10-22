@@ -2,6 +2,7 @@ import { getFunctionName } from 'convex/server'
 import { act, type ReactNode, useLayoutEffect, useState } from 'react'
 import type { Root } from 'react-dom/client'
 import { vi } from 'vitest'
+import type { RevealRequest } from '../lib/reveal'
 import type { ScopeInfo } from '../store/planner'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
@@ -91,7 +92,7 @@ export async function loadBoard(
     search: '',
   }
   let setSearch: (text: string) => void = () => {}
-  let setReveal: (request: { id: string; n: number } | null) => void = () => {}
+  let setReveal: (request: RevealRequest | null) => void = () => {}
   let reveals = 0
   /** The Board as App renders it, again on every store change. `window`
       renders beside it in the same root, with the task the Board opened. */
@@ -99,7 +100,7 @@ export async function loadBoard(
     usePlannerVersion()
     const [opened, setOpened] = useState<string | null>(null)
     const [search, typeSearch] = useState('')
-    const [revealTask, revealIt] = useState<{ id: string; n: number } | null>(null)
+    const [revealTask, revealIt] = useState<RevealRequest | null>(null)
     useLayoutEffect(() => {
       setSearch = typeSearch
       setReveal = revealIt
@@ -148,8 +149,10 @@ export async function loadBoard(
       document.querySelector<HTMLElement>(
         `[data-card="${P.issues.find((it) => it.uuid === uuid)?.id}"]`,
       ),
-    /** Asks the Board to reveal the task `id`, as App does for a jump. */
-    reveal: (id: string) => act(async () => setReveal({ id, n: ++reveals })),
+    /** Asks the Board to reveal the task `id`, as App does for a jump;
+        `atOnce` as the phone's crumb does. */
+    reveal: (id: string, atOnce?: boolean) =>
+      act(async () => setReveal({ id, n: ++reveals, atOnce })),
     /** Types `text` into the Board's search filter. */
     search: (text: string) => act(async () => setSearch(text)),
     /** Delivers `snapshot` as it is now, as the server would after a change. */

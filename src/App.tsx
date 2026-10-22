@@ -805,9 +805,9 @@ function App() {
   // window (Team sync, the Inbox, the task crumb, search). { id, n } like
   // focusPlan; the nonce comes from the same counter.
   const [revealTask, setRevealTask] = useState<RevealRequest | null>(null)
-  const reveal = (id: string) => {
+  const reveal = (id: string, atOnce = false) => {
     focusN.current += 1
-    setRevealTask({ id, n: focusN.current })
+    setRevealTask({ id, n: focusN.current, atOnce })
   }
   // current scope and layout for the popstate handler (registered once, deps [])
   const scopeRef = useRef(scope)
@@ -1255,7 +1255,7 @@ function App() {
         setInboxOpen(false)
         setSync(null)
         setOpenIssue(target)
-        if (revealed) reveal(revealed)
+        if (revealed) reveal(revealed, !keepOpen)
       },
     )
   }
