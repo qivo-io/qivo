@@ -9,6 +9,9 @@ import { CASES, MAX_TOTAL, parseProbeArgs, probe, probeBody } from './body-cap-p
 
 let server
 
+/** The most requests of each case one run of all of them may send. */
+const EACH = Math.floor(MAX_TOTAL / Object.keys(CASES).length)
+
 afterEach(() => server?.close())
 
 /* A server on a free loopback port that answers 401 after reading each
@@ -45,6 +48,30 @@ describe('body cap probe', () => {
     }
   })
 
+  it('stops sending a stalled body and counts the answer it gets before the end', async () => {
+    const { size } = CASES['auth-stall-past-buffer']
+    // answers 413 to a body that stays open 200 ms after its last byte, and
+    // 400 to one that ended
+    server = createServer((request, response) => {
+      let seen = 0
+      let ended = false
+      request.on('end', () => {
+        ended = true
+      })
+      request.on('data', (chunk) => {
+        seen += chunk.length
+        if (seen === size) setTimeout(() => response.writeHead(ended ? 400 : 413).end('{}'), 200)
+      })
+    })
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const origin = `http://127.0.0.1:${server.address().port}`
+    const counts = await probe(origin, CASES['auth-stall-past-buffer'], {
+      requests: 3,
+      concurrency: 3,
+    })
+    expect(counts).toEqual({ 413: 3 })
+  })
+
   it('takes a bare origin and whole counts within the bounds', () => {
     expect(parseProbeArgs(['https://api.example.test/', '--case', 'rest-small'])).toEqual({
       origin: 'https://api.example.test',
@@ -52,10 +79,8 @@ describe('body cap probe', () => {
       concurrency: 8,
       names: ['rest-small'],
     })
-    expect(
-      parseProbeArgs(['http://127.0.0.1:3211', '--requests', String(MAX_TOTAL / 10)]),
-    ).toMatchObject({
-      requests: MAX_TOTAL / 10,
+    expect(parseProbeArgs(['http://127.0.0.1:3211', '--requests', String(EACH)])).toMatchObject({
+      requests: EACH,
     })
   })
 
@@ -68,8 +93,8 @@ describe('body cap probe', () => {
       ['https://x.test', '--requests', '1.5'],
       ['https://x.test', '--requests', '0'],
       ['https://x.test', '--concurrency', '17'],
-      // ten cases of 201 pass MAX_TOTAL
-      ['https://x.test', '--requests', String(MAX_TOTAL / 10 + 1)],
+      // one more request of every case passes MAX_TOTAL
+      ['https://x.test', '--requests', String(EACH + 1)],
       ['https://x.test', '--case', 'nope'],
       ['https://x.test', '--case', 'toString'],
       ['https://user:pass@x.test'],

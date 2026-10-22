@@ -6,7 +6,9 @@
  * handler with answerAfterBody, which drops the rest of the body before the
  * answer goes out, however early the handler decided it. The Better Auth
  * component builds its own routes: its GET and POST handler (http.ts
- * createHttpAuthAfterBody) calls discardBody itself, and its CORS preflight
+ * createHttpAuthAfterBody) calls discardBody itself, and hands Better Auth,
+ * which reads a body with no bound in time or size, a copy whose body
+ * bufferedRequest has already read (http.ts readAuthBody). Its CORS preflight
  * for /api/auth/* and its /.well-known/openid-configuration redirect answer
  * without a handler of ours. Those two take OPTIONS and GET, which browsers
  * send without a body. convex/tests/requestBody.test.ts refuses any other
@@ -140,7 +142,7 @@ export const answerAfterBody = (handler: Parameters<typeof httpAction>[0]) =>
  * a request without one, `too_large` for one declared or found longer than
  * the limit and `too_slow` for one still arriving at the deadline. */
 export type LimitedBody =
-  | { outcome: 'read'; bytes: Uint8Array }
+  | { outcome: 'read'; bytes: Uint8Array<ArrayBuffer> }
   | { outcome: 'missing' | 'too_large' | 'too_slow' }
 
 /**
@@ -200,4 +202,31 @@ export async function readLimitedBody(
     if (late) await cancelBody(reader)
     else reader.releaseLock()
   }
+}
+
+/**
+ * A copy of `request` that holds its whole body in memory (`read`), or why
+ * readLimitedBody could not read it. The copy has the original method, URL
+ * and headers and exactly the bytes the client sent, so a handler that reads
+ * the body itself, such as Better Auth's, can neither wait on a slow client
+ * nor read past `maxBytes`. A GET or HEAD request, which carries no body,
+ * and a request without one come back as they are.
+ */
+export async function bufferedRequest(
+  request: Request,
+  maxBytes: number,
+  waitMs: number,
+): Promise<{ outcome: 'read'; request: Request } | { outcome: 'too_large' | 'too_slow' }> {
+  if (request.method === 'GET' || request.method === 'HEAD') return { outcome: 'read', request }
+  const read = await readLimitedBody(request, maxBytes, waitMs)
+  if (read.outcome === 'read')
+    return {
+      outcome: 'read',
+      request: new Request(request.url, {
+        method: request.method,
+        headers: request.headers,
+        body: read.bytes,
+      }),
+    }
+  return read.outcome === 'missing' ? { outcome: 'read', request } : { outcome: read.outcome }
 }

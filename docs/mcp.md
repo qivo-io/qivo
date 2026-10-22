@@ -470,8 +470,15 @@ closed, or with a `502` from the hosting front end, instead of Qivo's
 answer. Treat either like a network error, and check the credential and the
 body's size before you send it again. A body Qivo reads to answer, such as
 an authenticated request's body within the limit, has no such deadline. A
-client that sends `Expect: 100-continue` gets `100 Continue` at once, so it
-sends the whole body before any answer.
+client that sends `Expect: 100-continue` over HTTP/1.1 gets `100 Continue` at
+once, so it sends the whole body before any answer. Over HTTP/2 the hosting
+front end sends no `100 Continue`, so such a client sends the body only once
+its own wait for one ends, after 1 second for curl.
+
+The hosting front end hands a request to Qivo only once about 0.5 MiB of its
+body, or about 5 seconds of a steady upload, has arrived. A body that stops
+arriving before that gets no answer, and the front end resets the
+connection after about 15 seconds. Treat that like a network error too.
 
 MCP messages must be UTF-8. A body holding bytes that are not UTF-8, such as
 text a client encoded as Latin-1 or Windows-1252, is answered with HTTP
@@ -679,6 +686,13 @@ an authorization-server scope. Read-only grants receive HTTP 403 with
 leg. OAuth tokens also support REST webhook management. They are refused by
 other REST routes and background curation, so an OAuth connection attaches
 files with the MCP upload tools (see [Attachments](#attachments)).
+
+A request to the authorization server, such as a registration, token or
+revocation request, may hold a body of at most 64 KiB, which must arrive
+within 5 seconds. A longer body is answered with HTTP `413` and a slower one
+with HTTP `408`, each with `{"error": "invalid_request", "error_description":
+"..."}` naming the reason. Send the request again with a shorter body or over
+a better connection.
 
 Each approval has an immutable user, profile, organization, client and
 resource binding. Revocation, inactive or removed membership, and the

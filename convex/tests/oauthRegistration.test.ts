@@ -408,7 +408,8 @@ describe('client registration over HTTP', () => {
     expect(await clients(t)).toEqual([])
     // A client this person owns cannot be grown past the metadata cap.
     await plantClient(t, 'owned', { userId: user._id })
-    const large = 'x'.repeat(4 * OAUTH_CLIENT_METADATA_MAX_BYTES)
+    // past the metadata cap, and within the auth body cap (AUTH_BODY_MAX_BYTES)
+    const large = 'x'.repeat(2 * OAUTH_CLIENT_METADATA_MAX_BYTES)
     const updated = await signedIn('update-client', {
       client_id: 'owned',
       update: { client_uri: `${BROWSER}/${large}`, software_statement: large },

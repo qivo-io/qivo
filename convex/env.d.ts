@@ -35,7 +35,10 @@ declare class Blob {
   readonly type: string
 }
 declare class Request {
-  constructor(input: Request, init?: { headers?: Headers | Record<string, string> })
+  constructor(
+    input: Request | string,
+    init?: { method?: string; headers?: Headers | Record<string, string>; body?: Uint8Array },
+  )
   readonly url: string
   readonly method: string
   readonly headers: Headers
