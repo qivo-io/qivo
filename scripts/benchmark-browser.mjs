@@ -778,7 +778,9 @@ async function runVariedSample(origin, tasks, metrics, query = '') {
   phase('variedPhoneRoadmap')
   metrics.variedPhoneRoadmap.push(
     await timed(async () => {
-      await schedule.click({ timeout: timeout * 10 })
+      // the phone's bottom navigation can sit over the button, so a
+      // pointer click would land on it
+      await schedule.evaluate((button) => button.click())
       await page
         .locator(
           '.mobile-roadmap-task-list .mobile-roadmap-row, .mobile-roadmap-section > .mobile-roadmap-row',
