@@ -155,7 +155,7 @@ describe('internal/overCapRows', () => {
     const padded = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
-      description: '  Fix the login\n',
+      description: '\n\nFix the login\n',
     })
     await plantComment(t, longTask.id, long)
     const project = await plantProject(t, {
@@ -271,7 +271,7 @@ describe('internal/overCapRows', () => {
     const issueDoc: WithoutSystemFields<Doc<'issues'>> = {
       ...taskDoc,
       id: uuid(),
-      description: ' Trim me ',
+      description: '\nTrim me ',
       remaining_hours: 150_000,
     }
     const storedIssue = await store({ table: 'issues', doc: issueDoc }, issueDoc.id, issueDoc.id)

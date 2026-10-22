@@ -299,8 +299,9 @@ and so does the same removal by anyone who is not an organization admin.
 Each limit below is the same here, over MCP and in the app, and the
 [Limits](guide/limits.md) guide page lists every one. A text counts UTF-16
 code units, the count a browser's text field uses, after Qivo trims spaces
-and line breaks from both ends, and Qivo stores the trimmed text. Most emoji
-count as two. A request past a limit is refused with the sentence in the
+and line breaks from both ends, and Qivo stores the trimmed text. A task
+description or comment keeps the spaces that start its first line, because
+Markdown reads them. Most emoji count as two. A request past a limit is refused with the sentence in the
 table and changes nothing. The refusal is a `400`, except for a request body
 over its size (`413`), a full webhook quota (`409`) and the request rate
 (`429`). A number outside its range is refused, never moved into the range.

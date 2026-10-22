@@ -4,11 +4,19 @@
 
 import { address, asciiEmail } from './email'
 import { rule } from './functions'
-import { LIMITS, type Limit, outsideWhole, overText } from './limits'
+import { LIMITS, type Limit, outsideWhole, overText, trimMarkdown } from './limits'
 
 /** `raw` trimmed, the text to store. Refuses a text over `limit`. */
 export function limitedText(limit: Limit, raw: string): string {
   const text = raw.trim()
+  if (overText(limit, text)) throw rule(limit.refusal)
+  return text
+}
+
+/** `raw` as Markdown text is stored (lib/limits.ts trimMarkdown). Refuses
+ * a text over `limit`. */
+export function limitedMarkdown(limit: Limit, raw: string): string {
+  const text = trimMarkdown(raw)
   if (overText(limit, text)) throw rule(limit.refusal)
   return text
 }

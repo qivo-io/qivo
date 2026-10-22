@@ -457,10 +457,18 @@ export const deleteOrphanLogin = internalMutation({
   args: { email: v.string() },
   handler: async (ctx, args) => {
     const email = lookupEmail(args.email)
-    const user = (await ctx.runQuery(components.betterAuth.adapter.findOne, {
-      model: 'user',
-      where: [{ field: 'email', value: email }],
-    })) as { _id: string } | null
+    /* A login keeps the address its sign-in gave it, which for a provider
+     * sign-in can hold a Unicode domain that profiles store in punycode, so
+     * the login is looked up by the address as typed, lowercased, too. Type
+     * it as the login shows it. */
+    const spellings = [...new Set([email, args.email.trim().toLowerCase()])]
+    let user: { _id: string } | null = null
+    for (const value of spellings) {
+      user ??= (await ctx.runQuery(components.betterAuth.adapter.findOne, {
+        model: 'user',
+        where: [{ field: 'email', value }],
+      })) as { _id: string } | null
+    }
     if (user === null) throw notFound('no auth account with that email')
     /* ANY profile — home or guest — means this login is not an orphan; the
      * by_auth probe is belt-and-braces for a seat whose email moved on. */

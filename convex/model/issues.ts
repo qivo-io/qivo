@@ -82,7 +82,7 @@ import {
 import { descriptionForm, printOf, trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { shownImages } from '../lib/imageRefs'
-import { limitedText } from '../lib/limitRules'
+import { limitedMarkdown, limitedText } from '../lib/limitRules'
 import { grouped, LIMITS, PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from '../lib/limits'
 import { countsAsSubtask, type Liveness, projectLiveness } from '../lib/liveTasks'
 import { tooManyMentions } from '../lib/mentions'
@@ -192,7 +192,7 @@ export function cleanTitle(raw: unknown): string {
  * text past LIMITS.description or mentioning more people than
  * LIMITS.mentions allows. */
 export function cleanDescription(raw: string | null | undefined): string {
-  const text = limitedText(LIMITS.description, raw ?? '')
+  const text = limitedMarkdown(LIMITS.description, raw ?? '')
   if (tooManyMentions(text)) throw rule(LIMITS.mentions.refusal)
   return text
 }

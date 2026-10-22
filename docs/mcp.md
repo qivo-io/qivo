@@ -493,8 +493,9 @@ an organization admin.
 Each limit below is the same here, over REST and in the app, and the
 [Limits](guide/limits.md) guide page lists every one. A text counts UTF-16
 code units, the count a browser's text field uses, after Qivo trims spaces
-and line breaks from both ends, and Qivo stores the trimmed text. Most emoji
-count as two. The tool schemas carry these limits as `maxLength`, `minimum`
+and line breaks from both ends, and Qivo stores the trimmed text. A task
+description or comment keeps the spaces that start its first line, because
+Markdown reads them. Most emoji count as two. The tool schemas carry these limits as `maxLength`, `minimum`
 and `maximum`, but the server checks them, so a call past one gets the
 sentence in the table as its error result, the same sentence REST answers,
 and changes nothing. A number outside its range is refused, never moved into

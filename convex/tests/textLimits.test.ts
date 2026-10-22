@@ -169,7 +169,7 @@ describe('task titles and descriptions in the app', () => {
       id,
       project_id: f.sub.id,
       title: `   ${TITLE_AT_CAP}   `,
-      description: '\n  Padded brief  \n',
+      description: '\n\nPadded brief  \n',
     })
     expect(await issueRow(t, id)).toMatchObject({
       title: TITLE_AT_CAP,
@@ -182,10 +182,11 @@ describe('task titles and descriptions in the app', () => {
       const e = await expectRefusal(update({ title }), 'rule')
       expect(e.data.message).toBe(LIMITS.title.refusal)
     }
-    await update({ title: ` ${'😀'.repeat(127)}a `, description: ' Edited ' })
+    await update({ title: ` ${'😀'.repeat(127)}a `, description: ' # Edited \n' })
     expect(await issueRow(t, id)).toMatchObject({
       title: `${'😀'.repeat(127)}a`,
-      description: 'Edited',
+      // the first line's indent stays, so the text stays a paragraph
+      description: ' # Edited',
     })
   })
 })
@@ -206,7 +207,7 @@ describe('comments and archive reasons in the app', () => {
       return id
     }
     expect((await commentRow(t, await post(AT_CAP)))?.body).toBe(AT_CAP)
-    expect((await commentRow(t, await post(`     ${AT_CAP}     `)))?.body).toBe(AT_CAP)
+    expect((await commentRow(t, await post(`\n\n${AT_CAP}     `)))?.body).toBe(AT_CAP)
     for (const body of [OVER, `  ${OVER}  `]) {
       const e = await expectRefusal(post(body), 'rule')
       expect(e.data.message).toBe(LIMITS.comment.refusal)
@@ -403,7 +404,7 @@ describe('REST', () => {
     const created = await rest(t, 'POST', '/v1/tasks', {
       project: f.sub.key,
       title: `  ${TITLE_AT_CAP}  `,
-      description: ' Padded brief\n',
+      description: '\nPadded brief\n',
     })
     expect(created.status).toBe(201)
     const { id } = created.json as { id: string }
@@ -529,11 +530,11 @@ describe('MCP', () => {
     await wireOrg(t)
     const made = await tool(t, 'create_task', { project: 'FW', title: 'Padded' })
     const { id: taskId, key } = JSON.parse(made.content[0].text) as { id: string; key: string }
-    const padded = `  ${AT_CAP}\n`
+    const padded = `\n\n${AT_CAP}\n`
     const commented = await tool(t, 'add_comment', { ref: key, body: padded })
     expect(commented.isError).toBeUndefined()
     const { id } = JSON.parse(commented.content[0].text) as { id: string }
-    expect((await tool(t, 'update_comment', { comment: id, body: ` ${AT_CAP} ` })).isError).toBe(
+    expect((await tool(t, 'update_comment', { comment: id, body: `\n${AT_CAP} ` })).isError).toBe(
       undefined,
     )
     // a description stored over the cap is refused when it is sent back
@@ -566,7 +567,7 @@ describe('MCP', () => {
     const made = await tool(t, 'create_task', {
       project: 'FW',
       title: `  ${TITLE_AT_CAP}  `,
-      description: '\tPadded brief ',
+      description: '\n\nPadded brief ',
     })
     expect(made.isError).toBeUndefined()
     const { id, key } = JSON.parse(made.content[0].text) as { id: string; key: string }

@@ -72,7 +72,7 @@ import {
   type QueryCtx,
 } from '../_generated/server'
 import { address, asciiEmail } from '../lib/email'
-import { cutText, LIMITS, NAME_MAX, TEXT_MAX } from '../lib/limits'
+import { cutText, LIMITS, NAME_MAX, TEXT_MAX, trimMarkdown } from '../lib/limits'
 
 /** Rows per page and the bytes one page may read; a page can end early.
  * `page_size` lowers the rows per page, for tests of a walk over pages. */
@@ -166,7 +166,7 @@ function nameChange(name: string, max: number, shorten = fitted): Change[] {
 
 /** The report of a long text over `max`, which the fix never cuts. */
 function longText(field: string, text: string, max: number): Change[] {
-  const length = text.trim().length
+  const length = trimMarkdown(text).length
   return length <= max ? [] : [{ field, length }]
 }
 
@@ -198,7 +198,7 @@ function storedChanges(row: StoredRow): Change[] {
       const max = LIMITS.remainingHours.max
       if (hours !== undefined && hours > max)
         changes.push({ field: 'remaining_hours', length: hours, value: max })
-      const description = row.doc.description.trim()
+      const description = trimMarkdown(row.doc.description)
       if (description.length > TEXT_MAX)
         changes.push({ field: 'description', length: description.length })
       else if (description !== row.doc.description)

@@ -120,11 +120,13 @@ describe('the limits in the store', () => {
     expect(sent).toEqual([])
   })
 
-  it('counts a description after trimming, so spaces around one at the cap pass', () => {
+  it('counts a description after trimming, so blank lines and spaces around one at the cap pass', () => {
     const { P } = store
-    void P.updateIssue(task()?.id ?? '', { description: `  ${AT_CAP}  ` })
+    void P.updateIssue(task()?.id ?? '', { description: `\n${AT_CAP}  ` })
     expect(sent).toEqual(['issues:update'])
     expect(toast).not.toHaveBeenCalled()
+    // painted as the server stores it, so the editor stays within the parse cap
+    expect(task()?.description).toBe(AT_CAP)
   })
 
   it('takes a title of 255 characters whole and refuses one more, never cutting it', async () => {

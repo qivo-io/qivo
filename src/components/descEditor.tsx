@@ -64,7 +64,7 @@ import { DropdownChevron } from '@/components/ui/select'
 import { closeOrAsk } from '@/lib/discardQuestion'
 import { countText, limitSentence, nearLimit } from '@/lib/fieldLimits'
 import { cn } from '@/lib/utils'
-import { grouped, LIMITS, TEXT_MAX } from '../../convex/lib/limits'
+import { grouped, LIMITS, TEXT_MAX, trimMarkdown } from '../../convex/lib/limits'
 import { compressImage } from '../lib/images'
 import { useUnsaved, useUnsentScope } from '../lib/leaveGuard'
 import type { MdBlock, MdInline } from '../lib/md'
@@ -378,7 +378,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   // store sends it, taken once typing rests (a serialize per keystroke would
   // cost a long text too much)
   const limit = isComment ? LIMITS.comment : LIMITS.description
-  const [count, setCount] = useState(() => value.trim().length)
+  const [count, setCount] = useState(() => trimMarkdown(value).length)
   const [linkPop, setLinkPop] = useState<LinkPop | null>(null)
   const [headMenu, setHeadMenu] = useState(false)
   const [dirty, setDirty] = useState(false)
@@ -800,7 +800,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     const doc = ed.schema.nodeFromJSON(astToDoc(parseMd(text)))
     ed.view.updateState(EditorState.create({ doc, plugins: ed.state.plugins }))
     committedDocRef.current = ed.state.doc
-    setCount(text.trim().length)
+    setCount(trimMarkdown(text).length)
   }
 
   /* The DraftKeep of a save from baseline `seen`. Its keepDraft gets the
@@ -1082,7 +1082,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       if (editor.isFocused) requestAnimationFrame(() => keepFloorRef.current())
       clearTimeout(counting)
       counting = setTimeout(() => {
-        if (!editor.isDestroyed) setCount(serialize(editor).trim().length)
+        if (!editor.isDestroyed) setCount(trimMarkdown(serialize(editor)).length)
       }, COUNT_DELAY_MS)
     }
     editor.on('update', onUpd)

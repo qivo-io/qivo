@@ -283,7 +283,7 @@ describe('comments — create/update/remove', () => {
       org_id: f.org.id,
       id,
       issue_id: issue.id,
-      body: '  ship it  ',
+      body: '\nship it  ',
     })
     const comment = await commentById(t, id)
     expect(comment?.body).toBe('ship it') // trimmed

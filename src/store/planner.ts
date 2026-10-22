@@ -38,6 +38,7 @@ import {
   outsideWhole,
   overText,
   SLUG_SHAPE,
+  trimMarkdown,
 } from '../../convex/lib/limits'
 import { tooManyMentions } from '../../convex/lib/mentions'
 import { roundTenths } from '../../convex/lib/numbers'
@@ -1176,7 +1177,7 @@ function refuseOutside(limit: Limit, n: number): boolean {
     (lib/mentions.ts). Null when it may be sent. The editor and the store
     guards below share it, so a refused draft is kept. */
 export function textRefusal(limit: Limit, text: string): string | null {
-  if (overText(limit, text.trim())) return limitSentence(limit)
+  if (overText(limit, trimMarkdown(text))) return limitSentence(limit)
   if (tooManyMentions(text)) return limitSentence(LIMITS.mentions)
   return null
 }
@@ -3882,7 +3883,9 @@ type IssueWirePatch = FunctionArgs<typeof api.issues.update>['patch']
 function mapIssuePatch(patch: IssuePatch): IssueWirePatch {
   const db: IssueWirePatch = {}
   if ('title' in patch) db.title = cleanTitle(patch.title)
-  if ('description' in patch) db.description = patch.description || '' // required column; drawer commits null to clear
+  // required column; drawer commits null to clear. Painted as the server
+  // stores it, so the editor sees the text it saved
+  if ('description' in patch) db.description = trimMarkdown(patch.description || '')
   if ('status' in patch) db.status = patch.status
   if ('priority' in patch) db.priority = patch.priority
   if ('assignee' in patch) db.assignee_id = patch.assignee || null

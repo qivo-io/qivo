@@ -127,7 +127,7 @@ describe('editing and deleting comments', () => {
         callerId: fx.agent.id,
         ...W,
         comment: own.id.toUpperCase(),
-        body: '  Edited over MCP  ',
+        body: '\nEdited over MCP  ',
       }),
     )
     expect(Object.keys(viaMcp).slice(0, 4)).toEqual(['id', 'task', 'changed', 'body'])

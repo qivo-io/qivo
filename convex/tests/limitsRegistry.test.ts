@@ -3,7 +3,14 @@
  * and grouped() prints numbers as the sentences and docs do. */
 
 import { describe, expect, it } from 'vitest'
-import { attachmentTooLarge, grouped, LIMITS, type Limit, linksFull } from '../lib/limits'
+import {
+  attachmentTooLarge,
+  grouped,
+  LIMITS,
+  type Limit,
+  linksFull,
+  trimMarkdown,
+} from '../lib/limits'
 
 describe('the limits registry', () => {
   it.each(Object.entries(LIMITS) as [string, Limit][])(
@@ -29,5 +36,12 @@ describe('the limits registry', () => {
       '99,999.9',
       '604,800,000',
     ])
+  })
+
+  it('trims Markdown without turning a paragraph into a heading, list or quote', () => {
+    expect(trimMarkdown('\n\n  \nFix the login \n\n')).toBe('Fix the login')
+    for (const text of [' # Heading', ' - literal dash', ' > literal quote']) {
+      expect(trimMarkdown(`\n${text}\n`), text).toBe(text)
+    }
   })
 })

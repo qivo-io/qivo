@@ -16,7 +16,7 @@ import { hasProjectLevel } from '../lib/access'
 import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, rule } from '../lib/functions'
-import { limitedText } from '../lib/limitRules'
+import { limitedMarkdown, limitedText } from '../lib/limitRules'
 import { LIMITS } from '../lib/limits'
 import { tooManyMentions } from '../lib/mentions'
 import { issueKey } from '../lib/taskRefs'
@@ -47,7 +47,7 @@ export async function postComment(ctx: MutationCtx, a: NewComment): Promise<Doc<
   const { issue, author, now } = a
   if (a.id !== undefined) assertNewRowId(a.id)
   await assertCanEdit(ctx, author, issue.project_id)
-  const body = limitedText(LIMITS.comment, a.body)
+  const body = limitedMarkdown(LIMITS.comment, a.body)
   if (body === '') throw rule('a comment cannot be empty')
   if (tooManyMentions(body)) throw rule(LIMITS.mentions.refusal)
   const id = a.id ?? newUuid()
@@ -175,7 +175,7 @@ export async function editComment(
     expected: a.expected,
     next: { body: a.body },
   })
-  const text = limitedText(LIMITS.comment, a.body)
+  const text = limitedMarkdown(LIMITS.comment, a.body)
   if (text === '') throw rule('a comment cannot be empty')
   if (tooManyMentions(text)) throw rule(LIMITS.mentions.refusal)
   if (text === comment.body) return { comment, changed: false }

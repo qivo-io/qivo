@@ -85,23 +85,35 @@ function punycode(label: string): string {
 /** Whether every character of `s` is ASCII. */
 const isAscii = (s: string): boolean => [...s].every((c) => c.charCodeAt(0) < 0x80)
 
+/** The characters UTS 46 maps to nothing in a domain, such as the soft
+ * hyphen and the zero-width space: dropped, as url.domainToASCII drops them. */
+const IGNORED = /[\u00ad\u034f\u180b-\u180d\u200b\u2060\ufe00-\ufe0f\ufeff]/gu
+
+/** Whether a label that is not ASCII may be written as punycode: it holds
+ * no control, format or space character and does not start with a
+ * combining mark, which UTS 46 refuses. A refused label stays as typed, so
+ * the address rule refuses the address. */
+const encodable = (label: string): boolean => !/[\p{C}\p{Z}]/u.test(label) && !/^\p{M}/u.test(label)
+
 /** `raw` trimmed and lowercased, with each domain label that is not ASCII
  * written as punycode (bücher.de becomes xn--bcher-kva.de), the form
- * cleanEmail tests and stores. The domain is first normalized with NFKC and
- * lowercased again, as the UTS 46 mapping browsers and url.domainToASCII
- * apply does, so full-width ｅｘａｍｐｌｅ.com becomes example.com. It does not
- * check the address. Text longer than twice LIMITS.email.max is left
- * unconverted, because no conversion of it fits the limit. */
+ * cleanEmail tests and stores. The domain is first mapped as UTS 46 maps it
+ * for browsers and url.domainToASCII: ignored characters dropped, NFKC, and
+ * lowercased again, so full-width ｅｘａｍｐｌｅ.com becomes example.com. A
+ * label UTS 46 refuses stays unconverted. It does not check the address.
+ * Text longer than twice LIMITS.email.max is left unconverted, because no
+ * conversion of it fits the limit. */
 export function asciiEmail(raw: string): string {
   const text = raw.trim().toLowerCase()
   const at = text.lastIndexOf('@')
   if (at < 0 || text.length > 2 * LIMITS.email.max) return text
   const domain = text
     .slice(at + 1)
+    .replace(IGNORED, '')
     .normalize('NFKC')
     .toLowerCase()
     .split(/[.\u3002\uff0e\uff61]/)
-    .map((label) => (isAscii(label) ? label : `xn--${punycode(label)}`))
+    .map((label) => (isAscii(label) || !encodable(label) ? label : `xn--${punycode(label)}`))
     .join('.')
   return `${text.slice(0, at + 1)}${domain}`
 }

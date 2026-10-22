@@ -193,8 +193,9 @@ each value as the last read showed it, such as `parent_id` with
 Useful field rules:
 
 - Every text limit counts JavaScript string length (UTF-16 code units) once
-  spaces at both ends are trimmed, so most emoji count as two, and Qivo
-  stores the trimmed text. A value past a limit is refused with a sentence
+  spaces at both ends are trimmed (a description or comment keeps the spaces
+  that start its first line), so most emoji count as two, and Qivo stores
+  the trimmed text. A value past a limit is refused with a sentence
   that names the limit, and nothing changes.
   [Limits](https://qivo.io/docs/limits/) lists every limit.
 - Status: `backlog`, `todo`, `progress`, `review`, `done`. Priority: `urgent`,

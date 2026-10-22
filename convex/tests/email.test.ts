@@ -46,6 +46,18 @@ describe('cleanEmail', () => {
     expect(cleanEmail('taro@ｅｘａｍｐｌｅ.com')).toBe('taro@example.com')
   })
 
+  it('drops the characters a domain ignores and refuses the ones it cannot hold', () => {
+    // a soft hyphen and a zero-width space are mapped to nothing
+    for (const domain of ['exa\u00admple.com', 'exa\u200bmple.com']) {
+      expect(asciiEmail(`taro@${domain}`), domain).toBe(`taro@${domainToASCII(domain)}`)
+    }
+    // url.domainToASCII refuses these, and so does the address rule
+    for (const domain of ['\u0301abc.com', 'a\u200db.com', 'a b.com']) {
+      expect(domainToASCII(domain), domain).toBe('')
+      expect(cleanEmail(`taro@${domain}`), domain).toBeNull()
+    }
+  })
+
   it('takes an apostrophe in the local part, which Better Auth and Google accept', () => {
     expect(cleanEmail("Sean.O'Brien@Company.com")).toBe("sean.o'brien@company.com")
   })

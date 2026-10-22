@@ -540,6 +540,14 @@ export function serviceBusy(seconds: number): string {
  * name fields both use it, so they accept the same names. */
 export const cleanName = (raw: string): string => raw.replace(/\s+/g, ' ').trim()
 
+/** Markdown text, a task description or a comment, as Qivo stores and
+ * counts it: blank lines at the start and every space and line break at the
+ * end removed. Spaces that start the first line stay, because they are part
+ * of it: " # Heading" is a paragraph that reads "# Heading", and trimming
+ * them would make it a heading. */
+export const trimMarkdown = (text: string): string =>
+  text.replace(/^(?:[ \t]*\r?\n)+/, '').trimEnd()
+
 /** Whether `value`, already trimmed, is over a text limit. */
 export const overText = (limit: Limit, value: string): boolean => value.length > limit.max
 

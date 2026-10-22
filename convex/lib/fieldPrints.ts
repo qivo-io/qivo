@@ -4,7 +4,10 @@
  * of the text, so an edit never carries the text twice. Each task activity
  * row stores the print of every field its write changed
  * (activity_events.field_prints), so a refusal can tell who wrote the value
- * now stored. No imports, so the app can import this file. */
+ * now stored. Its one import, lib/limits.ts, has none, so the app can import
+ * this file. */
+
+import { trimMarkdown } from './limits'
 
 /** The refusal reason of an edit over a field someone else changed
  * (model/expected.ts). It differs from `write_conflict`, which means "send
@@ -19,7 +22,7 @@ export const trimmedForm = (value: unknown): string | null =>
 /** The compare form of a description: trimmed, as it is stored, and null
  * when empty or unset. */
 export const descriptionForm = (value: unknown): string | null =>
-  value == null || String(value).trim() === '' ? null : String(value).trim()
+  value == null || String(value).trim() === '' ? null : trimMarkdown(String(value))
 
 /* cyrb53 (public domain, bryc): a fast 53-bit string hash. It is not
  * cryptographic. A collision could only let a stale edit through, and only

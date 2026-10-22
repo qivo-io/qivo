@@ -317,6 +317,13 @@ describe('deleteOrphanLogin', () => {
     expect(rows[0].detail).toEqual({ email: 'leftover@test.local' })
   })
 
+  it('reaps an orphan whose provider login kept a Unicode domain, typed as the login shows it', async () => {
+    const t = newAuthT()
+    await plantLogin(t, 'anna@bücher.de')
+    await t.mutation(internal.adminAuth.deleteOrphanLogin, { email: 'Anna@Bücher.de' })
+    expect(await componentRow(t, 'user', 'email', 'anna@bücher.de')).toBeNull()
+  })
+
   /* The MCP OAuth provider's rows and the roadmap undo receipts of `userId`,
    * planted as a connected assistant and a recent roadmap edit leave them. */
   const plantGrants = (t: T, userId: string) =>

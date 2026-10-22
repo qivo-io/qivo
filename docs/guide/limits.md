@@ -1,6 +1,6 @@
 Every limit in Qivo is the same in the app, the REST API and the MCP server. A refused change keeps nothing and says which limit it passed and what to do. The app keeps what you typed or pasted, shows how many characters a field holds as it nears its limit and turns Save off until the text fits.
 
-A character is one UTF-16 code unit, the count a browser's text field uses. Most letters count as one and most emoji as two. Qivo trims spaces and line breaks from both ends of a text before counting and stores the trimmed text.
+A character is one UTF-16 code unit, the count a browser's text field uses. Most letters count as one and most emoji as two. Qivo trims spaces and line breaks from both ends of a text before counting and stores the trimmed text. A task description or comment keeps the spaces that start its first line, because Markdown reads them.
 
 ## Text
 
