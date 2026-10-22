@@ -41,17 +41,19 @@ const recordDemoVisitor = makeFunctionReference<
 >('demoVisitor:record')
 
 /* Why readAuthBody refused a body, with its status, as a Better Auth error
- * code and message. */
+ * code and a message naming the kind of request refused. */
 const AUTH_BODY_REFUSALS = {
   too_large: {
     status: 413,
     code: 'PAYLOAD_TOO_LARGE',
-    message: `The request body is larger than the ${AUTH_BODY_MAX_BYTES / 1024} KiB a sign-in request may hold. Shorten what you sent and try again.`,
+    message: (kind: string) =>
+      `The request body is larger than the ${AUTH_BODY_MAX_BYTES / 1024} KiB ${kind} may hold. Shorten what you sent and try again.`,
   },
   too_slow: {
     status: 408,
     code: 'REQUEST_TIMEOUT',
-    message: `The request took longer than ${DISCARD_MS / 1000} seconds to arrive. Check your connection and try again.`,
+    message: () =>
+      `The request took longer than ${DISCARD_MS / 1000} seconds to arrive. Check your connection and try again.`,
   },
 } as const
 
@@ -66,7 +68,8 @@ const AUTH_BODY_REFUSALS = {
 async function readAuthBody(request: Request, oauthClient = false): Promise<Request | Response> {
   const read = await bufferedRequest(request, AUTH_BODY_MAX_BYTES, DISCARD_MS)
   if (read.outcome === 'read') return read.request
-  const { status, code, message } = AUTH_BODY_REFUSALS[read.outcome]
+  const { status, code, message: messageFor } = AUTH_BODY_REFUSALS[read.outcome]
+  const message = messageFor(oauthClient ? 'an authorization server request' : 'a sign-in request')
   return new Response(
     JSON.stringify(
       oauthClient ? { error: 'invalid_request', error_description: message } : { code, message },
