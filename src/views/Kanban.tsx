@@ -8,12 +8,13 @@ import {
   type BoardCellGroup,
   boardDropPatch,
   CARD_GAP,
+  createCellGrouper,
   eagerCounts,
   groupBoardAssignees,
-  groupBoardCell,
   SYNC_LIMIT,
   sideEagerCounts,
 } from '@/lib/boardGroups'
+import { dateFormatInUse } from '@/lib/dates'
 import { createMountScheduler, useMountGuards } from '@/lib/mountScheduler'
 import { type RevealRequest, useReveal } from '@/lib/reveal'
 import { Avatar, EmptyState, Icon, ProjectName, StatusDot } from '../components/qivo'
@@ -61,8 +62,11 @@ const FOOT_H = PANEL_R * 2
 /* The narrowest a status column gets, and a side-board's width. */
 const MIN_COLUMN_W = 220
 const SIDE_BOARD_W = 248
-/* A cell's padding and rule, inside its column. */
+/* A cell's padding and rule, inside its column, its top padding and its
+   least height (DropCell). */
 const CELL_CHROME_X = 8 * 2 + 1
+const CELL_PAD_T = 8
+const CELL_MIN_H = 60
 
 /* The Board pane's width when it was last bound, for the cards' height
    estimates. Before the first Board, the window less the sidebar. */
@@ -634,6 +638,7 @@ function Kanban({
   // A large Board mounts its first screen at once and the rest in slices.
   const [scheduler] = useStateK(createMountScheduler)
   const [estimates] = useStateK(createEstimateCache)
+  const [groupCell] = useStateK(createCellGrouper<IssueVM>)
   useMountGuards(scheduler)
   // Binding sets no state, so mounting renders the Board once. React 19
   // calls the returned cleanup when the pane goes; StrictMode binds twice.
@@ -719,7 +724,7 @@ function Kanban({
   const cellOf = (key: string, items: IssueVM[]): BoardCellCards => ({
     key,
     items,
-    groups: groupBoardCell(items, P.issueById),
+    groups: groupCell(key, items, P.issueById),
   })
   // side-boards: each group its own mini board
   const boards = sideBoards
@@ -801,6 +806,61 @@ function Kanban({
   const sync = cells.reduce((total, cell) => total + cell.groups.length, 0) <= SYNC_LIMIT
   const initialOf = (key: string) =>
     sync ? Number.POSITIVE_INFINITY : eager.key === layoutKey ? (eager.counts.get(key) ?? 0) : 0
+
+  /* A lane that starts below the first screen of a Board that mounts in
+     slices: the browser skips its body while it is offscreen
+     (Board.css), so the cards a slice adds there cost no style, layout or
+     paint in that frame, nor in any frame after until the lane comes near
+     the view. The body stands at its cells' estimated height until then. */
+  const deferredLane = (cells: BoardCellCards[]) =>
+    !sync && cells.every((cell) => initialOf(cell.key) === 0)
+  const [cellHeights] = useStateK(
+    () =>
+      new Map<
+        string,
+        {
+          groups: CardGroup[]
+          width: number
+          kind: string
+          projects: typeof P.projects
+          dates: string
+          value: number
+        }
+      >(),
+  )
+  /** A cell's estimated height in a lane: its top padding and its cards
+      with the gaps between them, at least the cell's least height. */
+  const cellHeight = (
+    cell: BoardCellCards,
+    place: (it: IssueVM) => ProjectPlace | null,
+    cardWidth: number,
+  ) => {
+    // a card's estimate also follows the projects and the date format
+    // (createEstimateCache)
+    const known = cellHeights.get(cell.key)
+    if (
+      known &&
+      known.groups === cell.groups &&
+      known.width === cardWidth &&
+      known.kind === layoutKey &&
+      known.projects === P.projects &&
+      known.dates === dateFormatInUse()
+    )
+      return known.value
+    let cards = 0
+    for (const group of cell.groups)
+      cards += estimates(group, place, cardWidth, layoutKey, cell.key) + CARD_GAP
+    const value = Math.max(CELL_MIN_H, CELL_PAD_T + cards - (cell.groups.length ? CARD_GAP : 0))
+    cellHeights.set(cell.key, {
+      groups: cell.groups,
+      width: cardWidth,
+      kind: layoutKey,
+      projects: P.projects,
+      dates: dateFormatInUse(),
+      value,
+    })
+    return value
+  }
 
   // Focus that follows a task into a cell whose cards still wait mounts
   // that cell through the task's card first (taskFocus.ts).
@@ -1263,10 +1323,14 @@ function Kanban({
                   draws the top border and the foot draws the bottom, so the
                   grid is only ever the two sides */}
                   <div
+                    data-lane-deferred={deferredLane(laneCells[li]) ? '' : undefined}
                     style={{
                       gridTemplateColumns: gridCols,
                       borderLeft: `var(--board-body-frame, ${FRAME})`,
                       borderRight: `var(--board-body-frame, ${FRAME})`,
+                      containIntrinsicBlockSize: deferredLane(laneCells[li])
+                        ? `auto ${Math.max(...laneCells[li].map((cell) => cellHeight(cell, lanePlace, laneCardWidth)))}px`
+                        : undefined,
                     }}
                     className="board-lane-body [display:grid] [background:var(--surface-1)]"
                   >

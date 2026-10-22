@@ -4,6 +4,7 @@ import {
   type BoardCellGroup,
   type BoardCellIssue,
   boardDropPatch,
+  createCellGrouper,
   eagerCounts,
   estimateCardHeight,
   groupBoardAssignees,
@@ -332,6 +333,39 @@ describe('groupBoardCell', () => {
     expect(groups[0].issues[0]).toBe(child)
     expect(all).toEqual([child, parent])
     expect(groupBoardCell([], byId)).toEqual([])
+  })
+})
+
+describe('createCellGrouper', () => {
+  it('hands a cell whose tasks and headings are unchanged the groups it had', () => {
+    const parent = issue('parent', { children: ['child'] })
+    const child = issue('child', { parent: parent.id })
+    const lone = issue('lone')
+    const group = createCellGrouper<Issue>()
+    const first = group('a:todo', [child, lone], index([parent, child, lone]))
+    // a new list and a new index with the same task objects
+    expect(group('a:todo', [child, lone], index([parent, child, lone]))).toBe(first)
+    // another cell's key groups for itself
+    expect(group('b:todo', [child, lone], index([parent, child, lone]))).not.toBe(first)
+  })
+
+  it('groups again when a task, the order or a heading changes', () => {
+    const parent = issue('parent', { children: ['child'] })
+    const child = issue('child', { parent: parent.id })
+    const lone = issue('lone')
+    const group = createCellGrouper<Issue>()
+    const first = group('a:todo', [child, lone], index([parent, child, lone]))
+    const renamed = { ...lone }
+    const second = group('a:todo', [child, renamed], index([parent, child, renamed]))
+    expect(second).not.toBe(first)
+    expect(second[1].issues[0]).toBe(renamed)
+    const third = group('a:todo', [renamed, child], index([parent, child, renamed]))
+    expect(third.map((it) => it.key)).toEqual([`issue:${lone.uuid}`, `parent:${parent.uuid}`])
+    // the heading's task got a new object while its subtask kept its own
+    const newParent = { ...parent }
+    const fourth = group('a:todo', [renamed, child], index([newParent, child, renamed]))
+    expect(fourth).not.toBe(third)
+    expect(fourth[1].parent).toBe(newParent)
   })
 })
 
