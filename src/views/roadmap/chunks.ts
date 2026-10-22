@@ -44,15 +44,14 @@ export function stableChunks(rows: LaidRow[], memory: ChunkMemory) {
       current = { key: owner, rows: [] }
       chunks.push(current)
       used.add(owner)
-    } else if (owner === undefined || current?.key !== owner) {
-      // a new or moved row, or a kept one whose chunk new rows interrupted
-      if (!current || current.rows.length >= CHUNK_ROWS) {
-        current = { key: memory.next++, rows: [] }
-        chunks.push(current)
-        used.add(current.key)
-      }
+    } else if (!current || current.rows.length >= CHUNK_ROWS) {
+      // a full chunk, even the row's own when rows were inserted into it,
+      // is followed by a new one
+      current = { key: memory.next++, rows: [] }
+      chunks.push(current)
+      used.add(current.key)
     }
-    current?.rows.push(row)
+    current.rows.push(row)
   }
   memory.owners.clear()
   memory.places.clear()

@@ -27,6 +27,16 @@ describe('stableChunks', () => {
     for (let n = 1; n < 100; n++) expect(keyOf(after, n)).toBe(keyOf(before, n))
   })
 
+  it('splits a full chunk when a row is inserted into its middle', () => {
+    const m = memory()
+    stableChunks(rows(0, 32), m)
+    const after = stableChunks([...rows(0, 16), row(100), ...rows(16, 32)], m)
+    for (const chunk of after) expect(chunk.rows.length).toBeLessThanOrEqual(32)
+    expect(after.flatMap((chunk) => chunk.rows)).toHaveLength(33)
+    // the rows before the insert keep their chunk
+    for (let n = 0; n < 16; n++) expect(keyOf(after, n)).toBe(keyOf(after, 0))
+  })
+
   it('gives unique keys and bounded chunks after a filter is narrowed and cleared', () => {
     const m = memory()
     stableChunks(rows(0, 3000), m)
