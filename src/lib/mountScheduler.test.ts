@@ -48,6 +48,20 @@ function setup({ frames, idle }: { frames?: (() => void)[]; idle?: IdleTask[] } 
     tasks.shift()?.()
     await settle()
   }
+  /** A block the browser skips, counting the reads of its first item. */
+  const block = () => {
+    const element = document.createElement('div')
+    element.setAttribute('data-deferred-block', '')
+    const item = document.createElement('div')
+    const reads = { count: 0 }
+    item.getBoundingClientRect = () => {
+      reads.count++
+      return new DOMRect()
+    }
+    element.append(item)
+    root.append(element)
+    return reads
+  }
   return {
     scheduler,
     root,
@@ -57,6 +71,7 @@ function setup({ frames, idle }: { frames?: (() => void)[]; idle?: IdleTask[] } 
       time += ms
     },
     list,
+    block,
     settle,
     run,
     near: (spacer: Element, isIntersecting = true) =>
@@ -218,22 +233,8 @@ describe('createMountScheduler', () => {
     const idle: IdleTask[] = []
     const s = setup({ idle })
     s.scheduler.setRoot(s.root)
-    /** A block the browser skips, counting the reads of its first item. */
-    const block = () => {
-      const element = document.createElement('div')
-      element.setAttribute('data-deferred-block', '')
-      const item = document.createElement('div')
-      const reads = { count: 0 }
-      item.getBoundingClientRect = () => {
-        reads.count++
-        return new DOMRect()
-      }
-      element.append(item)
-      s.root.append(element)
-      return reads
-    }
-    const first = block()
-    const second = block()
+    const first = s.block()
+    const second = s.block()
     s.list('a', 20)
     await s.settle()
     // nothing is laid out ahead while a list waits
@@ -253,7 +254,7 @@ describe('createMountScheduler', () => {
     await s.settle()
     expect(idle).toHaveLength(0)
     // a list that mounts more starts one, which reads the new block alone
-    const third = block()
+    const third = s.block()
     s.list('b', 4, 4)
     await s.settle()
     idle.shift()?.({ timeRemaining: () => 10 })
@@ -264,23 +265,37 @@ describe('createMountScheduler', () => {
     const idle: IdleTask[] = []
     const s = setup({ idle })
     s.scheduler.setRoot(s.root)
-    const element = document.createElement('div')
-    element.setAttribute('data-deferred-block', '')
-    const item = document.createElement('div')
-    let reads = 0
-    item.getBoundingClientRect = () => {
-      reads++
-      return new DOMRect()
-    }
-    element.append(item)
-    s.root.append(element)
+    const reads = s.block()
     s.list('a', 2, 2)
     await s.settle()
     expect(idle).toHaveLength(1)
     s.list('b', 10)
     await s.settle()
     idle.shift()?.({ timeRemaining: () => 10 })
-    expect(reads).toBe(0)
+    expect(reads.count).toBe(0)
+    expect(idle).toHaveLength(0)
+  })
+
+  it('starts another pass for blocks that mounted during one', async () => {
+    const idle: IdleTask[] = []
+    const s = setup({ idle })
+    s.scheduler.setRoot(s.root)
+    const first = s.block()
+    s.list('a', 2, 2)
+    await s.settle()
+    expect(idle).toHaveLength(1)
+    // a list mounts whole between two idle periods of the pass
+    let left = 2
+    idle.shift()?.({ timeRemaining: () => left-- })
+    expect(first.count).toBe(0)
+    const second = s.block()
+    s.list('b', 4, 4)
+    await s.settle()
+    idle.shift()?.({ timeRemaining: () => 10 })
+    expect([first.count, second.count]).toEqual([1, 0])
+    expect(idle).toHaveLength(1)
+    idle.shift()?.({ timeRemaining: () => 10 })
+    expect([first.count, second.count]).toEqual([1, 1])
     expect(idle).toHaveLength(0)
   })
 })

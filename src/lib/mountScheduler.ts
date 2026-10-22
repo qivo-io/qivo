@@ -198,8 +198,8 @@ export function createMountScheduler({
      that block alone, and the browser keeps the result, so the frame that
      scrolls it into view only paints it. One block at a time, so input
      waits at most one block's layout. A pass stops when a list waits to
-     mount again; the next starts when none does, if lists mounted items
-     since the last one began. */
+     mount again; the next starts when none does, or when a pass ends, if
+     lists mounted items since the last one began. */
   const warm = () => {
     if (warming || !mountedSince || !idle || disposed || !root || pendingLists().length) return
     warming = true
@@ -218,7 +218,11 @@ export function createMountScheduler({
         laidOut.add(block)
       }
       if (queue.length) idle(step)
-      else warming = false
+      else {
+        // lists that mounted during the pass may have added blocks
+        warming = false
+        warm()
+      }
     }
     idle(step)
   }
