@@ -1,9 +1,9 @@
 /* Pure rules behind the operator's invitation dialogs (components/InviteDialogs.tsx).
    The server repeats every check in convex/adminOrgs.ts. These let a dialog
    point at the row to fix before anything is sent. */
-import { cleanName, limitSentence, overLimit } from '@/lib/fieldLimits'
+import { cleanName, limitSentence, overLimit, sentence } from '@/lib/fieldLimits'
 import { addCalendarMonths } from '../../convex/lib/billingAccess'
-import { asciiEmail, cleanEmail } from '../../convex/lib/email'
+import { asciiEmail, cleanEmail, emailRefusal } from '../../convex/lib/email'
 import { LIMITS } from '../../convex/lib/limits'
 import type { InviteRole, PeopleCheck, PersonInput } from './api'
 
@@ -43,7 +43,8 @@ export function nameProblem(raw: string): string {
 /* Why a typed address cannot be sent, or '' when cleanEmail takes it. */
 export function emailProblem(raw: string): string {
   if (raw.trim() === '') return 'Add an email address.'
-  if (asciiEmail(raw).length > LIMITS.email.max) return limitSentence(LIMITS.email)
+  const why = emailRefusal(raw)
+  if (why !== null) return sentence(why)
   return cleanEmail(raw) === null ? 'Enter a full email address.' : ''
 }
 

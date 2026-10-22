@@ -25,7 +25,7 @@ import type { Id } from '../../convex/_generated/dataModel'
 import { joinLists } from '../../convex/lib/arrayLimit'
 import { AVATAR_COLORS } from '../../convex/lib/avatarColors'
 import { BILLING_READ_ONLY, deletionReadOnly } from '../../convex/lib/billingAccess'
-import { asciiEmail, cleanEmail } from '../../convex/lib/email'
+import { cleanEmail, emailRefusal as storedEmailRefusal } from '../../convex/lib/email'
 import { descriptionForm, FIELD_CHANGED, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
 import type { FieldChange } from '../../convex/lib/functions'
 import { imageRefs, shownImages } from '../../convex/lib/imageRefs'
@@ -3512,17 +3512,19 @@ function checkTasks(sources: TaskSources) {
 
 /* --- email addresses ------------------------------------------------------
    One rule, the server's (convex/lib/email.ts cleanEmail): an address the
-   mail sender can send to, trimmed, lowercased, with a Unicode domain
-   written as punycode, at most LIMITS.email.max characters. Every write
-   stores that form; null is an empty or unusable address. */
+   mail sender can send to and a password login can use, trimmed,
+   lowercased, with a Unicode domain written as punycode, at most
+   LIMITS.email.max characters. Every write stores that form; null is an
+   empty or unusable address. */
 const normalizeEmail = (v: unknown): string | null => cleanEmail(String(v ?? ''))
 
 /** Why `v`, which normalizeEmail refused, cannot be a person's address: the
-    length sentence when its stored form is too long, as the server says. */
-const emailRefusal = (v: unknown): string =>
-  asciiEmail(String(v ?? '')).length > LIMITS.email.max
-    ? limitSentence(LIMITS.email)
-    : 'Enter an email address for sign-in.'
+    server's sentence when its stored form is too long or cannot get a
+    password login. */
+const emailRefusal = (v: unknown): string => {
+  const why = storedEmailRefusal(String(v ?? ''))
+  return why === null ? 'Enter an email address for sign-in.' : asSentence(why)
+}
 
 /* --- sub-issue remaining rollup (0066) — the optimistic mirror ------------
    A task that gains a subtask loses its own hours, at `at`. */

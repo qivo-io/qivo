@@ -317,12 +317,23 @@ describe('deleteOrphanLogin', () => {
     expect(rows[0].detail).toEqual({ email: 'leftover@test.local' })
   })
 
-  it('reaps an orphan whose provider login kept a Unicode domain, typed as the login shows it', async () => {
-    const t = newAuthT()
-    await plantLogin(t, 'anna@bücher.de')
-    await t.mutation(internal.adminAuth.deleteOrphanLogin, { email: 'Anna@Bücher.de' })
-    expect(await componentRow(t, 'user', 'email', 'anna@bücher.de')).toBeNull()
-  })
+  it.each(['Anna@Bücher.de', 'anna@xn--bcher-kva.de', ' ANNA@XN--BCHER-KVA.DE '])(
+    'reaps an orphan whose provider login kept a Unicode domain, typed as %j',
+    async (typed) => {
+      const t = newAuthT()
+      await plantLogin(t, 'anna@bücher.de')
+      // a different address with the same domain is not that login
+      await expectRefusal(
+        t.mutation(internal.adminAuth.deleteOrphanLogin, { email: 'ben@xn--bcher-kva.de' }),
+        'not_found',
+        /no auth account with that email/,
+      )
+      expect(await componentRow(t, 'user', 'email', 'anna@bücher.de')).not.toBeNull()
+      await t.mutation(internal.adminAuth.deleteOrphanLogin, { email: typed })
+      expect(await componentRow(t, 'user', 'email', 'anna@bücher.de')).toBeNull()
+      expect((await auditRows(t))[0].detail).toEqual({ email: 'anna@xn--bcher-kva.de' })
+    },
+  )
 
   /* The MCP OAuth provider's rows and the roadmap undo receipts of `userId`,
    * planted as a connected assistant and a recent roadmap edit leave them. */

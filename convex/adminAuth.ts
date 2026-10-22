@@ -33,7 +33,7 @@ import { authComponent, createAuth, createCaptureAuth } from './auth'
 import { claimSeatsForLogin } from './identity'
 import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
-import { asciiEmail } from './lib/email'
+import { asciiEmail, unicodeEmail } from './lib/email'
 import {
   badRequest,
   conflict,
@@ -458,10 +458,12 @@ export const deleteOrphanLogin = internalMutation({
   handler: async (ctx, args) => {
     const email = lookupEmail(args.email)
     /* A login keeps the address its sign-in gave it, which for a provider
-     * sign-in can hold a Unicode domain that profiles store in punycode, so
-     * the login is looked up by the address as typed, lowercased, too. Type
-     * it as the login shows it. */
-    const spellings = [...new Set([email, args.email.trim().toLowerCase()])]
+     * sign-in can hold a Unicode domain that profiles store in punycode. The
+     * address is put in the stored form (asciiEmail) whichever way it was
+     * typed, and the login is looked up in that form, with its domain
+     * written back in Unicode (unicodeEmail), and as typed, lowercased, for a
+     * login whose Unicode is not in the form unicodeEmail writes. */
+    const spellings = [...new Set([email, unicodeEmail(email), args.email.trim().toLowerCase()])]
     let user: { _id: string } | null = null
     for (const value of spellings) {
       user ??= (await ctx.runQuery(components.betterAuth.adapter.findOne, {

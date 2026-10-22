@@ -4,9 +4,10 @@ import { getFunctionName } from 'convex/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { NO_PASSWORD_LOGIN } from '../../../convex/lib/email'
 import { LIMITS } from '../../../convex/lib/limits'
 import { TooltipProvider } from '../../components/ui/tooltip'
-import { limitSentence } from '../../lib/fieldLimits'
+import { limitSentence, sentence } from '../../lib/fieldLimits'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 
 /* Organization > Users on the real store: an agent's keys, adding a person
@@ -254,6 +255,17 @@ describe("An invitation's address", () => {
     await type(field, 'Anna@Bücher.de')
     await act(async () => field.blur())
     expect(sentNames()).not.toContain('profiles:update')
+    expect(field.value).toBe('anna@xn--bcher-kva.de')
+  })
+
+  it('says why an address a password login cannot use is not saved, and restores the old one', async () => {
+    await show()
+    const field = find<HTMLInputElement>('input[data-user-email="anna"]')
+    await act(async () => field.focus())
+    await type(field, 'ivan@правительство.рф')
+    await act(async () => field.blur())
+    expect(sentNames()).not.toContain('profiles:update')
+    expect(window.showToast).toHaveBeenLastCalledWith(sentence(NO_PASSWORD_LOGIN), 'error')
     expect(field.value).toBe('anna@xn--bcher-kva.de')
   })
 })

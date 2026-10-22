@@ -1,10 +1,18 @@
 /* The one rule for a stored email address (lib/email.ts): the mail
  * sender's address rule within LIMITS.email, lowercased, with a Unicode
- * domain written as punycode. */
+ * domain written as punycode, that a password login can also use. */
 
-import { domainToASCII } from 'node:url'
+import { domainToASCII, domainToUnicode } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { asciiEmail, cleanEmail } from '../lib/email'
+import * as z from 'zod'
+import {
+  asciiEmail,
+  cleanEmail,
+  emailRefusal,
+  NO_PASSWORD_LOGIN,
+  PASSWORD_ADDR,
+  unicodeEmail,
+} from '../lib/email'
 import { LIMITS } from '../lib/limits'
 
 /** An address of exactly `length` characters at example.com. */
@@ -13,14 +21,13 @@ const ofLength = (length: number) => `${'a'.repeat(length - '@example.com'.lengt
 describe('cleanEmail', () => {
   it('trims and lowercases an address it can mail', () => {
     expect(cleanEmail('  Anna.Berg@Example.COM ')).toBe('anna.berg@example.com')
-    expect(cleanEmail('jørn@example.no')).toBe('jørn@example.no')
   })
 
   it('writes a Unicode domain as punycode, label by label', () => {
     expect(cleanEmail('anna@bücher.de')).toBe('anna@xn--bcher-kva.de')
     expect(cleanEmail('Anna@BÜCHER.de')).toBe('anna@xn--bcher-kva.de')
-    expect(cleanEmail('ivan@правительство.рф')).toBe('ivan@xn--80aealotwbjpid2k.xn--p1ai')
-    expect(cleanEmail('a@例え.テスト')).toBe('a@xn--r8jz45g.xn--zckzah')
+    expect(asciiEmail('ivan@правительство.рф')).toBe('ivan@xn--80aealotwbjpid2k.xn--p1ai')
+    expect(asciiEmail('a@例え.テスト')).toBe('a@xn--r8jz45g.xn--zckzah')
     // an ideographic full stop separates labels too
     expect(cleanEmail('a@日本語。jp')).toBe('a@xn--wgv71a119e.jp')
     // a domain already in punycode stays as it is
@@ -95,5 +102,82 @@ describe('cleanEmail', () => {
     const long = `a@${'ü'.repeat(10_000)}.de`
     expect(asciiEmail(long)).toBe(long)
     expect(cleanEmail(long)).toBeNull()
+  })
+})
+
+describe('password logins', () => {
+  /* Better Auth refuses any address outside zod's z.email() pattern on
+   * password sign-up, sign-in and reset (authMail.test.ts drives the real
+   * endpoints). */
+  it('copies the pattern Better Auth checks addresses with', () => {
+    // the formatter drops the backslash before a hyphen that ends a class,
+    // which means the same there
+    const plain = (pattern: RegExp) => pattern.source.replaceAll('\\-', '-')
+    expect(plain(PASSWORD_ADDR)).toBe(plain(z.regexes.email))
+    expect(PASSWORD_ADDR.flags).toBe(z.regexes.email.flags)
+  })
+
+  it('takes every address Better Auth takes, a Unicode second-level domain included', () => {
+    for (const raw of [
+      'anna@example.com',
+      'anna@bücher.de',
+      "sean.o'brien@company.com",
+      'first+tag@example.co.uk',
+      'a_b-c@sub.example.io',
+    ]) {
+      const email = cleanEmail(raw)
+      expect(email, raw).not.toBeNull()
+      expect(z.email().safeParse(email).success, raw).toBe(true)
+      expect(emailRefusal(raw), raw).toBeNull()
+    }
+  })
+
+  it('refuses an address the mail sender takes but a password login does not, and says why', () => {
+    for (const raw of [
+      // a Unicode top-level domain, typed in Unicode or in punycode
+      'ivan@правительство.рф',
+      'ivan@xn--80aealotwbjpid2k.xn--p1ai',
+      'a@例え.テスト',
+      'jørn@example.no',
+      'anna!berg@example.com',
+      'anna..berg@example.com',
+      'anna@example.c',
+    ]) {
+      expect(cleanEmail(raw), raw).toBeNull()
+      expect(z.email().safeParse(asciiEmail(raw)).success, raw).toBe(false)
+      expect(emailRefusal(raw), raw).toBe(NO_PASSWORD_LOGIN)
+    }
+    // the length and the address shape keep their own refusals
+    expect(emailRefusal(`${'a'.repeat(250)}@example.com`)).toBe(LIMITS.email.refusal)
+    expect(emailRefusal('anna@')).toBeNull()
+  })
+})
+
+describe('unicodeEmail', () => {
+  it('writes each punycode label of the domain back in Unicode, as url.domainToUnicode does', () => {
+    for (const domain of [
+      'bücher.de',
+      'straße.de',
+      'правительство.рф',
+      '例え.テスト',
+      '🍕.ws',
+      'ελληνικά.gr',
+      'a-ü-b.de',
+      'example.com',
+    ]) {
+      const ascii = asciiEmail(`taro@${domain}`)
+      expect(unicodeEmail(ascii), domain).toBe(`taro@${domainToUnicode(domainToASCII(domain))}`)
+    }
+  })
+
+  it('leaves a label that is not valid punycode as it is', () => {
+    for (const email of [
+      'a@xn--.de',
+      'a@xn--abc-.de',
+      'a@xn--!!.de',
+      'a@xn--99999999999999999999.de',
+      'anna',
+    ])
+      expect(unicodeEmail(email), email).toBe(email)
   })
 })

@@ -2,9 +2,9 @@
  * write that takes a limited value calls one of these, so the app, REST and
  * MCP refuse it with the same `rule` sentence. */
 
-import { address, asciiEmail } from './email'
+import { cleanEmail, emailRefusal } from './email'
 import { rule } from './functions'
-import { LIMITS, type Limit, outsideWhole, overText, trimMarkdown } from './limits'
+import { type Limit, outsideWhole, overText, trimMarkdown } from './limits'
 
 /** `raw` trimmed, the text to store. Refuses a text over `limit`. */
 export function limitedText(limit: Limit, raw: string): string {
@@ -34,11 +34,13 @@ export function limitedNumber(limit: Limit, n: number): number {
 }
 
 /** The address to store for `raw` (lib/email.ts cleanEmail). Refuses an
- * address longer than LIMITS.email with its sentence and any other address
- * Qivo cannot mail with `notAddress`, the caller's own sentence. */
+ * address longer than LIMITS.email or one a password login cannot use with
+ * their sentences (lib/email.ts emailRefusal), and any other address Qivo
+ * cannot mail with `notAddress`, the caller's own sentence. */
 export function limitedEmail(raw: string, notAddress: string): string {
-  const email = asciiEmail(raw)
-  if (overText(LIMITS.email, email)) throw rule(LIMITS.email.refusal)
-  if (address(email) === null) throw rule(notAddress)
+  const refusal = emailRefusal(raw)
+  if (refusal !== null) throw rule(refusal)
+  const email = cleanEmail(raw)
+  if (email === null) throw rule(notAddress)
   return email
 }

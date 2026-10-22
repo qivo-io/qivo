@@ -4,6 +4,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { components } from '../_generated/api'
 import authSchema from '../betterAuth/schema'
+import { asciiEmail, cleanEmail } from '../lib/email'
 import { newT } from './helpers.setup'
 
 const APP = 'http://localhost:5199'
@@ -158,6 +159,20 @@ it('refuses an address the sender would never mail before creating anything', as
   expect(provider).not.toHaveBeenCalled()
   // no account was created: sign-in finds none
   expect((await post('sign-in/email', { email: unmailable, password: PASSWORD })).status).toBe(401)
+})
+
+it('lets every address Qivo stores sign up with a password, and stores none that cannot', async () => {
+  const { signUp } = backend()
+  for (const raw of ['anna@bücher.de', "Sean.O'Brien@Company.com"]) {
+    const email = cleanEmail(raw)
+    expect(email, raw).not.toBeNull()
+    expect((await signUp(email ?? '')).status, raw).toBe(200)
+  }
+  // Better Auth refuses these on sign-up, so no invitation may name them
+  for (const raw of ['ivan@правительство.рф', 'jørn@example.no']) {
+    expect(cleanEmail(raw), raw).toBeNull()
+    expect((await signUp(asciiEmail(raw))).status, raw).toBe(400)
+  }
 })
 
 it('mails nothing for a reset request that fails validation', async () => {

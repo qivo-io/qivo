@@ -277,7 +277,8 @@ export function InviteOutcome({
 }
 
 // Only unclaimed invitations can change email. Claimed seats retain the
-// login address; empty, invalid or refused edits restore the saved value.
+// login address; empty, invalid or refused edits restore the saved value,
+// and an invalid or refused one says why (P.updateUser).
 export function UserEmail({ user }: { user: UserVM }) {
   const canEdit = !DEMO_MODE && P.isAdmin() && user.pending
   const [v, setV] = useStateS(user.email || '')
@@ -291,7 +292,7 @@ export function UserEmail({ user }: { user: UserVM }) {
   const commit = () => {
     const saved = user.email || ''
     const next = v.trim()
-    if (asciiEmail(next) === saved || !P.emailLooksValid(next)) setV(saved)
+    if (next === '' || asciiEmail(next) === saved) setV(saved)
     // a paused change keeps the typed address
     else if (!P.refusePausedEdit() && !P.updateUser(user.id, { email: next })) setV(saved)
   }
