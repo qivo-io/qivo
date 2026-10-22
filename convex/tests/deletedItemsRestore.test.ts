@@ -3313,6 +3313,48 @@ describe('a project item at the sub-project cap', () => {
     expect(await grantCount()).toEqual(grants)
   }, 240_000)
 
+  it('keeps an assignee whose grant was stored before grantees, once the backfill ran', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const [worker] = await plantPeople(t, f, 1)
+    const task = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      assignee_id: worker,
+    })
+    await t.run((ctx) =>
+      ctx.db.insert('project_team_access', {
+        project_id: f.sub.id,
+        team_id: f.team.id,
+        level: 'user',
+      }),
+    )
+    await deleteProject(t, f, f.meta.id)
+    await runSteps(t)
+    const item = await itemFor(t, f.meta.id)
+    // stored rows as a release before grantees left them
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query('deleted_rows').collect())
+        if (row.grantee !== undefined) await ctx.db.patch(row._id, { grantee: undefined })
+    })
+    const backfill = (dry_run: boolean) =>
+      t.action(internal.internal.storedGrantees.backfill, { dry_run, page_size: 2 })
+    // the grants of the worker, the guest and the viewer on Testbed platform,
+    // and the team's share on Firmware
+    expect(await backfill(true)).toEqual({
+      project_access: { missing: 3, set: 0 },
+      project_team_access: { missing: 1, set: 0 },
+    })
+    expect(await backfill(false)).toEqual({
+      project_access: { missing: 3, set: 3 },
+      project_team_access: { missing: 1, set: 1 },
+    })
+    expect((await backfill(true)).project_access.missing).toBe(0)
+    expect(await restore(t, f.user, [item.id])).toMatchObject({ restored: [item.id] })
+    await runSteps(t)
+    expect((await liveTask(t, task.id))?.assignee_id).toBe(worker)
+  })
+
   it('restores many project items without tasks, each reveal within the limits', async () => {
     const t = newT({ transactionLimits: { documentsWritten: 1000 } })
     const f = await withOrg(t)
