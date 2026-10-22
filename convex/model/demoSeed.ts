@@ -144,6 +144,7 @@ export const SEED_ROW_MISSING = {
   task: 'marketing demo: a seeded task is missing; use reset to replace it',
   project: 'marketing demo: a seeded project is missing; use reset to replace it',
   label: 'marketing demo: a seeded label is missing; use reset to replace it',
+  parent: 'marketing demo: a seeded parent task moved to another project; use reset to replace it',
 } as const
 
 /** What the steps of one seed share: the fixture uuids, and the rows they
@@ -347,7 +348,14 @@ export async function writeNorthstarStep(
       // written refuses rather than gain tasks that point at nothing
       require(preload.projects.has(projectIds[i.project]), rule(SEED_ROW_MISSING.project))
       require(i.labels.every((label) => labels.has(labelIds[label])), rule(SEED_ROW_MISSING.label))
-      if (i.parent) await task(i.parent)
+      if (i.parent) {
+        // a parent the app moved since would hold a child its project refuses
+        const parent = await task(i.parent)
+        const home = data.issues.find((it) => it.key === i.parent)?.project
+        require(home !== undefined && parent.project_id === projectIds[home], rule(
+          SEED_ROW_MISSING.parent,
+        ))
+      }
       // A dated last write (updated_at) lets Team sync read the task as
       // untouched, or its review as waiting, since a sync.
       const times = northstarTaskTimes(anchor, now, i)

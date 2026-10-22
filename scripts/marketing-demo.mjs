@@ -54,6 +54,7 @@ const SAFE_REFUSALS = new Set([
   'marketing demo: a seeded task is missing; use reset to replace it',
   'marketing demo: a seeded project is missing; use reset to replace it',
   'marketing demo: a seeded label is missing; use reset to replace it',
+  'marketing demo: a seeded parent task moved to another project; use reset to replace it',
   'marketing demo: use reset to change dates or dataset version',
   'marketing demo: Deleted items must be empty; run the same command again',
 ])

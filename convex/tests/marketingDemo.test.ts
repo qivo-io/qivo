@@ -1691,7 +1691,7 @@ describe('marketing demo seed steps', () => {
     await expectRefusal(apply(t, 'seed'), 'rule', /use reset to change dates or dataset version/)
   }, 120_000)
 
-  it('refuses a task step whose label or parent task was deleted since it was written', async () => {
+  it('refuses a task step whose label or parent task was deleted or moved since it was written', async () => {
     const t = newAuthT()
     await provision(t)
     await toSetup(t)
@@ -1732,7 +1732,29 @@ describe('marketing demo seed steps', () => {
     const tasks = (await t.query(inspectRef, TARGET)).counts.tasks
     await expectRefusal(apply(t, 'seed'), 'rule', /a seeded task is missing; use reset/)
     expect((await t.query(inspectRef, TARGET)).counts.tasks).toBe(tasks)
-  }, 120_000)
+    // the same parent moved to another project instead
+    await reset(t)
+    await wipe(t)
+    await toSetup(t)
+    await apply(t, 'seed')
+    for (let step = 0; step < Math.floor(child / NORTHSTAR_BATCH.tasks); step++)
+      await apply(t, 'seed')
+    const home = MARKETING_DEMO.issues.find((it) => it.key === MARKETING_DEMO.issues[child].parent)
+    const elsewhere = MARKETING_DEMO.projects.find(
+      (project) => project.parent !== undefined && project.key !== home?.project,
+    )
+    const elsewhereId = await demoId(`project:${elsewhere!.key}`)
+    await t.run(async (ctx) => {
+      const parent = await ctx.db
+        .query('issues')
+        .withIndex('by_uuid', (q) => q.eq('id', parentId))
+        .unique()
+      await ctx.db.patch(parent!._id, { project_id: elsewhereId })
+    })
+    const written = (await t.query(inspectRef, TARGET)).counts.tasks
+    await expectRefusal(apply(t, 'seed'), 'rule', /parent task moved to another project; use reset/)
+    expect((await t.query(inspectRef, TARGET)).counts.tasks).toBe(written)
+  }, 180_000)
 
   it("passes the check for an owned link whose task is in the demo's own Deleted items", async () => {
     const t = newAuthT()

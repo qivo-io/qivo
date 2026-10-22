@@ -803,6 +803,7 @@ describe('resumable seed execution', () => {
       'marketing demo: a seeded task is missing; use reset to replace it',
       'marketing demo: a seeded project is missing; use reset to replace it',
       'marketing demo: a seeded label is missing; use reset to replace it',
+      'marketing demo: a seeded parent task moved to another project; use reset to replace it',
       'marketing demo: work changed during the seed; use reset to replace it',
     ]) {
       const gone = await run('seed', () => {
