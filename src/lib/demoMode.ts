@@ -21,3 +21,11 @@ export function assertDemoFileSize(size: number, demo = DEMO_MODE): void {
   if (demo && size > DEMO_FILE_BYTES)
     throw new Error(`Choose a file no larger than ${DEMO_FILE_BYTES / MIB} MiB.`)
 }
+
+/** The sentence for a file over `limit`, the attachment cap the app applies
+ * (store/planner.ts projectAttachmentLimit). It names the demo's limit when
+ * that is the one that refused the file, else the organization's. */
+export function attachmentTooLarge(name: string, limit: number, demo = DEMO_MODE): string {
+  const which = demo && limit === DEMO_FILE_BYTES ? 'demo' : 'organization'
+  return `"${name}" is larger than the ${Math.round(limit / MIB)} MiB ${which} limit`
+}

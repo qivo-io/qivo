@@ -19,7 +19,9 @@ import { isoWeekForDate } from './lib/panoramaWeeks'
 import { answerAfterBody, discardBody, readLimitedBody } from './lib/requestBody'
 import { registerCuration } from './machine/curation'
 import { registerMcpRoutes } from './machine/mcp'
+import { conflictRetrying } from './machine/registry'
 import { registerRestRoutes } from './machine/rest'
+import { WRITE_CONFLICT, WRITE_CONFLICT_RETRY_AFTER } from './machine/shared'
 import { registerUploadRoutes } from './machine/uploads'
 import { DEMO_FILE_BYTES } from './model/demoUploads'
 
@@ -433,8 +435,13 @@ async function readBackgroundBody(
   )
 }
 
+/* The image upload receiver. Its mutations retry write conflicts and time
+ * outs like the upload URL's (machine/uploads.ts), and one that outlasts the
+ * retries saved nothing and answers 503 with Retry-After. */
 const receiveBackground = answerAfterBody(async (ctx, request) => {
   const headers = gatewayHeaders(request.headers.get('Origin'))
+  if (headers.get('Access-Control-Allow-Origin') !== null)
+    headers.set('Access-Control-Expose-Headers', 'Retry-After')
   headers.set('Cache-Control', 'no-store')
   headers.set('Content-Type', 'application/json')
   headers.set('Referrer-Policy', 'no-referrer')
@@ -463,10 +470,11 @@ const receiveBackground = answerAfterBody(async (ctx, request) => {
     return refuse()
   if (!(await ctx.runQuery(internal.appearance.uploadContext, { id, minter: m, exp })))
     return refuse()
+  const runMutation = conflictRetrying(ctx)
   let storageId: import('./_generated/dataModel').Id<'_storage'> | undefined
   let startedDemoWork = false
   try {
-    await ctx.runMutation(internal.appearance.beginDemoUploadWork, { id, minter: m })
+    await runMutation(internal.appearance.beginDemoUploadWork, { id, minter: m })
     startedDemoWork = isDemoDeployment()
     const mime = request.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() ?? ''
     // Validate MIME before reading the body, and size after bounded streaming.
@@ -483,7 +491,7 @@ const receiveBackground = answerAfterBody(async (ctx, request) => {
       throw badRequest(error instanceof Error ? error.message : 'Choose a valid image.')
     }
     storageId = await ctx.storage.store(new Blob([bytes], { type: mime }))
-    const settings = await ctx.runMutation(internal.appearance.finalizeUpload, {
+    const settings = await runMutation(internal.appearance.finalizeUpload, {
       ticket_id: id,
       minter: m,
       storage_id: storageId,
@@ -492,15 +500,31 @@ const receiveBackground = answerAfterBody(async (ctx, request) => {
     return new Response(JSON.stringify(settings), { status: 200, headers })
   } catch (error) {
     if (startedDemoWork)
-      await ctx
-        .runMutation(internal.demoUploads.abandon, { id, minter: m, storage_id: storageId })
-        .catch(() => {})
+      await runMutation(internal.demoUploads.abandon, {
+        id,
+        minter: m,
+        storage_id: storageId,
+      }).catch(() => {})
     if (storageId)
-      await ctx
-        .runMutation(internal.appearance.discardUpload, { storage_id: storageId })
-        .catch(() => {})
+      await runMutation(internal.appearance.discardUpload, { storage_id: storageId }).catch(
+        () => {},
+      )
     const data =
-      error instanceof ConvexError ? (error.data as { code?: string; message?: string }) : null
+      error instanceof ConvexError
+        ? (error.data as { code?: string; message?: string; reason?: string })
+        : null
+    if (data?.reason === WRITE_CONFLICT) {
+      headers.set('Retry-After', String(WRITE_CONFLICT_RETRY_AFTER))
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: 'conflict',
+            message: 'The server was too busy to save the image, and nothing changed. Try again.',
+          },
+        }),
+        { status: 503, headers },
+      )
+    }
     const code = data?.code ?? 'bad_request'
     const message = data?.message ?? 'The image upload failed. Choose the file again.'
     return new Response(JSON.stringify({ error: { code, message } }), {

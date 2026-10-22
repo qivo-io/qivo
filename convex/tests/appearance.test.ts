@@ -1,6 +1,7 @@
 /* Account appearance uses real registered queries, mutations and HTTP handlers.
  * The upload route's sole storage shim supplies the contentType convex-test
  * omits; file ownership, token checks, cleanup and gateway lookup stay real. */
+import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Id } from '../_generated/dataModel'
@@ -9,6 +10,8 @@ import authSchema from '../betterAuth/schema'
 import http from '../http'
 import { LIMITS } from '../lib/limits'
 import { PANORAMA_MAX_BYTES } from '../lib/panoramaImage'
+import { CONFLICT_RETRIES } from '../machine/registry'
+import { WRITE_CONFLICT_RETRY_AFTER } from '../machine/shared'
 import {
   as,
   expectRefusal,
@@ -32,6 +35,12 @@ declare class Request {
   )
 }
 type Caller = ReturnType<T['withIdentity']>
+
+/* What ctx.runMutation rejects with when a mutation kept conflicting
+ * (machine/registry.ts isWriteConflict). */
+const USER_CONFLICT =
+  'Documents read from or written to the "custom_backgrounds" table changed while this ' +
+  'mutation was being run and on every subsequent retry. See https://docs.convex.dev/error#1'
 
 const DEFAULT = { mode: 'dark', image_source: 'daily', custom_image: null }
 const headers = { 'Content-Type': 'image/jpeg', Origin: 'http://localhost:5199' }
@@ -123,7 +132,13 @@ async function uploadRequest(
   url: string,
   bytes: unknown = jpeg(),
   mime = 'image/jpeg',
-  options: { origin?: string; afterStore?: (id: Id<'_storage'>) => Promise<unknown> } = {},
+  options: {
+    origin?: string
+    afterStore?: (id: Id<'_storage'>) => Promise<unknown>
+    /* How many finalizeUpload calls fail with Convex's write conflict,
+     * which commits nothing, before the real one runs. */
+    conflicts?: number
+  } = {},
 ) {
   const route = http.lookup(new URL(url).pathname, 'POST')
   if (!route) throw new Error('Custom upload route is not registered')
@@ -132,9 +147,18 @@ async function uploadRequest(
   }
   let response: Response | undefined
   await t.action(async (ctx) => {
+    let conflicts = options.conflicts ?? 0
+    const finalize = getFunctionName(internal.appearance.finalizeUpload)
     response = await handler._handler(
       {
         ...ctx,
+        runMutation: ((mutation, ...args) => {
+          if (getFunctionName(mutation) === finalize && conflicts > 0) {
+            conflicts--
+            return Promise.reject(new Error(USER_CONFLICT))
+          }
+          return ctx.runMutation(mutation, ...args)
+        }) as ActionCtx['runMutation'],
         storage: {
           ...ctx.storage,
           store: async (blob) => {
@@ -657,6 +681,57 @@ describe('private custom background uploads', () => {
     expect(await settings(owner.caller)).toMatchObject({ custom_image: current.image })
     expect(await customRows(t)).toHaveLength(1)
     expect(await storedRows(t)).toHaveLength(1)
+  })
+
+  describe('whose record write conflicts', () => {
+    // real waits between the retries, the shortest ones, on the fixed clock
+    beforeEach(() => {
+      vi.useRealTimers()
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-09-07T12:00:00Z'))
+      vi.spyOn(Math, 'random').mockReturnValue(0)
+    })
+
+    it('saves the image after a conflict within the retries', async () => {
+      const { t, owner } = await setup()
+      const ticket = await owner.caller.mutation(api.appearance.createUpload, { name: 'Lake.jpg' })
+      const response = await uploadRequest(t, ticket.upload_url, jpeg(), 'image/jpeg', {
+        conflicts: CONFLICT_RETRIES,
+      })
+      expect(response.status, await response.text()).toBe(200)
+      expect(await customRows(t)).toHaveLength(1)
+      expect(await storedRows(t)).toHaveLength(1)
+    })
+
+    it('answers 503 with Retry-After and keeps nothing when the conflict persists', async () => {
+      const { t, owner } = await setup()
+      const current = await upload(t, owner.caller)
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      const ticket = await owner.caller.mutation(api.appearance.createUpload, { name: 'New.jpg' })
+      const response = await uploadRequest(
+        t,
+        ticket.upload_url,
+        jpeg(1920, 1080, 1),
+        'image/jpeg',
+        {
+          conflicts: CONFLICT_RETRIES + 1,
+        },
+      )
+      expect(response.status).toBe(503)
+      expect(response.headers.get('Retry-After')).toBe(String(WRITE_CONFLICT_RETRY_AFTER))
+      expect(response.headers.get('Access-Control-Expose-Headers')).toBe('Retry-After')
+      expect(JSON.parse(await response.text())).toEqual({
+        error: {
+          code: 'conflict',
+          message: 'The server was too busy to save the image, and nothing changed. Try again.',
+        },
+      })
+      expect(await settings(owner.caller)).toMatchObject({ custom_image: current.image })
+      expect(await customRows(t)).toHaveLength(1)
+      expect(await storedRows(t)).toHaveLength(1)
+      // the ticket is still good, so sending the file again saves it
+      expect((await uploadRequest(t, ticket.upload_url, jpeg(1920, 1080, 1))).status).toBe(200)
+    })
   })
 
   it('prevents a previously prepared upload from undoing explicit image removal', async () => {

@@ -96,7 +96,7 @@ import {
 } from '../lib/dates'
 import { DELAY_COLORS, DELAY_LABELS, DELAY_NEUTRAL, type DelayInfo } from '../lib/delay'
 import type { PurgeRefusal, RestoreRefusal } from '../lib/deletedItems'
-import { DEMO_MODE, notifyDemoEnded } from '../lib/demoMode'
+import { attachmentTooLarge, DEMO_MODE, notifyDemoEnded } from '../lib/demoMode'
 import { sentence as asSentence, cleanName, limitSentence } from '../lib/fieldLimits'
 import { AVATAR_TYPES, avatarImage, compressImage } from '../lib/images'
 import { nameInitials } from '../lib/initials'
@@ -6271,9 +6271,7 @@ export const PLANNER = {
       }
       const limit = PLANNER.attachmentLimit(issueKey)
       if (file.size > limit) {
-        toast(
-          `"${file.name}" is larger than the ${Math.round(limit / 1048576)} MiB organization limit`,
-        )
+        toast(attachmentTooLarge(file.name, limit))
         return null
       }
       const attId = crypto.randomUUID()
