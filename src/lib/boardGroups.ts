@@ -187,11 +187,10 @@ export function groupBoardCell<T extends BoardCellIssue>(
    task's meta line wraps its items as flex-wrap does, 8px apart across and
    4px down, and a line of text is 17.4px high, a line of the 11px priority
    mark alone 11px (measured on the 10,000-task local Northstar).
-   TITLE_CHAR_PX is the width of a title character with its share of word
-   wrapping: 8px predicted 538 of 540 titles' lines exactly and 2 one line
-   high (the font's mean glyph is 6.8px). A task title is 54px narrower than
-   its card (borders, padding, portrait and gap), a child's another 12px for
-   the rail, a parent title 18px. */
+   A title's lines come from wrapping its words at the widths of their
+   characters (TITLE_GLYPH_PX). A task title is 54px narrower than its card
+   (borders, padding, portrait and gap), a child's another 12px for the
+   rail, a parent title 18px. */
 const ROW_PAD = 8
 const TITLE_LINE = 18.9
 const META_TOP = 8
@@ -204,7 +203,21 @@ const PARENT_LINE = 19.6
 const PARENT_META = 8 + 18
 const BANNER = 25.4
 const PLACE_LINE = 8 + 17.4
-const TITLE_CHAR_PX = 8
+/* The advance of each printable ASCII character, space to tilde, in a card
+   title's font (14px Instrument Sans at weight 500), measured with a canvas
+   in Chromium. Layout comes out 2% narrower than these sums, so they are
+   scaled by TITLE_GLYPH_SCALE; a character past ASCII takes
+   TITLE_GLYPH_OTHER_PX. On the 10,000-task local Northstar this predicts
+   94% of titles' lines exactly in Swimlanes and 98% in Side-by-side boards,
+   where a flat 8px a character got 69% and 80%. */
+const TITLE_GLYPH_PX = [
+  3, 4, 6, 10, 9, 11, 11, 3, 6, 6, 6, 8, 4, 7, 4, 6, 9, 5, 8, 8, 9, 8, 9, 8, 8, 9, 4, 4, 8, 8, 8, 8,
+  12, 10, 9, 10, 11, 9, 8, 11, 10, 4, 6, 10, 8, 13, 10, 11, 9, 11, 9, 9, 9, 10, 10, 15, 10, 10, 9,
+  6, 6, 6, 8, 6, 5, 8, 9, 8, 9, 8, 5, 9, 8, 4, 4, 8, 4, 13, 8, 8, 9, 9, 5, 7, 5, 8, 7, 11, 8, 7, 7,
+  6, 3, 6, 8,
+]
+const TITLE_GLYPH_SCALE = 0.98
+const TITLE_GLYPH_OTHER_PX = 8
 const TASK_CHROME_PX = 54
 const CHILD_CHROME_PX = TASK_CHROME_PX + 12
 const PARENT_CHROME_PX = 18
@@ -244,9 +257,39 @@ function metaHeight(items: readonly MetaItem[], width: number) {
     titles with line-clamp-4). */
 const TITLE_LINES_MAX = 4
 
-/** The lines a title of `length` characters takes in `width` pixels. */
-const titleLines = (length: number, width: number) =>
-  Math.min(TITLE_LINES_MAX, Math.max(1, Math.ceil((length * TITLE_CHAR_PX) / Math.max(1, width))))
+/** How wide `text` draws in a title, in pixels. */
+const titleWidth = (text: string) => {
+  let width = 0
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    width += code >= 32 && code < 127 ? TITLE_GLYPH_PX[code - 32] : TITLE_GLYPH_OTHER_PX
+  }
+  return width * TITLE_GLYPH_SCALE
+}
+const SPACE_PX = TITLE_GLYPH_PX[0] * TITLE_GLYPH_SCALE
+
+/** The lines `title` takes in `width` pixels, its words wrapped as the
+    browser does and a word wider than a line broken (break-words), at
+    most the four a card shows. */
+function titleLines(title: string, width: number) {
+  const room = Math.max(1, width)
+  let lines = 1
+  let x = 0
+  for (const word of title.split(' ')) {
+    let w = titleWidth(word)
+    if (x > 0 && x + SPACE_PX + w > room) {
+      lines++
+      x = 0
+    }
+    while (w > room) {
+      lines++
+      w -= room
+    }
+    x = x > 0 ? x + SPACE_PX + w : w
+    if (lines >= TITLE_LINES_MAX) return TITLE_LINES_MAX
+  }
+  return lines
+}
 
 /** The height in pixels a card of `group` takes `cardWidth` pixels wide,
     for a card that has not rendered yet. `banner` says whether a task row
@@ -268,13 +311,13 @@ export function estimateCardHeight<T extends BoardCellIssue & { title: string }>
 ) {
   const heading = (issue: T) =>
     2 * ROW_PAD +
-    PARENT_LINE * titleLines(issue.title.length, cardWidth - PARENT_CHROME_PX) +
+    PARENT_LINE * titleLines(issue.title, cardWidth - PARENT_CHROME_PX) +
     PARENT_META +
     (placed(issue) ? PLACE_LINE : 0)
   const task = (issue: T, chrome: number) =>
     (banner(issue) ? BANNER : 0) +
     2 * ROW_PAD +
-    TITLE_LINE * titleLines(issue.title.length, cardWidth - chrome) +
+    TITLE_LINE * titleLines(issue.title, cardWidth - chrome) +
     metaHeight(meta(issue), Math.max(1, cardWidth - chrome))
   let height = CARD_BORDER
   for (const ancestor of group.ancestors) height += heading(ancestor)
