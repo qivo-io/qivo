@@ -164,7 +164,8 @@ export const PLAN_CURRENCY = `a billing plan must be priced in ${PLAN_CURRENCIES
 export const MIB = 1024 * 1024
 
 /** The largest file a public demo stores, a background image included
- * (model/demoUploads.ts). The demo app checks it before it uploads. */
+ * (model/demoUploads.ts). The demo app checks it before it uploads a
+ * background image or an attachment. */
 export const DEMO_FILE_BYTES = 5 * MIB
 
 export const LIMITS = {

@@ -196,10 +196,14 @@ const receive = answerAfterBody(async (ctx, request) => {
       attempt,
       storage_id: storageId,
     }).catch((cleanup: unknown) => {
-      // the URL stays held for UPLOAD_CLAIM_MS, and an unkept file waits
-      // for the storage sweep
-      console.error(cleanup)
+      // a claimed URL stays held for UPLOAD_CLAIM_MS, and an unkept file
+      // waits for the storage sweep
       held = claimed
+      console.error(
+        'attachment upload cleanup failed',
+        { ticket, attempt, storageId, held },
+        cleanup,
+      )
       return null
     })
     // finish committed but its answer was lost: the file is the ticket's

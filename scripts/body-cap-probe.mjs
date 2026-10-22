@@ -14,6 +14,8 @@
  * Exits 1 when any request answered a status its case does not expect, or
  * failed, and 2 for arguments it cannot use. */
 
+import { realpathSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
 /** The most requests one run sends, over all its cases. */
@@ -30,8 +32,9 @@ const MIB_PLUS_ONE = BODY_MAX + 1
 const FAKE_LINK = '00000000-0000-4000-8000-000000000000?e=1&m=probe&t=probe'
 
 /** One kind of request the probe sends, by name, with the statuses it may
- * answer. The demo metrics endpoint answers 404 where it is not set up, and
- * the Polar webhook where billing is off. */
+ * answer. The demo metrics endpoint answers 404 where it is not set up, the
+ * Polar webhook where billing is off, and the demo refuses an unknown auth
+ * endpoint with 403. */
 export const CASES = {
   'rest-over': { path: '/v1/tasks', size: MIB_PLUS_ONE, chunked: false, expect: ['401'] },
   'rest-over-chunked': { path: '/v1/tasks', size: MIB_PLUS_ONE, chunked: true, expect: ['401'] },
@@ -71,7 +74,7 @@ export const CASES = {
     path: '/api/auth/body-cap-probe',
     size: MIB_PLUS_ONE,
     chunked: false,
-    expect: ['404'],
+    expect: ['403', '404'],
   },
 }
 
@@ -207,4 +210,9 @@ async function main() {
   process.exit(clean ? 0 : 1)
 }
 
-if (import.meta.main) await main()
+// import.meta.main arrived in Node 24.2, and the engines field takes any 24.x
+const isMain =
+  import.meta.main ??
+  (process.argv[1] !== undefined &&
+    realpathSync(process.argv[1]) === fileURLToPath(import.meta.url))
+if (isMain) await main()

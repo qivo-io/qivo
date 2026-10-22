@@ -362,6 +362,8 @@ describe('early answers outside REST and MCP', () => {
   it.each([
     ['auth refusal on the demo', '/api/auth/sign-in/email', { APP_MODE: 'demo' }, json, 0, 403],
     ['OAuth refusal on the demo', '/api/auth/oauth2/register', { APP_MODE: 'demo' }, json, 0, 403],
+    // the copy oauthMachine forwards holds the body, so its own drain waits
+    ['OAuth token refusal', '/api/auth/oauth2/token', {}, json, 0, 400],
     [
       'image upload 404',
       '/background-uploads/x?e=1&m=x&t=y',
@@ -413,15 +415,16 @@ describe('early answers outside REST and MCP', () => {
   it('leaves no route without the wait', () => {
     // every module of convex/ that builds an HTTP action, tests and
     // generated code aside
-    const sources = import.meta.glob(['../**/*.ts', '!../tests/**', '!../_generated/**'], {
+    const sources = import.meta.glob(['../**/*.ts', '!../tests/**', '!../**/_generated/**'], {
       eager: true,
       query: '?raw',
       import: 'default',
     }) as Record<string, string>
     expect(Object.keys(sources).length).toBeGreaterThan(100)
+    // an import, so an alias or a type argument cannot hide a use
     const bare = Object.entries(sources)
       .filter(([path]) => path !== '../lib/requestBody.ts')
-      .filter(([, text]) => /\bhttpAction(Generic)?\s*\(/.test(text))
+      .filter(([, text]) => /import[^;]*\bhttpAction(Generic)?\b[^;]*from/.test(text))
       .map(([path]) => path)
     expect(bare).toEqual([])
   })

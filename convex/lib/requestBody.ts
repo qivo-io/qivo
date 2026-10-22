@@ -4,10 +4,13 @@
  * end reset the connection or answer 502 in its place, so the client sees no
  * reason or the wrong one. Every route in convex/ therefore builds its
  * handler with answerAfterBody, which drops the rest of the body before the
- * answer goes out, however early the handler decided it. The one exception
- * is the Better Auth component's own route, whose handler (http.ts
- * createHttpAuthAfterBody) calls discardBody itself.
- * convex/tests/requestBody.test.ts refuses any other httpAction. */
+ * answer goes out, however early the handler decided it. The Better Auth
+ * component builds its own routes: its GET and POST handler (http.ts
+ * createHttpAuthAfterBody) calls discardBody itself, and its CORS preflight
+ * for /api/auth/* and its /.well-known/openid-configuration redirect answer
+ * without a handler of ours. Those two take OPTIONS and GET, which browsers
+ * send without a body. convex/tests/requestBody.test.ts refuses any other
+ * module that imports httpAction. */
 
 import { httpAction } from '../_generated/server'
 import { MIB } from './limits'

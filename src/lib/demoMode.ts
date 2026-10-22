@@ -10,6 +10,10 @@ export function notifyDemoEnded(phase: 'expired' | 'lost' = 'expired') {
   if (DEMO_MODE) window.dispatchEvent(new CustomEvent(DEMO_ENDED_EVENT, { detail: phase }))
 }
 
+/** The size limit the demo app shows for a file, in MiB, or undefined
+ * outside the demo. */
+export const DEMO_FILE_MIB = DEMO_MODE ? DEMO_FILE_BYTES / MIB : undefined
+
 /** Refuses a file over the demo's per-file limit before it is uploaded, with
  * the sentence the demo backend answers (convex/http.ts readBackgroundBody),
  * so a large pick never ends in a failed upload. */

@@ -109,7 +109,9 @@ const createHttpAuth: typeof createAuth = (ctx) => {
 }
 /* The component builds the auth routes itself, so this handler drops the
  * rest of the request body before its answer goes out, as answerAfterBody
- * does for every other route. */
+ * does for every other route. The component's CORS preflight and its
+ * /.well-known/openid-configuration redirect never reach it
+ * (lib/requestBody.ts). */
 const createHttpAuthAfterBody: typeof createAuth = (ctx) => {
   const auth = createHttpAuth(ctx)
   return {

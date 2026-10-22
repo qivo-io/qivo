@@ -646,9 +646,23 @@ describe('the attachment upload URL', () => {
     expect(await post(fx, path)).toMatchObject({ status: 200 })
     expect(log).not.toHaveBeenCalled()
 
+    /* Whether the last log line is a failed cleanup that leaves the URL
+     * `held`. */
+    const loggedCleanup = (held: boolean) =>
+      expect(log).toHaveBeenLastCalledWith(
+        'attachment upload cleanup failed',
+        expect.objectContaining({ held }),
+        expect.objectContaining({ data: expect.objectContaining({ reason: WRITE_CONFLICT }) }),
+      )
+
+    // a refused POST whose cleanup failed leaves its claim, so the URL
+    // answers 409 until the claim lapses
     const other = await ticket(fx)
     faults.abandon = CONFLICT_RETRIES + 1
     expect(await post(fx, other, 3)).toMatchObject({ status: 400 })
+    loggedCleanup(true)
+    expect(await post(fx, other)).toMatchObject({ status: 409, json: { error: UPLOAD_URL_USED } })
+
     // a conflict whose cleanup failed too leaves the URL held, so it does
     // not say to send the POST again
     const third = await ticket(fx)
@@ -658,9 +672,19 @@ describe('the attachment upload URL', () => {
       status: 409,
       json: { error: UPLOAD_URL_USED },
     })
+    loggedCleanup(true)
     expect(await post(fx, third)).toMatchObject({ status: 409, json: { error: UPLOAD_URL_USED } })
-    expect(log).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ reason: WRITE_CONFLICT }) }),
-    )
+
+    // a claim that never committed holds nothing, so a failed cleanup still
+    // answers the 503 and the URL stays free
+    const fourth = await ticket(fx)
+    faults.claim = CONFLICT_RETRIES + 1
+    faults.abandon = CONFLICT_RETRIES + 1
+    expect(await post(fx, fourth)).toMatchObject({
+      status: 503,
+      json: { error: WRITE_CONFLICT_MESSAGE },
+    })
+    loggedCleanup(false)
+    expect(await post(fx, fourth)).toMatchObject({ status: 200 })
   })
 })

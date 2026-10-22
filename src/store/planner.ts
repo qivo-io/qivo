@@ -31,6 +31,7 @@ import type { FieldChange } from '../../convex/lib/functions'
 import { imageRefs, shownImages } from '../../convex/lib/imageRefs'
 import {
   DEFAULT_MESSAGE_RETENTION_DAYS,
+  DEMO_FILE_BYTES,
   grouped,
   LIMITS,
   type Limit,
@@ -6210,12 +6211,15 @@ export const PLANNER = {
 
   /* --- attachments ---------------------------------------------------------- */
   /** Per-file cap in bytes belongs to the project's organization, including
-      when the current user is working on a project shared by another org. */
+      when the current user is working on a project shared by another org.
+      The demo stores at most DEMO_FILE_BYTES whatever the organization
+      allows. */
   projectAttachmentLimit: (projectId: string) => {
     const project = rows.projects.get(projectId)
     const org = project ? rows.orgs.get(project.org_id) : null
     const cap = LIMITS.attachmentSize.max
-    return Math.min(org?.max_attachment_mb ?? cap, cap) * MIB
+    const limit = Math.min(org?.max_attachment_mb ?? cap, cap) * MIB
+    return DEMO_MODE ? Math.min(limit, DEMO_FILE_BYTES) : limit
   },
 
   /** Takes a derived key or the issue uuid, like addAttachment. */

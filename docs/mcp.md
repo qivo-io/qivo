@@ -1888,10 +1888,12 @@ a `POST` is storing the file, and once it has, another `POST` answers `409`
 with `this upload URL has already been used; start a new upload` and stores
 nothing. A body of another size than declared answers `400` with `the upload
 must be exactly the 48213 bytes declared` and stores nothing, after which
-the URL can be tried again. A `POST` that conflicts with other `POST`s sent
-to the same URL at that moment answers `503` with `Retry-After: 1` and
-stores nothing, so wait and send it again, or, rarely, `409` when Qivo could
-not free the URL either. Qivo reads the body in one of
+the URL can be tried again, unless, rarely, Qivo could not free it, when it
+answers `409` for at most 15 minutes. A `POST` that conflicts with other
+`POST`s sent to the same URL at that moment, or that a busy server kept from
+finishing in time, answers `503` with `Retry-After: 1` and stores nothing,
+so wait and send it again, or, rarely, `409` when Qivo could not free the
+URL either. Qivo reads the body in one of
 its own request handlers, which stays busy until the file has arrived, for
 at most 5 minutes, so send large files a few at a time. A refusal such as
 the `409` or the size `400` waits only 5 seconds more for the rest of the

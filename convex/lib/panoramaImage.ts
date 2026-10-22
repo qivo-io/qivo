@@ -13,7 +13,11 @@ export const PANORAMA_MIN_RATIO = 1.3
 export const PANORAMA_MAX_RATIO = 3
 export const PANORAMA_MAX_PIXELS = 32_000_000
 export const PANORAMA_IMAGE_REQUIREMENTS = `JPEG, at least 1600 × 800 pixels, landscape ratio 1.3:1–3:1, up to 32 megapixels and ${MAX_MIB} MiB`
-export const MANUAL_IMAGE_REQUIREMENTS = `JPEG, PNG or WebP, at least 1600 × 800 pixels, landscape ratio 1.3:1–3:1, up to 32 megapixels and ${MAX_MIB} MiB, still images only`
+/** The manual image rules as one sentence, with `maxMib` as the size limit,
+ * such as the demo's smaller one. */
+export const manualImageRequirements = (maxMib: number = MAX_MIB): string =>
+  `JPEG, PNG or WebP, at least 1600 × 800 pixels, landscape ratio 1.3:1–3:1, up to 32 megapixels and ${maxMib} MiB, still images only`
+export const MANUAL_IMAGE_REQUIREMENTS = manualImageRequirements()
 
 export function validateManualImageFile(mime: string | undefined, size: number) {
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime ?? ''))

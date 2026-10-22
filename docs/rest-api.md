@@ -2045,7 +2045,11 @@ one file:
   twice at most, and one that keeps conflicting answers `503` with
   `Retry-After: 1` and `{"error": "the request conflicted with other changes
   made at the same time and changed nothing; send it again"}`, like any
-  other request that keeps conflicting. It stores nothing and leaves the
+  other request that keeps conflicting, or `{"error": "the request took too
+  long and changed nothing; send it again, or change less at once if it
+  keeps happening"}` when a busy server kept it from finishing in time. An
+  upload cannot change less, so send it again. Either stores nothing and
+  leaves the
   URL free, so wait the `Retry-After` seconds and send the same `POST`
   again. If Qivo could not free the URL either, which is rare, the `POST`
   answers `409` (`this upload URL has already been used; start a new
