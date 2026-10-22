@@ -24,7 +24,9 @@ workspace** for a private copy of Northstar Labs with sample projects, tasks
 and teammates. Qivo signs you in as Nora without an email address or
 password. Opening the welcome page alone creates nothing. Other visitors
 receive separate copies, and sharing a task link does not give them access
-to yours.
+to yours. A bar shows how far Qivo has got with preparing your copy, which
+can take several seconds. If you leave before it is ready, returning in the
+same browser continues where it stopped.
 
 You can edit the sample work, scheduling and team. Demos start with the Dark
 theme and **Image of the week** as the Canvas background, using the default
