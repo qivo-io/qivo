@@ -85,7 +85,7 @@ Some links open a task's window over the Board and show its card behind
 it: **Board** on a Team sync row, **Open task in board** in the Inbox, the
 breadcrumb in a task window and a search result picked while the Board is
 open. The Board scrolls the card to the middle of the screen and rings it
-for a moment. A task with siblings under a parent heading rings its own
+until a moment after you close the window. A task with siblings under a parent heading rings its own
 row, and a parent task rings the first card under its heading. On phones
 the task list does the same with the task's row. Nothing is shown when a
 filter or the scope hides the task.
