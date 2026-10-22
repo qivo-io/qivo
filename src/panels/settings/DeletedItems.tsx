@@ -112,14 +112,11 @@ function adminRoster(): RosterPerson[] {
 }
 
 /** deletedItems.list, live. It is undefined while loading and null after an error.
-    `deleted_by` narrows it to one person on the server. `latest` holds the
-    newest answer at once, for code that runs before the page renders it. */
+    `deleted_by` narrows it to one person on the server. */
 function useDeletedList(deletedBy: string | undefined, enabled: boolean) {
   const [list, setList] = useState<DeletedList | null | undefined>(undefined)
   const [attempt, setAttempt] = useState(0)
-  const latest = useRef<DeletedList | null>(null)
   useEffect(() => {
-    latest.current = null
     setList(undefined)
     if (!enabled) return
     let active = true
@@ -127,9 +124,7 @@ function useDeletedList(deletedBy: string | undefined, enabled: boolean) {
       api.deletedItems.list,
       deletedBy === undefined ? {} : { deleted_by: deletedBy },
       (answer) => {
-        if (!active) return
-        latest.current = answer
-        setList(answer)
+        if (active) setList(answer)
       },
       (cause) => {
         console.error('[qivo] deleted items failed:', cause)
@@ -141,7 +136,7 @@ function useDeletedList(deletedBy: string | undefined, enabled: boolean) {
       unsubscribe()
     }
   }, [deletedBy, enabled, attempt])
-  return { list, latest, retry: () => setAttempt((n) => n + 1) }
+  return { list, retry: () => setAttempt((n) => n + 1) }
 }
 
 /** deletedItems.item for `id`, live: one item's row, for the project item a
@@ -595,14 +590,12 @@ export function DeletedItemsPage() {
         return
       }
       const row = done[0]
+      // an item too large for one call goes on in steps, as the server says
+      const stepping = outcome.stepping.includes(row.id)
       if (name !== undefined) {
-        toast(`Restored ${name}`)
+        toast(stepping ? `Restoring ${name}…` : `Restored ${name}`)
         return
       }
-      // an item too large for one call goes on in steps, and its row says so
-      const stepping = (source.latest.current?.items ?? []).some(
-        (r) => r.id === row.id && r.state === 'restoring',
-      )
       if (row.kind === 'task') {
         toast(
           stepping

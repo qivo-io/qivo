@@ -196,9 +196,11 @@ export type ProjectRemovalSummary = FunctionReturnType<typeof api.projects.remov
     P.purgeDeletedItems): the ids the server restored or deleted for good, the
     ids it refused with their reason, the ids it deferred until a project item
     of the same call is back, and the ids of calls it refused whole, with the
-    sentence to show for them. */
+    sentence to show for them. `stepping` are the restored ids that go on in
+    steps; a purge has none. */
 export type DeletedItemsOutcome<Reason> = {
   done: string[]
+  stepping: string[]
   refused: { id: string; reason: Reason }[]
   deferred: string[]
   failed: string[]
@@ -2454,7 +2456,7 @@ async function deletedItemsCalls<Reason>(
     orgId: string,
     ids: string[],
   ) => Promise<
-    { refused: { id: string; reason: Reason }[]; deferred?: string[] } & (
+    { refused: { id: string; reason: Reason }[]; deferred?: string[]; stepping?: string[] } & (
       | { restored: string[] }
       | { purged: string[] }
     )
@@ -2463,6 +2465,7 @@ async function deletedItemsCalls<Reason>(
 ): Promise<DeletedItemsOutcome<Reason>> {
   const outcome: DeletedItemsOutcome<Reason> = {
     done: [],
+    stepping: [],
     refused: [],
     deferred: [],
     failed: [],
@@ -2482,6 +2485,7 @@ async function deletedItemsCalls<Reason>(
         outcome.done.push(...('restored' in answer ? answer.restored : answer.purged))
         outcome.refused.push(...answer.refused)
         outcome.deferred.push(...(answer.deferred ?? []))
+        outcome.stepping.push(...(answer.stepping ?? []))
       } catch (e) {
         console.error('[qivo] deleted items call failed:', e)
         outcome.failed.push(...batch)

@@ -1303,6 +1303,8 @@ export type RestoreBlock =
  * restoring. A deferred item waits for a project item in the same call. */
 export type RestoreResult = {
   restored: string[]
+  /** The restored ids too large for the call, which go on in steps. */
+  stepping: string[]
   refused: { id: string; reason: RestoreBlock }[]
   deferred: string[]
 }
@@ -3167,7 +3169,7 @@ export async function restoreItems(
 ): Promise<RestoreResult> {
   const budget = budgetFor(CALL.scale)
   const counted = metered(ctx, budget)
-  const result: RestoreResult = { restored: [], refused: [], deferred: [] }
+  const result: RestoreResult = { restored: [], stepping: [], refused: [], deferred: [] }
   const ids = new Set<string>()
   // a sub-project's parent is a top-level project, so two tiers order them
   const ordered = [
@@ -3212,8 +3214,11 @@ export async function restoreItems(
     budget.moved = true
     if (next !== null) await saveJob(ctx, restoring, next, null)
     const failed = txn.failed.get(item.id)
-    if (failed === undefined) result.restored.push(item.id)
-    else result.refused.push({ id: item.id, reason: failed })
+    if (failed !== undefined) result.refused.push({ id: item.id, reason: failed })
+    else {
+      result.restored.push(item.id)
+      if (next !== null) result.stepping.push(item.id)
+    }
   }
   await narrate(ctx, txn.revealed ?? [], a.me, a.now)
   await finishTxn(ctx, txn)

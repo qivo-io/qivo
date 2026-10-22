@@ -362,6 +362,7 @@ describe('restoring a task item', () => {
     vi.setSystemTime(START + HOUR)
     expect(await restore(t, f.user, [item.id])).toEqual({
       restored: [item.id],
+      stepping: [],
       refused: [],
       deferred: [],
     })
@@ -947,6 +948,7 @@ describe('restoring a task item', () => {
     const item = await itemFor(t, inside.id)
     expect(await restore(t, f.user, [item.id])).toEqual({
       restored: [],
+      stepping: [],
       refused: [{ id: item.id, reason: 'project_deleted' }],
       deferred: [],
     })
@@ -1967,11 +1969,13 @@ describe('restoring a project item', () => {
     // the top-level lead does not lead a sub-project with its own lead
     expect(await restore(t, f.user, [item.id])).toEqual({
       restored: [],
+      stepping: [],
       refused: [{ id: item.id, reason: 'not_lead' }],
       deferred: [],
     })
     expect(await restore(t, f.admin, [item.id])).toEqual({
       restored: [item.id],
+      stepping: [],
       refused: [],
       deferred: [],
     })
@@ -3256,17 +3260,20 @@ describe('restore calls', () => {
     })
     expect(await restore(t, f.guest, [ids.viewOnly])).toEqual({
       restored: [],
+      stepping: [],
       refused: [{ id: ids.viewOnly, reason: 'view_only' }],
       deferred: [],
     })
     // one call with several problems answers each, and throws for none
     expect(await restore(t, f.user, [ids.early, ids.archived, ids.project])).toEqual({
       restored: [ids.project],
+      stepping: [],
       refused: [{ id: ids.archived, reason: 'project_archived' }],
       deferred: [ids.early],
     })
     expect(await restore(t, f.user, [ids.early])).toEqual({
       restored: [ids.early],
+      stepping: [],
       refused: [],
       deferred: [],
     })
@@ -3341,7 +3348,8 @@ describe('restore calls', () => {
       items.map((item) => item.id),
     )
     expect(result.restored).toEqual(items.map((item) => item.id))
-    // the first fits in the call; the others go on in steps
+    // the first fits in the call; the others go on in steps, as the answer says
+    expect(result.stepping).toEqual([items[1].id, items[2].id])
     expect(await itemById(t, items[0].id)).toBeNull()
     expect((await itemById(t, items[1].id))?.state).toBe('restoring')
     expect((await itemById(t, items[2].id))?.state).toBe('restoring')
@@ -3520,11 +3528,13 @@ describe('restore calls', () => {
     // Firmware waits for Testbed platform, and the task for Firmware
     expect(await restore(t, f.admin, [ids.task, ids.sub, ids.meta])).toEqual({
       restored: [ids.meta],
+      stepping: [],
       refused: [],
       deferred: [ids.sub, ids.task],
     })
     expect(await restore(t, f.admin, [ids.task, ids.sub])).toEqual({
       restored: [ids.sub],
+      stepping: [],
       refused: [],
       deferred: [ids.task],
     })
