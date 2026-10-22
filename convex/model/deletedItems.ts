@@ -20,11 +20,14 @@
  *
  * Fill first, reveal last (restoreItems). A restore mirrors the move: steps
  * write the rows back while what they name is still absent, a project
- * item's milestones and grants among them, and one transaction at the end,
- * the reveal, writes the item's root rows (a task item's tasks; a project
- * item's projects), so the work appears complete in one delivery. A project item's tasks whose
- * parent is outside it go back without that parent and get it after the
- * reveal, by the state then (attachParents). That happens in the reveal's
+ * item's milestones among them, and one transaction at the end, the reveal,
+ * writes the item's root rows (a task item's tasks; a project item's
+ * projects), so the work appears complete in one delivery. A project item's
+ * grants and team grants follow the reveal in steps (restoreGrants), so a
+ * person whose access comes from them sees the projects moments later. A
+ * project item's tasks whose parent is outside it go back without that
+ * parent and get it after the reveal and its grants, by the state then
+ * (attachParents). That happens in the reveal's
  * own transaction when they fit in what its budget has left, otherwise in
  * steps just after it, while the tasks show without their parent. A task
  * item first hands each subtask whose project is no longer live to the item
@@ -446,6 +449,12 @@ function wrapRow(
     storage_id: live.table === 'issue_attachments' ? live.doc.storage_id : undefined,
     project_key: live.table === 'projects' ? live.doc.key : undefined,
     lead_id: live.table === 'projects' ? live.doc.lead_id : undefined,
+    grantee:
+      live.table === 'project_access'
+        ? live.doc.profile_id
+        : live.table === 'project_team_access'
+          ? live.doc.team_id
+          : undefined,
     // the tag and its document, so row.table names doc's table
     row: { table: live.table, doc } as Doc<'deleted_rows'>['row'],
   }
@@ -1324,9 +1333,9 @@ async function purgeLeft(run: Run): Promise<boolean> {
 const REVEAL_RANGES_PER_TASK = 20
 
 /* The index ranges a reveal reads per project of a project item: the
- * conflict check's key and uuid reads, its lead and legacy team, its live
- * grants and team shares (itemRows), and the stored row it deletes. */
-const REVEAL_RANGES_PER_PROJECT = 7
+ * conflict check's key and uuid reads, its lead and legacy team, and the
+ * stored row it deletes. */
+const REVEAL_RANGES_PER_PROJECT = 5
 
 /** Why an item cannot be restored now (design 5.3). The item's state while
  * it is not ready; read_only while billing or a pending deletion makes the
@@ -1361,12 +1370,10 @@ export type RestoreResult = {
 type Revealed = { item: Item; tasks: number }
 
 /** The rows a restore writes back before its links and reveal: a project
- * item's milestones, grants and team grants, and the relation rows of the
- * item's tasks. */
+ * item's milestones and the relation rows of the item's tasks. Its grants
+ * and team grants go back after the reveal (restoreGrants). */
 const RESTORED_ROWS = [
   'milestones',
-  'project_access',
-  'project_team_access',
   'comments',
   'issue_labels',
   'issue_subscriptions',
@@ -1461,14 +1468,14 @@ async function cleanShare(
   return sameReference(await teamOf(s, g.team_id), s.item) ? g : null
 }
 
-/** A project item's projects as its reveal writes them back, with their
- * grants and shares, and a sub-project item's live parent: what levels
- * inside the item are computed over while it is in Deleted items. */
+/** A project item's projects as its reveal writes them back, and a
+ * sub-project item's live parent: what levels inside the item are computed
+ * over while it is in Deleted items. At most
+ * LIMITS.projectDeleteSubProjects.max + 1 projects; the grants and shares,
+ * which have no bound, are read per person (storedLevels). */
 type Hierarchy = {
   root: Stored<'projects'> | undefined
   projects: Stored<'projects'>[]
-  grants: Stored<'project_access'>[]
-  shares: Stored<'project_team_access'>[]
   parent: Doc<'projects'> | null
 }
 
@@ -1477,66 +1484,48 @@ function hierarchyOf(s: Scope): Promise<Hierarchy> {
     const projects: Stored<'projects'>[] = []
     for (const row of await storedOf(s, 'projects'))
       projects.push(await cleanProject(s, docOf(row, 'projects')))
-    const grants: Stored<'project_access'>[] = []
-    const grantsOn = (id: string) =>
-      s.ctx.db
-        .query('project_access')
-        .withIndex('by_project', (q) => q.eq('project_id', id))
-        .collect()
-    for (const g of await itemRows(s, 'project_access', grantsOn)) {
-      const grant = await cleanGrant(s, g)
-      if (grant !== null) grants.push(grant)
-    }
-    const shares: Stored<'project_team_access'>[] = []
-    const sharesOn = (id: string) =>
-      s.ctx.db
-        .query('project_team_access')
-        .withIndex('by_project', (q) => q.eq('project_id', id))
-        .collect()
-    for (const g of await itemRows(s, 'project_team_access', sharesOn)) {
-      const share = await cleanShare(s, g)
-      if (share !== null) shares.push(share)
-    }
     const { parent_project_id } = s.item
     return {
       root: projects.find((p) => p.id === s.item.target_id),
       projects,
-      grants,
-      shares,
       parent:
         parent_project_id === undefined ? null : await namedProject(s, parent_project_id, 'meta'),
     }
   })
 }
 
-/** The grants or team shares of a project item's projects. A ready item
- * stores them all. While it moves, the steps take them from the live
- * tables, and while it restores, restoreRows writes them back before the
- * reveal, so an item in flight also reads each of its projects' live rows.
- * Live rows can name its projects only then, because the projects are
- * absent and no writer adds a grant to an absent project. */
-async function itemRows<T extends 'project_access' | 'project_team_access'>(
-  s: Scope,
-  table: T,
-  liveOn: (projectId: string) => Promise<Stored<T>[]>,
-): Promise<Stored<T>[]> {
-  const rows = (await storedOf(s, table)).map((row) => docOf(row, table))
-  if (s.item.state === 'ready') return rows
-  for (const id of itemProjectIds(s.item)) rows.push(...(await liveOn(id)))
-  return rows
-}
+/** The item's stored rows of `table` that name `grantee`: a profile's
+ * grants or a team's shares. */
+const storedFor = (s: Scope, table: 'project_access' | 'project_team_access', grantee: string) =>
+  s.ctx.db
+    .query('deleted_rows')
+    .withIndex('by_item_table_grantee', (q) =>
+      q.eq('item_id', s.item.id).eq('table', table).eq('grantee', grantee),
+    )
+    .collect()
 
 /** `profile`'s levels on a project item's projects while they are in
  * Deleted items (design 6.1): lib/access.ts levelsFrom over the projects as
- * the reveal writes them back, the profile's grants, the shares of the teams
- * it belongs to now, and the live grants and shares on a sub-project item's
- * parent. */
+ * the reveal writes them back, the profile's stored grants and the stored
+ * shares of the teams it belongs to now, as the restore writes them back,
+ * and the live grants and shares on a sub-project item's parent. The grants
+ * stay stored until the reveal has run (restoreGrants). While a move has not
+ * yet stored some of them, those count for nobody, so the item shows to
+ * fewer people for those moments, never to more. */
 function storedLevels(s: Scope, profile: Doc<'profiles'>): Promise<OrgProjectLevels> {
   return memoRead(s.memo.levels, `${s.item.id}:${profile.id}`, async () => {
     const h = await hierarchyOf(s)
-    const teams = await teamsOf(s, profile)
-    const grants: LevelGrants['grants'] = h.grants.filter((g) => g.profile_id === profile.id)
-    const shares: LevelGrants['shares'] = h.shares.filter((g) => teams.has(g.team_id))
+    const grants: LevelGrants['grants'] = []
+    for (const row of await storedFor(s, 'project_access', profile.id)) {
+      const grant = await cleanGrant(s, docOf(row, 'project_access'))
+      if (grant !== null) grants.push(grant)
+    }
+    const shares: LevelGrants['shares'] = []
+    for (const teamId of await teamsOf(s, profile))
+      for (const row of await storedFor(s, 'project_team_access', teamId)) {
+        const share = await cleanShare(s, docOf(row, 'project_team_access'))
+        if (share !== null) shares.push(share)
+      }
     if (h.parent === null) return levelsFrom(profile, h.projects, grants, shares)
     const parent = await parentAccess(s, h.parent, profile)
     return levelsFrom(
@@ -2102,13 +2091,7 @@ async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
   const r = row.row
   const db = uncountedWriter(run.ctx.db)
   if (r.table === 'milestones') await db.insert('milestones', r.doc)
-  else if (r.table === 'project_access') {
-    const grant = await cleanGrant(run, r.doc)
-    if (grant !== null) await db.insert('project_access', grant)
-  } else if (r.table === 'project_team_access') {
-    const share = await cleanShare(run, r.doc)
-    if (share !== null) await db.insert('project_team_access', share)
-  } else if (r.table === 'comments')
+  else if (r.table === 'comments')
     await db.insert('comments', {
       ...r.doc,
       author: await keptProfile(run, r.doc.author),
@@ -2343,9 +2326,9 @@ async function writeTask(
  * 5.3, asked again for the restorer) sends it back to moving. Otherwise it
  * writes back a task item's tasks, or a project item's own rows, then the
  * links left, deletes the item's deleted_tasks rows, and narrates. A task
- * item is then gone (null). A project item goes on to restore_attach
- * (attachParents), which deletes the item once no task waits for its
- * parent.
+ * item is then gone (null). A project item goes on to restore_grants
+ * (restoreGrants) and then restore_attach (attachParents), which deletes
+ * the item once no task waits for its parent.
  *
  * So a project item's reveal reads none of its tasks, however many it has.
  * A task item holds no more tasks than its delete handled in one
@@ -2404,9 +2387,59 @@ async function reveal(run: Run): Promise<JobState | null> {
   for (const row of left) await run.ctx.db.delete(row._id)
   await announce(run, written, restorer)
   if (run.item.kind === 'project')
-    return { ...run.state, phase: 'restore_attach', cursor: undefined }
+    return { ...run.state, phase: 'restore_grants', cursor: undefined }
   await run.ctx.db.delete(run.item._id)
   return null
+}
+
+/* A project item's grants and team grants, written back after its reveal
+ * within the step's budget, before the attach. Until the reveal they stay
+ * stored, where a level check reads one person's grants of the item by
+ * index (storedLevels), however many grants the item holds; the reveal
+ * itself writes back only the projects. Between the reveal and this phase
+ * the projects show to their admins and leads, and to the people the grants
+ * name only once these rows are back. A grant whose profile, or a share
+ * whose team, fails the reference predicate stays out (cleanGrant,
+ * cleanShare), and so does one that a live row on the same project already
+ * holds, written after the reveal. */
+async function restoreGrants(run: Run): Promise<boolean> {
+  const db = uncountedWriter(run.ctx.db)
+  for (const table of ['project_access', 'project_team_access'] as const) {
+    const done = await drain(
+      run.budget,
+      (n) =>
+        run.ctx.db
+          .query('deleted_rows')
+          .withIndex('by_item_table_owner', (q) => q.eq('item_id', run.item.id).eq('table', table))
+          .take(n),
+      async (row) => {
+        const r = row.row
+        if (r.table === 'project_access') {
+          const grant = await cleanGrant(run, r.doc)
+          const held = await run.ctx.db
+            .query('project_access')
+            .withIndex('by_project_profile', (q) =>
+              q.eq('project_id', r.doc.project_id).eq('profile_id', r.doc.profile_id),
+            )
+            .first()
+          if (grant !== null && held === null) await db.insert('project_access', grant)
+        } else if (r.table === 'project_team_access') {
+          const share = await cleanShare(run, r.doc)
+          const held = await run.ctx.db
+            .query('project_team_access')
+            .withIndex('by_project_team', (q) =>
+              q.eq('project_id', r.doc.project_id).eq('team_id', r.doc.team_id),
+            )
+            .first()
+          if (share !== null && held === null) await db.insert('project_team_access', share)
+        }
+        await run.ctx.db.delete(row._id)
+      },
+      ALL,
+    )
+    if (!done) return false
+  }
+  return true
 }
 
 /** A failed reveal: the item goes back to moving, and its steps take what
@@ -3134,6 +3167,7 @@ const PHASES: Record<
   restore_rows: { run: restoreRows, next: () => 'restore_links' },
   restore_links: { run: restoreLinks, next: () => 'restore_tasks' },
   restore_tasks: { run: restoreTasks, next: () => 'restore_reveal' },
+  restore_grants: { run: restoreGrants, next: () => 'restore_attach' },
   purge_dependents: { run: purgeDependents, next: () => 'purge_live' },
   purge_live: { run: purgeLive, next: () => 'purge_rows' },
   purge_rows: { run: purgeRows, next: () => 'purge_activity' },
@@ -3332,7 +3366,8 @@ export async function runStep(ctx: MutationCtx, itemId: string): Promise<void> {
  * reveal its projects are live, so neither applies. An attach that fails
  * that often goes on as restore_detach, which leaves the tasks still
  * waiting without their parent and deletes the item. restore_detach only
- * deletes the item's own small rows, so it is retried until it finishes.
+ * deletes the item's own small rows, and restore_grants writes back small
+ * grant rows, so each is retried until it finishes.
  * A job of an organization whose deletion has begun stays as it is: its
  * steps stand down (runStep), and the deletion deletes the job with its
  * item (model/orgDeletion.ts). */
@@ -3362,6 +3397,7 @@ export async function recoverJobs(ctx: MutationCtx): Promise<void> {
     }
     const exhausted =
       job.phase !== 'restore_detach' &&
+      job.phase !== 'restore_grants' &&
       job.budget_scale <= RETRY.floor &&
       job.attempts >= halvings + RETRY.atFloor
     if (exhausted && job.phase === 'restore_attach') {

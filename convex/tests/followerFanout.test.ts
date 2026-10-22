@@ -4,7 +4,7 @@
  * before the follower cap stays inside Convex's limits, and every follower
  * reads the same line either way. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api } from '../_generated/api'
+import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { FOLLOWER_FANOUT, postMessage } from '../model/messages'
 import {
@@ -232,6 +232,45 @@ describe('a comment whose followers hold many snoozed rows', () => {
     // each follows the task now, and none heard the comment twice
     expect((await told(t, task)).filter(([, d]) => d === 'New comment')).toEqual([])
   }, 120_000)
+})
+
+describe('notices a step posts after their author was removed', () => {
+  it('do not name the removed author', async () => {
+    Object.assign(FOLLOWER_FANOUT, { inline: 1, step: 2, inlineRoom: 0 })
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const followers = await plantFollowers(t, f, task, 4)
+    // the author mentions two followers; the room leaves both mentions and
+    // all but the first follower to steps
+    await as(t, f.user).mutation(api.comments.create, {
+      org_id: f.org.id,
+      id: uuid(),
+      issue_id: task.id,
+      body: `@[A](user:${followers[0]}) @[B](user:${followers[1]}) please look`,
+    })
+    // the author is removed and the cleanup finishes before the steps run
+    await as(t, f.admin).mutation(api.profiles.remove, { org_id: f.org.id, id: f.user.id })
+    const pending = () =>
+      t.run((ctx) =>
+        ctx.db
+          .query('profile_removals')
+          .withIndex('by_profile', (q) => q.eq('profile_id', f.user.id))
+          .unique(),
+      )
+    while ((await pending()) !== null)
+      await t.mutation(internal.profileRemovals.step, { profile_id: f.user.id })
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+
+    const rows = await t.run((ctx) =>
+      ctx.db
+        .query('messages')
+        .withIndex('by_issue_read', (q) => q.eq('issue_id', task.id))
+        .collect(),
+    )
+    expect(rows.map((m) => m.recipient_id).sort()).toEqual([...followers].sort())
+    expect(rows.filter((m) => m.actor_id !== undefined)).toEqual([])
+  })
 })
 
 describe('a restore from Deleted items', () => {

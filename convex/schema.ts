@@ -1072,6 +1072,9 @@ export default defineSchema({
     // projects: the stored lead, so a lead finds the projects they led in
     // Deleted items (model/deletedItemsList.ts)
     lead_id: v.optional(v.string()),
+    // project_access: the profile, project_team_access: the team, so a level
+    // check reads one person's grants of an item (model/deletedItems.ts)
+    grantee: v.optional(v.string()),
     row: v.union(
       v.object({ table: v.literal('issues'), doc: issuesTable.validator }),
       v.object({ table: v.literal('comments'), doc: commentsTable.validator }),
@@ -1093,6 +1096,7 @@ export default defineSchema({
   })
     .index('by_item_table_owner', ['item_id', 'table', 'owner_id'])
     .index('by_item_owner', ['item_id', 'owner_id'])
+    .index('by_item_table_grantee', ['item_id', 'table', 'grantee'])
     .index('by_row', ['table', 'row_id'])
     .index('by_storage', ['storage_id'])
     .index('by_org_key', ['org_id', 'project_key'])

@@ -1399,8 +1399,8 @@ describe('searching for deleted tasks', () => {
     const all = await search(t, lena, 'survey')
     expect(all.matches).toHaveLength(4)
     expect(all.capped).toBe(false)
-    // 20 ranges read the search, Lena's sight and some of the items
-    LIST.call = { ...DEFAULT_LIST.call, ranges: 20 }
+    // 16 ranges read the search, Lena's sight and some of the items
+    LIST.call = { ...DEFAULT_LIST.call, ranges: 16 }
     const few = await search(t, lena, 'survey')
     expect(few.matches.length).toBeGreaterThan(0)
     expect(few.matches.length).toBeLessThan(4)

@@ -1547,7 +1547,8 @@ async function fanOut(
 export async function notifyFollowersStep(step: MutationCtx, a: FollowerStep): Promise<void> {
   const used = { calls: 0 }
   const ctx = counting(step, used)
-  const { after, ...notice } = a
+  const { after, ...written } = a
+  const notice = { ...written, actor_id: await actorThen(ctx, written) }
   const issue = await ctx.db.get(notice.task)
   if (issue === null || issue.id !== notice.issue_id || issue.org_id !== notice.org_id) return
   const project = await byId(ctx, 'projects', issue.project_id)
@@ -1576,6 +1577,20 @@ export async function notifyFollowersStep(step: MutationCtx, a: FollowerStep): P
     room: () => used.calls < FOLLOWER_FANOUT.stepRoom,
   })
   await scheduleItemTrims(ctx, issue.id, trims)
+}
+
+/** The author of a notice a background step posts: `actor_id` while a
+ * profile with that id exists and already existed when the write happened
+ * (`now`), else none. An author removed meanwhile has had every message
+ * naming them cleared (profileRemovals.ts), so a step must not name them
+ * again, nor a later profile that took their id. */
+async function actorThen(
+  ctx: QueryCtx,
+  a: { actor_id?: string; now: string },
+): Promise<string | undefined> {
+  if (a.actor_id === undefined) return undefined
+  const actor = await byId(ctx, 'profiles', a.actor_id)
+  return actor !== null && actor.created_at <= a.now ? actor.id : undefined
 }
 
 /** `ctx` whose database calls each add one to `used.calls`. A read uses an
@@ -1695,10 +1710,12 @@ async function tellMentioned(
  * the task as it is now, until its database calls reach
  * FOLLOWER_FANOUT.stepRoom, and schedules the next step with the rest. As
  * for followers (notifyFollowersStep), a reader must see the task's project
- * when it was written and now, and a task deleted meanwhile tells nobody. */
+ * when it was written and now, a task deleted meanwhile tells nobody, and an
+ * author removed meanwhile is not named (actorThen). */
 export async function notifyMentionsStep(step: MutationCtx, a: MentionStep): Promise<void> {
   const used = { calls: 0 }
   const ctx = counting(step, used)
+  const actor_id = await actorThen(ctx, a)
   const issue = await ctx.db.get(a.task)
   if (issue === null || issue.id !== a.issue_id || issue.org_id !== a.org_id) return
   const project = await byId(ctx, 'projects', issue.project_id)
@@ -1721,7 +1738,7 @@ export async function notifyMentionsStep(step: MutationCtx, a: MentionStep): Pro
       issue_id: issue.id,
       kind: 'mention',
       body: a.body,
-      actor_id: a.actor_id,
+      actor_id,
       now: a.now,
       issue,
       project,

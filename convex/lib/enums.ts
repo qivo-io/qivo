@@ -155,6 +155,7 @@ export const TRASH_PHASES = [
   'restore_links',
   'restore_tasks',
   'restore_reveal',
+  'restore_grants',
   'restore_attach',
   'restore_detach',
   'purge_dependents',

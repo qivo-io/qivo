@@ -1582,7 +1582,7 @@ describe('restoring a project item', () => {
     let sawHiddenEdge = false
     const steps = await stepThrough(t, item.id, async () => {
       const job = await jobFor(t, item.id)
-      if (job === null || job.phase === 'restore_attach') return
+      if (job === null || job.phase === 'restore_grants' || job.phase === 'restore_attach') return
       // until the reveal the projects stay absent, even with tasks back
       await projectsAbsent()
       if ((await liveTask(t, top.id)) !== null || (await liveTask(t, tasks[0].id)) !== null)
@@ -3253,6 +3253,65 @@ describe('a project item at the sub-project cap', () => {
     await runSteps(t)
     for (const id of subs) expect(await liveProject(t, id)).not.toBeNull()
   }, 120_000)
+
+  it('restores a tree whose grants pass what one transaction may read', async () => {
+    // 30 sub-projects shared with 120 people each: 3,600 grants against a
+    // limit of 3,000 documents read, standing in for 200 x 200 against 32,000
+    const t = newT({ transactionLimits: { documentsRead: 3000 } })
+    const f = await withOrg(t)
+    const people = await plantPeople(t, f, 120)
+    await plantSubProjects(t, f, f.meta.id, 28)
+    // counted a project at a time, since all of them pass the read limit
+    const grantCount = async () => {
+      const ids = await t.run(async (ctx) => [
+        f.meta.id,
+        ...(
+          await ctx.db
+            .query('projects')
+            .withIndex('by_parent', (q) => q.eq('parent_id', f.meta.id))
+            .collect()
+        ).map((p) => p.id),
+      ])
+      let n = 0
+      for (const id of ids)
+        n += await t.run(
+          async (ctx) =>
+            (
+              await ctx.db
+                .query('project_access')
+                .withIndex('by_project', (q) => q.eq('project_id', id))
+                .collect()
+            ).length,
+        )
+      return { projects: ids.length, rows: n }
+    }
+    const subs = await t.run(async (ctx) =>
+      ctx.db
+        .query('projects')
+        .withIndex('by_parent', (q) => q.eq('parent_id', f.meta.id))
+        .collect(),
+    )
+    expect(subs).toHaveLength(30)
+    for (const p of subs)
+      await t.run(async (ctx) => {
+        for (const profile_id of people)
+          await ctx.db.insert('project_access', { project_id: p.id, profile_id, level: 'user' })
+      })
+    const grants = await grantCount()
+    expect(grants.rows).toBeGreaterThan(3000)
+
+    await deleteProject(t, f, f.meta.id)
+    await runSteps(t)
+    const item = await itemFor(t, f.meta.id)
+    expect(item.state).toBe('ready')
+    // its lead lists it and restores it, reading only their own grants
+    const listed = await as(t, f.user).query(api.deletedItems.list, {})
+    expect(JSON.stringify(listed)).toContain(item.id)
+    expect(await restore(t, f.user, [item.id])).toMatchObject({ restored: [item.id] })
+    await runSteps(t)
+    expect(await itemById(t, item.id)).toBeNull()
+    expect(await grantCount()).toEqual(grants)
+  }, 240_000)
 
   it('restores many project items without tasks, each reveal within the limits', async () => {
     const t = newT({ transactionLimits: { documentsWritten: 1000 } })
