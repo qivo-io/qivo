@@ -142,6 +142,27 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
     expect(target?.hasAttribute('data-board-revealed')).toBe(false)
   })
 
+  it('keeps the ring while a task window makes the Board inert', async () => {
+    const board = await loadBoard(network, lanes, { scope: 'plan' })
+    await board.render(root)
+    const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
+    far = id
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    // the task window opens over the Board with the jump
+    container.setAttribute('inert', '')
+    await board.reveal(id)
+    await run(() => scrolled.mock.calls.length > 0)
+    const target = card(id)?.closest('.board-card')
+    await act(async () => vi.advanceTimersByTime(REVEAL_MS * 2))
+    expect(target?.hasAttribute('data-board-revealed')).toBe(true)
+    // closed: the ring shows for its time, then goes
+    await act(async () => container.removeAttribute('inert'))
+    await act(async () => vi.advanceTimersByTime(REVEAL_MS - 100))
+    expect(target?.hasAttribute('data-board-revealed')).toBe(true)
+    await act(async () => vi.advanceTimersByTime(200))
+    expect(target?.hasAttribute('data-board-revealed')).toBe(false)
+  })
+
   it('rings the row on the phone task list', async () => {
     const board = await loadBoard(network, lanes, { scope: 'plan', phone: true })
     await board.render(root)

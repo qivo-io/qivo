@@ -50,7 +50,9 @@ const reducedMotion = () =>
   typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
 
 /** Shows the task a request names in the list `pane` holds, and rings it
-    for REVEAL_MS with `data-board-revealed`. `mount` mounts the task's card
+    with `data-board-revealed` for REVEAL_MS of the time the pane is in
+    view: while a task window over it makes it inert, the ring waits, so it
+    still shows when the window closes. `mount` mounts the task's card
     first when its list still waits for it; it may commit a render. Two
     frames later the pane scrolls the card to its middle, smoothly unless
     reduced motion is on or the card is more than two screens away, and
@@ -77,10 +79,12 @@ export function useReveal(
     let timer = 0
     let ringed: HTMLElement | null = null
     let stopCorrection = () => {}
+    let inertWatch: MutationObserver | null = null
     cancel.current = () => {
       for (const frame of frames) cancelAnimationFrame(frame)
       window.clearTimeout(timer)
       stopCorrection()
+      inertWatch?.disconnect()
       ringed?.removeAttribute('data-board-revealed')
     }
     frames.push(
@@ -98,10 +102,25 @@ export function useReveal(
             scroller.scrollTo({ ...place, behavior })
             ringed = target
             target.setAttribute('data-board-revealed', '')
-            timer = window.setTimeout(() => {
-              target.removeAttribute('data-board-revealed')
-              ringed = null
-            }, REVEAL_MS)
+            // the ring's time runs while nothing makes the pane inert
+            const time = () => {
+              window.clearTimeout(timer)
+              if (scroller.closest('[inert]')) return
+              timer = window.setTimeout(() => {
+                inertWatch?.disconnect()
+                target.removeAttribute('data-board-revealed')
+                ringed = null
+              }, REVEAL_MS)
+            }
+            if (typeof MutationObserver === 'function') {
+              inertWatch = new MutationObserver(time)
+              inertWatch.observe(document.body, {
+                attributes: true,
+                attributeFilter: ['inert'],
+                subtree: true,
+              })
+            }
+            time()
             stopCorrection = correctOnce(scroller, target, behavior === 'smooth')
           }),
         )
