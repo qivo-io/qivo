@@ -322,6 +322,42 @@ describe('the field check in the store', () => {
     )
   })
 
+  it('says while you were offline for a change from the oldest of many drops the edit waited through', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const at = (minute: number) => new Date(Date.UTC(2026, 9, 20, 9, minute))
+    vi.setSystemTime(at(0))
+    sync.syncStatus.setSocket({ connected: true, everConnected: true })
+    void P.updateIssue(key('task-1'), { status: 'progress' })
+    // 21 drops, two minutes each, the change made in the first
+    for (let drop = 0; drop < 21; drop++) {
+      vi.setSystemTime(at(1 + drop * 3))
+      sync.syncStatus.setSocket({ connected: false, everConnected: true })
+      vi.setSystemTime(at(3 + drop * 3))
+      sync.syncStatus.setSocket({ connected: true, everConnected: true })
+    }
+    latest().reject(changed([{ at: '2026-10-20T09:02:00.000Z' }]))
+    await settle()
+    expect(showToast.mock.calls.at(-1)?.[0]).toBe(
+      'Not saved. Emil Berg changed the status of QN-1 while you were offline. Your change was discarded.',
+    )
+  })
+
+  it('says nothing of a drop that ended before the edit was sent', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-20T09:00:00.000Z'))
+    sync.syncStatus.setSocket({ connected: true, everConnected: true })
+    sync.syncStatus.setSocket({ connected: false, everConnected: true })
+    vi.setSystemTime(new Date('2026-10-20T09:02:00.000Z'))
+    sync.syncStatus.setSocket({ connected: true, everConnected: true })
+    vi.setSystemTime(new Date('2026-10-20T09:03:00.000Z'))
+    void P.updateIssue(key('task-1'), { status: 'progress' })
+    latest().reject(changed([{ at: '2026-10-20T09:01:00.000Z' }]))
+    await settle()
+    expect(showToast.mock.calls.at(-1)?.[0]).toBe(
+      'Not saved. Emil Berg changed the status of QN-1. Your change was discarded.',
+    )
+  })
+
   it('runs keepDraft with the text on screen once the paint goes, and says it is kept', async () => {
     const kept: unknown[] = []
     void P.updateIssue(
