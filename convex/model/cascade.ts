@@ -222,8 +222,9 @@ type AccessTable = 'agent_keys' | 'mcp_tokens' | 'team_members' | 'project_acces
  * - team_members, project_access: lib/access.ts asks by a resolved
  *   profile, and the snapshot sends only rows whose profile it sends.
  * - user_prefs: only the person's own seats read them (prefs.ts).
- * Names stored before NAME_MAX and preferences have no small size cap, so
- * those are read LARGE_ROWS_PER_READ at a time. */
+ * Every write caps key and token names (tokens.ts credentialName), so
+ * those rows are small and read a page at a time. Preferences have no size
+ * cap and are read LARGE_ROWS_PER_READ at a time, one row a person. */
 const ACCESS_RANGES: {
   range: (
     ctx: QueryCtx,
@@ -240,14 +241,14 @@ const ACCESS_RANGES: {
       ctx.db
         .query('agent_keys')
         .withIndex('by_profile', (q) => q.eq('profile_id', profileId).gte('_creationTime', from)),
-    perRead: LARGE_ROWS_PER_READ,
+    perRead: Number.POSITIVE_INFINITY,
   },
   {
     range: (ctx, profileId, from) =>
       ctx.db
         .query('mcp_tokens')
         .withIndex('by_profile', (q) => q.eq('profile_id', profileId).gte('_creationTime', from)),
-    perRead: LARGE_ROWS_PER_READ,
+    perRead: Number.POSITIVE_INFINITY,
   },
   {
     range: (ctx, profileId, from) =>
@@ -274,11 +275,12 @@ const ACCESS_RANGES: {
 
 /** Deletes the access rows of `profileId` (ACCESS_RANGES) until none is
  * left (true) or `budget` is spent (false). Each read goes on from the
- * creation time of the last row it deleted, because a read from the start
- * of the range passes over every row this transaction deleted there again,
- * and thousands of small reads of a long range then pass the time Convex
- * allows. A row deleted here no longer shows to a later read, so a read
- * from that same creation time skips nothing and repeats nothing. */
+ * creation time of the last row it deleted, so it does not pass over the
+ * rows this transaction deleted there again. A row deleted here no longer
+ * shows to a later read, so a read from that same creation time skips
+ * nothing and repeats nothing. Each read also costs time for every row the
+ * transaction deleted, so the small rows are read in few large pages: 512
+ * tokens read four at a time passed the time a local backend allows. */
 export async function deleteAccessRows(
   ctx: MutationCtx,
   profileId: string,

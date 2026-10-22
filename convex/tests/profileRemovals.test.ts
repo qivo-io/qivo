@@ -937,49 +937,6 @@ describe('access rows past the first pass', () => {
       })
   })
 
-  it('deletes keys with very large names a few at a time under real limits', async () => {
-    ACCESS_FIRST_PASS.rows = 2
-    const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
-    // names stored before NAME_MAX capped them, 900 KB each, 18 MB in all
-    const name = 'n'.repeat(900_000)
-    for (let i = 0; i < 22; i += 2)
-      await t.run(async (ctx) => {
-        for (let k = i; k < i + 2; k++)
-          await ctx.db.insert('agent_keys', {
-            id: uuid(),
-            profile_id: f.agent.id,
-            name: k < 2 ? `Key ${k}` : name,
-            key_prefix: 'qva_1111111',
-            key_hash: uuid(),
-            created_at: NOW,
-          })
-      })
-    // counted a few at a time, as a whole read would pass the read limit too
-    const keys = async () => {
-      let n = 0
-      let from = 0
-      for (;;) {
-        const page = await t.run((ctx) =>
-          ctx.db
-            .query('agent_keys')
-            .withIndex('by_profile', (q) =>
-              q.eq('profile_id', f.agent.id).gt('_creationTime', from),
-            )
-            .take(4),
-        )
-        n += page.length
-        if (page.length < 4) return n
-        from = page[3]._creationTime
-      }
-    }
-    await as(t, f.admin).mutation(api.profiles.remove, { org_id: f.org.id, id: f.agent.id })
-    expect(await keys()).toBe(20)
-    await t.finishAllScheduledFunctions(vi.runAllTimers)
-    expect(await keys()).toBe(0)
-    expect(await jobOf(t, f.agent.id)).toBeNull()
-  }, 120_000)
-
   it(`refuses to remove someone who leads more than ${LIMITS.removalLeads.max} projects`, async () => {
     const t = newT()
     const f = await withOrg(t)

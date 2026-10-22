@@ -261,6 +261,24 @@ describe('personal tokens', () => {
       'bad_request',
       /^an agent key takes no access or expiry/,
     )
+    // names are capped as in the app, so a removal reads them a page at a time
+    for (const [kind, name] of [
+      ['agent_key', 'k'.repeat(81)],
+      ['mcp_token', 't'.repeat(81)],
+    ] as const)
+      await expectRefusal(
+        t.mutation(internal.machine.testing.mintCredential, {
+          profile_id: kind === 'agent_key' ? f.agent.id : f.user.id,
+          kind,
+          key_prefix: 'qva_seam000',
+          key_hash: hex(),
+          name,
+          ...(kind === 'mcp_token' ? { access: 'read' as const } : {}),
+          pending: true,
+        }),
+        'rule',
+        /must be at most 80 characters/,
+      )
   })
 
   it('the test seam deletes the credentials of one profile with exactly one name', async () => {
