@@ -4618,6 +4618,42 @@ export const PLANNER = {
       .reduce((s, i) => s + (i.remaining || 0), 0)
     return Math.round(sum * 10) / 10
   },
+  /* progressIn for each of `groups`, lists of sub-projects, in one pass
+     over the tasks instead of one per group. Each result is exactly what
+     progressIn returns for that list. */
+  progressByGroups: (groups: string[][], only?: ((it: IssueVM) => boolean) | null) => {
+    const counts = groups.map(() => ({ total: 0, done: 0 }))
+    for (const it of PLANNER.issuesInGroups(groups, only))
+      for (const i of it.groups) {
+        counts[i].total++
+        if (it.issue.status === 'done') counts[i].done++
+      }
+    return counts.map(({ total, done }) => ({
+      total,
+      done,
+      pct: total ? Math.round((done / total) * 100) : 0,
+    }))
+  },
+  /* remainingIn for each of `groups` in one pass, summed in the same order,
+     so each result is exactly what remainingIn returns for that list. */
+  remainingByGroups: (groups: string[][], only?: ((it: IssueVM) => boolean) | null) => {
+    const sums = groups.map(() => 0)
+    for (const it of PLANNER.issuesInGroups(groups, only))
+      if (it.issue.status !== 'done') for (const i of it.groups) sums[i] += it.issue.remaining || 0
+    return sums.map((sum) => Math.round(sum * 10) / 10)
+  },
+  /* The leaf tasks in any of `groups` that `only` keeps, in task order,
+     each with the indexes of the groups whose sub-projects hold it. */
+  issuesInGroups: function* (groups: string[][], only?: ((it: IssueVM) => boolean) | null) {
+    const groupsOf = new Map<string, number[]>()
+    groups.forEach((subIds, i) => {
+      for (const id of new Set(subIds)) groupsOf.set(id, [...(groupsOf.get(id) ?? []), i])
+    })
+    for (const issue of PLANNER.issues) {
+      const found = groupsOf.get(issue.project)
+      if (found && !PLANNER.isGroup(issue) && (!only || only(issue))) yield { issue, groups: found }
+    }
+  },
   /* The organization a project (or sub-project) belongs to. */
   orgOf: (projectId: string) => {
     const p = PLANNER.project(projectId)

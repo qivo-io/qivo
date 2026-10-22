@@ -2,6 +2,7 @@ import { getFunctionName } from 'convex/server'
 import { act, type ReactNode, useLayoutEffect, useState } from 'react'
 import type { Root } from 'react-dom/client'
 import { vi } from 'vitest'
+import type { ScopeInfo } from '../store/planner'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
 /* The Board on the real store for jsdom tests. A test file mocks
@@ -131,6 +132,13 @@ export async function loadBoard(
       </TooltipProvider>
     )
   }
+  /** Another view over the same scope, again on every store change. */
+  function View({ view }: { view: (info: ScopeInfo) => ReactNode }) {
+    usePlannerVersion()
+    const info = P.scopeInfo(scope)
+    if (!info) throw new Error('missing the scope')
+    return <TooltipProvider>{view(info)}</TooltipProvider>
+  }
   return {
     P,
     snapshot,
@@ -148,6 +156,10 @@ export async function loadBoard(
     deliver: () => act(async () => deliver(snapshot)),
     render: (root: Root, window?: Window) =>
       act(async () => root.render(<Screen window={window} />)),
+    /** Renders `view` for the scope in place of the Board. A test imports
+        the view after loadBoard, so it shares this store. */
+    renderView: (root: Root, view: (info: ScopeInfo) => ReactNode) =>
+      act(async () => root.render(<View view={view} />)),
   }
 }
 

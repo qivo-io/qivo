@@ -5,10 +5,13 @@
    Naming someone here stamps no one: it is not a change made on a person's
    page. Finished work is not listed: it belongs to each person's page,
    since each person's "since" differs. */
-import { memo, type ReactNode } from 'react'
+import { memo, type ReactNode, useLayoutEffect, useRef, useState } from 'react'
 import { AssigneeAvatar } from '@/components/AssigneeAvatar'
+import { DeferredList } from '@/components/DeferredList'
 import { Avatar, Icon, IssueKey, ProjectNameOf } from '@/components/qivo'
+import { SYNC_LIMIT } from '@/lib/boardGroups'
 import { relativeWeek } from '@/lib/dates'
+import { createMountScheduler, useMountGuards } from '@/lib/mountScheduler'
 import {
   bannerVerdict,
   milestonesAhead,
@@ -165,6 +168,18 @@ const ReviewerAsk = memo(function ReviewerAsk({
   )
 })
 
+/* An ask row's height before it renders, and the least it takes, for the
+   rows a first screen holds. */
+const ASK_ESTIMATE_PX = 61
+const ASK_MIN_PX = 48
+const askKey = (it: IssueVM) => it.uuid
+const askEstimate = () => ASK_ESTIMATE_PX
+const pendingAsks = (n: number) => `Loading ${n} more ${n === 1 ? 'task' : 'tasks'}`
+/* A long list mounts in blocks (DeferredList.css); the rows keep their
+   rule where one block meets the next. */
+const ASK_LIST =
+  'overflow-hidden rounded-lg border border-border [&>.deferred-block+.deferred-block>*:first-child]:border-t'
+
 export function TeamOpening({
   rows,
   humans,
@@ -193,9 +208,33 @@ export function TeamOpening({
   const ahead = milestonesAhead(P.milestones, metaIds, day.todayWeek)
   const busy = nearCapacity(humans, weekFigure)
   const unowned = needsOwner(P.issues, subIds, day)
-  const unreviewed = needsReviewer(rows)
+  const unreviewed = needsReviewer(rows).map((ask) => ask.issue)
+  /* Lists of more than SYNC_LIMIT asks mount the rows of the first screen
+     at once and the rest in slices, in the page's scrolling pane. */
+  const opening = useRef<HTMLDivElement>(null)
+  const [scheduler] = useState(createMountScheduler)
+  useMountGuards(scheduler)
+  useLayoutEffect(
+    () => scheduler.setRoot(opening.current?.closest<HTMLElement>('[data-scroll]') ?? null),
+    [scheduler],
+  )
+  const [firstScreen] = useState(() => Math.ceil((window.innerHeight + 500) / ASK_MIN_PX))
+  const initialOf = (count: number) =>
+    count <= SYNC_LIMIT ? Number.POSITIVE_INFINITY : firstScreen
+  const ownerRow = (it: IssueVM) => (
+    <OwnerAsk key={it.uuid} it={it} onOpenTask={onOpenTask} context={P.contextVersion} />
+  )
+  const reviewerRow = (it: IssueVM) => (
+    <ReviewerAsk
+      key={it.uuid}
+      it={it}
+      waiting={it.reviewAt != null ? waitingLabel(it.reviewAt, now) : null}
+      onOpenTask={onOpenTask}
+      context={P.contextVersion}
+    />
+  )
   return (
-    <div data-sync-opening className="@container">
+    <div ref={opening} data-sync-opening className="@container">
       <p data-sync-sentence className="m-0 mb-5 max-w-[64ch] text-md text-text-1">
         {syncSentence(facts).map((part, i) =>
           typeof part === 'string' ? (
@@ -296,15 +335,18 @@ export function TeamOpening({
         <div className="min-w-0">
           <ListHeading title="Needs an owner" count={unowned.length} />
           {unowned.length ? (
-            <div className="mb-6 overflow-hidden rounded-lg border border-border">
-              {unowned.map((it) => (
-                <OwnerAsk
-                  key={it.uuid}
-                  it={it}
-                  onOpenTask={onOpenTask}
-                  context={P.contextVersion}
-                />
-              ))}
+            <div className={cn('mb-6', ASK_LIST)}>
+              <DeferredList
+                id="sync-needs-owner"
+                items={unowned}
+                keyOf={askKey}
+                render={ownerRow}
+                estimate={askEstimate}
+                gap={0}
+                initial={initialOf(unowned.length)}
+                scheduler={scheduler}
+                label={pendingAsks}
+              />
             </div>
           ) : (
             <div className="mb-6">
@@ -314,16 +356,18 @@ export function TeamOpening({
 
           <ListHeading title="Needs a reviewer" count={unreviewed.length} />
           {unreviewed.length ? (
-            <div className="overflow-hidden rounded-lg border border-border">
-              {unreviewed.map(({ issue: it, since }) => (
-                <ReviewerAsk
-                  key={it.uuid}
-                  it={it}
-                  waiting={since != null ? waitingLabel(since, now) : null}
-                  onOpenTask={onOpenTask}
-                  context={P.contextVersion}
-                />
-              ))}
+            <div className={ASK_LIST}>
+              <DeferredList
+                id="sync-needs-reviewer"
+                items={unreviewed}
+                keyOf={askKey}
+                render={reviewerRow}
+                estimate={askEstimate}
+                gap={0}
+                initial={initialOf(unreviewed.length)}
+                scheduler={scheduler}
+                label={pendingAsks}
+              />
             </div>
           ) : (
             <Empty>Every review has a reviewer</Empty>

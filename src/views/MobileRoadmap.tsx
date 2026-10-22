@@ -1,8 +1,21 @@
+import { memo, useLayoutEffect, useRef, useState } from 'react'
+import { DeferredList } from '@/components/DeferredList'
 import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Avatar, Icon, StatusDot } from '../components/qivo'
+import { SYNC_LIMIT } from '../lib/boardGroups'
+import { StaticControlsContext, useLiveControls } from '../lib/liveControls'
+import { createMountScheduler, useMountGuards } from '../lib/mountScheduler'
 import { isRoadmapTaskVisible } from '../lib/roadmapVisibility'
-import { type IssueFilters, type MilestoneVM, P, type ScopeInfo } from '../store/planner'
+import { useLatest } from '../lib/useLatest'
+import {
+  type IssueFilters,
+  type IssueVM,
+  type MilestoneVM,
+  P,
+  type ScopeInfo,
+} from '../store/planner'
+import type { StoreVersion } from '../store/updates'
 
 type MobileRoadmapProps = {
   info: ScopeInfo
@@ -21,6 +34,66 @@ type MobileRoadmapProps = {
   taskState: 'all' | 'planned' | 'unplanned'
   onTaskStateChange: (state: 'all' | 'planned' | 'unplanned') => void
 }
+
+/* A task row's height before it renders (a two-line title), and the least
+   it takes, for the rows a first screen holds. */
+const ROW_ESTIMATE_PX = 96
+const ROW_MIN_PX = 72
+const taskKey = (task: IssueVM) => task.id
+const rowEstimate = () => ROW_ESTIMATE_PX
+const pendingRows = (n: number) => `Loading ${n} more ${n === 1 ? 'task' : 'tasks'}`
+
+/** One task of the phone's task schedule. It renders again only when its
+    task object, the store's context (P.contextVersion) or `wide` changes,
+    and mounts no tooltip roots until a mouse points at it or keyboard
+    focus reaches it, so touch phones never mount them. */
+const MobileRoadmapRow = memo(function MobileRoadmapRow({
+  task: it,
+  wide,
+  onOpen,
+}: {
+  task: IssueVM
+  wide: boolean
+  context: StoreVersion
+  onOpen: (id: string) => void
+}) {
+  const root = useRef<HTMLButtonElement>(null)
+  const controls = useLiveControls(root)
+  const project = P.project(it.project)
+  const meta = P.metaOf(it.project)
+  const context =
+    wide && meta && meta.id !== project?.id
+      ? `${P.projectLabel(meta)}, ${project ? P.projectLabel(project) : ''}`
+      : project && P.projectLabel(project)
+  return (
+    <Button
+      ref={root}
+      {...controls.rootProps}
+      type="button"
+      variant="unstyled"
+      noTooltip
+      data-roadmap-row={it.id}
+      className="mobile-roadmap-row"
+      onClick={() => onOpen(it.id)}
+    >
+      <StaticControlsContext.Provider value={controls.value}>
+        {/* a group's own status is dormant */}
+        {!P.isGroup(it) && <StatusDot status={it.status} size={16} />}
+        <span className="mobile-roadmap-row-body">
+          <strong>{it.title}</strong>
+          <span>{context}</span>
+          <span>
+            {it.start == null
+              ? 'Unplanned'
+              : `${P.fmtDate(P.weekToDate(it.start))} → ${P.fmtDate(P.weekToDate(it.end))}`}
+            {it.due ? `, Due ${P.fmtISO(it.due)}` : ''}
+          </span>
+        </span>
+        {it.owner ? <Avatar id={it.owner} size={28} /> : <Icon name="chevronRight" size={16} />}
+      </StaticControlsContext.Provider>
+    </Button>
+  )
+})
 
 /** The phone entry to the same roadmap. Dates, editing and access rules still
  * come from the planner; the timeline remains available for spatial planning. */
@@ -57,6 +130,31 @@ export function MobileRoadmap({
         a.title.localeCompare(b.title),
     )
 
+  /* A schedule of more than SYNC_LIMIT tasks mounts the rows of its first
+     screen at once and the rest in slices, as the phone's task list does.
+     The count comes from the first render of a scope, section and choice. */
+  const scroller = useRef<HTMLDivElement>(null)
+  const [scheduler] = useState(createMountScheduler)
+  useMountGuards(scheduler)
+  useLayoutEffect(() => scheduler.setRoot(scroller.current), [scheduler])
+  const eagerKey = `${info.id}:${section}:${taskState}`
+  const firstScreen = () => Math.ceil((window.innerHeight + 500) / ROW_MIN_PX)
+  const [eager, setEager] = useState(() => ({ key: eagerKey, rows: firstScreen() }))
+  if (eager.key !== eagerKey) setEager({ key: eagerKey, rows: firstScreen() })
+  const initial =
+    tasks.length <= SYNC_LIMIT ? Number.POSITIVE_INFINITY : eager.key === eagerKey ? eager.rows : 0
+  // App makes its actions again every render; the rows keep one identity
+  const openIssue = useLatest((id: string) => actions.openIssue(id))
+  const renderRow = (it: IssueVM) => (
+    <MobileRoadmapRow
+      key={it.id}
+      task={it}
+      wide={info.wide}
+      context={P.contextVersion}
+      onOpen={openIssue}
+    />
+  )
+
   const milestoneRow = (m: MilestoneVM) => (
     <Button
       key={m.id}
@@ -79,7 +177,7 @@ export function MobileRoadmap({
   )
 
   return (
-    <div data-scroll data-screen-label="Roadmap" className="mobile-roadmap-agenda">
+    <div ref={scroller} data-scroll data-screen-label="Roadmap" className="mobile-roadmap-agenda">
       <div className="mobile-roadmap-open-timeline">
         <Button type="button" onClick={onTimeline}>
           <Icon name="timeline" size={16} />
@@ -185,41 +283,19 @@ export function MobileRoadmap({
             </NativeSelect>
             <span>{tasks.length}</span>
           </div>
-          {tasks.map((it) => {
-            const project = P.project(it.project)
-            const meta = P.metaOf(it.project)
-            const context =
-              info.wide && meta && meta.id !== project?.id
-                ? `${P.projectLabel(meta)}, ${project ? P.projectLabel(project) : ''}`
-                : project && P.projectLabel(project)
-            return (
-              <Button
-                key={it.id}
-                type="button"
-                variant="unstyled"
-                className="mobile-roadmap-row"
-                onClick={() => actions.openIssue(it.id)}
-              >
-                {/* a group's own status is dormant */}
-                {!P.isGroup(it) && <StatusDot status={it.status} size={16} />}
-                <span className="mobile-roadmap-row-body">
-                  <strong>{it.title}</strong>
-                  <span>{context}</span>
-                  <span>
-                    {it.start == null
-                      ? 'Unplanned'
-                      : `${P.fmtDate(P.weekToDate(it.start))} → ${P.fmtDate(P.weekToDate(it.end))}`}
-                    {it.due ? `, Due ${P.fmtISO(it.due)}` : ''}
-                  </span>
-                </span>
-                {it.owner ? (
-                  <Avatar id={it.owner} size={28} />
-                ) : (
-                  <Icon name="chevronRight" size={16} />
-                )}
-              </Button>
-            )
-          })}
+          <div className="mobile-roadmap-task-list">
+            <DeferredList
+              id="phone-roadmap"
+              items={tasks}
+              keyOf={taskKey}
+              render={renderRow}
+              estimate={rowEstimate}
+              gap={0}
+              initial={initial}
+              scheduler={scheduler}
+              label={pendingRows}
+            />
+          </div>
           {tasks.length === 0 && (
             <p className="mobile-roadmap-note">No tasks match these filters.</p>
           )}

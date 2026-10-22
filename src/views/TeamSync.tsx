@@ -200,7 +200,13 @@ function PersonColumns({
           )}
         >
           {done.map((d) => (
-            <DoneItem key={d.issue.uuid} it={d.issue} kind={d.kind} ctx={ctx} />
+            <DoneItem
+              key={d.issue.uuid}
+              it={d.issue}
+              kind={d.kind}
+              context={P.contextVersion}
+              ctx={ctx}
+            />
           ))}
           {!done.length && <Empty>Nothing finished since {sinceLabel}</Empty>}
         </SyncCol>
@@ -218,6 +224,7 @@ function PersonColumns({
                   it={w.issue}
                   reviewer={w.reviewer}
                   since={w.since}
+                  context={P.contextVersion}
                   ctx={ctx}
                 />
               ))}
@@ -555,7 +562,9 @@ export function TeamSync({
   }
 
   const person = humans.find((u) => u.id === step) || null
-  const allDone = (uid: string) => counted.every((it) => it.owner !== uid || reviewed.has(it.uuid))
+  // the owners with a counted task still to review, found once per render
+  const unfinished = new Set(counted.filter((it) => !reviewed.has(it.uuid)).map((it) => it.owner))
+  const allDone = (uid: string) => !unfinished.has(uid)
   const today = new Date(now)
   const last = idx >= steps.length - 1
 
