@@ -23,7 +23,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { hashPassword } from 'better-auth/crypto'
 import { ConvexHttpClient } from 'convex/browser'
 import { makeFunctionReference } from 'convex/server'
-import { LIMITS, MIB } from '../convex/lib/limits.ts'
+import { LIMITS, MIB } from './limits.mjs'
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const SLUG = 'northstar-labs'

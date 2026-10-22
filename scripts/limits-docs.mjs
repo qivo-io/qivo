@@ -8,7 +8,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { grouped, LIMIT_GROUPS, LIMITS } from '../convex/lib/limits.ts'
+import { grouped, LIMIT_GROUPS, LIMITS } from './limits.mjs'
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 
