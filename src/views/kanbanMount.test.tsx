@@ -108,6 +108,10 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
     expect(pane()?.getAttribute('aria-busy')).toBe('true')
     await finish()
     expect(cards()).toHaveLength(500)
+    // blocks of 16 cards, which the browser lays out as each comes into view
+    const blocks = [...document.querySelectorAll('[data-deferred-block]')]
+    expect(blocks.length).toBeGreaterThan(20)
+    for (const block of blocks) expect(block.children.length).toBeLessThanOrEqual(16)
     expect(pane()?.getAttribute('data-board-mount')).toBe('complete')
     expect(pane()?.hasAttribute('aria-busy')).toBe(false)
   })

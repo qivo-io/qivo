@@ -68,6 +68,14 @@ const CELL_CHROME_X = 8 * 2 + 1
    estimates. Before the first Board, the window less the sidebar. */
 let lastBoardWidth: number | null = null
 
+/* The cards in one block of a cell (DeferredList). A block is what the
+   browser lays out when it comes into view: scrolling a 5,000-task Board
+   for the first time, a frame took up to 380ms with blocks of 64 at 4x CPU
+   and 100 to 130ms with blocks of 16, about what the Board took before it
+   mounted in slices. Blocks of 8 made every frame of a later scroll
+   longer, as the browser checks each block on every frame. */
+const BOARD_BLOCK_SIZE = 16
+
 /* The first screen a Board mounts at once reaches this far below the
    window's height. */
 const FIRST_SCREEN_EXTRA_PX = 500
@@ -851,6 +859,7 @@ function Kanban({
         scheduler={scheduler}
         label={pendingLabel}
         listRole
+        blockSize={BOARD_BLOCK_SIZE}
       />
     )
   }

@@ -13,15 +13,14 @@ import { useLatest } from '@/lib/useLatest'
 import { Button } from './ui/button'
 import './DeferredList.css'
 
-/* The most items a slice adds to one block before it opens the next. A
-   slice renders only the block that grows, so its cost does not grow with
-   the items already mounted. A block is also what the browser lays out
-   when it comes into view (DeferredList.css), so a small one keeps that
-   frame short: scrolling a 5,000-task Board for the first time, a frame
-   took up to 380ms with blocks of 64 at 4x CPU and 100 to 130ms with
-   blocks of 16. Smaller blocks cost more: the browser checks each one on
-   every frame, so blocks of 8 made every frame of a later scroll longer. */
-const BLOCK_SIZE = 16
+/* The most items a slice adds to one block before it opens the next, by
+   default. A slice renders only the block that grows, so its cost does
+   not grow with the items already mounted. A block is also what the
+   browser lays out when it comes into view (DeferredList.css), so a small
+   one keeps that frame short, and costs more while mounting: the browser
+   checks each block on every frame. The Board takes blocks of 16
+   (BOARD_BLOCK_SIZE); a light list keeps 64. */
+const BLOCK_SIZE = 64
 /* The most items a render mounts at once when items arrive above the
    mounted boundary, as when a filter is cleared. */
 const MOST_AT_ONCE = 64
@@ -43,6 +42,8 @@ type Props<T extends object> = {
   label: (pending: number) => string
   /** puts the waiting space in a list item, for a list with role="list" */
   listRole?: boolean
+  /** the most items one block holds (BLOCK_SIZE by default) */
+  blockSize?: number
 }
 
 type Block<T> = { id: number; items: T[]; start: number }
@@ -144,6 +145,7 @@ export function DeferredList<T extends object>({
   scheduler,
   label,
   listRole = false,
+  blockSize = BLOCK_SIZE,
 }: Props<T>) {
   /* What is mounted follows what the last render mounted: every item it
      mounted that is still in the list stays mounted, wherever a reorder,
@@ -247,12 +249,11 @@ export function DeferredList<T extends object>({
      A block is boxed or plain for good, as a box that came and went would
      remount every card in it. A plain block takes any number of items
      while the list renders whole; once it mounts in slices, new items go
-     to new boxed blocks of BLOCK_SIZE, above the plain ones too. */
+     to new boxed blocks of `blockSize`, above the plain ones too. */
   const plainIds = useRef<ReadonlySet<number> | null>(null)
   const sliced = initial !== Number.POSITIVE_INFINITY
   const plain = (id: number) => plainIds.current?.has(id) ?? false
-  const capacity = (id: number) =>
-    plain(id) ? (sliced ? 0 : Number.POSITIVE_INFINITY) : BLOCK_SIZE
+  const capacity = (id: number) => (plain(id) ? (sliced ? 0 : Number.POSITIVE_INFINITY) : blockSize)
   /* A block between `low` and the kept block `high` (none: the end), or
      null when no id is left between them. Ids rise down the list. */
   const between = (low: number, high: number | undefined) => {
