@@ -80,7 +80,7 @@
     "concurrently": "10.0.5",
     "convex-test": "0.0.58",
     "cross-env": "^10.0.0",
-    "electron": "^44.4.3",
+    "electron": "^44.5.0",
     "electron-builder": "^26.15.3",
     "fast-check": "4.10.0",
     "jsdom": "29.1.1",
