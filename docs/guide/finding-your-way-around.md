@@ -118,7 +118,8 @@ another status before starting one.
 Open **Search** in the sidebar or use the phone header's search icon. Typing
 searches visible projects and task keys and titles. The task section shows
 up to nine results. An empty search shows no suggestions. Use Up/Down and
-Enter to open a result, or select it directly.
+Enter to open a result, or select it directly. A task picked while the Board
+is open also shows its card behind the task window ([Showing a task on the Board](./the-board.md#showing-a-task-on-the-board)).
 
 Search matches case-insensitive word fragments in any order. For example,
 “signed firm” finds “Add signed firmware updates and rollback”. A matching

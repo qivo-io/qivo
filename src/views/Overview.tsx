@@ -5,10 +5,23 @@ import { HoverTooltip } from '@/components/ui/tooltip'
 /* Overview — dashboard rollup: what to do, the scope's state in one box,
    health per group as a sortable table, then at-risk tasks, paused tasks and milestones. */
 
-import { type ReactNode, useState as useStateO } from 'react'
+import {
+  type MouseEvent,
+  memo,
+  type ReactNode,
+  useCallback,
+  useRef,
+  useState as useStateO,
+} from 'react'
+import { DeferredList } from '@/components/DeferredList'
+import { SYNC_LIMIT } from '@/lib/boardGroups'
 import { relativeWeek, weekToISO } from '@/lib/dates'
+import { StaticControlsContext, useLiveControls } from '@/lib/liveControls'
+import { createMountScheduler, useMountGuards } from '@/lib/mountScheduler'
+import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
+import type { StoreVersion } from '@/store/updates'
 import {
   Avatar,
   EmptyState,
@@ -18,13 +31,7 @@ import {
   ProjectName,
   StatusDot,
 } from '../components/qivo'
-import {
-  type IssueVM,
-  type MilestoneVM,
-  P,
-  type ProjectPlace,
-  type ScopeInfo,
-} from '../store/planner'
+import { type IssueVM, type MilestoneVM, P, type ScopeInfo } from '../store/planner'
 import { useOverviewPanelClipping } from './useOverviewPanelClipping'
 import './Overview.css'
 import '../styles/mobile-views.css'
@@ -514,73 +521,92 @@ function OvHealthTable({ rows, unit, sort, setSort, onOpen, mobile }) {
   )
 }
 
-/* these rows no longer carry the board's delay edge, only a plain border:
-   every row in an "Overdue & at risk" section is at risk by definition, so the
-   edge was restating the heading above it rather than adding anything */
-function OvPausedRow({
-  it,
-  place,
-  wide,
-  onOpen,
-}: {
+/* The two task lists can hold many tasks, and the Overview renders again
+   on each store change. A row renders again only when its task object, the
+   store's context (P.contextVersion, for today's date and the names it
+   reads) or `wide` changes, and mounts no tooltip roots until a mouse
+   points at it or keyboard focus reaches it. */
+type OvRowProps = {
   it: IssueVM
-  place: ProjectPlace | null
   wide: boolean
+  context: StoreVersion
   onOpen: (id: string) => void
-}) {
+}
+
+/** A list row's frame: a static scope until it is used, around the row's
+    button, which carries the task's title as its tooltip. */
+function OvRowFrame({ children }: { children: ReactNode }) {
+  const root = useRef<HTMLDivElement>(null)
+  const controls = useLiveControls(root)
   return (
-    <Button
-      type="button"
-      data-ovrow={it.id}
-      onClick={() => onOpen(it.id)}
-      title={it.title}
-      className="[display:flex] [align-items:center] [gap:8px] [width:100%] [text-align:left] [padding:8px] [border-radius:var(--r-md)] [border:1px_solid_var(--border)] [background:var(--surface-1)] [color:var(--text-1)] [transition:background-color_var(--dur-fast)_var(--ease-out),_border-color_var(--dur-fast)_var(--ease-out)] [font-family:var(--sans)] [cursor:pointer]"
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = 'var(--hover)'
-        e.currentTarget.style.borderColor = 'var(--border-strong)'
-      }}
-      onMouseLeave={(e) => {
-        // Hand the rest state back to CSS: themes paint these rows clear
-        // over the translucent section material.
-        e.currentTarget.style.removeProperty('background')
-        e.currentTarget.style.removeProperty('border-color')
-      }}
-      variant="unstyled"
-    >
-      <PausedMark />
-      <span className="min-w-0 flex-1">
-        <span className="line-clamp-2 break-words text-base leading-[1.4]">{it.title}</span>
-        <span className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-3">
-          {place && (
-            <HoverTooltip content={P.placeLabel(place)}>
-              <span
-                tabIndex={-1}
-                className={cn('truncate', wide ? 'max-w-[190px]' : 'max-w-[120px]')}
-              >
-                <ProjectName {...place} />
-              </span>
-            </HoverTooltip>
-          )}
-        </span>
-      </span>
-      {it.owner && <Avatar id={it.owner} size={28} />}
-    </Button>
+    <div ref={root} {...controls.rootProps}>
+      <StaticControlsContext.Provider value={controls.value}>
+        {children}
+      </StaticControlsContext.Provider>
+    </div>
   )
 }
 
+const OV_ROW =
+  '[display:flex] [align-items:center] [gap:8px] [width:100%] [text-align:left] [padding:8px] [border-radius:var(--r-md)] [border:1px_solid_var(--border)] [background:var(--surface-1)] [color:var(--text-1)] [transition:background-color_var(--dur-fast)_var(--ease-out),_border-color_var(--dur-fast)_var(--ease-out)] [font-family:var(--sans)] [cursor:pointer]'
+const hoverOn = (e: MouseEvent<HTMLElement>) => {
+  e.currentTarget.style.background = 'var(--hover)'
+  e.currentTarget.style.borderColor = 'var(--border-strong)'
+}
+const hoverOff = (e: MouseEvent<HTMLElement>) => {
+  // Hand the rest state back to CSS: themes paint these rows clear
+  // over the translucent section material.
+  e.currentTarget.style.removeProperty('background')
+  e.currentTarget.style.removeProperty('border-color')
+}
+
+/** Where a row's task lives: the sub-project alone inside one project, the
+    owning project too when every project is on screen at once. */
+function OvRowPlace({ it, wide }: { it: IssueVM; wide: boolean }) {
+  const place = P.projectPlace(it.project, wide)
+  if (!place) return null
+  return (
+    <HoverTooltip content={P.placeLabel(place)}>
+      <span tabIndex={-1} className={cn('truncate', wide ? 'max-w-[190px]' : 'max-w-[120px]')}>
+        <ProjectName {...place} />
+      </span>
+    </HoverTooltip>
+  )
+}
+
+/* these rows no longer carry the board's delay edge, only a plain border:
+   every row in an "Overdue & at risk" section is at risk by definition, so the
+   edge was restating the heading above it rather than adding anything */
+const OvPausedRow = memo(function OvPausedRow({ it, wide, onOpen }: OvRowProps) {
+  return (
+    <OvRowFrame>
+      <Button
+        type="button"
+        data-ovrow={it.id}
+        data-focus-key="row"
+        onClick={() => onOpen(it.id)}
+        title={it.title}
+        className={OV_ROW}
+        onMouseEnter={hoverOn}
+        onMouseLeave={hoverOff}
+        variant="unstyled"
+      >
+        <PausedMark />
+        <span className="min-w-0 flex-1">
+          <span className="line-clamp-2 break-words text-base leading-[1.4]">{it.title}</span>
+          <span className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-3">
+            <OvRowPlace it={it} wide={wide} />
+          </span>
+        </span>
+        {it.owner && <Avatar id={it.owner} size={28} />}
+      </Button>
+    </OvRowFrame>
+  )
+})
+
 /* one deadline row — either already overdue, or (delay-tracking projects,
    0064) projected by the capacity walk to miss its due date */
-function OvAtRiskRow({
-  it,
-  place,
-  wide,
-  onOpen,
-}: {
-  it: IssueVM
-  place: ProjectPlace | null
-  wide: boolean
-  onOpen: (id: string) => void
-}) {
+const OvAtRiskRow = memo(function OvAtRiskRow({ it, wide, onOpen }: OvRowProps) {
   const overdue = it.due < P.TODAY_ISO
   const delay = overdue ? null : P.delayOf(it)
   const days = overdue
@@ -591,49 +617,43 @@ function OvAtRiskRow({
       ? `, projected to finish in the week of ${P.fmtDate(P.weekToDate(delay.fin))}`
       : ''
   return (
-    <Button
-      type="button"
-      data-atrisk={it.id}
-      onClick={() => onOpen(it.id)}
-      title={`${it.title}, due ${P.fmtISO(it.due)}${finNote}`}
-      className="[display:flex] [align-items:center] [gap:8px] [width:100%] [text-align:left] [padding:8px] [border-radius:var(--r-md)] [border:1px_solid_var(--border)] [background:var(--surface-1)] [color:var(--text-1)] [transition:background-color_var(--dur-fast)_var(--ease-out),_border-color_var(--dur-fast)_var(--ease-out)] [font-family:var(--sans)] [cursor:pointer]"
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = 'var(--hover)'
-        e.currentTarget.style.borderColor = 'var(--border-strong)'
-      }}
-      onMouseLeave={(e) => {
-        // Hand the rest state back to CSS: themes paint these rows clear
-        // over the translucent section material.
-        e.currentTarget.style.removeProperty('background')
-        e.currentTarget.style.removeProperty('border-color')
-      }}
-      variant="unstyled"
-    >
-      {/* the icon separates this section's rows from the paused ones by SHAPE —
+    <OvRowFrame>
+      <Button
+        type="button"
+        data-atrisk={it.id}
+        data-focus-key="row"
+        onClick={() => onOpen(it.id)}
+        title={`${it.title}, due ${P.fmtISO(it.due)}${finNote}`}
+        className={OV_ROW}
+        onMouseEnter={hoverOn}
+        onMouseLeave={hoverOff}
+        variant="unstyled"
+      >
+        {/* the icon separates this section's rows from the paused ones by SHAPE —
           the red date text beside it is the one signal that carries a number */}
-      <Icon name="calendar" size={13} color="var(--text-3)" />
-      <span className="min-w-0 flex-1">
-        <span className="line-clamp-2 break-words text-base leading-[1.4]">{it.title}</span>
-        <span className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-3">
-          <span className="whitespace-nowrap !font-mono text-danger">
-            {P.fmtISO(it.due)}, {overdue ? `${days}d overdue` : 'projected to miss'}
+        <Icon name="calendar" size={13} color="var(--text-3)" />
+        <span className="min-w-0 flex-1">
+          <span className="line-clamp-2 break-words text-base leading-[1.4]">{it.title}</span>
+          <span className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-3">
+            <span className="whitespace-nowrap !font-mono text-danger">
+              {P.fmtISO(it.due)}, {overdue ? `${days}d overdue` : 'projected to miss'}
+            </span>
+            <OvRowPlace it={it} wide={wide} />
           </span>
-          {place && (
-            <HoverTooltip content={P.placeLabel(place)}>
-              <span
-                tabIndex={-1}
-                className={cn('truncate', wide ? 'max-w-[190px]' : 'max-w-[120px]')}
-              >
-                <ProjectName {...place} />
-              </span>
-            </HoverTooltip>
-          )}
         </span>
-      </span>
-      {it.owner && <Avatar id={it.owner} size={28} />}
-    </Button>
+        {it.owner && <Avatar id={it.owner} size={28} />}
+      </Button>
+    </OvRowFrame>
   )
-}
+})
+
+/* A list row's height before it renders, and the least it takes, for the
+   rows a first screen holds. */
+const OV_ROW_ESTIMATE_PX = 62
+const OV_ROW_MIN_PX = 54
+const rowKey = (it: IssueVM) => it.id
+const rowEstimate = () => OV_ROW_ESTIMATE_PX
+const pendingRows = (n: number) => `Loading ${n} more ${n === 1 ? 'task' : 'tasks'}`
 
 function OvMilestoneRow({
   m,
@@ -804,6 +824,21 @@ type OverviewActions = {
 function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions }) {
   const mobile = useMobile()
   const { paneRef } = useOverviewPanelClipping(!mobile)
+  /* The at-risk and paused lists mount the rows of the first screen at
+     once and the rest in slices once they hold more than SYNC_LIMIT tasks
+     together. */
+  const [scheduler] = useStateO(createMountScheduler)
+  useMountGuards(scheduler)
+  const scrollRef = useCallback(
+    (pane: HTMLDivElement | null) => {
+      paneRef(pane)
+      scheduler.setRoot(pane)
+    },
+    [paneRef, scheduler],
+  )
+  const [firstScreen] = useStateO(() => Math.ceil((window.innerHeight + 500) / OV_ROW_MIN_PX))
+  // App makes its actions again every render; the rows keep one identity
+  const openIssue = useLatest((id: string) => actions.openIssue(id))
   /* Which column the health table is sorted on. It opens on the worst first —
      "which of these is in trouble" is the question the section exists to
      answer, and a table that opens alphabetically makes you click to ask it.
@@ -891,13 +926,18 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
     .sort((a, b) => (a.due < b.due ? -1 : 1))
   const msSorted = info.milestones.slice().sort((a, b) => a.week - b.week)
   const nextMs = msSorted.find((m) => m.week >= P.TODAY_WEEK)
-  // where a row's task lives — the sub-project alone inside one project, the
-  // owning project too when every project is on screen at once
-  const rowPlace = (it: IssueVM) => P.projectPlace(it.project, wide)
+  const initial =
+    atRiskIssues.length + pausedIssues.length <= SYNC_LIMIT ? Number.POSITIVE_INFINITY : firstScreen
+  const atRiskRow = (it: IssueVM) => (
+    <OvAtRiskRow key={it.id} it={it} wide={wide} context={P.contextVersion} onOpen={openIssue} />
+  )
+  const pausedRow = (it: IssueVM) => (
+    <OvPausedRow key={it.id} it={it} wide={wide} context={P.contextVersion} onOpen={openIssue} />
+  )
 
   return (
     <div
-      ref={paneRef}
+      ref={scrollRef}
       data-scroll
       data-screen-label="Overview"
       className="overview-view [flex:1] [overflow:auto]"
@@ -953,11 +993,20 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
              In My view a project I have nothing in gets no row at all — an
              all-zero health row would say "this project is stalled" when it
              only means the work there isn't mine. */
+            // one pass over the scope's tasks for every group, not one per group
+            const groupOf = new Map<string, number[]>()
+            info.groups.forEach((g, i) => {
+              for (const id of g.subIds) groupOf.set(id, [...(groupOf.get(id) ?? []), i])
+            })
+            const held: IssueVM[][] = info.groups.map(() => [])
+            for (const it of scoped) for (const i of groupOf.get(it.project) ?? []) held[i].push(it)
+            const subIdLists = info.groups.map((g) => g.subIds)
+            const progress = P.progressByGroups(subIdLists, info.only)
+            const remaining = P.remainingByGroups(subIdLists, info.only)
             const rows = info.groups
-              .map((g) => {
-                const set = new Set(g.subIds)
-                const issues = scoped.filter((i) => set.has(i.project))
-                const gp = P.progressIn(g.subIds, info.only)
+              .map((g, gi) => {
+                const issues = held[gi]
+                const gp = progress[gi]
                 const leadId = P.leadOf(g.proj.id)
                 /* Projected verdicts (0064), gated PER ISSUE: `delayOf` returns the
                raw projection for every issue — only `delayColor` consults the
@@ -975,7 +1024,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
                   pct: gp.pct,
                   done: gp.done,
                   total: gp.total,
-                  remaining: P.remainingIn(g.subIds, info.only),
+                  remaining: remaining[gi],
                   lead: leadId ? P.user(leadId) : null,
                   late: delayCount('late'),
                   behind: delayCount('behind'),
@@ -1040,15 +1089,17 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
         >
           {atRiskIssues.length ? (
             <div className="[display:flex] [flex-direction:column] [gap:8px]">
-              {atRiskIssues.map((it) => (
-                <OvAtRiskRow
-                  key={it.id}
-                  it={it}
-                  place={rowPlace(it)}
-                  wide={wide}
-                  onOpen={actions.openIssue}
-                />
-              ))}
+              <DeferredList
+                id="overview-at-risk"
+                items={atRiskIssues}
+                keyOf={rowKey}
+                render={atRiskRow}
+                estimate={rowEstimate}
+                gap={8}
+                initial={initial}
+                scheduler={scheduler}
+                label={pendingRows}
+              />
             </div>
           ) : (
             <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic] [padding:4px_2px]">
@@ -1059,15 +1110,17 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
         <OvSection title={`Paused tasks${pausedIssues.length ? `, ${pausedIssues.length}` : ''}`}>
           {pausedIssues.length ? (
             <div className="[display:flex] [flex-direction:column] [gap:8px]">
-              {pausedIssues.map((it) => (
-                <OvPausedRow
-                  key={it.id}
-                  it={it}
-                  place={rowPlace(it)}
-                  wide={wide}
-                  onOpen={actions.openIssue}
-                />
-              ))}
+              <DeferredList
+                id="overview-paused"
+                items={pausedIssues}
+                keyOf={rowKey}
+                render={pausedRow}
+                estimate={rowEstimate}
+                gap={8}
+                initial={initial}
+                scheduler={scheduler}
+                label={pendingRows}
+              />
             </div>
           ) : (
             <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic] [padding:4px_2px]">

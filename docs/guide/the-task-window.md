@@ -1,5 +1,7 @@
 Open a task to read its discussion and details. The breadcrumb links to its
-project and sub-project Boards. Click the title to edit it. The header also
+project and sub-project Boards. Selecting one keeps the window open over that
+Board and shows the task's card behind it; on a phone it closes the window
+and shows the task's row ([Showing a task on the Board](./the-board.md#showing-a-task-on-the-board)). Click the title to edit it. The header also
 contains the subscription control ([Following tasks](./working-together.md#your-inbox)), permanent ID, **Close**, and an
 **…** menu with **Copy task ID**, **Copy link**, **Move to sub-project…** and
 **Archive or delete…**. With edit access, **Archive or delete…** opens one
@@ -11,7 +13,8 @@ Status and Assignee. Details holds the description, other properties,
 attachments and relationships. Switching tabs preserves unsent drafts.
 
 In the desktop Inbox, the task's discussion fills the right pane. Use
-**Open task in board** in its menu for the full task window ([Your inbox](./working-together.md#your-inbox)).
+**Open task in board** in its menu for the full task window over the Board,
+with the task's card shown behind it ([Your inbox](./working-together.md#your-inbox)).
 
 ## The discussion column
 

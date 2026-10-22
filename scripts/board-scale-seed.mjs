@@ -10,12 +10,16 @@
  * environment, and loopback origins only. Seed Northstar first with
  * `marketing-demo.mjs seed --local`. The tasks are created as Nora, the
  * organization's admin, through issues:create and issues:createParent, one
- * at a time, so every one passes the app's own checks. Their titles start
- * with "Board scale" and their number, and a second run adds only the
- * numbers still missing, up to --tasks. The mix follows the benchmark's varied workspace: every
- * status, a parent with three subtasks every 25th task, a due date every 7th
- * (every other one past), a pause every 31st, a title of the most characters
- * a title holds (LIMITS.title) every 13th and no owner every 11th. */
+ * at a time, so every one passes the app's own checks. Their titles read
+ * like real work, as long and as wide as Northstar's, so the Board's height
+ * estimates meet real text; each task's description names its number. A
+ * second run adds only what is still missing, up to --tasks, and finishes a
+ * family a stopped run left partial or a smaller --tasks left as tasks of
+ * their own. The mix follows the benchmark's varied
+ * workspace: every status, a parent with three subtasks every 25th task, a
+ * due date every 7th (every other one past), a pause every 31st, a title of
+ * the most characters a title holds (LIMITS.title) every 13th and no owner
+ * every 11th. */
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -25,11 +29,69 @@ import { LIMITS } from './limits.mjs'
 import { DemoCliError, resolveTarget } from './marketing-demo.mjs'
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const PREFIX = 'Board scale'
 const ACTOR = 'nora@demo.qivo.io'
 const STATUSES = ['backlog', 'todo', 'progress', 'review', 'done']
 const PRIORITIES = ['medium', 'high', 'low', 'medium', 'urgent', 'low', 'medium']
-const WORDS = ['calibrate', 'review', 'ship', 'test', 'document']
+/* Title parts in Northstar's words: a verb, what it acts on and sometimes
+   where or when, about 40 characters together as Northstar's titles are. */
+const VERBS = [
+  'Review',
+  'Draft',
+  'Validate',
+  'Prepare',
+  'Measure',
+  'Define',
+  'Test',
+  'Approve',
+  'Document',
+  'Compare',
+  'Build',
+  'Tune',
+  'Map',
+  'Write',
+  'Verify',
+  'Install',
+  'Shortlist',
+  'Explore',
+  'Agree',
+]
+const OBJECTS = [
+  'the revision B schematic',
+  'versioned telemetry payloads',
+  'airflow through the enclosure',
+  'the pilot assembly instructions',
+  'standby power consumption',
+  'the setup light patterns',
+  'the room comparison dashboard',
+  'alert duration thresholds',
+  'the customer onboarding guide',
+  'alternates for long-lead parts',
+  'the antenna matching network',
+  'signed firmware rollback',
+  'serial labels and setup codes',
+  'the pilot support playbook',
+  'sensor readings',
+  'the end-of-line functional check',
+  'the recyclable packaging insert',
+  'the beta checklist',
+  'radio pre-compliance results',
+  'the warm-white enclosure finish',
+  'keyboard navigation',
+  'notification preferences',
+]
+const TAILS = [
+  '',
+  ' for the pilot',
+  ' with the reference instrument',
+  ' before launch',
+  '',
+  ' at the three pilot offices',
+  ' after reconnecting',
+  ' for shared workspaces',
+  '',
+]
+/* What a seeded task's description says, with its number. */
+const MARK = 'Seeded by board-scale-seed as task'
 /* The most seeded tasks. At 10,000 tasks and their 400 parents
    snapshot:forMe already runs close to Convex's 1s limit on a local
    backend, so a larger organization would no longer load. */
@@ -65,20 +127,29 @@ export function parseSeedArgs(args) {
 /** A date `days` from today, as the app stores due dates. */
 const day = (days) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10)
 
+/** The `n`th title the seed writes: a verb, an object and a tail, taken
+    at different strides so neighbours differ. */
+export function seededTitle(n) {
+  const part = (k) =>
+    `${VERBS[(n + k) % VERBS.length]} ${OBJECTS[((n + k) * 5 + Math.floor((n + k) / VERBS.length)) % OBJECTS.length]}${TAILS[(n + k) % TAILS.length]}`
+  if (n % 13) return part(0)
+  // the most characters a title holds, in clauses, cut at a word
+  let title = part(0)
+  for (let k = 1; title.length < LIMITS.title.max; k++)
+    title += `, then ${part(k * 7).replace(/^\S+/, (verb) => verb.toLowerCase())}`
+  const cut = title.slice(0, LIMITS.title.max + 1)
+  return cut.slice(0, cut.lastIndexOf(' ')).replace(/[, ]+$/, '')
+}
+
 /** The task fields of the `n`th seeded task in `org`'s `project`, owned by `owner`. */
 export function seededTask(n, org, project, owner) {
   const status = STATUSES[n % STATUSES.length]
-  let title = `${PREFIX} ${WORDS[n % WORDS.length]} task ${n + 1}`
-  if (n % 13 === 0)
-    title = `${title} with a longer note on the work it covers `
-      .repeat(8)
-      .slice(0, LIMITS.title.max)
-      .trim()
   return {
     id: crypto.randomUUID(),
     org_id: org,
     project_id: project,
-    title,
+    title: seededTitle(n),
+    description: `${MARK} ${n + 1}.`,
     status,
     priority: PRIORITIES[n % PRIORITIES.length],
     assignee_id: n % 11 === 0 ? null : owner,
@@ -87,31 +158,63 @@ export function seededTask(n, org, project, owner) {
   }
 }
 
-/** The numbers of the seeded tasks in `issues`, from their titles. */
-export function seededNumbers(issues) {
-  const numbers = new Set()
-  for (const { title } of issues) {
-    const match = /^Board scale (?!parent)\S+ task (\d+)/.exec(title)
-    if (match) numbers.add(Number(match[1]) - 1)
+/** The seeded tasks in `issues` by number, each with its parent's id or
+    null: from the description's mark, or the title an earlier version of
+    the seed wrote ("Board scale ship task 12"). */
+export function seededTasks(issues) {
+  const found = new Map()
+  const marked = new RegExp(`^${MARK} (\\d+)\\.$`)
+  for (const task of issues) {
+    const match =
+      marked.exec(task.description ?? '') ??
+      /^Board scale (?!parent)\S+ task (\d+)/.exec(task.title)
+    if (match) found.set(Number(match[1]) - 1, { task, parent: task.parent_id ?? null })
   }
-  return numbers
+  return found
 }
 
-/** The tasks still to create for `tasks` seeded ones, given the `present`
-    numbers: one job per task, and one per family (every 25th task, its
-    parent and the three tasks after it), made in order. A family whose
-    first task exists is left as it is, so an interrupted family stays
-    partial rather than gaining a second parent. */
+/** The work still to do for `tasks` seeded ones, given the `present` ones
+    (seededTasks): one job per missing task, and one per family (every 25th
+    task, its parent and the three tasks after it) that is not complete. A
+    family job names the parts it lacks, so a run that stopped partway
+    through a family is finished, under the parent it already made:
+    `head` when its first task is missing (else `existing` is that task),
+    `parent` the existing parent's id (null when it still needs one),
+    `missing` the subtasks to add and `attach` the existing ones not yet
+    under that parent, such as tasks a run with a smaller --tasks seeded
+    on their own. */
 export function planSeed(tasks, present) {
   const list = []
   let added = 0
   for (let n = 0; n < tasks; n++) {
     const family = n % 25 === 0 && n + 3 < tasks
-    if (!present.has(n)) {
-      list.push({ first: n, family })
-      added += family ? 4 : 1
+    if (!family) {
+      if (!present.has(n)) {
+        list.push({ first: n, family: false })
+        added++
+      }
+      continue
     }
-    if (family) n += 3
+    const head = !present.has(n)
+    const parent = present.get(n)?.parent ?? null
+    const missing = [1, 2, 3].filter((k) => !present.has(n + k))
+    const attach = [1, 2, 3]
+      .map((k) => present.get(n + k))
+      .filter((sibling) => sibling && (!parent || sibling.parent !== parent))
+      .map((sibling) => sibling.task)
+    if (head || !parent || missing.length || attach.length) {
+      list.push({
+        first: n,
+        family: true,
+        head,
+        existing: present.get(n)?.task ?? null,
+        parent,
+        missing,
+        attach,
+      })
+      added += Number(head) + missing.length
+    }
+    n += 3
   }
   return { list, added }
 }
@@ -151,7 +254,7 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
       owners.get(issue.project_id).add(issue.assignee_id)
   const projects = [...owners.keys()]
   if (!projects.length) throw new DemoCliError('Northstar has no sub-projects to fill.')
-  const jobs = planSeed(options.tasks, seededNumbers(issues))
+  const jobs = planSeed(options.tasks, seededTasks(issues))
   log(`${jobs.added} seeded tasks to add in ${projects.length} sub-projects.`)
   let made = 0
   for (const job of jobs.list) {
@@ -159,25 +262,46 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
     const people = [...owners.get(project)]
     const owner = people.length ? people[job.first % people.length] : actor.id
     const head = seededTask(job.first, org, project, owner)
-    const parent = crypto.randomUUID()
+    // a family's existing head keeps its own id, project and owner
+    const existing = job.family ? job.existing : null
+    const parent = job.parent ?? crypto.randomUUID()
+    const subtaskOwner = (existing ? existing.assignee_id : head.assignee_id) ?? actor.id
+    const familyProject = existing?.project_id ?? project
     const calls = job.family
       ? [
-          ['issues:create', head],
-          [
-            'issues:createParent',
-            {
-              id: head.id,
-              org_id: org,
-              parent_id: parent,
-              title: `${PREFIX} parent ${job.first + 1}`,
-            },
-          ],
-          ...[1, 2, 3].map((k) => [
+          ...(job.head ? [['issues:create', head]] : []),
+          ...(job.parent
+            ? []
+            : [
+                [
+                  'issues:createParent',
+                  {
+                    id: existing?.id ?? head.id,
+                    org_id: org,
+                    parent_id: parent,
+                    title: `Coordinate ${OBJECTS[job.first % OBJECTS.length]}`,
+                  },
+                ],
+              ]),
+          ...job.missing.map((k) => [
             'issues:create',
             {
-              ...seededTask(job.first + k, org, project, head.assignee_id ?? actor.id),
+              ...seededTask(job.first + k, org, familyProject, subtaskOwner),
               parent_id: parent,
             },
+          ]),
+          // a subtask stays in its parent's top-level project, so one seeded
+          // on its own elsewhere moves to the family's sub-project first
+          ...job.attach.flatMap((task) => [
+            ...(task.project_id === familyProject
+              ? []
+              : [
+                  [
+                    'issues:move',
+                    { id: task.id, org_id: org, project_id: familyProject, detach_parent: true },
+                  ],
+                ]),
+            ['issues:update', { id: task.id, org_id: org, patch: { parent_id: parent } }],
           ]),
         ]
       : [['issues:create', head]]
@@ -186,7 +310,7 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
         await client.mutation(ref(name), fields)
       } catch (error) {
         throw new DemoCliError(
-          `${name} refused task "${fields.title}": ${error.data?.message ?? error.message}`,
+          `${name} refused task "${fields.title ?? fields.id}": ${error.data?.message ?? error.message}`,
         )
       }
       if (name === 'issues:create' && ++made % 500 === 0) log(`${made} seeded tasks added`)

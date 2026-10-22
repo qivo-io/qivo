@@ -110,6 +110,10 @@ Two lists help complete assignments:
 - **Needs a reviewer** includes In Review tasks without a reviewer, longest
   waiting first. Use **Reviewer** to assign one.
 
+In a very long list, rows below the first screen appear in the first moments
+after the opening shows, in shaded space; searching the page or printing
+loads them all first.
+
 Assigning someone removes the task from the list and places open work on the
 new owner's page. Task titles open the task window.
 
@@ -186,7 +190,9 @@ Use the row controls to change tasks without opening them:
   The window closes once the comment is saved, and the note cannot change
   while Qivo saves it. If Qivo refuses it, for example after you lose edit
   access, your note stays in the window, also if you closed it meanwhile.
-- **Board / Roadmap** opens the task there. Board opens its task window;
+- **Board / Roadmap** opens the task there. Board opens its task window and
+  shows its card behind it, scrolled into view and ringed until a moment
+  after the window closes ([Showing a task on the Board](./the-board.md#showing-a-task-on-the-board)).
   Roadmap finds its bar or unplanned row without starting a planning session.
 - The **review tick** marks the task reviewed without changing it.
 

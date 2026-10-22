@@ -24,9 +24,11 @@ const at = process.argv.indexOf('--tasks')
 const tasks = at < 0 ? 10_000 : Number(process.argv[at + 1])
 /* The checks below need a Board that mounts in slices (over 300 cards, and
    the parents of the generated workspace are no cards of their own) with
-   cards still waiting in the first lane's To Do when they start. Cells near
-   the view mount first, so at 2,000 tasks that cell is often whole by then;
-   3,000 tasks put about 100 cards there. */
+   cards still waiting in the first lane's To Do when they start: the drag
+   check after the Tab and focus checks runs on that cell while slices go
+   on.
+   Cells near the view mount first, so at 2,000 tasks that cell is often
+   whole by then; 3,000 tasks put about 100 cards there. */
 const LEAST_TASKS = 3000
 if (!Number.isInteger(tasks) || tasks < LEAST_TASKS) {
   console.error(`[board-large] --tasks takes a whole number of ${LEAST_TASKS} or more`)
@@ -129,20 +131,38 @@ try {
 
   // Tab from the last mounted card of a cell into its waiting space lands
   // on the next card's first control: a task's title, or a parent card's
-  // heading.
+  // heading. The page's animation frames are held meanwhile, also for the
+  // focus check after it: slices wait for a frame once they used theirs
+  // (src/lib/mountScheduler.ts), so the Board stops mounting and the cells
+  // keep their waiting space through the checks, however fast the machine
+  // is.
+  await page.evaluate(() => {
+    const held = []
+    window.__frames = { held, original: window.requestAnimationFrame }
+    window.requestAnimationFrame = (callback) => held.push(callback)
+  })
+  // the scheduler asked for a frame: no slice runs until it gets one
+  await page.waitForFunction(() => window.__frames.held.length > 0, null, { polling: 10 })
   const lane = page.locator('.board-lane').first()
   const todo = lane.locator('[data-board-cell][data-status="todo"]')
   const progress = lane.locator('[data-board-cell][data-status="progress"]')
-  const before = await todo.evaluate((cell) => {
-    if (!cell.querySelector('[data-board-pending]')) return -1
+  // the first cell, in Board order, that holds cards and still waits for more
+  const waiting = await page.evaluate(() => {
+    const cells = [...document.querySelectorAll('[data-board-cell]')]
+    const cell = cells.find(
+      (it) => it.querySelector('[data-board-pending]') && it.querySelector('.board-card'),
+    )
+    if (!cell) return null
+    cell.setAttribute('data-smoke-cell', '')
     const keys = cell.querySelectorAll('[data-focus-key]')
     keys[keys.length - 1].focus()
     return cell.querySelectorAll('.board-card').length
   })
-  assert.ok(before > 0, "The first lane's To Do must still wait for cards")
+  assert.ok(waiting > 0, 'A cell must still wait for cards')
   await page.keyboard.press('Tab')
   assert.deepEqual(
-    await todo.evaluate((cell) => {
+    await page.evaluate(() => {
+      const cell = document.querySelector('[data-smoke-cell]')
       const card = document.activeElement?.closest('.board-card')
       const first = [...(card?.querySelectorAll('[data-focus-key]') ?? [])].find(
         (element) => element.tabIndex >= 0,
@@ -152,24 +172,49 @@ try {
         first: !!first && first === document.activeElement,
       }
     }),
-    { index: before, first: true },
+    { index: waiting, first: true },
     'Tab into the waiting space must land on the next card',
   )
   log('Tab through the waiting space lands on the next card')
 
-  // Focus stays on a card that moves into a cell whose cards still wait.
-  const moved = await todo.locator('[data-card]').nth(2).getAttribute('data-card')
-  await todo.locator(`[data-card="${moved}"] [data-focus-key="title"]`).focus()
-  assert.ok(await page.evaluate(pending), 'The Board must still be mounting')
-  await page.evaluate((id) => window.PLANNER.updateIssue(id, { status: 'review' }), moved)
+  // Focus stays on a card that moves into a cell whose cards still wait:
+  // the first waiting cell, and a card from another cell of its lane.
+  const move = await page.evaluate(() => {
+    const cells = [...document.querySelectorAll('[data-board-cell]')]
+    for (const to of cells) {
+      if (!to.querySelector('[data-board-pending]')) continue
+      const lane = to.getAttribute('data-board-cell')
+      const from = cells.find(
+        (cell) =>
+          cell !== to &&
+          cell.getAttribute('data-board-cell') === lane &&
+          cell.querySelectorAll('[data-card]').length > 1,
+      )
+      const card = from?.querySelectorAll('[data-card]')[1]
+      if (card)
+        return { id: card.getAttribute('data-card'), status: to.getAttribute('data-status') }
+    }
+    return null
+  })
+  assert.ok(move, 'A waiting cell must have a card of its lane to take')
+  await page.locator(`[data-card="${move.id}"] [data-focus-key="title"]`).focus()
+  await page.evaluate(({ id, status }) => window.PLANNER.updateIssue(id, { status }), move)
   await page.waitForFunction(
-    (id) =>
+    ({ id, status }) =>
       document.activeElement
-        ?.closest('[data-status="review"] [data-card]')
+        ?.closest(`[data-status="${status}"] [data-card]`)
         ?.getAttribute('data-card') === id,
-    moved,
+    move,
+    { polling: 20 },
   )
   log('focus follows a card into a waiting cell')
+  // the frames go back, and the ones held run
+  await page.evaluate(() => {
+    const { held, original } = window.__frames
+    window.requestAnimationFrame = original
+    delete window.__frames
+    for (const callback of held) original(callback)
+  })
 
   // A drag while the Board mounts writes once.
   const dragged = todo.locator('[data-card][draggable="true"]').first()

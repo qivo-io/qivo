@@ -34,8 +34,25 @@ export function useStaticControls() {
 
 const ROWS = '[data-card], [data-parent-heading]'
 
-/** The control `mark` names among the rows `root` holds. */
-function markedControl(root: HTMLElement, mark: TaskFocusMark) {
+/** Where focus is in a row: a task row's mark, or in a row that is not a
+    task card (an Overview row), the control's data-focus-key. */
+type FocusAt = TaskFocusMark | { taskId: null; control: string }
+
+/** Where `active` is, or null when it is in no control the row can find
+    again. */
+function focusAt(active: Element): FocusAt | null {
+  const control = active.closest<HTMLElement>('[data-focus-key]')?.dataset.focusKey
+  return markTaskFocus(active) ?? (control ? { taskId: null, control } : null)
+}
+
+/** The control `mark` names among the rows `root` holds, or `root` itself. */
+function markedControl(root: HTMLElement, mark: FocusAt) {
+  if (mark.taskId === null)
+    return (
+      [root, ...root.querySelectorAll<HTMLElement>('[data-focus-key]')].find(
+        (element) => element.dataset.focusKey === mark.control,
+      ) ?? null
+    )
   for (const row of root.querySelectorAll<HTMLElement>(ROWS)) {
     if ((row.dataset.card ?? row.dataset.parentHeading) !== mark.taskId) continue
     const control = [row, ...row.querySelectorAll<HTMLElement>('[data-focus-key]')].find(
@@ -56,7 +73,7 @@ export function useLiveControls(root: RefObject<HTMLElement | null>) {
   const [live, setLive] = useState(false)
   // what to restore once the live controls are in
   const handover = useRef<{
-    focus: TaskFocusMark | null
+    focus: FocusAt | null
     wrap: number
     pointer?: { x: number; y: number }
   } | null>(null)
@@ -74,11 +91,11 @@ export function useLiveControls(root: RefObject<HTMLElement | null>) {
         if (wrapAt >= 0) handover.current.wrap = wrapAt
         if (pointer) handover.current.pointer = pointer
         if (!handover.current.focus && active && element.contains(active))
-          handover.current.focus = markTaskFocus(active)
+          handover.current.focus = focusAt(active)
         return
       }
       handover.current = {
-        focus: active && element.contains(active) ? markTaskFocus(active) : null,
+        focus: active && element.contains(active) ? focusAt(active) : null,
         wrap: wrapAt,
         pointer,
       }

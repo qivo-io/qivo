@@ -8,16 +8,19 @@ import {
   useState,
 } from 'react'
 import { lastInputWasPointer } from '@/lib/focusVisibility'
+import { keptOwners } from '@/lib/keptOwners'
 import type { MountScheduler } from '@/lib/mountScheduler'
 import { useLatest } from '@/lib/useLatest'
 import { Button } from './ui/button'
 import './DeferredList.css'
 
-/* The most items a slice adds to one block before it opens the next. A
-   slice renders only the block that grows, so its cost does not grow with
-   the items already mounted. A block is also what the browser lays out
-   when it comes into view (DeferredList.css), so a small one keeps that
-   frame short. */
+/* The most items a slice adds to one block before it opens the next, by
+   default. A slice renders only the block that grows, so its cost does
+   not grow with the items already mounted. A block is also what the
+   browser lays out when it comes into view (DeferredList.css), so a small
+   one keeps that frame short, and costs more while mounting: the browser
+   checks each block on every frame. The Board takes blocks of 16
+   (BOARD_BLOCK_SIZE); a light list keeps 64. */
 const BLOCK_SIZE = 64
 /* The most items a render mounts at once when items arrive above the
    mounted boundary, as when a filter is cleared. */
@@ -40,36 +43,11 @@ type Props<T extends object> = {
   label: (pending: number) => string
   /** puts the waiting space in a list item, for a list with role="list" */
   listRole?: boolean
+  /** the most items one block holds (BLOCK_SIZE by default) */
+  blockSize?: number
 }
 
 type Block<T> = { id: number; items: T[]; start: number }
-
-/** Which items keep the block they had: the longest run, in list order, of
-    owners that never decrease. Block ids rise down the list, so an item a
-    reorder moved across blocks breaks that order and only it changes
-    block; the items around it keep theirs. New items (no owner) keep none. */
-function keptOwners(owners: (number | undefined)[]) {
-  // patience sorting for the longest non-decreasing subsequence
-  const tails: number[] = []
-  const tailAt: number[] = []
-  const before = Array.from({ length: owners.length }, () => -1)
-  for (const [i, owner] of owners.entries()) {
-    if (owner === undefined) continue
-    let low = 0
-    let high = tails.length
-    while (low < high) {
-      const mid = (low + high) >> 1
-      if (tails[mid] <= owner) low = mid + 1
-      else high = mid
-    }
-    tails[low] = owner
-    tailAt[low] = i
-    before[i] = low > 0 ? tailAt[low - 1] : -1
-  }
-  const kept = Array.from({ length: owners.length }, () => false)
-  for (let i = tails.length ? tailAt[tails.length - 1] : -1; i >= 0; i = before[i]) kept[i] = true
-  return kept
-}
 
 /** How a block of a list that mounts in slices is drawn: its items'
     estimated height with their gaps, and whether it still grows. */
@@ -141,6 +119,7 @@ export function DeferredList<T extends object>({
   scheduler,
   label,
   listRole = false,
+  blockSize = BLOCK_SIZE,
 }: Props<T>) {
   /* What is mounted follows what the last render mounted: every item it
      mounted that is still in the list stays mounted, wherever a reorder,
@@ -244,12 +223,11 @@ export function DeferredList<T extends object>({
      A block is boxed or plain for good, as a box that came and went would
      remount every card in it. A plain block takes any number of items
      while the list renders whole; once it mounts in slices, new items go
-     to new boxed blocks of BLOCK_SIZE, above the plain ones too. */
+     to new boxed blocks of `blockSize`, above the plain ones too. */
   const plainIds = useRef<ReadonlySet<number> | null>(null)
   const sliced = initial !== Number.POSITIVE_INFINITY
   const plain = (id: number) => plainIds.current?.has(id) ?? false
-  const capacity = (id: number) =>
-    plain(id) ? (sliced ? 0 : Number.POSITIVE_INFINITY) : BLOCK_SIZE
+  const capacity = (id: number) => (plain(id) ? (sliced ? 0 : Number.POSITIVE_INFINITY) : blockSize)
   /* A block between `low` and the kept block `high` (none: the end), or
      null when no id is left between them. Ids rise down the list. */
   const between = (low: number, high: number | undefined) => {
@@ -376,9 +354,13 @@ export function DeferredList<T extends object>({
     const after = itemElements(parent, holder)
     const item = fromAbove ? after[before ? after.indexOf(before) + 1 : 0] : after.at(-1)
     if (!(item instanceof HTMLElement)) return
-    // the item's tab stops, as Tab itself would reach them
+    // the item's tab stops, as Tab itself would reach them: a disabled
+    // control takes no focus
     const controls = [item, ...item.querySelectorAll<HTMLElement>('[data-focus-key]')].filter(
-      (element) => element.dataset.focusKey !== undefined && element.tabIndex >= 0,
+      (element) =>
+        element.dataset.focusKey !== undefined &&
+        element.tabIndex >= 0 &&
+        !element.matches(':disabled'),
     )
     controls[fromAbove ? 0 : controls.length - 1]?.focus()
   }

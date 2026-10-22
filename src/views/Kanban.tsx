@@ -15,6 +15,7 @@ import {
   sideEagerCounts,
 } from '@/lib/boardGroups'
 import { createMountScheduler, useMountGuards } from '@/lib/mountScheduler'
+import { type RevealRequest, useReveal } from '@/lib/reveal'
 import { Avatar, EmptyState, Icon, ProjectName, StatusDot } from '../components/qivo'
 import { registerTaskMount, useFollowTaskFocus } from '../lib/taskFocus'
 import { useUpdateBlocker } from '../lib/updateSafety'
@@ -67,6 +68,14 @@ const CELL_CHROME_X = 8 * 2 + 1
    estimates. Before the first Board, the window less the sidebar. */
 let lastBoardWidth: number | null = null
 
+/* The cards in one block of a cell (DeferredList). A block is what the
+   browser lays out when it comes into view: scrolling a 5,000-task Board
+   for the first time, a frame took up to 380ms with blocks of 64 at 4x CPU
+   and 100 to 130ms with blocks of 16, about what the Board took before it
+   mounted in slices. Blocks of 8 made every frame of a later scroll
+   longer, as the browser checks each block on every frame. */
+const BOARD_BLOCK_SIZE = 16
+
 /* The first screen a Board mounts at once reaches this far below the
    window's height. */
 const FIRST_SCREEN_EXTRA_PX = 500
@@ -77,6 +86,20 @@ const pendingLabel = (n: number) => `Loading ${n} more ${n === 1 ? 'card' : 'car
 
 /** One status cell's tasks and cards, with the id its list mounts under. */
 type BoardCellCards = { key: string; items: IssueVM[]; groups: CardGroup[] }
+
+/** The task's card in each cell that shows it, in board order. A parent
+    heading repeats in every cell that holds one of its subtasks. */
+function holdingCards(cells: BoardCellCards[], taskId: string) {
+  return cells.flatMap((cell) => {
+    const group = cell.groups.find(
+      (it) =>
+        it.issues.some((task) => task.id === taskId) ||
+        it.parent?.id === taskId ||
+        it.ancestors.some((task) => task.id === taskId),
+    )
+    return group ? [{ cell: cell.key, group: group.key }] : []
+  })
+}
 
 type CardDropTarget = {
   projectIds?: string[]
@@ -546,11 +569,16 @@ function Kanban({
   filters,
   tweaks,
   actions,
+  revealTask = null,
+  onRevealConsumed,
 }: {
   info: ScopeInfo
   filters: IssueFilters
   tweaks: { metaViz: string }
   actions: Record<string, (...args: unknown[]) => void>
+  /** A task to scroll to and ring for a moment, behind its task window */
+  revealTask?: RevealRequest | null
+  onRevealConsumed?: () => void
 }) {
   // App makes its actions again every render; the cards keep one identity
   const onOpenIssue = useLatest(actions.openIssue)
@@ -780,17 +808,7 @@ function Kanban({
   React.useEffect(
     () =>
       registerTaskMount((mark) => {
-        // the task's card in each cell that shows it; a parent heading
-        // repeats in every cell that holds one of its subtasks
-        const holding = latestCells().flatMap((cell) => {
-          const group = cell.groups.find(
-            (it) =>
-              it.issues.some((task) => task.id === mark.taskId) ||
-              it.parent?.id === mark.taskId ||
-              it.ancestors.some((task) => task.id === mark.taskId),
-          )
-          return group ? [{ cell: cell.key, group: group.key }] : []
-        })
+        const holding = holdingCards(latestCells(), mark.taskId)
         // the remembered cell when it still holds the task, else the first:
         // focus needs one card, and mounting is synchronous work
         const one = holding.find((it) => it.cell === `${mark.cell}:${mark.status}`) ?? holding[0]
@@ -798,6 +816,12 @@ function Kanban({
       }),
     [latestCells, scheduler],
   )
+  // A jump to the Board (Team sync, the Inbox, the task crumb, search)
+  // shows the task's first card, mounting its cell through it.
+  useReveal(revealTask, onRevealConsumed, bodyRef, (id) => {
+    const [one] = holdingCards(latestCells(), id)
+    if (one) scheduler.mountThrough(one.cell, one.group)
+  })
 
   /** A cell's cards, mounting under the cell's key in slices past its first
       screen. Staleness is read only for the cards that mount. */
@@ -835,6 +859,7 @@ function Kanban({
         scheduler={scheduler}
         label={pendingLabel}
         listRole
+        blockSize={BOARD_BLOCK_SIZE}
       />
     )
   }

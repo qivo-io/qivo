@@ -404,6 +404,14 @@ describe('estimateCardHeight', () => {
       expect(height(base, width - 7)).toBeGreaterThanOrEqual(height(base, width))
   })
 
+  it('wraps a title by the widths of its characters and words', () => {
+    const one = height(card([task('a', 'Short')]))
+    // narrow letters fit one line where 8px a character would need two
+    expect(height(card([task('a', 'illicit little lilt fill')]))).toBe(one)
+    // wide ones need two where 8px a character would fit one
+    expect(height(card([task('a', 'MMMMMMMMMMMMMMMMMM')]))).toBe(height(card([task('a')])))
+  })
+
   it('caps a title at the four lines a card shows', () => {
     const long = height(card([task('a', 'word '.repeat(200))]))
     expect(height(card([task('a', 'word '.repeat(400))]))).toBe(long)

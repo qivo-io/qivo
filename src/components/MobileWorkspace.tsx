@@ -2,6 +2,7 @@ import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { SYNC_LIMIT } from '../lib/boardGroups'
 import { StaticControlsContext, useLiveControls } from '../lib/liveControls'
 import { createMountScheduler, useMountGuards } from '../lib/mountScheduler'
+import { type RevealRequest, useReveal } from '../lib/reveal'
 import { matchesAllWords } from '../lib/search'
 import { registerTaskMount, useFollowTaskFocus } from '../lib/taskFocus'
 import { useLatest } from '../lib/useLatest'
@@ -461,11 +462,16 @@ export function MobileTaskList({
   filters,
   setFilters,
   actions,
+  revealTask = null,
+  onRevealConsumed,
 }: {
   info: ScopeInfo
   filters: IssueFilters
   setFilters: React.Dispatch<React.SetStateAction<IssueFilters>>
   actions: Actions
+  /** A task to scroll to and ring for a moment, behind its task window */
+  revealTask?: RevealRequest | null
+  onRevealConsumed?: () => void
 }) {
   const [status, setStatus] = useState('all')
   const [filterOpen, setFilterOpen] = useState(false)
@@ -545,6 +551,11 @@ export function MobileTaskList({
       }),
     [latestShown, scheduler],
   )
+  // A jump to the Board shows the task's row, as the Board shows its card.
+  useReveal(revealTask, onRevealConsumed, listRef, (id) => {
+    const group = latestShown().find((it) => it.tasks.some((task) => task.id === id))
+    if (group) scheduler.mountThrough(`phone:${group.id}`, id)
+  })
   const renderRow = (task: IssueVM) => (
     <MobileTaskRow key={task.id} task={task} context={P.contextVersion} onOpen={openIssue} />
   )

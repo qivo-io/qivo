@@ -24,7 +24,9 @@ distribution** instead of the table.
 projects with delay tracking, tasks projected to miss it. Hover “projected
 to miss” for the projected finish week. **Paused tasks** lists work on hold.
 Select either list's rows to open tasks. Portraits show the reviewer while a
-task waits In Review with one.
+task waits In Review with one. When the two lists hold many tasks, rows below
+the first screen appear in the first moments after the Overview opens, in
+shaded space; searching the page or printing loads them all first.
 
 **Milestones** shows names, projects, calendar weeks, dates and relative
 timing, with the next milestone highlighted. Select **+** or a row to open

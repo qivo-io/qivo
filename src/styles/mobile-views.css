@@ -296,6 +296,22 @@
   border-bottom: 0;
 }
 
+/* The task schedule mounts a long list in blocks (DeferredList.css); a
+   block's last row keeps its rule unless it ends the list. */
+.mobile-roadmap-task-list {
+  display: flex;
+  flex-direction: column;
+}
+.mobile-roadmap-task-list .deferred-block > .mobile-roadmap-row:last-child {
+  border-bottom: 1px solid var(--border);
+}
+.mobile-roadmap-task-list > .deferred-block:last-child > .mobile-roadmap-row:last-child {
+  border-bottom: 0;
+}
+.mobile-roadmap-task-list > .board-pending {
+  border-radius: 0;
+}
+
 .mobile-roadmap-row > svg {
   flex-shrink: 0;
   margin-top: 3px;

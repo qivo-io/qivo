@@ -139,6 +139,7 @@ export function TitleButton({
       type="button"
       variant="unstyled"
       data-sync-open={it.id}
+      data-focus-key="title"
       onClick={() => ctx.onOpenTask(it.id)}
       title={clamp ? clampedTitleTip(it.title) : undefined}
       className={cn(
@@ -716,13 +717,15 @@ export const SyncCard = memo(
 )
 
 /** A task finished since the page owner's reading point: quiet, not a row. */
-export function DoneItem({
+function DoneItemView({
   it,
   kind,
   ctx,
 }: {
   it: IssueVM
   kind: 'done' | 'reviewed'
+  /** P.contextVersion, for the project name it reads */
+  context: StoreVersion
   ctx: PageCtx
 }) {
   return (
@@ -749,10 +752,23 @@ export function DoneItem({
   )
 }
 
+/* A done task renders the same while its task keeps its object, with the
+   same kind and context, on the same day (its label counts whole days),
+   and the same way to open it, as SyncCard does. */
+export const DoneItem = memo(
+  DoneItemView,
+  (a, b) =>
+    a.it === b.it &&
+    a.kind === b.kind &&
+    a.context === b.context &&
+    a.ctx.day.today === b.ctx.day.today &&
+    a.ctx.onOpenTask === b.ctx.onOpenTask,
+)
+
 /** One line of the quiet "Waiting on review" foot: the page owner's own task
     that someone else reviews. Not editable, not counted; the @ asks the
     reviewer. */
-export function WaitingItem({
+function WaitingItemView({
   it,
   reviewer,
   since,
@@ -762,6 +778,8 @@ export function WaitingItem({
   reviewer: string
   /** the hand-off instant, null when unknown: then no age is shown */
   since: number | null
+  /** P.contextVersion, for the names it reads */
+  context: StoreVersion
   ctx: PageCtx
 }) {
   const scope = useCardScope(ctx, it.uuid)
@@ -783,3 +801,20 @@ export function WaitingItem({
     </UnsentScopeContext.Provider>
   )
 }
+
+/* A waiting line renders the same while its task keeps its object, with
+   the same reviewer, hand-off and context, on the same day, for the same
+   page owner and cards: its @ stamps the page owner, as SyncCard's
+   callbacks do. */
+export const WaitingItem = memo(
+  WaitingItemView,
+  (a, b) =>
+    a.it === b.it &&
+    a.reviewer === b.reviewer &&
+    a.since === b.since &&
+    a.context === b.context &&
+    a.ctx.owner === b.ctx.owner &&
+    a.ctx.cards === b.ctx.cards &&
+    a.ctx.day.today === b.ctx.day.today &&
+    a.ctx.onOpenTask === b.ctx.onOpenTask,
+)
