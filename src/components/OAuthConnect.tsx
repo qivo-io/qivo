@@ -6,7 +6,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import type { api } from '../../convex/_generated/api'
 import { authClient } from '../lib/auth'
-import { connectionScopeLabel, connectionScopes } from '../lib/oauthConnection'
+import { connectionScopeLabel, connectionScopes, consentFailure } from '../lib/oauthConnection'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { P } from '../store/planner'
 
@@ -58,7 +58,7 @@ export function OAuthConnect({
         oauth_query: context.oauthQuery,
       })
       if (result.error || !result.data?.url || !result.data.redirect) {
-        setError('Could not complete this connection. Return to your app and try again.')
+        setError(consentFailure(result.error))
         setBusy(false)
         return
       }

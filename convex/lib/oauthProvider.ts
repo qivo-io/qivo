@@ -3,7 +3,8 @@ import { getOAuthProviderState, oauthProvider } from '@better-auth/oauth-provide
 import type { GenericCtx } from '@convex-dev/better-auth'
 import { requireRunMutationCtx } from '@convex-dev/better-auth/utils'
 import { APIError, createAuthMiddleware } from 'better-auth/api'
-import { makeFunctionReference } from 'convex/server'
+import { type FunctionArgs, makeFunctionReference } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import type { DataModel } from '../_generated/dataModel'
 import { sha256hex } from '../machine/auth'
 import { clientDisplayName, mcpResource, OAUTH_SCOPES, validateOAuthQuery } from './oauth'
@@ -89,6 +90,21 @@ export async function registerOAuthCode(
 const invalid = (description = 'This connection is invalid or has been disconnected.') =>
   new APIError('BAD_REQUEST', { error: 'invalid_grant', error_description: description })
 
+/* Runs oauthConnections:ensure. A refusal it throws, such as a login in no
+ * organization (lib/oauth.ts NO_ORGANIZATION), rolls its writes back and
+ * answers as Better Auth's access_denied with the refusal's sentence;
+ * anything else, a bare 500 otherwise, keeps failing as it is. */
+async function ensureConnection(ctx: GenericCtx<DataModel>, args: FunctionArgs<typeof ensureRef>) {
+  try {
+    return await requireRunMutationCtx(ctx).runMutation(ensureRef, args)
+  } catch (error) {
+    const data = error instanceof ConvexError ? error.data : null
+    if (data?.code === 'forbidden' && typeof data.message === 'string')
+      throw new APIError('FORBIDDEN', { error: 'access_denied', error_description: data.message })
+    throw error
+  }
+}
+
 export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, schemaOnly = false) {
   const resource = schemaOnly ? 'http://schema-only.invalid/mcp' : mcpResource()
   const provider = oauthProvider({
@@ -130,7 +146,7 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
           model: 'oauthClient',
           where: [{ field: 'clientId', value: clientId }],
         })
-        const id = await requireRunMutationCtx(ctx).runMutation(ensureRef, {
+        const id = await ensureConnection(ctx, {
           authorizationHash: await authorizationHash(user.id, query),
           authUserId: user.id,
           clientId,

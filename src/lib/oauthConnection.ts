@@ -19,6 +19,16 @@ export function oauthConnectRequest(url: URL): { oauthQuery: string; returnURL: 
   }
 }
 
+/** What the connect page says when consent is refused: the server's
+ * sentence (Better Auth's `error_description`, such as a login in no
+ * organization), else a general one. */
+export function consentFailure(error: object | null | undefined): string {
+  const description = error && 'error_description' in error ? error.error_description : undefined
+  return typeof description === 'string' && description.trim()
+    ? description
+    : 'Could not complete this connection. Return to your app and try again.'
+}
+
 export function connectionScopes(requested: readonly string[], allowChanges: boolean): string[] {
   return requested.filter((scope) => scope !== 'qivo:write' || allowChanges)
 }

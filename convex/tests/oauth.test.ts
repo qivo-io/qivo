@@ -10,6 +10,7 @@ import { api, components, internal } from '../_generated/api'
 import { createAuth } from '../auth'
 import authSchema from '../betterAuth/schema'
 import { LIMITS, NAME_MAX } from '../lib/limits'
+import { NO_ORGANIZATION, ORGANIZATION_GONE } from '../lib/oauth'
 import { sha256hex } from '../machine/auth'
 import { TOOLS } from '../machine/mcp'
 import { BODY_MAX_BYTES } from '../machine/shared'
@@ -903,6 +904,44 @@ describe('OAuth client names and request bodies', () => {
 })
 
 describe('OAuth organization selection', () => {
+  it('refuses consent for a person in no organization, naming why and what to do, and stores nothing', async () => {
+    const f = await fixture()
+    const request = await authorization(f, await register(f))
+    const oauthQuery = await consentPage(request)
+    // the person's only seat goes away before they approve
+    await f.t.run((ctx) => ctx.db.patch(f.profile._id, { active: false }))
+    const response = await consent(request, oauthQuery)
+    const result = await json(response)
+    expect(response.status, JSON.stringify(result)).toBe(403)
+    expect(result.error).toBe('access_denied')
+    expect(result.error_description).toBe(NO_ORGANIZATION)
+    expect(result.url).toBeUndefined()
+    expect(await f.t.run((ctx) => ctx.db.query('oauth_connections').collect())).toEqual([])
+    // the connect page says the same before the person can approve
+    await expectRefusal(
+      f.as.mutation(api.oauthConnections.getContext, { oauth_query: oauthQuery }),
+      'forbidden',
+      /belongs to no organization yet\. Create an organization or accept an invitation/,
+    )
+  })
+
+  it('refuses consent once the seat the connect page showed has left, and issues no code', async () => {
+    const f = await fixture()
+    const request = await authorization(f, await register(f))
+    const oauthQuery = await consentPage(request)
+    // the connect page stores the connection for the seat it shows
+    await f.as.mutation(api.oauthConnections.getContext, { oauth_query: oauthQuery })
+    await f.t.run((ctx) => ctx.db.patch(f.profile._id, { active: false }))
+    const response = await consent(request, oauthQuery)
+    const result = await json(response)
+    expect(response.status, JSON.stringify(result)).toBe(403)
+    expect(result).toMatchObject({ error: 'access_denied', error_description: ORGANIZATION_GONE })
+    expect(result.url).toBeUndefined()
+    const [row] = await f.t.run((ctx) => ctx.db.query('oauth_connections').collect())
+    expect(row.approved_at).toBeUndefined()
+    expect(await f.t.run((ctx) => ctx.db.query('oauth_credential_uses').collect())).toEqual([])
+  })
+
   it('keeps the displayed organization fixed if the home profile changes before approval', async () => {
     const f = await fixture()
     const guest = await plantSeat(f.t, {

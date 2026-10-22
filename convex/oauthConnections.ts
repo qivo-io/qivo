@@ -5,12 +5,13 @@ import { createAuth } from './auth'
 import { credentialAccess, findAuthUser, loginBanned } from './lib/access'
 import { byId } from './lib/db'
 import { isDemoDeployment, refuseDemoFeature } from './lib/demo'
-import { authedMutation, authedQuery, badRequest, notFound } from './lib/functions'
+import { authedMutation, authedQuery, badRequest, forbidden, notFound } from './lib/functions'
 import {
   canonicalOAuthQuery,
   clientDisplayName,
   homeProfile,
   mcpResource,
+  ORGANIZATION_GONE,
   validateOAuthQuery,
 } from './lib/oauth'
 import { authorizationHash } from './lib/oauthProvider'
@@ -44,7 +45,7 @@ export const getContext = authedMutation({
       ? await byId(ctx, 'profiles', connection.profile_id)
       : homeProfile([...ctx.myProfiles.values()])
     if (!profile?.active || profile.auth_user_id !== ctx.authUserId)
-      throw badRequest('This organization is no longer available. Reconnect from your app.')
+      throw badRequest(ORGANIZATION_GONE)
     const org = await byId(ctx, 'organizations', profile.org_id)
     if (!org) throw badRequest('This organization is no longer available.')
     if (!connection)
@@ -173,6 +174,8 @@ export const ensure = internalMutation({
       row.resource !== args.resource
     )
       return null
+    // A seat that left since the connection was stored refuses with its
+    // reason (lib/oauthProvider.ts answers it as access_denied).
     const profile = await byId(ctx, 'profiles', row.profile_id)
     if (
       !profile?.active ||
@@ -180,7 +183,7 @@ export const ensure = internalMutation({
       profile.auth_user_id !== row.auth_user_id ||
       profile.org_id !== row.org_id
     )
-      return null
+      throw forbidden(ORGANIZATION_GONE)
     if (args.approve) {
       if (
         !args.scopes.includes('qivo:read') ||

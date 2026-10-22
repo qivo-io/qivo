@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { connectionScopes, oauthConnectRequest, oauthNeedsLogin } from './oauthConnection'
+import {
+  connectionScopes,
+  consentFailure,
+  oauthConnectRequest,
+  oauthNeedsLogin,
+} from './oauthConnection'
 
 describe('OAuth connection request routing', () => {
   it('reserves only the app connection route', () => {
@@ -65,5 +70,20 @@ describe('OAuth connection request routing', () => {
     expect(oauthNeedsLogin(query, '2026-09-13T10:00:01Z')).toBe(false)
     expect(oauthNeedsLogin(`prompt=consent&ba_iat=${issuedAt}`, 0)).toBe(false)
     expect(oauthNeedsLogin('prompt=login&ba_iat=invalid', 0)).toBe(true)
+  })
+})
+
+describe('a refused consent', () => {
+  it("says the server's sentence, and a general one when there is none", () => {
+    const sentence =
+      'Your Qivo account belongs to no organization yet. Create an organization or accept an invitation, then connect your app again.'
+    expect(
+      consentFailure({ status: 403, error: 'access_denied', error_description: sentence }),
+    ).toBe(sentence)
+    const general = 'Could not complete this connection. Return to your app and try again.'
+    expect(consentFailure({ status: 500, statusText: 'Internal Server Error' })).toBe(general)
+    expect(consentFailure({ status: 400, error_description: '  ' })).toBe(general)
+    expect(consentFailure({ status: 400, error_description: 42 })).toBe(general)
+    expect(consentFailure(null)).toBe(general)
   })
 })
