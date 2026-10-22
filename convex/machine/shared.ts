@@ -256,7 +256,7 @@ export const DISCARD_MS = 5_000
 /** The most discardBody reads, in bytes: well over the largest body any
  * Qivo route takes (a 20 MiB attachment). Convex sets no request size
  * limit of its own. */
-export const DISCARD_MAX_BYTES = 32 * 1024 * 1024
+export const DISCARD_MAX_BYTES = 32 * MIB
 
 /**
  * Reads and drops whatever is left of a request body. An answer sent while
