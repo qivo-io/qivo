@@ -20,7 +20,8 @@
 //
 // --fixture varied also opens a second page per sample on the varied
 // workspace (scripts/perf/transport.mjs, shape=varied) and measures opening,
-// scrolling and one drag over its Board. --serve only builds and serves the
+// scrolling and one drag over its Board, going back to the Overview and
+// the phone's Roadmap task schedule. --serve only builds and serves the
 // pages, on --host (127.0.0.1 by default), until it is stopped.
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
@@ -121,7 +122,16 @@ const PHASES = [
   'boardFilterClear',
   'phoneBoard',
   ...(varied
-    ? ['variedBoardNavigation', 'variedBoardComplete', 'variedBoardScroll', 'variedBoardDragOver']
+    ? [
+        'variedBoardNavigation',
+        'variedBoardComplete',
+        'variedBoardScroll',
+        'variedBoardDragOver',
+        'variedOverview',
+        'variedOverviewComplete',
+        'variedPhoneRoadmap',
+        'variedPhoneRoadmapComplete',
+      ]
     : []),
 ]
 // the medians --baseline prints side by side
@@ -734,6 +744,53 @@ async function runVariedSample(origin, tasks, metrics, query = '') {
   })
   await source.dispatchEvent('dragend', { dataTransfer: transfer })
   await transfer.dispose()
+  await settle()
+  // Back to the Overview until its first screen shows, then until its
+  // lists are complete.
+  phase('variedOverview')
+  metrics.variedOverview.push(
+    await timed(async () => {
+      await page
+        .locator('[data-view-switch]')
+        .getByRole('radio', { name: 'Overview', exact: true })
+        .click({ timeout: timeout * 10 })
+      await page.locator('[data-ov-strip]').waitFor({ timeout: timeout * 10 })
+      await page
+        .locator('[data-atrisk], [data-ovrow]')
+        .first()
+        .waitFor({ timeout: timeout * 10 })
+    }),
+  )
+  phase('variedOverviewComplete')
+  metrics.variedOverviewComplete.push(
+    await timed(() => page.waitForFunction(boardComplete, null, { timeout: timeout * 10 })),
+  )
+  // The phone's Roadmap: its task schedule until the first row shows, then
+  // until every row is in.
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page
+    .locator('[data-view-switch]')
+    .getByRole('radio', { name: 'Roadmap', exact: true })
+    .click({ timeout: timeout * 10 })
+  const schedule = page.getByRole('button', { name: 'Task schedule', exact: true })
+  await schedule.waitFor({ timeout: timeout * 10 })
+  await settle()
+  phase('variedPhoneRoadmap')
+  metrics.variedPhoneRoadmap.push(
+    await timed(async () => {
+      await schedule.click({ timeout: timeout * 10 })
+      await page
+        .locator(
+          '.mobile-roadmap-task-list .mobile-roadmap-row, .mobile-roadmap-section > .mobile-roadmap-row',
+        )
+        .first()
+        .waitFor({ timeout: timeout * 10 })
+    }),
+  )
+  phase('variedPhoneRoadmapComplete')
+  metrics.variedPhoneRoadmapComplete.push(
+    await timed(() => page.waitForFunction(boardComplete, null, { timeout: timeout * 10 })),
+  )
   assert.deepEqual(errors, [], `Browser errors at ${tasks} varied tasks`)
   await context.close()
 }
