@@ -94,8 +94,14 @@ type Item = Doc<'deleted_items'>
  * organization is read-only, the person's teams, and a few per deleted
  * project an item names), a redacted task item's tasks up to one the viewer
  * sees, and, for a seat that is not an admin, a project item's stored
- * projects, grants and team shares (3 ranges). So 1,536 ranges build about
- * 500 such rows, and more when finding spent less. A mutable object, so
+ * projects and the person's stored grants (2 ranges) and one range for the
+ * stored shares of each team the person is in (model/deletedItems.ts
+ * storedLevels). An item deleted before the stored rows named their grantee
+ * also reads its rows without one, 2 ranges more and up to 2 x 101
+ * documents (LEGACY_READ), which the rows and bytes of the call bound
+ * rather than its ranges. So 1,536 ranges
+ * build about 500 such rows for a person in one team, and about 48 for one
+ * in 30 teams, and more when finding spent less. A mutable object, so
  * tests can lower it; replace `call` and `find` whole rather than change
  * their fields.
  */

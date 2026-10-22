@@ -15,11 +15,6 @@ import type { DataModel, Doc, Id, TableNames } from '../_generated/dataModel'
 import { isStoredTable } from './enums'
 import { badRequest, type Refusal } from './functions'
 
-/* Comments and tasks can approach Convex's 1 MiB document limit, so their
- * ranges are read a few rows at a time. Unused rows of the last read then
- * add at most three such documents to what a transaction reads. */
-export const LARGE_ROWS_PER_READ = 4
-
 /* Tables that declare .index('by_uuid', ['id']) — the app-key tables.
  * Pure join/platform tables (team_members, user_prefs, …) are excluded
  * by construction. */

@@ -154,6 +154,7 @@ export const TRASH_PHASES = [
   'restore_rows',
   'restore_links',
   'restore_tasks',
+  'restore_access',
   'restore_reveal',
   'restore_grants',
   'restore_attach',

@@ -2,10 +2,11 @@
  * stored before deleted_rows.grantee existed its grantee, the profile of a
  * grant or the team of a share. A project item's level checks read one
  * person's stored grants and their teams' stored shares by that field
- * (model/deletedItems.ts storedLevels), so a stored row without it counts for
- * nobody: the item lists for fewer people than it should, and a restore can
- * drop an assignee or reviewer whose access came from it. The restore itself
- * still writes every stored row back (restoreGrants).
+ * (model/deletedItems.ts storedLevels). They also read an item's rows
+ * without it, once per item and table, but count none of them past
+ * LEGACY_READ.max, and a restore sets the field on its own item before it
+ * checks the people its tasks keep. Run this on every deployment serving
+ * this release, so those reads stay empty.
  *
  * Run it once a deployment serves this release. The dry run writes nothing
  * and counts the rows it would change; running it again is safe. With the

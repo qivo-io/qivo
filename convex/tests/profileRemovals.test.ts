@@ -1191,6 +1191,36 @@ describe('bounds a long credential and file history', () => {
     expect(still).toBeNull()
   })
 
+  it('reads each range once a step, not a page at a time from its start', async () => {
+    // A read from the start of a range passes every row the step cleared
+    // there again, and the local backend reads a whole range for each
+    // query: 256 of 20,000 comments read four at a time took 10.3 s. A step
+    // here reads about 13 ranges in one pass, and 75 four at a time
+    const t = newT({ transactionLimits: { databaseQueries: 40 } })
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 2 * REMOVAL_BUDGET.rows; i++)
+        await ctx.db.insert('comments', {
+          id: uuid(),
+          issue_id: task.id,
+          author: f.user.id,
+          body: 'Checked on the bench.',
+          created_at: NOW,
+        })
+    })
+    await remove(t, f.user)
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    expect(await jobOf(t, f.user.id)).toBeNull()
+    const left = await t.run((ctx) =>
+      ctx.db
+        .query('comments')
+        .withIndex('by_author', (q) => q.eq('author', f.user.id))
+        .first(),
+    )
+    expect(left).toBeNull()
+  })
+
   it('restarts a failed removal that waits behind more than a batch of waiting ones', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT()

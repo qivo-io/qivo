@@ -13,7 +13,6 @@
 import { makeFunctionReference } from 'convex/server'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { LARGE_ROWS_PER_READ } from '../lib/db'
 import { REMOVAL_PHASES } from '../lib/enums'
 import { require, rule } from '../lib/functions'
 import { LIMITS } from '../lib/limits'
@@ -167,29 +166,31 @@ export type RemovalBudget = { rows: number; bytes: number }
 /** Whether `budget` has run out of rows or of bytes. */
 export const budgetSpent = (budget: RemovalBudget): boolean => budget.rows <= 0 || budget.bytes <= 0
 
-/** Clears the rows `read` returns until the range is empty (true) or the
- * budget is spent (false). A budget not yet spent clears at least one row,
- * however large. Bytes are estimated from each cleared document. `clear`
- * must move each row out of the range, because every read starts at the
- * beginning of the range. */
+/** Clears the rows of `rows`, an index range read in one pass, until the
+ * range ends (true) or the budget is spent (false). A budget not yet spent
+ * clears at least one row, however large. Bytes are estimated from each
+ * cleared document. `clear` must move each row out of the range, because
+ * the next step reads the range from its start again.
+ *
+ * One pass, rather than a page at a time from the start of the range, keeps
+ * a step to one read of the range: each read from the start passes again
+ * every row the transaction already cleared there, and the local backend
+ * reads a whole index range for each query whatever its limit. Clearing 256
+ * of 20,000 rows took 10.3 s read four at a time and 0.5 s in one pass.
+ * Convex charges a pass only for the documents it reaches. */
 export async function sweep<Row>(
   budget: RemovalBudget,
-  read: (n: number) => Promise<Row[]>,
+  rows: AsyncIterable<Row>,
   clear: (row: Row) => Promise<void>,
-  perRead: number,
 ): Promise<boolean> {
-  while (!budgetSpent(budget)) {
-    const n = Math.min(budget.rows, perRead)
-    const rows = await read(n)
-    for (const row of rows) {
-      await clear(row)
-      budget.rows -= 1
-      budget.bytes -= estimateDocumentBytes(row)
-      if (budgetSpent(budget)) return false
-    }
-    if (rows.length < n) return true
+  if (budgetSpent(budget)) return false
+  for await (const row of rows) {
+    await clear(row)
+    budget.rows -= 1
+    budget.bytes -= estimateDocumentBytes(row)
+    if (budgetSpent(budget)) return false
   }
-  return false
+  return true
 }
 
 /** The unfinished background removal of `profileId`, or null. While it
@@ -213,101 +214,49 @@ export const ACCESS_FIRST_PASS = { rows: 512 }
 type AccessTable = 'agent_keys' | 'mcp_tokens' | 'team_members' | 'project_access' | 'user_prefs'
 
 /* The rows that give a profile access or hold its own settings, each read
- * through its by_profile index from creation time `from` on, in the order a
- * removal deletes them. Rows left after the profile row is gone grant
- * nothing, because every reader asks with a live profile or drops ids
- * without one:
+ * through its by_profile index, in the order a removal deletes them. Rows
+ * left after the profile row is gone grant nothing, because every reader
+ * asks with a live profile or drops ids without one:
  * - agent_keys, mcp_tokens: machine/auth.ts lookupCredential refuses a
  *   credential whose profile is gone, and the lists read through live
  *   seats (tokens.ts, apiAccess.ts).
  * - team_members, project_access: lib/access.ts asks by a resolved
  *   profile, and the snapshot sends only rows whose profile it sends.
- * - user_prefs: only the person's own seats read them (prefs.ts).
- * Every write caps key and token names (tokens.ts credentialName), so
- * those rows are small and read a page at a time. Preferences have no size
- * cap and are read LARGE_ROWS_PER_READ at a time, one row a person. */
-const ACCESS_RANGES: {
-  range: (
-    ctx: QueryCtx,
-    profileId: string,
-    from: number,
-  ) => {
-    take(n: number): Promise<Doc<AccessTable>[]>
-    first(): Promise<Doc<AccessTable> | null>
-  }
-  perRead: number
-}[] = [
-  {
-    range: (ctx, profileId, from) =>
-      ctx.db
-        .query('agent_keys')
-        .withIndex('by_profile', (q) => q.eq('profile_id', profileId).gte('_creationTime', from)),
-    perRead: Number.POSITIVE_INFINITY,
-  },
-  {
-    range: (ctx, profileId, from) =>
-      ctx.db
-        .query('mcp_tokens')
-        .withIndex('by_profile', (q) => q.eq('profile_id', profileId).gte('_creationTime', from)),
-    perRead: Number.POSITIVE_INFINITY,
-  },
-  {
-    range: (ctx, profileId, from) =>
-      ctx.db
-        .query('team_members')
-        .withIndex('by_profile', (q) => q.eq('profile_id', profileId).gte('_creationTime', from)),
-    perRead: Number.POSITIVE_INFINITY,
-  },
-  {
-    range: (ctx, profileId, from) =>
-      ctx.db
-        .query('project_access')
-        .withIndex('by_profile', (q) => q.eq('profile_id', profileId).gte('_creationTime', from)),
-    perRead: Number.POSITIVE_INFINITY,
-  },
-  {
-    range: (ctx, profileId, from) =>
-      ctx.db
-        .query('user_prefs')
-        .withIndex('by_profile', (q) => q.eq('profile_id', profileId).gte('_creationTime', from)),
-    perRead: LARGE_ROWS_PER_READ,
-  },
+ * - user_prefs: only the person's own seats read them (prefs.ts). */
+const ACCESS_RANGES: ((
+  ctx: QueryCtx,
+  profileId: string,
+) => {
+  [Symbol.asyncIterator](): AsyncIterator<Doc<AccessTable>>
+  first(): Promise<Doc<AccessTable> | null>
+})[] = [
+  (ctx, profileId) =>
+    ctx.db.query('agent_keys').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
+  (ctx, profileId) =>
+    ctx.db.query('mcp_tokens').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
+  (ctx, profileId) =>
+    ctx.db.query('team_members').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
+  (ctx, profileId) =>
+    ctx.db.query('project_access').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
+  (ctx, profileId) =>
+    ctx.db.query('user_prefs').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
 ]
 
 /** Deletes the access rows of `profileId` (ACCESS_RANGES) until none is
- * left (true) or `budget` is spent (false). Each read goes on from the
- * creation time of the last row it deleted, so it does not pass over the
- * rows this transaction deleted there again. A row deleted here no longer
- * shows to a later read, so a read from that same creation time skips
- * nothing and repeats nothing. Each read also costs time for every row the
- * transaction deleted, so the small rows are read in few large pages: 512
- * tokens read four at a time passed the time a local backend allows. */
+ * left (true) or `budget` is spent (false), each range in one pass (sweep). */
 export async function deleteAccessRows(
   ctx: MutationCtx,
   profileId: string,
   budget: RemovalBudget,
 ): Promise<boolean> {
-  for (const { range, perRead } of ACCESS_RANGES) {
-    let from = 0
-    const cleared = await sweep(
-      budget,
-      async (n) => {
-        const rows = await range(ctx, profileId, from).take(n)
-        from = rows.at(-1)?._creationTime ?? from
-        return rows
-      },
-      (row) => ctx.db.delete(row._id),
-      perRead,
-    )
-    if (!cleared) return false
-  }
+  for (const range of ACCESS_RANGES)
+    if (!(await sweep(budget, range(ctx, profileId), (row) => ctx.db.delete(row._id)))) return false
   return true
 }
 
 /** Whether any access row of `profileId` is left (ACCESS_RANGES). */
 export async function accessRowsRemain(ctx: QueryCtx, profileId: string): Promise<boolean> {
-  for (const { range } of ACCESS_RANGES)
-    if ((await range(ctx, profileId, 0).first()) !== null) return true
+  for (const range of ACCESS_RANGES) if ((await range(ctx, profileId).first()) !== null) return true
   return false
 }
 
@@ -388,11 +337,8 @@ export async function removeProfile(
   // fails for a busy agent. The first step's tasks phase clears the rest.
   const budget: RemovalBudget = { ...REMOVAL_BUDGET }
   for (const holder of TASK_HOLDERS) {
-    const cleared = await sweep(
-      budget,
-      (n) => heldTasks(ctx, holder, profile.id, true).take(n),
-      (task) => clearHolder(ctx, task, holder, now),
-      LARGE_ROWS_PER_READ,
+    const cleared = await sweep(budget, heldTasks(ctx, holder, profile.id, true), (task) =>
+      clearHolder(ctx, task, holder, now),
     )
     if (!cleared) break
   }

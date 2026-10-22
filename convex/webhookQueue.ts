@@ -72,13 +72,13 @@ export const run = internalMutation({
   },
 })
 
-/** Expand original recipients in small transactions, rechecking their current access. */
+/** Expand original recipients in small transactions, rechecking their current access.
+ * The queue is read in one pass, oldest first: an event it finishes is
+ * deleted behind the read, and one it leaves part done ends the batch. */
 async function expandBatch(ctx: MutationCtx): Promise<boolean> {
   let budget = RECIPIENT_BATCH_SIZE
   let inserted = false
-  while (budget > 0) {
-    const event = await ctx.db.query('webhook_events').first()
-    if (!event) break
+  for await (const event of ctx.db.query('webhook_events')) {
     const task = await byId(ctx, 'issues', event.task_id)
     const end = Math.min(event.subscription_rows.length, event.next_recipient + budget)
     for (let index = event.next_recipient; index < end; index++) {
@@ -114,6 +114,7 @@ async function expandBatch(ctx: MutationCtx): Promise<boolean> {
     }
     if (end === event.subscription_rows.length) await ctx.db.delete(event._id)
     else await ctx.db.patch(event._id, { next_recipient: end })
+    if (budget <= 0) break
   }
   if (inserted) await requestWebhookDispatch(ctx)
   return budget === 0

@@ -968,9 +968,9 @@ describe('the list (design 6.2)', () => {
     const f = await withOrg(t)
     const lena = await person(t, f.org.id, 'Lena')
     // 1,400 projects Lena led and deleted herself. Finding them reads two
-    // ranges, but her row for each reads its stored projects, grants and
-    // team shares, 3 ranges, so rows for all of them would read 4,200
-    // ranges, past Convex's 4,096.
+    // ranges, but her row for each reads its stored projects and her
+    // stored grants, and here the rows stored without a grantee, 3 ranges,
+    // so rows for all of them would read 4,200 ranges, past Convex's 4,096.
     const ids = await plantLedProjects(t, lena, 1400)
 
     const listed = await list(t, lena)
@@ -1659,5 +1659,52 @@ describe('archiving a task and keeping its subtasks (design 9)', () => {
     expect(await liveTask(t, appKid.id)).toMatchObject({ parent_id: app.id, archived_at: AT_START })
     expect(await liveTask(t, restKid.id)).toMatchObject({ parent_id: rest.id })
     expect((await liveTask(t, restKid.id))?.archived_at).toBeDefined()
+  })
+})
+
+describe('a project item while it moves', () => {
+  it("reads the viewer's grants and team shares once for the whole list", async () => {
+    // the lead is in 20 teams that share 50 other projects each, 1,000
+    // shares the list's sight reads, and their own project is moving
+    const t = newT()
+    const f = await withOrg(t)
+    await t.run(async (ctx) => {
+      const projects: string[] = []
+      for (let i = 0; i < 50; i++) {
+        const id = crypto.randomUUID()
+        projects.push(id)
+        await ctx.db.insert('projects', {
+          id,
+          org_id: f.org.id,
+          type: 'meta',
+          key: `SH${i}`,
+          name: `Shared ${i}`,
+          description: '',
+          sort_order: 100 + i,
+          num: 500 + i,
+          track_delay: false,
+          created_at: NOW,
+        })
+      }
+      for (let i = 0; i < 20; i++) {
+        const team_id = crypto.randomUUID()
+        await ctx.db.insert('teams', {
+          id: team_id,
+          org_id: f.org.id,
+          name: `Team ${i}`,
+          track_delay_default: false,
+          created_at: NOW,
+        })
+        await ctx.db.insert('team_members', { team_id, profile_id: f.user.id, is_leader: false })
+        for (const project_id of projects)
+          await ctx.db.insert('project_team_access', { project_id, team_id, level: 'user' })
+      }
+    })
+    TRASH_BUDGET.rows = 1
+    await deleteProject(t, f.user, f.meta.id)
+    expect((await itemFor(t, f.meta.id)).state).toBe('moving')
+    expect(await idsOf(t, f.user)).toContain((await itemFor(t, f.meta.id)).id)
+    const metrics = await listMetrics(t, f.user)
+    expect(metrics.documentsRead.used).toBeLessThan(1600)
   })
 })

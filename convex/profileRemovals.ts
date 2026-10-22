@@ -8,9 +8,10 @@
  * (REMOVAL_PHASES), and schedules the next step until nothing names the
  * id. Then it deletes the row, which also frees the id for profiles.create.
  *
- * Every phase reads the same index prefix again with take(n). Clearing a
- * row moves it out of that range, so no cursor is kept, and a repeated step
- * can neither skip a row nor clear one twice. A step stops when it has
+ * Every step reads each range again from its start, in one pass
+ * (model/cascade.ts sweep). Clearing a row moves it out of that range, so
+ * no cursor is kept, and a repeated step can neither skip a row nor clear
+ * one twice. A step stops when it has
  * cleared REMOVAL_BUDGET.rows rows or about REMOVAL_BUDGET.bytes of
  * documents, but always clears at least one row. The byte budget matters
  * because comment bodies and task descriptions are large. They hold up to
@@ -29,7 +30,7 @@ import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
-import { byId, LARGE_ROWS_PER_READ } from './lib/db'
+import { byId } from './lib/db'
 import { REMOVAL_PHASES, type RemovalPhase } from './lib/enums'
 import {
   accessRowsRemain,
@@ -74,23 +75,17 @@ type Edge = {
 }
 
 /** An Edge over `range`, a new query for each read, whose rows `clear`
- * patches or deletes. `large` marks rows without a size cap. */
+ * patches or deletes. */
 function edge<Row>(a: {
   range: (
     ctx: MutationCtx,
     profileId: string,
-  ) => { take(n: number): Promise<Row[]>; first(): Promise<Row | null> }
+  ) => { [Symbol.asyncIterator](): AsyncIterator<Row>; first(): Promise<Row | null> }
   clear: (ctx: MutationCtx, row: Row, now: string) => Promise<void>
-  large?: boolean
 }): Edge {
   return {
     sweep: (ctx, profileId, budget, now) =>
-      sweep(
-        budget,
-        (n) => a.range(ctx, profileId).take(n),
-        (row) => a.clear(ctx, row, now),
-        a.large ? LARGE_ROWS_PER_READ : Number.POSITIVE_INFINITY,
-      ),
+      sweep(budget, a.range(ctx, profileId), (row) => a.clear(ctx, row, now)),
     remains: async (ctx, profileId) => (await a.range(ctx, profileId).first()) !== null,
   }
 }
@@ -108,25 +103,18 @@ const connectionsOf = (ctx: MutationCtx, profileId: string) =>
  * becomes a token through claimIssuance. */
 const oauthEdge: Edge = {
   sweep: async (ctx, profileId, budget) => {
-    while (!budgetSpent(budget)) {
-      const connection = await connectionsOf(ctx, profileId).first()
-      if (connection === null) return true
-      const usesCleared = await sweep(
-        budget,
-        (n) =>
-          ctx.db
-            .query('oauth_credential_uses')
-            .withIndex('by_connection', (q) => q.eq('connection_id', connection.id))
-            .take(n),
-        (use) => ctx.db.delete(use._id),
-        Number.POSITIVE_INFINITY,
-      )
-      if (!usesCleared) return false
+    if (budgetSpent(budget)) return false
+    for await (const connection of connectionsOf(ctx, profileId)) {
+      const uses = ctx.db
+        .query('oauth_credential_uses')
+        .withIndex('by_connection', (q) => q.eq('connection_id', connection.id))
+      if (!(await sweep(budget, uses, (use) => ctx.db.delete(use._id)))) return false
       await ctx.db.delete(connection._id)
       budget.rows -= 1
       budget.bytes -= estimateDocumentBytes(connection)
+      if (budgetSpent(budget)) return false
     }
-    return false
+    return true
   },
   remains: async (ctx, profileId) => (await connectionsOf(ctx, profileId).first()) !== null,
 }
@@ -148,7 +136,6 @@ const PHASE_EDGES: Record<Exclude<RemovalPhase, 'finish'>, Edge[]> = {
     edge({
       range: (ctx, profileId) => heldTasks(ctx, holder, profileId, false),
       clear: (ctx, task: Doc<'issues'>, now) => clearHolder(ctx, task, holder, now),
-      large: true,
     }),
   ),
   // rows older than the newest 500 the removal transaction cleared
@@ -164,13 +151,11 @@ const PHASE_EDGES: Record<Exclude<RemovalPhase, 'finish'>, Edge[]> = {
       range: (ctx, profileId) =>
         ctx.db.query('comments').withIndex('by_author', (q) => q.eq('author', profileId)),
       clear: (ctx, comment) => ctx.db.patch(comment._id, { author: undefined }),
-      large: true,
     }),
     edge({
       range: (ctx, profileId) =>
         ctx.db.query('comments').withIndex('by_edited_by', (q) => q.eq('edited_by', profileId)),
       clear: (ctx, comment) => ctx.db.patch(comment._id, { edited_by: undefined }),
-      large: true,
     }),
   ],
   sent_messages: [
@@ -203,7 +188,6 @@ const PHASE_EDGES: Record<Exclude<RemovalPhase, 'finish'>, Edge[]> = {
           .query('issue_attachments')
           .withIndex('by_uploaded_by', (q) => q.eq('uploaded_by', profileId)),
       clear: (ctx, attachment) => ctx.db.patch(attachment._id, { uploaded_by: undefined }),
-      large: true, // file names stored before attachFileCore capped them have no size cap
     }),
   ],
   agent_keys: [
@@ -211,7 +195,6 @@ const PHASE_EDGES: Record<Exclude<RemovalPhase, 'finish'>, Edge[]> = {
       range: (ctx, profileId) =>
         ctx.db.query('agent_keys').withIndex('by_created_by', (q) => q.eq('created_by', profileId)),
       clear: (ctx, key) => ctx.db.patch(key._id, { created_by: undefined }),
-      large: true, // key names stored before NAME_MAX capped them can be large
     }),
   ],
   oauth: [oauthEdge],

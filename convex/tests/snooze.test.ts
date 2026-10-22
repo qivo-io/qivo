@@ -203,11 +203,14 @@ describe('a wake about a task in Deleted items', () => {
     const kept = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const deleted = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const inProject = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    // a live task whose project is in Deleted items, which the move's steps
+    // have not reached yet
+    const stranded = await plantIssue(t, { org_id: f.org.id, project_id: uuid() })
     await as(t, f.user).mutation(api.issues.deleteDeep, { org_id: f.org.id, id: deleted.id })
     await as(t, f.user).mutation(api.projects.deleteDeep, { org_id: f.org.id, id: f.sub2.id })
     // snoozed rows a delete's steps have not reached yet
     const until = inAnHour()
-    for (const issue of [kept, deleted, inProject])
+    for (const issue of [kept, deleted, inProject, stranded])
       for (const day of ['01', '02'])
         await plantMessage(t, {
           org_id: f.org.id,
@@ -218,7 +221,7 @@ describe('a wake about a task in Deleted items', () => {
           snoozed_until: until,
         })
 
-    for (const issue of [kept, deleted, inProject])
+    for (const issue of [kept, deleted, inProject, stranded])
       await t.run((ctx) =>
         wakeSnoozedItem(ctx, { recipient_id: f.guest.id, issue_id: issue.id, until }, 'now'),
       )
@@ -227,7 +230,7 @@ describe('a wake about a task in Deleted items', () => {
       [undefined, 'now'],
       [undefined, 'now'],
     ])
-    for (const issue of [deleted, inProject]) {
+    for (const issue of [deleted, inProject, stranded]) {
       const rows = await messagesFor(t, f.guest.id, issue.id)
       expect(rows).toHaveLength(1) // the newest, as after a mark read
       expect(rows[0].read_at).toBeDefined()

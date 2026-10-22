@@ -350,8 +350,8 @@ export type NotifyPreload = {
    * notifyIssueUpdate leaves every follower notice to background steps
    * (FOLLOWER_FANOUT), so a save of many tasks with many followers stays
    * within one transaction. Those
-   * notices arrive moments later. Mentions and new owners' follows stay in
-   * the save. */
+   * notices arrive moments later. New owners' follows stay in the save;
+   * mentions are told in it while its notice room lasts (tellMentioned). */
   deferFollowers?: true
 }
 
@@ -1339,10 +1339,11 @@ async function mentionedIn(
 }
 
 /* ------------------------------------------------------- follower notices
- * What a comment or a change tells a task's followers. The first
- * FOLLOWER_FANOUT.inline followers hear in the writing transaction, and
- * background steps of FOLLOWER_FANOUT.step followers tell the rest, in
- * by_issue_profile order. A bulk save leaves them all to the steps
+ * What a comment or a change tells a task's followers. Up to the first
+ * FOLLOWER_FANOUT.inline followers hear in the writing transaction, while
+ * the notice room it shares with the mentions lasts
+ * (FOLLOWER_FANOUT.inlineRoom), and background steps of
+ * FOLLOWER_FANOUT.step followers tell the rest, in by_issue_profile order. A bulk save leaves them all to the steps
  * (NotifyPreload.deferFollowers). A step tells the followers it finds then:
  * someone who stops following meanwhile hears nothing, and someone who
  * starts following before their turn hears too. It posts about the task as
@@ -1644,8 +1645,8 @@ const notifyMentionsRef = makeFunctionReference<'mutation', MentionStep, null>(
  * 'skip'), and tells them `body`: in this transaction while `room` answers
  * true, and the rest from one background step (notifyMentionsStep). A
  * mentioned person whose item holds snoozed rows costs a write for each row
- * the notice wakes, so a text that mentions up to MENTION_MAX such people
- * would pass the transaction's limits. `guard` is a bulk writer's
+ * the notice wakes, so a text that mentions up to LIMITS.mentions.max such
+ * people would pass the transaction's limits. `guard` is a bulk writer's
  * (NotifyPreload), run before each. */
 async function tellMentioned(
   ctx: MutationCtx,
@@ -1757,8 +1758,8 @@ export async function notifyMentionsStep(step: MutationCtx, a: MentionStep): Pro
 }
 
 /** Tells the followers of `issue`, in `project`, one change line, `parts`
- * joined: the first FOLLOWER_FANOUT.inline in this transaction and the rest
- * in background steps. A restore from Deleted items says 'Restored' this
+ * joined: up to the first FOLLOWER_FANOUT.inline in this transaction, while
+ * its notice room lasts, and the rest in background steps. A restore from Deleted items says 'Restored' this
  * way (model/deletedItems.ts). */
 export async function notifyFollowersOfChange(
   ctx: MutationCtx,
@@ -1941,8 +1942,9 @@ export async function notifyIssueInsert(
  * profile the call names is read once, and the recipients' sight is worked
  * out once per project for the call (RecipientSight).
  *
- * Past FOLLOWER_FANOUT.inline followers, and for every follower of a bulk
- * save (NotifyPreload.deferFollowers), background steps tell the rest. */
+ * Past FOLLOWER_FANOUT.inline followers or the save's notice room, and for
+ * every follower of a bulk save (NotifyPreload.deferFollowers), background
+ * steps tell the rest. */
 export async function notifyIssueUpdate(
   ctx: MutationCtx,
   a: {
@@ -2190,8 +2192,9 @@ export async function notifyIssueUpdate(
  * want to hear the reply); every subscriber EXCEPT the mentioned reads
  * 'New comment'. `actor` is the comment's author; of the comment itself
  * only the body is read. The recipients' sight is worked out once per
- * project (RecipientSight). Past FOLLOWER_FANOUT.inline followers,
- * background steps tell the rest. */
+ * project (RecipientSight). Past FOLLOWER_FANOUT.inline followers or the
+ * save's notice room, background steps tell the rest, the mentioned people
+ * included (tellMentioned). */
 export async function notifyCommentInsert(
   ctx: MutationCtx,
   a: {

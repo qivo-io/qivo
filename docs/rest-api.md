@@ -1763,12 +1763,14 @@ Following (subscribing to) a task yourself is [its own route](#following),
 and the caller reads and clears what arrives through [the inbox
 routes](#inbox).
 
-All of it happens server-side, inside the same transaction as the write, so
-it needs nothing from the caller. The exceptions are follower messages on a
-task with more than 128 followers, past the first 128, and every follower
-message of a roadmap save, an access removal or the subtasks a task delete
-detaches, which arrive moments later
-(see [Inbox](#inbox)). Unknown or out-of-org uuids in mention
+All of it happens server-side, so it needs nothing from the caller. Most of
+it happens inside the same transaction as the write. Follower messages on a
+task with more than 128 followers, past the first 128, arrive moments later
+instead, and so do mention and follower messages when many of the people a
+write mentions or notifies have snoozed a long thread about the task,
+because each message wakes theirs. Every follower message of a roadmap save,
+an access removal or the subtasks a task delete detaches also arrives
+moments later (see [Inbox](#inbox)). Unknown or out-of-org uuids in mention
 position are silently ignored, as are users without visibility into the
 project and agents that receive no inbox messages (see [Inbox](#inbox)), so a
 subscription never outlives the project access that justified it.
@@ -1822,7 +1824,9 @@ until the item is read, and the app's Inbox shows it as **N earlier updates
 on this task are not listed**. The task's comments and history still hold
 what those messages announced. A comment or a change on a task with more than 128
 followers, such as a task from before the follower limit, reaches the
-first 128 at once and the rest moments later. The followers of the tasks a
+first 128 at once and the rest moments later. The same holds when many of
+the people a write mentions or notifies have snoozed a long thread about
+the task, because each message wakes theirs. The followers of the tasks a
 roadmap save or an access removal changes, and of the subtasks a task delete
 detaches, get their messages moments after it saves.
 

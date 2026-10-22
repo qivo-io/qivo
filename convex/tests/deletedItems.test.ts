@@ -323,6 +323,8 @@ describe('moving a task to Deleted items', () => {
     const fits = await comment(t, task, 'x'.repeat(STORED_ROW_MAX_BYTES - 1000))
     const tooLarge = await comment(t, task, 'x'.repeat(STORED_ROW_MAX_BYTES))
     await deleteTask(t, f, task.id)
+    // the call spends a quarter of a step's bytes, so a step stores the rest
+    await runSteps(t)
     const item = await itemFor(t, task.id)
     expect(item.state).toBe('ready')
     expect(item.dropped_rows).toBe(1)
@@ -495,6 +497,7 @@ describe('moving a task to Deleted items', () => {
       description: 'x'.repeat(STORED_ROW_MAX_BYTES),
     })
     await deleteTask(t, f, root.id, { subtask_ids: [huge.id] })
+    await runSteps(t)
     const item = await itemFor(t, root.id)
     expect(item).toMatchObject({
       state: 'ready',

@@ -1484,6 +1484,18 @@ describe('windows that wait for the server', () => {
     expect(has('[data-deleted-row="item-trial"] [data-restore]')).toBe(false)
   })
 
+  it('says Restoring while a task comes back in steps', async () => {
+    await open()
+    answers['deletedItems:restore'] = async (args) => {
+      push([task(7, { state: 'restoring', can_restore: false })])
+      return { restored: args.ids as string[], refused: [], deferred: [] }
+    }
+    await deliver([task(7)])
+    await click(find('[data-deleted-row="item-7"] [data-restore]'))
+    expect(window.showToast).toHaveBeenCalledWith('Restoring QN-7…', undefined)
+    expect(window.showToast).not.toHaveBeenCalledWith('Restored QN-7', undefined)
+  })
+
   it('opens the project window for a sub-project whose project is deleted too', async () => {
     await open()
     const website = task(0, {
