@@ -137,7 +137,10 @@ function HoverTooltip({ content, children }: HoverTooltipProps) {
 function LiveTooltip({ content, children }: HoverTooltipProps) {
   const [open, setOpen] = React.useState(false)
   // closed by Escape: skip the exit animation, so the tooltip leaves Radix's
-  // layer stack at once and the Escape can go on to the layer below
+  // layer stack at once and the Escape can go on to the layer below. Only an
+  // open tooltip skips it: removing an exit animation that already runs
+  // cancels it, Radix's Presence then waits for an end that never comes,
+  // and the closed tooltip stays the top layer and takes every Escape.
   const [escaped, setEscaped] = React.useState(false)
   const contentRef = React.useRef<HTMLDivElement>(null)
   const hasContent = hasTooltipContent(content)
@@ -174,7 +177,7 @@ function LiveTooltip({ content, children }: HoverTooltipProps) {
             // this press reaches nothing else; passEscapeOn sends it again
             event.preventDefault()
             event.stopPropagation()
-            setEscaped(true)
+            if (open) setEscaped(true)
             setOpen(false)
             passEscapeOn(event.target, contentRef.current)
           }}
