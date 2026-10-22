@@ -577,3 +577,17 @@ describe('demo lifetime and capabilities', () => {
     expect(restored.inserts).toBeLessThanOrEqual(DEMO_INSERTS_TOTAL)
   })
 })
+
+describe('public demo provisioning budget', () => {
+  // The whole Northstar work in one transaction, sharing its uuids, reads
+  // and notify memo across the steps. Before the seed was split into steps
+  // it read 1,612 index ranges and 1,668 documents here; rebuilding them
+  // per step read about twice that.
+  it('provisions a demo within the index ranges and reads of the unsplit seed', async () => {
+    const limited = newT({ transactionLimits: { databaseQueries: 1612, documentsRead: 1668 } })
+    limited.registerComponent('betterAuth', authSchema, componentModules)
+    const login = await anonymousLogin(limited)
+    const demo = await login.as.mutation(api.demo.ensureMine, {})
+    expect(demo.orgId).toBeTruthy()
+  })
+})

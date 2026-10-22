@@ -798,6 +798,18 @@ describe('resumable seed execution', () => {
     expect(refused.outcome.message).toBe(
       'Request refused during demo work seed: marketing demo: use reset to change dates or dataset version.',
     )
+    // a step that finds a seeded row gone can only be replaced by a reset
+    for (const sentence of [
+      'marketing demo: a seeded task is missing; use reset to replace it',
+      'marketing demo: a seeded project is missing; use reset to replace it',
+      'marketing demo: a seeded label is missing; use reset to replace it',
+      'marketing demo: work changed during the seed; use reset to replace it',
+    ]) {
+      const gone = await run('seed', () => {
+        throw Object.assign(new Error('refused'), { data: { code: 'rule', message: sentence } })
+      })
+      expect(gone.outcome.message).toBe(`Request refused during demo work seed: ${sentence}.`)
+    }
   })
 
   it('says the demo may be empty and to re-run reset only when the seed fails after the wipe', async () => {

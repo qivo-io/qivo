@@ -59,54 +59,14 @@ const MARKS: Array<['**' | '~~' | '++' | '*', 'bold' | 'strike' | 'underline' | 
   ['*', 'italic'],
 ]
 
-/** `[label](dest)` scanner; `at` must point at the opening bracket. A call
-    can walk to the end of the line, so the parser asks Scan.link, which
-    reads the same answer from tables. */
-function matchLinkLike(
-  src: string,
-  at: number,
-): { label: string; dest: string; end: number } | null {
-  let j = at + 1
-  let depth = 1
-  while (j < src.length) {
-    const c = src[j]
-    if (c === '\\') {
-      j += 2
-      continue
-    }
-    if (c === '\n') return null
-    if (c === '[') depth++
-    else if (c === ']') {
-      depth--
-      if (depth === 0) break
-    }
-    j++
-  }
-  if (depth !== 0 || src[j + 1] !== '(') return null
-  let k = j + 2
-  let pdepth = 1
-  while (k < src.length) {
-    const c = src[k]
-    if (c === '\\') {
-      k += 2
-      continue
-    }
-    if (c === '\n') return null
-    if (c === '(') pdepth++
-    else if (c === ')') {
-      pdepth--
-      if (pdepth === 0) break
-    }
-    k++
-  }
-  if (pdepth !== 0) return null
-  return { label: src.slice(at + 1, j), dest: src.slice(j + 2, k).trim(), end: k + 1 }
-}
+/** A `[label](dest)` construct: its label, its trimmed destination and the
+    index after its closing parenthesis. */
+type LinkLike = { label: string; dest: string; end: number }
 
 /* The partner of each opening `open` in `src`: the index of the `close`
    that brings its depth back to zero, or -1 when a line break or the end
    comes first. A character after an odd run of backslashes is escaped and
-   counts for nothing, as matchLinkLike skips it. */
+   counts for nothing, as a backslash escapes any character inside a link. */
 function partners(src: string, escaped: Uint8Array, open: string, close: string): Int32Array {
   const partner = new Int32Array(src.length).fill(-1)
   const stack: number[] = []
@@ -139,8 +99,9 @@ function escapes(src: string): Uint8Array {
     at each bracket, backtick or mark costs up to the rest of the text a
     time, which made text such as 20,000 brackets parse in quadratic time;
     the tables keep a parse linear in the text length at each nesting
-    depth. */
-class Scan {
+    depth. Exported for src/lib/md.test.ts, which checks every answer
+    against a scan ahead from the same index. */
+export class Scan {
   private escaped?: Uint8Array
   private brackets?: Int32Array
   private parens?: Int32Array
@@ -150,11 +111,13 @@ class Scan {
 
   constructor(readonly src: string) {}
 
-  /** The `[label](dest)` at `at` (matchLinkLike), or null. */
-  link(at: number): ReturnType<typeof matchLinkLike> {
+  /** The `[label](dest)` whose opening bracket is at `at`, or null. Inside
+      it a backslash escapes any character and a line break ends it; the
+      brackets of the label and the parentheses of the destination nest.
+      `at` must be an unescaped bracket (one after an even run of
+      backslashes, if any), as every parse asks. */
+  link(at: number): LinkLike | null {
     this.escaped ??= escapes(this.src)
-    // A parse never asks at an escaped bracket; read one directly.
-    if (this.escaped[at]) return matchLinkLike(this.src, at)
     this.brackets ??= partners(this.src, this.escaped, '[', ']')
     const j = this.brackets[at]
     if (j < 0 || this.src[j + 1] !== '(') return null

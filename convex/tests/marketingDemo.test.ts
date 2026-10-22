@@ -20,7 +20,7 @@ import { canSeeProject, hasProjectLevel } from '../lib/access'
 import { MCP_PROVENANCE } from '../machine/shared'
 import { logActivity, machineDetail } from '../model/activity'
 import { moveProjectToTrash, moveTasksToTrash, TRASH_BUDGET } from '../model/deletedItems'
-import { NORTHSTAR_STEPS } from '../model/demoSeed'
+import { NORTHSTAR_BATCH, NORTHSTAR_STEPS } from '../model/demoSeed'
 import { newOrgDefaults, newTeamDefaults } from '../model/orgs'
 import schema from '../schema'
 import {
@@ -1653,6 +1653,84 @@ describe('marketing demo seed steps', () => {
     await trashTask(t, seededTask)
     const tasks = (await t.query(inspectRef, TARGET)).counts.tasks
     await expectRefusal(seed(t), 'rule', /work changed during the seed; use reset/)
+    expect((await t.query(inspectRef, TARGET)).counts.tasks).toBe(tasks)
+  }, 120_000)
+
+  it('refuses a work step whose row the demo already holds, and a receipt from another step layout', async () => {
+    const t = newAuthT()
+    const { org_id } = await provision(t)
+    await toSetup(t)
+    await apply(t, 'seed')
+    // a demo user creates a task with a computed reserved uuid between calls
+    const project = await t.run(async (ctx) =>
+      ctx.db
+        .query('projects')
+        .withIndex('by_org', (q) => q.eq('org_id', org_id))
+        .filter((q) => q.eq(q.field('type'), 'project'))
+        .first(),
+    )
+    const reserved = await demoId(`issue:${MARKETING_DEMO.issues[0].key}`)
+    await plantIssue(t, { org_id, project_id: project!.id, id: reserved, title: 'Look-alike' })
+    await expectRefusal(apply(t, 'seed'), 'rule', /work changed during the seed; use reset/)
+    const withId = await t.run(async (ctx) =>
+      ctx.db
+        .query('issues')
+        .withIndex('by_uuid', (q) => q.eq('id', reserved))
+        .collect(),
+    )
+    expect(withId.map((issue) => issue.title)).toEqual(['Look-alike'])
+    // a step index written under another layout of the steps
+    await reset(t)
+    await wipe(t)
+    await apply(t, 'seed')
+    await apply(t, 'seed')
+    await t.run(async (ctx) => {
+      const receipt = await ctx.db.query('marketing_demo').unique()
+      await ctx.db.patch(receipt!._id, { seed: { ...receipt!.seed!, layout: 'another layout' } })
+    })
+    await expectRefusal(apply(t, 'seed'), 'rule', /use reset to change dates or dataset version/)
+  }, 120_000)
+
+  it('refuses a task step whose label or parent task was deleted since it was written', async () => {
+    const t = newAuthT()
+    await provision(t)
+    await toSetup(t)
+    await apply(t, 'seed')
+    // a label delete is final, not a Deleted items entry
+    const labelId = await demoId(`label:${MARKETING_DEMO.issues[0].labels[0]}`)
+    await t.run(async (ctx) => {
+      const label = await ctx.db
+        .query('labels')
+        .withIndex('by_uuid', (q) => q.eq('id', labelId))
+        .unique()
+      await ctx.db.delete(label!._id)
+    })
+    await expectRefusal(apply(t, 'seed'), 'rule', /a seeded label is missing; use reset/)
+    expect((await t.query(inspectRef, TARGET)).counts.tasks).toBe(0)
+    // a parent task gone once its step ran: the first task of a later step
+    // whose parent an earlier step wrote
+    await reset(t)
+    await wipe(t)
+    await toSetup(t)
+    await apply(t, 'seed')
+    const child = MARKETING_DEMO.issues.findIndex(
+      (issue, index) =>
+        issue.parent !== undefined &&
+        MARKETING_DEMO.issues.findIndex((p) => p.key === issue.parent) <
+          index - (index % NORTHSTAR_BATCH.tasks),
+    )
+    for (let step = 0; step < Math.floor(child / NORTHSTAR_BATCH.tasks); step++)
+      await apply(t, 'seed')
+    const parentId = await demoId(`issue:${MARKETING_DEMO.issues[child].parent}`)
+    await t.run(async (ctx) => {
+      const parent = await ctx.db
+        .query('issues')
+        .withIndex('by_uuid', (q) => q.eq('id', parentId))
+        .unique()
+      await ctx.db.delete(parent!._id)
+    })
+    const tasks = (await t.query(inspectRef, TARGET)).counts.tasks
+    await expectRefusal(apply(t, 'seed'), 'rule', /a seeded task is missing; use reset/)
     expect((await t.query(inspectRef, TARGET)).counts.tasks).toBe(tasks)
   }, 120_000)
 

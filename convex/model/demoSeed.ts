@@ -138,11 +138,49 @@ async function uuids(
   )
 }
 
-/* The org's profiles as stored now and the one visibility memo the notify
- * fan-outs of a task or comment step share. The setup step patched the
- * roles they read, and no later step writes teams, grants, roles or
- * projects. */
-async function notifyContext(ctx: MutationCtx, org: Doc<'organizations'>) {
+/** The refusals of a step that finds a row an earlier step wrote gone:
+ * the app changed the demo between two calls of a seed. */
+export const SEED_ROW_MISSING = {
+  task: 'marketing demo: a seeded task is missing; use reset to replace it',
+  project: 'marketing demo: a seeded project is missing; use reset to replace it',
+  label: 'marketing demo: a seeded label is missing; use reset to replace it',
+} as const
+
+/** What the steps of one seed share: the fixture uuids, and the rows they
+ * read or wrote, so a seed run in one transaction reads each only once
+ * (writeNorthstarWork). A step run alone builds its own (newNorthstarRun)
+ * and reads what it needs again. */
+export type NorthstarRun = {
+  ids: Record<'person' | 'project' | 'issue' | 'label' | 'team', Record<string, string>>
+  /* The org's profiles and the one notify preload the task and comment
+   * steps share, read after the setup step patched the roles they read; no
+   * later step writes teams, grants, roles or projects. */
+  notify?: { orgProfiles: Doc<'profiles'>[]; preload: NotifyPreload }
+  /* The uuids of the org's labels. */
+  labels?: Set<string>
+  /* The seeded tasks by fixture key, as inserted or read. Nothing in the
+   * seed patches a task before the archive marks. */
+  tasks: Map<string, Doc<'issues'>>
+}
+
+/** An empty NorthstarRun for the uuids of `namespace`. */
+export async function newNorthstarRun(namespace: string): Promise<NorthstarRun> {
+  const data = MARKETING_DEMO
+  return {
+    ids: {
+      person: await uuids(namespace, 'person', data.people),
+      project: await uuids(namespace, 'project', data.projects),
+      issue: await uuids(namespace, 'issue', data.issues),
+      label: await uuids(namespace, 'label', data.labels),
+      team: await uuids(namespace, 'team', data.teams),
+    },
+    tasks: new Map(),
+  }
+}
+
+/* The run's notify context, read on first use. */
+async function notifyContext(ctx: MutationCtx, org: Doc<'organizations'>, run: NorthstarRun) {
+  if (run.notify) return run.notify
   const orgProfiles = await ctx.db
     .query('profiles')
     .withIndex('by_org', (q) => q.eq('org_id', org.id))
@@ -151,42 +189,54 @@ async function notifyContext(ctx: MutationCtx, org: Doc<'organizations'>) {
     .query('projects')
     .withIndex('by_org', (q) => q.eq('org_id', org.id))
     .collect()
-  const preload: NotifyPreload = {
-    profiles: profileCacheOf(orgProfiles),
-    projects: new Map(projects.map((project) => [project.id, project])),
-    visibility: new Map(),
+  run.notify = {
+    orgProfiles,
+    preload: {
+      profiles: profileCacheOf(orgProfiles),
+      projects: new Map(projects.map((project) => [project.id, project])),
+      visibility: new Map(),
+    },
   }
-  return { orgProfiles, preload }
+  return run.notify
 }
 
 /** Writes the whole Northstar work in this transaction, every step in
- * order. The public demo provisions this way; the marketing demo runs one
- * step a call (writeNorthstarStep). */
+ * order, sharing one NorthstarRun. The public demo provisions this way; the
+ * marketing demo runs one step a call (writeNorthstarStep). */
 export async function writeNorthstarWork(ctx: MutationCtx, target: NorthstarTarget): Promise<void> {
-  for (const step of NORTHSTAR_STEPS) await writeNorthstarStep(ctx, target, step)
+  const run = await newNorthstarRun(target.namespace)
+  for (const step of NORTHSTAR_STEPS) await writeNorthstarStep(ctx, target, step, run)
 }
 
 /** Writes one step of the Northstar work (NorthstarStep). The steps before
  * it must have run, in this or earlier transactions, and nothing else may
- * have changed the organization's teams, grants, roles or projects since. */
+ * have changed the organization's teams, grants, roles or projects since;
+ * a step refuses (SEED_ROW_MISSING) when a task, project or label it builds
+ * on is gone. `run` is shared by the steps of one transaction. */
 export async function writeNorthstarStep(
   ctx: MutationCtx,
   { org, profiles, namespace, anchor, now }: NorthstarTarget,
   step: NorthstarStep,
+  run?: NorthstarRun,
 ): Promise<void> {
+  const shared = run ?? (await newNorthstarRun(namespace))
   const id = (key: string) => marketingId(namespace, key)
   const data = MARKETING_DEMO
-  const personIds = await uuids(namespace, 'person', data.people)
-  const projectIds = await uuids(namespace, 'project', data.projects)
-  const issueIds = await uuids(namespace, 'issue', data.issues)
-  const labelIds = await uuids(namespace, 'label', data.labels)
-  const teamIds = await uuids(namespace, 'team', data.teams)
+  const {
+    person: personIds,
+    project: projectIds,
+    issue: issueIds,
+    label: labelIds,
+    team: teamIds,
+  } = shared.ids
   const teamDefaults = newTeamDefaults(now)
-  // A task as an earlier step inserted it; nothing in the seed patches a
-  // task before the archive marks.
+  // A task an earlier step inserted.
   const task = async (key: string) => {
+    const known = shared.tasks.get(key)
+    if (known) return known
     const issue = await byId(ctx, 'issues', issueIds[key])
-    require(issue !== null, rule('marketing demo: task insert missing'))
+    require(issue !== null, rule(SEED_ROW_MISSING.task))
+    shared.tasks.set(key, issue)
     return issue
   }
   if (step.kind === 'setup') {
@@ -274,18 +324,30 @@ export async function writeNorthstarStep(
         color: l.color,
         created_at: now,
       })
+    shared.labels = new Set(data.labels.map((l) => labelIds[l.key]))
     return
   }
   if (step.kind === 'tasks') {
-    const { orgProfiles, preload } = await notifyContext(ctx, org)
+    const { orgProfiles, preload } = await notifyContext(ctx, org, shared)
     const atlas = orgProfiles.find((p) => p.id === personIds.atlas)
     require(atlas !== undefined, rule('marketing demo: import actor missing'))
+    // a label delete is final, so read which of the seeded labels are left
+    shared.labels ??= new Set(
+      (
+        await ctx.db
+          .query('labels')
+          .withIndex('by_org', (q) => q.eq('org_id', org.id))
+          .collect()
+      ).map((label) => label.id),
+    )
+    const labels = shared.labels
     for (let index = step.from; index < step.to; index++) {
       const i = data.issues[index]
-      // a project the app removed since setup refuses rather than gain tasks
-      require(preload.projects.has(projectIds[i.project]), rule(
-        'marketing demo: seeded project missing',
-      ))
+      // a project, label or parent task the app removed since it was
+      // written refuses rather than gain tasks that point at nothing
+      require(preload.projects.has(projectIds[i.project]), rule(SEED_ROW_MISSING.project))
+      require(i.labels.every((label) => labels.has(labelIds[label])), rule(SEED_ROW_MISSING.label))
+      if (i.parent) await task(i.parent)
       // A dated last write (updated_at) lets Team sync read the task as
       // untouched, or its review as waiting, since a sync.
       const times = northstarTaskTimes(anchor, now, i)
@@ -350,7 +412,8 @@ export async function writeNorthstarStep(
         { id: await id(`activity:import:${i.key}`) },
       )
       const issue = await ctx.db.get(issueDocId)
-      require(issue !== null, rule('marketing demo: task insert missing'))
+      require(issue !== null, rule(SEED_ROW_MISSING.task))
+      shared.tasks.set(i.key, issue)
       await notifyIssueInsert(ctx, { issue, actor: atlas, now, preload, skipTaskEvent: true })
     }
     return
@@ -418,10 +481,11 @@ export async function writeNorthstarStep(
         { id: await id(`activity:change:${c.key}`) },
       )
     }
+    const projects = shared.notify?.preload.projects
     for (const m of data.milestones) {
-      require((await byId(ctx, 'projects', projectIds[m.project])) !== null, rule(
-        'marketing demo: seeded project missing',
-      ))
+      const project =
+        projects?.get(projectIds[m.project]) ?? (await byId(ctx, 'projects', projectIds[m.project]))
+      require(project !== null && project !== undefined, rule(SEED_ROW_MISSING.project))
       await ctx.db.insert('milestones', {
         id: await id(`milestone:${m.key}`),
         project_id: projectIds[m.project],
@@ -433,7 +497,7 @@ export async function writeNorthstarStep(
     return
   }
   if (step.kind === 'comments') {
-    const { orgProfiles, preload } = await notifyContext(ctx, org)
+    const { orgProfiles, preload } = await notifyContext(ctx, org, shared)
     for (const c of NORTHSTAR_COMMENTS.slice(step.from, step.to)) {
       const createdAt = new Date(
         Date.parse(`${marketingDate(anchor, c.day)}T14:00:00.000Z`) + c.minute * 60_000,

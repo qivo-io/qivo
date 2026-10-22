@@ -51,6 +51,9 @@ const SAFE_REFUSALS = new Set([
   'marketing demo: credential set belongs to a different provisioning run',
   'marketing demo: work was added after wipe; use reset to replace it',
   'marketing demo: work changed during the seed; use reset to replace it',
+  'marketing demo: a seeded task is missing; use reset to replace it',
+  'marketing demo: a seeded project is missing; use reset to replace it',
+  'marketing demo: a seeded label is missing; use reset to replace it',
   'marketing demo: use reset to change dates or dataset version',
   'marketing demo: Deleted items must be empty; run the same command again',
 ])
@@ -67,8 +70,9 @@ const TRASH_BATCHES = 400
 // Calls of apply('wipe') before the CLI gives up; each deletes one bounded
 // batch of the demo's work.
 const WIPE_STEPS = 2000
-// Calls of apply('seed') before the CLI gives up; each writes one bounded
-// step of the demo's work (convex/model/demoSeed.ts NORTHSTAR_STEPS).
+// Calls of apply('seed') before the CLI gives up; each runs one bounded step
+// (convex/internal/marketingDemo.ts SEED_STEPS: the reserved-id check parts,
+// then the work of convex/model/demoSeed.ts NORTHSTAR_STEPS).
 const SEED_STEPS = 100
 /** A loopback HTTP origin, the only kind a --local run talks to. */
 const LOOPBACK_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):[0-9]{1,5}$/

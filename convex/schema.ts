@@ -521,9 +521,11 @@ export default defineSchema({
     state: v.union(v.literal('empty'), v.literal('seeding'), v.literal('ready')),
     version: v.number(),
     anchor: v.optional(v.string()),
-    // While 'seeding': the next step of model/demoSeed.ts NORTHSTAR_STEPS
-    // and the write time every step of this seed uses.
-    seed: v.optional(v.object({ step: v.number(), now: v.string() })),
+    // While 'seeding': the next step of internal/marketingDemo.ts SEED_STEPS
+    // (the reserved-id check parts, then model/demoSeed.ts NORTHSTAR_STEPS),
+    // the write time every step of this seed uses, and the SEED_LAYOUT the
+    // step index belongs to.
+    seed: v.optional(v.object({ step: v.number(), now: v.string(), layout: v.string() })),
     created_at: v.string(),
     updated_at: v.string(),
   }).index('by_key', ['key']),

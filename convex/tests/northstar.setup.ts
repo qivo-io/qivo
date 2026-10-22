@@ -1,7 +1,9 @@
 /* Northstar Labs inside convex-test — the whole dataset through the same
- * writeNorthstarWork the importer (internal/marketingDemo) and the public
- * demo use, without the auth component, the ownership receipt or scrypt: the
- * organization and its eight profiles are planted raw, each person carrying
+ * writeNorthstarWork the public demo uses (the importer,
+ * internal/marketingDemo, runs the same steps one call at a time through
+ * writeNorthstarStep), without the auth component, the ownership receipt or
+ * scrypt. The organization and its eight profiles are planted raw, each
+ * person carrying
  * the fake login `auth_<key>` so `t.withIdentity({ subject: 'auth_nora' })`
  * walks through the public doors as Nora. About a second per call — plant
  * once per test, never in a loop; the generic suites keep the tiny
