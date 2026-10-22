@@ -104,6 +104,7 @@ import { nameInitials } from '../lib/initials'
 import { groupProgress, isIssueDone, isIssueGroup } from '../lib/issueGroups'
 import { LABEL_COLORS } from '../lib/labelColors'
 import { hasUnsaved, holdUnsaved, leaveDeliberately } from '../lib/leaveGuard'
+import { loadFailureText } from '../lib/loadFailure'
 import { watchLocalDay } from '../lib/localDay'
 import { pauseSentence } from '../lib/noticeText'
 import { desktopNotify } from '../lib/notify'
@@ -1995,6 +1996,10 @@ export type SnapshotTrouble = {
   asOf: string | null
   retrying: boolean
   detail: string
+  /** the server's sentence when a part refused to load (a 'rule' error),
+      such as a part too large to load or one that did not arrive in time,
+      which retrying alone may not end */
+  reason?: string
 }
 let snapshotTrouble: SnapshotTrouble | null = null
 /* The crash note's report from this start (P.unconfirmedReport). */
@@ -8594,13 +8599,14 @@ function resetSnapshotTrouble() {
 
 /** Records snapshot trouble of `kind` after the first delivery. Keeps when
     the trouble began and a running retry. */
-function beginTrouble(kind: SnapshotTrouble['kind'], detail: string) {
+function beginTrouble(kind: SnapshotTrouble['kind'], detail: string, reason?: string) {
   snapshotTrouble = {
     kind,
     since: snapshotTrouble?.since ?? Date.now(),
     asOf: lastDeliveryAt,
     retrying: snapshotTrouble?.retrying ?? false,
     detail,
+    ...(reason === undefined ? {} : { reason }),
   }
   // a held delivery from before this trouble no longer ends it
   recoveryHeld = false
@@ -8610,11 +8616,18 @@ function beginTrouble(kind: SnapshotTrouble['kind'], detail: string) {
 /** Records a failed snapshot query after the first delivery. A lost sign-in
     (the server's `forbidden('not signed in')`) is `signed_out`; anything
     else is `failed`, except after every seat is gone. A fault says nothing
-    about access, so `no_access` holds until a snapshot brings a seat back. */
+    about access, so `no_access` holds until a snapshot brings a seat back.
+    A part that refused to load says why in a sentence (lib/liveParts.ts),
+    which the notice shows as it is, as the load-failed screen does. */
 function snapshotFailed(err: unknown) {
   const d = errData(err)
   const signedOut = d.code === 'forbidden' && d.message === 'not signed in'
   if (!signedOut && snapshotTrouble?.kind === 'no_access') return
+  if (d.code === 'rule' && d.message) {
+    const reason = loadFailureText(err)
+    beginTrouble('failed', reason, reason)
+    return
+  }
   const text = err instanceof Error ? err.message : String(err)
   beginTrouble(
     signedOut ? 'signed_out' : 'failed',
@@ -8653,6 +8666,11 @@ syncStatus.subscribe((ended) => {
   setTimeout(() => preferences.retry(), 0)
 })
 
+/* The thread's news that came with the boot's transitions, before the
+   first workspace settled the boot. initStore hands it on once the store
+   holds that workspace, unless a later transition brought newer news. */
+let bootThreadNews: PartsReport['side'] | undefined
+
 /** Starts the workspace's live parts. With `first`, the first transition
     that completes or fails the workspace settles it (boot); without, every
     report updates the store (a retry's or re-init's fresh parts). A boot
@@ -8674,6 +8692,7 @@ function startParts(
       if (!stillCurrent() || bootFailed) return
       const ws = news.workspace
       if (!settled) {
+        if (news.side) bootThreadNews = news.side
         if (ws.state === 'held') return
         settled = true
         if (ws.state === 'failed') {
@@ -8695,7 +8714,9 @@ function startParts(
       // the workspace and the thread of one transition repaint once
       together(() => {
         receiveWorkspace(ws, news.at)
-        if (news.side) threadNews(news.side)
+        if (!news.side) return
+        bootThreadNews = undefined
+        threadNews(news.side)
       })
     },
     online,
@@ -8780,6 +8801,7 @@ function stopParts() {
   parts = null
   threadWatched = null
   threadCurrent = false
+  bootThreadNews = undefined
 }
 
 /** Destroy demo memory before rendering the expired/session-loss screen.
@@ -9020,8 +9042,12 @@ export async function initStore(
     stopParts()
     return null
   }
-  // a thread watched before a re-init rides along with the new parts
+  // a thread watched before a re-init rides along with the new parts, and
+  // one watched during the boot hears what the boot's transitions brought
   subscribeWaitingThread()
+  const bootNews = bootThreadNews
+  bootThreadNews = undefined
+  if (bootNews) threadNews(bootNews)
   // the rows, with any layer from before a re-init painted over them
   paintRows(true, false)
   avatarSources.sync(

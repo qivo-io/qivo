@@ -67,7 +67,10 @@ function answerOf(whole: Whole | null, name: string, args: Record<string, unknow
 /** The live transport over `client`. `batch(step)` sends everything
     `step` delivers as one transition, as Convex sends the results one
     server state changed. */
-export function liveOver(client: Client): LiveQueries & { batch(step: () => void): void } {
+export function liveOver(client: Client): LiveQueries & {
+  batch(step: () => void): void
+  hold(orgId: string | null): void
+} {
   const handlers = new Set<(transition: LiveTransition) => void>()
   // what each watched token names, its latest result as JSON, and how many
   // watch it; a workspace part's result follows `whole`
@@ -94,6 +97,8 @@ export function liveOver(client: Client): LiveQueries & { batch(step: () => void
   const isPart = (name: string) => name === 'workspace:root' || name in PARTS
   // the tokens a batch() gathers, sent as one transition at its end
   let batching: Set<string> | null = null
+  // the organization whose parts answer nothing until hold(null)
+  let heldOrg: string | null = null
   const fire = (tokens: Set<string>, when?: string) => {
     if (batching) {
       for (const token of tokens) batching.add(token)
@@ -110,6 +115,7 @@ export function liveOver(client: Client): LiveQueries & { batch(step: () => void
     const changed = new Set<string>()
     for (const [token, w] of watched) {
       if (!isPart(w.name) || (only && token !== only) || whole === undefined) continue
+      if (heldOrg !== null && w.args.org_id === heldOrg) continue
       if ('error' in whole) {
         w.error = whole.error
         w.json = undefined
@@ -258,6 +264,12 @@ export function liveOver(client: Client): LiveQueries & { batch(step: () => void
       generation++
       handlers.add(fn)
       return () => handlers.delete(fn)
+    },
+    /** Keeps the parts of organization `orgId` from answering, such as a
+        new seat's still loading, and with null lets them answer. */
+    hold(orgId) {
+      heldOrg = orgId
+      if (orgId === null) fire(refresh())
     },
     batch(step) {
       batching = new Set()

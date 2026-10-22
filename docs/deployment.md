@@ -201,8 +201,8 @@ which takes the same loopback origins, `QIVO_FIXTURE_LOCAL=true` and
 `QIVO_LOCAL_ADMIN_KEY` as the Northstar seed and refuses every other
 target. It adds 10,000 tasks and a parent for every 25 of them, as Nora,
 the organization's admin, through the app's own task mutations, one at a
-time. `--tasks` sets a smaller count; a larger organization no longer
-loads. The tasks come in every status, with subtasks, due dates, pauses,
+time. `--tasks` sets any count from 1 to 30,000, which the app's workspace
+parts load in windows. The tasks come in every status, with subtasks, due dates, pauses,
 long titles and unowned tasks. Their titles read like Northstar's, so the
 Board's card height estimates meet realistic text, and each description
 names the task's number. Run it again to add only the tasks still missing;
@@ -411,15 +411,30 @@ deployment moved them into stamp rows with the one-time
 development, staging, production and the demo before the fields were
 dropped. Convex refuses to deploy a later commit to a backend where any
 profile still holds one of them, for example a development backend that
-never ran the backfill, or data from a backup taken before it ran. Deploy
-v0.1.52 (`38cc47f`), the last commit with the backfill, run it as its header
-says, wait until `remaining` reports 0 on every page, and then deploy the
-later commit. Returning the Convex functions to a commit before v0.1.52
+never ran the backfill, or data from a backup taken before it ran. Every
+main commit from v0.1.52 (`38cc47f`) up to the release that replaced
+`snapshot.forMe` with the workspace parts has the backfill. Deploy the
+newest of them, as an older one may refuse data from a later schema
+addition, run the backfill as its header says, wait until `remaining`
+reports 0 on every page, and then deploy the later commit. Returning the Convex functions to a commit before v0.1.52
 shows nobody as stamped, because earlier code reads only the profile fields,
 and the stamps it then writes into those fields make Convex refuse the roll
 forward until the backfill runs again, which moves them into rows only for
 people who have none, so those stamps are lost for everyone stamped before.
 Roll forward instead.
+
+Every task and project has a `window_key`, a random point the server picks
+when it stores the row, which places the row in the app's windows of the
+workspace (`convex/lib/workspaceParts.ts`). The release that replaced
+`snapshot.forMe` with the workspace parts added it. A task or project
+stored before has none until the one-time `internal/windowKeysBackfill`
+gives it one, and until then it loads in the first window of its kind, so
+an organization with more such tasks than one window holds cannot load.
+Run the backfill on every hosted deployment once it serves that release, as
+the module's header says, and check that `remaining` reports 0 on every
+page of both tables. Earlier releases do not accept the field, so a
+rollback past that release fails to deploy; it is a rollback floor anyway
+(see Rollback and hotfixes).
 
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to

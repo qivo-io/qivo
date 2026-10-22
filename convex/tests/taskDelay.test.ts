@@ -28,7 +28,7 @@ import {
   type LoadSpan,
   plannableHoursOf,
 } from '../../src/lib/workload'
-import { api, internal } from '../_generated/api'
+import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
 import { type DelayJson, OWNER_LOAD_CHECKS, ownerLoadSpans, utcToday } from '../lib/machineDelay'

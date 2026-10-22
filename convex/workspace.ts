@@ -12,14 +12,17 @@
  * - people (per window of the organization's profile ids,
  *   lib/idWindows.ts): profiles with their Team sync stamps and team
  *   memberships. Two ranges, and one per person for their memberships.
- * - projects (per window of its project ids): the projects the caller can
+ * - projects (per window of its projects' window keys, which the server
+ *   picks at random, lib/db.ts newWindowKey): the projects the caller can
  *   see, with grants, team grants and the active ones' milestones. Up to
  *   three ranges per project, beside the caller's levels on it.
- * - tasks (per window of its task ids): the caller's working set, with
- *   links, labels, attachments and follows, and the anonymized load of the
- *   window's tasks the caller is not shown. Six ranges for the window, two
- *   more per 64 subtasks past the first 64, one per task outside it that a
- *   task names (a parent, a link target) and one per owner of a hidden task.
+ * - tasks (per window of its tasks' window keys): the caller's working set,
+ *   with links, labels, attachments and follows, and the anonymized load of
+ *   the window's tasks the caller is not shown. Five ranges for the window
+ *   and its relation rows, one or two per task for its subtasks, five per
+ *   task restored before its archive marks were cleared, one per task
+ *   outside it that a task names (a parent, a link target) and one per
+ *   owner of a hidden task.
  * - inbox (per organization): the caller's messages, at most 3,002 messages
  *   read and one range per task they name, cut short where those tasks
  *   would read too much.

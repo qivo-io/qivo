@@ -280,7 +280,8 @@ const hiddenSubtaskParents = new Set(hiddenTasks.map((row) => row.parent_id).fil
     groupTest; every project here is active). */
 const parentsOf = () => new Set(allTasks.filter((row) => row.parent_id).map((row) => row.parent_id))
 let parents = parentsOf()
-/** Task `row` as the snapshot sends it (convex/snapshot.ts forMe). */
+/** Task `row` as the workspace sends it (convex/lib/workspaceParts.ts
+    readTasks), and as forMe sent it to baseline builds. */
 const wireTask = (row) => {
   const { parent_id: parent, ...rest } = row
   const out = parent && shown.has(parent) ? { ...rest, parent_id: parent } : rest
@@ -290,8 +291,9 @@ const wireTask = (row) => {
 }
 /** The load row the snapshot sends for task `row`, or null:
     convex/planning.ts orgLoadRows' fence for a staff reader, every owner in
-    the organization, kept for tasks the reader is not shown only, as forMe
-    keeps them (the app derives the shown tasks' load from their rows), or
+    the organization, kept for tasks the reader is not shown only, as the
+    tasks part sends them (the app derives the shown tasks' load from their
+    rows), or
     for every task with shownload=1. */
 const loadRow = (row) => {
   if (parents.has(row.id) || (!shownLoad && shown.has(row.id))) return null
@@ -583,8 +585,8 @@ function emit(name) {
 /* The watched parts by id, each with its query, args and the JSON it last
    sent, and the parts watched since the last transition. */
 const watchedParts = new Map()
-/* The timer that answers the parts watched since it was set. */
-let watchTimer = null
+/* Whether a timer will answer the parts watched since it was set. */
+let watchPending = false
 /* The transition waiting for its turn, which takes every part that changed
    by the time it is sent. */
 let nextTransition = null
@@ -883,10 +885,13 @@ self.onmessage = async ({ data }) => {
     case 'watch': {
       watchedParts.set(data.id, { name: data.name, args: data.args, sent: null })
       // the parts watched in one task are answered in one transition
-      watchTimer ??= setTimeout(() => {
-        watchTimer = null
-        void transition()
-      }, latency)
+      if (!watchPending) {
+        watchPending = true
+        setTimeout(() => {
+          watchPending = false
+          void transition()
+        }, latency)
+      }
       return
     }
     case 'unwatch':

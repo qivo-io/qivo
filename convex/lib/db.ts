@@ -69,6 +69,15 @@ export function assertNewRowId(id: string): void {
   if (!ROW_ID.test(id)) throw badRequest(ROW_ID_SHAPE)
 }
 
+declare const crypto: { randomUUID(): string }
+
+/** A new window key for a task or project: 8 random hex digits, the point
+ * of lib/idWindows.ts's space that places the row in the app's windows
+ * (lib/workspaceParts.ts). The server picks it, never the writer, so no
+ * writer can crowd its rows into one window, which could then not load.
+ * Every insert of a task or project sets it. */
+export const newWindowKey = (): string => crypto.randomUUID().slice(0, 8)
+
 /* Chainable eq shape shared by every IndexRangeBuilder — the generic index
  * types can't be threaded through a runtime field list, so the builder is
  * driven through this erased view. */

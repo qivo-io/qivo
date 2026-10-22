@@ -9,7 +9,7 @@ import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
-  live: null as null | { batch(step: () => void): void },
+  live: null as null | { batch(step: () => void): void; hold(orgId: string | null): void },
 }))
 vi.mock('../lib/convex', async () => {
   const { liveOver } = await import('./guard/liveDouble.setup')
@@ -103,6 +103,45 @@ describe('one transition', () => {
     expect(store.P.issues.find((i) => i.uuid === 'task-a')?.title).toBe('Renamed elsewhere')
     expect(store.P.comments.map((c) => c.body)).toEqual(['Looks good'])
     expect(emits).toBe(1)
+  })
+
+  it('keeps a write accepted while a new seat holds the workspace, until a transition completes it', async () => {
+    let answer: (value: null) => void = () => {}
+    network.mutation.mockImplementation((ref) =>
+      getFunctionName(ref) === 'issues:update'
+        ? new Promise((resolve) => (answer = resolve))
+        : Promise.resolve(null),
+    )
+    const title = () => store.P.issues.find((i) => i.uuid === 'task-a')?.title
+    store.P.updateIssue(store.P.issues.find((i) => i.uuid === 'task-a')?.id ?? '', {
+      title: 'Mine',
+    })
+    // a complete transition from before the server applied the write
+    snapshot.issues[0].description = 'Changed elsewhere'
+    deliver(structuredClone(snapshot))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(title()).toBe('Mine')
+    // a new seat's organization, whose parts load after the root names it
+    double.live?.hold('org-2')
+    snapshot.orgs.push({ ...snapshot.orgs[0], id: 'org-2', name: 'Second' })
+    snapshot.profiles.push({ ...snapshot.profiles[0], id: 'me-2', org_id: 'org-2' })
+    snapshot.myProfileIds.push('me-2')
+    // the server applied the write in the same state
+    snapshot.issues[0].title = 'Mine'
+    deliver(structuredClone(snapshot))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // the write answers while the workspace is held, and its paint stays
+    answer(null)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(title()).toBe('Mine')
+    // the transition that completes the workspace holds the write, so its
+    // saved paint goes, and a later change elsewhere shows
+    double.live?.hold(null)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    snapshot.issues[0].title = 'Elsewhere'
+    deliver(structuredClone(snapshot))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(title()).toBe('Elsewhere')
   })
 
   it('tells no view of a transition that changes no part', () => {

@@ -49,6 +49,10 @@ const tasksPart = (ids: string[], extra = {}) => ({
 function scripted() {
   const answers = new Map<string, { value?: unknown; error?: unknown }>()
   const watched = new Map<string, number>()
+  // every watch and stop, in order
+  const log: string[] = []
+  // tokens whose failed run Convex keeps until they are watched again
+  const failedRun = new Set<string>()
   const handlers = new Set<(t: LiveTransition) => void>()
   const keyOf = (name: string, args: Record<string, unknown>) => `${name}${JSON.stringify(args)}`
   let at = 1
@@ -57,9 +61,12 @@ function scripted() {
     watch(ref: FunctionReference<'query'>, args: Record<string, Value>) {
       const token = keyOf(getFunctionName(ref), args)
       watched.set(token, (watched.get(token) ?? 0) + 1)
+      log.push(`watch ${token}`)
+      failedRun.delete(token)
       return {
         token,
         stop: () => {
+          log.push(`stop ${token}`)
           const n = (watched.get(token) ?? 1) - 1
           if (n) watched.set(token, n)
           else watched.delete(token)
@@ -68,7 +75,11 @@ function scripted() {
     },
     read(token) {
       const a = answers.get(token)
-      if (a?.error !== undefined) throw a.error
+      if (a?.error !== undefined) {
+        failedRun.add(token)
+        throw a.error
+      }
+      if (failedRun.has(token)) throw new Error('the failed run stays')
       return a?.value
     },
     onTransition(fn) {
@@ -80,6 +91,7 @@ function scripted() {
   return {
     live,
     watched,
+    log,
     /** Sets the answer of part `name` with `args`. */
     set(name: string, args: Record<string, unknown>, answer: { value?: unknown; error?: unknown }) {
       answers.set(keyOf(name, args), answer)
@@ -216,21 +228,60 @@ describe('the live parts registry', () => {
     s.set('workspace:inbox', { org_id: ORG }, { error: new Error('boom') })
     s.send([inbox])
     expect(last()).toMatchObject({ state: 'failed' })
-    const before = new Map(s.watched)
-    expect(parts.retry()).toBe(true)
-    // the same subscriptions, the failed one taken again
-    expect(s.watched).toEqual(before)
     s.set('workspace:inbox', { org_id: ORG }, { value: EMPTY['workspace:inbox'] })
+    // the failed run stays until the part is watched again
+    s.send([inbox])
+    expect(last()).toMatchObject({ state: 'failed' })
+    s.log.length = 0
+    expect(parts.retry()).toBe(true)
+    expect(s.log).toEqual([`stop ${inbox}`, `watch ${inbox}`])
     s.send([inbox])
     expect(last()?.state).toBe('complete')
     const people = { org_id: ORG, from: '', to: null }
+    const peopleKey = s.keyOf('workspace:people', people)
     s.set('workspace:people', people, { value: { state: 'refused', message: 'Too much.' } })
-    s.send([s.keyOf('workspace:people', people)])
+    s.send([peopleKey])
     const failed = last()
     expect(failed?.state === 'failed' && (failed.error as { data: unknown }).data).toEqual({
       code: 'rule',
       message: 'Too much.',
     })
+    s.log.length = 0
+    expect(parts.retry()).toBe(true)
+    expect(s.log).toEqual([`stop ${peopleKey}`, `watch ${peopleKey}`])
+    s.set('workspace:people', people, { value: EMPTY['workspace:people'] })
+    s.send([peopleKey])
+    expect(last()?.state).toBe('complete')
+    // nothing failed, nothing to run again
+    expect(parts.retry()).toBe(false)
+  })
+
+  it('a window that fails after asking to be cut gives way to its halves, and a half that fails waits while its window shows', async () => {
+    const { s, parts, last, ids } = await started()
+    const first = { org_id: ORG, ...LEFT }
+    const left = { org_id: ORG, from: '', to: '40000000' }
+    const right = { org_id: ORG, from: '40000000', to: '80000000' }
+    s.set('workspace:tasks', first, { value: tasksPart(['a', 'b'], { split: true }) })
+    s.send([s.keyOf('workspace:tasks', first)])
+    // a half fails while its window still shows every row
+    s.set('workspace:tasks', left, { error: new Error('half failed') })
+    s.send([s.keyOf('workspace:tasks', left)])
+    expect(ids()).toEqual(['a', 'b', 'c'])
+    // then the window fails too: only the failed half holds it up
+    s.set('workspace:tasks', first, { error: new Error('grown too far') })
+    s.send([s.keyOf('workspace:tasks', first)])
+    expect(last()).toMatchObject({ state: 'failed' })
+    s.log.length = 0
+    expect(parts.retry()).toBe(true)
+    expect(s.log).toEqual([
+      `stop ${s.keyOf('workspace:tasks', left)}`,
+      `watch ${s.keyOf('workspace:tasks', left)}`,
+    ])
+    s.set('workspace:tasks', left, { value: tasksPart(['a']) })
+    s.set('workspace:tasks', right, { value: tasksPart(['b']) })
+    s.send([s.keyOf('workspace:tasks', left), s.keyOf('workspace:tasks', right)])
+    expect(ids()).toEqual(['a', 'b', 'c'])
+    expect(s.watched.has(s.keyOf('workspace:tasks', first))).toBe(false)
   })
 
   it('reports no seat, and drops a seat that goes without holding the workspace', async () => {
@@ -281,5 +332,31 @@ describe('the live parts registry', () => {
     expect(reports.at(-1)?.workspace.state).toBe('held')
     await vi.advanceTimersByTimeAsync(400)
     expect(reports.at(-1)?.workspace.state).toBe('failed')
+  })
+
+  it('the side query answering does not start the wait over', async () => {
+    vi.useFakeTimers()
+    STALL.ms = 1000
+    const s = scripted()
+    serve(s)
+    s.set('workspace:inbox', { org_id: ORG }, {})
+    const reports: PartsReport[] = []
+    const parts = createLiveParts(
+      s.live,
+      (r) => reports.push(r),
+      () => true,
+    )
+    parts.watchSide(makeFunctionReference<'query'>('snapshot:commentThread'), { issue_id: 't' })
+    s.send()
+    await vi.advanceTimersByTimeAsync(0)
+    s.send()
+    expect(reports.at(-1)?.workspace.state).toBe('held')
+    const side = s.keyOf('snapshot:commentThread', { issue_id: 't' })
+    for (let i = 0; i < 4; i++) {
+      s.set('snapshot:commentThread', { issue_id: 't' }, { value: { comments: [i] } })
+      s.send([side])
+      await vi.advanceTimersByTimeAsync(400)
+    }
+    expect(reports.some((r) => r.workspace.state === 'failed')).toBe(true)
   })
 })

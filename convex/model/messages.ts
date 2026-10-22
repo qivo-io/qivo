@@ -668,6 +668,8 @@ export async function subscribeToIssue(
   ctx: MutationCtx,
   a: {
     issue_id: string
+    /** the task's window_key, which the follow carries (schema.ts taskKey) */
+    task_key: string | undefined
     profile: Doc<'profiles'>
     org_id: string
     project: Doc<'projects'> | null
@@ -694,6 +696,7 @@ export async function subscribeToIssue(
     issue_id: a.issue_id,
     profile_id: a.profile.id,
     created_at: a.now,
+    task_key: a.task_key,
   })
   return true
 }
@@ -720,6 +723,7 @@ export async function followTask(
   }
   return await subscribeToIssue(ctx, {
     issue_id: a.issue.id,
+    task_key: a.issue.window_key,
     profile: a.me,
     org_id: a.issue.org_id,
     project,
@@ -1082,8 +1086,8 @@ export async function snoozeMessages(
  * leg could pass the archiving transaction's write limit. Each step marks
  * at most ARCHIVED_READ_BATCH rows, visits at most ARCHIVED_READ_TASKS tasks
  * and schedules the rest. The same call schedules the steps that mark the
- * archived tasks' relation rows for the app snapshot (model/archiveMarks.ts),
- * so no task archive path can leave one out.
+ * archived tasks' relation rows (model/archiveMarks.ts), so no task archive
+ * path can leave one out.
  *
  * A step checks each task when it runs and leaves one that is no longer
  * archived alone, so a restore before the step runs keeps that task's
@@ -1125,7 +1129,7 @@ const readArchivedProjectRef = makeFunctionReference<
  * Schedules the background steps that follow an archive. They mark every
  * message about the archived `issues`, and about the active tasks of the
  * archived `projects`, read. For the `issues` alone they also mark the
- * relation rows the app snapshot then skips (model/archiveMarks.ts). A
+ * relation rows the label search then skips (model/archiveMarks.ts). A
  * project archive stamps no task, so its tasks keep theirs. The archive
  * paths call it in the transaction that archives.
  */
@@ -1669,6 +1673,7 @@ async function tellMentioned(
     await a.guard?.()
     await subscribeToIssue(ctx, {
       issue_id: issue.id,
+      task_key: issue.window_key,
       profile: m,
       org_id: issue.org_id,
       project,
@@ -1847,6 +1852,7 @@ export async function notifyIssueInsert(
     if (assignee !== undefined) {
       await subscribeToIssue(ctx, {
         issue_id: issue.id,
+        task_key: issue.window_key,
         profile: assignee,
         org_id: issue.org_id,
         project,
@@ -1878,6 +1884,7 @@ export async function notifyIssueInsert(
     if (reviewer !== undefined) {
       await subscribeToIssue(ctx, {
         issue_id: issue.id,
+        task_key: issue.window_key,
         profile: reviewer,
         org_id: issue.org_id,
         project,
@@ -2007,6 +2014,7 @@ export async function notifyIssueUpdate(
     if (assignee !== undefined) {
       await subscribeToIssue(ctx, {
         issue_id: after.id,
+        task_key: after.window_key,
         profile: assignee,
         org_id: after.org_id,
         project,
@@ -2026,6 +2034,7 @@ export async function notifyIssueUpdate(
     if (owner !== undefined) {
       await subscribeToIssue(ctx, {
         issue_id: after.id,
+        task_key: after.window_key,
         profile: owner,
         org_id: after.org_id,
         project,
@@ -2228,6 +2237,7 @@ export async function notifyCommentInsert(
   })
   await subscribeToIssue(ctx, {
     issue_id: issue.id,
+    task_key: issue.window_key,
     profile: actor,
     org_id: issue.org_id,
     project,

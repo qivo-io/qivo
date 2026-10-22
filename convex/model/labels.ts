@@ -364,6 +364,7 @@ export async function setTaskLabel(
       org_id: issue.org_id,
       issue_id: issue.id,
       label_id: label.id,
+      task_key: issue.window_key,
     })
   }
   const named = `“${label.name}”`

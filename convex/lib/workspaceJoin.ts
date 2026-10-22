@@ -7,7 +7,9 @@
  * joinParts takes every part of every seat's organization, as one Convex
  * transition left them, and lists each section per organization in seat
  * order and, within one, window by window, so the rows keep the order the
- * windows read them in: by id within each organization. */
+ * windows give them: people by id, tasks by window key, projects by
+ * creation within each window, and hidden load rows in their own order
+ * (lib/workspaceParts.ts byLoad). */
 
 import { joinLists } from './arrayLimit.ts'
 import {
@@ -159,7 +161,9 @@ export type Workspace = ReturnType<typeof joinParts>
 
 /** The parts a server holding `workspace` would answer, for stand-ins of
  * the server (tests, the browser benchmark): `windows` gives each
- * organization's windows of ids per kind (lib/idWindows.ts). Inverse of
+ * organization's windows per kind (lib/idWindows.ts). The app never sees a
+ * row's window key, so a stand-in places tasks and projects by id, which
+ * the app cannot tell apart from keys the server picked. Inverse of
  * joinParts for a workspace whose sections hold no row of an organization
  * it does not list. A hidden load row names no task, so every one goes to
  * the first task window, and every seat's inbox counters go to the first

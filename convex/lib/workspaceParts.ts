@@ -1,15 +1,19 @@
 /* The readers behind the workspace parts (workspace.ts), which together
  * send what the app shows of every organization the caller holds a seat in.
  *
- * The long sections come in windows of row ids (lib/idWindows.ts): a
- * window [from, to) of the organization's tasks, people or projects holds
- * the rows whose id falls in it. The app chooses them from the
- * organization's counters, so each window stays far inside Convex's limits
- * per query (4,096 index ranges, 32,000 documents, 16 MiB read, 1 s) and a
- * change re-sends only the window that holds it. A window reads its rows
- * and their relation rows each in one index range, by organization and id,
- * not one range per task. A window keeps its bounds while rows come and
- * go. One that grew past PAGE's soft budget answers `split: true`, and the
+ * The long sections come in windows (lib/idWindows.ts): a window [from,
+ * to) of the organization's people holds those whose id falls in it, and
+ * one of its tasks or projects those whose window key does. The server
+ * picks a task's or project's window key at random when it inserts the row
+ * (lib/db.ts newWindowKey), so no writer can crowd rows into one window,
+ * and the ids writers choose say nothing about where a row lands. The app
+ * chooses the windows from the organization's counters, so each window
+ * stays far inside Convex's limits per query (4,096 index ranges, 32,000
+ * documents, 16 MiB read, 1 s) and a change re-sends only the window that
+ * holds it. A window reads its rows, and each kind of their relation rows,
+ * in one index range, by organization and key, not one range per row (a
+ * relation row carries its task's key as task_key). A window keeps its
+ * bounds while rows come and go. One that grew past PAGE's soft budget answers `split: true`, and the
  * app cuts it in two (lib/idWindows.ts halve) while it keeps answering.
  * One whose reads would pass the hard budget stops early and answers
  * `overflow` instead, before Convex would refuse the read, so the app cuts
@@ -60,12 +64,19 @@ function iconFree<
   return row
 }
 
-/** A relation row as the app receives it, without the organization id and
- * the archive mark, which only serve index reads. */
+/** A relation row as the app receives it, without the organization id,
+ * the archive mark and the task's window key, which only serve index
+ * reads. */
 function relationRow<
-  D extends { _id: unknown; _creationTime: number; org_id?: string; task_archived?: true },
+  D extends {
+    _id: unknown
+    _creationTime: number
+    org_id?: string
+    task_archived?: true
+    task_key?: string
+  },
 >(doc: D) {
-  const { org_id: _orgId, task_archived: _mark, ...row } = rowOf(doc)
+  const { org_id: _orgId, task_archived: _mark, task_key: _key, ...row } = rowOf(doc)
   return row
 }
 
@@ -87,7 +98,7 @@ type ProfileRow = AppRow<'profiles'> & { sync_at?: string; sync_since?: string }
 
 /* A task as the app receives it. The parent id goes out only when the
  * reader is shown the parent (lib/workingSet.ts parentLink). */
-type TaskRow = Omit<AppRow<'issues'>, 'relations_marked' | 'parent_id'> & {
+type TaskRow = Omit<AppRow<'issues'>, 'relations_marked' | 'parent_id' | 'window_key'> & {
   parent_id?: string
   has_hidden_subtasks: boolean
   has_hidden_parent: boolean
@@ -110,28 +121,34 @@ export const PAGE = {
   projects: { split: 600, most: 1200 },
   soft: { bytes: 4 * 1024 * 1024, documents: 8000, ranges: 2000 } satisfies Budget,
   hard: { bytes: 8 * 1024 * 1024, documents: 16_000, ranges: 3200 } satisfies Budget,
-  /** how many rows a part reads the per-row reads of at once, so one batch
-   * (a few ranges a row) stays inside Convex's 4,096 past PAGE.hard */
-  batch: 128,
-  /** how many subtasks one range of liveKids reads: 64 of the largest
-   * tasks hold about 4 MiB, so the check of PAGE.hard between ranges comes
-   * before Convex's 16 MiB */
-  kids: 64,
+  /** how many rows a part reads the per-row reads of at once, checking
+   * PAGE.hard before each batch: one batch reads at most this many task
+   * bodies (64 of the largest hold about 4 MiB) or about six ranges a row,
+   * so it stays inside Convex's 16 MiB and 4,096 past PAGE.hard */
+  batch: 64,
+  /** how many subtasks of each of PAGE.kids parents one step of kidsOf
+   * reads, so a step reads at most PAGE.kids² task bodies (64, about 4 MiB) */
+  kids: 8,
   /** the most relation rows of one kind (labels, attachments, links,
-   * follows) a tasks window reads; a task has no bound on them */
+   * follows) a tasks window reads, and a flagged task by its own indexes */
   relations: 2000,
   /** how many new tasks the inbox reads between checks of PAGE.hard: 32 of
    * the largest hold about 2 MiB */
   inboxCheck: 32,
 }
 
-/** Whether the transaction has read past `limit`. */
-async function readPast(ctx: QueryCtx, limit: Budget): Promise<boolean> {
+/* Reads that cost every part of the caller the same, whatever its window
+ * holds (lib/access.ts projectLevelsOf shared). */
+type Shared = { ranges: number; documents: number; bytes: number }
+const NONE: Shared = { ranges: 0, documents: 0, bytes: 0 }
+
+/** Whether the transaction has read past `limit`, not counting `shared`. */
+async function readPast(ctx: QueryCtx, limit: Budget, shared: Shared = NONE): Promise<boolean> {
   const m = await ctx.meta.getTransactionMetrics()
   return (
-    m.bytesRead.used > limit.bytes ||
-    m.documentsRead.used > limit.documents ||
-    m.databaseQueries.used > limit.ranges
+    m.bytesRead.used - shared.bytes > limit.bytes ||
+    m.documentsRead.used - shared.documents > limit.documents ||
+    m.databaseQueries.used - shared.ranges > limit.ranges
   )
 }
 
@@ -146,52 +163,66 @@ const overflow = (w: IdWindow) =>
     ? { state: 'refused' as const, message: TOO_MUCH }
     : { state: 'overflow' as const }
 
-/** `{split: true}` when `over` or the part read past PAGE.soft and its
- * window can be cut, else nothing. */
-async function softSplit(ctx: QueryCtx, w: IdWindow, over: boolean) {
+/** `{split: true}` when `over` or the part read past PAGE.soft, not
+ * counting `shared`, and its window can be cut, else nothing. Halving a
+ * window does not shrink what every part of the caller reads alike, so
+ * that never asks for a cut. */
+async function softSplit(ctx: QueryCtx, w: IdWindow, over: boolean, shared: Shared = NONE) {
   if (halve(w) === null) return {}
-  return over || (await readPast(ctx, PAGE.soft)) ? { split: true as const } : {}
+  return over || (await readPast(ctx, PAGE.soft, shared)) ? { split: true as const } : {}
 }
 
 /* Index range bounds of a window on an index whose next field is `field`. */
-type IdBounded<F extends string> = {
+type IdBounded<F extends string> = IndexRange & {
   gte(field: F, value: string): IndexRange & { lt(field: F, value: string): IndexRange }
+  lt(field: F, value: string): IndexRange
 }
 function ids<F extends string>(q: IdBounded<F>, field: F, w: IdWindow): IndexRange {
+  // The first window has no lower bound, so it also holds the rows without
+  // the field: a task or project stored before window keys sorts first.
+  if (w.from === '') return w.to === null ? q : q.lt(field, w.to)
   const from = q.gte(field, w.from)
   return w.to === null ? from : from.lt(field, w.to)
 }
 
 /** One page of a window's own rows, at most `most` and PAGE.soft.bytes of
  * them, in one system call (a stream costs one per row). `complete` says
- * the page holds every row. */
+ * the page holds every row, and `split` that Convex suggests cutting it.
+ * Convex ends a rerun of a subscribed query's page where its first run
+ * ended, so a rerun may hold more than `most` rows, or stop short at the
+ * bytes; neither counts as complete. */
 async function pageOf<R>(
   query: {
-    paginate(opts: {
-      cursor: null
-      numItems: number
-      maximumBytesRead: number
-    }): Promise<{ page: R[]; isDone: boolean }>
+    paginate(opts: { cursor: null; numItems: number; maximumBytesRead: number }): Promise<{
+      page: R[]
+      isDone: boolean
+      pageStatus?: 'SplitRecommended' | 'SplitRequired' | null
+    }>
   },
   most: number,
-): Promise<{ rows: R[]; complete: boolean }> {
-  const { page, isDone } = await query.paginate({
+): Promise<{ rows: R[]; complete: boolean; split: boolean }> {
+  const { page, isDone, pageStatus } = await query.paginate({
     cursor: null,
     numItems: most,
     maximumBytesRead: PAGE.soft.bytes,
   })
-  return { rows: page, complete: isDone }
+  return {
+    rows: page,
+    complete: isDone && pageStatus !== 'SplitRequired' && page.length <= most,
+    split: pageStatus === 'SplitRecommended',
+  }
 }
 
 /** Runs `step` over `rows` in batches of PAGE.batch, checking PAGE.hard
- * before each batch after the first. Answers whether it read them all. */
+ * before each batch, the first included, as the reads before it may have
+ * used the room. Answers whether it read them all. */
 async function inBatches<R>(
   ctx: QueryCtx,
   rows: readonly R[],
   step: (row: R, at: number) => Promise<void>,
 ): Promise<boolean> {
   for (let at = 0; at < rows.length; at += PAGE.batch) {
-    if (at > 0 && (await readPast(ctx, PAGE.hard))) return false
+    if (await readPast(ctx, PAGE.hard)) return false
     await Promise.all(rows.slice(at, at + PAGE.batch).map((row, i) => step(row, at + i)))
   }
   return true
@@ -311,7 +342,7 @@ export async function readPeople(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow
   return {
     state: 'ok' as const,
     ...chunkLists({ profiles, teamMembers: memberships.flat().map(rowOf) }),
-    ...(await softSplit(ctx, w, people.length > PAGE.people.split)),
+    ...(await softSplit(ctx, w, read.split || people.length > PAGE.people.split)),
   }
 }
 
@@ -332,6 +363,9 @@ function accessOf(ctx: QueryCtx, me: Doc<'profiles'>, read: readonly Doc<'projec
   }
   const visible = async (id: string) => (await levels.level(id)) !== null
   return {
+    /** What the caller's own grants and team shares cost to read so far,
+     * alike in every part (softSplit). */
+    shared: levels.shared,
     /** Whether the caller can see the project with this id
      * (canSeeProject). */
     visible,
@@ -355,14 +389,16 @@ type Access = ReturnType<typeof accessOf>
 
 // --- projects -----------------------------------------------------------------
 
-/** The projects of window `w` the caller can see, archived ones included
- * for navigation, oldest first, with every grant on them, their team grants,
- * and the milestones of the active ones. It reads the window's projects in
- * one range, the caller's levels on each and on its parent, and up to three
- * ranges per shown project. */
+/** The projects of window `w` (by window key) the caller can see, archived
+ * ones included for navigation, oldest first, with every grant on them,
+ * their team grants, and the milestones of the active ones. It reads the
+ * window's projects in one range, the caller's levels on each and on its
+ * parent, and up to three ranges per shown project. */
 export async function readProjects(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) {
   const read = await pageOf(
-    ctx.db.query('projects').withIndex('by_org_id', (q) => ids(q.eq('org_id', me.org_id), 'id', w)),
+    ctx.db
+      .query('projects')
+      .withIndex('by_org_window', (q) => ids(q.eq('org_id', me.org_id), 'window_key', w)),
     PAGE.projects.most,
   )
   if (!read.complete) return overflow(w)
@@ -398,7 +434,10 @@ export async function readProjects(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWind
   return {
     state: 'ok' as const,
     ...chunkLists({
-      projects: shown.map((p): IconFree<'projects'> => iconFree(p)),
+      projects: shown.map((p): Omit<IconFree<'projects'>, 'window_key'> => {
+        const { window_key: _window, ...row } = iconFree(p)
+        return row
+      }),
       // Every grant on a shown project, other members' too. The app shows
       // only those of people it holds (lib/workspaceJoin.ts), as a removed
       // person's grants can outlive their profile for a moment
@@ -407,7 +446,7 @@ export async function readProjects(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWind
       teamAccess: teamAccess.flat().map(rowOf),
       milestones: milestones.flat().map(rowOf),
     }),
-    ...(await softSplit(ctx, w, shown.length > PAGE.projects.split)),
+    ...(await softSplit(ctx, w, read.split || shown.length > PAGE.projects.split, caller.shared)),
   }
 }
 
@@ -429,75 +468,48 @@ function shownById(ctx: QueryCtx, me: Doc<'profiles'>, access: Access) {
   }
 }
 
-/** The active tasks of window `w`, every project's, at most `most`. */
+/** The active tasks of window `w` (by window key), every project's, at
+ * most `most`. */
 const windowTasks = (ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow, most: number) =>
   pageOf(
     ctx.db
       .query('issues')
-      .withIndex('by_org_archived_id', (q) =>
-        ids(q.eq('org_id', me.org_id).eq('archived_at', undefined), 'id', w),
+      .withIndex('by_org_archived_window', (q) =>
+        ids(q.eq('org_id', me.org_id).eq('archived_at', undefined), 'window_key', w),
       ),
     most,
   )
 
-/** The active subtasks of the tasks of window `w`, by parent, in live
- * projects, or null once the reads pass PAGE.hard. A task has no bound on
- * its subtasks, so they come PAGE.kids at a time, each range after the last
- * row of the one before (by parent, then creation): one range, and two for
- * each further PAGE.kids. The ranges after the first wait for `before`,
- * reads that run beside the first, so that the checks of PAGE.hard count
- * them. */
-async function liveKids(
-  ctx: QueryCtx,
-  me: Doc<'profiles'>,
-  w: IdWindow,
-  access: Access,
-  before: Promise<unknown>,
-) {
-  const kids: Doc<'issues'>[] = []
-  let last: Doc<'issues'> | undefined
-  for (;;) {
-    let chunk: Doc<'issues'>[]
-    if (last === undefined)
-      chunk = await ctx.db
-        .query('issues')
-        .withIndex('by_org_archived_parent', (q) =>
-          ids(q.eq('org_id', me.org_id).eq('archived_at', undefined), 'parent_id', w),
-        )
-        .take(PAGE.kids)
-    else {
-      const { parent_id: parent, _creationTime: at } = last
-      if (parent === undefined) break // a window's subtasks all have one
-      await before
-      if (await readPast(ctx, PAGE.hard)) return null
-      const same = await ctx.db
-        .query('issues')
-        .withIndex('by_org_archived_parent', (q) =>
-          q
-            .eq('org_id', me.org_id)
-            .eq('archived_at', undefined)
-            .eq('parent_id', parent)
-            .gt('_creationTime', at),
-        )
-        .take(PAGE.kids)
-      const later =
-        same.length < PAGE.kids
-          ? await ctx.db
-              .query('issues')
-              .withIndex('by_org_archived_parent', (q) => {
-                const after = q
-                  .eq('org_id', me.org_id)
-                  .eq('archived_at', undefined)
-                  .gt('parent_id', parent)
-                return w.to === null ? after : after.lt('parent_id', w.to)
-              })
-              .take(PAGE.kids - same.length)
-          : []
-      chunk = [...same, ...later]
+/** The active subtasks of `parents` in live projects, by parent, or null
+ * once the reads pass PAGE.hard. A subtask is a whole task body and a task
+ * holds up to LIMITS.subtasks active ones, so this reads at most one
+ * subtask of each parent first, in inBatches' batches, and then the rest of
+ * those that have one, PAGE.kids parents at a time and PAGE.kids subtasks
+ * each, checking PAGE.hard before each step. Every task is asked, as a
+ * subtask stored before the rule of one level may have subtasks too. */
+async function kidsOf(ctx: QueryCtx, parents: readonly Doc<'issues'>[], access: Access) {
+  /* the active subtasks of the task with this id, after `after` */
+  const activeKids = (id: string, after?: number) =>
+    ctx.db.query('issues').withIndex('by_parent_archived', (q) => {
+      const active = q.eq('parent_id', id).eq('archived_at', undefined)
+      return after === undefined ? active : active.gt('_creationTime', after)
+    })
+  const firsts = await mapInBatches(ctx, parents, (task) => activeKids(task.id).first())
+  if (firsts === null) return null
+  const kids = firsts.filter((kid) => kid !== null)
+  // the parents that may have more, each after the last subtask read
+  let open = kids.map((kid) => ({ id: kid.parent_id as string, after: kid._creationTime }))
+  while (open.length > 0) {
+    if (await readPast(ctx, PAGE.hard)) return null
+    const step = open.slice(0, PAGE.kids)
+    const got = await Promise.all(step.map((p) => activeKids(p.id, p.after).take(PAGE.kids)))
+    open = open.slice(PAGE.kids)
+    for (const [i, rows] of got.entries()) {
+      kids.push(...rows)
+      const last = rows.at(-1)
+      if (rows.length === PAGE.kids && last !== undefined)
+        open.push({ id: step[i].id, after: last._creationTime })
     }
-    kids.push(...chunk)
-    if (chunk.length < PAGE.kids) break
-    last = chunk[chunk.length - 1]
   }
   const live = await mapInBatches(ctx, kids, (kid) => access.live(kid.project_id))
   if (live === null) return null
@@ -520,20 +532,19 @@ function groupBy<T>(rows: readonly T[], key: (row: T) => string): Map<string, T[
  * `w`, with their links as source whose target the caller is shown, label
  * assignments, attachments and the caller's follows.
  *
- * It reads the window's active tasks, the unmarked label assignments,
- * attachments and links of its ids, and the caller's unmarked follows of
- * them, each in one range by organization (or person) and id, and answers
- * overflow past PAGE.relations rows of one kind. Rows of an
- * archived task carry a mark (model/archiveMarks.ts) and stay out; a task
- * restored before its marks were cleared (relations_marked) reads its own
- * rows, marked ones included, with the marked links to it, and shows its
- * marked follow. A task outside the window that a shown task names (its
- * parent, a link's target) is read by id to see whether the caller is shown
- * it. The window's active subtasks are read PAGE.kids at a time
- * (liveKids), for has_hidden_subtasks and for the load rows
- * of the window's tasks the caller is not shown (orgLoad, hiddenLoadOf).
- * Each project these tasks are in is read once, with the caller's levels on
- * it (accessOf). */
+ * It reads the window's active tasks, and the unmarked label assignments,
+ * attachments and links of their window keys and the caller's unmarked
+ * follows of them, each kind in one range by organization (or person) and
+ * task_key, and answers overflow past PAGE.relations rows of one kind. Rows
+ * of an archived task carry a mark (model/archiveMarks.ts) and stay out; a
+ * task restored before its marks were cleared (relations_marked) reads its
+ * own rows by its own indexes, marked ones included, with the marked links
+ * to it, and shows its marked follow. A task outside the window that a
+ * shown task names (its parent, a link's target) is read by id to see
+ * whether the caller is shown it. The window's active subtasks (kidsOf)
+ * give has_hidden_subtasks and the load rows of the window's tasks the
+ * caller is not shown (orgLoad, hiddenLoadOf). Each project these tasks
+ * are in is read once, with the caller's levels on it (accessOf). */
 export async function readTasks(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) {
   const read = await windowTasks(ctx, me, w, PAGE.tasks.most)
   if (!read.complete) return overflow(w)
@@ -553,43 +564,40 @@ export async function readTasks(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow)
     return (await byId(ctx, 'issues', id))?.relations_marked !== true
   }
   // The window's relation rows, each kind in one range and at most
-  // PAGE.relations of them, beside the first range of its subtasks.
-  const relations = Promise.all([
+  // PAGE.relations of them.
+  const [labels, attachments, links, follows] = await Promise.all([
     atMost(
       ctx.db
         .query('issue_labels')
-        .withIndex('by_org_task_archived_issue', (q) =>
-          ids(q.eq('org_id', me.org_id).eq('task_archived', undefined), 'issue_id', w),
+        .withIndex('by_org_task_archived_key', (q) =>
+          ids(q.eq('org_id', me.org_id).eq('task_archived', undefined), 'task_key', w),
         ),
     ),
     atMost(
       ctx.db
         .query('issue_attachments')
-        .withIndex('by_org_task_archived_issue', (q) =>
-          ids(q.eq('org_id', me.org_id).eq('task_archived', undefined), 'issue_id', w),
+        .withIndex('by_org_task_archived_key', (q) =>
+          ids(q.eq('org_id', me.org_id).eq('task_archived', undefined), 'task_key', w),
         ),
     ),
     atMost(
       ctx.db
         .query('issue_links')
-        .withIndex('by_org_task_archived_source', (q) =>
-          ids(q.eq('org_id', me.org_id).eq('task_archived', undefined), 'source_id', w),
+        .withIndex('by_org_task_archived_key', (q) =>
+          ids(q.eq('org_id', me.org_id).eq('task_archived', undefined), 'task_key', w),
         ),
     ),
     atMost(
       ctx.db
         .query('issue_subscriptions')
-        .withIndex('by_profile_task_archived_issue', (q) =>
-          ids(q.eq('profile_id', me.id).eq('task_archived', undefined), 'issue_id', w),
+        .withIndex('by_profile_task_archived_key', (q) =>
+          ids(q.eq('profile_id', me.id).eq('task_archived', undefined), 'task_key', w),
         ),
     ),
   ])
-  const [[labels, attachments, links, follows], kids] = await Promise.all([
-    relations,
-    liveKids(ctx, me, w, access, relations),
-  ])
   if (labels === null || attachments === null || links === null || follows === null)
     return overflow(w)
+  const kids = await kidsOf(ctx, read.rows, access)
   if (kids === null) return overflow(w)
   // a kid in a live project the caller cannot see
   const allKids = [...kids.values()].flat()
@@ -658,7 +666,7 @@ export async function readTasks(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow)
   const isShown = new Map(named.map((id, i) => [id, namedShown[i]]))
   const sourceShown = new Map(sources.map((id, i) => [id, sourcesShown[i]]))
   const issues = tasks.map((task): TaskRow => {
-    const { parent_id: parent, relations_marked: _marks, ...row } = rowOf(task)
+    const { parent_id: parent, relations_marked: _marks, window_key: _window, ...row } = rowOf(task)
     return {
       ...row,
       ...parentLink(task, () => parent !== undefined && isShown.get(parent) === true),
@@ -690,7 +698,7 @@ export async function readTasks(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow)
       // return with a restore.
       issueSubs: own.flatMap((rows) => (rows.follow === null ? [] : [relationRow(rows.follow)])),
     }),
-    ...(await softSplit(ctx, w, read.rows.length > PAGE.tasks.split)),
+    ...(await softSplit(ctx, w, read.split || read.rows.length > PAGE.tasks.split, access.shared)),
   }
 }
 

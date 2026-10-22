@@ -4,8 +4,9 @@
  * only the parts a change reaches. */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api } from '../_generated/api'
+import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { newWindowKey } from '../lib/db'
 import { halve, idWindows, inIdWindow, windowCount } from '../lib/idWindows'
 import { PAGE } from '../lib/workspaceParts'
 import {
@@ -17,6 +18,7 @@ import {
   patchCounters,
   plantIssue,
   plantMessage,
+  plantProject,
   type T,
   uuid,
   withOrg,
@@ -36,7 +38,12 @@ async function plantTasks(t: T, f: OrgFixture, n: number, extra: Partial<Doc<'is
   for (let i = 0; i < n; i++) {
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, ...extra })
     await t.run((ctx) =>
-      ctx.db.insert('issue_labels', { org_id: f.org.id, issue_id: task.id, label_id: 'label' }),
+      ctx.db.insert('issue_labels', {
+        org_id: f.org.id,
+        issue_id: task.id,
+        label_id: 'label',
+        task_key: task.window_key,
+      }),
     )
     tasks.push(task)
   }
@@ -68,6 +75,7 @@ async function plantMany(
         for (let i = from; i < Math.min(n, from + 50); i++) {
           const _id = await ctx.db.insert('issues', {
             id: uuid(),
+            window_key: newWindowKey(),
             num: 10_000 + i,
             title: `Task ${i}`,
             description: '',
@@ -86,11 +94,12 @@ async function plantMany(
   return planted
 }
 
-/* The narrowest window of the grid that holds `id`, and its sibling. */
-function narrowestOf(id: string) {
+/* The narrowest window of the grid that holds window key `key`, and its
+ * sibling. */
+function narrowestOf(key: string) {
   let pair = halve(whole)
   for (;;) {
-    const [holds, other] = inIdWindow(id, pair![0]) ? pair! : [pair![1], pair![0]]
+    const [holds, other] = inIdWindow(key, pair![0]) ? pair! : [pair![1], pair![0]]
     const next = halve(holds)
     if (next === null) return { holds, other }
     pair = next
@@ -133,11 +142,7 @@ describe('a tasks window', () => {
     const t = newT()
     const f = await withOrg(t)
     for (let i = 0; i < 3; i++)
-      await plantIssue(t, {
-        org_id: f.org.id,
-        project_id: f.sub.id,
-        id: `fff00000-0000-4000-8000-00000000000${i}`,
-      })
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, window_key: 'fff00000' })
     PAGE.tasks.most = 1
     // the narrowest window of the grid
     const last = narrowestOf('ffffffff').holds
@@ -175,6 +180,7 @@ describe('a tasks window', () => {
         for (let i = batch * 500; i < (batch + 1) * 500; i++)
           await ctx.db.insert('issues', {
             id: uuid(),
+            window_key: newWindowKey(),
             org_id: f.org.id,
             project_id: f.sub.id,
             num: i + 1,
@@ -193,7 +199,7 @@ describe('a tasks window', () => {
 })
 
 describe('links of a restored task', () => {
-  it('a marked link to a restored target goes out once, before its marks are cleared', async () => {
+  it('a marked link goes out once, with its source, before its marks are cleared', async () => {
     const t = newT()
     const f = await withOrg(t)
     const [a, b, c] = await plantTasks(t, f, 3)
@@ -246,14 +252,13 @@ describe('reads a window cannot bound by its rows', () => {
           issue_id: tasks[0].id,
           label_id: `marked-${i}`,
           task_archived: true,
+          task_key: tasks[0].window_key,
         })
     })
-    const w = narrowestOf(tasks[0].id).holds
+    const w = narrowestOf(tasks[0].window_key!).holds
     expect(
       await as(t, f.admin).query(api.workspace.tasks, { org_id: f.org.id, ...w }),
-    ).toMatchObject({
-      state: 'refused',
-    })
+    ).toMatchObject({ state: 'refused' })
   })
 
   it('reads subtasks a few at a time without missing one', async () => {
@@ -280,8 +285,8 @@ describe('reads a window cannot bound by its rows', () => {
     const f = await withOrg(t)
     // three parents in the narrowest window, with 100 subtasks each of
     // about 60 KB: about 18 MB of subtasks, which no cut can part
-    const parents = await plantMany(t, 3, (i) => ({
-      id: `a0000000-0000-4000-8000-00000000000${i}`,
+    const parents = await plantMany(t, 3, () => ({
+      window_key: 'a0000000',
       org_id: f.org.id,
       project_id: f.sub.id,
     }))
@@ -291,7 +296,7 @@ describe('reads a window cannot bound by its rows', () => {
       parent_id: parents[i % 3].id,
       description: LARGEST,
     }))
-    const w = narrowestOf(parents[0].id).holds
+    const w = narrowestOf('a0000000').holds
     const answer = await as(t, f.admin).query(api.workspace.tasks, { org_id: f.org.id, ...w })
     expect(answer).toMatchObject({ state: 'refused', message: expect.stringMatching(/^One part/) })
   }, 120_000)
@@ -401,36 +406,353 @@ describe('windows', () => {
     expect(windowCount(10_000_000, 100)).toBe(1024)
   })
 
-  it('send the same workspace in many windows as in one, people cut as they overflow', async () => {
+  it('send the same workspace in many windows as in one, relation rows across windows included, people cut as they overflow', async () => {
     const t = newT()
     const f = await withOrg(t)
-    await plantTasks(t, f, 12)
-    const one = await workspaceOf(as(t, f.admin))
+    // tasks in four windows of four, by their window keys
+    const at = (key: string, extra: Partial<Doc<'issues'>> = {}) =>
+      plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, window_key: key, ...extra })
+    const a = await at('10000000')
+    const b = await at('50000000')
+    const c = await at('90000000', { relations_marked: true })
+    const d = await at('d0000000')
+    // subtasks in other windows than their parents, one the guest is not shown
+    await at('e0000000', { parent_id: a.id })
+    await at('20000000', { parent_id: a.id, project_id: f.hidden.id })
+    // hidden load of the guest's own, in yet another window
+    await at('60000000', {
+      project_id: f.hidden.id,
+      assignee_id: f.guest.id,
+      start_week: '2026-01-05',
+      end_week: '2026-01-05',
+      remaining_hours: 2,
+    })
+    await t.run(async (ctx) => {
+      const link = (source: Doc<'issues'>, target: Doc<'issues'>, marked?: true) =>
+        ctx.db.insert('issue_links', {
+          org_id: f.org.id,
+          id: uuid(),
+          source_id: source.id,
+          target_id: target.id,
+          type: 'blocks',
+          pair_key: [source.id, target.id].sort().join(':'),
+          created_at: NOW,
+          task_archived: marked,
+          task_key: source.window_key,
+        })
+      await link(a, d)
+      await link(d, b)
+      // marked links of restored c, one from each side
+      await link(b, c, true)
+      await link(c, a, true)
+      for (const task of [a, c])
+        await ctx.db.insert('issue_attachments', {
+          org_id: f.org.id,
+          id: uuid(),
+          issue_id: task.id,
+          name: 'evidence.txt',
+          size_bytes: 1,
+          storage_id: await ctx.storage.store(new Blob() as never),
+          inline: false,
+          created_at: NOW,
+          task_archived: task === c ? true : undefined,
+          task_key: task.window_key,
+        })
+      for (const task of [b, c])
+        await ctx.db.insert('issue_subscriptions', {
+          issue_id: task.id,
+          profile_id: f.guest.id,
+          created_at: NOW,
+          task_archived: task === c ? true : undefined,
+          task_key: task.window_key,
+        })
+    })
+    await plantTasks(t, f, 4)
+    const one = await workspaceOf(as(t, f.guest))
     // counters that ask for 16 task windows and 4 project windows
     await t.run((ctx) =>
       patchCounters(ctx, f.org.id, { next_issue_num: 1600, next_project_num: 1000 }),
     )
     PAGE.people.most = 2
-    const many = await workspaceOf(as(t, f.admin))
+    const many = await workspaceOf(as(t, f.guest))
+    const by =
+      <R>(key: (row: R) => string) =>
+      (rows: readonly R[]) =>
+        [...rows].sort((x, y) => (key(x) < key(y) ? -1 : 1))
     const sorted = (snap: typeof one) =>
       snap && {
         ...snap,
         orgs: [],
-        issues: [...snap.issues].sort((a, b) => (a.id < b.id ? -1 : 1)),
-        issueLabels: [...snap.issueLabels].sort((a, b) => (a.issue_id < b.issue_id ? -1 : 1)),
-        profiles: [...snap.profiles].sort((a, b) => (a.id < b.id ? -1 : 1)),
-        teamMembers: [...snap.teamMembers].sort((a, b) =>
-          a.profile_id + a.team_id < b.profile_id + b.team_id ? -1 : 1,
+        issues: by<(typeof snap.issues)[number]>((r) => r.id)(snap.issues),
+        issueLabels: by<(typeof snap.issueLabels)[number]>((r) => r.issue_id)(snap.issueLabels),
+        links: by<(typeof snap.links)[number]>((r) => r.id)(snap.links),
+        attachments: by<(typeof snap.attachments)[number]>((r) => r.id)(snap.attachments),
+        issueSubs: by<(typeof snap.issueSubs)[number]>((r) => r.issue_id)(snap.issueSubs),
+        orgLoad: by<(typeof snap.orgLoad)[number]>((r) => JSON.stringify(r))(snap.orgLoad),
+        profiles: by<(typeof snap.profiles)[number]>((r) => r.id)(snap.profiles),
+        teamMembers: by<(typeof snap.teamMembers)[number]>((r) => r.profile_id + r.team_id)(
+          snap.teamMembers,
         ),
-        projects: [...snap.projects].sort((a, b) => (a.id < b.id ? -1 : 1)),
-        access: [...snap.access].sort((a, b) =>
-          a.project_id + a.profile_id < b.project_id + b.profile_id ? -1 : 1,
-        ),
-        teamAccess: [...snap.teamAccess].sort((a, b) =>
-          a.project_id + a.team_id < b.project_id + b.team_id ? -1 : 1,
+        projects: by<(typeof snap.projects)[number]>((r) => r.id)(snap.projects),
+        access: by<(typeof snap.access)[number]>((r) => r.project_id + r.profile_id)(snap.access),
+        teamAccess: by<(typeof snap.teamAccess)[number]>((r) => r.project_id + r.team_id)(
+          snap.teamAccess,
         ),
       }
     expect(sorted(many)).toEqual(sorted(one))
+    // every link goes out once, marked ones included
+    expect(many?.links.map((l) => `${l.source_id}>${l.target_id}`).sort()).toEqual(
+      [`${a.id}>${d.id}`, `${d.id}>${b.id}`, `${b.id}>${c.id}`, `${c.id}>${a.id}`].sort(),
+    )
+    expect(many?.attachments).toHaveLength(2)
+    expect(many?.issueSubs).toHaveLength(2)
+    expect(many?.orgLoad).toEqual([expect.objectContaining({ owner_id: f.guest.id })])
+    const shown = (task: Doc<'issues'>) => many?.issues.find((i) => i.id === task.id)
+    expect(shown(a)?.has_hidden_subtasks).toBe(true)
+    expect(many?.issues.filter((i) => i.parent_id === a.id)).toHaveLength(1)
+  })
+})
+
+describe('window keys', () => {
+  it("the server picks a new task's key, so a writer who crowds ids into one window does not crowd the windows", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const ids = [0, 1, 2].map((i) => `abc00000-0000-4000-8000-00000000000${i}`)
+    for (const id of ids)
+      await as(t, f.user).mutation(api.issues.create, {
+        org_id: f.org.id,
+        id,
+        project_id: f.sub.id,
+        title: 'Crowded',
+      })
+    const keys = await t.run(async (ctx) =>
+      Promise.all(
+        ids.map(
+          async (id) =>
+            (await ctx.db
+              .query('issues')
+              .withIndex('by_uuid', (q) => q.eq('id', id))
+              .unique())!.window_key,
+        ),
+      ),
+    )
+    for (const key of keys) expect(key).toMatch(/^[0-9a-f]{8}$/)
+    expect(new Set(keys).size).toBe(3)
+  })
+
+  it("every writer of a relation row gives it its task's key", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const [a, b] = [uuid(), uuid()]
+    const admin = as(t, f.admin)
+    for (const id of [a, b])
+      await admin.mutation(api.issues.create, {
+        org_id: f.org.id,
+        id,
+        project_id: f.sub.id,
+        title: 'Keyed',
+      })
+    const label = uuid()
+    await admin.mutation(api.labels.create, {
+      org_id: f.org.id,
+      id: label,
+      name: 'Keyed',
+      color: '#335577',
+    })
+    await admin.mutation(api.labels.toggle, {
+      org_id: f.org.id,
+      issue_id: a,
+      label_id: label,
+      on: true,
+    })
+    await admin.mutation(api.issues.addLink, {
+      org_id: f.org.id,
+      id: uuid(),
+      source_id: b,
+      target_id: a,
+      type: 'blocks',
+    })
+    await as(t, f.user).mutation(api.issues.subscribe, { org_id: f.org.id, issue_id: a })
+    const keyed = await t.run(async (ctx) => {
+      const keyOf = async (id: string) =>
+        (await ctx.db
+          .query('issues')
+          .withIndex('by_uuid', (q) => q.eq('id', id))
+          .unique())!.window_key
+      return {
+        a: await keyOf(a),
+        b: await keyOf(b),
+        labels: (
+          await ctx.db
+            .query('issue_labels')
+            .withIndex('by_issue', (q) => q.eq('issue_id', a))
+            .collect()
+        ).map((r) => r.task_key),
+        links: (
+          await ctx.db
+            .query('issue_links')
+            .withIndex('by_source', (q) => q.eq('source_id', b))
+            .collect()
+        ).map((r) => r.task_key),
+        follows: (
+          await ctx.db
+            .query('issue_subscriptions')
+            .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', a))
+            .collect()
+        ).map((r) => r.task_key),
+      }
+    })
+    expect(keyed.a).toMatch(/^[0-9a-f]{8}$/)
+    expect(keyed.labels).toEqual([keyed.a])
+    expect(keyed.links).toEqual([keyed.b])
+    expect(keyed.follows.length).toBeGreaterThan(0)
+    for (const key of keyed.follows) expect(key).toBe(keyed.a)
+  })
+
+  it('windows hold tasks by key, not id: ids in one narrowest window load apart, keys in one refuse', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const crowded = (i: number) => `fff00000-0000-4000-8000-00000000000${i}`
+    const keys = ['10000000', '50000000', 'd0000000']
+    for (const [i, key] of keys.entries())
+      await plantIssue(t, {
+        org_id: f.org.id,
+        project_id: f.sub.id,
+        id: crowded(i),
+        window_key: key,
+      })
+    PAGE.tasks.most = 1
+    const snap = await workspaceOf(as(t, f.admin))
+    expect(snap?.issues.map((i) => i.id).sort()).toEqual([0, 1, 2].map(crowded))
+    // the narrowest window of the crowded ids holds none of them
+    const ofIds = narrowestOf('fff00000').holds
+    const answer = await as(t, f.admin).query(api.workspace.tasks, { org_id: f.org.id, ...ofIds })
+    expect(answer).toMatchObject({ state: 'ok', issues: [] })
+  })
+
+  it('a task stored before window keys loads in the first window with its rows, until the backfill gives them one', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const old = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      window_key: undefined,
+    })
+    // its label, and a follow written with a key that is not its task's
+    await t.run(async (ctx) => {
+      await ctx.db.insert('issue_labels', { org_id: f.org.id, issue_id: old.id, label_id: 'old' })
+      await ctx.db.insert('issue_subscriptions', {
+        issue_id: old.id,
+        profile_id: f.admin.id,
+        created_at: NOW,
+        task_key: 'ffffffff',
+      })
+    })
+    const oldProject = await plantProject(t, { org_id: f.org.id, window_key: undefined })
+    await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, window_key: 'c0000000' })
+    const windows = idWindows(4)
+    const holding = async () => {
+      const answers = await Promise.all(
+        windows.map((w) => as(t, f.admin).query(api.workspace.tasks, { org_id: f.org.id, ...w })),
+      )
+      return answers.map((answer) =>
+        answer.state === 'ok'
+          ? answer.issues.some((i) => i.id === old.id) &&
+            answer.issueLabels.some((l) => l.issue_id === old.id)
+          : null,
+      )
+    }
+    expect(await holding()).toEqual([true, false, false, false])
+    const { BACKFILL_PAGE } = await import('../internal/windowKeysBackfill')
+    BACKFILL_PAGE.rows = { issues: 1, projects: 1 }
+    try {
+      const remaining = async (table: 'issues' | 'projects') => {
+        let rows = 0
+        let cursor: string | null = null
+        for (;;) {
+          const page: { rows: number; cursor: string; done: boolean } = await t.query(
+            internal.internal.windowKeysBackfill.remaining,
+            { table, cursor },
+          )
+          rows += page.rows
+          if (page.done) return rows
+          cursor = page.cursor
+        }
+      }
+      // withOrg's own rows have no key either
+      const before = { issues: await remaining('issues'), projects: await remaining('projects') }
+      expect(before.issues).toBeGreaterThanOrEqual(1)
+      expect(before.projects).toBeGreaterThanOrEqual(1)
+      expect(await t.action(internal.internal.windowKeysBackfill.run, { dry_run: true })).toEqual({
+        dry_run: true,
+        ...before,
+      })
+      expect(await remaining('issues')).toBe(before.issues)
+      expect(await t.action(internal.internal.windowKeysBackfill.run, { dry_run: false })).toEqual({
+        dry_run: false,
+        ...before,
+      })
+      expect([await remaining('issues'), await remaining('projects')]).toEqual([0, 0])
+      const keyOf = await t.run(async (ctx) => ({
+        task: (await ctx.db.get(old._id))?.window_key,
+        rows: [
+          ...(await ctx.db
+            .query('issue_labels')
+            .withIndex('by_issue', (q) => q.eq('issue_id', old.id))
+            .collect()),
+          ...(await ctx.db
+            .query('issue_subscriptions')
+            .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', old.id))
+            .collect()),
+        ].map((row) => row.task_key),
+        project: (await ctx.db.get(oldProject._id))?.window_key,
+        audit: await ctx.db
+          .query('platform_audit_log')
+          .filter((q) => q.eq(q.field('action'), 'window_keys_backfill'))
+          .collect(),
+      }))
+      expect(keyOf.task).toMatch(/^[0-9a-f]{8}$/)
+      expect(keyOf.rows).toEqual([keyOf.task, keyOf.task])
+      expect(keyOf.project).toMatch(/^[0-9a-f]{8}$/)
+      expect(keyOf.audit.map((row) => row.detail)).toEqual([before])
+      expect(await holding()).toEqual(windows.map((w) => inIdWindow(keyOf.task!, w)))
+    } finally {
+      BACKFILL_PAGE.rows = { issues: 25, projects: 500 }
+    }
+  })
+
+  it("no part sends a window key, an archive mark, a mark flag or a relation row's organization", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const [task] = await plantTasks(t, f, 1)
+    await t.run(async (ctx) => {
+      await ctx.db.patch(task._id, { relations_marked: true })
+      await ctx.db.insert('issue_labels', {
+        org_id: f.org.id,
+        issue_id: task.id,
+        label_id: 'marked',
+        task_archived: true,
+      })
+      await ctx.db.insert('issue_subscriptions', {
+        issue_id: task.id,
+        profile_id: f.admin.id,
+        created_at: NOW,
+        task_archived: true,
+      })
+    })
+    const snap = await workspaceOf(as(t, f.admin))
+    expect(snap?.issueLabels).toHaveLength(2)
+    expect(snap?.issueSubs).toHaveLength(1)
+    for (const row of [...(snap?.issueLabels ?? []), ...(snap?.issueSubs ?? [])]) {
+      expect(row).not.toHaveProperty('task_archived')
+      expect(row).not.toHaveProperty('org_id')
+    }
+    for (const row of snap?.issues ?? []) {
+      expect(row).not.toHaveProperty('relations_marked')
+      expect(row).not.toHaveProperty('window_key')
+    }
+    expect(snap?.projects.length).toBeGreaterThan(0)
+    for (const row of snap?.projects ?? []) expect(row).not.toHaveProperty('window_key')
   })
 })
 
@@ -463,8 +785,10 @@ describe('what a part reveals', () => {
       return { answer, documents: (await ctx.meta.getTransactionMetrics()).documentsRead.used }
     })
     if (read.answer.state !== 'ok') throw new Error(read.answer.state)
-    // in id order, the window's order
-    expect(read.answer.issues.map((i) => i.id)).toEqual(shown.map((task) => task.id).sort())
+    // in window key order, the window's order
+    expect(read.answer.issues.map((i) => i.id)).toEqual(
+      [...shown].sort((a, b) => (a.window_key! < b.window_key! ? -1 : 1)).map((task) => task.id),
+    )
     // a group whose subtasks the guest is not shown says only that
     const group = read.answer.issues.find((i) => i.id === shown[0].id)
     expect(group?.has_hidden_subtasks).toBe(true)
@@ -505,14 +829,16 @@ describe('what a part reveals', () => {
     ])
     expect(JSON.stringify(await rowsOf(f.guest))).not.toContain(own.id)
     // a window that does not hold the task gives them nothing
-    const { holds, other } = narrowestOf(own.id)
+    const { holds, other } = narrowestOf(own.window_key!)
     expect(await rowsOf(f.guest, holds)).toHaveLength(1)
     expect(await rowsOf(f.guest, other)).toEqual([])
     expect(await rowsOf(f.viewer)).toEqual([])
     // A window narrower than the grid's, or off it, is refused, so the
-    // window of a row tells at most the first three hex digits of its id.
+    // window of a row tells at most the first three hex digits of its
+    // window key, which the server picked at random and says nothing of
+    // its id.
     for (const w of [
-      { from: own.id.slice(0, 8), to: null },
+      { from: own.window_key!, to: null },
       { from: own.id, to: `${own.id}0` },
       { from: '00000000', to: null },
       { from: '20000000', to: '60000000' },
@@ -568,7 +894,7 @@ describe('answers Convex need not re-send', () => {
     })
     const after = await read()
     expect(after.map((answer, i) => answer !== before[i])).toEqual(
-      windows.map((w) => tasks[3].id >= w.from && (w.to === null || tasks[3].id < w.to)),
+      windows.map((w) => inIdWindow(tasks[3].window_key!, w)),
     )
   })
 })
@@ -588,6 +914,7 @@ describe('many projects', () => {
     const subs = await t.run(async (ctx) => {
       const row = (n: number, parent_id?: string) => ({
         id: n === 0 ? parent : uuid(),
+        window_key: newWindowKey(),
         org_id: f.org.id,
         type: parent_id === undefined ? ('meta' as const) : ('project' as const),
         parent_id,
@@ -621,12 +948,116 @@ describe('many projects', () => {
     // the task's window reads its task and project, not the organization's
     const read = await t.run(async (ctx) => {
       const { readTasks } = await import('../lib/workspaceParts')
-      const w = idWindows(16).find((w) => task.id >= w.from && (w.to === null || task.id < w.to))!
+      const w = idWindows(16).find((w) => inIdWindow(task.window_key!, w))!
       await readTasks(ctx, f.viewer, w)
       return (await ctx.meta.getTransactionMetrics()).documentsRead.used
     })
     expect(read).toBeLessThan(30)
   }, 120_000)
+})
+
+describe('the projects and people parts', () => {
+  it('a projects window answers overflow past its rows or its reads, its cuts send every project, and the narrowest one refuses', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    for (let i = 0; i < 4; i++) await plantProject(t, { org_id: f.org.id })
+    const ids = (snap: Awaited<ReturnType<typeof workspaceOf>>) =>
+      snap?.projects.map((p) => p.id).sort()
+    const one = await workspaceOf(as(t, f.admin))
+    expect(one?.projects.length).toBeGreaterThan(4)
+    const projectsOf = (w: { from: string; to: string | null }) =>
+      as(t, f.admin).query(api.workspace.projects, { org_id: f.org.id, ...w })
+    PAGE.projects.most = 2
+    expect(await projectsOf(whole)).toEqual({ state: 'overflow' })
+    expect(ids(await workspaceOf(as(t, f.admin)))).toEqual(ids(one))
+    // past the hard budget between batches of grants
+    Object.assign(PAGE, structuredClone(DEFAULT_PAGE))
+    PAGE.batch = 1
+    PAGE.hard.ranges = 5
+    expect(await projectsOf(whole)).toEqual({ state: 'overflow' })
+    // three projects in one narrowest window cannot be cut apart
+    Object.assign(PAGE, structuredClone(DEFAULT_PAGE))
+    for (let i = 0; i < 3; i++) await plantProject(t, { org_id: f.org.id, window_key: 'f0000000' })
+    PAGE.projects.most = 2
+    expect(await projectsOf(narrowestOf('f0000000').holds)).toMatchObject({
+      state: 'refused',
+      message: expect.stringMatching(/^One part/),
+    })
+  })
+
+  it('a projects window does not ask to be cut for reads every part of the caller repeats', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // every other project far from the window under test
+    await t.run(async (ctx) => {
+      for (const p of await ctx.db.query('projects').collect())
+        await ctx.db.patch(p._id, { window_key: '10000000' })
+    })
+    const parent = await plantProject(t, { org_id: f.org.id, window_key: 'f0000000' })
+    const child = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: parent.id,
+      window_key: '10000000',
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('project_access', {
+        project_id: child.id,
+        profile_id: f.viewer.id,
+        level: 'viewer',
+      })
+      // 30 more teams of the person, whose shares navigation reads
+      for (let i = 0; i < 30; i++) {
+        const id = uuid()
+        await ctx.db.insert('teams', {
+          id,
+          org_id: f.org.id,
+          name: `Team ${i}`,
+          track_delay_default: false,
+          created_at: NOW,
+        })
+        await ctx.db.insert('team_members', {
+          team_id: id,
+          profile_id: f.viewer.id,
+          is_leader: false,
+        })
+      }
+    })
+    PAGE.soft.ranges = 40
+    const answer = await as(t, f.viewer).query(api.workspace.projects, {
+      org_id: f.org.id,
+      ...idWindows(16)[15],
+    })
+    // shown for navigation, and not cut although navigation read past it
+    expect(answer).toMatchObject({
+      state: 'ok',
+      projects: [expect.objectContaining({ id: parent.id })],
+    })
+    expect(answer).not.toHaveProperty('split')
+  })
+
+  it('a people window too full to cut refuses with a sentence', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const crowded = [0, 1, 2].map((i) => `fff00000-0000-4000-8000-00000000000${i}`)
+    const { _id, _creationTime, ...viewer } = f.viewer
+    await t.run(async (ctx) => {
+      for (const id of crowded)
+        await ctx.db.insert('profiles', {
+          ...viewer,
+          id,
+          email: `${id}@testbed.test`,
+          auth_user_id: undefined,
+        })
+    })
+    PAGE.people.most = 2
+    expect(
+      await as(t, f.admin).query(api.workspace.people, {
+        org_id: f.org.id,
+        ...narrowestOf('fff00000').holds,
+      }),
+    ).toMatchObject({ state: 'refused', message: expect.stringMatching(/^One part/) })
+  })
 })
 
 describe('the people part', () => {

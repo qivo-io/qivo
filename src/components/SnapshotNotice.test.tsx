@@ -160,6 +160,19 @@ describe('SnapshotNotice', () => {
     ).toBe(false)
   })
 
+  it('shows the sentence of a part that refused to load, as text, and does not promise to keep trying', async () => {
+    const sentence =
+      'One part of this organization holds more than Qivo can load at once. Contact support so we can help reduce it.'
+    await failWith(new ConvexError({ code: 'rule', message: sentence }))
+    expect(shown()?.textContent).toContain(
+      `You’re seeing your workspace as of 14:32. ${sentence} Editing is paused until it loads again.`,
+    )
+    expect(shown()?.textContent).not.toContain('keeps trying')
+    await act(async () => button('Details')?.click())
+    expect(shown()?.textContent).not.toContain('"code"')
+    expect(button('Try again')).toBeDefined()
+  })
+
   it('offers a reload, not a retry, after the sign-in ended', async () => {
     await failWith(new ConvexError({ code: 'forbidden', message: 'not signed in' }))
     expect(shown()?.textContent).toContain('You’re signed out')

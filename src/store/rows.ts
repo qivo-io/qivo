@@ -12,6 +12,10 @@ type InternalFields<T extends TableNames> =
       ? 'task_archived'
       : never)
   | (T extends 'issues' ? 'relations_marked' : never)
+  | (T extends 'issues' | 'projects' ? 'window_key' : never)
+  | (T extends 'issue_links' | 'issue_labels' | 'issue_attachments' | 'issue_subscriptions'
+      ? 'task_key'
+      : never)
 
 // The workspace parts add each organization's task and project counters,
 // which live in org_counters, and each person's Team sync stamp, which lives

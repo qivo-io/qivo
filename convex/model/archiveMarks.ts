@@ -1,14 +1,17 @@
 /* Marks on the relation rows of archived tasks (schema.ts `task_archived`,
- * and `relations_marked` on the task). Organization-wide reads, such as
- * billing's storage totals, read the rows by indexes that leave marked rows
- * out, so their cost follows the active tasks instead of everything the
- * organization ever archived. The app reads a shown task's rows through the
- * task's own indexes (lib/workspaceParts.ts readTasks), and leaves out a
- * marked follow unless the task carries the flag.
+ * and `relations_marked` on the task). The label search of REST and MCP
+ * (lib/core.ts activeLabelNames) reads a label's assignments by an index
+ * that leaves marked rows out, so its cost follows the active tasks instead
+ * of everything the organization ever archived, and reads a task with the
+ * flag through its own assignments. The archive steps below read one task's
+ * marked or unmarked rows. Every other reader sees marked rows like any
+ * other: the app reads each shown task's rows through the task's own
+ * indexes (lib/workspaceParts.ts readTasks), and billing's storage totals
+ * count marked attachments too.
  *
- * The rule that keeps those reads exact is that every marked row belongs to
- * a task with relations_marked, a link through at least one end. These keep
- * it:
+ * The rule that keeps the label search exact is that every marked row
+ * belongs to a task with relations_marked, a link through at least one end.
+ * These keep it:
  * - Inserts never set a mark.
  * - Only markArchivedTask sets marks, for a task the caller read archived in
  *   the same transaction, and it sets the task's flag in that transaction.

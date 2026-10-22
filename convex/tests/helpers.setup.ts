@@ -26,6 +26,7 @@ import type { MutationCtx } from '../_generated/server'
 import authSchema from '../betterAuth/schema'
 import type { ReapCounts } from '../files'
 import type { RestIssueJson } from '../lib/core'
+import { newWindowKey } from '../lib/db'
 import type { OrgRole } from '../lib/enums'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { loadRowFor, type OrgLoadRow } from '../lib/loadRows'
@@ -440,6 +441,7 @@ export async function withOrg(t: T) {
       num,
       track_delay: false,
       created_at: NOW,
+      window_key: newWindowKey(),
       ...extra,
     })
 
@@ -655,6 +657,7 @@ export async function plantProject(
       num,
       track_delay: false,
       created_at: NOW,
+      window_key: newWindowKey(),
       ...proj,
     })
     return (await ctx.db.get(_id)) as Doc<'projects'>
@@ -677,6 +680,7 @@ export async function plantIssue(
       paused: false,
       created_at: NOW,
       updated_at: NOW,
+      window_key: newWindowKey(),
       ...issue,
     })
     return (await ctx.db.get(_id)) as Doc<'issues'>

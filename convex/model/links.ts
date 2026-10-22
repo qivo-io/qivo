@@ -154,7 +154,16 @@ export async function addLinkCore(
     'issue_links',
     'by_uuid',
     { id },
-    { id, org_id: source.org_id, source_id, target_id, type, pair_key: key, created_at: now },
+    {
+      id,
+      org_id: source.org_id,
+      source_id,
+      target_id,
+      type,
+      pair_key: key,
+      created_at: now,
+      task_key: source.window_key,
+    },
     badRequest('a link with this id already exists'),
   )
   // the stored number decides visibility for this row, not its wording

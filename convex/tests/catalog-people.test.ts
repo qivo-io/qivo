@@ -1369,7 +1369,7 @@ describe('teams.deleteDeep', () => {
     expect(left.label).not.toBeNull() // labels are org-level and SURVIVE
     expect(await messagesFor(t, f.admin.id, issue.id)).toHaveLength(1)
     // History survives its subjects: same rows. Team references stay, so
-    // the deleted team's history reaches admins only (snapshot.ts), and
+    // the deleted team's history reaches admins only, and
     // project references remain valid because those projects remain.
     const after = await activityFor(t, f.org.id)
     expect(after).toHaveLength(before.length) // deleteDeep narrates nothing

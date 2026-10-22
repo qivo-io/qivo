@@ -2466,7 +2466,7 @@ try {
     await fail('A non-admin can see the organization export control')
 
   // ---- 8b. Team sync, on temporaries only. Every change made from a row
-  // stamps the page owner's last sync (profiles.sync_at), and no client
+  // stamps the page owner's last sync (a sync_stamps row), and no client
   // write can put an older stamp back, so the stamp lands on a temporary
   // AGENT that the leg removes, with its stamp, afterwards: a real person's
   // stamp never moves. The agent joins every Northstar team (each meta

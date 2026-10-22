@@ -217,6 +217,7 @@ export async function attachFileCore(
       inline: a.inline,
       uploaded_by: me.id,
       created_at: a.now,
+      task_key: issue.window_key,
     },
     badRequest('an attachment with this id already exists'),
   )

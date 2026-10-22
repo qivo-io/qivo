@@ -311,29 +311,43 @@ export function projectLevelsOf(
   }
   /* the projects the person has a level of their own on */
   let ownLevels: Promise<Set<string>> | undefined
+  /* what reading ownLevels cost, the same for every part of the person */
+  const shared = { ranges: 0, documents: 0, bytes: 0 }
+  const counted = <R>(rows: R[]) => {
+    shared.ranges += 1
+    shared.documents += rows.length
+    for (const row of rows) shared.bytes += JSON.stringify(row).length
+    return rows
+  }
   const navigates = async (parent: Doc<'projects'>) => {
     // accessRowsOf's rows, each team checked once
     ownLevels ??= Promise.all([
       ctx.db
         .query('project_access')
         .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
-        .collect(),
+        .collect()
+        .then(counted),
       (receivesTeamAccess(me)
         ? ctx.db
             .query('team_members')
             .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
             .collect()
+            .then(counted)
         : Promise.resolve([])
       ).then((mine) =>
         Promise.all(
-          mine.map(async ({ team_id: teamId }) =>
-            (await teamInOrg(teamId))
+          mine.map(async ({ team_id: teamId }) => {
+            // the team's own read, unless a share check read it before
+            shared.ranges += 1
+            shared.documents += 1
+            return (await teamInOrg(teamId))
               ? await ctx.db
                   .query('project_team_access')
                   .withIndex('by_team', (q) => q.eq('team_id', teamId))
                   .collect()
-              : [],
-          ),
+                  .then(counted)
+              : []
+          }),
         ),
       ),
     ]).then(([grants, shares]) => new Set([...grants, ...shares.flat()].map((g) => g.project_id)))
@@ -351,6 +365,11 @@ export function projectLevelsOf(
   }
   const levels = new Map<string, Promise<AccessLevel | null>>()
   return {
+    /** About what the reads of the person's own grants and team shares cost
+     * so far (navigation, read once), which every part of theirs repeats
+     * however few rows it holds. Documents and ranges as Convex counts them,
+     * bytes as JSON. */
+    shared,
     /** The project with this id, of any organization, or null. */
     project,
     /** projectLevel on the project with this id, null when it is missing. */

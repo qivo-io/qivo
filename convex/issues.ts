@@ -87,9 +87,15 @@ import { followTask, subscribeToIssue, unfollowTask } from './model/messages'
 type MeCtx = QueryCtx & { me: Doc<'profiles'> }
 
 /* System fields stay internal; optional columns come back ABSENT, like the
- * snapshot's rows. relations_marked only steers the snapshot's relation
- * reads, so it stays internal too. */
-const pub = ({ _id, _creationTime, relations_marked: _marks, ...row }: Doc<'issues'>) => row
+ * workspace's rows. relations_marked (the archive steps' bookkeeping) and
+ * window_key (where the app's windows place the task) stay internal too. */
+const pub = ({
+  _id,
+  _creationTime,
+  relations_marked: _marks,
+  window_key: _window,
+  ...row
+}: Doc<'issues'>) => row
 
 /* A returned row names its parent only when the caller can see the parent's
  * project, so no hidden task id leaves a read or a write's result (the
@@ -718,6 +724,7 @@ export const setSubscriber = orgMutation({
       if (!keepsInbox(profile)) throw rule('a Viewer agent has no inbox and cannot follow tasks')
       await subscribeToIssue(ctx, {
         issue_id: issue.id,
+        task_key: issue.window_key,
         profile,
         org_id: issue.org_id,
         project,

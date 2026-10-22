@@ -12,7 +12,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { type GroupIssue, groupProgress, isIssueGroup } from '../../src/lib/issueGroups'
-import { api, internal } from '../_generated/api'
+import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import {
   ACTIVE_LIST_TOO_WIDE,

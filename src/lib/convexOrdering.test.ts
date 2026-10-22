@@ -261,6 +261,41 @@ describe('live queries over the base client', () => {
     expect(seen).toHaveLength(before)
   })
 
+  it('after the socket reconnects, names every watched query again with the next connection count, unchanged values included', async () => {
+    const { list, count, socket, seen } = await start()
+    // the server drops the socket
+    socket.readyState = 3
+    socket.onclose?.({ code: 1011, reason: 'gone' })
+    let again = ScriptedSocket.last
+    for (let i = 0; i < 100 && (again === socket || again?.readyState !== 1); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      again = ScriptedSocket.last
+    }
+    expect(again).not.toBe(socket)
+    await tick()
+    // the new connection asks for every query again, from an empty set
+    const ask = again!.sent.filter((m) => m.type === 'ModifyQuerySet').at(-1)!
+    const before = seen.length
+    again!.receive({
+      type: 'Transition',
+      startVersion: { querySet: 0, ts: u64(0), identity: 0 },
+      endVersion: { querySet: ask.newVersion, ts: u64(100), identity: 0 },
+      modifications: [0, 1].map((queryId) => ({
+        type: 'QueryUpdated',
+        queryId,
+        value: queryId === 0 ? 'list 1' : 3,
+        logLines: [],
+        journal: null,
+      })),
+    })
+    expect(seen.length).toBe(before + 1)
+    expect(seen.at(-1)).toEqual({
+      tokens: [list.token, count.token],
+      values: ['list 1', 3],
+      connection: 2,
+    })
+  })
+
   it('never reads the old result for a subscription made after the last one stopped', async () => {
     const { live, list, socket, seen, transition } = await start()
     list.stop()

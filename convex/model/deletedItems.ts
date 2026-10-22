@@ -107,7 +107,7 @@ import {
   projectLevelsForOrg,
 } from '../lib/access'
 import { deletionBegun, orgWriteBlock } from '../lib/billingAccess'
-import { byId, usedMoreThan } from '../lib/db'
+import { byId, newWindowKey, usedMoreThan } from '../lib/db'
 import { demoForOrg, isDemoDeployment, uncountedWriter } from '../lib/demo'
 import {
   type AccessLevel,
@@ -1385,6 +1385,7 @@ async function cleanProject(s: Scope, p: Stored<'projects'>): Promise<Stored<'pr
   const team = p.team_id === undefined ? null : await teamOf(s, p.team_id)
   return {
     ...p,
+    window_key: p.window_key ?? newWindowKey(),
     lead_id: sameReference(lead, s.item) && canLeadProjects(lead) ? p.lead_id : undefined,
     team_id: sameReference(team, s.item) ? p.team_id : undefined,
   }

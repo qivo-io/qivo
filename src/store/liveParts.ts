@@ -20,7 +20,10 @@
    - After the socket reconnects, Convex sends every result again, and none
      counts until it arrived again.
    - A part that failed, or refused to load with a sentence, makes the
-     workspace fail; Retry runs only the failed parts again.
+     workspace fail when nothing else can show its rows: a window that
+     asked to be cut and then failed gives way to its halves once they
+     answer, and a half's failure waits while its window still shows.
+     Retry runs only the parts whose failure holds the workspace again.
    - A workspace that stays incomplete while online, with no part answering
      for STALL.ms, fails, so a part that never answers shows instead of a
      frozen screen. Convex sends the first answers of parts subscribed
@@ -243,13 +246,37 @@ export function createLiveParts(
     })
   }
 
-  /** The first error a slot holds, or undefined. */
+  /** The error `slot` holds, a refusal as one, or undefined. */
+  function errorOf(slot: Slot): unknown {
+    if (slot.error !== undefined) return slot.error
+    if (slot.fresh && isAnswer(slot.value) && slot.value.state === 'refused')
+      return new ConvexError({ code: 'rule', message: slot.value.message })
+    return undefined
+  }
+
+  /** The slots complete() needs an answer from: the root, each
+      organization's catalog and inbox, and each window that shows its
+      rows neither itself nor through its halves (rowsOf), or, when it
+      has halves, the halves that cannot. */
+  function* needed(): Generator<Slot> {
+    if (root) yield root
+    for (const org of orgs.values()) {
+      yield org.catalog
+      yield org.inbox
+      for (const kind of KINDS) for (const n of org.kinds[kind]) yield* neededIn(n)
+    }
+  }
+  function* neededIn(n: Node): Generator<Slot> {
+    if (rowsOf(n) !== null) return
+    if (n.halves === null) yield n.slot
+    else for (const half of n.halves) yield* neededIn(half)
+  }
+
+  /** The first error of a slot complete() needs, or undefined. */
   function failure(): unknown {
-    for (const slot of slots.values()) {
-      if (slot === side) continue
-      if (slot.error !== undefined) return slot.error
-      if (slot.fresh && isAnswer(slot.value) && slot.value.state === 'refused')
-        return new ConvexError({ code: 'rule', message: slot.value.message })
+    for (const slot of needed()) {
+      const error = errorOf(slot)
+      if (error !== undefined) return error
     }
     return undefined
   }
@@ -369,9 +396,12 @@ export function createLiveParts(
       slot.value = value
       slot.error = error
       slot.fresh = true
-      progress = true
       if (slot === side) news = error === undefined ? { value } : { error }
-      else dirty = true
+      else {
+        // the side query never holds the workspace, so it is no progress
+        progress = true
+        dirty = true
+      }
     }
     settle({ news, progress })
   })
@@ -379,15 +409,12 @@ export function createLiveParts(
   root = watch(api.workspace.root, {})
 
   return {
-    /** Runs every failed part again, from a fresh subscription
-        (Convex never keeps a failed run). Answers whether there was one. */
+    /** Runs every failed part the workspace needs again, from a fresh
+        subscription (Convex never keeps a failed run). Answers whether
+        there was one. */
     retry(): boolean {
-      let any = false
-      for (const slot of [...slots.values()]) {
-        if (slot === side) continue
-        const refused = isAnswer(slot.value) && slot.value.state === 'refused'
-        if (slot.error === undefined && !refused) continue
-        any = true
+      const failed = [...needed()].filter((slot) => errorOf(slot) !== undefined)
+      for (const slot of failed) {
         slot.stop()
         const again = live.watch(slot.ref, slot.args)
         slots.delete(slot.token)
@@ -400,8 +427,8 @@ export function createLiveParts(
         })
         slots.set(slot.token, slot)
       }
-      if (any) settle()
-      return any
+      if (failed.length > 0) settle()
+      return failed.length > 0
     },
     /** Watches `ref` with `args` as the side query, replacing any before. */
     watchSide(ref: FunctionReference<'query'>, args: Record<string, Value>) {
@@ -418,7 +445,8 @@ export function createLiveParts(
       stopped = true
       stopTransitions()
       if (stallTimer) clearTimeout(stallTimer)
-      for (const slot of [...slots.values()]) drop(slot)
+      // a Map lets its loop delete the entry it is on
+      for (const slot of slots.values()) drop(slot)
       orgs.clear()
     },
   }

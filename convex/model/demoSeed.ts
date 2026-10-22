@@ -12,7 +12,7 @@ import {
   marketingWeek,
   northstarTaskTimes,
 } from '../internal/marketingDemoData'
-import { byId } from '../lib/db'
+import { byId, newWindowKey } from '../lib/db'
 import { demoRefusal } from '../lib/demo'
 import { require, rule } from '../lib/functions'
 import { DEFAULT_MESSAGE_RETENTION_DAYS } from '../lib/limits'
@@ -293,6 +293,7 @@ export async function writeNorthstarStep(
     for (const [index, p] of data.projects.entries()) {
       await ctx.db.insert('projects', {
         id: projectIds[p.key],
+        window_key: newWindowKey(),
         org_id: org.id,
         type: p.parent ? 'project' : 'meta',
         parent_id: p.parent ? projectIds[p.parent] : undefined,
@@ -358,8 +359,10 @@ export async function writeNorthstarStep(
       const times = northstarTaskTimes(anchor, now, i)
       // These are explicitly imported fixtures. Atlas is the import actor;
       // reporter is separate attribution, never a forged creator history.
+      const windowKey = newWindowKey()
       const issueDocId = await ctx.db.insert('issues', {
         id: issueIds[i.key],
+        window_key: windowKey,
         org_id: org.id,
         project_id: projectIds[i.project],
         num: index + 1,
@@ -399,6 +402,7 @@ export async function writeNorthstarStep(
           org_id: org.id,
           issue_id: issueIds[i.key],
           label_id: labelIds[label],
+          task_key: windowKey,
         })
       await insertActivity(
         ctx,
@@ -427,9 +431,9 @@ export async function writeNorthstarStep(
     const changedAt = (c: { day: number; time: string }) => marketingInstant(anchor, c.day, c.time)
     for (const l of data.links) {
       // both ends must still be live, as a link to a removed task is no link
-      await task(l.source)
-      await task(l.target)
+      const ends = [await task(l.source), await task(l.target)]
       const pair = [issueIds[l.source], issueIds[l.target]].sort()
+      const sourceId = l.type === 'relates' ? pair[0] : issueIds[l.source]
       // a link the history adds dates from that change
       const added = data.history.find(
         (c) => c.kind === 'link' && c.issue === l.source && c.target === l.target,
@@ -437,7 +441,8 @@ export async function writeNorthstarStep(
       await ctx.db.insert('issue_links', {
         org_id: org.id,
         id: await id(`link:${l.source}:${l.target}`),
-        source_id: l.type === 'relates' ? pair[0] : issueIds[l.source],
+        source_id: sourceId,
+        task_key: ends.find((end) => end.id === sourceId)?.window_key,
         target_id: l.type === 'relates' ? pair[1] : issueIds[l.target],
         type: l.type,
         pair_key: pair.join(':'),

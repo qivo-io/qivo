@@ -44,6 +44,7 @@ describe('earlier comments in the store', () => {
     Array.from({ length: to - from }, (_, n) => comment(from + n))
   const bodies = () => store.P.comments.map((c) => c.body)
   let failThread: (error: unknown) => void = () => {}
+  let snap: Snapshot
   const settle = async () => {
     for (let i = 0; i < 8; i++) await Promise.resolve()
   }
@@ -58,7 +59,7 @@ describe('earlier comments in the store', () => {
     vi.clearAllMocks()
     vi.stubGlobal('window', { showToast: vi.fn() })
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    const snap: Snapshot = plannerFixture()
+    snap = plannerFixture()
     author = snap.profiles[0].id
     snap.issues.push({
       id: 'task-a',
@@ -109,6 +110,31 @@ describe('earlier comments in the store', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+  })
+
+  it('shows a thread opened while a re-init loads, whose first answer came before the new workspace', async () => {
+    const { P } = store
+    // the re-init's workspace waits until the test answers it
+    let answerWhole = () => {}
+    network.onUpdate.mockImplementation((ref, _args, receive, fail) => {
+      if (getFunctionName(ref) === 'workspace:whole')
+        answerWhole = () => receive(structuredClone(snap))
+      else if (getFunctionName(ref) === 'snapshot:commentThread') {
+        publish = (page) => receive({ ...page, events: [] })
+        failThread = fail
+      }
+      return () => {}
+    })
+    P.watchComments(null)
+    const again = store.initStore()
+    await settle()
+    P.watchComments('task-a')
+    publish({ comments: range(0, 3), earlier: false })
+    await settle()
+    answerWhole()
+    await again
+    await settle()
+    expect(bodies()).toEqual(['#0', '#1', '#2'])
   })
 
   it('offers earlier comments only while the thread holds some', () => {

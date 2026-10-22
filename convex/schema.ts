@@ -59,18 +59,27 @@ import { vPanoramaStatus } from './lib/panorama'
 import { vEventFilters, vEventName, vEventOwner } from './lib/taskEvents'
 
 /* `task_archived` on a task's relation rows (links, label assignments, follows
- * and attachments) marks a row that organization-wide reads (billing's
- * storage totals) skip by index. Only a background step sets
+ * and attachments) marks a row that the label search of REST and MCP
+ * (lib/core.ts activeLabelNames) skips by index. Only a background step sets
  * it, for a task it finds archived in its own transaction, and that step also
  * sets the task's `relations_marked`. After a restore, other steps clear the
  * marks, and only the one that finds none left while the task is active
  * unsets the flag (model/archiveMarks.ts). Every marked row therefore belongs
  * to a task with relations_marked, a link through at least one end, and the
- * app's tasks part (lib/workspaceParts.ts readTasks) shows the marked follow
- * of an active task with the flag. A row written after the archive, or before marks
- * existed, stays unmarked, and readers filter it as before. Every other
- * reader sees marked rows like any other. */
+ * search reads such a task through its own assignments. A row written after
+ * the archive, or before marks existed, stays unmarked, and readers filter it
+ * as before. Every other reader, the app's workspace parts and billing's
+ * storage totals included, sees marked rows like any other. */
 const taskArchived = v.optional(v.literal(true))
+
+/* `task_key` on a task's relation rows (label assignments, attachments,
+ * follows, and a link's on its source's behalf): the task's window_key, so
+ * the app's windows read the rows of their tasks in one range
+ * (lib/workspaceParts.ts readTasks). A writer copies it from the task; a
+ * task's key never changes once set. Rows stored before keys have none, as
+ * their tasks have none, and both sort first, into the first window, until
+ * internal/windowKeysBackfill gives the task a key and its rows the same. */
+const taskKey = v.optional(v.string())
 
 /* The ten tables whose rows a deleted task or project keeps in deleted_rows
  * (lib/enums.ts STORED_TABLES), defined first so deleted_rows can reuse each
@@ -103,11 +112,16 @@ const projectsTable = defineTable({
   review_hours: v.optional(v.number()),
   archived_at: v.optional(v.string()),
   created_at: v.string(),
+  // server-owned: where the project sorts in the app's windows
+  // (lib/db.ts newWindowKey), set once. Never sent to clients, REST, MCP,
+  // webhooks or the export. A project stored before it had one sorts first,
+  // in the first window, until internal/windowKeysBackfill gives it one.
+  window_key: v.optional(v.string()),
 })
   .index('by_uuid', ['id'])
   .index('by_org', ['org_id'])
-  // the app's project windows: a range of project ids (lib/workspaceParts.ts)
-  .index('by_org_id', ['org_id', 'id'])
+  // the app's project windows: a range of window keys (lib/workspaceParts.ts)
+  .index('by_org_window', ['org_id', 'window_key'])
   .index('by_org_key', ['org_id', 'key'])
   .index('by_org_num', ['org_id', 'num'])
   .index('by_parent', ['parent_id'])
@@ -173,6 +187,10 @@ const issuesTable = defineTable({
   // server-owned: some relation rows of this task may carry task_archived
   // (above). Never sent to clients, REST, MCP, webhooks or the export.
   relations_marked: v.optional(v.literal(true)),
+  // server-owned: where the task sorts in the app's windows (lib/db.ts
+  // newWindowKey), as projects' window_key above; its relation rows carry
+  // it as task_key
+  window_key: v.optional(v.string()),
   created_at: v.string(),
   updated_at: v.string(),
 })
@@ -180,10 +198,9 @@ const issuesTable = defineTable({
   .index('by_org', ['org_id'])
   // The working snapshot and planning reads do not scan archived task bodies.
   .index('by_org_archived', ['org_id', 'archived_at'])
-  // the app's task and hidden load windows: a range of active task ids
-  // (lib/workspaceParts.ts), and the active subtasks of such a range
-  .index('by_org_archived_id', ['org_id', 'archived_at', 'id'])
-  .index('by_org_archived_parent', ['org_id', 'archived_at', 'parent_id'])
+  // the app's task and hidden load windows: a range of active tasks' window
+  // keys (lib/workspaceParts.ts)
+  .index('by_org_archived_window', ['org_id', 'archived_at', 'window_key'])
   // The nightly archive reads only Done tasks past the shortest threshold.
   .index('by_org_archived_status_done', ['org_id', 'archived_at', 'status', 'done_at'])
   // The nightly repair finds active tasks still flagged relations_marked.
@@ -224,9 +241,12 @@ const issueLinksTable = defineTable({
   pair_key: v.string(),
   created_at: v.string(),
   task_archived: taskArchived,
+  task_key: taskKey, // the source's
 })
   // The archive steps' reads of one end's unmarked or marked rows.
   .index('by_org_task_archived_source', ['org_id', 'task_archived', 'source_id'])
+  // the app's windows: the unmarked links from a range of window keys
+  .index('by_org_task_archived_key', ['org_id', 'task_archived', 'task_key'])
   .index('by_org_task_archived_target', ['org_id', 'task_archived', 'target_id'])
   .index('by_uuid', ['id'])
   .index('by_source', ['source_id'])
@@ -239,8 +259,11 @@ const issueLabelsTable = defineTable({
   issue_id: v.string(), // label and issue must share an org
   label_id: v.string(),
   task_archived: taskArchived,
+  task_key: taskKey,
 })
   .index('by_org_task_archived_issue', ['org_id', 'task_archived', 'issue_id'])
+  // the app's windows: the unmarked rows of a range of window keys
+  .index('by_org_task_archived_key', ['org_id', 'task_archived', 'task_key'])
   .index('by_issue', ['issue_id'])
   // a label's assignments; REST and MCP search read only its unmarked ones
   .index('by_label', ['label_id', 'task_archived'])
@@ -251,14 +274,15 @@ const issueSubscriptionsTable = defineTable({
   profile_id: v.string(), // recipient must be able to see the project
   created_at: v.string(),
   task_archived: taskArchived,
+  task_key: taskKey,
 })
   // a task's follows, and the archive steps' unmarked or marked ones
   .index('by_issue_task_archived', ['issue_id', 'task_archived'])
   // one person's unmarked follows; profile cleanup takes the whole profile
   // range
   .index('by_profile_task_archived', ['profile_id', 'task_archived'])
-  // one person's unmarked follows of a range of task ids (the app's windows)
-  .index('by_profile_task_archived_issue', ['profile_id', 'task_archived', 'issue_id'])
+  // one person's unmarked follows of a range of window keys (the app's windows)
+  .index('by_profile_task_archived_key', ['profile_id', 'task_archived', 'task_key'])
   .index('by_issue_profile', ['issue_id', 'profile_id'])
 
 // A task holds at most LIMITS.attachments.max rows (lib/limits.ts) without a
@@ -277,6 +301,7 @@ const issueAttachmentsTable = defineTable({
   uploaded_by: v.optional(v.string()),
   created_at: v.string(),
   task_archived: taskArchived,
+  task_key: taskKey,
   // When a description save took this image out of the description
   // (model/descriptionImages.ts settleDescriptionImages). It no longer counts
   // toward LIMITS.attachments.max, and a save that shows it again within a day
@@ -284,6 +309,8 @@ const issueAttachmentsTable = defineTable({
   dropped_at: v.optional(v.string()),
 })
   .index('by_org_task_archived_issue', ['org_id', 'task_archived', 'issue_id'])
+  // the app's windows: the unmarked rows of a range of window keys
+  .index('by_org_task_archived_key', ['org_id', 'task_archived', 'task_key'])
   // An organization's rows in the order they were stored. Archiving a task
   // moves its rows within by_org_task_archived_issue but not here, so the
   // billing storage sample pages through this one (model/billing.ts
