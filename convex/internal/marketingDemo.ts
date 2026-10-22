@@ -16,7 +16,9 @@ import { badRequest, conflict, require, rule } from '../lib/functions'
 import { DEFAULT_MESSAGE_RETENTION_DAYS, LIMITS, MIB } from '../lib/limits'
 import { pendingRemoval } from '../model/cascade'
 import {
+  NORTHSTAR_COMMENTS,
   NORTHSTAR_STEPS,
+  type NorthstarStep,
   SAMPLE_AVATARS,
   type SampleAvatar,
   writeNorthstarStep,
@@ -388,17 +390,16 @@ export const RESERVED_PART = 80
 /** How many parts the reserved-id check has (checkReserved). */
 export const RESERVED_PARTS = Math.ceil(RESERVED.length / RESERVED_PART)
 
-/* Refuses when a uuid of part `part` of the reserved-id check belongs to
- * another organization. All app UUIDs are globally unique, so the seed
- * must fail on a matching key in another tenant before it writes anything,
- * and a reset before its wipe deletes anything (checkReserved). A uuid that
- * another organization's Deleted items keep stays reserved too (lib/db.ts
- * insertUnique), so it collides like a live row; only an absent row needs
- * that look. */
-async function assertReservedPart(
+/* Refuses when a uuid of `items` belongs to another organization. All app
+ * UUIDs are globally unique, so the seed must fail on a matching key in
+ * another tenant before it writes anything, and a reset before its wipe
+ * deletes anything (checkReserved). A uuid that another organization's
+ * Deleted items keep stays reserved too (lib/db.ts insertUnique), so it
+ * collides like a live row; only an absent row needs that look. */
+async function assertReserved(
   ctx: QueryCtx,
   org: Doc<'organizations'>,
-  part: number,
+  items: readonly (typeof RESERVED)[number][],
 ): Promise<void> {
   const trashedElsewhere = async (table: StoredTable, rowId: string) => {
     const row = await ctx.db
@@ -407,9 +408,9 @@ async function assertReservedPart(
       .first()
     return row !== null && row.org_id !== org.id
   }
-  // The organization of a live comment's task or a live milestone's
-  // project, which can be in Deleted items while a delete's steps have not
-  // moved that comment or milestone yet.
+  // The organization of a live comment's or link's task or a live
+  // milestone's project, which can be in Deleted items while a delete's
+  // steps have not moved that comment, link or milestone yet.
   const ownerOrg = async (table: 'issues' | 'projects', rowId: string) =>
     (await byId(ctx, table, rowId))?.org_id ??
     (
@@ -423,7 +424,7 @@ async function assertReservedPart(
       `marketing demo: reserved ${what} id belongs to another organization`,
       'demo_id_collision',
     )
-  for (const item of RESERVED.slice(part * RESERVED_PART, (part + 1) * RESERVED_PART)) {
+  for (const item of items) {
     const rowId = await id(item.key)
     if (item.kind === 'project' || item.kind === 'issue') {
       const table = item.kind === 'project' ? 'projects' : 'issues'
@@ -446,11 +447,10 @@ async function assertReservedPart(
         : (await ownerOrg('projects', existing.project_id)) === org.id, collision('milestone'))
     } else if (item.kind === 'link') {
       const existing = await byId(ctx, 'issue_links', rowId)
-      const source = existing ? await byId(ctx, 'issues', existing.source_id) : null
-      const target = existing ? await byId(ctx, 'issues', existing.target_id) : null
       require(existing === null
         ? !(await trashedElsewhere('issue_links', rowId))
-        : source?.org_id === org.id && target?.org_id === org.id, collision('link'))
+        : (await ownerOrg('issues', existing.source_id)) === org.id &&
+            (await ownerOrg('issues', existing.target_id)) === org.id, collision('link'))
     } else {
       const existing = await byId(ctx, 'activity_events', rowId)
       require(existing === null || existing.org_id === org.id, collision('activity'))
@@ -458,9 +458,57 @@ async function assertReservedPart(
   }
 }
 
+/* Part `part` of the reserved-id check (RESERVED_PARTS). */
+const assertReservedPart = (ctx: QueryCtx, org: Doc<'organizations'>, part: number) =>
+  assertReserved(ctx, org, RESERVED.slice(part * RESERVED_PART, (part + 1) * RESERVED_PART))
+
+/* The reserved uuids Northstar step `step` writes. */
+function reservedFor(step: NorthstarStep): (typeof RESERVED)[number][] {
+  const keys = new Set<string>()
+  if (step.kind === 'setup') {
+    for (const p of MARKETING_DEMO.projects) keys.add(`project:${p.key}`)
+    for (const l of MARKETING_DEMO.labels) keys.add(`label:${l.key}`)
+    for (const t of MARKETING_DEMO.teams) keys.add(`team:${t.key}`)
+  } else if (step.kind === 'tasks') {
+    for (const i of MARKETING_DEMO.issues.slice(step.from, step.to)) {
+      keys.add(`issue:${i.key}`)
+      keys.add(`activity:import:${i.key}`)
+    }
+  } else if (step.kind === 'history') {
+    for (const l of MARKETING_DEMO.links) keys.add(`link:${l.source}:${l.target}`)
+    for (const c of MARKETING_DEMO.history) keys.add(`activity:change:${c.key}`)
+    for (const m of MARKETING_DEMO.milestones) keys.add(`milestone:${m.key}`)
+  } else if (step.kind === 'comments') {
+    for (const c of NORTHSTAR_COMMENTS.slice(step.from, step.to)) keys.add(`comment:${c.key}`)
+  }
+  return RESERVED.filter((item) => keys.has(item.key))
+}
+
+/* The refusal of a seed step when the demo's work changed since the seed
+ * began: work added before its setup, or anything moved to Deleted items. */
+const CHANGED_DURING_SEED = 'marketing demo: work changed during the seed; use reset to replace it'
+
+/* The refusal of a seed of a demo that is not empty. */
+const ADDED_AFTER_WIPE = 'marketing demo: work was added after wipe; use reset to replace it'
+
+/* Whether organization `orgId` has no projects, tasks, teams or labels,
+ * live or in Deleted items. */
+async function holdsNoWork(ctx: QueryCtx, orgId: string): Promise<boolean> {
+  for (const table of ['projects', 'issues', 'teams', 'labels'] as const) {
+    const row = await ctx.db
+      .query(table)
+      .withIndex('by_org', (q) => q.eq('org_id', orgId))
+      .first()
+    if (row !== null) return false
+  }
+  return !(await holdsTrash(ctx, orgId))
+}
+
 /* One call of a seed: a part of the reserved-id check, which writes
  * nothing, or a step of the Northstar work. Every part comes first, so a
- * collision refuses before the seed writes anything. */
+ * collision refuses before the seed writes anything; each work step checks
+ * the uuids it writes again in its own transaction, since a row could take
+ * one after the parts ran. */
 const SEED_STEPS = [
   ...Array.from({ length: RESERVED_PARTS }, (_, part) => ({ kind: 'check' as const, part })),
   ...NORTHSTAR_STEPS.map((step) => ({ kind: 'work' as const, step })),
@@ -545,31 +593,7 @@ export const apply = internalMutation({
       }
       return await seedStep(ctx, record, { org, profiles }, args.expected_site_url)
     }
-    if (args.mode === 'seed') {
-      const projects = await ctx.db
-        .query('projects')
-        .withIndex('by_org', (q) => q.eq('org_id', org.id))
-        .first()
-      const issues = await ctx.db
-        .query('issues')
-        .withIndex('by_org', (q) => q.eq('org_id', org.id))
-        .first()
-      const teams = await ctx.db
-        .query('teams')
-        .withIndex('by_org', (q) => q.eq('org_id', org.id))
-        .first()
-      const labels = await ctx.db
-        .query('labels')
-        .withIndex('by_org', (q) => q.eq('org_id', org.id))
-        .first()
-      require(projects === null &&
-        issues === null &&
-        teams === null &&
-        labels === null &&
-        !(await holdsTrash(ctx, org.id)), rule(
-        'marketing demo: work was added after wipe; use reset to replace it',
-      ))
-    }
+    if (args.mode === 'seed') require(await holdsNoWork(ctx, org.id), rule(ADDED_AFTER_WIPE))
     // A wipe deletes only live work and rewinds the counters, so it refuses
     // while Deleted items hold anything: their tasks keep numbers the seed
     // hands out again, and an item still moving keeps tasks under projects
@@ -592,7 +616,7 @@ export const apply = internalMutation({
       if (!cleared) return { state: 'empty', wipe_done: false }
       return { ...(await inspectCore(ctx, args.expected_site_url)), wipe_done: true }
     }
-    require(cleared, rule('marketing demo: work was added after wipe; use reset to replace it'))
+    require(cleared, rule(ADDED_AFTER_WIPE))
     await ctx.db.patch(record._id, {
       state: 'seeding',
       version: MARKETING_DEMO_VERSION,
@@ -618,7 +642,17 @@ async function seedStep(
   // A receipt from another code version can point past the steps.
   require(seed !== undefined && anchor !== undefined && step !== undefined, rule(RESET_TO_CHANGE))
   if (step.kind === 'check') await assertReservedPart(ctx, owner.org, step.part)
-  else await writeNorthstarStep(ctx, { ...owner, namespace: KEY, anchor, now: seed.now }, step.step)
+  else {
+    // Between two calls the app can change the demo. Setup resets the
+    // counters, so it needs the demo as empty as the first call left it;
+    // a later step would write under tasks or projects moved to Deleted
+    // items. A collision refuses before this transaction writes.
+    if (step.step.kind === 'setup')
+      require(await holdsNoWork(ctx, owner.org.id), rule(ADDED_AFTER_WIPE))
+    else require(!(await holdsTrash(ctx, owner.org.id)), rule(CHANGED_DURING_SEED))
+    await assertReserved(ctx, owner.org, reservedFor(step.step))
+    await writeNorthstarStep(ctx, { ...owner, namespace: KEY, anchor, now: seed.now }, step.step)
+  }
   const next = seed.step + 1
   if (next < SEED_STEPS.length) {
     await ctx.db.patch(record._id, { seed: { step: next, now: seed.now } })

@@ -50,6 +50,7 @@ const SAFE_REFUSALS = new Set([
   'marketing demo: a demo email already belongs to an unowned account',
   'marketing demo: credential set belongs to a different provisioning run',
   'marketing demo: work was added after wipe; use reset to replace it',
+  'marketing demo: work changed during the seed; use reset to replace it',
   'marketing demo: use reset to change dates or dataset version',
   'marketing demo: Deleted items must be empty; run the same command again',
 ])

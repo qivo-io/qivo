@@ -1583,6 +1583,94 @@ describe('marketing demo seed steps', () => {
     expect(await wipe(t)).toMatchObject({ state: 'empty', counts: { tasks: 0 } })
   }, 60_000)
 
+  // first call, then the check parts: the next call is the setup step
+  const toSetup = async (t: T, anchor = ANCHOR) => {
+    for (let call = 0; call <= RESERVED_PARTS; call++) await apply(t, 'seed', anchor)
+  }
+  /* Moves the live row of `issue` into Deleted items, as a delete's first
+   * step leaves it while its links are still to follow. */
+  const trashTask = (t: T, issue: Doc<'issues'>) =>
+    t.run(async (ctx) => {
+      const { _id, _creationTime, ...doc } = issue
+      await ctx.db.delete(_id)
+      await ctx.db.insert('deleted_rows', {
+        item_id: uuid(),
+        org_id: issue.org_id,
+        table: 'issues',
+        owner_id: issue.id,
+        row_id: issue.id,
+        created_ts: _creationTime,
+        row: { table: 'issues', doc },
+      })
+    })
+
+  it('refuses a work step whose uuid another organization took after the check parts, and writes nothing', async () => {
+    const t = newAuthT()
+    const foreign = await withOrg(t)
+    const { org_id } = await provision(t)
+    await toSetup(t)
+    // a client-supplied uuid created between the check parts and the setup
+    await plantProject(t, {
+      org_id: foreign.org.id,
+      id: await demoId(`project:${MARKETING_DEMO.projects[0].key}`),
+      name: 'Customer project',
+    })
+    await expectRefusal(apply(t, 'seed'), 'conflict', /reserved project id belongs to another/)
+    expect(await t.query(inspectRef, TARGET)).toMatchObject({
+      state: 'seeding',
+      counts: { projects: 0, subprojects: 0, tasks: 0 },
+    })
+    for (const table of ['teams', 'labels'] as const) {
+      const rows = await t.run(async (ctx) =>
+        ctx.db
+          .query(table)
+          .withIndex('by_org', (q) => q.eq('org_id', org_id))
+          .collect(),
+      )
+      expect(rows, table).toEqual([])
+    }
+    expect(await countersFor(t, org_id)).toEqual({ next_issue_num: 0, next_project_num: 0 })
+  }, 60_000)
+
+  it('refuses to resume a seed once work was added or moved to Deleted items since it began', async () => {
+    const t = newAuthT()
+    const { org_id } = await provision(t)
+    await apply(t, 'seed')
+    // work added after the first call, before the setup step
+    const project = await plantProject(t, { org_id, name: 'Walkthrough notes' })
+    const task = await plantIssue(t, { org_id, project_id: project.id, title: 'Keep me' })
+    const counters = await countersFor(t, org_id)
+    await expectRefusal(seed(t), 'rule', /work was added after wipe; use reset/)
+    expect(await t.run(async (ctx) => ctx.db.get(task._id))).toEqual(task)
+    expect(await countersFor(t, org_id)).toEqual(counters)
+    // a seeded task moved to Deleted items after the setup step
+    await reset(t)
+    await wipe(t)
+    await toSetup(t)
+    await apply(t, 'seed')
+    await apply(t, 'seed')
+    const seededTask = (await t.run(async (ctx) => ctx.db.query('issues').collect()))[0]
+    await trashTask(t, seededTask)
+    const tasks = (await t.query(inspectRef, TARGET)).counts.tasks
+    await expectRefusal(seed(t), 'rule', /work changed during the seed; use reset/)
+    expect((await t.query(inspectRef, TARGET)).counts.tasks).toBe(tasks)
+  }, 120_000)
+
+  it("passes the check for an owned link whose task is in the demo's own Deleted items", async () => {
+    const t = newAuthT()
+    await seeded(t)
+    const link = MARKETING_DEMO.links[0]
+    const sourceId = await demoId(`issue:${link.source}`)
+    const source = await t.run(async (ctx) =>
+      ctx.db
+        .query('issues')
+        .withIndex('by_uuid', (q) => q.eq('id', sourceId))
+        .unique(),
+    )
+    await trashTask(t, source!)
+    await checkReserved(t)
+  }, 60_000)
+
   it('resumes a stopped seed at its next step, refuses another anchor until a reset, and wipes a half-seeded demo', async () => {
     const t = newAuthT()
     await provision(t)

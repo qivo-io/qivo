@@ -282,6 +282,10 @@ export async function writeNorthstarStep(
     require(atlas !== undefined, rule('marketing demo: import actor missing'))
     for (let index = step.from; index < step.to; index++) {
       const i = data.issues[index]
+      // a project the app removed since setup refuses rather than gain tasks
+      require(preload.projects.has(projectIds[i.project]), rule(
+        'marketing demo: seeded project missing',
+      ))
       // A dated last write (updated_at) lets Team sync read the task as
       // untouched, or its review as waiting, since a sync.
       const times = northstarTaskTimes(anchor, now, i)
@@ -354,6 +358,9 @@ export async function writeNorthstarStep(
   if (step.kind === 'history') {
     const changedAt = (c: { day: number; time: string }) => marketingInstant(anchor, c.day, c.time)
     for (const l of data.links) {
+      // both ends must still be live, as a link to a removed task is no link
+      await task(l.source)
+      await task(l.target)
       const pair = [issueIds[l.source], issueIds[l.target]].sort()
       // a link the history adds dates from that change
       const added = data.history.find(
@@ -411,7 +418,10 @@ export async function writeNorthstarStep(
         { id: await id(`activity:change:${c.key}`) },
       )
     }
-    for (const m of data.milestones)
+    for (const m of data.milestones) {
+      require((await byId(ctx, 'projects', projectIds[m.project])) !== null, rule(
+        'marketing demo: seeded project missing',
+      ))
       await ctx.db.insert('milestones', {
         id: await id(`milestone:${m.key}`),
         project_id: projectIds[m.project],
@@ -419,6 +429,7 @@ export async function writeNorthstarStep(
         week: marketingWeek(anchor, m.week),
         created_at: now,
       })
+    }
     return
   }
   if (step.kind === 'comments') {
