@@ -40,11 +40,11 @@ jobs:
       - name: Install desktop runtime dependencies
         run: npm run desktop:install
 
-      # Biome reports advisory warnings without failing the gate.
+      # A warning fails the gate as an error does.
       - name: Lint and format (biome)
-        run: npx biome ci .
+        run: npx biome ci . --error-on-warnings
 
-      - name: Lint (oxlint)
+      - name: Lint (biome and oxlint)
         run: npm run lint
 
       - name: UI component and styling conventions

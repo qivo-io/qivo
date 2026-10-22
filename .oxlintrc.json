@@ -7,18 +7,33 @@
     "convex/betterAuth/schema.ts",
     "public/favicon.svg"
   ],
-  "rules": {},
+  "rules": {
+    "no-unused-vars": [
+      "warn",
+      {
+        "ignoreRestSiblings": true,
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        "caughtErrorsIgnorePattern": "^_",
+        "destructuredArrayIgnorePattern": "^_"
+      }
+    ]
+  },
   "overrides": [
     {
       "files": ["src/**/*.tsx"],
       "plugins": ["react"],
       "rules": {
         "react/only-export-components": ["error", { "allowConstantExport": true }],
+        // Off: memo keys name the planner store's version counters, which the rule calls unneeded.
         "react/exhaustive-deps": "off",
-        "react/globals": "off",
-        "react/immutability": "off",
+        "react/globals": "warn",
+        "react/immutability": "warn",
+        // Off: views read the clock while they render (expiry, today) and the app has no React Compiler.
         "react/purity": "off",
+        // Off: hooks keep the latest callback in a ref during render, on purpose.
         "react/refs": "off",
+        // Off: effects reset their state when what they subscribe to changes.
         "react/set-state-in-effect": "off"
       }
     }
