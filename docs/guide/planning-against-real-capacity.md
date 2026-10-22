@@ -186,7 +186,8 @@ Use the row controls to change tasks without opening them:
   The window closes once the comment is saved, and the note cannot change
   while Qivo saves it. If Qivo refuses it, for example after you lose edit
   access, your note stays in the window, also if you closed it meanwhile.
-- **Board / Roadmap** opens the task there. Board opens its task window;
+- **Board / Roadmap** opens the task there. Board opens its task window and
+  shows its card behind it, scrolled into view and ringed for a moment.
   Roadmap finds its bar or unplanned row without starting a planning session.
 - The **review tick** marks the task reviewed without changing it.
 

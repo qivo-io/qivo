@@ -13,6 +13,7 @@ import {
 } from 'react'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
+import { REVEAL_MS } from '@/lib/reveal'
 import { isRoadmapTaskVisible } from '@/lib/roadmapVisibility'
 import { useUpdateBlocker } from '@/lib/updateSafety'
 import { useLatest } from '@/lib/useLatest'
@@ -49,9 +50,6 @@ const HEAD_PAD_T = 6 // breathing room above the week numbers
 const WEEK_BAND_H = 33 // calendar week number over the week's first workday
 const MS_BAND_H = 36 // milestone flags with up to two lines of text
 const HEAD_H = HEAD_PAD_T + WEEK_BAND_H + MS_BAND_H
-
-// how long a read-only reveal keeps its spotlight ring
-const REVEAL_MS = 2400
 
 /* The timeline panel keeps its Task/week header above the task scrollport.
    Header, tasks and Team share a horizontal origin, while only task rows

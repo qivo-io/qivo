@@ -37,6 +37,7 @@ import { isLandscapeRoadmapOpen } from './lib/landscape'
 import { createUnsentScope, type UnsentScope, UnsentScopeContext } from './lib/leaveGuard'
 import { afterProjectSaved } from './lib/newProjectAccess'
 import { createPopRefusal } from './lib/popRefusal'
+import type { RevealRequest } from './lib/reveal'
 import {
   ARCHIVED_TASKS_PAGE,
   buildPath,
@@ -799,9 +800,15 @@ function App() {
   // issue re-triggers the spotlight even when the id is unchanged.
   const [focusPlan, setFocusPlan] = useState(null)
   const focusN = useRef(0)
-  // Team sync's Roadmap jump: reveal a task's bar read-only, { id, n } like
-  // focusPlan (the nonce comes from the same counter)
-  const [revealTask, setRevealTask] = useState(null)
+  // Show a task in the view: its bar on the Roadmap (Team sync's jump, a
+  // parent's Plan on roadmap), or its card on the Board behind its task
+  // window (Team sync, the Inbox, the task crumb, search). { id, n } like
+  // focusPlan; the nonce comes from the same counter.
+  const [revealTask, setRevealTask] = useState<RevealRequest | null>(null)
+  const reveal = (id: string) => {
+    focusN.current += 1
+    setRevealTask({ id, n: focusN.current })
+  }
   // current scope and layout for the popstate handler (registered once, deps [])
   const scopeRef = useRef(scope)
   scopeRef.current = scope
@@ -863,6 +870,8 @@ function App() {
   }
   // edits made on the sync page are not roadmap edits, whatever the view below
   const roadmapActive = view === 'roadmap' && !settingsPage && !inboxOpen && !projectsOpen && !sync
+  // the Board (or the phone's task list) is what the main pane shows
+  const boardActive = view === 'kanban' && !settingsPage && !inboxOpen && !projectsOpen && !sync
   useLayoutEffect(() => {
     P.roadmapContext(roadmapActive, !!openIssue)
   }, [roadmapActive, openIssue])
@@ -1109,14 +1118,17 @@ function App() {
       leaveInbox()
       setView(v)
     })
-  const navOpenIssue = (k) =>
+  // `revealing` also reveals the task's card behind its window
+  const openNav = (k, revealing: boolean) =>
     move(k ? { openIssue: k, inboxOpen: false, projectsOpen: false } : { openIssue: k }, () => {
       if (k) {
         setInboxOpen(false)
         setProjectsOpen(false)
       }
       setOpenIssue(k)
+      if (k && revealing) reveal(k)
     })
+  const navOpenIssue = (k) => openNav(k, false)
   // another task in the open window, or none (the Inbox pane, Team sync)
   const openTask = (id: string | null) => move({ openIssue: id }, () => setOpenIssue(id))
 
@@ -1208,16 +1220,19 @@ function App() {
         setInboxOpen(false)
         setSync(null)
         setOpenIssue(null)
-        focusN.current += 1
-        if (group) setRevealTask({ id, n: focusN.current })
-        else setFocusPlan({ id, n: focusN.current })
+        if (group) reveal(id)
+        else {
+          focusN.current += 1
+          setFocusPlan({ id, n: focusN.current })
+        }
       },
     )
   }
 
-  // Task breadcrumb clicks switch to the Board scoped to the clicked
-  // project/sub-project; the Inbox's Open task in board action also opens the task.
-  const showOnBoard = (projectId, issueKey?) => {
+  // Task breadcrumb clicks and the Inbox's Open task in board switch to the
+  // Board scoped to the project or sub-project, with the task's window open
+  // over the Board and its card revealed behind it.
+  const showOnBoard = (projectId: string, issueKey?: string) => {
     const p = P.project(projectId)
     if (!p) return
     const target = issueKey || null
@@ -1237,6 +1252,7 @@ function App() {
         setInboxOpen(false)
         setSync(null)
         setOpenIssue(target)
+        if (target) reveal(target)
       },
     )
   }
@@ -1299,8 +1315,9 @@ function App() {
      the task's own sub-project). Filters left from before the sync are
      cleared, Focus kept, since nothing on the sync could show why the task
      is missing. The Board opens the task window over it, as showOnBoard
-     does; the Roadmap reveals its bar read-only (scrolled into view and
-     ringed for a moment: no planning session, nothing written). */
+     does, and reveals its card behind it; the Roadmap reveals its bar
+     read-only. Either way the task is scrolled into view and ringed for a
+     moment: no planning session, nothing written. */
   const showTaskOn = (v: 'kanban' | 'roadmap', handle: string) => {
     const it = P.issueById[handle]
     if (!it) return
@@ -1312,10 +1329,7 @@ function App() {
       setScope(to)
       setView(v)
       setOpenIssue(task)
-      if (v === 'roadmap') {
-        focusN.current += 1
-        setRevealTask({ id: handle, n: focusN.current })
-      }
+      reveal(handle)
     })
   }
   /* A person header's Board or Roadmap jump: leave the page for that view
@@ -1540,7 +1554,11 @@ function App() {
 
   // the palette searches and nothing else, so it needs only the two ways to
   // open what it found
-  const paletteCtx = { setScope: navScope, openIssue: navOpenIssue }
+  // a task picked in search while the Board shows opens over its revealed card
+  const paletteCtx = {
+    setScope: navScope,
+    openIssue: (id: string) => openNav(id, boardActive),
+  }
 
   /* An address that now names a DIFFERENT organization than the last time this
      login followed it. See src/lib/addressBook.ts for why that is worth
@@ -1835,6 +1853,8 @@ function App() {
                             filters={filters}
                             setFilters={setFilters}
                             actions={actions}
+                            revealTask={revealTask}
+                            onRevealConsumed={() => setRevealTask(null)}
                           />
                         ) : (
                           <Kanban
@@ -1842,6 +1862,8 @@ function App() {
                             filters={effFilters}
                             tweaks={tweaks}
                             actions={actions}
+                            revealTask={revealTask}
+                            onRevealConsumed={() => setRevealTask(null)}
                           />
                         ))}
                       {/* The roadmap's toolbar row is its own — the window controls, the

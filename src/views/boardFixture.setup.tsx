@@ -48,11 +48,12 @@ export function taskRow(snapshot: Snapshot, id: string, status: Row['status'], n
 
 /** Boots a fresh store on the fixture with the tasks `prepare` adds, and
     returns it with the Board and a way to deliver a changed snapshot. The
-    Board is drawn in the `metaViz` layout, or as the phone's task list. */
+    Board is drawn in the `metaViz` layout, or as the phone's task list,
+    over the project `scope` (by default the fixture's one project). */
 export async function loadBoard(
   network: Network,
   prepare: (snapshot: Snapshot) => void,
-  { metaViz = 'swimlanes', phone = false } = {},
+  { metaViz = 'swimlanes', phone = false, scope: scopeId = '' } = {},
 ) {
   vi.resetModules()
   const snapshot = plannerFixture()
@@ -79,7 +80,7 @@ export async function loadBoard(
   const { Kanban } = await import('./Kanban')
   const { MobileTaskList } = await import('../components/MobileWorkspace')
   const { P } = store
-  const scope = snapshot.projects[0].id
+  const scope = scopeId || snapshot.projects[0].id
   const filters = {
     mine: false,
     assignees: [],
@@ -89,14 +90,18 @@ export async function loadBoard(
     search: '',
   }
   let setSearch: (text: string) => void = () => {}
+  let setReveal: (request: { id: string; n: number } | null) => void = () => {}
+  let reveals = 0
   /** The Board as App renders it, again on every store change. `window`
       renders beside it in the same root, with the task the Board opened. */
   function Screen({ window }: { window?: Window }) {
     usePlannerVersion()
     const [opened, setOpened] = useState<string | null>(null)
     const [search, typeSearch] = useState('')
+    const [revealTask, revealIt] = useState<{ id: string; n: number } | null>(null)
     useLayoutEffect(() => {
       setSearch = typeSearch
+      setReveal = revealIt
     }, [])
     const info = P.scopeInfo(scope)
     if (!info) throw new Error('missing the scope')
@@ -109,6 +114,8 @@ export async function loadBoard(
             filters={{ ...filters, search }}
             setFilters={() => {}}
             actions={actions}
+            revealTask={revealTask}
+            onRevealConsumed={() => revealIt(null)}
           />
         ) : (
           <Kanban
@@ -116,6 +123,8 @@ export async function loadBoard(
             filters={{ ...filters, search }}
             tweaks={{ metaViz }}
             actions={actions}
+            revealTask={revealTask}
+            onRevealConsumed={() => revealIt(null)}
           />
         )}
         {window?.(opened, () => setOpened(null), setOpened)}
@@ -131,6 +140,8 @@ export async function loadBoard(
       document.querySelector<HTMLElement>(
         `[data-card="${P.issues.find((it) => it.uuid === uuid)?.id}"]`,
       ),
+    /** Asks the Board to reveal the task `id`, as App does for a jump. */
+    reveal: (id: string) => act(async () => setReveal({ id, n: ++reveals })),
     /** Types `text` into the Board's search filter. */
     search: (text: string) => act(async () => setSearch(text)),
     /** Delivers `snapshot` as it is now, as the server would after a change. */

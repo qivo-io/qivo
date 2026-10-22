@@ -221,7 +221,8 @@ On desktop, selecting a row opens the task's discussion pane. Click
 **Description** to expand its collapsed description. The pane shows the
 current assignee or reviewer, Activity and comment box. Use the pop-out button
 for editable details, attachments and links, or **Open task in board** to
-visit its Board. The project breadcrumb also links to the Board.
+open the full task window over its Board, which scrolls to the task's card
+and rings it for a moment. The project breadcrumb does the same.
 
 The address follows the selected task, such as `/app/<org>/inbox/tasks/qn-14`,
 so saved links and reloads reopen it. **Esc** closes a pop-out first, then the

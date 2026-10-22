@@ -254,6 +254,10 @@
   .mobile-task-row:hover {
     background: var(--hover);
   }
+  /* the row a jump to the task list revealed, ringed for a moment */
+  .mobile-task-row[data-board-revealed] {
+    box-shadow: inset 0 0 0 2px var(--primary);
+  }
   .mobile-task-row:focus-visible:where(html:not([data-focus-modality="pointer"]) *) {
     outline: 2px solid var(--primary);
     outline-offset: -3px;

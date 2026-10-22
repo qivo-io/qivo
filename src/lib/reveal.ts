@@ -1,0 +1,145 @@
+import { type RefObject, useEffect, useRef } from 'react'
+import { useLatest } from './useLatest'
+
+/** How long a revealed task keeps its ring, on the Roadmap and the Board. */
+export const REVEAL_MS = 2400
+
+/** A request to show one task: `n` is a nonce, so asking again for the
+    same task reveals it again. */
+export type RevealRequest = { id: string; n: number }
+
+const ROWS = '[data-card], [data-parent-heading]'
+
+/** The element that shows task `id` in `pane` and takes the ring: a card
+    of its own, or the row of a task that shares its card with a parent
+    heading or siblings. A parent task rings the first card under its
+    heading. Values are compared, not put in a selector, so any id works. */
+export function revealTarget(pane: ParentNode, id: string): HTMLElement | null {
+  const row = [...pane.querySelectorAll<HTMLElement>(ROWS)].find(
+    (element) => (element.dataset.card ?? element.dataset.parentHeading) === id,
+  )
+  if (!row) return null
+  const card = row.closest<HTMLElement>('.board-card')
+  if (!card) return row
+  const parent = row.dataset.card === undefined
+  return parent || card.querySelectorAll(ROWS).length === 1 ? card : row
+}
+
+/** Where `pane` scrolls to put `target` in its middle, and to bring it
+    into view across when it is not. A target taller than half the pane
+    keeps its top a quarter down the pane, so its start shows. */
+function placeOf(pane: HTMLElement, target: HTMLElement) {
+  const view = pane.getBoundingClientRect()
+  const box = target.getBoundingClientRect()
+  const middle =
+    box.height > pane.clientHeight / 2
+      ? box.top - view.top - pane.clientHeight / 4
+      : box.top + box.height / 2 - view.top - pane.clientHeight / 2
+  const across =
+    box.left < view.left || box.right > view.left + pane.clientWidth
+      ? box.left + box.width / 2 - view.left - pane.clientWidth / 2
+      : 0
+  const clamp = (value: number, most: number) => Math.max(0, Math.min(most, value))
+  return {
+    top: clamp(pane.scrollTop + middle, pane.scrollHeight - pane.clientHeight),
+    left: clamp(pane.scrollLeft + across, pane.scrollWidth - pane.clientWidth),
+  }
+}
+
+const reducedMotion = () =>
+  typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+
+/** Shows the task a request names in the list `pane` holds, and rings it
+    for REVEAL_MS with `data-board-revealed`. `mount` mounts the task's card
+    first when its list still waits for it; it may commit a render. Two
+    frames later the pane scrolls the card to its middle, smoothly unless
+    reduced motion is on or the card is more than two screens away, and
+    corrects once where cards that rendered meanwhile moved it. Scrolling
+    yields to the person: a wheel, touch, press or key stops the
+    correction. `onConsumed` runs as soon as the request is taken. Nothing
+    happens when the pane does not show the task. */
+export function useReveal(
+  request: RevealRequest | null | undefined,
+  onConsumed: (() => void) | undefined,
+  pane: RefObject<HTMLElement | null>,
+  mount: (id: string) => void,
+) {
+  const consumed = useLatest(() => onConsumed?.())
+  const mountTask = useLatest(mount)
+  // the running reveal's cancel; consuming the request must not stop it
+  const cancel = useRef(() => {})
+  useEffect(() => () => cancel.current(), [])
+  useEffect(() => {
+    if (!request) return
+    cancel.current()
+    consumed()
+    const frames: number[] = []
+    let timer = 0
+    let ringed: HTMLElement | null = null
+    let stopCorrection = () => {}
+    cancel.current = () => {
+      for (const frame of frames) cancelAnimationFrame(frame)
+      window.clearTimeout(timer)
+      stopCorrection()
+      ringed?.removeAttribute('data-board-revealed')
+    }
+    frames.push(
+      requestAnimationFrame(() => {
+        // a render now, outside React's commit
+        mountTask(request.id)
+        frames.push(
+          requestAnimationFrame(() => {
+            const scroller = pane.current
+            const target = scroller && revealTarget(scroller, request.id)
+            if (!scroller || !target) return
+            const place = placeOf(scroller, target)
+            const far = Math.abs(place.top - scroller.scrollTop) > scroller.clientHeight * 2
+            const behavior = reducedMotion() || far ? 'instant' : 'smooth'
+            scroller.scrollTo({ ...place, behavior })
+            ringed = target
+            target.setAttribute('data-board-revealed', '')
+            timer = window.setTimeout(() => {
+              target.removeAttribute('data-board-revealed')
+              ringed = null
+            }, REVEAL_MS)
+            stopCorrection = correctOnce(scroller, target, behavior === 'smooth')
+          }),
+        )
+      }),
+    )
+    // a request is new when its nonce is
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request?.n])
+}
+
+/** Puts `target` back in the middle of `pane` once the scroll ends, when
+    cards that rendered during it moved it, unless the person scrolls or
+    acts first. A smooth scroll ends on scrollend, or after a second at
+    most; an instant one after two frames. Returns the cancel. */
+function correctOnce(pane: HTMLElement, target: HTMLElement, smooth: boolean) {
+  let frame = 0
+  let timer = 0
+  const inputs = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const
+  const stop = () => {
+    cancelAnimationFrame(frame)
+    window.clearTimeout(timer)
+    pane.removeEventListener('scrollend', correct)
+    for (const name of inputs) window.removeEventListener(name, stop, true)
+  }
+  function correct() {
+    stop()
+    if (!target.isConnected) return
+    const place = placeOf(pane, target)
+    if (Math.abs(place.top - pane.scrollTop) > 1 || Math.abs(place.left - pane.scrollLeft) > 1)
+      pane.scrollTo({ ...place, behavior: 'instant' })
+  }
+  for (const name of inputs) window.addEventListener(name, stop, { capture: true, passive: true })
+  if (smooth) {
+    pane.addEventListener('scrollend', correct)
+    timer = window.setTimeout(correct, 1000)
+  } else
+    frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(correct)
+    })
+  return stop
+}

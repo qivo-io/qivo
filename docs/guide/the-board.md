@@ -79,6 +79,17 @@ Paused tasks show an amber mark. Delay banners identify slipping or delayed
 tasks. When the last active subtask leaves a parent, it returns to a normal
 card in its saved status column.
 
+## Showing a task on the Board
+
+Some links open a task's window over the Board and show its card behind
+it: **Board** on a Team sync row, **Open task in board** in the Inbox, the
+breadcrumb in a task window and a search result picked while the Board is
+open. The Board scrolls the card to the middle of the screen and rings it
+for a moment. A task with siblings under a parent heading rings its own
+row, and a parent task rings the first card under its heading. On phones
+the task list does the same with the task's row. Nothing is shown when a
+filter or the scope hides the task.
+
 ## Stale tasks fade
 
 Unfinished tasks untouched for more than 120 days fade until you hover over

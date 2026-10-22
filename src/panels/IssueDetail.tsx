@@ -2235,7 +2235,7 @@ function IssueDetail({
                         )
                           return
                         e.preventDefault()
-                        onShowOnBoard(p.id)
+                        onShowOnBoard(p.id, it.id)
                       }}
                       className="max-w-60 overflow-hidden text-ellipsis whitespace-nowrap rounded-sm px-1 py-0.5 text-sm text-text-3 no-underline hover:bg-hover hover:text-text-1 focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
                     >
