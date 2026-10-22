@@ -624,10 +624,6 @@ export type Memo = {
   teamsOf: Map<string, Promise<Set<string>>>
   /** a person's live grant and team shares on a live parent, keyed `parent:profile` */
   parentAccess: Map<string, Promise<LevelGrants>>
-  /** a person's live grants, by profile (liveGrantsOf) */
-  grantsOf: Map<string, Promise<Doc<'project_access'>[]>>
-  /** a team's live shares, by team (liveSharesOf) */
-  sharesOf: Map<string, Promise<Doc<'project_team_access'>[]>>
   /** whether the organization is read-only, by organization (orgReadOnly) */
   readOnly: Map<string, Promise<boolean>>
   /** the item holding a stored project, by project */
@@ -652,8 +648,6 @@ export const newMemo = (): Memo => ({
   live: new Map(),
   teamsOf: new Map(),
   parentAccess: new Map(),
-  grantsOf: new Map(),
-  sharesOf: new Map(),
   readOnly: new Map(),
   heldBy: new Map(),
   hierarchy: new Map(),
@@ -1330,9 +1324,9 @@ async function purgeLeft(run: Run): Promise<boolean> {
 const REVEAL_RANGES_PER_TASK = 20
 
 /* The index ranges a reveal reads per project of a project item: the
- * conflict check's key and uuid reads, its lead and legacy team, and the
- * stored row it deletes. */
-const REVEAL_RANGES_PER_PROJECT = 5
+ * conflict check's key and uuid reads, its lead and legacy team, its live
+ * grants and team shares (itemRows), and the stored row it deletes. */
+const REVEAL_RANGES_PER_PROJECT = 7
 
 /** Why an item cannot be restored now (design 5.3). The item's state while
  * it is not ready; read_only while billing or a pending deletion makes the
@@ -1467,10 +1461,9 @@ async function cleanShare(
   return sameReference(await teamOf(s, g.team_id), s.item) ? g : null
 }
 
-/** A project item's projects as its reveal writes them back, with the
- * grants and shares it stores as they are, and a sub-project item's live
- * parent: what levels inside the item are computed over while it is in
- * Deleted items. */
+/** A project item's projects as its reveal writes them back, with their
+ * grants and shares, and a sub-project item's live parent: what levels
+ * inside the item are computed over while it is in Deleted items. */
 type Hierarchy = {
   root: Stored<'projects'> | undefined
   projects: Stored<'projects'>[]
@@ -1484,10 +1477,26 @@ function hierarchyOf(s: Scope): Promise<Hierarchy> {
     const projects: Stored<'projects'>[] = []
     for (const row of await storedOf(s, 'projects'))
       projects.push(await cleanProject(s, docOf(row, 'projects')))
-    const grants = (await storedOf(s, 'project_access')).map((row) => docOf(row, 'project_access'))
-    const shares = (await storedOf(s, 'project_team_access')).map((row) =>
-      docOf(row, 'project_team_access'),
-    )
+    const grants: Stored<'project_access'>[] = []
+    const grantsOn = (id: string) =>
+      s.ctx.db
+        .query('project_access')
+        .withIndex('by_project', (q) => q.eq('project_id', id))
+        .collect()
+    for (const g of await itemRows(s, 'project_access', grantsOn)) {
+      const grant = await cleanGrant(s, g)
+      if (grant !== null) grants.push(grant)
+    }
+    const shares: Stored<'project_team_access'>[] = []
+    const sharesOn = (id: string) =>
+      s.ctx.db
+        .query('project_team_access')
+        .withIndex('by_project', (q) => q.eq('project_id', id))
+        .collect()
+    for (const g of await itemRows(s, 'project_team_access', sharesOn)) {
+      const share = await cleanShare(s, g)
+      if (share !== null) shares.push(share)
+    }
     const { parent_project_id } = s.item
     return {
       root: projects.find((p) => p.id === s.item.target_id),
@@ -1500,36 +1509,34 @@ function hierarchyOf(s: Scope): Promise<Hierarchy> {
   })
 }
 
+/** The grants or team shares of a project item's projects. A ready item
+ * stores them all. While it moves, the steps take them from the live
+ * tables, and while it restores, restoreRows writes them back before the
+ * reveal, so an item in flight also reads each of its projects' live rows.
+ * Live rows can name its projects only then, because the projects are
+ * absent and no writer adds a grant to an absent project. */
+async function itemRows<T extends 'project_access' | 'project_team_access'>(
+  s: Scope,
+  table: T,
+  liveOn: (projectId: string) => Promise<Stored<T>[]>,
+): Promise<Stored<T>[]> {
+  const rows = (await storedOf(s, table)).map((row) => docOf(row, table))
+  if (s.item.state === 'ready') return rows
+  for (const id of itemProjectIds(s.item)) rows.push(...(await liveOn(id)))
+  return rows
+}
+
 /** `profile`'s levels on a project item's projects while they are in
  * Deleted items (design 6.1): lib/access.ts levelsFrom over the projects as
- * the reveal writes them back, the profile's grants and the shares of the
- * teams it belongs to now, each as the reveal would keep it, and the live
- * grants and shares on a sub-project item's parent. A project item's grants
- * and shares are stored, or still live while its move takes them, or live
- * again once its restore wrote them back before the reveal (restoreRows),
- * so both places are read. Live rows on the item's projects can only be
- * those, because its projects are absent. */
+ * the reveal writes them back, the profile's grants, the shares of the teams
+ * it belongs to now, and the live grants and shares on a sub-project item's
+ * parent. */
 function storedLevels(s: Scope, profile: Doc<'profiles'>): Promise<OrgProjectLevels> {
   return memoRead(s.memo.levels, `${s.item.id}:${profile.id}`, async () => {
     const h = await hierarchyOf(s)
     const teams = await teamsOf(s, profile)
-    const ids = new Set(itemProjectIds(s.item))
-    const grants: LevelGrants['grants'] = []
-    for (const g of [
-      ...h.grants.filter((g) => g.profile_id === profile.id),
-      ...(await liveGrantsOf(s, profile.id)).filter((g) => ids.has(g.project_id)),
-    ]) {
-      const grant = await cleanGrant(s, g)
-      if (grant !== null) grants.push(grant)
-    }
-    const shares: LevelGrants['shares'] = []
-    const live: Stored<'project_team_access'>[] = []
-    for (const teamId of teams)
-      for (const g of await liveSharesOf(s, teamId)) if (ids.has(g.project_id)) live.push(g)
-    for (const g of [...h.shares.filter((g) => teams.has(g.team_id)), ...live]) {
-      const share = await cleanShare(s, g)
-      if (share !== null) shares.push(share)
-    }
+    const grants: LevelGrants['grants'] = h.grants.filter((g) => g.profile_id === profile.id)
+    const shares: LevelGrants['shares'] = h.shares.filter((g) => teams.has(g.team_id))
     if (h.parent === null) return levelsFrom(profile, h.projects, grants, shares)
     const parent = await parentAccess(s, h.parent, profile)
     return levelsFrom(
@@ -1558,24 +1565,6 @@ const teamsOf = (s: Scope, profile: Doc<'profiles'>) =>
       if ((await teamOf(s, m.team_id))?.org_id === profile.org_id) teams.add(m.team_id)
     return teams
   })
-
-/** Every live grant of profile `profileId`. */
-const liveGrantsOf = (s: Scope, profileId: string) =>
-  memoRead(s.memo.grantsOf, profileId, () =>
-    s.ctx.db
-      .query('project_access')
-      .withIndex('by_profile', (q) => q.eq('profile_id', profileId))
-      .collect(),
-  )
-
-/** Every live share of team `teamId`. */
-const liveSharesOf = (s: Scope, teamId: string) =>
-  memoRead(s.memo.sharesOf, teamId, () =>
-    s.ctx.db
-      .query('project_team_access')
-      .withIndex('by_team', (q) => q.eq('team_id', teamId))
-      .collect(),
-  )
 
 /** `profile`'s own grant and its teams' shares on live project `parent`. */
 const parentAccess = (s: Scope, parent: Doc<'projects'>, profile: Doc<'profiles'>) =>

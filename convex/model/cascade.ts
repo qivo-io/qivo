@@ -204,7 +204,7 @@ const removalStepRef = makeFunctionReference<'mutation', { profile_id: string },
   'profileRemovals:step',
 )
 
-/** The most access rows (ACCESS_RANGES) removeProfile deletes itself; the
+/** The most access rows (deleteAccessRows) removeProfile deletes itself; the
  * profile removal access phase deletes the rest. A mutable object, so tests
  * can lower it. */
 export const ACCESS_FIRST_PASS = { rows: 512 }
@@ -212,37 +212,101 @@ export const ACCESS_FIRST_PASS = { rows: 512 }
 type AccessTable = 'agent_keys' | 'mcp_tokens' | 'team_members' | 'project_access' | 'user_prefs'
 
 /* The rows that give a profile access or hold its own settings, each read
- * through its by_profile index, in the order a removal deletes them. Rows
- * left after the profile row is gone grant nothing, because every reader
- * asks with a live profile or drops ids without one:
+ * through its by_profile index from creation time `from` on, in the order a
+ * removal deletes them. Rows left after the profile row is gone grant
+ * nothing, because every reader asks with a live profile or drops ids
+ * without one:
  * - agent_keys, mcp_tokens: machine/auth.ts lookupCredential refuses a
  *   credential whose profile is gone, and the lists read through live
  *   seats (tokens.ts, apiAccess.ts).
  * - team_members, project_access: lib/access.ts asks by a resolved
  *   profile, and the snapshot sends only rows whose profile it sends.
  * - user_prefs: only the person's own seats read them (prefs.ts).
- * Each read takes what the budget has left at once. A read starts at the
- * beginning of its range again, and the rows this transaction deleted
- * there still cost the database to pass over, so a few rows at a time
- * would pass over the same deleted rows again and again. */
-export const ACCESS_RANGES: ((
-  ctx: QueryCtx,
-  profileId: string,
-) => {
-  take(n: number): Promise<Doc<AccessTable>[]>
-  first(): Promise<Doc<AccessTable> | null>
-})[] = [
-  (ctx, profileId) =>
-    ctx.db.query('agent_keys').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
-  (ctx, profileId) =>
-    ctx.db.query('mcp_tokens').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
-  (ctx, profileId) =>
-    ctx.db.query('team_members').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
-  (ctx, profileId) =>
-    ctx.db.query('project_access').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
-  (ctx, profileId) =>
-    ctx.db.query('user_prefs').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
+ * Names stored before NAME_MAX and preferences have no small size cap, so
+ * those are read LARGE_ROWS_PER_READ at a time. */
+const ACCESS_RANGES: {
+  range: (
+    ctx: QueryCtx,
+    profileId: string,
+    from: number,
+  ) => {
+    take(n: number): Promise<Doc<AccessTable>[]>
+    first(): Promise<Doc<AccessTable> | null>
+  }
+  perRead: number
+}[] = [
+  {
+    range: (ctx, profileId, from) =>
+      ctx.db
+        .query('agent_keys')
+        .withIndex('by_profile', (q) => q.eq('profile_id', profileId).gte('_creationTime', from)),
+    perRead: LARGE_ROWS_PER_READ,
+  },
+  {
+    range: (ctx, profileId, from) =>
+      ctx.db
+        .query('mcp_tokens')
+        .withIndex('by_profile', (q) => q.eq('profile_id', profileId).gte('_creationTime', from)),
+    perRead: LARGE_ROWS_PER_READ,
+  },
+  {
+    range: (ctx, profileId, from) =>
+      ctx.db
+        .query('team_members')
+        .withIndex('by_profile', (q) => q.eq('profile_id', profileId).gte('_creationTime', from)),
+    perRead: Number.POSITIVE_INFINITY,
+  },
+  {
+    range: (ctx, profileId, from) =>
+      ctx.db
+        .query('project_access')
+        .withIndex('by_profile', (q) => q.eq('profile_id', profileId).gte('_creationTime', from)),
+    perRead: Number.POSITIVE_INFINITY,
+  },
+  {
+    range: (ctx, profileId, from) =>
+      ctx.db
+        .query('user_prefs')
+        .withIndex('by_profile', (q) => q.eq('profile_id', profileId).gte('_creationTime', from)),
+    perRead: LARGE_ROWS_PER_READ,
+  },
 ]
+
+/** Deletes the access rows of `profileId` (ACCESS_RANGES) until none is
+ * left (true) or `budget` is spent (false). Each read goes on from the
+ * creation time of the last row it deleted, because a read from the start
+ * of the range passes over every row this transaction deleted there again,
+ * and thousands of small reads of a long range then pass the time Convex
+ * allows. A row deleted here no longer shows to a later read, so a read
+ * from that same creation time skips nothing and repeats nothing. */
+export async function deleteAccessRows(
+  ctx: MutationCtx,
+  profileId: string,
+  budget: RemovalBudget,
+): Promise<boolean> {
+  for (const { range, perRead } of ACCESS_RANGES) {
+    let from = 0
+    const cleared = await sweep(
+      budget,
+      async (n) => {
+        const rows = await range(ctx, profileId, from).take(n)
+        from = rows.at(-1)?._creationTime ?? from
+        return rows
+      },
+      (row) => ctx.db.delete(row._id),
+      perRead,
+    )
+    if (!cleared) return false
+  }
+  return true
+}
+
+/** Whether any access row of `profileId` is left (ACCESS_RANGES). */
+export async function accessRowsRemain(ctx: QueryCtx, profileId: string): Promise<boolean> {
+  for (const { range } of ACCESS_RANGES)
+    if ((await range(ctx, profileId, 0).first()) !== null) return true
+  return false
+}
 
 /** The activity rows this transaction clears; the profile removal activity
  * phase clears the rest. */
@@ -309,18 +373,12 @@ export async function removeProfile(
   if (led.length > LIMITS.removalLeads.max) throw rule(LIMITS.removalLeads.refusal)
   for (const p of led) await ctx.db.patch(p._id, { lead_id: undefined })
   // DELETE, credentials first, within ACCESS_FIRST_PASS.rows rows. Every
-  // reader of the rest ends with the profile row deleted below (ACCESS_RANGES),
-  // and the profile removal access phase deletes them.
-  const access: RemovalBudget = { rows: ACCESS_FIRST_PASS.rows, bytes: REMOVAL_BUDGET.bytes }
-  for (const range of ACCESS_RANGES) {
-    const cleared = await sweep(
-      access,
-      (n) => range(ctx, profile.id).take(n),
-      (row) => ctx.db.delete(row._id),
-      Number.POSITIVE_INFINITY,
-    )
-    if (!cleared) break
-  }
+  // reader of the rest ends with the profile row deleted below
+  // (ACCESS_RANGES), and the profile removal access phase deletes them.
+  await deleteAccessRows(ctx, profile.id, {
+    rows: ACCESS_FIRST_PASS.rows,
+    bytes: REMOVAL_BUDGET.bytes,
+  })
   // SET NULL + touch on open tasks within one budget, in TASK_HOLDERS order.
   // Each clear reads and writes the whole task, and a task the profile
   // created and reports is cleared once per field, so an unbounded pass

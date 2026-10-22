@@ -3218,6 +3218,42 @@ describe('a project item at the sub-project cap', () => {
     expect(await treeRows(t, f.meta.id, 'project_access')).toEqual(grants)
   }, 240_000)
 
+  it('restores many sub-project items for a lead whose other grants it does not read', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // grants of the lead's elsewhere, which say nothing about these items
+    for (let from = 0; from < 4000; from += 1000)
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 1000; i++)
+          await ctx.db.insert('project_access', {
+            project_id: uuid(),
+            profile_id: f.user.id,
+            level: 'user',
+          })
+      })
+    const subs: string[] = []
+    for (let i = 0; i < 10; i++) {
+      const sub = await plantProject(t, {
+        org_id: f.org.id,
+        type: 'project',
+        parent_id: f.meta.id,
+        key: `RST${i}`,
+      })
+      await deleteProject(t, f, sub.id)
+      subs.push(sub.id)
+    }
+    await runSteps(t)
+    const items = await Promise.all(subs.map((id) => itemFor(t, id)))
+    const ids = items.map((item) => item.id)
+    const result = await as(t, f.user).mutation(api.deletedItems.restore, {
+      org_id: f.org.id,
+      ids,
+    })
+    expect(result.restored.sort()).toEqual([...ids].sort())
+    await runSteps(t)
+    for (const id of subs) expect(await liveProject(t, id)).not.toBeNull()
+  }, 120_000)
+
   it('restores many project items without tasks, each reveal within the limits', async () => {
     const t = newT({ transactionLimits: { documentsWritten: 1000 } })
     const f = await withOrg(t)

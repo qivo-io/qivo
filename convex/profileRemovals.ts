@@ -32,9 +32,10 @@ import { internalMutation, type MutationCtx } from './_generated/server'
 import { byId, LARGE_ROWS_PER_READ } from './lib/db'
 import { REMOVAL_PHASES, type RemovalPhase } from './lib/enums'
 import {
-  ACCESS_RANGES,
+  accessRowsRemain,
   budgetSpent,
   clearHolder,
+  deleteAccessRows,
   heldTasks,
   pendingRemoval,
   REMOVAL_BUDGET,
@@ -135,9 +136,12 @@ const oauthEdge: Edge = {
 const PHASE_EDGES: Record<Exclude<RemovalPhase, 'finish'>, Edge[]> = {
   // the keys, tokens, memberships, grants and preferences the removal
   // transaction left
-  access: ACCESS_RANGES.map((range) =>
-    edge({ range, clear: (ctx, row) => ctx.db.delete(row._id) }),
-  ),
+  access: [
+    {
+      sweep: (ctx, profileId, budget) => deleteAccessRows(ctx, profileId, budget),
+      remains: accessRowsRemain,
+    },
+  ],
   // open tasks the removal transaction left, archived tasks, and any task
   // restored before this step reached it
   tasks: TASK_HOLDERS.map((holder) =>
