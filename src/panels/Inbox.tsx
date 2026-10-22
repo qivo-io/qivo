@@ -64,6 +64,7 @@ function SnoozeRow({
   onCount: (n: number) => void
   onSnooze: (until: string) => void
 }) {
+  // oxlint-disable-next-line react/purity -- the picker shows when a snooze from now would end
   const until = new Date(Date.now() + count * SNOOZE_UNIT_MS[unit])
   const max = snoozeStepMax(unit)
   const stepClass =

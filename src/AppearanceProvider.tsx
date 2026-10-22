@@ -73,6 +73,7 @@ function usePrivateImage(imageId: string | null, previewVersion: number | null) 
     }
   }, [imageId, previewVersion])
   return {
+    // oxlint-disable-next-line react/purity -- a lease past its expiry stops counting at the next render
     lease: lease?.image_id === imageId && lease.expires_at > Date.now() ? lease : null,
     failed,
   }

@@ -62,7 +62,8 @@ export function BillingNotice({
     )
   if (!status?.enabled) return null
   const daysLeft = status.complimentary_until
-    ? (new Date(status.complimentary_until).getTime() - Date.now()) / 86_400_000
+    ? // oxlint-disable-next-line react/purity -- the days of complimentary access left today
+      (new Date(status.complimentary_until).getTime() - Date.now()) / 86_400_000
     : null
   const freeEnding = daysLeft !== null && daysLeft > 0 && daysLeft <= 14
   const freeExpired = daysLeft !== null && daysLeft <= 0 && status.status === 'pending'

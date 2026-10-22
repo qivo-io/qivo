@@ -618,6 +618,7 @@ export function MetricsChart({
 
 function Storage({ report }: { report: DemoMetricsReport }) {
   const storage = report.storage
+  // oxlint-disable-next-line react/purity -- an old storage sample shows as stale at the next render
   const stale = storage && Date.now() - storage.sampledAt > DEMO_STORAGE_STALE_MS
   const rows = demoStorageSeries(report).map((row) => ({
     key: row.date,
