@@ -185,7 +185,7 @@ type Item = Doc<'deleted_items'>
 type Job = Doc<'deleted_item_jobs'>
 type Tally = NonNullable<Job['tally']>
 /** Where a job is: what a step reads first and saves last. */
-type JobState = Pick<Job, 'phase' | 'cursor' | 'tally' | 'alone' | 'purge_history'>
+type JobState = Pick<Job, 'phase' | 'cursor' | 'tally' | 'alone' | 'purge_history' | 'granted'>
 export type Via = NonNullable<Item['via']>
 
 /** A live document of one of the stored tables, tagged with its table. */
@@ -1454,16 +1454,19 @@ const granteeOf = (row: Doc<'deleted_rows'>['row']): string | undefined =>
 const GRANTEE_SINCE = '2026-10-23T00:00:00.000Z'
 
 /** The most stored rows without a grantee one read takes for an item and
- * table (storedFor). A mutable object, so tests can lower it. */
-export const LEGACY_READ = { max: 2000 }
+ * table (storedFor). A restore call reads them for its view and its check
+ * of each of up to 25 items, so a hundred keep that under 11,000 documents.
+ * A mutable object, so tests can lower it. */
+export const LEGACY_READ = { max: 100 }
 
 /** The item's stored rows of `table` that name `grantee`: a profile's
  * grants or a team's shares. A row stored before deleted_rows.grantee
  * existed has none, so for an item deleted before GRANTEE_SINCE the rows
  * without one are read too, once per item and table, and kept when their
  * document names `grantee`. Past LEGACY_READ.max such rows none of them
- * count, so the item shows to fewer people, never to more; a restore sets
- * their grantee before it checks anyone's level (restoreRows), and
+ * count, so the item shows to fewer people, never to more. A restore sets
+ * their grantee before it checks the people its tasks keep (restoreRows,
+ * keepsHolder), but checks the restorer before that, and
  * internal/storedGrantees backfill sets it on every item. */
 async function storedFor(s: Scope, table: GrantTable, grantee: string) {
   const named = await s.ctx.db
@@ -2359,6 +2362,8 @@ async function reveal(run: Run): Promise<JobState | null> {
     if (late !== null) return { ...run.state, phase: 'restore_rows', cursor: undefined }
   }
   if (run.item.kind === 'project') {
+    // a job the release before saved here has not written the grants back
+    if (!run.state.granted) return { ...run.state, phase: 'restore_access', cursor: undefined }
     // a subtask another restore's split moved here (splitOff)
     const late = await run.ctx.db
       .query('deleted_tasks')
@@ -2452,13 +2457,16 @@ async function restoreAccess(run: Run): Promise<boolean> {
       if (spent(run.budget)) return stop()
     }
   }
+  run.state.granted = true
   return true
 }
 
 /* After the reveal, deletes a project item's stored grants and team
  * grants within the step's budget, before the attach. It writes none back:
- * restore_access wrote every one before the reveal, and a grant an admin
- * removed since must stay removed. */
+ * restore_access wrote every one before the reveal (granted), and a grant
+ * an admin removed since must stay removed. A job the release before left
+ * past its reveal wrote its grants back here, so without `granted` this
+ * writes back each one still missing on a live project first. */
 async function restoreGrants(run: Run): Promise<boolean> {
   for (const table of GRANT_TABLES) {
     const done = await drain(
@@ -2466,7 +2474,11 @@ async function restoreGrants(run: Run): Promise<boolean> {
       run.ctx.db
         .query('deleted_rows')
         .withIndex('by_item_table_owner', (q) => q.eq('item_id', run.item.id).eq('table', table)),
-      (row) => run.ctx.db.delete(row._id),
+      async (row) => {
+        if (!run.state.granted && (await byId(run.ctx, 'projects', row.owner_id)) !== null)
+          await writeGrantBack(run, row)
+        await run.ctx.db.delete(row._id)
+      },
     )
     if (!done) return false
   }
@@ -3314,6 +3326,7 @@ async function work(
       tally: state.tally,
       alone: state.alone,
       purge_history: state.purge_history,
+      granted: state.granted,
     },
     budget,
     actor: await actorOf(ctx, item, state.phase, txn),
@@ -3391,6 +3404,7 @@ async function saveJob(
     tally: state.tally,
     alone: state.alone,
     purge_history: state.purge_history,
+    granted: state.granted,
     progress_at: new Date().toISOString(),
     scheduled_id,
     attempts: 0,
@@ -3436,9 +3450,9 @@ export async function runStep(ctx: MutationCtx, itemId: string): Promise<void> {
  * reveal its projects are live, so neither applies. An attach that fails
  * that often goes on as restore_detach, which leaves the tasks still
  * waiting without their parent and deletes the item. restore_detach only
- * deletes the item's own small rows, and restore_grants deletes small
- * stored grant rows, writing back any still missing, so each is retried
- * until it finishes.
+ * deletes the item's own small rows, and restore_grants deletes the small
+ * stored grant rows (writing back the missing ones only for a job the
+ * release before left), so each is retried until it finishes.
  * A job of an organization whose deletion has begun stays as it is: its
  * steps stand down (runStep), and the deletion deletes the job with its
  * item (model/orgDeletion.ts). */
@@ -3494,6 +3508,7 @@ export async function recoverJobs(ctx: MutationCtx): Promise<void> {
       await ctx.db.patch(job._id, {
         phase: 'move_drain',
         cursor: undefined,
+        granted: undefined,
         progress_at: new Date(now).toISOString(),
         scheduled_id: await ctx.scheduler.runAfter(0, stepRef, { item_id: job.item_id }),
         attempts: 0,

@@ -999,7 +999,8 @@ export default defineSchema({
     item_id: v.string(),
     phase: vTrashPhase,
     // Where a phase that reads a range it does not empty goes on: an index
-    // into the item's projects (or 0) and the _creationTime last done there.
+    // into the item's projects (or 0), or for restore_access into each grant
+    // table of each of them, and the _creationTime last done there.
     cursor: v.optional(v.object({ index: v.number(), after: v.number() })),
     // The tasks the item stores, as its steps count them: a move adds each
     // task it stores, and a restore subtracts each one it writes back. The
@@ -1027,6 +1028,10 @@ export default defineSchema({
     // Only the release before set it; a move now stores such a task cut
     // to the caps.
     purge_history: v.optional(v.array(v.string())),
+    // a restore whose restore_access wrote the item's grants and shares back
+    // before its reveal, so restore_grants only deletes the stored rows; a
+    // job the release before left has none and writes back what is missing
+    granted: v.optional(v.literal(true)),
   })
     .index('by_item', ['item_id'])
     .index('by_progress', ['progress_at']),

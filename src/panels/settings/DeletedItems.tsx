@@ -599,14 +599,18 @@ export function DeletedItemsPage() {
         toast(`Restored ${name}`)
         return
       }
-      if (row.kind === 'task') {
-        toast(`Restored ${row.key}${row.archived ? ' to Archived tasks' : ''}`)
-        return
-      }
-      // a project too large for one call goes on in steps, and its row says so
+      // an item too large for one call goes on in steps, and its row says so
       const stepping = (source.latest.current?.items ?? []).some(
         (r) => r.id === row.id && r.state === 'restoring',
       )
+      if (row.kind === 'task') {
+        toast(
+          stepping
+            ? `Restoring ${row.key}…`
+            : `Restored ${row.key}${row.archived ? ' to Archived tasks' : ''}`,
+        )
+        return
+      }
       toast(
         stepping
           ? `Restoring “${row.title}”…`

@@ -1764,13 +1764,13 @@ and the caller reads and clears what arrives through [the inbox
 routes](#inbox).
 
 All of it happens server-side, so it needs nothing from the caller. Most of
-it happens inside the same transaction as the write. Mention and follower
-messages arrive moments later instead on a task with more than 128
-followers, past the first 128, and when many of the people a write mentions
-or notifies have snoozed a long thread about the task, because each message
-wakes theirs. Every follower message of a roadmap save, an access removal or
-the subtasks a task delete detaches also arrives moments later
-(see [Inbox](#inbox)). Unknown or out-of-org uuids in mention
+it happens inside the same transaction as the write. Follower messages on a
+task with more than 128 followers, past the first 128, arrive moments later
+instead, and so do mention and follower messages when many of the people a
+write mentions or notifies have snoozed a long thread about the task,
+because each message wakes theirs. Every follower message of a roadmap save,
+an access removal or the subtasks a task delete detaches also arrives
+moments later (see [Inbox](#inbox)). Unknown or out-of-org uuids in mention
 position are silently ignored, as are users without visibility into the
 project and agents that receive no inbox messages (see [Inbox](#inbox)), so a
 subscription never outlives the project access that justified it.

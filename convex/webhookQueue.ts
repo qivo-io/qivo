@@ -79,7 +79,6 @@ async function expandBatch(ctx: MutationCtx): Promise<boolean> {
   let budget = RECIPIENT_BATCH_SIZE
   let inserted = false
   for await (const event of ctx.db.query('webhook_events')) {
-    if (budget <= 0) break
     const task = await byId(ctx, 'issues', event.task_id)
     const end = Math.min(event.subscription_rows.length, event.next_recipient + budget)
     for (let index = event.next_recipient; index < end; index++) {
@@ -115,6 +114,7 @@ async function expandBatch(ctx: MutationCtx): Promise<boolean> {
     }
     if (end === event.subscription_rows.length) await ctx.db.delete(event._id)
     else await ctx.db.patch(event._id, { next_recipient: end })
+    if (budget <= 0) break
   }
   if (inserted) await requestWebhookDispatch(ctx)
   return budget === 0

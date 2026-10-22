@@ -98,7 +98,12 @@ const restore = (t: T, who: Doc<'profiles'>, ids: string[]): Promise<RestoreResu
 const liveProject = (t: T, id: string) => t.run((ctx) => byId(ctx, 'projects', id))
 /** Every task that waits for its parent after a project item's reveal. */
 const waitingParents = (t: T) => t.run((ctx) => ctx.db.query('deleted_item_parents').collect())
-const patch = (t: T, table: 'issues' | 'projects' | 'profiles', id: string, fields: object) =>
+const patch = (
+  t: T,
+  table: 'issues' | 'projects' | 'profiles' | 'deleted_items',
+  id: string,
+  fields: object,
+) =>
   t.run(async (ctx) => {
     const row = await byId(ctx, table, id)
     if (row === null) throw new Error(`no ${table} row ${id}`)
@@ -1494,6 +1499,62 @@ describe('a project item while it moves', () => {
   })
 })
 
+describe('a project item read over grants stored before grantees', () => {
+  it('counts them up to LEGACY_READ for an item deleted before GRANTEE_SINCE, and only then', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const [lead] = await plantPeople(t, f, 1)
+    // the person leads Firmware and reaches Board rev only through a grant
+    await t.run(async (ctx) => {
+      const own = await ctx.db
+        .query('project_access')
+        .withIndex('by_profile', (q) => q.eq('profile_id', lead))
+        .unique()
+      if (own !== null) await ctx.db.delete(own._id)
+      await ctx.db.insert('project_access', {
+        project_id: f.sub2.id,
+        profile_id: lead,
+        level: 'user',
+      })
+    })
+    await patch(t, 'projects', f.sub.id, { lead_id: lead })
+    await deleteProject(t, f, f.meta.id)
+    await runSteps(t)
+    const item = await itemFor(t, f.meta.id)
+    const seenBy = (id: string) =>
+      t.run(async (ctx) => {
+        const me = await byId(ctx, 'profiles', id)
+        const now = await byId(ctx, 'deleted_items', item.id)
+        if (me === null || now === null) throw new Error('missing')
+        const view = await viewOf(ctx, newMemo(), me, now)
+        return { projects: view?.projects.map((p) => p.id) ?? [] }
+      })
+    expect((await seenBy(lead)).projects).toContain(f.sub2.id)
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query('deleted_rows').collect())
+        if (row.grantee !== undefined) await ctx.db.patch(row._id, { grantee: undefined })
+    })
+    // read without their grantee, as the release before stored them
+    expect((await seenBy(lead)).projects).toContain(f.sub2.id)
+    // past what one read takes they count for nobody
+    LEGACY_READ.max = 1
+    expect((await seenBy(lead)).projects).not.toContain(f.sub2.id)
+    LEGACY_READ.max = 100
+    // an item deleted since GRANTEE_SINCE holds none, so none is read
+    await patch(t, 'deleted_items', item.id, { deleted_at: '2026-11-01T00:00:00.000Z' })
+    expect((await seenBy(lead)).projects).not.toContain(f.sub2.id)
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query('deleted_rows').collect())
+        if (row.row.table === 'project_access' || row.row.table === 'project_team_access')
+          await ctx.db.patch(row._id, {
+            grantee:
+              row.row.table === 'project_access' ? row.row.doc.profile_id : row.row.doc.team_id,
+          })
+    })
+    expect((await seenBy(lead)).projects).toContain(f.sub2.id)
+  })
+})
+
 describe('restoring a project item', () => {
   /** `profileId`'s level on live project `projectId`, or null. */
   const levelOn = (t: T, profileId: string, projectId: string) =>
@@ -1743,6 +1804,80 @@ describe('restoring a project item', () => {
     expect(await restore(t, f.user, [item.id])).toMatchObject({ restored: [item.id] })
     await runSteps(t)
     expect((await liveTask(t, task.id))?.assignee_id).toBe(worker)
+  })
+
+  it('writes back the grants of a restore the release before left at its reveal or after it', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const [person] = await plantPeople(t, f, 1)
+    const grantOf = () =>
+      t.run((ctx) =>
+        ctx.db
+          .query('project_access')
+          .withIndex('by_project_profile', (q) =>
+            q.eq('project_id', f.meta.id).eq('profile_id', person),
+          )
+          .unique(),
+      )
+    const asLeftBefore = (itemId: string, phase: 'restore_reveal' | 'restore_grants') =>
+      t.run(async (ctx) => {
+        const job = await ctx.db
+          .query('deleted_item_jobs')
+          .withIndex('by_item', (q) => q.eq('item_id', itemId))
+          .unique()
+        if (job === null) throw new Error('no job')
+        await ctx.db.patch(job._id, { phase, cursor: undefined, granted: undefined })
+      })
+    await deleteProject(t, f, f.meta.id)
+    await runSteps(t)
+    TRASH_BUDGET.rows = 1
+    // at its reveal, before restore_access existed
+    const first = await itemFor(t, f.meta.id)
+    await restore(t, f.user, [first.id])
+    await asLeftBefore(first.id, 'restore_reveal')
+    for (let i = 0; (await liveProject(t, f.meta.id)) === null; i++) {
+      expect(i).toBeLessThan(50)
+      await step(t, first.id)
+    }
+    expect(await grantOf()).not.toBeNull()
+    await runSteps(t)
+    // past its reveal, with the grants not yet written back
+    TRASH_BUDGET.rows = 300
+    await deleteProject(t, f, f.meta.id)
+    await runSteps(t)
+    const second = await itemFor(t, f.meta.id)
+    TRASH_BUDGET.rows = 1
+    await restore(t, f.user, [second.id])
+    for (let i = 0; (await liveProject(t, f.meta.id)) === null; i++) {
+      expect(i).toBeLessThan(50)
+      await step(t, second.id)
+    }
+    await t.run(async (ctx) => {
+      for (const g of await ctx.db.query('project_access').collect())
+        if (g.project_id === f.meta.id) await ctx.db.delete(g._id)
+    })
+    await asLeftBefore(second.id, 'restore_grants')
+    await runSteps(t)
+    expect(await itemById(t, second.id)).toBeNull()
+    expect(await grantOf()).not.toBeNull()
+  })
+
+  it('refuses a restore whose reveal in the call finds a live project holding its key', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await deleteProject(t, f, f.sub2.id)
+    await runSteps(t)
+    const item = await itemFor(t, f.sub2.id)
+    // the reservations should prevent this; the reveal checks it anyway
+    await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id, key: 'PCB' })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(await restore(t, f.user, [item.id])).toMatchObject({
+      restored: [],
+      refused: [{ id: item.id, reason: 'conflict' }],
+    })
+    await runSteps(t)
+    expect(await itemById(t, item.id)).toMatchObject({ state: 'ready' })
+    expect(await liveProject(t, f.sub2.id)).toBeNull()
   })
 
   it('stores a grant once when a restore that wrote it back goes back to moving', async () => {
@@ -2339,9 +2474,13 @@ describe('parents outside a restored project', () => {
     expect(item).toMatchObject({ state: 'ready', counts: { tasks: 50 } })
 
     // 50 tasks do not fit in the call, a quarter of a step, so steps
-    // restore them and one reveals them
+    // restore them, and one step reveals them and gives each its parent
     await as(t, f.user).mutation(api.deletedItems.restore, { org_id, ids: [item.id] })
-    await stepThrough(t, item.id)
+    for (let i = 0; (await liveProject(t, f.sub2.id)) === null; i++) {
+      expect(i).toBeLessThan(20)
+      await step(t, item.id)
+    }
+    // the step that showed the project gave every task its parent
     expect(await parentsOf(t, tasks)).toEqual(tasks.map(() => epic.id))
     expect(await waitingParents(t)).toEqual([])
     expect(await itemById(t, item.id)).toBeNull()

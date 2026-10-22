@@ -97,7 +97,9 @@ type Item = Doc<'deleted_items'>
  * projects and the person's stored grants (2 ranges) and one range for the
  * stored shares of each team the person is in (model/deletedItems.ts
  * storedLevels). An item deleted before the stored rows named their grantee
- * also reads its rows without one, up to 2 ranges more. So 1,536 ranges
+ * also reads its rows without one, 2 ranges more and up to 2 x 101
+ * documents (LEGACY_READ), which the rows and bytes of the call bound
+ * rather than its ranges. So 1,536 ranges
  * build about 500 such rows for a person in one team, and about 48 for one
  * in 30 teams, and more when finding spent less. A mutable object, so
  * tests can lower it; replace `call` and `find` whole rather than change
