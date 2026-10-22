@@ -317,6 +317,18 @@ export async function projectLevelsForOrg(
       .query('projects')
       .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
       .collect())
+  const { grants, shares } = await accessRowsOf(ctx, me)
+  return levelsFrom(me, projects, grants, shares)
+}
+
+/** `me`'s own grants and the shares of the teams of its organization it
+ * belongs to, the rows projectLevelsForOrg reads: shares only for a role
+ * that receives team access. A caller that also needs the rows reads them
+ * here once and passes them to levelsFrom. */
+export async function accessRowsOf(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+): Promise<{ grants: Doc<'project_access'>[]; shares: Doc<'project_team_access'>[] }> {
   const grants = await ctx.db
     .query('project_access')
     .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
@@ -338,7 +350,7 @@ export async function projectLevelsForOrg(
       for await (const share of teamShares) shares.push(share)
     }
   }
-  return levelsFrom(me, projects, grants, shares)
+  return { grants, shares }
 }
 
 /** How many membership rows projectLevelsForPeople reads from the

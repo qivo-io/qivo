@@ -16,7 +16,15 @@ import { PURGE_ORG } from '../deletedItems'
 import { byId } from '../lib/db'
 import type { EventOwner } from '../lib/taskEvents'
 import { REMOVAL_BUDGET } from '../model/cascade'
-import { CALL, COUNT_READ, EXPIRY, RETRY, SIGHT_READ, TRASH_BUDGET } from '../model/deletedItems'
+import {
+  CALL,
+  COUNT_READ,
+  EXPIRY,
+  LEGACY_READ,
+  RETRY,
+  SIGHT_READ,
+  TRASH_BUDGET,
+} from '../model/deletedItems'
 import { as, NOW, type OrgFixture, plantActivity, type T, uuid } from './helpers.setup'
 
 declare class Blob {
@@ -34,9 +42,10 @@ const DEFAULT_EXPIRY = { ...EXPIRY }
 const DEFAULT_PURGE_ORG = { ...PURGE_ORG }
 const DEFAULT_REMOVAL_BUDGET = { ...REMOVAL_BUDGET }
 const DEFAULT_CALL = { ...CALL }
+const DEFAULT_LEGACY_READ = { ...LEGACY_READ }
 
 /** Fake timers from START for each test of the suite, and the default
- * budget, call share, chain, depth and sight checks, retries,
+ * budget, call share, legacy read, chain, depth and sight checks, retries,
  * expiry batch, purgeOrg batch and organization deletion budget back after
  * it. */
 export function installTrashTimers(): void {
@@ -53,6 +62,7 @@ export function installTrashTimers(): void {
     Object.assign(PURGE_ORG, DEFAULT_PURGE_ORG)
     Object.assign(REMOVAL_BUDGET, DEFAULT_REMOVAL_BUDGET)
     Object.assign(CALL, DEFAULT_CALL)
+    Object.assign(LEGACY_READ, DEFAULT_LEGACY_READ)
     vi.clearAllTimers()
     vi.useRealTimers()
     vi.restoreAllMocks()

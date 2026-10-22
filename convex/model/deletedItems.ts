@@ -96,6 +96,7 @@ import { compareValues } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
+  accessRowsOf,
   canHoldWork,
   canLeadProjects,
   hasProjectLevel,
@@ -1452,12 +1453,18 @@ const granteeOf = (row: Doc<'deleted_rows'>['row']): string | undefined =>
  * November 2026, after which no item is older than this. */
 const GRANTEE_SINCE = '2026-10-23T00:00:00.000Z'
 
+/** The most stored rows without a grantee one read takes for an item and
+ * table (storedFor). A mutable object, so tests can lower it. */
+export const LEGACY_READ = { max: 2000 }
+
 /** The item's stored rows of `table` that name `grantee`: a profile's
  * grants or a team's shares. A row stored before deleted_rows.grantee
  * existed has none, so for an item deleted before GRANTEE_SINCE the rows
  * without one are read too, once per item and table, and kept when their
- * document names `grantee`. internal/storedGrantees backfill sets the field
- * on them, which leaves that read empty. */
+ * document names `grantee`. Past LEGACY_READ.max such rows none of them
+ * count, so the item shows to fewer people, never to more; a restore sets
+ * their grantee before it checks anyone's level (restoreRows), and
+ * internal/storedGrantees backfill sets it on every item. */
 async function storedFor(s: Scope, table: GrantTable, grantee: string) {
   const named = await s.ctx.db
     .query('deleted_rows')
@@ -1466,14 +1473,15 @@ async function storedFor(s: Scope, table: GrantTable, grantee: string) {
     )
     .collect()
   if (s.item.deleted_at >= GRANTEE_SINCE) return named
-  const legacy = await memoRead(s.memo.legacyGrants, `${s.item.id}:${table}`, () =>
-    s.ctx.db
+  const legacy = await memoRead(s.memo.legacyGrants, `${s.item.id}:${table}`, async () => {
+    const rows = await s.ctx.db
       .query('deleted_rows')
       .withIndex('by_item_table_grantee', (q) =>
         q.eq('item_id', s.item.id).eq('table', table).eq('grantee', undefined),
       )
-      .collect(),
-  )
+      .take(LEGACY_READ.max + 1)
+    return rows.length > LEGACY_READ.max ? [] : rows
+  })
   return [...named, ...legacy.filter((row) => granteeOf(row.row) === grantee)]
 }
 
@@ -1520,24 +1528,11 @@ function storedLevels(s: Scope, profile: Doc<'profiles'>): Promise<OrgProjectLev
 /** `profile`'s live grants and its teams' live shares on a moving project
  * item's projects, as the restore would write them back (cleanGrant,
  * cleanShare). It reads all of them as lib/access.ts projectLevelsForOrg
- * does, once per profile for every item of a list read (liveAccess). */
+ * does, once per profile for a whole list read (liveAccess), whose sight
+ * already holds the viewer's (sightOf). */
 async function pendingAccess(s: Scope, profile: Doc<'profiles'>): Promise<LevelGrants> {
   const ids = new Set(itemProjectIds(s.item))
-  const live = await memoRead(s.memo.liveAccess, profile.id, async (): Promise<LiveAccess> => {
-    const grants = await s.ctx.db
-      .query('project_access')
-      .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
-      .collect()
-    const shares: Doc<'project_team_access'>[] = []
-    for (const teamId of await teamsOf(s, profile))
-      shares.push(
-        ...(await s.ctx.db
-          .query('project_team_access')
-          .withIndex('by_team', (q) => q.eq('team_id', teamId))
-          .collect()),
-      )
-    return { grants, shares }
-  })
+  const live = await memoRead(s.memo.liveAccess, profile.id, () => accessRowsOf(s.ctx, profile))
   const out: LevelGrants = { grants: [], shares: [] }
   for (const g of live.grants) {
     const grant = ids.has(g.project_id) ? await cleanGrant(s, g) : null
@@ -1550,8 +1545,8 @@ async function pendingAccess(s: Scope, profile: Doc<'profiles'>): Promise<LevelG
   return out
 }
 
-/** A person's live grants and their teams' live shares, whole. */
-type LiveAccess = { grants: Doc<'project_access'>[]; shares: Doc<'project_team_access'>[] }
+/** A person's live grants and their teams' live shares, whole (accessRowsOf). */
+type LiveAccess = Awaited<ReturnType<typeof accessRowsOf>>
 
 /** Grants and team shares as lib/access.ts levelsFrom takes them. */
 type LevelGrants = {
@@ -1801,7 +1796,8 @@ export async function myItem(
 
 /** One person's sight of their organization for a list read, read once for
  * every item it looks at: the live projects, `levels` on them, the
- * profiles, and a memo seeded with those and with the organization's teams.
+ * profiles, and a memo seeded with those, with the person's grants and
+ * team shares and with the organization's teams.
  * The memo leaves the conflict checks to the restore. */
 export type Sight = {
   me: Doc<'profiles'>
@@ -1817,8 +1813,11 @@ export async function sightOf(ctx: QueryCtx, me: Doc<'profiles'>): Promise<Sight
     .query('projects')
     .withIndex('by_org', (q) => q.eq('org_id', org_id))
     .collect()
-  const levels = await projectLevelsForOrg(ctx, me, projects)
+  const rows = await accessRowsOf(ctx, me)
+  const levels = levelsFrom(me, projects, rows.grants, rows.shares)
   const memo: Memo = { ...newMemo(), conflicts: false }
+  // a moving item reads them again (pendingAccess)
+  memo.liveAccess.set(me.id, Promise.resolve(rows))
   for (const p of projects) {
     memo.projects.set(p.id, Promise.resolve(p))
     memo.live.set(`${me.id}:${p.id}`, Promise.resolve(levels.levelOf(p)))
@@ -2071,6 +2070,22 @@ async function dropStored(ctx: MutationCtx, row: Doc<'deleted_rows'>): Promise<v
  * of the index it reads them by, which for comments and attachments is
  * their creation order, and this reads them back in the order stored. */
 async function restoreRows(run: Run): Promise<boolean> {
+  // grants and shares stored before they named their grantee get it first,
+  // so the level checks of restore_tasks read them by index (storedFor)
+  if (run.item.kind === 'project')
+    for (const table of GRANT_TABLES) {
+      const legacy = run.ctx.db
+        .query('deleted_rows')
+        .withIndex('by_item_table_grantee', (q) =>
+          q.eq('item_id', run.item.id).eq('table', table).eq('grantee', undefined),
+        )
+      if (
+        !(await drain(run.budget, legacy, (row) =>
+          run.ctx.db.patch(row._id, { grantee: granteeOf(row.row) }),
+        ))
+      )
+        return false
+    }
   for (const table of RESTORED_ROWS) {
     const done = await drain(
       run.budget,
@@ -2396,12 +2411,14 @@ async function reveal(run: Run): Promise<JobState | null> {
  * holds, and the live copies name projects that are still absent, which
  * readers skip as they do while a move drains. The step walks each
  * project's stored rows of each table with the job's cursor, because the
- * rows stay in their range. A grant whose profile, or a share whose team,
- * fails the reference predicate stays out (cleanGrant, cleanShare), and so
- * does one a live row on the same project already holds, which a walk
- * repeated after the reveal sent the item back to an earlier phase finds.
- * A row the cursor skips on a tie of _creationTime is written by
- * restoreGrants. */
+ * rows stay in their range. Each step goes on from the creation time of the
+ * last row it wrote, that row included, so a tie of _creationTime skips
+ * nothing. A grant whose profile, or a share whose team, fails the
+ * reference predicate stays out (cleanGrant, cleanShare), and so does one a
+ * live row on the same project already holds: the row a step starts with,
+ * or one a walk repeated after the reveal sent the item back to an earlier
+ * phase finds. Every grant is back before the reveal, so nothing writes one
+ * after it, when an admin may already have removed it. */
 async function restoreAccess(run: Run): Promise<boolean> {
   if (run.item.kind !== 'project') return true
   const ids = itemProjectIds(run.item)
@@ -2421,11 +2438,16 @@ async function restoreAccess(run: Run): Promise<boolean> {
           .eq('item_id', run.item.id)
           .eq('table', table)
           .eq('owner_id', owner)
-          .gt('_creationTime', cursor.after),
+          .gte('_creationTime', cursor.after),
       )
     for await (const row of rows) {
-      await writeGrantBack(run, row)
-      charge(run.budget, row)
+      // a row already back, the one the step starts with among them, costs
+      // only its reads, so every step gets past it
+      if (await writeGrantBack(run, row)) charge(run.budget, row)
+      else {
+        chargeRead(run.budget, row)
+        run.budget.moved = true
+      }
       cursor.after = row._creationTime
       if (spent(run.budget)) return stop()
     }
@@ -2434,10 +2456,9 @@ async function restoreAccess(run: Run): Promise<boolean> {
 }
 
 /* After the reveal, deletes a project item's stored grants and team
- * grants within the step's budget, before the attach, writing back first
- * any that restore_access did not. A project deleted again since keeps
- * none: the item that holds it now stored the copies restore_access wrote,
- * and a grant written now would name a project that is absent. */
+ * grants within the step's budget, before the attach. It writes none back:
+ * restore_access wrote every one before the reveal, and a grant an admin
+ * removed since must stay removed. */
 async function restoreGrants(run: Run): Promise<boolean> {
   for (const table of GRANT_TABLES) {
     const done = await drain(
@@ -2445,11 +2466,7 @@ async function restoreGrants(run: Run): Promise<boolean> {
       run.ctx.db
         .query('deleted_rows')
         .withIndex('by_item_table_owner', (q) => q.eq('item_id', run.item.id).eq('table', table)),
-      async (row) => {
-        // read now, not from the memo, which may predate the reveal
-        if ((await byId(run.ctx, 'projects', row.owner_id)) !== null) await writeGrantBack(run, row)
-        await run.ctx.db.delete(row._id)
-      },
+      (row) => run.ctx.db.delete(row._id),
     )
     if (!done) return false
   }
@@ -2458,8 +2475,9 @@ async function restoreGrants(run: Run): Promise<boolean> {
 
 /** Writes stored grant or team grant `row` back to its live table, unless
  * it fails the reference predicate (cleanGrant, cleanShare) or a live row
- * on the same project already holds it. Leaves the stored row. */
-async function writeGrantBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
+ * on the same project already holds it. Leaves the stored row. True when it
+ * wrote one. */
+async function writeGrantBack(run: Run, row: Doc<'deleted_rows'>): Promise<boolean> {
   const db = uncountedWriter(run.ctx.db)
   const r = row.row
   if (r.table === 'project_access') {
@@ -2470,7 +2488,9 @@ async function writeGrantBack(run: Run, row: Doc<'deleted_rows'>): Promise<void>
         q.eq('project_id', r.doc.project_id).eq('profile_id', r.doc.profile_id),
       )
       .first()
-    if (grant !== null && held === null) await db.insert('project_access', grant)
+    if (grant === null || held !== null) return false
+    await db.insert('project_access', grant)
+    return true
   } else if (r.table === 'project_team_access') {
     const share = await cleanShare(run, r.doc)
     const held = await run.ctx.db
@@ -2479,8 +2499,11 @@ async function writeGrantBack(run: Run, row: Doc<'deleted_rows'>): Promise<void>
         q.eq('project_id', r.doc.project_id).eq('team_id', r.doc.team_id),
       )
       .first()
-    if (share !== null && held === null) await db.insert('project_team_access', share)
+    if (share === null || held !== null) return false
+    await db.insert('project_team_access', share)
+    return true
   }
+  return false
 }
 
 /** A failed reveal: the item goes back to moving, and its steps take what

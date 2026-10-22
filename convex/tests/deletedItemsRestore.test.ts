@@ -20,6 +20,7 @@ import { deleteOrgDeep } from '../model/cascade'
 import {
   CALL,
   COUNT_READ,
+  LEGACY_READ,
   newMemo,
   type RestoreResult,
   restoreItems,
@@ -1682,6 +1683,66 @@ describe('restoring a project item', () => {
     )
     expect(access.grants.map(([id]) => id)).not.toContain(removed)
     expect(access.shares).toEqual([team])
+  })
+
+  it('keeps a grant or share removed between the reveal and the end of its stored grants removed', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const [team] = await plantTeams(t, f, 1)
+    const people = await plantPeople(t, f, 8)
+    await t.run((ctx) =>
+      ctx.db.insert('project_team_access', { project_id: f.sub.id, team_id: team, level: 'user' }),
+    )
+    await deleteProject(t, f, f.meta.id)
+    await runSteps(t)
+    const item = await itemFor(t, f.meta.id)
+    TRASH_BUDGET.rows = 3
+    await restore(t, f.user, [item.id])
+    for (let i = 0; (await liveProject(t, f.meta.id)) === null; i++) {
+      expect(i).toBeLessThan(50)
+      await step(t, item.id)
+    }
+    expect((await storedRows(t, item.id)).some((r) => r.table === 'project_access')).toBe(true)
+    // an admin removes a grant and the share while the stored copies wait
+    await t.run(async (ctx) => {
+      for (const g of await ctx.db.query('project_access').collect())
+        if (g.profile_id === people[0]) await ctx.db.delete(g._id)
+      for (const g of await ctx.db.query('project_team_access').collect())
+        if (g.team_id === team) await ctx.db.delete(g._id)
+    })
+    await runSteps(t)
+    expect(await itemById(t, item.id)).toBeNull()
+    const left = await t.run(async (ctx) => ({
+      grants: (await ctx.db.query('project_access').collect()).map((g) => g.profile_id),
+      shares: (await ctx.db.query('project_team_access').collect()).map((g) => g.team_id),
+    }))
+    expect(left.grants).not.toContain(people[0])
+    expect(left.grants).toContain(people[1])
+    expect(left.shares).not.toContain(team)
+  })
+
+  it('sets the grantee of more stored grants than one read takes before it checks the people', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const [worker] = await plantPeople(t, f, 4)
+    const task = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      assignee_id: worker,
+    })
+    await deleteProject(t, f, f.meta.id)
+    await runSteps(t)
+    const item = await itemFor(t, f.meta.id)
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query('deleted_rows').collect())
+        if (row.grantee !== undefined) await ctx.db.patch(row._id, { grantee: undefined })
+    })
+    // six grants without a grantee, past what one read takes, count for
+    // nobody until the restore names them
+    LEGACY_READ.max = 2
+    expect(await restore(t, f.user, [item.id])).toMatchObject({ restored: [item.id] })
+    await runSteps(t)
+    expect((await liveTask(t, task.id))?.assignee_id).toBe(worker)
   })
 
   it('stores a grant once when a restore that wrote it back goes back to moving', async () => {
