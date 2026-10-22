@@ -103,7 +103,9 @@ export const CASES = {
     size: 600 * 1024,
     chunked: true,
     stall: { chunk: 65536, every: 0 },
-    expect: ['403', '413'],
+    // a hosted front end resets the client after the action answers 413,
+    // because the body never ended (staging, f21abda: 413 in about 1.1 s)
+    expect: ['403', '413', 'UND_ERR_SOCKET', 'ECONNRESET'],
   },
   'auth-stall-slow': {
     path: SIGN_IN,
