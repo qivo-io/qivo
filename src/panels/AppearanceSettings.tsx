@@ -6,14 +6,15 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
-  MANUAL_IMAGE_REQUIREMENTS,
   manualImageDimensions,
+  manualImageRequirements,
   validateManualImageFile,
   validatePanoramaDimensions,
 } from '../../convex/lib/panoramaImage'
 import { SettingsGroup } from '../components/settingsPage'
 import { ThemeSelector } from '../components/ThemeSelector'
 import { useAppearance } from '../lib/appearanceContext'
+import { assertDemoFileSize, DEMO_FILE_MIB } from '../lib/demoMode'
 import { useUnsaved } from '../lib/leaveGuard'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { type AppearancePreferences, P } from '../store/planner'
@@ -76,6 +77,8 @@ function errorText(error: unknown): string {
 }
 
 async function inspectFile(file: File) {
+  // the demo's smaller limit first, so a large pick names the one that applies
+  assertDemoFileSize(file.size)
   validateManualImageFile(file.type, file.size)
   manualImageDimensions(new Uint8Array(await file.arrayBuffer()), file.type)
   const url = URL.createObjectURL(file)
@@ -381,7 +384,7 @@ export function AppearanceSettings() {
                       }}
                     />
                     <p id={`${id}-requirements`} className="text-sm text-text-2">
-                      {MANUAL_IMAGE_REQUIREMENTS}
+                      {manualImageRequirements(DEMO_FILE_MIB)}
                     </p>
                   </div>
                   {preferences.custom_image && (

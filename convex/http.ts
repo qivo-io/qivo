@@ -2,7 +2,6 @@ import { oauthProviderAuthServerMetadata } from '@better-auth/oauth-provider'
 import { httpRouter, makeFunctionReference } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { internal } from './_generated/api'
-import { httpAction } from './_generated/server'
 import { appOrigins, authComponent, createAuth } from './auth'
 import { registerBilling } from './billingHttp'
 import { registerDemoReporting } from './demoReportingHttp'
@@ -17,9 +16,12 @@ import {
   validateManualImageFile,
 } from './lib/panoramaImage'
 import { isoWeekForDate } from './lib/panoramaWeeks'
+import { answerAfterBody, discardBody, readLimitedBody } from './lib/requestBody'
 import { registerCuration } from './machine/curation'
 import { registerMcpRoutes } from './machine/mcp'
+import { conflictRetrying } from './machine/registry'
 import { registerRestRoutes } from './machine/rest'
+import { WRITE_CONFLICT, WRITE_CONFLICT_RETRY_AFTER } from './machine/shared'
 import { registerUploadRoutes } from './machine/uploads'
 import { DEMO_FILE_BYTES } from './model/demoUploads'
 
@@ -107,7 +109,25 @@ const createHttpAuth: typeof createAuth = (ctx) => {
     },
   }
 }
-authComponent.registerRoutes(http, createHttpAuth, {
+/* The component builds the auth routes itself, so this handler drops the
+ * rest of the request body before its answer goes out, as answerAfterBody
+ * does for every other route. The component's CORS preflight and its
+ * /.well-known/openid-configuration redirect never reach it
+ * (lib/requestBody.ts). */
+const createHttpAuthAfterBody: typeof createAuth = (ctx) => {
+  const auth = createHttpAuth(ctx)
+  return {
+    ...auth,
+    handler: async (request: Request) => {
+      try {
+        return await auth.handler(request)
+      } finally {
+        await discardBody(request).catch(() => {})
+      }
+    },
+  }
+}
+authComponent.registerRoutes(http, createHttpAuthAfterBody, {
   cors: {
     allowedOrigins: isDemoDeployment() ? [] : ['http://localhost:5199'],
     // Demo frontends from before country attribution was removed send this
@@ -130,7 +150,7 @@ const canvasHeaders = {
 http.route({
   path: '/public/canvas',
   method: 'GET',
-  handler: httpAction(async (ctx, request) => {
+  handler: answerAfterBody(async (ctx, request) => {
     if (isDemoDeployment()) return new Response(null, { status: 404, headers: canvasHeaders })
     const params = new URL(request.url).searchParams
     const dates = params.getAll('date')
@@ -152,7 +172,7 @@ http.route({
 http.route({
   path: '/public/canvas',
   method: 'OPTIONS',
-  handler: httpAction(
+  handler: answerAfterBody(
     async () =>
       new Response(null, { status: isDemoDeployment() ? 404 : 204, headers: canvasHeaders }),
   ),
@@ -169,12 +189,19 @@ const oauthMachineHeaders = {
   'Access-Control-Expose-Headers': 'WWW-Authenticate, Retry-After',
   'Cache-Control': 'no-store',
 }
-const oauthMachine = httpAction(async (ctx, request) => {
+const oauthMachine = answerAfterBody(async (ctx, request) => {
   if (isDemoDeployment()) return new Response(null, { status: 403, headers: oauthMachineHeaders })
   const headers = new Headers(request.headers)
   headers.delete('Cookie')
   headers.delete('Better-Auth-Cookie')
-  const response = await createAuth(ctx).handler(new Request(request, { headers }))
+  // the copy takes over the body, so it is the one to drop before answering
+  const forwarded = new Request(request, { headers })
+  let response: Response
+  try {
+    response = await createAuth(ctx).handler(forwarded)
+  } finally {
+    await discardBody(forwarded).catch(() => {})
+  }
   const responseHeaders = new Headers(response.headers)
   responseHeaders.delete('Set-Cookie')
   responseHeaders.delete('Set-Better-Auth-Cookie')
@@ -185,7 +212,7 @@ const oauthMachine = httpAction(async (ctx, request) => {
     headers: responseHeaders,
   })
 })
-const oauthMachinePreflight = httpAction(
+const oauthMachinePreflight = answerAfterBody(
   async () => new Response(null, { status: 204, headers: oauthMachineHeaders }),
 )
 for (const endpoint of ['register', 'token', 'introspect', 'revoke']) {
@@ -200,7 +227,7 @@ const oauthMetadataHeaders = {
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Cache-Control': 'public, max-age=300',
 }
-const resourceMetadata = httpAction(
+const resourceMetadata = answerAfterBody(
   async () =>
     new Response(
       JSON.stringify({
@@ -212,10 +239,10 @@ const resourceMetadata = httpAction(
       { headers: oauthMetadataHeaders },
     ),
 )
-const serverMetadata = httpAction(async (ctx, request) =>
+const serverMetadata = answerAfterBody(async (ctx, request) =>
   oauthProviderAuthServerMetadata(createAuth(ctx), { headers: oauthMetadataHeaders })(request),
 )
-const metadataPreflight = httpAction(
+const metadataPreflight = answerAfterBody(
   async () => new Response(null, { status: 204, headers: oauthMetadataHeaders }),
 )
 for (const path of [
@@ -301,7 +328,7 @@ const serve = (
   kind: Exclude<FileTokenKind, 'attachment_upload' | 'background_upload' | 'demo_upload'>,
   prefix: string,
 ) =>
-  httpAction(async (ctx, request) => {
+  answerAfterBody(async (ctx, request) => {
     const url = new URL(request.url)
     const headers = gatewayHeaders(request.headers.get('Origin'))
     const refuse = (): Response => {
@@ -359,7 +386,7 @@ const serve = (
 
 /* Plain GETs never preflight (no custom headers, simple method), but answer
  * OPTIONS anyway so any future fetch() variant fails soft, not weird. */
-const preflight = httpAction(async (_ctx, request) => {
+const preflight = answerAfterBody(async (_ctx, request) => {
   const headers = gatewayHeaders(request.headers.get('Origin'))
   headers.set('Access-Control-Allow-Methods', 'GET, OPTIONS')
   headers.set('Access-Control-Max-Age', '86400')
@@ -390,55 +417,38 @@ http.route({ pathPrefix: '/background-previews/', method: 'OPTIONS', handler: pr
  * the validated request body; replay/cancel/expiry/replacement are fenced in
  * one final mutation and unretained bytes are reference-safely discarded. */
 declare const Blob: { new (parts: Uint8Array[], options: { type: string }): Blob }
-declare function setTimeout(callback: () => void, delay: number): unknown
-declare function clearTimeout(timer: unknown): void
-type ImageBody = {
-  getReader(): { read(): Promise<{ done: boolean; value?: Uint8Array }>; cancel(): Promise<void> }
-}
 
+/* An image or demo upload's bytes, at most `maxBytes` and within 30 s, else
+ * the refusal that says why (lib/requestBody.ts readLimitedBody). */
 async function readBackgroundBody(
   request: Request,
   maxBytes = isDemoDeployment() ? DEMO_FILE_BYTES : PANORAMA_MAX_BYTES,
 ): Promise<Uint8Array> {
-  if (Number(request.headers.get('Content-Length')) > maxBytes)
-    throw badRequest(`Choose a file no larger than ${maxBytes / 1024 / 1024} MiB.`)
-  const body = (request as Request & { body: ImageBody | null }).body
-  if (!body) throw badRequest('Choose an image file to upload.')
-  const reader = body.getReader()
-  let timer: unknown
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(badRequest('The image upload timed out. Try again.')), 30_000)
-  })
-  const receive = async () => {
-    const chunks: Uint8Array[] = []
-    let size = 0
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      if (!value) continue
-      size += value.byteLength
-      if (size > maxBytes)
-        throw badRequest(`Choose a file no larger than ${maxBytes / 1024 / 1024} MiB.`)
-      chunks.push(value)
-    }
-    const bytes = new Uint8Array(size)
-    let offset = 0
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset)
-      offset += chunk.byteLength
-    }
-    return bytes
-  }
-  try {
-    return await Promise.race([receive(), timeout])
-  } finally {
-    clearTimeout(timer)
-    await reader.cancel().catch(() => {})
-  }
+  const read = await readLimitedBody(request, maxBytes, 30_000)
+  if (read.outcome === 'read') return read.bytes
+  throw badRequest(
+    read.outcome === 'missing'
+      ? 'Choose an image file to upload.'
+      : read.outcome === 'too_slow'
+        ? 'The image upload timed out. Try again.'
+        : `Choose a file no larger than ${maxBytes / 1024 / 1024} MiB.`,
+  )
 }
 
-const receiveBackground = httpAction(async (ctx, request) => {
+/* The answer for an image upload whose write kept conflicting or timing
+ * out. The app cancels a failed upload's ticket, so its next step is a new
+ * upload. */
+const BACKGROUND_UPLOAD_BUSY =
+  'The server was too busy to save the image, and nothing changed. Choose the image again.'
+
+/* The image upload receiver. Its mutations retry write conflicts and time
+ * outs like the upload URL's (machine/uploads.ts), and one that outlasts the
+ * retries saved nothing and answers 503. Outside the demo the URL still
+ * works, so the answer carries Retry-After. */
+const receiveBackground = answerAfterBody(async (ctx, request) => {
   const headers = gatewayHeaders(request.headers.get('Origin'))
+  if (headers.get('Access-Control-Allow-Origin') !== null)
+    headers.set('Access-Control-Expose-Headers', 'Retry-After')
   headers.set('Cache-Control', 'no-store')
   headers.set('Content-Type', 'application/json')
   headers.set('Referrer-Policy', 'no-referrer')
@@ -467,10 +477,11 @@ const receiveBackground = httpAction(async (ctx, request) => {
     return refuse()
   if (!(await ctx.runQuery(internal.appearance.uploadContext, { id, minter: m, exp })))
     return refuse()
+  const runMutation = conflictRetrying(ctx)
   let storageId: import('./_generated/dataModel').Id<'_storage'> | undefined
   let startedDemoWork = false
   try {
-    await ctx.runMutation(internal.appearance.beginDemoUploadWork, { id, minter: m })
+    await runMutation(internal.appearance.beginDemoUploadWork, { id, minter: m })
     startedDemoWork = isDemoDeployment()
     const mime = request.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() ?? ''
     // Validate MIME before reading the body, and size after bounded streaming.
@@ -487,7 +498,7 @@ const receiveBackground = httpAction(async (ctx, request) => {
       throw badRequest(error instanceof Error ? error.message : 'Choose a valid image.')
     }
     storageId = await ctx.storage.store(new Blob([bytes], { type: mime }))
-    const settings = await ctx.runMutation(internal.appearance.finalizeUpload, {
+    const settings = await runMutation(internal.appearance.finalizeUpload, {
       ticket_id: id,
       minter: m,
       storage_id: storageId,
@@ -496,15 +507,28 @@ const receiveBackground = httpAction(async (ctx, request) => {
     return new Response(JSON.stringify(settings), { status: 200, headers })
   } catch (error) {
     if (startedDemoWork)
-      await ctx
-        .runMutation(internal.demoUploads.abandon, { id, minter: m, storage_id: storageId })
-        .catch(() => {})
+      await runMutation(internal.demoUploads.abandon, {
+        id,
+        minter: m,
+        storage_id: storageId,
+      }).catch(() => {})
     if (storageId)
-      await ctx
-        .runMutation(internal.appearance.discardUpload, { storage_id: storageId })
-        .catch(() => {})
+      await runMutation(internal.appearance.discardUpload, { storage_id: storageId }).catch(
+        () => {},
+      )
     const data =
-      error instanceof ConvexError ? (error.data as { code?: string; message?: string }) : null
+      error instanceof ConvexError
+        ? (error.data as { code?: string; message?: string; reason?: string })
+        : null
+    if (data?.reason === WRITE_CONFLICT) {
+      // the demo's cleanup spent the URL's reservation, so only a new
+      // upload can work there
+      if (!startedDemoWork) headers.set('Retry-After', String(WRITE_CONFLICT_RETRY_AFTER))
+      return new Response(
+        JSON.stringify({ error: { code: 'conflict', message: BACKGROUND_UPLOAD_BUSY } }),
+        { status: 503, headers },
+      )
+    }
     const code = data?.code ?? 'bad_request'
     const message = data?.message ?? 'The image upload failed. Choose the file again.'
     return new Response(JSON.stringify({ error: { code, message } }), {
@@ -518,7 +542,7 @@ http.route({ pathPrefix: '/background-uploads/', method: 'POST', handler: receiv
 http.route({
   pathPrefix: '/background-uploads/',
   method: 'OPTIONS',
-  handler: httpAction(async (_ctx, request) => {
+  handler: answerAfterBody(async (_ctx, request) => {
     const headers = gatewayHeaders(request.headers.get('Origin'))
     headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS')
     headers.set('Access-Control-Allow-Headers', 'Content-Type')
@@ -530,7 +554,7 @@ http.route({
 http.route({
   pathPrefix: '/demo-uploads/',
   method: 'POST',
-  handler: httpAction(async (ctx, request) => {
+  handler: answerAfterBody(async (ctx, request) => {
     const headers = gatewayHeaders(request.headers.get('Origin'))
     headers.set('Cache-Control', 'no-store')
     headers.set('Content-Type', 'application/json')
@@ -584,7 +608,7 @@ http.route({
 http.route({
   pathPrefix: '/demo-uploads/',
   method: 'OPTIONS',
-  handler: httpAction(async (_ctx, request) => {
+  handler: answerAfterBody(async (_ctx, request) => {
     const headers = gatewayHeaders(request.headers.get('Origin'))
     headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS')
     headers.set('Access-Control-Allow-Headers', 'Content-Type')

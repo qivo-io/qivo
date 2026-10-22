@@ -100,6 +100,7 @@ import { limitedText } from '../lib/limitRules'
 import { LIMITS, serviceBusy, tooManyRequests } from '../lib/limits'
 import { utcToday } from '../lib/machineDelay'
 import { mcpResource } from '../lib/oauth'
+import { answerAfterBody } from '../lib/requestBody'
 import { type EventOwner, vEventOwner } from '../lib/taskEvents'
 import { ingressShard, machineRetryAfter } from '../model/billingUsage'
 import { postComment } from '../model/comments'
@@ -153,7 +154,6 @@ import { PROJECT_ROUTES, projectDetailJson } from './projects'
 import { RECORD_ROUTES } from './records'
 import { conflictRetrying, type MachineEntry, type Principal, runEntry } from './registry'
 import {
-  answerAfterBody,
   REST_CALLER as CALLER,
   internalError,
   listOffset,

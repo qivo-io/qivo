@@ -90,6 +90,7 @@ import { limitedText } from '../lib/limitRules'
 import { DEFAULT_PAGE_SIZE, LIMITS, serviceBusy, tooManyRequests } from '../lib/limits'
 import { utcToday } from '../lib/machineDelay'
 import { mcpResource, mcpResourceMetadata, OAUTH_SCOPES } from '../lib/oauth'
+import { answerAfterBody } from '../lib/requestBody'
 import { DEFAULT_REVIEW_HOURS } from '../lib/review'
 import {
   EVENT_PARAMS_NOT_FINITE,
@@ -162,7 +163,6 @@ import {
   runEntry,
 } from './registry'
 import {
-  answerAfterBody,
   hasLoneSurrogate,
   internalError,
   LONE_SURROGATE,

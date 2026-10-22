@@ -251,14 +251,20 @@ still counts as a call. A declared `Content-Length` over the limit is refused
 without keeping the body. Files never travel in these bodies; see
 [Attachments](#attachments).
 
-Qivo answers every request only after its whole body has arrived, even when
-the answer does not depend on it, such as a `401` or this `413`. Once Qivo
-knows such an answer, it waits at most 5 seconds more for the rest of the
-body, and reads at most 32 MiB of it. If the rest takes longer, which for a
-body just over the limit means an upload slower than about 2 Mbit/s, the
-request can end with the connection closed and no answer. Treat that like
-any network error, and check the body's size before you send it again. A
-body Qivo does use, such as one within the limit, has no such deadline.
+Qivo answers a request only after its whole body has arrived, even when the
+answer does not depend on it, such as a `401`, a `429` or this `413`. Once
+Qivo knows such an answer, it waits at most 5 seconds more for the rest of
+the body, and less when no bytes arrive for 1 second. It reads at most
+32 MiB of the rest, and does not wait at all for a body whose
+`Content-Length` declares more than 32 MiB. If the rest takes longer, which
+for a body just over the limit means an upload slower than about 2 Mbit/s,
+or the body is longer than 32 MiB, the request can end with the connection
+closed, or with a `502` from the hosting front end, instead of Qivo's
+answer. Treat either like a network error, and check the credential and the
+body's size before you send it again. A body Qivo reads to answer, such as
+an authenticated request's body within the limit, has no such deadline. A
+client that sends `Expect: 100-continue` gets `100 Continue` at once, so it
+sends the whole body before any answer.
 
 A request that takes a JSON body needs a JSON object. Anything else, such as
 invalid JSON, an array or a number, is a `400` (`request body must be
@@ -275,7 +281,8 @@ such as `unknown field "parnet"; this request takes project, sub_project,
 parent, …`, so a misspelled field never falls back to a default. A route that
 takes no body, such as `DELETE /v1/tasks/{ref}`, accepts an empty body or
 `{}` and refuses any field (`unknown field "x"; this request takes no body`).
-A `GET` request's body is never read. Every route also refuses a query
+A `GET` request's body is never used, only read and dropped like any
+unused body. Every route also refuses a query
 parameter it does not take, such as `unknown query parameter "stauts"; this
 request takes project, status, …`, or `…; this request takes no query
 parameters`, so a misspelled filter never answers an unfiltered list. Fields a
@@ -2030,7 +2037,23 @@ one file:
   upload took too long; send it again`). These store nothing, and the URL
   can be tried again, as after any other failed `POST`. A `POST` that ends
   without an answer and without storing a file, for example when the
-  connection drops, holds the URL for at most 15 minutes.
+  connection drops, holds the URL for at most 15 minutes. So does, rarely,
+  a refused `POST` whose cleanup kept conflicting with other `POST`s, and
+  until then the URL answers `409`.
+- `POST`s sent to one upload URL at the same moment change the same ticket,
+  so one can conflict with the others. Qivo retries such a conflict itself,
+  twice at most, and one that keeps conflicting answers `503` with
+  `Retry-After: 1` and `{"error": "the request conflicted with other changes
+  made at the same time and changed nothing; send it again"}`, like any
+  other request that keeps conflicting, or `{"error": "the request took too
+  long and changed nothing; send it again, or change less at once if it
+  keeps happening"}` when a busy server kept it from finishing in time. An
+  upload cannot change less, so send it again. Either stores nothing and
+  leaves the
+  URL free, so wait the `Retry-After` seconds and send the same `POST`
+  again. If Qivo could not free the URL either, which is rare, the `POST`
+  answers `409` (`this upload URL has already been used; start a new
+  upload`) instead.
 - An expired or altered upload URL, and one whose upload was confirmed,
   answers `404` (`upload not found or expired; start a new upload`).
 
@@ -2038,12 +2061,16 @@ Qivo reads the body of a `POST` to the upload URL in one of its own request
 handlers, which stays busy until the whole file has arrived, for at most the
 5 minutes above. A 20 MiB file therefore needs about 70 KB/s or more. Many
 large uploads at once from one organization share the deployment's handlers
-with every other request, so send them a few at a time. A refusal, such as
-the `400` for a body of another size, also waits for the rest of the body,
-but only 5 seconds more and 32 MiB, as for
-[every request](#request-limits-and-billing).
-A slower upload that is refused can end with the connection closed and no
-answer.
+with every other request, so send them a few at a time. A refusal decided
+before the file is read, or while reading a body of another size, such as
+the `409` or the `400` for a body of another size, also waits for the rest
+of the body, but only 5 seconds more, 1 second without bytes and 32 MiB, as
+for [every request](#request-limits-and-billing). A slower upload that is
+refused can end with the connection closed, or with a `502` from the
+hosting front end, instead of the answer. The `400` for an upload that took
+more than 5 minutes stops the upload at once, so a client that slow usually
+sees the connection close. Treat either like a network error and start the
+upload again.
 
 Only the user that started the upload can confirm it, only for the same
 task, and only once. Any other ticket, including an expired one, answers

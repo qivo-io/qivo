@@ -458,14 +458,20 @@ checks the size after authentication and answers a longer body with HTTP
 Request: a request body must be at most 1 MiB. Send less in one request."},
 "id": null}`. Such a request still counts as a call.
 
-Qivo answers every request only after its whole body has arrived, even when
-the answer does not depend on it, such as a `401` or this `413`. Once Qivo
-knows such an answer, it waits at most 5 seconds more for the rest of the
-body, and reads at most 32 MiB of it. If the rest takes longer, which for a
-body just over the limit means an upload slower than about 2 Mbit/s, the
-request can end with the connection closed and no answer. Treat that like
-any network error, and check the body's size before you send it again. A
-body Qivo does use, such as one within the limit, has no such deadline.
+Qivo answers a request only after its whole body has arrived, even when the
+answer does not depend on it, such as a `401`, a `429` or this `413`. Once
+Qivo knows such an answer, it waits at most 5 seconds more for the rest of
+the body, and less when no bytes arrive for 1 second. It reads at most
+32 MiB of the rest, and does not wait at all for a body whose
+`Content-Length` declares more than 32 MiB. If the rest takes longer, which
+for a body just over the limit means an upload slower than about 2 Mbit/s,
+or the body is longer than 32 MiB, the request can end with the connection
+closed, or with a `502` from the hosting front end, instead of Qivo's
+answer. Treat either like a network error, and check the credential and the
+body's size before you send it again. A body Qivo reads to answer, such as
+an authenticated request's body within the limit, has no such deadline. A
+client that sends `Expect: 100-continue` gets `100 Continue` at once, so it
+sends the whole body before any answer.
 
 MCP messages must be UTF-8. A body holding bytes that are not UTF-8, such as
 text a client encoded as Latin-1 or Windows-1252, is answered with HTTP
@@ -1882,9 +1888,18 @@ a `POST` is storing the file, and once it has, another `POST` answers `409`
 with `this upload URL has already been used; start a new upload` and stores
 nothing. A body of another size than declared answers `400` with `the upload
 must be exactly the 48213 bytes declared` and stores nothing, after which
-the URL can be tried again. Qivo reads the body in one of its own request
-handlers, which stays busy until the file has arrived, for at most 5
-minutes, so send large files a few at a time. Once the upload is confirmed,
+the URL can be tried again, unless, rarely, Qivo could not free it, when it
+answers `409` for at most 15 minutes. A `POST` that conflicts with other
+`POST`s sent to the same URL at that moment, or that a busy server kept from
+finishing in time, answers `503` with `Retry-After: 1` and stores nothing,
+so wait and send it again, or, rarely, `409` when Qivo could not free the
+URL either. Qivo reads the body in one of
+its own request handlers, which stays busy until the file has arrived, for
+at most 5 minutes, so send large files a few at a time. A refusal such as
+the `409` or the size `400` waits only 5 seconds more for the rest of the
+body, so a large upload that is refused can end with the connection closed,
+or with a `502` from the hosting front end, instead of the answer. Treat
+either like a network error. Once the upload is confirmed,
 its URL answers
 `404` like an expired one (see [REST attachments](rest-api.md#attachments)
 for every answer). Only the user that started

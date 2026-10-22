@@ -1,10 +1,12 @@
 /* Independent regression checks for capability replay and cleanup progress.
  * Only the uploaded metadata omitted by convex-test is supplied by a shim. */
+import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { ActionCtx } from '../_generated/server'
 import authSchema from '../betterAuth/schema'
 import http from '../http'
+import { CONFLICT_RETRIES } from '../machine/registry'
 import {
   beginDemoUpload,
   demoUploadFor,
@@ -79,16 +81,37 @@ function jpeg() {
   ])
 }
 
-async function uploadBackground(t: T, url: string, afterStore?: () => Promise<void>) {
+/* What ctx.runMutation rejects with when a mutation kept conflicting
+ * (machine/registry.ts isWriteConflict). */
+const USER_CONFLICT =
+  'Documents read from or written to the "custom_backgrounds" table changed while this ' +
+  'mutation was being run and on every subsequent retry. See https://docs.convex.dev/error#1'
+
+/* POSTs the image to `url`. The first `conflicts` finalizeUpload calls fail
+ * with Convex's write conflict, which commits nothing. */
+async function uploadBackground(
+  t: T,
+  url: string,
+  afterStore?: () => Promise<void>,
+  conflicts = 0,
+) {
   const route = http.lookup(new URL(url).pathname, 'POST')!
   const handler = route[0] as unknown as {
     _handler(ctx: ActionCtx, request: Request): Promise<Response>
   }
+  const finalize = getFunctionName(internal.appearance.finalizeUpload)
   let response: Response | undefined
   await t.action(async (ctx) => {
     response = await handler._handler(
       {
         ...ctx,
+        runMutation: ((mutation, ...args) => {
+          if (getFunctionName(mutation) === finalize && conflicts > 0) {
+            conflicts--
+            return Promise.reject(new Error(USER_CONFLICT))
+          }
+          return ctx.runMutation(mutation, ...args)
+        }) as ActionCtx['runMutation'],
         storage: {
           ...ctx.storage,
           store: async (blob) => {
@@ -122,6 +145,33 @@ describe('demo upload independent review regressions', () => {
     expect(replayStatus).toBe(404)
     expect(first.status).toBe(200)
     expect(await t.run((ctx) => ctx.db.query('custom_backgrounds').collect())).toHaveLength(1)
+  })
+
+  it('answers a persisting write conflict without Retry-After, since the URL is spent', async () => {
+    // real waits between the retries, the shortest ones, on the fixed clock
+    vi.useRealTimers()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(NOW)
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { t, caller } = await setup()
+    const ticket = await caller.mutation(api.appearance.createUpload, { name: 'Lake.jpg' })
+    const busy = await uploadBackground(t, ticket.upload_url, undefined, CONFLICT_RETRIES + 1)
+    expect(busy.status).toBe(503)
+    expect(busy.headers.get('Retry-After')).toBeNull()
+    expect(JSON.parse(await busy.text())).toEqual({
+      error: {
+        code: 'conflict',
+        message:
+          'The server was too busy to save the image, and nothing changed. Choose the image again.',
+      },
+    })
+    expect(await t.run((ctx) => ctx.db.query('custom_backgrounds').collect())).toEqual([])
+    expect(await t.run((ctx) => ctx.db.system.query('_storage').collect())).toEqual([])
+    // the cleanup freed the reservation, so the URL is spent
+    expect((await uploadBackground(t, ticket.upload_url)).status).toBe(404)
+    expect(await t.run((ctx) => ctx.db.query('demo_uploads').collect())).toEqual([])
+    vi.restoreAllMocks()
   })
 
   it('releases a canceled pending background reservation immediately', async () => {
