@@ -159,7 +159,7 @@ describe('DeferredList', () => {
     expect(spacer()).toBeNull()
   })
 
-  it('brings filtered cards back in blocks of 64 at most', async () => {
+  it('brings filtered cards back in blocks of 16 at most', async () => {
     const items = Array.from({ length: 1000 }, (_, n) => ({ key: `k${n}` }))
     await show(items, 12)
     while (tasks.length) await slice()
@@ -168,7 +168,7 @@ describe('DeferredList', () => {
     while (tasks.length) await slice()
     expect(nodes()).toHaveLength(1000)
     for (const box of container.querySelectorAll('[data-deferred-block]'))
-      expect(box.children.length).toBeLessThanOrEqual(64)
+      expect(box.children.length).toBeLessThanOrEqual(16)
   })
 
   it('puts what a list that opened whole gains later into bounded boxes', async () => {
@@ -181,13 +181,13 @@ describe('DeferredList', () => {
     while (tasks.length) await slice()
     expect(nodes()).toHaveLength(500)
     for (const node of first) expect(node.isConnected).toBe(true)
-    // the first 30 stay plain; the rest fill boxed blocks of 64 at most
+    // the first 30 stay plain; the rest fill boxed blocks of 16 at most
     expect(first.every((node) => !node.parentElement?.hasAttribute('data-deferred-block'))).toBe(
       true,
     )
     const boxes = [...container.querySelectorAll('[data-deferred-block]')]
-    expect(boxes.length).toBeGreaterThanOrEqual(470 / 64)
-    for (const box of boxes) expect(box.children.length).toBeLessThanOrEqual(64)
+    expect(boxes.length).toBeGreaterThanOrEqual(470 / 16)
+    for (const box of boxes) expect(box.children.length).toBeLessThanOrEqual(16)
   })
 
   it('boxes the items that arrive above a list that mounts in slices', async () => {
@@ -202,7 +202,7 @@ describe('DeferredList', () => {
     for (const node of nodes())
       expect(node.parentElement?.hasAttribute('data-deferred-block')).toBe(true)
     for (const box of container.querySelectorAll('[data-deferred-block]'))
-      expect(box.children.length).toBeLessThanOrEqual(64)
+      expect(box.children.length).toBeLessThanOrEqual(16)
   })
 
   it('works in a slice on the items it adds, not on every item it holds', async () => {
@@ -235,7 +235,7 @@ describe('DeferredList', () => {
     while (tasks.length) await slice()
     expect(nodes().map((node) => node.dataset.k)).toEqual(items.map((item) => item.key))
     for (const box of container.querySelectorAll('[data-deferred-block]'))
-      expect(box.children.length).toBeLessThanOrEqual(64)
+      expect(box.children.length).toBeLessThanOrEqual(16)
   })
 
   it('keeps its cards when its first screen changes size', async () => {
@@ -299,18 +299,18 @@ describe('DeferredList', () => {
   it('boxes the blocks of a list that mounts in slices, sized by their estimates', async () => {
     const items = Array.from({ length: 700 }, (_, n) => ({ key: `k${n}` }))
     await show(items, 10)
-    // past one block of 64 while items still wait
+    // past a few blocks of 16 while items still wait
     while (nodes().length < 280) await slice()
     expect(spacer()).not.toBeNull()
     const boxes = [...container.querySelectorAll<HTMLElement>('[data-deferred-block]')]
     // the first screen's 10 items keep a block of their own, which is on
-    // screen; slices fill the next blocks of 64 items. A closed block keeps
+    // screen; slices fill the next blocks of 16 items. A closed block keeps
     // the size it last rendered at, the open one takes its estimate.
     expect(boxes.length).toBeGreaterThanOrEqual(3)
     expect(boxes[0].children).toHaveLength(10)
     expect(boxes[0].style.containIntrinsicBlockSize).toBe(`auto ${10 * 40 + 9 * 8}px`)
-    expect(boxes[1].children).toHaveLength(64)
-    expect(boxes[1].style.containIntrinsicBlockSize).toBe(`auto ${64 * 40 + 63 * 8}px`)
+    expect(boxes[1].children).toHaveLength(16)
+    expect(boxes[1].style.containIntrinsicBlockSize).toBe(`auto ${16 * 40 + 15 * 8}px`)
     expect(boxes.at(-1)?.style.containIntrinsicBlockSize).toMatch(/^\d+px$/)
     expect(boxes.every((box) => box.getAttribute('role') === 'none')).toBe(true)
   })

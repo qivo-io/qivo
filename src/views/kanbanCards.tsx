@@ -66,7 +66,7 @@ function DueDate({ it, inButton = false }: { it: IssueVM; inButton?: boolean }) 
         data-focus-key="due"
         className={`inline-flex items-center gap-1 whitespace-nowrap !font-mono text-xs ${warning ? 'font-semibold text-danger' : 'text-text-3'}`}
       >
-        <Icon name="calendar" size={11} />
+        <span aria-hidden="true" className="due-glyph" />
         {P.fmtISO(it.due)}
       </span>
     </HoverTooltip>
@@ -302,25 +302,29 @@ function BoardCardView({
             {...actions}
           />
         )}
-        <div className={group.parent && group.issues.length ? 'pb-2' : undefined}>
-          {group.issues.map((it, index) => (
-            // The rail and elbow sit in the row's 12px gutter and are lifted
-            // above the row (an isolated stacking context) so the hover fill
-            // spanning the card never covers them. The sibling separator stays
-            // on the indented content, starting at the rail.
-            <div
-              key={it.uuid}
-              data-child-row={group.parent ? it.id : undefined}
-              className={
-                group.parent
-                  ? `relative isolate before:pointer-events-none before:absolute before:top-0 before:left-3 before:z-[1] before:w-0.5 before:bg-[var(--board-hierarchy-line)] after:pointer-events-none after:absolute after:left-3 after:z-[1] after:h-px after:w-2 after:bg-[var(--board-hierarchy-line)] ${P.delayColor(it) ? 'after:top-[42px]' : 'after:top-[18px]'} ${index === group.issues.length - 1 ? (P.delayColor(it) ? 'before:h-[42px]' : 'before:h-[18px]') : 'before:bottom-0'} ${index > 0 ? '[&>div>div]:border-t [&>div>div]:border-border' : ''}`
-                  : undefined
-              }
-            >
-              <TaskRow it={it} place={place(it)} indented={!!group.parent} {...actions} />
-            </div>
+        {/* a card of its own is its task's row alone, without the wrappers
+            a parent's subtasks need: thousands of cards render on a Board */}
+        {!group.parent &&
+          group.issues.map((it) => (
+            <TaskRow key={it.uuid} it={it} place={place(it)} {...actions} />
           ))}
-        </div>
+        {group.parent && (
+          <div className={group.issues.length ? 'pb-2' : undefined}>
+            {group.issues.map((it, index) => (
+              // The rail and elbow sit in the row's 12px gutter and are lifted
+              // above the row (an isolated stacking context) so the hover fill
+              // spanning the card never covers them. The sibling separator stays
+              // on the indented content, starting at the rail.
+              <div
+                key={it.uuid}
+                data-child-row={it.id}
+                className={`relative isolate before:pointer-events-none before:absolute before:top-0 before:left-3 before:z-[1] before:w-0.5 before:bg-[var(--board-hierarchy-line)] after:pointer-events-none after:absolute after:left-3 after:z-[1] after:h-px after:w-2 after:bg-[var(--board-hierarchy-line)] ${P.delayColor(it) ? 'after:top-[42px]' : 'after:top-[18px]'} ${index === group.issues.length - 1 ? (P.delayColor(it) ? 'before:h-[42px]' : 'before:h-[18px]') : 'before:bottom-0'} ${index > 0 ? '[&>div>div]:border-t [&>div>div]:border-border' : ''}`}
+              >
+                <TaskRow it={it} place={place(it)} indented {...actions} />
+              </div>
+            ))}
+          </div>
+        )}
       </StaticControlsContext.Provider>
     </div>
   )

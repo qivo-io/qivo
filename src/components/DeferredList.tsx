@@ -17,8 +17,11 @@ import './DeferredList.css'
    slice renders only the block that grows, so its cost does not grow with
    the items already mounted. A block is also what the browser lays out
    when it comes into view (DeferredList.css), so a small one keeps that
-   frame short. */
-const BLOCK_SIZE = 64
+   frame short: scrolling a 5,000-task Board for the first time, a frame
+   took up to 380ms with blocks of 64 at 4x CPU and 100 to 130ms with
+   blocks of 16. Smaller blocks cost more: the browser checks each one on
+   every frame, so blocks of 8 made every frame of a later scroll longer. */
+const BLOCK_SIZE = 16
 /* The most items a render mounts at once when items arrive above the
    mounted boundary, as when a filter is cleared. */
 const MOST_AT_ONCE = 64

@@ -5,7 +5,7 @@ import { flushSync } from 'react-dom'
    (a DeferredList) registers how many of its items still wait to mount and
    how to mount more. One slice is one posted task: it mounts about 8ms of
    items, lists near the view first, then in document order. Slices follow
-   each other within 24ms of a frame's start, then wait for the next frame,
+   each other within 16ms of a frame's start, then wait for the next frame,
    so input runs between them, the browser renders between frames, and a
    frame stays under about 50ms. The scheduler marks its root while
    anything waits, without a React render. */
@@ -43,7 +43,7 @@ type Options = {
     slices wait for the next frame, and a slice's first, least and most
     items. */
 const SLICE_MS = 8
-const FRAME_MS = 24
+const FRAME_MS = 16
 const FIRST_SLICE = 8
 const MIN_SLICE = 1
 const MAX_SLICE = 512

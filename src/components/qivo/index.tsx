@@ -291,8 +291,8 @@ function Avatar({
         style={{
           width: size,
           height: size,
-          background: u.color,
-          boxShadow: ring ? '0 0 0 2px var(--surface-1)' : 'none',
+          backgroundColor: u.color,
+          boxShadow: ring ? '0 0 0 2px var(--surface-1)' : undefined,
         }}
         className={cn(
           'grid place-items-center rounded-[5px] font-semibold text-white',
@@ -362,28 +362,17 @@ function PriorityIcon({ priority, size = 14 }: { priority: string; size?: number
       </HoverTooltip>
     )
   }
-  const filled = priority === 'high' ? 3 : priority === 'medium' ? 2 : 1
-  const heights = [0.42, 0.7, 1]
+  // one element: the bars are a mask over a fill (styles/glyphs.css)
   return (
     <HoverTooltip content={`${p.name} priority`}>
       <span
         tabIndex={-1}
         role="img"
         aria-label={`${p.name} priority`}
-        style={{ gap: size * 0.14, height: size, width: size }}
-        className="[display:inline-flex] [align-items:flex-end] [flex-shrink:0]"
-      >
-        {[0, 1, 2].map((i) => (
-          <span
-            key={i}
-            style={{
-              height: heights[i] * size,
-              background: i < filled ? p.color : 'var(--border-strong)',
-            }}
-            className="[flex:1] [border-radius:var(--r-2xs)]"
-          />
-        ))}
-      </span>
+        data-prio={priority}
+        style={{ height: size, width: size }}
+        className="prio-bars"
+      />
     </HoverTooltip>
   )
 }
