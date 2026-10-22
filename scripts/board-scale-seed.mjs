@@ -14,7 +14,8 @@
  * like real work, as long and as wide as Northstar's, so the Board's height
  * estimates meet real text; each task's description names its number. A
  * second run adds only what is still missing, up to --tasks, and finishes a
- * family a stopped run left partial. The mix follows the benchmark's varied
+ * family a stopped run left partial or a smaller --tasks left as tasks of
+ * their own. The mix follows the benchmark's varied
  * workspace: every status, a parent with three subtasks every 25th task, a
  * due date every 7th (every other one past), a pause every 31st, a title of
  * the most characters a title holds (LIMITS.title) every 13th and no owner
@@ -178,8 +179,10 @@ export function seededTasks(issues) {
     family job names the parts it lacks, so a run that stopped partway
     through a family is finished, under the parent it already made:
     `head` when its first task is missing (else `existing` is that task),
-    `parent` the existing parent's id (null when it still needs one) and
-    `missing` the subtasks to add. */
+    `parent` the existing parent's id (null when it still needs one),
+    `missing` the subtasks to add and `attach` the existing ones not yet
+    under that parent, such as tasks a run with a smaller --tasks seeded
+    on their own. */
 export function planSeed(tasks, present) {
   const list = []
   let added = 0
@@ -195,7 +198,11 @@ export function planSeed(tasks, present) {
     const head = !present.has(n)
     const parent = present.get(n)?.parent ?? null
     const missing = [1, 2, 3].filter((k) => !present.has(n + k))
-    if (head || !parent || missing.length) {
+    const attach = [1, 2, 3]
+      .map((k) => present.get(n + k))
+      .filter((sibling) => sibling && (!parent || sibling.parent !== parent))
+      .map((sibling) => sibling.task)
+    if (head || !parent || missing.length || attach.length) {
       list.push({
         first: n,
         family: true,
@@ -203,6 +210,7 @@ export function planSeed(tasks, present) {
         existing: present.get(n)?.task ?? null,
         parent,
         missing,
+        attach,
       })
       added += Number(head) + missing.length
     }
@@ -258,6 +266,7 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
     const existing = job.family ? job.existing : null
     const parent = job.parent ?? crypto.randomUUID()
     const subtaskOwner = (existing ? existing.assignee_id : head.assignee_id) ?? actor.id
+    const familyProject = existing?.project_id ?? project
     const calls = job.family
       ? [
           ...(job.head ? [['issues:create', head]] : []),
@@ -277,9 +286,22 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
           ...job.missing.map((k) => [
             'issues:create',
             {
-              ...seededTask(job.first + k, org, existing?.project_id ?? project, subtaskOwner),
+              ...seededTask(job.first + k, org, familyProject, subtaskOwner),
               parent_id: parent,
             },
+          ]),
+          // a subtask stays in its parent's top-level project, so one seeded
+          // on its own elsewhere moves to the family's sub-project first
+          ...job.attach.flatMap((task) => [
+            ...(task.project_id === familyProject
+              ? []
+              : [
+                  [
+                    'issues:move',
+                    { id: task.id, org_id: org, project_id: familyProject, detach_parent: true },
+                  ],
+                ]),
+            ['issues:update', { id: task.id, org_id: org, patch: { parent_id: parent } }],
           ]),
         ]
       : [['issues:create', head]]
@@ -288,7 +310,7 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
         await client.mutation(ref(name), fields)
       } catch (error) {
         throw new DemoCliError(
-          `${name} refused task "${fields.title}": ${error.data?.message ?? error.message}`,
+          `${name} refused task "${fields.title ?? fields.id}": ${error.data?.message ?? error.message}`,
         )
       }
       if (name === 'issues:create' && ++made % 500 === 0) log(`${made} seeded tasks added`)

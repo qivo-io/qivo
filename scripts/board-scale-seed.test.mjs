@@ -99,7 +99,9 @@ describe('board-scale-seed', () => {
     // a family every 25th task: its first task, a parent and three more
     expect(fresh.list.filter((job) => job.family).map((job) => job.first)).toEqual([0, 25, 50])
     const done = (numbers, parent = 'parent') =>
-      new Map(numbers.map((n) => [n, { task: { id: `task${n}` }, parent: n % 25 ? null : parent }]))
+      new Map(
+        numbers.map((n) => [n, { task: { id: `task${n}` }, parent: n % 25 > 3 ? null : parent }]),
+      )
     // a re-run finds 0 to 9 and 30 to 59, and adds 10 to 29 without repeats
     const present = done([...Array(10).keys(), ...Array.from({ length: 30 }, (_, i) => i + 30)])
     const resumed = planSeed(60, present)
@@ -123,7 +125,15 @@ describe('board-scale-seed', () => {
       ]),
     )
     expect(partial.list).toEqual([
-      { first: 25, family: true, head: false, existing: { id: 'h' }, parent: 'p', missing: [2, 3] },
+      {
+        first: 25,
+        family: true,
+        head: false,
+        existing: { id: 'h' },
+        parent: 'p',
+        missing: [2, 3],
+        attach: [],
+      },
       { first: 29, family: false },
     ])
     expect(partial.added).toBe(3)
@@ -139,8 +149,45 @@ describe('board-scale-seed', () => {
       existing: { id: 'h' },
       parent: null,
       missing: [1, 2, 3],
+      attach: [],
     })
     expect(headOnly.added).toBe(4)
+  })
+
+  it('attaches the tasks a smaller --tasks seeded on their own when the family grows', () => {
+    // --tasks 27 seeds 25 and 26 on their own; --tasks 30 makes them a family
+    const grown = planSeed(
+      30,
+      new Map([
+        ...doneUpTo(25),
+        [25, { task: { id: 'h' }, parent: null }],
+        [26, { task: { id: 's' }, parent: null }],
+      ]),
+    )
+    expect(grown.list).toEqual([
+      {
+        first: 25,
+        family: true,
+        head: false,
+        existing: { id: 'h' },
+        parent: null,
+        missing: [2, 3],
+        attach: [{ id: 's' }],
+      },
+      { first: 29, family: false },
+    ])
+    // once attached, the family is complete
+    const after = planSeed(
+      30,
+      new Map([
+        ...doneUpTo(25),
+        ...[25, 26, 27, 28, 29].map((n) => [
+          n,
+          { task: { id: `t${n}` }, parent: n === 29 ? null : 'p' },
+        ]),
+      ]),
+    )
+    expect(after.list).toEqual([])
   })
 
   it('reads the seeded tasks from their marks and old titles, not parents or other tasks', () => {
@@ -157,11 +204,12 @@ describe('board-scale-seed', () => {
   })
 })
 
-/** The seeded tasks before `n`, families complete. */
+/** The seeded tasks before `n`, families complete: a family's first task
+    and its three subtasks under one parent. */
 function doneUpTo(n) {
   return Array.from({ length: n }, (_, i) => [
     i,
-    { task: { id: `t${i}` }, parent: i % 25 ? null : 'p0' },
+    { task: { id: `t${i}` }, parent: i % 25 > 3 ? null : 'p0' },
   ])
 }
 
@@ -189,5 +237,34 @@ describe('a rerun of board-scale-seed', () => {
       ['issues:create', 'Seeded by board-scale-seed as task 29.', parent[1].parent_id],
     ])
     for (const [, fields] of rest) expect(fields.project_id).toBe('sub')
+  })
+
+  it('moves a task seeded on its own into the family it joins, then attaches it', async () => {
+    // a run with --tasks 27 left 25 and 26 on their own, 26 in another project
+    fake.issues = Array.from({ length: 27 }, (_, n) => ({
+      ...seededTask(n, 'org', n === 26 ? 'other' : 'sub', 'owner'),
+      id: `task${n}`,
+      parent_id: n % 25 === 0 && n < 25 ? 'parent0' : null,
+    }))
+    for (const task of fake.issues)
+      if (/as task [234]\./.test(task.description)) task.parent_id = 'parent0'
+    fake.calls = []
+    await runBoardScaleSeed([...local, '--tasks', '30'], { env, log: () => {} })
+    const parent = fake.calls[0][1].parent_id
+    expect(fake.calls.map(([name, fields]) => [name, fields.description ?? fields.id])).toEqual([
+      ['issues:createParent', 'task25'],
+      ['issues:create', 'Seeded by board-scale-seed as task 28.'],
+      ['issues:create', 'Seeded by board-scale-seed as task 29.'],
+      ['issues:move', 'task26'],
+      ['issues:update', 'task26'],
+      ['issues:create', 'Seeded by board-scale-seed as task 30.'],
+    ])
+    expect(fake.calls[3][1]).toEqual({
+      id: 'task26',
+      org_id: 'org',
+      project_id: 'sub',
+      detach_parent: true,
+    })
+    expect(fake.calls[4][1]).toEqual({ id: 'task26', org_id: 'org', patch: { parent_id: parent } })
   })
 })
