@@ -323,6 +323,10 @@ describe('what a row says', () => {
     expect(blockedText({ reason: 'not_lead', project: 'Specs' })).toBe(
       'Specs has no lead now. Ask an organization admin to restore it.',
     )
+    // a project the row cannot name starts the sentence as "This project"
+    expect(blockedText({ reason: 'not_lead' })).toBe(
+      'This project has no lead now. Ask an organization admin to restore it.',
+    )
     expect(blockedText({ reason: 'project_archived', project: 'Website' })).toBe(
       'Restore Website from Archived projects first.',
     )

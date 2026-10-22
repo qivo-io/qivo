@@ -42,7 +42,11 @@
  *
  * Each row found carries an `outcome`: 'fixed' by this run, 'would_fix' in a
  * dry run or check, 'skipped' when the fixed value would collide with
- * another row, or 'reported' when only a person can fix it.
+ * another row, or 'reported' when only a person can fix it. A dry run sees
+ * a collision with a stored row or a row of the same page; two rows on
+ * different pages that fix to the same value both show 'would_fix', and the
+ * real run fixes the first and skips the second. `fix` answers `counts` for
+ * every row and lists the first 2,000, so a large run still answers.
  *
  * The fix trims each over-long name and cuts it to its limit without
  * splitting an emoji (cutText); a file name keeps its extension. It lowers
@@ -367,12 +371,27 @@ export const check = internalQuery({
     await walk(ctx, phase, cursor ?? null, null, page_size),
 })
 
-/** Walks every page of every phase and lists every row it found, with what
- * it did to each, or would do in a dry run. */
+/** The most rows fix lists, far below Convex's 8,192 values per array, so
+ * a run that finds more still answers. `counts` covers every row. */
+const ROWS_LISTED = 2_000
+
+/** Walks every page of every phase and answers what it did to each row it
+ * found, or would do in a dry run: `counts` per table, field and outcome,
+ * and the first ROWS_LISTED rows with `unlisted` the rest. */
 export const fix = internalAction({
   args: { dry_run: v.boolean(), page_size: vPageSize },
-  handler: async (ctx, { dry_run, page_size }): Promise<{ dry_run: boolean; rows: Found[] }> => {
+  handler: async (
+    ctx,
+    { dry_run, page_size },
+  ): Promise<{
+    dry_run: boolean
+    counts: Record<string, number>
+    rows: Found[]
+    unlisted: number
+  }> => {
     const rows: Found[] = []
+    const counts: Record<string, number> = {}
+    let unlisted = 0
     for (const phase of PHASES) {
       let cursor: string | null = null
       for (;;) {
@@ -382,11 +401,16 @@ export const fix = internalAction({
           cursor,
           page_size,
         })
-        rows.push(...result.rows)
+        for (const row of result.rows) {
+          const key = `${row.table}.${row.field} ${row.outcome}`
+          counts[key] = (counts[key] ?? 0) + 1
+          if (rows.length < ROWS_LISTED) rows.push(row)
+          else unlisted += 1
+        }
         if (result.done) break
         cursor = result.cursor
       }
     }
-    return { dry_run, rows }
+    return { dry_run, counts, rows, unlisted }
   },
 })

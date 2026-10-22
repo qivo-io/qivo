@@ -295,9 +295,9 @@ const ORDERED = /^(\d{1,3})[.)]\s+/
    input (e.g. one long run of asterisks); past this size the text renders as
    plain paragraphs instead of freezing every viewer of the issue. The editor
    checks it too: the fallback AST must never round-trip through a commit
-   (re-escaping would corrupt the whole text). The limit equals the server's
-   save cap, so every stored text parses; only a draft typed past the cap,
-   which cannot be saved, reaches the fallback. */
+   (re-escaping would corrupt the whole text), so a stored text past it
+   opens read-only. The limit equals the server's save cap, so every text
+   saved since the cap parses. */
 export const MAX_PARSE = TEXT_MAX
 
 export function parseMd(src: string): MdBlock[] {

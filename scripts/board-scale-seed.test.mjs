@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { TITLE_MAX } from '../convex/model/issues'
+import { LIMITS } from '../convex/lib/limits'
 import {
   parseSeedArgs,
   planSeed,
@@ -50,7 +50,7 @@ describe('board-scale-seed', () => {
     expect(
       tasks.filter((task) => task.paused).every((t) => !['backlog', 'done'].includes(t.status)),
     ).toBe(true)
-    expect(Math.max(...tasks.map((task) => task.title.length))).toBe(TITLE_MAX)
+    expect(Math.max(...tasks.map((task) => task.title.length))).toBe(LIMITS.title.max)
     expect(tasks.every((task) => task.title.startsWith('Board scale '))).toBe(true)
   })
 

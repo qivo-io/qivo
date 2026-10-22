@@ -182,8 +182,8 @@ export function blockedText(blocked: BlockDetail, holder?: string): string | nul
     case 'not_lead':
       // the server names no lead when none passes today's lead rule
       return blocked.lead
-        ? `${project} has its own lead, ${blocked.lead}. Ask them or an organization admin to restore it.`
-        : `${project} has no lead now. Ask an organization admin to restore it.`
+        ? `${blocked.project ?? 'This project'} has its own lead, ${blocked.lead}. Ask them or an organization admin to restore it.`
+        : `${blocked.project ?? 'This project'} has no lead now. Ask an organization admin to restore it.`
     case 'subtask_project':
       return "A subtask is in a project you can't edit. Ask an organization admin to restore it."
     case 'project_archived':

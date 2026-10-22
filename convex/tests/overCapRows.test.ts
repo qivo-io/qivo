@@ -108,6 +108,9 @@ describe('internal/overCapRows', () => {
       'profiles.email reported',
       'teams.name would_fix',
     ])
+    // every row is counted, so a run too large to list still says what it found
+    expect(dry.counts).toEqual(Object.fromEntries(summary(dry.rows).map((key) => [key, 1])))
+    expect(dry.unlisted).toBe(0)
     expect(await t.query(internal.internal.overCapRows.check, { phase: 'teams' })).toMatchObject({
       rows: [{ field: 'name', length: 81, outcome: 'would_fix' }],
       done: true,

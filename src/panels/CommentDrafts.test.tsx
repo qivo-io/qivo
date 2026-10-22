@@ -61,7 +61,8 @@ const comment = (n: number): Row<'comments'> => ({
 const range = (from: number, to: number) =>
   Array.from({ length: to - from }, (_, n) => comment(from + n))
 
-async function load() {
+/** Loads the store with task QN-27, whose description is `description`. */
+async function load(description = '') {
   vi.resetModules()
   const snap: Snapshot = plannerFixture()
   me = snap.profiles[0].id
@@ -71,7 +72,7 @@ async function load() {
     project_id: snap.projects[0].id,
     num: 27,
     title: 'Run the soak test',
-    description: '',
+    description,
     status: 'progress',
     priority: 'medium',
     paused: false,
@@ -379,6 +380,15 @@ describe('comment drafts in the task window', { timeout: 20_000 }, () => {
       expect(writes).toEqual([])
       await act(async () => editor.commands.setContent(''))
     }
+  })
+})
+
+describe('a description saved before the text limit', { timeout: 20_000 }, () => {
+  it('opens read-only, so the parser fallback is never saved back', async () => {
+    await load(`# Heading\n\n${'a'.repeat(LIMITS.description.max)}`)
+    await open()
+    expect(document.body.textContent).toContain('This description is too long to edit.')
+    expect(document.querySelector('[aria-label="Task description"]')).toBeNull()
   })
 })
 

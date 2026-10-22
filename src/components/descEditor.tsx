@@ -75,6 +75,7 @@ import { P, textRefusal } from '../store/planner'
 import type { PMNode } from './descDoc'
 import { astToDoc, docToAst } from './descDoc'
 import { copyImage, downloadImage, openImageFull, toast } from './imgActions'
+import { Markdown } from './markdown'
 import { mentionSuggestion } from './mentionSuggestion'
 import { Icon } from './qivo'
 
@@ -1702,7 +1703,38 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   )
 })
 
-/* Every stored description and comment is within TEXT_MAX once trimmed,
-   which is also the parse cap (lib/md.ts MAX_PARSE), so every one opens for
-   editing. */
-export default DescEditorInner
+/** Outer guard: a stored text longer than the parse cap (lib/md.ts
+    MAX_PARSE, TEXT_MAX) renders read-only, because the parser's literal
+    fallback must never round-trip through a commit, which would escape all
+    of its Markdown. New writes cannot pass TEXT_MAX; a text saved before the
+    cap is shortened over REST or MCP (internal/overCapRows.ts reports it). */
+const DescEditor = forwardRef<DescEditorHandle, DescEditorProps>(function DescEditor(props, ref) {
+  if (props.value.length > MAX_PARSE) {
+    const onClose = props.comment?.onClose
+    return (
+      <div>
+        <Markdown text={props.value} />
+        <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [margin-top:6px] [font-style:italic]">
+          This {props.comment ? 'comment' : 'description'} is too long to edit.
+        </div>
+        {/* edit-in-place must stay exitable: without this the row is stuck in
+            edit mode (its own Edit/Delete buttons hide while editing) */}
+        {onClose && (
+          <div className="[display:flex] [justify-content:flex-end] [margin-top:8px]">
+            <Button
+              type="button"
+              variant="ghost"
+              className="h-control-sm [font-size:var(--fs-sm)]"
+              onClick={onClose}
+            >
+              Close
+            </Button>
+          </div>
+        )}
+      </div>
+    )
+  }
+  return <DescEditorInner {...props} ref={ref} />
+})
+
+export default DescEditor

@@ -32,7 +32,7 @@ Ctrl/Cmd+S to save. The formatting row and save controls remain visible while
 long drafts scroll. Descriptions and comments can hold up to 20,000
 characters, including formatting. Near the limit the editor shows how many
 characters the draft holds, and a longer draft cannot be saved until you
-shorten it.
+shorten it. Older text saved over this limit can be read but not edited.
 
 **Comments** use the same editor but accept text only. Add images as
 attachments. The composer sits below the newest message, or below the scrolling
