@@ -8,13 +8,18 @@
  * reads exactly the declared number of bytes, stores them and records the
  * file on the ticket (finishTicketUpload), which the confirm call then must
  * name. A POST that fails stores nothing and frees the URL for another try
- * (abandonTicketUpload). One that cannot, because its runtime stopped, holds
- * the URL for UPLOAD_CLAIM_MS at most.
+ * (abandonTicketUpload). One that cannot, because its runtime stopped or
+ * the cleanup kept failing, holds the URL for UPLOAD_CLAIM_MS at most.
+ *
+ * POSTs sent to one URL at once all write its ticket, so each of these
+ * mutations runs through conflictRetrying like a REST write, and a conflict
+ * that outlasts the retries is REST's 503 (WRITE_CONFLICT).
  *
  * It answers like a Convex upload URL, `{"storageId": "…"}` with any
  * origin allowed, so clients built for one keep working. A refusal is
  * `{"error": message}` with 404 for an unknown, expired or forged URL, 409
- * for a used one and 400 for a body that is not the declared size. */
+ * for a used one, 400 for a body that is not the declared size and 503 with
+ * Retry-After for a write conflict. */
 
 import type { HttpRouter } from 'convex/server'
 import { ConvexError, v } from 'convex/values'
@@ -24,6 +29,7 @@ import { internalMutation } from '../_generated/server'
 import { verifyFileToken } from '../lib/fileTokens'
 import { badRequest, type Refusal } from '../lib/functions'
 import { LIMITS, overText } from '../lib/limits'
+import { answerAfterBody, readLimitedBody } from '../lib/requestBody'
 import {
   abandonTicketUpload,
   beginTicketUpload,
@@ -32,7 +38,8 @@ import {
   UPLOAD_TICKET_MISSING,
   uploadSizeWrong,
 } from '../model/attachments'
-import { answerAfterBody, internalError } from './shared'
+import { conflictRetrying } from './registry'
+import { internalError, WRITE_CONFLICT, WRITE_CONFLICT_RETRY_AFTER } from './shared'
 
 const PREFIX = '/attachment-uploads/'
 
@@ -47,19 +54,10 @@ export const UPLOAD_TOO_SLOW = 'the upload took too long; send it again'
  * confirm's sentence for it. */
 export const MEDIA_TYPE_TOO_LONG = LIMITS.mediaType.refusal
 
-/* The Convex runtime's Blob, timers and crypto, which convex/tsconfig's
- * ESNext lib does not declare. */
+/* The Convex runtime's Blob and crypto, which convex/tsconfig's ESNext lib
+ * does not declare. */
 declare const Blob: { new (parts: Uint8Array[], options: { type: string }): Blob }
-declare function setTimeout(callback: () => void, delay: number): unknown
-declare function clearTimeout(timer: unknown): void
 declare const crypto: { randomUUID(): string }
-type BodyStream = {
-  getReader(): {
-    read(): Promise<{ done: boolean; value?: Uint8Array }>
-    cancel(): Promise<void>
-    releaseLock(): void
-  }
-}
 
 /* Claims the ticket's one POST (model/attachments.ts beginTicketUpload). */
 export const begin = internalMutation({
@@ -112,7 +110,7 @@ export const abandon = internalMutation({
 
 /* Every answer allows any origin, as a Convex upload URL does, and is never
  * cached. */
-const answer = (status: number, body: unknown): Response =>
+const answer = (status: number, body: unknown, headers: Record<string, string> = {}): Response =>
   new Response(JSON.stringify(body), {
     status,
     headers: {
@@ -120,52 +118,25 @@ const answer = (status: number, body: unknown): Response =>
       'Cache-Control': 'no-store',
       'Content-Type': 'application/json',
       'Referrer-Policy': 'no-referrer',
+      ...headers,
     },
   })
 
-/** The request body's chunks when it holds exactly `size` bytes, else null.
- * It stops reading once the body passes `size`, so a longer body never
- * fills memory, and leaves the rest to receive's discardBody. It refuses a
- * body still arriving after `readMs`, and stops that one's upload. */
+/** The request body when it holds exactly `size` bytes, else null. It stops
+ * reading once the body passes `size`, so a longer body never fills memory,
+ * and leaves the rest to receive's discardBody. It refuses a body still
+ * arriving after `readMs`, and stops that one's upload. */
 export async function readExactly(
   request: Request,
   size: number,
   readMs = READ_MS,
-): Promise<Uint8Array[] | null> {
+): Promise<Uint8Array | null> {
   const declared = request.headers.get('Content-Length')
   if (declared !== null && Number(declared) !== size) return null
-  const body = (request as Request & { body: BodyStream | null }).body
-  if (body === null) return size === 0 ? [] : null
-  const reader = body.getReader()
-  let timer: unknown
-  let late = false
-  const tooSlow = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
-      late = true
-      reject(badRequest(UPLOAD_TOO_SLOW))
-    }, readMs)
-  })
-  const read = async (): Promise<Uint8Array[] | null> => {
-    const chunks: Uint8Array[] = []
-    let total = 0
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      if (value === undefined) continue
-      total += value.byteLength
-      if (total > size) return null
-      chunks.push(value)
-    }
-    return total === size ? chunks : null
-  }
-  try {
-    return await Promise.race([read(), tooSlow])
-  } finally {
-    clearTimeout(timer)
-    // a read still waits on a body that came too late, so only cancel ends it
-    if (late) await reader.cancel().catch(() => {})
-    else reader.releaseLock()
-  }
+  const read = await readLimitedBody(request, size, readMs)
+  if (read.ok) return read.bytes.byteLength === size ? read.bytes : null
+  if (read.reason === 'too_slow') throw badRequest(UPLOAD_TOO_SLOW)
+  return read.reason === 'missing' && size === 0 ? new Uint8Array(0) : null
 }
 
 /* POST /attachment-uploads/{ticket}?e=&m=&t= stores the ticket's file. */
@@ -192,17 +163,18 @@ const receive = answerAfterBody(async (ctx, request) => {
   }
   // this POST's own claim, so cleanup never frees another POST's claim
   const attempt = crypto.randomUUID()
+  const runMutation = conflictRetrying(ctx)
   let storageId: Id<'_storage'> | undefined
   try {
-    const { size } = await ctx.runMutation(internal.machine.uploads.begin, {
+    const { size } = await runMutation(internal.machine.uploads.begin, {
       ticket,
       minter,
       attempt,
     })
-    const chunks = await readExactly(request, size)
-    if (chunks === null) throw badRequest(uploadSizeWrong(size))
-    storageId = await ctx.storage.store(new Blob(chunks, { type }))
-    const kept = await ctx.runMutation(internal.machine.uploads.finish, {
+    const bytes = await readExactly(request, size)
+    if (bytes === null) throw badRequest(uploadSizeWrong(size))
+    storageId = await ctx.storage.store(new Blob([bytes], { type }))
+    const kept = await runMutation(internal.machine.uploads.finish, {
       ticket,
       minter,
       attempt,
@@ -213,18 +185,28 @@ const receive = answerAfterBody(async (ctx, request) => {
     return answer(200, { storageId })
   } catch (e) {
     // also when begin's answer was lost after it committed the claim
-    const stored = await ctx
-      .runMutation(internal.machine.uploads.abandon, {
-        ticket,
-        minter,
-        attempt,
-        storage_id: storageId,
-      })
-      .catch(() => null)
+    const stored = await runMutation(internal.machine.uploads.abandon, {
+      ticket,
+      minter,
+      attempt,
+      storage_id: storageId,
+    }).catch((cleanup: unknown) => {
+      // the URL stays held for UPLOAD_CLAIM_MS, and an unkept file waits
+      // for the storage sweep
+      console.error(cleanup)
+      return null
+    })
     // finish committed but its answer was lost: the file is the ticket's
     if (stored !== null) return answer(200, { storageId: stored })
     if (!(e instanceof ConvexError)) return answer(500, { error: internalError(e) })
     const refusal = e.data as Refusal
+    if (refusal.reason === WRITE_CONFLICT) {
+      return answer(
+        503,
+        { error: refusal.message },
+        { 'Retry-After': String(WRITE_CONFLICT_RETRY_AFTER) },
+      )
+    }
     const status = refusal.code === 'not_found' ? 404 : refusal.code === 'conflict' ? 409 : 400
     return answer(status, { error: refusal.message })
   }

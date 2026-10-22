@@ -30,6 +30,16 @@ describe('body cap probe', () => {
     expect(() => probeBody('/mcp', 10)).toThrow(/at least/)
   })
 
+  it('sends no credential and no real link, so no case can change data', () => {
+    for (const { path, expect: statuses } of Object.values(CASES)) {
+      expect(
+        statuses.every((status) => /^4\d\d$/.test(status)),
+        path,
+      ).toBe(true)
+      if (path.includes('uploads/')) expect(path).toContain('t=probe')
+    }
+  })
+
   it('counts every answer and every request that got none', async () => {
     const origin = await listen((n) => n % 4 === 0)
     for (const kind of [CASES['rest-over'], CASES['rest-over-chunked']]) {

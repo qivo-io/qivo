@@ -8,8 +8,8 @@ import { internal } from '../_generated/api'
 import { badRequest, type Refusal } from '../lib/functions'
 import { validateCalendarDay } from '../lib/panorama'
 import { CURATION_BODY_LIMIT_BYTES } from '../lib/panoramaCuration'
+import { answerAfterBody } from '../lib/requestBody'
 import { sha256hex } from './auth'
-import { answerAfterBody } from './shared'
 
 declare class TextEncoder {
   encode(text: string): Uint8Array

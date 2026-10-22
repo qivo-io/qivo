@@ -1,15 +1,19 @@
 /* The 1 MiB cap on REST and MCP request bodies (machine/shared.ts readBody).
  * A body over the cap answers 413 after authentication, before any routing or
  * work, so the call is still counted and an unauthenticated caller only ever
- * sees its 401. Every answer goes out only after the body has arrived
- * (machine/shared.ts answerAfterBody), so an early one is never lost to a
- * reset connection. */
+ * sees its 401. Every answer of every HTTP route goes out only after the body
+ * has arrived (lib/requestBody.ts answerAfterBody), so an early one is never
+ * lost to a reset connection. */
+/// <reference types="vite/client" />
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Doc } from '../_generated/dataModel'
+import { DEMO_REPORT_MAX_BYTES } from '../lib/demoReporting'
 import { LIMITS } from '../lib/limits'
+import { POLAR_MAX_BODY_BYTES } from '../lib/polar'
+import { DISCARD_MAX_BYTES, discardBody, readLimitedBody } from '../lib/requestBody'
 import { sha256hex } from '../machine/auth'
-import { BODY_MAX_BYTES, DISCARD_MAX_BYTES, discardBody } from '../machine/shared'
+import { BODY_MAX_BYTES } from '../machine/shared'
 import { NOW, newT, type OrgFixture, type T, uuid, withOrg } from './helpers.setup'
 
 const SECRET = `qva_${'3'.repeat(48)}`
@@ -253,14 +257,19 @@ describe('MCP', () => {
   })
 })
 
-/* A body the test sends in two parts: the first at once, the rest when it
- * calls `finish`. `read` says whether the handler took the last part. */
-function heldBody() {
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
+
+/* A body the test sends in two parts: the first, of `first` bytes, at once,
+ * the rest when it calls `finish`. `read` says whether the handler took the
+ * last part. */
+function heldBody(first = 64 * 1024) {
   let finish = () => {}
   let read = false
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(new Uint8Array(64 * 1024).fill(32))
+      controller.enqueue(new Uint8Array(first).fill(32))
       finish = () => {
         controller.enqueue(new Uint8Array(BODY_MAX_BYTES).fill(32))
         controller.close()
@@ -311,6 +320,160 @@ describe('early answers', () => {
     held.finish()
     expect((await response).status).toBe(status)
     expect(held.wasRead()).toBe(true)
+  })
+})
+
+/* Sends `held` to `path`, checks that no answer comes before the test
+ * finishes the body, and answers the response. */
+async function answeredAfter(
+  t: T,
+  path: string,
+  headers: Record<string, string>,
+  held: ReturnType<typeof heldBody>,
+): Promise<Response> {
+  let answered = false
+  const response = http(t, path, {
+    method: 'POST',
+    headers,
+    body: held.body,
+    duplex: 'half',
+  }).then((answer) => {
+    answered = true
+    return answer
+  })
+  // long enough for every handler to decide its answer
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  expect(answered).toBe(false)
+  held.finish()
+  const answer = await response
+  expect(held.wasRead()).toBe(true)
+  return answer
+}
+
+describe('early answers outside REST and MCP', () => {
+  const METRICS = 'm'.repeat(40)
+  const json = { 'Content-Type': 'application/json' }
+  // every other route's answers before or while it reads the body: a refusal
+  // on the demo, an unknown upload link, a closed endpoint and a body found
+  // or declared past the route's cap
+  it.each([
+    ['auth refusal on the demo', '/api/auth/sign-in/email', { APP_MODE: 'demo' }, json, 0, 403],
+    ['OAuth refusal on the demo', '/api/auth/oauth2/register', { APP_MODE: 'demo' }, json, 0, 403],
+    [
+      'image upload 404',
+      '/background-uploads/x?e=1&m=x&t=y',
+      {},
+      { 'Content-Type': 'image/png' },
+      0,
+      404,
+    ],
+    ['demo upload 404', '/demo-uploads/x?e=1&m=x&t=y', {}, {}, 0, 404],
+    ['demo metrics 404', '/internal/demo-metrics', {}, json, 0, 404],
+    [
+      'demo metrics 413 by Content-Length',
+      '/internal/demo-metrics',
+      { DEMO_METRICS_SECRET: METRICS },
+      {
+        ...json,
+        Authorization: `Bearer ${METRICS}`,
+        'Content-Length': String(DEMO_REPORT_MAX_BYTES + 1),
+      },
+      0,
+      413,
+    ],
+    [
+      'demo metrics 413 past the cap',
+      '/internal/demo-metrics',
+      { DEMO_METRICS_SECRET: METRICS },
+      { ...json, Authorization: `Bearer ${METRICS}` },
+      DEMO_REPORT_MAX_BYTES + 1,
+      413,
+    ],
+    ['Polar webhook 404', '/billing/polar/webhook', {}, json, 0, 404],
+    [
+      'Polar webhook 400 past the cap',
+      '/billing/polar/webhook',
+      { BILLING_ENABLED: 'true', POLAR_WEBHOOK_SECRET: 'polar-webhook-secret' },
+      json,
+      POLAR_MAX_BODY_BYTES + 1,
+      400,
+    ],
+  ] as const)('%s waits for the whole body', async (_name, path, env, headers, first, status) => {
+    vi.stubEnv('SITE_URL', 'http://localhost:5199')
+    vi.stubEnv('BETTER_AUTH_SECRET', 'request-body-files-secret')
+    for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value)
+    const t = newT()
+    const held = heldBody(first || undefined)
+    expect((await answeredAfter(t, path, headers, held)).status).toBe(status)
+  })
+
+  it('leaves no route without the wait', () => {
+    // every module of convex/ that builds an HTTP action, tests and
+    // generated code aside
+    const sources = import.meta.glob(['../**/*.ts', '!../tests/**', '!../_generated/**'], {
+      eager: true,
+      query: '?raw',
+      import: 'default',
+    }) as Record<string, string>
+    expect(Object.keys(sources).length).toBeGreaterThan(100)
+    const bare = Object.entries(sources)
+      .filter(([path]) => path !== '../lib/requestBody.ts')
+      .filter(([, text]) => /\bhttpAction(Generic)?\s*\(/.test(text))
+      .map(([path]) => path)
+    expect(bare).toEqual([])
+  })
+})
+
+describe('readLimitedBody', () => {
+  // a request whose body sends `chunks` and then waits until it is cancelled
+  const stalling = (length: number | null, ...chunks: Uint8Array[]) => {
+    const seen = { cancelled: false, released: false }
+    const request = {
+      headers: { get: (name: string) => (name === 'Content-Length' ? length : null) },
+      body: {
+        getReader: () => ({
+          read: () =>
+            chunks.length > 0
+              ? Promise.resolve({ done: false, value: chunks.shift() })
+              : new Promise<never>(() => {}),
+          cancel: async () => {
+            seen.cancelled = true
+          },
+          releaseLock: () => {
+            seen.released = true
+          },
+        }),
+      },
+    } as unknown as Request
+    return { request, seen }
+  }
+
+  it('refuses a body declared past the limit without reading it', async () => {
+    const { request, seen } = stalling(5, new Uint8Array(1))
+    expect(await readLimitedBody(request, 4, 60_000)).toEqual({ ok: false, reason: 'too_large' })
+    expect(seen).toEqual({ cancelled: false, released: false })
+  })
+
+  it('leaves the rest of a body found past the limit to discardBody', async () => {
+    const { request, seen } = stalling(null, new Uint8Array(3), new Uint8Array(2))
+    expect(await readLimitedBody(request, 4, 60_000)).toEqual({ ok: false, reason: 'too_large' })
+    expect(seen).toEqual({ cancelled: false, released: true })
+  })
+
+  it('cancels a body still arriving at the deadline', async () => {
+    const { request, seen } = stalling(null, new Uint8Array(2))
+    expect(await readLimitedBody(request, 4, 20)).toEqual({ ok: false, reason: 'too_slow' })
+    expect(seen).toEqual({ cancelled: true, released: false })
+  })
+
+  it('answers the bytes of a body within the limit, and says when there is none', async () => {
+    const whole = new Request('http://x', { method: 'POST', body: 'abcd' })
+    const read = await readLimitedBody(whole, 4, 60_000)
+    expect(read.ok && new TextDecoder().decode(read.bytes)).toBe('abcd')
+    expect(await readLimitedBody(new Request('http://x'), 4)).toEqual({
+      ok: false,
+      reason: 'missing',
+    })
   })
 })
 

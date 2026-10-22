@@ -18,11 +18,16 @@
  *      conflict outlasts the retries.
  *   5. The answer's sentence and wait are pinned, and the public docs quote
  *      them.
+ *   6. The attachment upload URL, whose POSTs all write one ticket, retries
+ *      its claim, record and cleanup the same way. A conflict that outlasts
+ *      the retries stores nothing, frees the URL and answers 503 with
+ *      Retry-After, and a cleanup that keeps failing is logged.
  *
  * Convex's conflicts cannot happen in convex-test, which runs one
- * transaction at a time, so the comment fan-out, the ingress count and
- * the attach throw Convex's message for as many calls as `faults` asks. The
- * throw rolls the transaction back like the real failure. */
+ * transaction at a time, so the comment fan-out, the ingress count, the
+ * attach and the upload URL's mutations throw Convex's message for as many
+ * calls as `faults` asks. The throw rolls the transaction back like the real
+ * failure. */
 /// <reference types="vite/client" />
 
 import { ConvexError } from 'convex/values'
@@ -72,7 +77,21 @@ const faults = vi.hoisted(() => ({
   commentError: '',
   ingress: [] as unknown[],
   attach: 0,
+  claim: 0,
+  finish: 0,
+  abandon: 0,
 }))
+
+/* Wraps `write` so that its next `faults[key]` calls throw USER_CONFLICT. */
+const faulty =
+  <A extends unknown[], R>(key: 'claim' | 'finish' | 'abandon', write: (...a: A) => Promise<R>) =>
+  async (...a: A): Promise<R> => {
+    if (faults[key] > 0) {
+      faults[key]--
+      throw new Error(USER_CONFLICT)
+    }
+    return await write(...a)
+  }
 
 // A post's fan-out runs after its insert, so a throw there undoes the comment.
 vi.mock('../model/messages', async (importOriginal) => {
@@ -100,6 +119,9 @@ vi.mock('../model/attachments', async (importOriginal) => {
       }
       return await real.attachFileCore(...a)
     },
+    beginTicketUpload: faulty('claim', real.beginTicketUpload),
+    finishTicketUpload: faulty('finish', real.finishTicketUpload),
+    abandonTicketUpload: faulty('abandon', real.abandonTicketUpload),
   }
 })
 
@@ -122,6 +144,9 @@ beforeEach(() => {
   faults.commentError = ''
   faults.ingress = []
   faults.attach = 0
+  faults.claim = 0
+  faults.finish = 0
+  faults.abandon = 0
   // the shortest waits, 100 ms and then 200 ms
   vi.spyOn(Math, 'random').mockReturnValue(0)
 })
@@ -521,5 +546,105 @@ describe('the write conflict answer', () => {
       expect(prose, path).toContain(WRITE_TIMEOUT_MESSAGE)
       expect(prose, path).toContain(`Retry-After: ${WRITE_CONFLICT_RETRY_AFTER}`)
     }
+  })
+})
+
+/* ------------------------------------------------------- 6. the upload URL */
+
+describe('the attachment upload URL', () => {
+  /* A ticket for 4 bytes on the task, and the path of its upload URL. */
+  const ticket = async (fx: Fx): Promise<string> => {
+    const started = await send(fx, `/v1/tasks/QN-${fx.task.num}/attachments`, {
+      name: 'notes.txt',
+      size: 4,
+    })
+    expect(started.status).toBe(201)
+    const url = new URL((started.json as { upload_url: string }).upload_url)
+    return `${url.pathname}${url.search}`
+  }
+
+  /* POSTs `size` bytes to the upload URL at `path`. */
+  const post = async (fx: Fx, path: string, size = 4): Promise<Wire> => {
+    const res = await (
+      fx.t as unknown as {
+        fetch(
+          path: string,
+          init: { method: string; headers: Record<string, string>; body: Uint8Array },
+        ): Promise<Response>
+      }
+    ).fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: new Uint8Array(size),
+    })
+    return { status: res.status, headers: res.headers, json: JSON.parse(await res.text()) }
+  }
+
+  const stored = (fx: Fx) =>
+    fx.t.run(async (ctx) => (await ctx.db.system.query('_storage').collect()).length)
+
+  it('stores the file after a claim that conflicted within the retries', async () => {
+    vi.stubEnv('BETTER_AUTH_SECRET', 'write-conflicts-files-secret')
+    const fx = await setup()
+    const path = await ticket(fx)
+    faults.claim = CONFLICT_RETRIES
+    expect(await post(fx, path)).toMatchObject({
+      status: 200,
+      json: { storageId: expect.any(String) },
+    })
+    expect(faults.claim).toBe(0)
+  })
+
+  it('answers 503 with Retry-After and frees the URL when the claim keeps conflicting', async () => {
+    vi.stubEnv('BETTER_AUTH_SECRET', 'write-conflicts-files-secret')
+    const fx = await setup()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const path = await ticket(fx)
+    faults.claim = CONFLICT_RETRIES + 1
+    const res = await post(fx, path)
+    expect(res.status).toBe(503)
+    expect(res.headers.get('Retry-After')).toBe(String(WRITE_CONFLICT_RETRY_AFTER))
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
+    expect(res.json).toEqual({ error: WRITE_CONFLICT_MESSAGE })
+    expect(await stored(fx)).toBe(0)
+    // sending it again stores the file
+    expect(await post(fx, path)).toMatchObject({ status: 200 })
+  })
+
+  it('deletes the file, frees the URL and answers 503 when recording it keeps conflicting', async () => {
+    vi.stubEnv('BETTER_AUTH_SECRET', 'write-conflicts-files-secret')
+    const fx = await setup()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const path = await ticket(fx)
+    faults.finish = CONFLICT_RETRIES + 1
+    expect(await post(fx, path)).toMatchObject({
+      status: 503,
+      json: { error: WRITE_CONFLICT_MESSAGE },
+    })
+    expect(await stored(fx)).toBe(0)
+    expect(await post(fx, path)).toMatchObject({ status: 200 })
+    expect(await stored(fx)).toBe(1)
+  })
+
+  it('answers the refusal and logs a cleanup that keeps conflicting', async () => {
+    vi.stubEnv('BETTER_AUTH_SECRET', 'write-conflicts-files-secret')
+    const fx = await setup()
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const path = await ticket(fx)
+    // a cleanup that conflicts within the retries still frees the URL
+    faults.abandon = CONFLICT_RETRIES
+    expect(await post(fx, path, 3)).toMatchObject({
+      status: 400,
+      json: { error: 'the upload must be exactly the 4 bytes declared' },
+    })
+    expect(await post(fx, path)).toMatchObject({ status: 200 })
+    expect(log).not.toHaveBeenCalled()
+
+    const other = await ticket(fx)
+    faults.abandon = CONFLICT_RETRIES + 1
+    expect(await post(fx, other, 3)).toMatchObject({ status: 400 })
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ reason: WRITE_CONFLICT }) }),
+    )
   })
 })

@@ -2030,7 +2030,17 @@ one file:
   upload took too long; send it again`). These store nothing, and the URL
   can be tried again, as after any other failed `POST`. A `POST` that ends
   without an answer and without storing a file, for example when the
-  connection drops, holds the URL for at most 15 minutes.
+  connection drops, holds the URL for at most 15 minutes. So does, rarely,
+  a refused `POST` whose cleanup kept conflicting with other `POST`s, and
+  until then the URL answers `409`.
+- `POST`s sent to one upload URL at the same moment change the same ticket,
+  so one can conflict with the others. Qivo retries such a conflict itself,
+  twice at most, and one that keeps conflicting answers `503` with
+  `Retry-After: 1` and `{"error": "the request conflicted with other changes
+  made at the same time and changed nothing; send it again"}`, like any
+  other request that keeps conflicting. It stores nothing and leaves the
+  URL free, so wait the `Retry-After` seconds and send the same `POST`
+  again.
 - An expired or altered upload URL, and one whose upload was confirmed,
   answers `404` (`upload not found or expired; start a new upload`).
 
