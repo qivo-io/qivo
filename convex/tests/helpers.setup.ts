@@ -827,17 +827,22 @@ export function beforeBodyRead(change: () => Promise<unknown>) {
     const real = body.call(this) as WithBody['body']
     if (real === null) return null
     const reader = real.getReader()
-    return new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        if (!ran) {
-          ran = true
-          await change()
-        }
-        const next = await reader.read()
-        if (next.done) controller.close()
-        else controller.enqueue(next.value)
+    // no queue of its own, so the first pull is the first read, never the
+    // stream's own fill on creation
+    return new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          if (!ran) {
+            ran = true
+            await change()
+          }
+          const next = await reader.read()
+          if (next.done) controller.close()
+          else controller.enqueue(next.value)
+        },
       },
-    })
+      { highWaterMark: 0 },
+    )
   })
   return Object.assign(spy, { ran: () => ran })
 }
