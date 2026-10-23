@@ -446,6 +446,14 @@ describe('private, persistent credentials', () => {
     expect(() => fixtureDirectory(cwd, env(tracked), { local: true })).toThrow(/dev-temp/)
     writeFileSync(join(cwd, '.gitignore'), '')
     expect(() => fixtureDirectory(cwd, env(ignored), { local: true })).toThrow(/dev-temp/)
+    // the config the user's git reads counts: GIT_CONFIG_GLOBAL replaces
+    // ~/.gitconfig, whose excludes file would ignore dev-temp/
+    writeFileSync(join(cwd, 'excludes'), 'dev-temp/\n')
+    writeFileSync(join(cwd, '.gitconfig'), `[core]\n\texcludesFile = ${join(cwd, 'excludes')}\n`)
+    expect(fixtureDirectory(cwd, env(ignored), { local: true })).toBe(realpathSync(ignored))
+    writeFileSync(join(cwd, 'empty.gitconfig'), '')
+    vi.stubEnv('GIT_CONFIG_GLOBAL', join(cwd, 'empty.gitconfig'))
+    expect(() => fixtureDirectory(cwd, env(ignored), { local: true })).toThrow(/dev-temp/)
     // another repository that ignores dev-temp/ does not count for this checkout
     const other = folder()
     spawnSync('git', ['init', '--quiet'], { cwd: other })

@@ -71,6 +71,9 @@ workers. The backend check also fails when a `convex/` file that runs in
 Convex's default runtime uses a Node global such as `Buffer` or a Node module.
 Only the files that start with `'use node'` and the tests may, because Convex
 bundles every other file for the default runtime, whichever files import it.
+Convex runs the top-level `http`, `crons`, `schema`, `auth.config` and
+`convex.config` files there whatever their directive. The check also fails on
+an import it cannot follow.
 Types and `import type` may still name Node's types, and a file may import
 `AsyncLocalStorage` and `AsyncResource` from `async_hooks`, which the default
 runtime provides.

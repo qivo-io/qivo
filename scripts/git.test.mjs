@@ -15,7 +15,12 @@ afterEach(() => {
 function repository(name) {
   const root = path.join(directory, name)
   fs.mkdirSync(root)
-  const env = { ...checkoutEnvironment(), HOME: directory, XDG_CONFIG_HOME: directory }
+  const env = {
+    ...checkoutEnvironment(),
+    HOME: directory,
+    XDG_CONFIG_HOME: directory,
+    GIT_CONFIG_NOSYSTEM: '1',
+  }
   const git = (...args) =>
     execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], {
       cwd: root,
@@ -28,10 +33,25 @@ function repository(name) {
 }
 
 describe('git in a checkout', () => {
-  it('drops the GIT_ variables and keeps the rest', () => {
+  it('drops the variables that select another repository and keeps the config ones', () => {
     expect(
-      checkoutEnvironment({ GIT_DIR: '/x/.git', GIT_WORK_TREE: '/x', PATH: '/bin', GITHUB: 'y' }),
-    ).toEqual({ PATH: '/bin', GITHUB: 'y' })
+      checkoutEnvironment({
+        GIT_DIR: '/x/.git',
+        GIT_WORK_TREE: '/x',
+        GIT_INDEX_FILE: '/x/index',
+        GIT_COMMON_DIR: '/x/.git',
+        GIT_OBJECT_DIRECTORY: '/x/objects',
+        GIT_CONFIG_GLOBAL: '/home/u/.gitconfig',
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_CEILING_DIRECTORIES: '/home',
+        PATH: '/bin',
+      }),
+    ).toEqual({
+      GIT_CONFIG_GLOBAL: '/home/u/.gitconfig',
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CEILING_DIRECTORIES: '/home',
+      PATH: '/bin',
+    })
   })
 
   it('answers for the checkout at its working directory when GIT_DIR names another', async () => {

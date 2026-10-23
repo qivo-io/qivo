@@ -148,6 +148,16 @@ describe('typecheck coverage', { timeout: 30_000 }, () => {
     expect(check()).toMatchObject({ status: 1, output: expect.stringContaining(output) })
   })
 
+  it('fails when convex/ holds TypeScript without a config of its own or the runtime check', () => {
+    setUp({ 'convex/main.ts': 'export {}\n' })
+    expect(check()).toMatchObject({
+      status: 1,
+      output: expect.stringContaining(
+        'verify:local does not run `node scripts/check-convex-runtime.mjs`',
+      ),
+    })
+  })
+
   it('passes when verify:local and CI run the convex runtime check', () => {
     setUp({
       'package.json': JSON.stringify({
@@ -326,7 +336,12 @@ describe('typecheck coverage', { timeout: 30_000 }, () => {
           ],
           {
             cwd: outer,
-            env: { ...checkoutEnvironment(), HOME: outer, XDG_CONFIG_HOME: outer },
+            env: {
+              ...checkoutEnvironment(),
+              HOME: outer,
+              XDG_CONFIG_HOME: outer,
+              GIT_CONFIG_NOSYSTEM: '1',
+            },
           },
         )
       git('init', '-q', 'main')

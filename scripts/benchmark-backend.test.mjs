@@ -93,7 +93,12 @@ describe('the backend benchmark baseline', () => {
       const git = (...args) =>
         execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], {
           cwd: other,
-          env: { ...checkoutEnvironment(), HOME: other, XDG_CONFIG_HOME: other },
+          env: {
+            ...checkoutEnvironment(),
+            HOME: other,
+            XDG_CONFIG_HOME: other,
+            GIT_CONFIG_NOSYSTEM: '1',
+          },
         })
       git('init', '-q')
       git('commit', '-q', '--allow-empty', '-m', 'other')

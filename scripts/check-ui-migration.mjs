@@ -206,9 +206,12 @@ try {
     }
     visit(sf)
   }
-} finally {
-  await closeTypeScriptAPI(api)
+} catch (error) {
+  // Closing after a failed walk can fail too, and would hide the walk's error.
+  await closeTypeScriptAPI(api).catch(() => {})
+  throw error
 }
+await closeTypeScriptAPI(api)
 
 for (const [file, count] of styleCounts) {
   const allowed = allowlist[file]

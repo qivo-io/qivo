@@ -155,7 +155,9 @@ async function declarationErrors(project, declarations) {
 const failures = []
 const { scripts } = JSON.parse(fs.readFileSync('package.json', 'utf8'))
 const { projects, names, convexRuntime } = typecheckRuns(scripts, 'verify:local')
-if (fs.existsSync('convex/tsconfig.json') && !convexRuntime)
+const files = repositoryFiles()
+// Whichever config holds convex/, its default-runtime code needs the check.
+if (files.some((file) => file.startsWith('convex/')) && !convexRuntime)
   failures.push(
     `verify:local does not run \`${convexRuntimeCheck}\`, which checks that convex/'s default-runtime code uses no Node global.`,
   )
@@ -173,7 +175,6 @@ for (const name of names)
 
 const programs = await Promise.all([...projects].map(programFiles))
 for (const { failure } of programs) if (failure) failures.push(failure)
-const files = repositoryFiles()
 for (const file of files)
   if (!programs.some(({ files }) => files.has(path.resolve(file))))
     failures.push(`${file} is in no typecheck that verify:local runs.`)

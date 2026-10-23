@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -9,7 +10,8 @@ import { closeTypeScriptAPI } from './typescript-api.mjs'
 let directory = ''
 afterEach(() => fs.rmSync(directory, { recursive: true, force: true }))
 
-describe('closeTypeScriptAPI', () => {
+// On Windows closeTypeScriptAPI only runs the API's close(), which ends the server at once.
+describe.skipIf(process.platform === 'win32')('closeTypeScriptAPI', () => {
   it('releases the snapshots and lets the server exit on its own', async () => {
     directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'qivo-typescript-api-')))
     const file = path.join(directory, 'main.ts')
@@ -20,6 +22,7 @@ describe('closeTypeScriptAPI', () => {
     // A SIGTERM is what makes the server print "context canceled" now and then.
     const server = api.client.channel.child
     await closeTypeScriptAPI(api)
+    expect(server.killed).toBe(false)
     expect({ code: server.exitCode, signal: server.signalCode }).toEqual({ code: 0, signal: null })
     expect(snapshot.isDisposed()).toBe(true)
   })
@@ -30,15 +33,27 @@ describe('closeTypeScriptAPI', () => {
     expect(api.close).toHaveBeenCalledOnce()
   })
 
-  it.skipIf(process.platform === 'win32')(
-    'stops a server that does not exit after its input closes, and throws',
-    async () => {
-      const server = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
-        stdio: ['pipe', 'ignore', 'inherit'],
-      })
-      const api = { client: { channel: { child: server, close: () => server.kill() } }, close() {} }
-      await expect(closeTypeScriptAPI(api, 200)).rejects.toThrow('did not exit within 200 ms')
-      expect(server.signalCode).toBe('SIGTERM')
-    },
-  )
+  it("throws when the API's close() stops the server some other way", async () => {
+    const api = new API()
+    api.updateSnapshot({ openFiles: [] })
+    const server = api.client.channel.child
+    api.client.close = () => server.kill()
+    await expect(closeTypeScriptAPI(api)).rejects.toThrow('stopped its server with a signal')
+    await once(server, 'exit')
+  })
+
+  it('kills a server that does not exit after its stdin closes or on SIGTERM, and throws', async () => {
+    const server = spawn(
+      process.execPath,
+      [
+        '-e',
+        "process.on('SIGTERM', () => {}); process.stdout.write('ready'); setInterval(() => {}, 1000)",
+      ],
+      { stdio: ['pipe', 'pipe', 'inherit'] },
+    )
+    await once(server.stdout, 'data')
+    const api = { client: { channel: { child: server, close: () => server.kill() } }, close() {} }
+    await expect(closeTypeScriptAPI(api, 200, 200)).rejects.toThrow('did not exit within 200 ms')
+    expect(server.signalCode).toBe('SIGKILL')
+  })
 })
