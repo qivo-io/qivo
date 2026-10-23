@@ -122,7 +122,8 @@ describe('desktop builds through electron-builder', () => {
   // A stand-in for the 7-Zip that electron-builder would otherwise download.
   // It writes an empty archive at the path ending in .zip. electron-builder
   // keeps the first 7-Zip path it finds for the whole process, so the
-  // stand-in lives as long as this file's tests.
+  // stand-in lives as long as this file's tests. It is a shell script, so the
+  // one build that runs 7-Zip skips on Windows.
   let sevenZip = ''
   const previous7za = process.env.ELECTRON_BUILDER_7ZIP_PATH
   beforeAll(() => {
@@ -191,22 +192,26 @@ describe('desktop builds through electron-builder', () => {
 
   const linuxPackages = Platform.LINUX.createTarget(['deb', 'rpm', 'AppImage'], Arch.x64)
 
-  it('builds a Linux package without a feed', async () => {
-    const result = await run(undefined, () =>
-      build({
-        projectDir: project,
-        config: configuration(),
-        targets: Platform.LINUX.createTarget('zip', Arch.x64),
-        publish: 'never',
-      }),
-    )
-    // electron-builder names the package after the root package version
-    const { version } = require('../package.json')
-    expect(result).toEqual({
-      error: undefined,
-      files: expect.arrayContaining([`Qivo-${version}-x64.zip`]),
-    })
-  }, 60_000)
+  it.skipIf(process.platform === 'win32')(
+    'builds a Linux package without a feed',
+    async () => {
+      const result = await run(undefined, () =>
+        build({
+          projectDir: project,
+          config: configuration(),
+          targets: Platform.LINUX.createTarget('zip', Arch.x64),
+          publish: 'never',
+        }),
+      )
+      // electron-builder names the package after the root package version
+      const { version } = require('../package.json')
+      expect(result).toEqual({
+        error: undefined,
+        files: expect.arrayContaining([`Qivo-${version}-x64.zip`]),
+      })
+    },
+    60_000,
+  )
 
   const options = { targets: linuxPackages, publish: 'never' } as const
   it.each([
