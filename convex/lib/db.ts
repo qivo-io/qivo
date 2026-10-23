@@ -1,7 +1,7 @@
-/* Uuid-key lookup, the race-free unique insert and the room check of bulk
- * writers. Serializable mutations make check-then-insert safe: two
- * concurrent insertUnique calls on the same key conflict and one retries,
- * re-running the check. */
+/* Uuid-key lookup, the race-free unique insert, the room check of bulk
+ * writers and window keys. Serializable mutations make check-then-insert
+ * safe: two concurrent insertUnique calls on the same key conflict and one
+ * retries, re-running the check. */
 
 import type {
   GenericDatabaseReader,
@@ -77,6 +77,34 @@ declare const crypto: { randomUUID(): string }
  * writer can crowd its rows into one window, which could then not load.
  * Every insert of a task or project sets it. */
 export const newWindowKey = (): string => crypto.randomUUID().slice(0, 8)
+
+/** The relation rows of task `id` (label assignments, attachments, the
+ * links from it and follows) whose task_key is not `key`, every one for null
+ * (a task about to get its first key). Whoever gives a task a key gives
+ * these rows the same one (schema.ts taskKey). */
+export async function strayRows(ctx: ReaderCtx, id: string, key: string | null) {
+  const [labels, attachments, links, follows] = await Promise.all([
+    ctx.db
+      .query('issue_labels')
+      .withIndex('by_issue', (q) => q.eq('issue_id', id))
+      .collect(),
+    ctx.db
+      .query('issue_attachments')
+      .withIndex('by_issue', (q) => q.eq('issue_id', id))
+      .collect(),
+    ctx.db
+      .query('issue_links')
+      .withIndex('by_source', (q) => q.eq('source_id', id))
+      .collect(),
+    ctx.db
+      .query('issue_subscriptions')
+      .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', id))
+      .collect(),
+  ])
+  return [...labels, ...attachments, ...links, ...follows].filter(
+    (row) => key === null || row.task_key !== key,
+  )
+}
 
 /* Chainable eq shape shared by every IndexRangeBuilder — the generic index
  * types can't be threaded through a runtime field list, so the builder is

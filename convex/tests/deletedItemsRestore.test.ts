@@ -12,7 +12,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { projectLevel } from '../lib/access'
-import { byId } from '../lib/db'
+import { byId, strayRows } from '../lib/db'
 import { LIMITS, PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from '../lib/limits'
 import type { EventOwner } from '../lib/taskEvents'
 import { storageUsage } from '../model/billing'
@@ -1322,6 +1322,55 @@ describe('copies stored before window keys', () => {
     })
     // the link in keeps its own source's key
     expect((await keysOf(t, from.id)).issue_links).toEqual([from.window_key])
+  })
+
+  /** Undoes what a step on the release before restores gave keys would not
+   * have written, while `taskId` is still stored: the key of its stored
+   * copy and of its relation rows already written back. */
+  const asBeforeKeys = (t: T, taskId: string) =>
+    t.run(async (ctx) => {
+      if ((await byId(ctx, 'issues', taskId)) !== null) return
+      const stored = await ctx.db
+        .query('deleted_rows')
+        .withIndex('by_row', (q) => q.eq('table', 'issues').eq('row_id', taskId))
+        .unique()
+      if (stored?.row.table === 'issues')
+        await ctx.db.patch(stored._id, {
+          row: { table: 'issues', doc: { ...stored.row.doc, window_key: undefined } },
+        })
+      for (const row of await strayRows(ctx, taskId, null))
+        await ctx.db.patch(row._id, { task_key: undefined })
+    })
+
+  it.each([
+    ['its first step', 1],
+    ['every step before the task', Number.POSITIVE_INFINITY],
+  ])('keys the rows a restore wrote back without one in %s', async (_, oldSteps) => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const task = await plantIssue(t, { org_id, project_id: f.sub.id, window_key: undefined })
+    const to = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    const from = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    await plantRows(t, f, task, { to, from })
+    await deleteTask(t, f, task.id)
+
+    TRASH_BUDGET.rows = 1
+    const item = await itemFor(t, task.id)
+    await restore(t, f.user, [item.id])
+    let steps = 0
+    await stepThrough(t, item.id, async () => {
+      if (++steps <= oldSteps) await asBeforeKeys(t, task.id)
+    })
+    expect(steps).toBeGreaterThan(2)
+    const key = (await liveTask(t, task.id))?.window_key
+    expect(key).toMatch(KEY)
+    expect(await keysOf(t, task.id)).toEqual({
+      issue_labels: [key],
+      issue_subscriptions: [key],
+      issue_attachments: [key],
+      issue_links: [key],
+    })
   })
 
   it('gives a project item, its tasks and their rows keys', async () => {

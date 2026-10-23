@@ -107,7 +107,7 @@ import {
   projectLevelsForOrg,
 } from '../lib/access'
 import { deletionBegun, orgWriteBlock } from '../lib/billingAccess'
-import { byId, newWindowKey, usedMoreThan } from '../lib/db'
+import { byId, newWindowKey, strayRows, usedMoreThan } from '../lib/db'
 import { demoForOrg, isDemoDeployment, uncountedWriter } from '../lib/demo'
 import {
   type AccessLevel,
@@ -2126,9 +2126,9 @@ function taskKeyOf(run: Run, taskId: string, stored: string | undefined) {
 
 /* The window key stored task `taskId` goes back with, or undefined when
  * Deleted items holds no copy of it. A copy stored before tasks had keys
- * gets one here, written into the copy, so its relation rows, which go back
- * before it and maybe in earlier steps, carry the key that writeTask then
- * writes with the task. */
+ * gets one here (firstTaskKey), written into the copy, so its relation
+ * rows, which go back before it and maybe in earlier steps, carry the key
+ * that writeTask then writes with the task. */
 async function storedTaskKey(run: Run, taskId: string): Promise<string | undefined> {
   const row = await run.ctx.db
     .query('deleted_rows')
@@ -2140,9 +2140,22 @@ async function storedTaskKey(run: Run, taskId: string): Promise<string | undefin
     chargeRead(run.budget, row)
     return doc.window_key
   }
-  const window_key = newWindowKey()
+  const window_key = await firstTaskKey(run, taskId)
   await run.ctx.db.patch(row._id, { row: { table: 'issues', doc: { ...doc, window_key } } })
   charge(run.budget, row)
+  return window_key
+}
+
+/* A new window key for stored task `taskId`, which has none, given also to
+ * the relation rows of it already written back. A restore that began before
+ * restores gave keys wrote those without one, and they would load in the
+ * first window, away from their task (lib/workspaceParts.ts). */
+async function firstTaskKey(run: Run, taskId: string): Promise<string> {
+  const window_key = newWindowKey()
+  for (const row of await strayRows(run.ctx, taskId, null)) {
+    await run.ctx.db.patch(row._id, { task_key: window_key })
+    charge(run.budget, row)
+  }
   return window_key
 }
 
@@ -2355,7 +2368,7 @@ function inThisItem(run: Run, taskId: string): Promise<boolean> {
  * done_at for an active Done task so the nightly sweep does not archive it
  * the next night (as a restore from the archive restarts it,
  * model/issues.ts doneStampUpdate), no archive mark, updated_at now, and a
- * window key when it was stored without one.
+ * window key when it was stored without one (firstTaskKey).
  * Deletes the stored row and, outside the reveal, the task's deleted_tasks
  * row (the reveal deletes the item's remaining ones together), and counts
  * the task out of the tally. Returns the id of the task as written. */
@@ -2371,7 +2384,7 @@ async function writeTask(
     ...doc,
     // a copy stored before tasks had keys, whose relation rows gave it
     // none (storedTaskKey)
-    window_key: doc.window_key ?? newWindowKey(),
+    window_key: doc.window_key ?? (await firstTaskKey(run, doc.id)),
     parent_id: parentId,
     ...(await restoredHolders(run, doc)),
     created_by: await keptProfile(run, doc.created_by),

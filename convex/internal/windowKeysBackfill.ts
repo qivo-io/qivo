@@ -45,7 +45,7 @@ import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { internalAction, internalMutation, internalQuery } from '../_generated/server'
-import { newWindowKey } from '../lib/db'
+import { newWindowKey, strayRows } from '../lib/db'
 
 /** Rows per page of each table, for the check and for each step of the
  * run, and the bytes one page may read. A project without a key writes one
@@ -73,32 +73,6 @@ const pageRef = makeFunctionReference<
 const auditRef = makeFunctionReference<'mutation', { issues: number; projects: number }, null>(
   'internal/windowKeysBackfill:audit',
 )
-
-/* The relation rows of task `id` whose task_key is not `key`, every one
- * for null (a task about to get its first key). */
-async function strayRows(ctx: QueryCtx, id: string, key: string | null) {
-  const [labels, attachments, links, follows] = await Promise.all([
-    ctx.db
-      .query('issue_labels')
-      .withIndex('by_issue', (q) => q.eq('issue_id', id))
-      .collect(),
-    ctx.db
-      .query('issue_attachments')
-      .withIndex('by_issue', (q) => q.eq('issue_id', id))
-      .collect(),
-    ctx.db
-      .query('issue_links')
-      .withIndex('by_source', (q) => q.eq('source_id', id))
-      .collect(),
-    ctx.db
-      .query('issue_subscriptions')
-      .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', id))
-      .collect(),
-  ])
-  return [...labels, ...attachments, ...links, ...follows].filter(
-    (row) => key === null || row.task_key !== key,
-  )
-}
 
 /* One page of `table` from `cursor`: how many rows have no window key, and
  * how many relation rows of the page's tasks have not their task's, and,
