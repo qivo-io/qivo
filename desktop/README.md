@@ -16,6 +16,44 @@ that the client needs:
 - OAuth provider pages open in the system browser. A short-lived, one-time
   `qivo://` callback returns the result to the waiting Qivo window.
 
+## Security
+
+The shell follows Electron's
+[security checklist](https://www.electronjs.org/docs/latest/tutorial/security):
+
+- The renderer has context isolation, the Chromium sandbox and no Node.js.
+  The preload exposes only `window.qivoDesktop`, and every IPC handler
+  accepts calls only from the top-level page of the configured app origin.
+- The window loads only pages of the configured app origin. A link, a
+  redirect or `window.open` to any other page, sign-in providers included,
+  goes to the system instead: `http`, `https`, `mailto` and `tel` links open
+  in the default app, and other schemes are dropped. The shell opens no
+  second window.
+- [permissions.ts](permissions.ts) refuses every web permission except
+  `clipboard-sanitized-write`, which copying a link, text or an image needs.
+  Only the app origin's top-level page gets it. Every request from another
+  origin or from a frame is refused, and so is every HID, serial and USB
+  device. Inbox alerts use the preload bridge, not the web Notification API.
+- The hosted app's `Content-Security-Policy` (`vercel.json`) lets the app
+  and operator pages run scripts only from the deployment and the one inline
+  theme script by hash. It also blocks plugins, `<base>` changes to another
+  origin and framing.
+- A packaged build always loads `https://qivo.io/app`. It ignores
+  `QIVO_DESKTOP_URL`, so no environment setting can make a local page the
+  trusted app origin. Only a run from source reads it.
+- Packaging flips Electron's
+  [fuses](https://www.electronjs.org/docs/latest/tutorial/fuses): no
+  `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS` or `--inspect`, app code only from
+  `app.asar`, which Windows checks against its hash, and no extra `file://`
+  privileges. No fuse turns off Chromium's `--remote-debugging-port` and
+  `--remote-debugging-pipe` switches, so a program that starts Qivo itself
+  can still drive its page. Such a program already runs as the user and can
+  read the same stored data from disk.
+- Cookie encryption stays off. Qivo keeps its sign-in in `localStorage`, not
+  in cookies, so encryption would protect nothing. On Linux it also makes the
+  shell ask the keyring for its key at start, which shows an unlock prompt
+  when the keyring is locked, for example after an automatic login.
+
 ## Desktop settings
 
 Open **Settings → User account → Desktop app**, below **Your preferences**.
@@ -67,7 +105,16 @@ npm run desktop:dev
 
 `desktop:dev` loads `http://localhost:5199/app`. Set `QIVO_DESKTOP_URL` when a
 different local or preview origin is needed. The main process accepts only
-localhost over HTTP and Qivo HTTPS origins.
+localhost over HTTP and Qivo HTTPS origins. To run the shell from source
+against another local server, compile it and start Electron yourself:
+
+```sh
+npm run desktop:compile
+QIVO_DESKTOP_URL=http://localhost:5347/app npx electron desktop
+```
+
+A packaged build ignores `QIVO_DESKTOP_URL` and always loads
+`https://qivo.io/app`, so test local changes with a run from source.
 
 ## Packaging and updates
 

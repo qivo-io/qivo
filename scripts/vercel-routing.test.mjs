@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 /* Route fixtures for vercel.json. Vercel's documented order is redirects,
@@ -186,12 +187,36 @@ describe('public demo', () => {
   })
 })
 
+/** The policy every app and operator page gets. Scripts load only from the
+ * deployment, plus the inline scripts in app.html and admin.html by hash. */
+const PAGE_POLICY =
+  "script-src 'self' 'sha256-xc/jZrGrOaYb4EJVsGOCgj4b8Gd243bPM2/zmHo0VWQ='; " +
+  "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+
+/** The hash source of each inline script in `html`, as the policy names it.
+ * Throws on an inline event handler, which a hash cannot allow. The handler
+ * check also matches `on…=` inside a quoted attribute value; that only fails
+ * loudly, never lets a handler through. */
+function inlineScriptHashes(html) {
+  const live = html.replace(/<!--[\s\S]*?-->/g, '')
+  const scripts = [...live.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)]
+  const tags = live.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '')
+  if (/<[a-z][^>]*\son[a-z]+\s*=/i.test(tags)) throw new Error('inline event handler')
+  return scripts
+    .filter(([, attributes]) => !/(?:^|\s)src\s*=/i.test(attributes))
+    .map(([, , body]) => `'sha256-${createHash('sha256').update(body).digest('base64')}'`)
+}
+
+/** The app and operator entries, as `vite build` reads them and, when built, as Vercel serves them. */
+const ENTRIES = ['app.html', 'admin.html']
+const readEntry = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')
+
 describe('security headers', () => {
   it.each([...HOSTS, DEMO_HOST])('protect app and operator pages on %s', (host) => {
     for (const path of [...Object.keys(APP_PATHS), '/app.html', '/admin.html']) {
       const { headers } = route(config, host, path)
       expect(headers['x-frame-options'], path).toBe('DENY')
-      expect(headers['content-security-policy'], path).toBe("frame-ancestors 'none'")
+      expect(headers['content-security-policy'], path).toBe(PAGE_POLICY)
       expect(headers['cache-control'], path).toBe('no-store')
     }
     expect(route(config, host, '/assets/index-abc123.js').headers['cache-control']).toBe(
@@ -199,6 +224,32 @@ describe('security headers', () => {
     )
     // the update check must always reach the server
     expect(route(config, host, '/version.json').headers['cache-control']).toBe('no-store')
+  })
+
+  it('allows exactly the inline scripts the app and operator pages have', () => {
+    // Vite copies inline scripts into the build unchanged, so the source hash
+    // is the served one. An edited script needs its new hash in vercel.json.
+    const allowed = PAGE_POLICY.match(/'sha256-[^']+'/g)
+    expect(allowed).toEqual(ENTRIES.flatMap((file) => inlineScriptHashes(readEntry(file))))
+    expect(inlineScriptHashes(readEntry('app.html'))).toHaveLength(1)
+    // after `npm run build`, check the files Vercel serves as well
+    for (const file of ENTRIES) {
+      if (!existsSync(new URL(`../dist/${file}`, import.meta.url))) continue
+      for (const hash of inlineScriptHashes(readEntry(`dist/${file}`)))
+        expect(allowed, `dist/${file}`).toContain(hash)
+    }
+  })
+
+  it('finds every inline script the policy would block', () => {
+    const hashOf = (body) => `'sha256-${createHash('sha256').update(body).digest('base64')}'`
+    expect(
+      inlineScriptHashes(
+        '<SCRIPT>a()</SCRIPT><script data-src="x">b()</script><script src="/x.js"></script>' +
+          '<script type="module" src="/y.js"></script><!-- <script>c()</script> -->',
+      ),
+    ).toEqual([hashOf('a()'), hashOf('b()')])
+    for (const html of ['<body onload="c()">', '<img src="x" ONERROR = "d()">'])
+      expect(() => inlineScriptHashes(html), html).toThrow('inline event handler')
   })
 })
 

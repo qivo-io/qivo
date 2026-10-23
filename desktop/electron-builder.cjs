@@ -22,6 +22,25 @@ module.exports = {
     output: 'desktop/release',
   },
   files: ['dist/**/*', 'assets/qivo.png', 'package.json'],
+  // Fuses are bits in the Electron executable, flipped while packaging. These
+  // turn off the ELECTRON_RUN_AS_NODE and NODE_OPTIONS variables, the
+  // --inspect flags, app code outside the packaged app.asar and extra file://
+  // privileges. Windows also checks app.asar against the hash electron-builder
+  // writes into the executable. No fuse covers Chromium's remote debugging
+  // switches. Cookie encryption stays off. Qivo keeps its sign-in in
+  // localStorage, not in cookies, so it would protect nothing, and on Linux it
+  // makes every start ask the keyring for its key, which shows an unlock
+  // prompt when the keyring is locked.
+  electronFuses: {
+    runAsNode: false,
+    enableCookieEncryption: false,
+    enableNodeOptionsEnvironmentVariable: false,
+    enableNodeCliInspectArguments: false,
+    enableEmbeddedAsarIntegrityValidation: true,
+    onlyLoadAppFromAsar: true,
+    loadBrowserProcessSpecificV8Snapshot: false,
+    grantFileProtocolExtraPrivileges: false,
+  },
   // Keep one icon source for the Linux desktop entry, all package formats and
   // the Windows executable and installer. Electron-builder reads the PNG at
   // build time and converts it for Windows. The shell also uses the packaged

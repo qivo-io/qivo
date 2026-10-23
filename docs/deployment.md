@@ -97,6 +97,13 @@ staging and has preview deployment creation disabled. Private operators can
 provision synthetic data deliberately using the private setup instructions.
 A later deployment preserves it.
 
+Every deployment sends the same `Content-Security-Policy` on `/app` and
+`/admin` (`vercel.json`). It lets those pages run scripts only from the
+deployment itself, so the Vercel toolbar, whose script comes from
+`vercel.live`, does not load on them in a branch preview. The website pages
+have no such policy and keep the toolbar. Do not add `vercel.live` to the
+policy, because the same headers serve production.
+
 ### End-to-end API check
 
 `scripts/staging-check.mjs` checks the REST API, MCP and OAuth consent on
