@@ -114,6 +114,57 @@ describe('typecheck coverage', { timeout: 30_000 }, () => {
     })
   })
 
+  it.each([
+    [
+      'verify:local does not run',
+      { 'typecheck:convex': 'tsc -p convex' },
+      'verify:local does not run `node scripts/check-convex-runtime.mjs`',
+    ],
+    [
+      'CI does not run',
+      {
+        'typecheck:convex': 'tsc -p convex && npm run check:convex',
+        'check:convex': 'node scripts/check-convex-runtime.mjs',
+      },
+      'ci.yml does not run `npm run check:convex`',
+    ],
+  ])('fails when %s the convex runtime check', (_, convexScripts, output) => {
+    setUp({
+      'package.json': JSON.stringify({
+        scripts: {
+          'verify:local': 'npm run typecheck && npm run typecheck:convex',
+          typecheck: 'tsc --noEmit && tsc -p tools',
+          ...convexScripts,
+        },
+      }),
+      '.github/workflows/ci.yml':
+        'steps:\n  - run: npm run typecheck\n  - run: npm run typecheck:convex\n',
+      'convex/tsconfig.json': JSON.stringify({ compilerOptions: options }),
+      'convex/main.ts': 'export {}\n',
+    })
+    expect(check()).toMatchObject({ status: 1, output: expect.stringContaining(output) })
+  })
+
+  it('passes when verify:local and CI run the convex runtime check', () => {
+    setUp({
+      'package.json': JSON.stringify({
+        scripts: {
+          'verify:local': 'npm run typecheck && npm run typecheck:convex',
+          typecheck: 'tsc --noEmit && tsc -p tools',
+          'typecheck:convex': 'tsc -p convex && node scripts/check-convex-runtime.mjs',
+        },
+      }),
+      '.github/workflows/ci.yml':
+        'steps:\n  - run: npm run typecheck\n  - run: npm run typecheck:convex\n',
+      'convex/tsconfig.json': JSON.stringify({ compilerOptions: options }),
+      'convex/main.ts': 'export {}\n',
+    })
+    expect(check()).toEqual({
+      status: 0,
+      output: '5 TypeScript files are in the typechecks of 3 configs.\n',
+    })
+  })
+
   it('finds an error inside a declaration file that skipLibCheck hides', () => {
     setUp({ 'src/globals.d.ts': 'declare const buildId: MissingType\n' })
     expect(check()).toMatchObject({

@@ -2,11 +2,13 @@
  * `npm run verify:local` runs, or when CI's workflow skips one of those
  * typechecks. The typechecks are the tsc runs of verify:local's scripts,
  * followed through `npm run`, and a file counts when it is in the program of
- * one, by include or by import. Every config sets skipLibCheck, which skips
- * the errors inside declaration files, so this also typechecks each program
- * that holds a hand-written declaration file with skipLibCheck off, and fails
- * on the errors located in those files or in a library declaration they
- * conflict with. */
+ * one, by include or by import. A repository with convex/ must also run
+ * scripts/check-convex-runtime.mjs that way, which checks the globals of the
+ * code that runs in Convex's default runtime. Every config sets skipLibCheck,
+ * which skips the errors inside declaration files, so this also typechecks
+ * each program that holds a hand-written declaration file with skipLibCheck
+ * off, and fails on the errors located in those files or in a library
+ * declaration they conflict with. */
 import { execFile, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
@@ -29,14 +31,19 @@ const declarationFile = /\.d\.(?:[cm]ts|(?:[^/\\]+\.)?ts)$/
 // Convex writes these, and they import types that fail without skipLibCheck.
 const generatedDeclarations = 'convex/_generated/'
 
+// Checks the globals of convex/'s default-runtime code, which tsc checks with Node's.
+const convexRuntimeCheck = 'node scripts/check-convex-runtime.mjs'
+
 /**
- * Returns the tsc projects a script's command runs, as config paths, and the
- * names of the scripts that run tsc themselves, following `npm run`.
+ * Returns the tsc projects a script's command runs, as config paths, the
+ * names of the scripts that run tsc or the convex runtime check themselves,
+ * following `npm run`, and whether the convex runtime check runs.
  */
 function typecheckRuns(scripts, name, seen = new Set()) {
   const projects = new Set()
   const names = new Set()
-  if (seen.has(name)) return { projects, names }
+  let convexRuntime = false
+  if (seen.has(name)) return { projects, names, convexRuntime }
   seen.add(name)
   for (const command of (scripts[name] ?? '').split('&&').map((part) => part.trim())) {
     const script = command.match(/^npm run (\S+)/)?.[1]
@@ -44,13 +51,17 @@ function typecheckRuns(scripts, name, seen = new Set()) {
       const inner = typecheckRuns(scripts, script, seen)
       for (const project of inner.projects) projects.add(project)
       for (const inside of inner.names) names.add(inside)
+      convexRuntime ||= inner.convexRuntime
     } else if (/^(npx )?tsc(\s|$)/.test(command)) {
       const project = command.match(/(?:^|\s)(?:-p|--project)\s+(\S+)/)?.[1] ?? '.'
       projects.add(project.endsWith('.json') ? project : path.join(project, 'tsconfig.json'))
       names.add(name)
+    } else if (command === convexRuntimeCheck) {
+      convexRuntime = true
+      names.add(name)
     }
   }
-  return { projects, names }
+  return { projects, names, convexRuntime }
 }
 
 /** Lists the repository's TypeScript files, tracked or new, that Git does not ignore. */
@@ -138,7 +149,11 @@ async function declarationErrors(project, declarations) {
 
 const failures = []
 const { scripts } = JSON.parse(fs.readFileSync('package.json', 'utf8'))
-const { projects, names } = typecheckRuns(scripts, 'verify:local')
+const { projects, names, convexRuntime } = typecheckRuns(scripts, 'verify:local')
+if (fs.existsSync('convex/tsconfig.json') && !convexRuntime)
+  failures.push(
+    `verify:local does not run \`${convexRuntimeCheck}\`, which checks that convex/'s default-runtime code uses no Node global.`,
+  )
 // A step that is present but skipped or allowed to fail still counts here.
 const workflow = fs.readFileSync('.github/workflows/ci.yml', 'utf8')
 for (const name of names)

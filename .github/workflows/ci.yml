@@ -64,6 +64,7 @@ jobs:
         run: npm run typecheck:strict
 
       # The root project does not cover the entire backend or the desktop shell.
+      # This also checks that the default-runtime code uses no Node global.
       - name: Typecheck backend (convex, strict)
         run: npm run typecheck:convex
 
