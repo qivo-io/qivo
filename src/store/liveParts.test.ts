@@ -470,6 +470,17 @@ describe('a staged load', () => {
     expect(small.last()?.state).toBe('complete')
   })
 
+  it('watches the first task windows before the people and project windows', () => {
+    const { s } = big()
+    const order = s.log.filter((l) => l.startsWith('watch ')).map((l) => l.split('{')[0])
+    expect(order.lastIndexOf('watch workspace:tasks')).toBeLessThan(
+      order.indexOf('watch workspace:people'),
+    )
+    expect(order.lastIndexOf('watch workspace:tasks')).toBeLessThan(
+      order.indexOf('watch workspace:projects'),
+    )
+  })
+
   it('starts the next stage only once every part watched answered', () => {
     const { s, last } = big()
     // the catalog alone answered

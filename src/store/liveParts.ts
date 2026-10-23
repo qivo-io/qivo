@@ -24,8 +24,14 @@
    that arrived, and every person and project, and knows the share of tasks
    still to come. Convex sends the first subscription of a stage in a
    transition of its own, so reporting per stage rather than per transition
-   halves the repaints. A partial transition holds no write for certain,
-   since the window a write changed may not have arrived. A workspace of
+   halves the repaints. The task windows of a stage subscribe before the
+   people and project windows: a deployment runs a limited number of
+   queries at once (16 on a local backend) and refuses one that waits too
+   long for a turn, closing the socket with 1013 TooManyConcurrentRequests,
+   and the project windows of a workspace with thousands of projects run
+   long enough that a part queued behind them can wait that long. A
+   partial transition holds no write for certain, since the window a write
+   changed may not have arrived. A workspace of
    fewer parts subscribes them at once and is never partial, and so do the
    organizations added once the workspace was complete and a boot that
    waits for the whole workspace (createLiveParts `whole`). A part that
@@ -234,17 +240,14 @@ export function createLiveParts(
     // stages only while a partial workspace can show
     const stage = parts > STAGES.most && !completed && !opts?.whole
     if (stage) staged = true
-    for (const { row, tasks, projects } of added) {
-      const windows = (kind: Kind, list: IdWindow[]) => list.map((w) => node(row.id, kind, w))
+    const windows = (orgId: string, kind: Kind, list: IdWindow[]) =>
+      list.map((w) => node(orgId, kind, w))
+    for (const { row, tasks } of added) {
       orgs.set(row.id, {
         id: row.id,
         catalog: watch(api.workspace.catalog, { org_id: row.id }),
         inbox: watch(api.workspace.inbox, { org_id: row.id }),
-        kinds: {
-          tasks: windows('tasks', stage ? [] : tasks),
-          people: windows('people', idWindows(1)),
-          projects: windows('projects', projects),
-        },
+        kinds: { tasks: windows(row.id, 'tasks', stage ? [] : tasks), people: [], projects: [] },
         later: stage ? tasks : [],
       })
       moved = true
@@ -255,6 +258,14 @@ export function createLiveParts(
         STAGES.first,
         added.map(({ row }) => row.id),
       )
+    // People and projects subscribe after the task windows, so the backend,
+    // which runs the parts in the order they came, runs the slow project
+    // windows last, with nothing waiting behind them (STAGES)
+    for (const { row, projects } of added) {
+      const org = orgs.get(row.id) as Org
+      org.kinds.people = windows(row.id, 'people', idWindows(1))
+      org.kinds.projects = windows(row.id, 'projects', projects)
+    }
     // a window that asked to be cut gets its pieces
     for (const org of orgs.values())
       for (const kind of KINDS)
