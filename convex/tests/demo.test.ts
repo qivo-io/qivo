@@ -631,7 +631,7 @@ describe('public demo provisioning steps', () => {
     const halfway = await t.run((ctx) => ctx.db.query('demo_sessions').unique())
     expect(halfway).toMatchObject({ status: 'unprovisioned', provision: { step: 3 } })
     expect(halfway?.org_id).toBeTruthy()
-    await expectRefusal(login.as.query(api.snapshot.forMe, {}), 'forbidden', /prepared/)
+    await expectRefusal(login.as.query(api.workspace.root, {}), 'forbidden', /prepared/)
     expect(await login.as.query(api.demo.current, {})).toMatchObject({
       status: 'unprovisioned',
       orgId: null,
