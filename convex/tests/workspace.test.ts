@@ -233,6 +233,16 @@ describe('links of a restored task', () => {
 })
 
 describe('reads a window cannot bound by its rows', () => {
+  it('asks to be cut past half its relation rows of one kind, while it still shows them', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await plantTasks(t, f, 3)
+    PAGE.relations = 4
+    const answer = await as(t, f.admin).query(api.workspace.tasks, { org_id: f.org.id, ...whole })
+    expect(answer).toMatchObject({ state: 'ok', split: true })
+    if (answer.state === 'ok') expect(answer.issueLabels).toHaveLength(3)
+  })
+
   it('answers overflow past its relation rows of one kind, flagged tasks included, and its cuts send them all', async () => {
     const t = newT()
     const f = await withOrg(t)

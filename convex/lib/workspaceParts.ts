@@ -130,7 +130,9 @@ export const PAGE = {
    * reads, so a step reads at most PAGE.kids² task bodies (64, about 4 MiB) */
   kids: 8,
   /** the most relation rows of one kind (labels, attachments, links,
-   * follows) a tasks window reads, and a flagged task by its own indexes */
+   * follows) a tasks window reads, and a flagged task by its own indexes;
+   * past half of it the window asks to be cut, so it is cut while it still
+   * shows, before it would answer overflow */
   relations: 2000,
   /** how many new tasks the inbox reads between checks of PAGE.hard: 32 of
    * the largest hold about 2 MiB */
@@ -698,7 +700,14 @@ export async function readTasks(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow)
       // return with a restore.
       issueSubs: own.flatMap((rows) => (rows.follow === null ? [] : [relationRow(rows.follow)])),
     }),
-    ...(await softSplit(ctx, w, read.split || read.rows.length > PAGE.tasks.split, access.shared)),
+    ...(await softSplit(
+      ctx,
+      w,
+      read.split ||
+        read.rows.length > PAGE.tasks.split ||
+        [labels, attachments, links, follows].some((rows) => rows.length > PAGE.relations / 2),
+      access.shared,
+    )),
   }
 }
 
