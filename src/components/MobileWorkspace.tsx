@@ -642,6 +642,8 @@ export function MobileTaskList({
               initial={initialOf(group.id)}
               scheduler={scheduler}
               label={pendingRows}
+              // tasks still arriving land among the rows (DeferredList hold)
+              hold={P.stillLoading() !== null}
             />
           </div>
         </section>

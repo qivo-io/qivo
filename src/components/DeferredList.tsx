@@ -46,6 +46,11 @@ type Props<T extends object> = {
   listRole?: boolean
   /** the most items one block holds (BLOCK_SIZE by default) */
   blockSize?: number
+  /** while the items still arrive (a large workspace loading in stages,
+      store/liveParts.ts): each arrival moves the mounted ones, so the list
+      mounts none past what it shows, `initial` and what focus asks for,
+      nor does the render after; the scheduler mounts the rest once it ends */
+  hold?: boolean
 }
 
 type Block<T> = { id: number; items: T[]; start: number }
@@ -121,6 +126,7 @@ export function DeferredList<T extends object>({
   label,
   listRole = false,
   blockSize = BLOCK_SIZE,
+  hold = false,
 }: Props<T>) {
   /* What is mounted follows what the last render mounted: every item it
      mounted that is still in the list stays mounted, wherever a reorder,
@@ -142,6 +148,11 @@ export function DeferredList<T extends object>({
   } | null>(null)
   const grown =
     last.current?.items === items && last.current.initial === initial ? last.current : null
+  // no item mounts at once past the mounted ones while items arrive, nor in
+  // the render after, which holds the rest of them
+  const heldLast = useRef(hold)
+  const atOnce = hold || heldLast.current ? 0 : MOST_AT_ONCE
+  heldLast.current = hold
   // a length a slice or mountThrough asked for, 0 once rendered
   const [target, setTarget] = useState(0)
   const floor = Math.min(initial, items.length)
@@ -156,7 +167,7 @@ export function DeferredList<T extends object>({
       }
   const mounted = Math.min(
     items.length,
-    Math.max(floor, Math.min(stays, before.size + MOST_AT_ONCE), target),
+    Math.max(floor, Math.min(stays, before.size + atOnce), target),
   )
   if (grown) for (let i = grown.mounted; i < mounted; i++) before.add(keyOf(items[i]))
   else mountedKeys.current = new Set(items.slice(0, mounted).map(keyOf))
@@ -166,6 +177,7 @@ export function DeferredList<T extends object>({
 
   const latest = useRef(items)
   const waiting = useRef(pending)
+  const holding = useRef(hold)
   const grow = useLatest((n: number) =>
     setTarget((asked) => Math.max(asked, Math.min(latest.current.length, lastMounted.current + n))),
   )
@@ -180,6 +192,7 @@ export function DeferredList<T extends object>({
         id,
         spacer: () => spacer.current,
         pending: () => waiting.current,
+        holds: () => holding.current,
         grow,
         mountThrough,
       }),
@@ -188,6 +201,7 @@ export function DeferredList<T extends object>({
   useLayoutEffect(() => {
     latest.current = items
     waiting.current = pending
+    holding.current = hold
     scheduler.changed()
   })
 

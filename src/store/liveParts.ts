@@ -14,18 +14,19 @@
    One socket runs one update at a time, and every part subscribed before
    an update starts arrives with it, so a workspace subscribed all at once
    shows nothing until all of it arrived. A workspace of more than
-   STAGES.most parts therefore loads in stages: each organization's
+   STAGES.most parts therefore loads in two stages: each organization's
    catalog, inbox, people and projects and the first STAGES.first task
-   windows, then STAGES.batch more task windows each time every part
-   watched so far answered. Until its first complete transition, such a
-   workspace is partial at the end of each stage, once every part watched
-   answered: the store shows the tasks of the windows that arrived, and
-   every person and project, and knows the share of tasks still to come.
-   Convex sends the first subscription of a stage in a transition of its
-   own, so reporting per stage rather than per transition halves the
-   repaints. A partial transition holds no write for certain, since the window
-   a write changed may not have arrived. A workspace of fewer parts
-   subscribes them at once and is never partial.
+   windows, then, once every part watched answered, the other task
+   windows. One update brings those as soon as several smaller ones would,
+   and each stage repaints the whole workspace. Until its first complete
+   transition, such a workspace is partial at the end of a stage, once
+   every part watched answered: the store shows the tasks of the windows
+   that arrived, and every person and project, and knows the share of tasks
+   still to come. Convex sends the first subscription of a stage in a
+   transition of its own, so reporting per stage rather than per transition
+   halves the repaints. A partial transition holds no write for certain,
+   since the window a write changed may not have arrived. A workspace of
+   fewer parts subscribes them at once and is never partial.
 
    - A window that answers `split` keeps serving while its two halves load,
      and gives way to them in the first complete transition that holds both.
@@ -83,9 +84,9 @@ export const STALL = { ms: 60_000 }
 
 /** How a large workspace loads in stages: with more than `most` parts it
     subscribes every part but its task windows, and `first` of those, then
-    `batch` more each time every part watched so far answered. Probes
-    change them. */
-export const STAGES = { most: 32, first: 16, batch: 64 }
+    `batch` more each time every part watched so far answered, all of them
+    unless a probe sets fewer. */
+export const STAGES = { most: 32, first: 16, batch: Number.POSITIVE_INFINITY }
 
 /** What the store hears after each transition, and when the workspace
     fails outside one. */

@@ -943,6 +943,8 @@ function Kanban({
         label={pendingLabel}
         listRole
         blockSize={BOARD_BLOCK_SIZE}
+        // tasks still arriving land among the cards (DeferredList hold)
+        hold={P.stillLoading() !== null}
       />
     )
   }
