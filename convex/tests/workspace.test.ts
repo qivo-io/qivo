@@ -1140,6 +1140,7 @@ describe('the people part', () => {
     })
     const inWindow = await t.run(async (ctx) =>
       (await ctx.db.query('profiles').collect())
+        .filter((p) => p.org_id === f.org.id)
         .map((p) => p.id)
         .filter((id) => inIdWindow(id, w))
         .sort(),

@@ -2116,8 +2116,8 @@ function taskKeyOf(run: Run, taskId: string, stored: string | undefined) {
   liveKeys.set(run, keys)
   let key = keys.get(taskId)
   if (key === undefined) {
-    key = byId(run.ctx, 'issues', taskId).then(
-      async (task) => task?.window_key ?? (await storedTaskKey(run, taskId)),
+    key = byId(run.ctx, 'issues', taskId).then(async (task) =>
+      task !== null ? task.window_key : await storedTaskKey(run, taskId),
     )
     keys.set(taskId, key)
   }

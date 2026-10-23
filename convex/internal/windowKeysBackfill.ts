@@ -12,7 +12,11 @@
  * load. New rows get a key when they are inserted. Deleted items keep their
  * stored copies as they were, and a restore gives a copy stored before keys
  * a key as it writes it back, its relation rows with it
- * (model/deletedItems.ts storedTaskKey, cleanProject).
+ * (model/deletedItems.ts storedTaskKey, cleanProject). Earlier releases
+ * brought such a task back without a key, with its rows, so a deployment
+ * that ran the backfill before it served the release that keys restores
+ * checks `remaining` again once it does, and runs the backfill again if a
+ * page reports rows.
  *
  * Check a deployment before changing it. `remaining` is a query, so it
  * cannot write, and a key that may only run internal queries can run it. It

@@ -1311,9 +1311,21 @@ describe('copies stored before window keys', () => {
     TRASH_BUDGET.rows = 1
     const item = await itemFor(t, task.id)
     await restore(t, f.user, [item.id])
-    await runSteps(t)
+    // while the task is stored, its copy holds the key its rows went back
+    // with, so the task's reveal writes none of them again
+    let storedKey: string | undefined
+    await stepThrough(t, item.id, async () => {
+      const copy = await storedIssue(t, task.id)
+      const written = Object.values(await keysOf(t, task.id)).flat()
+      if (copy === undefined || written.length === 0) return
+      storedKey ??= copy.window_key
+      expect(copy.window_key).toMatch(KEY)
+      expect(copy.window_key).toBe(storedKey)
+      expect(written.every((k) => k === storedKey)).toBe(true)
+    })
     const key = (await liveTask(t, task.id))?.window_key
     expect(key).toMatch(KEY)
+    expect(key).toBe(storedKey)
     expect(await keysOf(t, task.id)).toEqual({
       issue_labels: [key],
       issue_subscriptions: [key],
