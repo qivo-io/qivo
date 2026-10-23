@@ -1,7 +1,9 @@
 const fs = require('node:fs')
 const path = require('node:path')
-// The copy in desktop/node_modules that electron-updater reads app-update.yml with.
-const yaml = require('js-yaml')
+// Read app-update.yml with the js-yaml copy electron-updater itself loads.
+const yaml = require(
+  require.resolve('js-yaml', { paths: [path.dirname(require.resolve('electron-updater'))] }),
+)
 
 const updateUrl = process.env.QIVO_DESKTOP_UPDATE_URL
 const rootPackage = require('../package.json')
@@ -23,10 +25,11 @@ if (updateUrl) {
  * `CSC_LINK`, `win.signtoolOptions.publisherName`, or
  * `win.azureSignOptions.publisherName`. Without one, the installed app would
  * run any installer the feed offers. electron-builder writes the file before
- * this hook runs.
+ * this hook runs, for a feed from QIVO_DESKTOP_UPDATE_URL or from any other
+ * publish setting, so the hook checks every file it finds.
  */
 async function requireWindowsPublisher(context) {
-  if (!updateUrl || context.electronPlatformName !== 'win32') return
+  if (context.electronPlatformName !== 'win32') return
   const configPath = path.join(
     context.packager.getResourcesDir(context.appOutDir),
     'app-update.yml',
@@ -37,7 +40,7 @@ async function requireWindowsPublisher(context) {
   const publishers = Array.isArray(publisherName) ? publisherName : [publisherName]
   if (!publishers.length || !publishers.every((name) => typeof name === 'string' && name.trim()))
     throw new Error(
-      'A Windows build with QIVO_DESKTOP_UPDATE_URL must be signed with a known publisher, so the installed app checks the signature of every update.',
+      'A Windows build with an update feed must be signed with a known publisher, so the installed app checks the signature of its updates.',
     )
 }
 

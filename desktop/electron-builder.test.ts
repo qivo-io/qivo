@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 const require = createRequire(import.meta.url)
 const configPath = require.resolve('./electron-builder.cjs')
@@ -42,16 +42,17 @@ describe('desktop package fuses', () => {
 })
 
 describe('desktop update feed in the build', () => {
-  let appOutDir = ''
-  afterEach(() => {
-    if (appOutDir) fs.rmSync(appOutDir, { recursive: true, force: true })
+  let runDirectory = ''
+  beforeEach(() => {
+    const parent = path.resolve('dev-temp/desktop-builder-tests')
+    fs.mkdirSync(parent, { recursive: true })
+    runDirectory = fs.mkdtempSync(path.join(parent, 'run-'))
   })
+  afterEach(() => fs.rmSync(runDirectory, { recursive: true, force: true }))
 
   /** Packs a fake app whose resources hold this app-update.yml, or none. */
   function packed(platform: string, updateConfig?: string) {
-    const parent = path.resolve('dev-temp/desktop-builder-tests')
-    fs.mkdirSync(parent, { recursive: true })
-    appOutDir = fs.mkdtempSync(path.join(parent, 'run-'))
+    const appOutDir = fs.mkdtempSync(path.join(runDirectory, 'app-'))
     const resources = path.join(appOutDir, 'resources')
     fs.mkdirSync(resources)
     if (updateConfig) fs.writeFileSync(path.join(resources, 'app-update.yml'), updateConfig)
@@ -79,11 +80,16 @@ describe('desktop update feed in the build', () => {
       `${unsigned}publisherName: null\n`,
       `${unsigned}publisherName:\n`,
       `${unsigned}publisherName: []\n`,
+      `${unsigned}publisherName: '  '\n`,
       `${unsigned}publisherName:\n  - Qivo AB\n  - ''\n`,
     ])
       await expect(loadConfig(feed).afterPack(packed('win32', config)), config).rejects.toThrow(
         'known publisher',
       )
+    // a feed from another publish setting than QIVO_DESKTOP_UPDATE_URL
+    await expect(loadConfig().afterPack(packed('win32', unsigned))).rejects.toThrow(
+      'known publisher',
+    )
   })
 
   it('passes a signed Windows build, a Linux build and a build without a feed', async () => {
@@ -93,5 +99,7 @@ describe('desktop update feed in the build', () => {
     ).resolves.toBeUndefined()
     await expect(loadConfig(feed).afterPack(packed('linux', unsigned))).resolves.toBeUndefined()
     await expect(loadConfig().afterPack(packed('win32'))).resolves.toBeUndefined()
+    // a Windows target that writes no app-update.yml never checks for updates
+    await expect(loadConfig(feed).afterPack(packed('win32'))).resolves.toBeUndefined()
   })
 })

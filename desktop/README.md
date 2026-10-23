@@ -11,8 +11,8 @@ that the client needs:
   Qivo and opens the Inbox.
 - Packaged builds check the release feed built into them, download updates in the
   background and show a native “update ready” notification. Qivo waits for
-  active edits and asks before restarting to install an update. A normal quit
-  also completes a downloaded update.
+  active edits and asks before restarting to install an update. On Windows a
+  normal quit also completes a downloaded update.
 - OAuth provider pages open in the system browser. A short-lived, one-time
   `qivo://` callback returns the result to the waiting Qivo window.
 
@@ -57,11 +57,17 @@ The shell follows Electron's
   processes through one. [switches.ts](switches.ts) lists them: accepting
   untrusted certificates, host mapping, remote debugging, child-process
   launch prefixes and command-line extensions. A run from source accepts
-  every switch.
-- The logon entry of a Linux AppImage starts the file in `APPIMAGE`. Qivo
-  reads that variable only when it runs from an AppImage's temporary folder,
-  where the AppImage runtime has set it, so a .deb or .rpm install that
-  inherits it still starts the installed program.
+  every switch. Windows shows the reason in a dialog. Linux writes it to
+  standard error and opens no window, so start Qivo from a terminal to read
+  it. Showing a window first would start the processes and the debugging
+  port those switches act on.
+- The logon entry of a Linux AppImage starts the file in `APPIMAGE`, and an
+  AppImage update replaces that file. Qivo reads the variable only when it
+  runs from a folder that an AppImage launcher set it for: the AppImage
+  runtime's temporary folder, `firejail --appimage` or NixOS `appimage-run`.
+  Otherwise Qivo ignores it and removes it before the updater starts, so a
+  .deb or .rpm install that inherits it still starts the installed program,
+  and the updater replaces no other file.
 - These rules keep Qivo's own settings from redirecting it. They do not
   protect against a program that already runs as the user. Such a program
   can set loader variables such as `LD_PRELOAD`, edit the per-user Windows
@@ -153,7 +159,8 @@ $env:QIVO_DESKTOP_UPDATE_URL = "https://downloads.example.com/qivo/win"
 npm run desktop:package
 ```
 
-The feed must be HTTPS with no credentials, query string or fragment. Upload
+On Windows this build also needs the signing settings described below. The
+feed must be HTTPS with no credentials, query string or fragment. Upload
 the generated installer and its `latest.yml`/blockmap files to that endpoint
 with the same version from `package.json`. The installed app checks only this
 feed and reads no feed setting at run time. `QIVO_DISABLE_UPDATES=1` turns
@@ -166,11 +173,19 @@ writes that name from the signing settings: the common name of the
 certificate in `CSC_LINK` or `win.signtoolOptions` (`certificateFile`,
 `certificateSubjectName` or `certificateSha1`), or
 `win.signtoolOptions.publisherName`, or `win.azureSignOptions.publisherName`
-for Azure Trusted Signing. The name must match the certificate's common
-name. Keep `win.verifyUpdateCodeSignature` unset. A Windows build with a feed
-whose configuration names no publisher fails, so the signing change must set
-one of these. A test signed with a self-signed certificate needs that
-certificate trusted on the test machine.
+for Azure Trusted Signing. A name alone matches any trusted certificate with
+that common name, so set `win.signtoolOptions.publisherName` or
+`win.azureSignOptions.publisherName` to the certificate's full subject, such
+as `CN=Qivo AB, O=Qivo AB, C=SE`. electron-updater then requires every field
+it names to match. Keep `win.verifyUpdateCodeSignature` unset. A Windows
+build with a feed whose configuration names no publisher fails, so the
+signing change must set one of these. A test signed with a self-signed
+certificate needs that certificate trusted on the test machine.
+
+electron-updater checks the signature with PowerShell. When PowerShell cannot
+run at all, for example where AppLocker blocks it, the library logs a warning
+and installs the update without the check. Do not block PowerShell on the
+computers that run a signed build.
 
 Linux updates have no signature check. electron-updater installs the `.deb`
 or `.rpm` whose SHA-512 the same feed lists, as root after Qivo asks, so the

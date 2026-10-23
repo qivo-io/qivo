@@ -14,8 +14,11 @@ describe('desktop command-line switches', () => {
       ),
     ).toEqual(['--ignore-certificate-errors', '--host-resolver-rules'])
     expect(
-      refusedSwitchesIn(true, commandLine('remote-debugging-port', 'renderer-cmd-prefix')),
-    ).toEqual(['--remote-debugging-port', '--renderer-cmd-prefix'])
+      refusedSwitchesIn(
+        true,
+        commandLine('remote-debugging-port', 'renderer-cmd-prefix', 'zygote-cmd-prefix'),
+      ),
+    ).toEqual(['--remote-debugging-port', '--renderer-cmd-prefix', '--zygote-cmd-prefix'])
   })
 
   it('starts a packaged build with the switches Qivo and troubleshooting use', () => {

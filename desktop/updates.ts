@@ -1,5 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import type { AppUpdater } from 'electron-updater'
+import { appImagePath } from './startup.js'
 
 /**
  * electron-updater's test hooks. One picks the Linux package manager that
@@ -7,6 +9,13 @@ import path from 'node:path'
  * downloads. An installed app takes neither from its environment.
  */
 const updaterTestVariables = ['ELECTRON_BUILDER_LINUX_PACKAGE_MANAGER', 'TEST_UPDATER_ARCH']
+
+type UpdateInputs = {
+  packaged: boolean
+  env: NodeJS.ProcessEnv
+  resourcesPath: string
+  executablePath: string
+}
 
 /**
  * Returns the update configuration a build checks, or null when it never
@@ -26,7 +35,21 @@ export function builtInUpdateConfig(
   return fs.existsSync(configPath) ? configPath : null
 }
 
-/** Removes electron-updater's test hooks before the updater reads them. */
-export function ignoreUpdaterTestHooks(env: NodeJS.ProcessEnv): void {
+/**
+ * Points the updater at the built-in feed and returns whether it may check.
+ * Before the first check it also removes the environment values the updater
+ * would otherwise follow: its test hooks, and an `APPIMAGE` that no AppImage
+ * launcher set, which the AppImage updater would delete and replace. Leaves
+ * the updater untouched when the build never checks.
+ */
+export function useBuiltInFeed(
+  updater: Pick<AppUpdater, 'updateConfigPath'>,
+  { packaged, env, resourcesPath, executablePath }: UpdateInputs,
+): boolean {
+  const updateConfig = builtInUpdateConfig(packaged, env, resourcesPath)
+  if (!updateConfig) return false
+  updater.updateConfigPath = updateConfig
   for (const name of updaterTestVariables) delete env[name]
+  if (!appImagePath(executablePath, env)) delete env.APPIMAGE
+  return true
 }

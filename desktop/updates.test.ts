@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { builtInUpdateConfig, ignoreUpdaterTestHooks } from './updates'
+import { builtInUpdateConfig, useBuiltInFeed } from './updates'
 
 let resources: string
 
@@ -34,13 +34,51 @@ describe('desktop update feed', () => {
     expect(builtInUpdateConfig(false, runTimeFeed, resources)).toBeNull()
   })
 
-  it("drops electron-updater's test hooks and keeps everything else", () => {
+  it("points the updater at the built-in feed and drops the environment's updater overrides", () => {
+    const configPath = path.join(resources, 'app-update.yml')
+    fs.writeFileSync(configPath, 'provider: generic\n')
+    const updater = { updateConfigPath: null as string | null }
     const env = {
+      ...runTimeFeed,
       ELECTRON_BUILDER_LINUX_PACKAGE_MANAGER: 'apt',
       TEST_UPDATER_ARCH: 'arm64',
+      APPIMAGE: '/home/user/Applications/Editor.AppImage',
       HOME: '/home/user',
     }
-    ignoreUpdaterTestHooks(env)
-    expect(env).toEqual({ HOME: '/home/user' })
+    const inputs = {
+      packaged: true,
+      env,
+      resourcesPath: resources,
+      executablePath: '/opt/Qivo/qivo',
+    }
+    expect(useBuiltInFeed(updater, inputs)).toBe(true)
+    expect(updater.updateConfigPath).toBe(configPath)
+    expect(env).toEqual({ ...runTimeFeed, HOME: '/home/user' })
+  })
+
+  it('keeps the APPIMAGE an AppImage launcher set', () => {
+    fs.writeFileSync(path.join(resources, 'app-update.yml'), 'provider: generic\n')
+    const env = { APPIMAGE: '/home/user/Applications/Qivo.AppImage' }
+    const inputs = {
+      packaged: true,
+      env,
+      resourcesPath: resources,
+      executablePath: '/tmp/.mount_QivoAbC123/qivo',
+    }
+    expect(useBuiltInFeed({ updateConfigPath: null }, inputs)).toBe(true)
+    expect(env).toEqual({ APPIMAGE: '/home/user/Applications/Qivo.AppImage' })
+  })
+
+  it('leaves the updater alone in a build that never checks', () => {
+    const updater = { updateConfigPath: null as string | null }
+    const env = { ...runTimeFeed, TEST_UPDATER_ARCH: 'arm64' }
+    const inputs = {
+      packaged: true,
+      env,
+      resourcesPath: resources,
+      executablePath: '/opt/Qivo/qivo',
+    }
+    expect(useBuiltInFeed(updater, inputs)).toBe(false)
+    expect(updater.updateConfigPath).toBeNull()
   })
 })

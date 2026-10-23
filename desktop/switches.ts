@@ -10,9 +10,12 @@
  *   another address.
  * - `remote-debugging-port` and `remote-debugging-pipe` let another program
  *   drive the page, and with it the desktop bridge.
- * - `renderer-cmd-prefix`, `utility-cmd-prefix`, `gpu-launcher` and
- *   `browser-subprocess-path` start Qivo's child processes through another
- *   program.
+ * - `renderer-cmd-prefix`, `utility-cmd-prefix`, `zygote-cmd-prefix`,
+ *   `gpu-launcher` and `browser-subprocess-path` start Qivo's child
+ *   processes through another program. Chromium starts the Linux zygote
+ *   before this check runs, so refusing its prefix stops Qivo from showing
+ *   its page through the wrapped processes but cannot stop the wrapper from
+ *   starting once.
  * - `load-extension` loads an extension into the session. Electron is not
  *   known to honour it, and Qivo refuses it either way.
  *
@@ -28,6 +31,7 @@ export const refusedSwitches = [
   'remote-debugging-pipe',
   'renderer-cmd-prefix',
   'utility-cmd-prefix',
+  'zygote-cmd-prefix',
   'gpu-launcher',
   'browser-subprocess-path',
   'load-extension',

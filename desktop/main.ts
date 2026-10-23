@@ -22,7 +22,7 @@ import { createDesktopSettingsStore, defaultDesktopSettings } from './settings.j
 import { appImagePath, createLoginStartup, startupArgument } from './startup.js'
 import { refusedSwitchesIn } from './switches.js'
 import { createUpdatePrompt } from './updatePrompt.js'
-import { builtInUpdateConfig, ignoreUpdaterTestHooks } from './updates.js'
+import { useBuiltInFeed } from './updates.js'
 
 // electron-updater is CommonJS. Import its default namespace explicitly so
 // Electron's native ESM loader does not rely on synthetic named exports.
@@ -123,10 +123,13 @@ function setupAutoUpdates(): void {
   // Never contact a feed while running from source, so local development and
   // browser smoke drives stay deterministic. A packaged build checks only the
   // feed built into it, and a build without one never checks.
-  const updateConfig = builtInUpdateConfig(app.isPackaged, process.env, process.resourcesPath)
-  if (!updateConfig) return
-  autoUpdater.updateConfigPath = updateConfig
-  ignoreUpdaterTestHooks(process.env)
+  const checks = useBuiltInFeed(autoUpdater, {
+    packaged: app.isPackaged,
+    env: process.env,
+    resourcesPath: process.resourcesPath,
+    executablePath: process.execPath,
+  })
+  if (!checks) return
   disableStagingUserId(autoUpdater)
   autoUpdater.autoDownload = true
   // Download in the background and finish on a normal app quit. A click on

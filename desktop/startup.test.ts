@@ -70,9 +70,21 @@ describe('desktop logon startup', () => {
     const env = { APPIMAGE: '/home/user/Applications/Qivo.AppImage' }
     expect(appImagePath('/tmp/.mount_QivoAbC123/qivo', env)).toBe(env.APPIMAGE)
     expect(appImagePath('/tmp/appimage_extracted_0123abcd/qivo', env)).toBe(env.APPIMAGE)
+    expect(appImagePath('/run/firejail/appimage/qivo', env)).toBe(env.APPIMAGE)
+    const nixCache = `/home/user/.cache/appimage-run/${'0a'.repeat(32)}`
+    expect(appImagePath(`${nixCache}/qivo`, env)).toBe(env.APPIMAGE)
+    expect(appImagePath(`${nixCache}/squashfs-root/qivo`, env)).toBe(env.APPIMAGE)
     // a .deb or .rpm install that inherited the variable
     expect(appImagePath('/opt/Qivo/qivo', env)).toBeUndefined()
-    expect(appImagePath('/opt/Qivo/qivo', { APPIMAGE: '/tmp/other' })).toBeUndefined()
+    // folders that only look like an AppImage launcher's
+    for (const executable of [
+      '/opt/x.mount_y/qivo',
+      '/tmp/.mount_X/sub/qivo',
+      '/home/user/squashfs-root/qivo',
+      '/home/user/.cache/appimage-run/abc/qivo',
+      '/srv/run/firejail/appimage/qivo',
+    ])
+      expect(appImagePath(executable, env), executable).toBeUndefined()
   })
 
   it('registers the stable AppImage path instead of its temporary mount', () => {
