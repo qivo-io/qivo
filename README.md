@@ -69,8 +69,11 @@ TypeScript file is in a typecheck, the types of the frontend, backend, desktop
 app, tests and tooling, production build and hermetic tests with at most two
 workers. The backend check also fails when a `convex/` file that runs in
 Convex's default runtime uses a Node global such as `Buffer` or a Node module.
-Only the files that start with `'use node'`, the files only they import and
-the tests may.
+Only the files that start with `'use node'` and the tests may, because Convex
+bundles every other file for the default runtime, whichever files import it.
+Types and `import type` may still name Node's types, and a file may import
+`AsyncLocalStorage` and `AsyncResource` from `async_hooks`, which the default
+runtime provides.
 It needs no deployment credentials and does not reset any hosted data.
 Do not run full gates concurrently across agents. `npm run test:contract`, demo
 reset/seed commands and browser smoke tools can write to a backend; they are

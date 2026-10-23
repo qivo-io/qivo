@@ -61,16 +61,29 @@ describe('the convex typecheck', { timeout: 60_000 }, () => {
     )
   })
 
-  it('passes the same code in a Node file, a file only Node files import, and a test', () => {
+  it('passes Node code in Node files and tests, and Node types where they are erased', () => {
     const { status, output } = typecheck({
       'encode.ts': `'use node'\n${usesBuffer}`,
-      'lib/bytes.ts': 'export const size = (text: string) => Buffer.byteLength(text)\n',
+      'lib/bytes.ts': "'use node'\nexport const size = (text: string) => Buffer.byteLength(text)\n",
       'measure.ts':
         "'use node'\nimport { size } from './lib/bytes'\nexport const bytes = size('x')\n",
       'tests/encode.test.ts': usesBuffer,
-      'site.ts': "export const site = new URL('https://qivo.io')\n",
+      'site.ts': [
+        "import type { Readable } from 'node:stream'",
+        "import { AsyncLocalStorage, type AsyncResource } from 'node:async_hooks'",
+        "import type { size } from './lib/bytes'",
+        "export const options: RequestInit = { method: 'POST' }",
+        'export let stream: Readable | typeof Buffer | AsyncResource | undefined',
+        'export let measure: typeof size | undefined',
+        'export const storage = new AsyncLocalStorage<string>()',
+        'export interface Encoded extends Buffer {}',
+        'declare const later: typeof setImmediate',
+        '',
+      ].join('\n'),
     })
-    expect(output).toBe("1 convex/ files use only the default runtime's globals; 3 run in Node.\n")
+    expect(output).toBe(
+      "1 files run in Convex's default runtime and use only its globals; 3 run in Node.\n",
+    )
     expect(status).toBe(0)
   })
 
@@ -80,15 +93,26 @@ describe('the convex typecheck', { timeout: 60_000 }, () => {
     expect(output).toContain('holds no convex/ file that runs in the default runtime.')
   })
 
-  it('checks a file that both kinds import in the default runtime', () => {
+  it('fails when a file Convex bundles is not in the program', () => {
+    const { status, output } = typecheck({
+      'site.ts': "export const site = new URL('https://qivo.io')\n",
+      'legacy.js': 'export const legacy = 1\n',
+    })
+    expect(status).toBe(1)
+    expect(output).toContain('convex/legacy.js is not in ')
+  })
+
+  it('checks in the default runtime a file without use node, whoever imports it', () => {
     const { status, output } = typecheck({
       'lib/bytes.ts': 'export const size = (text: string) => Buffer.byteLength(text)\n',
+      'lib/count.ts': 'export const count = (text: string) => Buffer.byteLength(text)\n',
       'measure.ts':
         "'use node'\nimport { size } from './lib/bytes'\nexport const bytes = size('x')\n",
-      'count.ts': "import { size } from './lib/bytes'\nexport const bytes = size('y')\n",
+      'tally.ts': "import { count } from './lib/count'\nexport const bytes = count('y')\n",
     })
     expect(status).toBe(1)
     expect(output).toContain('convex/lib/bytes.ts:1:39 - Buffer is a Node global')
+    expect(output).toContain('convex/lib/count.ts:1:40 - Buffer is a Node global')
     expect(output).not.toContain('convex/measure.ts')
   })
 
@@ -101,22 +125,28 @@ describe('the convex typecheck', { timeout: 60_000 }, () => {
         'export const load = () => fetch(new Request(site, { headers: new Headers() }))',
         '',
       ].join('\n'),
+      'encode.ts': `'use node'\n${usesBuffer}`,
       'node.ts': [
         "import { createHash } from 'node:crypto'",
-        "import type { Readable } from 'stream'",
+        "import hooks from 'node:async_hooks'",
+        "import { executionAsyncId } from 'async_hooks'",
+        "import { encoded } from './encode'",
         "export const hash = createHash('sha256')",
         'export const directory = process.cwd()',
-        'export let stream: Readable | undefined',
         'export const later = (run: () => void) => setImmediate(run)',
+        'export const exposed = { Buffer, encoded, hooks, executionAsyncId }',
         '',
       ].join('\n'),
     })
     expect(status).toBe(1)
     expect(output.split('\n').filter((line) => line.startsWith('convex/'))).toEqual([
       'convex/node.ts:1:28 - node:crypto is a Node module, which the default runtime does not provide.',
-      'convex/node.ts:2:31 - stream is a Node module, which the default runtime does not provide.',
-      'convex/node.ts:4:26 - process holds only env in the default runtime, so read process.env.',
-      'convex/node.ts:6:43 - setImmediate is a Node global, which the default runtime does not provide.',
+      "convex/node.ts:2:19 - the default runtime's node:async_hooks holds only AsyncLocalStorage and AsyncResource, so import them by name.",
+      "convex/node.ts:3:34 - the default runtime's async_hooks holds only AsyncLocalStorage and AsyncResource, so import them by name.",
+      "convex/node.ts:4:25 - ./encode starts with 'use node', and the default runtime cannot run it.",
+      'convex/node.ts:6:26 - process holds only env in the default runtime, so read process.env.',
+      'convex/node.ts:7:43 - setImmediate is a Node global, which the default runtime does not provide.',
+      'convex/node.ts:8:26 - Buffer is a Node global, which the default runtime does not provide.',
     ])
   })
 })
