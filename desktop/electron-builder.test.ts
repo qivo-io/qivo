@@ -74,13 +74,23 @@ describe('desktop update feed in the build', () => {
   })
 
   it('fails a Windows build with a feed but no signing publisher', async () => {
-    await expect(loadConfig(feed).afterPack(packed('win32', unsigned))).rejects.toThrow(
-      'known publisher',
-    )
+    for (const config of [
+      unsigned,
+      `${unsigned}publisherName: null\n`,
+      `${unsigned}publisherName:\n`,
+      `${unsigned}publisherName: []\n`,
+      `${unsigned}publisherName:\n  - Qivo AB\n  - ''\n`,
+    ])
+      await expect(loadConfig(feed).afterPack(packed('win32', config)), config).rejects.toThrow(
+        'known publisher',
+      )
   })
 
   it('passes a signed Windows build, a Linux build and a build without a feed', async () => {
     await expect(loadConfig(feed).afterPack(packed('win32', signed))).resolves.toBeUndefined()
+    await expect(
+      loadConfig(feed).afterPack(packed('win32', `${unsigned}publisherName: Qivo AB\n`)),
+    ).resolves.toBeUndefined()
     await expect(loadConfig(feed).afterPack(packed('linux', unsigned))).resolves.toBeUndefined()
     await expect(loadConfig().afterPack(packed('win32'))).resolves.toBeUndefined()
   })

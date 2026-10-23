@@ -1,5 +1,7 @@
 const fs = require('node:fs')
 const path = require('node:path')
+// The copy in desktop/node_modules that electron-updater reads app-update.yml with.
+const yaml = require('js-yaml')
 
 const updateUrl = process.env.QIVO_DESKTOP_UPDATE_URL
 const rootPackage = require('../package.json')
@@ -30,7 +32,10 @@ async function requireWindowsPublisher(context) {
     'app-update.yml',
   )
   if (!fs.existsSync(configPath)) return
-  if (!/^publisherName:/m.test(fs.readFileSync(configPath, 'utf8')))
+  // electron-updater skips the check when publisherName is missing or null.
+  const { publisherName } = yaml.load(fs.readFileSync(configPath, 'utf8')) ?? {}
+  const publishers = Array.isArray(publisherName) ? publisherName : [publisherName]
+  if (!publishers.length || !publishers.every((name) => typeof name === 'string' && name.trim()))
     throw new Error(
       'A Windows build with QIVO_DESKTOP_UPDATE_URL must be signed with a known publisher, so the installed app checks the signature of every update.',
     )
