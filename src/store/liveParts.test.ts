@@ -571,6 +571,32 @@ describe('a staged load', () => {
     expect(watchedWindows(s)).toHaveLength(STAGES.first)
   })
 
+  it('watches every window of several large organizations whose first stage they share', () => {
+    const s = scripted()
+    serveBig(s)
+    serveOrg(s, 'org-2', 64)
+    serveOrg(s, 'org-3', 64)
+    s.set(
+      'workspace:root',
+      {},
+      {
+        value: { ...BIG, orgs: [...BIG.orgs, orgRow('org-2', 64), orgRow('org-3', 64)] },
+      },
+    )
+    const reports: PartsReport[] = []
+    createLiveParts(
+      s.live,
+      (r) => reports.push(r),
+      () => true,
+    )
+    // a first stage of 8 windows ends inside a turn of the three
+    for (let i = 0; i < 12 && reports.at(-1)?.workspace.state !== 'complete'; i++) s.send()
+    expect(reports.at(-1)?.workspace.state).toBe('complete')
+    for (const org of [ORG, 'org-2', 'org-3']) expect(watchedWindows(s, org)).toHaveLength(64)
+    const w = reports.at(-1)?.workspace
+    expect(w?.state === 'complete' && w.value?.issues).toHaveLength(64 * 3)
+  })
+
   it('weights the share loaded by each organization’s tasks', () => {
     const s = scripted()
     serveBig(s)

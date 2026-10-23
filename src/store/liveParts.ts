@@ -299,8 +299,9 @@ export function createLiveParts(
     const from = [...orgs.values()].filter((org) => !ids || ids.includes(org.id))
     while (n > 0 && from.some((org) => org.later.length > 0))
       for (const org of from) {
+        if (n === 0) break
         const w = org.later.shift()
-        if (!w || n === 0) continue
+        if (!w) continue
         org.kinds.tasks.push(node(org.id, 'tasks', w))
         n--
       }
