@@ -63,6 +63,53 @@ export function halve(w: IdWindow): [IdWindow, IdWindow] | null {
   ]
 }
 
+/** The most pieces one cut makes of a window (cutPieces). */
+export const MOST_PIECES = 64
+
+/** `w` cut into `n` equal windows of the grid, n a power of two, or into
+ * windows of the grid's narrowest width when `n` would make them narrower.
+ * Null when `w` cannot be cut. */
+export function cut(w: IdWindow, n: number): IdWindow[] | null {
+  if (halve(w) === null) return null
+  const a = pointOf(w.from)
+  const width = Math.max(NARROWEST, (pointOf(w.to) - a) / Math.max(2, n))
+  const count = (pointOf(w.to) - a) / width
+  return Array.from({ length: count }, (_, i) => ({
+    from: i === 0 ? w.from : point(a + width * i),
+    to: i === count - 1 ? w.to : point(a + width * (i + 1)),
+  }))
+}
+
+/** How many pieces to cut window `w` into when the rows a read took from
+ * its start, in order, end at a row whose key or id starts with `last`: so
+ * many that each holds about half of what the read took, as keys and ids
+ * spread evenly, from 2 to MOST_PIECES. A window that cannot hold all its
+ * rows in one read then reaches its size in one round, not in one round per
+ * halving. 2 when `last` is no hex point. */
+export function cutPieces(w: IdWindow, last: string | undefined): number {
+  const a = pointOf(w.from)
+  const at = last === undefined ? Number.NaN : Number.parseInt(last.slice(0, 8), 16)
+  if (!/^[0-9a-f]{8}/.test(last ?? '') || !(at >= a)) return 2
+  const covered = (at - a + 1) / (pointOf(w.to) - a)
+  let n = 2
+  while (n < MOST_PIECES && n * covered < 2) n *= 2
+  return n
+}
+
+/** The windows that take over from window `w` after its part answered
+ * `answer`: its halves after `split`, the pieces it names after `overflow`
+ * (any count but a power of two from 2 to MOST_PIECES halves), or null when
+ * the answer asks for no cut or `w` cannot be cut. */
+export function piecesAfter(
+  w: IdWindow,
+  answer: { state: string; split?: boolean; pieces?: number },
+): IdWindow[] | null {
+  if (answer.state === 'ok' && answer.split === true) return halve(w)
+  if (answer.state !== 'overflow') return null
+  const n = answer.pieces ?? 2
+  return cut(w, Number.isInteger(Math.log2(n)) && n >= 2 && n <= MOST_PIECES ? n : 2)
+}
+
 /** Whether `w` is a window of the grid that idWindows and halve make: its
  * width is the whole space halved at most MAX_DEPTH times, it starts at a
  * multiple of its width, and its bounds are written as they write them. */
@@ -80,5 +127,6 @@ export const inIdWindow = (id: string, w: IdWindow) => id >= w.from && (w.to ===
 /** About how many rows the app's first windows of each kind hold, from the
  * organization's counters (lib/workspaceParts.ts PAGE has the split
  * points). The people of an organization have no counter, so they start in
- * one window, which cuts itself as it fills. */
+ * one window, which a large organization overflows at once, and its answer
+ * says how many pieces to cut it into (cutPieces). */
 export const WINDOW_ROWS = { tasks: 200, projects: 250 }

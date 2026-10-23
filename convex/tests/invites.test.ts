@@ -163,8 +163,15 @@ describe('invitations from the app', () => {
       ['anna@xn--bcher-kva.de', 'anna'],
       [`${local}@example.se`, 'g'.repeat(LIMITS.personName.max)],
     ])
+    // each invitation schedules its own send, and the two sends run at once,
+    // so their letters leave in either order
     await flush(t)
-    expect(letters().map((l) => l.to)).toEqual([['anna@xn--bcher-kva.de'], [`${local}@example.se`]])
+    expect(
+      letters()
+        .map((l) => l.to[0])
+        .sort(),
+    ).toEqual(['anna@xn--bcher-kva.de', `${local}@example.se`])
+    expect(letters().every((l) => l.to.length === 1)).toBe(true)
   })
 
   it('stores and emails an address with an apostrophe', async () => {

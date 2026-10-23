@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Input } from '../components/ui/input'
 import { TooltipProvider } from '../components/ui/tooltip'
+import { pastCloseTicks } from '../lib/discardQuestion.setup'
 import { plannerFixture } from '../store/plannerFixture.setup'
 
 /* Closing a dialog while a field holds text the person typed: the close
@@ -104,7 +105,7 @@ async function press(name: string) {
   if (!button) throw new Error(`missing ${name}`)
   await act(async () => {
     button.click()
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    await pastCloseTicks()
   })
 }
 async function pressEscape() {
@@ -112,7 +113,7 @@ async function pressEscape() {
     document.activeElement?.dispatchEvent(
       new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
     )
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    await pastCloseTicks()
   })
 }
 const question = () => document.querySelector('[data-discard-prompt] h2')?.textContent ?? null

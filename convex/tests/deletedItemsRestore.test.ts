@@ -1041,7 +1041,9 @@ describe('restoring a task item', () => {
   })
 
   /** Task `a` in Firmware with a link to `b` and to `b`'s subtask, which
-   * travel with `a`, deleted first, and `b` deleted with its subtask. */
+   * travel with `a`, deleted first, and `b` deleted with its subtask. The
+   * links are stored without a window key, and `links` holds them as they
+   * come back, with `a`'s. */
   async function linkedItems() {
     const t = newT()
     const f = await withOrg(t)
@@ -1070,7 +1072,8 @@ describe('restoring a task item', () => {
     const items = [await itemFor(t, a.id), await itemFor(t, b.id)]
     const strip = ({ _id, _creationTime, ...doc }: Doc<'issue_links'>) => doc
     const byLinkId = (x: { id: string }, y: { id: string }) => (x.id < y.id ? -1 : 1)
-    return { t, f, a, b, items, links: links.map(strip).sort(byLinkId), byLinkId }
+    const back = links.map((link) => ({ ...strip(link), task_key: a.window_key }))
+    return { t, f, a, b, items, links: back.sort(byLinkId), byLinkId }
   }
 
   it('restores two items whose tasks link to each other, in steps that take turns', async () => {
@@ -1254,7 +1257,10 @@ describe('restoring a task item', () => {
     expect(back?.done_at).toBe(NOW)
     expect((await liveTask(t, done.id))?.done_at).toBe(iso(START + HOUR))
     const rows = await liveRowsOf(t, archived.id)
-    expect(rows.issue_labels).toEqual([{ org_id, issue_id: archived.id, label_id: labelId }])
+    // a row stored without a window key comes back with its task's
+    expect(rows.issue_labels).toEqual([
+      { org_id, issue_id: archived.id, label_id: labelId, task_key: archived.window_key },
+    ])
     expect(rows.issue_links.map((l) => l.task_archived)).toEqual([undefined])
     const scheduled = await t.run(async (ctx) =>
       (await ctx.db.system.query('_scheduled_functions').collect()).filter(
@@ -1270,6 +1276,94 @@ describe('restoring a task item', () => {
     await runSteps(t)
     expect((await liveTask(t, archived.id))?.relations_marked).toBe(true)
     expect((await liveRowsOf(t, archived.id)).issue_labels[0]?.task_archived).toBe(true)
+  })
+})
+
+describe('copies stored before window keys', () => {
+  const KEY = /^[0-9a-f]{8}$/
+
+  /** The window keys `taskId`'s live relation rows carry, by table, the
+   * links it is the source of only. */
+  const keysOf = async (t: T, taskId: string) => {
+    const rows = await liveRowsOf(t, taskId)
+    return {
+      issue_labels: rows.issue_labels.map((r) => r.task_key),
+      issue_subscriptions: rows.issue_subscriptions.map((r) => r.task_key),
+      issue_attachments: rows.issue_attachments.map((r) => r.task_key),
+      issue_links: rows.issue_links.filter((r) => r.source_id === taskId).map((r) => r.task_key),
+    }
+  }
+
+  it('gives a task item and its rows one new key, in steps', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const task = await plantIssue(t, { org_id, project_id: f.sub.id, window_key: undefined })
+    const to = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    const from = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    await plantRows(t, f, task, { to, from })
+    await deleteTask(t, f, task.id)
+    const stored = await storedIssue(t, task.id)
+    expect(stored).toBeDefined()
+    expect(stored?.window_key).toBeUndefined()
+
+    // a row a step, so the rows go back in steps before the task
+    TRASH_BUDGET.rows = 1
+    const item = await itemFor(t, task.id)
+    await restore(t, f.user, [item.id])
+    await runSteps(t)
+    const key = (await liveTask(t, task.id))?.window_key
+    expect(key).toMatch(KEY)
+    expect(await keysOf(t, task.id)).toEqual({
+      issue_labels: [key],
+      issue_subscriptions: [key],
+      issue_attachments: [key],
+      issue_links: [key],
+    })
+    // the link in keeps its own source's key
+    expect((await keysOf(t, from.id)).issue_links).toEqual([from.window_key])
+  })
+
+  it('gives a project item, its tasks and their rows keys', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    for (const p of [f.meta, f.sub, f.sub2])
+      await patch(t, 'projects', p.id, { window_key: undefined })
+    const task = await plantIssue(t, { org_id, project_id: f.sub.id, window_key: undefined })
+    const kid = await plantIssue(t, {
+      org_id,
+      project_id: f.sub.id,
+      parent_id: task.id,
+      window_key: undefined,
+    })
+    const to = await plantIssue(t, { org_id, project_id: f.sub2.id, window_key: undefined })
+    const from = await plantIssue(t, { org_id, project_id: f.sub2.id, window_key: undefined })
+    await plantRows(t, f, task, { to, from })
+    await deleteProject(t, f, f.meta.id)
+    await runSteps(t)
+
+    TRASH_BUDGET.rows = 1
+    await restore(t, f.user, [(await itemFor(t, f.meta.id)).id])
+    await runSteps(t)
+    for (const p of [f.meta, f.sub, f.sub2])
+      expect((await liveProject(t, p.id))?.window_key).toMatch(KEY)
+    const keys = []
+    for (const one of [task, kid, to, from]) {
+      const key = (await liveTask(t, one.id))?.window_key
+      expect(key).toMatch(KEY)
+      keys.push(key)
+    }
+    expect(new Set(keys).size).toBe(4)
+    const [key, , , fromKey] = keys
+    expect(await keysOf(t, task.id)).toEqual({
+      issue_labels: [key],
+      issue_subscriptions: [key],
+      issue_attachments: [key],
+      issue_links: [key],
+    })
+    expect((await keysOf(t, from.id)).issue_links).toEqual([fromKey])
+    await assertNoDanglingRefs(t, 'after keyless copies came back')
   })
 })
 

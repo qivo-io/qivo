@@ -10,8 +10,9 @@
  * window of its kind, its relation rows with it, so the app still shows it,
  * but an organization with more such tasks than one window holds cannot
  * load. New rows get a key when they are inserted. Deleted items keep their
- * stored copies as they were, so a task deleted before keys comes back
- * without one, with its rows, and a later run gives them one.
+ * stored copies as they were, and a restore gives a copy stored before keys
+ * a key as it writes it back, its relation rows with it
+ * (model/deletedItems.ts storedTaskKey, cleanProject).
  *
  * Check a deployment before changing it. `remaining` is a query, so it
  * cannot write, and a key that may only run internal queries can run it. It

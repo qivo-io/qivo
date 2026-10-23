@@ -213,6 +213,32 @@ describe('the live parts registry', () => {
     expect(ids()).toEqual(['a', 'b', 'c'])
   })
 
+  it('cuts an overflowing window into the pieces its answer names, in one round', async () => {
+    const { s, last, ids } = await started()
+    const first = { org_id: ORG, ...LEFT }
+    s.set('workspace:tasks', first, { value: { state: 'overflow', pieces: 4 } })
+    s.send([s.keyOf('workspace:tasks', first)])
+    const pieces = [
+      ['', '20000000'],
+      ['20000000', '40000000'],
+      ['40000000', '60000000'],
+      ['60000000', '80000000'],
+    ].map(([from, to]) => ({ org_id: ORG, from, to }))
+    // every piece is watched at once, and none of the halves
+    for (const piece of pieces) expect(s.watched.has(s.keyOf('workspace:tasks', piece))).toBe(true)
+    expect(
+      s.watched.has(s.keyOf('workspace:tasks', { org_id: ORG, from: '', to: '40000000' })),
+    ).toBe(false)
+    for (const [i, piece] of pieces.entries())
+      if (i < 3) s.set('workspace:tasks', piece, { value: tasksPart([`p${i}`]) })
+    s.send()
+    expect(last()?.state).toBe('held')
+    s.set('workspace:tasks', pieces[3], { value: tasksPart(['p3']) })
+    s.send()
+    expect(ids()).toEqual(['p0', 'p1', 'p2', 'p3', 'c'])
+    expect(s.watched.has(s.keyOf('workspace:tasks', first))).toBe(false)
+  })
+
   it('after a reconnect, holds the workspace until every part arrived again', async () => {
     const { s, last } = await started()
     s.reconnect()

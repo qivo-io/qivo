@@ -14,15 +14,16 @@
    - A window that answers `split` keeps serving while its two halves load,
      and gives way to them in the first complete transition that holds both.
    - A window that answers `overflow` has no rows to show, so the workspace
-     waits for its halves.
+     waits for its pieces: as many as the answer names, else its halves
+     (convex/lib/idWindows.ts piecesAfter).
    - A new seat's organization waits for its parts. A seat that
      goes leaves with the root part's answer, quietly.
    - After the socket reconnects, Convex sends every result again, and none
      counts until it arrived again.
    - A part that failed, or refused to load with a sentence, makes the
      workspace fail when nothing else can show its rows: a window that
-     asked to be cut and then failed gives way to its halves once they
-     answer, and a half's failure waits while its window still shows.
+     asked to be cut and then failed gives way to its pieces once they
+     answer, and a piece's failure waits while its window still shows.
      Retry runs only the parts whose failure holds the workspace again.
    - A workspace that stays incomplete while online, with no part answering
      for STALL.ms, from the start on, fails, so a part that never answers shows instead of a
@@ -38,9 +39,9 @@ import type { FunctionReference } from 'convex/server'
 import { ConvexError, type Value } from 'convex/values'
 import { api } from '../../convex/_generated/api'
 import {
-  halve,
   type IdWindow,
   idWindows,
+  piecesAfter,
   WINDOW_ROWS,
   windowCount,
 } from '../../convex/lib/idWindows'
@@ -102,9 +103,9 @@ type Slot = {
   fresh: boolean
 }
 
-/* A window of one kind, its own part, and the halves it gives way to once
+/* A window of one kind, its own part, and the pieces it gives way to once
    it asked to be cut. */
-type Node = IdWindow & { slot: Slot; halves: [Node, Node] | null }
+type Node = IdWindow & { slot: Slot; pieces: Node[] | null }
 
 /* What the registry holds for one organization. */
 type Org = {
@@ -116,7 +117,7 @@ type Org = {
 }
 
 /* An answer with rows of a part. */
-type Answer = { state: string; split?: boolean; message?: string }
+type Answer = { state: string; split?: boolean; pieces?: number; message?: string }
 
 const isAnswer = (value: unknown): value is Answer =>
   typeof value === 'object' && value !== null && 'state' in value
@@ -154,7 +155,7 @@ export function createLiveParts(
   const node = (orgId: string, kind: Kind, w: IdWindow): Node => ({
     ...w,
     slot: watch(WINDOWED[kind], { org_id: orgId, from: w.from, to: w.to }),
-    halves: null,
+    pieces: null,
   })
 
   /** Brings the organizations in line with the root part's answer, and
@@ -189,26 +190,25 @@ export function createLiveParts(
       })
       moved = true
     }
-    // a window that asked to be cut gets its halves
+    // a window that asked to be cut gets its pieces
     for (const org of orgs.values())
       for (const kind of KINDS)
         for (const n of nodesOf(org.kinds[kind]))
-          if (n.halves === null && n.slot.fresh && isAnswer(n.slot.value)) {
-            const { state, split } = n.slot.value
-            const halves = halve(n)
-            if (halves && (state === 'overflow' || (state === 'ok' && split === true))) {
-              n.halves = [node(org.id, kind, halves[0]), node(org.id, kind, halves[1])]
+          if (n.pieces === null && n.slot.fresh && isAnswer(n.slot.value)) {
+            const pieces = piecesAfter(n, n.slot.value)
+            if (pieces) {
+              n.pieces = pieces.map((w) => node(org.id, kind, w))
               moved = true
             }
           }
     return moved
   }
 
-  /** Every node of `list`, halves included. */
+  /** Every node of `list`, pieces included. */
   function* nodesOf(list: readonly Node[]): Generator<Node> {
     for (const n of list) {
       yield n
-      if (n.halves) yield* nodesOf(n.halves)
+      if (n.pieces) yield* nodesOf(n.pieces)
     }
   }
   function* orgSlots(org: Org): Generator<Slot> {
@@ -225,24 +225,30 @@ export function createLiveParts(
     return partRows(slot.value as Answer & { state: 'ok' }) as P
   }
 
-  /** The rows of `n`'s window from its halves when both are ready, else its
+  /** The rows of `n`'s window from its pieces when all are ready, else its
       own answer, or null while neither can show it. */
   function rowsOf<P>(n: Node): P[] | null {
-    if (n.halves) {
-      const [a, b] = n.halves.map((h) => rowsOf<P>(h))
-      if (a && b) return [...a, ...b]
+    if (n.pieces) {
+      const rows: P[] = []
+      let ready = true
+      for (const piece of n.pieces) {
+        const got = ready ? rowsOf<P>(piece) : null
+        if (got === null) ready = false
+        else rows.push(...got)
+      }
+      if (ready) return rows
     }
     const own = rowsOfSlot<P>(n.slot)
     return own === null ? null : [own]
   }
 
-  /** `list` with each window whose halves are both ready replaced by
+  /** `list` with each window whose pieces are all ready replaced by
       them, as a complete transition just showed them. */
-  function adoptHalves(list: readonly Node[]): Node[] {
+  function adoptPieces(list: readonly Node[]): Node[] {
     return list.flatMap((n) => {
-      if (!n.halves?.every((h) => rowsOf(h) !== null)) return [n]
+      if (!n.pieces?.every((piece) => rowsOf(piece) !== null)) return [n]
       drop(n.slot)
-      return adoptHalves(n.halves)
+      return adoptPieces(n.pieces)
     })
   }
 
@@ -256,8 +262,8 @@ export function createLiveParts(
 
   /** The slots complete() needs an answer from: the root, each
       organization's catalog and inbox, and each window that shows its
-      rows neither itself nor through its halves (rowsOf), or, when it
-      has halves, the halves that cannot. */
+      rows neither itself nor through its pieces (rowsOf), or, when it
+      has pieces, the pieces that cannot. */
   function* needed(): Generator<Slot> {
     if (root) yield root
     for (const org of orgs.values()) {
@@ -268,8 +274,8 @@ export function createLiveParts(
   }
   function* neededIn(n: Node): Generator<Slot> {
     if (rowsOf(n) !== null) return
-    if (n.halves === null) yield n.slot
-    else for (const half of n.halves) yield* neededIn(half)
+    if (n.pieces === null) yield n.slot
+    else for (const piece of n.pieces) yield* neededIn(piece)
   }
 
   /** The first error of a slot complete() needs, or undefined. */
@@ -333,8 +339,8 @@ export function createLiveParts(
         for (const org of orgs.values())
           for (const kind of KINDS) {
             const list = org.kinds[kind]
-            // the halves hold the rows the window held, so nothing changes
-            if (list?.some((n) => n.halves)) org.kinds[kind] = adoptHalves(list)
+            // the pieces hold the rows the window held, so nothing changes
+            if (list?.some((n) => n.pieces)) org.kinds[kind] = adoptPieces(list)
           }
       }
     }
