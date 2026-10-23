@@ -1,8 +1,9 @@
+import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { API } from 'typescript/unstable/sync'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { closeTypeScriptAPI } from './typescript-api.mjs'
 
 let directory = ''
@@ -22,4 +23,22 @@ describe('closeTypeScriptAPI', () => {
     expect({ code: server.exitCode, signal: server.signalCode }).toEqual({ code: 0, signal: null })
     expect(snapshot.isDisposed()).toBe(true)
   })
+
+  it('closes the API and throws when TypeScript moves its server', async () => {
+    const api = { close: vi.fn() }
+    await expect(closeTypeScriptAPI(api)).rejects.toThrow('Update scripts/typescript-api.mjs')
+    expect(api.close).toHaveBeenCalledOnce()
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'stops a server that does not exit after its input closes, and throws',
+    async () => {
+      const server = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+        stdio: ['pipe', 'ignore', 'inherit'],
+      })
+      const api = { client: { channel: { child: server, close: () => server.kill() } }, close() {} }
+      await expect(closeTypeScriptAPI(api, 200)).rejects.toThrow('did not exit within 200 ms')
+      expect(server.signalCode).toBe('SIGTERM')
+    },
+  )
 })
