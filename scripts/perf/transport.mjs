@@ -144,6 +144,8 @@ export const live = {
     transitionHandlers.add(fn)
     return () => transitionHandlers.delete(fn)
   },
+  // the stand-in server's socket never drops
+  onConnection: () => () => {},
   query: (ref, args) => convex.query(ref, args),
 }
 export const authClient = {

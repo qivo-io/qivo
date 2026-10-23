@@ -8,7 +8,12 @@ import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
-  live: null as null | { holdWindow(from: string | null): void },
+  live: null as null | {
+    holdWindow(from: string | null): void
+    drop(overloaded?: boolean): void
+    reconnect(): void
+    watchedParts(): number
+  },
 }))
 vi.mock('../lib/convex', async () => {
   const { liveOver } = await import('./guard/liveDouble.setup')
@@ -163,6 +168,51 @@ describe('a staged load', () => {
     await tick()
     expect(title()).toBe('Elsewhere')
     expect(shown('fd000000-b')).toBe(true)
+  })
+
+  it('after a drop, asks for one wave and keeps the workspace and a write made meanwhile until a complete transition holds it', async () => {
+    await boot()
+    double.live?.holdWindow(null)
+    await tick()
+    expect(store.P.stillLoading()).toBeNull()
+    const { BOUND } = await import('./liveParts')
+    double.live?.drop()
+    expect(double.live?.watchedParts()).toBe(BOUND.wave)
+    expect(store.P.waitingForServer()).toBe(true)
+    // the parts arrive again in waves; the last window holds the workspace
+    double.live?.holdWindow(LAST_WINDOW)
+    double.live?.reconnect()
+    await tick()
+    expect(double.live?.watchedParts()).toBeGreaterThan(BOUND.wave)
+    expect(store.P.waitingForServer()).toBe(false)
+    store.P.updateIssue(store.P.issues.find((i) => i.uuid === '01000000-a')?.id ?? '', {
+      title: 'Mine',
+    })
+    await tick()
+    expect(title()).toBe('Mine')
+    // another person's change from before the server applied the write:
+    // the workspace shown stays, with every task it had
+    const other = snapshot.issues.find((i) => i.id === '01100000-c')
+    if (other) other.title = 'Changed elsewhere'
+    deliver(structuredClone(snapshot))
+    await tick()
+    const otherTitle = () => store.P.issues.find((i) => i.uuid === '01100000-c')?.title
+    expect(otherTitle()).toBe('Task 3')
+    expect(title()).toBe('Mine')
+    expect(shown('fd000000-b')).toBe(true)
+    // the server applied it, and the last window arrives: the complete
+    // transition holds the write, so its paint goes
+    const mine = snapshot.issues.find((i) => i.id === '01000000-a')
+    if (mine) mine.title = 'Mine'
+    deliver(structuredClone(snapshot))
+    double.live?.holdWindow(null)
+    await tick()
+    expect(otherTitle()).toBe('Changed elsewhere')
+    expect(title()).toBe('Mine')
+    if (mine) mine.title = 'Elsewhere'
+    deliver(structuredClone(snapshot))
+    await tick()
+    expect(title()).toBe('Elsewhere')
   })
 
   it('takes a parent whose subtasks are still to come for a group, never a leaf', async () => {

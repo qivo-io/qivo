@@ -17,26 +17,35 @@
    STAGES.most parts therefore loads in two stages: each organization's
    catalog, inbox, people and projects and the first STAGES.first task
    windows, then, once every part watched answered, the other task
-   windows. One update brings those as soon as several smaller ones would,
-   and each stage repaints the whole workspace. Until its first complete
+   windows. Each stage repaints the whole workspace, so there are two,
+   whatever number of waves (below) brings them. Until its first complete
    transition, such a workspace is partial at the end of a stage, once
    every part watched answered: the store shows the tasks of the windows
    that arrived, and every person and project, and knows the share of tasks
    still to come. Convex sends the first subscription of a stage in a
    transition of its own, so reporting per stage rather than per transition
    halves the repaints. The task windows of a stage subscribe before the
-   people and project windows: a deployment runs a limited number of
-   queries at once (16 on a local backend) and refuses one that waits too
-   long for a turn, closing the socket with 1013 TooManyConcurrentRequests,
-   and the project windows of a workspace with thousands of projects run
-   long enough that a part queued behind them can wait that long. A
+   people and project windows, so the slow project windows of a workspace
+   with thousands of projects run last. A
    partial transition holds no write for certain, since the window a write
    changed may not have arrived. A workspace of
-   fewer parts subscribes them at once and is never partial, and so do the
+   fewer parts loads in one stage and is never partial, and so do the
    organizations added once the workspace was complete and a boot that
    waits for the whole workspace (createLiveParts `whole`). A part that
-   fails ends the stage: no other window subscribes while it holds the
+   fails ends the stage: no other part subscribes while it holds the
    workspace.
+
+   A deployment runs a limited number of queries at once, shared by every
+   client (16 on a local backend and the Free plan, 256 on Pro), and
+   refuses one that waits 5 s for a turn, closing the socket with 1013
+   TooManyConcurrentRequests. The server runs one socket's new
+   subscriptions in updates of up to 20 queries at once, each update the
+   subscriptions that arrived while the one before ran. So parts subscribe
+   in waves (BOUND): a wave of at most BOUND.wave parts while at most a
+   wave is unanswered, which keeps the next update waiting behind the
+   running one without making it larger. A local backend is bound by its
+   processors, so a smaller wave finishes as soon, each query holding its
+   turn for less time, and leaves turns for other clients.
 
    - A window that answers `split` keeps serving while its two halves load,
      and gives way to them in the first complete transition that holds both.
@@ -47,7 +56,14 @@
    - A new seat's organization waits for its parts. A seat that
      goes leaves with the root part's answer, quietly.
    - After the socket reconnects, Convex sends every result again, and none
-     counts until it arrived again.
+     counts until it arrived again. Convex sends every subscription the
+     moment it connects, so when the socket drops the registry keeps one
+     wave subscribed and puts the other parts back in line; they subscribe
+     in waves again as the earlier ones answer, while the workspace holds.
+     After a close for the server's load the wave halves, down to
+     BOUND.least, until the workspace is complete, so a busy server is not
+     sent the same set again. The workspace waits for the server
+     (`onWait`) from the drop until a part answers.
    - A part that failed, or refused to load with a sentence, makes the
      workspace fail when nothing else can show its rows: a window that
      asked to be cut and then failed gives way to its pieces once they
@@ -98,6 +114,12 @@ export const STALL = { ms: 60_000 }
     unless a probe sets fewer. */
 export const STAGES = { most: 32, first: 16, batch: Number.POSITIVE_INFINITY }
 
+/** How many part queries the registry has the server run at once: it
+    subscribes at most `wave` parts while at most `wave` are unanswered, so
+    each server update holds about one wave. A close for the server's load
+    halves the wave, down to `least`, until the workspace is complete. */
+export const BOUND = { wave: 8, least: 2 }
+
 /** What the store hears after each transition, and when the workspace
     fails outside one. */
 export type PartsReport = {
@@ -134,10 +156,13 @@ const WINDOWED = {
   projects: api.workspace.projects,
 } as const
 
-/* One subscription and what the transitions brought it. */
+/* One part, its subscription while it has one, and what the transitions
+   brought it. */
 type Slot = {
-  token: string
-  stop: () => void
+  /** the subscription, null while the part waits for its turn (BOUND) */
+  sub: { token: string; stop: () => void } | null
+  /** the part's place in line: parts made earlier subscribe first */
+  seq: number
   ref: FunctionReference<'query'>
   args: Record<string, Value>
   /** the latest answer, undefined before one arrived */
@@ -171,16 +196,27 @@ const isAnswer = (value: unknown): value is Answer =>
 /** Creates a registry over `live` that reports to `report`. `online` says
     whether the stall check may fail the workspace, false while the socket
     is down or saves pause offline. With `whole`, the caller shows only a
-    complete workspace, so nothing loads in stages. */
+    complete workspace, so nothing loads in stages. `onWait` hears whether
+    the workspace waits for the server: from a drop of the socket, or a
+    close for the server's load, until a part answers again. */
 export function createLiveParts(
   live: LiveQueries,
   report: (news: PartsReport) => void,
   online: () => boolean,
-  opts?: { whole?: boolean },
+  opts?: { whole?: boolean; onWait?: (waiting: boolean) => void },
 ) {
   let stopped = false
   let connection: number | null = null
+  // the subscribed parts and the side query, by token
   const slots = new Map<string, Slot>()
+  // the parts waiting for their turn, in line
+  const queue: Slot[] = []
+  let seq = 0
+  // the most parts a wave subscribes, smaller after a close for load
+  let wave = BOUND.wave
+  // whether the socket dropped and has not connected again
+  let down = false
+  let waitingNow = false
   let root: Slot | null = null
   const orgs = new Map<string, Org>()
   // whether a part changed since the last complete report
@@ -194,15 +230,71 @@ export function createLiveParts(
   let staged = false
   let completed = false
 
+  /** A part for `ref` with `args`, in line for its turn (pump). */
   const watch = (ref: FunctionReference<'query'>, args: Record<string, Value>): Slot => {
-    const { token, stop } = live.watch(ref, args)
-    const slot: Slot = { token, stop, ref, args, fresh: false }
-    slots.set(token, slot)
+    const slot: Slot = { sub: null, seq: seq++, ref, args, fresh: false }
+    queue.push(slot)
     return slot
   }
-  const drop = (slot: Slot) => {
-    slot.stop()
-    if (slots.get(slot.token) === slot) slots.delete(slot.token)
+  const subscribe = (slot: Slot) => {
+    slot.sub = live.watch(slot.ref, slot.args)
+    slots.set(slot.sub.token, slot)
+  }
+  /** Ends `slot`'s subscription, or its wait in line. */
+  const unsubscribe = (slot: Slot) => {
+    if (!slot.sub) {
+      const at = queue.indexOf(slot)
+      if (at >= 0) queue.splice(at, 1)
+      return
+    }
+    slot.sub.stop()
+    if (slots.get(slot.sub.token) === slot) slots.delete(slot.sub.token)
+    slot.sub = null
+  }
+  const drop = unsubscribe
+  const inLine = (slot: Slot) => {
+    const at = queue.findIndex((other) => other.seq > slot.seq)
+    queue.splice(at < 0 ? queue.length : at, 0, slot)
+  }
+
+  /** How many subscribed parts have no answer since the socket last
+      connected. */
+  function unanswered(): number {
+    let n = 0
+    for (const slot of slots.values()) if (slot !== side && !slot.fresh) n++
+    return n
+  }
+
+  /** Subscribes the next wave of parts in line while at most a wave is
+      unanswered. The server runs the subscriptions that arrived during an
+      update in the next one, so a wave sent while one runs keeps it busy
+      without making its update larger, and none of this client's queries
+      waits for a turn (BOUND). Nothing subscribes while the socket is down:
+      the next connection sends every subscription at once. */
+  function pump() {
+    if (stopped || down || queue.length === 0 || unanswered() > wave) return
+    for (const slot of queue.splice(0, wave)) subscribe(slot)
+  }
+
+  /** On a drop of the socket, keeps the first wave of subscribed parts
+      and puts the others back in line, so the next connection sends one
+      wave, not every part; after a close for the server's load, a smaller
+      one. */
+  function park(overloaded: boolean) {
+    if (overloaded) wave = Math.max(BOUND.least, Math.floor(wave / 2))
+    const on = [...slots.values()].filter((slot) => slot !== side).sort((a, b) => a.seq - b.seq)
+    for (const slot of on.slice(wave)) {
+      unsubscribe(slot)
+      inLine(slot)
+    }
+    for (const slot of on) slot.fresh = false
+  }
+
+  /** Tells onWait when waiting for the server begins or ends. */
+  function setWaiting(waiting: boolean) {
+    if (waiting === waitingNow) return
+    waitingNow = waiting
+    opts?.onWait?.(waiting)
   }
 
   const node = (orgId: string, kind: Kind, w: IdWindow): Node => ({
@@ -440,6 +532,8 @@ export function createLiveParts(
     const answered = transition !== undefined && !waiting()
     const error = failure()
     if (answered && error === undefined) watchLater(STAGES.batch)
+    // a part that fails ends the stage, and its line waits with it
+    if (error === undefined) pump()
     let workspace: PartsReport['workspace']
     if (error !== undefined) workspace = { state: 'failed', error }
     else {
@@ -449,6 +543,7 @@ export function createLiveParts(
         workspace = { state: 'complete', value: done.value, changed: dirty }
         dirty = false
         completed = true
+        wave = BOUND.wave
         for (const org of orgs.values())
           for (const kind of KINDS) {
             const list = org.kinds[kind]
@@ -502,6 +597,8 @@ export function createLiveParts(
     if (connection !== null && transition.connection !== connection)
       for (const slot of slots.values()) slot.fresh = false
     connection = transition.connection
+    // a transition comes over a connected socket, whenever Convex reports it
+    down = false
     let news: PartsReport['side']
     let progress = false
     for (const token of transition.tokens) {
@@ -528,10 +625,20 @@ export function createLiveParts(
         dirty = true
       }
     }
+    if (progress) setWaiting(false)
     settle({ news, progress })
   })
 
+  const stopConnection = live.onConnection(({ connected, overloaded }) => {
+    if (stopped || connected !== down) return
+    down = !connected
+    if (!down) return pump()
+    park(overloaded)
+    setWaiting(true)
+  })
+
   root = watch(api.workspace.root, {})
+  pump()
   // the wait runs from the start, so a root that never answers fails too
   watchStall(true, false)
 
@@ -542,25 +649,19 @@ export function createLiveParts(
     retry(): boolean {
       const failed = [...needed()].filter((slot) => errorOf(slot) !== undefined)
       for (const slot of failed) {
-        slot.stop()
-        const again = live.watch(slot.ref, slot.args)
-        slots.delete(slot.token)
-        Object.assign(slot, {
-          token: again.token,
-          stop: again.stop,
-          value: undefined,
-          error: undefined,
-          fresh: false,
-        })
-        slots.set(slot.token, slot)
+        unsubscribe(slot)
+        Object.assign(slot, { value: undefined, error: undefined, fresh: false })
+        inLine(slot)
       }
       if (failed.length > 0) settle()
       return failed.length > 0
     },
-    /** Watches `ref` with `args` as the side query, replacing any before. */
+    /** Watches `ref` with `args` as the side query, replacing any before.
+        It takes no turn in line. */
     watchSide(ref: FunctionReference<'query'>, args: Record<string, Value>) {
       if (side) drop(side)
-      side = watch(ref, args)
+      side = { sub: null, seq: -1, ref, args, fresh: false }
+      subscribe(side)
     },
     /** Stops the side query. */
     stopSide() {
@@ -571,9 +672,11 @@ export function createLiveParts(
     stop() {
       stopped = true
       stopTransitions()
+      stopConnection()
       if (stallTimer) clearTimeout(stallTimer)
       // a Map lets its loop delete the entry it is on
       for (const slot of slots.values()) drop(slot)
+      queue.length = 0
       orgs.clear()
     },
   }

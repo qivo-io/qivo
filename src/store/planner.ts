@@ -5441,6 +5441,10 @@ export const PLANNER = {
       arrived, from 0 to 1; null once every task did. Counts, totals and
       verdicts over many tasks wait for null (store/liveParts.ts). */
   stillLoading: (): number | null => stillLoading,
+  /** Whether the workspace waits for the server: its socket dropped, or the
+      server closed it for its load, and no part answered since
+      (store/liveParts.ts). Observe it through the `health` channel. */
+  waitingForServer: (): boolean => serverWait,
   /** Whether the parent of `x` is a task still to arrive while a large
       workspace loads (hiddenParentsNow). */
   parentLoading: (x: IssueVM | string): boolean => {
@@ -8660,6 +8664,8 @@ let stillLoading: number | null = null
    paint, which sets stillLoading to null: until then the rows on screen
    are the partial ones. */
 let loadEnds = false
+/* Whether the live parts wait for the server (P.waitingForServer). */
+let serverWait = false
 /* The live parts of the running store, null before boot and after
    disposal. */
 let parts: LiveParts | null = null
@@ -8821,8 +8827,15 @@ function startParts(
       })
     },
     online,
-    // a workspace once complete shows only a complete one again
-    { whole: first ? first.whole : stillLoading === null },
+    {
+      // a workspace once complete shows only a complete one again
+      whole: first ? first.whole : stillLoading === null,
+      onWait: (waiting) => {
+        if (!stillCurrent() || bootFailed) return
+        serverWait = waiting
+        emit('health')
+      },
+    },
   )
 }
 
@@ -8920,6 +8933,7 @@ function retrySnapshot() {
 function stopParts() {
   parts?.stop()
   parts = null
+  serverWait = false
   threadWatched = null
   threadCurrent = false
   bootThreadNews = undefined

@@ -1,7 +1,7 @@
 import { type FunctionReference, getFunctionName, makeFunctionReference } from 'convex/server'
 import type { Value } from 'convex/values'
 import { splitWorkspace, type Workspace } from '../../../convex/lib/workspaceJoin'
-import type { LiveQueries, LiveTransition } from '../../lib/liveQueries'
+import type { ConnectionChange, LiveQueries, LiveTransition } from '../../lib/liveQueries'
 
 /* The live transport (lib/liveQueries.ts) for store tests, over a Convex
    client double with onUpdate. A test publishes the whole workspace as one
@@ -11,7 +11,8 @@ import type { LiveQueries, LiveTransition } from '../../lib/liveQueries'
    the store of the parts whose answer changed in one transition, as Convex
    would. A test can hold back one task window (holdWindow). Any other
    query, such as a task's thread, is watched through the client's own
-   onUpdate, each result a transition of its own.
+   onUpdate, each result a transition of its own. A test can drop the
+   socket and connect it again (drop, reconnect).
 
    Each store test file mocks lib/convex with `{ convex: network, live:
    liveOver(network) }`. */
@@ -73,8 +74,18 @@ export function liveOver(client: Client): LiveQueries & {
   batch(step: () => void): void
   hold(orgId: string | null): void
   holdWindow(from: string | null): void
+  drop(overloaded?: boolean): void
+  reconnect(): void
+  watchedParts(): number
 } {
   const handlers = new Set<(transition: LiveTransition) => void>()
+  // each with the generation of the store that registered it
+  const connectionHandlers = new Map<(change: ConnectionChange) => void, number>()
+  /** Tells the newest store of a change of the socket. */
+  const tell = (change: ConnectionChange) => {
+    for (const [fn, gen] of connectionHandlers) if (gen === generation) fn(change)
+  }
+  let connection = 1
   // what each watched token names, its latest result as JSON, and how many
   // watch it; a workspace part's result follows `whole`
   type Watch = {
@@ -112,7 +123,7 @@ export function liveOver(client: Client): LiveQueries & {
     const t = when ? Date.parse(when) : Number.NaN
     // the workspace's delivery time, which a test sets, or the last one
     if (Number.isFinite(t)) at = Math.max(at, t)
-    for (const fn of handlers) fn({ tokens, at, connection: 1 })
+    for (const fn of handlers) fn({ tokens, at, connection })
   }
   /** Brings every workspace part in line with `whole`, answering the tokens
       whose result changed. */
@@ -271,6 +282,25 @@ export function liveOver(client: Client): LiveQueries & {
       generation++
       handlers.add(fn)
       return () => handlers.delete(fn)
+    },
+    onConnection(fn) {
+      connectionHandlers.set(fn, generation)
+      return () => connectionHandlers.delete(fn)
+    },
+    /** How many workspace parts are watched. */
+    watchedParts: () =>
+      [...watched.values()].filter((w) => isPart(w.name) && w.gen === generation).length,
+    /** Drops the socket, for the server's load when `overloaded`. */
+    drop(overloaded = false) {
+      tell({ connected: false, overloaded })
+    },
+    /** Connects the socket again: every part still watched answers again,
+        in one transition, as Convex sends a new connection's first. */
+    reconnect() {
+      connection++
+      tell({ connected: true, overloaded: false })
+      for (const w of watched.values()) if (isPart(w.name)) w.json = undefined
+      fire(refresh())
     },
     /** Keeps the parts of organization `orgId` from answering, such as a
         new seat's still loading, and with null lets them answer. */

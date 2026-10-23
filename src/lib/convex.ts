@@ -12,7 +12,12 @@ if (!url) {
 // so this is the vanilla browser client — no React hooks anywhere. Its own
 // leave warning counts only writes already sent, not ones made after the
 // socket closed, so each page installs its own instead (lib/leaveGuard).
-export const convex = new ConvexClient(url, { unsavedChangesWarning: false })
+// The server's reason for a close it caused tells the live parts whether
+// it was too busy (lib/liveQueries.ts).
+export const convex = new ConvexClient(url, {
+  unsavedChangesWarning: false,
+  onServerDisconnectError: (message) => live.serverClosed(message),
+})
 
 /* The workspace's live parts, read by transition (lib/liveQueries.ts) over
    the same connection. */

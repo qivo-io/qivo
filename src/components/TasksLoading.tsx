@@ -12,8 +12,10 @@ function loadedPercent(): number | null {
 
 /** The note over the bottom of the workspace while a large workspace still
     loads its tasks (store/liveParts.ts): one line with the share loaded,
-    or the share it stopped at while the workspace cannot load
-    (P.snapshotTrouble, which the notices explain). It floats and keeps to
+    the share it stopped at while the workspace cannot load
+    (P.snapshotTrouble, which the notices explain), or that it waits for
+    the server (P.waitingForServer), so a page whose tasks stop arriving
+    for a while does not look frozen. It floats and keeps to
     one line, so it covers little and the page does not move when it goes:
     a large Board would lay itself out again. Gone once every task arrived.
     Its parent must be positioned. App's useTasksLoadingNews says the start
@@ -32,7 +34,9 @@ export function TasksLoadingBar() {
         <span className="font-medium text-text-1">
           {P.snapshotTrouble()
             ? `Tasks stopped loading at ${percent}%`
-            : `Loading tasks… ${percent}%`}
+            : P.waitingForServer()
+              ? `Waiting for the server… ${percent}%`
+              : `Loading tasks… ${percent}%`}
         </span>
         <Progress className="h-1.5 w-24" value={percent} aria-label="Tasks loaded" />
       </div>

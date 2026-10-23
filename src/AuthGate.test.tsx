@@ -30,7 +30,8 @@ vi.mock('./lib/auth', () => ({
   signOut: vi.fn(),
 }))
 vi.mock('./lib/convex', () => ({ convex: { query: vi.fn(), mutation: vi.fn() } }))
-vi.mock('./store/planner', () => ({ initStore: vi.fn(), P: {} }))
+vi.mock('./store/planner', () => ({ initStore: vi.fn(), P: { waitingForServer: () => false } }))
+vi.mock('./store/usePlannerVersion', () => ({ usePlannerVersion: () => 0 }))
 vi.mock('./lib/workspacePreload', () => ({
   loadWorkspace: vi.fn(),
   preloadWorkspacePage: vi.fn(),

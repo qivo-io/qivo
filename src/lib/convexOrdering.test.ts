@@ -1,7 +1,7 @@
 import { ConvexClient } from 'convex/browser'
 import { anyApi } from 'convex/server'
-import { afterEach, describe, expect, it } from 'vitest'
-import { createLiveQueries } from './liveQueries'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { type ConnectionChange, createLiveQueries } from './liveQueries'
 
 /* The store's optimistic layers (store/planner.ts send) rely on three things
    the Convex client does, pinned here against a real ConvexClient driving a
@@ -185,6 +185,7 @@ describe('live queries over the base client', () => {
     client = new ConvexClient('https://happy-otter-123.convex.cloud', {
       webSocketConstructor: ScriptedSocket as unknown as typeof WebSocket,
       unsavedChangesWarning: false,
+      onServerDisconnectError: (message) => live.serverClosed(message),
     })
     const live = createLiveQueries(client.client, (ref, args) => client!.query(ref, args))
     const seen: { tokens: string[]; values: unknown[]; connection: number }[] = []
@@ -294,6 +295,42 @@ describe('live queries over the base client', () => {
       values: ['list 1', 3],
       connection: 2,
     })
+  })
+
+  it('tells of a drop for the server’s load before it reconnects, and the next connection asks only for what is still watched', async () => {
+    const { live, count, socket } = await start()
+    const changes: ConnectionChange[] = []
+    // store/liveParts.ts stops the parts beyond a wave when it hears of a drop
+    live.onConnection((change) => {
+      changes.push(change)
+      if (!change.connected) count.stop()
+    })
+    vi.useFakeTimers()
+    try {
+      socket.readyState = 3
+      socket.onclose?.({
+        code: 1013,
+        reason: 'TooManyConcurrentRequests: Too many concurrent requests.',
+      })
+      await Promise.resolve()
+      expect(changes).toEqual([{ connected: false, overloaded: true }])
+      // Convex waits 3 s, give or take half, before it connects again
+      await vi.advanceTimersByTimeAsync(5000)
+      const again = ScriptedSocket.last!
+      expect(again).not.toBe(socket)
+      expect(changes.at(-1)).toEqual({ connected: true, overloaded: false })
+      const ask = again.sent.filter((m) => m.type === 'ModifyQuerySet')
+      expect(
+        ask.flatMap((m) => (m.modifications as { udfPath: string }[]).map((x) => x.udfPath)),
+      ).toEqual(['tasks:list'])
+      // a drop for any other reason is no sign of load
+      again.readyState = 3
+      again.onclose?.({ code: 1011, reason: 'InternalServerError: gone' })
+      await Promise.resolve()
+      expect(changes.at(-1)).toEqual({ connected: false, overloaded: false })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('never reads the old result for a subscription made after the last one stopped', async () => {

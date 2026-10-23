@@ -2,8 +2,8 @@ import { type FunctionReference, getFunctionName, makeFunctionReference } from '
 import type { Value } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { idWindows } from '../../convex/lib/idWindows'
-import type { LiveQueries, LiveTransition } from '../lib/liveQueries'
-import { createLiveParts, type PartsReport, STAGES, STALL } from './liveParts'
+import type { ConnectionChange, LiveQueries, LiveTransition } from '../lib/liveQueries'
+import { BOUND, createLiveParts, type PartsReport, STAGES, STALL } from './liveParts'
 
 /* The registry over a scripted transport: the test plays the server, sets
    what each part answers and sends transitions naming the parts that
@@ -55,6 +55,18 @@ function scripted() {
   // tokens whose failed run Convex keeps until they are watched again
   const failedRun = new Set<string>()
   const handlers = new Set<(t: LiveTransition) => void>()
+  const connections = new Set<(c: ConnectionChange) => void>()
+  // the watched parts with no answer on this connection; the most at once,
+  // and the most a connection was asked for between two transitions, which
+  // is what the server runs in one update
+  const unanswered = new Set<string>()
+  const most = { unanswered: 0, asked: 0 }
+  let asked = 0
+  const ask = (n: number) => {
+    asked += n
+    most.unanswered = Math.max(most.unanswered, unanswered.size)
+    most.asked = Math.max(most.asked, asked)
+  }
   const keyOf = (name: string, args: Record<string, unknown>) => `${name}${JSON.stringify(args)}`
   let at = 1
   let connection = 1
@@ -64,13 +76,18 @@ function scripted() {
       watched.set(token, (watched.get(token) ?? 0) + 1)
       log.push(`watch ${token}`)
       failedRun.delete(token)
+      unanswered.add(token)
+      ask(1)
       return {
         token,
         stop: () => {
           log.push(`stop ${token}`)
           const n = (watched.get(token) ?? 1) - 1
           if (n) watched.set(token, n)
-          else watched.delete(token)
+          else {
+            watched.delete(token)
+            unanswered.delete(token)
+          }
         },
       }
     },
@@ -87,12 +104,19 @@ function scripted() {
       handlers.add(fn)
       return () => handlers.delete(fn)
     },
+    onConnection(fn) {
+      connections.add(fn)
+      return () => connections.delete(fn)
+    },
     query: (async () => null) as LiveQueries['query'],
   }
   return {
     live,
     watched,
     log,
+    most,
+    /** The `n` watched parts that went longest without an answer. */
+    oldest: (n: number) => [...unanswered].slice(0, n),
     /** Sets the answer of part `name` with `args`. */
     set(name: string, args: Record<string, unknown>, answer: { value?: unknown; error?: unknown }) {
       answers.set(keyOf(name, args), answer)
@@ -100,10 +124,26 @@ function scripted() {
     /** Sends a transition naming the watched parts given, or all watched. */
     send(tokens = [...watched.keys()]) {
       at++
+      for (const token of tokens) unanswered.delete(token)
+      asked = 0
       for (const fn of handlers) fn({ tokens: new Set(tokens), at, connection })
     },
+    /** Drops the socket, for the server's load when `overloaded`. */
+    drop(overloaded = false) {
+      for (const fn of connections) fn({ connected: false, overloaded })
+    },
+    /** Starts the next connection; Convex tells of it when the socket
+        dropped first. */
     reconnect() {
       connection++
+      // the new connection asks for every watched part at once, in an
+      // update of their own, and the server runs what comes after it in the
+      // next one
+      for (const token of watched.keys()) unanswered.add(token)
+      asked = 0
+      ask(watched.size)
+      asked = 0
+      for (const fn of connections) fn({ connected: true, overloaded: false })
     },
     keyOf,
   }
@@ -422,11 +462,15 @@ const watchedWindows = (s: ReturnType<typeof scripted>, org = ORG) =>
 
 describe('a staged load', () => {
   const stages = { ...STAGES }
+  const bound = { ...BOUND }
   beforeEach(() => {
     Object.assign(STAGES, { most: 32, first: 8, batch: 32 })
+    // these stages run without waves (a bounded load)
+    BOUND.wave = Number.POSITIVE_INFINITY
   })
   afterEach(() => {
     Object.assign(STAGES, stages)
+    Object.assign(BOUND, bound)
   })
 
   function big() {
@@ -546,7 +590,7 @@ describe('a staged load', () => {
     expect(reports.slice(before).map((r) => r.workspace.state)).not.toContain('partial')
   })
 
-  it('subscribes every part at once for a boot that waits for the whole workspace', () => {
+  it('loads in one stage, never partial, for a boot that waits for the whole workspace', () => {
     const s = scripted()
     serveBig(s)
     const reports: PartsReport[] = []
@@ -644,3 +688,123 @@ function serveOrg(s: ReturnType<typeof scripted>, id: string, windows: number) {
   for (const [i, w] of idWindows(windows).entries())
     s.set('workspace:tasks', { org_id: id, ...w }, { value: tasksPart([`${id}-${i}`]) })
 }
+
+describe('a bounded load', () => {
+  const bound = { ...BOUND }
+  beforeEach(() => {
+    Object.assign(BOUND, { wave: 8, least: 2 })
+  })
+  afterEach(() => {
+    Object.assign(BOUND, bound)
+  })
+
+  /** A large workspace booting; `onWait` hears whether it waits for the
+      server. */
+  function big(onWait?: (waiting: boolean) => void) {
+    const s = scripted()
+    serveBig(s)
+    const reports: PartsReport[] = []
+    createLiveParts(
+      s.live,
+      (r) => reports.push(r),
+      () => true,
+      { onWait },
+    )
+    const state = () => reports.at(-1)?.workspace.state
+    /** Sends transitions, each answering the `each` parts that waited
+        longest, all of them unless given, until the workspace completes. */
+    const complete = (each?: number) => {
+      for (let i = 0; i < 200 && state() !== 'complete'; i++)
+        s.send(each ? s.oldest(each) : undefined)
+      expect(state()).toBe('complete')
+    }
+    const ids = () => {
+      const w = reports.at(-1)?.workspace
+      return w?.state === 'complete' ? w.value?.issues.map((i) => i.id) : null
+    }
+    return { s, reports, state, complete, ids }
+  }
+  const all = WINDOWS.map((_, i) => `t${i}`)
+
+  it('asks for at most a wave between two transitions and has at most two unanswered, still painting in stages', () => {
+    for (const each of [undefined, 3]) {
+      const { s, reports, complete, ids } = big()
+      complete(each)
+      expect(ids()).toEqual(all)
+      expect(reports.map((r) => r.workspace.state)).toContain('partial')
+      expect(s.most.asked).toBeLessThanOrEqual(BOUND.wave)
+      expect(s.most.unanswered).toBeLessThanOrEqual(2 * BOUND.wave)
+    }
+  })
+
+  it('after a drop, asks for one wave on the next connection and the rest as parts answer, keeping the workspace it showed', () => {
+    const { s, reports, complete, ids } = big()
+    complete()
+    const before = reports.length
+    Object.assign(s.most, { asked: 0, unanswered: 0 })
+    s.drop()
+    expect(s.watched.size).toBe(BOUND.wave)
+    s.reconnect()
+    expect(s.most.asked).toBe(BOUND.wave)
+    expect(s.most.unanswered).toBe(2 * BOUND.wave)
+    complete()
+    // held while parts arrived again: never less than it showed, never a
+    // mix of the old and the new
+    expect(
+      reports
+        .slice(before, -1)
+        .map((r) => r.workspace.state)
+        .every((state) => state === 'held'),
+    ).toBe(true)
+    expect(ids()).toEqual(all)
+    expect(s.most.asked).toBeLessThanOrEqual(BOUND.wave)
+    expect(s.most.unanswered).toBeLessThanOrEqual(2 * BOUND.wave)
+  })
+
+  it('asks for fewer parts after each close for the server’s load, and for a full wave again once complete', () => {
+    const { s, complete } = big()
+    s.send()
+    s.send()
+    s.drop(true)
+    expect(s.watched.size).toBe(BOUND.wave / 2)
+    s.reconnect()
+    s.drop(true)
+    expect(s.watched.size).toBe(BOUND.wave / 4)
+    s.reconnect()
+    s.drop(true)
+    expect(s.watched.size).toBe(BOUND.least)
+    s.reconnect()
+    complete()
+    s.drop()
+    expect(s.watched.size).toBe(BOUND.wave)
+  })
+
+  it('says it waits for the server from a drop until a part answers again', () => {
+    const waits: boolean[] = []
+    const { s } = big((waiting) => waits.push(waiting))
+    s.send()
+    expect(waits).toEqual([])
+    s.drop(true)
+    s.reconnect()
+    expect(waits).toEqual([true])
+    s.send([s.keyOf('workspace:root', {})])
+    expect(waits).toEqual([true, false])
+  })
+
+  it('keeps a refusal after a drop a refusal, and asks for no more parts while it holds', () => {
+    const { s, complete, state } = big()
+    complete()
+    s.drop()
+    s.reconnect()
+    const watched = s.watched.size
+    const catalog = { org_id: ORG }
+    s.set('workspace:catalog', catalog, { value: { state: 'refused', message: 'No access.' } })
+    s.send([s.keyOf('workspace:root', {}), s.keyOf('workspace:catalog', catalog)])
+    expect(state()).toBe('failed')
+    s.send()
+    expect(state()).toBe('failed')
+    // the parts still in line wait while the refusal holds the workspace
+    expect(s.watched.size).toBe(watched)
+    expect(watched).toBeLessThanOrEqual(2 * BOUND.wave)
+  })
+})

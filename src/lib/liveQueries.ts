@@ -30,6 +30,11 @@ export type LiveTransition = {
   connection: number
 }
 
+/** A change of the socket: `overloaded` when the server closed it because
+    it ran too many queries at once (close code 1013), as
+    TooManyConcurrentRequests does. */
+export type ConnectionChange = { connected: boolean; overloaded: boolean }
+
 /** The live query transport the store uses. Tests and the browser
     benchmark stand in for it (store/guard/liveDouble.setup.ts,
     scripts/perf/transport.mjs). */
@@ -48,6 +53,9 @@ export type LiveQueries = {
   read(token: string): unknown
   /** Calls `fn` once per transition. Answers the way to stop. */
   onTransition(fn: (transition: LiveTransition) => void): () => void
+  /** Calls `fn` when the socket drops or connects again. Answers the way
+      to stop. */
+  onConnection(fn: (change: ConnectionChange) => void): () => void
   /** Runs one-shot query `ref`. */
   query<Q extends FunctionReference<'query'>>(
     ref: Q,
@@ -60,17 +68,35 @@ export type LiveQueries = {
 const CLOCK_SLACK_MS = 24 * 60 * 60 * 1000
 
 /** The transport over `client`, ConvexClient's base client, with `query`
-    for its one-shot reads. */
+    for its one-shot reads. The client's `onServerDisconnectError` option
+    hands each close the server explains to `serverClosed`, so a change
+    can tell an overloaded server from a lost network. */
 export function createLiveQueries(
   client: BaseConvexClient,
   query: LiveQueries['query'],
-): LiveQueries {
+): LiveQueries & { serverClosed(message: string): void } {
   // what each watched token names, and how many watch it
   const watched = new Map<string, { name: string; args: Record<string, Value>; count: number }>()
   // the newest transition's database time, in nanoseconds
   let last = 0n
   let warned = false
+  // whether the server closed the socket last for its load
+  let overloaded = false
   return {
+    serverClosed(message) {
+      // "WebSocket closed with code 1013: TooManyConcurrentRequests: …"
+      overloaded = /\b1013\b/.test(message)
+    },
+    onConnection(fn) {
+      let connected = client.connectionState().isWebSocketConnected
+      return client.subscribeToConnectionState((state) => {
+        if (state.isWebSocketConnected === connected) return
+        connected = state.isWebSocketConnected
+        // Convex reports the server's reason before it reports the drop
+        fn({ connected, overloaded: !connected && overloaded })
+        if (connected) overloaded = false
+      })
+    },
     watch(ref, args) {
       const name = getFunctionName(ref)
       const { queryToken, unsubscribe } = client.subscribe(name, args)

@@ -22,7 +22,10 @@ Overview, the Roadmap and Team sync open once every task has loaded, and so
 do moving, archiving and deleting a task. Settings opens at once, but its
 Teams, Projects, Labels and Archived tasks pages wait for every task. A
 link to one task opens once every task has loaded. If loading stops, the
-note says how far it got, and a notice explains what went wrong.
+note says how far it got, and a notice explains what went wrong. When the
+connection drops or the server is busy, the note, or the loading screen
+before the first tasks arrive, says **Waiting for the server…** until tasks
+arrive again.
 
 If your organization uses Microsoft and sign-in asks for admin approval, see
 [Microsoft sign-in and administrator approval](./microsoft-sign-in-and-administrator-approval.md).

@@ -47,6 +47,7 @@ import { unconfirmedNote } from './lib/unconfirmedNote'
 import { beginUpdateBlock, isUpdateBlocked, useUpdateBlocker } from './lib/updateSafety'
 import { loadWorkspace, preloadWorkspacePage } from './lib/workspacePreload'
 import { initStore, P } from './store/planner'
+import { usePlannerVersion } from './store/usePlannerVersion'
 
 const App = lazyFromModule(loadWorkspace, (module) => module.default)
 
@@ -88,7 +89,11 @@ function AuthShell({ children, wide = false }: { children: React.ReactNode; wide
   )
 }
 
+/** The card while the session or the workspace loads. It says so when the
+    workspace waits for the server (P.waitingForServer), such as after the
+    server closed the connection because it was busy. */
 function LoadingScreen() {
+  usePlannerVersion('health')
   return (
     <AuthShell>
       <div
@@ -96,7 +101,7 @@ function LoadingScreen() {
         role="status"
         className="[color:var(--text-2)] [font-size:var(--fs-base)]"
       >
-        Loading…
+        {P.waitingForServer() ? 'Waiting for the server…' : 'Loading…'}
       </div>
     </AuthShell>
   )
