@@ -20,3 +20,5 @@ desktop/release/
 !.env.example
 .vercel/
 desktop/dist/
+# Left by scripts/check-typecheck-coverage.mjs only when it is killed mid-run.
+tsconfig.coverage-*.json

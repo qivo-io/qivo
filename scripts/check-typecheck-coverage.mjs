@@ -5,11 +5,10 @@
  * one, by include or by import. Every config sets skipLibCheck, which skips
  * the errors inside declaration files, so this also typechecks each
  * hand-written declaration file on its own, with the options of the first
- * config whose program holds it. */
+ * config whose program holds it, from a config written next to that one. */
 import { execFile, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
-import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 
@@ -70,8 +69,17 @@ async function programFiles(project) {
   )
 }
 
-/** Typechecks one declaration file with a project's options and returns the errors in repository files. */
-async function declarationErrors(file, project, config) {
+/**
+ * Typechecks one declaration file with a project's options and returns the
+ * errors outside node_modules, or a failure when tsc did not finish. The
+ * config goes in the project's directory, because tsc finds the `@types`
+ * packages from the config's directory.
+ */
+async function declarationErrors(file, project, index) {
+  const config = path.join(
+    path.dirname(path.resolve(project)),
+    `tsconfig.coverage-${process.pid}-${index}.json`,
+  )
   fs.writeFileSync(
     config,
     JSON.stringify({
@@ -80,13 +88,35 @@ async function declarationErrors(file, project, config) {
       include: [],
       files: [path.resolve(file)],
     }),
+    { flag: 'wx' },
   )
-  const output = await run(process.execPath, [tsc, '-p', config, '--pretty', 'false']).catch(
-    (failure) => failure,
-  )
-  return output.stdout
-    .split(/\r?\n/)
-    .filter((line) => / error TS\d+:/.test(line) && !line.includes('node_modules'))
+  try {
+    const { stdout, stderr, code, signal } = await run(
+      process.execPath,
+      [tsc, '-p', config, '--pretty', 'false'],
+      { maxBuffer: 64 * 1024 * 1024 },
+    ).then(
+      (output) => ({ ...output, code: 0, signal: null }),
+      (failure) => failure,
+    )
+    // A located error starts with its file, a global one with `error`.
+    const errors = (stdout ?? '')
+      .split(/\r?\n/)
+      .filter((line) => /^(?:.+\(\d+,\d+\): )?error TS\d+:/.test(line))
+    // tsc exits 1 or 2 when it reports errors, and anything else means it stopped.
+    const finished = !signal && (code === 0 || ((code === 1 || code === 2) && errors.length > 0))
+    if (!finished)
+      return [`tsc did not finish checking ${file} (${signal ?? code}). ${stderr ?? ''}`.trim()]
+    return errors.filter(
+      (line) =>
+        !line
+          .match(/^(.+)\(\d+,\d+\): /)?.[1]
+          .split(/[\\/]/)
+          .includes('node_modules'),
+    )
+  } finally {
+    fs.rmSync(config, { force: true })
+  }
 }
 
 const failures = []
@@ -111,22 +141,16 @@ for (const file of files)
   if (!programs.some(({ files }) => files.has(path.resolve(file))))
     failures.push(`${file} is in no typecheck that verify:local runs.`)
 
-const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'qivo-typecheck-coverage-'))
-try {
-  const declarations = files.filter(
-    (file) => declarationFile.test(file) && !file.startsWith(generatedDeclarations),
-  )
-  const errors = await Promise.all(
-    declarations.map((file, index) => {
-      const program = programs.find(({ files }) => files.has(path.resolve(file)))
-      const config = path.join(temporary, `${index}.json`)
-      return program ? declarationErrors(file, program.project, config) : []
-    }),
-  )
-  failures.push(...errors.flat())
-} finally {
-  fs.rmSync(temporary, { recursive: true, force: true })
-}
+const declarations = files.filter(
+  (file) => declarationFile.test(file) && !file.startsWith(generatedDeclarations),
+)
+const errors = await Promise.all(
+  declarations.map((file, index) => {
+    const program = programs.find(({ files }) => files.has(path.resolve(file)))
+    return program ? declarationErrors(file, program.project, index) : []
+  }),
+)
+failures.push(...errors.flat())
 
 if (failures.length) {
   console.error(failures.join('\n'))

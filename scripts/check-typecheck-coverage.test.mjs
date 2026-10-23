@@ -7,13 +7,14 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 const script = fileURLToPath(new URL('./check-typecheck-coverage.mjs', import.meta.url))
 
+const options = { noEmit: true, skipLibCheck: true, strict: true, lib: ['ES2022'], types: [] }
+
 let repository = ''
 afterEach(() => fs.rmSync(repository, { recursive: true, force: true }))
 
 /** Writes a Git repository with two typechecks, one followed through `npm run`, and these extra files. */
 function setUp(files = {}) {
   repository = fs.mkdtempSync(path.join(os.tmpdir(), 'qivo-typecheck-coverage-'))
-  const options = { noEmit: true, skipLibCheck: true, strict: true, lib: ['ES2022'], types: [] }
   const fixture = {
     'package.json': JSON.stringify({
       scripts: {
@@ -92,5 +93,24 @@ describe('typecheck coverage', () => {
         /globals\.d\.ts\(1,24\): error TS2304: Cannot find name 'MissingType'/,
       ),
     })
+  })
+
+  it('checks a declaration file with the @types packages its project finds', () => {
+    setUp({
+      '.gitignore': 'dev-temp/\nnode_modules/\n',
+      'tools/tsconfig.json': JSON.stringify({
+        compilerOptions: { ...options, types: ['fake'] },
+        include: ['*.mts'],
+      }),
+      'node_modules/@types/fake/index.d.ts': 'declare namespace Fake {\n  type Id = string\n}\n',
+      'tools/env.d.mts': 'export declare const id: Fake.Id\n',
+    })
+    expect(check()).toEqual({
+      status: 0,
+      output: '5 TypeScript files are in the typechecks of 2 configs.\n',
+    })
+    expect(fs.readdirSync(path.join(repository, 'tools'))).not.toContainEqual(
+      expect.stringMatching(/^tsconfig\.coverage-/),
+    )
   })
 })
