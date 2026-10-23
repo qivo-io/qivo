@@ -26,7 +26,11 @@
    transition of its own, so reporting per stage rather than per transition
    halves the repaints. A partial transition holds no write for certain,
    since the window a write changed may not have arrived. A workspace of
-   fewer parts subscribes them at once and is never partial.
+   fewer parts subscribes them at once and is never partial, and so do the
+   organizations added once the workspace was complete and a boot that
+   waits for the whole workspace (createLiveParts `whole`). A part that
+   fails ends the stage: no other window subscribes while it holds the
+   workspace.
 
    - A window that answers `split` keeps serving while its two halves load,
      and gives way to them in the first complete transition that holds both.
@@ -160,11 +164,13 @@ const isAnswer = (value: unknown): value is Answer =>
 
 /** Creates a registry over `live` that reports to `report`. `online` says
     whether the stall check may fail the workspace, false while the socket
-    is down or saves pause offline. */
+    is down or saves pause offline. With `whole`, the caller shows only a
+    complete workspace, so nothing loads in stages. */
 export function createLiveParts(
   live: LiveQueries,
   report: (news: PartsReport) => void,
   online: () => boolean,
+  opts?: { whole?: boolean },
 ) {
   let stopped = false
   let connection: number | null = null
@@ -177,7 +183,8 @@ export function createLiveParts(
   let lastAt = 0
   let stallTimer: ReturnType<typeof setTimeout> | null = null
   // whether the first organizations load in stages, and whether a complete
-  // report went out, after which the workspace is never partial again
+  // report went out, after which the workspace is never partial again, so
+  // nothing loads in stages any more
   let staged = false
   let completed = false
 
@@ -224,8 +231,9 @@ export function createLiveParts(
       }))
     // the catalog, the inbox and one people window besides the windows
     const parts = added.reduce((n, o) => n + 3 + o.tasks.length + o.projects.length, 0)
-    const stage = parts > STAGES.most
-    if (stage && !completed) staged = true
+    // stages only while a partial workspace can show
+    const stage = parts > STAGES.most && !completed && !opts?.whole
+    if (stage) staged = true
     for (const { row, tasks, projects } of added) {
       const windows = (kind: Kind, list: IdWindow[]) => list.map((w) => node(row.id, kind, w))
       orgs.set(row.id, {
@@ -241,7 +249,12 @@ export function createLiveParts(
       })
       moved = true
     }
-    if (stage) watchLater(STAGES.first)
+    // the organizations just added get the first windows
+    if (stage)
+      watchLater(
+        STAGES.first,
+        added.map(({ row }) => row.id),
+      )
     // a window that asked to be cut gets its pieces
     for (const org of orgs.values())
       for (const kind of KINDS)
@@ -269,12 +282,14 @@ export function createLiveParts(
     for (const kind of KINDS) for (const n of nodesOf(org.kinds[kind])) yield n.slot
   }
 
-  /** Watches up to `n` of the task windows a staged load holds back, the
-      first organization's first. */
-  function watchLater(n: number) {
-    for (const org of orgs.values())
-      while (n > 0 && org.later.length > 0) {
-        const w = org.later.shift() as IdWindow
+  /** Watches up to `n` of the task windows a staged load holds back, each
+      organization's next in turn, of the organizations `ids` when given. */
+  function watchLater(n: number, ids?: readonly string[]) {
+    const from = [...orgs.values()].filter((org) => !ids || ids.includes(org.id))
+    while (n > 0 && from.some((org) => org.later.length > 0))
+      for (const org of from) {
+        const w = org.later.shift()
+        if (!w || n === 0) continue
         org.kinds.tasks.push(node(org.id, 'tasks', w))
         n--
       }
@@ -358,8 +373,9 @@ export function createLiveParts(
 
   /** The workspace when every part it needs is current, else null. With
       `partial`, the workspace when every part but some task windows is,
-      from the task windows that are, with the share of task windows they
-      cover; null unless at least one is. */
+      from the task windows that are, with the share of tasks they cover,
+      each organization weighted by its task count; null unless at least
+      one is. */
   function join(partial: boolean): { value: Workspace | null; loaded: number } | null {
     if (!root?.fresh || root.error !== undefined) return null
     const answer = root.value as RootAnswer | undefined
@@ -367,7 +383,10 @@ export function createLiveParts(
     if (answer === null) return partial ? null : { value: null, loaded: 1 }
     const parts: OrgParts[] = []
     let loaded = 0
-    for (const { id } of answer.orgs) {
+    const tasksIn = (row: (typeof answer.orgs)[number]) => Math.max(1, row.next_issue_num)
+    const allTasks = answer.orgs.reduce((n, row) => n + tasksIn(row), 0)
+    for (const row of answer.orgs) {
+      const { id } = row
       const org = orgs.get(id)
       if (!org) return null
       /** Every window of `kind` in order, or null while one is not ready.
@@ -379,7 +398,7 @@ export function createLiveParts(
           if (got === null && !some) return null
           if (got === null) continue
           rows.push(...got)
-          if (kind === 'tasks') loaded += idShare(n) / answer.orgs.length
+          if (kind === 'tasks') loaded += (idShare(n) * tasksIn(row)) / allTasks
         }
         return rows
       }
@@ -403,11 +422,12 @@ export function createLiveParts(
   function settle(transition?: { news?: PartsReport['side']; progress?: boolean }) {
     if (stopped) return
     if (reconcile()) dirty = true
-    // every part watched so far answered: the next stage starts, and a
-    // partial workspace shows, once per stage rather than per transition
+    // every part watched so far answered: the next stage starts, unless the
+    // workspace failed, and a partial workspace shows, once per stage rather
+    // than per transition
     const answered = transition !== undefined && !waiting()
-    if (answered) watchLater(STAGES.batch)
     const error = failure()
+    if (answered && error === undefined) watchLater(STAGES.batch)
     let workspace: PartsReport['workspace']
     if (error !== undefined) workspace = { state: 'failed', error }
     else {

@@ -112,11 +112,11 @@ export function createMountScheduler({
   const waitingLists = () => [...lists.values()].filter((list) => list.pending() > 0)
   const pendingLists = () => waitingLists().filter((list) => !list.holds?.())
 
-  /* The root's marks: pending with aria-busy while any list waits, then
-     complete. */
+  /* The root's marks: pending with aria-busy while any list waits, held
+     ones included, then complete. */
   const mark = () => {
     if (!root) return
-    const pending = pendingLists().length > 0
+    const pending = waitingLists().length > 0
     const state = pending ? 'pending' : 'complete'
     const was = root.getAttribute('data-board-mount')
     if (was === state || (!pending && was === null)) return
@@ -291,8 +291,8 @@ export function createMountScheduler({
     },
     changed,
     setRoot,
-    /** Whether any list still waits. */
-    pending: () => pendingLists().length > 0,
+    /** Whether any list still waits, held ones included. */
+    pending: () => waitingLists().length > 0,
     /** Mounts all of the list `id` now. */
     completeList(id: string) {
       const list = lists.get(id)

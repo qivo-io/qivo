@@ -48,8 +48,11 @@ type Props<T extends object> = {
   blockSize?: number
   /** while the items still arrive (a large workspace loading in stages,
       store/liveParts.ts): each arrival moves the mounted ones, so the list
-      mounts none past what it shows, `initial` and what focus asks for,
-      nor does the render after; the scheduler mounts the rest once it ends */
+      keeps as many mounted as it shows, `initial` or more, and mounts no
+      more, nor does the render after; the scheduler mounts the rest once it
+      ends. A list someone asks for meanwhile (a click or Tab into its
+      waiting space, a focus, Find) stops holding and keeps every item it
+      mounted, mounting the arrivals among them, until the hold ends. */
   hold?: boolean
 }
 
@@ -128,12 +131,14 @@ export function DeferredList<T extends object>({
   blockSize = BLOCK_SIZE,
   hold = false,
 }: Props<T>) {
-  /* What is mounted follows what the last render mounted: every item it
-     mounted that is still in the list stays mounted, wherever a reorder,
-     delete or insert moved it, with at most MOST_AT_ONCE new ones; a
-     slice or a focus that needs an item asks for a longer prefix. A list
-     that loses items mounts only what is left, so it grows back in
-     slices. */
+  /* What is mounted follows what the last render mounted: a prefix of the
+     list that holds every item it mounted that is still in the list,
+     wherever a reorder, delete or insert moved it, with at most
+     MOST_AT_ONCE new ones (none while it holds, any once someone asked
+     for it while it holds), so a larger insert pushes
+     the last mounted items out of it; a slice or a focus that needs an
+     item asks for a longer prefix. A list that loses items mounts only
+     what is left, so it grows back in slices. */
   const mountedKeys = useRef(new Set<string>())
   const lastMounted = useRef(0)
   /* The last render's list and blocks. While the list stays the same
@@ -149,10 +154,18 @@ export function DeferredList<T extends object>({
   const grown =
     last.current?.items === items && last.current.initial === initial ? last.current : null
   // no item mounts at once past the mounted ones while items arrive, nor in
-  // the render after, which holds the rest of them
-  const heldLast = useRef(hold)
-  const atOnce = hold || heldLast.current ? 0 : MOST_AT_ONCE
-  heldLast.current = hold
+  // the render after, which holds the rest of them; a list someone asked
+  // for meanwhile keeps every item it mounted, through that render too
+  const asked = useRef(false)
+  const holds = hold && !asked.current
+  const heldLast = useRef(holds)
+  const atOnce = asked.current
+    ? Number.POSITIVE_INFINITY
+    : holds || heldLast.current
+      ? 0
+      : MOST_AT_ONCE
+  heldLast.current = holds
+  if (!hold) asked.current = false
   // a length a slice or mountThrough asked for, 0 once rendered
   const [target, setTarget] = useState(0)
   const floor = Math.min(initial, items.length)
@@ -177,13 +190,16 @@ export function DeferredList<T extends object>({
 
   const latest = useRef(items)
   const waiting = useRef(pending)
-  const holding = useRef(hold)
-  const grow = useLatest((n: number) =>
-    setTarget((asked) => Math.max(asked, Math.min(latest.current.length, lastMounted.current + n))),
-  )
+  const holding = useRef(holds)
+  const grow = useLatest((n: number) => {
+    if (holding.current) asked.current = true
+    setTarget((t) => Math.max(t, Math.min(latest.current.length, lastMounted.current + n)))
+  })
   const mountThrough = useLatest((key: string) => {
     const at = latest.current.findIndex((it) => keyOf(it) === key)
-    if (at >= lastMounted.current) setTarget((asked) => Math.max(asked, at + 1))
+    if (at < lastMounted.current) return
+    if (holding.current) asked.current = true
+    setTarget((t) => Math.max(t, at + 1))
   })
   const spacer = useRef<HTMLButtonElement>(null)
   useLayoutEffect(
@@ -201,7 +217,7 @@ export function DeferredList<T extends object>({
   useLayoutEffect(() => {
     latest.current = items
     waiting.current = pending
-    holding.current = hold
+    holding.current = holds
     scheduler.changed()
   })
 

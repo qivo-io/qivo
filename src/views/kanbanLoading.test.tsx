@@ -101,4 +101,31 @@ describe('the Board while tasks still load', () => {
     },
     BOARD_TEST_TIMEOUT,
   )
+
+  it(
+    'mounts no more cards than its first screen while tasks arrive, then all of them',
+    async () => {
+      // more cards than the Board mounts at once (SYNC_LIMIT), all in the
+      // first task window
+      const ids = Array.from({ length: 320 }, (_, i) => `01${i.toString(16).padStart(6, '0')}-x`)
+      const board = await loadBoard(network, (snapshot) => {
+        snapshot.orgs[0].next_issue_num = 64 * 200
+        snapshot.issues.push(
+          ...ids.map((id, i) => taskRow(snapshot, id, 'progress', i + 1)),
+          taskRow(snapshot, 'fd000000-b', 'progress', 321),
+        )
+      })
+      await board.render(root)
+      const cards = () => container.querySelectorAll('[data-card]').length
+      const first = cards()
+      expect(first).toBeGreaterThan(0)
+      expect(first).toBeLessThan(320)
+      // slices leave the held cell be
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 100)))
+      expect(cards()).toBe(first)
+      await act(async () => double.live?.holdWindow(null))
+      await vi.waitFor(() => expect(cards()).toBe(321), { timeout: 10_000 })
+    },
+    BOARD_TEST_TIMEOUT,
+  )
 })

@@ -416,9 +416,9 @@ function serveBig(s: ReturnType<typeof scripted>) {
     s.set('workspace:tasks', { org_id: ORG, ...w }, { value: tasksPart([`t${i}`]) })
 }
 
-/** The task windows watched, by where they start. */
-const watchedWindows = (s: ReturnType<typeof scripted>) =>
-  WINDOWS.filter((w) => s.watched.has(s.keyOf('workspace:tasks', { org_id: ORG, ...w })))
+/** The task windows of 64 watched for organization `org`. */
+const watchedWindows = (s: ReturnType<typeof scripted>, org = ORG) =>
+  WINDOWS.filter((w) => s.watched.has(s.keyOf('workspace:tasks', { org_id: org, ...w })))
 
 describe('a staged load', () => {
   const stages = { ...STAGES }
@@ -510,7 +510,7 @@ describe('a staged load', () => {
     expect(last()).toMatchObject({ state: 'failed' })
   })
 
-  it('is never partial again after its first complete transition', () => {
+  it('is never partial again after its first complete transition, nor stages an organization added then', () => {
     const { s, reports } = big()
     s.send()
     s.send()
@@ -519,5 +519,91 @@ describe('a staged load', () => {
     s.reconnect()
     s.send([s.keyOf('workspace:root', {})])
     expect(reports.at(-1)?.workspace.state).toBe('held')
+    s.send()
+    expect(reports.at(-1)?.workspace.state).toBe('complete')
+    // a large organization joins: every window of it is watched at once,
+    // and the workspace holds until all of them answered
+    serveOrg(s, 'org-2', 64)
+    s.set('workspace:root', {}, { value: { ...BIG, orgs: [...BIG.orgs, orgRow('org-2', 64)] } })
+    const before = reports.length
+    s.send([s.keyOf('workspace:root', {})])
+    expect(watchedWindows(s, 'org-2')).toHaveLength(64)
+    s.send([...s.watched.keys()].filter((t) => !t.includes('"org_id":"org-2"')))
+    expect(reports.at(-1)?.workspace.state).toBe('held')
+    s.send()
+    expect(reports.at(-1)?.workspace.state).toBe('complete')
+    expect(reports.slice(before).map((r) => r.workspace.state)).not.toContain('partial')
+  })
+
+  it('subscribes every part at once for a boot that waits for the whole workspace', () => {
+    const s = scripted()
+    serveBig(s)
+    const reports: PartsReport[] = []
+    createLiveParts(
+      s.live,
+      (r) => reports.push(r),
+      () => true,
+      { whole: true },
+    )
+    s.send()
+    expect(watchedWindows(s)).toHaveLength(64)
+    s.send()
+    expect(reports.map((r) => r.workspace.state)).not.toContain('partial')
+    expect(reports.at(-1)?.workspace.state).toBe('complete')
+  })
+
+  it('watches no later window once a part of the stage failed', () => {
+    const { s, last } = big()
+    s.set('workspace:tasks', { org_id: ORG, ...WINDOWS[0] }, { error: new Error('boom') })
+    s.send()
+    expect(last()).toMatchObject({ state: 'failed' })
+    expect(watchedWindows(s)).toHaveLength(STAGES.first)
+  })
+
+  it('weights the share loaded by each organization’s tasks', () => {
+    const s = scripted()
+    serveBig(s)
+    serveOrg(s, 'org-2', 1)
+    s.set('workspace:root', {}, { value: { ...BIG, orgs: [...BIG.orgs, orgRow('org-2', 1)] } })
+    const reports: PartsReport[] = []
+    createLiveParts(
+      s.live,
+      (r) => reports.push(r),
+      () => true,
+    )
+    s.send()
+    // the first stage takes each organization's windows in turn: org-2's
+    // one window holds its 200 task numbers, and org-1's first 7 of 64
+    // windows 1,400 of its 12,800
+    expect(s.watched.has(s.keyOf('workspace:tasks', { org_id: 'org-2', from: '', to: null }))).toBe(
+      true,
+    )
+    expect(watchedWindows(s)).toHaveLength(STAGES.first - 1)
+    s.send()
+    const w = reports.at(-1)?.workspace
+    expect(w?.state).toBe('partial')
+    expect(w?.state === 'partial' && w.loaded).toBeCloseTo(1600 / 13000)
   })
 })
+
+/** A root row for organization `id` with `windows` task windows. */
+const orgRow = (id: string, windows: number) => ({
+  id,
+  name: id,
+  next_issue_num: windows * 200,
+  next_project_num: 1,
+})
+
+/** Serves organization `id` with `windows` task windows, task <id>-<i> in
+    window i. */
+function serveOrg(s: ReturnType<typeof scripted>, id: string, windows: number) {
+  for (const [name, value] of Object.entries(EMPTY)) {
+    const args =
+      name === 'workspace:catalog' || name === 'workspace:inbox'
+        ? { org_id: id }
+        : { org_id: id, from: '', to: null }
+    s.set(name, args, { value })
+  }
+  for (const [i, w] of idWindows(windows).entries())
+    s.set('workspace:tasks', { org_id: id, ...w }, { value: tasksPart([`${id}-${i}`]) })
+}

@@ -730,6 +730,39 @@ function syncPlaceFor(r: NonNullable<Route['sync']>, mobile: boolean): SyncPlace
 type PageReturn = { inbox: boolean; projects: boolean; sync: SyncPlace | null }
 const NO_RETURN: PageReturn = { inbox: false, projects: false, sync: null }
 
+/** The page a UI state shows besides its open task, as one comparable
+    string (App's pendingTask). */
+const pageKey = (s: Omit<UiState, 'openIssue'>) =>
+  JSON.stringify([
+    s.scope ?? null,
+    s.view ?? null,
+    s.settingsPage ?? null,
+    !!s.inboxOpen,
+    !!s.projectsOpen,
+    s.sync ?? null,
+  ])
+
+/** Says politely, through the page's announcer (lib/announce), which modal
+    layers leave audible, when a large workspace starts loading its tasks
+    and when every task has loaded. The caller renders on every store
+    change (usePlannerVersion). */
+function useTasksLoadingNews() {
+  const loading = P.stillLoading() !== null
+  // whether the start was said, so the end is said only after it
+  const said = useRef(false)
+  useEffect(() => {
+    if (loading) {
+      said.current = true
+      announce(
+        'Loading tasks. Lists show the tasks that have arrived. Counts and reports wait until every task is in.',
+      )
+    } else if (said.current) {
+      said.current = false
+      announce('Every task has loaded.')
+    }
+  }, [loading])
+}
+
 /* ---------- root ---------- */
 function App() {
   const mobile = useMobile()
@@ -884,10 +917,19 @@ function App() {
   const replaceNextHistory = useRef(false)
   /* The address Back or Forward reached while tasks still load, when it
      names a task still to arrive (lib/router taskSegmentOf). The window
-     holds its reference and says the task is loading, the address stays,
-     and the task opens once it arrives, or the window closes once every
-     task has loaded without it. */
-  const pendingTask = useRef<{ pathname: string; hash: string; ref: string } | null>(null)
+     holds its reference and says the task is loading, the address stays
+     while the page is the one Back or Forward set (`page`), and the task
+     opens once it arrives, in the scope Back or Forward would have chosen
+     for it (`scope`, `preferred`) unless the page moved meanwhile, or the
+     window closes once every task has loaded without it. */
+  const pendingTask = useRef<{
+    pathname: string
+    hash: string
+    ref: string
+    page: string
+    scope?: string
+    preferred: string | null
+  } | null>(null)
   // the project an "Archived tasks" entry asked for; null = derive from the
   // current scope (Settings' own Archived tasks item, deep links)
   const [archiveProject, setArchiveProject] = useState<string | null>(null)
@@ -901,6 +943,7 @@ function App() {
   const rev = usePlannerVersion()
   // Views over every task wait while a large workspace still loads them
   const tasksLoading = P.stillLoading() !== null
+  useTasksLoadingNews()
 
   // date rendering follows the organization's format setting; set during
   // render so everything below formats consistently on this pass
@@ -956,8 +999,14 @@ function App() {
     // the address is not the page's while it steps back over a refused Back
     // or Forward, and a write now would move the entry it steps back to
     if (refusal.stepping()) return
-    // a task Back or Forward reached keeps its address until it arrives
-    if (pendingTask.current && pendingTask.current.ref === openIssue) return
+    // a task Back or Forward reached keeps its address until it arrives,
+    // while the page stays the one it set
+    if (
+      pendingTask.current?.ref === openIssue &&
+      pendingTask.current.page ===
+        pageKey({ scope, view, settingsPage, inboxOpen, projectsOpen, sync })
+    )
+      return
     const p = buildPath({
       scope,
       view,
@@ -1000,10 +1049,17 @@ function App() {
     const issue = (parsePath(pending.pathname) || parseHash(pending.hash))?.issue
     if (!issue && P.stillLoading() !== null) return
     pendingTask.current = null
+    const here = { scope, view, settingsPage, inboxOpen, projectsOpen, sync }
+    const unmoved = pending.page === pageKey(here)
     // the address named this task all along
-    replaceNextHistory.current = true
+    if (unmoved) replaceNextHistory.current = true
+    // the scope Back or Forward gives a task address (onPop)
+    if (issue && unmoved && !sync) {
+      const sc = liveScope(pending.scope) ? pending.scope : scopeForIssue(issue, pending.preferred)
+      if (liveScope(sc)) setScope(sc)
+    }
     setOpenIssue(issue || null)
-  }, [openIssue, rev])
+  }, [openIssue, rev, scope, view, settingsPage, inboxOpen, projectsOpen, sync])
   /* Remember what each address opened, so the gate can tell a MOVED address
      from one this login has simply never followed. Deliberately after the
      url-sync effect above and skipped entirely while the gate is up: accepting
@@ -1090,7 +1146,14 @@ function App() {
       if (!r.settings) settingsReturn.current = NO_RETURN
       if (!r.sync) syncReturn.current = NO_RETURN
       pendingTask.current = held
-        ? { pathname: location.pathname, hash: location.hash, ref: held }
+        ? {
+            pathname: location.pathname,
+            hash: location.hash,
+            ref: held,
+            page: pageKey(next),
+            scope: r.scope,
+            preferred,
+          }
         : null
       setScope(next.scope)
       setView(next.view)
@@ -1706,42 +1769,37 @@ function App() {
       <>
         <ViewBoundary onBack={() => setSettingsPage(null)}>
           <Suspense fallback={<ViewLoading />}>
-            {/* removals, label counts and archived tasks read every task */}
-            {tasksLoading ? (
-              <TasksLoadingView what="Settings" onBack={exitSettings} />
-            ) : (
-              <UnsentScopeContext.Provider value={unsent.page}>
-                <SettingsScreen
-                  page={settingsPage}
-                  setPage={(page) => move({ settingsPage: page }, () => setSettingsPage(page))}
-                  resetPage={setSettingsPage}
-                  onBackPage={(page) =>
-                    move({ settingsPage: page }, () =>
-                      backOrSet({ settingsPage: page }, () => setSettingsPage(page)),
-                    )
-                  }
-                  onExit={exitSettings}
-                  onNewProject={() => openNewProject({ kind: 'program' })}
-                  onNewSubProject={(parent) => openNewProject({ parent })}
-                  archivedTasksProject={archiveProject || scopeMeta}
-                  onOpenArchivedTasks={(projectId) =>
-                    move({ settingsPage: ARCHIVED_TASKS_PAGE }, () => {
-                      setArchiveProject(projectId)
-                      setSettingsPage(ARCHIVED_TASKS_PAGE)
-                    })
-                  }
-                  onProjectGone={(parent) => {
-                    // deleted or archived — from out here they are the same event: a
-                    // project the scope may have been pointing at is no longer one of
-                    // the ones this login can open. Both sentinels survive it — each is
-                    // defined by what's left, not by the row that went away.
-                    if (P.isWideScope(scope)) return
-                    const fb = parent && P.project(parent) ? parent : P.visibleProjects()[0]?.id
-                    if (fb) setScope(fb)
-                  }}
-                />
-              </UnsentScopeContext.Provider>
-            )}
+            <UnsentScopeContext.Provider value={unsent.page}>
+              <SettingsScreen
+                page={settingsPage}
+                setPage={(page) => move({ settingsPage: page }, () => setSettingsPage(page))}
+                resetPage={setSettingsPage}
+                onBackPage={(page) =>
+                  move({ settingsPage: page }, () =>
+                    backOrSet({ settingsPage: page }, () => setSettingsPage(page)),
+                  )
+                }
+                onExit={exitSettings}
+                onNewProject={() => openNewProject({ kind: 'program' })}
+                onNewSubProject={(parent) => openNewProject({ parent })}
+                archivedTasksProject={archiveProject || scopeMeta}
+                onOpenArchivedTasks={(projectId) =>
+                  move({ settingsPage: ARCHIVED_TASKS_PAGE }, () => {
+                    setArchiveProject(projectId)
+                    setSettingsPage(ARCHIVED_TASKS_PAGE)
+                  })
+                }
+                onProjectGone={(parent) => {
+                  // deleted or archived — from out here they are the same event: a
+                  // project the scope may have been pointing at is no longer one of
+                  // the ones this login can open. Both sentinels survive it — each is
+                  // defined by what's left, not by the row that went away.
+                  if (P.isWideScope(scope)) return
+                  const fb = parent && P.project(parent) ? parent : P.visibleProjects()[0]?.id
+                  if (fb) setScope(fb)
+                }}
+              />
+            </UnsentScopeContext.Provider>
           </Suspense>
         </ViewBoundary>
         {dialogs}

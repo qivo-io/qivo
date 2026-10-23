@@ -88,13 +88,13 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
           </Button>
         }
       />
+      {/* search covers only the tasks that arrived while the rest load */}
+      {P.stillLoading() !== null && query.trim() && (
+        <p data-palette-loading className="px-4 pt-2 text-xs text-text-3">
+          Tasks are still loading, so more results may come.
+        </p>
+      )}
       <CommandList className="max-h-[388px] min-h-0 p-2">
-        {/* search covers only the tasks that arrived while the rest load */}
-        {P.stillLoading() !== null && query.trim() && (
-          <p data-palette-loading className="px-2 py-1 text-xs text-text-3" role="note">
-            Tasks are still loading, so more results may come.
-          </p>
-        )}
         {!hasResults && query.trim() && (
           <CommandEmpty className="py-6 text-center text-base text-text-3">
             {P.stillLoading() === null

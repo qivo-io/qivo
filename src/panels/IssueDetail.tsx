@@ -1516,7 +1516,10 @@ function IssueDetail({
   const upd = (patch) => {
     P.updateIssue(it.id, patch)
   }
-  const open = !!it
+  // a task opened by its address while tasks still load may be one still
+  // to arrive: the window opens and says so (App pendingTask)
+  const waiting = !it && !!issueId && P.stillLoading() !== null
+  const open = !!it || waiting
   // Move and Archive open from the Task actions menu, which is gone when they
   // close, so they return focus to the button that opened that menu.
   const taskActionsButton = () =>
@@ -2537,10 +2540,14 @@ function IssueDetail({
                 }
           }
         >
-          {/* a task opened by its link may be one still to arrive */}
-          {!it && P.stillLoading() !== null && (
-            <div role="status" data-task-loading className="p-6 text-sm text-text-2">
-              Loading this task…
+          {waiting && (
+            <div data-task-loading className="flex items-center gap-3 p-6 text-sm text-text-2">
+              <span role="status" className="flex-1">
+                Loading this task…
+              </span>
+              <Button type="button" variant="ghost" onClick={onClose}>
+                Close
+              </Button>
             </div>
           )}
           {it && (
@@ -3260,7 +3267,11 @@ function IssueDetail({
                           // the parent cannot be shown, but it can be removed,
                           // the one change left to a task with subtasks there
                           <div className="flex items-center gap-2 text-sm text-text-2 italic">
-                            <span className="flex-1">The parent task is outside this view.</span>
+                            <span className="flex-1">
+                              {P.parentLoading(it)
+                                ? 'The parent task is still loading.'
+                                : 'The parent task is outside this view.'}
+                            </span>
                             <Button
                               type="button"
                               variant="ghost"

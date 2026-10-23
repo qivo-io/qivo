@@ -1225,6 +1225,10 @@ function repaint(parts: { workspace?: boolean; thread?: boolean }) {
   }
   paintRows(workspace, thread)
   if (workspace) {
+    if (loadEnds) {
+      loadEnds = false
+      stillLoading = null
+    }
     rebuild()
     moveHandles(lastMoves)
     // a delivery that brings nothing new to the screen, such as a batch's
@@ -3298,9 +3302,15 @@ function rebuild(now = new Date(), full = false) {
     todayBefore !== TODAY_ISO
   lastIdentity = identity
   const changes = taskChangesOf(dirty)
-  // the tasks taken for groups with subtasks to come change while loading
-  if (sources.hiddenSubtaskParents !== lastSubtaskParents) changes.flags = true
+  // the tasks taken for groups with subtasks to come, and for subtasks of
+  // parents to come, change while loading
+  if (
+    sources.hiddenSubtaskParents !== lastSubtaskParents ||
+    sources.hiddenParentTasks !== lastHiddenParents
+  )
+    changes.flags = true
   lastSubtaskParents = sources.hiddenSubtaskParents
+  lastHiddenParents = sources.hiddenParentTasks
   const moved = whole ? null : tasks.update(sources, changes)
   if (moved) lastMoves = moved
   else {
@@ -3449,7 +3459,7 @@ function taskSources(): TaskSources {
     projects: rows.projects,
     profiles: rows.profiles,
     hiddenSubtaskParents: subtaskParentsNow(),
-    hiddenParentTasks: rows.hiddenParentTasks,
+    hiddenParentTasks: hiddenParentsNow(),
     homeOrg: HOME_ORG,
     mine: myProfileSet,
     // indexed once: P.user is a linear scan
@@ -3460,8 +3470,10 @@ function taskSources(): TaskSources {
 
 /* Whether the last rebuild was while a large workspace still loaded. */
 let rebuiltLoading = false
-/* The Set the last rebuild took for hiddenSubtaskParents. */
+/* The Sets the last rebuild took for hiddenSubtaskParents and
+   hiddenParentTasks. */
 let lastSubtaskParents: ReadonlySet<string> = new Set()
+let lastHiddenParents: ReadonlySet<string> = new Set()
 
 /** The tasks with subtasks this person is not shown. While a large
     workspace loads (stillLoading), they include every task the server
@@ -3475,6 +3487,20 @@ function subtaskParentsNow(): ReadonlySet<string> {
   const next = new Set(hidden)
   for (const [uuid, row] of rows.issues) if (row.has_subtasks) next.add(uuid)
   return sameData(next, lastSubtaskParents) ? lastSubtaskParents : next
+}
+
+/** The tasks whose parent this person is not shown. While a large
+    workspace loads, they include every subtask whose parent is still to
+    come (parentLoading): such a task never reads as one without a parent,
+    nor is offered as a parent. A Set is kept while it holds the same
+    tasks. */
+function hiddenParentsNow(): ReadonlySet<string> {
+  const hidden = rows.hiddenParentTasks
+  if (stillLoading === null) return hidden
+  const next = new Set(hidden)
+  for (const [uuid, row] of rows.issues)
+    if (row.parent_id && !rows.issues.has(row.parent_id)) next.add(uuid)
+  return sameData(next, lastHiddenParents) ? lastHiddenParents : next
 }
 
 /** What the rows say changed since the last rebuild, as the task index
@@ -5157,7 +5183,8 @@ export const PLANNER = {
       toast(msg.charAt(0).toUpperCase() + msg.slice(1))
       return false
     }
-    await initStore()
+    // the workspace on screen never shrinks to a partial one
+    await initStore(undefined, undefined, { whole: true })
     emit()
     return true
   },
@@ -5414,6 +5441,13 @@ export const PLANNER = {
       arrived, from 0 to 1; null once every task did. Counts, totals and
       verdicts over many tasks wait for null (store/liveParts.ts). */
   stillLoading: (): number | null => stillLoading,
+  /** Whether the parent of `x` is a task still to arrive while a large
+      workspace loads (hiddenParentsNow). */
+  parentLoading: (x: IssueVM | string): boolean => {
+    const it = typeof x === 'string' ? PLANNER.issueById[x] : x
+    const parent = it && stillLoading !== null ? rows.issues.get(it.uuid)?.parent_id : undefined
+    return !!parent && !rows.issues.has(parent)
+  },
   /** Why Qivo cannot save now, or null (lib/syncStatus). Observe it through
       the `health` channel. */
   savePause,
@@ -8622,6 +8656,10 @@ let hasSnapshot = false
    changed may not have arrived, so it is no live good delivery: writes
    accepted meanwhile stay saved until the complete one. */
 let stillLoading: number | null = null
+/* Whether the complete delivery that ends a staged load waits for its
+   paint, which sets stillLoading to null: until then the rows on screen
+   are the partial ones. */
+let loadEnds = false
 /* The live parts of the running store, null before boot and after
    disposal. */
 let parts: LiveParts | null = null
@@ -8761,9 +8799,11 @@ function startParts(
         }
         const snap = ws.value && anchor(ws.value)
         hasSnapshot = snap !== null
+        // the boot paints this delivery before anything rebuilds
+        stillLoading = snap && ws.state === 'partial' ? ws.loaded : null
+        loadEnds = false
         if (snap) {
-          if (ws.state === 'partial') stillLoading = ws.loaded
-          else {
+          if (ws.state !== 'partial') {
             snapshotCurrent = true
             snapshotDeliveries++
           }
@@ -8781,6 +8821,8 @@ function startParts(
       })
     },
     online,
+    // a workspace once complete shows only a complete one again
+    { whole: first ? first.whole : stillLoading === null },
   )
 }
 
@@ -8833,8 +8875,9 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
   hasSnapshot = true
   snapshotCurrent = true
   snapshotDeliveries++
+  // the repaint that paints this delivery ends the load (repaint)
   const loadedNow = stillLoading !== null
-  stillLoading = null
+  if (loadedNow) loadEnds = true
   if (ws.changed) {
     const snap = anchor(ws.value)
     noteDelivery(base.stage(snap), snap)
@@ -8915,6 +8958,7 @@ export function disposeDemoStore() {
   pendingRestoreIssueIds.clear()
   hasSnapshot = false
   stillLoading = null
+  loadEnds = false
   layers.clear()
   owed.workspace = false
   owed.thread = false
@@ -9099,9 +9143,9 @@ export async function initStore(
   // profile on the server, so they do not wait for the snapshot's roster.
   const bootPreferences = preferences.beginBoot()
   stopParts()
-  // the new parts have delivered nothing yet
+  // the new parts have delivered nothing yet; what shows stays partial, if
+  // it is, until their first delivery paints
   snapshotCurrent = false
-  stillLoading = null
   // New parts start from a clean state; their first complete transition
   // settles the boot, so it never reports recovery from earlier trouble.
   if (snapshotTrouble) {

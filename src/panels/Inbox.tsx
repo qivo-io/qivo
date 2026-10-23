@@ -839,6 +839,26 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
                 : 'This task is still loading. It opens here once it arrives.'}
             </PaneNote>
           </>
+        ) : openIssue && P.stillLoading() !== null ? (
+          // Back or Forward to a task still to arrive (App pendingTask)
+          <>
+            {mobile && (
+              <Button
+                type="button"
+                variant="ghost"
+                className="inbox-mobile-back"
+                onClick={closeTask}
+              >
+                <Icon name="chevronLeft" size={20} />
+                Back to inbox
+              </Button>
+            )}
+            <PaneNote>
+              <span data-task-loading>
+                This task is still loading. It opens here once it arrives.
+              </span>
+            </PaneNote>
+          </>
         ) : (
           <PaneNote>
             <Icon name="mail" size={26} color="var(--text-3)" className="[margin:0_auto_8px]" />

@@ -51,6 +51,7 @@ describe('a staged load', () => {
   let store: typeof import('./planner')
   let snapshot: Snapshot
   let deliver: (snap: Snapshot) => void
+  let fail: (error: unknown) => void
 
   beforeEach(async () => {
     vi.resetModules()
@@ -77,12 +78,16 @@ describe('a staged load', () => {
       { ...task(snapshot, 'fd200000-j', 10), parent_id: '01500000-h' },
       // a task due before today: late
       { ...task(snapshot, '01700000-k', 11), due_date: '2020-01-06' },
+      // a subtask in the first window whose parent is in the last
+      { ...task(snapshot, '01800000-l', 12), parent_id: 'fd300000-m' },
+      { ...task(snapshot, 'fd300000-m', 13), has_subtasks: true },
     )
     network.query.mockResolvedValue(null)
     network.mutation.mockResolvedValue(null)
-    network.onUpdate.mockImplementation((ref, _args, receive) => {
+    network.onUpdate.mockImplementation((ref, _args, receive, failed) => {
       if (getFunctionName(ref) === 'workspace:whole') {
         deliver = receive
+        fail = failed
         receive(structuredClone(snapshot))
       }
       return () => {}
@@ -211,5 +216,74 @@ describe('a staged load', () => {
     await tick()
     expect(store.P.progressOf(group)).toMatchObject({ done: 1, total: 2, unknown: false })
     expect(store.P.remainingOf(group)).toBe(3)
+  })
+  it('never shows a subtask whose parent is still to come as one without a parent', async () => {
+    await boot()
+    const child = () => store.P.issues.find((i) => i.uuid === '01800000-l')
+    expect(child()?.parent).toBeNull()
+    expect(child()?.hasHiddenParent).toBe(true)
+    expect(store.P.parentLoading(child()?.id ?? '')).toBe(true)
+    double.live?.holdWindow(null)
+    await tick()
+    expect(child()?.parent).toBe(store.P.issues.find((i) => i.uuid === 'fd300000-m')?.id)
+    expect(child()?.hasHiddenParent).toBe(false)
+    expect(store.P.parentLoading(child()?.id ?? '')).toBe(false)
+  })
+
+  it('settles a boot that waits for the whole workspace only on the complete transition', async () => {
+    double.live?.holdWindow(LAST_WINDOW)
+    let settled = false
+    const booted = store.initStore(undefined, undefined, { whole: true }).then(() => {
+      settled = true
+    })
+    for (let i = 0; i < 5; i++) await tick()
+    expect(settled).toBe(false)
+    double.live?.holdWindow(null)
+    await booted
+    expect(store.P.stillLoading()).toBeNull()
+    expect(shown('fd000000-b')).toBe(true)
+  })
+
+  it('keeps saying it loads, with the tasks shown, when a later stage fails', async () => {
+    await boot()
+    const share = store.P.stillLoading()
+    fail(new Error('boom'))
+    await tick()
+    expect(store.P.snapshotTrouble()?.kind).toBe('failed')
+    expect(store.P.stillLoading()).toBe(share)
+    expect(shown('01000000-a')).toBe(true)
+  })
+
+  it('ends the load with the paint of the complete delivery, after a write answered later', async () => {
+    await boot()
+    let answer = (_value: unknown) => {}
+    network.mutation.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve
+        }),
+    )
+    store.P.updateIssue(store.P.issues.find((i) => i.uuid === '01000000-a')?.id ?? '', {
+      title: 'Mine',
+    })
+    await tick()
+    const mine = snapshot.issues.find((i) => i.id === '01000000-a')
+    if (mine) mine.title = 'Mine'
+    deliver(structuredClone(snapshot))
+    double.live?.holdWindow(null)
+    // the complete delivery waits for the write's answer or a 0 ms timer,
+    // and the rows on screen are the partial ones until it paints
+    expect(store.P.stillLoading()).not.toBeNull()
+    expect(shown('fd000000-b')).toBe(false)
+    await tick()
+    expect(store.P.stillLoading()).toBeNull()
+    expect(shown('fd000000-b')).toBe(true)
+    answer(null)
+    await tick()
+    expect(title()).toBe('Mine')
+    if (mine) mine.title = 'Elsewhere'
+    deliver(structuredClone(snapshot))
+    await tick()
+    expect(title()).toBe('Elsewhere')
   })
 })
