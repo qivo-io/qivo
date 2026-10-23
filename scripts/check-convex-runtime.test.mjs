@@ -157,6 +157,7 @@ describe('the convex typecheck', { timeout: 60_000 }, () => {
         "export const bytes = new TextEncoder().encode(btoa('qivo'))",
         'export const id = crypto.randomUUID()',
         'export const load = () => fetch(new Request(site, { headers: new Headers() }))',
+        'export const page = new globalThis.URL(globalThis.process.env.PAGE ?? site)',
         '',
       ].join('\n'),
       'encode.ts': `'use node'\n${usesBuffer}`,
@@ -169,6 +170,8 @@ describe('the convex typecheck', { timeout: 60_000 }, () => {
         'export const directory = process.cwd()',
         'export const later = (run: () => void) => setImmediate(run)',
         'export const exposed = { Buffer, encoded, hooks, executionAsyncId }',
+        'export const viaGlobal = [globalThis.Buffer, (globalThis as typeof globalThis).Buffer]',
+        "export const keyed = [globalThis['setImmediate'], globalThis.process.cwd()]",
         '',
       ].join('\n'),
     })
@@ -181,6 +184,10 @@ describe('the convex typecheck', { timeout: 60_000 }, () => {
       'convex/node.ts:6:26 - process holds only env in the default runtime, so read process.env.',
       'convex/node.ts:7:43 - setImmediate is a Node global, which the default runtime does not provide.',
       'convex/node.ts:8:26 - Buffer is a Node global, which the default runtime does not provide.',
+      'convex/node.ts:9:38 - Buffer is a Node global, which the default runtime does not provide.',
+      'convex/node.ts:9:80 - Buffer is a Node global, which the default runtime does not provide.',
+      'convex/node.ts:10:34 - setImmediate is a Node global, which the default runtime does not provide.',
+      'convex/node.ts:10:62 - process holds only env in the default runtime, so read process.env.',
     ])
   })
   it('passes reads of web types through mapped types and unions, and imports named by a template', () => {

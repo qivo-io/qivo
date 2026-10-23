@@ -413,6 +413,32 @@ try {
     Boolean(symbol?.declarations.some((d) => valueKinds.has(d.kind) && nodeTypes.test(d.path)))
   // The parent of a global is none, or `declare global`.
   const global = (symbol) => [undefined, '__global'].includes(symbol.getParent()?.name)
+  /** Tells why reading a global fails in the default runtime, if it does. `read` yields it. */
+  const refusal = (symbol, read) => {
+    if (!nodeOnly(symbol) || !global(symbol)) return undefined
+    if (symbol.name !== 'process')
+      return runtimeGlobals.has(symbol.name)
+        ? undefined
+        : `${symbol.name} is a Node global, which the default runtime does not provide.`
+    const env =
+      ts.isPropertyAccessExpression(read.parent) &&
+      read.parent.expression === read &&
+      read.parent.name.text === 'env'
+    return env ? undefined : 'process holds only env in the default runtime, so read process.env.'
+  }
+  // The global object's names, through which `globalThis.Buffer` reads a global too.
+  const globalObjects = new Set(
+    ['globalThis', 'self']
+      .map((name) => checker.resolveName(name, SymbolFlags.Value, undefined, false)?.id)
+      .filter((id) => id !== undefined),
+  )
+  // Parentheses, casts and `!` around an expression, which leave its value alone.
+  const unchanged = (node) =>
+    ts.isParenthesizedExpression(node) ||
+    ts.isAsExpression(node) ||
+    ts.isSatisfiesExpression(node) ||
+    ts.isNonNullExpression(node) ||
+    ts.isTypeAssertion(node)
   for (const key of runtime) {
     checked++
     const sourceFile = sources.get(key)
@@ -428,31 +454,37 @@ try {
     const names = identifiers.filter(isReference)
     const symbols = names.length ? checker.getSymbolAtLocation(names) : []
     names.forEach((name, index) => {
-      const parent = name.parent
       // `{ Buffer }` reads Buffer, but its symbol is the property's.
-      const symbol = ts.isShorthandPropertyAssignment(parent)
-        ? checker.getShorthandAssignmentValueSymbol(parent)
+      const symbol = ts.isShorthandPropertyAssignment(name.parent)
+        ? checker.getShorthandAssignmentValueSymbol(name.parent)
         : symbols[index]
       if (!symbol) {
         failures.push(`${at(key, name)} - TypeScript does not resolve ${name.text}.`)
         return
       }
-      if (!nodeOnly(symbol) || !global(symbol)) return
-      if (
-        symbol.name === 'process' &&
-        ts.isPropertyAccessExpression(parent) &&
-        parent.expression === name &&
-        parent.name.text === 'env'
-      )
-        return
-      if (symbol.name === 'process')
-        failures.push(
-          `${at(key, name)} - process holds only env in the default runtime, so read process.env.`,
-        )
-      else if (!runtimeGlobals.has(symbol.name))
-        failures.push(
-          `${at(key, name)} - ${symbol.name} is a Node global, which the default runtime does not provide.`,
-        )
+      const reason = refusal(symbol, name)
+      if (reason) failures.push(`${at(key, name)} - ${reason}`)
+      if (!globalObjects.has(symbol.id)) return
+      let object = name
+      while (unchanged(object.parent) && object.parent.expression === object) object = object.parent
+      const member = object.parent
+      if (ts.isPropertyAccessExpression(member) && member.expression === object) {
+        if (!ts.isIdentifier(member.name)) return
+        const read = checker.resolveName(member.name.text, SymbolFlags.Value, undefined, false)
+        const reason = read && refusal(read, member)
+        if (reason) failures.push(`${at(key, member.name)} - ${reason}`)
+      } else if (ts.isElementAccessExpression(member) && member.expression === object) {
+        const argument = member.argumentExpression
+        if (!ts.isStringLiteral(argument) && !ts.isNoSubstitutionTemplateLiteral(argument)) {
+          failures.push(
+            `${at(key, argument)} - this reads a global named at runtime, which the check cannot follow. Name it with a string.`,
+          )
+          return
+        }
+        const read = checker.resolveName(argument.text, SymbolFlags.Value, undefined, false)
+        const reason = read && refusal(read, member)
+        if (reason) failures.push(`${at(key, argument)} - ${reason}`)
+      }
     })
   }
   // A config that holds no such file would make this pass without reading anything.
