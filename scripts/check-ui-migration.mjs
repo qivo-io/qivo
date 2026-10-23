@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import * as ts from 'typescript/unstable/ast'
 import { API } from 'typescript/unstable/sync'
+import { closeTypeScriptAPI } from './typescript-api.mjs'
 
 const root = path.resolve('src')
 const allowlist = JSON.parse(fs.readFileSync('scripts/ui-runtime-style-allowlist.json', 'utf8'))
@@ -206,7 +207,7 @@ try {
     visit(sf)
   }
 } finally {
-  api.close()
+  await closeTypeScriptAPI(api)
 }
 
 for (const [file, count] of styleCounts) {
