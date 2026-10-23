@@ -9,10 +9,10 @@ that the client needs:
   Qivo**.
 - Inbox events can raise native desktop notifications. Clicking one restores
   Qivo and opens the Inbox.
-- Packaged builds check the configured release feed, download updates in the
+- Packaged builds check the release feed built into them, download updates in the
   background and show a native “update ready” notification. Qivo waits for
-  active edits and asks before restarting to install an update. A normal quit
-  also completes a downloaded update.
+  active edits and asks before restarting to install an update. On Windows a
+  normal quit also completes a downloaded update.
 - OAuth provider pages open in the system browser. A short-lived, one-time
   `qivo://` callback returns the result to the waiting Qivo window.
 
@@ -41,14 +41,37 @@ The shell follows Electron's
 - A packaged build always loads `https://qivo.io/app`. It ignores
   `QIVO_DESKTOP_URL`, so no environment setting can make a local page the
   trusted app origin. Only a run from source reads it.
+- A packaged build checks for updates only at the feed written into it when
+  it was built, and a build without one never checks. No environment
+  variable names another feed. `QIVO_DISABLE_UPDATES=1` can only turn checks
+  off. The shell also removes electron-updater's test variables
+  `ELECTRON_BUILDER_LINUX_PACKAGE_MANAGER`, which picks the package manager
+  that installs a Linux update as root, and `TEST_UPDATER_ARCH`.
 - Packaging flips Electron's
   [fuses](https://www.electronjs.org/docs/latest/tutorial/fuses): no
   `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS` or `--inspect`, app code only from
   `app.asar`, which Windows checks against its hash, and no extra `file://`
-  privileges. No fuse turns off Chromium's `--remote-debugging-port` and
-  `--remote-debugging-pipe` switches, so a program that starts Qivo itself
-  can still drive its page. Such a program already runs as the user and can
-  read the same stored data from disk.
+  privileges.
+- A packaged build refuses to start with a Chromium switch that could hand
+  its page or update feed to another server or program, or run its child
+  processes through one. [switches.ts](switches.ts) lists them: accepting
+  untrusted certificates, host mapping, remote debugging, child-process
+  launch prefixes and command-line extensions. A run from source accepts
+  every switch. Windows shows the reason in a dialog. Linux writes it to
+  standard error and opens no window, so start Qivo from a terminal to read
+  it. Showing a window first would start the processes and the debugging
+  port those switches act on.
+- The logon entry of a Linux AppImage starts the file in `APPIMAGE`, and an
+  AppImage update replaces that file. Qivo reads the variable only when it
+  runs from a folder that an AppImage launcher set it for: the AppImage
+  runtime's temporary folder, `firejail --appimage` or NixOS `appimage-run`.
+  Otherwise Qivo ignores it and removes it before the updater starts, so a
+  .deb or .rpm install that inherits it still starts the installed program,
+  and the updater replaces no other file.
+- These rules keep Qivo's own settings from redirecting it. They do not
+  protect against a program that already runs as the user. Such a program
+  can set loader variables such as `LD_PRELOAD`, edit the per-user Windows
+  install, add a trusted certificate or read Qivo's stored data from disk.
 - Cookie encryption stays off. Qivo keeps its sign-in in `localStorage`, not
   in cookies, so encryption would protect nothing. On Linux it also makes the
   shell ask the keyring for its key at start, which shows an unlock prompt
@@ -136,12 +159,37 @@ $env:QIVO_DESKTOP_UPDATE_URL = "https://downloads.example.com/qivo/win"
 npm run desktop:package
 ```
 
-The feed must be HTTPS with no credentials, query string or fragment. Upload
+On Windows this build also needs the signing settings described below. The
+feed must be HTTPS with no credentials, query string or fragment. Upload
 the generated installer and its `latest.yml`/blockmap files to that endpoint
-with the same version from `package.json`. The installed app can override the
-feed at runtime with the same environment variable; `QIVO_DISABLE_UPDATES=1`
-disables checks for diagnostics. Signing the installer is required before
-shipping it to users.
+with the same version from `package.json`. The installed app checks only this
+feed and reads no feed setting at run time. `QIVO_DISABLE_UPDATES=1` turns
+checks off for diagnostics. Signing the installer is required before shipping
+it to users.
+
+electron-updater checks the signature of a downloaded Windows update only
+when the built-in `app-update.yml` names the publisher. electron-builder
+writes that name from the signing settings: the common name of the
+certificate in `CSC_LINK` or `win.signtoolOptions` (`certificateFile`,
+`certificateSubjectName` or `certificateSha1`), or
+`win.signtoolOptions.publisherName`, or `win.azureSignOptions.publisherName`
+for Azure Trusted Signing. A name alone matches any trusted certificate with
+that common name, so set `win.signtoolOptions.publisherName` or
+`win.azureSignOptions.publisherName` to the certificate's full subject, such
+as `CN=Qivo AB, O=Qivo AB, C=SE`. electron-updater then requires every field
+it names to match. Keep `win.verifyUpdateCodeSignature` unset. A Windows
+build with a feed whose configuration names no publisher fails, so the
+signing change must set one of these. A test signed with a self-signed
+certificate needs that certificate trusted on the test machine.
+
+electron-updater checks the signature with PowerShell. When PowerShell cannot
+run at all, for example where AppLocker blocks it, the library logs a warning
+and installs the update without the check. Do not block PowerShell on the
+computers that run a signed build.
+
+Linux updates have no signature check. electron-updater installs the `.deb`
+or `.rpm` whose SHA-512 the same feed lists, as root after Qivo asks, so the
+feed's HTTPS and the host behind it protect those updates.
 
 On Ubuntu 26.04 (or another x64 Linux build host), create all three Linux
 artifacts with:
@@ -173,10 +221,9 @@ The Linux package command is intentionally build-only.
 ## Network requests
 
 The window loads the Qivo web app, which makes the same requests as it does
-in a browser. The shell itself contacts only the update feed, and only in a
-packaged build that has one. Local package builds and **Desktop test build**
-artifacts have no feed and never check, unless `QIVO_DESKTOP_UPDATE_URL` is
-set when the app starts.
+in a browser. The shell itself contacts only the update feed built into it,
+and only in a packaged build that has one. Local package builds and
+**Desktop test build** artifacts have no feed and never check.
 
 A packaged build checks at startup and then every 4 hours while it runs. A
 check is an HTTPS `GET` for `latest.yml` on Windows or `latest-linux.yml` on

@@ -49,6 +49,30 @@ export function linuxAutostartEntry(executablePath: string): string {
   ].join('\n')
 }
 
+/**
+ * Folders an AppImage launcher runs Qivo from after setting `APPIMAGE` to the
+ * file it started: the AppImage runtime's mount and `--appimage-extract-and-run`
+ * folders, `firejail --appimage` and NixOS `appimage-run`.
+ */
+const appImageFolders = [
+  /\/\.mount_[^/]+$/,
+  /\/appimage_extracted_[^/]+$/,
+  /^\/run\/firejail\/appimage$/,
+  /\/appimage-run\/[0-9a-f]{64}(\/squashfs-root)?$/,
+]
+
+/**
+ * Returns the AppImage file to start at logon, or undefined when Qivo is not
+ * running from an AppImage. Qivo reads `APPIMAGE` only when its executable
+ * sits in a folder an AppImage launcher runs it from, so a value inherited
+ * by a .deb or .rpm install cannot make its logon entry or updater act on
+ * another file. The environment cannot move the executable.
+ */
+export function appImagePath(executablePath: string, env: NodeJS.ProcessEnv): string | undefined {
+  const folder = path.dirname(executablePath)
+  return appImageFolders.some((pattern) => pattern.test(folder)) ? env.APPIMAGE : undefined
+}
+
 /** Development launches never register the development Electron executable. */
 export function createLoginStartup(options: StartupOptions) {
   const loginOptions = { path: options.executablePath, args: [startupArgument] }
