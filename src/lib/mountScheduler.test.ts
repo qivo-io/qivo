@@ -274,6 +274,11 @@ describe('createMountScheduler', () => {
     idle.shift()?.({ timeRemaining: () => 10 })
     expect(reads.count).toBe(0)
     expect(idle).toHaveLength(0)
+    // the next starts once the list has mounted
+    while (s.tasks.length) await s.run()
+    expect(idle).toHaveLength(1)
+    idle.shift()?.({ timeRemaining: () => 10 })
+    expect(reads.count).toBe(1)
   })
 
   it('starts another pass for blocks that mounted during one', async () => {

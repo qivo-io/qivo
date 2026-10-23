@@ -8,10 +8,10 @@ import { flushSync } from 'react-dom'
    each other within 16ms of a frame's start, then wait for the next frame,
    so input runs between them, the browser renders between frames, and a
    frame stays under about 50ms. The scheduler marks its root while
-   anything waits, without a React render. Once nothing waits, it has the
-   browser lay out the blocks it skips offscreen (DeferredList.css) one at
-   a time while the page is idle, so a block that scrolls into view later
-   only paints. */
+   anything waits, without a React render. Once nothing waits after it
+   mounted items, it has the browser lay out the blocks it skips offscreen
+   (DeferredList.css) while the page is idle, so a block that scrolls into
+   view later only paints. */
 
 /** A list the scheduler mounts. `pending` is how many of its items still
     wait; `grow(n)` mounts the next `n` of them and `mountThrough(key)` the
@@ -196,10 +196,14 @@ export function createMountScheduler({
   /* Lays out, while the page is idle, each block the browser skips that it
      has not laid out yet: reading a box inside a skipped block lays out
      that block alone, and the browser keeps the result, so the frame that
-     scrolls it into view only paints it. One block at a time, so input
-     waits at most one block's layout. A pass stops when a list waits to
-     mount again; the next starts when none does, or when a pass ends, if
-     lists mounted items since the last one began. */
+     scrolls it into view only paints it. An idle task reads blocks until
+     its idle period has 2ms left, so input waits at most for the rest of
+     the period, up to 50ms, and one block. A pass stops when a list waits
+     to mount again; the next starts when none does, or when a pass ends,
+     if the scheduler mounted items since the last one began: registered
+     lists, slices and the mounts it was asked for. Items a list's own
+     render adds, at most MOST_AT_ONCE (DeferredList), and a laid out
+     block whose items change, lay out when they come into view. */
   const warm = () => {
     if (warming || !mountedSince || !idle || disposed || !root || pendingLists().length) return
     warming = true

@@ -367,6 +367,20 @@ describe('createCellGrouper', () => {
     expect(fourth).not.toBe(third)
     expect(fourth[1].parent).toBe(newParent)
   })
+
+  it('groups again when a heading above the parent changes', () => {
+    const root = issue('root', { children: ['middle'] })
+    const middle = issue('middle', { parent: root.id, children: ['leaf'] })
+    const leaf = issue('leaf', { parent: middle.id })
+    const group = createCellGrouper<Issue>()
+    const first = group('a:todo', [leaf], index([root, middle, leaf]))
+    expect(first[0].ancestors).toEqual([root])
+    // the grandparent got a new object while its subtasks kept theirs
+    const newRoot = { ...root, title: 'Renamed root' }
+    const second = group('a:todo', [leaf], index([newRoot, middle, leaf]))
+    expect(second).not.toBe(first)
+    expect(second[0].ancestors[0]).toBe(newRoot)
+  })
 })
 
 describe('estimateCardHeight', () => {
