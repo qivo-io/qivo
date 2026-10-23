@@ -59,3 +59,25 @@ export function createWindowOpenHandler(appOrigin: string, openExternal: (url: s
     return { action: 'deny' }
   }
 }
+
+type GuardedContents = {
+  setWindowOpenHandler(handler: ReturnType<typeof createWindowOpenHandler>): void
+  on(event: 'will-navigate', listener: (event: NavigationEvent) => void): unknown
+  on(event: 'will-redirect', listener: (event: NavigationEvent) => void): unknown
+}
+
+/**
+ * Installs the navigation limits on a window's contents: the window-open
+ * handler, and the guard for both links (`will-navigate`) and server
+ * redirects (`will-redirect`).
+ */
+export function guardWindow(
+  contents: GuardedContents,
+  appOrigin: string,
+  openExternal: (url: string) => void,
+): void {
+  contents.setWindowOpenHandler(createWindowOpenHandler(appOrigin, openExternal))
+  const guard = createNavigationGuard(appOrigin, openExternal)
+  contents.on('will-navigate', guard)
+  contents.on('will-redirect', guard)
+}

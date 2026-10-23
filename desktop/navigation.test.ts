@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   createNavigationGuard,
   createWindowOpenHandler,
+  guardWindow,
   isAppURL,
   isOAuthProviderURL,
 } from './navigation'
@@ -78,6 +79,39 @@ describe('desktop navigation', () => {
       ['https://example.com/doc'],
       ['mailto:a@b.c'],
       ['tel:+4612345'],
+    ])
+  })
+
+  it('guards both links and server redirects in the window', () => {
+    type Contents = Parameters<typeof guardWindow>[0]
+    type Listener = Parameters<Contents['on']>[1]
+    const listeners = new Map<string, Listener>()
+    let openHandler: Parameters<Contents['setWindowOpenHandler']>[0] | undefined
+    const openExternal = vi.fn()
+    guardWindow(
+      {
+        setWindowOpenHandler: (handler) => {
+          openHandler = handler
+        },
+        on: (name: string, listener: Listener) => listeners.set(name, listener),
+      },
+      APP,
+      openExternal,
+    )
+    expect([...listeners.keys()]).toEqual(['will-navigate', 'will-redirect'])
+    for (const listener of listeners.values()) {
+      const away = { url: 'https://evil.example/', isMainFrame: true, preventDefault: vi.fn() }
+      listener(away)
+      expect(away.preventDefault).toHaveBeenCalled()
+      const home = { url: `${APP}/app/board`, isMainFrame: true, preventDefault: vi.fn() }
+      listener(home)
+      expect(home.preventDefault).not.toHaveBeenCalled()
+    }
+    expect(openHandler?.({ url: 'https://example.com/' })).toEqual({ action: 'deny' })
+    expect(openExternal.mock.calls).toEqual([
+      ['https://evil.example/'],
+      ['https://evil.example/'],
+      ['https://example.com/'],
     ])
   })
 })

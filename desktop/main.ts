@@ -14,10 +14,11 @@ import {
   Tray,
 } from 'electron'
 import electronUpdater from 'electron-updater'
+import { resolveAppURL } from './appURL.js'
 import { createLeavePrompt } from './leavePrompt.js'
-import { createNavigationGuard, createWindowOpenHandler, isOAuthProviderURL } from './navigation.js'
-import { restrictPermissions } from './permissions.js'
-import { disableStagingUserId, keepSpellcheckOffline } from './privacy.js'
+import { guardWindow, isOAuthProviderURL } from './navigation.js'
+import { disableStagingUserId } from './privacy.js'
+import { secureSession } from './session.js'
 import { createDesktopSettingsStore, defaultDesktopSettings } from './settings.js'
 import { createLoginStartup, startupArgument } from './startup.js'
 import { createUpdatePrompt } from './updatePrompt.js'
@@ -27,35 +28,9 @@ import { createUpdatePrompt } from './updatePrompt.js'
 const { autoUpdater } = electronUpdater
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const isDevelopment = process.env.QIVO_DESKTOP_DEV === '1' || !app.isPackaged
 if (process.platform === 'linux') app.setDesktopName('io.qivo.desktop')
 if (process.platform === 'win32') app.setAppUserModelId('io.qivo.desktop')
-const configuredURL = process.env.QIVO_DESKTOP_URL?.trim()
-const defaultURL = isDevelopment ? 'http://localhost:5199/app' : 'https://qivo.io/app'
-const appURL = new URL(configuredURL || defaultURL)
-
-if (!['http:', 'https:'].includes(appURL.protocol)) {
-  throw new Error('QIVO_DESKTOP_URL must use http or https')
-}
-
-const trustedHosts = new Set(['qivo.io', 'www.qivo.io', 'localhost'])
-const trustedSuffixes = ['.qivo.io']
-
-function isTrustedHost(hostname: string): boolean {
-  const host = hostname.toLowerCase()
-  return trustedHosts.has(host) || trustedSuffixes.some((suffix) => host.endsWith(suffix))
-}
-
-if (
-  appURL.username ||
-  appURL.password ||
-  appURL.search ||
-  appURL.hash ||
-  !isTrustedHost(appURL.hostname) ||
-  (appURL.protocol === 'http:' && appURL.hostname !== 'localhost')
-) {
-  throw new Error('QIVO_DESKTOP_URL must be a trusted Qivo HTTPS origin or localhost HTTP origin')
-}
+const appURL = resolveAppURL(app.isPackaged, process.env)
 
 let mainWindow: BrowserWindow | null = null
 let appTray: Tray | null = null
@@ -303,7 +278,7 @@ function initializeSettings(): void {
   try {
     const startup = createLoginStartup({
       platform: process.platform,
-      packaged: app.isPackaged && !isDevelopment,
+      packaged: app.isPackaged,
       executablePath: process.execPath,
       appImagePath: process.env.APPIMAGE,
       configDirectory: app.getPath('appData'),
@@ -393,11 +368,7 @@ function createWindow(startHidden = false): void {
     },
   })
   mainWindow.setMenu(null)
-  const openExternal = (url: string) => void shell.openExternal(url)
-  mainWindow.webContents.setWindowOpenHandler(createWindowOpenHandler(appURL.origin, openExternal))
-  const guard = createNavigationGuard(appURL.origin, openExternal)
-  mainWindow.webContents.on('will-navigate', guard)
-  mainWindow.webContents.on('will-redirect', guard)
+  guardWindow(mainWindow.webContents, appURL.origin, (url) => void shell.openExternal(url))
   const win = mainWindow
   win.webContents.on(
     'will-prevent-unload',
@@ -525,10 +496,7 @@ if (!gotLock) {
 } else {
   // Register before ready so the window's session and electron-updater's
   // session are both covered from the moment they exist.
-  app.on('session-created', (session) => {
-    keepSpellcheckOffline(session, process.platform)
-    restrictPermissions(session, appURL.origin)
-  })
+  app.on('session-created', (session) => secureSession(session, appURL.origin, process.platform))
   app.on('second-instance', (_event, commandLine) => {
     const deepLink = commandLine.find((arg) => arg.startsWith('qivo://'))
     if (deepLink) consumeDeepLink(deepLink)

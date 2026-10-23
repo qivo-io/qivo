@@ -18,7 +18,7 @@
     "typecheck:desktop": "tsc --noEmit -p desktop",
     "demo": "node scripts/marketing-demo.mjs",
     "desktop:compile": "tsc -p desktop/tsconfig.json",
-    "desktop:dev": "npm run desktop:compile && concurrently -k \"vite --port 5199 --strictPort\" \"wait-on http://localhost:5199/app.html && cross-env QIVO_DESKTOP_DEV=1 QIVO_DESKTOP_URL=http://localhost:5199/app electron desktop\"",
+    "desktop:dev": "npm run desktop:compile && concurrently -k \"vite --port 5199 --strictPort\" \"wait-on http://localhost:5199/app.html && cross-env QIVO_DESKTOP_URL=http://localhost:5199/app electron desktop\"",
     "desktop:build": "npm run build && npm run desktop:compile",
     "desktop:package": "npm run desktop:build && electron-builder --config desktop/electron-builder.cjs --win --publish never",
     "desktop:package:linux": "npm run desktop:build && electron-builder --config desktop/electron-builder.cjs --linux deb rpm AppImage --publish never",

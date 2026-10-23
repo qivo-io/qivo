@@ -38,12 +38,21 @@ The shell follows Electron's
   and operator pages run scripts only from the deployment and the one inline
   theme script by hash. It also blocks plugins, `<base>` changes to another
   origin and framing.
+- A packaged build always loads `https://qivo.io/app`. It ignores
+  `QIVO_DESKTOP_URL`, so no environment setting can make a local page the
+  trusted app origin. Only a run from source reads it.
 - Packaging flips Electron's
   [fuses](https://www.electronjs.org/docs/latest/tutorial/fuses): no
   `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS` or `--inspect`, app code only from
-  `app.asar`, which Windows checks against its hash, no extra `file://`
-  privileges and encrypted cookies. Cookie encryption cannot be turned off
-  again without losing the stored cookies.
+  `app.asar`, which Windows checks against its hash, and no extra `file://`
+  privileges. No fuse turns off Chromium's `--remote-debugging-port` and
+  `--remote-debugging-pipe` switches, so a program that starts Qivo itself
+  can still drive its page. Such a program already runs as the user and can
+  read the same stored data from disk.
+- Cookie encryption stays off. Qivo keeps its sign-in in `localStorage`, not
+  in cookies, so encryption would protect nothing. On Linux it also makes the
+  shell ask the keyring for its key at start, which shows an unlock prompt
+  when the keyring is locked, for example after an automatic login.
 
 ## Desktop settings
 
@@ -96,7 +105,16 @@ npm run desktop:dev
 
 `desktop:dev` loads `http://localhost:5199/app`. Set `QIVO_DESKTOP_URL` when a
 different local or preview origin is needed. The main process accepts only
-localhost over HTTP and Qivo HTTPS origins.
+localhost over HTTP and Qivo HTTPS origins. To run the shell from source
+against another local server, compile it and start Electron yourself:
+
+```sh
+npm run desktop:compile
+QIVO_DESKTOP_URL=http://localhost:5347/app npx electron desktop
+```
+
+A packaged build ignores `QIVO_DESKTOP_URL` and always loads
+`https://qivo.io/app`, so test local changes with a run from source.
 
 ## Packaging and updates
 

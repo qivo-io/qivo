@@ -23,15 +23,17 @@ module.exports = {
   },
   files: ['dist/**/*', 'assets/qivo.png', 'package.json'],
   // Fuses are bits in the Electron executable, flipped while packaging. These
-  // turn off the ways another program could run its own code as Qivo: the
-  // ELECTRON_RUN_AS_NODE and NODE_OPTIONS variables, the --inspect flags and
-  // app code outside the packaged app.asar. Windows also checks app.asar
-  // against the hash electron-builder writes into the executable. Cookies on
-  // disk are encrypted with the OS key store; that cannot be turned off again
-  // without losing the stored cookies.
+  // turn off the ELECTRON_RUN_AS_NODE and NODE_OPTIONS variables, the
+  // --inspect flags, app code outside the packaged app.asar and extra file://
+  // privileges. Windows also checks app.asar against the hash electron-builder
+  // writes into the executable. No fuse covers Chromium's remote debugging
+  // switches. Cookie encryption stays off. Qivo keeps its sign-in in
+  // localStorage, not in cookies, so it would protect nothing, and on Linux it
+  // makes every start ask the keyring for its key, which shows an unlock
+  // prompt when the keyring is locked.
   electronFuses: {
     runAsNode: false,
-    enableCookieEncryption: true,
+    enableCookieEncryption: false,
     enableNodeOptionsEnvironmentVariable: false,
     enableNodeCliInspectArguments: false,
     enableEmbeddedAsarIntegrityValidation: true,
