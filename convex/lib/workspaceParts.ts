@@ -363,9 +363,12 @@ export async function readPeople(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow
 /** The caller's access as one part asks it, project by project, each
  * project and its levels read once (lib/access.ts projectLevelsOf). A part
  * reads only the projects its rows name, not every project of the
- * organization, so thousands of projects and hundreds of teams of the
- * caller cost each part only its own, and a change to a project re-runs only
- * the parts that read it. `read` holds projects the part already read. */
+ * organization, so thousands of projects cost each part only its own, and a
+ * change to a project re-runs only the parts that read it. A part that asks
+ * about many projects reads the caller's own grants, memberships and team
+ * shares once instead of once a project (lib/access.ts OWN_READS), so tasks
+ * spread over thousands of projects do not cost a window two more ranges a
+ * project. `read` holds projects the part already read. */
 function accessOf(ctx: QueryCtx, me: Doc<'profiles'>, read: readonly Doc<'projects'>[] = []) {
   const levels = projectLevelsOf(ctx, me, read)
   /* the project of the caller's organization with this id */

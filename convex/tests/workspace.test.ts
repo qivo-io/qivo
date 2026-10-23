@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { OWN_READS, projectLevel } from '../lib/access'
 import { newWindowKey } from '../lib/db'
 import {
   cut,
@@ -18,7 +19,7 @@ import {
   piecesAfter,
   windowCount,
 } from '../lib/idWindows'
-import { PAGE } from '../lib/workspaceParts'
+import { PAGE, readProjects, readTasks } from '../lib/workspaceParts'
 import {
   as,
   expectRefusal,
@@ -29,6 +30,7 @@ import {
   plantIssue,
   plantMessage,
   plantProject,
+  plantSeat,
   type T,
   uuid,
   withOrg,
@@ -36,8 +38,10 @@ import {
 } from './helpers.setup'
 
 const DEFAULT_PAGE = structuredClone(PAGE)
+const DEFAULT_OWN_READS = structuredClone(OWN_READS)
 afterEach(() => {
   Object.assign(PAGE, structuredClone(DEFAULT_PAGE))
+  Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
   vi.restoreAllMocks()
 })
 
@@ -1021,6 +1025,257 @@ describe('many projects', () => {
     })
     expect(read).toBeLessThan(30)
   }, 120_000)
+
+  it('shows a task exactly where the person sees its project, for every kind of grant, however their own rows are read', async () => {
+    const shownProjects = {
+      admin: [
+        'led',
+        'grant',
+        'viewerGrant',
+        'share',
+        'otherTeam',
+        'foreignTeam',
+        'none',
+        'parentShared',
+        'parentLed',
+        'parentGrant',
+      ],
+      user: ['led', 'grant', 'viewerGrant', 'share', 'parentShared', 'parentLed', 'parentGrant'],
+      // a viewer leads nothing
+      viewer: ['grant', 'viewerGrant', 'share', 'parentShared', 'parentGrant'],
+      // a guest gets nothing through teams
+      guest: ['led', 'grant', 'viewerGrant', 'parentLed', 'parentGrant'],
+    } as const
+    for (const [role, expected] of Object.entries(shownProjects)) {
+      const t = newT()
+      const f = await withOrg(t)
+      const me = await plantSeat(t, {
+        org_id: f.org.id,
+        org_role: role as keyof typeof shownProjects,
+      })
+      const { parent, kinds: byProject } = await t.run(async (ctx) => {
+        const team = async (orgId: string) => {
+          const id = uuid()
+          await ctx.db.insert('teams', {
+            id,
+            org_id: orgId,
+            name: 'Team',
+            track_delay_default: false,
+            created_at: NOW,
+          })
+          return id
+        }
+        const [mine, other, foreign] = [
+          await team(f.org.id),
+          await team(f.org.id),
+          await team(f.otherOrg.id),
+        ]
+        for (const team_id of [mine, foreign])
+          await ctx.db.insert('team_members', { team_id, profile_id: me.id, is_leader: false })
+        const project = async (extra: Partial<Doc<'projects'>>) => {
+          const id = uuid()
+          await ctx.db.insert('projects', {
+            id,
+            org_id: f.org.id,
+            type: 'project',
+            key: id.slice(0, 5).toUpperCase(),
+            name: 'Kind',
+            description: '',
+            sort_order: 1,
+            num: 1,
+            track_delay: false,
+            created_at: NOW,
+            window_key: newWindowKey(),
+            ...extra,
+          })
+          return id
+        }
+        const grant = (project_id: string, level: 'user' | 'viewer') =>
+          ctx.db.insert('project_access', { project_id, profile_id: me.id, level })
+        const share = (project_id: string, team_id: string) =>
+          ctx.db.insert('project_team_access', { project_id, team_id, level: 'user' })
+        const parent = await project({ type: 'meta' })
+        const sub = (extra: Partial<Doc<'projects'>> = {}) =>
+          project({ parent_id: parent, ...extra })
+        const ids = {
+          led: await sub({ lead_id: me.id }),
+          grant: await sub(),
+          viewerGrant: await sub(),
+          share: await sub(),
+          otherTeam: await sub(),
+          foreignTeam: await sub(),
+          none: await sub(),
+          archived: await sub({ archived_at: NOW }),
+          deleted: await sub(),
+          parentShared: await project({ parent_id: await project({ type: 'meta' }) }),
+          parentLed: await project({ parent_id: await project({ type: 'meta', lead_id: me.id }) }),
+          parentGrant: await project({ parent_id: await project({ type: 'meta' }) }),
+        }
+        await grant(ids.grant, 'user')
+        await grant(ids.viewerGrant, 'viewer')
+        await grant(ids.archived, 'user')
+        await grant(ids.deleted, 'user')
+        await share(ids.share, mine)
+        await share(ids.otherTeam, other)
+        await share(ids.foreignTeam, foreign)
+        const parentOf = async (id: string) =>
+          (await ctx.db
+            .query('projects')
+            .withIndex('by_uuid', (q) => q.eq('id', id))
+            .unique())!.parent_id!
+        await share(await parentOf(ids.parentShared), mine)
+        await grant(await parentOf(ids.parentGrant), 'viewer')
+        for (const [kind, project_id] of Object.entries(ids)) {
+          await ctx.db.insert('issues', {
+            id: uuid(),
+            org_id: f.org.id,
+            project_id,
+            num: 1,
+            title: kind,
+            description: '',
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+            window_key: newWindowKey(),
+          })
+        }
+        // a deleted project leaves no row
+        const gone = await ctx.db
+          .query('projects')
+          .withIndex('by_uuid', (q) => q.eq('id', ids.deleted))
+          .unique()
+        await ctx.db.delete(gone!._id)
+        return {
+          parent,
+          kinds: Object.fromEntries(Object.entries(ids).map(([kind, id]) => [id, kind])),
+        }
+      })
+      for (const own of [
+        DEFAULT_OWN_READS,
+        // the person's five grants and two teams read at once
+        { ...DEFAULT_OWN_READS, steps: [1, 8], manyTeams: 1 },
+        {
+          ...DEFAULT_OWN_READS,
+          steps: [1],
+          lookups: 0,
+          rows: 0,
+          manyTeams: 1,
+          orgTeams: 0,
+          bytes: 0,
+        },
+      ]) {
+        Object.assign(OWN_READS, structuredClone(own))
+        const shown = await t.run(async (ctx) => {
+          const answer = await readTasks(ctx, me, whole)
+          if (answer.state !== 'ok') throw new Error(answer.state)
+          return answer.issues.map((task) => byProject[task.project_id]).sort()
+        })
+        expect(shown, `${role}, own reads ${JSON.stringify(own)}`).toEqual([...expected].sort())
+        // the projects part, which asks about parents for navigation, shows
+        // the projects the per-project walk shows
+        const projects = await t.run(async (ctx) => {
+          const answer = await readProjects(ctx, me, whole)
+          if (answer.state !== 'ok') throw new Error(answer.state)
+          const walk: string[] = []
+          for (const p of await ctx.db.query('projects').collect())
+            if (p.org_id === f.org.id && (await projectLevel(ctx, me, p)) !== null) walk.push(p.id)
+          return { shown: answer.projects.map((p) => p.id).sort(), walk: walk.sort() }
+        })
+        expect(projects.shown, `${role}, own reads ${JSON.stringify(own)}`).toEqual(projects.walk)
+        expect(projects.shown).toContain(parent)
+      }
+    }
+  }, 60_000)
+
+  it("a person's grants, memberships and team shares are read once a window, not once a project", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const me = await plantSeat(t, { org_id: f.org.id, org_role: 'user' })
+    // one task in each of 60 sub-projects of 30 parents, five shared with a
+    // team of the person's three, each parent granted to them
+    await t.run(async (ctx) => {
+      const teams: string[] = []
+      for (let i = 0; i < 3; i++) {
+        const id = uuid()
+        await ctx.db.insert('teams', {
+          id,
+          org_id: f.org.id,
+          name: `Team ${i}`,
+          track_delay_default: false,
+          created_at: NOW,
+        })
+        await ctx.db.insert('team_members', { team_id: id, profile_id: me.id, is_leader: false })
+        teams.push(id)
+      }
+      const project = async (num: number, extra: Partial<Doc<'projects'>>) => {
+        const id = uuid()
+        await ctx.db.insert('projects', {
+          id,
+          org_id: f.org.id,
+          type: 'project',
+          key: `R${num}`,
+          name: `Spread ${num}`,
+          description: '',
+          sort_order: num,
+          num,
+          track_delay: false,
+          created_at: NOW,
+          window_key: newWindowKey(),
+          ...extra,
+        })
+        return id
+      }
+      for (let n = 0; n < 30; n++) {
+        const parent = await project(3000 + 3 * n, { type: 'meta' })
+        await ctx.db.insert('project_access', {
+          project_id: parent,
+          profile_id: me.id,
+          level: 'viewer',
+        })
+        for (const k of [1, 2]) {
+          const sub = await project(3000 + 3 * n + k, { parent_id: parent })
+          if (n % 6 === 0 && k === 1)
+            await ctx.db.insert('project_team_access', {
+              project_id: sub,
+              team_id: teams[n % 3],
+              level: 'user',
+            })
+          await ctx.db.insert('issues', {
+            id: uuid(),
+            org_id: f.org.id,
+            project_id: sub,
+            num: 3000 + 3 * n + k,
+            title: `Spread ${n}`,
+            description: '',
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+            window_key: newWindowKey(),
+          })
+        }
+      }
+    })
+    /* the index ranges one whole window reads as `who`, and the tasks it shows */
+    const reads = (who: Doc<'profiles'>) =>
+      t.run(async (ctx) => {
+        const answer = await readTasks(ctx, who, whole)
+        if (answer.state !== 'ok') throw new Error(answer.state)
+        return {
+          ranges: (await ctx.meta.getTransactionMetrics()).databaseQueries.used,
+          shown: answer.issues.length,
+        }
+      })
+    const [member, admin] = [await reads(me), await reads(f.admin)]
+    expect(member.shown).toBe(60)
+    // an admin reads no access rows; the member asks about the first
+    // projects one by one and then reads their own rows once, so they cost
+    // less than half of the two ranges for each of the 90 projects
+    expect(member.ranges - admin.ranges).toBeLessThan(90)
+  })
 })
 
 describe('the projects and people parts', () => {
@@ -1073,8 +1328,8 @@ describe('the projects and people parts', () => {
         profile_id: f.viewer.id,
         level: 'viewer',
       })
-      // 30 more teams of the person, whose shares navigation reads
-      for (let i = 0; i < 30; i++) {
+      // 60 more teams of the person, whose shares navigation reads
+      for (let i = 0; i < 60; i++) {
         const id = uuid()
         await ctx.db.insert('teams', {
           id,
@@ -1091,16 +1346,20 @@ describe('the projects and people parts', () => {
       }
     })
     PAGE.soft.ranges = 40
-    const answer = await as(t, f.viewer).query(api.workspace.projects, {
-      org_id: f.org.id,
-      ...idWindows(16)[15],
-    })
-    // shown for navigation, and not cut although navigation read past it
-    expect(answer).toMatchObject({
-      state: 'ok',
-      projects: [expect.objectContaining({ id: parent.id })],
-    })
-    expect(answer).not.toHaveProperty('split')
+    // the organization's teams read at once, and each team by its own read
+    for (const manyTeams of [DEFAULT_OWN_READS.manyTeams, Number.POSITIVE_INFINITY]) {
+      OWN_READS.manyTeams = manyTeams
+      const answer = await as(t, f.viewer).query(api.workspace.projects, {
+        org_id: f.org.id,
+        ...idWindows(16)[15],
+      })
+      // shown for navigation, and not cut although navigation read past it
+      expect(answer, `manyTeams ${manyTeams}`).toMatchObject({
+        state: 'ok',
+        projects: [expect.objectContaining({ id: parent.id })],
+      })
+      expect(answer, `manyTeams ${manyTeams}`).not.toHaveProperty('split')
+    }
   })
 
   it('a people window too full to cut refuses with a sentence', async () => {

@@ -5,7 +5,7 @@
  * how they were computed before and how the single-project reads and writes
  * still decide. The per-project walk is kept here as the reference, and the
  * grant shapes are in accessShapes.setup.ts. */
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
@@ -17,15 +17,15 @@ import {
   LEVELS_READ,
   machineAccess,
   type OrgProjectLevels,
+  OWN_READS,
   projectLevel,
   projectLevelsForOrg,
   projectLevelsForPeople,
   projectLevelsOf,
-  TEAM_LOOKUPS,
 } from '../lib/access'
 import { type AccessFlag, accessFlags, loadCatalogue } from '../lib/core'
 import { type CredentialAccess, ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
-import { SHAPES } from './accessShapes.setup'
+import { newTeam, SHAPES } from './accessShapes.setup'
 import {
   expectRefusal,
   NOW,
@@ -39,6 +39,10 @@ import {
 } from './helpers.setup'
 
 const ACCESS: CredentialAccess[] = ['read', 'write']
+const DEFAULT_OWN_READS = structuredClone(OWN_READS)
+afterEach(() => {
+  Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
+})
 
 /* The flags as accessFlags computed them before, one canSeeProject and one
  * hasProjectLevel walk per project. */
@@ -159,22 +163,54 @@ describe('accessFlags', () => {
         for (const org_role of ORG_ROLES) {
           for (const kind of PROFILE_KINDS) {
             for (const me of [{ ...subject, org_role, kind }, f.viewer, f.guest, f.otherAdmin]) {
-              // teams asked one at a time, and from all memberships at once
-              for (const lookups of [64, 0]) {
-                TEAM_LOOKUPS.max = lookups
-                const levels = projectLevelsOf(ctx, me)
-                for (const p of projects) {
-                  for (const navigation of [true, false]) {
-                    const level = await levels.level(p.id, navigation)
-                    expect(
-                      level,
-                      `${name}: ${me.name} as ${me.org_role} ${me.kind} on ${p.key}, navigation ${navigation}, lookups ${lookups}`,
-                    ).toBe(await projectLevel(ctx, me, p, navigation))
-                    seen.add(String(level))
-                  }
+              // project by project, the person's own rows read from the first
+              // project on, and own rows too many to read at once, the
+              // projects asked in both orders
+              for (const own of [
+                DEFAULT_OWN_READS,
+                {
+                  ...DEFAULT_OWN_READS,
+                  steps: [1, 2],
+                  manyTeams: 1,
+                },
+                {
+                  ...DEFAULT_OWN_READS,
+                  steps: [1],
+                  lookups: 0,
+                  rows: 0,
+                  manyTeams: 1,
+                  orgTeams: 0,
+                  bytes: 0,
+                },
+              ]) {
+                Object.assign(OWN_READS, structuredClone(own))
+                const asked = (order: readonly Doc<'projects'>[]) =>
+                  order.flatMap((p) => [true, false].map((navigation) => ({ p, navigation })))
+                const expectSame = async (
+                  { p, navigation }: { p: Doc<'projects'>; navigation: boolean },
+                  level: string | null,
+                  how: string,
+                ) => {
+                  expect(
+                    level,
+                    `${name}: ${me.name} as ${me.org_role} ${me.kind} on ${p.key}, navigation ${navigation}, own reads ${JSON.stringify(own)}, ${how}`,
+                  ).toBe(await projectLevel(ctx, me, p, navigation))
+                  seen.add(String(level))
                 }
+                for (const order of [projects, [...projects].reverse()]) {
+                  const levels = projectLevelsOf(ctx, me)
+                  for (const one of asked(order))
+                    await expectSame(one, await levels.level(one.p.id, one.navigation), 'in turn')
+                }
+                // all at once, as a part asks a batch
+                const levels = projectLevelsOf(ctx, me)
+                const all = asked(projects)
+                const answers = await Promise.all(
+                  all.map(({ p, navigation }) => levels.level(p.id, navigation)),
+                )
+                for (const [i, one] of all.entries()) await expectSame(one, answers[i], 'at once')
               }
-              TEAM_LOOKUPS.max = 64
+              Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
             }
           }
         }
@@ -229,6 +265,193 @@ describe('accessFlags', () => {
       return (await ctx.meta.getTransactionMetrics()).documentsRead.used
     })
     expect(read).toBeLessThan(20)
+  })
+
+  it("stops reading the organization's teams at OWN_READS.bytes and answers from the person's own teams", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const me = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+    // eight teams of the person, one of them shares the meta's sub-project,
+    // beside 24 teams with 64 KiB legacy icons, 1.5 MiB in all
+    await t.run(async (ctx) => {
+      const team = async (icon?: string) => {
+        const id = uuid()
+        await ctx.db.insert('teams', {
+          id,
+          org_id: f.org.id,
+          name: 'Team',
+          icon,
+          track_delay_default: false,
+          created_at: NOW,
+        })
+        return id
+      }
+      for (let i = 0; i < 24; i++) await team('x'.repeat(64 * 1024))
+      for (let i = 0; i < OWN_READS.manyTeams; i++) {
+        const id = await team()
+        await ctx.db.insert('team_members', { team_id: id, profile_id: me.id, is_leader: false })
+        if (i === 0)
+          await ctx.db.insert('project_team_access', {
+            project_id: f.sub.id,
+            team_id: id,
+            level: 'user',
+          })
+      }
+    })
+    await t.run(async (ctx) => {
+      const before = (await ctx.meta.getTransactionMetrics()).bytesRead.used
+      const levels = projectLevelsOf(ctx, me)
+      for (const p of [f.meta, f.sub, f.sub2]) {
+        expect(await levels.level(p.id, true), p.key).toBe(await projectLevel(ctx, me, p, true))
+      }
+      const read = (await ctx.meta.getTransactionMetrics()).bytesRead.used - before
+      expect(await levels.level(f.sub.id)).toBe('user')
+      // the scan reached the bound and stopped at the first row past it,
+      // the reference walk's reads included
+      expect(levels.shared.bytes).toBeGreaterThan(OWN_READS.bytes)
+      expect(levels.shared.bytes).toBeLessThan(OWN_READS.bytes + 2 * 64 * 1024)
+      expect(read).toBeLessThan(OWN_READS.bytes + 3 * 64 * 1024)
+    })
+  })
+
+  it("stops reading the organization's teams past OWN_READS.orgTeams rows a team asked about and answers team by team", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const me = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+    Object.assign(OWN_READS, { manyTeams: 2, orgTeams: 1 })
+    // ten small teams first, then the person's two, one sharing the
+    // sub-project, past the two rows the scan may read
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 10; i++) await newTeam(ctx, f.org.id)
+      for (let i = 0; i < 2; i++) {
+        const id = await newTeam(ctx, f.org.id)
+        await ctx.db.insert('team_members', { team_id: id, profile_id: me.id, is_leader: false })
+        if (i === 0)
+          await ctx.db.insert('project_team_access', {
+            project_id: f.sub.id,
+            team_id: id,
+            level: 'user',
+          })
+      }
+    })
+    await t.run(async (ctx) => {
+      const levels = projectLevelsOf(ctx, me)
+      expect(await levels.level(f.meta.id)).toBe('viewer')
+      expect(await levels.level(f.meta.id)).toBe(await projectLevel(ctx, me, f.meta))
+      // two memberships, the scan's first three rows, both teams by their
+      // own read and the one share, not the organization's 13 teams
+      expect(levels.shared.documents).toBe(2 + 3 + 2 + 1)
+    })
+  })
+
+  it("answers every project from navigation's read of the person's team shares, and reads the organization's teams only for teams it must ask about", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const me = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+    const subs = await t.run(async (ctx) => {
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: me.id,
+        is_leader: false,
+      })
+      for (const p of [f.sub, f.sub2])
+        await ctx.db.insert('project_team_access', {
+          project_id: p.id,
+          team_id: f.team.id,
+          level: 'user',
+        })
+      const ids: string[] = []
+      for (let n = 0; n < 20; n++) {
+        const id = uuid()
+        await ctx.db.insert('projects', {
+          id,
+          org_id: f.org.id,
+          type: 'project',
+          parent_id: f.meta.id,
+          key: `S${n}`,
+          name: `Spread ${n}`,
+          description: '',
+          sort_order: 500 + n,
+          num: 500 + n,
+          track_delay: false,
+          created_at: NOW,
+        })
+        ids.push(id)
+      }
+      return ids
+    })
+    // the shares are too many to read at once, so navigation reads them
+    // and they answer every later project
+    Object.assign(OWN_READS, { steps: [1], rows: 1 })
+    await t.run(async (ctx) => {
+      const levels = projectLevelsOf(ctx, me)
+      expect(await levels.level(f.meta.id)).toBe('viewer')
+      const before = (await ctx.meta.getTransactionMetrics()).databaseQueries.used
+      for (const id of subs) expect(await levels.level(id)).toBeNull()
+      // one range a project for its own row, none for its shares
+      expect((await ctx.meta.getTransactionMetrics()).databaseQueries.used - before).toBe(20)
+    })
+    // the shares known before navigation name one team of the person's
+    // two, which the sub-projects asked already checked, so it reads no
+    // team at all
+    await t.run(async (ctx) => {
+      const team_id = await newTeam(ctx, f.org.id)
+      await ctx.db.insert('team_members', { team_id, profile_id: me.id, is_leader: false })
+    })
+    Object.assign(OWN_READS, { ...DEFAULT_OWN_READS, steps: [2], manyTeams: 1 })
+    await t.run(async (ctx) => {
+      const levels = projectLevelsOf(ctx, me)
+      expect(await levels.level(f.sub.id)).toBe('user')
+      expect(await levels.level(f.sub2.id)).toBe('user')
+      const known = { ...levels.shared }
+      expect(await levels.level(f.meta.id)).toBe('viewer')
+      // a read nothing awaits would still count after the answer
+      for (let i = 0; i < 100; i++) await Promise.resolve()
+      expect(levels.shared).toEqual(known)
+    })
+  })
+
+  it('refuses as projectLevel does where a team id names two rows, under navigation, with no rejection left unhandled', async () => {
+    for (const many of [false, true]) {
+      const t = newT()
+      const f = await withOrg(t)
+      const me = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+      await t.run(async (ctx) => {
+        // the person's teams, enough to read the organization's teams or not,
+        // the first with a second row of its id and a share on the
+        // sub-project
+        for (let i = 0; i < (many ? OWN_READS.manyTeams : 1); i++) {
+          const id = await newTeam(ctx, f.org.id)
+          await ctx.db.insert('team_members', { team_id: id, profile_id: me.id, is_leader: false })
+          if (i > 0) continue
+          await ctx.db.insert('teams', {
+            id,
+            org_id: f.org.id,
+            name: 'Twin',
+            track_delay_default: false,
+            created_at: NOW,
+          })
+          await ctx.db.insert('project_team_access', {
+            project_id: f.sub.id,
+            team_id: id,
+            level: 'user',
+          })
+        }
+      })
+      const unhandled: unknown[] = []
+      const note = (reason: unknown) => unhandled.push(reason)
+      process.on('unhandledRejection', note)
+      try {
+        await t.run(async (ctx) => {
+          await expect(projectLevel(ctx, me, f.meta)).rejects.toThrow()
+          await expect(projectLevelsOf(ctx, me).level(f.meta.id)).rejects.toThrow()
+        })
+        await new Promise((done) => setTimeout(done, 10))
+      } finally {
+        process.off('unhandledRejection', note)
+      }
+      expect(unhandled, `${many ? 'many teams' : 'one team'}`).toEqual([])
+    }
   })
 
   it('hides a project outside a top-level meta from everyone, in lists and single reads and writes', async () => {

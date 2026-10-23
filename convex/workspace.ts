@@ -32,9 +32,16 @@
  * of an organization the caller no longer holds a seat in answers
  * `{state: 'gone'}`, and only a missing sign-in throws. A part that needs to
  * know what the caller can see reads the projects its rows name, the
- * caller's grants and team shares on them, the caller's memberships and the
- * organization's teams (lib/access.ts projectLevelsOf), so an edit of one of
- * those reruns the parts that read it. Each windowed part stays inside Convex's limits at any size by
+ * caller's grants and the team shares on them, and the teams those shares
+ * name with the caller's memberships of them; where it asks about many
+ * projects, all of the caller's grants, memberships and team shares instead.
+ * A part that asks whether a parent shows for navigation (a top-level
+ * project the caller holds no level on, lib/access.ts levelUnder) reads all of the caller's grants, memberships and
+ * team shares, the parent's sub-projects, and the teams of those
+ * memberships or shares, or for many such teams all of the organization's
+ * teams, so a team edit anywhere in the organization reruns it
+ * (lib/access.ts projectLevelsOf, OWN_READS). An edit of one of those
+ * reruns the parts that read it. Each windowed part stays inside Convex's limits at any size by
  * answering `split` or `overflow` (lib/workspaceParts.ts), and the app
  * chooses the windows from the organization's counters, without asking.
  * A windowed part refuses (bad_request) a window that is not one of

@@ -43,6 +43,10 @@ describe('the limits registry for Node scripts', () => {
         .map((name) => join(dir, name)),
     )
     const found = scripts.filter((file) => importsTs.test(readFileSync(file, 'utf8')))
-    expect(found).toEqual(['scripts/limits.mjs', 'scripts/workspaceJoin.mjs'])
+    expect(found).toEqual([
+      'scripts/limits.mjs',
+      'scripts/liveParts.mjs',
+      'scripts/workspaceJoin.mjs',
+    ])
   })
 })
