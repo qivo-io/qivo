@@ -38,6 +38,7 @@ import {
   TODAY,
   uuid,
   withOrg,
+  withParentKey,
   workspaceOf,
 } from './helpers.setup'
 
@@ -110,19 +111,22 @@ let bulkNum = 50_000
 const plantMany = (fx: Fx, count: number, over: Partial<Doc<'issues'>> & { project_id: string }) =>
   fx.t.run(async (ctx) => {
     for (let i = 0; i < count; i++) {
-      await ctx.db.insert('issues', {
-        id: uuid(),
-        org_id: fx.org.id,
-        num: bulkNum++,
-        title: `Bulk ${i}`,
-        description: '',
-        status: 'todo',
-        priority: 'medium',
-        paused: false,
-        created_at: NOW,
-        updated_at: NOW,
-        ...over,
-      })
+      await ctx.db.insert(
+        'issues',
+        await withParentKey(ctx, {
+          id: uuid(),
+          org_id: fx.org.id,
+          num: bulkNum++,
+          title: `Bulk ${i}`,
+          description: '',
+          status: 'todo',
+          priority: 'medium',
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+          ...over,
+        }),
+      )
     }
   })
 

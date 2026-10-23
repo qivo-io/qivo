@@ -382,7 +382,12 @@ export async function createStarterTeam(
   const teamId = newUuid()
   await ctx.db.insert('teams', { id: teamId, org_id, name, ...newTeamDefaults(now) })
   if (leader_id !== undefined) {
-    await ctx.db.insert('team_members', { team_id: teamId, profile_id: leader_id, is_leader: true })
+    await ctx.db.insert('team_members', {
+      team_id: teamId,
+      profile_id: leader_id,
+      is_leader: true,
+      org_id,
+    })
   }
   return teamId
 }

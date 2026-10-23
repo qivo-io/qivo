@@ -126,6 +126,7 @@ describe('listProjectUsersCore', () => {
       for (const team_id of [f.team.id, second]) {
         await ctx.db.insert('project_team_access', {
           project_id: f.meta.id,
+          org_id: f.meta.org_id,
           team_id,
           level: 'user',
         })
@@ -145,6 +146,7 @@ describe('listProjectUsersCore', () => {
           created_at: NOW,
         })
         await ctx.db.insert('team_members', {
+          org_id: f.org.id,
           team_id: i % 2 ? second : f.team.id,
           profile_id: id,
           is_leader: false,

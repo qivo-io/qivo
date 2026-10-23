@@ -100,7 +100,10 @@ type ProfileRow = AppRow<'profiles'> & { sync_at?: string; sync_since?: string }
 
 /* A task as the app receives it. The parent id goes out only when the
  * reader is shown the parent (lib/workingSet.ts parentLink). */
-type TaskRow = Omit<AppRow<'issues'>, 'relations_marked' | 'parent_id' | 'window_key'> & {
+type TaskRow = Omit<
+  AppRow<'issues'>,
+  'relations_marked' | 'parent_id' | 'window_key' | 'parent_key'
+> & {
   parent_id?: string
   /** always sent; absent reads as false, as in rows the app makes */
   has_subtasks?: boolean
@@ -139,6 +142,11 @@ export const PAGE = {
    * past half of it the window asks to be cut, so it is cut while it still
    * shows, before it would answer overflow */
   relations: 2000,
+  /** the most team memberships a people window reads in one range; past it
+   * it reads them person by person. A membership has a fixed shape of ids
+   * and a flag, about 200 bytes, so 4,000 are about 800 KB and, with the
+   * window's people and stamps, stay inside PAGE.soft's documents */
+  memberships: 4000,
   /** how many new tasks the inbox reads between checks of PAGE.hard: 32 of
    * the largest hold about 2 MiB */
   inboxCheck: 32,
@@ -193,6 +201,14 @@ function ids<F extends string>(q: IdBounded<F>, field: F, w: IdWindow): IndexRan
   // The first window has no lower bound, so it also holds the rows without
   // the field: a task or project stored before window keys sorts first.
   if (w.from === '') return w.to === null ? q : q.lt(field, w.to)
+  const from = q.gte(field, w.from)
+  return w.to === null ? from : from.lt(field, w.to)
+}
+
+/* Index range bounds of a window on an index whose next field is `field`,
+ * holding only rows that have the field: unlike ids, the first window starts
+ * at '', which sorts after a missing value. */
+function keys<F extends string>(q: IdBounded<F>, field: F, w: IdWindow): IndexRange {
   const from = q.gte(field, w.from)
   return w.to === null ? from : from.lt(field, w.to)
 }
@@ -314,8 +330,8 @@ export async function readCatalog(ctx: QueryCtx, me: Doc<'profiles'>) {
 /** The people of window `w`, inactive, agent and unclaimed ones included,
  * each with their Team sync stamp and team memberships. Clients paint the
  * avatar color as a CSS background, so an older non-hex value goes out as
- * gray. One range for the people and one for their stamps, and one per
- * person for their memberships. */
+ * gray. One range for the people, one for their stamps and two for their
+ * memberships (membershipsOf). */
 export async function readPeople(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) {
   const read = await pageOf(
     ctx.db.query('profiles').withIndex('by_org_id', (q) => ids(q.eq('org_id', me.org_id), 'id', w)),
@@ -331,14 +347,8 @@ export async function readPeople(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow
         .collect()
     ).map((row) => [row.profile_id, stampOfRow(row)]),
   )
-  const memberships: Doc<'team_members'>[][] = people.map(() => [])
-  const done = await inBatches(ctx, people, async (p, at) => {
-    memberships[at] = await ctx.db
-      .query('team_members')
-      .withIndex('by_profile', (q) => q.eq('profile_id', p.id))
-      .collect()
-  })
-  if (!done) return overflow(w)
+  const memberships = await membershipsOf(ctx, me, w, people)
+  if (memberships === null) return overflow(w)
   const profiles = people.map((p): ProfileRow => {
     const stamp = stamps.get(p.id)
     return {
@@ -353,9 +363,52 @@ export async function readPeople(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow
   })
   return {
     state: 'ok' as const,
-    ...chunkLists({ profiles, teamMembers: memberships.flat().map(rowOf) }),
+    ...chunkLists({
+      profiles,
+      // without the organization id, which only serves the index read
+      teamMembers: memberships.map((m) => {
+        const { org_id: _orgId, ...row } = rowOf(m)
+        return row
+      }),
+    }),
     ...(await softSplit(ctx, w, read.split || people.length > PAGE.people.split)),
   }
+}
+
+/** The team memberships of `people`, the people of window `w`, in the
+ * order of people and then of creation: in one range by organization and
+ * person (team_members by_org_profile), which also holds those of a removed
+ * person waiting for their cleanup, left out here, and one more that finds
+ * none of the window's without org_id. While one has none
+ * (internal/rangeKeysBackfill), or past PAGE.memberships, it reads person by
+ * person, as before, in inBatches' batches. Null once those reads pass
+ * PAGE.hard. */
+async function membershipsOf(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  w: IdWindow,
+  people: readonly Doc<'profiles'>[],
+): Promise<Doc<'team_members'>[] | null> {
+  const window = (org: string | undefined) =>
+    ctx.db
+      .query('team_members')
+      .withIndex('by_org_profile', (q) => ids(q.eq('org_id', org), 'profile_id', w))
+  const [unkeyed, rows] = await Promise.all([
+    window(undefined).first(),
+    window(me.org_id).take(PAGE.memberships + 1),
+  ])
+  if (unkeyed === null && rows.length <= PAGE.memberships) {
+    const shown = new Set(people.map((p) => p.id))
+    return rows.filter((m) => shown.has(m.profile_id))
+  }
+  const memberships: Doc<'team_members'>[][] = people.map(() => [])
+  const done = await inBatches(ctx, people, async (p, at) => {
+    memberships[at] = await ctx.db
+      .query('team_members')
+      .withIndex('by_profile', (q) => q.eq('profile_id', p.id))
+      .collect()
+  })
+  return done ? memberships.flat() : null
 }
 
 // --- access -------------------------------------------------------------------
@@ -458,7 +511,11 @@ export async function readProjects(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWind
       // person's grants can outlive their profile for a moment
       // (model/cascade.ts removeProfile).
       access: access.flat().map(rowOf),
-      teamAccess: teamAccess.flat().map(rowOf),
+      // without the organization id, which only serves index reads
+      teamAccess: teamAccess.flat().map((share) => {
+        const { org_id: _orgId, ...row } = rowOf(share)
+        return row
+      }),
       milestones: milestones.flat().map(rowOf),
     }),
     ...(await softSplit(ctx, w, read.split || shown.length > PAGE.projects.split, caller.shared)),
@@ -495,14 +552,82 @@ const windowTasks = (ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow, most: numb
     most,
   )
 
-/** The active subtasks of `parents` in live projects, by parent, or null
- * once the reads pass PAGE.hard. A subtask is a whole task body and a task
- * holds up to LIMITS.subtasks active ones, so this reads at most one
- * subtask of each parent first, in inBatches' batches, and then the rest of
- * those that have one, PAGE.kids parents at a time and PAGE.kids subtasks
- * each, checking PAGE.hard before each step. Every task is asked, as a
- * subtask stored before the rule of one level may have subtasks too. */
-async function kidsOf(ctx: QueryCtx, parents: readonly Doc<'issues'>[], access: Access) {
+/** The active subtasks of `parents`, the active tasks of window `w`, in
+ * live projects, by parent, or null once the reads pass PAGE.hard. A
+ * subtask carries its parent's window key as parent_key (schema.ts), so the
+ * window reads its tasks' active subtasks in one range by organization and
+ * parent key (keyedKids). While an active subtask of the organization has
+ * none (internal/rangeKeysBackfill), which one more range finds, it asks
+ * task by task instead (kidsOneByOne). */
+async function kidsOf(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  w: IdWindow,
+  parents: readonly Doc<'issues'>[],
+  access: Access,
+) {
+  const unkeyed = await ctx.db
+    .query('issues')
+    .withIndex('by_org_archived_parent_key', (q) =>
+      q
+        .eq('org_id', me.org_id)
+        .eq('archived_at', undefined)
+        .eq('parent_key', undefined)
+        .gte('parent_id', ''),
+    )
+    .first()
+  const kids =
+    unkeyed === null ? await keyedKids(ctx, me, w, parents) : await kidsOneByOne(ctx, parents)
+  if (kids === null) return null
+  const live = await mapInBatches(ctx, kids, (kid) => access.live(kid.project_id))
+  if (live === null) return null
+  const byParent = new Map<string, Doc<'issues'>[]>()
+  for (const [i, kid] of kids.entries()) {
+    if (kid.parent_id === undefined || !live[i]) continue
+    byParent.set(kid.parent_id, [...(byParent.get(kid.parent_id) ?? []), kid])
+  }
+  return byParent
+}
+
+/** The active subtasks of `parents`, the active tasks of window `w`, from
+ * the one range of the organization's active subtasks whose parent_key is
+ * in the window, or null once the reads pass PAGE.hard. The range holds the
+ * subtasks of the window's archived tasks too, left out here. A subtask is
+ * a whole task body, so it checks PAGE.hard before the first and after
+ * every PAGE.batch subtasks, as inBatches does. */
+async function keyedKids(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  w: IdWindow,
+  parents: readonly Doc<'issues'>[],
+): Promise<Doc<'issues'>[] | null> {
+  if (await readPast(ctx, PAGE.hard)) return null
+  const ids = new Set(parents.map((task) => task.id))
+  const kids: Doc<'issues'>[] = []
+  let read = 0
+  const range = ctx.db
+    .query('issues')
+    .withIndex('by_org_archived_parent_key', (q) =>
+      keys(q.eq('org_id', me.org_id).eq('archived_at', undefined), 'parent_key', w),
+    )
+  for await (const kid of range) {
+    if (kid.parent_id !== undefined && ids.has(kid.parent_id)) kids.push(kid)
+    if (++read % PAGE.batch === 0 && (await readPast(ctx, PAGE.hard))) return null
+  }
+  return kids
+}
+
+/** The active subtasks of `parents`, asked task by task, or null once the
+ * reads pass PAGE.hard. A subtask is a whole task body and a task holds up
+ * to LIMITS.subtasks active ones, so this reads at most one subtask of each
+ * parent first, in inBatches' batches, and then the rest of those that have
+ * one, PAGE.kids parents at a time and PAGE.kids subtasks each, checking
+ * PAGE.hard before each step. Every task is asked, as a subtask stored
+ * before the rule of one level may have subtasks too. */
+async function kidsOneByOne(
+  ctx: QueryCtx,
+  parents: readonly Doc<'issues'>[],
+): Promise<Doc<'issues'>[] | null> {
   /* the active subtasks of the task with this id, from `from` on */
   const activeKids = (id: string, from?: number) =>
     ctx.db.query('issues').withIndex('by_parent_archived', (q) => {
@@ -538,14 +663,7 @@ async function kidsOf(ctx: QueryCtx, parents: readonly Doc<'issues'>[], access: 
       open.push({ id: p.id, from: last._creationTime, seen })
     }
   }
-  const live = await mapInBatches(ctx, kids, (kid) => access.live(kid.project_id))
-  if (live === null) return null
-  const byParent = new Map<string, Doc<'issues'>[]>()
-  for (const [i, kid] of kids.entries()) {
-    if (kid.parent_id === undefined || !live[i]) continue
-    byParent.set(kid.parent_id, [...(byParent.get(kid.parent_id) ?? []), kid])
-  }
-  return byParent
+  return kids
 }
 
 /** Groups `rows` by `key`. */
@@ -625,7 +743,7 @@ export async function readTasks(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow)
   ])
   if (labels === null || attachments === null || links === null || follows === null)
     return overflow(w)
-  const kids = await kidsOf(ctx, read.rows, access)
+  const kids = await kidsOf(ctx, me, w, read.rows, access)
   if (kids === null) return overflow(w)
   // a kid in a live project the caller cannot see
   const allKids = [...kids.values()].flat()
@@ -694,7 +812,13 @@ export async function readTasks(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow)
   const isShown = new Map(named.map((id, i) => [id, namedShown[i]]))
   const sourceShown = new Map(sources.map((id, i) => [id, sourcesShown[i]]))
   const issues = tasks.map((task): TaskRow => {
-    const { parent_id: parent, relations_marked: _marks, window_key: _window, ...row } = rowOf(task)
+    const {
+      parent_id: parent,
+      relations_marked: _marks,
+      window_key: _window,
+      parent_key: _parentKey,
+      ...row
+    } = rowOf(task)
     return {
       ...row,
       ...parentLink(task, () => parent !== undefined && isShown.get(parent) === true),

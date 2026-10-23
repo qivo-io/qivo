@@ -46,6 +46,7 @@ import {
   type T,
   uuid,
   withOrg,
+  withParentKey,
 } from './helpers.setup'
 import { deleteTask, itemFor } from './trash.setup'
 
@@ -306,21 +307,24 @@ async function plantSubtasks(
     const out: Doc<'issues'>[] = []
     const base = await ctx.db.query('issues').collect()
     for (let i = 0; i < n; i++) {
-      const _id = await ctx.db.insert('issues', {
-        id: uuid(),
-        org_id: fx.org.id,
-        project_id: fx.sub.id,
-        parent_id: parent.id,
-        num: 50_000 + base.length + i,
-        title: `Step ${i}`,
-        description: '',
-        status: 'done',
-        priority: 'medium',
-        paused: false,
-        created_at: NOW,
-        updated_at: NOW,
-        ...over,
-      })
+      const _id = await ctx.db.insert(
+        'issues',
+        await withParentKey(ctx, {
+          id: uuid(),
+          org_id: fx.org.id,
+          project_id: fx.sub.id,
+          parent_id: parent.id,
+          num: 50_000 + base.length + i,
+          title: `Step ${i}`,
+          description: '',
+          status: 'done',
+          priority: 'medium',
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+          ...over,
+        }),
+      )
       out.push((await ctx.db.get(_id)) as Doc<'issues'>)
     }
     return out
@@ -1368,6 +1372,7 @@ describe('the follower limit', () => {
       })
       await ctx.db.insert('project_team_access', {
         project_id: fx.meta.id,
+        org_id: fx.meta.org_id,
         team_id: team,
         level: 'viewer',
       })
@@ -1386,7 +1391,12 @@ describe('the follower limit', () => {
           created_at: NOW,
         })
         if (i < 1200) {
-          await ctx.db.insert('team_members', { team_id: team, profile_id: id, is_leader: false })
+          await ctx.db.insert('team_members', {
+            org_id: fx.org.id,
+            team_id: team,
+            profile_id: id,
+            is_leader: false,
+          })
           members.push(id)
         }
       }

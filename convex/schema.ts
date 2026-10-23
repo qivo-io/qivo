@@ -141,10 +141,19 @@ const projectTeamAccessTable = defineTable({
   project_id: v.string(), // explicit shares may target a project or sub-project
   team_id: v.string(), // same organization as the project
   level: vGrantLevel,
+  // server-owned: the project's organization, so a person in many teams
+  // reads the shares of their organization in one range instead of one
+  // range a team (lib/access.ts projectLevelsOf). Every writer sets it. A
+  // share stored before it has none until internal/rangeKeysBackfill gives it
+  // one, and readers fall back to reading team by team while any share
+  // lacks it.
+  org_id: v.optional(v.string()),
 })
   .index('by_project', ['project_id'])
   .index('by_team', ['team_id'])
   .index('by_project_team', ['project_id', 'team_id'])
+  // every share on an organization's projects, and those without org_id
+  .index('by_org', ['org_id'])
 
 const issuesTable = defineTable({
   id: v.string(),
@@ -191,11 +200,23 @@ const issuesTable = defineTable({
   // newWindowKey), as projects' window_key above; its relation rows carry
   // it as task_key
   window_key: v.optional(v.string()),
+  // server-owned: a subtask's parent's window_key, '' while the parent has
+  // none or is gone, and absent on a top-level task, so a task window reads
+  // the active subtasks of its tasks in one range (lib/workspaceParts.ts
+  // kidsOf). Every write that gives a task a parent, or a parent a window
+  // key, sets it. A subtask stored before it has none until
+  // internal/rangeKeysBackfill gives it one, and readers fall back to asking
+  // task by task while an active one lacks it. Internal like window_key.
+  parent_key: v.optional(v.string()),
   created_at: v.string(),
   updated_at: v.string(),
 })
   .index('by_uuid', ['id'])
   .index('by_org', ['org_id'])
+  // The app's task windows read the active subtasks of a range of parents'
+  // window keys; parent_id last, so the active subtasks without parent_key
+  // (stored before it) are one range too.
+  .index('by_org_archived_parent_key', ['org_id', 'archived_at', 'parent_key', 'parent_id'])
   // The working snapshot and planning reads do not scan archived task bodies.
   .index('by_org_archived', ['org_id', 'archived_at'])
   // the app's task and hidden load windows: a range of active tasks' window
@@ -819,10 +840,20 @@ export default defineSchema({
     team_id: v.string(),
     profile_id: v.string(),
     is_leader: v.boolean(),
+    // server-owned: the member's organization, so a people window reads
+    // the memberships of its people in one range instead of one range a
+    // person (lib/workspaceParts.ts readPeople). Every writer sets it. A
+    // membership stored before it has none until internal/rangeKeysBackfill
+    // gives it one, and readers fall back to reading person by person while
+    // any of a window's lacks it.
+    org_id: v.optional(v.string()),
   })
     .index('by_team', ['team_id'])
     .index('by_profile', ['profile_id'])
-    .index('by_team_profile', ['team_id', 'profile_id']),
+    .index('by_team_profile', ['team_id', 'profile_id'])
+    // the memberships of a range of an organization's people (the app's
+    // people windows), and those without org_id
+    .index('by_org_profile', ['org_id', 'profile_id']),
 
   profiles: defineTable({
     id: v.string(),

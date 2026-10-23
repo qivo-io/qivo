@@ -25,6 +25,7 @@ async function fixture() {
     await ctx.db.insert('team_members', {
       team_id: f.team.id,
       profile_id: ordinary.id,
+      org_id: ordinary.org_id,
       is_leader: false,
     })
     await ctx.db.insert('project_access', {

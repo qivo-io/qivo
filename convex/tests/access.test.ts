@@ -176,6 +176,7 @@ describe('canSeeProject', () => {
       await ctx.db.insert('team_members', {
         team_id: f.team.id,
         profile_id: f.viewer.id,
+        org_id: f.viewer.org_id,
         is_leader: true,
       })
     })
@@ -273,10 +274,12 @@ describe('projectSightForProfiles', () => {
       await ctx.db.insert('team_members', {
         team_id: f.team.id,
         profile_id: f.agent.id,
+        org_id: f.agent.org_id,
         is_leader: false,
       })
       await ctx.db.insert('project_team_access', {
         project_id: f.sub2.id,
+        org_id: f.sub2.org_id,
         team_id: f.team.id,
         level: 'user',
       })
@@ -298,10 +301,12 @@ describe('projectSightForProfiles', () => {
       await ctx.db.insert('team_members', {
         team_id: viewers,
         profile_id: f.viewer.id,
+        org_id: f.viewer.org_id,
         is_leader: false,
       })
       await ctx.db.insert('project_team_access', {
         project_id: f.meta.id,
+        org_id: f.meta.org_id,
         team_id: viewers,
         level: 'viewer',
       })
@@ -367,10 +372,12 @@ describe('canAccessProject', () => {
       await ctx.db.insert('team_members', {
         team_id: sibTeam,
         profile_id: teamSib.id,
+        org_id: teamSib.org_id,
         is_leader: false,
       })
       await ctx.db.insert('project_team_access', {
         project_id: f.sub2.id,
+        org_id: f.sub2.org_id,
         team_id: sibTeam,
         level: 'user',
       })
@@ -378,10 +385,12 @@ describe('canAccessProject', () => {
       await ctx.db.insert('team_members', {
         team_id: f.team.id,
         profile_id: metaTeamGuest.id,
+        org_id: metaTeamGuest.org_id,
         is_leader: false,
       })
       await ctx.db.insert('project_team_access', {
         project_id: f.meta.id,
+        org_id: f.meta.org_id,
         team_id: f.team.id,
         level: 'user',
       })
@@ -434,6 +443,7 @@ describe('isTeamLeader', () => {
       ctx.db.insert('team_members', {
         team_id: f.team.id,
         profile_id: f.viewer.id,
+        org_id: f.viewer.org_id,
         is_leader: true,
       }),
     )
@@ -445,6 +455,7 @@ describe('isTeamLeader', () => {
       ctx.db.insert('team_members', {
         team_id: f.team.id,
         profile_id: f.otherAdmin.id,
+        org_id: f.otherAdmin.org_id,
         is_leader: true,
       }),
     )
@@ -456,6 +467,7 @@ describe('isTeamLeader', () => {
       ctx.db.insert('team_members', {
         team_id: f.team.id,
         profile_id: f.agent.id,
+        org_id: f.agent.org_id,
         is_leader: true,
       }),
     )

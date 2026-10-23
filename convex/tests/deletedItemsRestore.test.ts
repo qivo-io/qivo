@@ -12,7 +12,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { projectLevel } from '../lib/access'
-import { byId, strayRows } from '../lib/db'
+import { byId, parentKeyFor, strayRows } from '../lib/db'
 import { LIMITS, PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from '../lib/limits'
 import type { EventOwner } from '../lib/taskEvents'
 import { storageUsage } from '../model/billing'
@@ -47,6 +47,7 @@ import {
   type T,
   uuid,
   withOrg,
+  withParentKey,
 } from './helpers.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 import {
@@ -107,7 +108,20 @@ const patch = (
   t.run(async (ctx) => {
     const row = await byId(ctx, table, id)
     if (row === null) throw new Error(`no ${table} row ${id}`)
-    await ctx.db.patch(row._id, fields)
+    // a task's new parent gives it its parent key, as every writer does
+    const parentId = 'parent_id' in fields ? fields.parent_id : null
+    await ctx.db.patch(
+      row._id,
+      table === 'issues' && parentId !== null
+        ? {
+            ...fields,
+            parent_key: await parentKeyFor(
+              ctx,
+              typeof parentId === 'string' ? parentId : undefined,
+            ),
+          }
+        : fields,
+    )
   })
 
 /** Steps `item` until its job is gone, checking `between` after each. */
@@ -148,7 +162,12 @@ const plantPeople = (t: T, f: OrgFixture, n: number, teams: string[] = []) =>
         level: 'user',
       })
       for (const team_id of teams)
-        await ctx.db.insert('team_members', { team_id, profile_id: id, is_leader: false })
+        await ctx.db.insert('team_members', {
+          org_id: f.org.id,
+          team_id,
+          profile_id: id,
+          is_leader: false,
+        })
       ids.push(id)
     }
     return ids
@@ -193,21 +212,24 @@ let subtaskNum = 70_000
 const plantSubtasks = (t: T, f: OrgFixture, parentId: string, n: number, archived = 0) =>
   t.run(async (ctx) => {
     for (let i = 0; i < n; i++)
-      await ctx.db.insert('issues', {
-        id: uuid(),
-        org_id: f.org.id,
-        num: subtaskNum++,
-        project_id: f.sub.id,
-        parent_id: parentId,
-        title: 'Planted subtask',
-        description: '',
-        status: 'todo',
-        priority: 'medium',
-        paused: false,
-        ...(i < archived ? { archived_at: NOW } : {}),
-        created_at: NOW,
-        updated_at: NOW,
-      })
+      await ctx.db.insert(
+        'issues',
+        await withParentKey(ctx, {
+          id: uuid(),
+          org_id: f.org.id,
+          num: subtaskNum++,
+          project_id: f.sub.id,
+          parent_id: parentId,
+          title: 'Planted subtask',
+          description: '',
+          status: 'todo',
+          priority: 'medium',
+          paused: false,
+          ...(i < archived ? { archived_at: NOW } : {}),
+          created_at: NOW,
+          updated_at: NOW,
+        }),
+      )
   })
 
 let assignedNum = 60_000
@@ -225,22 +247,25 @@ const plantAssigned = (
     const ids: string[] = []
     for (const [i, assignee_id] of people.entries()) {
       const id = uuid()
-      await ctx.db.insert('issues', {
-        id,
-        org_id: f.org.id,
-        num: assignedNum++,
-        project_id: f.sub2.id,
-        parent_id: parentId,
-        assignee_id,
-        reviewer_id: reviewers[i],
-        title: 'Planted task',
-        description: '',
-        status: 'todo',
-        priority: 'medium',
-        paused: false,
-        created_at: NOW,
-        updated_at: NOW,
-      })
+      await ctx.db.insert(
+        'issues',
+        await withParentKey(ctx, {
+          id,
+          org_id: f.org.id,
+          num: assignedNum++,
+          project_id: f.sub2.id,
+          parent_id: parentId,
+          assignee_id,
+          reviewer_id: reviewers[i],
+          title: 'Planted task',
+          description: '',
+          status: 'todo',
+          priority: 'medium',
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+        }),
+      )
       ids.push(id)
     }
     return ids
@@ -911,7 +936,7 @@ describe('restoring a task item', () => {
         if (row !== null) await ctx.db.delete(row._id)
       }
       const { _id: _parentRow, _creationTime: _parentTime, ...parentRow } = parent
-      await ctx.db.insert('issues', { ...parentRow, created_at: LATER })
+      await ctx.db.insert('issues', await withParentKey(ctx, { ...parentRow, created_at: LATER }))
       await ctx.db.insert('labels', {
         id: labelId,
         org_id,
@@ -1738,9 +1763,15 @@ describe('restoring a project item', () => {
         )
         .unique()
       if (own !== null) await ctx.db.delete(own._id)
-      await ctx.db.insert('team_members', { team_id: team, profile_id: member, is_leader: false })
+      await ctx.db.insert('team_members', {
+        org_id: f.org.id,
+        team_id: team,
+        profile_id: member,
+        is_leader: false,
+      })
       await ctx.db.insert('project_team_access', {
         project_id: f.sub.id,
+        org_id: f.sub.org_id,
         team_id: team,
         level: 'user',
       })
@@ -1865,7 +1896,12 @@ describe('restoring a project item', () => {
     const [kept, demoted, removed] = await plantPeople(t, f, 3)
     await t.run(async (ctx) => {
       for (const team_id of [team, gone])
-        await ctx.db.insert('project_team_access', { project_id: f.sub.id, team_id, level: 'user' })
+        await ctx.db.insert('project_team_access', {
+          project_id: f.sub.id,
+          org_id: f.sub.org_id,
+          team_id,
+          level: 'user',
+        })
     })
     await deleteProject(t, f, f.meta.id)
     await runSteps(t)
@@ -1912,7 +1948,12 @@ describe('restoring a project item', () => {
     const [team] = await plantTeams(t, f, 1)
     const people = await plantPeople(t, f, 8)
     await t.run((ctx) =>
-      ctx.db.insert('project_team_access', { project_id: f.sub.id, team_id: team, level: 'user' }),
+      ctx.db.insert('project_team_access', {
+        project_id: f.sub.id,
+        org_id: f.sub.org_id,
+        team_id: team,
+        level: 'user',
+      }),
     )
     await deleteProject(t, f, f.meta.id)
     await runSteps(t)
@@ -2095,6 +2136,7 @@ describe('restoring a project item', () => {
       })
       await ctx.db.insert('project_team_access', {
         project_id: f.sub2.id,
+        org_id: f.sub2.org_id,
         team_id: f.team.id,
         level: 'user',
       })
@@ -2533,20 +2575,23 @@ describe('parents outside a restored project', () => {
         planted.push([])
         for (let i = 0; i < LIMITS.subtasks.max; i++) {
           const id = uuid()
-          await ctx.db.insert('issues', {
-            id,
-            org_id,
-            num: 50_000 + e * LIMITS.subtasks.max + i,
-            project_id: f.sub2.id,
-            parent_id: epic.id,
-            title: 'Planted task',
-            description,
-            status: 'todo',
-            priority: 'medium',
-            paused: false,
-            created_at: NOW,
-            updated_at: NOW,
-          })
+          await ctx.db.insert(
+            'issues',
+            await withParentKey(ctx, {
+              id,
+              org_id,
+              num: 50_000 + e * LIMITS.subtasks.max + i,
+              project_id: f.sub2.id,
+              parent_id: epic.id,
+              title: 'Planted task',
+              description,
+              status: 'todo',
+              priority: 'medium',
+              paused: false,
+              created_at: NOW,
+              updated_at: NOW,
+            }),
+          )
           planted[e].push(id)
         }
       }
@@ -4045,6 +4090,7 @@ describe('a project item at the sub-project cap', () => {
       if (own !== null) await ctx.db.delete(own._id)
       await ctx.db.insert('project_team_access', {
         project_id: f.sub.id,
+        org_id: f.sub.org_id,
         team_id: team,
         level: 'user',
       })
@@ -4081,6 +4127,7 @@ describe('a project item at the sub-project cap', () => {
     await t.run((ctx) =>
       ctx.db.insert('project_team_access', {
         project_id: f.sub.id,
+        org_id: f.sub.org_id,
         team_id: f.team.id,
         level: 'user',
       }),

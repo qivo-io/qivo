@@ -23,6 +23,7 @@ import {
   type T,
   uuid,
   withOrg,
+  withParentKey,
 } from './helpers.setup'
 
 declare class Blob {
@@ -330,6 +331,7 @@ describe('organization export', () => {
       })
       await ctx.db.insert('project_team_access', {
         project_id: f.meta.id,
+        org_id: f.meta.org_id,
         team_id: f.team.id,
         level: 'user',
       })
@@ -574,7 +576,7 @@ describe('organization export', () => {
         .withIndex('by_uuid', (q) => q.eq('id', children[99]))
         .unique()
       if (row === null) throw new Error('the last child vanished')
-      await ctx.db.patch(row._id, { parent_id: stranded.id })
+      await ctx.db.patch(row._id, await withParentKey(ctx, { parent_id: stranded.id }))
     })
     await plantProjectItem(t, moving, 'moving')
     await t.run((ctx) => ctx.db.delete(moving._id))
@@ -719,6 +721,7 @@ describe('organization export', () => {
       await ctx.db.insert('team_members', {
         team_id: f.team.id,
         profile_id: f.otherAdmin.id,
+        org_id: f.otherAdmin.org_id,
         is_leader: true,
       })
       const teamId = uuid()
@@ -726,6 +729,7 @@ describe('organization export', () => {
       await ctx.db.insert('teams', { ...team, id: teamId, org_id: f.otherOrg.id })
       await ctx.db.insert('project_team_access', {
         project_id: f.meta.id,
+        org_id: f.meta.org_id,
         team_id: teamId,
         level: 'user',
       })

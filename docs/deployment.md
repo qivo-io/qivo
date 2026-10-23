@@ -480,6 +480,22 @@ page of both tables. Earlier releases do not accept the field, so a
 rollback past that release fails to deploy; it is a rollback floor anyway
 (see Rollback and hotfixes).
 
+Every team membership and team share has an `org_id`, and every subtask a
+`parent_key`, its parent's `window_key`, which the server writes with the
+row. They let a people window read its people's memberships, a person in
+many teams their organization's shares, and a task window its tasks'
+subtasks, each in one index range (`convex/lib/workspaceParts.ts`,
+`convex/lib/access.ts`). A row stored before the release that added them
+has none until the one-time `internal/rangeKeysBackfill` gives it one, and
+until then the parts find such rows in one more range and read as before,
+one range a person, a team or a task, so the app shows the same, only
+slower. Run `internal/windowKeysBackfill` to 0 first, because a subtask of a
+task without a window key keeps no `parent_key` until its parent has one.
+Then run this backfill on every hosted deployment once it serves that
+release, as the module's header says, and check that `remaining` reports 0
+`rows` and 0 `orphans` on every page of its three tables. Earlier releases
+do not accept the fields, so a rollback past that release fails to deploy.
+
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to
 deploy. Roll forward instead. Later releases no longer accept those fields,

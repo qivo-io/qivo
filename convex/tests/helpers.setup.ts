@@ -26,7 +26,7 @@ import type { MutationCtx } from '../_generated/server'
 import authSchema from '../betterAuth/schema'
 import type { ReapCounts } from '../files'
 import type { RestIssueJson } from '../lib/core'
-import { newWindowKey } from '../lib/db'
+import { byId, newWindowKey, parentKeyFor, parentKeyOf } from '../lib/db'
 import type { OrgRole } from '../lib/enums'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { loadRowFor, type OrgLoadRow } from '../lib/loadRows'
@@ -61,8 +61,92 @@ export const newT = (
     ...options,
   })
   t.registerComponent('betterAuth', authSchema, import.meta.glob('../betterAuth/**/*.*s'))
-  if (TestRunner.getCurrentTest() !== undefined) onTestFinished(() => settleScheduled(t))
+  if (TestRunner.getCurrentTest() !== undefined)
+    onTestFinished(async () => {
+      await settleScheduled(t)
+      if (!unkeyedRows.has(t)) await assertRangeKeys(t)
+    })
   return t
+}
+
+/* Instances whose test plants rows without the fields of assertRangeKeys
+ * on purpose (allowUnkeyedRows). */
+const unkeyedRows = new WeakSet<T>()
+
+/** Lets the current test's `t` hold rows without the fields
+ * assertRangeKeys checks, as a backfill or fallback test plants them. */
+export const allowUnkeyedRows = (t: T): void => {
+  unkeyedRows.add(t)
+}
+
+/* The rows of `table`, read a small page per transaction, so a suite's
+ * low transactionLimits never refuse the check. */
+async function allRows<N extends 'profiles' | 'teams' | 'projects' | 'issues'>(
+  t: T,
+  table: N,
+): Promise<Doc<N>[]>
+async function allRows(
+  t: T,
+  table: 'team_members' | 'project_team_access',
+): Promise<Doc<'team_members' | 'project_team_access'>[]>
+async function allRows(
+  t: T,
+  table: 'profiles' | 'teams' | 'projects' | 'issues' | 'team_members' | 'project_team_access',
+) {
+  const rows: Doc<typeof table>[] = []
+  let cursor: string | null = null
+  for (;;) {
+    const page: { page: Doc<typeof table>[]; isDone: boolean; continueCursor: string } =
+      await t.run((ctx) =>
+        ctx.db.query(table).paginate({ cursor, numItems: 100, maximumBytesRead: 64 * 1024 }),
+      )
+    rows.push(...page.page)
+    if (page.isDone) return rows
+    cursor = page.continueCursor
+  }
+}
+
+/**
+ * Throws when a row of `t` was written without the fields that let the
+ * workspace parts read it in one range, or with a wrong one (schema.ts): a
+ * membership's org_id is its person's organization, a share's its
+ * project's, else their team's, and a subtask's parent_key its parent's
+ * window key (lib/db.ts parentKeyOf). A row whose reference is gone only
+ * needs the field. Every test checks its instance when it finishes (newT),
+ * so a writer or fixture that leaves one out fails its tests.
+ */
+export async function assertRangeKeys(t: T): Promise<void> {
+  const [profiles, teams, projects, issues, members, shares] = await Promise.all([
+    allRows(t, 'profiles'),
+    allRows(t, 'teams'),
+    allRows(t, 'projects'),
+    allRows(t, 'issues'),
+    allRows(t, 'team_members'),
+    allRows(t, 'project_team_access'),
+  ])
+  const orgOf = new Map([...profiles, ...teams, ...projects].map((row) => [row.id, row.org_id]))
+  const tasks = new Map(issues.map((task) => [task.id, task]))
+  const wrong: string[] = []
+  for (const row of [...members, ...shares]) {
+    const first = orgOf.get('profile_id' in row ? row.profile_id : row.project_id)
+    const want = first ?? orgOf.get(row.team_id)
+    if (want === undefined ? row.org_id === undefined : row.org_id !== want)
+      wrong.push(`${'profile_id' in row ? 'membership' : 'share'} with org_id ${row.org_id}`)
+  }
+  for (const task of issues) {
+    if (task.parent_id === undefined) {
+      if (task.parent_key !== undefined) wrong.push(`top-level task ${task.id} with parent_key`)
+      continue
+    }
+    const parent = tasks.get(task.parent_id) ?? null
+    const want = parentKeyOf(parent)
+    if (parent === null ? task.parent_key === undefined : task.parent_key !== want)
+      wrong.push(`subtask ${task.id} with parent_key ${task.parent_key}, not ${want}`)
+  }
+  if (wrong.length > 0)
+    throw new Error(
+      `${wrong.length} rows without their range keys, such as: ${wrong.slice(0, 5).join('; ')}`,
+    )
 }
 
 /** Ensures no scheduled function of `t` runs after the current test.
@@ -418,11 +502,17 @@ export async function withOrg(t: T) {
       created_at: NOW,
     })
 
-    await ctx.db.insert('team_members', { team_id: team.id, profile_id: user.id, is_leader: true })
+    await ctx.db.insert('team_members', {
+      team_id: team.id,
+      profile_id: user.id,
+      is_leader: true,
+      org_id: orgId,
+    })
     await ctx.db.insert('team_members', {
       team_id: team.id,
       profile_id: admin.id,
       is_leader: false,
+      org_id: orgId,
     })
 
     const project = (
@@ -664,13 +754,40 @@ export async function plantProject(
   })
 }
 
+/* Each transaction's parent keys by parent id, so a fixture that writes
+ * many subtasks of one parent reads the parent once. */
+const parentKeys = new WeakMap<object, Map<string, Promise<string | undefined>>>()
+
+/** `row` with the parent_key its parent gives it (lib/db.ts parentKeyFor),
+ * for a fixture that writes a task raw: an insert, or a patch that sets
+ * parent_id. Without a parent it has none. Each parent is read once per
+ * transaction. */
+export async function withParentKey<R extends object>(
+  ctx: Pick<MutationCtx, 'db'>,
+  row: R,
+): Promise<R & { parent_key?: string }> {
+  const id = 'parent_id' in row && typeof row.parent_id === 'string' ? row.parent_id : undefined
+  if (id === undefined) return { ...row, parent_key: undefined }
+  const known = parentKeys.get(ctx.db) ?? new Map<string, Promise<string | undefined>>()
+  parentKeys.set(ctx.db, known)
+  let key = known.get(id)
+  if (key === undefined) {
+    key = parentKeyFor(ctx, id)
+    known.set(id, key)
+  }
+  return { ...row, parent_key: await key }
+}
+
 /* An issue row — unscheduled backlog-shaped unless overridden. */
 export async function plantIssue(
   t: T,
   issue: { org_id: string; project_id: string } & Partial<WithoutSystemFields<Doc<'issues'>>>,
 ): Promise<Doc<'issues'>> {
   return await t.run(async (ctx) => {
+    const parent =
+      issue.parent_id === undefined ? undefined : await byId(ctx, 'issues', issue.parent_id)
     const _id = await ctx.db.insert('issues', {
+      ...(parent === undefined ? {} : { parent_key: parentKeyOf(parent) }),
       id: uuid(),
       num: plantedNum++,
       title: 'Planted task',

@@ -37,6 +37,7 @@ import {
   TODAY,
   uuid,
   withOrg,
+  withParentKey,
   workspaceOf,
 } from './helpers.setup'
 
@@ -246,6 +247,8 @@ describe('a group’s progress is the app task window’s Progress', () => {
     const aId = uuid()
     const b = await task(fx, { parent_id: aId, title: 'Cycle B' })
     const a = await task(fx, { id: aId, parent_id: b.id, title: 'Cycle A' })
+    // b's parent did not exist when it was written
+    await fx.t.run((ctx) => ctx.db.patch(b._id, { parent_key: a.window_key }))
     const progress = { done: 0, total: 0, percent: 0, partial: true }
     expect((await restGet(fx, a.id, fx.admin.id)).progress).toEqual(progress)
     const viaMcp = await mcpRead<Row>(fx, internal.machine.mcp.getIssue, fx.admin.id, {
@@ -312,19 +315,22 @@ describe('a project’s completion is the app Overview’s Completion', () => {
     const fx = await setup(newT({ transactionLimits: { documentsRead: 250 } }))
     await fx.t.run(async (ctx) => {
       for (let i = 0; i < 300; i++) {
-        await ctx.db.insert('issues', {
-          id: uuid(),
-          org_id: fx.org.id,
-          project_id: fx.sub.id,
-          num: 50_000 + i,
-          title: `Bulk ${i}`,
-          description: '',
-          status: 'todo',
-          priority: 'low',
-          paused: false,
-          created_at: NOW,
-          updated_at: NOW,
-        })
+        await ctx.db.insert(
+          'issues',
+          await withParentKey(ctx, {
+            id: uuid(),
+            org_id: fx.org.id,
+            project_id: fx.sub.id,
+            num: 50_000 + i,
+            title: `Bulk ${i}`,
+            description: '',
+            status: 'todo',
+            priority: 'low',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+          }),
+        )
       }
     })
     const created = JSON.parse(
@@ -437,19 +443,22 @@ describe('an active page keeps inside the request’s read limits', () => {
     await fx.t.run(async (ctx) => {
       for (let i = 0; i < 30; i++) {
         const id = uuid()
-        await ctx.db.insert('issues', {
-          id,
-          org_id: fx.org.id,
-          project_id: fx.sub.id,
-          num: 60_000 + i,
-          title: `Discussed ${i}`,
-          description: '',
-          status: 'todo',
-          priority: 'low',
-          paused: false,
-          created_at: NOW,
-          updated_at: NOW,
-        })
+        await ctx.db.insert(
+          'issues',
+          await withParentKey(ctx, {
+            id,
+            org_id: fx.org.id,
+            project_id: fx.sub.id,
+            num: 60_000 + i,
+            title: `Discussed ${i}`,
+            description: '',
+            status: 'todo',
+            priority: 'low',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+          }),
+        )
         await ctx.db.insert('comments', {
           id: uuid(),
           issue_id: id,

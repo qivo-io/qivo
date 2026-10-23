@@ -86,10 +86,12 @@ async function setup(): Promise<Fx> {
     await ctx.db.insert('team_members', {
       team_id: f.team.id,
       profile_id: emil.id,
+      org_id: emil.org_id,
       is_leader: false,
     })
     await ctx.db.insert('project_team_access', {
       project_id: f.meta.id,
+      org_id: f.meta.org_id,
       team_id: f.team.id,
       level: 'user',
     })
@@ -150,6 +152,7 @@ const teamRow = (t: T, id: string) =>
 const plantLeaderRow = (fx: Fx, profileId: string) =>
   fx.t.run(async (ctx) => {
     await ctx.db.insert('team_members', {
+      org_id: fx.org.id,
       team_id: fx.team.id,
       profile_id: profileId,
       is_leader: true,
@@ -210,6 +213,7 @@ describe('listing teams', () => {
         await ctx.db.insert('team_members', {
           team_id: assembly,
           profile_id: who.id,
+          org_id: who.org_id,
           is_leader: false,
         })
       }
@@ -580,6 +584,7 @@ describe('removing a member settles their open tasks', () => {
     await fx.t.run(async (ctx) => {
       await ctx.db.insert('project_team_access', {
         project_id: fx.sub2.id,
+        org_id: fx.sub2.org_id,
         team_id: fx.team.id,
         level: 'user',
       })
@@ -639,6 +644,7 @@ describe('removing a member settles their open tasks', () => {
       await ctx.db.insert('team_members', {
         team_id: fx.team.id,
         profile_id: fx.pia.id,
+        org_id: fx.pia.org_id,
         is_leader: true,
       })
     })
@@ -701,6 +707,7 @@ describe('removing a member settles their open tasks', () => {
       await ctx.db.insert('team_members', {
         team_id: fx.team.id,
         profile_id: fx.emil.id,
+        org_id: fx.emil.org_id,
         is_leader: false,
       })
       for (const g of await ctx.db
@@ -806,6 +813,7 @@ describe("deleting a team settles its members' open tasks", () => {
     await fx.t.run(async (ctx) => {
       await ctx.db.insert('project_team_access', {
         project_id: fx.sub.id,
+        org_id: fx.sub.org_id,
         team_id: fx.team.id,
         level: 'user',
       })
@@ -856,6 +864,7 @@ describe("deleting a team settles its members' open tasks", () => {
         await ctx.db.insert('team_members', {
           team_id: fx.team.id,
           profile_id: who.id,
+          org_id: who.org_id,
           is_leader: false,
         })
       }
@@ -889,10 +898,12 @@ describe("deleting a team settles its members' open tasks", () => {
       await ctx.db.insert('team_members', {
         team_id: fx.team.id,
         profile_id: ola.id,
+        org_id: ola.org_id,
         is_leader: false,
       })
       for (const project_id of [fx.sub.id, fx.sub2.id])
         await ctx.db.insert('project_team_access', {
+          org_id: fx.org.id,
           project_id,
           team_id: fx.team.id,
           level: 'user',
@@ -1046,6 +1057,7 @@ describe("deleting a team settles its members' open tasks", () => {
       fx.t.run(async (ctx) => {
         for (let i = 0; i < n; i++)
           await ctx.db.insert('team_members', {
+            org_id: fx.org.id,
             team_id: fx.team.id,
             profile_id: uuid(),
             is_leader: false,
@@ -1131,6 +1143,7 @@ describe("deleting a team settles its members' open tasks", () => {
     await fx.t.run(async (ctx) => {
       for (let i = 0; i < 250; i++)
         await ctx.db.insert('team_members', {
+          org_id: fx.org.id,
           team_id: fx.team.id,
           profile_id: uuid(),
           is_leader: false,

@@ -52,6 +52,7 @@ import {
   type T,
   uuid,
   withOrg,
+  withParentKey,
 } from './helpers.setup'
 
 /* The people the crowd adds to withOrg's five, for an organization of 100. */
@@ -87,7 +88,12 @@ async function crowded(
       created_at: NOW,
     })
     for (const team_id of [f.team.id, platform])
-      await ctx.db.insert('project_team_access', { project_id: f.meta.id, team_id, level: 'user' })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.meta.id,
+        org_id: f.meta.org_id,
+        team_id,
+        level: 'user',
+      })
     const person = async (name: string, team_id: string) => {
       const _id = await ctx.db.insert('profiles', {
         id: uuid(),
@@ -103,7 +109,12 @@ async function crowded(
         created_at: NOW,
       })
       const profile = (await ctx.db.get(_id)) as Doc<'profiles'>
-      await ctx.db.insert('team_members', { team_id, profile_id: profile.id, is_leader: false })
+      await ctx.db.insert('team_members', {
+        team_id,
+        profile_id: profile.id,
+        org_id: profile.org_id,
+        is_leader: false,
+      })
       return profile
     }
     const crowd: Doc<'profiles'>[] = []
@@ -131,22 +142,25 @@ async function crowded(
         const out: Doc<'issues'>[] = []
         for (let i = from; i < Math.min(n, from + 100); i++) {
           const reviewing = i % 5 === 1
-          const _id = await ctx.db.insert('issues', {
-            id: uuid(),
-            org_id: f.org.id,
-            project_id: f.sub.id,
-            num: 1000 + i,
-            title: `Task ${i}`,
-            description: '',
-            status: reviewing ? 'review' : 'todo',
-            priority: 'medium',
-            paused: false,
-            assignee_id: reviewing ? crowd[i % CROWD].id : emil.id,
-            reviewer_id: reviewing ? emil.id : undefined,
-            parent_id: i % 3 === 0 ? parents[Math.floor(i / 30)].id : undefined,
-            created_at: NOW,
-            updated_at: NOW,
-          })
+          const _id = await ctx.db.insert(
+            'issues',
+            await withParentKey(ctx, {
+              id: uuid(),
+              org_id: f.org.id,
+              project_id: f.sub.id,
+              num: 1000 + i,
+              title: `Task ${i}`,
+              description: '',
+              status: reviewing ? 'review' : 'todo',
+              priority: 'medium',
+              paused: false,
+              assignee_id: reviewing ? crowd[i % CROWD].id : emil.id,
+              reviewer_id: reviewing ? emil.id : undefined,
+              parent_id: i % 3 === 0 ? parents[Math.floor(i / 30)].id : undefined,
+              created_at: NOW,
+              updated_at: NOW,
+            }),
+          )
           const task = (await ctx.db.get(_id)) as Doc<'issues'>
           const others = Array.from(
             { length: followers },
@@ -301,6 +315,7 @@ describe('reassigning the tasks of an access removal', () => {
           })
           await ctx.db.insert('project_team_access', {
             project_id: f.meta.id,
+            org_id: f.meta.org_id,
             team_id: f.team.id,
             level: 'user',
           })
@@ -321,24 +336,28 @@ describe('reassigning the tasks of an access removal', () => {
             created_at: NOW,
           })
           await ctx.db.insert('team_members', {
+            org_id: f.org.id,
             team_id: f.team.id,
             profile_id: id,
             is_leader: false,
           })
-          await ctx.db.insert('issues', {
-            id: uuid(),
-            org_id: f.org.id,
-            project_id: f.sub.id,
-            num: 2000 + i,
-            title: `Task ${i}`,
-            description: '',
-            status: 'todo',
-            priority: 'medium',
-            paused: false,
-            assignee_id: id,
-            created_at: NOW,
-            updated_at: NOW,
-          })
+          await ctx.db.insert(
+            'issues',
+            await withParentKey(ctx, {
+              id: uuid(),
+              org_id: f.org.id,
+              project_id: f.sub.id,
+              num: 2000 + i,
+              title: `Task ${i}`,
+              description: '',
+              status: 'todo',
+              priority: 'medium',
+              paused: false,
+              assignee_id: id,
+              created_at: NOW,
+              updated_at: NOW,
+            }),
+          )
           members.push(id)
         }
       })
@@ -383,6 +402,7 @@ describe('reassigning the tasks of an access removal', () => {
     await t.run(async (ctx) => {
       await ctx.db.insert('project_team_access', {
         project_id: f.meta.id,
+        org_id: f.meta.org_id,
         team_id: f.team.id,
         level: 'user',
       })
@@ -392,6 +412,7 @@ describe('reassigning the tasks of an access removal', () => {
         await ctx.db.insert('team_members', {
           team_id: f.team.id,
           profile_id: member.id,
+          org_id: member.org_id,
           is_leader: false,
         })
         holders.push(member.id)
@@ -561,6 +582,7 @@ describe('reassigning the tasks of an access removal', () => {
           created_at: NOW,
         })
         await ctx.db.insert('team_members', {
+          org_id: fx.org.id,
           team_id: fx.team.id,
           profile_id: id,
           is_leader: false,
@@ -611,6 +633,7 @@ describe('reassigning the tasks of an access removal', () => {
         })
         await ctx.db.insert('project_team_access', {
           project_id: fx.meta.id,
+          org_id: fx.meta.org_id,
           team_id: id,
           level: 'viewer',
         })
@@ -687,6 +710,7 @@ async function manyHolders(n: number, limits: Parameters<typeof newT>[0] = {}) {
         })
         await ctx.db.insert('project_team_access', {
           project_id: f.meta.id,
+          org_id: f.meta.org_id,
           team_id: f.team.id,
           level: 'user',
         })
@@ -707,24 +731,28 @@ async function manyHolders(n: number, limits: Parameters<typeof newT>[0] = {}) {
           created_at: NOW,
         })
         await ctx.db.insert('team_members', {
+          org_id: f.org.id,
           team_id: f.team.id,
           profile_id: id,
           is_leader: false,
         })
-        await ctx.db.insert('issues', {
-          id: uuid(),
-          org_id: f.org.id,
-          project_id: f.sub.id,
-          num: 2000 + i,
-          title: `Task ${i}`,
-          description: '',
-          status: 'todo',
-          priority: 'medium',
-          paused: false,
-          assignee_id: id,
-          created_at: NOW,
-          updated_at: NOW,
-        })
+        await ctx.db.insert(
+          'issues',
+          await withParentKey(ctx, {
+            id: uuid(),
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            num: 2000 + i,
+            title: `Task ${i}`,
+            description: '',
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            assignee_id: id,
+            created_at: NOW,
+            updated_at: NOW,
+          }),
+        )
       }
     })
   }
@@ -836,20 +864,23 @@ describe('a removal of many people', () => {
     for (let from = 0; from < 2500; from += 500)
       await t.run(async (ctx) => {
         for (let i = from; i < from + 500; i++)
-          await ctx.db.insert('issues', {
-            id: uuid(),
-            org_id: f.org.id,
-            project_id: f.sub2.id,
-            num: 9000 + i,
-            title: `Other ${i}`,
-            description: '',
-            status: 'todo',
-            priority: 'medium',
-            paused: false,
-            assignee_id: f.viewer.id,
-            created_at: NOW,
-            updated_at: NOW,
-          })
+          await ctx.db.insert(
+            'issues',
+            await withParentKey(ctx, {
+              id: uuid(),
+              org_id: f.org.id,
+              project_id: f.sub2.id,
+              num: 9000 + i,
+              title: `Other ${i}`,
+              description: '',
+              status: 'todo',
+              priority: 'medium',
+              paused: false,
+              assignee_id: f.viewer.id,
+              created_at: NOW,
+              updated_at: NOW,
+            }),
+          )
       })
     const e = await expectRefusal(
       t.mutation(internal.machine.projects.restRemoveTeamAccess, {
@@ -884,6 +915,7 @@ describe('a removal of many people', () => {
           created_at: NOW,
         })
         await ctx.db.insert('project_team_access', {
+          org_id: f.org.id,
           project_id: id,
           team_id: f.team.id,
           level: 'viewer',
@@ -918,7 +950,12 @@ describe('a removal of many people', () => {
         created_at: NOW,
       })
       for (let i = 0; i < 12_000; i++)
-        await ctx.db.insert('team_members', { team_id: id, profile_id: uuid(), is_leader: false })
+        await ctx.db.insert('team_members', {
+          org_id: f.org.id,
+          team_id: id,
+          profile_id: uuid(),
+          is_leader: false,
+        })
     })
     const before = LEVELS_READ.max
     LEVELS_READ.max = 20_000
@@ -1090,22 +1127,25 @@ describe('deleting a task with many subtasks', () => {
       const ids: string[] = []
       for (let i = 0; i < LIMITS.subtasks.max + 200; i++) {
         const id = uuid()
-        await ctx.db.insert('issues', {
-          id,
-          org_id: fx.org.id,
-          project_id: fx.sub.id,
-          num: 2000 + i,
-          title: `Subtask ${i}`,
-          description: '',
-          status: 'todo',
-          priority: 'medium',
-          paused: false,
-          parent_id: parent.id,
-          // past the active ones, archived subtasks have no bound
-          ...(i < LIMITS.subtasks.max ? {} : { archived_at: NOW }),
-          created_at: NOW,
-          updated_at: NOW,
-        })
+        await ctx.db.insert(
+          'issues',
+          await withParentKey(ctx, {
+            id,
+            org_id: fx.org.id,
+            project_id: fx.sub.id,
+            num: 2000 + i,
+            title: `Subtask ${i}`,
+            description: '',
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            parent_id: parent.id,
+            // past the active ones, archived subtasks have no bound
+            ...(i < LIMITS.subtasks.max ? {} : { archived_at: NOW }),
+            created_at: NOW,
+            updated_at: NOW,
+          }),
+        )
         for (const follower of followers(i))
           await ctx.db.insert('issue_subscriptions', {
             issue_id: id,

@@ -31,6 +31,7 @@ import {
   tick,
   uuid,
   withOrg,
+  withParentKey,
 } from './helpers.setup'
 
 const REVIEWER_SENTENCE =
@@ -460,8 +461,8 @@ describe('the status stamp (status_at)', () => {
     const sibling = await stamped(t, f)
     const [childRow, siblingRow] = [await issueRow(t, child.id), await issueRow(t, sibling.id)]
     await t.run(async (ctx) => {
-      await ctx.db.patch(childRow._id, { parent_id: top.id })
-      await ctx.db.patch(siblingRow._id, { parent_id: top.id })
+      await ctx.db.patch(childRow._id, await withParentKey(ctx, { parent_id: top.id }))
+      await ctx.db.patch(siblingRow._id, await withParentKey(ctx, { parent_id: top.id }))
     })
     expect((await move(t, f, top.id, far.id)).project_id).toBe(far.id)
     for (const id of [top.id, child.id, sibling.id]) {

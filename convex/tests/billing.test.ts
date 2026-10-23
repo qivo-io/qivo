@@ -16,6 +16,7 @@ import {
   type T,
   uuid,
   withOrg,
+  withParentKey,
 } from './helpers.setup'
 
 type PlanInput = Omit<BillingPlan, 'id' | 'archived' | 'created_at'>
@@ -673,19 +674,22 @@ describe('provider state, retries and billing snapshots', () => {
         for (let i = from; i < from + 1000; i++) {
           const project_id = i % 3 === 0 ? f.sub2.id : f.sub.id
           const id = uuid()
-          await ctx.db.insert('issues', {
-            id,
-            org_id: f.org.id,
-            project_id,
-            num: i + 1,
-            title: `Task ${i}`,
-            description: '',
-            status: 'todo',
-            priority: 'medium',
-            paused: false,
-            created_at: NOW,
-            updated_at: NOW,
-          })
+          await ctx.db.insert(
+            'issues',
+            await withParentKey(ctx, {
+              id,
+              org_id: f.org.id,
+              project_id,
+              num: i + 1,
+              title: `Task ${i}`,
+              description: '',
+              status: 'todo',
+              priority: 'medium',
+              paused: false,
+              created_at: NOW,
+              updated_at: NOW,
+            }),
+          )
           if (i < 4500)
             await ctx.db.insert('issue_attachments', {
               org_id: f.org.id,
@@ -757,19 +761,22 @@ describe('provider state, retries and billing snapshots', () => {
       const ids: string[] = []
       for (let i = 0; i < 60; i++) {
         const id = uuid()
-        await ctx.db.insert('issues', {
-          id,
-          org_id: f.org.id,
-          project_id: f.sub.id,
-          num: i + 1,
-          title: `Task ${i}`,
-          description: '',
-          status: 'todo',
-          priority: 'medium',
-          paused: false,
-          created_at: NOW,
-          updated_at: NOW,
-        })
+        await ctx.db.insert(
+          'issues',
+          await withParentKey(ctx, {
+            id,
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            num: i + 1,
+            title: `Task ${i}`,
+            description: '',
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+          }),
+        )
         ids.push(id)
       }
       return ids

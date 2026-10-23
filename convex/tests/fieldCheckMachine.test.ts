@@ -25,6 +25,7 @@ import {
   type T,
   uuid,
   withOrg,
+  withParentKey,
 } from './helpers.setup'
 
 const SECRET = `qva_${'fieldchk'.repeat(6)}`
@@ -786,7 +787,7 @@ describe('a parent the caller cannot read', () => {
     for (const guess of [hidden, uuid()]) {
       await fx.t.run(async (ctx) => {
         const live = await byId(ctx, 'issues', row.id)
-        if (live) await ctx.db.patch(live._id, { parent_id: hidden })
+        if (live) await ctx.db.patch(live._id, await withParentKey(ctx, { parent_id: hidden }))
       })
       const probe = await send(fx, 'PATCH', `/v1/tasks/${row.id}`, {
         parent: null,
@@ -814,7 +815,7 @@ describe('a parent the caller cannot read', () => {
     const hidden = (await plantIssue(fx.t, { org_id: fx.org.id, project_id: away.id })).id
     await fx.t.run(async (ctx) => {
       const live = await byId(ctx, 'issues', row.id)
-      if (live) await ctx.db.patch(live._id, { parent_id: hidden })
+      if (live) await ctx.db.patch(live._id, await withParentKey(ctx, { parent_id: hidden }))
     })
     for (const seen of [shown.id, shown.id.toUpperCase()]) {
       const probe = await send(fx, 'PATCH', `/v1/tasks/${key(row)}`, {

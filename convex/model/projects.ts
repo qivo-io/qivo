@@ -407,6 +407,7 @@ export async function createProjectCore(
       project_id: project.id,
       team_id: sharedTeamId,
       level,
+      org_id: project.org_id,
     })
   }
   await logActivity(ctx, {
@@ -618,8 +619,13 @@ export async function updateProjectCore(
       await assertTeamGrantee(ctx, project, teamId)
       const row = held.get(teamId)
       if (row === undefined) {
-        await ctx.db.insert('project_team_access', { project_id: id, team_id: teamId, level })
-      } else if (row.level !== level) await ctx.db.patch(row._id, { level })
+        await ctx.db.insert('project_team_access', {
+          project_id: id,
+          team_id: teamId,
+          level,
+          org_id: project.org_id,
+        })
+      } else if (row.level !== level) await ctx.db.patch(row._id, { level, org_id: project.org_id })
     }
     removes ||= prev.some((row) => !next.has(row.team_id))
   }

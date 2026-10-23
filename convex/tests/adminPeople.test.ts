@@ -495,6 +495,7 @@ describe('orgDetail', () => {
       await t.run(async (ctx) => {
         for (let i = 0; i < 1000; i++) {
           await ctx.db.insert('team_members', {
+            org_id: f.org.id,
             team_id: f.team.id,
             profile_id: uuid(),
             is_leader: false,

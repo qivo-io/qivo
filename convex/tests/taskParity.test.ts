@@ -58,6 +58,7 @@ import {
   TODAY,
   uuid,
   withOrg,
+  withParentKey,
 } from './helpers.setup'
 
 const KEY = 'drive'
@@ -388,20 +389,23 @@ describe('a single-task read walks only the subtasks that can count', () => {
   const plantMany = (fx: Fx, count: number, firstNum: number, over: Partial<Doc<'issues'>>) =>
     fx.t.run(async (ctx) => {
       for (let i = 0; i < count; i++) {
-        await ctx.db.insert('issues', {
-          id: uuid(),
-          org_id: fx.org.id,
-          project_id: fx.sub.id,
-          num: firstNum + i,
-          title: `Planted ${i}`,
-          description: '',
-          status: 'todo',
-          priority: 'low',
-          paused: false,
-          created_at: NOW,
-          updated_at: NOW,
-          ...over,
-        })
+        await ctx.db.insert(
+          'issues',
+          await withParentKey(ctx, {
+            id: uuid(),
+            org_id: fx.org.id,
+            project_id: fx.sub.id,
+            num: firstNum + i,
+            title: `Planted ${i}`,
+            description: '',
+            status: 'todo',
+            priority: 'low',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+            ...over,
+          }),
+        )
       }
     })
 

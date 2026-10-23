@@ -106,6 +106,25 @@ export async function strayRows(ctx: ReaderCtx, id: string, key: string | null) 
   )
 }
 
+/** The parent_key (schema.ts) of a task under `parent`: the parent's
+ * window key, none while the parent has none, so readers ask task by task
+ * until it has one and the subtask its key, and '' when the parent is gone.
+ * A task keeps its window key once it has one, so the key never goes stale. */
+export const parentKeyOf = (
+  parent: Pick<Doc<'issues'>, 'window_key'> | null,
+): string | undefined => (parent === null ? '' : parent.window_key)
+
+/** The parent_key of a task whose parent has id `parentId`, read by id, and
+ * none for a top-level task. Every write that gives a task a parent writes
+ * it, and so does one that makes a subtask active again, which may have
+ * been stored or archived before it had one. */
+export async function parentKeyFor(
+  ctx: ReaderCtx,
+  parentId: string | undefined,
+): Promise<string | undefined> {
+  return parentId === undefined ? undefined : parentKeyOf(await byId(ctx, 'issues', parentId))
+}
+
 /* Chainable eq shape shared by every IndexRangeBuilder — the generic index
  * types can't be threaded through a runtime field list, so the builder is
  * driven through this erased view. */

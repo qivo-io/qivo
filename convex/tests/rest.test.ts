@@ -44,6 +44,7 @@ import {
   tick,
   uuid,
   withOrg,
+  withParentKey,
 } from './helpers.setup'
 import { itemFor, plantCredential, storedRows } from './trash.setup'
 
@@ -2148,24 +2149,30 @@ describe("a group's dates on REST", () => {
         let num = 20_000
         for (let g = 0; g < 10; g++) {
           const feature = uuid()
-          await ctx.db.insert('issues', {
-            ...row,
-            id: feature,
-            num: 10_000 + g,
-            title: `Feature ${g}`,
-            parent_id: epic.id,
-          })
+          await ctx.db.insert(
+            'issues',
+            await withParentKey(ctx, {
+              ...row,
+              id: feature,
+              num: 10_000 + g,
+              title: `Feature ${g}`,
+              parent_id: epic.id,
+            }),
+          )
           for (let k = 0; k < 50; k++) {
             const week = `2026-0${1 + (k % 9)}-05`
-            await ctx.db.insert('issues', {
-              ...row,
-              id: uuid(),
-              num: num++,
-              title: `Leaf ${g}.${k}`,
-              parent_id: feature,
-              start_week: week,
-              end_week: week,
-            })
+            await ctx.db.insert(
+              'issues',
+              await withParentKey(ctx, {
+                ...row,
+                id: uuid(),
+                num: num++,
+                title: `Leaf ${g}.${k}`,
+                parent_id: feature,
+                start_week: week,
+                end_week: week,
+              }),
+            )
           }
         }
       })
@@ -2501,10 +2508,12 @@ describe('a navigation-only parent hides its other sub-projects', () => {
       await ctx.db.insert('team_members', {
         team_id: f.team.id,
         profile_id: teamSib.id,
+        org_id: teamSib.org_id,
         is_leader: false,
       })
       await ctx.db.insert('project_team_access', {
         project_id: f.sub2.id,
+        org_id: f.sub2.org_id,
         team_id: f.team.id,
         level: 'user',
       })

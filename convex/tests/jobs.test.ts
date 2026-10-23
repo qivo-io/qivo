@@ -42,6 +42,7 @@ import {
   type T,
   uuid,
   withOrg,
+  withParentKey,
 } from './helpers.setup'
 
 /* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
@@ -145,18 +146,21 @@ const plantTasks = (
 ): Promise<void> =>
   t.run(async (ctx) => {
     for (let n = 0; n < count; n++) {
-      await ctx.db.insert('issues', {
-        id: uuid(),
-        num: bulkNum++,
-        title: 'Bulk task',
-        description: '',
-        status: 'todo',
-        priority: 'medium',
-        paused: false,
-        created_at: NOW,
-        updated_at: NOW,
-        ...issue,
-      })
+      await ctx.db.insert(
+        'issues',
+        await withParentKey(ctx, {
+          id: uuid(),
+          num: bulkNum++,
+          title: 'Bulk task',
+          description: '',
+          status: 'todo',
+          priority: 'medium',
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+          ...issue,
+        }),
+      )
     }
   })
 

@@ -530,6 +530,7 @@ describe('profiles.update — the admin door', () => {
       ctx.db.insert('team_members', {
         team_id: f.team.id,
         profile_id: f.guest.id,
+        org_id: f.guest.org_id,
         is_leader: true,
       }),
     )
@@ -549,6 +550,7 @@ describe('profiles.update — the admin door', () => {
         ctx.db.insert('team_members', {
           team_id: f.team.id,
           profile_id: f.guest.id,
+          org_id: f.guest.org_id,
           is_leader: true,
         }),
       )
@@ -851,6 +853,7 @@ describe('profiles.setPlannableHours — the rights matrix', () => {
         ctx.db.insert('team_members', {
           team_id: f.team.id,
           profile_id: caller.id,
+          org_id: caller.org_id,
           is_leader: true,
         }),
       )
@@ -863,6 +866,7 @@ describe('profiles.setPlannableHours — the rights matrix', () => {
       ctx.db.insert('team_members', {
         team_id: f.team.id,
         profile_id: f.guest.id,
+        org_id: f.guest.org_id,
         is_leader: false,
       }),
     )
@@ -1161,6 +1165,7 @@ describe('teams membership — the three verbs', () => {
       ctx.db.insert('team_members', {
         team_id: f.team.id,
         profile_id: f.guest.id,
+        org_id: f.guest.org_id,
         is_leader: false,
       }),
     )
@@ -1225,6 +1230,7 @@ describe('teams membership — the three verbs', () => {
       await ctx.db.insert('team_members', {
         team_id: f.team.id,
         profile_id: f.agent.id,
+        org_id: f.agent.org_id,
         is_leader: true,
       })
       return (await ctx.db.get(f.agent._id)) as Doc<'profiles'>

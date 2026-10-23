@@ -247,12 +247,14 @@ export async function setProjectGrantCore(
     next: level,
   })
   if (row?.level === level) return { changed: false }
-  if (row !== null) await ctx.db.patch(row._id, { level })
+  if (row !== null)
+    await ctx.db.patch(row._id, 'team' in subject ? { level, org_id: project.org_id } : { level })
   else if ('team' in subject) {
     await ctx.db.insert('project_team_access', {
       project_id: project.id,
       team_id: subject.team.id,
       level,
+      org_id: project.org_id,
     })
   } else {
     await ctx.db.insert('project_access', {

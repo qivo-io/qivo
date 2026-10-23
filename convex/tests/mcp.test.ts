@@ -2200,6 +2200,7 @@ describe('write tools', () => {
       ctx.db.insert('team_members', {
         team_id: fx.team.id,
         profile_id: fx.agent.id,
+        org_id: fx.agent.org_id,
         is_leader: true,
       }),
     )

@@ -205,9 +205,9 @@ export async function emitTaskEvent(
   const changed = a.before
     ? Array.from(new Set([...Object.keys(a.issue), ...Object.keys(a.before)])).filter(
         (key) =>
-          // relations_marked is the archive steps' bookkeeping and window_key
-          // places the task in the app's windows, never news; status_at
-          // moves only with status or project_id, which are listed
+          // relations_marked is the archive steps' bookkeeping, and window_key
+          // and parent_key place the task in the app's windows, never news;
+          // status_at moves only with status or project_id, which are listed
           ![
             '_id',
             '_creationTime',
@@ -215,6 +215,7 @@ export async function emitTaskEvent(
             'status_at',
             'relations_marked',
             'window_key',
+            'parent_key',
           ].includes(key) &&
           !sameValue(a.issue[key as keyof Doc<'issues'>], a.before?.[key as keyof Doc<'issues'>]),
       )

@@ -27,6 +27,7 @@ import {
   TODAY,
   uuid,
   withOrg,
+  withParentKey,
   workspaceOf,
 } from './helpers.setup'
 import { assertNoDanglingRefs } from './refs.setup'
@@ -78,20 +79,23 @@ const plantLabelledTasks = (
     for (let n = 0; n < count; n++) {
       const id = uuid()
       const archived = n % 3 === 2
-      await ctx.db.insert('issues', {
-        id,
-        org_id: f.org.id,
-        project_id: f.sub.id,
-        num: nextNum++,
-        title: `Labelled ${n}`,
-        description: '',
-        status: archived ? 'done' : 'todo',
-        priority: 'medium',
-        paused: false,
-        ...(archived ? { done_at: NOW, archived_at: NOW } : {}),
-        created_at: NOW,
-        updated_at: NOW,
-      })
+      await ctx.db.insert(
+        'issues',
+        await withParentKey(ctx, {
+          id,
+          org_id: f.org.id,
+          project_id: f.sub.id,
+          num: nextNum++,
+          title: `Labelled ${n}`,
+          description: '',
+          status: archived ? 'done' : 'todo',
+          priority: 'medium',
+          paused: false,
+          ...(archived ? { done_at: NOW, archived_at: NOW } : {}),
+          created_at: NOW,
+          updated_at: NOW,
+        }),
+      )
       for (const label of labels) {
         await ctx.db.insert('issue_labels', {
           org_id: f.org.id,

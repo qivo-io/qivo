@@ -214,11 +214,13 @@ describe('promoteOrgAdmin — the lockout rescue', () => {
       await ctx.db.insert('team_members', {
         team_id: f.team.id,
         profile_id: f.guest.id,
+        org_id: f.guest.org_id,
         is_leader: true,
       })
       await ctx.db.insert('team_members', {
         team_id: f.team.id,
         profile_id: f.viewer.id,
+        org_id: f.viewer.org_id,
         is_leader: false,
       })
     })

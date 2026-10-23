@@ -36,6 +36,7 @@ import {
   type T,
   uuid,
   withOrg,
+  withParentKey,
   workspaceOf,
 } from './helpers.setup'
 import { assertNoDanglingRefs } from './refs.setup'
@@ -101,25 +102,28 @@ async function plantHistory(
   await t.run(async (ctx) => {
     for (let i = 0; i < n; i++) {
       const task = id()
-      await ctx.db.insert('issues', {
-        id: task,
-        org_id,
-        project_id,
-        num: nextNum++,
-        title: `Archived ${i}`,
-        description: '',
-        status: 'done',
-        priority: 'medium',
-        paused: false,
-        assignee_id: p,
-        reviewer_id: p,
-        created_by: p,
-        reporter_id: p,
-        done_at: NOW,
-        archived_at: NOW,
-        created_at: NOW,
-        updated_at: NOW,
-      })
+      await ctx.db.insert(
+        'issues',
+        await withParentKey(ctx, {
+          id: task,
+          org_id,
+          project_id,
+          num: nextNum++,
+          title: `Archived ${i}`,
+          description: '',
+          status: 'done',
+          priority: 'medium',
+          paused: false,
+          assignee_id: p,
+          reviewer_id: p,
+          created_by: p,
+          reporter_id: p,
+          done_at: NOW,
+          archived_at: NOW,
+          created_at: NOW,
+          updated_at: NOW,
+        }),
+      )
       await ctx.db.insert('comments', {
         id: id(),
         issue_id: task,
@@ -231,20 +235,23 @@ describe('the removal transaction under real limits', () => {
     const f = await withOrg(t)
     await t.run(async (ctx) => {
       for (let i = 0; i < 4200; i++)
-        await ctx.db.insert('issues', {
-          id: uuid(),
-          org_id: f.org.id,
-          project_id: f.sub.id,
-          num: nextNum++,
-          title: `Task ${i}`,
-          description: '',
-          status: i % 2 ? 'done' : 'todo',
-          priority: 'medium',
-          paused: false,
-          archived_at: i % 2 ? NOW : undefined,
-          created_at: NOW,
-          updated_at: NOW,
-        })
+        await ctx.db.insert(
+          'issues',
+          await withParentKey(ctx, {
+            id: uuid(),
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            num: nextNum++,
+            title: `Task ${i}`,
+            description: '',
+            status: i % 2 ? 'done' : 'todo',
+            priority: 'medium',
+            paused: false,
+            archived_at: i % 2 ? NOW : undefined,
+            created_at: NOW,
+            updated_at: NOW,
+          }),
+        )
     })
     const invited = await plantSeat(t, { org_id: f.org.id, email: 'new@testbed.test' })
     const cancelled = await plantSeat(t, { org_id: f.org.id, email: 'gone@testbed.test' })
@@ -274,22 +281,25 @@ describe('the removal transaction under real limits', () => {
     const description = 'x'.repeat(2048)
     await t.run(async (ctx) => {
       for (let i = 0; i < 3000; i++)
-        await ctx.db.insert('issues', {
-          id: uuid(),
-          org_id: f.org.id,
-          project_id: f.sub.id,
-          num: nextNum++,
-          title: `Imported ${i}`,
-          description,
-          status: 'todo',
-          priority: 'medium',
-          paused: false,
-          assignee_id: agent,
-          created_by: agent,
-          reporter_id: agent,
-          created_at: NOW,
-          updated_at: NOW,
-        })
+        await ctx.db.insert(
+          'issues',
+          await withParentKey(ctx, {
+            id: uuid(),
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            num: nextNum++,
+            title: `Imported ${i}`,
+            description,
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            assignee_id: agent,
+            created_by: agent,
+            reporter_id: agent,
+            created_at: NOW,
+            updated_at: NOW,
+          }),
+        )
     })
     const held = () =>
       t.run(async (ctx) => {
@@ -747,7 +757,12 @@ describe('access rows past the first pass', () => {
             track_delay_default: false,
             created_at: NOW,
           })
-          await ctx.db.insert('team_members', { team_id: team, profile_id: user, is_leader: false })
+          await ctx.db.insert('team_members', {
+            org_id: f.org.id,
+            team_id: team,
+            profile_id: user,
+            is_leader: false,
+          })
           const project = uuid()
           await ctx.db.insert('projects', {
             id: project,
@@ -829,6 +844,7 @@ describe('access rows past the first pass', () => {
       await ctx.db.insert('team_members', {
         team_id: f.team.id,
         profile_id: f.agent.id,
+        org_id: f.agent.org_id,
         is_leader: false,
       })
       for (const profile_id of [f.user.id, f.agent.id])

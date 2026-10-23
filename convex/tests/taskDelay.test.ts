@@ -49,6 +49,7 @@ import {
   type T,
   uuid,
   withOrg,
+  withParentKey,
   workspaceOf,
 } from './helpers.setup'
 
@@ -478,24 +479,27 @@ describe('a verdict reads the owner’s other work only when it can change it', 
   const busy = async (fx: Fx, owner: Doc<'profiles'>, status: Doc<'issues'>['status'] = 'todo') => {
     await fx.t.run(async (ctx) => {
       for (let i = 0; i < 300; i++) {
-        await ctx.db.insert('issues', {
-          id: uuid(),
-          org_id: fx.org.id,
-          project_id: fx.sub2.id,
-          num: 70_000 + i,
-          title: `Load ${i}`,
-          description: '',
-          status,
-          priority: 'low',
-          assignee_id: owner.id,
-          start_week: W(0),
-          end_week: W(2),
-          remaining_hours: 1,
-          remaining_set_at: NOW,
-          paused: false,
-          created_at: NOW,
-          updated_at: NOW,
-        })
+        await ctx.db.insert(
+          'issues',
+          await withParentKey(ctx, {
+            id: uuid(),
+            org_id: fx.org.id,
+            project_id: fx.sub2.id,
+            num: 70_000 + i,
+            title: `Load ${i}`,
+            description: '',
+            status,
+            priority: 'low',
+            assignee_id: owner.id,
+            start_week: W(0),
+            end_week: W(2),
+            remaining_hours: 1,
+            remaining_set_at: NOW,
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+          }),
+        )
       }
     })
   }

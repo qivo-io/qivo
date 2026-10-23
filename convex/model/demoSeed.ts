@@ -12,7 +12,7 @@ import {
   marketingWeek,
   northstarTaskTimes,
 } from '../internal/marketingDemoData'
-import { byId, newWindowKey } from '../lib/db'
+import { byId, newWindowKey, parentKeyOf } from '../lib/db'
 import { demoRefusal } from '../lib/demo'
 import { require, rule } from '../lib/functions'
 import { DEFAULT_MESSAGE_RETENTION_DAYS } from '../lib/limits'
@@ -266,6 +266,7 @@ export async function writeNorthstarStep(
           team_id: teamIds[team.key],
           profile_id: personIds[member],
           is_leader: member === team.lead,
+          org_id: org.id,
         })
     }
     for (const p of data.people) {
@@ -312,6 +313,7 @@ export async function writeNorthstarStep(
             project_id: projectIds[p.key],
             team_id: teamIds[team.key],
             level: team.key === p.team ? 'user' : 'viewer',
+            org_id: org.id,
           })
     }
     for (const l of data.labels)
@@ -346,9 +348,11 @@ export async function writeNorthstarStep(
       // written refuses rather than gain tasks that point at nothing
       require(preload.projects.has(projectIds[i.project]), rule(SEED_ROW_MISSING.project))
       require(i.labels.every((label) => labels.has(labelIds[label])), rule(SEED_ROW_MISSING.label))
+      let parentKey: string | undefined
       if (i.parent) {
         // a parent the app moved since would hold a child its project refuses
         const parent = await task(i.parent)
+        parentKey = parentKeyOf(parent)
         const home = data.issues.find((it) => it.key === i.parent)?.project
         require(home !== undefined && parent.project_id === projectIds[home], rule(
           SEED_ROW_MISSING.parent,
@@ -384,6 +388,7 @@ export async function writeNorthstarStep(
           ],
         created_by: personIds.atlas,
         parent_id: i.parent ? issueIds[i.parent] : undefined,
+        parent_key: parentKey,
         start_week: i.startWeek !== undefined ? marketingWeek(anchor, i.startWeek) : undefined,
         end_week: i.endWeek !== undefined ? marketingWeek(anchor, i.endWeek) : undefined,
         due_date: i.dueDay !== undefined ? marketingDate(anchor, i.dueDay) : undefined,

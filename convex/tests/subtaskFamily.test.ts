@@ -35,6 +35,7 @@ import {
   type T,
   uuid,
   withOrg,
+  withParentKey,
 } from './helpers.setup'
 
 const ARCHIVED = '2026-01-02T00:00:00.000Z'
@@ -354,20 +355,23 @@ describe('moving a task to another top-level project', () => {
     // inPcb, LIMITS.subtasks.max active ones and the rest archived
     await t.run(async (ctx) => {
       for (let i = 0; i < LIMITS.moveSubtree.max; i++) {
-        await ctx.db.insert('issues', {
-          ...base,
-          id: uuid(),
-          num: 1000 + i,
-          title: `Step ${i}`,
-          description: '',
-          status: 'todo',
-          priority: 'low',
-          paused: false,
-          parent_id: root.id,
-          archived_at: i < LIMITS.subtasks.max - 1 ? undefined : ARCHIVED,
-          created_at: ARCHIVED,
-          updated_at: ARCHIVED,
-        })
+        await ctx.db.insert(
+          'issues',
+          await withParentKey(ctx, {
+            ...base,
+            id: uuid(),
+            num: 1000 + i,
+            title: `Step ${i}`,
+            description: '',
+            status: 'todo',
+            priority: 'low',
+            paused: false,
+            parent_id: root.id,
+            archived_at: i < LIMITS.subtasks.max - 1 ? undefined : ARCHIVED,
+            created_at: ARCHIVED,
+            updated_at: ARCHIVED,
+          }),
+        )
       }
     })
     const crowded = await allIssues(t, f.org.id)
@@ -537,21 +541,24 @@ describe('a move, archive or parent change too large for one transaction', () =>
     const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
     await t.run(async (ctx) => {
       for (let i = 0; i < LIMITS.subtasks.max + 1000; i++)
-        await ctx.db.insert('issues', {
-          id: uuid(),
-          org_id: f.org.id,
-          project_id: f.sub.id,
-          parent_id: root.id,
-          num: 900_000 + i,
-          title: `Step ${i}`,
-          description: '',
-          status: 'todo',
-          priority: 'medium',
-          paused: false,
-          archived_at: i < LIMITS.subtasks.max ? undefined : ARCHIVED,
-          created_at: root.created_at,
-          updated_at: root.updated_at,
-        })
+        await ctx.db.insert(
+          'issues',
+          await withParentKey(ctx, {
+            id: uuid(),
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            parent_id: root.id,
+            num: 900_000 + i,
+            title: `Step ${i}`,
+            description: '',
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            archived_at: i < LIMITS.subtasks.max ? undefined : ARCHIVED,
+            created_at: root.created_at,
+            updated_at: root.updated_at,
+          }),
+        )
     })
     const activeUnder = () =>
       t.run(

@@ -1016,6 +1016,7 @@ describe("0056 §C — planted forbidden rows grant nothing ('the design assumes
       await ctx.db.insert('team_members', {
         team_id: foreignTeam.id,
         profile_id: f.user.id,
+        org_id: f.user.org_id,
         is_leader: true,
       })
     })

@@ -4,7 +4,7 @@ import { components, internal } from '../_generated/api'
 import authSchema from '../betterAuth/schema'
 import { INSPECT_READ } from '../internal/marketingDemo'
 import { REMOVAL_BUDGET } from '../model/cascade'
-import { newT, type T, withOrg } from './helpers.setup'
+import { newT, type T, withOrg, withParentKey } from './helpers.setup'
 
 const SITE = 'https://preview.qivo.io'
 const HASH = `${'a'.repeat(32)}:${'b'.repeat(128)}`
@@ -333,19 +333,22 @@ describe('Northstar wipe', () => {
       if (project === null || author === null) throw new Error('the seed made no project')
       for (let i = 0; i < 500; i++) {
         const id = crypto.randomUUID()
-        await ctx.db.insert('issues', {
-          id,
-          org_id,
-          project_id: project.id,
-          num: 10_000 + i,
-          title: `Manual task ${i}`,
-          description: '',
-          status: 'todo',
-          priority: 'medium',
-          paused: false,
-          created_at: '2026-09-07T00:00:00.000Z',
-          updated_at: '2026-09-07T00:00:00.000Z',
-        })
+        await ctx.db.insert(
+          'issues',
+          await withParentKey(ctx, {
+            id,
+            org_id,
+            project_id: project.id,
+            num: 10_000 + i,
+            title: `Manual task ${i}`,
+            description: '',
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            created_at: '2026-09-07T00:00:00.000Z',
+            updated_at: '2026-09-07T00:00:00.000Z',
+          }),
+        )
         await ctx.db.insert('comments', {
           id: crypto.randomUUID(),
           issue_id: id,

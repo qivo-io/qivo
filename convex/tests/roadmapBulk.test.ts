@@ -27,6 +27,7 @@ import {
   type T,
   uuid,
   withOrg,
+  withParentKey,
 } from './helpers.setup'
 
 /* The people the crowd adds to withOrg's five, for an organization of 100. */
@@ -54,7 +55,12 @@ async function planted(
       created_at: NOW,
     })
     for (const team_id of [f.team.id, platform])
-      await ctx.db.insert('project_team_access', { project_id: f.meta.id, team_id, level: 'user' })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.meta.id,
+        org_id: f.meta.org_id,
+        team_id,
+        level: 'user',
+      })
     const out: string[] = []
     for (let i = 0; i < CROWD; i++) {
       const id = uuid()
@@ -72,6 +78,7 @@ async function planted(
         created_at: NOW,
       })
       await ctx.db.insert('team_members', {
+        org_id: f.org.id,
         team_id: i % 2 ? platform : f.team.id,
         profile_id: id,
         is_leader: false,
@@ -86,20 +93,23 @@ async function planted(
       ...(await t.run(async (ctx) => {
         const out: Doc<'issues'>[] = []
         for (let i = from; i < Math.min(n, from + 100); i++) {
-          const _id = await ctx.db.insert('issues', {
-            id: uuid(),
-            org_id: f.org.id,
-            project_id: f.sub.id,
-            num: 1000 + i,
-            title: `Task ${i}`,
-            description: '',
-            status: 'todo',
-            priority: 'medium',
-            paused: false,
-            assignee_id: crowd[i % CROWD],
-            created_at: NOW,
-            updated_at: NOW,
-          })
+          const _id = await ctx.db.insert(
+            'issues',
+            await withParentKey(ctx, {
+              id: uuid(),
+              org_id: f.org.id,
+              project_id: f.sub.id,
+              num: 1000 + i,
+              title: `Task ${i}`,
+              description: '',
+              status: 'todo',
+              priority: 'medium',
+              paused: false,
+              assignee_id: crowd[i % CROWD],
+              created_at: NOW,
+              updated_at: NOW,
+            }),
+          )
           for (let k = 0; k < followers; k++)
             await ctx.db.insert('issue_subscriptions', {
               issue_id: (await ctx.db.get(_id))?.id as string,
@@ -302,6 +312,7 @@ describe('roadmap saves and undo of many tasks', () => {
         const sees = n % 2 === 0
         if (sees)
           await ctx.db.insert('team_members', {
+            org_id: fx.org.id,
             team_id: fx.team.id,
             profile_id: id,
             is_leader: false,

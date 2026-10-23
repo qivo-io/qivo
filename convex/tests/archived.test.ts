@@ -27,6 +27,7 @@ import {
   type T,
   uuid,
   withOrg,
+  withParentKey,
 } from './helpers.setup'
 
 /* Archive cursors are sealed with a key derived from BETTER_AUTH_SECRET
@@ -207,20 +208,23 @@ const plantMany = (
     for (let i = 0; i < count; i++) {
       const id = uuid()
       ids.push(id)
-      await ctx.db.insert('issues', {
-        id,
-        org_id: f.org.id,
-        num: bulkNum++,
-        title: `Bulk ${i}`,
-        description: '',
-        status: 'done',
-        priority: 'medium',
-        paused: false,
-        created_at: NOW,
-        updated_at: NOW,
-        archived_at: NOW,
-        ...over(i),
-      })
+      await ctx.db.insert(
+        'issues',
+        await withParentKey(ctx, {
+          id,
+          org_id: f.org.id,
+          num: bulkNum++,
+          title: `Bulk ${i}`,
+          description: '',
+          status: 'done',
+          priority: 'medium',
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+          archived_at: NOW,
+          ...over(i),
+        }),
+      )
     }
     return ids
   })

@@ -34,6 +34,7 @@ import {
   type T,
   uuid,
   withOrg,
+  withParentKey,
   workspaceOf,
 } from './helpers.setup'
 
@@ -87,19 +88,22 @@ async function plantMany(
       ...(await t.run(async (ctx) => {
         const rows: Doc<'issues'>[] = []
         for (let i = from; i < Math.min(n, from + 50); i++) {
-          const _id = await ctx.db.insert('issues', {
-            id: uuid(),
-            window_key: newWindowKey(),
-            num: 10_000 + i,
-            title: `Task ${i}`,
-            description: '',
-            status: 'todo',
-            priority: 'medium',
-            paused: false,
-            created_at: NOW,
-            updated_at: NOW,
-            ...extra(i),
-          })
+          const _id = await ctx.db.insert(
+            'issues',
+            await withParentKey(ctx, {
+              id: uuid(),
+              window_key: newWindowKey(),
+              num: 10_000 + i,
+              title: `Task ${i}`,
+              description: '',
+              status: 'todo',
+              priority: 'medium',
+              paused: false,
+              created_at: NOW,
+              updated_at: NOW,
+              ...extra(i),
+            }),
+          )
           rows.push((await ctx.db.get(_id))!)
         }
         return rows
@@ -192,20 +196,23 @@ describe('a tasks window', () => {
     for (let batch = 0; batch < 3; batch++)
       await t.run(async (ctx) => {
         for (let i = batch * 500; i < (batch + 1) * 500; i++)
-          await ctx.db.insert('issues', {
-            id: uuid(),
-            window_key: newWindowKey(),
-            org_id: f.org.id,
-            project_id: f.sub.id,
-            num: i + 1,
-            title: `Task ${i}`,
-            description,
-            status: 'todo',
-            priority: 'medium',
-            paused: false,
-            created_at: NOW,
-            updated_at: NOW,
-          })
+          await ctx.db.insert(
+            'issues',
+            await withParentKey(ctx, {
+              id: uuid(),
+              window_key: newWindowKey(),
+              org_id: f.org.id,
+              project_id: f.sub.id,
+              num: i + 1,
+              title: `Task ${i}`,
+              description,
+              status: 'todo',
+              priority: 'medium',
+              paused: false,
+              created_at: NOW,
+              updated_at: NOW,
+            }),
+          )
       })
     const snap = await workspaceOf(as(t, f.admin))
     expect(snap?.issues).toHaveLength(1500)
@@ -324,6 +331,7 @@ describe('reads a window cannot bound by its rows', () => {
       org_id: f.org.id,
       project_id: f.sub.id,
       parent_id: parents[i % 3].id,
+      parent_key: parents[i % 3].window_key,
       description: LARGEST,
     }))
     const w = narrowestOf('a0000000').holds
@@ -351,6 +359,7 @@ describe('reads a window cannot bound by its rows', () => {
       await ctx.db.insert('team_members', {
         team_id: ids[99],
         profile_id: f.viewer.id,
+        org_id: f.viewer.org_id,
         is_leader: false,
       })
       return ids
@@ -373,7 +382,12 @@ describe('reads a window cannot bound by its rows', () => {
             created_at: NOW,
           })
           for (const team_id of teams)
-            await ctx.db.insert('project_team_access', { project_id: id, team_id, level: 'viewer' })
+            await ctx.db.insert('project_team_access', {
+              org_id: f.org.id,
+              project_id: id,
+              team_id,
+              level: 'viewer',
+            })
           return id
         }),
       )
@@ -1071,7 +1085,12 @@ describe('many projects', () => {
           await team(f.otherOrg.id),
         ]
         for (const team_id of [mine, foreign])
-          await ctx.db.insert('team_members', { team_id, profile_id: me.id, is_leader: false })
+          await ctx.db.insert('team_members', {
+            team_id,
+            profile_id: me.id,
+            org_id: me.org_id,
+            is_leader: false,
+          })
         const project = async (extra: Partial<Doc<'projects'>>) => {
           const id = uuid()
           await ctx.db.insert('projects', {
@@ -1093,7 +1112,12 @@ describe('many projects', () => {
         const grant = (project_id: string, level: 'user' | 'viewer') =>
           ctx.db.insert('project_access', { project_id, profile_id: me.id, level })
         const share = (project_id: string, team_id: string) =>
-          ctx.db.insert('project_team_access', { project_id, team_id, level: 'user' })
+          ctx.db.insert('project_team_access', {
+            org_id: f.org.id,
+            project_id,
+            team_id,
+            level: 'user',
+          })
         const parent = await project({ type: 'meta' })
         const sub = (extra: Partial<Doc<'projects'>> = {}) =>
           project({ parent_id: parent, ...extra })
@@ -1126,20 +1150,23 @@ describe('many projects', () => {
         await share(await parentOf(ids.parentShared), mine)
         await grant(await parentOf(ids.parentGrant), 'viewer')
         for (const [kind, project_id] of Object.entries(ids)) {
-          await ctx.db.insert('issues', {
-            id: uuid(),
-            org_id: f.org.id,
-            project_id,
-            num: 1,
-            title: kind,
-            description: '',
-            status: 'todo',
-            priority: 'medium',
-            paused: false,
-            created_at: NOW,
-            updated_at: NOW,
-            window_key: newWindowKey(),
-          })
+          await ctx.db.insert(
+            'issues',
+            await withParentKey(ctx, {
+              id: uuid(),
+              org_id: f.org.id,
+              project_id,
+              num: 1,
+              title: kind,
+              description: '',
+              status: 'todo',
+              priority: 'medium',
+              paused: false,
+              created_at: NOW,
+              updated_at: NOW,
+              window_key: newWindowKey(),
+            }),
+          )
         }
         // a deleted project leaves no row
         const gone = await ctx.db
@@ -1206,7 +1233,12 @@ describe('many projects', () => {
           track_delay_default: false,
           created_at: NOW,
         })
-        await ctx.db.insert('team_members', { team_id: id, profile_id: me.id, is_leader: false })
+        await ctx.db.insert('team_members', {
+          team_id: id,
+          profile_id: me.id,
+          org_id: me.org_id,
+          is_leader: false,
+        })
         teams.push(id)
       }
       const project = async (num: number, extra: Partial<Doc<'projects'>>) => {
@@ -1238,24 +1270,28 @@ describe('many projects', () => {
           const sub = await project(3000 + 3 * n + k, { parent_id: parent })
           if (n % 6 === 0 && k === 1)
             await ctx.db.insert('project_team_access', {
+              org_id: f.org.id,
               project_id: sub,
               team_id: teams[n % 3],
               level: 'user',
             })
-          await ctx.db.insert('issues', {
-            id: uuid(),
-            org_id: f.org.id,
-            project_id: sub,
-            num: 3000 + 3 * n + k,
-            title: `Spread ${n}`,
-            description: '',
-            status: 'todo',
-            priority: 'medium',
-            paused: false,
-            created_at: NOW,
-            updated_at: NOW,
-            window_key: newWindowKey(),
-          })
+          await ctx.db.insert(
+            'issues',
+            await withParentKey(ctx, {
+              id: uuid(),
+              org_id: f.org.id,
+              project_id: sub,
+              num: 3000 + 3 * n + k,
+              title: `Spread ${n}`,
+              description: '',
+              status: 'todo',
+              priority: 'medium',
+              paused: false,
+              created_at: NOW,
+              updated_at: NOW,
+              window_key: newWindowKey(),
+            }),
+          )
         }
       }
     })
@@ -1341,6 +1377,7 @@ describe('the projects and people parts', () => {
         await ctx.db.insert('team_members', {
           team_id: id,
           profile_id: f.viewer.id,
+          org_id: f.viewer.org_id,
           is_leader: false,
         })
       }
@@ -1424,6 +1461,7 @@ describe('the people part', () => {
       await ctx.db.insert('team_members', {
         team_id: 'gone-team',
         profile_id: f.viewer.id,
+        org_id: f.viewer.org_id,
         is_leader: false,
       })
     })

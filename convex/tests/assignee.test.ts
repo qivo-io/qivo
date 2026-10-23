@@ -74,10 +74,12 @@ describe('assignee project permission', () => {
       await ctx.db.insert('team_members', {
         team_id: f.team.id,
         profile_id: recipient.id,
+        org_id: recipient.org_id,
         is_leader: false,
       })
       return await ctx.db.insert('project_team_access', {
         project_id: f.meta.id,
+        org_id: f.meta.org_id,
         team_id: f.team.id,
         level: 'viewer',
       })

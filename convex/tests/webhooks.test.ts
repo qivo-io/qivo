@@ -16,6 +16,7 @@ import {
   plantProject,
   uuid,
   withOrg,
+  withParentKey,
 } from './helpers.setup'
 
 beforeEach(() => {
@@ -169,7 +170,7 @@ describe('durable task events', () => {
     expect((await f.t.run((ctx) => byId(ctx, 'issues', f.issue.id)))?.status_at).toBeDefined()
     await f.t.run(async (ctx) => {
       const row = await byId(ctx, 'issues', child.id)
-      await ctx.db.patch(row!._id, { parent_id: f.issue.id })
+      await ctx.db.patch(row!._id, await withParentKey(ctx, { parent_id: f.issue.id }))
     })
     const carried = await move(far.id)
     expect(carried).toContainEqual([child.id, ['project_id']])

@@ -52,6 +52,7 @@ import {
   type T,
   uuid,
   withOrg,
+  withParentKey,
   workspaceOf,
 } from './helpers.setup'
 import { assertNoDanglingRefs } from './refs.setup'
@@ -103,20 +104,23 @@ async function plantChildren(
   for (let from = 0; from < n; from += 100)
     await t.run(async (ctx) => {
       for (const [i, id] of ids.slice(from, from + 100).entries())
-        await ctx.db.insert('issues', {
-          id,
-          org_id: parent.org_id,
-          project_id: projectId,
-          parent_id: parent.id,
-          num: 10_000 + from + i,
-          title: `Subtask ${from + i + 1}`,
-          description,
-          status: 'todo',
-          priority: 'medium',
-          paused: false,
-          created_at: NOW,
-          updated_at: NOW,
-        })
+        await ctx.db.insert(
+          'issues',
+          await withParentKey(ctx, {
+            id,
+            org_id: parent.org_id,
+            project_id: projectId,
+            parent_id: parent.id,
+            num: 10_000 + from + i,
+            title: `Subtask ${from + i + 1}`,
+            description,
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+          }),
+        )
     })
   return ids
 }

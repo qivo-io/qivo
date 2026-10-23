@@ -195,6 +195,7 @@ export const create = adminMutation({
         team_id: team.id,
         profile_id: args.id,
         is_leader: false,
+        org_id: org.id,
       })
     }
     await logActivity(ctx, {
@@ -401,6 +402,7 @@ async function updateProfile(
       team_id: team.id,
       profile_id: row.id,
       is_leader: false,
+      org_id: row.org_id,
     })
   }
   if (upd.active !== undefined || upd.org_role !== undefined || upd.email !== undefined) {

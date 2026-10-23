@@ -107,7 +107,7 @@ import {
   projectLevelsForOrg,
 } from '../lib/access'
 import { deletionBegun, orgWriteBlock } from '../lib/billingAccess'
-import { byId, newWindowKey, strayRows, usedMoreThan } from '../lib/db'
+import { byId, newWindowKey, parentKeyOf, strayRows, usedMoreThan } from '../lib/db'
 import { demoForOrg, isDemoDeployment, uncountedWriter } from '../lib/demo'
 import {
   type AccessLevel,
@@ -2391,6 +2391,7 @@ async function writeTask(
     // none (storedTaskKey)
     window_key: doc.window_key ?? (await firstTaskKey(run, doc.id)),
     parent_id: parentId,
+    parent_key: await restoredParentKey(run, parentId),
     ...(await restoredHolders(run, doc)),
     created_by: await keptProfile(run, doc.created_by),
     reporter_id: await keptProfile(run, doc.reporter_id),
@@ -2411,6 +2412,24 @@ async function writeTask(
   run.budget.tasks -= 1
   charge(run.budget, t.row)
   return _id
+}
+
+/* The parent_key (schema.ts) of a task written back under `parentId`: from
+ * the parent while it is in issues, else from its stored copy, which goes
+ * back with that key (storedTaskKey). The task's own stored copy may have
+ * none, stored before parent keys, or one of a parent it no longer comes
+ * back with, so the restore always takes it from the parent. */
+async function restoredParentKey(
+  run: Run,
+  parentId: string | undefined,
+): Promise<string | undefined> {
+  if (parentId === undefined) return undefined
+  const live = await byId(run.ctx, 'issues', parentId)
+  if (live !== null) {
+    chargeRead(run.budget, live)
+    return parentKeyOf(live)
+  }
+  return (await storedTaskKey(run, parentId)) ?? ''
 }
 
 /* ----------------------------------------------------------- the reveal */
@@ -2590,7 +2609,8 @@ async function writeGrantBack(run: Run, row: Doc<'deleted_rows'>): Promise<boole
       )
       .first()
     if (share === null || held !== null) return false
-    await db.insert('project_team_access', share)
+    // a share stored before shares had org_id gets its project's
+    await db.insert('project_team_access', { ...share, org_id: run.item.org_id })
     return true
   }
   return false
@@ -2826,7 +2846,7 @@ type StoredChildren = Map<string, Stored<'issues'>[]>
  * from outside the item, undefined to clear it, or 'later' when the check
  * ran out of the step's reads (liveSubtasks, allSee) and must run again in the
  * next step. */
-type Kept = { id: string; grouped: boolean } | undefined | 'later'
+type Kept = { id: string; key: string | undefined; grouped: boolean } | undefined | 'later'
 
 /** The parent `task` of the item keeps from outside it, by the parent table
  * (design 5.2), or undefined to clear it. Only a live parent that is the
@@ -2894,7 +2914,7 @@ async function keptParent(
     { archived: !active, projectLive: outside.project.archived_at === undefined },
     { archived: !taskActive, projectLive: home.archived_at === undefined },
   )
-  return sees ? { id: outside.parent.id, grouped } : undefined
+  return sees ? { id: outside.parent.id, key: parentKeyOf(outside.parent), grouped } : undefined
 }
 
 /** The most bytes one count of a parent's subtasks (liveSubtasks) reads.
@@ -3209,7 +3229,7 @@ async function attachParent(
   const kept = await keptParent(run, task, home, outside, new Map(), step)
   if (kept === 'later') return false
   if (kept !== undefined) {
-    const fields = { parent_id: kept.id, updated_at: run.now }
+    const fields = { parent_id: kept.id, parent_key: kept.key, updated_at: run.now }
     await run.ctx.db.patch(task._id, fields)
     step.tasks.set(task.id, { ...task, ...fields })
     if (kept.grouped) step.grouped.add(kept.id)

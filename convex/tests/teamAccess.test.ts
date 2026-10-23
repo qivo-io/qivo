@@ -263,6 +263,7 @@ describe('project team sharing', () => {
         await ctx.db.insert('team_members', {
           team_id: sharedTeamId,
           profile_id: profile.id,
+          org_id: profile.org_id,
           is_leader: true,
         })
       }
@@ -270,16 +271,19 @@ describe('project team sharing', () => {
         await ctx.db.delete(grant._id)
       await ctx.db.insert('project_team_access', {
         project_id: f.otherProject.id,
+        org_id: f.otherProject.org_id,
         team_id: sharedTeamId,
         level: 'user',
       })
       await ctx.db.insert('team_members', {
         team_id: foreignTeamId,
         profile_id: person.id,
+        org_id: person.org_id,
         is_leader: true,
       })
       await ctx.db.insert('project_team_access', {
         project_id: f.hidden.id,
+        org_id: f.hidden.org_id,
         team_id: foreignTeamId,
         level: 'user',
       })

@@ -11,18 +11,21 @@
  * - catalog (per organization): teams and labels. One range each.
  * - people (per window of the organization's profile ids,
  *   lib/idWindows.ts): profiles with their Team sync stamps and team
- *   memberships. Two ranges, and one per person for their memberships.
+ *   memberships. Four ranges; one per person for their memberships while
+ *   one of the window's lacks org_id (internal/rangeKeysBackfill). A
+ *   membership edit of anyone in the window reruns it.
  * - projects (per window of its projects' window keys, which the server
  *   picks at random, lib/db.ts newWindowKey): the projects the caller can
  *   see, with grants, team grants and the active ones' milestones. Up to
  *   three ranges per project, beside the caller's levels on it.
  * - tasks (per window of its tasks' window keys): the caller's working set,
  *   with links, labels, attachments and follows, and the anonymized load of
- *   the window's tasks the caller is not shown. Five ranges for the window
- *   and its relation rows, one or two per task for its subtasks, five per
- *   task restored before its archive marks were cleared, one per task
- *   outside it that a task names (a parent, a link target) and one per
- *   owner of a hidden task.
+ *   the window's tasks the caller is not shown. Seven ranges for the
+ *   window, its relation rows and its tasks' active subtasks (by their
+ *   parent's window key; one or two per task while an active subtask of
+ *   the organization lacks it), five per task restored before its archive
+ *   marks were cleared, one per task outside it that a task names (a
+ *   parent, a link target) and one per owner of a hidden task.
  * - inbox (per organization): the caller's messages, at most 3,002 messages
  *   read and one range per task they name, cut short where those tasks
  *   would read too much.
@@ -34,7 +37,10 @@
  * know what the caller can see reads the projects its rows name, the
  * caller's grants and the team shares on them, and the teams those shares
  * name with the caller's memberships of them; where it asks about many
- * projects, all of the caller's grants, memberships and team shares instead.
+ * projects, all of the caller's grants, memberships and team shares
+ * instead, and for a caller in many teams every team share on the
+ * organization's projects, so a share edit anywhere in the organization
+ * reruns it.
  * A part that asks whether a parent shows for navigation (a top-level
  * project the caller holds no level on, lib/access.ts levelUnder) reads all of the caller's grants, memberships and
  * team shares, the parent's sub-projects, and the teams of those

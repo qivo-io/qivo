@@ -34,6 +34,7 @@ import {
   type T,
   uuid,
   withOrg,
+  withParentKey,
   workspaceOf,
 } from './helpers.setup'
 
@@ -1403,6 +1404,7 @@ describe('navigation-only parents', () => {
       })
       await ctx.db.insert('project_team_access', {
         project_id: f.sub2.id,
+        org_id: f.sub2.org_id,
         team_id: f.team.id,
         level: 'viewer',
       })
@@ -1416,6 +1418,7 @@ describe('navigation-only parents', () => {
       })
       await ctx.db.insert('project_team_access', {
         project_id: f.meta.id,
+        org_id: f.meta.org_id,
         team_id: parentTeam,
         level: 'user',
       })
@@ -1501,7 +1504,7 @@ describe('hidden parents', () => {
     await t.run(async (ctx) => {
       const sub2 = await ctx.db.get(f.sub2._id)
       await ctx.db.patch(sub2!._id, { archived_at: NOW })
-      await ctx.db.patch(near._id, { parent_id: undefined })
+      await ctx.db.patch(near._id, await withParentKey(ctx, { parent_id: undefined }))
     })
     const inSub2 = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
     const underArchived = await plantIssue(t, {
@@ -1957,19 +1960,22 @@ describe('commentThread events near the read limits', () => {
         ...(await big.run(async (ctx) => {
           const out: Doc<'issues'>[] = []
           for (let i = from; i < from + 20; i++) {
-            const _id = await ctx.db.insert('issues', {
-              id: uuid(),
-              org_id: g.org.id,
-              project_id: g.sub2.id,
-              num: 5_000 + i,
-              title: `Long ${i}`,
-              description: 'd'.repeat(500_000),
-              status: 'todo',
-              priority: 'medium',
-              paused: false,
-              created_at: NOW,
-              updated_at: NOW,
-            })
+            const _id = await ctx.db.insert(
+              'issues',
+              await withParentKey(ctx, {
+                id: uuid(),
+                org_id: g.org.id,
+                project_id: g.sub2.id,
+                num: 5_000 + i,
+                title: `Long ${i}`,
+                description: 'd'.repeat(500_000),
+                status: 'todo',
+                priority: 'medium',
+                paused: false,
+                created_at: NOW,
+                updated_at: NOW,
+              }),
+            )
             out.push((await ctx.db.get(_id)) as Doc<'issues'>)
           }
           return out

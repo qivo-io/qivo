@@ -13,7 +13,12 @@ async function fixture() {
     email: 'person@example.test',
   })
   await t.run((ctx) =>
-    ctx.db.insert('team_members', { team_id: f.team.id, profile_id: person.id, is_leader: true }),
+    ctx.db.insert('team_members', {
+      team_id: f.team.id,
+      profile_id: person.id,
+      org_id: person.org_id,
+      is_leader: true,
+    }),
   )
   return { t, f, person }
 }

@@ -316,7 +316,12 @@ export async function addTeamMemberCore(
   if (member === null || member.org_id !== team.org_id) throw notFound('user not found')
   if (member.org_role === 'guest') throw forbidden('a guest is never a team member')
   if ((await membershipOf(ctx, team.id, member.id)) !== null) return { changed: false }
-  await ctx.db.insert('team_members', { team_id: team.id, profile_id: member.id, is_leader: false })
+  await ctx.db.insert('team_members', {
+    team_id: team.id,
+    profile_id: member.id,
+    is_leader: false,
+    org_id: member.org_id,
+  })
   await logActivity(ctx, {
     org_id: team.org_id,
     actor_id: me.id,
@@ -367,7 +372,7 @@ export async function setTeamLeaderCore(
         : 'a guest is never a team member',
     )
   }
-  await ctx.db.patch(row._id, { is_leader: isLeader })
+  await ctx.db.patch(row._id, { is_leader: isLeader, org_id: member.org_id })
   await logActivity(ctx, {
     org_id: team.org_id,
     actor_id: me.id,

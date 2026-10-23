@@ -242,14 +242,22 @@ function exportRow(doc: Doc<OrgExportSection>, section: OrgExportSection): OrgEx
   delete row.gravatar_avatars
   // a task's archive-mark flag is the archive steps' bookkeeping
   delete row.relations_marked
-  // a task's or project's window key only places it in the app's windows
+  // a task's or project's window key and a subtask's parent key only place
+  // it in the app's windows
   delete row.window_key
+  delete row.parent_key
   // an activity row's field prints only let a refused edit name who wrote
   // the value (model/expected.ts)
   delete row.field_prints
   // The organization id, the archive mark and the task's window key only
   // serve index reads.
-  if (section === 'issue_links' || section === 'issue_labels' || section === 'issue_attachments') {
+  if (
+    section === 'issue_links' ||
+    section === 'issue_labels' ||
+    section === 'issue_attachments' ||
+    section === 'team_members' ||
+    section === 'project_team_access'
+  ) {
     delete row.org_id
     delete row.task_archived
   }

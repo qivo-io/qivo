@@ -76,7 +76,7 @@ const plantMembership = (on: T, org_id: string, profile_id: string, is_leader = 
       track_delay_default: false,
       created_at: NOW,
     })
-    await ctx.db.insert('team_members', { team_id, profile_id, is_leader })
+    await ctx.db.insert('team_members', { org_id: org_id, team_id, profile_id, is_leader })
     return team_id
   })
 

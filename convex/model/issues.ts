@@ -70,7 +70,15 @@ import {
   profileCanSeeProject,
 } from '../lib/access'
 import { HISTORY_PAGE_MAX, receivedRows } from '../lib/activityVisibility'
-import { assertNewRowId, byId, insertUnique, newWindowKey, usedMoreThan } from '../lib/db'
+import {
+  assertNewRowId,
+  byId,
+  insertUnique,
+  newWindowKey,
+  parentKeyFor,
+  parentKeyOf,
+  usedMoreThan,
+} from '../lib/db'
 import {
   ISSUE_PRIORITIES,
   ISSUE_STATUSES,
@@ -1053,8 +1061,8 @@ export async function detachChild(
   now: string,
   preload?: NotifyPreload,
 ): Promise<void> {
-  await ctx.db.patch(child._id, { parent_id: undefined, updated_at: now })
-  const { parent_id: _parentId, ...rest } = child
+  await ctx.db.patch(child._id, { parent_id: undefined, parent_key: undefined, updated_at: now })
+  const { parent_id: _parentId, parent_key: _parentKey, ...rest } = child
   const after: Doc<'issues'> = { ...rest, updated_at: now }
   await notifyIssueUpdate(ctx, { before: child, after, actor, now, preload })
 }
@@ -1387,6 +1395,7 @@ export async function createIssueCore(
   // its own (model/descriptionImages.ts)
   if (shownImages(description).size > 0) throw rule(IMAGE_NOT_ATTACHED)
   const parent_id = args.parent_id ?? undefined
+  let parent_key: string | undefined
   if (parent_id !== undefined) {
     // a used id, live or held by Deleted items, is refused first, so the
     // subtask check below, which reads the subtasks of the id it is given,
@@ -1401,6 +1410,7 @@ export async function createIssueCore(
     const child = { id: args.id, org_id, project_id: project.id }
     const parent = await assertParentChain(ctx, child, parent_id, me)
     assertParentActive(parent, undefined) // a fresh row is active
+    parent_key = parentKeyOf(parent)
   }
   const assignee_id = args.assignee_id ?? undefined
   if (assignee_id !== undefined) await assertAssigneeRule(ctx, project, assignee_id)
@@ -1448,6 +1458,7 @@ export async function createIssueCore(
       assignee_id,
       reviewer_id,
       parent_id,
+      parent_key,
       start_week,
       end_week,
       due_date: cleanTaskDate(args.due_date, 'due_date'),
@@ -1616,8 +1627,13 @@ export async function updateIssueCore(
       assertParentActive(attachedTo, issue.archived_at)
     }
     w.parent_id = nextParent
+    w.parent_key = attachedTo === undefined ? undefined : parentKeyOf(attachedTo)
   } else if (leavesParent) {
     w.parent_id = undefined // ctx.db.patch unsets it
+    w.parent_key = undefined
+  } else if (toggle === 'restored' && issue.parent_id !== undefined) {
+    // an archived subtask may have missed its parent's first window key
+    w.parent_key = await parentKeyFor(ctx, issue.parent_id)
   }
   // the task's project, read at most once and only by the guards that need it
   let project: Doc<'projects'> | undefined
@@ -2084,7 +2100,10 @@ export async function moveIssueCore(
     updated_at: now,
     ...movedStamps(issue, now),
   }
-  if (detach) w.parent_id = undefined // ctx.db.patch unsets it
+  if (detach) {
+    w.parent_id = undefined // ctx.db.patch unsets it
+    w.parent_key = undefined
+  }
   const live = projectLiveness(ctx)
   // Which projects are live once the move lands, for the group tests of the
   // task and its subtasks. A subtask the move carries lands in the
@@ -2380,6 +2399,8 @@ async function restoreAncestors(
       : {}
     await ctx.db.patch(parent._id, {
       archived_at: undefined,
+      // a subtask stored before the rule of one level has a parent too
+      parent_key: await parentKeyFor(ctx, parent.parent_id),
       ...ownHours,
       done_at: doneStampUpdate(parent, { status: parent.status, archived_at: undefined }, now),
       updated_at: now,
@@ -2494,7 +2515,10 @@ export async function unarchiveIssueCore(
   const leaves = left !== undefined
   await ctx.db.patch(issue._id, {
     archived_at: undefined,
-    ...(leaves ? { parent_id: undefined } : {}),
+    // an archived subtask may have missed its parent's first window key
+    ...(leaves
+      ? { parent_id: undefined, parent_key: undefined }
+      : { parent_key: await parentKeyFor(ctx, issue.parent_id) }),
     done_at: doneStampUpdate(issue, { status: issue.status, archived_at: undefined }, now),
     updated_at: now,
   })

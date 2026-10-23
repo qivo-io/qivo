@@ -87,13 +87,15 @@ import { followTask, subscribeToIssue, unfollowTask } from './model/messages'
 type MeCtx = QueryCtx & { me: Doc<'profiles'> }
 
 /* System fields stay internal; optional columns come back ABSENT, like the
- * workspace's rows. relations_marked (the archive steps' bookkeeping) and
- * window_key (where the app's windows place the task) stay internal too. */
+ * workspace's rows. relations_marked (the archive steps' bookkeeping),
+ * window_key and parent_key (where the app's windows place the task) stay
+ * internal too. */
 const pub = ({
   _id,
   _creationTime,
   relations_marked: _marks,
   window_key: _window,
+  parent_key: _parentKey,
   ...row
 }: Doc<'issues'>) => row
 

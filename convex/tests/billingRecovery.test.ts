@@ -630,7 +630,12 @@ describe('admin actions that take access away during read-only access', () => {
     // The fixture's user leads the team; the viewer and the agent join it raw.
     await t.run(async (ctx) => {
       for (const profile_id of [f.viewer.id, f.agent.id]) {
-        await ctx.db.insert('team_members', { team_id, profile_id, is_leader: false })
+        await ctx.db.insert('team_members', {
+          org_id: org_id,
+          team_id,
+          profile_id,
+          is_leader: false,
+        })
       }
     })
     // keeping a member as a Viewer or reassigning their tasks writes more
@@ -728,6 +733,7 @@ describe('admin actions that take access away during read-only access', () => {
       await ctx.db.insert('team_members', {
         team_id: f.team.id,
         profile_id: f.viewer.id,
+        org_id: f.viewer.org_id,
         is_leader: false,
       })
     })

@@ -15,10 +15,20 @@ const grant = (
 ) => ctx.db.insert('project_access', { project_id: project.id, profile_id: me.id, level })
 
 const join = (ctx: MutationCtx, teamId: string, me: Doc<'profiles'>, is_leader = false) =>
-  ctx.db.insert('team_members', { team_id: teamId, profile_id: me.id, is_leader })
+  ctx.db.insert('team_members', {
+    team_id: teamId,
+    profile_id: me.id,
+    org_id: me.org_id,
+    is_leader,
+  })
 
 const share = (ctx: MutationCtx, project: Doc<'projects'>, teamId: string, level: GrantLevel) =>
-  ctx.db.insert('project_team_access', { project_id: project.id, team_id: teamId, level })
+  ctx.db.insert('project_team_access', {
+    project_id: project.id,
+    org_id: project.org_id,
+    team_id: teamId,
+    level,
+  })
 
 /* A new team of organization `orgId`, without members. */
 export async function newTeam(ctx: MutationCtx, orgId: string): Promise<string> {

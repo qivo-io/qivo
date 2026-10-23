@@ -1697,9 +1697,19 @@ describe('a project item while it moves', () => {
           track_delay_default: false,
           created_at: NOW,
         })
-        await ctx.db.insert('team_members', { team_id, profile_id: f.user.id, is_leader: false })
+        await ctx.db.insert('team_members', {
+          team_id,
+          profile_id: f.user.id,
+          org_id: f.user.org_id,
+          is_leader: false,
+        })
         for (const project_id of projects)
-          await ctx.db.insert('project_team_access', { project_id, team_id, level: 'user' })
+          await ctx.db.insert('project_team_access', {
+            org_id: f.org.id,
+            project_id,
+            team_id,
+            level: 'user',
+          })
       }
     })
     TRASH_BUDGET.rows = 1

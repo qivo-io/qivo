@@ -45,6 +45,7 @@ import {
   TODAY,
   uuid,
   withOrg,
+  withParentKey,
 } from './helpers.setup'
 
 /* Archive cursors are sealed with a key derived from BETTER_AUTH_SECRET
@@ -83,19 +84,22 @@ const plantMany = (fx: Fx, count: number, over: Partial<Doc<'issues'>> & { proje
     for (let i = 0; i < count; i++) {
       const id = uuid()
       ids.push(id)
-      await ctx.db.insert('issues', {
-        id,
-        org_id: fx.org.id,
-        num: bulkNum++,
-        title: `Bulk ${i}`,
-        description: '',
-        status: 'done',
-        priority: 'medium',
-        paused: false,
-        created_at: NOW,
-        updated_at: NOW,
-        ...over,
-      })
+      await ctx.db.insert(
+        'issues',
+        await withParentKey(ctx, {
+          id,
+          org_id: fx.org.id,
+          num: bulkNum++,
+          title: `Bulk ${i}`,
+          description: '',
+          status: 'done',
+          priority: 'medium',
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+          ...over,
+        }),
+      )
     }
     return ids
   })
@@ -1428,21 +1432,24 @@ describe('a single-task read of an archived group', () => {
           created_at: NOW,
         })
         const id = uuid()
-        await ctx.db.insert('issues', {
-          id,
-          org_id: fx.org.id,
-          project_id,
-          num: bulkNum++,
-          title: `Wide ${i}`,
-          description: '',
-          status: 'done',
-          priority: 'medium',
-          paused: false,
-          parent_id: group.id,
-          archived_at: day(9),
-          created_at: NOW,
-          updated_at: NOW,
-        })
+        await ctx.db.insert(
+          'issues',
+          await withParentKey(ctx, {
+            id,
+            org_id: fx.org.id,
+            project_id,
+            num: bulkNum++,
+            title: `Wide ${i}`,
+            description: '',
+            status: 'done',
+            priority: 'medium',
+            paused: false,
+            parent_id: group.id,
+            archived_at: day(9),
+            created_at: NOW,
+            updated_at: NOW,
+          }),
+        )
         ids.push(id)
       }
       return ids

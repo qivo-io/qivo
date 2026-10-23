@@ -27,6 +27,7 @@ import {
   type T,
   uuid,
   withOrg,
+  withParentKey,
 } from './helpers.setup'
 import { attach, comment, deleteTask } from './trash.setup'
 
@@ -129,6 +130,7 @@ async function consoleFixture(t: T): Promise<OrgFixture> {
     })
     await ctx.db.insert('project_team_access', {
       project_id: f.meta.id,
+      org_id: f.meta.org_id,
       team_id: f.team.id,
       level: 'user',
     })
@@ -364,6 +366,7 @@ describe('listOrgs', () => {
         let bytes = 0
         for (let i = 0; i < 1000; i++) {
           const _id = await ctx.db.insert('team_members', {
+            org_id: f.org.id,
             team_id: f.team.id,
             profile_id: uuid(),
             is_leader: false,
@@ -419,19 +422,22 @@ describe('listOrgs', () => {
     for (let batch = 0; batch < 3; batch++) {
       await t.run(async (ctx) => {
         for (let i = 0; i < 500; i++) {
-          await ctx.db.insert('issues', {
-            id: uuid(),
-            org_id: f.org.id,
-            project_id: f.sub.id,
-            num: batch * 500 + i + 1,
-            title: 'Bulk task',
-            description: '',
-            status: 'todo',
-            priority: 'medium',
-            paused: false,
-            created_at: NOW,
-            updated_at: NOW,
-          })
+          await ctx.db.insert(
+            'issues',
+            await withParentKey(ctx, {
+              id: uuid(),
+              org_id: f.org.id,
+              project_id: f.sub.id,
+              num: batch * 500 + i + 1,
+              title: 'Bulk task',
+              description: '',
+              status: 'todo',
+              priority: 'medium',
+              paused: false,
+              created_at: NOW,
+              updated_at: NOW,
+            }),
+          )
         }
       })
     }

@@ -28,6 +28,7 @@ import {
   tick,
   uuid,
   withOrg,
+  withParentKey,
   workspaceOf,
 } from './helpers.setup'
 
@@ -483,19 +484,22 @@ describe('teamSync.lastComments', () => {
     // passes the document limit.
     await t.run(async (ctx) => {
       for (let n = 0; n < 7000; n++) {
-        await ctx.db.insert('issues', {
-          id: uuid(),
-          num: 10_000 + n,
-          title: 'Bulk task',
-          description: '',
-          status: n < 5000 ? 'progress' : n % 2 ? 'done' : 'backlog',
-          priority: 'medium',
-          paused: false,
-          created_at: NOW,
-          updated_at: NOW,
-          ...others,
-          ...(n < 5000 ? {} : { assignee_id: f.user.id, reviewer_id: f.user.id }),
-        })
+        await ctx.db.insert(
+          'issues',
+          await withParentKey(ctx, {
+            id: uuid(),
+            num: 10_000 + n,
+            title: 'Bulk task',
+            description: '',
+            status: n < 5000 ? 'progress' : n % 2 ? 'done' : 'backlog',
+            priority: 'medium',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+            ...others,
+            ...(n < 5000 ? {} : { assignee_id: f.user.id, reviewer_id: f.user.id }),
+          }),
+        )
       }
     })
     const owned = []
@@ -546,18 +550,21 @@ describe('teamSync.lastComments', () => {
       await t.run(async (ctx) => {
         for (let n = chunk; n < chunk + 86; n++) {
           const id = uuid()
-          await ctx.db.insert('issues', {
-            id,
-            num: 10_000 + n,
-            title: 'Long task',
-            description: 'd'.repeat(20_000),
-            status: 'progress',
-            priority: 'medium',
-            paused: false,
-            created_at: NOW,
-            updated_at: NOW,
-            ...base,
-          })
+          await ctx.db.insert(
+            'issues',
+            await withParentKey(ctx, {
+              id,
+              num: 10_000 + n,
+              title: 'Long task',
+              description: 'd'.repeat(20_000),
+              status: 'progress',
+              priority: 'medium',
+              paused: false,
+              created_at: NOW,
+              updated_at: NOW,
+              ...base,
+            }),
+          )
           await ctx.db.insert('comments', {
             id: uuid(),
             issue_id: id,
