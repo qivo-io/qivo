@@ -26,7 +26,7 @@ import {
   hasProjectLevel,
   rootMetaOf,
 } from '../lib/access'
-import { assertNewRowId, byId, insertUnique } from '../lib/db'
+import { assertNewRowId, byId, insertUnique, newWindowKey } from '../lib/db'
 import type { GrantLevel, ProjectType } from '../lib/enums'
 import { descriptionForm, trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
@@ -374,6 +374,7 @@ export async function createProjectCore(
       // Teamless projects use the neutral default unless explicitly set.
       track_delay: p.track_delay ?? true,
       created_at: now,
+      window_key: newWindowKey(),
     },
     badRequest('a project with this id already exists'),
   )
@@ -694,7 +695,8 @@ async function writeGrants(
     if (next.has(uid)) continue
     if (mayDrop(uid)) await ctx.db.delete(row._id)
     // a removed person's grant waits for its cleanup (profileRemovals.ts),
-    // and no client lists it (snapshot.ts), so leaving it out removes nothing
+    // and no client lists it (lib/workspaceJoin.ts), so leaving it out
+    // removes nothing
     else if ((await byId(ctx, 'profiles', uid)) !== null) removes = true
   }
   return removes

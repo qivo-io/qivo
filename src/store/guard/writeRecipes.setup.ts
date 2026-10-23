@@ -1,5 +1,6 @@
 import type { FunctionReturnType } from 'convex/server'
 import type { api } from '../../../convex/_generated/api'
+import type { Workspace } from '../../../convex/lib/workspaceJoin'
 import type { Row } from '../rows'
 
 /* One recipe per write the store sends (layerGuard.test.ts checks that each
@@ -9,7 +10,7 @@ import type { Row } from '../rows'
    write, written from the server's code with its own stamps, so a paint
    that differs from what the server stores shows up. */
 
-export type Snapshot = NonNullable<FunctionReturnType<typeof api.snapshot.forMe>>
+export type Snapshot = Workspace
 export type Thread = FunctionReturnType<typeof api.snapshot.commentThread>
 type Store = typeof import('../planner')
 type Planner = Store['P']
@@ -126,7 +127,6 @@ export function fixture(): Snapshot {
         week_start: 1,
         week_one_rule: 'first4day',
         default_plannable_hours: 40,
-        gravatar_avatars: false,
       },
     ],
     profiles: [person(ME, 'Planner', 'admin'), person(PAT, 'Pat', 'user')],

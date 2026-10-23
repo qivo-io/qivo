@@ -46,6 +46,7 @@ import {
   type T,
   uuid,
   withOrg,
+  workspaceOf,
 } from './helpers.setup'
 
 /* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not. */
@@ -997,7 +998,7 @@ describe("0056 §C — planted forbidden rows grant nothing ('the design assumes
       expect(await canSeeProject(ctx, f.viewer, f.otherProject)).toBe(false)
       expect(await hasProjectLevel(ctx, f.viewer, f.otherProject.id, 'user')).toBe(false)
     })
-    const snap = await as(t, f.viewer).query(api.snapshot.forMe, {})
+    const snap = await workspaceOf(as(t, f.viewer))
     expect(snap).not.toBeNull()
     expect(snap!.orgs.map((o) => o.id)).toEqual([f.org.id])
     expect(snap!.projects.map((p) => p.id)).not.toContain(f.otherProject.id)
@@ -1023,7 +1024,7 @@ describe("0056 §C — planted forbidden rows grant nothing ('the design assumes
       expect(await canSeeProject(ctx, f.user, foreignTeamProject)).toBe(false)
       expect(await hasProjectLevel(ctx, f.user, foreignTeamProject.id, 'user')).toBe(false)
     })
-    const snap = await as(t, f.user).query(api.snapshot.forMe, {})
+    const snap = await workspaceOf(as(t, f.user))
     expect(snap).not.toBeNull()
     expect(snap!.orgs.map((o) => o.id)).toEqual([f.org.id])
     expect(snap!.teams.map((tm) => tm.id)).not.toContain(foreignTeam.id)

@@ -37,7 +37,7 @@
  * them beyond this file. */
 
 import { internalMutation } from '../_generated/server'
-import { byId } from '../lib/db'
+import { byId, newWindowKey } from '../lib/db'
 import { refuseProduction } from '../lib/deployment'
 import type { IssueStatus } from '../lib/enums'
 import { DEFAULT_MESSAGE_RETENTION_DAYS } from '../lib/limits'
@@ -153,6 +153,7 @@ export const zzGuestOrg = internalMutation({
         num,
         track_delay: true, // the 0064 column default the SQL rows took
         created_at: now,
+        window_key: newWindowKey(),
       })
     await project(ZZ.sharedMeta, 1, 'ZGM', 'ZZ Shared Project', 0, {})
     await project(ZZ.sharedSub, 2, 'ZGS', 'ZZ Shared Sub', 0, { parent_id: ZZ.sharedMeta })
@@ -200,6 +201,7 @@ export const zzGuestOrg = internalMutation({
     ) =>
       ctx.db.insert('issues', {
         id,
+        window_key: newWindowKey(),
         project_id,
         org_id: ZZ.org,
         num,

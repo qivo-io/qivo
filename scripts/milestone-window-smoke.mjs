@@ -39,7 +39,9 @@ async function persisted() {
   })
   return page.evaluate(async (prefix) => {
     const { convex } = await import('/src/lib/convex.ts')
-    const snapshot = await convex.query('snapshot:forMe', {})
+    const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
+      (name, args) => convex.query(name, args),
+    )
     return snapshot.milestones
       .filter((row) => row.name.startsWith(prefix))
       .map(({ name, week, project_id }) => ({ name, week, project_id }))
@@ -90,7 +92,9 @@ async function cleanup() {
     await cleanupPage.evaluate(
       async ({ prefix, orgSlug }) => {
         const { convex } = await import('/src/lib/convex.ts')
-        const snapshot = await convex.query('snapshot:forMe', {})
+        const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
+          (name, args) => convex.query(name, args),
+        )
         const org = snapshot.orgs.find((row) => row.slug === orgSlug)
         if (!org) throw new Error('Cleanup organization is unavailable')
         for (const row of snapshot.milestones.filter((row) => row.name.startsWith(prefix))) {

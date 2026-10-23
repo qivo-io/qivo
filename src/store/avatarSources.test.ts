@@ -3,11 +3,15 @@ import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
+import type { Workspace } from '../../convex/lib/workspaceJoin'
 
-type Snapshot = NonNullable<FunctionReturnType<typeof api.snapshot.forMe>>
+type Snapshot = Workspace
 type Minted = FunctionReturnType<typeof api.files.mintUrls>
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -29,7 +33,6 @@ function fixture(): Snapshot {
     week_start: 1 as const,
     week_one_rule: 'first4day' as const,
     default_plannable_hours: 40,
-    gravatar_avatars: false,
   }
   const profiles: Snapshot['profiles'] = ['One', 'Two'].map((name, index) => ({
     id: crypto.randomUUID(),
@@ -104,6 +107,13 @@ describe('uploaded profile pictures through the planner store', () => {
         ]),
     ),
   })
+  /* A delivery that changes the workspace, so the store rebuilds. Convex
+     re-sends no part whose answer stayed the same. */
+  let deliveries = 0
+  const deliverChange = () => {
+    snap.orgs[0].name = `Testbed ${++deliveries}`
+    publish(structuredClone(snap))
+  }
   const ready = async () =>
     vi.waitFor(() =>
       expect(store.P.users.every((user) => user.avatarUrl?.startsWith('blob:'))).toBe(true),
@@ -172,14 +182,14 @@ describe('uploaded profile pictures through the planner store', () => {
     const renewal = deferred<Minted>()
     mint.mockReturnValueOnce(renewal.promise)
     vi.setSystemTime(new Date(NOW.getTime() + 480_000))
-    publish(structuredClone(snap))
+    deliverChange()
     expect(store.P.users.map((user) => user.avatarUrl)).toEqual(sources)
     expect(mint).toHaveBeenCalledTimes(2)
-    publish(structuredClone(snap))
+    deliverChange()
     expect(mint).toHaveBeenCalledTimes(2)
     renewal.resolve(response())
     await vi.advanceTimersByTimeAsync(0)
-    publish(structuredClone(snap))
+    deliverChange()
     expect(store.P.users.map((user) => user.avatarUrl)).toEqual(sources)
     expect(fetcher).toHaveBeenCalledTimes(2)
     expect(revoke).not.toHaveBeenCalled()
@@ -196,7 +206,7 @@ describe('uploaded profile pictures through the planner store', () => {
           new ConvexError({ code: 'forbidden', message: 'No longer a member' }),
         )
       vi.setSystemTime(new Date(NOW.getTime() + 480_000))
-      publish(structuredClone(snap))
+      deliverChange()
       await vi.waitFor(() => expect(store.P.users.every((user) => !user.avatarUrl)).toBe(true))
       expect(revoke).toHaveBeenCalledTimes(2)
       expect(mint).toHaveBeenCalledTimes(2)
@@ -210,7 +220,7 @@ describe('uploaded profile pictures through the planner store', () => {
     const stalled = deferred<Minted>()
     mint.mockReturnValueOnce(stalled.promise)
     vi.setSystemTime(new Date(NOW.getTime() + 480_000))
-    publish(structuredClone(snap))
+    deliverChange()
     await vi.advanceTimersByTimeAsync(15_000)
     expect(store.P.users.map((user) => user.avatarUrl)).toEqual(sources)
     await vi.advanceTimersByTimeAsync(45_000)
@@ -228,7 +238,7 @@ describe('uploaded profile pictures through the planner store', () => {
     await store.initStore()
     const obsolete = response()
     snap.profiles[0].avatar_storage_id = 'new-storage' as Id<'_storage'>
-    publish(structuredClone(snap))
+    deliverChange()
     await vi.waitFor(() => expect(store.P.users[0].avatarUrl).toBe('blob:portrait-1'))
     pending.resolve(obsolete)
     await ready()
@@ -241,7 +251,7 @@ describe('uploaded profile pictures through the planner store', () => {
     await ready()
     const removed = store.P.users[0].avatarUrl
     snap.profiles[0].avatar_storage_id = undefined
-    publish(structuredClone(snap))
+    deliverChange()
     expect(store.P.users[0].avatarUrl).toBeNull()
     expect(revoke).toHaveBeenCalledWith(removed)
     const remaining = store.P.users[1].avatarUrl

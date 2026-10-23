@@ -13,7 +13,10 @@ import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
    connection is back (EditorSlot in IssueDetail). */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -73,7 +76,7 @@ describe('the task editor while its code waits for the connection', { timeout: 2
     })
     network.onUpdate.mockImplementation((ref, _args, next) => {
       const name = getFunctionName(ref)
-      if (name === 'snapshot:forMe') next(structuredClone(snap))
+      if (name === 'workspace:whole') next(structuredClone(snap))
       else if (name === 'snapshot:commentThread') next({ comments: [], earlier: false, events: [] })
       return () => {}
     })

@@ -39,13 +39,13 @@
  * nothing else, so their notify is skipped outright; restored-up ancestors
  * pass notifyIssueUpdate's suppressNotify. Both archive writers (the core
  * and the machine toggle) schedule the background steps that mark every
- * message about the archived subtree read and the subtree's relation rows
- * for the app snapshot (model/messages.ts scheduleArchivedReads). Both
- * restore writers schedule the steps that clear those marks again for every
- * task they restore, the row itself and each archived ancestor
- * (model/archiveMarks.ts scheduleMarkClears). The snapshot reads such a task
- * through its own indexes until they finish, so a restore writes no relation
- * row.
+ * message about the archived subtree read and mark the subtree's relation
+ * rows (model/messages.ts scheduleArchivedReads). Both restore writers
+ * schedule the steps that clear those marks again for every task they
+ * restore, the row itself and each archived ancestor (model/archiveMarks.ts
+ * scheduleMarkClears). Readers that skip marked rows read such a task
+ * through its own indexes until they finish, so a restore writes no
+ * relation row.
  *
  * Every core that changes a task (create, update, move on both ends,
  * archive, restore, delete) first runs the write gate, assertCanEdit, which
@@ -70,7 +70,7 @@ import {
   profileCanSeeProject,
 } from '../lib/access'
 import { HISTORY_PAGE_MAX, receivedRows } from '../lib/activityVisibility'
-import { assertNewRowId, byId, insertUnique, usedMoreThan } from '../lib/db'
+import { assertNewRowId, byId, insertUnique, newWindowKey, usedMoreThan } from '../lib/db'
 import {
   ISSUE_PRIORITIES,
   ISSUE_STATUSES,
@@ -1460,6 +1460,7 @@ export async function createIssueCore(
       review_at: reviewStamp(null, { status, reviewer_id }, now), // created In Review: now
       status_at: now,
       archived_at: undefined,
+      window_key: newWindowKey(),
       created_at: now,
       updated_at: now,
     },
@@ -2499,8 +2500,8 @@ export async function unarchiveIssueCore(
   })
   const rootAfter = (await ctx.db.get(issue._id)) as Doc<'issues'>
   const restored = await restoreAncestors(ctx, { row: rootAfter, actor: me, now })
-  // the relation rows' marks are cleared in the background; the snapshot
-  // reads these tasks through their own indexes until then
+  // the relation rows' marks are cleared in the background; the label
+  // search reads these tasks through their own indexes until then
   await scheduleMarkClears(ctx, [rootAfter, ...restored])
   await notifyIssueUpdate(ctx, { before, after: rootAfter, actor: me, now }) // 'Restored'
   const event = {

@@ -32,8 +32,9 @@ const double = vi.hoisted(() => ({
 }))
 vi.mock('../../lib/convex', async () => {
   const { createConvexDouble } = await import('./convexOrder.setup')
+  const { liveOver } = await import('./liveDouble.setup')
   double.current = createConvexDouble()
-  return { convex: double.current.client }
+  return { convex: double.current.client, live: liveOver(double.current.client) }
 })
 vi.mock('../../lib/auth', () => ({
   armConvexAuth: async () => true,
@@ -47,7 +48,7 @@ vi.mock('../../lib/images', async (original) => ({
   avatarImage: async (file: File) => file,
 }))
 
-const QUERY_FAILURE = '[CONVEX Q(snapshot:forMe)] Server Error'
+const QUERY_FAILURE = '[CONVEX Q(workspace:whole)] Server Error'
 const THREAD_FAILURE = '[CONVEX Q(snapshot:commentThread)] Server Error'
 const REFUSAL = () => new ConvexError({ code: 'forbidden', message: 'no write access' })
 
@@ -88,7 +89,7 @@ async function boot(recipe: Recipe) {
   sync = await import('../../lib/syncStatus')
   const d = server()
   d.reset()
-  d.publish('snapshot:forMe', snap, false)
+  d.publish('workspace:whole', snap, false)
   d.publish('snapshot:commentThread', page, false)
   // a new listener gets the held snapshot on a 0 ms timer, as from Convex
   let booted = false
@@ -213,8 +214,8 @@ describe.each(recipes.map((recipe) => [`${recipe.mutation} (${recipe.what})`, re
 
     it.each(pauses)('paints and sends nothing while paused (%s)', async (pause) => {
       await boot(recipe)
-      if (pause === 'failed') server().fail('snapshot:forMe', new Error(QUERY_FAILURE))
-      else if (pause === 'no_access') server().publish('snapshot:forMe', null)
+      if (pause === 'failed') server().fail('workspace:whole', new Error(QUERY_FAILURE))
+      else if (pause === 'no_access') server().publish('workspace:whole', null)
       else goOffline()
       await settle()
       const before = probe().rows()
@@ -248,7 +249,7 @@ describe.each(recipes.map((recipe) => [`${recipe.mutation} (${recipe.what})`, re
           beforeAnswer = probe().rows(true)
           // the query fails before the answer, so no delivery holds the write
           if (thread) server().fail('snapshot:commentThread', new Error(THREAD_FAILURE))
-          else server().fail('snapshot:forMe', new Error(QUERY_FAILURE))
+          else server().fail('workspace:whole', new Error(QUERY_FAILURE))
         }
         resolve(answerOf(recipe, name, sent))
       })
@@ -270,7 +271,7 @@ describe.each(recipes.map((recipe) => [`${recipe.mutation} (${recipe.what})`, re
       expect(probe().rows()).toEqual(shown)
       // the server's rows end the trouble and hold every accepted write
       if (thread) server().publish('snapshot:commentThread', threadOf(recipe, args))
-      else server().publish('snapshot:forMe', truthOf(recipe, args))
+      else server().publish('workspace:whole', truthOf(recipe, args))
       await settle()
       expect(P().snapshotTrouble()).toBeNull()
       expect(probe().layerCount()).toBe(0)
@@ -291,7 +292,7 @@ describe.each(recipes.map((recipe) => [`${recipe.mutation} (${recipe.what})`, re
       const early = probe().rows(true)
       // Convex delivers the write before it answers
       if (recipe.thread) server().publish('snapshot:commentThread', threadOf(recipe, pending))
-      else server().publish('snapshot:forMe', truthOf(recipe, pending))
+      else server().publish('workspace:whole', truthOf(recipe, pending))
       await settle()
       const painted = probe().rows(true)
       ;(answer as () => void)()

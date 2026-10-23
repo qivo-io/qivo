@@ -15,7 +15,10 @@ import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
    "Today 14:0x" in any time zone. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../../lib/convex', () => ({ convex: network }))
+vi.mock('../../lib/convex', async () => ({
+  convex: network,
+  live: (await import('../../store/guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -183,7 +186,7 @@ async function load(role: Role = 'admin', setup?: (snapshot: Snapshot) => void) 
   itemQueries = []
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
-    if (name === 'snapshot:forMe') next(structuredClone(snap))
+    if (name === 'workspace:whole') next(structuredClone(snap))
     if (name === 'deletedItems:item') {
       const subscription = { id: args.id, next, live: true }
       itemQueries.push(subscription)

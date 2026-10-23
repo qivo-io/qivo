@@ -1,14 +1,17 @@
-import { type FunctionReturnType, getFunctionName } from 'convex/server'
+import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { api } from '../../convex/_generated/api'
 import { firstSittingDay, SYNC_OWNERS_MAX, SYNC_SITTING_MS } from '../../convex/lib/teamSync'
+import type { Workspace } from '../../convex/lib/workspaceJoin'
 
-type Snapshot = NonNullable<FunctionReturnType<typeof api.snapshot.forMe>>
+type Snapshot = Workspace
 type Planner = typeof import('./planner')['P']
 type Role = Snapshot['profiles'][number]['org_role']
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -101,7 +104,6 @@ function fixture(myRole: Role) {
         week_start: 1,
         week_one_rule: 'first4day',
         default_plannable_hours: 32,
-        gravatar_avatars: false,
       },
     ],
     profiles: [me, aisha, ben],

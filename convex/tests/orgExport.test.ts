@@ -221,6 +221,32 @@ describe('organization export', () => {
     expect(await organization()).toMatchObject({ next_issue_num: 2, next_project_num: 5 })
   })
 
+  it("exports each person's Team sync stamp from their sync_stamps row on the profile row", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const caller = as(t, f.admin)
+    await caller.mutation(api.teamSync.stamp, { org_id: f.org.id, profile_id: f.user.id })
+    await caller.mutation(api.teamSync.stamp, { org_id: f.org.id, profile_id: f.agent.id })
+    const since = '2026-01-05T09:00:00.000Z'
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query('sync_stamps')
+        .withIndex('by_profile', (q) => q.eq('profile_id', f.agent.id))
+        .unique()
+      await ctx.db.patch(row!._id, { since })
+    })
+    const stamps = await t.run((ctx) => ctx.db.query('sync_stamps').collect())
+    const at = (id: string) => stamps.find((row) => row.profile_id === id)?.at
+    const profiles = (
+      await caller.query(page, { org_id: f.org.id, section: 'profiles', cursor: null })
+    ).rows
+    const row = (id: string) => profiles.find((p) => p.id === id)
+    expect(row(f.user.id)).toMatchObject({ sync_at: at(f.user.id) })
+    expect(row(f.user.id)).not.toHaveProperty('sync_since')
+    expect(row(f.agent.id)).toMatchObject({ sync_at: at(f.agent.id), sync_since: since })
+    expect(row(f.admin.id)).not.toHaveProperty('sync_at')
+  })
+
   it('exports every org-owned section including archived work, files, and safe key metadata', async () => {
     const t = newT()
     const f = await withOrg(t)

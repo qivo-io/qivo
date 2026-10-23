@@ -1,13 +1,17 @@
 /* Marks on the relation rows of archived tasks (schema.ts `task_archived`,
- * and `relations_marked` on the task). The app snapshot reads an
- * organization's links, label assignments and attachments, and the caller's
- * own follows, by indexes that leave marked rows out
- * (lib/snapshotRelations.ts, snapshot.ts). Its cost then follows the active
- * tasks instead of everything the organization ever archived.
+ * and `relations_marked` on the task). The label search of REST and MCP
+ * (lib/core.ts activeLabelNames) reads a label's assignments by an index
+ * that leaves marked rows out, so its cost follows the active tasks instead
+ * of everything the organization ever archived, and reads a task with the
+ * flag through its own assignments. The archive steps below read one task's
+ * marked or unmarked rows. Every other reader sees marked rows like any
+ * other: the app reads each shown task's rows through the task's own
+ * indexes (lib/workspaceParts.ts readTasks), and billing's storage totals
+ * count marked attachments too.
  *
- * The rule that keeps those reads exact is that every marked row belongs to
- * a task with relations_marked, a link through at least one end. These keep
- * it:
+ * The rule that keeps the label search exact is that every marked row
+ * belongs to a task with relations_marked, a link through at least one end.
+ * These keep it:
  * - Inserts never set a mark.
  * - Only markArchivedTask sets marks, for a task the caller read archived in
  *   the same transaction, and it sets the task's flag in that transaction.
@@ -30,9 +34,10 @@
  *   rows to the mark steps that archive scheduled. Clearing a link while its
  *   other end is archived is safe, because an unmarked row may belong to an
  *   archived task and readers filter it.
- * Until its flag is gone, the snapshot reads an active task through the
- * task's own indexes, which include marked rows, so its rows are back the
- * moment it is restored and stay right if a clear step fails. The nightly
+ * Until its flag is gone, the app shows an active task's marked follow, and
+ * its other rows come from the task's own indexes, which include marked
+ * rows, so its rows are back the moment it is restored and stay right if a
+ * clear step fails. The nightly
  * sweep (jobs.ts) schedules clears again for active tasks still flagged.
  *
  * Both kinds of step read only the rows they change, from indexes that hold

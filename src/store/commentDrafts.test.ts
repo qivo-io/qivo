@@ -5,7 +5,10 @@ import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 import type { Row } from './rows'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -22,9 +25,6 @@ type Deferred = { resolve: (value: null) => void; reject: (reason: unknown) => v
 type Thread = {
   deliver: (page: Page) => void
   fail: (e: unknown) => void
-  /** Hands over the object last delivered again, as Convex does to a new
-      listener on a result it still holds. */
-  replay: (value: unknown) => void
   closed: boolean
 }
 
@@ -44,11 +44,6 @@ describe('comment drafts and a failed thread in the store', () => {
   let threads: Thread[]
   let writes: { name: string; answer: Deferred }[]
   let toast: ReturnType<typeof vi.fn>
-  // The failure the client still holds for the thread. ConvexClient keeps a
-  // query's last result until the server answers the next subscription to
-  // it, and hands it to a new listener on a 0 ms timer unless the server
-  // answered that listener first.
-  let held: unknown
   // the thread value the double handed over last
   let delivered: unknown
 
@@ -78,7 +73,7 @@ describe('comment drafts and a failed thread in the store', () => {
   const settle = async () => {
     for (let i = 0; i < 8; i++) await Promise.resolve()
   }
-  // after the timers queued so far, such as a held result's redelivery
+  // after the timers queued so far
   const later = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
 
   beforeEach(async () => {
@@ -112,7 +107,6 @@ describe('comment drafts and a failed thread in the store', () => {
     }
     threads = []
     writes = []
-    held = null
     network.query.mockResolvedValue(null)
     network.mutation.mockImplementation(
       (ref) =>
@@ -123,30 +117,19 @@ describe('comment drafts and a failed thread in the store', () => {
         }),
     )
     network.onUpdate.mockImplementation((ref, _args, receive, onError) => {
-      if (getFunctionName(ref) === 'snapshot:forMe') receive(structuredClone(snap))
+      if (getFunctionName(ref) === 'workspace:whole') receive(structuredClone(snap))
       else if (getFunctionName(ref) === 'snapshot:commentThread') {
-        let answered = false
+        // a fresh subscription hears only the server's own answers
+        // (lib/convexOrdering.test.ts)
         const thread: Thread = {
           deliver: (page) => {
-            held = null
-            answered = true
             delivered = { events: [], ...page }
             receive(delivered)
           },
-          replay: (value) => receive(value),
-          fail: (e) => {
-            held = e
-            answered = true
-            onError(e)
-          },
+          fail: (e) => onError(e),
           closed: false,
         }
         threads.push(thread)
-        const cached = held
-        if (cached !== null)
-          setTimeout(() => {
-            if (!thread.closed && !answered) onError(cached)
-          }, 0)
         return () => {
           thread.closed = true
         }
@@ -223,26 +206,6 @@ describe('comment drafts and a failed thread in the store', () => {
   })
 
   describe('while the thread fails', () => {
-    it('takes a held thread Convex hands Retry for a replay, which ends no failure', async () => {
-      const { P } = store
-      live().deliver({ comments: range(1, 4), earlier: false })
-      const old = delivered
-      const edited = P.updateComment('comment-2', 'Edited')
-      live().fail(new Error('[CONVEX Q(snapshot:commentThread)] Server Error'))
-      writes[0].answer.resolve(null)
-      expect(await edited).toBe(true)
-      P.retryComments()
-      live().replay(old)
-      await settle()
-      expect(P.commentsFailure).toBe('retrying')
-      expect(bodies()).toEqual(['#1', 'Edited', '#3'])
-      // another write's refusal still leaves the saved edit
-      const refused = P.updateComment('comment-3', 'Refused')
-      writes[1].answer.reject(new ConvexError({ code: 'forbidden', message: 'not yours' }))
-      expect(await refused).toBe(false)
-      expect(bodies()).toEqual(['#1', 'Edited', '#3'])
-    })
-
     it('keeps a comment waiting for task A off task B, and shows it again on A', async () => {
       const { P } = store
       live().deliver({ comments: range(1, 3), earlier: false })
@@ -398,8 +361,7 @@ describe('comment drafts and a failed thread in the store', () => {
       expect(first.closed).toBe(true)
       expect(threads).toHaveLength(2)
       expect(P.commentsFailure).toBe('retrying')
-      // the client hands the new subscription the old failure first. It is
-      // not the server's answer, so the retry goes on.
+      // only the server's answer to the new subscription ends the retry
       await later()
       expect(P.commentsFailure).toBe('retrying')
       expect(bodies()).toEqual(['#1', '#2', '#3'])
@@ -412,34 +374,14 @@ describe('comment drafts and a failed thread in the store', () => {
       expect(bodies()).toEqual(['#1', '#2', '#3', '#4'])
     })
 
-    it('shows a failure the server sent before the old one could be replayed', () => {
-      vi.useFakeTimers()
+    it("shows the server's failure of a retry at once, and its later answer ends it", () => {
       const { P } = store
       live().deliver({ comments: range(1, 4), earlier: false })
       live().fail(new Error('Server Error'))
       P.retryComments()
-      // the server answers the rerun before the store's own timer runs, so
-      // the client replays nothing after it, and the answer is skipped
       live().fail(new Error('Server Error'))
-      vi.advanceTimersByTime(0)
-      expect(P.commentsFailure).toBe('retrying')
-      vi.advanceTimersByTime(4999)
-      expect(P.commentsFailure).toBe('retrying')
-      vi.advanceTimersByTime(1)
       expect(P.commentsFailure).toBe('failed')
       expect(bodies()).toEqual(['#1', '#2', '#3'])
-    })
-
-    it('shows the old failure again when the server does not answer a retry', () => {
-      vi.useFakeTimers()
-      const { P } = store
-      live().fail(new Error('Server Error'))
-      P.retryComments()
-      vi.advanceTimersByTime(4999)
-      expect(P.commentsFailure).toBe('retrying')
-      vi.advanceTimersByTime(1)
-      expect(P.commentsFailure).toBe('failed')
-      // the server's later answer still ends it
       live().deliver({ comments: range(1, 3), earlier: false })
       expect(P.commentsFailure).toBe('none')
       expect(bodies()).toEqual(['#1', '#2'])

@@ -36,6 +36,7 @@ import {
   type T,
   uuid,
   withOrg,
+  workspaceOf,
 } from './helpers.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 
@@ -670,9 +671,7 @@ describe('access ends in the removal transaction', () => {
         resource: mcpResource(),
       }),
       connections: (await session.query(api.oauthConnections.list, {})).length,
-      roster: ((await as(t, f.admin).query(api.snapshot.forMe, {}))?.profiles ?? []).map(
-        (p) => p.id,
-      ),
+      roster: ((await workspaceOf(as(t, f.admin)))?.profiles ?? []).map((p) => p.id),
     })
 
     // control case, everything works while both profiles exist
@@ -857,7 +856,7 @@ describe('access rows past the first pass', () => {
       ),
     })
     const shown = async () => {
-      const rows = await as(t, f.admin).query(api.snapshot.forMe, {})
+      const rows = await workspaceOf(as(t, f.admin))
       const projectUsers = await t.query(internal.machine.rest.listProjectUsers, {
         callerId: f.admin.id,
         access: 'read',
@@ -1109,7 +1108,7 @@ describe('the reserved id and its end states', () => {
     vi.setSystemTime(START + 1000)
     await as(t, f.admin).mutation(api.issues.unarchive, { org_id: f.org.id, id: archived.id })
     const shown = async () =>
-      (await as(t, f.admin).query(api.snapshot.forMe, {}))?.issues.find((i) => i.id === archived.id)
+      (await workspaceOf(as(t, f.admin)))?.issues.find((i) => i.id === archived.id)
     // back on the Board under an id the roster no longer has
     expect(await shown()).toMatchObject({ assignee_id: f.user.id })
     const later = START + 2000

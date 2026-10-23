@@ -17,11 +17,11 @@ import { countsAsSubtask, groupTest, LIVE_PROJECT_READS } from '../lib/liveTasks
 import { OWNER_LOAD_CHECKS, ownerLoadSpans } from '../lib/machineDelay'
 import { orgProjectView } from '../lib/visibility'
 import { weekGrid } from '../lib/workload'
+import { readTasks } from '../lib/workspaceParts'
 import { getProject } from '../machine/rest'
 import { MOVE_SUBTREE_HOLDER_RULE, REVIEWER_RULE } from '../model/issues'
 import { ASSIGNEE_LOAD_CHECKS, assigneeLoad, workloadCore } from '../planning'
 import { finishedBefore, positionAfter, RESTORE_REGROUP, restoredStep } from '../regroup'
-import { invokeSnapshot } from './backendPerformance.setup'
 import {
   as,
   expectRefusal,
@@ -38,6 +38,7 @@ import {
   TODAY,
   uuid,
   withOrg,
+  workspaceOf,
 } from './helpers.setup'
 
 type Fx = OrgFixture & {
@@ -126,7 +127,7 @@ const plantMany = (fx: Fx, count: number, over: Partial<Doc<'issues'>> & { proje
   })
 
 /* A public query's handler run inside `ctx`, so a test can read the
- * transaction's metrics after it (backendPerformance.setup invokeSnapshot). */
+ * transaction's metrics after it. */
 const handlerOf = <Args, Out>(fn: unknown) =>
   (fn as { _handler: (ctx: QueryCtx, args: Args) => Promise<Out> })._handler
 
@@ -191,7 +192,7 @@ describe('the group rule', () => {
       status: 'todo',
     })
     expect(Array.isArray(todo) && todo.map((r) => r.id)).toContain(parent.id)
-    const snap = await as(fx.t, fx.admin).query(api.snapshot.forMe, {})
+    const snap = await workspaceOf(as(fx.t, fx.admin))
     expect(snap?.issues.find((i) => i.id === parent.id)?.has_hidden_subtasks).toBe(false)
     // and it takes a status, dates and hours of its own
     await restPatch(fx, parent.id, {
@@ -241,16 +242,23 @@ describe('the group rule', () => {
 })
 
 describe('reading only live tasks', () => {
-  it('the snapshot never reads the tasks of an archived project', async () => {
+  it("the app's task and load parts never send the tasks of an archived project", async () => {
     const fx = await setup()
     const parent = await task(fx, { title: 'Parent' })
     await task(fx, { parent_id: parent.id })
     await task(fx, { project_id: fx.sub2.id, start_week: '2026-09-07', end_week: '2026-09-07' })
     const read = (who: Doc<'profiles'>) =>
       as(fx.t, who).query(async (ctx) => {
-        const snapshot = await invokeSnapshot(ctx)
+        const me = (await byId(ctx, 'profiles', who.id)) as Doc<'profiles'>
+        const whole = { from: '', to: null }
+        const tasks = await readTasks(ctx, me, whole)
+
         const { documentsRead } = await ctx.meta.getTransactionMetrics()
-        return { snapshot, documents: documentsRead.used }
+        if (tasks.state !== 'ok') throw new Error('a part did not answer')
+        return {
+          snapshot: { issues: tasks.issues, orgLoad: tasks.orgLoad },
+          documents: documentsRead.used,
+        }
       })
     const before = { admin: await read(fx.admin), guest: await read(fx.guest) }
     await plantMany(fx, 400, { project_id: fx.shelf.id })
@@ -259,7 +267,9 @@ describe('reading only live tasks', () => {
       const was = who === fx.admin ? before.admin : before.guest
       expect(now.snapshot?.issues).toEqual(was.snapshot?.issues)
       expect(now.snapshot?.orgLoad).toEqual(was.snapshot?.orgLoad)
-      expect(now.documents - was.documents, who.name).toBeLessThan(5)
+      // a window reads every active task of its ids, so its reads follow
+      // the tasks the organization made, not only the live ones
+      expect(now.documents - was.documents, who.name).toBeLessThan(450)
     }
   })
 
@@ -552,11 +562,6 @@ describe('reading only live tasks', () => {
           owner: await ranges(() =>
             ownerLoadSpans(ctx, me, owner, weekGrid(fx.org.week_start), view),
           ),
-          // the same answer at another moment
-          snapshot: await ranges(async () => ({
-            ...(await invokeSnapshot(ctx)),
-            delivered_at: '',
-          })),
         }
       })
     const reads = LIVE_PROJECT_READS.reads
@@ -568,7 +573,7 @@ describe('reading only live tasks', () => {
       const perProject = await read()
       LIVE_PROJECT_READS.reads = 1
       const oneRange = await read()
-      for (const key of ['workload', 'assignee', 'owner', 'snapshot'] as const) {
+      for (const key of ['workload', 'assignee', 'owner'] as const) {
         expect(oneRange[key].out, key).toEqual(perProject[key].out)
         expect(oneRange[key].ranges, key).toBeLessThan(perProject[key].ranges - 40)
       }

@@ -11,13 +11,11 @@
    writes into the server's rows outside a paint throws instead of changing
    them unseen. */
 
-import type { FunctionReturnType } from 'convex/server'
-import type { api } from '../../convex/_generated/api'
+import type { Workspace } from '../../convex/lib/workspaceJoin'
 import { sameData } from './stable'
 
-/** The snapshot as forMe sends it, with its long lists joined
-    (lib/arrayLimit.ts joinLists). */
-export type Snapshot = Omit<NonNullable<FunctionReturnType<typeof api.snapshot.forMe>>, 'more'>
+/** The workspace as the live parts join into it (convex/lib/workspaceJoin.ts). */
+export type Snapshot = Workspace
 
 /** The row sections kept by key, and how each row's key reads. */
 const KEYED = {
@@ -168,12 +166,6 @@ function indexOf(state: Staged): Map<string, number> {
   return state.index
 }
 
-/** The delivery's load rows of tasks this person is not shown. The store
-    derives the shown tasks' load from their rows (store/taskIndex.ts), so a
-    row naming a task, which a server before that change still sends, would
-    count twice. */
-const hiddenLoad = (snap: Snapshot) => (snap.orgLoad ?? []).filter((row) => row.issue_id === null)
-
 /** Creates an empty base. */
 export function createWorkspaceBase() {
   const empty = (): Staged => ({
@@ -271,8 +263,7 @@ export function createWorkspaceBase() {
         const keys = stageSection(name, snap[name], KEYED[name])
         if (name === 'issues') added = keys
       }
-      for (const name of LISTED_SECTIONS)
-        stageSection(name, name === 'orgLoad' ? hiddenLoad(snap) : (snap[name] ?? []), LISTED[name])
+      for (const name of LISTED_SECTIONS) stageSection(name, snap[name], LISTED[name])
       stagedScalars = {
         auth_user_id: snap.auth_user_id,
         myProfileIds: snap.myProfileIds,

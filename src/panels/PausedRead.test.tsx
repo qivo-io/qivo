@@ -14,7 +14,10 @@ import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
    included. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -85,7 +88,7 @@ describe('the task window while snapshot trouble pauses edits', { timeout: 30_00
     let live: { deliver: (value: Snapshot) => void; fail: (error: unknown) => void } | null = null
     network.onUpdate.mockImplementation((ref, _args, next, fail) => {
       const name = getFunctionName(ref)
-      if (name === 'snapshot:forMe') {
+      if (name === 'workspace:whole') {
         live = { deliver: next, fail }
         next(structuredClone(snap))
       } else if (name === 'snapshot:commentThread')

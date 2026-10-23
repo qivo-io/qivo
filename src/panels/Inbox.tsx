@@ -766,7 +766,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
               {P.messageGroups.length === 0 ? 'No messages yet.' : 'No messages match the filters.'}
             </div>
           )}
-          {/* the Inbox loads the newest 500 messages (convex/snapshot.ts) */}
+          {/* the Inbox loads the newest 500 messages (convex/lib/workspaceParts.ts readInbox) */}
           {P.inboxCut && (
             <div
               data-inbox-cut

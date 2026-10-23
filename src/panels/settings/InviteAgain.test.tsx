@@ -15,7 +15,10 @@ const network = vi.hoisted(() => ({
   query: vi.fn(),
   push: (_rows: Row[]) => {},
 }))
-vi.mock('../../lib/convex', () => ({ convex: network }))
+vi.mock('../../lib/convex', async () => ({
+  convex: network,
+  live: (await import('../../store/guard/liveDouble.setup')).liveOver(network),
+}))
 // UserControls reaches the store, whose auth client needs a backend URL
 vi.mock('../../lib/auth', () => ({
   armConvexAuth: async () => true,

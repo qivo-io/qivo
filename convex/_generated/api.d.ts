@@ -49,7 +49,7 @@ import type * as internal_oauthSmoke from "../internal/oauthSmoke.js";
 import type * as internal_operator from "../internal/operator.js";
 import type * as internal_overCapRows from "../internal/overCapRows.js";
 import type * as internal_storedGrantees from "../internal/storedGrantees.js";
-import type * as internal_syncStampsBackfill from "../internal/syncStampsBackfill.js";
+import type * as internal_windowKeysBackfill from "../internal/windowKeysBackfill.js";
 import type * as invites from "../invites.js";
 import type * as issues from "../issues.js";
 import type * as jobs from "../jobs.js";
@@ -80,6 +80,7 @@ import type * as lib_enums from "../lib/enums.js";
 import type * as lib_fieldPrints from "../lib/fieldPrints.js";
 import type * as lib_fileTokens from "../lib/fileTokens.js";
 import type * as lib_functions from "../lib/functions.js";
+import type * as lib_idWindows from "../lib/idWindows.js";
 import type * as lib_imageRefs from "../lib/imageRefs.js";
 import type * as lib_inbox from "../lib/inbox.js";
 import type * as lib_limitRules from "../lib/limitRules.js";
@@ -108,7 +109,6 @@ import type * as lib_projectKeys from "../lib/projectKeys.js";
 import type * as lib_requestBody from "../lib/requestBody.js";
 import type * as lib_review from "../lib/review.js";
 import type * as lib_search from "../lib/search.js";
-import type * as lib_snapshotRelations from "../lib/snapshotRelations.js";
 import type * as lib_taskEvents from "../lib/taskEvents.js";
 import type * as lib_taskRefs from "../lib/taskRefs.js";
 import type * as lib_teamSync from "../lib/teamSync.js";
@@ -116,6 +116,8 @@ import type * as lib_visibility from "../lib/visibility.js";
 import type * as lib_webhookTransport from "../lib/webhookTransport.js";
 import type * as lib_workingSet from "../lib/workingSet.js";
 import type * as lib_workload from "../lib/workload.js";
+import type * as lib_workspaceJoin from "../lib/workspaceJoin.js";
+import type * as lib_workspaceParts from "../lib/workspaceParts.js";
 import type * as machine_auth from "../machine/auth.js";
 import type * as machine_bodyFields from "../machine/bodyFields.js";
 import type * as machine_curation from "../machine/curation.js";
@@ -187,6 +189,7 @@ import type * as tokens from "../tokens.js";
 import type * as webhookActions from "../webhookActions.js";
 import type * as webhookQueue from "../webhookQueue.js";
 import type * as webhooks from "../webhooks.js";
+import type * as workspace from "../workspace.js";
 
 import type {
   ApiFromModules,
@@ -236,7 +239,7 @@ declare const fullApi: ApiFromModules<{
   "internal/operator": typeof internal_operator;
   "internal/overCapRows": typeof internal_overCapRows;
   "internal/storedGrantees": typeof internal_storedGrantees;
-  "internal/syncStampsBackfill": typeof internal_syncStampsBackfill;
+  "internal/windowKeysBackfill": typeof internal_windowKeysBackfill;
   invites: typeof invites;
   issues: typeof issues;
   jobs: typeof jobs;
@@ -267,6 +270,7 @@ declare const fullApi: ApiFromModules<{
   "lib/fieldPrints": typeof lib_fieldPrints;
   "lib/fileTokens": typeof lib_fileTokens;
   "lib/functions": typeof lib_functions;
+  "lib/idWindows": typeof lib_idWindows;
   "lib/imageRefs": typeof lib_imageRefs;
   "lib/inbox": typeof lib_inbox;
   "lib/limitRules": typeof lib_limitRules;
@@ -295,7 +299,6 @@ declare const fullApi: ApiFromModules<{
   "lib/requestBody": typeof lib_requestBody;
   "lib/review": typeof lib_review;
   "lib/search": typeof lib_search;
-  "lib/snapshotRelations": typeof lib_snapshotRelations;
   "lib/taskEvents": typeof lib_taskEvents;
   "lib/taskRefs": typeof lib_taskRefs;
   "lib/teamSync": typeof lib_teamSync;
@@ -303,6 +306,8 @@ declare const fullApi: ApiFromModules<{
   "lib/webhookTransport": typeof lib_webhookTransport;
   "lib/workingSet": typeof lib_workingSet;
   "lib/workload": typeof lib_workload;
+  "lib/workspaceJoin": typeof lib_workspaceJoin;
+  "lib/workspaceParts": typeof lib_workspaceParts;
   "machine/auth": typeof machine_auth;
   "machine/bodyFields": typeof machine_bodyFields;
   "machine/curation": typeof machine_curation;
@@ -374,6 +379,7 @@ declare const fullApi: ApiFromModules<{
   webhookActions: typeof webhookActions;
   webhookQueue: typeof webhookQueue;
   webhooks: typeof webhooks;
+  workspace: typeof workspace;
 }>;
 
 /**

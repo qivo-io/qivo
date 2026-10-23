@@ -14,6 +14,7 @@ import {
   purgeDeletedTasks,
   signInDemo,
 } from './browser-demo.mjs'
+import { readWorkspace } from './workspaceJoin.mjs'
 
 const demo = loadBrowserDemo(process.argv[2] ?? 'http://localhost:5199')
 const before = await inspectBrowserDemo(demo)
@@ -194,7 +195,9 @@ async function cleanupFixture() {
     await cleanupPage.evaluate(
       async ({ tasks, orgSlug }) => {
         const { convex } = await import('/src/lib/convex.ts')
-        const snapshot = await convex.query('snapshot:forMe', {})
+        const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
+          (name, args) => convex.query(name, args),
+        )
         const org = snapshot.orgs.find((candidate) => candidate.slug === orgSlug)
         if (!org) throw new Error('Cleanup organization is unavailable')
         const errors = []
@@ -354,7 +357,9 @@ try {
     await page.getByRole('dialog').getByRole('button', { name: layout, exact: true }).click()
     await assertDragBoundary(assigned, fixture.electronics, fixture.firmware)
     await waitForMutations()
-    const stored = await persistedClient.query(makeFunctionReference('snapshot:forMe'), {})
+    const stored = await readWorkspace((name, args) =>
+      persistedClient.query(makeFunctionReference(name), args),
+    )
     assert.deepEqual(
       fixtures.map(({ id }) => {
         const task = stored.issues.find((issue) => issue.id === id)
@@ -396,7 +401,9 @@ try {
   // mutation acknowledgement, then verify through an independent HTTP client
   // before reloading. Neither proof can be satisfied by optimistic paint.
   await waitForMutations()
-  const stored = await persistedClient.query(makeFunctionReference('snapshot:forMe'), {})
+  const stored = await readWorkspace((name, args) =>
+    persistedClient.query(makeFunctionReference(name), args),
+  )
   assert.deepEqual(
     fixtures.map((task) => stored.issues.find((issue) => issue.id === task.id)?.status),
     ['done', 'progress', 'review', 'todo'],

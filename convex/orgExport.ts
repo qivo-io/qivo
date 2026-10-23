@@ -240,16 +240,20 @@ function exportRow(doc: Doc<OrgExportSection>, section: OrgExportSection): OrgEx
   delete row.message_retention_days
   // the retired Gravatar setting (schema.ts)
   delete row.gravatar_avatars
-  // a task's archive-mark flag only steers the app snapshot's reads
+  // a task's archive-mark flag is the archive steps' bookkeeping
   delete row.relations_marked
+  // a task's or project's window key only places it in the app's windows
+  delete row.window_key
   // an activity row's field prints only let a refused edit name who wrote
   // the value (model/expected.ts)
   delete row.field_prints
-  // The organization id and the archive mark only serve the app's index reads.
+  // The organization id, the archive mark and the task's window key only
+  // serve index reads.
   if (section === 'issue_links' || section === 'issue_labels' || section === 'issue_attachments') {
     delete row.org_id
     delete row.task_archived
   }
+  delete row.task_key
   // A team's or project's legacy icon and its color: nothing writes or shows
   // them now, and a value stored before they were dropped has no length limit.
   if (section === 'teams' || section === 'projects') {
@@ -329,14 +333,12 @@ export const page = orgQuery({
       if (projectId !== undefined && !(await liveProject(projectId))) continue
       const row = exportRow(doc, section)
       // A person's Team sync stamp goes out as sync_at and sync_since, from
-      // their sync_stamps row or, before the backfill moved it, from the
-      // retired profile fields the row already holds.
+      // their sync_stamps row.
       if (section === 'profiles' && typeof row.id === 'string') {
         const stamp = await stampRow(ctx, row.id)
         if (stamp !== null) {
           row.sync_at = stamp.at
-          if (stamp.since === undefined) delete row.sync_since
-          else row.sync_since = stamp.since
+          if (stamp.since !== undefined) row.sync_since = stamp.since
         }
       }
       if (checkParents && typeof row.parent_id === 'string' && !(await liveParent(row.parent_id)))

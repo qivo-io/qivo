@@ -377,6 +377,12 @@ describe('public Northstar provisioning and bounded deletion', () => {
       void ignoredId
       void ignoredTime
       await ctx.db.insert('issues', record)
+      // a Team sync stamp row whose profile is already gone
+      await ctx.db.insert('sync_stamps', {
+        org_id: a.org_id!,
+        profile_id: uuid(),
+        at: new Date(NOW).toISOString(),
+      })
       for (let i = 0; i < 150; i++)
         await ctx.db.insert('comments', {
           id: uuid(),

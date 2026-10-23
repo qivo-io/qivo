@@ -201,8 +201,8 @@ which takes the same loopback origins, `QIVO_FIXTURE_LOCAL=true` and
 `QIVO_LOCAL_ADMIN_KEY` as the Northstar seed and refuses every other
 target. It adds 10,000 tasks and a parent for every 25 of them, as Nora,
 the organization's admin, through the app's own task mutations, one at a
-time. `--tasks` sets a smaller count; a larger organization no longer
-loads. The tasks come in every status, with subtasks, due dates, pauses,
+time. `--tasks` sets any count from 1 to 30,000, which the app's workspace
+parts load in windows. The tasks come in every status, with subtasks, due dates, pauses,
 long titles and unowned tasks. Their titles read like Northstar's, so the
 Board's card height estimates meet realistic text, and each description
 names the task's number. Run it again to add only the tasks still missing;
@@ -308,14 +308,23 @@ The app before v0.1.18 reads an activity list that the snapshot no longer
 sends, so it cannot load at all. Never return the app or the demo to a
 deployment of a commit older than v0.1.18 (`8a1b37c`).
 
-The snapshot sends load rows only for tasks its reader cannot see, and the
-app works out the load of the tasks it shows from their rows, so a pending
-hours or owner change moves delays and Team sync load at once. An app from
-before that change counts no load for the tasks it shows, so against a
-later backend its delays and Team sync load come out too low. That includes
-a tab already open when the release deploys, until it reloads. This moves the
-floor: never return the app or the demo to a deployment of a commit before
-the release that made this change. Roll forward instead.
+Since v0.1.52 (`38cc47f`) the backend sends load rows only for tasks their
+reader cannot see, and the app works out the load of the tasks it shows
+from their rows, so a pending hours or owner change moves delays and Team
+sync load at once. An app from before v0.1.52 counts no load for the tasks
+it shows, so against a later backend its delays and Team sync load come out
+too low, also in a tab that was open when v0.1.52 deployed, until it
+reloads. Never return the app or the demo to a deployment of a commit
+before v0.1.52.
+
+The app reads the workspace in live parts (`convex/workspace.ts`), and the
+backend no longer has `snapshot.forMe`, the one query earlier apps loaded
+the workspace with. An app from before the parts cannot load at all against
+a later backend, and that includes a tab already open when the release
+deploys, until it reloads. This moves the floor: never return the app or the
+demo to a deployment of a commit before the release that replaced
+`snapshot.forMe` with the parts (the release after v0.1.52). Roll forward
+instead.
 
 ## Environment configuration
 
@@ -378,8 +387,13 @@ a database to compensate for a failed build.
 Backend changes must remain compatible with open browser tabs, desktop clients
 and already scheduled jobs. Introduce optional schema fields first, migrate
 existing records deliberately, and remove old fields/functions only after old
-clients no longer need them. Test migrations with representative synthetic
-data and retain verified production backups before destructive changes.
+clients no longer need them. Two releases broke that rule on purpose, by the
+owner's decision while Qivo had no users: v0.1.52 and the release after it,
+which replaced `snapshot.forMe` with the workspace parts. A tab open across
+either deploy shows wrong load or cannot load until it reloads, and each is a
+rollback floor (see Rollback and hotfixes). Later changes keep the rule.
+Test migrations with representative synthetic data and retain verified
+production backups before destructive changes.
 
 Organizations no longer have the fields `next_issue_num`, `next_project_num`
 and `activity_count`. Every hosted deployment cleared them with the one-time
@@ -391,16 +405,36 @@ v0.1.21 (`ab0a802`), run `internal/orgCountersBackfill:start`, wait until its
 `remaining` query reports 0 on every page, and then deploy the later commit.
 
 Team sync stamps live in their own `sync_stamps` table, off the profiles.
-The release that moved them adds the one-time `internal/syncStampsBackfill`.
-Run it on every hosted deployment once that deployment serves the release,
-with the owner's approval, as its header says: check with `remaining`, read
-the dry run, then run it. Until it runs, the app reads a person without a
-stamp row from the retired profile fields `sync_at` and `sync_since`. A later
-release drops those fields from the schema once `remaining` reports 0 on
-every page of every deployment, so Convex refuses that release on a backend
-where the backfill has not run. Returning the Convex functions to a commit
-before the move, after the backfill ran, shows nobody as stamped, because
-earlier code reads only the profile fields. Roll forward instead.
+Profiles no longer have the fields `sync_at` and `sync_since`. Every hosted
+deployment moved them into stamp rows with the one-time
+`internal/syncStampsBackfill`, whose `remaining` check reported 0 on
+development, staging, production and the demo before the fields were
+dropped. Convex refuses to deploy a later commit to a backend where any
+profile still holds one of them, for example a development backend that
+never ran the backfill, or data from a backup taken before it ran. Every
+main commit from v0.1.52 (`38cc47f`) up to the release that replaced
+`snapshot.forMe` with the workspace parts has the backfill. Deploy the
+newest of them, as an older one may refuse data from a later schema
+addition, run the backfill as its header says, wait until `remaining`
+reports 0 on every page, and then deploy the later commit. Returning the Convex functions to a commit before v0.1.52
+shows nobody as stamped, because earlier code reads only the profile fields,
+and the stamps it then writes into those fields make Convex refuse the roll
+forward until the backfill runs again, which moves them into rows only for
+people who have none, so those stamps are lost for everyone stamped before.
+Roll forward instead.
+
+Every task and project has a `window_key`, a random point the server picks
+when it stores the row, which places the row in the app's windows of the
+workspace (`convex/lib/workspaceParts.ts`). The release that replaced
+`snapshot.forMe` with the workspace parts added it. A task or project
+stored before has none until the one-time `internal/windowKeysBackfill`
+gives it one, and until then it loads in the first window of its kind, so
+an organization with more such tasks than one window holds cannot load.
+Run the backfill on every hosted deployment once it serves that release, as
+the module's header says, and check that `remaining` reports 0 on every
+page of both tables. Earlier releases do not accept the field, so a
+rollback past that release fails to deploy; it is a rollback floor anyway
+(see Rollback and hotfixes).
 
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to

@@ -28,7 +28,7 @@ import {
   type LoadSpan,
   plannableHoursOf,
 } from '../../src/lib/workload'
-import { api, internal } from '../_generated/api'
+import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
 import { type DelayJson, OWNER_LOAD_CHECKS, ownerLoadSpans, utcToday } from '../lib/machineDelay'
@@ -49,6 +49,7 @@ import {
   type T,
   uuid,
   withOrg,
+  workspaceOf,
 } from './helpers.setup'
 
 /* A Wednesday at noon UTC, the same day in every likely time zone. */
@@ -176,7 +177,7 @@ async function cases(fx: Fx) {
  * paints nothing (planner.ts tracksDelay). */
 async function appDelays(fx: Fx, person: Doc<'profiles'>): Promise<Map<string, DelayJson | null>> {
   setWeekConfig(fx.org.week_start, fx.org.week_one_rule, new Date(NOW))
-  const snap = await as(fx.t, person).query(api.snapshot.forMe, {})
+  const snap = await workspaceOf(as(fx.t, person))
   if (snap === null) throw new Error(`${person.name} has no snapshot`)
   const rows = snap.issues.filter((i) => i.org_id === fx.org.id)
   const byId: Record<string, DatedGroupIssue> = {}

@@ -15,7 +15,7 @@ import {
   DEMO_WRITES_TOTAL,
 } from '../lib/demo'
 import { PUBLIC_DEMO_STEPS } from '../model/demoSeed'
-import { expectRefusal, newT, type T, uuid } from './helpers.setup'
+import { expectRefusal, newT, type T, uuid, workspaceOf } from './helpers.setup'
 
 const componentModules = import.meta.glob('../betterAuth/**/*.ts')
 let t: T
@@ -115,7 +115,7 @@ async function provision(as: Awaited<ReturnType<typeof anonymousLogin>>['as']) {
 async function readyDemo() {
   const login = await anonymousLogin()
   const demo = (await provision(login.as)).at(-1)!
-  const snapshot = await login.as.query(api.snapshot.forMe, {})
+  const snapshot = await workspaceOf(login.as)
   if (!snapshot || !demo.orgId) throw new Error('demo did not become ready')
   const receipt = await t.run((ctx) =>
     ctx.db
@@ -190,7 +190,7 @@ describe('public demo ownership and authentication', () => {
   it('requires a real anonymous account and refuses unprovisioned ordinary data', async () => {
     await expectRefusal(t.mutation(api.demo.ensureMine, {}), 'forbidden', /not signed in/)
     const login = await anonymousLogin()
-    await expectRefusal(login.as.query(api.snapshot.forMe, {}), 'forbidden', /prepared/)
+    await expectRefusal(login.as.query(api.workspace.root, {}), 'forbidden', /prepared/)
     await t.mutation(components.betterAuth.adapter.updateOne, {
       input: {
         model: 'user',
@@ -339,7 +339,7 @@ describe('demo lifetime and capabilities', () => {
       /between/,
     )
     vi.setSystemTime(short.expiresAt)
-    await expectRefusal(a.as.query(api.snapshot.forMe, {}), 'forbidden', /expired/)
+    await expectRefusal(a.as.query(api.workspace.root, {}), 'forbidden', /expired/)
   })
 
   it('refuses old identities at the deadline even before the cleanup job runs', async () => {
@@ -356,7 +356,7 @@ describe('demo lifetime and capabilities', () => {
       'forbidden',
       /expired/,
     )
-    await expectRefusal(a.as.query(api.snapshot.forMe, {}), 'forbidden', /expired/)
+    await expectRefusal(a.as.query(api.workspace.root, {}), 'forbidden', /expired/)
     await expectRefusal(
       a.as.mutation(api.demo.ensureMine, {}),
       'forbidden',
@@ -393,7 +393,7 @@ describe('demo lifetime and capabilities', () => {
       'forbidden',
       /no profile/,
     )
-    const mine = await a.as.query(api.snapshot.forMe, {})
+    const mine = await workspaceOf(a.as)
     expect(JSON.stringify(mine)).not.toContain(b.demo.orgId)
   }, 30_000)
 
@@ -466,6 +466,10 @@ describe('demo lifetime and capabilities', () => {
       /record limit/,
     )
     expect((await t.run((ctx) => ctx.db.get(a.profile._id)))?.name).toBe(a.profile.name)
+    // a person's first Team sync stamp adds the row that replaced a profile
+    // field, which the limit does not count
+    await a.as.mutation(api.teamSync.stamp, { org_id: a.demo.orgId!, profile_id: a.profile.id })
+    expect(await countsOf(a.receipt)).toMatchObject({ insert_count: DEMO_INSERTS_TOTAL })
     await setCounts(a.receipt, { write_count: DEMO_WRITES_TOTAL, insert_count: 0 })
     await expectRefusal(
       a.as.mutation(api.profiles.setDisplayName, { name: 'Over the total' }),
@@ -627,7 +631,7 @@ describe('public demo provisioning steps', () => {
     const halfway = await t.run((ctx) => ctx.db.query('demo_sessions').unique())
     expect(halfway).toMatchObject({ status: 'unprovisioned', provision: { step: 3 } })
     expect(halfway?.org_id).toBeTruthy()
-    await expectRefusal(login.as.query(api.snapshot.forMe, {}), 'forbidden', /prepared/)
+    await expectRefusal(login.as.query(api.workspace.root, {}), 'forbidden', /prepared/)
     expect(await login.as.query(api.demo.current, {})).toMatchObject({
       status: 'unprovisioned',
       orgId: null,

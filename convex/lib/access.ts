@@ -156,28 +156,231 @@ export async function projectLevel(
   includeNavigation = true,
 ): Promise<AccessLevel | null> {
   const root = await rootMetaOf(ctx, project)
+  const direct = (p: Doc<'projects'>) => directLevel(ctx, me, p)
+  return await levelUnder(me, project, root, includeNavigation, {
+    direct,
+    // A child grant exposes its parent for navigation, without granting
+    // permissions on siblings or control over the parent.
+    navigates: async (parent) => {
+      const children = ctx.db
+        .query('projects')
+        .withIndex('by_parent', (q) => q.eq('parent_id', parent.id))
+      for await (const child of children) {
+        if (child.org_id !== me.org_id) continue
+        if (isProjectLead(me, child, parent) || (await direct(child)) !== null) return true
+      }
+      return false
+    },
+  })
+}
+
+/* projectLevel's rule once `root` is known. `direct` gives the person's own
+ * and team level on one project, and `navigates` whether a sub-project of
+ * root `parent` is led by them or gives them a level of their own. */
+async function levelUnder(
+  me: Doc<'profiles'>,
+  project: Doc<'projects'>,
+  root: Doc<'projects'>,
+  includeNavigation: boolean,
+  {
+    direct,
+    navigates,
+  }: {
+    direct: (project: Doc<'projects'>) => Promise<AccessLevel | null>
+    navigates: (parent: Doc<'projects'>) => Promise<boolean>
+  },
+): Promise<AccessLevel | null> {
   if (project.org_id !== me.org_id || root.org_id !== me.org_id) return null
   if (!inMetaTree(project, root)) return null
   if (me.org_role === 'admin' || isProjectLead(me, project, root)) return 'lead'
-  let level = await directLevel(ctx, me, project)
+  let level = await direct(project)
   if (project.id !== root.id) {
-    const inherited = isProjectLead(me, root, root) ? 'user' : await directLevel(ctx, me, root)
+    const inherited = isProjectLead(me, root, root) ? 'user' : await direct(root)
     level = higherLevel(level, inherited)
-  } else if (level === null && includeNavigation) {
-    // A child grant exposes its parent for navigation, without granting
-    // permissions on siblings or control over the parent.
-    const children = ctx.db
-      .query('projects')
-      .withIndex('by_parent', (q) => q.eq('parent_id', root.id))
-    for await (const child of children) {
-      if (child.org_id !== me.org_id) continue
-      if (isProjectLead(me, child, root) || (await directLevel(ctx, me, child)) !== null) {
-        level = 'viewer'
-        break
-      }
-    }
+  } else if (level === null && includeNavigation && (await navigates(root))) {
+    level = 'viewer'
   }
   return cappedLevel(me.org_role, level)
+}
+
+/* The cached promise of `key`, read once. */
+function once<T>(cache: Map<string, Promise<T>>, key: string, read: () => Promise<T>): Promise<T> {
+  let known = cache.get(key)
+  if (known === undefined) {
+    known = read()
+    cache.set(key, known)
+  }
+  return known
+}
+
+/** How many teams projectLevelsOf asks about one at a time before it reads
+ * all of a person's memberships instead. Tests lower it. */
+export const TEAM_LOOKUPS = { max: 64 }
+
+/** projectLevel of `me` on the projects of one organization asked about one
+ * at a time, each project, root and direct level read once, and each team a
+ * share names checked once (isMember, teamInOrg). A caller that needs a few
+ * hundred of an organization's thousands of projects reads only those,
+ * where projectLevelsForOrg reads them all with every share of the person's
+ * teams. Whether a parent shows for navigation is answered from the
+ * person's grants and team shares, read once (accessRowsOf's rows), and the
+ * parent's sub-projects, as projectLevel's walk reads two or more ranges a
+ * sub-project and passes Convex's 4,096 under a large parent. A missing
+ * project, a dangling parent or a cycle answers null instead of throwing,
+ * as projectLevelsForOrg hides them. `read` holds projects the caller
+ * already read. */
+export function projectLevelsOf(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  read: readonly Doc<'projects'>[] = [],
+) {
+  const projects = new Map(read.map((p) => [p.id, Promise.resolve<Doc<'projects'> | null>(p)]))
+  const project = (id: string) => once(projects, id, () => byId(ctx, 'projects', id))
+  /* Whether the person is a member of the team with this id, each team
+   * asked once: by the team for the first TEAM_LOOKUPS teams, then from all
+   * their memberships read once, so a project shared with many teams costs
+   * at most TEAM_LOOKUPS ranges and one more however many teams it names. */
+  const member = new Map<string, Promise<boolean>>()
+  let memberships: Promise<Set<string>> | undefined
+  const isMember = (teamId: string) =>
+    once(member, teamId, async () => {
+      if (memberships === undefined && member.size <= TEAM_LOOKUPS.max)
+        return (
+          (await ctx.db
+            .query('team_members')
+            .withIndex('by_team_profile', (q) => q.eq('team_id', teamId).eq('profile_id', me.id))
+            .first()) !== null
+        )
+      memberships ??= ctx.db
+        .query('team_members')
+        .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
+        .collect()
+        .then((rows) => new Set(rows.map((m) => m.team_id)))
+      return (await memberships).has(teamId)
+    })
+  /* whether the team with this id is one of the person's organization,
+   * each read once */
+  const inOrg = new Map<string, Promise<boolean>>()
+  const teamInOrg = (id: string) =>
+    once(inOrg, id, async () => {
+      const team = await ctx.db
+        .query('teams')
+        .withIndex('by_uuid', (q) => q.eq('id', id))
+        .unique()
+      return team !== null && team.org_id === me.org_id
+    })
+  /* the shares of `shares` that reach the person: through a team of their
+   * organization they are a member of, for a role that receives team
+   * access */
+  const reaching = async <S extends { team_id: string }>(shares: readonly S[]) => {
+    if (!receivesTeamAccess(me)) return []
+    const ok = await Promise.all(
+      shares.map(
+        async (share) => (await isMember(share.team_id)) && (await teamInOrg(share.team_id)),
+      ),
+    )
+    return shares.filter((_, i) => ok[i])
+  }
+  const direct = new Map<string, Promise<AccessLevel | null>>()
+  /* directLevel over the cached teams */
+  const directOf = (p: Doc<'projects'>) =>
+    once(direct, p.id, async () => {
+      const [grant, shares] = await Promise.all([
+        grantOn(ctx, p.id, me.id),
+        ctx.db
+          .query('project_team_access')
+          .withIndex('by_project', (q) => q.eq('project_id', p.id))
+          .collect()
+          .then(reaching),
+      ])
+      let level: AccessLevel | null = grant?.level ?? null
+      for (const share of shares) level = higherLevel(level, share.level)
+      return level
+    })
+  /* rootMetaOf over the cached reads, null where it throws */
+  const rootOf = async (p: Doc<'projects'>) => {
+    let current = p
+    const seen = new Set([p.id])
+    while (current.parent_id !== undefined) {
+      const parent = await project(current.parent_id)
+      if (parent === null || seen.has(parent.id)) return null
+      seen.add(parent.id)
+      current = parent
+    }
+    return current
+  }
+  /* the projects the person has a level of their own on */
+  let ownLevels: Promise<Set<string>> | undefined
+  /* what reading ownLevels cost, the same for every part of the person */
+  const shared = { ranges: 0, documents: 0, bytes: 0 }
+  const counted = <R>(rows: R[]) => {
+    shared.ranges += 1
+    shared.documents += rows.length
+    for (const row of rows) shared.bytes += JSON.stringify(row).length
+    return rows
+  }
+  const navigates = async (parent: Doc<'projects'>) => {
+    // accessRowsOf's rows, each team checked once
+    ownLevels ??= Promise.all([
+      ctx.db
+        .query('project_access')
+        .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
+        .collect()
+        .then(counted),
+      (receivesTeamAccess(me)
+        ? ctx.db
+            .query('team_members')
+            .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
+            .collect()
+            .then(counted)
+        : Promise.resolve([])
+      ).then((mine) =>
+        Promise.all(
+          mine.map(async ({ team_id: teamId }) => {
+            // the team's own read, unless a share check read it before
+            shared.ranges += 1
+            shared.documents += 1
+            return (await teamInOrg(teamId))
+              ? await ctx.db
+                  .query('project_team_access')
+                  .withIndex('by_team', (q) => q.eq('team_id', teamId))
+                  .collect()
+                  .then(counted)
+              : []
+          }),
+        ),
+      ),
+    ]).then(([grants, shares]) => new Set([...grants, ...shares.flat()].map((g) => g.project_id)))
+    const [own, children] = await Promise.all([
+      ownLevels,
+      ctx.db
+        .query('projects')
+        .withIndex('by_parent', (q) => q.eq('parent_id', parent.id))
+        .collect(),
+    ])
+    return children.some(
+      (child) =>
+        child.org_id === me.org_id && (isProjectLead(me, child, parent) || own.has(child.id)),
+    )
+  }
+  const levels = new Map<string, Promise<AccessLevel | null>>()
+  return {
+    /** About what the reads of the person's own grants and team shares cost
+     * so far (navigation, read once), which every part of theirs repeats
+     * however few rows it holds. Documents and ranges as Convex counts them,
+     * bytes as JSON. */
+    shared,
+    /** The project with this id, of any organization, or null. */
+    project,
+    /** projectLevel on the project with this id, null when it is missing. */
+    level: (id: string, includeNavigation = true) =>
+      once(levels, `${includeNavigation}:${id}`, async () => {
+        const p = await project(id)
+        const root = p === null ? null : await rootOf(p)
+        if (p === null || root === null) return null
+        return await levelUnder(me, p, root, includeNavigation, { direct: directOf, navigates })
+      }),
+  }
 }
 
 export async function canSeeProject(
@@ -302,6 +505,14 @@ export type OrgProjectLevels = {
   navigationOnly: (projectId: string) => boolean
 }
 
+/** Every project of organization `orgId`, archived ones included, oldest
+ * first. */
+export const orgProjects = (ctx: QueryCtx, orgId: string): Promise<Doc<'projects'>[]> =>
+  ctx.db
+    .query('projects')
+    .withIndex('by_org', (q) => q.eq('org_id', orgId))
+    .collect()
+
 /* Amortized counterpart of projectLevel, used by snapshots and list reads.
  * Evaluate actual projects rather than reusing the parent's answer for all
  * siblings. Navigation-only parent visibility is never inherited back down.
@@ -311,46 +522,51 @@ export async function projectLevelsForOrg(
   me: Doc<'profiles'>,
   loadedProjects?: readonly Doc<'projects'>[],
 ): Promise<OrgProjectLevels> {
-  const projects =
-    loadedProjects ??
-    (await ctx.db
-      .query('projects')
-      .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
-      .collect())
-  const { grants, shares } = await accessRowsOf(ctx, me)
+  const [projects, { grants, shares }] = await Promise.all([
+    loadedProjects ?? orgProjects(ctx, me.org_id),
+    accessRowsOf(ctx, me),
+  ])
   return levelsFrom(me, projects, grants, shares)
 }
 
 /** `me`'s own grants and the shares of the teams of its organization it
  * belongs to, the rows projectLevelsForOrg reads: shares only for a role
  * that receives team access. A caller that also needs the rows reads them
- * here once and passes them to levelsFrom. */
+ * here once and passes them to levelsFrom. The teams are read at once, as
+ * the memberships of a person in hundreds of teams would take as many
+ * reads one after another. */
 export async function accessRowsOf(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
 ): Promise<{ grants: Doc<'project_access'>[]; shares: Doc<'project_team_access'>[] }> {
-  const grants = await ctx.db
-    .query('project_access')
-    .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
-    .collect()
-  const shares: Doc<'project_team_access'>[] = []
-  if (receivesTeamAccess(me)) {
-    const memberships = ctx.db
-      .query('team_members')
+  const [grants, perTeam] = await Promise.all([
+    ctx.db
+      .query('project_access')
       .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
-    for await (const membership of memberships) {
-      const team = await ctx.db
-        .query('teams')
-        .withIndex('by_uuid', (q) => q.eq('id', membership.team_id))
-        .unique()
-      if (team === null || team.org_id !== me.org_id) continue
-      const teamShares = ctx.db
-        .query('project_team_access')
-        .withIndex('by_team', (q) => q.eq('team_id', team.id))
-      for await (const share of teamShares) shares.push(share)
-    }
-  }
-  return { grants, shares }
+      .collect(),
+    receivesTeamAccess(me)
+      ? ctx.db
+          .query('team_members')
+          .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
+          .collect()
+          .then((memberships) =>
+            Promise.all(
+              memberships.map(async (membership) => {
+                const team = await ctx.db
+                  .query('teams')
+                  .withIndex('by_uuid', (q) => q.eq('id', membership.team_id))
+                  .unique()
+                if (team === null || team.org_id !== me.org_id) return []
+                return await ctx.db
+                  .query('project_team_access')
+                  .withIndex('by_team', (q) => q.eq('team_id', team.id))
+                  .collect()
+              }),
+            ),
+          )
+      : [],
+  ])
+  return { grants, shares: perTeam.flat() }
 }
 
 /** How many membership rows projectLevelsForPeople reads from the

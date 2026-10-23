@@ -212,7 +212,7 @@ function inboxShown(
  * messages into items (src/store/viewModels.ts shapeMessageGroup). Like the
  * app, it lists only tasks in the caller's working set (inboxShown). Rows
  * about other tasks stay stored and come back if the task does. It reads
- * with the snapshot's limit (lib/inbox.ts loadInbox, INBOX_LIMIT) and folds
+ * with the app's limit (lib/inbox.ts loadInbox, INBOX_LIMIT) and folds
  * up to INBOX_LIMIT unread messages, newest first, and up to INBOX_LIMIT
  * read ones, most recently read first. Each walk examines at most
  * 2 * INBOX_LIMIT rows, those about unlisted tasks included. The app

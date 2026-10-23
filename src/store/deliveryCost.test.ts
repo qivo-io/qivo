@@ -10,7 +10,10 @@ import { plannerFixture, type Snapshot } from './plannerFixture.setup'
    if a delivery rebuilt everything. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: { getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }) },
@@ -138,7 +141,7 @@ describe('the cost of a delivery', () => {
     held = []
     network.query.mockResolvedValue(null)
     network.onUpdate.mockImplementation((ref, _args, next) => {
-      if (getFunctionName(ref) === 'snapshot:forMe') {
+      if (getFunctionName(ref) === 'workspace:whole') {
         deliver = next
         next(structuredClone(snapshot))
       }

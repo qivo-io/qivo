@@ -91,8 +91,18 @@ async function inOrder(steps: (() => Promise<boolean>)[]): Promise<boolean> {
   return true
 }
 
-/** Profiles with everything that hangs off them, then their pictures. */
-const profileRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
+/** Profiles with everything that hangs off them, then their pictures,
+ * then any Team sync stamp row left without its profile (a rollback or a
+ * manual edit can leave one), which finish() refuses to leave behind. */
+const profileRows = async (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
+  (await profilesWithRows(ctx, orgId, budget)) &&
+  (await drain(
+    ctx,
+    budget,
+    ctx.db.query('sync_stamps').withIndex('by_org', (q) => q.eq('org_id', orgId)),
+  ))
+
+const profilesWithRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   parents(
     ctx,
     budget,

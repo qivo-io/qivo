@@ -13,7 +13,10 @@ import { TooltipProvider } from './ui/tooltip'
    can fail the live query or deliver a later result mid-session. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
+}))
 // The note of the page under test. Each boot opens a new page, and every
 // other page has closed (Web Locks). Mocked modules outlive resetModules, so
 // the mock forwards to the page's own note.
@@ -79,7 +82,7 @@ beforeEach(async () => {
   network.query.mockResolvedValue(null)
   network.mutation.mockResolvedValue(null)
   network.onUpdate.mockImplementation((ref, _args, deliver, onError) => {
-    if (getFunctionName(ref) === 'snapshot:forMe') {
+    if (getFunctionName(ref) === 'workspace:whole') {
       subscribed++
       fail = onError
       deliverLater = deliver
@@ -138,7 +141,7 @@ describe('SnapshotNotice', () => {
   })
 
   it('says when the view was current, that editing is paused, and shows the error on request', async () => {
-    await failWith(new Error('[CONVEX Q(snapshot:forMe)] [Request ID: 3f9c] Server Error'))
+    await failWith(new Error('[CONVEX Q(workspace:tasks)] [Request ID: 3f9c] Server Error'))
     expect(shown()?.textContent).toContain('Qivo can’t load the latest changes')
     expect(shown()?.textContent).toContain(
       'You’re seeing your workspace as of 14:32. Editing is paused until it loads again. Qivo keeps trying.',
@@ -146,7 +149,7 @@ describe('SnapshotNotice', () => {
     expect(shown()?.textContent).not.toContain('Request ID')
     await act(async () => button('Details')?.click())
     expect(shown()?.textContent).toContain(
-      '[CONVEX Q(snapshot:forMe)] [Request ID: 3f9c] Server Error',
+      '[CONVEX Q(workspace:tasks)] [Request ID: 3f9c] Server Error',
     )
     expect(button('Hide details')?.getAttribute('aria-expanded')).toBe('true')
     // the error text stays selectable for copying
@@ -155,6 +158,19 @@ describe('SnapshotNotice', () => {
         document.getElementById(button('Hide details')?.getAttribute('aria-controls') ?? ''),
       ),
     ).toBe(false)
+  })
+
+  it('shows the sentence of a part that refused to load, as text, and does not promise to keep trying', async () => {
+    const sentence =
+      'One part of this organization holds more than Qivo can load at once. Contact support so we can help reduce it.'
+    await failWith(new ConvexError({ code: 'rule', message: sentence }))
+    expect(shown()?.textContent).toContain(
+      `You’re seeing your workspace as of 14:32. ${sentence} Editing is paused until it loads again.`,
+    )
+    expect(shown()?.textContent).not.toContain('keeps trying')
+    await act(async () => button('Details')?.click())
+    expect(shown()?.textContent).not.toContain('"code"')
+    expect(button('Try again')).toBeDefined()
   })
 
   it('offers a reload, not a retry, after the sign-in ended', async () => {
@@ -221,7 +237,7 @@ describe('SnapshotNotice while Qivo cannot save', () => {
 
   it('puts snapshot trouble before the connection, and the connection before the crash note', async () => {
     const status = await offline()
-    await failWith(new Error('[CONVEX Q(snapshot:forMe)] Server Error'))
+    await failWith(new Error('[CONVEX Q(workspace:tasks)] Server Error'))
     expect(shown()?.dataset.snapshotNotice).toBe('failed')
     expect(document.querySelectorAll('[data-snapshot-notice]')).toHaveLength(1)
     await act(async () => deliverLater(plannerFixture()))

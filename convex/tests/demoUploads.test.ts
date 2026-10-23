@@ -170,7 +170,7 @@ describe('private demo upload boundaries', () => {
     expect(late.status).toBe(400)
     expect(await t.run((ctx) => ctx.db.system.get(lateId!))).toBeNull()
     expect(await t.query(internal.files.gatewayAttachment, { id, minter: fx.admin.id })).toBeNull()
-    await expectRefusal(caller.query(api.snapshot.forMe, {}), 'forbidden', /expired/)
+    await expectRefusal(caller.query(api.workspace.root, {}), 'forbidden', /expired/)
   })
 
   it('reserves simultaneous upload quota and waits for receiving work during purge', async () => {

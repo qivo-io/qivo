@@ -642,7 +642,7 @@ export async function archiveFamily(
  * is a group. */
 export type ArchivedPageRow = Omit<
   Doc<'issues'>,
-  '_id' | '_creationTime' | 'description' | 'parent_id' | 'relations_marked'
+  '_id' | '_creationTime' | 'description' | 'parent_id' | 'relations_marked' | 'window_key'
 > & { archived_at: string; is_group: boolean }
 
 /**
@@ -676,6 +676,7 @@ export async function archivedPageCore(
         description: _description,
         parent_id: _parent,
         relations_marked: _marks,
+        window_key: _window,
         ...row
       } = task
       return { ...row, is_group: await facts.isGroup() }

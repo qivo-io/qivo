@@ -594,7 +594,9 @@ export async function runDemoSmoke(env = process.env) {
     const isolation = await pageB.evaluate(
       async ({ orgId, taskId, title }) => {
         const { convex } = await import('/src/lib/convex.ts')
-        const snapshot = await convex.query('snapshot:forMe', {})
+        const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
+          (name, args) => convex.query(name, args),
+        )
         let refusal = null
         try {
           await convex.mutation('issues:update', {

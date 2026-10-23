@@ -27,6 +27,7 @@ import {
   TODAY,
   uuid,
   withOrg,
+  workspaceOf,
 } from './helpers.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 
@@ -161,7 +162,7 @@ describe('a label on more tasks than one delete removes', () => {
 
     // The app joins the snapshot's labels as below. planner.ts drops an
     // assignment whose label is not in the list.
-    const snap = (await as(t, f.admin).query(api.snapshot.forMe, {}))!
+    const snap = (await workspaceOf(as(t, f.admin)))!
     const shown = new Set(snap.labels.map((l) => l.id))
     expect(shown.has(bug.id)).toBe(false)
     const joined = snap.issueLabels.filter((row) => shown.has(row.label_id))

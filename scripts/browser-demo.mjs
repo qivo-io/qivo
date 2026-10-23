@@ -136,7 +136,9 @@ export async function cleanupDemoArtifacts(browser, demo, artifacts) {
         // Use the dev app's authenticated singleton so cleanup awaits backend
         // completion, including after a failed optimistic browser operation.
         const { convex } = await import('/src/lib/convex.ts')
-        const snapshot = await convex.query('snapshot:forMe', {})
+        const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
+          (name, args) => convex.query(name, args),
+        )
         const org = snapshot.orgs.find((candidate) => candidate.slug === orgSlug)
         if (!org) throw new Error('Cleanup organization is unavailable')
         const deleted = []

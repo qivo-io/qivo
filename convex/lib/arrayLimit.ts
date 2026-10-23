@@ -1,8 +1,8 @@
 /* Convex refuses a function result that holds an array of more than 8,192
- * values, so the snapshot (convex/snapshot.ts forMe) of an organization with
- * more tasks, or any other list past that, failed for every member. The
- * snapshot sends its long lists through chunkLists and the app joins them
- * back with joinLists. No imports, so the app can import this file as it
+ * values. The workspace parts (lib/workspaceParts.ts) send their lists
+ * through chunkLists, and the app joins them back with joinLists
+ * (lib/workspaceJoin.ts partRows), so no list of a large organization fails
+ * a part. No imports, so the app can import this file as it
  * does limits.ts. */
 
 /** The most values one array in a function result may hold. A mutable

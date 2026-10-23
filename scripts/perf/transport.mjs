@@ -10,6 +10,9 @@
 // convex/dist/esm/browser/sync/remote_query_set.js) and hands it to its
 // listener, all in the one message task, as a WebSocket message would.
 // Like Convex, a write's results reach the listeners before it resolves.
+// `live` stands in for lib/liveQueries.ts: the server sends the workspace's
+// parts that changed in one transition message, and the page decodes each
+// and then calls the transition handlers once.
 // window.__perf counts the bytes and results delivered and the time spent
 // decoding them.
 import { getFunctionName } from 'convex/server'
@@ -57,6 +60,25 @@ server.onmessage = ({ data }) => {
     if (receiver) receiver.receive(value)
     else calls.get(data.to)?.resolve(value)
     calls.delete(data.to)
+  } else if (data.type === 'transition') {
+    const tokens = new Set()
+    for (const result of data.results) {
+      const token = partTokens.get(result.to)
+      const entry = token && parts.get(token)
+      if (!entry) continue
+      tokens.add(token)
+      if (result.error) {
+        entry.error = new Error(result.error)
+        continue
+      }
+      window.__perf.wireBytes += result.bytes
+      window.__perf.deliveries++
+      const start = performance.now()
+      entry.value = jsonToConvex(JSON.parse(result.text))
+      entry.error = undefined
+      window.__perf.decodeMs += performance.now() - start
+    }
+    for (const fn of transitionHandlers) fn({ tokens, at: data.at, connection: 1 })
   } else if (data.type === 'answer') {
     const waiting = calls.get(data.id)
     calls.delete(data.id)
@@ -82,6 +104,47 @@ export const convex = {
   mutation(ref, args) {
     return call({ type: 'mutation', name: getFunctionName(ref), args })
   },
+}
+/* The watched parts by token, each with its id on the server, its latest
+   value or error and how many watch it; tokens by id; the handlers. */
+const parts = new Map()
+const partTokens = new Map()
+const transitionHandlers = new Set()
+export const live = {
+  watch(ref, args) {
+    const name = getFunctionName(ref)
+    const token = `${name}:${JSON.stringify(args)}`
+    let entry = parts.get(token)
+    if (entry) entry.count++
+    else {
+      entry = { id: `p${next++}`, count: 1, value: undefined, error: undefined }
+      parts.set(token, entry)
+      partTokens.set(entry.id, token)
+      server.postMessage({ type: 'watch', id: entry.id, name, args })
+    }
+    let stopped = false
+    return {
+      token,
+      stop() {
+        if (stopped) return
+        stopped = true
+        if (--entry.count > 0) return
+        parts.delete(token)
+        partTokens.delete(entry.id)
+        server.postMessage({ type: 'unwatch', id: entry.id })
+      },
+    }
+  },
+  read(token) {
+    const entry = parts.get(token)
+    if (entry?.error) throw entry.error
+    return entry?.value
+  },
+  onTransition(fn) {
+    transitionHandlers.add(fn)
+    return () => transitionHandlers.delete(fn)
+  },
+  query: (ref, args) => convex.query(ref, args),
 }
 export const authClient = {
   getSession: async () => ({

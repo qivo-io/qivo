@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
-import { as, newT, plantSeat, uuid, withOrg } from '../../convex/tests/helpers.setup'
+import { as, newT, plantSeat, uuid, withOrg, workspaceOf } from '../../convex/tests/helpers.setup'
 import { plannerFixture as fixture, type Snapshot } from './plannerFixture.setup'
 import { duplicateNameTags, type TaggableProject } from './viewModels'
 
@@ -68,7 +68,10 @@ describe('duplicateNameTags', () => {
 })
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -176,7 +179,7 @@ describe('project labels in the store', () => {
     const mine = await create(f.user)
     const theirs = await create(colleague)
     const snapshotOf = async (profile: Doc<'profiles'>) => {
-      const snap = await as(t, profile).query(api.snapshot.forMe, {})
+      const snap = await workspaceOf(as(t, profile))
       if (snap === null) throw new Error(`no snapshot for ${profile.name}`)
       return snap
     }

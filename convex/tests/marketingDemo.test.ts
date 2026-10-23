@@ -941,12 +941,7 @@ describe('marketing demo rebuild ownership', () => {
         .query('profiles')
         .withIndex('by_uuid', (q) => q.eq('id', noraId))
         .unique())!
-      await ctx.db.patch(nora._id, {
-        message_retention_days: undefined,
-        // a stamp in the retired profile fields, which a reset clears
-        sync_at: NOW,
-        sync_since: NOW,
-      })
+      await ctx.db.patch(nora._id, { message_retention_days: undefined })
       // Team sync stamps from interactive use, on a person the seed leaves unstamped
       await ctx.db.insert('sync_stamps', {
         org_id: result.org_id,
@@ -1000,13 +995,10 @@ describe('marketing demo rebuild ownership', () => {
           .unique(),
       )
       expect(org?.project_creators).toBeUndefined()
-      // Every stamp is set or cleared from the dataset, following the anchor,
-      // and the retired profile fields stay clear.
+      // Every stamp is set or cleared from the dataset, following the anchor.
       const stamped = await stamps(t, result.org_id)
       for (const person of MARKETING_DEMO.people) {
         const row = roster.find((p) => p.name === person.name)
-        expect(row?.sync_at, person.key).toBeUndefined()
-        expect(row?.sync_since, person.key).toBeUndefined()
         const stamp = stamped.get(row?.id ?? '')
         expect(stamp?.at, person.key).toBe(
           person.syncDay === undefined

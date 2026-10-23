@@ -24,7 +24,10 @@ const network = vi.hoisted(() => ({
   query: vi.fn(),
   onUpdate: vi.fn(),
 }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+}))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: { getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }) },
@@ -200,8 +203,9 @@ describe('the field check in the store', () => {
       description: printOf(descriptionForm('Seen text')),
     })
     P.watchComments('task-1')
-    // the store takes a thread's first answer after a 0 ms timer
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    // the thread's first answer paints once the pending task edit lets it,
+    // on the store's 0 ms paint timer
+    await vi.waitFor(() => expect(P.commentsLoaded).toBe(true))
     await settle()
     void P.updateComment('c-1', 'Second take', { seen: 'First take', keepDraft: () => true })
     expect(latest()).toMatchObject({

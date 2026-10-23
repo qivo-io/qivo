@@ -1,12 +1,13 @@
 /* Team sync: the meeting page's two server facts. `stamp` records that a
  * change was made on a person through the sync page (the person's
  * sync_stamps row, model/syncStamps.ts, read through the sitting rule in
- * lib/teamSync.ts; the snapshot joins it into its profile rows as sync_at
- * and sync_since). `lastComments` is the one per-task fact
- * the snapshot lacks: when each open task was last commented on, for the
+ * lib/teamSync.ts; the app's people part sends it on its profile rows as
+ * sync_at and sync_since). `lastComments` is the one per-task fact
+ * the workspace lacks: when each open task was last commented on, for the
  * page's "untouched" and "changed" marks. The page subscribes to it only
  * while it is open, and only for the people whose cards it shows, so neither
- * forMe nor the page reads a comment per task of the whole organization.
+ * the workspace parts nor the page read a comment per task of the whole
+ * organization.
  *
  * The stamp is meeting bookkeeping, not a task change: it writes no activity
  * row and notifies no one. */
@@ -37,10 +38,9 @@ export const stamp = orgMutation({
     if (!isOrgStaff(ctx.me)) throw forbidden('no permission to run a team sync')
     const person = await byId(ctx, 'profiles', profile_id)
     if (person === null || person.org_id !== ctx.me.org_id) throw notFound('profile not found')
-    // the person's row, or the retired profile fields a backfill has not
-    // moved yet; the profile itself is never written, so the person's own
+    // the profile itself is never written, so the person's own
     // subscriptions do not rerun
-    const next = nextSyncStamp(await stampOf(ctx, person), now, first_since)
+    const next = nextSyncStamp(await stampOf(ctx, person.id), now, first_since)
     await writeStamp(ctx, person, next)
     return null
   },

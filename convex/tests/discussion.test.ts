@@ -42,6 +42,7 @@ import {
   TODAY,
   uuid,
   withOrg,
+  workspaceOf,
 } from './helpers.setup'
 
 async function refused(p: Promise<unknown>, code: RefusalCode, sentence: string): Promise<void> {
@@ -660,7 +661,7 @@ describe('reading the inbox', () => {
     const listed = async () =>
       (await listMcp(fx, { include_snoozed: true }, fx.admin.id)).map((i) => i.task.id).sort()
     const inApp = async () => {
-      const snapshot = await as(fx.t, fx.admin).query(api.snapshot.forMe, {})
+      const snapshot = await workspaceOf(as(fx.t, fx.admin))
       return [...new Set((snapshot?.messages ?? []).map((m) => m.issue_id))].sort()
     }
     expect(await listed()).toEqual([fx.task.id])

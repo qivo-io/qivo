@@ -111,20 +111,17 @@ describe('the workspace base', () => {
     expect(a?.title).toBe(snap.issues[0].title)
   })
 
-  it("keys an owner's hidden load rows by their place, keeps a new order across deliveries and leaves out rows naming a task", () => {
+  it("keys an owner's hidden load rows by their place and keeps a new order across deliveries", () => {
     const base = createWorkspaceBase()
     const snap = snapshotOf(['a', 'b'])
     const hidden = (remaining: number) => ({ ...snap.orgLoad[0], remaining })
-    // a server before the app derived its shown tasks' load sent their rows
-    // too, which would count twice
-    const shown = { ...snap.orgLoad[0], issue_id: 'a', remaining: 9 }
-    snap.orgLoad = [shown, hidden(1), hidden(2), hidden(4)]
+    snap.orgLoad = [hidden(1), hidden(2), hidden(4)]
     base.stage(structuredClone(snap))
     base.apply()
     expect(base.list('orgLoad').map((row) => row.remaining)).toEqual([1, 2, 4])
     // the first hidden row goes: the second takes its place
     const fewer = structuredClone(snap)
-    fewer.orgLoad.splice(1, 1)
+    fewer.orgLoad.splice(0, 1)
     base.stage(structuredClone(fewer))
     expect(base.apply()?.orgLoad).toBeDefined()
     expect(base.list('orgLoad').map((row) => row.remaining)).toEqual([2, 4])

@@ -10,7 +10,8 @@ import {
 } from './board-scale-seed.mjs'
 
 /* A local backend the seed talks to: Nora, Northstar with one sub-project,
-   the tasks `fake.issues` holds, and every mutation it receives. */
+   the tasks `fake.issues` holds, in the workspace parts, and every mutation
+   it receives. */
 const fake = vi.hoisted(() => ({ issues: [], calls: [] }))
 vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
@@ -23,11 +24,41 @@ vi.mock('convex/browser', () => ({
             { email: 'nora@demo.qivo.io', auth_user_id: 'nora-login', id: 'nora', org_id: 'org' },
           ],
         }
+      // the workspace parts (convex/workspace.ts), one window of each kind
       return {
-        orgs: [{ id: 'org' }],
-        projects: [{ id: 'sub', org_id: 'org', type: 'project' }],
-        issues: fake.issues,
-      }
+        'workspace:root': {
+          auth_user_id: 'nora-login',
+          myProfileIds: ['nora'],
+          orgs: [{ id: 'org' }],
+        },
+        'workspace:catalog': { state: 'ok', teams: [], labels: [] },
+        'workspace:people': { state: 'ok', profiles: [], teamMembers: [] },
+        'workspace:projects': {
+          state: 'ok',
+          projects: [{ id: 'sub', org_id: 'org', type: 'project' }],
+          access: [],
+          teamAccess: [],
+          milestones: [],
+        },
+        'workspace:tasks': {
+          state: 'ok',
+          issues: fake.issues,
+          links: [],
+          issueLabels: [],
+          attachments: [],
+          issueSubs: [],
+          orgLoad: [],
+        },
+        'workspace:inbox': {
+          state: 'ok',
+          unread: [],
+          read: [],
+          readMessageCount: 0,
+          unreadTruncated: false,
+          readTruncated: false,
+          truncated: false,
+        },
+      }[name]
     }
     async mutation(ref, fields) {
       fake.calls.push([getFunctionName(ref), fields])
@@ -51,9 +82,8 @@ describe('board-scale-seed', () => {
   it('refuses anything but a disposable local backend before it connects', async () => {
     expect(() => parseSeedArgs(['--url', 'http://127.0.0.1:3214'])).toThrow(/--local backend only/)
     expect(() => parseSeedArgs([...local, '--tasks', '0'])).toThrow(/--tasks/)
-    // an organization much larger no longer loads through snapshot:forMe
-    expect(() => parseSeedArgs([...local, '--tasks', '10001'])).toThrow(/1 to 10000/)
-    expect(parseSeedArgs([...local, '--tasks', '10000']).tasks).toBe(10_000)
+    expect(() => parseSeedArgs([...local, '--tasks', '30001'])).toThrow(/1 to 30000/)
+    expect(parseSeedArgs([...local, '--tasks', '30000']).tasks).toBe(30_000)
     const refused = (args, extra = {}) =>
       runBoardScaleSeed(args, { env: { ...env, ...extra }, log: () => {} })
     await expect(

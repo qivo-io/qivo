@@ -29,12 +29,15 @@ export function SnapshotNotice() {
   const asOf = trouble?.asOf ? `You’re seeing your workspace as of ${asOfText(trouble.asOf)}. ` : ''
   // Each kind's title and line. A lost sign-in or seat does not end by
   // retrying, so those two offer Reload instead of Try again and Details.
+  // A part that refused to load says why, which retrying alone may not end.
   const words: Record<SnapshotTrouble['kind'], { title: string; line: string }> = {
     failed: {
       title: 'Qivo can’t load the latest changes',
-      line: asOf
-        ? `${asOf}Editing is paused until it loads again. Qivo keeps trying.`
-        : 'Editing is paused until your workspace loads again. Qivo keeps trying.',
+      line: trouble?.reason
+        ? `${asOf}${trouble.reason} Editing is paused until it loads again.`
+        : asOf
+          ? `${asOf}Editing is paused until it loads again. Qivo keeps trying.`
+          : 'Editing is paused until your workspace loads again. Qivo keeps trying.',
     },
     signed_out: {
       title: 'You’re signed out',
