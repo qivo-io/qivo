@@ -13,6 +13,10 @@ const page = await browser.newPage({ viewport: { width: 1556, height: 1286 } })
 const pageErrors = []
 page.on('pageerror', (error) => pageErrors.push(error.message))
 const log = (message) => console.log(`[board-scroll] ${message}`)
+/* The shown Board's pane. A Board that the drive opened stays loaded,
+   hidden, while another view of its scope shows (KeptView), after the shown
+   view, which alone has data-workspace-view. */
+const SCROLL = '[data-workspace-view] [data-scroll]'
 const paintProof = { headingOverlaps: 0, footContent: 0, roundedCorners: 0, gapOverlaps: 0 }
 const panel = (name) =>
   page.locator('[data-swimlane-panel]').filter({
@@ -49,7 +53,7 @@ async function geometry(name) {
 }
 
 async function assertPanelPaint() {
-  const proof = await page.locator('[data-scroll]').evaluate((scroll) => {
+  const proof = await page.locator(SCROLL).evaluate((scroll) => {
     const pane = scroll.getBoundingClientRect()
     const band = scroll.parentElement.querySelector('.board-status-band')
     const status = band.querySelector('.board-status-panel').getBoundingClientRect()
@@ -164,7 +168,7 @@ async function assertPanelPaint() {
 
 // Wait through wheel dispatch and smooth scrolling.
 async function settle() {
-  await page.locator('[data-scroll]').evaluate(
+  await page.locator(SCROLL).evaluate(
     (scroll) =>
       new Promise((resolve, reject) => {
         const started = performance.now()
@@ -205,7 +209,7 @@ async function positionAt(name, headingOffset = 0) {
       `${name} did not reach the requested ${headingOffset}px heading offset`,
     )
   }
-  const bounds = await page.locator('[data-scroll]').boundingBox()
+  const bounds = await page.locator(SCROLL).boundingBox()
   await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
 }
 
@@ -257,7 +261,7 @@ async function reverseDuringSnap(direction) {
   )
   // Capture before the app's listener handles the reversal, proving the real
   // wheel event arrived while the original animation was still in flight.
-  await page.locator('[data-scroll]').evaluate((scroll) => {
+  await page.locator(SCROLL).evaluate((scroll) => {
     delete scroll.dataset.wheelReversedAt
     scroll.addEventListener(
       'wheel',
@@ -273,7 +277,7 @@ async function reverseDuringSnap(direction) {
     null,
     { timeout: 2000 },
   )
-  const reversedAt = await page.locator('[data-scroll]').evaluate((scroll) => {
+  const reversedAt = await page.locator(SCROLL).evaluate((scroll) => {
     const top = Number(scroll.dataset.wheelReversedAt)
     delete scroll.dataset.wheelReversedAt
     return top
@@ -308,7 +312,7 @@ async function scrollDownTo(name, nextName) {
 }
 
 async function steadyWheelTicks(deltaY, interval, count) {
-  await page.locator('[data-scroll]').evaluate((scroll) => {
+  await page.locator(SCROLL).evaluate((scroll) => {
     const lanes = [...scroll.querySelectorAll('[data-swimlane-panel]')]
     const proof = { ticks: [], unreadCrossings: [], seenLast: [], active: -1 }
     const sample = () => {
@@ -371,7 +375,7 @@ async function steadyWheelTicks(deltaY, interval, count) {
     }),
   )
   await settle()
-  return page.locator('[data-scroll]').evaluate((scroll) => scroll.finishWheelProof())
+  return page.locator(SCROLL).evaluate((scroll) => scroll.finishWheelProof())
 }
 
 async function assertSteadyResponse({ short = false, motion, interval, deltaY = 30, count = 16 }) {
@@ -445,7 +449,9 @@ try {
   }
   await panel('Luma Sensor').waitFor()
   // a large Board mounts in slices; these are small, so this only guards
-  await page.waitForFunction(() => !document.querySelector('[data-board-mount="pending"]'))
+  await page.waitForFunction(
+    () => !document.querySelector('[data-workspace-view] [data-board-mount="pending"]'),
+  )
   await page.evaluate(() => document.fonts.ready)
   await positionAt('Luma Sensor')
   await scrollDownTo('Luma Sensor', 'Luma Cloud')
@@ -507,7 +513,7 @@ try {
   )
   await page.keyboard.press('End')
   await settle()
-  const keyboardEnd = await page.locator('[data-scroll]').evaluate((scroll) => ({
+  const keyboardEnd = await page.locator(SCROLL).evaluate((scroll) => ({
     top: scroll.scrollTop,
     max: scroll.scrollHeight - scroll.clientHeight,
   }))
@@ -523,7 +529,7 @@ try {
     (top) => document.querySelector('[data-scroll]').scrollTop > top + 2,
     beforeScrollbar.scrollTop,
   )
-  const scrollbar = await page.locator('[data-scroll]').evaluate((scroll) => {
+  const scrollbar = await page.locator(SCROLL).evaluate((scroll) => {
     const bounds = scroll.getBoundingClientRect()
     const width = scroll.offsetWidth - scroll.clientWidth
     const height = scroll.clientHeight
@@ -607,7 +613,7 @@ try {
   await page.mouse.wheel(180, 0)
   await settle()
   assert.ok(
-    await page.locator('[data-scroll]').evaluate((scroll) => scroll.scrollLeft > 0),
+    await page.locator(SCROLL).evaluate((scroll) => scroll.scrollLeft > 0),
     'Horizontal wheel input must move the narrow board',
   )
   await assertPanelPaint()

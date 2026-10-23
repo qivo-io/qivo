@@ -1,5 +1,6 @@
 import { type FocusEvent, type RefObject, useEffect, useLayoutEffect, useRef } from 'react'
 import { lastInputWasPointer } from './focusVisibility'
+import { OUT_OF_USE } from './viewHidden'
 
 /* Focus that follows a task's card. A card that moves to another cell (its
    status or owner changed, here or elsewhere) is a new element, so the
@@ -54,7 +55,7 @@ export function registerTaskMount(mount: (mark: TaskFocusMark) => void) {
 }
 
 const usable = (element: HTMLElement | null | undefined): element is HTMLElement =>
-  !!element?.isConnected && !element.closest('[inert]')
+  !!element?.isConnected && !element.closest(OUT_OF_USE)
 
 /** Focuses the control `mark` names, wherever its task is now, or another
     control of the task's row. With `nearby`, and only when the task is no
@@ -162,7 +163,7 @@ export function useFollowTaskFocus(container: RefObject<HTMLElement | null>) {
         !!list &&
         document.hasFocus() &&
         document.activeElement === document.body &&
-        !list.closest('[inert]')
+        !list.closest(OUT_OF_USE)
       )
     }
     /* Follows the control focus landed on, whether or not React delivered

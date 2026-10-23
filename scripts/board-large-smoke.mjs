@@ -83,11 +83,14 @@ try {
     await page.goto(`${server.origin}/?tasks=${tasks}&latency=0&mbps=10000`)
     await page.locator('[data-view-switch]').waitFor(slow)
     await page.evaluate(() => {
-      const state = { first: null, firstAt: null, frames: [] }
+      const state = { first: null, firstAt: null, frames: [], observer: null }
       window.__boardOpen = state
-      new PerformanceObserver((list) => {
+      // held in the state, so the read below can take the frames it has
+      // not delivered yet
+      state.observer = new PerformanceObserver((list) => {
         for (const entry of list.getEntries()) state.frames.push(entry)
-      }).observe({ type: 'long-animation-frame' })
+      })
+      state.observer.observe({ type: 'long-animation-frame' })
       const seen = new MutationObserver(() => {
         const count = document.querySelectorAll('.board-card').length
         if (!count) return
@@ -103,10 +106,12 @@ try {
       .click(slow)
     await page.locator('[data-card]').first().waitFor(slow)
   }
-  /** The long animation frames (over 50ms) after the first card. */
+  /** The long animation frames (over 50ms) after the first card, with
+      those the observer has not delivered yet. */
   const longFrames = (page) =>
     page.evaluate(() => {
-      const { firstAt, frames } = window.__boardOpen
+      const { firstAt, frames, observer } = window.__boardOpen
+      frames.push(...observer.takeRecords())
       return frames.filter((f) => f.startTime > firstAt).map((f) => f.duration)
     })
 

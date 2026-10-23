@@ -18,16 +18,24 @@
 // under the same machine load, which moves single numbers a lot. The App
 // render counts (*AppRenders) do not depend on load at all.
 //
+// Every sample ends on the Overview and the Roadmap after the Board was
+// open (which stays loaded, hidden): the page's memory, and a remote change
+// and a local edit on each (overviewAfterBoard*, roadmapAfterBoard*).
+//
 // --fixture varied also opens a second page per sample on the varied
-// workspace (scripts/perf/transport.mjs, shape=varied) and measures opening,
-// scrolling and one drag over its Board, going back to the Overview and
-// the phone's Roadmap task schedule. --serve only builds and serves the
-// pages, on --host (127.0.0.1 by default), until it is stopped.
+// workspace (scripts/perf/transport.mjs, shape=varied) and measures opening
+// its Board with the longest frame after the first card, scrolling and one
+// drag over it, going back to the Overview and then to the Board again,
+// each with the longest frame after the view first showed and the longest
+// key press delay of the switch, and the phone's Roadmap task schedule.
+// Each sample records the machine's load average in `loads`. --serve only
+// builds and serves the pages, on --host (127.0.0.1 by default), until it
+// is stopped.
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { loadavg, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
@@ -121,6 +129,11 @@ const PHASES = [
   'boardFilter',
   'boardFilterClear',
   'phoneBoard',
+  // with the Board open before, now hidden (a Board that stays loaded)
+  'overviewAfterBoardRemote',
+  'overviewAfterBoardEdit',
+  'roadmapAfterBoardRemote',
+  'roadmapAfterBoardEdit',
   ...(varied
     ? [
         'variedBoardNavigation',
@@ -129,6 +142,8 @@ const PHASES = [
         'variedBoardDragOver',
         'variedOverview',
         'variedOverviewComplete',
+        'variedBoardReturn',
+        'variedBoardReturnComplete',
         'variedPhoneRoadmap',
         'variedPhoneRoadmapComplete',
       ]
@@ -147,7 +162,7 @@ const COMPARED = [
     'remoteProjectRename',
     'inboxMessage',
     'remoteStamp',
-    ...PHASES.filter((phase) => /^(board|phone|varied)/.test(phase)),
+    ...PHASES.filter((phase) => /^(board|phone|varied|overview|roadmap)/.test(phase)),
   ].flatMap((phase) => [`${phase}ScriptDurationMs`, `${phase}AppRenders`]),
   ...[
     'remote',
@@ -162,6 +177,27 @@ const COMPARED = [
   'boardLongestSliceMs',
   'boardDomNodes',
   'boardHeapMb',
+  'boardKeyDelayMs',
+  'boardRemote',
+  'overviewAfterBoardRemote',
+  'overviewAfterBoardEdit',
+  'roadmapAfterBoardRemote',
+  'roadmapAfterBoardEdit',
+  'afterBoardHeapMb',
+  ...(varied
+    ? [
+        'variedBoardLongestFrameMs',
+        'variedBoardKeyDelayMs',
+        'variedOverview',
+        'variedOverviewComplete',
+        'variedOverviewLongestFrameMs',
+        'variedOverviewKeyDelayMs',
+        'variedBoardReturn',
+        'variedBoardReturnComplete',
+        'variedBoardReturnLongestFrameMs',
+        'variedBoardReturnKeyDelayMs',
+      ]
+    : []),
 ]
 let browser
 const servers = []
@@ -175,6 +211,8 @@ const report = {
   timeoutMs: timeout,
   kind: 'authenticated production UI; synthetic transport',
   scenarios: [],
+  // the one-minute load average after each sample
+  loads: [],
 }
 // --trace prints each phase as it starts, to find a step that stalls
 const trace = process.argv.includes('--trace')
@@ -272,8 +310,10 @@ async function openPage(origin, tasks, metrics, query = '') {
 
 /* The Board counts as complete when nothing on it waits to mount. A Board
    that mounts in slices marks its pending part with this attribute; one
-   that mounts whole never sets it. */
-const boardComplete = () => !document.querySelector('[data-board-mount="pending"]')
+   that mounts whole never sets it. Only the shown view counts: a Board kept
+   hidden while another view shows (KeptView) waits until it shows again. */
+const boardComplete = () =>
+  !document.querySelector('[data-workspace-view] [data-board-mount="pending"]')
 
 /** How many cards the Board must show, as the stand-in server counts them:
     every task but the parents, whose subtasks are their cards. */
@@ -290,39 +330,105 @@ async function pageSize(page, cdp) {
   }
 }
 
-/** The view switch's `name` button, found before a timed phase clicks it.
-    Each CSS selector a Playwright locator runs also reads every element on
-    the page, to look into shadow roots, which on a page with a large Board
-    or Roadmap takes longer than the app's own work, so a phase that found
-    the button inside its timing measured the search. */
-const viewButton = (page, name) =>
-  page
-    .locator('[data-view-switch]')
-    .getByRole('radio', { name, exact: true })
-    .elementHandle({ timeout: timeout * 10 })
+/** The element `locator` finds, found before a timed phase uses it. Each
+    CSS selector a Playwright locator runs also reads every element on the
+    page, to look into shadow roots, which on a page with a large Board or
+    Roadmap takes longer than the app's own work, so a phase that searched
+    inside its timing measured the search. A timed phase acts on the handle
+    and waits with shows and the page's own functions instead. */
+const handle = (locator) => locator.elementHandle({ timeout: timeout * 10 })
 
-/** Waits inside a timed phase until an element that `selector` matches
-    shows, with the page's own querySelector on each frame, for the reason
-    viewButton gives. */
-const shows = (page, selector) =>
-  page.waitForFunction((css) => !!document.querySelector(css)?.checkVisibility(), selector, {
-    timeout: timeout * 10,
+/** Presses Shift, which nothing handles, every 50ms until `stop`, which
+    waits for the last press and throws what a press threw. */
+function pressEvery50ms(page) {
+  let pressing = true
+  const loop = (async () => {
+    while (pressing) {
+      await page.keyboard.press('Shift')
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+  })()
+  // a failed press surfaces through stop, never as an unhandled rejection
+  loop.catch(() => {})
+  return {
+    stop: () => {
+      pressing = false
+      return loop
+    },
+  }
+}
+
+/** Watches the page's animation frames and key presses, with a Shift
+    press every 50ms, which nothing handles, from now until `stop`. Then
+    `read(after)` answers the longest frame that started at page time
+    `after` or later, and the longest any press waited for its turn. */
+async function watchInput(page) {
+  await page.evaluate(() => {
+    const state = { frames: [], events: [], observers: [] }
+    window.__watch = state
+    const frames = new PerformanceObserver((list) => {
+      state.frames.push(...list.getEntries())
+    })
+    frames.observe({ type: 'long-animation-frame' })
+    const events = new PerformanceObserver((list) => {
+      state.events.push(...list.getEntries())
+    })
+    events.observe({ type: 'event', durationThreshold: 16 })
+    state.observers = [frames, events]
   })
+  const presses = pressEvery50ms(page)
+  return {
+    stop: () => presses.stop(),
+    read: (after) =>
+      page.evaluate((after) => {
+        const { frames, events, observers } = window.__watch
+        const [frameObserver, eventObserver] = observers
+        frames.push(...frameObserver.takeRecords())
+        events.push(...eventObserver.takeRecords())
+        for (const observer of observers) observer.disconnect()
+        delete window.__watch
+        return {
+          frame: Math.max(
+            0,
+            ...frames.filter((entry) => entry.startTime >= after).map((entry) => entry.duration),
+          ),
+          keyDelay: Math.max(
+            0,
+            ...events
+              .filter((entry) => entry.name === 'keydown')
+              .map((entry) => entry.processingStart - entry.startTime),
+          ),
+        }
+      }, after),
+  }
+}
+
+/** The view switch's `name` button, for a timed phase to click. */
+const viewButton = (page, name) =>
+  handle(page.locator('[data-view-switch]').getByRole('radio', { name, exact: true }))
+
+/** Waits inside a timed phase until the element that `selector` matches
+    `nth` (from 0) shows, with the page's own querySelector on each frame,
+    for the reason handle gives. */
+const shows = (page, selector, nth = 0) =>
+  page.waitForFunction(
+    ([css, index]) =>
+      !!(
+        index ? document.querySelectorAll(css)[index] : document.querySelector(css)
+      )?.checkVisibility(),
+    [selector, nth],
+    { timeout: timeout * 10 },
+  )
 
 /** Opens the Board from another view as `prefix`Navigation, until its first
-    card shows, and `prefix`Complete, until every card is in. Returns their
-    sum and the longest animation frame that started after the first card
-    showed (0 when it all happened in one). */
+    card shows, and `prefix`Complete, until every card is in, with input
+    watched from the click: `prefix`KeyDelayMs is the longest a key press
+    waited. Returns their sum and the longest animation frame that started
+    after the first card showed (0 when it all happened in one). */
 async function openBoard({ page, timed }, metrics, prefix) {
   await page.evaluate(() => {
-    const state = { firstCardAt: null, frames: [], observer: null }
+    const state = { firstCardAt: null }
     window.__boardOpen = state
-    // held in the state, so the read below can take the frames it has
-    // not delivered yet and disconnect it
-    state.observer = new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) state.frames.push(entry)
-    })
-    state.observer.observe({ type: 'long-animation-frame', buffered: false })
     const seen = new MutationObserver(() => {
       if (!document.querySelector('[data-card]')) return
       state.firstCardAt = performance.now()
@@ -330,32 +436,70 @@ async function openBoard({ page, timed }, metrics, prefix) {
     })
     seen.observe(document.body, { childList: true, subtree: true })
   })
-  phase(`${prefix}Navigation`)
   const button = await viewButton(page, 'Board')
-  const navigation = await timed(async () => {
-    await button.click({ timeout: timeout * 10 })
-    await shows(page, '[data-card]')
-  })
-  metrics[`${prefix}Navigation`].push(navigation)
-  phase(`${prefix}Complete`)
-  const complete = await timed(() =>
-    page.waitForFunction(boardComplete, null, { timeout: timeout * 10 }),
-  )
-  metrics[`${prefix}Complete`].push(complete)
-  const longest = await page.evaluate(() => {
-    const { firstCardAt, frames, observer } = window.__boardOpen
-    // the frames it has not delivered yet
-    frames.push(...observer.takeRecords())
-    observer.disconnect()
-    delete window.__boardOpen
-    return Math.max(
-      0,
-      ...frames
-        .filter((frame) => firstCardAt !== null && frame.startTime >= firstCardAt)
-        .map((frame) => frame.duration),
+  const watch = await watchInput(page)
+  let navigation
+  let complete
+  try {
+    phase(`${prefix}Navigation`)
+    navigation = await timed(async () => {
+      await button.click({ timeout: timeout * 10 })
+      await shows(page, '[data-card]')
+    })
+    metrics[`${prefix}Navigation`].push(navigation)
+    phase(`${prefix}Complete`)
+    complete = await timed(() =>
+      page.waitForFunction(boardComplete, null, { timeout: timeout * 10 }),
     )
+    metrics[`${prefix}Complete`].push(complete)
+  } finally {
+    await watch.stop()
+  }
+  const firstCardAt = await page.evaluate(() => {
+    const at = window.__boardOpen.firstCardAt
+    delete window.__boardOpen
+    return at
   })
-  return { openToComplete: navigation + complete, longest }
+  const { frame, keyDelay } = await watch.read(firstCardAt ?? Number.POSITIVE_INFINITY)
+  metrics[`${prefix}KeyDelayMs`].push(keyDelay)
+  return { openToComplete: navigation + complete, longest: frame }
+}
+
+/** Switches to the view `name` as `prefix`, until `first` shows (then
+    `last`, when given), and `prefix`Complete, until nothing in the shown
+    view waits to mount, with input watched from the click:
+    `prefix`LongestFrameMs is the longest animation frame that started after
+    `first` showed, and `prefix`KeyDelayMs the longest a key press waited
+    during the whole switch. */
+async function switchTo({ page, timed }, metrics, prefix, name, first, last) {
+  const button = await viewButton(page, name)
+  const watch = await watchInput(page)
+  let shownAt = Number.POSITIVE_INFINITY
+  try {
+    phase(prefix)
+    metrics[prefix].push(
+      await timed(async () => {
+        await button.click({ timeout: timeout * 10 })
+        // on the frame that first shows it, so later frames can be told apart
+        const shown = await page.waitForFunction(
+          (css) => !!document.querySelector(css)?.checkVisibility() && performance.now(),
+          first,
+          { timeout: timeout * 10 },
+        )
+        shownAt = await shown.jsonValue()
+        if (last) await shows(page, last)
+      }),
+    )
+    phase(`${prefix}Complete`)
+    metrics[`${prefix}Complete`].push(
+      await timed(() => page.waitForFunction(boardComplete, null, { timeout: timeout * 10 })),
+    )
+  } finally {
+    await watch.stop()
+  }
+  const { frame, keyDelay } = await watch.read(shownAt)
+  metrics[`${prefix}LongestFrameMs`].push(frame)
+  metrics[`${prefix}KeyDelayMs`].push(keyDelay)
 }
 
 /** Scrolls the Board's pane down by half its height every animation frame
@@ -404,32 +548,33 @@ async function runSample(origin, tasks, metrics, query = '') {
   await settle()
   metrics.startup.push(await page.evaluate(() => performance.now()))
   assert.equal(await page.evaluate(() => window.PLANNER.issues.length), tasks)
-  const search = page.getByRole('combobox', { name: 'Search tasks and projects' })
+  const searchButton = await handle(page.locator('[data-sidebar-search]'))
   phase('searchOpen')
   metrics.searchOpen.push(
     await timed(async () => {
-      await page.locator('[data-sidebar-search]').click()
-      await search.waitFor()
+      await searchButton.click()
+      await shows(page, '[role="dialog"] input[aria-label="Search tasks and projects"]')
     }),
+  )
+  const search = await handle(
+    page.getByRole('dialog').getByRole('combobox', { name: 'Search tasks and projects' }),
   )
   phase('search')
   metrics.search.push(
     await timed(async () => {
       await search.fill('signed firm')
-      await page.locator('[cmdk-item]').nth(8).waitFor()
+      await shows(page, '[cmdk-item]', 8)
     }),
   )
   assert.equal(await page.locator('[cmdk-item]').count(), 9)
   await page.keyboard.press('Escape')
+  const roadmap = await viewButton(page, 'Roadmap')
   phase('navigation')
   metrics.navigation.push(
     await timed(async () => {
-      await page
-        .locator('[data-view-switch]')
-        .getByRole('radio', { name: 'Roadmap', exact: true })
-        .click()
-      await page.locator('[data-roadmap-panel]').waitFor()
-      await page.locator('[data-bar]').first().waitFor()
+      await roadmap.click()
+      await shows(page, '[data-roadmap-panel]')
+      await shows(page, '[data-roadmap-task-open]')
     }),
   )
   assert.equal(
@@ -486,7 +631,13 @@ async function runSample(origin, tasks, metrics, query = '') {
   metrics.comments.push(
     await timed(async () => {
       const body = await page.evaluate(() => window.__perf.deliverComments())
-      await page.getByText(body, { exact: true }).waitFor()
+      await page.waitForFunction(
+        (text) =>
+          [...document.querySelectorAll('[data-comment]')].some(
+            (comment) => comment.textContent.includes(text) && comment.checkVisibility(),
+          ),
+        body,
+      )
     }),
   )
   metrics.commentAppRenders.push((await appRenders()) - renders)
@@ -663,7 +814,7 @@ async function runSample(origin, tasks, metrics, query = '') {
   await scrollBoard(opened, metrics, 'boardScroll')
   // A filter that matches nothing, then clearing it, which brings every card
   // back.
-  const filter = page.getByPlaceholder('Filter tasks…', { exact: true })
+  const filter = await handle(page.getByPlaceholder('Filter tasks…', { exact: true }))
   phase('boardFilter')
   metrics.boardFilter.push(
     await timed(async () => {
@@ -680,10 +831,7 @@ async function runSample(origin, tasks, metrics, query = '') {
     await timed(async () => {
       const start = await page.evaluate(() => performance.now())
       await filter.fill('', { timeout: timeout * 10 })
-      await page
-        .locator('[data-card]')
-        .first()
-        .waitFor({ timeout: timeout * 10 })
+      await shows(page, '[data-card]')
       firstCard = (await page.evaluate(() => performance.now())) - start
       await page.waitForFunction(boardComplete, null, { timeout: timeout * 10 })
     }),
@@ -701,10 +849,7 @@ async function runSample(origin, tasks, metrics, query = '') {
     await timed(async () => {
       const start = await page.evaluate(() => performance.now())
       await page.setViewportSize({ width: 390, height: 844 })
-      await page
-        .locator('.mobile-task-list [data-card]')
-        .first()
-        .waitFor({ timeout: timeout * 10 })
+      await shows(page, '.mobile-task-list [data-card]')
       phoneFirstCard = (await page.evaluate(() => performance.now())) - start
       await page.waitForFunction(boardComplete, null, { timeout: timeout * 10 })
     }),
@@ -716,6 +861,49 @@ async function runSample(origin, tasks, metrics, query = '') {
     'The phone list must show every task',
   )
   await page.setViewportSize({ width: 1440, height: 1000 })
+  await shows(page, '[data-workspace-view="kanban"] [data-card]')
+  await page.waitForFunction(boardComplete, null, { timeout: timeout * 10 })
+  /* The Overview and the Roadmap after the Board was open, which a Board
+     that stays loaded (KeptView) keeps hidden: the memory the page holds,
+     and another person's change and one of this person's own on each. */
+  await (await viewButton(page, 'Overview')).click({ timeout: timeout * 10 })
+  await shows(page, '[data-ov-strip]')
+  await page.waitForFunction(boardComplete, null, { timeout: timeout * 10 })
+  const afterBoard = await pageSize(page, cdp)
+  metrics.afterBoardHeapMb.push(afterBoard.heapMb)
+  metrics.afterBoardDomNodes.push(afterBoard.domNodes)
+  /** Times another person's rename of task `remote`, then this person's
+      own rename of task `own`, as `prefix`Remote and `prefix`Edit. */
+  const changes = async (prefix, remote, own) => {
+    await settle()
+    await noToasts()
+    phase(`${prefix}Remote`)
+    metrics[`${prefix}Remote`].push(
+      await timed(async () => {
+        await page.evaluate((n) => window.__perf.deliverRemote(n), remote)
+        await paintTimer()
+      }),
+    )
+    const written = await page.evaluate(() => window.__perf.writes)
+    phase(`${prefix}Edit`)
+    metrics[`${prefix}Edit`].push(
+      await timed(async () => {
+        await page.evaluate((n) => {
+          void window.PLANNER.updateIssue(window.PLANNER.issues[n].id, { title: `Own edit ${n}` })
+        }, own)
+        await paintTimer()
+      }),
+    )
+    // its answer lands before the next phase
+    await page.waitForFunction((count) => window.__perf.writes > count, written, {
+      timeout: timeout * 2,
+    })
+  }
+  await changes('overviewAfterBoard', 5, 6)
+  await (await viewButton(page, 'Roadmap')).click({ timeout: timeout * 10 })
+  await shows(page, '[data-roadmap-task-open]')
+  await page.waitForFunction(boardComplete, null, { timeout: timeout * 10 })
+  await changes('roadmapAfterBoard', 7, 8)
   assert.deepEqual(errors, [], `Browser errors at ${tasks} tasks`)
   await context.close()
 }
@@ -728,7 +916,7 @@ async function runVariedSample(origin, tasks, metrics, query = '') {
   const { context, page, errors, settle, timed } = opened
   await page.locator('[data-view-switch]').waitFor()
   await settle()
-  await openBoard(opened, metrics, 'variedBoard')
+  metrics.variedBoardLongestFrameMs.push((await openBoard(opened, metrics, 'variedBoard')).longest)
   await scrollBoard(opened, metrics, 'variedBoardScroll')
   // A drag from the first lane's To Do into its In Progress, the way
   // board-cards-smoke.mjs drives one, with only the dragover timed.
@@ -740,7 +928,7 @@ async function runVariedSample(origin, tasks, metrics, query = '') {
     .first()
     .getAttribute('data-card')
   const source = page.locator(`[data-card="${id}"]`)
-  const target = lane.locator('[data-board-cell][data-status="progress"]')
+  const target = await handle(lane.locator('[data-board-cell][data-status="progress"]'))
   await source.scrollIntoViewIfNeeded()
   const transfer = await page.evaluateHandle(() => new DataTransfer())
   await source.dispatchEvent('dragstart', { dataTransfer: transfer })
@@ -765,21 +953,27 @@ async function runVariedSample(origin, tasks, metrics, query = '') {
   await source.dispatchEvent('dragend', { dataTransfer: transfer })
   await transfer.dispose()
   await settle()
-  // Back to the Overview until its first screen shows, then until its
-  // lists are complete.
-  phase('variedOverview')
-  const overview = await viewButton(page, 'Overview')
-  metrics.variedOverview.push(
-    await timed(async () => {
-      await overview.click({ timeout: timeout * 10 })
-      await shows(page, '[data-ov-strip]')
-      await shows(page, '[data-atrisk], [data-ovrow]')
-    }),
+  /* Back to the Overview until its first screen shows, then until its
+     lists are complete, and to the Board again, which a Board that stays
+     loaded (KeptView) shows without mounting it anew. */
+  await switchTo(
+    opened,
+    metrics,
+    'variedOverview',
+    'Overview',
+    '[data-ov-strip]',
+    '[data-atrisk], [data-ovrow]',
   )
-  phase('variedOverviewComplete')
-  metrics.variedOverviewComplete.push(
-    await timed(() => page.waitForFunction(boardComplete, null, { timeout: timeout * 10 })),
+  await switchTo(
+    opened,
+    metrics,
+    'variedBoardReturn',
+    'Board',
+    '[data-workspace-view="kanban"] [data-card]',
   )
+  // the phone's Roadmap below starts from the Overview, as before
+  await (await viewButton(page, 'Overview')).click({ timeout: timeout * 10 })
+  await shows(page, '[data-ov-strip]')
   // The phone's Roadmap: its task schedule until the first row shows, then
   // until every row is in.
   await page.setViewportSize({ width: 390, height: 844 })
@@ -787,8 +981,7 @@ async function runVariedSample(origin, tasks, metrics, query = '') {
     .locator('[data-view-switch]')
     .getByRole('radio', { name: 'Roadmap', exact: true })
     .click({ timeout: timeout * 10 })
-  const schedule = page.getByRole('button', { name: 'Task schedule', exact: true })
-  await schedule.waitFor({ timeout: timeout * 10 })
+  const schedule = await handle(page.getByRole('button', { name: 'Task schedule', exact: true }))
   await settle()
   phase('variedPhoneRoadmap')
   metrics.variedPhoneRoadmap.push(
@@ -796,12 +989,10 @@ async function runVariedSample(origin, tasks, metrics, query = '') {
       // the phone's bottom navigation can sit over the button, so a
       // pointer click would land on it
       await schedule.evaluate((button) => button.click())
-      await page
-        .locator(
-          '.mobile-roadmap-task-list .mobile-roadmap-row, .mobile-roadmap-section > .mobile-roadmap-row',
-        )
-        .first()
-        .waitFor({ timeout: timeout * 10 })
+      await shows(
+        page,
+        '.mobile-roadmap-task-list .mobile-roadmap-row, .mobile-roadmap-section > .mobile-roadmap-row',
+      )
     }),
   )
   phase('variedPhoneRoadmapComplete')
@@ -827,6 +1018,15 @@ const emptyMetrics = () =>
       'boardHeapMb',
       'boardFilterFirstCardMs',
       'phoneBoardFirstCardMs',
+      'boardKeyDelayMs',
+      'afterBoardHeapMb',
+      'afterBoardDomNodes',
+      'variedBoardLongestFrameMs',
+      'variedBoardKeyDelayMs',
+      'variedOverviewLongestFrameMs',
+      'variedOverviewKeyDelayMs',
+      'variedBoardReturnLongestFrameMs',
+      'variedBoardReturnKeyDelayMs',
     ].map((key) => [key, []]),
   )
 
@@ -891,7 +1091,12 @@ try {
           running = { label: target.label, tasks, sample: sample + 1, phase: 'startup' }
           await runSample(target.origin, tasks, target.metrics, target.query)
           if (varied) await runVariedSample(target.origin, tasks, target.metrics, target.query)
-          console.log(`${target.label}, ${tasks} tasks: sample ${sample + 1}/${samples}`)
+          // the machine's load, which moves single numbers a lot
+          const load = loadavg()[0]
+          report.loads.push({ target: target.label, tasks, sample: sample + 1, load })
+          console.log(
+            `${target.label}, ${tasks} tasks: sample ${sample + 1}/${samples}, load ${load.toFixed(2)}`,
+          )
         }
       }
       for (const target of targets) target.scenarios.push(summarized(tasks, target.metrics))

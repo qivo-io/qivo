@@ -19,6 +19,7 @@ import {
   unsentList,
 } from '@/lib/discardQuestion'
 import { restoreFocus } from '@/lib/focusVisibility'
+import { OUT_OF_USE } from '@/lib/viewHidden'
 
 /* The Keep editing or Discard question (lib/discardQuestion has its state
    and the closeOrAsk every window's close goes through). */
@@ -49,7 +50,7 @@ export function DiscardPrompt() {
         onCloseAutoFocus={(event) => {
           // back to the text after Keep editing or Escape
           const field = takeReturnField()
-          if (!field?.isConnected || field.closest('[inert]')) return
+          if (!field?.isConnected || field.closest(OUT_OF_USE)) return
           event.preventDefault()
           restoreFocus(field)
         }}

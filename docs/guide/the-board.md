@@ -62,6 +62,10 @@ active subtasks outside these groups have individual cards.
 On very large boards, cards below the first screen appear in the first
 moments after the Board opens, in shaded space that keeps the Board's shape.
 Searching the page with Ctrl+F or ⌘F, or printing, loads them all first.
+The Board stays loaded while you use the Overview, the Roadmap, the Inbox,
+Team sync or Settings, as long as the sidebar choice, such as a project or All
+projects, stays the same. Going back shows it at once, scrolled where you left
+it.
 
 Task rows show title, priority, remaining hours, due date and owner. Click
 the row or parent title to open the task. Drag individual task rows to change

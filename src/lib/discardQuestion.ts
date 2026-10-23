@@ -1,4 +1,5 @@
 import type { UnsentScope } from '@/lib/leaveGuard'
+import { OUT_OF_USE } from '@/lib/viewHidden'
 
 /* The question before a window closes with text it has not sent.
 
@@ -63,7 +64,7 @@ function returnFieldFor(focused: HTMLElement | null) {
   const last = lastField
   if (
     last?.isConnected &&
-    !last.closest('[inert]') &&
+    !last.closest(OUT_OF_USE) &&
     (!focused || focused === document.body || layerOf(last) === layerOf(focused))
   )
     return last

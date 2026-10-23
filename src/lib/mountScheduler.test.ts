@@ -31,7 +31,7 @@ function setup({ frames, idle }: { frames?: (() => void)[]; idle?: IdleTask[] } 
   const list = (id: string, total: number, mounted = 0, cost = 0, held = { value: false }) => {
     const spacer = document.createElement('div')
     root.append(spacer)
-    const state = { mounted, grown: [] as number[] }
+    const state = { mounted, grown: [] as number[], through: [] as string[] }
     const entry: DeferredMount = {
       id,
       spacer: () => (state.mounted < total ? spacer : null),
@@ -42,7 +42,9 @@ function setup({ frames, idle }: { frames?: (() => void)[]; idle?: IdleTask[] } 
         state.mounted += n
         time += n * cost
       },
-      mountThrough: () => {},
+      mountThrough: (key) => {
+        state.through.push(key)
+      },
     }
     return { state, spacer, unregister: scheduler.register(entry) }
   }
@@ -222,6 +224,24 @@ describe('createMountScheduler', () => {
     await s.settle()
     await s.run()
     expect(a.state.mounted).toBe(8)
+  })
+
+  it('mounts nothing on request while it is disposed, as while its Board is hidden', async () => {
+    const s = setup()
+    s.scheduler.setRoot(s.root)
+    const a = s.list('a', 100)
+    const b = s.list('b', 100)
+    await s.settle()
+    s.scheduler.dispose()
+    s.scheduler.completeList('a')
+    s.scheduler.mountThrough('b', 'item-50')
+    s.scheduler.completeAll()
+    expect(a.state.grown).toEqual([])
+    expect(b.state.grown).toEqual([])
+    expect(b.state.through).toEqual([])
+    s.scheduler.revive()
+    s.scheduler.completeList('a')
+    expect(a.state.mounted).toBe(100)
   })
 
   it('runs slices within 16ms of a frame, then waits for the next frame', async () => {

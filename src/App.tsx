@@ -5,8 +5,10 @@ import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
 import { DropdownChevron } from '@/components/ui/select'
 import { HoverTooltip } from '@/components/ui/tooltip'
+import { keptBoardScope } from '@/lib/keptBoard'
 import { cn } from '@/lib/utils'
 import { BillingNotice } from './components/BillingNotice'
+import { ViewKeeper } from './components/KeptView'
 import {
   MobileHeader,
   MobileNavigation,
@@ -484,6 +486,10 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
 }
 
 /* ---------- top bar ---------- */
+/** A workspace view's container, which enters with a short rise. */
+const VIEW_CLASS =
+  'animate-in fade-in slide-in-from-bottom-1 [flex:1] [display:flex] [flex-direction:column] [overflow:hidden]'
+
 const VIEWS = [
   { id: 'overview', label: 'Overview', icon: 'chart', kbd: '1' },
   { id: 'kanban', label: 'Board', icon: 'board', kbd: '2' },
@@ -873,6 +879,26 @@ function App() {
   const [sync, setSync] = useState<SyncPlace | null>(() =>
     r0?.sync && P.homeOrg ? syncPlaceFor(r0.sync, mobile) : null,
   )
+  // The scope row can vanish mid-session (deleted by another member, or over
+  // REST/MCP). The access guard below re-scopes one commit later, but THIS
+  // render still runs with the dead id — and an uncaught render error would
+  // unmount the tree for good, so the guard never gets its chance. Skip the
+  // scoped pane for that frame; the sidebar (already null-safe) stays up.
+  // scopeInfo returns null for exactly that dead scope, and a full description
+  // for the live ones (both sentinels included).
+  const scopeInfo = P.scopeInfo(scope)
+  // the Board (or the phone's task list) is what the main pane shows
+  const boardActive = view === 'kanban' && !settingsPage && !inboxOpen && !projectsOpen && !sync
+  /* The scope whose Board stays loaded, hidden, while every other page of
+     that scope shows (lib/keptBoard.ts, components/KeptView.tsx). */
+  const [keptBoard, setKeptBoard] = useState<string | null>(null)
+  const keepBoard = keptBoardScope({
+    kept: keptBoard,
+    scope,
+    scopeLive: !!scopeInfo,
+    boardShown: boardActive,
+  })
+  if (keepBoard !== keptBoard) setKeptBoard(keepBoard)
   // Where the user is, as the address mirrors it: a project create that
   // finishes saving moves the user into the project only if this is unchanged.
   // The ref follows committed renders only.
@@ -905,8 +931,6 @@ function App() {
   }
   // edits made on the sync page are not roadmap edits, whatever the view below
   const roadmapActive = view === 'roadmap' && !settingsPage && !inboxOpen && !projectsOpen && !sync
-  // the Board (or the phone's task list) is what the main pane shows
-  const boardActive = view === 'kanban' && !settingsPage && !inboxOpen && !projectsOpen && !sync
   useLayoutEffect(() => {
     P.roadmapContext(roadmapActive, !!openIssue)
   }, [roadmapActive, openIssue])
@@ -1738,84 +1762,73 @@ function App() {
     </DeferredOverlay>
   )
 
-  if (settingsPage) {
-    // null from either sentinel scope, on purpose. Archived tasks shows ONE
-    // project at a time, so it opens on its own picker rather than being
-    // pre-scoped to an arbitrary one (P.project() is undefined for both)
-    const scopeMeta = (() => {
-      const p = P.project(scope)
-      return p ? (p.type === 'meta' ? p.id : (p.parent ?? null)) : null
-    })()
-    /** Leaves Settings for the page that opened it. */
-    const exitSettings = () => {
-      const back = settingsReturn.current
-      const to = {
-        settingsPage: null,
-        inboxOpen: back.inbox,
-        projectsOpen: back.projects,
-        sync: back.sync,
-      }
-      move(to, () => {
-        settingsReturn.current = NO_RETURN
-        backOrSet(to, () => {
-          setSettingsPage(null)
-          setInboxOpen(back.inbox)
-          setProjectsOpen(back.projects)
-          setSync(back.sync)
-        })
-      })
-    }
-    return (
-      <>
-        <ViewBoundary onBack={() => setSettingsPage(null)}>
-          <Suspense fallback={<ViewLoading />}>
-            <UnsentScopeContext.Provider value={unsent.page}>
-              <SettingsScreen
-                page={settingsPage}
-                setPage={(page) => move({ settingsPage: page }, () => setSettingsPage(page))}
-                resetPage={setSettingsPage}
-                onBackPage={(page) =>
-                  move({ settingsPage: page }, () =>
-                    backOrSet({ settingsPage: page }, () => setSettingsPage(page)),
-                  )
-                }
-                onExit={exitSettings}
-                onNewProject={() => openNewProject({ kind: 'program' })}
-                onNewSubProject={(parent) => openNewProject({ parent })}
-                archivedTasksProject={archiveProject || scopeMeta}
-                onOpenArchivedTasks={(projectId) =>
-                  move({ settingsPage: ARCHIVED_TASKS_PAGE }, () => {
-                    setArchiveProject(projectId)
-                    setSettingsPage(ARCHIVED_TASKS_PAGE)
-                  })
-                }
-                onProjectGone={(parent) => {
-                  // deleted or archived — from out here they are the same event: a
-                  // project the scope may have been pointing at is no longer one of
-                  // the ones this login can open. Both sentinels survive it — each is
-                  // defined by what's left, not by the row that went away.
-                  if (P.isWideScope(scope)) return
-                  const fb = parent && P.project(parent) ? parent : P.visibleProjects()[0]?.id
-                  if (fb) setScope(fb)
-                }}
-              />
-            </UnsentScopeContext.Provider>
-          </Suspense>
-        </ViewBoundary>
-        {dialogs}
-        <ToastHost toasts={toasts} dismiss={dismissToast} />
-      </>
-    )
-  }
-
-  // The scope row can vanish mid-session (deleted by another member, or over
-  // REST/MCP). The access guard above re-scopes one commit later, but THIS
-  // render still runs with the dead id — and an uncaught render error would
-  // unmount the tree for good, so the guard never gets its chance. Skip the
-  // scoped pane for that frame; the sidebar (already null-safe) stays up.
-  // scopeInfo returns null for exactly that dead scope, and a full description
-  // for the live ones (both sentinels included).
-  const scopeInfo = P.scopeInfo(scope)
+  /* Settings owns the screen. The workspace stays mounted after it,
+     hidden, for the kept Board (KeptView). */
+  const settingsView = settingsPage
+    ? (() => {
+        // null from either sentinel scope, on purpose. Archived tasks shows ONE
+        // project at a time, so it opens on its own picker rather than being
+        // pre-scoped to an arbitrary one (P.project() is undefined for both)
+        const p = P.project(scope)
+        const scopeMeta = p ? (p.type === 'meta' ? p.id : (p.parent ?? null)) : null
+        /** Leaves Settings for the page that opened it. */
+        const exitSettings = () => {
+          const back = settingsReturn.current
+          const to = {
+            settingsPage: null,
+            inboxOpen: back.inbox,
+            projectsOpen: back.projects,
+            sync: back.sync,
+          }
+          move(to, () => {
+            settingsReturn.current = NO_RETURN
+            backOrSet(to, () => {
+              setSettingsPage(null)
+              setInboxOpen(back.inbox)
+              setProjectsOpen(back.projects)
+              setSync(back.sync)
+            })
+          })
+        }
+        return (
+          <ViewBoundary onBack={() => setSettingsPage(null)}>
+            <Suspense fallback={<ViewLoading />}>
+              <UnsentScopeContext.Provider value={unsent.page}>
+                <SettingsScreen
+                  page={settingsPage}
+                  setPage={(page) => move({ settingsPage: page }, () => setSettingsPage(page))}
+                  resetPage={setSettingsPage}
+                  onBackPage={(page) =>
+                    move({ settingsPage: page }, () =>
+                      backOrSet({ settingsPage: page }, () => setSettingsPage(page)),
+                    )
+                  }
+                  onExit={exitSettings}
+                  onNewProject={() => openNewProject({ kind: 'program' })}
+                  onNewSubProject={(parent) => openNewProject({ parent })}
+                  archivedTasksProject={archiveProject || scopeMeta}
+                  onOpenArchivedTasks={(projectId) =>
+                    move({ settingsPage: ARCHIVED_TASKS_PAGE }, () => {
+                      setArchiveProject(projectId)
+                      setSettingsPage(ARCHIVED_TASKS_PAGE)
+                    })
+                  }
+                  onProjectGone={(parent) => {
+                    // deleted or archived — from out here they are the same event: a
+                    // project the scope may have been pointing at is no longer one of
+                    // the ones this login can open. Both sentinels survive it — each is
+                    // defined by what's left, not by the row that went away.
+                    if (P.isWideScope(scope)) return
+                    const fb = parent && P.project(parent) ? parent : P.visibleProjects()[0]?.id
+                    if (fb) setScope(fb)
+                  }}
+                />
+              </UnsentScopeContext.Provider>
+            </Suspense>
+          </ViewBoundary>
+        )
+      })()
+    : null
 
   /* The scope's own narrowing, handed to the two views that render a filter
      row. DERIVED here, never written into `filters` state: the My tasks
@@ -1832,13 +1845,25 @@ function App() {
      stand, and a flag switched on over on the board would otherwise thin the
      timeline with nothing on screen to clear it. */
   const roadmapFilters = { ...effFilters, stale: false, focus: false }
+  /** A failed view's way back: the scope's Overview. */
+  const backToWorkspace = () => {
+    setSync(null)
+    setInboxOpen(false)
+    setProjectsOpen(false)
+    setView('overview')
+  }
 
   return (
     <>
+      {settingsView}
+      {/* While Settings shows, the workspace stays, hidden, holding only the
+         kept Board in place, so its elements keep their layout, and a Board
+         whose scope went while Settings showed can come apart in slices. */}
       <WorkspaceShell
         className="planner-shell"
+        hidden={!!settingsPage}
         header={
-          mobile ? (
+          settingsPage ? null : mobile ? (
             <MobileHeader
               scope={scope}
               view={view}
@@ -1867,7 +1892,7 @@ function App() {
           )
         }
         navigation={
-          mobile ? (
+          settingsPage ? null : mobile ? (
             <MobileNavigation
               scope={scope}
               inboxOpen={inboxOpen}
@@ -1887,148 +1912,162 @@ function App() {
         }
       >
         <main className="[flex:1] [display:flex] [flex-direction:column] [overflow:hidden] [min-width:0] [position:relative]">
-          <BillingNotice
-            key={P.org.id}
-            orgId={P.org.id}
-            orgName={P.org.name}
-            admin={P.isAdmin()}
-            onBilling={() => actions.openSettings('org-billing')}
-            onExport={() => actions.openSettings('org-general')}
-          />
-          <TasksLoadingBar />
-          <ViewBoundary
-            key={sync ? 'sync' : inboxOpen ? 'inbox' : projectsOpen ? 'projects' : view}
-            onBack={() => {
-              setSync(null)
-              setInboxOpen(false)
-              setProjectsOpen(false)
-              setView('overview')
-            }}
-          >
-            <Suspense fallback={<ViewLoading />}>
-              <UnsentScopeContext.Provider value={unsent.page}>
-                {projectsOpen ? (
-                  <ProjectDirectory actions={actions} />
-                ) : inboxOpen ? (
-                  // openTask does not use navOpenIssue on purpose: the inbox's right pane IS
-                  // the task window, so opening a task must NOT leave the inbox — and
-                  // `openIssue` is what that pane shows, which is why the address
-                  // (/inbox/tasks/<task>) restores it
-                  <UnsentScopeContext.Provider value={unsent.task}>
-                    <Inbox
-                      showOnBoard={showOnBoard}
-                      onExit={() => move({ inboxOpen: false }, () => setInboxOpen(false))}
-                      openTask={(id) => (id ? openTask(id) : closeIssue())}
-                      openIssue={openIssue}
-                      onPlanOnRoadmap={planOnRoadmap}
-                    />
-                  </UnsentScopeContext.Provider>
-                ) : sync ? (
-                  /* Team sync, over the scope and view it returns to. Its tasks open
+          {!settingsPage && (
+            <BillingNotice
+              key={P.org.id}
+              orgId={P.org.id}
+              orgName={P.org.name}
+              admin={P.isAdmin()}
+              onBilling={() => actions.openSettings('org-billing')}
+              onExport={() => actions.openSettings('org-general')}
+            />
+          )}
+          {!settingsPage && <TasksLoadingBar />}
+          {/* the Board has a boundary of its own, below, and so has each view */}
+          {!settingsPage && (
+            <ViewBoundary
+              key={sync ? 'sync' : inboxOpen ? 'inbox' : projectsOpen ? 'projects' : 'views'}
+              onBack={backToWorkspace}
+            >
+              <Suspense fallback={<ViewLoading />}>
+                <UnsentScopeContext.Provider value={unsent.page}>
+                  {projectsOpen ? (
+                    <ProjectDirectory actions={actions} />
+                  ) : inboxOpen ? (
+                    // openTask does not use navOpenIssue on purpose: the inbox's right pane IS
+                    // the task window, so opening a task must NOT leave the inbox — and
+                    // `openIssue` is what that pane shows, which is why the address
+                    // (/inbox/tasks/<task>) restores it
+                    <UnsentScopeContext.Provider value={unsent.task}>
+                      <Inbox
+                        showOnBoard={showOnBoard}
+                        onExit={() => move({ inboxOpen: false }, () => setInboxOpen(false))}
+                        openTask={(id) => (id ? openTask(id) : closeIssue())}
+                        openIssue={openIssue}
+                        onPlanOnRoadmap={planOnRoadmap}
+                      />
+                    </UnsentScopeContext.Provider>
+                  ) : sync ? (
+                    /* Team sync, over the scope and view it returns to. Its tasks open
              in the floating window below (openTask, not navOpenIssue: opening one must
              not leave the page), and Escape does not close it: a meeting
              page must not vanish on a stray key. */
-                  <div
-                    data-workspace-view="sync"
-                    className="animate-in fade-in slide-in-from-bottom-1 [flex:1] [display:flex] [flex-direction:column] [overflow:hidden]"
-                  >
-                    {tasksLoading ? (
-                      <TasksLoadingView what="Team sync" />
-                    ) : (
-                      <TeamSync
-                        place={sync}
-                        onPlace={placeSync}
-                        onCorrect={correctSync}
-                        onClose={closeSync}
-                        onOpenTask={openTask}
-                        onShowTask={showTaskOn}
-                        onShowPerson={showPersonOn}
-                      />
-                    )}
-                  </div>
-                ) : (
-                  scopeInfo && (
                     <div
-                      key={scope + view}
-                      data-workspace-view={view}
+                      data-workspace-view="sync"
                       className="animate-in fade-in slide-in-from-bottom-1 [flex:1] [display:flex] [flex-direction:column] [overflow:hidden]"
                     >
-                      {view !== 'kanban' && tasksLoading ? (
-                        <TasksLoadingView
-                          what={view === 'roadmap' ? 'The roadmap' : 'The overview'}
-                        />
-                      ) : null}
-                      {view === 'overview' && !tasksLoading && (
-                        <Overview info={scopeInfo} actions={actions} />
-                      )}
-                      {view === 'kanban' &&
-                        (mobile ? (
-                          <MobileTaskList
-                            info={scopeInfo}
-                            filters={filters}
-                            setFilters={setFilters}
-                            actions={actions}
-                            revealTask={revealTask}
-                            onRevealConsumed={() => setRevealTask(null)}
-                          />
-                        ) : (
-                          <Kanban
-                            info={scopeInfo}
-                            filters={effFilters}
-                            tweaks={tweaks}
-                            actions={actions}
-                            revealTask={revealTask}
-                            onRevealConsumed={() => setRevealTask(null)}
-                          />
-                        ))}
-                      {/* The roadmap's toolbar row is its own — the window controls, the
-                estimate walk and the auto-correct count are all local to it and
-                cannot be handed up to the bar. So the bar hands the FILTERS
-                down instead, ready-made: App holds the state, the roadmap holds
-                the row, and the controls themselves have one definition shared
-                with the board, in the same order — but three of them are left
-                out here. `My tasks` is HIDDEN: the Assignee roster's
-                `Me only` row throws the same flag and its trigger reads
-                "Me only" while it is on, so nothing is lost. `Stale` and
-                `Focus` are hidden AND inert: the roadmap takes
-                `roadmapFilters`, the effective filters with `stale` and
-                `focus` forced off, because a filter this view does not show
-                must not narrow it (deviations #236 and #241) — see the note
-                above ViewFilters.
-                `filters` (not effFilters) on purpose — the controls edit the raw
-                object for the same reason TopBar does. */}
-                      {view === 'roadmap' && !tasksLoading && (
-                        <Roadmap
-                          info={scopeInfo}
-                          filters={roadmapFilters}
-                          actions={actions}
-                          filterControls={(phone) => (
-                            <ViewFilters
-                              info={scopeInfo}
-                              filters={filters}
-                              setFilters={setFilters}
-                              actions={actions}
-                              searchWidth={180}
-                              hideSearch={phone}
-                              hide={['mine', 'stale', 'focus']}
-                            />
-                          )}
-                          focusPlan={focusPlan}
-                          onFocusConsumed={() => setFocusPlan(null)}
-                          revealTask={revealTask}
-                          onRevealConsumed={() => setRevealTask(null)}
+                      {tasksLoading ? (
+                        <TasksLoadingView what="Team sync" />
+                      ) : (
+                        <TeamSync
+                          place={sync}
+                          onPlace={placeSync}
+                          onCorrect={correctSync}
+                          onClose={closeSync}
+                          onOpenTask={openTask}
+                          onShowTask={showTaskOn}
+                          onShowPerson={showPersonOn}
                         />
                       )}
                     </div>
-                  )
-                )}
-              </UnsentScopeContext.Provider>
-            </Suspense>
-          </ViewBoundary>
+                  ) : (
+                    scopeInfo &&
+                    view !== 'kanban' && (
+                      <div key={scope + view} data-workspace-view={view} className={VIEW_CLASS}>
+                        <ViewBoundary onBack={backToWorkspace}>
+                          <Suspense fallback={<ViewLoading />}>
+                            {tasksLoading ? (
+                              <TasksLoadingView
+                                what={view === 'roadmap' ? 'The roadmap' : 'The overview'}
+                              />
+                            ) : null}
+                            {view === 'overview' && !tasksLoading && (
+                              <Overview info={scopeInfo} actions={actions} />
+                            )}
+                            {/* The roadmap's toolbar row is its own — the window controls, the
+                    estimate walk and the auto-correct count are all local to it and
+                    cannot be handed up to the bar. So the bar hands the FILTERS
+                    down instead, ready-made: App holds the state, the roadmap holds
+                    the row, and the controls themselves have one definition shared
+                    with the board, in the same order — but three of them are left
+                    out here. `My tasks` is HIDDEN: the Assignee roster's
+                    `Me only` row throws the same flag and its trigger reads
+                    "Me only" while it is on, so nothing is lost. `Stale` and
+                    `Focus` are hidden AND inert: the roadmap takes
+                    `roadmapFilters`, the effective filters with `stale` and
+                    `focus` forced off, because a filter this view does not show
+                    must not narrow it (deviations #236 and #241) — see the note
+                    above ViewFilters.
+                    `filters` (not effFilters) on purpose — the controls edit the raw
+                    object for the same reason TopBar does. */}
+                            {view === 'roadmap' && !tasksLoading && (
+                              <Roadmap
+                                info={scopeInfo}
+                                filters={roadmapFilters}
+                                actions={actions}
+                                filterControls={(phone) => (
+                                  <ViewFilters
+                                    info={scopeInfo}
+                                    filters={filters}
+                                    setFilters={setFilters}
+                                    actions={actions}
+                                    searchWidth={180}
+                                    hideSearch={phone}
+                                    hide={['mine', 'stale', 'focus']}
+                                  />
+                                )}
+                                focusPlan={focusPlan}
+                                onFocusConsumed={() => setFocusPlan(null)}
+                                revealTask={revealTask}
+                                onRevealConsumed={() => setRevealTask(null)}
+                              />
+                            )}
+                          </Suspense>
+                        </ViewBoundary>
+                      </div>
+                    )
+                  )}
+                </UnsentScopeContext.Provider>
+              </Suspense>
+            </ViewBoundary>
+          )}
+          {/* The Board stays loaded, hidden, while every other page of its
+             scope shows (ViewKeeper): it is the most used view, and mounting
+             a large one takes seconds. A new scope mounts it anew, as
+             before, and the old one comes apart after the next view paints. */}
+          <UnsentScopeContext.Provider value={unsent.page}>
+            <ViewKeeper id={keepBoard} view="kanban" shown={boardActive} className={VIEW_CLASS}>
+              {scopeInfo && (
+                <ViewBoundary onBack={backToWorkspace}>
+                  <Suspense fallback={<ViewLoading />}>
+                    {mobile ? (
+                      <MobileTaskList
+                        info={scopeInfo}
+                        filters={filters}
+                        setFilters={setFilters}
+                        actions={actions}
+                        revealTask={revealTask}
+                        onRevealConsumed={() => setRevealTask(null)}
+                      />
+                    ) : (
+                      <Kanban
+                        info={scopeInfo}
+                        filters={effFilters}
+                        tweaks={tweaks}
+                        actions={actions}
+                        revealTask={revealTask}
+                        onRevealConsumed={() => setRevealTask(null)}
+                      />
+                    )}
+                  </Suspense>
+                </ViewBoundary>
+              )}
+            </ViewKeeper>
+          </UnsentScopeContext.Provider>
         </main>
         {/* the floating window — everywhere but the inbox, which embeds the same
           component in its right pane instead of stacking one over the other */}
-        {!inboxOpen && openIssue && (
+        {!settingsPage && !inboxOpen && openIssue && (
           <DeferredOverlay onClose={closeIssue}>
             <UnsentScopeContext.Provider value={unsent.task}>
               <IssueDetail
@@ -2043,14 +2082,15 @@ function App() {
             </UnsentScopeContext.Provider>
           </DeferredOverlay>
         )}
-        {paletteOpen && (
+        {!settingsPage && paletteOpen && (
           <DeferredOverlay onClose={() => setPaletteOpen(false)}>
             <SearchPalette ctx={paletteCtx} onClose={() => setPaletteOpen(false)} />
           </DeferredOverlay>
         )}
-        <ToastHost toasts={toasts} dismiss={dismissToast} />
+        {!settingsPage && <ToastHost toasts={toasts} dismiss={dismissToast} />}
       </WorkspaceShell>
       {dialogs}
+      {settingsPage && <ToastHost toasts={toasts} dismiss={dismissToast} />}
     </>
   )
 }

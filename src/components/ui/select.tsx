@@ -4,6 +4,7 @@ import * as React from 'react'
 
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { useViewHidden } from '@/lib/viewHidden'
 
 function Select({ ...props }: React.ComponentProps<typeof SelectPrimitive.Root>) {
   return <SelectPrimitive.Root data-slot="select" {...props} />
@@ -72,6 +73,8 @@ const SelectContent = React.forwardRef<
   { className, children, position = 'item-aligned', align = 'center', sideOffset = 6, ...props },
   ref,
 ) {
+  // in a hidden kept view (lib/viewHidden.ts)
+  if (useViewHidden()) return null
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content

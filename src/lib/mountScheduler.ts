@@ -296,7 +296,7 @@ export function createMountScheduler({
     /** Mounts all of the list `id` now. */
     completeList(id: string) {
       const list = lists.get(id)
-      if (!list?.pending()) return
+      if (disposed || !list?.pending()) return
       flush(() => list.grow(list.pending()))
       mountedSince = true
       changed()
@@ -304,14 +304,14 @@ export function createMountScheduler({
     /** Mounts the list `id` up to its item `key` now. */
     mountThrough(id: string, key: string) {
       const list = lists.get(id)
-      if (!list?.pending()) return
+      if (disposed || !list?.pending()) return
       flush(() => list.mountThrough(key))
       mountedSince = true
       changed()
     },
     /** Mounts every list now, for Find or printing. */
     completeAll() {
-      const waiting = waitingLists()
+      const waiting = disposed ? [] : waitingLists()
       if (!waiting.length) return
       flush(() => {
         for (const list of waiting) list.grow(list.pending())
@@ -319,7 +319,9 @@ export function createMountScheduler({
       mountedSince = true
       changed()
     },
-    /** Stops slicing; `revive` starts it again (a remount in development). */
+    /** Stops slicing and refuses to mount, as for a hidden Board (App's
+        KeptView); `revive` starts it again when it shows, or a remount in
+        development. */
     dispose() {
       disposed = true
       observer?.disconnect()
@@ -344,7 +346,8 @@ const editable = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
   (target.isContentEditable || !!target.closest('input, textarea, select'))
 
-/** Runs `scheduler` while the calling view is mounted, and mounts all of
+/** Runs `scheduler` while the calling view is mounted and shown (a hidden
+    Board's effects stop, see KeptView), and mounts all of
     its lists before the browser's Find (Ctrl+F or Cmd+F, Ctrl+G, F3),
     Select all outside a field, or printing, which read the whole page. */
 export function useMountGuards(scheduler: MountScheduler) {

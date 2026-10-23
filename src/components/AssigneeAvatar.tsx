@@ -1,4 +1,5 @@
 import { Avatar, Icon, Popover } from '@/components/qivo'
+import { OWNER_WRAP, ownerTrigger, PORTRAIT_CLASS, portraitFace } from '@/components/rowElements'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -116,20 +117,8 @@ export function AssigneeAvatar({
 }) {
   const shown = field ?? issue.ownerField
   const who = issue[shown]
-  const none = shown === 'reviewer' ? 'No reviewer' : 'Unassigned'
-  const name = P.user(who)?.name || none
   const canWrite = P.canWrite(issue.project)
-  const portrait = (
-    <span
-      className={
-        compact
-          ? 'inline-flex size-[18px] shrink-0 [&>*]:!size-[18px] [&>*]:!rounded-[4px] [&>*]:!text-[9px]'
-          : 'inline-flex size-7 shrink-0'
-      }
-    >
-      <Avatar id={who} size={28} />
-    </span>
-  )
+  const portrait = portraitFace(compact, <Avatar id={who} size={28} />)
   if (variant === 'portrait' && !canWrite) return portrait
 
   const face =
@@ -155,16 +144,12 @@ export function AssigneeAvatar({
     )
   const faceClass =
     variant === 'portrait'
-      ? 'flex cursor-pointer rounded-md outline-none hover:ring-2 hover:ring-border-strong focus-visible:ring-2 focus-visible:ring-primary'
+      ? PORTRAIT_CLASS
       : variant === 'chevron'
         ? 'inline-flex h-control-sm shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-transparent pr-2 pl-1 hover:border-border hover:bg-hover disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:border-transparent disabled:hover:bg-transparent'
         : 'gap-1.5 pr-2 pl-2.5 font-normal'
   return (
-    <span
-      role="presentation"
-      className="pointer-events-auto relative inline-flex shrink-0"
-      onClick={(event) => event.stopPropagation()}
-    >
+    <span {...OWNER_WRAP}>
       <Popover
         width={260}
         align="right"
@@ -175,22 +160,7 @@ export function AssigneeAvatar({
             variant={variant === 'label' ? 'default' : 'unstyled'}
             size={variant === 'label' ? 'sm' : undefined}
             data-field-trigger={variant === 'portrait' ? undefined : ''}
-            data-assignee-edit={issue.id}
-            data-owner-field={shown}
-            data-focus-key="owner"
-            aria-label={`Change ${shown} for ${issue.title}: ${name}`}
-            title={canWrite ? `Change ${shown} · ${name}` : 'Read-only project access'}
-            disabled={!canWrite}
-            draggable={false}
-            onDragStart={(event) => {
-              event.preventDefault()
-              event.stopPropagation()
-            }}
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation()
-              toggle()
-            }}
+            {...ownerTrigger(issue, shown, canWrite, toggle)}
             className={faceClass}
           >
             {face}

@@ -4,6 +4,13 @@ import * as React from 'react'
 import { useStaticControls } from '@/lib/liveControls'
 import { passEscapeOn } from '@/lib/passEscapeOn'
 import { cn } from '@/lib/utils'
+import { useViewHidden } from '@/lib/viewHidden'
+import {
+  hasTooltipContent,
+  staticTooltipTarget,
+  type TooltipTargetElement,
+  tooltipTabIndex,
+} from './tooltip-target'
 
 // Tooltips hold no interactive controls (design-spec §3.1), so Radix's
 // hoverable-content grace area is disabled: the tooltip closes on the
@@ -39,6 +46,8 @@ function TooltipContent({
   children,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
+  // in a hidden kept view (lib/viewHidden.ts)
+  if (useViewHidden()) return null
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content
@@ -102,38 +111,20 @@ const TooltipTarget = React.forwardRef<
 
 type HoverTooltipProps = {
   content?: React.ReactNode
-  children: React.ReactElement<React.HTMLAttributes<HTMLElement>>
-}
-
-const hasTooltipContent = (content: React.ReactNode) =>
-  content !== undefined && content !== null && content !== '' && content !== false
-
-/** The target's tab index: its own, or 0 for a plain element that has
-    content to show, so keyboard users can reach the tooltip. */
-function tooltipTabIndex(children: HoverTooltipProps['children'], hasContent: boolean) {
-  const nativeTag = typeof children.type === 'string' ? children.type : null
-  const focusable =
-    nativeTag &&
-    !['button', 'input', 'select', 'textarea', 'a', 'summary'].includes(nativeTag) &&
-    !children.props.contentEditable
-  return children.props.tabIndex ?? (hasContent && focusable ? 0 : undefined)
+  children: TooltipTargetElement
 }
 
 // Keep the target's DOM, ref and event handlers intact, including grid items,
 // drag handles and disabled controls. Native `title` is never forwarded.
 // Inside a static row (liveControls.tsx) the target renders alone, with the
 // attributes a closed live tooltip gives it, until the row goes live.
+// rowElements.tsx's hoverTooltip renders the same without a component.
 function HoverTooltip({ content, children }: HoverTooltipProps) {
-  const statics = useStaticControls()
-  if (!statics) return <LiveTooltip content={content}>{children}</LiveTooltip>
-  const hasContent = hasTooltipContent(content)
-  // in the order the live trigger's props land
-  return React.cloneElement(children, {
-    tabIndex: tooltipTabIndex(children, hasContent),
-    'data-tooltip-trigger': hasContent ? '' : undefined,
-  } as React.HTMLAttributes<HTMLElement>)
+  if (useStaticControls()) return staticTooltipTarget(content, children)
+  return <LiveTooltip content={content}>{children}</LiveTooltip>
 }
 
+/** HoverTooltip outside a static row. */
 function LiveTooltip({ content, children }: HoverTooltipProps) {
   const [open, setOpen] = React.useState(false)
   // closed by Escape: skip the exit animation, so the tooltip leaves Radix's
@@ -189,4 +180,4 @@ function LiveTooltip({ content, children }: HoverTooltipProps) {
   )
 }
 
-export { HoverTooltip, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger }
+export { HoverTooltip, LiveTooltip, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger }

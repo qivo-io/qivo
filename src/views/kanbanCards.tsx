@@ -1,11 +1,17 @@
 import { memo, useId, useRef } from 'react'
 import { AssigneeAvatar } from '@/components/AssigneeAvatar'
-import { Icon, PausedMark, PriorityIcon, ProjectName } from '@/components/qivo'
-import { Button } from '@/components/ui/button'
+import { Icon, PausedMark } from '@/components/qivo'
+import {
+  hoverTooltip,
+  priorityIcon,
+  projectName,
+  staticOwnerPortrait,
+} from '@/components/rowElements'
+import { buttonElement } from '@/components/ui/button-element'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import type { BoardCellGroup } from '@/lib/boardGroups'
 import { clampedTitleTip } from '@/lib/clampedTitle'
-import { StaticControlsContext, useLiveControls } from '@/lib/liveControls'
+import { type StaticControls, StaticControlsContext, useLiveControls } from '@/lib/liveControls'
 import { type IssueVM, P, type ProjectPlace } from '@/store/planner'
 import type { StoreVersion } from '@/store/updates'
 import { parentPlaceOf } from './board/cardEstimate'
@@ -42,9 +48,9 @@ function DelayBanner({ it, id }: { it: IssueVM; id?: string }) {
 }
 
 /* The paused mark stays visible on a faded card: a pause is a fact about the
-   task, not a hover detail. The reason lives in the task's comments. */
-function PausedGlyph({ it, id }: { it: IssueVM; id?: string }) {
-  if (!P.isPaused(it)) return null
+   task, not a hover detail. The reason lives in the task's comments. Render
+   it for a paused task only. */
+function PausedGlyph({ id }: { id?: string }) {
   return (
     <HoverTooltip content="Paused">
       <PausedMark className="mt-0.5" id={id} />
@@ -52,24 +58,38 @@ function PausedGlyph({ it, id }: { it: IssueVM; id?: string }) {
   )
 }
 
-function DueDate({ it, inButton = false }: { it: IssueVM; inButton?: boolean }) {
+/* A Board renders thousands of cards, and every component a card mounts
+   adds to mounting the Board and to leaving it. So the parts every card
+   shows are elements that its rows build in the card's static scope
+   (`statics`, liveControls.tsx), as rowElements.tsx does, not components
+   of their own. */
+
+/** The owner's portrait, which opens the owner picker. */
+const ownerPortrait = (statics: StaticControls | null, it: IssueVM, compact = false) =>
+  statics ? (
+    staticOwnerPortrait(statics, it, compact)
+  ) : (
+    <AssigneeAvatar issue={it} compact={compact} />
+  )
+
+/** The due date, its state in the hover text. Inside the title's button
+    (`inButton`) it takes no tab stop. The calendar glyph is the span's
+    ::before (styles/glyphs.css). */
+function dueDate(statics: StaticControls | null, it: IssueVM, inButton = false) {
   if (!it.due) return null
   const overdue = it.due < P.TODAY_ISO && !P.isDone(it)
   const dueMiss = overdue || (P.tracksDelay(it) && P.delayOf(it)?.status === 'late')
   const warning = dueMiss && !P.delayColor(it)
-  return (
-    <HoverTooltip
-      content={`Due ${P.fmtISO(it.due)}${overdue ? ', overdue' : dueMiss ? ', projected to be missed' : ''}`}
+  return hoverTooltip(
+    statics,
+    `Due ${P.fmtISO(it.due)}${overdue ? ', overdue' : dueMiss ? ', projected to be missed' : ''}`,
+    <span
+      tabIndex={inButton ? -1 : 0}
+      data-focus-key="due"
+      className={`due-date inline-flex items-center gap-1 whitespace-nowrap !font-mono text-xs ${warning ? 'font-semibold text-danger' : 'text-text-3'}`}
     >
-      <span
-        tabIndex={inButton ? -1 : 0}
-        data-focus-key="due"
-        className={`inline-flex items-center gap-1 whitespace-nowrap !font-mono text-xs ${warning ? 'font-semibold text-danger' : 'text-text-3'}`}
-      >
-        <span aria-hidden="true" className="due-glyph" />
-        {P.fmtISO(it.due)}
-      </span>
-    </HoverTooltip>
+      {P.fmtISO(it.due)}
+    </span>,
   )
 }
 
@@ -77,20 +97,28 @@ function DueDate({ it, inButton = false }: { it: IssueVM; inButton?: boolean }) 
     gets a tooltip with its whole text, so a card adds no tooltip root for a
     short title. The span takes no tab stop: its button already names the
     whole title. */
-function ClampedTitle({ title, className }: { title: string; className: string }) {
+function clampedTitle(statics: StaticControls | null, title: string, className: string) {
   const tip = clampedTitleTip(title)
   const text = (
     <span tabIndex={tip ? -1 : undefined} className={className}>
       {title}
     </span>
   )
-  return tip ? <HoverTooltip content={tip}>{text}</HoverTooltip> : text
+  return tip ? hoverTooltip(statics, tip, text) : text
 }
 
 /** Parent context uses a small inline portrait, leaving the larger right-hand
  * portrait exclusively for the child whose row can be moved independently.
  * A group's owner is always its assignee. */
-function ParentHeading({ it, place }: { it: IssueVM; place: ProjectPlace | null }) {
+function ParentHeading({
+  it,
+  place,
+  statics,
+}: {
+  it: IssueVM
+  place: ProjectPlace | null
+  statics: StaticControls | null
+}) {
   const owner = P.user(it.owner)
   /* A screen reader hears the owner, priority and due date after the title,
      in plain words: the meta row holds the owner button, whose name repeats
@@ -105,41 +133,48 @@ function ParentHeading({ it, place }: { it: IssueVM; place: ProjectPlace | null 
     .join(', ')
   return (
     <span className="flex w-full min-w-0 flex-col gap-2 p-2">
-      <Button
-        type="button"
-        variant="unstyled"
-        noTooltip
-        data-focus-key="parent"
-        aria-label={`Parent: ${it.title}`}
-        aria-describedby={meta}
-        className="flex min-w-0 items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary"
-      >
-        <PausedGlyph it={it} />
-        <ClampedTitle
-          title={it.title}
-          className="line-clamp-4 min-w-0 break-words text-base font-semibold leading-[1.4] text-[var(--board-parent-text)]"
-        />
-      </Button>
+      {buttonElement({
+        type: 'button',
+        variant: 'unstyled',
+        'data-focus-key': 'parent',
+        'aria-label': `Parent: ${it.title}`,
+        'aria-describedby': meta,
+        className:
+          'flex min-w-0 items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary',
+        children: (
+          <>
+            {P.isPaused(it) && <PausedGlyph />}
+            {clampedTitle(
+              statics,
+              it.title,
+              'line-clamp-4 min-w-0 break-words text-base font-semibold leading-[1.4] text-[var(--board-parent-text)]',
+            )}
+          </>
+        ),
+      })}
       <span id={meta} className="sr-only">
         {summary}
       </span>
       <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-2">
-        <HoverTooltip content={owner?.name || 'Unassigned'}>
+        {hoverTooltip(
+          statics,
+          owner?.name || 'Unassigned',
           <span data-focus-key="owner-name" className="inline-flex min-w-0 items-center gap-1.5">
-            <AssigneeAvatar issue={it} compact />
+            {ownerPortrait(statics, it, true)}
             <span className="truncate">{owner?.name.split(' ')[0] || 'Unassigned'}</span>
-          </span>
-        </HoverTooltip>
-        <PriorityIcon priority={it.priority} size={11} />
-        <DueDate it={it} />
+          </span>,
+        )}
+        {priorityIcon(statics, it.priority, 11)}
+        {dueDate(statics, it)}
       </span>
-      {place && (
-        <HoverTooltip content={P.placeLabel(place)}>
+      {place &&
+        hoverTooltip(
+          statics,
+          P.placeLabel(place),
           <span data-focus-key="place" className="truncate text-xs text-text-2">
-            <ProjectName {...place} />
-          </span>
-        </HoverTooltip>
-      )}
+            {projectName(place)}
+          </span>,
+        )}
     </span>
   )
 }
@@ -151,6 +186,7 @@ function ParentHeading({ it, place }: { it: IssueVM; place: ProjectPlace | null 
 function TaskRow({
   it,
   place,
+  statics,
   parentHeader = false,
   actualIssue = true,
   indented = false,
@@ -161,6 +197,8 @@ function TaskRow({
 }: CardActions & {
   it: IssueVM
   place: ProjectPlace | null
+  /** The card's static scope, null once it is live. */
+  statics: StaticControls | null
   parentHeader?: boolean
   actualIssue?: boolean
   indented?: boolean
@@ -173,7 +211,8 @@ function TaskRow({
      and the meta row (priority, hours, place, due date, owner) after it. */
   const ids = useId()
   const banner = actualIssue && !!P.delayColor(it)
-  const describedBy = [banner && `${ids}delay`, P.isPaused(it) && `${ids}paused`, `${ids}meta`]
+  const paused = P.isPaused(it)
+  const describedBy = [banner && `${ids}delay`, paused && `${ids}paused`, `${ids}meta`]
     .filter(Boolean)
     .join(' ')
   return (
@@ -200,50 +239,55 @@ function TaskRow({
       <div
         className={`relative flex w-full min-w-0 flex-col ${movable ? (dragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-pointer'}`}
       >
-        {actualIssue && <DelayBanner it={it} id={`${ids}delay`} />}
+        {banner && <DelayBanner it={it} id={`${ids}delay`} />}
         {parentHeader ? (
-          <ParentHeading it={it} place={place} />
+          <ParentHeading it={it} place={place} statics={statics} />
         ) : (
           <span className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_28px] items-center gap-x-2 p-2">
-            <Button
-              type="button"
-              variant="unstyled"
-              noTooltip
-              data-focus-key="title"
-              aria-label={it.title}
-              aria-describedby={describedBy}
-              className="min-w-0 cursor-inherit text-left font-normal outline-none focus-visible:ring-2 focus-visible:ring-primary"
-            >
-              <span className="flex min-w-0 items-start gap-2">
-                <PausedGlyph it={it} id={`${ids}paused`} />
-                <ClampedTitle
-                  title={it.title}
-                  className="line-clamp-4 min-w-0 break-words text-base font-medium leading-[1.35]"
-                />
-              </span>
-              <span
-                id={`${ids}meta`}
-                className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-3"
-              >
-                <PriorityIcon priority={it.priority} size={11} />
-                {remaining != null && (
-                  <span className="whitespace-nowrap !font-mono">
-                    {it.children.length ? 'Σ ' : ''}
-                    {remaining}h
+            {buttonElement({
+              type: 'button',
+              variant: 'unstyled',
+              'data-focus-key': 'title',
+              'aria-label': it.title,
+              'aria-describedby': describedBy,
+              className:
+                'min-w-0 cursor-inherit text-left font-normal outline-none focus-visible:ring-2 focus-visible:ring-primary',
+              children: (
+                <>
+                  <span className="flex min-w-0 items-start gap-2">
+                    {paused && <PausedGlyph id={`${ids}paused`} />}
+                    {clampedTitle(
+                      statics,
+                      it.title,
+                      'line-clamp-4 min-w-0 break-words text-base font-medium leading-[1.35]',
+                    )}
                   </span>
-                )}
-                {place && (
-                  <HoverTooltip content={P.placeLabel(place)}>
-                    <span tabIndex={-1} className="max-w-full truncate">
-                      <ProjectName {...place} />
-                    </span>
-                  </HoverTooltip>
-                )}
-                <DueDate it={it} inButton />
-                {!P.user(it.owner) && <span>Unassigned</span>}
-              </span>
-            </Button>
-            <AssigneeAvatar issue={it} />
+                  <span
+                    id={`${ids}meta`}
+                    className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-3"
+                  >
+                    {priorityIcon(statics, it.priority, 11)}
+                    {remaining != null && (
+                      // one text node
+                      <span className="whitespace-nowrap !font-mono">
+                        {`${it.children.length ? 'Σ ' : ''}${remaining}h`}
+                      </span>
+                    )}
+                    {place &&
+                      hoverTooltip(
+                        statics,
+                        P.placeLabel(place),
+                        <span tabIndex={-1} className="max-w-full truncate">
+                          {projectName(place)}
+                        </span>,
+                      )}
+                    {dueDate(statics, it, true)}
+                    {!P.user(it.owner) && <span>Unassigned</span>}
+                  </span>
+                </>
+              ),
+            })}
+            {ownerPortrait(statics, it)}
           </span>
         )}
       </div>
@@ -283,47 +327,61 @@ function BoardCardView({
       className="board-card overflow-hidden rounded-md border border-border bg-surface-1 shadow-card transition-opacity duration-150 motion-reduce:transition-none"
     >
       <StaticControlsContext.Provider value={controls.value}>
-        {group.ancestors.map((ancestor) => (
-          <TaskRow
-            key={ancestor.uuid}
-            it={ancestor}
-            parentHeader
-            actualIssue={false}
-            place={place(ancestor)}
-            {...actions}
-          />
-        ))}
-        {group.parent && (
-          <TaskRow
-            it={group.parent}
-            parentHeader
-            actualIssue={false}
-            place={parentPlace}
-            {...actions}
-          />
-        )}
-        {/* a card of its own is its task's row alone, without the wrappers
-            a parent's subtasks need: thousands of cards render on a Board */}
-        {!group.parent &&
-          group.issues.map((it) => (
-            <TaskRow key={it.uuid} it={it} place={place(it)} {...actions} />
-          ))}
-        {group.parent && (
-          <div className={group.issues.length ? 'pb-2' : undefined}>
-            {group.issues.map((it, index) => (
-              // The rail and elbow sit in the row's 12px gutter and are lifted
-              // above the row (an isolated stacking context) so the hover fill
-              // spanning the card never covers them. The sibling separator stays
-              // on the indented content, starting at the rail.
-              <div
-                key={it.uuid}
-                data-child-row={it.id}
-                className={`relative isolate before:pointer-events-none before:absolute before:top-0 before:left-3 before:z-[1] before:w-0.5 before:bg-[var(--board-hierarchy-line)] after:pointer-events-none after:absolute after:left-3 after:z-[1] after:h-px after:w-2 after:bg-[var(--board-hierarchy-line)] ${P.delayColor(it) ? 'after:top-[42px]' : 'after:top-[18px]'} ${index === group.issues.length - 1 ? (P.delayColor(it) ? 'before:h-[42px]' : 'before:h-[18px]') : 'before:bottom-0'} ${index > 0 ? '[&>div>div]:border-t [&>div>div]:border-border' : ''}`}
-              >
-                <TaskRow it={it} place={place(it)} indented {...actions} />
-              </div>
+        {group.parent ? (
+          <>
+            {group.ancestors.map((ancestor) => (
+              <TaskRow
+                key={ancestor.uuid}
+                it={ancestor}
+                parentHeader
+                actualIssue={false}
+                place={place(ancestor)}
+                statics={controls.value}
+                {...actions}
+              />
             ))}
-          </div>
+            <TaskRow
+              it={group.parent}
+              parentHeader
+              actualIssue={false}
+              place={parentPlace}
+              statics={controls.value}
+              {...actions}
+            />
+            <div className={group.issues.length ? 'pb-2' : undefined}>
+              {group.issues.map((it, index) => (
+                // The rail and elbow sit in the row's 12px gutter and are lifted
+                // above the row (an isolated stacking context) so the hover fill
+                // spanning the card never covers them. The sibling separator stays
+                // on the indented content, starting at the rail.
+                <div
+                  key={it.uuid}
+                  data-child-row={it.id}
+                  className={`relative isolate before:pointer-events-none before:absolute before:top-0 before:left-3 before:z-[1] before:w-0.5 before:bg-[var(--board-hierarchy-line)] after:pointer-events-none after:absolute after:left-3 after:z-[1] after:h-px after:w-2 after:bg-[var(--board-hierarchy-line)] ${P.delayColor(it) ? 'after:top-[42px]' : 'after:top-[18px]'} ${index === group.issues.length - 1 ? (P.delayColor(it) ? 'before:h-[42px]' : 'before:h-[18px]') : 'before:bottom-0'} ${index > 0 ? '[&>div>div]:border-t [&>div>div]:border-border' : ''}`}
+                >
+                  <TaskRow
+                    it={it}
+                    place={place(it)}
+                    statics={controls.value}
+                    indented
+                    {...actions}
+                  />
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          /* a card of its own is its task's row alone, without the wrappers
+             a parent's subtasks need, nor a list's: thousands of cards render
+             on a Board. A group without a parent holds its one task
+             (createCellGrouper). */
+          <TaskRow
+            key={group.issues[0].uuid}
+            it={group.issues[0]}
+            place={place(group.issues[0])}
+            statics={controls.value}
+            {...actions}
+          />
         )}
       </StaticControlsContext.Provider>
     </div>

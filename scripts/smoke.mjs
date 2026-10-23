@@ -205,10 +205,19 @@ function deferWorkspaceBoot(convex, live, { appearance = false } = {}) {
 
 // These drives keep the real account's upload intact. Only the browser's
 // cached copy is cleared to exercise network failures and cold startup.
+/* A Board that the drive opened stays loaded, hidden, while another view
+   of its scope shows (KeptView), after the shown view, which alone has
+   data-workspace-view: selectors for the Board or the phone task list look
+   in the shown one. */
+const SHOWN = '[data-workspace-view]'
+const PHONE_LIST = `${SHOWN} .mobile-task-list`
+
 /* A large Board mounts in slices. The smoke's Boards are small, so this
    only guards against a Board that has not finished. */
 async function boardMounted(page) {
-  await page.waitForFunction(() => !document.querySelector('[data-board-mount="pending"]'))
+  await page.waitForFunction(
+    () => !document.querySelector('[data-workspace-view] [data-board-mount="pending"]'),
+  )
 }
 
 async function storedBackground({ clear = false } = {}) {
@@ -1118,11 +1127,11 @@ try {
   await pageA.keyboard.press('Enter')
   const myTasksURL = `${BASE}/app/~/board/mine`
   await pageA.waitForURL(myTasksURL)
-  await pageA.locator('.mobile-task-list').waitFor({ state: 'visible' })
+  await pageA.locator(PHONE_LIST).waitFor({ state: 'visible' })
   if ((await myTasks.getAttribute('aria-current')) !== 'page')
     await fail('Phone navigation does not identify My tasks as the current page')
   const checkPhoneTaskSections = async () => {
-    const sections = await pageA.locator('.mobile-task-section').evaluateAll((elements) =>
+    const sections = await pageA.locator(`${SHOWN} .mobile-task-section`).evaluateAll((elements) =>
       elements.map((element) => ({
         label: element.querySelector('h2')?.textContent,
         height: element.clientHeight,
@@ -1147,7 +1156,7 @@ try {
   await desktopTaskFilter.waitFor({ state: 'visible' })
   if ((await desktopTaskFilter.inputValue()) !== desktopOnlyQuery)
     await fail('Switching to phone My tasks discarded the desktop text filter')
-  if (await pageA.locator('[data-card]').count())
+  if (await pageA.locator(`${SHOWN} [data-card]`).count())
     await fail('Returning to desktop did not restore its active text filter')
   await desktopTaskFilter.fill('')
   await pageA.locator('[data-card]').first().waitFor({ state: 'visible' })
@@ -1174,7 +1183,7 @@ try {
   const checkSearchReturnedToMyTasks = async () => {
     await palette.waitFor({ state: 'detached', timeout: 5000 })
     await pageA.waitForURL(myTasksURL)
-    await pageA.locator('.mobile-task-list').waitFor({ state: 'visible' })
+    await pageA.locator(PHONE_LIST).waitFor({ state: 'visible' })
     if ((await myTasks.getAttribute('aria-current')) !== 'page')
       await fail('Dismissing phone Search changed the underlying My tasks view')
   }
@@ -1183,7 +1192,7 @@ try {
     // would swallow this Back and leave the user on My tasks again.
     await pageA.goBack()
     await pageA.waitForURL(allTasksURL)
-    await pageA.locator('.mobile-task-list').waitFor({ state: 'visible' })
+    await pageA.locator(PHONE_LIST).waitFor({ state: 'visible' })
     if (await palette.count()) await fail('Native Back reopened a dismissed phone Search')
     await myTasks.click()
     await pageA.waitForURL(myTasksURL)
@@ -1310,7 +1319,7 @@ try {
   await pageA.locator('[data-settings-page="menu"]').waitFor({ state: 'visible' })
   await pageA.locator('[data-settings-back]').click()
   await pageA.waitForURL(myTasksURL)
-  await pageA.locator('.mobile-task-list').waitFor({ state: 'visible' })
+  await pageA.locator(PHONE_LIST).waitFor({ state: 'visible' })
 
   await phoneNavigation.getByRole('button', { name: 'Projects', exact: true }).click()
   const projectsURL = `${BASE}/app/~/projects`
@@ -1338,7 +1347,7 @@ try {
   await pageA.goBack()
   await pageA.waitForURL(myTasksURL)
   await pageA.setViewportSize({ width: 320, height: 844 })
-  await pageA.locator('.mobile-task-list').waitFor({ state: 'visible' })
+  await pageA.locator(PHONE_LIST).waitFor({ state: 'visible' })
   await checkPhoneTaskSections()
   await pageA.setViewportSize({ width: 390, height: 844 })
 

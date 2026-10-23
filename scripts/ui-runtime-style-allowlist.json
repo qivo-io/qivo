@@ -7,9 +7,17 @@
     "count": 1,
     "reason": "selection-anchored link-popover coordinates clamped to the viewport"
   },
+  "src/components/qivo/icon.tsx": {
+    "count": 1,
+    "reason": "Qivo icon geometry and color, and forwarded caller styles"
+  },
   "src/components/qivo/index.tsx": {
-    "count": 20,
-    "reason": "Qivo icon/avatar/calendar geometry and data colors, configurable control sizes and forwarded caller styles; popup anchor coordinates, menu widths and measured landscape height"
+    "count": 15,
+    "reason": "Qivo calendar geometry and data colors, configurable control sizes and forwarded caller styles; popup anchor coordinates, menu widths and measured landscape height"
+  },
+  "src/components/rowElements.tsx": {
+    "count": 2,
+    "reason": "priority glyph geometry and data color; the avatar chip's geometry and data color pass to its root as props"
   },
   "src/components/settingsPage.tsx": {
     "count": 1,

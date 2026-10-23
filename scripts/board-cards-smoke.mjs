@@ -30,22 +30,33 @@ const page = await browser.newPage({ viewport: { width: 1600, height: 1100 } })
 const pageErrors = []
 page.on('pageerror', (error) => pageErrors.push(error.message))
 const log = (message) => console.log(`[board-cards] ${message}`)
-const card = (id) => page.locator(`[data-card="${id}"]`)
-const family = (parentId) => page.locator(`[data-parent-card="${parentId}"]`)
+/* A Board that the drive opened stays loaded, hidden, while another view
+   of its scope shows (KeptView), after the shown view: Board selectors look
+   in the shown one, which alone has data-workspace-view. */
+const SHOWN = '[data-workspace-view]'
+const card = (id) => page.locator(`${SHOWN} [data-card="${id}"]`)
+const family = (parentId) => page.locator(`${SHOWN} [data-parent-card="${parentId}"]`)
 const lane = (id) =>
-  page.locator('[data-swimlane-panel]').filter({ has: page.locator(`[data-lane="${id}"]`) })
+  page
+    .locator(`${SHOWN} [data-swimlane-panel]`)
+    .filter({ has: page.locator(`[data-lane="${id}"]`) })
 const cell = (laneId, status) => lane(laneId).locator(`[data-board-cell][data-status="${status}"]`)
 let initialLayout
 let initialFocus
 let passed = false
 
 async function assertActualCards(ids) {
-  await page.waitForFunction((ids) => {
-    const actual = [...document.querySelectorAll('[data-card]')].map((el) => el.dataset.card)
-    return actual.length === ids.length && ids.every((id) => actual.includes(id))
-  }, ids)
+  await page.waitForFunction(
+    ({ ids, shown }) => {
+      const actual = [...document.querySelectorAll(`${shown} [data-card]`)].map(
+        (el) => el.dataset.card,
+      )
+      return actual.length === ids.length && ids.every((id) => actual.includes(id))
+    },
+    { ids, shown: SHOWN },
+  )
   const actual = await page
-    .locator('[data-card]')
+    .locator(`${SHOWN} [data-card]`)
     .evaluateAll((els) => els.map((el) => el.dataset.card))
   assert.equal(new Set(actual).size, actual.length, 'An actual task appears more than once')
   assert.deepEqual(actual.sort(), [...ids].sort(), 'A filtered-out task entered the board')
@@ -130,7 +141,8 @@ async function waitForMutations() {
 }
 
 async function assertDragBoundary(id, sourceProject, otherProject) {
-  const selector = (project, status) => `[data-board-cell="${project}"][data-status="${status}"]`
+  const selector = (project, status) =>
+    `${SHOWN} [data-board-cell="${project}"][data-status="${status}"]`
   const source = selector(sourceProject, 'todo')
   const empty = selector(sourceProject, 'progress')
   const invalid = selector(otherProject, 'done')
@@ -237,7 +249,10 @@ try {
   await page.getByRole('heading', { name: 'Luma Sensor', exact: true }).waitFor()
   if (initialFocus) await page.locator('[data-filter-focus]').click()
   // a large Board mounts in slices; this one is small, so this only guards
-  await page.waitForFunction(() => !document.querySelector('[data-board-mount="pending"]'))
+  await page.waitForFunction(
+    (shown) => !document.querySelector(`${shown} [data-board-mount="pending"]`),
+    SHOWN,
+  )
   // the closed switcher names the layout in a word
   if (!(await page.locator('[data-group-menu]').innerText()).includes('Project')) {
     await page.locator('[data-group-menu]').click()
@@ -304,8 +319,8 @@ try {
     2,
     'Only columns with visible children need a family card',
   )
-  assert.equal((await page.locator('[data-status-count="todo"]').innerText()).trim(), '3')
-  assert.equal((await page.locator('[data-status-count="done"]').innerText()).trim(), '0')
+  assert.equal((await page.locator(`${SHOWN} [data-status-count="todo"]`).innerText()).trim(), '3')
+  assert.equal((await page.locator(`${SHOWN} [data-status-count="done"]`).innerText()).trim(), '0')
   log('Siblings share one card per column and swimlane; parent status contributes no card or count')
 
   await card(assigned).locator(`[data-avatar="${fixture.nora}"]`).waitFor({ state: 'visible' })
@@ -464,7 +479,7 @@ try {
     await cell(fixture.electronics, 'done').locator(`[data-card="${parent}"]`).count(),
     1,
   )
-  assert.equal((await page.locator('[data-status-count="done"]').innerText()).trim(), '1')
+  assert.equal((await page.locator(`${SHOWN} [data-status-count="done"]`).innerText()).trim(), '1')
   await card(parent).click()
   const status = page.locator('[aria-label="Status"]')
   await status.waitFor({ state: 'visible' })

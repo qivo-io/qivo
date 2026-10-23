@@ -77,6 +77,7 @@ import { useUpdateBlocker } from '../lib/updateSafety'
 import { useBottomSnap } from '../lib/useBottomSnap'
 import { useConfirmArm } from '../lib/useConfirmArm'
 import { useMobile } from '../lib/useMobile'
+import { OUT_OF_USE } from '../lib/viewHidden'
 import { loadDescEditor } from '../lib/workspaceChunks'
 import '../styles/mobile-issue.css'
 import {
@@ -1641,7 +1642,7 @@ function IssueDetail({
       dialog?.removeEventListener('pointerdown', release, true)
       release()
       for (const [element, wasInert] of outside) element.inert = wasInert
-      if (previousFocus?.isConnected && !previousFocus.closest('[inert]')) {
+      if (previousFocus?.isConnected && !previousFocus.closest(OUT_OF_USE)) {
         restoreFocus(previousFocus)
       } else {
         // The opener went with its card. This cleanup can run while React
