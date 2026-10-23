@@ -210,11 +210,17 @@ numbered active task assigned to that person (or the task `--task` names),
 renames it back, and prints, for each change, every part that sent a new
 answer and its size. It waits until every part answered, the pieces of a
 window cut in two included, before the first rename. The title is the only
-change, and the probe puts it back also after a failure, a timeout or a
-first Ctrl-C; a second signal or a kill exits without. Each write carries
-the title it replaces, so a rename by someone else meanwhile keeps their
-title and fails the probe. It exits 0 when each change re-sent only that
-window. Run it through the staging helper:
+field it changes, but each of the two writes is a rename like one in the
+app: it sets the task's update time, adds a history row, sends a
+`task.updated` event to each webhook that takes it and sends every other
+follower of the task an inbox notice of the new title. The probe puts the title back also after a
+failure, a timeout or a first Ctrl-C, when the backend accepts that write
+within a minute, and otherwise prints the title to set; a second signal or
+a kill exits without. A title that still ends in ` (rename probe)` stops
+the probe before any write. Each write carries the title it replaces, so a
+rename by someone else meanwhile keeps their title and fails the probe. It
+exits 0 when each change re-sent only that window. Run it through the
+staging helper:
 
 ```sh
 "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-staging" \

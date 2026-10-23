@@ -222,10 +222,11 @@ function once<T>(cache: Map<string, Promise<T>>, key: string, read: () => Promis
  * one batch of a part can afford past its budget check, lib/workspaceParts.ts
  * PAGE.batch and PAGE.hard), and their shares at most `rows`. Membership is
  * asked team by team for the first `lookups` teams, then from all their
- * memberships. Navigation asks about every team of the person, and from
- * `manyTeams` teams on reads the organization's teams in one range instead,
- * while they are at most `orgTeams` for each team of the person and at most
- * `orgTeamsMost` and at most `bytes` as JSON, as a legacy team icon has
+ * memberships. Navigation asks whether each team of the person, or each
+ * team their known shares name, is the organization's, and from `manyTeams`
+ * such teams not asked yet reads the organization's teams in one range
+ * instead, while they are at most `orgTeams` for each of those teams and at
+ * most `orgTeamsMost` and at most `bytes` as JSON, as a legacy team icon has
  * no length limit and the part's hard budget counts this read too. Past
  * any bound it asks team by team. Tests change them. */
 export const OWN_READS = {
@@ -269,6 +270,12 @@ export function projectLevelsOf(
     shared.documents += rows.length
     for (const row of rows) shared.bytes += JSON.stringify(row).length
     return rows
+  }
+  /* `promise`, marked handled: a read that fails fails every answer that
+   * awaits it, and none left unawaited rejects unhandled */
+  const handled = <P extends Promise<unknown>>(promise: P) => {
+    promise.catch(() => {})
+    return promise
   }
   /* the rows of `query`, or null when it holds more than `most` */
   const atMost = <R>(query: { take(n: number): Promise<R[]> }, most: number) =>
@@ -319,8 +326,9 @@ export function projectLevelsOf(
       if (teams === undefined && member.size > OWN_READS.lookups) {
         allTeams ??= memberRows()
           .collect()
+          .then(counted)
           .then((rows) => {
-            teams ??= new Set(counted(rows).map((m) => m.team_id))
+            teams ??= new Set(rows.map((m) => m.team_id))
           })
         await allTeams
       }
@@ -333,15 +341,18 @@ export function projectLevelsOf(
       )
     })
   /* the ids of the teams of the person's organization, read once where
-   * every team of the person is asked about (navigation), or null past
-   * OWN_READS */
+   * navigation asks about many teams, or null past OWN_READS or where one
+   * id names two of its rows */
   let orgTeams: Promise<Set<string> | null> | undefined
   /* whether the team with this id is one of the person's organization,
-   * each asked once: from orgTeams once read, else by the team. Team ids are
-   * server-made UUIDs, so orgTeams does not look for a second row with the
-   * same id in another organization, which the read by the team refuses. */
+   * each asked once: from orgTeams once read, else by the team, a read
+   * counted in `shared` when navigation (`own`) makes it. The client chooses
+   * a team's id, and createTeamCore keeps it unique across organizations
+   * (lib/db.ts insertUnique on teams by_uuid), so orgTeams does not look for
+   * a second row with the same id in another organization, which the read
+   * by the team refuses. */
   const inOrg = new Map<string, Promise<boolean>>()
-  const teamInOrg = (id: string) =>
+  const teamInOrg = (id: string, own = false) =>
     once(inOrg, id, async () => {
       const all = orgTeams === undefined ? null : await orgTeams
       if (all !== null) return all.has(id)
@@ -349,6 +360,7 @@ export function projectLevelsOf(
         .query('teams')
         .withIndex('by_uuid', (q) => q.eq('id', id))
         .unique()
+      if (own) counted(team === null ? [] : [team])
       return team !== null && team.org_id === me.org_id
     })
   /* the shares of the person's teams by project, once read, or null when
@@ -392,7 +404,7 @@ export function projectLevelsOf(
         teams !== undefined &&
         teams.size <= Math.min(most, OWN_READS.teams)
       )
-        ofTeams = sharesOfTeams([...teams])
+        ofTeams = handled(sharesOfTeams([...teams]))
     })
   /* the team shares on the project with this id that may reach the person:
    * those of their teams once read, else the project's */
@@ -452,28 +464,40 @@ export function projectLevelsOf(
           ? Promise.resolve([...teams])
           : memberRows()
               .collect()
+              .then(counted)
               .then((rows) => {
-                teams ??= new Set(counted(rows).map((m) => m.team_id))
+                teams ??= new Set(rows.map((m) => m.team_id))
                 return [...teams]
               })
         : Promise.resolve([])
-      // The shares of the person's teams: those sharesOn read, or read here
-      // team by team, every one, which then answer sharesOn too.
+      // The shares of the person's teams: those sharesOn read, or else read
+      // here team by team, every one, which then answer sharesOn too.
       const before = ofTeams
       const shares = teamIds.then(async (mine) => {
-        // Every team of the person is asked about, so a person in many teams
-        // reads the organization's teams at once instead, while they are at
-        // most OWN_READS.orgTeams rows for each of the person's teams.
-        if (mine.length >= OWN_READS.manyTeams)
-          orgTeams ??= atMostBytes(
-            ctx.db.query('teams').withIndex('by_org', (q) => q.eq('org_id', me.org_id)),
-            Math.min(OWN_READS.orgTeams * mine.length, OWN_READS.orgTeamsMost),
-          ).then((rows) => (rows === null ? null : new Set(rows.map((team) => team.id))))
         const known = before === undefined ? null : await before
-        if (known !== null) return [...known.values()].flat()
+        const read = known === null ? null : [...known.values()].flat()
+        // Navigation asks whether each of these teams is the organization's,
+        // so for many teams not asked yet it reads the organization's teams
+        // at once instead, while they are at most OWN_READS.orgTeams rows
+        // for each of those teams.
+        const asking = new Set(
+          (read?.map((share) => share.team_id) ?? mine).filter((id) => !inOrg.has(id)),
+        )
+        if (asking.size >= OWN_READS.manyTeams)
+          orgTeams ??= handled(
+            atMostBytes(
+              ctx.db.query('teams').withIndex('by_org', (q) => q.eq('org_id', me.org_id)),
+              Math.min(OWN_READS.orgTeams * asking.size, OWN_READS.orgTeamsMost),
+            ).then((rows) => {
+              const ids = new Set(rows?.map((team) => team.id))
+              // two rows with one id: the read by the team refuses them
+              return rows !== null && ids.size === rows.length ? ids : null
+            }),
+          )
+        if (read !== null) return read
         const perTeam = await Promise.all(
           mine.map(async (teamId) =>
-            (await teamInOrg(teamId))
+            (await teamInOrg(teamId, true))
               ? await ctx.db
                   .query('project_team_access')
                   .withIndex('by_team', (q) => q.eq('team_id', teamId))
@@ -484,19 +508,20 @@ export function projectLevelsOf(
         )
         return perTeam.flat()
       })
-      ofTeams ??= shares.then(byProjectId)
+      ofTeams = handled(shares.then(byProjectId))
       ownLevels = Promise.all([
         grants !== undefined
           ? [...grants.values()].flat()
           : grantRows()
               .collect()
+              .then(counted)
               .then((rows) => {
-                grants ??= byProjectId(counted(rows))
+                grants ??= byProjectId(rows)
                 return rows
               }),
         // only the shares of teams of the person's organization
         shares.then(async (rows) => {
-          const ok = await Promise.all(rows.map((share) => teamInOrg(share.team_id)))
+          const ok = await Promise.all(rows.map((share) => teamInOrg(share.team_id, true)))
           return rows.filter((_, i) => ok[i])
         }),
       ]).then(([grants, own]) => new Set([...grants, ...own].map((g) => g.project_id)))
@@ -515,10 +540,12 @@ export function projectLevelsOf(
   }
   const levels = new Map<string, Promise<AccessLevel | null>>()
   return {
-    /** About what the reads of the person's own rows cost so far (their
-     * grants, memberships and team shares, each read once), which every
-     * part of theirs repeats however few rows it holds. Documents and ranges
-     * as Convex counts them, bytes as JSON. */
+    /** About what the reads of the person's own rows cost so far, which
+     * every part of theirs repeats however few rows it holds: each read of
+     * all their grants, memberships or team shares (at a step of OWN_READS,
+     * or for navigation, which may read them again), and navigation's reads
+     * of their teams or the organization's teams. Documents and ranges as
+     * Convex counts them, bytes as JSON. */
     shared,
     /** The project with this id, of any organization, or null. */
     project,

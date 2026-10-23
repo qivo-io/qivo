@@ -33,6 +33,6 @@ if (problem) {
   process.exit(1)
 }
 
-export const { DEFAULT_PAGE_SIZE, grouped, LIMIT_GROUPS, LIMITS, MIB } = await import(
+export const { cutText, DEFAULT_PAGE_SIZE, grouped, LIMIT_GROUPS, LIMITS, MIB } = await import(
   '../convex/lib/limits.ts'
 )

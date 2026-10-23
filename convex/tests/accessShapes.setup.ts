@@ -121,6 +121,24 @@ export const SHAPES: Shape[] = [
       await share(ctx, f.meta, teamId, 'user')
     },
   ],
+  // navigation reads the person's team shares on sub-projects and must drop
+  // these two as the per-project walk does
+  [
+    'a share on a sub-project through a team whose row is gone',
+    async (ctx, f, me) => {
+      const gone = uuid()
+      await join(ctx, gone, me)
+      await share(ctx, f.sub, gone, 'user')
+    },
+  ],
+  [
+    "another organization's team shared on a sub-project",
+    async (ctx, f, me) => {
+      const teamId = await newTeam(ctx, f.otherOrg.id)
+      await join(ctx, teamId, me)
+      await share(ctx, f.sub, teamId, 'user')
+    },
+  ],
   ['leader of a team without shares', (ctx, f, me) => join(ctx, f.team.id, me, true)],
   ['lead of the parent', (ctx, f, me) => ctx.db.patch(f.meta._id, { lead_id: me.id })],
   [

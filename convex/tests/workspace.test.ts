@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { OWN_READS } from '../lib/access'
+import { OWN_READS, projectLevel } from '../lib/access'
 import { newWindowKey } from '../lib/db'
 import {
   cut,
@@ -19,7 +19,7 @@ import {
   piecesAfter,
   windowCount,
 } from '../lib/idWindows'
-import { PAGE, readTasks } from '../lib/workspaceParts'
+import { PAGE, readProjects, readTasks } from '../lib/workspaceParts'
 import {
   as,
   expectRefusal,
@@ -1053,7 +1053,7 @@ describe('many projects', () => {
         org_id: f.org.id,
         org_role: role as keyof typeof shownProjects,
       })
-      const byProject = await t.run(async (ctx) => {
+      const { parent, kinds: byProject } = await t.run(async (ctx) => {
         const team = async (orgId: string) => {
           const id = uuid()
           await ctx.db.insert('teams', {
@@ -1147,12 +1147,24 @@ describe('many projects', () => {
           .withIndex('by_uuid', (q) => q.eq('id', ids.deleted))
           .unique()
         await ctx.db.delete(gone!._id)
-        return Object.fromEntries(Object.entries(ids).map(([kind, id]) => [id, kind]))
+        return {
+          parent,
+          kinds: Object.fromEntries(Object.entries(ids).map(([kind, id]) => [id, kind])),
+        }
       })
       for (const own of [
         DEFAULT_OWN_READS,
-        { ...DEFAULT_OWN_READS, steps: [1, 2], manyTeams: 1 },
-        { ...DEFAULT_OWN_READS, steps: [1], lookups: 0, rows: 0, orgTeams: 0, bytes: 0 },
+        // the person's five grants and two teams read at once
+        { ...DEFAULT_OWN_READS, steps: [1, 8], manyTeams: 1 },
+        {
+          ...DEFAULT_OWN_READS,
+          steps: [1],
+          lookups: 0,
+          rows: 0,
+          manyTeams: 1,
+          orgTeams: 0,
+          bytes: 0,
+        },
       ]) {
         Object.assign(OWN_READS, structuredClone(own))
         const shown = await t.run(async (ctx) => {
@@ -1161,6 +1173,18 @@ describe('many projects', () => {
           return answer.issues.map((task) => byProject[task.project_id]).sort()
         })
         expect(shown, `${role}, own reads ${JSON.stringify(own)}`).toEqual([...expected].sort())
+        // the projects part, which asks about parents for navigation, shows
+        // the projects the per-project walk shows
+        const projects = await t.run(async (ctx) => {
+          const answer = await readProjects(ctx, me, whole)
+          if (answer.state !== 'ok') throw new Error(answer.state)
+          const walk: string[] = []
+          for (const p of await ctx.db.query('projects').collect())
+            if (p.org_id === f.org.id && (await projectLevel(ctx, me, p)) !== null) walk.push(p.id)
+          return { shown: answer.projects.map((p) => p.id).sort(), walk: walk.sort() }
+        })
+        expect(projects.shown, `${role}, own reads ${JSON.stringify(own)}`).toEqual(projects.walk)
+        expect(projects.shown).toContain(parent)
       }
     }
   }, 60_000)
@@ -1248,9 +1272,9 @@ describe('many projects', () => {
     const [member, admin] = [await reads(me), await reads(f.admin)]
     expect(member.shown).toBe(60)
     // an admin reads no access rows; the member asks about the first
-    // projects one by one and then reads their own rows once, not twice for
-    // each of the 90 projects
-    expect(member.ranges - admin.ranges).toBeLessThanOrEqual(2 * OWN_READS.steps[0] + 10)
+    // projects one by one and then reads their own rows once, so they cost
+    // less than half of the two ranges for each of the 90 projects
+    expect(member.ranges - admin.ranges).toBeLessThan(90)
   })
 })
 
@@ -1304,8 +1328,8 @@ describe('the projects and people parts', () => {
         profile_id: f.viewer.id,
         level: 'viewer',
       })
-      // 30 more teams of the person, whose shares navigation reads
-      for (let i = 0; i < 30; i++) {
+      // 60 more teams of the person, whose shares navigation reads
+      for (let i = 0; i < 60; i++) {
         const id = uuid()
         await ctx.db.insert('teams', {
           id,
@@ -1322,16 +1346,20 @@ describe('the projects and people parts', () => {
       }
     })
     PAGE.soft.ranges = 40
-    const answer = await as(t, f.viewer).query(api.workspace.projects, {
-      org_id: f.org.id,
-      ...idWindows(16)[15],
-    })
-    // shown for navigation, and not cut although navigation read past it
-    expect(answer).toMatchObject({
-      state: 'ok',
-      projects: [expect.objectContaining({ id: parent.id })],
-    })
-    expect(answer).not.toHaveProperty('split')
+    // the organization's teams read at once, and each team by its own read
+    for (const manyTeams of [DEFAULT_OWN_READS.manyTeams, Number.POSITIVE_INFINITY]) {
+      OWN_READS.manyTeams = manyTeams
+      const answer = await as(t, f.viewer).query(api.workspace.projects, {
+        org_id: f.org.id,
+        ...idWindows(16)[15],
+      })
+      // shown for navigation, and not cut although navigation read past it
+      expect(answer, `manyTeams ${manyTeams}`).toMatchObject({
+        state: 'ok',
+        projects: [expect.objectContaining({ id: parent.id })],
+      })
+      expect(answer, `manyTeams ${manyTeams}`).not.toHaveProperty('split')
+    }
   })
 
   it('a people window too full to cut refuses with a sentence', async () => {

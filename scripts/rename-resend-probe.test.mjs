@@ -1,6 +1,18 @@
 import { makeFunctionReference } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import { describe, expect, it } from 'vitest'
-import { parseArgs, partName, verdict, watching, within } from './rename-resend-probe.mjs'
+import { LIMITS } from './limits.mjs'
+import {
+  authFetcher,
+  parseArgs,
+  partName,
+  probeTitleOf,
+  renameAndBack,
+  SUFFIX,
+  verdict,
+  watching,
+  within,
+} from './rename-resend-probe.mjs'
 
 describe('rename-resend-probe arguments', () => {
   it('takes a target, a fixture person and a task number', () => {
@@ -80,7 +92,7 @@ describe('rename-resend-probe waits', () => {
         return answers.get(token)
       },
     }
-    const { live, named, answered } = watching(base)
+    const { live, named, watched, answered } = watching(base)
     const ref = makeFunctionReference('workspace:tasks')
     const window = live.watch(ref, { from: '' })
     answers.set('', { state: 'ok', split: true })
@@ -100,5 +112,120 @@ describe('rename-resend-probe waits', () => {
     live.watch(ref, { from: 'c' }).stop()
     expect(answered()).toBe(true)
     expect(named.get('a')).toEqual({ name: 'workspace:tasks', args: { from: 'a' } })
+    // the window cut in two is no longer counted
+    expect(watched()).toEqual(['a', 'b'])
+  })
+
+  it('answers no token where the token request fails, and never prints a token', async () => {
+    const secrets = []
+    const lost = []
+    expect(
+      await authFetcher(
+        async () => 'qvt_1111111111',
+        secrets,
+        (e) => lost.push(e),
+      )(),
+    ).toBe('qvt_1111111111')
+    expect(secrets).toEqual(['qvt_1111111111'])
+    const failing = authFetcher(
+      async () => {
+        throw new Error('The token request answered 503.')
+      },
+      secrets,
+      (e) => lost.push(e.message),
+    )
+    await expect(failing()).resolves.toBeNull()
+    expect(lost).toEqual(['The token request answered 503.'])
+  })
+})
+
+describe('rename-resend-probe title', () => {
+  it('adds the suffix within the title limit and never splits an emoji', () => {
+    expect(probeTitleOf('Ship it')).toBe(`Ship it${SUFFIX}`)
+    const max = LIMITS.title.max - SUFFIX.length
+    const long = `${'a'.repeat(max - 1)}😀 and more`
+    const probe = probeTitleOf(long)
+    expect(probe).toBe(`${'a'.repeat(max - 1)}${SUFFIX}`)
+    expect(probe.length).toBeLessThanOrEqual(LIMITS.title.max)
+    expect(probeTitleOf('b'.repeat(max + 5))).toBe(`${'b'.repeat(max)}${SUFFIX}`)
+  })
+})
+
+describe('rename-resend-probe put-back', () => {
+  const original = 'Ship it'
+  const probeTitle = 'Ship it (rename probe)'
+  const refused = (reason) => new ConvexError({ code: 'conflict', message: 'Refused.', reason })
+  const theirs = (error) => error?.data?.reason === 'field_changed'
+  /* renameAndBack over `steps`, one for each change: what the change does
+     after `landed` or instead of it. Answers the writes, what was left to
+     put back after each write was sent, and what is left at the end. */
+  async function run(steps) {
+    const left = { write: null }
+    const writes = []
+    const leftWhileSent = []
+    const reports = []
+    const result = await renameAndBack({
+      original,
+      probeTitle,
+      left,
+      theirs,
+      report: (label) => reports.push(label),
+      change: async (title, seen, landed) => {
+        writes.push({ title, seen })
+        leftWhileSent.push(left.write)
+        const step = steps[writes.length - 1]
+        if (step.before) throw step.before
+        landed()
+        if (step.after) throw step.after
+        return { resent: new Map(), ms: 1 }
+      },
+    }).then(
+      () => null,
+      (error) => error,
+    )
+    return { error: result, writes, leftWhileSent, reports, left: left.write }
+  }
+  const back = { title: original, seen: probeTitle }
+
+  it('writes over the title it replaces, owes the put-back from before the first write, and owes nothing once the rename back landed', async () => {
+    const r = await run([{}, {}])
+    expect(r.error).toBeNull()
+    expect(r.writes).toEqual([{ title: probeTitle, seen: original }, back])
+    expect(r.leftWhileSent).toEqual([back, back])
+    expect(r.reports).toEqual(['Rename', 'Rename back'])
+    expect(r.left).toBeNull()
+    // a signal while the rename back settles: it landed, nothing to put back
+    expect((await run([{}, { after: new Error('stopped by SIGINT') }])).left).toBeNull()
+  })
+
+  it('still owes the put-back where a write may have landed', async () => {
+    // the first rename timed out, or stopped while it settled
+    for (const step of [
+      { before: new Error('The rename was not confirmed in time.') },
+      { after: new Error('stopped by SIGTERM') },
+    ]) {
+      const r = await run([step])
+      expect(r.error).toBeInstanceOf(Error)
+      expect(r.left).toEqual(back)
+    }
+    // the rename back timed out, or was refused for another reason
+    for (const before of [new Error('The rename was not confirmed in time.'), refused()])
+      expect((await run([{}, { before }])).left).toEqual(back)
+  })
+
+  it('owes nothing where a refusal shows the title is not the probe’s, and says the title was not changed', async () => {
+    const forbidden = await run([{ before: refused() }])
+    expect(forbidden.left).toBeNull()
+    expect(forbidden.writes).toHaveLength(1)
+    expect(forbidden.error.message).toBe(
+      'the rename was refused (Refused.); the title was not changed',
+    )
+    const first = await run([{ before: refused('field_changed') }])
+    expect(first.left).toBeNull()
+    expect(first.error.message).toMatch(/^someone else renamed the task meanwhile/)
+    // their rename landed between the probe's two
+    const second = await run([{}, { before: refused('field_changed') }])
+    expect(second.left).toBeNull()
+    expect(theirs(second.error)).toBe(true)
   })
 })
