@@ -9182,7 +9182,26 @@ export async function initStore(
     unconfirmedReport = text
     emit('health')
   })
+  // A large workspace's first part and the views' first render are two
+  // long tasks; a paint between them keeps each frame shorter.
+  if (stillLoading !== null) await afterPaint()
+  if (!stillCurrent()) return null
   return { profileId: CURRENT_USER, homeOrg: HOME_ORG }
+}
+
+/** Resolves once the browser painted the next frame, or after 100ms in a
+    hidden tab, which paints nothing; at once without frames. */
+function afterPaint() {
+  return new Promise<void>((resolve) => {
+    if (typeof requestAnimationFrame !== 'function') return resolve()
+    const timer = setTimeout(resolve, 100)
+    requestAnimationFrame(() =>
+      setTimeout(() => {
+        clearTimeout(timer)
+        resolve()
+      }, 0),
+    )
+  })
 }
 
 export const P = PLANNER
