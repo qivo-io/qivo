@@ -165,8 +165,19 @@ describe('accessFlags', () => {
               // projects asked in both orders
               for (const own of [
                 DEFAULT_OWN_READS,
-                { steps: [1, 2], lookups: 64, rows: 1000, teams: 256, manyTeams: 1, orgTeams: 16 },
-                { steps: [1], lookups: 0, rows: 0, teams: 256, manyTeams: 8, orgTeams: 0 },
+                {
+                  ...DEFAULT_OWN_READS,
+                  steps: [1, 2],
+                  manyTeams: 1,
+                },
+                {
+                  ...DEFAULT_OWN_READS,
+                  steps: [1],
+                  lookups: 0,
+                  rows: 0,
+                  orgTeams: 0,
+                  bytes: 0,
+                },
               ]) {
                 for (const order of [projects, [...projects].reverse()]) {
                   Object.assign(OWN_READS, structuredClone(own))
@@ -238,6 +249,48 @@ describe('accessFlags', () => {
       return (await ctx.meta.getTransactionMetrics()).documentsRead.used
     })
     expect(read).toBeLessThan(20)
+  })
+
+  it("stops reading the organization's teams at OWN_READS.bytes and answers from the person's own teams", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const me = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+    // eight teams of the person, one of them shares the meta's sub-project,
+    // beside 24 teams with 64 KiB legacy icons, 1.5 MiB in all
+    await t.run(async (ctx) => {
+      const team = async (icon?: string) => {
+        const id = uuid()
+        await ctx.db.insert('teams', {
+          id,
+          org_id: f.org.id,
+          name: 'Team',
+          icon,
+          track_delay_default: false,
+          created_at: NOW,
+        })
+        return id
+      }
+      for (let i = 0; i < 24; i++) await team('x'.repeat(64 * 1024))
+      for (let i = 0; i < OWN_READS.manyTeams; i++) {
+        const id = await team()
+        await ctx.db.insert('team_members', { team_id: id, profile_id: me.id, is_leader: false })
+        if (i === 0)
+          await ctx.db.insert('project_team_access', {
+            project_id: f.sub.id,
+            team_id: id,
+            level: 'user',
+          })
+      }
+    })
+    await t.run(async (ctx) => {
+      const levels = projectLevelsOf(ctx, me)
+      for (const p of [f.meta, f.sub, f.sub2]) {
+        expect(await levels.level(p.id, true), p.key).toBe(await projectLevel(ctx, me, p, true))
+      }
+      expect(await levels.level(f.sub.id)).toBe('user')
+      // the scan stopped at the first row past the bound
+      expect(levels.shared.bytes).toBeLessThan(OWN_READS.bytes + 2 * 64 * 1024)
+    })
   })
 
   it('hides a project outside a top-level meta from everyone, in lists and single reads and writes', async () => {

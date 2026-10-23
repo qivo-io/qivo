@@ -1151,8 +1151,8 @@ describe('many projects', () => {
       })
       for (const own of [
         DEFAULT_OWN_READS,
-        { steps: [1, 2], lookups: 64, rows: 1000, teams: 256, manyTeams: 1, orgTeams: 16 },
-        { steps: [1], lookups: 0, rows: 0, teams: 256, manyTeams: 8, orgTeams: 0 },
+        { ...DEFAULT_OWN_READS, steps: [1, 2], manyTeams: 1 },
+        { ...DEFAULT_OWN_READS, steps: [1], lookups: 0, rows: 0, orgTeams: 0, bytes: 0 },
       ]) {
         Object.assign(OWN_READS, structuredClone(own))
         const shown = await t.run(async (ctx) => {

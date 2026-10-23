@@ -6,14 +6,19 @@
  * endpoint, with the password from the fixture credentials file
  * (QIVO_FIXTURE_CREDENTIALS_DIR, as scripts/staging-check.mjs reads it), and
  * subscribes to the workspace parts (convex/workspace.ts) through the app's
- * own registry (src/store/liveParts.ts) until the workspace is complete. It
- * then renames one active task assigned to that person in Northstar, waits
- * until the new title arrives and a few seconds more, renames the task back
- * the same way, and prints, for each of the two changes, every part that
- * sent a new answer and its size. The title is the only change it makes,
- * and it restores the title also after a failure. A rename leaves the
- * task's history row, as any rename in the app does. It exits 0 when each
- * change re-sent only the tasks window that holds the task, 1 when it
+ * own registry (src/store/liveParts.ts) until the workspace is complete and
+ * every part it watches answered, the pieces of a window cut in two
+ * included. It then renames one active task assigned to that person in
+ * Northstar, waits until the new title arrives and a few seconds more,
+ * renames the task back the same way, and prints, for each of the two
+ * changes, every part that sent a new answer and its size. The title is the
+ * only change it makes, and it restores the title also after a failure, a
+ * timeout or a first Ctrl-C, SIGTERM or SIGHUP; a second signal exits at
+ * once without, and so does a kill. Each write carries the title it
+ * replaces as `expected`, as the app's do, so a rename by someone else
+ * meanwhile refuses the probe's write and keeps their title. A rename leaves
+ * the task's history row, as any rename in the app does. It exits 0 when
+ * each change re-sent only the tasks window that holds the task, 1 when it
  * re-sent anything else or failed, and 2 for arguments it cannot use.
  *
  * The password, the session and the sign-in token stay in this process's
@@ -34,6 +39,7 @@
  * them). */
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { getFunctionName, makeFunctionReference } from 'convex/server'
 import { LIMITS } from './limits.mjs'
 import { fixtureDirectory, loadCredentials } from './marketing-demo.mjs'
 import { resolveConfig } from './staging-check.mjs'
@@ -50,6 +56,57 @@ const CHANGE_MS = 60_000
 const LOAD_MS = 180_000
 
 class UsageError extends Error {}
+
+/** `promise`, or a rejection with `message` when it has not settled within
+ *  `ms`, or with the reason of `stop` when that rejects first. */
+export function within(promise, ms, message, stop) {
+  let timer
+  const late = new Promise((_, fail) => {
+    timer = setTimeout(() => fail(new Error(message)), ms)
+  })
+  return Promise.race([promise, late, ...(stop ? [stop] : [])]).finally(() => clearTimeout(timer))
+}
+
+/** `base`'s watch as the probe sees it: `named` holds what each token names,
+ *  `answered()` says whether every part watched now holds an answer, and
+ *  `live` is the transport that records both for the registry. A window
+ *  cut in two keeps serving while its pieces load, so a complete workspace
+ *  may still wait for their first answers. */
+export function watching(base) {
+  const named = new Map()
+  // how many watch each token now
+  const active = new Map()
+  const live = {
+    ...base,
+    watch(ref, args) {
+      const watched = base.watch(ref, args)
+      named.set(watched.token, { name: getFunctionName(ref), args })
+      active.set(watched.token, (active.get(watched.token) ?? 0) + 1)
+      let stopped = false
+      return {
+        token: watched.token,
+        stop: () => {
+          if (stopped) return
+          stopped = true
+          const left = active.get(watched.token) - 1
+          if (left === 0) active.delete(watched.token)
+          else active.set(watched.token, left)
+          watched.stop()
+        },
+      }
+    },
+  }
+  const answered = () =>
+    [...active.keys()].every((token) => {
+      try {
+        return base.read(token) !== undefined
+      } catch {
+        // a failed part holds an answer too, its error
+        return true
+      }
+    })
+  return { live, named, answered }
+}
 
 /** Parses the command line. Secrets are never accepted as arguments. */
 export function parseArgs(argv) {
@@ -185,15 +242,34 @@ async function start() {
     for (const secret of secrets) s = s.split(secret).join('[redacted]')
     console.log(s)
   }
+  // The first signal stops the wait at hand and goes on to put the title
+  // back; a second exits at once. A closed terminal must not stop that.
+  for (const stream of [process.stdout, process.stderr]) stream.on('error', () => {})
+  let interrupt
+  const interrupted = new Promise((_, fail) => {
+    interrupt = fail
+  })
+  interrupted.catch(() => {})
+  let signalled = false
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'])
+    process.on(signal, () => {
+      if (signalled) process.exit(130)
+      signalled = true
+      interrupt(
+        new Error(`stopped by ${signal}; a second signal exits without putting the title back`),
+      )
+    })
 
   const { ConvexClient } = await import('convex/browser')
-  const { makeFunctionReference, getFunctionName } = await import('convex/server')
-  const { createLiveQueries, createLiveParts } = await import('./liveParts.mjs')
+  const { createLiveQueries, createLiveParts, FIELD_CHANGED, printOf, trimmedForm } = await import(
+    './liveParts.mjs'
+  )
   const { partRows } = await import('./workspaceJoin.mjs')
 
   const auth = await signIn(cfg.apiOrigin, cfg.appOrigin, account)
   const client = new ConvexClient(cfg.target.url, { unsavedChangesWarning: false })
-  // the title to put back when the probe stops before it did
+  const update = makeFunctionReference('issues:update')
+  // the write that puts the title back when the probe stops before it did
   let restore = null
   let failed = false
   try {
@@ -204,46 +280,26 @@ async function start() {
     })
     const base = createLiveQueries(client.client, (ref, args) => client.query(ref, args))
     // what each token names, from the registry's own subscriptions
-    const named = new Map()
-    const live = {
-      ...base,
-      watch(ref, args) {
-        const watched = base.watch(ref, args)
-        named.set(watched.token, { name: getFunctionName(ref), args })
-        return watched
-      },
-    }
-    const watching = new Set()
+    const { live, named, answered } = watching(base)
     let onChange = () => {}
-    base.onTransition(({ tokens }) => {
-      for (const token of tokens) if (named.has(token)) watching.add(token)
-      onChange(tokens)
-    })
+    base.onTransition(({ tokens }) => onChange(tokens))
     const began = performance.now()
     let complete
     let parts
     const loaded = new Promise((done, fail) => {
-      const timer = setTimeout(
-        () => fail(new Error('The workspace did not load in time.')),
-        LOAD_MS,
-      )
       parts = createLiveParts(
         live,
         (news) => {
-          if (news.workspace.state === 'failed') {
-            clearTimeout(timer)
-            fail(new Error('The workspace failed to load.'))
-          }
+          if (news.workspace.state === 'failed') fail(new Error('The workspace failed to load.'))
           if (news.workspace.state === 'complete') {
             complete = news.workspace.value
-            clearTimeout(timer)
-            done()
+            if (answered()) done()
           }
         },
         () => true,
       )
     })
-    await loaded
+    await within(loaded, LOAD_MS, 'The workspace did not load in time.', interrupted)
     const org = complete?.orgs.find((row) => row.slug === ORG_SLUG)
     if (!org) throw new Error(`The person holds no seat in ${ORG_SLUG}.`)
     const mine = new Set(complete.myProfileIds)
@@ -289,10 +345,17 @@ async function start() {
         }
       return null
     }
-    const update = makeFunctionReference('issues:update')
-    /* sets the task's title and records every part that sends a new answer
-       until it arrived and SETTLE_MS more passed */
-    const change = async (title) => {
+    /* the write that sets the task's title to `title` over `seen`, the
+       title it replaces, refused when someone else renamed the task since */
+    const rename = (title, seen) => ({
+      org_id: org.id,
+      id: task.id,
+      patch: { title },
+      expected: { title: printOf(trimmedForm(seen)) },
+    })
+    /* sets the task's title over `seen` and records every part that sends a
+       new answer until it arrived and SETTLE_MS more passed */
+    const change = async (title, seen) => {
       const resent = new Map()
       let arrived = null
       let settled
@@ -311,10 +374,18 @@ async function start() {
       }
       const sent = performance.now()
       const timer = setTimeout(settled, CHANGE_MS)
-      await client.mutation(update, { org_id: org.id, id: task.id, patch: { title } })
-      await done
-      clearTimeout(timer)
-      onChange = () => {}
+      try {
+        await within(
+          client.mutation(update, rename(title, seen)),
+          CHANGE_MS,
+          'The rename was not confirmed in time.',
+          interrupted,
+        )
+        await Promise.race([done, interrupted])
+      } finally {
+        clearTimeout(timer)
+        onChange = () => {}
+      }
       return { resent, ms: arrived === null ? null : arrived - sent }
     }
     const holder = holderOf()
@@ -324,12 +395,14 @@ async function start() {
     const probeTitle = `${original.slice(0, LIMITS.title.max - suffix.length)}${suffix}`
     say(`Task ${task.num} is in ${partName(named.get(holder.token))}.`)
     let ok = true
-    for (const [label, title] of [
-      ['Rename', probeTitle],
-      ['Rename back', original],
+    for (const [label, title, seen] of [
+      ['Rename', probeTitle, original],
+      ['Rename back', original, probeTitle],
     ]) {
-      restore ??= { org_id: org.id, id: task.id, patch: { title: original } }
-      const { resent, ms } = await change(title)
+      // over the probe's title, whether or not the first rename landed: a
+      // write of the title already stored passes the check
+      restore ??= rename(original, probeTitle)
+      const { resent, ms } = await change(title, seen)
       if (title === original) restore = null
       const holderNow = holderOf()?.token ?? holder.token
       const result = verdict(resent, holderNow)
@@ -347,15 +420,26 @@ async function start() {
     process.exitCode = ok ? 0 : 1
   } catch (error) {
     failed = true
-    say(`FAIL: ${error instanceof Error ? error.message : 'the probe stopped'}`)
+    say(
+      `FAIL: ${
+        error?.data?.reason === FIELD_CHANGED
+          ? 'someone else renamed the task meanwhile'
+          : error instanceof Error
+            ? error.message
+            : 'the probe stopped'
+      }`,
+    )
   } finally {
+    // not stopped by a signal: the first one led here, and a second exits
     if (restore !== null)
       try {
-        await client.mutation(makeFunctionReference('issues:update'), restore)
+        await within(client.mutation(update, restore), CHANGE_MS, 'timed out')
         say('The title was put back.')
-      } catch {
+      } catch (error) {
         say(
-          `FAIL: the title of the task could not be put back; set it to "${restore.patch.title}".`,
+          error?.data?.reason === FIELD_CHANGED
+            ? 'FAIL: someone else renamed the task meanwhile, so the probe kept their title.'
+            : `FAIL: the title of the task could not be put back; set it to "${restore.patch.title}".`,
         )
       }
     await client.close()

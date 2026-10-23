@@ -224,8 +224,10 @@ function once<T>(cache: Map<string, Promise<T>>, key: string, read: () => Promis
  * asked team by team for the first `lookups` teams, then from all their
  * memberships. Navigation asks about every team of the person, and from
  * `manyTeams` teams on reads the organization's teams in one range instead,
- * while they are at most `orgTeams` for each team of the person. Tests
- * change them. */
+ * while they are at most `orgTeams` for each team of the person and at most
+ * `orgTeamsMost` and at most `bytes` as JSON, as a legacy team icon has
+ * no length limit and the part's hard budget counts this read too. Past
+ * any bound it asks team by team. Tests change them. */
 export const OWN_READS = {
   steps: [32, 128, 512],
   lookups: 64,
@@ -233,6 +235,8 @@ export const OWN_READS = {
   teams: 256,
   manyTeams: 8,
   orgTeams: 16,
+  orgTeamsMost: 4000,
+  bytes: 512 * 1024,
 }
 
 /** projectLevel of `me` on the projects of one organization asked about one
@@ -272,6 +276,23 @@ export function projectLevelsOf(
       .take(most + 1)
       .then(counted)
       .then((rows) => (rows.length > most ? null : rows))
+  /* atMost for rows of any size: also null past OWN_READS.bytes, read row
+   * by row, as take() reads, so it stops at the first row past either
+   * bound */
+  const atMostBytes = async <R>(query: AsyncIterable<R>, most: number) => {
+    const rows: R[] = []
+    let bytes = 0
+    shared.ranges += 1
+    for await (const row of query) {
+      const size = JSON.stringify(row).length
+      shared.documents += 1
+      shared.bytes += size
+      bytes += size
+      rows.push(row)
+      if (rows.length > most || bytes > OWN_READS.bytes) return null
+    }
+    return rows
+  }
   const grantRows = () =>
     ctx.db.query('project_access').withIndex('by_profile', (q) => q.eq('profile_id', me.id))
   const memberRows = () =>
@@ -444,9 +465,9 @@ export function projectLevelsOf(
         // reads the organization's teams at once instead, while they are at
         // most OWN_READS.orgTeams rows for each of the person's teams.
         if (mine.length >= OWN_READS.manyTeams)
-          orgTeams ??= atMost(
+          orgTeams ??= atMostBytes(
             ctx.db.query('teams').withIndex('by_org', (q) => q.eq('org_id', me.org_id)),
-            OWN_READS.orgTeams * mine.length,
+            Math.min(OWN_READS.orgTeams * mine.length, OWN_READS.orgTeamsMost),
           ).then((rows) => (rows === null ? null : new Set(rows.map((team) => team.id))))
         const known = before === undefined ? null : await before
         if (known !== null) return [...known.values()].flat()

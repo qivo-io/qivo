@@ -208,8 +208,12 @@ person (Nora unless `--as` names another) with the fixture password, loads
 the workspace through the app's own part registry, renames the lowest
 numbered active task assigned to that person (or the task `--task` names),
 renames it back, and prints, for each change, every part that sent a new
-answer and its size. The title is the only change, and the probe puts it
-back also after a failure. It exits 0 when each change re-sent only that
+answer and its size. It waits until every part answered, the pieces of a
+window cut in two included, before the first rename. The title is the only
+change, and the probe puts it back also after a failure, a timeout or a
+first Ctrl-C; a second signal or a kill exits without. Each write carries
+the title it replaces, so a rename by someone else meanwhile keeps their
+title and fails the probe. It exits 0 when each change re-sent only that
 window. Run it through the staging helper:
 
 ```sh
