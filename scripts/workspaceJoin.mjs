@@ -4,4 +4,4 @@
  * a sentence that names the version to use. */
 import './limits.mjs'
 
-export const { readWorkspace } = await import('../convex/lib/workspaceJoin.ts')
+export const { readWorkspace, partRows } = await import('../convex/lib/workspaceJoin.ts')

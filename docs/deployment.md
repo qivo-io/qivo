@@ -200,6 +200,27 @@ restores `BILLING_ENABLED` only while it is still the `true` the run set,
 and otherwise removes just the mark, so a setting someone changed since
 stays. Run one local run per backend at a time.
 
+### Which parts a rename re-sends
+
+`scripts/rename-resend-probe.mjs` checks that a change to one task re-sends
+only the one tasks window that holds it. It signs in a Northstar fixture
+person (Nora unless `--as` names another) with the fixture password, loads
+the workspace through the app's own part registry, renames the lowest
+numbered active task assigned to that person (or the task `--task` names),
+renames it back, and prints, for each change, every part that sent a new
+answer and its size. The title is the only change, and the probe puts it
+back also after a failure. It exits 0 when each change re-sent only that
+window. Run it through the staging helper:
+
+```sh
+"${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-staging" \
+  node scripts/rename-resend-probe.mjs --staging
+```
+
+It takes the same targets and refusals as the end-to-end check above, and
+for `--local` the same `--app-url`, `--convex-url`, `--api-url` and
+`--deployment`.
+
 ### A large organization on a local backend
 
 To check the Board at scale by hand, grow that local Northstar copy with

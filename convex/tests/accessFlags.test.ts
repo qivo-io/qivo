@@ -17,11 +17,11 @@ import {
   LEVELS_READ,
   machineAccess,
   type OrgProjectLevels,
+  OWN_READS,
   projectLevel,
   projectLevelsForOrg,
   projectLevelsForPeople,
   projectLevelsOf,
-  TEAM_LOOKUPS,
 } from '../lib/access'
 import { type AccessFlag, accessFlags, loadCatalogue } from '../lib/core'
 import { type CredentialAccess, ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
@@ -39,6 +39,7 @@ import {
 } from './helpers.setup'
 
 const ACCESS: CredentialAccess[] = ['read', 'write']
+const DEFAULT_OWN_READS = structuredClone(OWN_READS)
 
 /* The flags as accessFlags computed them before, one canSeeProject and one
  * hasProjectLevel walk per project. */
@@ -159,22 +160,30 @@ describe('accessFlags', () => {
         for (const org_role of ORG_ROLES) {
           for (const kind of PROFILE_KINDS) {
             for (const me of [{ ...subject, org_role, kind }, f.viewer, f.guest, f.otherAdmin]) {
-              // teams asked one at a time, and from all memberships at once
-              for (const lookups of [64, 0]) {
-                TEAM_LOOKUPS.max = lookups
-                const levels = projectLevelsOf(ctx, me)
-                for (const p of projects) {
-                  for (const navigation of [true, false]) {
-                    const level = await levels.level(p.id, navigation)
-                    expect(
-                      level,
-                      `${name}: ${me.name} as ${me.org_role} ${me.kind} on ${p.key}, navigation ${navigation}, lookups ${lookups}`,
-                    ).toBe(await projectLevel(ctx, me, p, navigation))
-                    seen.add(String(level))
+              // project by project, the person's own rows read from the first
+              // project on, and own rows too many to read at once, the
+              // projects asked in both orders
+              for (const own of [
+                DEFAULT_OWN_READS,
+                { steps: [1, 2], lookups: 64, rows: 1000, teams: 256, manyTeams: 1, orgTeams: 16 },
+                { steps: [1], lookups: 0, rows: 0, teams: 256, manyTeams: 8, orgTeams: 0 },
+              ]) {
+                for (const order of [projects, [...projects].reverse()]) {
+                  Object.assign(OWN_READS, structuredClone(own))
+                  const levels = projectLevelsOf(ctx, me)
+                  for (const p of order) {
+                    for (const navigation of [true, false]) {
+                      const level = await levels.level(p.id, navigation)
+                      expect(
+                        level,
+                        `${name}: ${me.name} as ${me.org_role} ${me.kind} on ${p.key}, navigation ${navigation}, own reads ${JSON.stringify(own)}`,
+                      ).toBe(await projectLevel(ctx, me, p, navigation))
+                      seen.add(String(level))
+                    }
                   }
                 }
               }
-              TEAM_LOOKUPS.max = 64
+              Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
             }
           }
         }
