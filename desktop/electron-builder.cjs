@@ -5,7 +5,7 @@ const path = require('node:path')
 const yaml = require(
   require.resolve('js-yaml', { paths: [path.dirname(require.resolve('electron-updater'))] }),
 )
-const { getAppUpdatePublishConfiguration } = require(
+const { getPublishConfigs, getPublishConfigsForUpdateInfo } = require(
   require.resolve('app-builder-lib/out/publish/PublishManager', {
     paths: [path.dirname(require.resolve('electron-builder'))],
   }),
@@ -36,21 +36,39 @@ function requireWindowsPublisher(configPath) {
 }
 
 /**
- * Fails a Linux build that has an update feed. electron-updater checks no
- * signature on a `.deb`, `.rpm` or AppImage update, only the SHA-512 the same
- * feed lists, so the feed alone would decide what the app installs.
- * electron-builder writes app-update.yml before afterPack, and the deb, rpm
- * and AppImage targets write it again later from the same settings, so this
- * refuses both a file in the app and a feed electron-builder would resolve.
+ * Returns whether electron-builder would write an update feed into this app,
+ * now or while a target builds. The deb, rpm and AppImage targets write
+ * app-update.yml again after afterPack and may pass their own publish
+ * settings, so this checks each target's settings as well as the platform and
+ * top-level ones.
  */
-async function refuseLinuxFeed(context, configPath) {
-  if (
-    fs.existsSync(configPath) ||
-    (await getAppUpdatePublishConfiguration(context.packager, null, context.arch, false))
-  )
-    throw new Error(
-      'A Linux build cannot have an update feed until the app checks a signature on each Linux update. See "Linux builds have no update feed" in desktop/README.md.',
+async function resolvesFeed({ packager, arch, targets }) {
+  for (const options of [null, ...targets.map((target) => target.options)]) {
+    const configs = await getPublishConfigsForUpdateInfo(
+      packager,
+      await getPublishConfigs(packager, options, arch, false),
+      arch,
     )
+    if (configs?.length) return true
+  }
+  return false
+}
+
+/**
+ * Fails a build for any platform but Windows that has an update feed.
+ * electron-updater checks no signature on a `.deb`, `.rpm` or AppImage
+ * update, only the SHA-512 the same feed lists, so the feed alone would
+ * decide what the app installs. Qivo configures no macOS build, so a macOS
+ * feed is refused too. This refuses both an app-update.yml already in the
+ * app and a feed electron-builder would write later.
+ */
+async function refuseFeed(context, configPath) {
+  if (!fs.existsSync(configPath) && !(await resolvesFeed(context))) return
+  throw new Error(
+    context.electronPlatformName === 'linux'
+      ? 'A Linux build cannot have an update feed until the app checks a signature on each Linux update. See "Linux builds have no update feed" in desktop/README.md.'
+      : `A ${context.electronPlatformName} build cannot have an update feed. Only a Windows build signed with a known publisher can have one.`,
+  )
 }
 
 /** Checks the update feed of an app electron-builder has just packed. */
@@ -60,7 +78,7 @@ async function checkUpdateFeed(context) {
     'app-update.yml',
   )
   if (context.electronPlatformName === 'win32') requireWindowsPublisher(configPath)
-  else if (context.electronPlatformName === 'linux') await refuseLinuxFeed(context, configPath)
+  else await refuseFeed(context, configPath)
 }
 
 /**
@@ -130,7 +148,7 @@ module.exports = () => {
       artifactName: 'Qivo-${version}-${arch}.${ext}',
     },
     // The static-runtime AppImage toolset avoids a libfuse2 dependency on newer
-    // Ubuntu hosts while preserving AppImage self-update support.
+    // Ubuntu hosts.
     toolsets: { appimage: '1.0.3' },
     deb: {
       maintainer: 'Qivo <support@qivo.io>',
@@ -154,9 +172,10 @@ module.exports = () => {
     },
     // The update feed is written into the installed app only when
     // QIVO_DESKTOP_UPDATE_URL is set, and the installed app checks no other.
-    // Only a signed Windows build may have one. The package command never
-    // publishes; the artifacts are uploaded to that HTTPS feed after signing
-    // and validation.
+    // Only a Windows build whose app-update.yml names a signing publisher may
+    // have one, and afterPack refuses a feed on any other platform. The
+    // package command never publishes; the artifacts are uploaded to that
+    // HTTPS feed after signing and validation.
     publish: updateUrl ? [{ provider: 'generic', url: updateUrl }] : null,
     async afterPack(context) {
       await checkUpdateFeed(context)

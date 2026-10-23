@@ -9,10 +9,11 @@ that the client needs:
   Qivo**.
 - Inbox events can raise native desktop notifications. Clicking one restores
   Qivo and opens the Inbox.
-- Packaged builds check the release feed built into them, download updates in the
-  background and show a native “update ready” notification. Qivo waits for
-  active edits and asks before restarting to install an update. On Windows a
-  normal quit also completes a downloaded update.
+- A packaged Windows build with a release feed built into it checks that
+  feed, downloads updates in the background and shows a native “update
+  ready” notification. Qivo waits for active edits and asks before restarting
+  to install an update. A normal quit also completes a downloaded update.
+  Linux builds have no feed and never update themselves.
 - OAuth provider pages open in the system browser. A short-lived, one-time
   `qivo://` callback returns the result to the waiting Qivo window.
 
@@ -44,11 +45,11 @@ The shell follows Electron's
 - A packaged build checks for updates only at the feed written into it when
   it was built, and a build without one never checks. No environment
   variable names another feed. `QIVO_DISABLE_UPDATES=1` can only turn checks
-  off. A Linux build cannot have a feed at all, because electron-updater
-  checks no signature on Linux updates. The shell also removes
-  electron-updater's test variables
+  off. Only a Windows build can have a feed. A Linux build cannot, because
+  electron-updater checks no signature on Linux updates. Before a build with
+  a feed checks, the shell removes electron-updater's test variables
   `ELECTRON_BUILDER_LINUX_PACKAGE_MANAGER`, which picks the package manager
-  that installs a Linux update as root, and `TEST_UPDATER_ARCH`.
+  that would install a Linux update as root, and `TEST_UPDATER_ARCH`.
 - Packaging flips Electron's
   [fuses](https://www.electronjs.org/docs/latest/tutorial/fuses): no
   `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS` or `--inspect`, app code only from
@@ -63,13 +64,14 @@ The shell follows Electron's
   standard error and opens no window, so start Qivo from a terminal to read
   it. Showing a window first would start the processes and the debugging
   port those switches act on.
-- The logon entry of a Linux AppImage starts the file in `APPIMAGE`, and an
-  AppImage update replaces that file. Qivo reads the variable only when it
-  runs from a folder that an AppImage launcher set it for: the AppImage
-  runtime's temporary folder, `firejail --appimage` or NixOS `appimage-run`.
-  Otherwise Qivo ignores it and removes it before the updater starts, so a
-  .deb or .rpm install that inherits it still starts the installed program,
-  and the updater replaces no other file.
+- The logon entry of a Linux AppImage starts the file in `APPIMAGE`. Qivo
+  reads the variable only when it runs from a folder that an AppImage
+  launcher set it for: the AppImage runtime's temporary folder,
+  `firejail --appimage` or NixOS `appimage-run`. Otherwise Qivo ignores it,
+  so a .deb or .rpm install that inherits it still starts the installed
+  program. A build with a feed also removes such a value before the updater
+  starts, because an AppImage update replaces the file it names. Linux builds
+  have no feed today, so that removal only prepares for a signed Linux feed.
 - These rules keep Qivo's own settings from redirecting it. They do not
   protect against a program that already runs as the user. Such a program
   can set loader variables such as `LD_PRELOAD`, edit the per-user Windows
@@ -167,7 +169,9 @@ the generated installer and its `latest.yml`/blockmap files to that endpoint
 with the same version from `package.json`. The installed app checks only this
 feed and reads no feed setting at run time. `QIVO_DISABLE_UPDATES=1` turns
 checks off for diagnostics. Signing the installer is required before shipping
-it to users.
+it to users. A build for any other platform with a feed fails, as
+[Linux builds have no update feed](#linux-builds-have-no-update-feed)
+explains for Linux. Qivo has no macOS build configuration.
 
 electron-updater checks the signature of a downloaded Windows update only
 when the built-in `app-update.yml` names the publisher. electron-builder
@@ -229,8 +233,7 @@ A Linux build with an update feed fails, whether the feed comes from
 no signature on a `.deb`, `.rpm` or AppImage update. It installs the file
 whose SHA-512 the same feed lists, a `.deb` or `.rpm` as root after Qivo asks,
 so whoever controls the feed or its HTTPS host would decide what the app
-installs. Linux builds without a feed, the only kind built today, are
-unchanged and never check for updates.
+installs. Linux builds have no feed and never check for updates.
 
 The change that allows a Linux feed must add all of this, and remove the
 refusal in [electron-builder.cjs](electron-builder.cjs) in the same change:

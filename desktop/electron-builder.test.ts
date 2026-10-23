@@ -3,7 +3,7 @@ import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { Arch, build, type Configuration, Packager, Platform } from 'electron-builder'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 const require = createRequire(import.meta.url)
 const configPath = require.resolve('./electron-builder.cjs')
@@ -59,14 +59,14 @@ describe('desktop update feed in the build', () => {
   })
   afterEach(() => fs.rmSync(runDirectory, { recursive: true, force: true }))
 
-  /** Packs a fake Windows app whose resources hold this app-update.yml, or none. */
-  function packed(updateConfig?: string) {
+  /** Packs a fake app for this platform whose resources hold this app-update.yml, or none. */
+  function packed(updateConfig?: string, electronPlatformName = 'win32') {
     const appOutDir = fs.mkdtempSync(path.join(runDirectory, 'app-'))
     const resources = path.join(appOutDir, 'resources')
     fs.mkdirSync(resources)
     if (updateConfig) fs.writeFileSync(path.join(resources, 'app-update.yml'), updateConfig)
     return {
-      electronPlatformName: 'win32',
+      electronPlatformName,
       appOutDir,
       packager: { getResourcesDir: (outDir: string) => path.join(outDir, 'resources') },
     }
@@ -107,12 +107,39 @@ describe('desktop update feed in the build', () => {
     // a Windows target that writes no app-update.yml never checks for updates
     await expect(loadConfig(feed).afterPack(packed())).resolves.toBeUndefined()
   })
+
+  it('fails a macOS build with a feed, even a signed one', async () => {
+    await expect(loadConfig(feed).afterPack(packed(signed, 'darwin'))).rejects.toThrow(
+      'A darwin build cannot have an update feed',
+    )
+  })
 })
 
 describe('desktop builds through electron-builder', () => {
   // electron-builder searches upward for node_modules, so the project lives
   // outside this checkout.
   let project = ''
+  // A stand-in for the 7-Zip that electron-builder would otherwise download.
+  // It writes an empty archive at the path ending in .zip. electron-builder
+  // keeps the first 7-Zip path it finds for the whole process, so the
+  // stand-in lives as long as this file's tests.
+  let sevenZip = ''
+  const previous7za = process.env.ELECTRON_BUILDER_7ZIP_PATH
+  beforeAll(() => {
+    sevenZip = fs.mkdtempSync(path.join(os.tmpdir(), 'qivo-desktop-7za-'))
+    const stub = path.join(sevenZip, '7za')
+    fs.writeFileSync(
+      stub,
+      '#!/bin/sh\nfor arg; do case "$arg" in *.zip) : > "$arg" ;; esac; done\n',
+    )
+    fs.chmodSync(stub, 0o755)
+    process.env.ELECTRON_BUILDER_7ZIP_PATH = stub
+  })
+  afterAll(() => {
+    if (previous7za === undefined) delete process.env.ELECTRON_BUILDER_7ZIP_PATH
+    else process.env.ELECTRON_BUILDER_7ZIP_PATH = previous7za
+    fs.rmSync(sevenZip, { recursive: true, force: true })
+  })
   beforeEach(() => {
     project = fs.mkdtempSync(path.join(os.tmpdir(), 'qivo-desktop-build-'))
     fs.writeFileSync(path.join(project, 'package.json'), '{"name":"qivo","version":"0.1.0"}')
@@ -138,6 +165,8 @@ describe('desktop builds through electron-builder', () => {
       electronVersion: require('electron/package.json').version,
       // The stand-in executable has no fuses to flip.
       electronFuses: null,
+      // The app has no dependencies to install or rebuild.
+      npmRebuild: false,
       ...overrides,
     }
   }
@@ -163,52 +192,71 @@ describe('desktop builds through electron-builder', () => {
   const linuxPackages = Platform.LINUX.createTarget(['deb', 'rpm', 'AppImage'], Arch.x64)
 
   it('builds a Linux package without a feed', async () => {
-    // A stand-in for the 7-Zip that electron-builder would otherwise download.
-    // It writes an empty archive at the path ending in .zip.
-    write('7za', '#!/bin/sh\nfor arg; do case "$arg" in *.zip) : > "$arg" ;; esac; done\n')
-    fs.chmodSync(path.join(project, '7za'), 0o755)
-    const previous7za = process.env.ELECTRON_BUILDER_7ZIP_PATH
-    process.env.ELECTRON_BUILDER_7ZIP_PATH = path.join(project, '7za')
-    try {
-      const result = await run(undefined, () =>
-        build({
-          projectDir: project,
-          config: configuration(),
-          targets: Platform.LINUX.createTarget('zip', Arch.x64),
-          publish: 'never',
-        }),
-      )
-      // electron-builder names the package after the root package version
-      const { version } = require('../package.json')
-      expect(result).toEqual({
-        error: undefined,
-        files: expect.arrayContaining([`Qivo-${version}-x64.zip`]),
-      })
-    } finally {
-      if (previous7za === undefined) delete process.env.ELECTRON_BUILDER_7ZIP_PATH
-      else process.env.ELECTRON_BUILDER_7ZIP_PATH = previous7za
-    }
+    const result = await run(undefined, () =>
+      build({
+        projectDir: project,
+        config: configuration(),
+        targets: Platform.LINUX.createTarget('zip', Arch.x64),
+        publish: 'never',
+      }),
+    )
+    // electron-builder names the package after the root package version
+    const { version } = require('../package.json')
+    expect(result).toEqual({
+      error: undefined,
+      files: expect.arrayContaining([`Qivo-${version}-x64.zip`]),
+    })
   }, 60_000)
 
-  it('refuses a Linux build with a feed before it writes a package', async () => {
-    const refused = 'A Linux build cannot have an update feed'
-    const options = { projectDir: project, targets: linuxPackages, publish: 'never' } as const
-    for (const result of [
-      await run(feed, () => build({ ...options, config: configuration() })),
-      // a feed from another publish setting than QIVO_DESKTOP_UPDATE_URL
-      await run(undefined, () =>
+  const options = { targets: linuxPackages, publish: 'never' } as const
+  it.each([
+    {
+      name: 'the build-time feed',
+      updateUrl: feed,
+      start: () => build({ ...options, projectDir: project, config: configuration() }),
+    },
+    {
+      name: 'a feed in the Linux publish setting',
+      start: () =>
         build({
           ...options,
+          projectDir: project,
           config: configuration({ linux: { publish: { provider: 'generic', url: feed } } }),
         }),
-      ),
+    },
+    {
+      name: 'a feed in the deb publish setting',
+      start: () =>
+        build({
+          ...options,
+          projectDir: project,
+          config: configuration({ deb: { publish: { provider: 'generic', url: feed } } }),
+        }),
+    },
+    {
       // a build without the publish step, where only the targets write the feed
-      await run(feed, () => new Packager({ ...options, config: configuration() }).build()),
-    ]) {
-      expect(result.error).toContain(refused)
+      name: 'the build-time feed and no publish step',
+      updateUrl: feed,
+      start: () =>
+        new Packager({ ...options, projectDir: project, config: configuration() }).build(),
+    },
+    {
+      // an app-update.yml that no publish setting names
+      name: 'a feed file in the Electron folder',
+      start: () => {
+        write('electron/resources/app-update.yml', `provider: generic\nurl: ${feed}\n`)
+        return build({ ...options, projectDir: project, config: configuration() })
+      },
+    },
+  ])(
+    'refuses a Linux build with $name before it writes a package',
+    async ({ updateUrl, start }) => {
+      const result = await run(updateUrl, start)
+      expect(result.error).toContain('A Linux build cannot have an update feed')
       expect(result.files.filter((file) => /\.(deb|rpm|AppImage)$/.test(file))).toEqual([])
-    }
-  }, 60_000)
+    },
+    60_000,
+  )
 
   it('refuses to package a prepackaged app before it writes an installer', async () => {
     // A Windows app from a build that failed the publisher check.
