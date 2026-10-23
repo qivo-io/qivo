@@ -814,7 +814,9 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
             <PaneNote
               title={`“${P.messageGroups.find((g) => g.id === deadItem)?.issueTitle || 'This task'}”`}
             >
-              This task is archived or unavailable.
+              {P.stillLoading() === null
+                ? 'This task is archived or unavailable.'
+                : 'This task may be one still loading. Open the message again once every task has loaded.'}
             </PaneNote>
           </>
         ) : (

@@ -105,6 +105,9 @@ function EditorSlot({ fallback, children }: { fallback: ReactNode; children: Rea
   )
 }
 const NO_PROFILE = '__none__'
+/* Why moving, archiving or deleting waits while tasks still load: each acts
+   on subtasks and blockers that may be still to arrive. */
+const WAITS_FOR_TASKS = 'Available once every task has loaded'
 
 function MiniIssueRow({
   id,
@@ -764,7 +767,11 @@ function IssuePickerPopup({
         })}
         {matches.length === 0 && !canCreate && (
           <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [padding:4px_5px]">
-            {ql ? 'No matching tasks.' : 'No eligible tasks.'}
+            {P.stillLoading() !== null
+              ? 'No matching tasks yet. Tasks are still loading.'
+              : ql
+                ? 'No matching tasks.'
+                : 'No eligible tasks.'}
           </div>
         )}
         {canCreate && tooLong && <PickerRefusal limit={LIMITS.title} />}
@@ -2530,6 +2537,12 @@ function IssueDetail({
                 }
           }
         >
+          {/* a task opened by its link may be one still to arrive */}
+          {!it && P.stillLoading() !== null && (
+            <div role="status" data-task-loading className="p-6 text-sm text-text-2">
+              Loading this task…
+            </div>
+          )}
           {it && (
             <>
               {/* Where the task lives, over its title, and the window's own
@@ -2609,6 +2622,8 @@ function IssueDetail({
                           </MenuItem>
                           {canMove && (
                             <MenuItem
+                              disabled={P.stillLoading() !== null}
+                              title={P.stillLoading() !== null ? WAITS_FOR_TASKS : undefined}
                               onClick={() => {
                                 close()
                                 setMoveOpen(true)
@@ -2623,6 +2638,8 @@ function IssueDetail({
                           {canLabel && (
                             <MenuItem
                               data-task-fate
+                              disabled={P.stillLoading() !== null}
+                              title={P.stillLoading() !== null ? WAITS_FOR_TASKS : undefined}
                               onClick={() => {
                                 close()
                                 setFateOpen(true)
@@ -3191,7 +3208,9 @@ function IssueDetail({
                           </div>
                           {prog.unknown ? (
                             <span className="text-xs text-text-3">
-                              Additional work is outside this view.
+                              {P.stillLoading() === null
+                                ? 'Additional work is outside this view.'
+                                : 'Subtasks are still loading.'}
                             </span>
                           ) : (
                             <ProgressBar
@@ -3256,7 +3275,9 @@ function IssueDetail({
                             </Button>
                           </div>
                         ) : (
-                          <div className="text-sm text-text-2 italic">No parent task.</div>
+                          <div className="text-sm text-text-2 italic">
+                            {P.stillLoading() === null ? 'No parent task.' : 'No parent task yet.'}
+                          </div>
                         )}
                       </section>
 
@@ -3266,7 +3287,9 @@ function IssueDetail({
                           inlineAction
                           label={
                             'Subtasks' +
-                            ((it.children || []).length ? ` (${it.children.length})` : '')
+                            ((it.children || []).length && P.stillLoading() === null
+                              ? ` (${it.children.length})`
+                              : '')
                           }
                         >
                           <Button
@@ -3300,7 +3323,7 @@ function IssueDetail({
                           </div>
                         ) : (
                           <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic]">
-                            No subtasks.
+                            {P.stillLoading() === null ? 'No subtasks.' : 'No subtasks yet.'}
                           </div>
                         )}
                       </section>
@@ -3311,7 +3334,9 @@ function IssueDetail({
                           inlineAction
                           label={
                             'Linked tasks' +
-                            ((it.links || []).length ? ` (${it.links.length})` : '')
+                            ((it.links || []).length && P.stillLoading() === null
+                              ? ` (${it.links.length})`
+                              : '')
                           }
                         >
                           <Button

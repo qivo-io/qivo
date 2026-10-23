@@ -42,6 +42,7 @@ import { lazyFromModule } from './lib/lazyModule'
 import { leaveDeliberately, useUnsaved } from './lib/leaveGuard'
 import { loadFailureText } from './lib/loadFailure'
 import { oauthConnectRequest, oauthNeedsLogin } from './lib/oauthConnection'
+import { addressesTask } from './lib/router'
 import { unconfirmedNote } from './lib/unconfirmedNote'
 import { beginUpdateBlock, isUpdateBlocked, useUpdateBlocker } from './lib/updateSafety'
 import { loadWorkspace, preloadWorkspacePage } from './lib/workspacePreload'
@@ -267,9 +268,13 @@ export function AuthGate() {
       // Finish both attempts before offering Retry. An import failure must not
       // leave an older store initializer running beside the next attempt.
       const [storeResult, workspaceResult] = await Promise.allSettled([
-        initStore((accountId) => {
-          if (attempt === loadAttempt.current) setAppearanceAccount(accountId)
-        }, knownSession),
+        initStore(
+          (accountId) => {
+            if (attempt === loadAttempt.current) setAppearanceAccount(accountId)
+          },
+          knownSession,
+          { whole: addressesTask(location.pathname, location.hash) },
+        ),
         connection ? null : loadWorkspace(),
       ])
       if (attempt !== loadAttempt.current) return

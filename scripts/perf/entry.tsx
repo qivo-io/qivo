@@ -10,7 +10,8 @@ import '@perf/styles/demo.css'
 async function boot() {
   // as src/main.tsx does: views tell pointer from keyboard input by it
   installFocusVisibility()
-  await initStore()
+  // every scenario measures the complete workspace, never a partial one
+  await initStore(undefined, undefined, { whole: true })
   createRoot(document.getElementById('root')!).render(
     <TooltipProvider>
       <AppearanceProvider accountId="perf-account">

@@ -267,6 +267,18 @@ export function parsePath(pathname: string): Route | null {
   return parseSegments(seg.slice(1), org, orgUnknown)
 }
 
+/** Whether `pathname` or the legacy `hash` names a task: only a complete
+    workspace can tell such an address apart from one to a task that is gone,
+    so the first load waits for every task (store/liveParts.ts). */
+export function addressesTask(pathname: string, hash: string): boolean {
+  const app = pathname.split('?')[0].split('#')[0]
+  const segments = (s: string) => s.split('/').filter(Boolean)
+  return (
+    ((app === APP_PREFIX || app.startsWith(`${APP_PREFIX}/`)) && segments(app).includes('tasks')) ||
+    (hash.startsWith('#/') && segments(hash.slice(2)).includes('tasks'))
+  )
+}
+
 /** Read-only hash navigation using the same task segments as path routes.
     Nothing emits a hash any more. */
 export function parseHash(hash: string): Route | null {

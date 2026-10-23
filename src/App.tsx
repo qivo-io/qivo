@@ -15,6 +15,7 @@ import {
 } from './components/MobileWorkspace'
 import { navRow, navRowDiv } from './components/navRow'
 import { Icon, MenuItem, Popover, ProjectName, Seg } from './components/qivo'
+import { TasksLoadingBar, TasksLoadingView } from './components/TasksLoading'
 import { ViewBoundary } from './components/ViewBoundary'
 import { ViewFilters } from './components/viewFilters'
 import {
@@ -891,6 +892,8 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [toasts, setToasts] = useState<Toast[]>([])
   const rev = usePlannerVersion()
+  // Views over every task wait while a large workspace still loads them
+  const tasksLoading = P.stillLoading() !== null
 
   // date rendering follows the organization's format setting; set during
   // render so everything below formats consistently on this pass
@@ -1652,54 +1655,59 @@ function App() {
       <>
         <ViewBoundary onBack={() => setSettingsPage(null)}>
           <Suspense fallback={<ViewLoading />}>
-            <UnsentScopeContext.Provider value={unsent.page}>
-              <SettingsScreen
-                page={settingsPage}
-                setPage={(page) => move({ settingsPage: page }, () => setSettingsPage(page))}
-                resetPage={setSettingsPage}
-                onBackPage={(page) =>
-                  move({ settingsPage: page }, () =>
-                    backOrSet({ settingsPage: page }, () => setSettingsPage(page)),
-                  )
-                }
-                onExit={() => {
-                  const back = settingsReturn.current
-                  const to = {
-                    settingsPage: null,
-                    inboxOpen: back.inbox,
-                    projectsOpen: back.projects,
-                    sync: back.sync,
+            {/* removals, label counts and archived tasks read every task */}
+            {tasksLoading ? (
+              <TasksLoadingView what="Settings" onBack={() => setSettingsPage(null)} />
+            ) : (
+              <UnsentScopeContext.Provider value={unsent.page}>
+                <SettingsScreen
+                  page={settingsPage}
+                  setPage={(page) => move({ settingsPage: page }, () => setSettingsPage(page))}
+                  resetPage={setSettingsPage}
+                  onBackPage={(page) =>
+                    move({ settingsPage: page }, () =>
+                      backOrSet({ settingsPage: page }, () => setSettingsPage(page)),
+                    )
                   }
-                  move(to, () => {
-                    settingsReturn.current = NO_RETURN
-                    backOrSet(to, () => {
-                      setSettingsPage(null)
-                      setInboxOpen(back.inbox)
-                      setProjectsOpen(back.projects)
-                      setSync(back.sync)
+                  onExit={() => {
+                    const back = settingsReturn.current
+                    const to = {
+                      settingsPage: null,
+                      inboxOpen: back.inbox,
+                      projectsOpen: back.projects,
+                      sync: back.sync,
+                    }
+                    move(to, () => {
+                      settingsReturn.current = NO_RETURN
+                      backOrSet(to, () => {
+                        setSettingsPage(null)
+                        setInboxOpen(back.inbox)
+                        setProjectsOpen(back.projects)
+                        setSync(back.sync)
+                      })
                     })
-                  })
-                }}
-                onNewProject={() => openNewProject({ kind: 'program' })}
-                onNewSubProject={(parent) => openNewProject({ parent })}
-                archivedTasksProject={archiveProject || scopeMeta}
-                onOpenArchivedTasks={(projectId) =>
-                  move({ settingsPage: ARCHIVED_TASKS_PAGE }, () => {
-                    setArchiveProject(projectId)
-                    setSettingsPage(ARCHIVED_TASKS_PAGE)
-                  })
-                }
-                onProjectGone={(parent) => {
-                  // deleted or archived — from out here they are the same event: a
-                  // project the scope may have been pointing at is no longer one of
-                  // the ones this login can open. Both sentinels survive it — each is
-                  // defined by what's left, not by the row that went away.
-                  if (P.isWideScope(scope)) return
-                  const fb = parent && P.project(parent) ? parent : P.visibleProjects()[0]?.id
-                  if (fb) setScope(fb)
-                }}
-              />
-            </UnsentScopeContext.Provider>
+                  }}
+                  onNewProject={() => openNewProject({ kind: 'program' })}
+                  onNewSubProject={(parent) => openNewProject({ parent })}
+                  archivedTasksProject={archiveProject || scopeMeta}
+                  onOpenArchivedTasks={(projectId) =>
+                    move({ settingsPage: ARCHIVED_TASKS_PAGE }, () => {
+                      setArchiveProject(projectId)
+                      setSettingsPage(ARCHIVED_TASKS_PAGE)
+                    })
+                  }
+                  onProjectGone={(parent) => {
+                    // deleted or archived — from out here they are the same event: a
+                    // project the scope may have been pointing at is no longer one of
+                    // the ones this login can open. Both sentinels survive it — each is
+                    // defined by what's left, not by the row that went away.
+                    if (P.isWideScope(scope)) return
+                    const fb = parent && P.project(parent) ? parent : P.visibleProjects()[0]?.id
+                    if (fb) setScope(fb)
+                  }}
+                />
+              </UnsentScopeContext.Provider>
+            )}
           </Suspense>
         </ViewBoundary>
         {dialogs}
@@ -1786,7 +1794,7 @@ function App() {
           )
         }
       >
-        <main className="[flex:1] [display:flex] [flex-direction:column] [overflow:hidden] [min-width:0]">
+        <main className="[flex:1] [display:flex] [flex-direction:column] [overflow:hidden] [min-width:0] [position:relative]">
           <BillingNotice
             key={P.org.id}
             orgId={P.org.id}
@@ -1795,6 +1803,7 @@ function App() {
             onBilling={() => actions.openSettings('org-billing')}
             onExport={() => actions.openSettings('org-general')}
           />
+          <TasksLoadingBar />
           <ViewBoundary
             key={sync ? 'sync' : inboxOpen ? 'inbox' : projectsOpen ? 'projects' : view}
             onBack={() => {
@@ -1831,15 +1840,19 @@ function App() {
                     data-workspace-view="sync"
                     className="animate-in fade-in slide-in-from-bottom-1 [flex:1] [display:flex] [flex-direction:column] [overflow:hidden]"
                   >
-                    <TeamSync
-                      place={sync}
-                      onPlace={placeSync}
-                      onCorrect={correctSync}
-                      onClose={closeSync}
-                      onOpenTask={openTask}
-                      onShowTask={showTaskOn}
-                      onShowPerson={showPersonOn}
-                    />
+                    {tasksLoading ? (
+                      <TasksLoadingView what="Team sync" />
+                    ) : (
+                      <TeamSync
+                        place={sync}
+                        onPlace={placeSync}
+                        onCorrect={correctSync}
+                        onClose={closeSync}
+                        onOpenTask={openTask}
+                        onShowTask={showTaskOn}
+                        onShowPerson={showPersonOn}
+                      />
+                    )}
                   </div>
                 ) : (
                   scopeInfo && (
@@ -1848,7 +1861,14 @@ function App() {
                       data-workspace-view={view}
                       className="animate-in fade-in slide-in-from-bottom-1 [flex:1] [display:flex] [flex-direction:column] [overflow:hidden]"
                     >
-                      {view === 'overview' && <Overview info={scopeInfo} actions={actions} />}
+                      {view !== 'kanban' && tasksLoading ? (
+                        <TasksLoadingView
+                          what={view === 'roadmap' ? 'The roadmap' : 'The overview'}
+                        />
+                      ) : null}
+                      {view === 'overview' && !tasksLoading && (
+                        <Overview info={scopeInfo} actions={actions} />
+                      )}
                       {view === 'kanban' &&
                         (mobile ? (
                           <MobileTaskList
@@ -1885,7 +1905,7 @@ function App() {
                 above ViewFilters.
                 `filters` (not effFilters) on purpose — the controls edit the raw
                 object for the same reason TopBar does. */}
-                      {view === 'roadmap' && (
+                      {view === 'roadmap' && !tasksLoading && (
                         <Roadmap
                           info={scopeInfo}
                           filters={roadmapFilters}

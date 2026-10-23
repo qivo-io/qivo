@@ -11,11 +11,28 @@
    and nothing a transition brought is dropped, since the next complete one
    holds it.
 
+   One socket runs one update at a time, and every part subscribed before
+   an update starts arrives with it, so a workspace subscribed all at once
+   shows nothing until all of it arrived. A workspace of more than
+   STAGES.most parts therefore loads in stages: each organization's
+   catalog, inbox, people and projects and the first STAGES.first task
+   windows, then STAGES.batch more task windows each time every part
+   watched so far answered. Until its first complete transition, such a
+   workspace is partial at the end of each stage, once every part watched
+   answered: the store shows the tasks of the windows that arrived, and
+   every person and project, and knows the share of tasks still to come.
+   Convex sends the first subscription of a stage in a transition of its
+   own, so reporting per stage rather than per transition halves the
+   repaints. A partial transition holds no write for certain, since the window
+   a write changed may not have arrived. A workspace of fewer parts
+   subscribes them at once and is never partial.
+
    - A window that answers `split` keeps serving while its two halves load,
      and gives way to them in the first complete transition that holds both.
    - A window that answers `overflow` has no rows to show, so the workspace
      waits for its pieces: as many as the answer names, else its halves
-     (convex/lib/idWindows.ts piecesAfter).
+     (convex/lib/idWindows.ts piecesAfter). A partial workspace leaves its
+     tasks out until they arrive.
    - A new seat's organization waits for its parts. A seat that
      goes leaves with the root part's answer, quietly.
    - After the socket reconnects, Convex sends every result again, and none
@@ -40,6 +57,7 @@ import { ConvexError, type Value } from 'convex/values'
 import { api } from '../../convex/_generated/api'
 import {
   type IdWindow,
+  idShare,
   idWindows,
   piecesAfter,
   WINDOW_ROWS,
@@ -63,6 +81,12 @@ import type { LiveQueries } from '../lib/liveQueries'
     while online before it fails. Tests lower it. */
 export const STALL = { ms: 60_000 }
 
+/** How a large workspace loads in stages: with more than `most` parts it
+    subscribes every part but its task windows, and `first` of those, then
+    `batch` more each time every part watched so far answered. Probes
+    change them. */
+export const STAGES = { most: 32, first: 16, batch: 64 }
+
 /** What the store hears after each transition, and when the workspace
     fails outside one. */
 export type PartsReport = {
@@ -75,6 +99,15 @@ export type PartsReport = {
         value: Workspace | null
         /** whether any part changed since the last complete report */
         changed: boolean
+      }
+    | {
+        /** a large workspace before its first complete transition, with
+            every part but some task windows current */
+        state: 'partial'
+        value: Workspace
+        changed: boolean
+        /** the share of task windows that arrived, from 0 to 1 */
+        loaded: number
       }
     | { state: 'held' }
     | { state: 'failed'; error: unknown }
@@ -114,6 +147,8 @@ type Org = {
   inbox: Slot
   /** the windows of each kind */
   kinds: Record<Kind, Node[]>
+  /** the task windows a staged load has not watched yet, in order */
+  later: IdWindow[]
 }
 
 /* An answer with rows of a part. */
@@ -140,6 +175,10 @@ export function createLiveParts(
   let side: Slot | null = null
   let lastAt = 0
   let stallTimer: ReturnType<typeof setTimeout> | null = null
+  // whether the first organizations load in stages, and whether a complete
+  // report went out, after which the workspace is never partial again
+  let staged = false
+  let completed = false
 
   const watch = (ref: FunctionReference<'query'>, args: Record<string, Value>): Slot => {
     const { token, stop } = live.watch(ref, args)
@@ -172,24 +211,36 @@ export function createLiveParts(
       orgs.delete(id)
       moved = true
     }
-    for (const row of answer === null ? [] : answer.orgs) {
-      if (orgs.has(row.id)) continue
-      // as many windows as the counters say the organization fills
-      const count = (rows: number, kind: keyof typeof WINDOW_ROWS) =>
-        idWindows(windowCount(rows, WINDOW_ROWS[kind]))
+    // as many windows as the counters say each new organization fills
+    const count = (rows: number, kind: keyof typeof WINDOW_ROWS) =>
+      idWindows(windowCount(rows, WINDOW_ROWS[kind]))
+    const added = (answer === null ? [] : answer.orgs)
+      .filter((row) => !orgs.has(row.id))
+      .map((row) => ({
+        row,
+        tasks: count(row.next_issue_num, 'tasks'),
+        projects: count(row.next_project_num, 'projects'),
+      }))
+    // the catalog, the inbox and one people window besides the windows
+    const parts = added.reduce((n, o) => n + 3 + o.tasks.length + o.projects.length, 0)
+    const stage = parts > STAGES.most
+    if (stage && !completed) staged = true
+    for (const { row, tasks, projects } of added) {
       const windows = (kind: Kind, list: IdWindow[]) => list.map((w) => node(row.id, kind, w))
       orgs.set(row.id, {
         id: row.id,
         catalog: watch(api.workspace.catalog, { org_id: row.id }),
         inbox: watch(api.workspace.inbox, { org_id: row.id }),
         kinds: {
-          tasks: windows('tasks', count(row.next_issue_num, 'tasks')),
+          tasks: windows('tasks', stage ? [] : tasks),
           people: windows('people', idWindows(1)),
-          projects: windows('projects', count(row.next_project_num, 'projects')),
+          projects: windows('projects', projects),
         },
+        later: stage ? tasks : [],
       })
       moved = true
     }
+    if (stage) watchLater(STAGES.first)
     // a window that asked to be cut gets its pieces
     for (const org of orgs.values())
       for (const kind of KINDS)
@@ -215,6 +266,23 @@ export function createLiveParts(
     yield org.catalog
     yield org.inbox
     for (const kind of KINDS) for (const n of nodesOf(org.kinds[kind])) yield n.slot
+  }
+
+  /** Watches up to `n` of the task windows a staged load holds back, the
+      first organization's first. */
+  function watchLater(n: number) {
+    for (const org of orgs.values())
+      while (n > 0 && org.later.length > 0) {
+        const w = org.later.shift() as IdWindow
+        org.kinds.tasks.push(node(org.id, 'tasks', w))
+        n--
+      }
+  }
+
+  /** Whether a part watched has no answer since the socket last connected. */
+  function waiting(): boolean {
+    for (const org of orgs.values()) for (const slot of orgSlots(org)) if (!slot.fresh) return true
+    return false
   }
 
   /** The rows of the part `slot` answered, or null without a current
@@ -287,37 +355,44 @@ export function createLiveParts(
     return undefined
   }
 
-  /** The workspace when every part it needs is current, else null. */
-  function complete(): { value: Workspace | null } | null {
+  /** The workspace when every part it needs is current, else null. With
+      `partial`, the workspace when every part but some task windows is,
+      from the task windows that are, with the share of task windows they
+      cover; null unless at least one is. */
+  function join(partial: boolean): { value: Workspace | null; loaded: number } | null {
     if (!root?.fresh || root.error !== undefined) return null
     const answer = root.value as RootAnswer | undefined
     if (answer === undefined) return null
-    if (answer === null) return { value: null }
+    if (answer === null) return partial ? null : { value: null, loaded: 1 }
     const parts: OrgParts[] = []
+    let loaded = 0
     for (const { id } of answer.orgs) {
       const org = orgs.get(id)
       if (!org) return null
-      /** Every window of `kind` in order, or null while one is not ready. */
-      const windowsOf = <P>(kind: Kind): P[] | null => {
-        const list = org.kinds[kind]
-        if (!list) return null
+      /** Every window of `kind` in order, or null while one is not ready.
+          With `some`, the ready ones. */
+      const windowsOf = <P>(kind: Kind, some = false): P[] | null => {
         const rows: P[] = []
-        for (const n of list) {
+        for (const n of org.kinds[kind]) {
           const got = rowsOf<P>(n)
-          if (got === null) return null
+          if (got === null && !some) return null
+          if (got === null) continue
           rows.push(...got)
+          if (kind === 'tasks') loaded += idShare(n) / answer.orgs.length
         }
         return rows
       }
+      if (!partial && org.later.length > 0) return null
       const catalog = rowsOfSlot<CatalogPart>(org.catalog)
       const inbox = rowsOfSlot<InboxPart>(org.inbox)
-      const tasks = windowsOf<TasksPart>('tasks')
+      const tasks = windowsOf<TasksPart>('tasks', partial)
       const people = windowsOf<PeoplePart>('people')
       const projects = windowsOf<ProjectsPart>('projects')
       if (!catalog || !inbox || !tasks || !people || !projects) return null
       parts.push({ catalog, inbox, tasks, people, projects })
     }
-    return { value: joinParts(answer, parts, new Date(lastAt).toISOString()) }
+    if (partial && loaded === 0) return null
+    return { value: joinParts(answer, parts, new Date(lastAt).toISOString()), loaded }
   }
 
   /** Tells the store the workspace's state after a transition, `news` the
@@ -327,24 +402,35 @@ export function createLiveParts(
   function settle(transition?: { news?: PartsReport['side']; progress?: boolean }) {
     if (stopped) return
     if (reconcile()) dirty = true
+    // every part watched so far answered: the next stage starts, and a
+    // partial workspace shows, once per stage rather than per transition
+    const answered = transition !== undefined && !waiting()
+    if (answered) watchLater(STAGES.batch)
     const error = failure()
     let workspace: PartsReport['workspace']
     if (error !== undefined) workspace = { state: 'failed', error }
     else {
-      const done = transition ? complete() : null
-      if (done === null) workspace = { state: 'held' }
-      else {
+      const done = transition ? join(false) : null
+      const some = answered && !done && staged && !completed ? join(true) : null
+      if (done) {
         workspace = { state: 'complete', value: done.value, changed: dirty }
         dirty = false
+        completed = true
         for (const org of orgs.values())
           for (const kind of KINDS) {
             const list = org.kinds[kind]
             // the pieces hold the rows the window held, so nothing changes
-            if (list?.some((n) => n.pieces)) org.kinds[kind] = adoptPieces(list)
+            if (list.some((n) => n.pieces)) org.kinds[kind] = adoptPieces(list)
           }
-      }
+      } else if (some?.value) {
+        workspace = { state: 'partial', value: some.value, changed: dirty, loaded: some.loaded }
+        dirty = false
+      } else workspace = { state: 'held' }
     }
-    watchStall(workspace.state === 'held', transition?.progress === true)
+    watchStall(
+      workspace.state === 'held' || workspace.state === 'partial',
+      transition?.progress === true,
+    )
     if (transition || workspace.state === 'failed')
       report({ at: lastAt, workspace, ...(transition?.news ? { side: transition.news } : {}) })
   }
