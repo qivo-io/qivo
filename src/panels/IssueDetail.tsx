@@ -53,7 +53,6 @@ import { closeOrAsk, questionOpen } from '../lib/discardQuestion'
 import { limitSentence, overLimit } from '../lib/fieldLimits'
 import { roomBeside, useFloatInsets } from '../lib/floatStack'
 import { lastInputWasPointer, restoreFocus } from '../lib/focusVisibility'
-import { OUT_OF_USE } from '../lib/viewHidden'
 import { lazyFromModule } from '../lib/lazyModule'
 import {
   type UnsentScope,
@@ -78,6 +77,7 @@ import { useUpdateBlocker } from '../lib/updateSafety'
 import { useBottomSnap } from '../lib/useBottomSnap'
 import { useConfirmArm } from '../lib/useConfirmArm'
 import { useMobile } from '../lib/useMobile'
+import { OUT_OF_USE } from '../lib/viewHidden'
 import { loadDescEditor } from '../lib/workspaceChunks'
 import '../styles/mobile-issue.css'
 import {
