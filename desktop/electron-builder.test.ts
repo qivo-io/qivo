@@ -163,18 +163,31 @@ describe('desktop builds through electron-builder', () => {
   const linuxPackages = Platform.LINUX.createTarget(['deb', 'rpm', 'AppImage'], Arch.x64)
 
   it('builds a Linux package without a feed', async () => {
-    const result = await run(undefined, () =>
-      build({
-        projectDir: project,
-        config: configuration(),
-        targets: Platform.LINUX.createTarget('zip', Arch.x64),
-        publish: 'never',
-      }),
-    )
-    expect(result).toEqual({
-      error: undefined,
-      files: expect.arrayContaining(['Qivo-0.1.0-x64.zip']),
-    })
+    // A stand-in for the 7-Zip that electron-builder would otherwise download.
+    // It writes an empty archive at the path ending in .zip.
+    write('7za', '#!/bin/sh\nfor arg; do case "$arg" in *.zip) : > "$arg" ;; esac; done\n')
+    fs.chmodSync(path.join(project, '7za'), 0o755)
+    const previous7za = process.env.ELECTRON_BUILDER_7ZIP_PATH
+    process.env.ELECTRON_BUILDER_7ZIP_PATH = path.join(project, '7za')
+    try {
+      const result = await run(undefined, () =>
+        build({
+          projectDir: project,
+          config: configuration(),
+          targets: Platform.LINUX.createTarget('zip', Arch.x64),
+          publish: 'never',
+        }),
+      )
+      // electron-builder names the package after the root package version
+      const { version } = require('../package.json')
+      expect(result).toEqual({
+        error: undefined,
+        files: expect.arrayContaining([`Qivo-${version}-x64.zip`]),
+      })
+    } finally {
+      if (previous7za === undefined) delete process.env.ELECTRON_BUILDER_7ZIP_PATH
+      else process.env.ELECTRON_BUILDER_7ZIP_PATH = previous7za
+    }
   }, 60_000)
 
   it('refuses a Linux build with a feed before it writes a package', async () => {
