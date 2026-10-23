@@ -64,8 +64,10 @@ To see the website, run `npm run build` and then `npm run preview`.
 npm run verify:local
 ```
 
-This sequential gate checks formatting, lint, UI conventions, frontend/backend/
-desktop types, production build and hermetic tests with at most two workers.
+This sequential gate checks formatting, lint, UI conventions, that every
+TypeScript file is in a typecheck, the types of the frontend, backend, desktop
+app, tests and tooling, production build and hermetic tests with at most two
+workers.
 It needs no deployment credentials and does not reset any hosted data.
 Do not run full gates concurrently across agents. `npm run test:contract`, demo
 reset/seed commands and browser smoke tools can write to a backend; they are

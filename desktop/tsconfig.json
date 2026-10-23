@@ -1,16 +1,17 @@
 {
+  /* Typechecks every desktop file, the tests and electron-builder.cjs
+     included. tsconfig.build.json compiles the app from main.ts and
+     preload.cts. */
   "compilerOptions": {
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "outDir": "dist",
-    "rootDir": ".",
     "strict": true,
+    "noEmit": true,
+    "allowJs": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "sourceMap": true,
-    "declaration": false
+    "forceConsistentCasingInFileNames": true
   },
-  "include": ["main.ts", "preload.cts"]
+  "include": ["*.ts", "*.cts", "electron-builder.cjs"]
 }

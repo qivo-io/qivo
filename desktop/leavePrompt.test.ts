@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createLeavePrompt, LEAVE_PROMPT } from './leavePrompt'
+import { createLeavePrompt, LEAVE_PROMPT } from './leavePrompt.js'
 
 describe('desktop leave prompt', () => {
   it('leaves only when the person chooses Leave', () => {

@@ -54,6 +54,9 @@ jobs:
       - name: UI component and styling conventions
         run: npm run check:ui
 
+      - name: Every TypeScript file in a typecheck
+        run: npm run check:typecheck
+
       - name: Typecheck frontend
         run: npm run typecheck
 
@@ -66,6 +69,9 @@ jobs:
 
       - name: Typecheck desktop (strict)
         run: npm run typecheck:desktop
+
+      - name: Typecheck tests and tooling (Node, strict)
+        run: npm run typecheck:node
 
       - name: Build
         run: npm run build

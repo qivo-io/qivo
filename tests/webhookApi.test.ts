@@ -125,7 +125,7 @@ async function fixture() {
       status: response.status,
       body: JSON.parse(await response.text()) as {
         result?: { events?: { name: string }[]; id?: string; refreshBefore?: string | null }
-        error?: { code: number; data?: Record<string, unknown> }
+        error?: { code: number; message: string; data?: Record<string, unknown> }
       },
     }
   }

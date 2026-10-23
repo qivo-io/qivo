@@ -28,10 +28,12 @@ printf 'quality gate\n'
 run 'biome ci'          npx biome ci . --diagnostic-level=error
 run 'lint'              npm run --silent lint
 run 'UI conventions'    npm run --silent check:ui
+run 'typecheck coverage' npm run --silent check:typecheck
 run 'typecheck'         npm run --silent typecheck
 run 'typecheck:strict'  npm run --silent typecheck:strict
 run 'typecheck:convex'  npm run --silent typecheck:convex
 run 'typecheck:desktop' npm run --silent typecheck:desktop
+run 'typecheck:node'    npm run --silent typecheck:node
 run 'build'             npm run --silent build
 # Match verify:local's worker cap so fixture-heavy tests have CPU headroom.
 run 'test'              npm test --silent -- --maxWorkers=2

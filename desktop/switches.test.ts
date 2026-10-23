@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { refusedSwitches, refusedSwitchesIn } from './switches'
+import { refusedSwitches, refusedSwitchesIn } from './switches.js'
 
 function commandLine(...switches: string[]) {
   return { hasSwitch: (name: string) => switches.includes(name) }

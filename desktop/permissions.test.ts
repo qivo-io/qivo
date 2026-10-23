@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appPermissions, restrictPermissions } from './permissions'
+import { appPermissions, restrictPermissions } from './permissions.js'
 
 type Session = Parameters<typeof restrictPermissions>[0]
 type RequestHandler = NonNullable<Parameters<Session['setPermissionRequestHandler']>[0]>
@@ -151,8 +151,6 @@ describe('desktop permissions', () => {
   it('refuses every device', () => {
     const { device } = install()
     for (const deviceType of ['hid', 'serial', 'usb'] as const)
-      expect(
-        device({ deviceType, origin: APP, url: `${APP}/app`, device: {} as Electron.HIDDevice }),
-      ).toBe(false)
+      expect(device({ deviceType, origin: APP, device: {} as Electron.HIDDevice })).toBe(false)
   })
 })

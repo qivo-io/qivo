@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { builtInUpdateConfig, useBuiltInFeed } from './updates'
+import { builtInUpdateConfig, useBuiltInFeed } from './updates.js'
 
 let resources: string
 
