@@ -279,10 +279,11 @@ export function liveOver(client: Client): LiveQueries & {
       if (orgId === null) fire(refresh())
     },
     /** Keeps every task window that starts at `from` from answering, as a
-        window a staged load has not reached, and with null lets it answer. */
+        window a staged load has not reached, and lets the one held before
+        answer; null holds none. */
     holdWindow(from) {
       heldWindow = from
-      if (from === null) fire(refresh())
+      fire(refresh())
     },
     batch(step) {
       batching = new Set()

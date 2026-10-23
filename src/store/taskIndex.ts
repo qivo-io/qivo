@@ -799,6 +799,24 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
       return moved
     },
 
+    /** Gives each task in `uuids` a new view model with the same data, so
+        the views that compare tasks by identity paint it again: one whose
+        delay shows only once a large workspace has loaded (store/planner.ts
+        delayOf). */
+    renew(uuids: Iterable<string>) {
+      let renewed = false
+      for (const uuid of uuids) {
+        const it = byUuid.get(uuid)
+        if (!it) continue
+        byUuid.set(uuid, { ...it })
+        renewed = true
+      }
+      if (!renewed) return
+      issues = issues.map((it) => byUuid.get(it.uuid) as IssueVM)
+      issueById = {}
+      for (const it of issues) issueById[it.id] = it
+    },
+
     /** Forgets every task (a disposed demo). */
     clear() {
       for (const map of [

@@ -267,17 +267,44 @@ export function parsePath(pathname: string): Route | null {
   return parseSegments(seg.slice(1), org, orgUnknown)
 }
 
-/** Whether `pathname` or the legacy `hash` names a task: only a complete
-    workspace can tell such an address apart from one to a task that is gone,
-    so the first load waits for every task (store/liveParts.ts). */
-export function addressesTask(pathname: string, hash: string): boolean {
-  const app = pathname.split('?')[0].split('#')[0]
-  const segments = (s: string) => s.split('/').filter(Boolean)
-  return (
-    ((app === APP_PREFIX || app.startsWith(`${APP_PREFIX}/`)) && segments(app).includes('tasks')) ||
-    (hash.startsWith('#/') && segments(hash.slice(2)).includes('tasks'))
-  )
+/** The task reference the address names, decoded as the parsers read it:
+    the path's, else the legacy `hash`'s, as parsePath and parseHash take
+    them in that order. Undefined when it names no task. Only a complete
+    workspace can tell such an address apart from one to a task that is
+    gone, so the first load waits for every task, and Back or Forward to
+    one while tasks load waits for its task (store/liveParts.ts). */
+export function taskSegmentOf(pathname: string, hash: string): string | undefined {
+  const decoded = (s: string) =>
+    s
+      .split('/')
+      .filter(Boolean)
+      .map((part) => {
+        try {
+          return decodeURIComponent(part)
+        } catch {
+          return part
+        }
+      })
+  const path = (pathname || '').split('?')[0].split('#')[0]
+  const app =
+    path === APP_PREFIX || path.startsWith(`${APP_PREFIX}/`)
+      ? decoded(path.slice(APP_PREFIX.length))
+      : []
+  // past the org segment, as parsePath reads it; a path that names
+  // nothing past it leaves the hash's
+  let seg = app.slice(1)
+  if (!seg.length) {
+    const h = (hash || '').replace(/^#/, '')
+    seg = h[0] === '/' ? decoded(h.slice(1)) : []
+    if (seg[0] === 'o') seg = seg.slice(2)
+  }
+  const at = seg.indexOf('tasks')
+  return at === -1 ? undefined : seg[at + 1]
 }
+
+/** Whether the address names a task (taskSegmentOf). */
+export const addressesTask = (pathname: string, hash: string) =>
+  taskSegmentOf(pathname, hash) !== undefined
 
 /** Read-only hash navigation using the same task segments as path routes.
     Nothing emits a hash any more. */

@@ -1661,9 +1661,10 @@ const SERVER_STAMPS = new Set([
   'archived_at',
   'sync_at',
 ])
-/* Snapshot fields that only feed a row section's set (the base's flags,
-   store/workspaceBase.ts), where false means the same as absent. */
-const SET_FLAGS = new Set(['has_hidden_subtasks', 'has_hidden_parent'])
+/* Snapshot fields that only feed a set of tasks (the base's flags,
+   store/workspaceBase.ts, and subtaskParentsNow), where false means the
+   same as absent. */
+const SET_FLAGS = new Set(['has_subtasks', 'has_hidden_subtasks', 'has_hidden_parent'])
 
 /** Every row section and inbox counter in one canonical form: map entries,
     set members and array items sorted, object keys sorted and undefined
@@ -3296,12 +3297,23 @@ function rebuild(now = new Date(), full = false) {
     gridBefore !== TIMELINE_START.getTime() ||
     todayBefore !== TODAY_ISO
   lastIdentity = identity
-  const moved = whole ? null : tasks.update(sources, taskChangesOf(dirty))
+  const changes = taskChangesOf(dirty)
+  // the tasks taken for groups with subtasks to come change while loading
+  if (sources.hiddenSubtaskParents !== lastSubtaskParents) changes.flags = true
+  lastSubtaskParents = sources.hiddenSubtaskParents
+  const moved = whole ? null : tasks.update(sources, changes)
   if (moved) lastMoves = moved
   else {
     lastMoves = tasks.full(sources)
     committedByOwner.clear()
   }
+  // the delays a staged load held back (delayOf) show now: the tasks that
+  // show one paint again
+  if (rebuiltLoading && stillLoading === null) {
+    const shown = [...tasks.delays].filter(([, d]) => DELAY_COLORS[d.status] !== null)
+    tasks.renew(shown.map(([uuid]) => uuid))
+  }
+  rebuiltLoading = stillLoading !== null
   P.issues = tasks.issues()
   P.issueById = tasks.issueById()
   if (STRICT_LAYERS && !unchecked) checkTasks(sources)
@@ -3436,7 +3448,7 @@ function taskSources(): TaskSources {
     orgLoad: rows.orgLoad,
     projects: rows.projects,
     profiles: rows.profiles,
-    hiddenSubtaskParents: rows.hiddenSubtaskParents,
+    hiddenSubtaskParents: subtaskParentsNow(),
     hiddenParentTasks: rows.hiddenParentTasks,
     homeOrg: HOME_ORG,
     mine: myProfileSet,
@@ -3444,6 +3456,25 @@ function taskSources(): TaskSources {
     capacity: new Map(PLANNER.users.map((u) => [u.id, plannableHoursOf(u)])),
     defaultCapacity: DEFAULT_PLANNABLE_HOURS,
   }
+}
+
+/* Whether the last rebuild was while a large workspace still loaded. */
+let rebuiltLoading = false
+/* The Set the last rebuild took for hiddenSubtaskParents. */
+let lastSubtaskParents: ReadonlySet<string> = new Set()
+
+/** The tasks with subtasks this person is not shown. While a large
+    workspace loads (stillLoading), they include every task the server
+    says has subtasks (has_subtasks), as theirs may be still to come: a
+    parent never shows as a leaf, nor a group as done or with known
+    progress, before every task arrived. A Set is kept while it holds the
+    same tasks. */
+function subtaskParentsNow(): ReadonlySet<string> {
+  const hidden = rows.hiddenSubtaskParents
+  if (stillLoading === null) return hidden
+  const next = new Set(hidden)
+  for (const [uuid, row] of rows.issues) if (row.has_subtasks) next.add(uuid)
+  return sameData(next, lastSubtaskParents) ? lastSubtaskParents : next
 }
 
 /** What the rows say changed since the last rebuild, as the task index
@@ -5427,12 +5458,10 @@ export const PLANNER = {
   },
   /* progress — computed from descendant leaves, never group statuses. A
      group's is unknown while tasks still load, since subtasks may be still
-     to come. */
+     to come (subtaskParentsNow). */
   progressOf: (x: IssueVM | string) => {
     const it = typeof x === 'string' ? PLANNER.issueById[x] : x
-    if (!it) return { pct: 0, done: 0, total: 0, unknown: false }
-    const progress = groupProgress(it, PLANNER.issueById)
-    return stillLoading !== null && isIssueGroup(it) ? { ...progress, unknown: true } : progress
+    return it ? groupProgress(it, PLANNER.issueById) : { pct: 0, done: 0, total: 0, unknown: false }
   },
 
   /* remaining is own hours for a leaf. For a group it is the sum over the

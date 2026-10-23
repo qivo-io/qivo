@@ -284,7 +284,7 @@ describe('reads a window cannot bound by its rows', () => {
   it('reads subtasks a few at a time without missing one', async () => {
     const t = newT()
     const f = await withOrg(t)
-    const [p1, p2, p3] = await plantTasks(t, f, 3)
+    const [p1, p2, p3, leaf] = await plantTasks(t, f, 4)
     const kid = (parent: Doc<'issues'>, project: Doc<'projects'>) =>
       plantIssue(t, { org_id: f.org.id, project_id: project.id, parent_id: parent.id })
     // the subtask the guest is not shown comes last of its parent's
@@ -299,6 +299,10 @@ describe('reads a window cannot bound by its rows', () => {
       const hiddenKids = (task: Doc<'issues'>) =>
         snap?.issues.find((i) => i.id === task.id)?.has_hidden_subtasks
       expect([p1, p2, p3].map(hiddenKids)).toEqual([true, false, true])
+      // every parent says it is one, whichever window its subtasks are in
+      const parent = (task: Doc<'issues'>) =>
+        snap?.issues.find((i) => i.id === task.id)?.has_subtasks
+      expect([p1, p2, p3, leaf].map(parent)).toEqual([true, true, true, false])
     }
   })
 

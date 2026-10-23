@@ -50,6 +50,7 @@ import {
   type Route,
   scopeForIssue,
   syncPlaceOf,
+  taskSegmentOf,
   type UiState,
 } from './lib/router'
 import { type Toast, toastLook, withToast } from './lib/toasts'
@@ -881,6 +882,12 @@ function App() {
   const settingsReturn = useRef(NO_RETURN)
   const syncReturn = useRef(NO_RETURN)
   const replaceNextHistory = useRef(false)
+  /* The address Back or Forward reached while tasks still load, when it
+     names a task still to arrive (lib/router taskSegmentOf). The window
+     holds its reference and says the task is loading, the address stays,
+     and the task opens once it arrives, or the window closes once every
+     task has loaded without it. */
+  const pendingTask = useRef<{ pathname: string; hash: string; ref: string } | null>(null)
   // the project an "Archived tasks" entry asked for; null = derive from the
   // current scope (Settings' own Archived tasks item, deep links)
   const [archiveProject, setArchiveProject] = useState<string | null>(null)
@@ -949,6 +956,8 @@ function App() {
     // the address is not the page's while it steps back over a refused Back
     // or Forward, and a write now would move the entry it steps back to
     if (refusal.stepping()) return
+    // a task Back or Forward reached keeps its address until it arrives
+    if (pendingTask.current && pendingTask.current.ref === openIssue) return
     const p = buildPath({
       scope,
       view,
@@ -980,6 +989,21 @@ function App() {
     else history.pushState({ qivoPrevious: location.pathname }, '', p)
     replaceNextHistory.current = false
   }, [scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync, rev])
+  // the task a held Back or Forward named, once it arrived or every task did
+  useEffect(() => {
+    const pending = pendingTask.current
+    if (!pending) return
+    if (openIssue !== pending.ref) {
+      pendingTask.current = null
+      return
+    }
+    const issue = (parsePath(pending.pathname) || parseHash(pending.hash))?.issue
+    if (!issue && P.stillLoading() !== null) return
+    pendingTask.current = null
+    // the address named this task all along
+    replaceNextHistory.current = true
+    setOpenIssue(issue || null)
+  }, [openIssue, rev])
   /* Remember what each address opened, so the gate can tell a MOVED address
      from one this login has simply never followed. Deliberately after the
      url-sync effect above and skipped entirely while the gate is up: accepting
@@ -1017,6 +1041,11 @@ function App() {
          the router's own absent-scope-means-project-form reading.
          A Team sync address names its own scope, so the one underneath stays
          put, task or not. */
+      // a task still to arrive while tasks load (pendingTask)
+      const held =
+        !r.issue && P.stillLoading() !== null
+          ? taskSegmentOf(location.pathname, location.hash)
+          : undefined
       const preferred = r.view && !r.scope && P.isWideScope(was.scope) ? null : was.scope
       const sc = r.sync
         ? undefined
@@ -1032,10 +1061,10 @@ function App() {
         // reset it either
         view: r.view
           ? r.view
-          : !r.issue && !r.inbox && !r.settings && !r.projects && !r.sync
+          : !(r.issue || held) && !r.inbox && !r.settings && !r.projects && !r.sync
             ? 'overview'
             : was.view,
-        openIssue: r.issue || null,
+        openIssue: r.issue || held || null,
         settingsPage: r.settings || null,
         inboxOpen: !!r.inbox,
         projectsOpen: !!r.projects,
@@ -1060,6 +1089,9 @@ function App() {
          Exit or Done cannot restore a page from another visit. */
       if (!r.settings) settingsReturn.current = NO_RETURN
       if (!r.sync) syncReturn.current = NO_RETURN
+      pendingTask.current = held
+        ? { pathname: location.pathname, hash: location.hash, ref: held }
+        : null
       setScope(next.scope)
       setView(next.view)
       setOpenIssue(next.openIssue)
@@ -1651,13 +1683,32 @@ function App() {
       const p = P.project(scope)
       return p ? (p.type === 'meta' ? p.id : (p.parent ?? null)) : null
     })()
+    /** Leaves Settings for the page that opened it. */
+    const exitSettings = () => {
+      const back = settingsReturn.current
+      const to = {
+        settingsPage: null,
+        inboxOpen: back.inbox,
+        projectsOpen: back.projects,
+        sync: back.sync,
+      }
+      move(to, () => {
+        settingsReturn.current = NO_RETURN
+        backOrSet(to, () => {
+          setSettingsPage(null)
+          setInboxOpen(back.inbox)
+          setProjectsOpen(back.projects)
+          setSync(back.sync)
+        })
+      })
+    }
     return (
       <>
         <ViewBoundary onBack={() => setSettingsPage(null)}>
           <Suspense fallback={<ViewLoading />}>
             {/* removals, label counts and archived tasks read every task */}
             {tasksLoading ? (
-              <TasksLoadingView what="Settings" onBack={() => setSettingsPage(null)} />
+              <TasksLoadingView what="Settings" onBack={exitSettings} />
             ) : (
               <UnsentScopeContext.Provider value={unsent.page}>
                 <SettingsScreen
@@ -1669,24 +1720,7 @@ function App() {
                       backOrSet({ settingsPage: page }, () => setSettingsPage(page)),
                     )
                   }
-                  onExit={() => {
-                    const back = settingsReturn.current
-                    const to = {
-                      settingsPage: null,
-                      inboxOpen: back.inbox,
-                      projectsOpen: back.projects,
-                      sync: back.sync,
-                    }
-                    move(to, () => {
-                      settingsReturn.current = NO_RETURN
-                      backOrSet(to, () => {
-                        setSettingsPage(null)
-                        setInboxOpen(back.inbox)
-                        setProjectsOpen(back.projects)
-                        setSync(back.sync)
-                      })
-                    })
-                  }}
+                  onExit={exitSettings}
                   onNewProject={() => openNewProject({ kind: 'program' })}
                   onNewSubProject={(parent) => openNewProject({ parent })}
                   archivedTasksProject={archiveProject || scopeMeta}

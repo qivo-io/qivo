@@ -438,6 +438,8 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
      instead and the pane says so. */
   const paneIssue = openIssue ? P.issueById[openIssue] : null
   const [deadItem, setDeadItem] = useState(null as string | null) // item id (= issue uuid)
+  // deadItem while its task may be one still to arrive (selectNow)
+  const arriving = useRef<string | null>(null)
   /* The pane is the discussion alone — no details column fits beside a 380px
      message list — so the header offers a way to the rest of it: the SAME
      window, floating, over the inbox. It holds no task of its own, which is
@@ -524,14 +526,32 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   const selectNow = (g: MessageGroupVM) => {
     queueScrollTop.current = listScrollRef.current?.scrollTop || 0
     setFrozen({ uuid: g.issueUuid, ts: firstUnreadTs(P.messages, g.issueUuid) })
+    // a task still to arrive opens once it does, and its item reads then
+    const later = !g.issueKey && P.stillLoading() !== null
     // a sleeping row is a reminder that returns unread; looking does not read it
-    if (!g.snoozed) P.markMessagesRead(g.ids)
+    if (!g.snoozed && !later) P.markMessagesRead(g.ids)
     if (g.issueKey) showTask(g.issueKey)
     else {
       openTask(null)
       setDeadItem(g.id)
+      arriving.current = later ? g.id : null
     }
   }
+  // The item picked while its task was still to arrive: the task opens
+  // once it arrives, and the item reads then, or once every task has
+  // loaded without it.
+  const deadKey = deadItem
+    ? (P.messageGroups.find((g) => g.id === deadItem)?.issueKey ?? null)
+    : null
+  const loading = P.stillLoading() !== null
+  useEffect(() => {
+    if (arriving.current !== deadItem) arriving.current = null
+    if (!deadItem || arriving.current === null || (!deadKey && loading)) return
+    arriving.current = null
+    const g = P.messageGroups.find((x) => x.id === deadItem)
+    if (g && !g.snoozed) P.markMessagesRead(g.ids)
+    if (deadKey) showTask(deadKey)
+  }, [deadItem, deadKey, loading])
   // …and only for the task it was frozen about
   const unreadTs = frozen && paneIssue && frozen.uuid === paneIssue.uuid ? frozen.ts : undefined
   const menuGroup = menu ? P.messageGroups.find((g) => g.id === menu.id) : null
@@ -816,7 +836,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
             >
               {P.stillLoading() === null
                 ? 'This task is archived or unavailable.'
-                : 'This task may be one still loading. Open the message again once every task has loaded.'}
+                : 'This task is still loading. It opens here once it arrives.'}
             </PaneNote>
           </>
         ) : (
