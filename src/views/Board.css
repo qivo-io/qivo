@@ -15,3 +15,11 @@
 .board-card [data-board-revealed] {
   box-shadow: inset 0 0 0 2px var(--primary);
 }
+
+/* The body of a lane below a large Board's first screen (Kanban): the
+   browser skips its style, layout and paint while it is offscreen, at the
+   height Kanban estimates, until it first renders; Kanban then takes the
+   attribute off. Its cards stay findable and in the accessibility tree. */
+.board-lane-body[data-lane-deferred] {
+  content-visibility: auto;
+}

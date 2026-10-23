@@ -2,9 +2,12 @@
 import { describe, expect, it } from 'vitest'
 import { createMountScheduler, type DeferredMount } from './mountScheduler'
 
+type IdleTask = (deadline: { timeRemaining: () => number }) => void
+
 /* The scheduler with its tasks, frames, clock and observer in the test's
-   hands. Frames start at once unless `frames` collects them. */
-function setup({ frames }: { frames?: (() => void)[] } = {}) {
+   hands. Frames start at once unless `frames` collects them; idle tasks
+   wait in `idle` when given, and never run otherwise. */
+function setup({ frames, idle }: { frames?: (() => void)[]; idle?: IdleTask[] } = {}) {
   const tasks: (() => void)[] = []
   let time = 0
   let report: ((entries: { target: Element; isIntersecting: boolean }[]) => void) | null = null
@@ -13,6 +16,7 @@ function setup({ frames }: { frames?: (() => void)[] } = {}) {
     frame: (callback) => (frames ? frames.push(callback) : callback()),
     now: () => time,
     flush: (work) => work(),
+    idle: idle ? (task) => idle.push(task) : null,
     observer: (receive) => {
       report = receive
       return { observe() {}, unobserve() {}, disconnect() {} }
@@ -44,6 +48,20 @@ function setup({ frames }: { frames?: (() => void)[] } = {}) {
     tasks.shift()?.()
     await settle()
   }
+  /** A block the browser skips, counting the reads of its first item. */
+  const block = () => {
+    const element = document.createElement('div')
+    element.setAttribute('data-deferred-block', '')
+    const item = document.createElement('div')
+    const reads = { count: 0 }
+    item.getBoundingClientRect = () => {
+      reads.count++
+      return new DOMRect()
+    }
+    element.append(item)
+    root.append(element)
+    return reads
+  }
   return {
     scheduler,
     root,
@@ -53,6 +71,7 @@ function setup({ frames }: { frames?: (() => void)[] } = {}) {
       time += ms
     },
     list,
+    block,
     settle,
     run,
     near: (spacer: Element, isIntersecting = true) =>
@@ -208,5 +227,80 @@ describe('createMountScheduler', () => {
     expect(s.root.hasAttribute('aria-busy')).toBe(false)
     expect(s.root.hasAttribute('data-board-mount')).toBe(false)
     expect(pane.getAttribute('data-board-mount')).toBe('pending')
+  })
+
+  it('lays out each skipped block once while idle, after nothing waits', async () => {
+    const idle: IdleTask[] = []
+    const s = setup({ idle })
+    s.scheduler.setRoot(s.root)
+    const first = s.block()
+    const second = s.block()
+    s.list('a', 20)
+    await s.settle()
+    // nothing is laid out ahead while a list waits
+    expect(idle).toHaveLength(0)
+    while (s.tasks.length) await s.run()
+    expect(idle).toHaveLength(1)
+    // one block fits the first idle period, the next one the rest
+    let left = 3
+    idle.shift()?.({ timeRemaining: () => left-- })
+    expect([first.count, second.count]).toEqual([1, 0])
+    expect(idle).toHaveLength(1)
+    idle.shift()?.({ timeRemaining: () => 10 })
+    expect([first.count, second.count]).toEqual([1, 1])
+    expect(idle).toHaveLength(0)
+    // a render that mounted nothing starts no pass
+    s.scheduler.changed()
+    await s.settle()
+    expect(idle).toHaveLength(0)
+    // a list that mounts more starts one, which reads the new block alone
+    const third = s.block()
+    s.list('b', 4, 4)
+    await s.settle()
+    idle.shift()?.({ timeRemaining: () => 10 })
+    expect([first.count, second.count, third.count]).toEqual([1, 1, 1])
+  })
+
+  it('stops a pass while a list waits to mount', async () => {
+    const idle: IdleTask[] = []
+    const s = setup({ idle })
+    s.scheduler.setRoot(s.root)
+    const reads = s.block()
+    s.list('a', 2, 2)
+    await s.settle()
+    expect(idle).toHaveLength(1)
+    s.list('b', 10)
+    await s.settle()
+    idle.shift()?.({ timeRemaining: () => 10 })
+    expect(reads.count).toBe(0)
+    expect(idle).toHaveLength(0)
+    // the next starts once the list has mounted
+    while (s.tasks.length) await s.run()
+    expect(idle).toHaveLength(1)
+    idle.shift()?.({ timeRemaining: () => 10 })
+    expect(reads.count).toBe(1)
+  })
+
+  it('starts another pass for blocks that mounted during one', async () => {
+    const idle: IdleTask[] = []
+    const s = setup({ idle })
+    s.scheduler.setRoot(s.root)
+    const first = s.block()
+    s.list('a', 2, 2)
+    await s.settle()
+    expect(idle).toHaveLength(1)
+    // a list mounts whole between two idle periods of the pass
+    let left = 2
+    idle.shift()?.({ timeRemaining: () => left-- })
+    expect(first.count).toBe(0)
+    const second = s.block()
+    s.list('b', 4, 4)
+    await s.settle()
+    idle.shift()?.({ timeRemaining: () => 10 })
+    expect([first.count, second.count]).toEqual([1, 0])
+    expect(idle).toHaveLength(1)
+    idle.shift()?.({ timeRemaining: () => 10 })
+    expect([first.count, second.count]).toEqual([1, 1])
+    expect(idle).toHaveLength(0)
   })
 })

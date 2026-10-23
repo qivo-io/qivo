@@ -290,17 +290,39 @@ async function pageSize(page, cdp) {
   }
 }
 
+/** The view switch's `name` button, found before a timed phase clicks it.
+    Each CSS selector a Playwright locator runs also reads every element on
+    the page, to look into shadow roots, which on a page with a large Board
+    or Roadmap takes longer than the app's own work, so a phase that found
+    the button inside its timing measured the search. */
+const viewButton = (page, name) =>
+  page
+    .locator('[data-view-switch]')
+    .getByRole('radio', { name, exact: true })
+    .elementHandle({ timeout: timeout * 10 })
+
+/** Waits inside a timed phase until an element that `selector` matches
+    shows, with the page's own querySelector on each frame, for the reason
+    viewButton gives. */
+const shows = (page, selector) =>
+  page.waitForFunction((css) => !!document.querySelector(css)?.checkVisibility(), selector, {
+    timeout: timeout * 10,
+  })
+
 /** Opens the Board from another view as `prefix`Navigation, until its first
     card shows, and `prefix`Complete, until every card is in. Returns their
     sum and the longest animation frame that started after the first card
     showed (0 when it all happened in one). */
 async function openBoard({ page, timed }, metrics, prefix) {
   await page.evaluate(() => {
-    const state = { firstCardAt: null, frames: [] }
+    const state = { firstCardAt: null, frames: [], observer: null }
     window.__boardOpen = state
-    new PerformanceObserver((list) => {
+    // held in the state, so the read below can take the frames it has
+    // not delivered yet and disconnect it
+    state.observer = new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) state.frames.push(entry)
-    }).observe({ type: 'long-animation-frame', buffered: false })
+    })
+    state.observer.observe({ type: 'long-animation-frame', buffered: false })
     const seen = new MutationObserver(() => {
       if (!document.querySelector('[data-card]')) return
       state.firstCardAt = performance.now()
@@ -309,15 +331,10 @@ async function openBoard({ page, timed }, metrics, prefix) {
     seen.observe(document.body, { childList: true, subtree: true })
   })
   phase(`${prefix}Navigation`)
+  const button = await viewButton(page, 'Board')
   const navigation = await timed(async () => {
-    await page
-      .locator('[data-view-switch]')
-      .getByRole('radio', { name: 'Board', exact: true })
-      .click({ timeout: timeout * 10 })
-    await page
-      .locator('[data-card]')
-      .first()
-      .waitFor({ timeout: timeout * 10 })
+    await button.click({ timeout: timeout * 10 })
+    await shows(page, '[data-card]')
   })
   metrics[`${prefix}Navigation`].push(navigation)
   phase(`${prefix}Complete`)
@@ -326,7 +343,10 @@ async function openBoard({ page, timed }, metrics, prefix) {
   )
   metrics[`${prefix}Complete`].push(complete)
   const longest = await page.evaluate(() => {
-    const { firstCardAt, frames } = window.__boardOpen
+    const { firstCardAt, frames, observer } = window.__boardOpen
+    // the frames it has not delivered yet
+    frames.push(...observer.takeRecords())
+    observer.disconnect()
     delete window.__boardOpen
     return Math.max(
       0,
@@ -748,17 +768,12 @@ async function runVariedSample(origin, tasks, metrics, query = '') {
   // Back to the Overview until its first screen shows, then until its
   // lists are complete.
   phase('variedOverview')
+  const overview = await viewButton(page, 'Overview')
   metrics.variedOverview.push(
     await timed(async () => {
-      await page
-        .locator('[data-view-switch]')
-        .getByRole('radio', { name: 'Overview', exact: true })
-        .click({ timeout: timeout * 10 })
-      await page.locator('[data-ov-strip]').waitFor({ timeout: timeout * 10 })
-      await page
-        .locator('[data-atrisk], [data-ovrow]')
-        .first()
-        .waitFor({ timeout: timeout * 10 })
+      await overview.click({ timeout: timeout * 10 })
+      await shows(page, '[data-ov-strip]')
+      await shows(page, '[data-atrisk], [data-ovrow]')
     }),
   )
   phase('variedOverviewComplete')

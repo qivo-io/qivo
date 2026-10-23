@@ -8,7 +8,10 @@ import { flushSync } from 'react-dom'
    each other within 16ms of a frame's start, then wait for the next frame,
    so input runs between them, the browser renders between frames, and a
    frame stays under about 50ms. The scheduler marks its root while
-   anything waits, without a React render. */
+   anything waits, without a React render. Once nothing waits after it
+   mounted items, it has the browser lay out the blocks it skips offscreen
+   (DeferredList.css) while the page is idle, so a block that scrolls into
+   view later only paints. */
 
 /** A list the scheduler mounts. `pending` is how many of its items still
     wait; `grow(n)` mounts the next `n` of them and `mountThrough(key)` the
@@ -37,6 +40,9 @@ type Options = {
   /** commits the React updates `grow` makes inside it before returning */
   flush?: (work: () => void) => void
   observer?: ObserverFactory | null
+  /** runs a task when the page is idle, with the time left; none skips
+      laying out the offscreen blocks ahead */
+  idle?: ((task: (deadline: { timeRemaining: () => number }) => void) => void) | null
 }
 
 /** The time one slice aims to take, the time into a frame after which
@@ -59,6 +65,14 @@ function postMessageTask(task: () => void) {
   channel.port2.postMessage(null)
 }
 
+const defaultIdle: Options['idle'] =
+  typeof requestIdleCallback === 'undefined' ? null : (task) => requestIdleCallback(task)
+
+/* The skipped blocks idle layout reaches, and the time it leaves in an
+   idle period for the browser's own work. */
+const SKIPPED = '[data-deferred-block]'
+const IDLE_SPARE_MS = 2
+
 const defaultObserver: ObserverFactory | null =
   typeof IntersectionObserver === 'undefined'
     ? null
@@ -72,6 +86,7 @@ export function createMountScheduler({
   now = () => performance.now(),
   flush = flushSync,
   observer: factory = defaultObserver,
+  idle = defaultIdle,
 }: Options = {}) {
   const lists = new Map<string, DeferredMount>()
   // the lists whose spacer is within 500px of the view
@@ -86,6 +101,11 @@ export function createMountScheduler({
   // when the current frame started, as its frame callback saw it
   let frameStart = Number.NEGATIVE_INFINITY
   let disposed = false
+  // the blocks idle layout has laid out, whether a pass is under way, and
+  // whether lists mounted items since the last pass began
+  const laidOut = new WeakSet<Element>()
+  let warming = false
+  let mountedSince = false
 
   const pendingLists = () => [...lists.values()].filter((list) => list.pending() > 0)
 
@@ -164,12 +184,51 @@ export function createMountScheduler({
     // quickly, or found few items left, does not make the next one long; a
     // slice at most doubles.
     const mounted = size - budget
+    if (mounted > 0) mountedSince = true
     if (mounted > 0) {
       const sample = Math.max(1, elapsed) / mounted
       perItem = perItem === null ? sample : perItem * 0.7 + sample * 0.3
       size = Math.min(MAX_SLICE, size * 2, Math.max(MIN_SLICE, Math.round(SLICE_MS / perItem)))
     }
     changed()
+  }
+
+  /* Lays out, while the page is idle, each block the browser skips that it
+     has not laid out yet: reading a box inside a skipped block lays out
+     that block alone, and the browser keeps the result, so the frame that
+     scrolls it into view only paints it. An idle task reads blocks until
+     its idle period has 2ms left, so input waits at most for the rest of
+     the period, up to 50ms, and one block. A pass stops when a list waits
+     to mount again; the next starts when none does, or when a pass ends,
+     if the scheduler mounted items since the last one began: registered
+     lists, slices and the mounts it was asked for. Items a list's own
+     render adds, at most MOST_AT_ONCE (DeferredList), and a laid out
+     block whose items change, lay out when they come into view. */
+  const warm = () => {
+    if (warming || !mountedSince || !idle || disposed || !root || pendingLists().length) return
+    warming = true
+    mountedSince = false
+    let queue: Element[] | null = null
+    const step = (deadline: { timeRemaining: () => number }) => {
+      if (disposed || !root || pendingLists().length) {
+        warming = false
+        return
+      }
+      queue ??= [...root.querySelectorAll(SKIPPED)].filter((block) => !laidOut.has(block))
+      while (queue.length && deadline.timeRemaining() > IDLE_SPARE_MS) {
+        const block = queue.shift() as Element
+        if (!block.isConnected) continue
+        block.firstElementChild?.getBoundingClientRect()
+        laidOut.add(block)
+      }
+      if (queue.length) idle(step)
+      else {
+        // lists that mounted during the pass may have added blocks
+        warming = false
+        warm()
+      }
+    }
+    idle(step)
   }
 
   /** Brings marks, watched spacers and the next slice up to date, once
@@ -185,6 +244,7 @@ export function createMountScheduler({
       watch()
       mark()
       schedule()
+      warm()
     })
   }
 
@@ -217,6 +277,7 @@ export function createMountScheduler({
   return {
     register(list: DeferredMount) {
       lists.set(list.id, list)
+      mountedSince = true
       changed()
       return () => {
         if (lists.get(list.id) !== list) return
@@ -234,6 +295,7 @@ export function createMountScheduler({
       const list = lists.get(id)
       if (!list?.pending()) return
       flush(() => list.grow(list.pending()))
+      mountedSince = true
       changed()
     },
     /** Mounts the list `id` up to its item `key` now. */
@@ -241,6 +303,7 @@ export function createMountScheduler({
       const list = lists.get(id)
       if (!list?.pending()) return
       flush(() => list.mountThrough(key))
+      mountedSince = true
       changed()
     },
     /** Mounts every list now, for Find or printing. */
@@ -250,6 +313,7 @@ export function createMountScheduler({
       flush(() => {
         for (const list of waiting) list.grow(list.pending())
       })
+      mountedSince = true
       changed()
     },
     /** Stops slicing; `revive` starts it again (a remount in development). */

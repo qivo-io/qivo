@@ -177,6 +177,33 @@ export function groupBoardCell<T extends BoardCellIssue>(
   return [...groups.values()]
 }
 
+/** groupBoardCell, remembered per cell `key`. A cell whose tasks are the
+    same objects in the same order, and whose cards' headings are still the
+    tasks `issueById` holds, gets the groups it got before, the same array:
+    a Board renders again on every store change, and a change reaches few
+    cells. The store gives a task a new object when it, its parent or its
+    subtasks change (store/taskIndex.ts), so a task that became a parent, or
+    moved to another, is a new object here. */
+export function createCellGrouper<T extends BoardCellIssue>() {
+  const known = new Map<string, { items: readonly T[]; groups: BoardCellGroup<T>[] }>()
+  return (key: string, items: readonly T[], issueById: Readonly<Record<string, T>>) => {
+    const entry = known.get(key)
+    const groups =
+      entry &&
+      entry.items.length === items.length &&
+      entry.items.every((it, i) => it === items[i]) &&
+      entry.groups.every(
+        (group) =>
+          (!group.parent || issueById[group.parent.id] === group.parent) &&
+          group.ancestors.every((it) => issueById[it.id] === it),
+      )
+        ? entry.groups
+        : groupBoardCell(items, issueById)
+    known.set(key, { items, groups })
+    return groups
+  }
+}
+
 /* Card geometry for estimateCardHeight, measured in Chromium (Playwright,
    1440 x 1000) on the benchmark's varied workspace at 500 tasks: each row's
    getBoundingClientRect height by shape, with the title's line count from

@@ -274,4 +274,72 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
     expect(delay.mock.calls.length).toBeLessThan(cards().length * 4)
     expect(delay.mock.calls.length).toBeLessThan(100)
   })
+
+  // a lane of 500 cards fills the first screen; the Unassigned lane is
+  // below it, with 20 cards to do and 5 in progress
+  const twoLanes = (snap: Snapshot) => {
+    tasks(500)(snap)
+    for (let n = 0; n < 25; n++)
+      snap.issues.push({
+        ...taskRow(snap, `u${n}`, n < 20 ? 'todo' : 'progress', 600 + n),
+        assignee_id: undefined,
+      })
+  }
+
+  it("lets the browser skip the lanes below a large Board's first screen", async () => {
+    const board = await loadBoard(network, twoLanes, { metaViz: 'assignees' })
+    await board.render(root)
+    const bodies = [...document.querySelectorAll<HTMLElement>('.board-lane-body')]
+    expect(bodies).toHaveLength(2)
+    expect(bodies[0].hasAttribute('data-lane-deferred')).toBe(false)
+    expect(bodies[0].style.containIntrinsicBlockSize).toBe('')
+    expect(bodies[1].hasAttribute('data-lane-deferred')).toBe(true)
+    // its tallest cell's estimated height: the padding above the 20 cards
+    // waiting to do, whose space holds their estimated height and gaps
+    const todo = bodies[1].querySelector<HTMLElement>('.board-pending')
+    expect(bodies[1].style.containIntrinsicBlockSize).toBe(
+      `auto ${8 + Number.parseFloat(todo?.style.height ?? '')}px`,
+    )
+    expect(Number.parseFloat(todo?.style.height ?? '')).toBeGreaterThan(20 * MIN_CARD_PITCH - 8)
+  })
+
+  it('skips a lane only until it first renders', async () => {
+    const board = await loadBoard(network, twoLanes, { metaViz: 'assignees' })
+    await board.render(root)
+    const body = document.querySelectorAll<HTMLElement>('.board-lane-body')[1]
+    const state = (skipped: boolean) =>
+      body.dispatchEvent(Object.assign(new Event('contentvisibilityautostatechange'), { skipped }))
+    state(true)
+    expect(body.hasAttribute('data-lane-deferred')).toBe(true)
+    // the browser renders it: the height it would keep while skipped from
+    // then on would not follow its cards
+    state(false)
+    expect(body.hasAttribute('data-lane-deferred')).toBe(false)
+    expect(body.style.containIntrinsicBlockSize).toBe('')
+    // and a later change to its cards leaves it out too
+    board.snapshot.issues.push({
+      ...taskRow(board.snapshot, 'u25', 'todo', 625),
+      assignee_id: undefined,
+    })
+    await board.deliver()
+    expect(body.querySelectorAll('[data-board-pending]').length).toBeGreaterThan(0)
+    expect(document.querySelectorAll('[data-lane-deferred]')).toHaveLength(0)
+    expect(document.querySelectorAll<HTMLElement>('.board-lane-body')[1]).toBe(body)
+    expect(body.style.containIntrinsicBlockSize).toBe('')
+  })
+
+  it('skips no lane of a Board that renders whole', async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        tasks(25)(snap)
+        for (let n = 0; n < 5; n++)
+          snap.issues.push({ ...taskRow(snap, `u${n}`, 'todo', 600 + n), assignee_id: undefined })
+      },
+      { metaViz: 'assignees' },
+    )
+    await board.render(root)
+    expect(document.querySelectorAll('.board-lane-body')).toHaveLength(2)
+    expect(document.querySelectorAll('[data-lane-deferred]')).toHaveLength(0)
+  })
 })

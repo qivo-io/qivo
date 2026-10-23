@@ -19,7 +19,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { HoverTooltip } from '@/components/ui/tooltip'
-import { hasOpenTooltip } from '@/lib/passEscapeOn'
+import { hasTooltip } from '@/lib/passEscapeOn'
 import { cn } from '@/lib/utils'
 import { usePlannerVersion } from '@/store/usePlannerVersion'
 import { LIMITS, type Limit, MIB } from '../../convex/lib/limits'
@@ -259,8 +259,9 @@ function FocusWindow({
       if (e.defaultPrevented) return
       // the discard question, which opens above this window, owns the key
       if (questionOpen()) return
-      // an open tooltip closes first and passes the Escape on, read then
-      if (hasOpenTooltip()) return
+      // a tooltip, open or closing, takes the Escape first and passes it on,
+      // read then
+      if (hasTooltip()) return
       if (
         e.target instanceof Element &&
         e.target.closest('[data-slot="popover-content"], [data-slot="select-content"]')

@@ -17,8 +17,9 @@ import './DeferredList.css'
 /* The most items a slice adds to one block before it opens the next, by
    default. A slice renders only the block that grows, so its cost does
    not grow with the items already mounted. A block is also what the
-   browser lays out when it comes into view (DeferredList.css), so a small
-   one keeps that frame short, and costs more while mounting: the browser
+   browser lays out when it comes into view (DeferredList.css), unless the
+   scheduler laid it out while the page was idle, so a small one keeps that
+   frame short, and costs more while mounting: the browser
    checks each block on every frame. The Board takes blocks of 16
    (BOARD_BLOCK_SIZE); a light list keeps 64. */
 const BLOCK_SIZE = 64

@@ -111,7 +111,7 @@ import { questionOpen } from '@/lib/discardQuestion'
 import { restoreFocus } from '@/lib/focusVisibility'
 import { LandscapeContext, type LandscapeViewport } from '@/lib/landscape'
 import { type StaticControls, useStaticControls } from '@/lib/liveControls'
-import { hasOpenTooltip } from '@/lib/passEscapeOn'
+import { hasTooltip } from '@/lib/passEscapeOn'
 import { useMenuBackLayer } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
 import { P } from '../../store/planner'
@@ -1039,7 +1039,7 @@ function AnchoredPop({
     // no document-level listener, so the dismissing click can't also hit
     // whatever sits underneath (the issue modal's scrim in particular).
     const k = (e) => {
-      if (e.key !== 'Escape' || hasOpenTooltip()) return
+      if (e.key !== 'Escape' || hasTooltip()) return
       if (popStack[popStack.length - 1] !== entry) return // a pop stacked on top owns Escape
       // so does the discard question, which opens above every pop
       if (questionOpen()) return
