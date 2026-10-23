@@ -9,10 +9,11 @@ that the client needs:
   Qivo**.
 - Inbox events can raise native desktop notifications. Clicking one restores
   Qivo and opens the Inbox.
-- Packaged builds check the release feed built into them, download updates in the
-  background and show a native “update ready” notification. Qivo waits for
-  active edits and asks before restarting to install an update. On Windows a
-  normal quit also completes a downloaded update.
+- A packaged Windows build with a release feed built into it checks that
+  feed, downloads updates in the background and shows a native “update
+  ready” notification. Qivo waits for active edits and asks before restarting
+  to install an update. A normal quit also completes a downloaded update.
+  Linux builds have no feed and never update themselves.
 - OAuth provider pages open in the system browser. A short-lived, one-time
   `qivo://` callback returns the result to the waiting Qivo window.
 
@@ -44,9 +45,11 @@ The shell follows Electron's
 - A packaged build checks for updates only at the feed written into it when
   it was built, and a build without one never checks. No environment
   variable names another feed. `QIVO_DISABLE_UPDATES=1` can only turn checks
-  off. The shell also removes electron-updater's test variables
+  off. Only a Windows build can have a feed. A Linux build cannot, because
+  electron-updater checks no signature on Linux updates. Before a build with
+  a feed checks, the shell removes electron-updater's test variables
   `ELECTRON_BUILDER_LINUX_PACKAGE_MANAGER`, which picks the package manager
-  that installs a Linux update as root, and `TEST_UPDATER_ARCH`.
+  that would install a Linux update as root, and `TEST_UPDATER_ARCH`.
 - Packaging flips Electron's
   [fuses](https://www.electronjs.org/docs/latest/tutorial/fuses): no
   `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS` or `--inspect`, app code only from
@@ -61,13 +64,14 @@ The shell follows Electron's
   standard error and opens no window, so start Qivo from a terminal to read
   it. Showing a window first would start the processes and the debugging
   port those switches act on.
-- The logon entry of a Linux AppImage starts the file in `APPIMAGE`, and an
-  AppImage update replaces that file. Qivo reads the variable only when it
-  runs from a folder that an AppImage launcher set it for: the AppImage
-  runtime's temporary folder, `firejail --appimage` or NixOS `appimage-run`.
-  Otherwise Qivo ignores it and removes it before the updater starts, so a
-  .deb or .rpm install that inherits it still starts the installed program,
-  and the updater replaces no other file.
+- The logon entry of a Linux AppImage starts the file in `APPIMAGE`. Qivo
+  reads the variable only when it runs from a folder that an AppImage
+  launcher set it for: the AppImage runtime's temporary folder,
+  `firejail --appimage` or NixOS `appimage-run`. Otherwise Qivo ignores it,
+  so a .deb or .rpm install that inherits it still starts the installed
+  program. A build with a feed also removes such a value before the updater
+  starts, because an AppImage update replaces the file it names. Linux builds
+  have no feed today, so that removal only prepares for a signed Linux feed.
 - These rules keep Qivo's own settings from redirecting it. They do not
   protect against a program that already runs as the user. Such a program
   can set loader variables such as `LD_PRELOAD`, edit the per-user Windows
@@ -151,8 +155,8 @@ npm run desktop:package
 ```
 
 Artifacts are written to `desktop/release/`. The normal package command never
-publishes. To build a release that can check a generic HTTPS feed, provide the
-feed root while packaging:
+publishes. To build a Windows release that can check a generic HTTPS feed,
+provide the feed root while packaging:
 
 ```powershell
 $env:QIVO_DESKTOP_UPDATE_URL = "https://downloads.example.com/qivo/win"
@@ -165,7 +169,9 @@ the generated installer and its `latest.yml`/blockmap files to that endpoint
 with the same version from `package.json`. The installed app checks only this
 feed and reads no feed setting at run time. `QIVO_DISABLE_UPDATES=1` turns
 checks off for diagnostics. Signing the installer is required before shipping
-it to users.
+it to users. A build for any other platform with a feed fails, as
+[Linux builds have no update feed](#linux-builds-have-no-update-feed)
+explains for Linux. Qivo has no macOS build configuration.
 
 electron-updater checks the signature of a downloaded Windows update only
 when the built-in `app-update.yml` names the publisher. electron-builder
@@ -187,9 +193,10 @@ run at all, for example where AppLocker blocks it, the library logs a warning
 and installs the update without the check. Do not block PowerShell on the
 computers that run a signed build.
 
-Linux updates have no signature check. electron-updater installs the `.deb`
-or `.rpm` whose SHA-512 the same feed lists, as root after Qivo asks, so the
-feed's HTTPS and the host behind it protect those updates.
+The build refuses `--prepackaged`. electron-builder runs none of its
+packing hooks for an app it did not pack itself, so the checks on the update
+feed would not run. Package the app in the same run that writes the
+installer.
 
 On Ubuntu 26.04 (or another x64 Linux build host), create all three Linux
 artifacts with:
@@ -210,13 +217,44 @@ systems, an RPM (`.rpm`) for Fedora/RHEL-family systems, and a portable
 AppImage. The `.deb` is the recommended Ubuntu install format because it gets
 desktop integration and dependency handling from the package manager. AppImage
 is useful when installation privileges are unavailable; its ability to run
-depends on the host's user-namespace and desktop security policy. Linux update
-installation for `.deb` and `.rpm` asks before invoking the package manager;
-AppImage updates replace the downloaded image in place. If a hardened Ubuntu
-installation blocks AppImage execution, use the `.deb` or run the AppImage
-with `--appimage-extract-and-run` for diagnostics.
+depends on the host's user-namespace and desktop security policy. These
+packages have no update feed and never update themselves, as
+[Linux builds have no update feed](#linux-builds-have-no-update-feed)
+explains. If a hardened Ubuntu installation blocks AppImage execution, use
+the `.deb` or run the AppImage with `--appimage-extract-and-run` for
+diagnostics.
 
 The Linux package command is intentionally build-only.
+
+### Linux builds have no update feed
+
+A Linux build with an update feed fails, whether the feed comes from
+`QIVO_DESKTOP_UPDATE_URL` or another publish setting. electron-updater checks
+no signature on a `.deb`, `.rpm` or AppImage update. It installs the file
+whose SHA-512 the same feed lists, a `.deb` or `.rpm` as root after Qivo asks,
+so whoever controls the feed or its HTTPS host would decide what the app
+installs. Linux builds have no feed and never check for updates.
+
+The change that allows a Linux feed must add all of this, and remove the
+refusal in [electron-builder.cjs](electron-builder.cjs) in the same change:
+
+- **A key the app holds.** The packaged app contains one or more Ed25519
+  public keys for Linux updates. The private key stays offline with the
+  release signer, never on the feed host or in a workflow that builds
+  unreviewed refs. A new key ships in an update signed by the old one.
+- **What it signs.** For each release, a signed manifest names the version
+  and, for each Linux file, its file name and SHA-512. The signature covers
+  the exact manifest bytes and is published next to `latest-linux.yml`.
+- **When the app checks.** The app verifies the manifest signature before it
+  downloads an update, and refuses a version that is not newer than the
+  installed one. After the download it checks the file's SHA-512 against the
+  signed manifest, immediately before it hands the file to the package
+  manager or replaces the AppImage.
+- **What happens on a mismatch.** The app deletes the downloaded file,
+  installs nothing, shows no restart prompt, logs the reason and keeps
+  running the installed version. It tries again at the next scheduled check.
+  No setting turns the check off. A feed without a manifest, or with one
+  signed by an unknown key, gets the same treatment.
 
 ## Network requests
 
@@ -226,9 +264,9 @@ and only in a packaged build that has one. Local package builds and
 **Desktop test build** artifacts have no feed and never check.
 
 A packaged build checks at startup and then every 4 hours while it runs. A
-check is an HTTPS `GET` for `latest.yml` on Windows or `latest-linux.yml` on
-Linux at the feed root. electron-updater sends it from its own in-memory
-session, so it carries no Qivo cookies or account data. It contains:
+check is an HTTPS `GET` for `latest.yml` at the feed root. Linux builds have
+no feed. electron-updater sends the request from its own in-memory session,
+so it carries no Qivo cookies or account data. It contains:
 
 - a `noCache` query parameter holding the current time in base 32
 - `User-Agent: electron-builder` and `Cache-Control: no-cache`
