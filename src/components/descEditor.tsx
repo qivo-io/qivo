@@ -1,6 +1,6 @@
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
-import { hasOpenTooltip } from '@/lib/passEscapeOn'
+import { hasTooltip } from '@/lib/passEscapeOn'
 /* Rich editor for the lib/md dialect; viewers use Markdown. Load through
    parseMd -> astToDoc, save through docToAst -> astToMd and reparse to a fixed
    point. The server's description saves settle images
@@ -1314,7 +1314,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       e.stopPropagation()
       return
     }
-    if (e.key !== 'Escape' || e.defaultPrevented || hasOpenTooltip()) return
+    if (e.key !== 'Escape' || e.defaultPrevented || hasTooltip()) return
     if (escapeStep()) {
       e.preventDefault()
       e.stopPropagation()
@@ -1324,10 +1324,10 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   }
   /* Escape inside the text, after ProseMirror's own handlers (an @-mention
      list closes first). It takes the same steps; with none to take, a clean
-     editor only blurs, so the next Escape reaches the window. An open
-     tooltip takes this one and passes it on (passEscapeOn). */
+     editor only blurs, so the next Escape reaches the window. A tooltip,
+     open or closing, takes this one and passes it on (passEscapeOn). */
   escapeTextRef.current = () => {
-    if (hasOpenTooltip()) return false
+    if (hasTooltip()) return false
     if (!escapeStep()) editorRef.current?.commands.blur()
     return true
   }
