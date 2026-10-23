@@ -617,7 +617,7 @@ describe('provider state, retries and billing snapshots', () => {
     const { t, f } = await fixture()
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.meta.id })
     const attachment = await t.run(async (ctx) => {
-      const storage_id = await ctx.storage.store(new Blob())
+      const storage_id = await ctx.storage.store(new Blob([]))
       return await ctx.db.insert('issue_attachments', {
         org_id: task.org_id,
         id: uuid(),
@@ -667,7 +667,7 @@ describe('provider state, retries and billing snapshots', () => {
     await t.mutation(apply, { payload: remote(f.org.id), event_id: 'first-period' })
     // 5,000 tasks, 4,500 of them with a 2 MB file, a third of those in PCB.
     // The rows share one stored file; only their size_bytes count.
-    const storage_id = await t.run((ctx) => ctx.storage.store(new Blob()))
+    const storage_id = await t.run((ctx) => ctx.storage.store(new Blob([])))
     for (let from = 0; from < 5000; from += 1000) {
       await t.run(async (ctx) => {
         for (let i = from; i < from + 1000; i++) {
@@ -752,7 +752,7 @@ describe('provider state, retries and billing snapshots', () => {
 
   it('records a renewal of 6,000 attachment rows at once and samples them under 4,000 documents a read', async () => {
     const { t, f } = await fixture({ transactionLimits: { documentsRead: 4000 } })
-    const storage_id = await t.run((ctx) => ctx.storage.store(new Blob()))
+    const storage_id = await t.run((ctx) => ctx.storage.store(new Blob([])))
     const tasks = await t.run(async (ctx) => {
       const ids: string[] = []
       for (let i = 0; i < 60; i++) {
@@ -827,7 +827,7 @@ describe('provider state, retries and billing snapshots', () => {
 
   it('samples the bytes storageUsage counts, at any page size', async () => {
     const { t, f } = await fixture()
-    const storage_id = await t.run((ctx) => ctx.storage.store(new Blob()))
+    const storage_id = await t.run((ctx) => ctx.storage.store(new Blob([])))
     const file = (issue_id: string, size_bytes: number, org_id = f.org.id) => ({
       org_id,
       id: uuid(),
@@ -878,7 +878,7 @@ describe('provider state, retries and billing snapshots', () => {
 
   it('counts each row once when tasks are archived, restored or brought back from Deleted items during the sample', async () => {
     const { t, f } = await fixture()
-    const storage_id = await t.run((ctx) => ctx.storage.store(new Blob()))
+    const storage_id = await t.run((ctx) => ctx.storage.store(new Blob([])))
     const rows: Id<'issue_attachments'>[] = []
     for (const [size_bytes, archived] of [
       [2_000_000_000, false],
@@ -932,7 +932,7 @@ describe('provider state, retries and billing snapshots', () => {
     const { t, f } = await fixture()
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await t.run(async (ctx) => {
-      const storage_id = await ctx.storage.store(new Blob())
+      const storage_id = await ctx.storage.store(new Blob([]))
       await ctx.db.insert('issue_attachments', {
         org_id: f.org.id,
         id: uuid(),
@@ -971,7 +971,7 @@ describe('provider state, retries and billing snapshots', () => {
     const { t, f } = await fixture()
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await t.run(async (ctx) => {
-      const storage_id = await ctx.storage.store(new Blob())
+      const storage_id = await ctx.storage.store(new Blob([]))
       await ctx.db.insert('issue_attachments', {
         org_id: f.org.id,
         id: uuid(),
@@ -1048,7 +1048,7 @@ describe('provider state, retries and billing snapshots', () => {
     const { t, f } = await fixture()
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await t.run(async (ctx) => {
-      const storage_id = await ctx.storage.store(new Blob())
+      const storage_id = await ctx.storage.store(new Blob([]))
       await ctx.db.insert('issue_attachments', {
         org_id: f.org.id,
         id: uuid(),
@@ -1138,7 +1138,7 @@ describe('provider state, retries and billing snapshots', () => {
     const { t, f } = await fixture()
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await t.run(async (ctx) => {
-      const storage_id = await ctx.storage.store(new Blob())
+      const storage_id = await ctx.storage.store(new Blob([]))
       await ctx.db.insert('issue_attachments', {
         org_id: f.org.id,
         id: uuid(),

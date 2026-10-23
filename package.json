@@ -16,7 +16,7 @@
     "typecheck": "tsc --noEmit",
     "typecheck:strict": "tsc --noEmit -p tsconfig.strict.json",
     "typecheck:convex": "tsc --noEmit -p convex",
-    "typecheck:desktop": "tsc --noEmit -p desktop",
+    "typecheck:desktop": "tsc --noEmit -p desktop && tsc --noEmit -p desktop/tsconfig.build.json",
     "typecheck:node": "tsc -p tsconfig.node.json",
     "demo": "node scripts/marketing-demo.mjs",
     "desktop:compile": "tsc -p desktop/tsconfig.build.json",

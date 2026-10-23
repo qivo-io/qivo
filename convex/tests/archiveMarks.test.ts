@@ -65,7 +65,7 @@ async function plantRelations(
       issue_id: task.id,
       name: 'notes.txt',
       size_bytes: 1,
-      storage_id: await ctx.storage.store(new Blob() as never),
+      storage_id: await ctx.storage.store(new Blob([]) as never),
       inline: false,
       created_at: NOW,
     })

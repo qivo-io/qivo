@@ -426,6 +426,9 @@ describe('private, persistent credentials', () => {
   it('lets only a local backend keep credentials in the checkout, under a git-ignored dev-temp/', () => {
     const cwd = folder()
     // only this repository's rules count, not the machine's global ignore file
+    // or the repository a Git hook names in GIT_DIR
+    for (const name of Object.keys(process.env))
+      if (name.startsWith('GIT_')) vi.stubEnv(name, undefined)
     vi.stubEnv('HOME', cwd)
     vi.stubEnv('XDG_CONFIG_HOME', cwd)
     vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1')

@@ -61,10 +61,5 @@ interface Window {
   qivoDesktop?: QivoDesktopBridge
 }
 
-/* The root tsc pass reaches the Convex function sources through
-   src/store → convex/_generated/api.d.ts (the typed function references).
-   Those files run in the Convex isolate and read process.env, and this
-   project carries no @types/node on purpose — mirror convex/env.d.ts's
-   minimal declaration (URL/console come from lib.dom here, so `process`
-   is the only gap). Type-level only: nothing in the browser bundle reads it. */
-declare const process: { env: Record<string, string | undefined> }
+/* `process` in the Convex sources this program reaches comes from @types/node,
+   which sharp's types bring in through convex/backgroundPreviewProcessor.ts. */

@@ -480,7 +480,7 @@ describe('billing recovery', () => {
   it('blocks org avatar administration during read-only access and preserves personal recovery', async () => {
     const { t, f } = await fixture()
     const admin = as(t, f.admin)
-    const storageId = await t.run((ctx) => ctx.storage.store(new Blob() as never))
+    const storageId = await t.run((ctx) => ctx.storage.store(new Blob([]) as never))
     await expectRefusal(
       admin.mutation(api.files.avatarUploadUrl, { profile_id: f.agent.id }),
       'forbidden',
