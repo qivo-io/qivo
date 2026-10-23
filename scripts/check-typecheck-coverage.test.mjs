@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { checkoutEnvironment } from './git.mjs'
 
 const script = fileURLToPath(new URL('./check-typecheck-coverage.mjs', import.meta.url))
 const typescript = path.dirname(createRequire(import.meta.url).resolve('typescript/package.json'))
@@ -22,10 +23,12 @@ afterEach(() => {
  * as GIT_DIR, and without the machine's Git configuration and ignore files.
  */
 function isolated() {
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')),
-  )
-  return { ...env, HOME: repository, XDG_CONFIG_HOME: repository, GIT_CONFIG_NOSYSTEM: '1' }
+  return {
+    ...checkoutEnvironment(),
+    HOME: repository,
+    XDG_CONFIG_HOME: repository,
+    GIT_CONFIG_NOSYSTEM: '1',
+  }
 }
 
 /** Writes files under a directory, creating their folders. */
@@ -111,6 +114,67 @@ describe('typecheck coverage', { timeout: 30_000 }, () => {
     expect(check()).toMatchObject({
       status: 1,
       output: expect.stringContaining('ci.yml does not run `npm run typecheck`'),
+    })
+  })
+
+  it.each([
+    [
+      'verify:local does not run',
+      { 'typecheck:convex': 'tsc -p convex' },
+      'verify:local does not run `node scripts/check-convex-runtime.mjs`',
+    ],
+    [
+      'CI does not run',
+      {
+        'typecheck:convex': 'tsc -p convex && npm run check:convex',
+        'check:convex': 'node scripts/check-convex-runtime.mjs',
+      },
+      'ci.yml does not run `npm run check:convex`',
+    ],
+  ])('fails when %s the convex runtime check', (_, convexScripts, output) => {
+    setUp({
+      'package.json': JSON.stringify({
+        scripts: {
+          'verify:local': 'npm run typecheck && npm run typecheck:convex',
+          typecheck: 'tsc --noEmit && tsc -p tools',
+          ...convexScripts,
+        },
+      }),
+      '.github/workflows/ci.yml':
+        'steps:\n  - run: npm run typecheck\n  - run: npm run typecheck:convex\n',
+      'convex/tsconfig.json': JSON.stringify({ compilerOptions: options }),
+      'convex/main.ts': 'export {}\n',
+    })
+    expect(check()).toMatchObject({ status: 1, output: expect.stringContaining(output) })
+  })
+
+  it('fails when convex/ holds TypeScript without a config of its own or the runtime check', () => {
+    setUp({ 'convex/main.ts': 'export {}\n' })
+    expect(check()).toMatchObject({
+      status: 1,
+      output: expect.stringContaining(
+        'verify:local does not run `node scripts/check-convex-runtime.mjs`',
+      ),
+    })
+  })
+
+  it('passes when verify:local and CI run the convex runtime check', () => {
+    setUp({
+      'package.json': JSON.stringify({
+        scripts: {
+          'verify:local': 'npm run typecheck && npm run typecheck:convex',
+          typecheck: 'tsc --noEmit && tsc -p tools',
+          'typecheck:convex': 'tsc -p convex && node scripts/check-convex-runtime.mjs',
+        },
+      }),
+      '.github/workflows/ci.yml':
+        'steps:\n  - run: npm run typecheck\n  - run: npm run typecheck:convex\n',
+      'convex/tsconfig.json': JSON.stringify({ compilerOptions: options }),
+      'convex/main.ts': 'export {}\n',
+    })
+    expect(check()).toEqual({
+      status: 0,
+      output: '5 TypeScript files are in the typechecks of 3 configs.\n',
     })
   })
 
@@ -234,6 +298,26 @@ describe('typecheck coverage', { timeout: 30_000 }, () => {
     }
   })
 
+  it('lists the files of the checkout it runs in when GIT_DIR names another repository', () => {
+    setUp({ 'scripts/new.ts': 'export {}\n' })
+    // the other repository's exclude file would hide scripts/
+    const other = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'qivo-typecheck-other-')))
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: other, env: isolated() })
+      fs.writeFileSync(path.join(other, '.git/info/exclude'), 'scripts/\n')
+      const result = spawnSync(process.execPath, [script], {
+        cwd: repository,
+        env: { ...isolated(), PWD: repository, GIT_DIR: path.join(other, '.git') },
+        encoding: 'utf8',
+        timeout: 30_000,
+      })
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain('scripts/new.ts is in no typecheck that verify:local runs.')
+    } finally {
+      fs.rmSync(other, { recursive: true, force: true })
+    }
+  })
+
   it('leaves the repository alone when a Git hook exports GIT_DIR', () => {
     // A pre-push hook in a linked worktree gets the worktree's GIT_DIR.
     const outer = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'qivo-typecheck-outer-')))
@@ -252,7 +336,12 @@ describe('typecheck coverage', { timeout: 30_000 }, () => {
           ],
           {
             cwd: outer,
-            env: { ...process.env, HOME: outer, XDG_CONFIG_HOME: outer, GIT_DIR: undefined },
+            env: {
+              ...checkoutEnvironment(),
+              HOME: outer,
+              XDG_CONFIG_HOME: outer,
+              GIT_CONFIG_NOSYSTEM: '1',
+            },
           },
         )
       git('init', '-q', 'main')

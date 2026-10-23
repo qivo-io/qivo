@@ -11,26 +11,20 @@
 // base of HEAD and origin/main, so a branch is measured against the commit
 // it started from, and to HEAD in a checkout without origin/main.
 // --current-only measures the working tree alone and needs no revision.
-import { execFile } from 'node:child_process'
 import { realpathSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { promisify } from 'node:util'
+import { gitIn } from './git.mjs'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 
 /** A baseline that cannot be used, with a sentence that says what to do. */
 export class BaselineError extends Error {}
 
-/** Runs git in the checkout and resolves its trimmed output. A failure
-    carries git's exit status as `code`, or a string such as ENOENT when git
-    could not run. */
-async function runGit(args) {
-  const { stdout } = await promisify(execFile)('git', args, { cwd: root, encoding: 'utf8' })
-  return stdout.trim()
-}
+/** Runs git in the checkout and resolves its trimmed output, as gitIn does. */
+const runGit = (args) => gitIn(root, args)
 
 /** `run`'s output, or '' when git exits with one of `statuses`. Any other
     failure, such as git missing or a checkout that is not a repository,

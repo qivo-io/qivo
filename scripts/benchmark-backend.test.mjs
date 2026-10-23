@@ -1,7 +1,11 @@
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { BaselineError, resolveBaseline } from './benchmark-backend.mjs'
+import { checkoutEnvironment } from './git.mjs'
 
 /** A git double. `answers` maps a joined command to its output, `failures`
     maps one to the exit status it fails with, and any other command fails
@@ -75,9 +79,37 @@ describe('the backend benchmark baseline', () => {
   })
 
   it('resolves commits, and refuses what is not one, with real git', async () => {
-    const head = (await promisify(execFile)('git', ['rev-parse', 'HEAD'])).stdout.trim()
+    const head = (
+      await promisify(execFile)('git', ['rev-parse', 'HEAD'], { env: checkoutEnvironment() })
+    ).stdout.trim()
     await expect(resolveBaseline(['HEAD'])).resolves.toEqual({ commit: head, chosen: 'HEAD' })
     for (const other of ['HEAD^{tree}', 'HEAD:package.json', '0'.repeat(40)])
       await expect(resolveBaseline([other])).rejects.toThrow('is not a commit in this checkout')
+  })
+
+  it("resolves this checkout's commit when GIT_DIR names another repository", async () => {
+    const other = mkdtempSync(join(tmpdir(), 'qivo-baseline-other-'))
+    try {
+      const git = (...args) =>
+        execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], {
+          cwd: other,
+          env: {
+            ...checkoutEnvironment(),
+            HOME: other,
+            XDG_CONFIG_HOME: other,
+            GIT_CONFIG_NOSYSTEM: '1',
+          },
+        })
+      git('init', '-q')
+      git('commit', '-q', '--allow-empty', '-m', 'other')
+      const head = (
+        await promisify(execFile)('git', ['rev-parse', 'HEAD'], { env: checkoutEnvironment() })
+      ).stdout.trim()
+      vi.stubEnv('GIT_DIR', join(other, '.git'))
+      await expect(resolveBaseline(['HEAD'])).resolves.toEqual({ commit: head, chosen: 'HEAD' })
+    } finally {
+      vi.unstubAllEnvs()
+      rmSync(other, { recursive: true, force: true })
+    }
   })
 })

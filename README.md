@@ -67,7 +67,16 @@ npm run verify:local
 This sequential gate checks formatting, lint, UI conventions, that every
 TypeScript file is in a typecheck, the types of the frontend, backend, desktop
 app, tests and tooling, production build and hermetic tests with at most two
-workers.
+workers. The backend check also fails when a `convex/` file that runs in
+Convex's default runtime uses a Node global such as `Buffer` or a Node module.
+Only the files that start with `'use node'` and the tests may, because Convex
+bundles every other file for the default runtime, whichever files import it.
+Convex runs the top-level `http`, `crons`, `schema`, `auth.config` and
+`convex.config` files there whatever their directive. The check also fails on
+an import it cannot follow.
+Types and `import type` may still name Node's types, and a file may import
+`AsyncLocalStorage` and `AsyncResource` from `async_hooks`, which the default
+runtime provides.
 It needs no deployment credentials and does not reset any hosted data.
 Do not run full gates concurrently across agents. `npm run test:contract`, demo
 reset/seed commands and browser smoke tools can write to a backend; they are

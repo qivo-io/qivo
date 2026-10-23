@@ -23,6 +23,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { hashPassword } from 'better-auth/crypto'
 import { ConvexHttpClient } from 'convex/browser'
 import { makeFunctionReference } from 'convex/server'
+import { checkoutEnvironment } from './git.mjs'
 import { LIMITS, MIB } from './limits.mjs'
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -344,9 +345,14 @@ export function credentialsPath(directory, target) {
 }
 
 /** Whether git ignores `path` in the checkout at `cwd`, so nothing under it
- * can be committed. False when git cannot tell. */
+ * can be committed. False when git cannot tell. The caller's GIT_DIR or
+ * GIT_WORK_TREE would ask another repository. */
 function ignoredByGit(cwd, path) {
-  const result = spawnSync('git', ['check-ignore', '--quiet', path], { cwd, stdio: 'ignore' })
+  const result = spawnSync('git', ['check-ignore', '--quiet', path], {
+    cwd,
+    stdio: 'ignore',
+    env: checkoutEnvironment(),
+  })
   return result.status === 0
 }
 

@@ -10,6 +10,7 @@ import { promisify } from 'node:util'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { build } from 'vite'
+import { gitIn } from '../git.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const entry = join(here, 'entry.tsx')
@@ -73,9 +74,7 @@ export async function checkoutOf(root, commit, temporary) {
   const folder = join(temporary, `baseline-${commit.slice(0, 12)}`)
   await mkdir(folder)
   const archive = join(temporary, 'baseline.tar')
-  await promisify(execFile)('git', ['archive', '-o', archive, commit, 'src', 'convex', 'scripts'], {
-    cwd: root,
-  })
+  await gitIn(root, ['archive', '-o', archive, commit, 'src', 'convex', 'scripts'])
   await promisify(execFile)('tar', ['-xf', archive, '-C', folder])
   await symlink(join(root, 'node_modules'), join(folder, 'node_modules'))
   return folder

@@ -32,15 +32,14 @@
 // builds and serves the pages, on --host (127.0.0.1 by default), until it
 // is stopped.
 import assert from 'node:assert/strict'
-import { execFile } from 'node:child_process'
 import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { loadavg, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { promisify } from 'node:util'
 import { chromium } from 'playwright'
 import { BaselineError, resolveBaseline } from './benchmark-backend.mjs'
+import { gitIn } from './git.mjs'
 import { buildPage, checkoutOf, serve } from './perf/page.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -77,8 +76,7 @@ let baseline = null
 if (baselineRevision !== null) {
   try {
     // git in the measured checkout, which --root may name
-    const git = async (args) =>
-      (await promisify(execFile)('git', args, { cwd: root, encoding: 'utf8' })).stdout.trim()
+    const git = (args) => gitIn(root, args)
     baseline = await resolveBaseline(baselineRevision ? [baselineRevision] : [], git)
   } catch (error) {
     if (!(error instanceof BaselineError)) throw error
