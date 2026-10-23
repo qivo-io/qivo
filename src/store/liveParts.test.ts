@@ -712,11 +712,13 @@ describe('a bounded load', () => {
     )
     const state = () => reports.at(-1)?.workspace.state
     /** Sends transitions, each answering the `each` parts that waited
-        longest, all of them unless given, until the workspace completes. */
+        longest, all of them unless given, until a report from now on
+        completes the workspace. */
     const complete = (each?: number) => {
-      for (let i = 0; i < 200 && state() !== 'complete'; i++)
-        s.send(each ? s.oldest(each) : undefined)
-      expect(state()).toBe('complete')
+      const from = reports.length
+      const done = () => reports.slice(from).some((r) => r.workspace.state === 'complete')
+      for (let i = 0; i < 200 && !done(); i++) s.send(each ? s.oldest(each) : undefined)
+      expect(done()).toBe(true)
     }
     const ids = () => {
       const w = reports.at(-1)?.workspace
@@ -744,19 +746,19 @@ describe('a bounded load', () => {
     Object.assign(s.most, { asked: 0, unanswered: 0 })
     s.drop()
     expect(s.watched.size).toBe(BOUND.wave)
+    // the last window, still in line, changed while the socket was down
+    s.set('workspace:tasks', { org_id: ORG, ...WINDOWS[63] }, { value: tasksPart(['t63-new']) })
     s.reconnect()
     expect(s.most.asked).toBe(BOUND.wave)
     expect(s.most.unanswered).toBe(2 * BOUND.wave)
     complete()
     // held while parts arrived again: never less than it showed, never a
     // mix of the old and the new
-    expect(
-      reports
-        .slice(before, -1)
-        .map((r) => r.workspace.state)
-        .every((state) => state === 'held'),
-    ).toBe(true)
-    expect(ids()).toEqual(all)
+    const again = reports.slice(before).map((r) => r.workspace.state)
+    expect(again.length).toBeGreaterThan(1)
+    expect(again.slice(0, -1).every((state) => state === 'held')).toBe(true)
+    expect(again.at(-1)).toBe('complete')
+    expect(ids()).toEqual([...all.slice(0, -1), 't63-new'])
     expect(s.most.asked).toBeLessThanOrEqual(BOUND.wave)
     expect(s.most.unanswered).toBeLessThanOrEqual(2 * BOUND.wave)
   })
@@ -777,6 +779,23 @@ describe('a bounded load', () => {
     complete()
     s.drop()
     expect(s.watched.size).toBe(BOUND.wave)
+  })
+
+  it('after a drop, lets a part that had failed subscribe again from its turn in line, and recovers', () => {
+    const { s, complete, state, ids } = big()
+    complete()
+    const last = { org_id: ORG, ...WINDOWS[63] }
+    s.set('workspace:tasks', last, { error: new Error('down') })
+    s.send([s.keyOf('workspace:tasks', last)])
+    expect(state()).toBe('failed')
+    s.drop()
+    // the failed window waits in line; the server recovered meanwhile
+    expect(s.watched.has(s.keyOf('workspace:tasks', last))).toBe(false)
+    s.set('workspace:tasks', last, { value: tasksPart(['t63']) })
+    s.reconnect()
+    complete()
+    expect(ids()).toEqual(all)
+    expect(s.most.asked).toBeLessThanOrEqual(BOUND.wave)
   })
 
   it('says it waits for the server from a drop until a part answers again', () => {

@@ -466,9 +466,11 @@ export function createLiveParts(
     else for (const piece of n.pieces) yield* neededIn(piece)
   }
 
-  /** The first error of a slot complete() needs, or undefined. */
-  function failure(): unknown {
+  /** The first error of a slot complete() needs, or undefined. With
+      `current`, only an error that came over this connection. */
+  function failure(current = false): unknown {
     for (const slot of needed()) {
+      if (current && !slot.fresh) continue
       const error = errorOf(slot)
       if (error !== undefined) return error
     }
@@ -532,8 +534,10 @@ export function createLiveParts(
     const answered = transition !== undefined && !waiting()
     const error = failure()
     if (answered && error === undefined) watchLater(STAGES.batch)
-    // a part that fails ends the stage, and its line waits with it
-    if (error === undefined) pump()
+    // a part that fails ends the stage, and its line waits with it; an
+    // error from before the socket dropped does not, or a part put back in
+    // line with one would never subscribe again to replace it
+    if (failure(true) === undefined) pump()
     let workspace: PartsReport['workspace']
     if (error !== undefined) workspace = { state: 'failed', error }
     else {
