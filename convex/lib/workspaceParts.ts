@@ -126,8 +126,9 @@ export const PAGE = {
    * bodies (64 of the largest hold about 4 MiB) or about six ranges a row,
    * so it stays inside Convex's 16 MiB and 4,096 past PAGE.hard */
   batch: 64,
-  /** how many subtasks of each of PAGE.kids parents one step of kidsOf
-   * reads, so a step reads at most PAGE.kids² task bodies (64, about 4 MiB) */
+  /** how many new subtasks of each of PAGE.kids parents one step of kidsOf
+   * reads, so a step reads about PAGE.kids² task bodies (64, about 4 MiB),
+   * plus those it reads again at the time it resumes from */
   kids: 8,
   /** the most relation rows of one kind (labels, attachments, links,
    * follows) a tasks window reads, and a flagged task by its own indexes;
@@ -490,27 +491,39 @@ const windowTasks = (ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow, most: numb
  * each, checking PAGE.hard before each step. Every task is asked, as a
  * subtask stored before the rule of one level may have subtasks too. */
 async function kidsOf(ctx: QueryCtx, parents: readonly Doc<'issues'>[], access: Access) {
-  /* the active subtasks of the task with this id, after `after` */
-  const activeKids = (id: string, after?: number) =>
+  /* the active subtasks of the task with this id, from `from` on */
+  const activeKids = (id: string, from?: number) =>
     ctx.db.query('issues').withIndex('by_parent_archived', (q) => {
       const active = q.eq('parent_id', id).eq('archived_at', undefined)
-      return after === undefined ? active : active.gt('_creationTime', after)
+      return from === undefined ? active : active.gte('_creationTime', from)
     })
   const firsts = await mapInBatches(ctx, parents, (task) => activeKids(task.id).first())
   if (firsts === null) return null
   const kids = firsts.filter((kid) => kid !== null)
-  // the parents that may have more, each after the last subtask read
-  let open = kids.map((kid) => ({ id: kid.parent_id as string, after: kid._creationTime }))
+  // The parents that may have more, each from the time of the last subtask
+  // read, that time included, as Convex does not make _creationTime unique;
+  // `seen` holds the subtasks at that time read already.
+  let open = kids.map((kid) => ({
+    id: kid.parent_id as string,
+    from: kid._creationTime,
+    seen: new Set([kid._id]),
+  }))
   while (open.length > 0) {
     if (await readPast(ctx, PAGE.hard)) return null
     const step = open.slice(0, PAGE.kids)
-    const got = await Promise.all(step.map((p) => activeKids(p.id, p.after).take(PAGE.kids)))
+    const got = await Promise.all(
+      step.map((p) => activeKids(p.id, p.from).take(PAGE.kids + p.seen.size)),
+    )
     open = open.slice(PAGE.kids)
     for (const [i, rows] of got.entries()) {
-      kids.push(...rows)
+      const p = step[i]
+      kids.push(...rows.filter((kid) => !p.seen.has(kid._id)))
       const last = rows.at(-1)
-      if (rows.length === PAGE.kids && last !== undefined)
-        open.push({ id: step[i].id, after: last._creationTime })
+      if (rows.length < PAGE.kids + p.seen.size || last === undefined) continue
+      const at = rows.filter((kid) => kid._creationTime === last._creationTime)
+      const seen = new Set(at.map((kid) => kid._id))
+      if (last._creationTime === p.from) for (const id of p.seen) seen.add(id)
+      open.push({ id: p.id, from: last._creationTime, seen })
     }
   }
   const live = await mapInBatches(ctx, kids, (kid) => access.live(kid.project_id))

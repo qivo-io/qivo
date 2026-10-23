@@ -283,11 +283,13 @@ describe('reads a window cannot bound by its rows', () => {
     await kid(p2, f.sub)
     await kid(p2, f.sub)
     await kid(p3, f.hidden)
-    PAGE.kids = 2
-    const snap = await workspaceOf(as(t, f.guest))
-    const hiddenKids = (task: Doc<'issues'>) =>
-      snap?.issues.find((i) => i.id === task.id)?.has_hidden_subtasks
-    expect([p1, p2, p3].map(hiddenKids)).toEqual([true, false, true])
+    for (const kids of [1, 2]) {
+      PAGE.kids = kids
+      const snap = await workspaceOf(as(t, f.guest))
+      const hiddenKids = (task: Doc<'issues'>) =>
+        snap?.issues.find((i) => i.id === task.id)?.has_hidden_subtasks
+      expect([p1, p2, p3].map(hiddenKids)).toEqual([true, false, true])
+    }
   })
 
   it('refuses with a sentence a window whose subtasks would pass the real limits', async () => {

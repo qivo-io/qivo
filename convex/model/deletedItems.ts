@@ -2105,11 +2105,28 @@ async function restoreRows(run: Run): Promise<boolean> {
   return true
 }
 
+/* The window key a task's restored relation row carries (schema.ts
+ * taskKey): its task's while the task is in issues, which a backfill may
+ * have given a key since the row was stored, else the stored one, which the
+ * stored task holds too. Each task is read once per run. */
+const liveKeys = new WeakMap<Run, Map<string, Promise<string | undefined>>>()
+function taskKeyOf(run: Run, taskId: string, stored: string | undefined) {
+  const keys = liveKeys.get(run) ?? new Map<string, Promise<string | undefined>>()
+  liveKeys.set(run, keys)
+  let key = keys.get(taskId)
+  if (key === undefined) {
+    key = byId(run.ctx, 'issues', taskId).then((task) => task?.window_key)
+    keys.set(taskId, key)
+  }
+  return key.then((live) => live ?? stored)
+}
+
 /** Writes a stored relation row back without its archive mark, with org_id
- * where the table has it (design 5.2): a comment keeps its author and
- * editor, an attachment its uploader, only while they pass the reference
- * predicate; a follow and a label assignment stay only while their profile
- * or label passes it. Deletes the stored row. */
+ * where the table has it (design 5.2), and with its task's window key
+ * (taskKeyOf): a comment keeps its author and editor, an attachment its
+ * uploader, only while they pass the reference predicate; a follow and a
+ * label assignment stay only while their profile or label passes it.
+ * Deletes the stored row. */
 async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
   const { org_id } = run.item
   const r = row.row
@@ -2123,16 +2140,26 @@ async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
     })
   else if (r.table === 'issue_labels') {
     if (sameReference(await labelOf(run, r.doc.label_id), run.item))
-      await db.insert('issue_labels', { ...r.doc, org_id, task_archived: undefined })
+      await db.insert('issue_labels', {
+        ...r.doc,
+        org_id,
+        task_archived: undefined,
+        task_key: await taskKeyOf(run, r.doc.issue_id, r.doc.task_key),
+      })
   } else if (r.table === 'issue_subscriptions') {
     if ((await keptProfile(run, r.doc.profile_id)) !== undefined)
-      await db.insert('issue_subscriptions', { ...r.doc, task_archived: undefined })
+      await db.insert('issue_subscriptions', {
+        ...r.doc,
+        task_archived: undefined,
+        task_key: await taskKeyOf(run, r.doc.issue_id, r.doc.task_key),
+      })
   } else if (r.table === 'issue_attachments') {
     await db.insert('issue_attachments', {
       ...r.doc,
       org_id,
       uploaded_by: await keptProfile(run, r.doc.uploaded_by),
       task_archived: undefined,
+      task_key: await taskKeyOf(run, r.doc.issue_id, r.doc.task_key),
     })
     // the step its drop scheduled found it here, so a dropped image gets
     // its step again, due when the drop's was (model/descriptionImages.ts)
@@ -2227,6 +2254,7 @@ async function placeLinkBy(
       ...link,
       org_id: run.item.org_id,
       task_archived: undefined,
+      task_key: await taskKeyOf(run, link.source_id, link.task_key),
     })
   await run.ctx.db.delete(row._id)
 }

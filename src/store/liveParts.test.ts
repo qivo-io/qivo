@@ -334,6 +334,22 @@ describe('the live parts registry', () => {
     expect(reports.at(-1)?.workspace.state).toBe('failed')
   })
 
+  it('fails a workspace whose root never answers while online', async () => {
+    vi.useFakeTimers()
+    STALL.ms = 1000
+    const s = scripted()
+    const reports: PartsReport[] = []
+    createLiveParts(
+      s.live,
+      (r) => reports.push(r),
+      () => true,
+    )
+    await vi.advanceTimersByTimeAsync(999)
+    expect(reports).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(reports.at(-1)?.workspace.state).toBe('failed')
+  })
+
   it('the side query answering does not start the wait over', async () => {
     vi.useFakeTimers()
     STALL.ms = 1000

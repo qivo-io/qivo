@@ -16,12 +16,16 @@ type Baseline = {
 } & ({ currentOnly: true } | { currentOnly?: false; activity: typeof logActivity })
 
 /** The id of benchmark task `i`: a UUID whose first part is a hash, spread
-    over the id space as the app's random ids are (lib/idWindows.ts). */
+    over the id space as the server's random window keys are
+    (lib/idWindows.ts), and which is also its window key (keyOf). */
 function taskId(i: number): string {
   let hash = 0x811c9dc5
   for (const ch of `task:${i}`) hash = Math.imul(hash ^ ch.charCodeAt(0), 0x01000193) >>> 0
   return `${hash.toString(16).padStart(8, '0')}-0000-4000-8000-${String(i).padStart(12, '0')}`
 }
+
+/** The window key of benchmark task `i`, the first part of its id. */
+const keyOf = (i: number) => taskId(i).slice(0, 8)
 
 /* A caller as convex-test's withIdentity gives one. */
 type Identity = { query: <R>(fn: (ctx: QueryCtx) => Promise<R>) => Promise<R> }
@@ -43,6 +47,9 @@ async function readParts(identity: Identity, orgId: string) {
     const started = performance.now()
     const out = await identity.query(async (ctx) => {
       const answer = await run(fn, ctx, args)
+      // a window that overflowed or refused measures nothing the app shows
+      const state = (answer as { state?: string } | null)?.state
+      if (state !== undefined && state !== 'ok') throw new Error(`${name} answered ${state}`)
       const m = await ctx.meta.getTransactionMetrics()
       return {
         answer: JSON.stringify(answer),
@@ -107,6 +114,7 @@ export async function benchmarkBackend(baseline: Baseline) {
       for (let i = 0; i < count; i++) {
         await ctx.db.insert('issues', {
           id: taskId(i),
+          window_key: keyOf(i),
           org_id: f.org.id,
           project_id: i % 20 === 0 ? f.hidden.id : f.sub.id,
           num: i + 1,
@@ -127,6 +135,7 @@ export async function benchmarkBackend(baseline: Baseline) {
             org_id: f.org.id,
             issue_id: taskId(i),
             label_id: 'benchmark-label',
+            task_key: keyOf(i),
           })
         }
         if (i % 50 === 2) {
@@ -138,6 +147,7 @@ export async function benchmarkBackend(baseline: Baseline) {
             type: 'blocks',
             pair_key: `${taskId(i)}:${taskId(i - 1)}`,
             created_at: NOW,
+            task_key: keyOf(i),
           })
         }
       }

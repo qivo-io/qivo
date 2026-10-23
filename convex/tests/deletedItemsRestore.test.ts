@@ -1032,8 +1032,11 @@ describe('restoring a task item', () => {
     expect((await liveRowsOf(t, a.id)).issue_links).toEqual([])
 
     await restore(t, f.user, [bItem.id])
+    // a link stored without its source's window key comes back with it, as
+    // the source holds one now (a backfill gives a key to the task alone)
     const { _id, _creationTime, ...doc } = toB
-    expect((await liveRowsOf(t, a.id)).issue_links).toEqual([doc])
+    expect(toB.task_key).toBeUndefined()
+    expect((await liveRowsOf(t, a.id)).issue_links).toEqual([{ ...doc, task_key: a.window_key }])
     await assertNoDanglingRefs(t, 'after links came back')
   })
 

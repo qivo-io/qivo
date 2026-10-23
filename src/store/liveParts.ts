@@ -25,7 +25,7 @@
      answer, and a half's failure waits while its window still shows.
      Retry runs only the parts whose failure holds the workspace again.
    - A workspace that stays incomplete while online, with no part answering
-     for STALL.ms, fails, so a part that never answers shows instead of a
+     for STALL.ms, from the start on, fails, so a part that never answers shows instead of a
      frozen screen. Convex sends the first answers of parts subscribed
      together in one transition, so a large organization on a busy backend
      can take many seconds before anything arrives.
@@ -407,6 +407,8 @@ export function createLiveParts(
   })
 
   root = watch(api.workspace.root, {})
+  // the wait runs from the start, so a root that never answers fails too
+  watchStall(true, false)
 
   return {
     /** Runs every failed part the workspace needs again, from a fresh
