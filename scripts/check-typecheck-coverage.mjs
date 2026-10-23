@@ -14,6 +14,7 @@ import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { promisify, stripVTControlCharacters } from 'node:util'
+import { checkoutEnvironment } from './git.mjs'
 
 const run = promisify(execFile)
 // The TypeScript of the repository being checked.
@@ -64,10 +65,14 @@ function typecheckRuns(scripts, name, seen = new Set()) {
   return { projects, names, convexRuntime }
 }
 
-/** Lists the repository's TypeScript files, tracked or new, that Git does not ignore. */
+/**
+ * Lists the repository's TypeScript files, tracked or new, that Git does not
+ * ignore, in the checkout at the working directory whatever GIT_DIR says.
+ */
 function repositoryFiles() {
   return execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
     encoding: 'utf8',
+    env: checkoutEnvironment(),
   })
     .split('\0')
     .filter((file) => typescriptFile.test(file) && fs.existsSync(file))

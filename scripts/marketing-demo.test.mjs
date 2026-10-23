@@ -446,6 +446,12 @@ describe('private, persistent credentials', () => {
     expect(() => fixtureDirectory(cwd, env(tracked), { local: true })).toThrow(/dev-temp/)
     writeFileSync(join(cwd, '.gitignore'), '')
     expect(() => fixtureDirectory(cwd, env(ignored), { local: true })).toThrow(/dev-temp/)
+    // another repository that ignores dev-temp/ does not count for this checkout
+    const other = folder()
+    spawnSync('git', ['init', '--quiet'], { cwd: other })
+    writeFileSync(join(other, '.git', 'info', 'exclude'), 'dev-temp/\n')
+    vi.stubEnv('GIT_DIR', join(other, '.git'))
+    expect(() => fixtureDirectory(cwd, env(ignored), { local: true })).toThrow(/dev-temp/)
   })
 })
 

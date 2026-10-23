@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { checkoutEnvironment } from './git.mjs'
 
 const script = fileURLToPath(new URL('./check-typecheck-coverage.mjs', import.meta.url))
 const typescript = path.dirname(createRequire(import.meta.url).resolve('typescript/package.json'))
@@ -22,10 +23,12 @@ afterEach(() => {
  * as GIT_DIR, and without the machine's Git configuration and ignore files.
  */
 function isolated() {
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')),
-  )
-  return { ...env, HOME: repository, XDG_CONFIG_HOME: repository, GIT_CONFIG_NOSYSTEM: '1' }
+  return {
+    ...checkoutEnvironment(),
+    HOME: repository,
+    XDG_CONFIG_HOME: repository,
+    GIT_CONFIG_NOSYSTEM: '1',
+  }
 }
 
 /** Writes files under a directory, creating their folders. */
@@ -285,6 +288,26 @@ describe('typecheck coverage', { timeout: 30_000 }, () => {
     }
   })
 
+  it('lists the files of the checkout it runs in when GIT_DIR names another repository', () => {
+    setUp({ 'scripts/new.ts': 'export {}\n' })
+    // the other repository's exclude file would hide scripts/
+    const other = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'qivo-typecheck-other-')))
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: other, env: isolated() })
+      fs.writeFileSync(path.join(other, '.git/info/exclude'), 'scripts/\n')
+      const result = spawnSync(process.execPath, [script], {
+        cwd: repository,
+        env: { ...isolated(), PWD: repository, GIT_DIR: path.join(other, '.git') },
+        encoding: 'utf8',
+        timeout: 30_000,
+      })
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain('scripts/new.ts is in no typecheck that verify:local runs.')
+    } finally {
+      fs.rmSync(other, { recursive: true, force: true })
+    }
+  })
+
   it('leaves the repository alone when a Git hook exports GIT_DIR', () => {
     // A pre-push hook in a linked worktree gets the worktree's GIT_DIR.
     const outer = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'qivo-typecheck-outer-')))
@@ -303,7 +326,7 @@ describe('typecheck coverage', { timeout: 30_000 }, () => {
           ],
           {
             cwd: outer,
-            env: { ...process.env, HOME: outer, XDG_CONFIG_HOME: outer, GIT_DIR: undefined },
+            env: { ...checkoutEnvironment(), HOME: outer, XDG_CONFIG_HOME: outer },
           },
         )
       git('init', '-q', 'main')
