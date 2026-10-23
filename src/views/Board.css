@@ -18,8 +18,8 @@
 
 /* The body of a lane below a large Board's first screen (Kanban): the
    browser skips its style, layout and paint while it is offscreen, at the
-   height Kanban estimates until it first renders and at the height it last
-   rendered at after. Its cards stay findable and in the accessibility tree. */
+   height Kanban estimates, until it first renders; Kanban then takes the
+   attribute off. Its cards stay findable and in the accessibility tree. */
 .board-lane-body[data-lane-deferred] {
   content-visibility: auto;
 }

@@ -812,9 +812,28 @@ function Kanban({
      slices: the browser skips its body while it is offscreen
      (Board.css), so the cards a slice adds there cost no style, layout or
      paint in that frame, nor in any frame after until the lane comes near
-     the view. The body stands at its cells' estimated height until then. */
-  const deferredLane = (cells: BoardCellCards[]) =>
-    !sync && cells.every((cell) => initialOf(cell.key) === 0)
+     the view. The body stands at its cells' estimated height until then.
+     A lane skips only until it first renders: the browser keeps a skipped
+     body at the height it last rendered at, whatever changed in it since,
+     so scrolling back up into a lane that changed offscreen would move the
+     Board by the difference. A lane that has rendered skips its blocks
+     alone (DeferredList.css), as a small Board's lanes do. */
+  const [shownLanes] = useStateK(() => new Set<string>())
+  const deferredLane = (key: string, cells: BoardCellCards[]) =>
+    !sync && !shownLanes.has(key) && cells.every((cell) => initialOf(cell.key) === 0)
+  /** Ends a deferred lane body's skipping once it first renders, without
+      a React render: every render after leaves the lane out too. */
+  const watchLane = (key: string) => (body: HTMLDivElement | null) => {
+    if (!body?.hasAttribute('data-lane-deferred')) return
+    const shown = (event: ContentVisibilityAutoStateChangeEvent) => {
+      if (event.skipped) return
+      shownLanes.add(key)
+      body.removeAttribute('data-lane-deferred')
+      body.style.containIntrinsicBlockSize = ''
+    }
+    body.addEventListener('contentvisibilityautostatechange', shown)
+    return () => body.removeEventListener('contentvisibilityautostatechange', shown)
+  }
   const [cellHeights] = useStateK(
     () =>
       new Map<
@@ -1324,12 +1343,13 @@ function Kanban({
                   draws the top border and the foot draws the bottom, so the
                   grid is only ever the two sides */}
                   <div
-                    data-lane-deferred={deferredLane(laneCells[li]) ? '' : undefined}
+                    ref={watchLane(lane.key)}
+                    data-lane-deferred={deferredLane(lane.key, laneCells[li]) ? '' : undefined}
                     style={{
                       gridTemplateColumns: gridCols,
                       borderLeft: `var(--board-body-frame, ${FRAME})`,
                       borderRight: `var(--board-body-frame, ${FRAME})`,
-                      containIntrinsicBlockSize: deferredLane(laneCells[li])
+                      containIntrinsicBlockSize: deferredLane(lane.key, laneCells[li])
                         ? `auto ${Math.max(...laneCells[li].map((cell) => cellHeight(cell, lanePlace, laneCardWidth)))}px`
                         : undefined,
                     }}
