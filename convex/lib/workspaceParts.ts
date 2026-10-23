@@ -593,8 +593,9 @@ async function kidsOf(
  * the one range of the organization's active subtasks whose parent_key is
  * in the window, or null once the reads pass PAGE.hard. The range holds the
  * subtasks of the window's archived tasks too, left out here. A subtask is
- * a whole task body, so it checks PAGE.hard before the first and after
- * every PAGE.batch subtasks, as inBatches does. */
+ * a whole task body, and one stored before the description cap may hold
+ * up to Convex's 1 MiB a document, so it checks PAGE.hard before the first
+ * and after each one. */
 async function keyedKids(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
@@ -604,7 +605,6 @@ async function keyedKids(
   if (await readPast(ctx, PAGE.hard)) return null
   const ids = new Set(parents.map((task) => task.id))
   const kids: Doc<'issues'>[] = []
-  let read = 0
   const range = ctx.db
     .query('issues')
     .withIndex('by_org_archived_parent_key', (q) =>
@@ -612,7 +612,7 @@ async function keyedKids(
     )
   for await (const kid of range) {
     if (kid.parent_id !== undefined && ids.has(kid.parent_id)) kids.push(kid)
-    if (++read % PAGE.batch === 0 && (await readPast(ctx, PAGE.hard))) return null
+    if (await readPast(ctx, PAGE.hard)) return null
   }
   return kids
 }

@@ -2301,6 +2301,46 @@ describe('restoring a project item', () => {
     await assertNoDanglingRefs(t, 'after a project came back in steps')
   }, 120_000)
 
+  it("keeps a subtask's parent key when internal/rangeKeysBackfill runs while its parent is not back yet", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    // a subtask planted before its parent comes back first
+    const kid = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const parent = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await patch(t, 'issues', kid.id, { parent_id: parent.id })
+    await deleteProject(t, f, f.sub.id)
+    await runSteps(t)
+    const item = await itemFor(t, f.sub.id)
+    Object.assign(TRASH_BUDGET, { tasks: 1 })
+    vi.setSystemTime(START + HOUR)
+    expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
+    /* every page of the backfill's issues, written */
+    const backfill = async () => {
+      let cursor: string | null = null
+      for (;;) {
+        const page: { cursor: string | null; done: boolean } = await t.mutation(
+          internal.internal.rangeKeysBackfill.page,
+          { table: 'issues', dry_run: false, cursor },
+        )
+        if (page.done) return
+        cursor = page.cursor
+      }
+    }
+    // after the restorer's own call or a step, while only the subtask is back
+    let ran = false
+    const between = async () => {
+      if (ran || (await liveTask(t, kid.id)) === null || (await liveTask(t, parent.id)) !== null)
+        return
+      await backfill()
+      ran = true
+    }
+    await between()
+    await stepThrough(t, item.id, between)
+    expect(ran).toBe(true)
+    expect((await liveTask(t, kid.id))?.parent_key).toBe(parent.window_key)
+  }, 120_000)
+
   it('places the links before the tasks, so the mark steps of an archived task find them', async () => {
     const t = newT()
     const f = await withOrg(t)

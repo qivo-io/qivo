@@ -339,6 +339,30 @@ describe('reads a window cannot bound by its rows', () => {
     expect(answer).toMatchObject({ state: 'refused', message: expect.stringMatching(/^One part/) })
   }, 120_000)
 
+  it('refuses with a sentence a window whose subtasks from before the description cap would pass the real limits', async () => {
+    const t = newT(REAL_LIMITS)
+    const f = await withOrg(t)
+    // one parent in the narrowest window with 20 subtasks of 900 KiB, a
+    // description from before the 20,000-character cap: about 18 MiB, read
+    // in one range
+    const [parent] = await plantMany(t, 1, () => ({
+      window_key: 'a0000000',
+      org_id: f.org.id,
+      project_id: f.sub.id,
+    }))
+    for (let i = 0; i < 20; i++)
+      await plantMany(t, 1, () => ({
+        org_id: f.org.id,
+        project_id: f.sub.id,
+        parent_id: parent.id,
+        parent_key: parent.window_key,
+        description: 'Field note. '.repeat(76_800),
+      }))
+    const w = narrowestOf('a0000000').holds
+    const answer = await as(t, f.admin).query(api.workspace.tasks, { org_id: f.org.id, ...w })
+    expect(answer).toMatchObject({ state: 'refused', message: expect.stringMatching(/^One part/) })
+  }, 120_000)
+
   it('reads tasks shared with many teams within the real limits', async () => {
     const t = newT(REAL_LIMITS)
     const f = await withOrg(t)

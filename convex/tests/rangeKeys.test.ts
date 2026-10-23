@@ -427,6 +427,61 @@ describe('internal/rangeKeysBackfill', () => {
   const everything = async (t: T, f: OrgFixture) =>
     await Promise.all([f.admin, f.user, f.viewer, f.guest].map((p) => workspaceOf(as(t, p))))
 
+  it('asks for fewer rows when the parents of a page would pass the real limits', async () => {
+    const t = newT({
+      transactionLimits: {
+        bytesRead: 16 * 1024 * 1024,
+        documentsRead: 32_000,
+        databaseQueries: 4096,
+      },
+    })
+    const f = await withOrg(t)
+    // 20 parents of 900 KiB, a description from before the 20,000-character
+    // cap, then a subtask of each stored before parent_key, all in one page:
+    // about 18 MiB of parents
+    const parents: Doc<'issues'>[] = []
+    for (let i = 0; i < 20; i++)
+      parents.push(
+        await plantIssue(t, {
+          org_id: f.org.id,
+          project_id: f.sub.id,
+          description: 'Field note. '.repeat(76_800),
+        }),
+      )
+    const kids: Doc<'issues'>[] = []
+    for (const parent of parents)
+      kids.push(
+        await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: parent.id }),
+      )
+    await unkey(t, { tasks: kids })
+    // a page of subtasks reads too much and asks for fewer rows, which fit
+    let rows = 0
+    let fewer = 0
+    let from: { cursor: string | null; rows?: number } = { cursor: null }
+    for (;;) {
+      const page = await t.query(internal.internal.rangeKeysBackfill.remaining, {
+        table: 'issues',
+        ...from,
+      })
+      rows += page.rows
+      if (page.fewer !== undefined) {
+        fewer++
+        expect(page.rows).toBe(0)
+        from = { cursor: from.cursor, rows: page.fewer }
+      } else if (page.done) break
+      else from = { cursor: page.cursor }
+    }
+    expect(fewer).toBeGreaterThan(0)
+    expect(rows).toBe(20)
+    const result = await t.action(internal.internal.rangeKeysBackfill.run, { dry_run: false })
+    expect(result.issues).toEqual({ rows: 20, orphans: 0 })
+    expect(result.next).toBeNull()
+    const keys = await t.run(async (ctx) =>
+      Promise.all(kids.map(async (kid) => (await ctx.db.get(kid._id))?.parent_key)),
+    )
+    expect(keys).toEqual(parents.map((p) => p.window_key))
+  }, 120_000)
+
   it('fills every field, repairs wrong ones and counts orphans, while every part keeps answering the same', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -486,7 +541,7 @@ describe('internal/rangeKeysBackfill', () => {
         out[table] = { rows: 0, orphans: 0 }
         let cursor: string | null = null
         for (;;) {
-          const page: { rows: number; orphans: number; cursor: string; done: boolean } =
+          const page: { rows: number; orphans: number; cursor: string | null; done: boolean } =
             await t.query(internal.internal.rangeKeysBackfill.remaining, { table, cursor })
           out[table].rows += page.rows
           out[table].orphans += page.orphans
@@ -531,7 +586,7 @@ describe('internal/rangeKeysBackfill', () => {
     for (const table of ['team_members', 'project_team_access', 'issues'] as const) {
       let cursor: string | null = null
       for (;;) {
-        const page: { cursor: string; done: boolean } = await t.mutation(
+        const page: { cursor: string | null; done: boolean } = await t.mutation(
           internal.internal.rangeKeysBackfill.page,
           { table, dry_run: false, cursor },
         )
