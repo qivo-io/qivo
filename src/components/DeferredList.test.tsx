@@ -44,7 +44,7 @@ const keyOf = (item: Item) => item.key
 const estimate = () => 40
 const label = (n: number) => `Loading ${n} more`
 
-const show = (items: Item[], initial: number) =>
+const show = (items: Item[], initial: number, hold = false) =>
   act(async () =>
     root.render(
       <DeferredList
@@ -57,6 +57,7 @@ const show = (items: Item[], initial: number) =>
         initial={initial}
         scheduler={scheduler}
         label={label}
+        hold={hold}
       />,
     ),
   )
@@ -333,6 +334,59 @@ describe('DeferredList', () => {
     await show(items, 20)
     expect(nodes().length).toBeLessThanOrEqual(20 + 64)
     expect(spacer()).not.toBeNull()
+  })
+
+  it('mounts no more than its first screen while items arrive, and slices the rest after', async () => {
+    // every other item first, as tasks arrive window by window
+    const items = Array.from({ length: 400 }, (_, n) => ({ key: `k${n}` }))
+    const first = items.filter((_, n) => n % 2 === 0)
+    await show(first, 20, true)
+    expect(nodes()).toHaveLength(20)
+    // slices leave a held list be
+    await slice()
+    expect(nodes()).toHaveLength(20)
+    // the rest arrive among the mounted ones: no more mount at once, while
+    // held or in the render after
+    await show(items, 20, true)
+    expect(nodes()).toHaveLength(20)
+    await show([...items], 20)
+    expect(nodes()).toHaveLength(20)
+    expect(nodes().map((node) => node.dataset.k)).toEqual(items.slice(0, 20).map(keyOf))
+    // then slices mount the rest
+    while (tasks.length) await slice()
+    expect(nodes()).toHaveLength(400)
+  })
+
+  it('mounts no more at once when the rest arrive in the render that ends the hold', async () => {
+    const items = Array.from({ length: 400 }, (_, n) => ({ key: `k${n}` }))
+    await show(
+      items.filter((_, n) => n % 2 === 0),
+      20,
+      true,
+    )
+    // the complete transition brings the rest and ends the hold together
+    await show(items, 20)
+    expect(nodes()).toHaveLength(20)
+  })
+
+  it('mounts a held list whole when its waiting space is asked for', async () => {
+    const items = Array.from({ length: 100 }, (_, n) => ({ key: `k${n}` }))
+    await show(items, 10, true)
+    await act(async () => scheduler.completeList('list'))
+    expect(nodes()).toHaveLength(100)
+  })
+
+  it('keeps what someone asked for of a held list mounted as the rest arrive', async () => {
+    const items = Array.from({ length: 400 }, (_, n) => ({ key: `k${n}` }))
+    const first = items.filter((_, n) => n % 2 === 0)
+    await show(first, 10, true)
+    await act(async () => scheduler.completeList('list'))
+    expect(nodes()).toHaveLength(200)
+    const keys = () => new Set(nodes().map((node) => node.dataset.k))
+    await show(items, 10, true)
+    expect(first.every((item) => keys().has(item.key))).toBe(true)
+    await show([...items], 10)
+    expect(first.every((item) => keys().has(item.key))).toBe(true)
   })
 })
 

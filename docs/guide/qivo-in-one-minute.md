@@ -14,6 +14,16 @@ and flags projected delays. Other users see saved changes live.
 
 Views and dialogs may show **Loading…** the first time you open them.
 
+A very large workspace opens before all its tasks have arrived. A note at
+the bottom of the page says **Loading tasks…** with how far it has got.
+Until it is gone, the Board and the task list show the tasks that have
+arrived, without counts, and search notes that more results may come. The
+Overview, the Roadmap and Team sync open once every task has loaded, and so
+do moving, archiving and deleting a task. Settings opens at once, but its
+Teams, Projects, Labels and Archived tasks pages wait for every task. A
+link to one task opens once every task has loaded. If loading stops, the
+note says how far it got, and a notice explains what went wrong.
+
 If your organization uses Microsoft and sign-in asks for admin approval, see
 [Microsoft sign-in and administrator approval](./microsoft-sign-in-and-administrator-approval.md).
 

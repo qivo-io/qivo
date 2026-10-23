@@ -7,8 +7,9 @@ import type { LiveQueries, LiveTransition } from '../../lib/liveQueries'
    client double with onUpdate. A test publishes the whole workspace as one
    value of the stand-in query WHOLE, in the shape the store keeps it (or
    null for no seat, or fails it), and the double answers every workspace
-   part from it, each organization in one window, and tells the store of the
-   parts whose answer changed in one transition, as Convex would. Any other
+   part from it, each window with the rows whose ids fall in it, and tells
+   the store of the parts whose answer changed in one transition, as Convex
+   would. A test can hold back one task window (holdWindow). Any other
    query, such as a task's thread, is watched through the client's own
    onUpdate, each result a transition of its own.
 
@@ -47,21 +48,22 @@ function answerOf(whole: Whole | null, name: string, args: Record<string, unknow
     return whole === null
       ? null
       : { auth_user_id: whole.auth_user_id, myProfileIds: whole.myProfileIds, orgs: whole.orgs }
+  // the window asked for; the catalog and the inbox name none
+  const window = {
+    from: typeof args.from === 'string' ? args.from : '',
+    to: typeof args.to === 'string' ? args.to : null,
+  }
   const org = whole
-    ? splitWorkspace(whole, () => [{ from: '', to: null }]).find((o) => o.org_id === args.org_id)
+    ? splitWorkspace(whole, () => [window]).find((o) => o.org_id === args.org_id)
     : undefined
   if (!org) return { state: 'gone' }
   const part = PARTS[name]
   if (part === 'catalog' || part === 'inbox') return { state: 'ok', ...org[part] }
   const kind = part as (typeof KINDS)[number]
-  // one window per kind, the first; any later window is empty
-  const window = args.from === '' ? org[kind][0] : undefined
-  const empty = {
-    tasks: { issues: [], links: [], issueLabels: [], attachments: [], issueSubs: [], orgLoad: [] },
-    people: { profiles: [], teamMembers: [] },
-    projects: { projects: [], access: [], teamAccess: [], milestones: [] },
-  }
-  return { state: 'ok', ...(window ?? empty[kind]) }
+  const rows = org[kind][0]
+  // the hidden load rows ride with the first task window only
+  if (kind === 'tasks' && window.from !== '') return { state: 'ok', ...rows, orgLoad: [] }
+  return { state: 'ok', ...rows }
 }
 
 /** The live transport over `client`. `batch(step)` sends everything
@@ -70,6 +72,7 @@ function answerOf(whole: Whole | null, name: string, args: Record<string, unknow
 export function liveOver(client: Client): LiveQueries & {
   batch(step: () => void): void
   hold(orgId: string | null): void
+  holdWindow(from: string | null): void
 } {
   const handlers = new Set<(transition: LiveTransition) => void>()
   // what each watched token names, its latest result as JSON, and how many
@@ -99,6 +102,8 @@ export function liveOver(client: Client): LiveQueries & {
   let batching: Set<string> | null = null
   // the organization whose parts answer nothing until hold(null)
   let heldOrg: string | null = null
+  // where the task windows start that answer nothing until holdWindow(null)
+  let heldWindow: string | null = null
   const fire = (tokens: Set<string>, when?: string) => {
     if (batching) {
       for (const token of tokens) batching.add(token)
@@ -116,6 +121,8 @@ export function liveOver(client: Client): LiveQueries & {
     for (const [token, w] of watched) {
       if (!isPart(w.name) || (only && token !== only) || whole === undefined) continue
       if (heldOrg !== null && w.args.org_id === heldOrg) continue
+      if (heldWindow !== null && w.name === 'workspace:tasks' && w.args.from === heldWindow)
+        continue
       if ('error' in whole) {
         w.error = whole.error
         w.json = undefined
@@ -270,6 +277,13 @@ export function liveOver(client: Client): LiveQueries & {
     hold(orgId) {
       heldOrg = orgId
       if (orgId === null) fire(refresh())
+    },
+    /** Keeps every task window that starts at `from` from answering, as a
+        window a staged load has not reached, and lets the one held before
+        answer; null holds none. */
+    holdWindow(from) {
+      heldWindow = from
+      fire(refresh())
     },
     batch(step) {
       batching = new Set()

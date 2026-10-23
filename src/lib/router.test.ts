@@ -54,6 +54,7 @@ vi.mock('../store/planner', () => ({
 }))
 
 import {
+  addressesTask,
   buildPath,
   issueLink,
   ORG_NONE,
@@ -62,6 +63,7 @@ import {
   pathMatchesState,
   scopeForIssue,
   syncPlaceOf,
+  taskSegmentOf,
   type UiState,
 } from './router'
 
@@ -740,5 +742,33 @@ describe('phone page navigation', () => {
     expect(pathMatchesState('/app/~/projects', { settingsPage: 'menu' })).toBe(false)
     expect(pathMatchesState('/app/~/settings/menu', { settingsPage: 'account' })).toBe(false)
     expect(pathMatchesState('/app/~/inbox', { projectsOpen: true })).toBe(false)
+  })
+})
+
+describe('addressesTask — a first load waits for every task', () => {
+  it('names a task in a path or a legacy hash', () => {
+    expect(addressesTask('/app/northstar/board/tasks/QN-7', '')).toBe(true)
+    expect(addressesTask('/app/~/inbox/tasks/QN-7', '')).toBe(true)
+    expect(addressesTask('/app/northstar/sync/all/tasks/QN-7', '')).toBe(true)
+    expect(addressesTask('/app', '#/tasks/QN-7')).toBe(true)
+    expect(addressesTask('/app/northstar', '#/o/northstar/board/tasks/QN-7')).toBe(true)
+  })
+
+  it('reads encoded segments as the parsers decode them', () => {
+    expect(addressesTask('/app/northstar/board/%74asks/qn-5', '')).toBe(true)
+    expect(taskSegmentOf('/app/northstar/board/%74asks/qn%2D5', '')).toBe('qn-5')
+    expect(taskSegmentOf('/app', '#/inbox/tasks/QN-7')).toBe('QN-7')
+  })
+
+  it('names none for a scope, a page, or a path outside the app', () => {
+    expect(addressesTask('/app/northstar/board/p/3', '')).toBe(false)
+    expect(addressesTask('/app/northstar/settings/project/3', '')).toBe(false)
+    expect(addressesTask('/app', '')).toBe(false)
+    expect(addressesTask('/docs/tasks/intro', '')).toBe(false)
+    expect(addressesTask('/app', '#tasks')).toBe(false)
+    // an organization's slug is not a page
+    expect(addressesTask('/app/tasks/board/p/3', '')).toBe(false)
+    // a path that names a page leaves the hash unread, as parsePath does
+    expect(addressesTask('/app/northstar/board/p/3', '#/tasks/QN-7')).toBe(false)
   })
 })

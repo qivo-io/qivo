@@ -121,6 +121,9 @@ export function isIdWindow(w: IdWindow): boolean {
   return width >= NARROWEST && Number.isInteger(Math.log2(width)) && a % width === 0
 }
 
+/** The share of every id that window `w` covers, from 0 to 1. */
+export const idShare = (w: IdWindow) => (pointOf(w.to) - pointOf(w.from)) / SPACE
+
 /** Whether id `id` falls in window `w`. */
 export const inIdWindow = (id: string, w: IdWindow) => id >= w.from && (w.to === null || id < w.to)
 

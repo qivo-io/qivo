@@ -2,6 +2,7 @@
 import { useEffect as useEffectS, useRef as useRefS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Icon } from '../components/qivo'
+import { TasksLoadingView } from '../components/TasksLoading'
 import { WorkspacePageHeader, WorkspaceShell } from '../components/WorkspaceShell'
 import { restoreFocus } from '../lib/focusVisibility'
 import { useMobile } from '../lib/useMobile'
@@ -19,6 +20,23 @@ import { OrgGeneralPage } from './settings/OrganizationSettings'
 import { ArchivedProjectsPage, OrgProjectsPage, ProjectPage } from './settings/ProjectSettings'
 import { OrgTeamsPage, TeamPage } from './settings/TeamSettings'
 import { OrgUsersPage } from './settings/UsersSettings'
+
+/** Whether the Settings page `page` reads every task, so it waits while a
+    large workspace still loads them (P.stillLoading): removing access from
+    a team or a project counts the tasks the change reaches before it asks,
+    Labels counts each label's tasks, and Archived tasks tells live tasks
+    from archived ones. Every other page, Sign out, tokens and people
+    included, opens at once. */
+function readsEveryTask(page: string) {
+  return (
+    page === 'org-teams' ||
+    page.startsWith('team:') ||
+    page === 'projects' ||
+    page.startsWith('project:') ||
+    page === 'org-labels' ||
+    page === 'projects-archived-tasks'
+  )
+}
 
 function SettingsScreen({
   page,
@@ -203,6 +221,8 @@ function SettingsScreen({
         }}
       />
     )
+  if (P.stillLoading() !== null && readsEveryTask(page))
+    content = <TasksLoadingView what="This page" />
 
   const navigation = (
     <aside className="settings-navigation" aria-label="Settings navigation">

@@ -102,6 +102,8 @@ type ProfileRow = AppRow<'profiles'> & { sync_at?: string; sync_since?: string }
  * reader is shown the parent (lib/workingSet.ts parentLink). */
 type TaskRow = Omit<AppRow<'issues'>, 'relations_marked' | 'parent_id' | 'window_key'> & {
   parent_id?: string
+  /** always sent; absent reads as false, as in rows the app makes */
+  has_subtasks?: boolean
   has_hidden_subtasks: boolean
   has_hidden_parent: boolean
 }
@@ -564,9 +566,10 @@ function groupBy<T>(rows: readonly T[], key: (row: T) => string): Map<string, T[
  * to it, and shows its marked follow. A task outside the window that a
  * shown task names (its parent, a link's target) is read by id to see
  * whether the caller is shown it. The window's active subtasks (kidsOf)
- * give has_hidden_subtasks and the load rows of the window's tasks the
- * caller is not shown (orgLoad, hiddenLoadOf). Each project these tasks
- * are in is read once, with the caller's levels on it (accessOf). */
+ * give has_subtasks, which tells a group before its subtasks in other
+ * windows arrive, has_hidden_subtasks and the load rows of the window's
+ * tasks the caller is not shown (orgLoad, hiddenLoadOf). Each project these
+ * tasks are in is read once, with the caller's levels on it (accessOf). */
 export async function readTasks(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) {
   const read = await windowTasks(ctx, me, w, PAGE.tasks.most)
   if (!read.complete) return overflow(w, read.rows.at(-1)?.window_key)
@@ -692,8 +695,11 @@ export async function readTasks(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow)
     return {
       ...row,
       ...parentLink(task, () => parent !== undefined && isShown.get(parent) === true),
-      // an active subtask in a live project the caller cannot see makes
-      // this task a group whose subtasks they are not all shown
+      // an active subtask in a live project makes this task a group, which
+      // the app tells while subtasks in later windows are still to come
+      has_subtasks: (kids.get(task.id)?.length ?? 0) > 0,
+      // one the caller cannot see makes it a group whose subtasks they are
+      // not all shown
       has_hidden_subtasks: (kids.get(task.id) ?? []).some((kid) => hiddenKid.get(kid.id)),
     }
   })

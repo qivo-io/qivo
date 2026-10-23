@@ -625,7 +625,10 @@ export function MobileTaskList({
         <section key={group.id} className="mobile-task-section">
           <h2>
             <StatusDot status={group.id} /> {group.name}
-            <span className="text-xs text-text-2">{group.tasks.length}</span>
+            <span className="text-xs text-text-2">
+              {/* a count waits while tasks still load */}
+              {P.stillLoading() === null ? group.tasks.length : '…'}
+            </span>
           </h2>
           {/* the phone's Board cell for one status, as taskFocus reads it */}
           <div className="mobile-task-group" data-board-cell="phone" data-status={group.id}>
@@ -639,6 +642,8 @@ export function MobileTaskList({
               initial={initialOf(group.id)}
               scheduler={scheduler}
               label={pendingRows}
+              // tasks still arriving land among the rows (DeferredList hold)
+              hold={P.stillLoading() !== null}
             />
           </div>
         </section>
@@ -646,13 +651,15 @@ export function MobileTaskList({
       {count === 0 && (
         <div className="mobile-task-empty">
           <Icon name="board" size={24} />
-          <h2>No tasks here</h2>
+          <h2>{P.stillLoading() === null ? 'No tasks here' : 'Loading tasks…'}</h2>
           <p>
-            {activeFilters || selectedStatus !== 'all'
-              ? 'Try another status or adjust your filters.'
-              : info.mine
-                ? 'Tasks assigned to you will appear here.'
-                : 'Create a task to get started.'}
+            {P.stillLoading() !== null
+              ? 'Tasks are still arriving.'
+              : activeFilters || selectedStatus !== 'all'
+                ? 'Try another status or adjust your filters.'
+                : info.mine
+                  ? 'Tasks assigned to you will appear here.'
+                  : 'Create a task to get started.'}
           </p>
           {(activeFilters > 0 || selectedStatus !== 'all') && (
             <Button

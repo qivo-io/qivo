@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
-import { createMountScheduler, type DeferredMount } from './mountScheduler'
+import { act, createElement } from 'react'
+import { createRoot } from 'react-dom/client'
+import { describe, expect, it, vi } from 'vitest'
+import { createMountScheduler, type DeferredMount, useMountGuards } from './mountScheduler'
 
 type IdleTask = (deadline: { timeRemaining: () => number }) => void
 
@@ -24,8 +26,9 @@ function setup({ frames, idle }: { frames?: (() => void)[]; idle?: IdleTask[] } 
   })
   const root = document.createElement('div')
   document.body.replaceChildren(root)
-  /** A list of `total` items, `mounted` of them in, `cost` ms per item mounted. */
-  const list = (id: string, total: number, mounted = 0, cost = 0) => {
+  /** A list of `total` items, `mounted` of them in, `cost` ms per item
+      mounted, held while `held.value` is true. */
+  const list = (id: string, total: number, mounted = 0, cost = 0, held = { value: false }) => {
     const spacer = document.createElement('div')
     root.append(spacer)
     const state = { mounted, grown: [] as number[] }
@@ -33,6 +36,7 @@ function setup({ frames, idle }: { frames?: (() => void)[]; idle?: IdleTask[] } 
       id,
       spacer: () => (state.mounted < total ? spacer : null),
       pending: () => total - state.mounted,
+      holds: () => held.value,
       grow: (n) => {
         state.grown.push(n)
         state.mounted += n
@@ -91,9 +95,38 @@ describe('createMountScheduler', () => {
     expect(a.state.grown).toEqual([8])
     while (s.tasks.length) await s.run()
     expect(a.state.mounted).toBe(40)
+    await s.settle()
     expect(s.root.getAttribute('data-board-mount')).toBe('complete')
     expect(s.root.hasAttribute('aria-busy')).toBe(false)
     expect(s.tasks).toHaveLength(0)
+  })
+
+  it('leaves a held list to Find, not to slices, and keeps the root busy while it waits', async () => {
+    const s = setup()
+    s.scheduler.setRoot(s.root)
+    const held = { value: true }
+    const a = s.list('a', 40, 10, 0, held)
+    await s.settle()
+    // slices leave it be, but it still waits
+    expect(s.tasks).toHaveLength(0)
+    expect(s.scheduler.pending()).toBe(true)
+    expect(s.root.getAttribute('data-board-mount')).toBe('pending')
+    expect(s.root.getAttribute('aria-busy')).toBe('true')
+    // Find mounts it, as it mounts every list
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+    const view = document.createElement('div')
+    const reactRoot = createRoot(view)
+    function Guards() {
+      useMountGuards(s.scheduler)
+      return null
+    }
+    await act(async () => reactRoot.render(createElement(Guards)))
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true }))
+    expect(a.state.mounted).toBe(40)
+    await s.settle()
+    expect(s.root.getAttribute('data-board-mount')).toBe('complete')
+    await act(async () => reactRoot.unmount())
+    vi.unstubAllGlobals()
   })
 
   it('leaves a root with nothing to wait for unmarked', async () => {

@@ -1063,6 +1063,7 @@ function shownWorkspace() {
       P.inboxCutReach.removeRead,
       P.CURRENT_USER,
       P.contextVersion,
+      stillLoading,
       // Roadmap's undo (P.roadmapUndo), which a task edit's answer ends
       roadmapVisit?.count ?? 0,
       !roadmapVisit || roadmapVisit.disabled,
@@ -1224,6 +1225,10 @@ function repaint(parts: { workspace?: boolean; thread?: boolean }) {
   }
   paintRows(workspace, thread)
   if (workspace) {
+    if (loadEnds) {
+      loadEnds = false
+      stillLoading = null
+    }
     rebuild()
     moveHandles(lastMoves)
     // a delivery that brings nothing new to the screen, such as a batch's
@@ -1660,9 +1665,10 @@ const SERVER_STAMPS = new Set([
   'archived_at',
   'sync_at',
 ])
-/* Snapshot fields that only feed a row section's set (the base's flags,
-   store/workspaceBase.ts), where false means the same as absent. */
-const SET_FLAGS = new Set(['has_hidden_subtasks', 'has_hidden_parent'])
+/* Snapshot fields that only feed a set of tasks (the base's flags,
+   store/workspaceBase.ts, and subtaskParentsNow), where false means the
+   same as absent. */
+const SET_FLAGS = new Set(['has_subtasks', 'has_hidden_subtasks', 'has_hidden_parent'])
 
 /** Every row section and inbox counter in one canonical form: map entries,
     set members and array items sorted, object keys sorted and undefined
@@ -2880,10 +2886,7 @@ async function primeMint(items: MintItem[]): Promise<boolean> {
                 // A snapshot replacement can overtake either the mint or its
                 // byte fetch. Never attach a newer storage version to an old key.
                 if (!lease || new URL(lease.url).searchParams.get('v') !== key.split(':').at(-1)) {
-                  if (avatarSources.failure(key, true, ticket)) {
-                    rebuild()
-                    emit()
-                  }
+                  if (avatarSources.failure(key, true, ticket)) showPortraits()
                   return
                 }
                 if (
@@ -2894,10 +2897,7 @@ async function primeMint(items: MintItem[]): Promise<boolean> {
                   )
                 ) {
                   // One slow portrait must not hold the roster's ready faces.
-                  if (epoch === storeEpoch) {
-                    rebuild()
-                    emit()
-                  }
+                  if (epoch === storeEpoch) showPortraits()
                 }
               }),
             )
@@ -2924,6 +2924,16 @@ async function primeMint(items: MintItem[]): Promise<boolean> {
     })
   }
   return (await Promise.all(waits)).some(Boolean)
+}
+
+/** Shows the portraits that became ready or failed. While a large workspace
+    still loads its tasks, they wait for its next paint, which rebuilds from
+    them: each one would repaint the whole workspace while the parts still
+    to come need the page (store/liveParts.ts). */
+function showPortraits() {
+  if (stillLoading !== null) return
+  rebuild()
+  emit()
 }
 
 /** Re-mint before anything goes stale. A rebuild already primes, but a tab
@@ -3291,12 +3301,29 @@ function rebuild(now = new Date(), full = false) {
     gridBefore !== TIMELINE_START.getTime() ||
     todayBefore !== TODAY_ISO
   lastIdentity = identity
-  const moved = whole ? null : tasks.update(sources, taskChangesOf(dirty))
+  const changes = taskChangesOf(dirty)
+  // the tasks taken for groups with subtasks to come, and for subtasks of
+  // parents to come, change while loading
+  if (
+    sources.hiddenSubtaskParents !== lastSubtaskParents ||
+    sources.hiddenParentTasks !== lastHiddenParents
+  )
+    changes.flags = true
+  lastSubtaskParents = sources.hiddenSubtaskParents
+  lastHiddenParents = sources.hiddenParentTasks
+  const moved = whole ? null : tasks.update(sources, changes)
   if (moved) lastMoves = moved
   else {
     lastMoves = tasks.full(sources)
     committedByOwner.clear()
   }
+  // the delays a staged load held back (delayOf) show now: the tasks that
+  // show one paint again
+  if (rebuiltLoading && stillLoading === null) {
+    const shown = [...tasks.delays].filter(([, d]) => DELAY_COLORS[d.status] !== null)
+    tasks.renew(shown.map(([uuid]) => uuid))
+  }
+  rebuiltLoading = stillLoading !== null
   P.issues = tasks.issues()
   P.issueById = tasks.issueById()
   if (STRICT_LAYERS && !unchecked) checkTasks(sources)
@@ -3431,14 +3458,49 @@ function taskSources(): TaskSources {
     orgLoad: rows.orgLoad,
     projects: rows.projects,
     profiles: rows.profiles,
-    hiddenSubtaskParents: rows.hiddenSubtaskParents,
-    hiddenParentTasks: rows.hiddenParentTasks,
+    hiddenSubtaskParents: subtaskParentsNow(),
+    hiddenParentTasks: hiddenParentsNow(),
     homeOrg: HOME_ORG,
     mine: myProfileSet,
     // indexed once: P.user is a linear scan
     capacity: new Map(PLANNER.users.map((u) => [u.id, plannableHoursOf(u)])),
     defaultCapacity: DEFAULT_PLANNABLE_HOURS,
   }
+}
+
+/* Whether the last rebuild was while a large workspace still loaded. */
+let rebuiltLoading = false
+/* The Sets the last rebuild took for hiddenSubtaskParents and
+   hiddenParentTasks. */
+let lastSubtaskParents: ReadonlySet<string> = new Set()
+let lastHiddenParents: ReadonlySet<string> = new Set()
+
+/** The tasks with subtasks this person is not shown. While a large
+    workspace loads (stillLoading), they include every task the server
+    says has subtasks (has_subtasks), as theirs may be still to come: a
+    parent never shows as a leaf, nor a group as done or with known
+    progress, before every task arrived. A Set is kept while it holds the
+    same tasks. */
+function subtaskParentsNow(): ReadonlySet<string> {
+  const hidden = rows.hiddenSubtaskParents
+  if (stillLoading === null) return hidden
+  const next = new Set(hidden)
+  for (const [uuid, row] of rows.issues) if (row.has_subtasks) next.add(uuid)
+  return sameData(next, lastSubtaskParents) ? lastSubtaskParents : next
+}
+
+/** The tasks whose parent this person is not shown. While a large
+    workspace loads, they include every subtask whose parent is still to
+    come (parentLoading): such a task never reads as one without a parent,
+    nor is offered as a parent. A Set is kept while it holds the same
+    tasks. */
+function hiddenParentsNow(): ReadonlySet<string> {
+  const hidden = rows.hiddenParentTasks
+  if (stillLoading === null) return hidden
+  const next = new Set(hidden)
+  for (const [uuid, row] of rows.issues)
+    if (row.parent_id && !rows.issues.has(row.parent_id)) next.add(uuid)
+  return sameData(next, lastHiddenParents) ? lastHiddenParents : next
 }
 
 /** What the rows say changed since the last rebuild, as the task index
@@ -5121,7 +5183,8 @@ export const PLANNER = {
       toast(msg.charAt(0).toUpperCase() + msg.slice(1))
       return false
     }
-    await initStore()
+    // the workspace on screen never shrinks to a partial one
+    await initStore(undefined, undefined, { whole: true })
     emit()
     return true
   },
@@ -5273,10 +5336,12 @@ export const PLANNER = {
      folded into delayColor: null means "nothing to paint — the surface stays
      as it is", which now covers three cases that all look alike, not tracked,
      done/no-signal, and on track. A token string otherwise, and only for the
-     two states that carry pressure: yellow behind, red late. */
+     two states that carry pressure: yellow behind, red late. Neither judges
+     while tasks still load, since the load of the owners' tasks still to
+     come is missing. */
   delayOf: (x: IssueVM | string): DelayInfo | null => {
     const it = typeof x === 'string' ? PLANNER.issueById[x] : x
-    return (it && delayMap.get(it.uuid)) || null
+    return (stillLoading === null && it && delayMap.get(it.uuid)) || null
   },
   tracksDelay: (x: IssueVM | string): boolean => {
     const it = typeof x === 'string' ? PLANNER.issueById[x] : x
@@ -5310,7 +5375,7 @@ export const PLANNER = {
   },
   delayColor: (x: IssueVM | string): string | null => {
     const it = typeof x === 'string' ? PLANNER.issueById[x] : x
-    if (!it || !PLANNER.tracksDelay(it)) return null
+    if (!it || stillLoading !== null || !PLANNER.tracksDelay(it)) return null
     const d = delayMap.get(it.uuid)
     return d ? DELAY_COLORS[d.status] : DELAY_NEUTRAL
   },
@@ -5372,6 +5437,17 @@ export const PLANNER = {
   /** Why the live snapshot is stale, or null while it is current. Observe
       it through the `health` channel. */
   snapshotTrouble: (): SnapshotTrouble | null => snapshotTrouble,
+  /** While a large workspace loads in stages, the share of its tasks that
+      arrived, from 0 to 1; null once every task did. Counts, totals and
+      verdicts over many tasks wait for null (store/liveParts.ts). */
+  stillLoading: (): number | null => stillLoading,
+  /** Whether the parent of `x` is a task still to arrive while a large
+      workspace loads (hiddenParentsNow). */
+  parentLoading: (x: IssueVM | string): boolean => {
+    const it = typeof x === 'string' ? PLANNER.issueById[x] : x
+    const parent = it && stillLoading !== null ? rows.issues.get(it.uuid)?.parent_id : undefined
+    return !!parent && !rows.issues.has(parent)
+  },
   /** Why Qivo cannot save now, or null (lib/syncStatus). Observe it through
       the `health` channel. */
   savePause,
@@ -5414,7 +5490,9 @@ export const PLANNER = {
     const it = typeof x === 'string' ? PLANNER.issueById[x] : x
     return !!it && isIssueDone(it, PLANNER.issueById)
   },
-  /* progress — computed from descendant leaves, never group statuses */
+  /* progress — computed from descendant leaves, never group statuses. A
+     group's is unknown while tasks still load, since subtasks may be still
+     to come (subtaskParentsNow). */
   progressOf: (x: IssueVM | string) => {
     const it = typeof x === 'string' ? PLANNER.issueById[x] : x
     return it ? groupProgress(it, PLANNER.issueById) : { pct: 0, done: 0, total: 0, unknown: false }
@@ -5425,11 +5503,12 @@ export const PLANNER = {
      own, 0066, and a Done task has no work left, as in every other remaining
      total). Cycle-safe like progressOf. undefined when no unfinished leaf has
      hours entered. Only the parent/sub-issue tree feeds this, and linked
-     issues never count. */
+     issues never count. A group has none while tasks still load. */
   remainingOf: (x: IssueVM | string): number | undefined => {
     const it = typeof x === 'string' ? PLANNER.issueById[x] : x
     if (!it) return undefined
     if (!PLANNER.isGroup(it)) return it.remaining
+    if (stillLoading !== null) return undefined
     let sum = 0
     let any = false
     eachDescendant(it, (child) => {
@@ -8556,12 +8635,14 @@ export const PLANNER = {
    The workspace arrives in live parts (convex/workspace.ts), which the
    registry (store/liveParts.ts) adopts once per Convex transition. Its first
    complete transition settles initStore; every later one that changed a
-   part is the new anchor the rows are built from (owe). A part that fails
-   after the first is snapshot trouble (see snapshot health), and so is a
-   later answer with no seat left. Network drops only delay transitions
-   until Convex reconnects and resubscribes. The last workspace stays on
-   screen and shared edits pause until a later complete transition arrives
-   and reaches the screen. */
+   part is the new anchor the rows are built from (owe). A large workspace
+   settles initStore with its first partial transition instead, and shows
+   the task windows that arrived until its first complete one
+   (stillLoading). A part that fails after the first is snapshot trouble
+   (see snapshot health), and so is a later answer with no seat left.
+   Network drops only delay transitions until Convex reconnects and
+   resubscribes. The last workspace stays on screen and shared edits pause
+   until a later complete transition arrives and reaches the screen. */
 
 /* Whether the server delivered a workspace, never undone by a later answer
    with no seat. Its rows are staged in the base (store/workspaceBase.ts),
@@ -8569,6 +8650,16 @@ export const PLANNER = {
    they run ahead of the rows on screen until then. The parts' answers are
    not kept beside it: the base keeps each unchanged row's earlier object. */
 let hasSnapshot = false
+/* While a large workspace loads in stages (store/liveParts.ts), the share of
+   its task windows that arrived, from 0 to 1; null once it is complete. A
+   partial delivery holds no write for certain, since the window a write
+   changed may not have arrived, so it is no live good delivery: writes
+   accepted meanwhile stay saved until the complete one. */
+let stillLoading: number | null = null
+/* Whether the complete delivery that ends a staged load waits for its
+   paint, which sets stillLoading to null: until then the rows on screen
+   are the partial ones. */
+let loadEnds = false
 /* The live parts of the running store, null before boot and after
    disposal. */
 let parts: LiveParts | null = null
@@ -8680,7 +8771,12 @@ let bootThreadNews: PartsReport['side'] | undefined
     claim. */
 function startParts(
   stillCurrent: () => boolean,
-  first?: { resolve: (snap: Snapshot | null) => void; reject: (err: unknown) => void },
+  first?: {
+    resolve: (snap: Snapshot | null) => void
+    reject: (err: unknown) => void
+    /** whether the boot waits for the complete workspace, not a partial one */
+    whole?: boolean
+  },
 ): LiveParts {
   let settled = !first
   let bootFailed = false
@@ -8693,7 +8789,7 @@ function startParts(
       const ws = news.workspace
       if (!settled) {
         if (news.side) bootThreadNews = news.side
-        if (ws.state === 'held') return
+        if (ws.state === 'held' || (ws.state === 'partial' && first?.whole)) return
         settled = true
         if (ws.state === 'failed') {
           bootFailed = true
@@ -8703,9 +8799,14 @@ function startParts(
         }
         const snap = ws.value && anchor(ws.value)
         hasSnapshot = snap !== null
+        // the boot paints this delivery before anything rebuilds
+        stillLoading = snap && ws.state === 'partial' ? ws.loaded : null
+        loadEnds = false
         if (snap) {
-          snapshotCurrent = true
-          snapshotDeliveries++
+          if (ws.state !== 'partial') {
+            snapshotCurrent = true
+            snapshotDeliveries++
+          }
           noteDelivery(base.stage(snap), snap)
         }
         first?.resolve(snap)
@@ -8720,6 +8821,8 @@ function startParts(
       })
     },
     online,
+    // a workspace once complete shows only a complete one again
+    { whole: first ? first.whole : stillLoading === null },
   )
 }
 
@@ -8730,6 +8833,21 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
   // writes accepted meanwhile stay saved until a complete transition.
   if (ws.state === 'held') {
     snapshotCurrent = false
+    return
+  }
+  // A large workspace still loading shows the task windows that arrived.
+  // A workspace once complete never shrinks to a partial one: fresh parts
+  // after Try again hold it, as a held transition does.
+  if (ws.state === 'partial') {
+    snapshotCurrent = false
+    if (stillLoading === null) return
+    stillLoading = ws.loaded
+    if (ws.changed) {
+      const snap = anchor(ws.value)
+      noteDelivery(base.stage(snap), snap)
+    }
+    subscribeWaitingThread()
+    owe('workspace')
     return
   }
   if (ws.state === 'failed') {
@@ -8757,6 +8875,9 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
   hasSnapshot = true
   snapshotCurrent = true
   snapshotDeliveries++
+  // the repaint that paints this delivery ends the load (repaint)
+  const loadedNow = stillLoading !== null
+  if (loadedNow) loadEnds = true
   if (ws.changed) {
     const snap = anchor(ws.value)
     noteDelivery(base.stage(snap), snap)
@@ -8766,7 +8887,7 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
   const dropped = layers.dropSaved('workspace')
   // Snapshot trouble ends with the paint of this delivery (endHeldRecovery)
   if (snapshotTrouble) recoveryHeld = true
-  if (ws.changed || dropped || recoveryHeld) owe('workspace')
+  if (ws.changed || dropped || recoveryHeld || loadedNow) owe('workspace')
 }
 
 /** Try again. Runs the failed parts again from fresh
@@ -8836,6 +8957,8 @@ export function disposeDemoStore() {
   PLANNER.lastCommentsCut = []
   pendingRestoreIssueIds.clear()
   hasSnapshot = false
+  stillLoading = null
+  loadEnds = false
   layers.clear()
   owed.workspace = false
   owed.thread = false
@@ -8980,6 +9103,9 @@ function countInbox() {
 export async function initStore(
   onAuthenticated?: (accountId: string) => void,
   knownSession?: Awaited<ReturnType<typeof authClient.getSession>>,
+  /** `whole` waits for the complete workspace even when a large one could
+      show part of it first, for an address that names a task */
+  opts?: { whole?: boolean },
 ): Promise<{ profileId: string; homeOrg: string } | null> {
   stopDayWatch?.()
   stopDayWatch = null
@@ -9017,7 +9143,8 @@ export async function initStore(
   // profile on the server, so they do not wait for the snapshot's roster.
   const bootPreferences = preferences.beginBoot()
   stopParts()
-  // the new parts have delivered nothing yet
+  // the new parts have delivered nothing yet; what shows stays partial, if
+  // it is, until their first delivery paints
   snapshotCurrent = false
   // New parts start from a clean state; their first complete transition
   // settles the boot, so it never reports recovery from earlier trouble.
@@ -9028,7 +9155,7 @@ export async function initStore(
   let bootParts: LiveParts | null = null
   const first = await new Promise<Snapshot | null>((resolve, reject) => {
     if (DEMO_MODE) cancelDemoBoot = () => resolve(null)
-    parts = bootParts = startParts(stillCurrent, { resolve, reject })
+    parts = bootParts = startParts(stillCurrent, { resolve, reject, whole: opts?.whole })
   }).catch((err: unknown) => {
     // a failed boot keeps no subscription (see startParts)
     if (parts === bootParts) stopParts()
@@ -9099,7 +9226,26 @@ export async function initStore(
     unconfirmedReport = text
     emit('health')
   })
+  // A large workspace's first part and the views' first render are two
+  // long tasks; a paint between them keeps each frame shorter.
+  if (stillLoading !== null) await afterPaint()
+  if (!stillCurrent()) return null
   return { profileId: CURRENT_USER, homeOrg: HOME_ORG }
+}
+
+/** Resolves once the browser painted the next frame, or after 100ms in a
+    hidden tab, which paints nothing; at once without frames. */
+function afterPaint() {
+  return new Promise<void>((resolve) => {
+    if (typeof requestAnimationFrame !== 'function') return resolve()
+    const timer = setTimeout(resolve, 100)
+    requestAnimationFrame(() =>
+      setTimeout(() => {
+        clearTimeout(timer)
+        resolve()
+      }, 0),
+    )
+  })
 }
 
 export const P = PLANNER

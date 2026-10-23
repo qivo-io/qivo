@@ -531,7 +531,8 @@ function ColHeaderRow({
             {s.name}
           </span>
           <span data-status-count={s.id} className="[font-size:var(--fs-xs)] [color:var(--text-3)]">
-            {counts[s.id] || 0}
+            {/* a count waits while tasks still load */}
+            {P.stillLoading() === null ? counts[s.id] || 0 : '…'}
           </span>
           <div className="[flex:1]" />
           {/* a column names a status, not a place — across all projects there
@@ -560,7 +561,9 @@ function NoMatchNote({ onClear }: { onClear: () => void }) {
   return (
     <div className="board-empty-note animate-in fade-in slide-in-from-bottom-1 [display:flex] [flex-direction:column] [align-items:center] [gap:6px] [padding:26px_16px]">
       <span className="[font-size:var(--fs-base)] [color:var(--text-3)]">
-        Nothing matches your filters
+        {P.stillLoading() === null
+          ? 'Nothing matches your filters'
+          : 'Nothing matches your filters yet. Tasks are still loading.'}
       </span>
       <Button type="button" onClick={onClear}>
         Clear filters
@@ -940,6 +943,8 @@ function Kanban({
         label={pendingLabel}
         listRole
         blockSize={BOARD_BLOCK_SIZE}
+        // tasks still arriving land among the cards (DeferredList hold)
+        hold={P.stillLoading() !== null}
       />
     )
   }
@@ -1030,6 +1035,10 @@ function Kanban({
     )
   }
   if (scoped.length === 0) {
+    // the tasks of this view may be still to come
+    if (P.stillLoading() !== null) {
+      return <EmptyState icon="board" title="Loading tasks…" hint="Tasks are still arriving." />
+    }
     // My view empties for a reason of its own — an empty board here doesn't
     // mean nobody has created anything, only that none of it landed on me
     if (mine) {
@@ -1168,7 +1177,10 @@ function Kanban({
                           >
                             <div className="[display:flex] [align-items:center] [gap:6px] [padding:4px_2px] [font-size:var(--fs-xs)] [color:var(--text-3)] [font-weight:600]">
                               <StatusDot status={s.id} size={12} />
-                              {s.name} <span className="[font-weight:400]">{items.length}</span>
+                              {s.name}{' '}
+                              <span className="[font-weight:400]">
+                                {P.stillLoading() === null ? items.length : '…'}
+                              </span>
                             </div>
                             {/* biome-ignore lint/a11y/useSemanticElements: a styled flex div inside the cell that takes drops */}
                             <div
