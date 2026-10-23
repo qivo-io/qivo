@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, useEffect, useState } from 'react'
+import { act, lazy, Suspense, useEffect, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -90,6 +90,7 @@ const show = (shown: boolean, label = 'board', layers = false) =>
   )
 const view = () => container.firstElementChild as HTMLElement
 const board = () => container.querySelector<HTMLElement>('[data-board]')
+const content = () => container.querySelector<HTMLElement>('[data-kept-content]')
 
 describe('KeptView', () => {
   it('keeps the view mounted while hidden, out of use, unmarked and inactive', async () => {
@@ -106,13 +107,13 @@ describe('KeptView', () => {
     // hidden by the container, which keeps its layout, and not by the
     // display: none Activity gives its elements, which would drop it
     expect(view().className).toContain('[content-visibility:hidden]')
-    expect(board()?.style.display).toBe('')
+    expect(content()?.style.display).toBe('')
     // Activity stops its effects
     expect(counts.running).toBe(0)
     await show(true)
     expect(view().dataset.workspaceView).toBe('kanban')
     expect(view().matches(OUT_OF_USE)).toBe(false)
-    expect(board()?.style.display).toBe('')
+    expect(content()?.style.display).toBe('')
     expect(counts.running).toBe(1)
     // shown again, not mounted again
     expect(counts.mounts).toBe(1)
@@ -134,9 +135,32 @@ describe('KeptView', () => {
     await show(false)
     await act(async () => bump())
     // the render while hidden does not leave Activity's display: none on
-    expect(board()?.style.display).toBe('')
+    expect(content()?.style.display).toBe('')
     await show(true)
     expect(board()?.dataset.n).toBe('1')
+  })
+
+  it('leaves content that a Suspense inside hid hidden when it shows again', async () => {
+    const Never = lazy(() => new Promise<{ default: () => null }>(() => {}))
+    const tree = (shown: boolean, waiting: boolean) =>
+      act(async () =>
+        root.render(
+          <KeptView view="kanban" shown={shown} className="view">
+            <Suspense fallback={<span data-fallback />}>
+              <div data-board="board">{waiting && <Never />}</div>
+            </Suspense>
+          </KeptView>,
+        ),
+      )
+    await tree(true, false)
+    // the view's code for a part is still on its way: Suspense hides the rest
+    await tree(true, true)
+    expect(board()?.style.display).toBe('none')
+    await tree(false, true)
+    await tree(true, true)
+    expect(content()?.style.display).toBe('')
+    expect(board()?.style.display).toBe('none')
+    expect(container.querySelector('[data-fallback]')).not.toBeNull()
   })
 
   it('closes its pop-ups while hidden, and they leave the page', async () => {

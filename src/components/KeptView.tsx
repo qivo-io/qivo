@@ -110,7 +110,11 @@ export function KeptView({
       <HiddenViewContext.Provider value={hidden}>
         <TeardownContext.Provider value={teardown}>
           <Activity mode={mode === 'hidden' ? 'hidden' : 'visible'}>
-            <Frozen frozen={!shown}>{children}</Frozen>
+            {/* the one element Activity hides, and so the one shown again;
+               a Suspense inside keeps its own hidden content hidden */}
+            <div data-kept-content className="contents">
+              <Frozen frozen={!shown}>{children}</Frozen>
+            </div>
           </Activity>
         </TeardownContext.Provider>
       </HiddenViewContext.Provider>
@@ -118,8 +122,8 @@ export function KeptView({
   )
 }
 
-/** Takes back the inline `display: none` Activity gave the elements at the
-    top of `container`. */
+/** Takes back the inline `display: none` Activity gave the content
+    wrapper at the top of `container`. */
 function undoDisplayNone(container: Element | null) {
   for (const element of container?.children ?? [])
     if (element instanceof HTMLElement && element.style.display === 'none')
