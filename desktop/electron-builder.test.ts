@@ -1,23 +1,32 @@
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
+import os from 'node:os'
 import path from 'node:path'
+import { Arch, build, type Configuration, Packager, Platform } from 'electron-builder'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 const require = createRequire(import.meta.url)
 const configPath = require.resolve('./electron-builder.cjs')
+const feed = 'https://downloads.qivo.io/desktop'
 
-/** Loads the build config as electron-builder would with this build-time feed. */
-function loadConfig(updateUrl?: string) {
+/** Sets the build-time feed, or removes it, and returns a function that restores it. */
+function setFeed(updateUrl?: string) {
   const previous = process.env.QIVO_DESKTOP_UPDATE_URL
   if (updateUrl) process.env.QIVO_DESKTOP_UPDATE_URL = updateUrl
   else delete process.env.QIVO_DESKTOP_UPDATE_URL
-  delete require.cache[configPath]
-  try {
-    return require(configPath)
-  } finally {
+  return () => {
     if (previous === undefined) delete process.env.QIVO_DESKTOP_UPDATE_URL
     else process.env.QIVO_DESKTOP_UPDATE_URL = previous
-    delete require.cache[configPath]
+  }
+}
+
+/** Loads the build config as electron-builder would with this build-time feed. */
+function loadConfig(updateUrl?: string) {
+  const restore = setFeed(updateUrl)
+  try {
+    return require(configPath)()
+  } finally {
+    restore()
   }
 }
 
@@ -50,20 +59,19 @@ describe('desktop update feed in the build', () => {
   })
   afterEach(() => fs.rmSync(runDirectory, { recursive: true, force: true }))
 
-  /** Packs a fake app whose resources hold this app-update.yml, or none. */
-  function packed(platform: string, updateConfig?: string) {
+  /** Packs a fake Windows app whose resources hold this app-update.yml, or none. */
+  function packed(updateConfig?: string) {
     const appOutDir = fs.mkdtempSync(path.join(runDirectory, 'app-'))
     const resources = path.join(appOutDir, 'resources')
     fs.mkdirSync(resources)
     if (updateConfig) fs.writeFileSync(path.join(resources, 'app-update.yml'), updateConfig)
     return {
-      electronPlatformName: platform,
+      electronPlatformName: 'win32',
       appOutDir,
       packager: { getResourcesDir: (outDir: string) => path.join(outDir, 'resources') },
     }
   }
 
-  const feed = 'https://downloads.qivo.io/desktop'
   const unsigned = `provider: generic\nurl: ${feed}\nupdaterCacheDirName: qivo-desktop-updater\n`
   const signed = `${unsigned}publisherName:\n  - Qivo AB\n`
 
@@ -83,23 +91,133 @@ describe('desktop update feed in the build', () => {
       `${unsigned}publisherName: '  '\n`,
       `${unsigned}publisherName:\n  - Qivo AB\n  - ''\n`,
     ])
-      await expect(loadConfig(feed).afterPack(packed('win32', config)), config).rejects.toThrow(
+      await expect(loadConfig(feed).afterPack(packed(config)), config).rejects.toThrow(
         'known publisher',
       )
     // a feed from another publish setting than QIVO_DESKTOP_UPDATE_URL
-    await expect(loadConfig().afterPack(packed('win32', unsigned))).rejects.toThrow(
-      'known publisher',
-    )
+    await expect(loadConfig().afterPack(packed(unsigned))).rejects.toThrow('known publisher')
   })
 
-  it('passes a signed Windows build, a Linux build and a build without a feed', async () => {
-    await expect(loadConfig(feed).afterPack(packed('win32', signed))).resolves.toBeUndefined()
+  it('passes a signed Windows build and a Windows build without a feed', async () => {
+    await expect(loadConfig(feed).afterPack(packed(signed))).resolves.toBeUndefined()
     await expect(
-      loadConfig(feed).afterPack(packed('win32', `${unsigned}publisherName: Qivo AB\n`)),
+      loadConfig(feed).afterPack(packed(`${unsigned}publisherName: Qivo AB\n`)),
     ).resolves.toBeUndefined()
-    await expect(loadConfig(feed).afterPack(packed('linux', unsigned))).resolves.toBeUndefined()
-    await expect(loadConfig().afterPack(packed('win32'))).resolves.toBeUndefined()
+    await expect(loadConfig().afterPack(packed())).resolves.toBeUndefined()
     // a Windows target that writes no app-update.yml never checks for updates
-    await expect(loadConfig(feed).afterPack(packed('win32'))).resolves.toBeUndefined()
+    await expect(loadConfig(feed).afterPack(packed())).resolves.toBeUndefined()
   })
+})
+
+describe('desktop builds through electron-builder', () => {
+  // electron-builder searches upward for node_modules, so the project lives
+  // outside this checkout.
+  let project = ''
+  beforeEach(() => {
+    project = fs.mkdtempSync(path.join(os.tmpdir(), 'qivo-desktop-build-'))
+    fs.writeFileSync(path.join(project, 'package.json'), '{"name":"qivo","version":"0.1.0"}')
+    write('app/package.json', '{"name":"qivo-desktop","main":"dist/main.js","author":"Qivo"}')
+    write('app/dist/main.js', '// app')
+    // A stand-in for the unpacked Electron that electron-builder copies.
+    write('electron/electron', '')
+    fs.mkdirSync(path.join(project, 'electron/resources'))
+  })
+  afterEach(() => fs.rmSync(project, { recursive: true, force: true }))
+
+  function write(file: string, content: string) {
+    fs.mkdirSync(path.dirname(path.join(project, file)), { recursive: true })
+    fs.writeFileSync(path.join(project, file), content)
+  }
+
+  /** Extends desktop/electron-builder.cjs the way `-c.` options on the command line do. */
+  function configuration(overrides: Configuration = {}): Configuration {
+    return {
+      extends: configPath,
+      directories: { app: path.join(project, 'app'), output: path.join(project, 'out') },
+      electronDist: path.join(project, 'electron'),
+      electronVersion: require('electron/package.json').version,
+      // The stand-in executable has no fuses to flip.
+      electronFuses: null,
+      ...overrides,
+    }
+  }
+
+  /** Runs a build with this build-time feed, or none, and lists the files it wrote. */
+  async function run(
+    updateUrl: string | undefined,
+    start: () => Promise<unknown>,
+  ): Promise<{ error?: string; files: string[] }> {
+    let error: string | undefined
+    const restore = setFeed(updateUrl)
+    try {
+      await start()
+    } catch (cause) {
+      error = (cause as Error).message
+    } finally {
+      restore()
+    }
+    const out = path.join(project, 'out')
+    return { error, files: fs.existsSync(out) ? fs.readdirSync(out) : [] }
+  }
+
+  const linuxPackages = Platform.LINUX.createTarget(['deb', 'rpm', 'AppImage'], Arch.x64)
+
+  it('builds a Linux package without a feed', async () => {
+    const result = await run(undefined, () =>
+      build({
+        projectDir: project,
+        config: configuration(),
+        targets: Platform.LINUX.createTarget('zip', Arch.x64),
+        publish: 'never',
+      }),
+    )
+    expect(result).toEqual({
+      error: undefined,
+      files: expect.arrayContaining(['Qivo-0.1.0-x64.zip']),
+    })
+  }, 60_000)
+
+  it('refuses a Linux build with a feed before it writes a package', async () => {
+    const refused = 'A Linux build cannot have an update feed'
+    const options = { projectDir: project, targets: linuxPackages, publish: 'never' } as const
+    for (const result of [
+      await run(feed, () => build({ ...options, config: configuration() })),
+      // a feed from another publish setting than QIVO_DESKTOP_UPDATE_URL
+      await run(undefined, () =>
+        build({
+          ...options,
+          config: configuration({ linux: { publish: { provider: 'generic', url: feed } } }),
+        }),
+      ),
+      // a build without the publish step, where only the targets write the feed
+      await run(feed, () => new Packager({ ...options, config: configuration() }).build()),
+    ]) {
+      expect(result.error).toContain(refused)
+      expect(result.files.filter((file) => /\.(deb|rpm|AppImage)$/.test(file))).toEqual([])
+    }
+  }, 60_000)
+
+  it('refuses to package a prepackaged app before it writes an installer', async () => {
+    // A Windows app from a build that failed the publisher check.
+    write('win-unpacked/Qivo.exe', '')
+    write('win-unpacked/resources/app-update.yml', `provider: generic\nurl: ${feed}\n`)
+    write('linux-unpacked/qivo-desktop', '')
+    const refused = 'without --prepackaged'
+    for (const [prepackaged, targets, updateUrl] of [
+      ['win-unpacked', Platform.WINDOWS.createTarget('nsis', Arch.x64), feed],
+      // refused without a feed too, since the prepackaged app may hold one
+      ['linux-unpacked', linuxPackages, undefined],
+    ] as const) {
+      const result = await run(updateUrl, () =>
+        build({
+          projectDir: project,
+          config: configuration(),
+          prepackaged: path.join(project, prepackaged),
+          targets,
+          publish: 'never',
+        }),
+      )
+      expect(result, prepackaged).toEqual({ error: expect.stringContaining(refused), files: [] })
+    }
+  }, 60_000)
 })
