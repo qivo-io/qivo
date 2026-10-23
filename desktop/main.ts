@@ -15,6 +15,8 @@ import {
 } from 'electron'
 import electronUpdater from 'electron-updater'
 import { createLeavePrompt } from './leavePrompt.js'
+import { createNavigationGuard, createWindowOpenHandler, isOAuthProviderURL } from './navigation.js'
+import { restrictPermissions } from './permissions.js'
 import { disableStagingUserId, keepSpellcheckOffline } from './privacy.js'
 import { createDesktopSettingsStore, defaultDesktopSettings } from './settings.js'
 import { createLoginStartup, startupArgument } from './startup.js'
@@ -38,27 +40,10 @@ if (!['http:', 'https:'].includes(appURL.protocol)) {
 
 const trustedHosts = new Set(['qivo.io', 'www.qivo.io', 'localhost'])
 const trustedSuffixes = ['.qivo.io']
-const oauthHosts = new Set(['accounts.google.com', 'login.microsoftonline.com', 'login.live.com'])
 
 function isTrustedHost(hostname: string): boolean {
   const host = hostname.toLowerCase()
   return trustedHosts.has(host) || trustedSuffixes.some((suffix) => host.endsWith(suffix))
-}
-
-function isAllowedURL(rawURL: string, allowOAuth = false): boolean {
-  let parsed: URL
-  try {
-    parsed = new URL(rawURL)
-  } catch {
-    return false
-  }
-  if (parsed.protocol === 'http:' && parsed.hostname !== 'localhost') return false
-  if (!['http:', 'https:'].includes(parsed.protocol)) return false
-  // Only the configured app origin stays in the renderer. Convex endpoints
-  // and links to other Qivo subdomains open externally instead of becoming a
-  // new top-level renderer document.
-  if (parsed.origin === appURL.origin) return true
-  return allowOAuth && parsed.protocol === 'https:' && oauthHosts.has(parsed.hostname.toLowerCase())
 }
 
 if (
@@ -408,19 +393,11 @@ function createWindow(startHidden = false): void {
     },
   })
   mainWindow.setMenu(null)
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^(mailto:|tel:)/i.test(url)) {
-      void shell.openExternal(url)
-      return { action: 'deny' }
-    }
-    if (/^https?:\/\//i.test(url) && !isAllowedURL(url)) void shell.openExternal(url)
-    return { action: 'deny' }
-  })
-  mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (isAllowedURL(url, true)) return
-    event.preventDefault()
-    if (/^(https?:\/\/|mailto:|tel:)/i.test(url)) void shell.openExternal(url)
-  })
+  const openExternal = (url: string) => void shell.openExternal(url)
+  mainWindow.webContents.setWindowOpenHandler(createWindowOpenHandler(appURL.origin, openExternal))
+  const guard = createNavigationGuard(appURL.origin, openExternal)
+  mainWindow.webContents.on('will-navigate', guard)
+  mainWindow.webContents.on('will-redirect', guard)
   const win = mainWindow
   win.webContents.on(
     'will-prevent-unload',
@@ -534,12 +511,10 @@ function installIPC(): void {
   })
   ipcMain.handle('qivo:auth:open-oauth', (event, rawURL: unknown) => {
     if (!isAuthorizedRenderer(event) || typeof rawURL !== 'string') return false
-    if (!isAllowedURL(rawURL, true)) return false
+    if (!isOAuthProviderURL(rawURL)) return false
     // Keep provider sign-in in the system browser. The registered qivo://
     // protocol returns the one-time result to this shell after the callback.
-    const provider = new URL(rawURL)
-    if (!oauthHosts.has(provider.hostname.toLowerCase())) return false
-    void shell.openExternal(provider.href)
+    void shell.openExternal(new URL(rawURL).href)
     return true
   })
 }
@@ -550,7 +525,10 @@ if (!gotLock) {
 } else {
   // Register before ready so the window's session and electron-updater's
   // session are both covered from the moment they exist.
-  app.on('session-created', (session) => keepSpellcheckOffline(session, process.platform))
+  app.on('session-created', (session) => {
+    keepSpellcheckOffline(session, process.platform)
+    restrictPermissions(session, appURL.origin)
+  })
   app.on('second-instance', (_event, commandLine) => {
     const deepLink = commandLine.find((arg) => arg.startsWith('qivo://'))
     if (deepLink) consumeDeepLink(deepLink)

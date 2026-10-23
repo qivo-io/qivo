@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
@@ -186,12 +187,26 @@ describe('public demo', () => {
   })
 })
 
+/** The policy every app and operator page gets. Scripts load only from the
+ * deployment, plus the inline scripts in app.html and admin.html by hash. */
+const PAGE_POLICY =
+  "script-src 'self' 'sha256-xc/jZrGrOaYb4EJVsGOCgj4b8Gd243bPM2/zmHo0VWQ='; " +
+  "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+
+/** The hash source of each inline script in an HTML entry, as the policy names it. */
+function inlineScriptHashes(file) {
+  const html = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')
+  return [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map(
+    ([, body]) => `'sha256-${createHash('sha256').update(body).digest('base64')}'`,
+  )
+}
+
 describe('security headers', () => {
   it.each([...HOSTS, DEMO_HOST])('protect app and operator pages on %s', (host) => {
     for (const path of [...Object.keys(APP_PATHS), '/app.html', '/admin.html']) {
       const { headers } = route(config, host, path)
       expect(headers['x-frame-options'], path).toBe('DENY')
-      expect(headers['content-security-policy'], path).toBe("frame-ancestors 'none'")
+      expect(headers['content-security-policy'], path).toBe(PAGE_POLICY)
       expect(headers['cache-control'], path).toBe('no-store')
     }
     expect(route(config, host, '/assets/index-abc123.js').headers['cache-control']).toBe(
@@ -199,6 +214,17 @@ describe('security headers', () => {
     )
     // the update check must always reach the server
     expect(route(config, host, '/version.json').headers['cache-control']).toBe('no-store')
+  })
+
+  it('allows exactly the inline scripts the app and operator pages have', () => {
+    // Vite copies inline scripts into the build unchanged, so the source hash
+    // is the served one. An edited script needs its new hash in vercel.json.
+    const allowed = PAGE_POLICY.match(/'sha256-[^']+'/g)
+    expect(allowed).toEqual([
+      ...inlineScriptHashes('app.html'),
+      ...inlineScriptHashes('admin.html'),
+    ])
+    expect(inlineScriptHashes('app.html')).toHaveLength(1)
   })
 })
 

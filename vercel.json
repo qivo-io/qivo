@@ -141,7 +141,7 @@
         },
         {
           "key": "Content-Security-Policy",
-          "value": "frame-ancestors 'none'"
+          "value": "script-src 'self' 'sha256-xc/jZrGrOaYb4EJVsGOCgj4b8Gd243bPM2/zmHo0VWQ='; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
         }
       ]
     },
@@ -162,7 +162,7 @@
         },
         {
           "key": "Content-Security-Policy",
-          "value": "frame-ancestors 'none'"
+          "value": "script-src 'self' 'sha256-xc/jZrGrOaYb4EJVsGOCgj4b8Gd243bPM2/zmHo0VWQ='; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
         }
       ]
     },
@@ -183,7 +183,7 @@
         },
         {
           "key": "Content-Security-Policy",
-          "value": "frame-ancestors 'none'"
+          "value": "script-src 'self' 'sha256-xc/jZrGrOaYb4EJVsGOCgj4b8Gd243bPM2/zmHo0VWQ='; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
         }
       ]
     },
@@ -204,7 +204,7 @@
         },
         {
           "key": "Content-Security-Policy",
-          "value": "frame-ancestors 'none'"
+          "value": "script-src 'self' 'sha256-xc/jZrGrOaYb4EJVsGOCgj4b8Gd243bPM2/zmHo0VWQ='; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
         }
       ]
     },
@@ -225,7 +225,7 @@
         },
         {
           "key": "Content-Security-Policy",
-          "value": "frame-ancestors 'none'"
+          "value": "script-src 'self' 'sha256-xc/jZrGrOaYb4EJVsGOCgj4b8Gd243bPM2/zmHo0VWQ='; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
         }
       ]
     }

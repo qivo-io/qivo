@@ -16,6 +16,35 @@ that the client needs:
 - OAuth provider pages open in the system browser. A short-lived, one-time
   `qivo://` callback returns the result to the waiting Qivo window.
 
+## Security
+
+The shell follows Electron's
+[security checklist](https://www.electronjs.org/docs/latest/tutorial/security):
+
+- The renderer has context isolation, the Chromium sandbox and no Node.js.
+  The preload exposes only `window.qivoDesktop`, and every IPC handler
+  accepts calls only from the top-level page of the configured app origin.
+- The window loads only pages of the configured app origin. A link, a
+  redirect or `window.open` to any other page, sign-in providers included,
+  goes to the system instead: `http`, `https`, `mailto` and `tel` links open
+  in the default app, and other schemes are dropped. The shell opens no
+  second window.
+- [permissions.ts](permissions.ts) refuses every web permission except
+  `clipboard-sanitized-write`, which copying a link, text or an image needs.
+  Only the app origin's top-level page gets it. Every request from another
+  origin or from a frame is refused, and so is every HID, serial and USB
+  device. Inbox alerts use the preload bridge, not the web Notification API.
+- The hosted app's `Content-Security-Policy` (`vercel.json`) lets the app
+  and operator pages run scripts only from the deployment and the one inline
+  theme script by hash. It also blocks plugins, `<base>` changes to another
+  origin and framing.
+- Packaging flips Electron's
+  [fuses](https://www.electronjs.org/docs/latest/tutorial/fuses): no
+  `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS` or `--inspect`, app code only from
+  `app.asar`, which Windows checks against its hash, no extra `file://`
+  privileges and encrypted cookies. Cookie encryption cannot be turned off
+  again without losing the stored cookies.
+
 ## Desktop settings
 
 Open **Settings → User account → Desktop app**, below **Your preferences**.
