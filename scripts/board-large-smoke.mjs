@@ -6,9 +6,10 @@
  * checks the first commit's size, the busy mark, Tab through the waiting
  * space, focus that follows a moved card, a drag and Ctrl+F. Then, at full
  * speed, a drag between statuses, keyboard focus through a card and back
- * from the task window, Find on the last card, the owner picker on the
- * first tap of a touch screen, the frames of the pooled Board mounting at
- * 4x, and that the pages log no errors. Writes go to the page's synthetic
+ * from the task window, Find on the last card, scrolling back into a lane
+ * that changed above the view, the owner picker on the first tap of a
+ * touch screen, the frames of the pooled Board mounting at 4x, and that
+ * the pages log no errors. Writes go to the page's synthetic
  * transport only. */
 import assert from 'node:assert/strict'
 import { rmSync } from 'node:fs'
@@ -322,6 +323,65 @@ try {
     'Find must reach the last task',
   )
   log('Find reaches the last task')
+
+  // A lane whose cards change while it is above the view: scrolling back
+  // into it keeps the cards in view in place. A body the browser still
+  // skipped would keep the height it last rendered at (Kanban).
+  const changed = await page.evaluate(async () => {
+    const frames = async (n) => {
+      for (let i = 0; i < n; i++) await new Promise((resolve) => requestAnimationFrame(resolve))
+    }
+    const pane = document.querySelector('[data-workspace-view="kanban"] [data-scroll]')
+    const bodies = () => document.querySelectorAll('.board-lane-body')
+    if (bodies().length < 3) return { lanes: bodies().length }
+    const P = window.PLANNER
+    const box = () => bodies()[1].getBoundingClientRect()
+    const view = pane.getBoundingClientRect()
+    // the lane's foot comes into view, then goes far above it
+    pane.scrollTop += box().bottom - view.top - view.height / 2
+    await frames(3)
+    pane.scrollTop += view.height * 2
+    await frames(3)
+    const before = box().height
+    // 40 of its cards move into its tallest column (the stand-in server
+    // takes status changes, not moves between lanes)
+    const cards = [...bodies()[1].querySelectorAll('[data-card]')].map(
+      (card) => P.issueById[card.getAttribute('data-card')],
+    )
+    const count = new Map()
+    for (const it of cards) count.set(it.status, (count.get(it.status) ?? 0) + 1)
+    const tallest = [...count].sort((a, b) => b[1] - a[1])[0][0]
+    const moving = cards.filter((it) => it.status !== tallest && !it.parent && !it.children?.length)
+    for (const it of moving.slice(0, 40)) P.setStatus(it.id, tallest)
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+    await frames(3)
+    // back up a step at a time: a card in view moves by the step alone
+    let jump = 0
+    for (let step = 0; step < 100 && box().bottom < view.top + view.height / 2; step++) {
+      const card = document
+        .elementFromPoint(view.left + view.width / 2, view.top + view.height * 0.6)
+        ?.closest('[data-card]')
+      const top = card?.getBoundingClientRect().top
+      const from = pane.scrollTop
+      pane.scrollTop = from - 150
+      await frames(3)
+      if (card?.isConnected && top !== undefined)
+        jump = Math.max(
+          jump,
+          Math.abs(card.getBoundingClientRect().top - top - (from - pane.scrollTop)),
+        )
+    }
+    return { lanes: bodies().length, before, after: box().height, jump }
+  })
+  assert.ok(changed.lanes >= 3, `The Board must have three lanes, not ${changed.lanes}`)
+  assert.ok(
+    changed.after - changed.before > 500,
+    `The lane must grow, not go from ${changed.before}px to ${changed.after}px`,
+  )
+  assert.ok(changed.jump <= 100, `Scrolling back into the lane moved its cards ${changed.jump}px`)
+  log(
+    `scrolling back into a lane that changed above the view moved its cards ${Math.round(changed.jump)}px`,
+  )
 
   // A tap on a card's owner button opens the picker on a touch screen.
   const touch = await open({ hasTouch: true })
