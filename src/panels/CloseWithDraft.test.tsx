@@ -5,6 +5,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
+import { pastCloseTicks } from '../lib/discardQuestion.setup'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
 /* Closing the task window while it holds text the person typed and has not
@@ -163,7 +164,7 @@ const asked = (text: string) =>
 const press = (selector: string) =>
   act(async () => {
     document.querySelector<HTMLElement>(selector)?.click()
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    await pastCloseTicks()
   })
 /** The titles sent to the server. */
 const renames = () =>
@@ -268,7 +269,7 @@ describe('closing the task window with unsent text', { timeout: 30_000 }, () => 
     const escapeOn = () =>
       act(async () => {
         toolbar?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-        await new Promise((resolve) => setTimeout(resolve, 10))
+        await pastCloseTicks()
       })
     await act(async () => composer.commands.insertContent('Drift is under 2%'))
     // an Escape that ends an input method's composition is the input method's
@@ -305,7 +306,7 @@ describe('closing the task window with unsent text', { timeout: 30_000 }, () => 
           cancelable: true,
         }),
       )
-      await new Promise((resolve) => setTimeout(resolve, 10))
+      await pastCloseTicks()
     })
 
   it('asks before Escape inside the description throws its draft away', async () => {
@@ -385,7 +386,7 @@ describe('closing the task window with unsent text', { timeout: 30_000 }, () => 
       document.activeElement?.dispatchEvent(
         new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
       )
-      await new Promise((resolve) => setTimeout(resolve, 10))
+      await pastCloseTicks()
     })
     expect(question()).toBeNull()
     expect(document.querySelector('[data-focus-window="Description"]')).not.toBeNull()

@@ -13,10 +13,10 @@
 
 import { joinLists } from './arrayLimit.ts'
 import {
-  halve,
   type IdWindow,
   idWindows,
   inIdWindow,
+  piecesAfter,
   WINDOW_ROWS,
   windowCount,
 } from './idWindows.ts'
@@ -250,7 +250,7 @@ const WINDOWED_NAMES = {
 } as const
 
 /* A part's answer before its rows are taken. */
-type Answered = { state: string; split?: boolean; message?: string }
+type Answered = { state: string; split?: boolean; pieces?: number; message?: string }
 
 /** The answer of part `name`, which must have rows. */
 function rowsOrThrow(name: string, answer: unknown) {
@@ -263,7 +263,8 @@ function rowsOrThrow(name: string, answer: unknown) {
 /**
  * The workspace of the caller of `query` read once, as the app holds it once
  * every part answered: the root and every part, each window cut where
- * it answers overflow or split, as the app cuts them, joined by joinParts with the local time as delivery
+ * it answers overflow or split, as the app cuts them (lib/idWindows.ts
+ * piecesAfter), joined by joinParts with the local time as delivery
  * time. Null without a seat. For tests and scripts that read the workspace
  * once rather than subscribing; its parts are read at different moments, so
  * a write meanwhile can show in some and not others.
@@ -280,13 +281,11 @@ export async function readWorkspace(query: QueryByName): Promise<Workspace | nul
   ): Promise<unknown[]> => {
     const name = WINDOWED_NAMES[kind]
     const answer = (await query(name, { org_id, from: w.from, to: w.to })) as Answered
-    const halves = halve(w)
-    if ((answer.state === 'overflow' || answer.split === true) && halves)
-      return [
-        ...(await windowRows(kind, org_id, halves[0])),
-        ...(await windowRows(kind, org_id, halves[1])),
-      ]
-    return [rowsOrThrow(name, answer)]
+    const pieces = piecesAfter(w, answer)
+    if (pieces === null) return [rowsOrThrow(name, answer)]
+    const rows: unknown[] = []
+    for (const piece of pieces) rows.push(...(await windowRows(kind, org_id, piece)))
+    return rows
   }
   const orgs: OrgParts[] = []
   for (const { id, next_issue_num, next_project_num } of root.orgs) {

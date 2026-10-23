@@ -5,6 +5,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../../components/ui/tooltip'
+import { pastCloseTicks } from '../../lib/discardQuestion.setup'
 import type { UnsentScope } from '../../lib/leaveGuard'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 
@@ -155,7 +156,7 @@ async function toggle() {
   await act(async () => {
     document.querySelector<HTMLElement>('[data-sync-mention]')?.click()
     // a close that asks answers two ticks later
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    await pastCloseTicks()
   })
 }
 const question = () => document.querySelector('[data-discard-prompt] h2')?.textContent ?? null

@@ -436,7 +436,13 @@ workspace (`convex/lib/workspaceParts.ts`). The release that replaced
 `snapshot.forMe` with the workspace parts added it. A task or project
 stored before has none until the one-time `internal/windowKeysBackfill`
 gives it one, and until then it loads in the first window of its kind, so
-an organization with more such tasks than one window holds cannot load.
+an organization with more such tasks than one window holds cannot load. A
+restore from Deleted items gives a task or project stored before keys a
+key as it writes it back, and the task's relation rows the same key.
+Earlier releases brought such a task back without a key, so a deployment
+that ran the backfill before it served the release that keys restores
+needs `remaining` checked again once it does, and another run if a page
+reports rows.
 Run the backfill on every hosted deployment once it serves that release, as
 the module's header says, and check that `remaining` reports 0 on every
 page of both tables. Earlier releases do not accept the field, so a

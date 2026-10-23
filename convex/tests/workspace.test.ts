@@ -7,7 +7,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { newWindowKey } from '../lib/db'
-import { halve, idWindows, inIdWindow, windowCount } from '../lib/idWindows'
+import {
+  cut,
+  cutPieces,
+  halve,
+  idWindows,
+  inIdWindow,
+  isIdWindow,
+  MOST_PIECES,
+  piecesAfter,
+  windowCount,
+} from '../lib/idWindows'
 import { PAGE } from '../lib/workspaceParts'
 import {
   as,
@@ -132,7 +142,7 @@ describe('a tasks window', () => {
     const tasks = await plantTasks(t, f, 9)
     PAGE.tasks.most = 4
     const answer = await as(t, f.admin).query(api.workspace.tasks, { org_id: f.org.id, ...whole })
-    expect(answer).toEqual({ state: 'overflow' })
+    expect(answer).toMatchObject({ state: 'overflow' })
     const snap = await workspaceOf(as(t, f.admin))
     expect(snap?.issues.map((i) => i.id).sort()).toEqual(tasks.map((task) => task.id).sort())
     expect(snap?.issueLabels).toHaveLength(9)
@@ -416,6 +426,47 @@ describe('windows', () => {
     expect(windowCount(0, 100)).toBe(1)
     expect(windowCount(250, 100)).toBe(4)
     expect(windowCount(10_000_000, 100)).toBe(1024)
+  })
+
+  it('cut into as many pieces of the grid as asked, and halve when asked for no valid count', () => {
+    const left = idWindows(2)[0]
+    const pieces = cut(left, 4)
+    expect(pieces).toEqual([
+      { from: '', to: '20000000' },
+      { from: '20000000', to: '40000000' },
+      { from: '40000000', to: '60000000' },
+      { from: '60000000', to: '80000000' },
+    ])
+    expect(cut(idWindows(1)[0], 2)).toEqual(idWindows(2))
+    // never narrower than the grid allows
+    const narrow = cut({ from: 'ffc00000', to: null }, MOST_PIECES)
+    expect(narrow).toHaveLength(4)
+    expect(narrow?.every(isIdWindow)).toBe(true)
+    expect(narrow?.at(-1)).toEqual({ from: 'fff00000', to: null })
+    expect(cut({ from: 'fff00000', to: null }, 2)).toBeNull()
+    // an overflow names its pieces, a split asks for halves, an ok answer for none
+    expect(piecesAfter(left, { state: 'overflow', pieces: 4 })).toEqual(pieces)
+    expect(piecesAfter(left, { state: 'overflow' })).toEqual(halve(left))
+    for (const pieces of [3, 0, 1, MOST_PIECES * 2, Number.NaN])
+      expect(piecesAfter(left, { state: 'overflow', pieces })).toEqual(halve(left))
+    expect(piecesAfter(left, { state: 'ok', split: true, pieces: 8 })).toEqual(halve(left))
+    expect(piecesAfter(left, { state: 'ok' })).toBeNull()
+    expect(piecesAfter(left, { state: 'refused' })).toBeNull()
+  })
+
+  it('ask for enough pieces that each holds about half of what a read took', () => {
+    const whole = idWindows(1)[0]
+    // a read that took its rows from the first quarter: eight pieces
+    expect(cutPieces(whole, '3fffffff-aaaa')).toBe(8)
+    expect(cutPieces(whole, '7fffffff')).toBe(4)
+    expect(cutPieces(whole, 'ffffffff')).toBe(2)
+    // rows crowded at the start ask for the most
+    expect(cutPieces(whole, '00000001')).toBe(MOST_PIECES)
+    // a window that starts further in counts from its start
+    expect(cutPieces({ from: '80000000', to: null }, 'a0000000')).toBe(8)
+    // no hex point, or one before the window: halves
+    for (const last of [undefined, '', 'person-1', '10000000'])
+      expect(cutPieces({ from: '80000000', to: null }, last)).toBe(2)
   })
 
   it('send the same workspace in many windows as in one, relation rows across windows included, people cut as they overflow', async () => {
@@ -980,7 +1031,7 @@ describe('the projects and people parts', () => {
     const projectsOf = (w: { from: string; to: string | null }) =>
       as(t, f.admin).query(api.workspace.projects, { org_id: f.org.id, ...w })
     PAGE.projects.most = 2
-    expect(await projectsOf(whole)).toEqual({ state: 'overflow' })
+    expect(await projectsOf(whole)).toEqual({ state: 'overflow', pieces: expect.any(Number) })
     expect(ids(await workspaceOf(as(t, f.admin)))).toEqual(ids(one))
     // past the hard budget between batches of grants
     Object.assign(PAGE, structuredClone(DEFAULT_PAGE))
@@ -1073,6 +1124,35 @@ describe('the projects and people parts', () => {
 })
 
 describe('the people part', () => {
+  it('names how many pieces to cut an overflowing window into, from how far its read reached', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const w = { from: 'a0000000', to: 'a0400000' }
+    const { _id, _creationTime, ...viewer } = f.viewer
+    await t.run(async (ctx) => {
+      for (const at of ['a0000000', 'a0080000', 'a0100000', 'a0180000'])
+        await ctx.db.insert('profiles', {
+          ...viewer,
+          id: `${at}-0000-4000-8000-000000000000`,
+          email: `${at}@testbed.test`,
+          auth_user_id: undefined,
+        })
+    })
+    const inWindow = await t.run(async (ctx) =>
+      (await ctx.db.query('profiles').collect())
+        .filter((p) => p.org_id === f.org.id)
+        .map((p) => p.id)
+        .filter((id) => inIdWindow(id, w))
+        .sort(),
+    )
+    PAGE.people.most = 2
+    const answer = await as(t, f.admin).query(api.workspace.people, { org_id: f.org.id, ...w })
+    expect(answer).toEqual({ state: 'overflow', pieces: cutPieces(w, inWindow[1]) })
+    // the read reached an eighth of the window, sixteen pieces, which the
+    // grid allows only four of
+    expect(piecesAfter(w, answer)).toHaveLength(4)
+  })
+
   it("sends each person's memberships with them, and the app keeps those of teams it holds", async () => {
     const t = newT()
     const f = await withOrg(t)

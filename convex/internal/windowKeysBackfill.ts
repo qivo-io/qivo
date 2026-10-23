@@ -10,8 +10,13 @@
  * window of its kind, its relation rows with it, so the app still shows it,
  * but an organization with more such tasks than one window holds cannot
  * load. New rows get a key when they are inserted. Deleted items keep their
- * stored copies as they were, so a task deleted before keys comes back
- * without one, with its rows, and a later run gives them one.
+ * stored copies as they were, and a restore gives a copy stored before keys
+ * a key as it writes it back, its relation rows with it
+ * (model/deletedItems.ts storedTaskKey, cleanProject). Earlier releases
+ * brought such a task back without a key, with its rows, so a deployment
+ * that ran the backfill before it served the release that keys restores
+ * checks `remaining` again once it does, and runs the backfill again if a
+ * page reports rows.
  *
  * Check a deployment before changing it. `remaining` is a query, so it
  * cannot write, and a key that may only run internal queries can run it. It
@@ -44,7 +49,7 @@ import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { internalAction, internalMutation, internalQuery } from '../_generated/server'
-import { newWindowKey } from '../lib/db'
+import { newWindowKey, strayRows } from '../lib/db'
 
 /** Rows per page of each table, for the check and for each step of the
  * run, and the bytes one page may read. A project without a key writes one
@@ -72,32 +77,6 @@ const pageRef = makeFunctionReference<
 const auditRef = makeFunctionReference<'mutation', { issues: number; projects: number }, null>(
   'internal/windowKeysBackfill:audit',
 )
-
-/* The relation rows of task `id` whose task_key is not `key`, every one
- * for null (a task about to get its first key). */
-async function strayRows(ctx: QueryCtx, id: string, key: string | null) {
-  const [labels, attachments, links, follows] = await Promise.all([
-    ctx.db
-      .query('issue_labels')
-      .withIndex('by_issue', (q) => q.eq('issue_id', id))
-      .collect(),
-    ctx.db
-      .query('issue_attachments')
-      .withIndex('by_issue', (q) => q.eq('issue_id', id))
-      .collect(),
-    ctx.db
-      .query('issue_links')
-      .withIndex('by_source', (q) => q.eq('source_id', id))
-      .collect(),
-    ctx.db
-      .query('issue_subscriptions')
-      .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', id))
-      .collect(),
-  ])
-  return [...labels, ...attachments, ...links, ...follows].filter(
-    (row) => key === null || row.task_key !== key,
-  )
-}
 
 /* One page of `table` from `cursor`: how many rows have no window key, and
  * how many relation rows of the page's tasks have not their task's, and,

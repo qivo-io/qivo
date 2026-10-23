@@ -17,7 +17,9 @@
  * app cuts it in two (lib/idWindows.ts halve) while it keeps answering.
  * One whose reads would pass the hard budget stops early and answers
  * `overflow` instead, before Convex would refuse the read, so the app cuts
- * it before it shows it. A window that cannot be cut further and still does
+ * it before it shows it: into the pieces the answer names when its own rows
+ * did not fit in one read, so a large window, such as the one window the
+ * people of an organization start in, reaches its size in one round. A window that cannot be cut further and still does
  * not fit answers `refused` with a sentence the app shows. Bounds are fixed
  * points of the id space, so no bound says anything about the rows.
  *
@@ -35,7 +37,7 @@ import { stampOfRow } from '../model/syncStamps'
 import { isOrgStaff, projectLevelsOf } from './access'
 import { chunkLists } from './arrayLimit'
 import { byId } from './db'
-import { halve, type IdWindow } from './idWindows.ts'
+import { cutPieces, halve, type IdWindow } from './idWindows.ts'
 import { loadInbox, newestFirst, recentlyReadFirst } from './inbox'
 import { INBOX_LIMIT } from './limits'
 import { loadRowFor, type OrgLoadRow } from './loadRows'
@@ -160,11 +162,16 @@ const TOO_MUCH =
   'One part of this organization holds more than Qivo can load at once. Contact support so we can help reduce it.'
 
 /** The answer of a part over its hard budget: cut its window, or, when it
- * cannot be cut, refuse. */
-const overflow = (w: IdWindow) =>
+ * cannot be cut, refuse. A window whose own rows did not fit in one read
+ * also says how many pieces to cut it into, from `last`, the key or id of
+ * the last row the read took (lib/idWindows.ts cutPieces), so a large one
+ * reaches its size in one round. Without, the app halves it. */
+const overflow = (w: IdWindow, last?: string) =>
   halve(w) === null
     ? { state: 'refused' as const, message: TOO_MUCH }
-    : { state: 'overflow' as const }
+    : last === undefined
+      ? { state: 'overflow' as const }
+      : { state: 'overflow' as const, pieces: cutPieces(w, last) }
 
 /** `{split: true}` when `over` or the part read past PAGE.soft, not
  * counting `shared`, and its window can be cut, else nothing. Halving a
@@ -312,7 +319,7 @@ export async function readPeople(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow
     ctx.db.query('profiles').withIndex('by_org_id', (q) => ids(q.eq('org_id', me.org_id), 'id', w)),
     PAGE.people.most,
   )
-  if (!read.complete) return overflow(w)
+  if (!read.complete) return overflow(w, read.rows.at(-1)?.id)
   const people = read.rows
   const stamps = new Map(
     (
@@ -404,7 +411,7 @@ export async function readProjects(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWind
       .withIndex('by_org_window', (q) => ids(q.eq('org_id', me.org_id), 'window_key', w)),
     PAGE.projects.most,
   )
-  if (!read.complete) return overflow(w)
+  if (!read.complete) return overflow(w, read.rows.at(-1)?.window_key)
   const caller = accessOf(ctx, me, read.rows)
   const seen = await mapInBatches(ctx, read.rows, (p) => caller.visible(p.id))
   if (seen === null) return overflow(w)
@@ -562,7 +569,7 @@ function groupBy<T>(rows: readonly T[], key: (row: T) => string): Map<string, T[
  * are in is read once, with the caller's levels on it (accessOf). */
 export async function readTasks(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) {
   const read = await windowTasks(ctx, me, w, PAGE.tasks.most)
-  if (!read.complete) return overflow(w)
+  if (!read.complete) return overflow(w, read.rows.at(-1)?.window_key)
   const access = accessOf(ctx, me)
   const held = await mapInBatches(ctx, read.rows, (t) => access.holds(t))
   if (held === null) return overflow(w)
