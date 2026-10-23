@@ -11,6 +11,7 @@ import { lastInputWasPointer } from '@/lib/focusVisibility'
 import { keptOwners } from '@/lib/keptOwners'
 import type { MountScheduler } from '@/lib/mountScheduler'
 import { useLatest } from '@/lib/useLatest'
+import { useDropped } from '@/lib/viewTeardown'
 import { Button } from './ui/button'
 import './DeferredList.css'
 
@@ -68,7 +69,8 @@ type BlockBox = { height: number; gap: number; open: boolean }
    browser checks each such box on every frame, so a box per item would
    cost a check per item. A block that still grows takes its estimate as
    it is; a closed one keeps the size it last rendered at. A list its first
-   screen covers draws no boxes, the DOM of a plain list. */
+   screen covers draws no boxes, the DOM of a plain list. A block is also
+   what a kept view that left unmounts in one slice (viewTeardown.ts). */
 function BlockView<T>({
   items,
   render,
@@ -78,6 +80,8 @@ function BlockView<T>({
   render: (item: T) => ReactNode
   box: BlockBox | null
 }) {
+  const dropped = useDropped()
+  if (dropped) return null
   const nodes = items.map((item) => render(item))
   if (!box) return <>{nodes}</>
   return (

@@ -11,13 +11,24 @@ export function WorkspaceToolbar({ children }: { children: ReactNode }) {
   return host ? createPortal(children, host) : null
 }
 
+/* A hidden shell takes no room, draws nothing and takes no focus, and
+   keeps its elements' layout: it holds a view that stays loaded
+   (KeptView.tsx) while another page owns the screen. Not `inert`, for
+   the reason KeptView gives. */
+const HIDDEN = '[content-visibility:hidden] !h-0'
+
+/** The workspace frame: `header`, a toolbar row views portal into,
+    `navigation` and `children`. A `hidden` shell stays in the page out of
+    sight and out of use. */
 export function WorkspaceShell({
   className = '',
+  hidden = false,
   header,
   navigation,
   children,
 }: {
   className?: string
+  hidden?: boolean
   header: ReactNode
   navigation?: ReactNode
   children: ReactNode
@@ -27,7 +38,12 @@ export function WorkspaceShell({
   useRootMark('workspace-shell')
   return (
     <ToolbarHost.Provider value={toolbarHost}>
-      <div className={`workspace-shell ${className}`}>
+      <div
+        data-hidden-view={hidden ? 'workspace' : undefined}
+        className={
+          hidden ? `workspace-shell ${className} ${HIDDEN}` : `workspace-shell ${className}`
+        }
+      >
         <div className="workspace-header">{header}</div>
         <div className="workspace-toolbar" ref={setToolbarHost} />
         {navigation}

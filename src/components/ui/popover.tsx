@@ -2,6 +2,7 @@ import { Popover as PopoverPrimitive } from 'radix-ui'
 import * as React from 'react'
 
 import { cn } from '@/lib/utils'
+import { useViewHidden } from '@/lib/viewHidden'
 
 function Popover({ ...props }: React.ComponentProps<typeof PopoverPrimitive.Root>) {
   return <PopoverPrimitive.Root data-slot="popover" {...props} />
@@ -18,6 +19,8 @@ const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
 >(function PopoverContent({ className, align = 'center', sideOffset = 4, ...props }, ref) {
+  // in a hidden kept view (lib/viewHidden.ts)
+  if (useViewHidden()) return null
   return (
     <PopoverPrimitive.Portal>
       <PopoverPrimitive.Content

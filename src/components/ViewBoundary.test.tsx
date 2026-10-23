@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CodeWaitsForConnection, lazyFromModule, preloadModule } from '../lib/lazyModule'
 import { createSyncStatus, OFFLINE_DELAY_MS, type SyncStatus } from '../lib/syncStatus'
+import { KeptView } from './KeptView'
 import { TooltipProvider } from './ui/tooltip'
 import { ViewBoundary } from './ViewBoundary'
 
@@ -144,6 +145,46 @@ describe('a view whose code did not load', () => {
         <Stale />
       </ViewBoundary>,
     )
+    expect(container.textContent).toBe('Board')
+  })
+
+  it('in a kept view, opens when it shows again after the connection came back while hidden', async () => {
+    const { View, importModule } = flakyView(0)
+    const kept = (shown: boolean) => (
+      <KeptView view="kanban" shown={shown} className="view">
+        {page(View)}
+      </KeptView>
+    )
+    await goOffline()
+    await show(kept(true))
+    expect(container.textContent).toContain('This view opens when the connection is back.')
+    // hidden, the boundary does not hear the connection come back
+    await show(kept(false))
+    await reconnect()
+    await show(kept(true))
+    expect(container.textContent).toBe('Board')
+    expect(importModule).toHaveBeenCalledTimes(1)
+  })
+
+  it('in a kept view, tries a view that failed again when it shows again', async () => {
+    let broken = true
+    function Fragile() {
+      if (broken) throw new Error('render failed')
+      return <p>Board</p>
+    }
+    const kept = (shown: boolean) => (
+      <KeptView view="kanban" shown={shown} className="view">
+        <ViewBoundary onBack={() => {}} status={status}>
+          <Fragile />
+        </ViewBoundary>
+      </KeptView>
+    )
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await show(kept(true))
+    expect(container.textContent).toContain('This view could not be loaded.')
+    broken = false
+    await show(kept(false))
+    await show(kept(true))
     expect(container.textContent).toBe('Board')
   })
 

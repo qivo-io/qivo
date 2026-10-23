@@ -2,6 +2,7 @@ import { AlertDialog as AlertDialogPrimitive } from 'radix-ui'
 import type * as React from 'react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { useViewHidden } from '@/lib/viewHidden'
 
 function AlertDialog({ ...props }: React.ComponentProps<typeof AlertDialogPrimitive.Root>) {
   return <AlertDialogPrimitive.Root data-slot="alert-dialog" {...props} />
@@ -42,6 +43,8 @@ function AlertDialogContent({
   size?: 'default' | 'sm'
   overlayClassName?: string
 }) {
+  // in a hidden kept view (lib/viewHidden.ts)
+  if (useViewHidden()) return null
   return (
     <AlertDialogPortal>
       <AlertDialogOverlay className={overlayClassName} />

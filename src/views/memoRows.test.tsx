@@ -25,6 +25,8 @@ vi.mock('../lib/auth', () => ({
   },
   signOut: vi.fn(),
 }))
+/* A row renders its owner's portrait each time it renders: a live row
+   through AssigneeAvatar, a static Board card through staticOwnerPortrait. */
 const portraits = vi.hoisted(() => ({ rendered: [] as string[] }))
 vi.mock('@/components/AssigneeAvatar', () => ({
   AssigneeAvatar: ({ issue }: { issue: IssueVM }) => {
@@ -32,6 +34,13 @@ vi.mock('@/components/AssigneeAvatar', () => ({
     return null
   },
   OwnerPickList: () => null,
+}))
+vi.mock('@/components/rowElements', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/components/rowElements')>()),
+  staticOwnerPortrait: (_statics: unknown, issue: IssueVM) => {
+    portraits.rendered.push(issue.uuid)
+    return null
+  },
 }))
 
 const AT = '2026-09-14T08:00:00.000Z'

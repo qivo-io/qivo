@@ -41,6 +41,15 @@ describe('restoreTaskFocus', () => {
     expect(focused()).toEqual({ task: { card: 'A' }, key: 'owner' })
   })
 
+  it('passes by a card in a view kept hidden behind another page', () => {
+    document.body.innerHTML = cell('todo', card('A'))
+    const mark = markTaskFocus(control('data-card="A"', 'owner'))!
+    // the kept Board, hidden, holds the card first; the shown view after it
+    document.body.innerHTML = `<div data-hidden-view="kanban">${cell('todo', card('A'))}</div><div data-workspace-view="roadmap">${cell('todo', card('A'))}</div>`
+    expect(restoreTaskFocus(mark, { scroll: false })).toBe(true)
+    expect(document.activeElement?.closest('[data-workspace-view]')).not.toBeNull()
+  })
+
   it('takes only the remembered occurrence when asked to be exact', () => {
     document.body.innerHTML = cell('todo', family('P', 'A')) + cell('progress', family('P', 'B'))
     const mark = markTaskFocus(

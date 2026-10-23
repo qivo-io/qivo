@@ -3,6 +3,7 @@ import { Dialog as DialogPrimitive } from 'radix-ui'
 import * as React from 'react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { useViewHidden } from '@/lib/viewHidden'
 
 function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />
@@ -53,6 +54,8 @@ const DialogContent = React.forwardRef<
   { className, children, showCloseButton = true, overlayClassName, ...props },
   ref,
 ) {
+  // in a hidden kept view (lib/viewHidden.ts)
+  if (useViewHidden()) return null
   return (
     <DialogPortal data-slot="dialog-portal">
       <DialogOverlay className={overlayClassName} />

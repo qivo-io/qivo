@@ -1,4 +1,5 @@
-import { cva } from 'class-variance-authority'
+import { cva, type VariantProps } from 'class-variance-authority'
+import { cn } from '@/lib/utils'
 
 /* `data-on` is the one lit state for every control that reports "on" or
    "current" (deviation #232): a raised --lit chip (a step above --surface-3
@@ -50,3 +51,20 @@ export const buttonVariants = cva(
     },
   },
 )
+
+type ButtonVariants = VariantProps<typeof buttonVariants>
+
+/** The data hooks and class Button gives its element, after its props. */
+export function buttonHooks(
+  variant: ButtonVariants['variant'] = 'default',
+  size: ButtonVariants['size'] = 'default',
+  className?: string,
+) {
+  return {
+    'data-slot': 'button',
+    'data-variant': variant,
+    'data-size': variant === 'unstyled' ? undefined : size,
+    className:
+      variant === 'unstyled' ? cn(className) : cn(buttonVariants({ variant, size, className })),
+  }
+}

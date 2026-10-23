@@ -78,6 +78,15 @@ export class ViewBoundary extends Component<
 
   override componentDidMount() {
     this.stopListening = watchCodeWaits(this.status, () => this.resumeIfReady())
+    // an error here means it shows again after it was hidden (KeptView.tsx)
+    if (this.state.error) this.showAgain()
+  }
+
+  /** Tries the children again as one mounted anew would: hidden, the
+      boundary did not hear the connection come back. */
+  private showAgain() {
+    if (this.state.error?.cause instanceof CodeWaitsForConnection) this.resumeIfReady()
+    else this.setState({ error: null })
   }
 
   // the connection can come back between the refusal and this catch

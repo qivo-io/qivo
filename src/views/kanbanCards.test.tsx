@@ -190,30 +190,39 @@ describe('static Board cards', { timeout: BOARD_TEST_TIMEOUT }, () => {
     ).toBe('true')
   })
 
-  it('open the owner picker when a press lands before the pointer made the card live', async () => {
+  it('keep the control a press lands on when it comes right after the pointer', async () => {
     const board = await loadBoard(network, twenty)
     await board.render(root)
-    const owner = cards()[6].querySelector<HTMLElement>('[data-focus-key="owner"]')
-    // the mouse arrives and presses before React renders the live card
+    // the mouse arrives and React gets to the update in its own time, as on
+    // a busy page: the control under the mouse when the press lands must be
+    // the one the click reaches, not a static one the live card replaces
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', false)
+    cards()[6].querySelector('[data-focus-key="owner"]')?.dispatchEvent(pointer('pointerover'))
+    const pressed = cards()[6].querySelector<HTMLElement>('[data-focus-key="owner"]')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+    expect(cards()[6].hasAttribute('data-card-live')).toBe(true)
+    expect(pressed?.isConnected).toBe(true)
+    // so is keyboard focus that lands on it
+    await act(async () => pressed?.focus())
+    expect(document.activeElement).toBe(pressed)
+    await act(async () => pressed?.click())
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+  })
+
+  it('open the owner picker when keyboard focus and a press both land before the card renders live', async () => {
+    const board = await loadBoard(network, twenty)
+    await board.render(root)
+    const owner = cards()[3].querySelector<HTMLElement>('[data-focus-key="owner"]')
+    // two ways in, in one task: the second joins the switch the first began
     await act(async () => {
-      owner?.dispatchEvent(pointer('pointerover'))
+      owner?.focus()
       owner?.click()
     })
+    expect(cards()[3].hasAttribute('data-card-live')).toBe(true)
     const dialog = document.querySelector('[role="dialog"]')
     expect(dialog).not.toBeNull()
     expect(dialog?.contains(document.activeElement)).toBe(true)
-  })
-
-  it('keep keyboard focus that arrives while a pointer has the card going live', async () => {
-    const board = await loadBoard(network, twenty)
-    await board.render(root)
-    const owner = cards()[4].querySelector<HTMLElement>('[data-focus-key="owner"]')
-    await act(async () => {
-      cards()[4].dispatchEvent(pointer('pointerover'))
-      owner?.focus()
-    })
-    expect(document.activeElement?.getAttribute('data-focus-key')).toBe('owner')
-    expect(cards()[4].contains(document.activeElement)).toBe(true)
   })
 
   it('render the same markup and tab stops static and live, for every card shape', async () => {

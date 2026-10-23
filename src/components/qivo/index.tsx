@@ -1,79 +1,6 @@
-/* Shared UI primitives + icon set. */
+/* Shared UI primitives. The icon set is in ./icon. */
 
-import {
-  Archive,
-  ArrowDown,
-  ArrowLeftRight,
-  ArrowRight,
-  ArrowRightFromLine,
-  ArrowRightToLine,
-  ArrowUp,
-  ArrowUpRight,
-  AtSign,
-  Ban,
-  Bell,
-  CalendarDays,
-  Camera,
-  ChartColumn,
-  Check,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsDown,
-  ChevronsUp,
-  ChevronUp,
-  Circle,
-  CircleAlert,
-  CircleDot,
-  CircleHelp,
-  Clock8,
-  ClockFading,
-  Columns3,
-  Command as CommandIcon,
-  Copy,
-  Diamond,
-  Download,
-  ExternalLink,
-  Eye,
-  EyeOff,
-  FileText,
-  Flag,
-  GanttChart,
-  History,
-  Inbox,
-  Info,
-  Key,
-  Keyboard,
-  Layers,
-  Link as LinkIcon,
-  List,
-  ListFilter,
-  type LucideIcon,
-  Mail,
-  MessageSquare,
-  Monitor,
-  MoreHorizontal,
-  Paperclip,
-  Pause,
-  PenLine,
-  Play,
-  Plug,
-  Plus,
-  RotateCcw,
-  Rows2,
-  Rows3,
-  Search,
-  Settings,
-  SlidersHorizontal,
-  Tag,
-  Target,
-  Trash2,
-  TriangleAlert,
-  User,
-  Users,
-  X,
-  Zap,
-} from 'lucide-react'
+import { Check } from 'lucide-react'
 import {
   type ComponentPropsWithoutRef,
   type CSSProperties,
@@ -91,7 +18,6 @@ import {
   useState,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { Avatar as UiAvatar } from '@/components/ui/avatar'
 import { Badge as UiBadge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { PopoverContent, PopoverTrigger, Popover as ShadcnPopover } from '@/components/ui/popover'
@@ -114,108 +40,10 @@ import { type StaticControls, useStaticControls } from '@/lib/liveControls'
 import { hasTooltip } from '@/lib/passEscapeOn'
 import { useMenuBackLayer } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
+import { useViewHidden } from '@/lib/viewHidden'
 import { P } from '../../store/planner'
-
-/* ---- Generic chrome icons use lucide; Qivo status/priority glyphs stay below. ---- */
-const LUCIDE_ICONS: Record<string, LucideIcon> = {
-  search: Search,
-  filter: ListFilter,
-  plus: Plus,
-  chevronDown: ChevronDown,
-  chevronUp: ChevronUp,
-  chevronRight: ChevronRight,
-  chevronLeft: ChevronLeft,
-  chevronsDown: ChevronsDown,
-  chevronsUp: ChevronsUp,
-  board: Columns3,
-  timeline: GanttChart,
-  people: Users,
-  list: List,
-  chart: ChartColumn,
-  close: X,
-  link: LinkIcon,
-  parent: ArrowUp,
-  child: ArrowDown,
-  blocked: Ban,
-  pause: Pause,
-  play: Play,
-  more: MoreHorizontal,
-  calendar: CalendarDays,
-  check: Check,
-  sliders: SlidersHorizontal,
-  layers: Layers,
-  flag: Flag,
-  dot: Circle,
-  circleDot: CircleDot,
-  arrowUpRight: ArrowUpRight,
-  externalLink: ExternalLink,
-  arrowRight: ArrowRight,
-  warning: TriangleAlert,
-  alert: CircleAlert,
-  info: Info,
-  user: User,
-  zap: Zap,
-  trash: Trash2,
-  copy: Copy,
-  rotateCcw: RotateCcw,
-  diamond: Diamond,
-  keyboard: Keyboard,
-  key: Key,
-  plug: Plug,
-  command: CommandIcon,
-  inbox: Inbox,
-  archive: Archive,
-  mail: Mail,
-  bell: Bell,
-  monitor: Monitor,
-  tag: Tag,
-  paperclip: Paperclip,
-  download: Download,
-  history: History,
-  rows: Rows2,
-  rows3: Rows3,
-  clock8: Clock8,
-  clockFading: ClockFading,
-  arrowRightFromLine: ArrowRightFromLine,
-  arrowRightToLine: ArrowRightToLine,
-  arrowLeftRight: ArrowLeftRight,
-  comment: MessageSquare,
-  page: FileText,
-  pen: PenLine,
-  target: Target,
-  eye: Eye,
-  camera: Camera,
-  eyeOff: EyeOff,
-  cog: Settings,
-  at: AtSign,
-}
-function Icon({
-  name,
-  size = 16,
-  color = 'currentColor',
-  strokeWidth = 1.75,
-  style,
-  className,
-}: {
-  name: string
-  size?: number
-  color?: string
-  strokeWidth?: number
-  style?: CSSProperties
-  className?: string
-}) {
-  const Glyph = LUCIDE_ICONS[name] ?? CircleHelp
-  return (
-    <Glyph
-      size={size}
-      color={color}
-      strokeWidth={strokeWidth}
-      style={{ width: size, height: size, color, ...style }}
-      className={cn('[flex-shrink:0] [display:block]', className)}
-      aria-hidden="true"
-    />
-  )
-}
+import { type AvatarSize, avatar, POPOVER_CLOSED, priorityIcon, projectName } from '../rowElements'
+import { Icon } from './icon'
 
 /* The one paused mark: the amber pause glyph, named for readers and drives
    (`[data-paused]`). The Board card, phone task row and Overview list draw it;
@@ -245,13 +73,8 @@ function PausedMark({
   )
 }
 
-/* ---- Avatars ----------------------------------------------------------
-   An uploaded picture painted over the initials-on-color chip. The chip is
-   not a placeholder that gets replaced: it is always rendered, so a person
-   without a picture, or one whose picture fails to load, shows initials. */
-/* 20 is the Team sync row's portrait (beside a chevron in a 32px control). */
-export type AvatarSize = 20 | 28 | 40
-
+/* ---- Avatars ---------------------------------------------------------- */
+/** A person's portrait, or Unassigned's (rowElements.tsx draws it). */
 function Avatar({
   id,
   size = 28,
@@ -261,59 +84,7 @@ function Avatar({
   size?: AvatarSize
   ring?: boolean
 }) {
-  const [failed, setFailed] = useState('')
-  const u = P.user(id)
-  if (!u)
-    return (
-      <HoverTooltip content="Unassigned">
-        <UiAvatar
-          tabIndex={-1}
-          role="img"
-          aria-label="Unassigned"
-          style={{ width: size, height: size }}
-          className="grid place-items-center rounded-[5px] border border-dashed border-border-strong bg-surface-3"
-        >
-          <Icon name="user" size={size * 0.55} color="var(--text-3)" />
-        </UiAvatar>
-      </HoverTooltip>
-    )
-  // null until an uploaded picture's signed URL arrives (0097)
-  const src = u.avatarPath ? u.avatarUrl : null
-  // The two larger portraits share one readable fallback type step; the
-  // 20px row portrait steps its initials down so two letters still fit.
-  return (
-    <HoverTooltip content={u.name}>
-      <UiAvatar
-        tabIndex={-1}
-        data-avatar={u.id}
-        role="img"
-        aria-label={u.name}
-        style={{
-          width: size,
-          height: size,
-          backgroundColor: u.color,
-          boxShadow: ring ? '0 0 0 2px var(--surface-1)' : undefined,
-        }}
-        className={cn(
-          'grid place-items-center rounded-[5px] font-semibold text-white',
-          size === 20 ? 'rounded-[4px] text-[10px]' : '[font-size:var(--fs-sm)]',
-        )}
-      >
-        {u.initials}
-        {src && failed !== src && (
-          // no-referrer so the page a face is drawn on never reaches the host
-          <img
-            data-avatar-img
-            src={src}
-            alt=""
-            referrerPolicy="no-referrer"
-            onError={() => setFailed(src)}
-            className="[position:absolute] [inset:0] [width:100%] [height:100%] [object-fit:cover] [display:block] [border-radius:inherit]"
-          />
-        )}
-      </UiAvatar>
-    </HoverTooltip>
-  )
+  return avatar(useStaticControls(), id, size, ring)
 }
 function AvatarStack({ ids, size = 28 }: { ids: string[]; size?: AvatarSize }) {
   return (
@@ -335,47 +106,9 @@ function AvatarStack({ ids, size = 28 }: { ids: string[]; size?: AvatarSize }) {
    chip so it is still legible where colour isn't. The colours arrive as
    p.color from the store, already tokens. */
 function PriorityIcon({ priority, size = 14 }: { priority: string; size?: number }) {
-  const p = P.PRIORITIES[priority]
-  if (!p) return null
-  if (priority === 'urgent') {
-    return (
-      /* The chip scales with `size`, so its radius and its glyph are derived
-         from it rather than tokenised — but both are ROUNDED, or a 13px chip
-         asks for 2.86px of radius and 10.14px of text. Fractional type is the
-         one thing the scale exists to stop; proportion survives the rounding. */
-      <HoverTooltip content="Urgent priority">
-        <span
-          tabIndex={-1}
-          role="img"
-          aria-label="Urgent priority"
-          style={{
-            width: size,
-            height: size,
-            borderRadius: Math.round(size * 0.22),
-            background: p.color,
-            fontSize: Math.round(size * 0.78),
-          }}
-          className="[color:#fff] [display:inline-grid] [place-items:center] [font-weight:800] [line-height:1] [flex-shrink:0] [font-family:var(--sans)]"
-        >
-          !
-        </span>
-      </HoverTooltip>
-    )
-  }
-  // one element: the bars are a mask over a fill (styles/glyphs.css)
-  return (
-    <HoverTooltip content={`${p.name} priority`}>
-      <span
-        tabIndex={-1}
-        role="img"
-        aria-label={`${p.name} priority`}
-        data-prio={priority}
-        style={{ height: size, width: size }}
-        className="prio-bars"
-      />
-    </HoverTooltip>
-  )
+  return priorityIcon(useStaticControls(), priority, size)
 }
+
 /* Linear-style status glyphs, colored by the status tone: dashed ring =
    backlog, empty ring = todo, ring + pie fill = in progress / in review,
    filled circle with check = done. Unknown statuses fall back to a grey ring. */
@@ -511,71 +244,14 @@ function IssueKey({ id, dim }: { id: string; dim?: boolean }) {
     </span>
   )
 }
-type ProjectRef = { id: string; name: string }
 /** A project's name, followed by its number when another project shown
     alongside it has the same name (P.projectTag). `owner` names the owning
     project first, as in "Website, Design"; spread a P.projectPlace to get both.
     By default each name truncates and the numbers stay visible; `wrap` lets
     long names wrap. Plain-text places such as <option> use P.projectLabel or
     P.placeLabel instead. */
-function ProjectName({
-  project,
-  owner,
-  wrap,
-}: {
-  project: ProjectRef
-  owner?: ProjectRef | null
-  wrap?: boolean
-}) {
-  const names = owner && owner.id !== project.id ? [owner, project] : [project]
-  const parts = names.map((p) => ({ id: p.id, name: p.name, tag: P.projectTag(p.id) }))
-  if (!parts.some((p) => p.tag)) return <>{names.map((p) => p.name).join(', ')}</>
-  // line-height 1 keeps the mono number from deepening the line it sits on
-  const number = (tag: string) => (
-    <span
-      data-project-tag
-      className="whitespace-nowrap !font-mono text-xs leading-none font-normal text-text-2"
-    >
-      {tag}
-    </span>
-  )
-  // real spaces keep "Test #4" apart for screen readers and copied text
-  if (wrap) {
-    return (
-      <>
-        {parts.map((p, i) => (
-          <Fragment key={p.id}>
-            {i > 0 && ', '}
-            {p.name}
-            {p.tag && <> {number(p.tag)}</>}
-          </Fragment>
-        ))}
-      </>
-    )
-  }
-  // One grid column per part. Numbers and separators keep their width; the
-  // names truncate and share what is left equally, so a short name stays
-  // whole beside a long one. A grid drops plain spaces, so separators
-  // preserve them; the space before a number is drawn 6px wide.
-  const gap = (text: string, className?: string) => (
-    <span className={cn('whitespace-pre', className)}>{text}</span>
-  )
-  return (
-    <span className="inline-grid min-w-0 max-w-full grid-flow-col items-baseline align-bottom">
-      {parts.map((p, i) => (
-        <Fragment key={p.id}>
-          {i > 0 && gap(', ')}
-          <span className="truncate">{p.name}</span>
-          {p.tag && (
-            <>
-              {gap(' ', 'w-1.5 overflow-hidden')}
-              {number(p.tag)}
-            </>
-          )}
-        </Fragment>
-      ))}
-    </span>
-  )
+function ProjectName(props: Parameters<typeof projectName>[0]) {
+  return projectName(props)
 }
 /** ProjectName for a project id, after its owning project with `withOwner`;
     nothing when the project is not loaded. */
@@ -722,11 +398,7 @@ function StaticPopover({ statics, button, wrapStyle }: PopoverProps & { statics:
   return (
     <div ref={wrap} style={wrapStyle} data-popover-wrap>
       {isValidElement(trigger)
-        ? cloneElement(trigger as ReactElement<Record<string, unknown>>, {
-            'aria-haspopup': 'dialog',
-            'aria-expanded': false,
-            'data-state': 'closed',
-          })
+        ? cloneElement(trigger as ReactElement<Record<string, unknown>>, POPOVER_CLOSED)
         : trigger}
     </div>
   )
@@ -972,16 +644,7 @@ function FieldSelect<T extends string>({
 // any pop is open (via the [data-anchoredpop-backdrop] probe).
 const popStack: object[] = []
 
-function AnchoredPop({
-  x,
-  y,
-  width = 300,
-  align = 'center',
-  gap = 10,
-  onClose,
-  stayOnScroll = false,
-  children,
-}: {
+type AnchoredPopProps = {
   x: number
   y: number
   width?: number
@@ -990,7 +653,24 @@ function AnchoredPop({
   onClose: () => void
   stayOnScroll?: boolean
   children?: ReactNode
-}) {
+}
+
+/** A pop at a point. It goes, with its listeners, while the kept view it
+    opened in is hidden (lib/viewHidden.ts). */
+function AnchoredPop(props: AnchoredPopProps) {
+  return useViewHidden() ? null : <AnchoredPopLayer {...props} />
+}
+
+function AnchoredPopLayer({
+  x,
+  y,
+  width = 300,
+  align = 'center',
+  gap = 10,
+  onClose,
+  stayOnScroll = false,
+  children,
+}: AnchoredPopProps) {
   const ref = useRef<HTMLDivElement>(null)
   const landscape = useContext(LandscapeContext)
   const viewportWidth = landscape?.width ?? window.innerWidth
@@ -1618,6 +1298,7 @@ function EmptyState({
   )
 }
 
+export type { AvatarSize }
 export {
   AnchoredPop,
   Avatar,

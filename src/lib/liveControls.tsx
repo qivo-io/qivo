@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { flushSync } from 'react-dom'
 import { lastInputWasPointer } from './focusVisibility'
 import { markTaskFocus, type TaskFocusMark } from './taskFocus'
 
@@ -83,8 +84,9 @@ export function useLiveControls(root: RefObject<HTMLElement | null>) {
       const element = root.current
       if (!element) return
       const wrapAt = wrap ? [...element.querySelectorAll('[data-popover-wrap]')].indexOf(wrap) : -1
-      // Already going live, as a mouse that arrives renders the row later:
-      // a press that lands first still opens its popover.
+      // Already going live: keyboard focus and then a press, in one task
+      // before React renders, still open the pressed popover. (A mouse makes
+      // the row live at once, in its own event.)
       const active = document.activeElement
       if (handover.current) {
         // the newest press, pointer and focus while the render is pending
@@ -137,10 +139,13 @@ export function useLiveControls(root: RefObject<HTMLElement | null>) {
   }, [live, root])
   const value = live ? null : statics
   /* A mouse that points at the row, never a touch, and never while a button
-     is held: a press or drag keeps the node it started on. */
+     is held: a press or drag keeps the node it started on. The row goes live
+     at once, not when React gets to it: on a busy page that came after a
+     press that followed the mouse, and the live controls replaced the node
+     the press began on, so its click reached no control. */
   const pointed = (event: ReactPointerEvent) => {
     if (event.pointerType !== 'touch' && event.buttons === 0)
-      activate(null, { x: event.clientX, y: event.clientY })
+      flushSync(() => activate(null, { x: event.clientX, y: event.clientY }))
   }
   const rootProps = live
     ? { 'data-card-live': '' }

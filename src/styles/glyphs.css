@@ -1,5 +1,5 @@
-/* Glyphs drawn by one element each, for the long lists (Board cards, phone
-   rows) that render thousands of them. */
+/* Glyphs drawn by one element or pseudo-element each, for the long lists
+   (Board cards, phone rows) that render thousands of them. */
 
 /* PriorityIcon's one, two or three bars: the three rounded bars are a mask,
    and the fill colors the bars the priority reaches (--prio-fill across)
@@ -29,8 +29,10 @@
   --prio-fill: 100%;
 }
 
-/* The due date's calendar (Lucide's calendar-days) in the text color. */
-.due-glyph {
+/* The due date's calendar (Lucide's calendar-days) in the text color, drawn
+   before the date. */
+.due-date::before {
+  content: "";
   display: block;
   flex-shrink: 0;
   width: 11px;
@@ -45,15 +47,15 @@
    Contrast) and printing without backgrounds would drop: draw them in the
    text color there. */
 .prio-bars,
-.due-glyph {
+.due-date::before {
   print-color-adjust: exact;
 }
 @media (forced-colors: active) {
   .prio-bars,
-  .due-glyph {
+  .due-date::before {
     forced-color-adjust: none;
   }
-  .due-glyph {
+  .due-date::before {
     background: CanvasText;
   }
   .prio-bars {

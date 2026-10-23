@@ -3,6 +3,7 @@ import type * as React from 'react'
 
 import { useStaticControls } from '@/lib/liveControls'
 import { cn } from '@/lib/utils'
+import { avatarHooks } from './avatar-hooks'
 
 function Avatar({
   className,
@@ -14,17 +15,7 @@ function Avatar({
   // A static row (liveControls.tsx) renders the root's span without Radix;
   // its image parts are not used there.
   const Root = useStaticControls() ? 'span' : AvatarPrimitive.Root
-  return (
-    <Root
-      data-slot="avatar"
-      data-size={size}
-      className={cn(
-        'group/avatar relative flex size-8 shrink-0 overflow-hidden rounded-full select-none data-[size=lg]:size-10 data-[size=sm]:size-6',
-        className,
-      )}
-      {...props}
-    />
-  )
+  return <Root {...avatarHooks(size, className)} {...props} />
 }
 
 function AvatarImage({ className, ...props }: React.ComponentProps<typeof AvatarPrimitive.Image>) {

@@ -19,7 +19,9 @@ vi.mock('../lib/auth', () => ({
   },
   signOut: vi.fn(),
 }))
-// The owner's portrait renders once per task row, so it counts card renders.
+/* The owner's portrait renders once per task row, so it counts card
+   renders: a live row's through AssigneeAvatar, a static card's through
+   staticOwnerPortrait. */
 const portraits = vi.hoisted(() => ({ rendered: [] as string[] }))
 vi.mock('@/components/AssigneeAvatar', () => ({
   AssigneeAvatar: ({ issue }: { issue: IssueVM }) => {
@@ -27,6 +29,13 @@ vi.mock('@/components/AssigneeAvatar', () => ({
     return null
   },
   OwnerPickList: () => null,
+}))
+vi.mock('@/components/rowElements', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/components/rowElements')>()),
+  staticOwnerPortrait: (_statics: unknown, issue: IssueVM) => {
+    portraits.rendered.push(issue.uuid)
+    return null
+  },
 }))
 
 let container: HTMLDivElement
@@ -72,6 +81,8 @@ describe('dragging a Board card', { timeout: BOARD_TEST_TIMEOUT }, () => {
     const board = await crowded()
     await board.render(root)
     await act(async () => board.card('a')?.dispatchEvent(dragEvent('dragstart')))
+    // the counter sees the cards, static ones included
+    expect(portraits.rendered).toContain('p19')
     portraits.rendered = []
     await over('progress')
     expect(portraits.rendered).toEqual([])
