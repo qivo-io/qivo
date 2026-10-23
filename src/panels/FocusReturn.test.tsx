@@ -139,6 +139,18 @@ describe('closing a task window', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(document.activeElement).toBe(title)
   })
 
+  it('does not return focus to a card in a view kept hidden behind another page', async () => {
+    const title = await openEditClose(() => {
+      // the scope changed as the window closed: the Board is kept, hidden
+      container.setAttribute('data-hidden-view', 'kanban')
+    })
+    expect(title).toBeTruthy()
+    // no card of the hidden Board takes it (the window, in this one root,
+    // holds it)
+    expect(document.activeElement).not.toBe(title)
+    expect(document.activeElement?.closest('[data-card]')).toBeNull()
+  })
+
   it("returns focus to the shown task's card when the opener's task is gone", async () => {
     const title = await openEditClose(async (board, open) => {
       // the window moves on to B; elsewhere A is archived and B moved on, so

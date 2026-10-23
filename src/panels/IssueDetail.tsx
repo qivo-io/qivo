@@ -53,6 +53,7 @@ import { closeOrAsk, questionOpen } from '../lib/discardQuestion'
 import { limitSentence, overLimit } from '../lib/fieldLimits'
 import { roomBeside, useFloatInsets } from '../lib/floatStack'
 import { lastInputWasPointer, restoreFocus } from '../lib/focusVisibility'
+import { OUT_OF_USE } from '../lib/viewHidden'
 import { lazyFromModule } from '../lib/lazyModule'
 import {
   type UnsentScope,
@@ -1641,7 +1642,7 @@ function IssueDetail({
       dialog?.removeEventListener('pointerdown', release, true)
       release()
       for (const [element, wasInert] of outside) element.inert = wasInert
-      if (previousFocus?.isConnected && !previousFocus.closest('[inert]')) {
+      if (previousFocus?.isConnected && !previousFocus.closest(OUT_OF_USE)) {
         restoreFocus(previousFocus)
       } else {
         // The opener went with its card. This cleanup can run while React

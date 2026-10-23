@@ -1762,8 +1762,8 @@ function App() {
     </DeferredOverlay>
   )
 
-  /* Settings owns the screen. The workspace stays mounted below it only
-     while it holds the kept Board, hidden (settingsView, KeptView). */
+  /* Settings owns the screen. The workspace stays mounted after it,
+     hidden, for the kept Board (KeptView). */
   const settingsView = settingsPage
     ? (() => {
         // null from either sentinel scope, on purpose. Archived tasks shows ONE
@@ -1856,135 +1856,135 @@ function App() {
   return (
     <>
       {settingsView}
-      {/* while Settings shows, the workspace holds only the kept Board,
-         hidden in place, so its elements keep their layout */}
-      {(!settingsPage || keepBoard !== null) && (
-        <WorkspaceShell
-          className="planner-shell"
-          hidden={!!settingsPage}
-          header={
-            settingsPage ? null : mobile ? (
-              <MobileHeader
-                scope={scope}
+      {/* While Settings shows, the workspace stays, hidden, holding only the
+         kept Board in place, so its elements keep their layout, and a Board
+         whose scope went while Settings showed can come apart in slices. */}
+      <WorkspaceShell
+        className="planner-shell"
+        hidden={!!settingsPage}
+        header={
+          settingsPage ? null : mobile ? (
+            <MobileHeader
+              scope={scope}
+              view={view}
+              inboxOpen={inboxOpen}
+              projectsOpen={projectsOpen}
+              syncOpen={!!sync}
+              actions={actions}
+            />
+          ) : projectsOpen ? (
+            <WorkspacePageHeader label="Projects" icon="layers" />
+          ) : (
+            (inboxOpen || sync || scopeInfo) && (
+              <TopBar
+                info={scopeInfo}
                 view={view}
                 inboxOpen={inboxOpen}
-                projectsOpen={projectsOpen}
                 syncOpen={!!sync}
+                setView={navView}
+                filters={filters}
+                setFilters={setFilters}
+                tweaks={tweaks}
+                setTweak={setTweak}
                 actions={actions}
-              />
-            ) : projectsOpen ? (
-              <WorkspacePageHeader label="Projects" icon="layers" />
-            ) : (
-              (inboxOpen || sync || scopeInfo) && (
-                <TopBar
-                  info={scopeInfo}
-                  view={view}
-                  inboxOpen={inboxOpen}
-                  syncOpen={!!sync}
-                  setView={navView}
-                  filters={filters}
-                  setFilters={setFilters}
-                  tweaks={tweaks}
-                  setTweak={setTweak}
-                  actions={actions}
-                />
-              )
-            )
-          }
-          navigation={
-            settingsPage ? null : mobile ? (
-              <MobileNavigation
-                scope={scope}
-                inboxOpen={inboxOpen}
-                projectsOpen={projectsOpen}
-                syncOpen={!!sync}
-                actions={actions}
-              />
-            ) : (
-              <Sidebar
-                scope={scope}
-                setScope={navScope}
-                actions={actions}
-                inboxOpen={inboxOpen}
-                syncOpen={!!sync}
               />
             )
-          }
-        >
-          <main className="[flex:1] [display:flex] [flex-direction:column] [overflow:hidden] [min-width:0] [position:relative]">
-            {!settingsPage && (
-              <BillingNotice
-                key={P.org.id}
-                orgId={P.org.id}
-                orgName={P.org.name}
-                admin={P.isAdmin()}
-                onBilling={() => actions.openSettings('org-billing')}
-                onExport={() => actions.openSettings('org-general')}
-              />
-            )}
-            {!settingsPage && <TasksLoadingBar />}
-            {/* the Board has a boundary of its own, below, and so has each view */}
-            {!settingsPage && (
-              <ViewBoundary
-                key={sync ? 'sync' : inboxOpen ? 'inbox' : projectsOpen ? 'projects' : 'views'}
-                onBack={backToWorkspace}
-              >
-                <Suspense fallback={<ViewLoading />}>
-                  <UnsentScopeContext.Provider value={unsent.page}>
-                    {projectsOpen ? (
-                      <ProjectDirectory actions={actions} />
-                    ) : inboxOpen ? (
-                      // openTask does not use navOpenIssue on purpose: the inbox's right pane IS
-                      // the task window, so opening a task must NOT leave the inbox — and
-                      // `openIssue` is what that pane shows, which is why the address
-                      // (/inbox/tasks/<task>) restores it
-                      <UnsentScopeContext.Provider value={unsent.task}>
-                        <Inbox
-                          showOnBoard={showOnBoard}
-                          onExit={() => move({ inboxOpen: false }, () => setInboxOpen(false))}
-                          openTask={(id) => (id ? openTask(id) : closeIssue())}
-                          openIssue={openIssue}
-                          onPlanOnRoadmap={planOnRoadmap}
-                        />
-                      </UnsentScopeContext.Provider>
-                    ) : sync ? (
-                      /* Team sync, over the scope and view it returns to. Its tasks open
+          )
+        }
+        navigation={
+          settingsPage ? null : mobile ? (
+            <MobileNavigation
+              scope={scope}
+              inboxOpen={inboxOpen}
+              projectsOpen={projectsOpen}
+              syncOpen={!!sync}
+              actions={actions}
+            />
+          ) : (
+            <Sidebar
+              scope={scope}
+              setScope={navScope}
+              actions={actions}
+              inboxOpen={inboxOpen}
+              syncOpen={!!sync}
+            />
+          )
+        }
+      >
+        <main className="[flex:1] [display:flex] [flex-direction:column] [overflow:hidden] [min-width:0] [position:relative]">
+          {!settingsPage && (
+            <BillingNotice
+              key={P.org.id}
+              orgId={P.org.id}
+              orgName={P.org.name}
+              admin={P.isAdmin()}
+              onBilling={() => actions.openSettings('org-billing')}
+              onExport={() => actions.openSettings('org-general')}
+            />
+          )}
+          {!settingsPage && <TasksLoadingBar />}
+          {/* the Board has a boundary of its own, below, and so has each view */}
+          {!settingsPage && (
+            <ViewBoundary
+              key={sync ? 'sync' : inboxOpen ? 'inbox' : projectsOpen ? 'projects' : 'views'}
+              onBack={backToWorkspace}
+            >
+              <Suspense fallback={<ViewLoading />}>
+                <UnsentScopeContext.Provider value={unsent.page}>
+                  {projectsOpen ? (
+                    <ProjectDirectory actions={actions} />
+                  ) : inboxOpen ? (
+                    // openTask does not use navOpenIssue on purpose: the inbox's right pane IS
+                    // the task window, so opening a task must NOT leave the inbox — and
+                    // `openIssue` is what that pane shows, which is why the address
+                    // (/inbox/tasks/<task>) restores it
+                    <UnsentScopeContext.Provider value={unsent.task}>
+                      <Inbox
+                        showOnBoard={showOnBoard}
+                        onExit={() => move({ inboxOpen: false }, () => setInboxOpen(false))}
+                        openTask={(id) => (id ? openTask(id) : closeIssue())}
+                        openIssue={openIssue}
+                        onPlanOnRoadmap={planOnRoadmap}
+                      />
+                    </UnsentScopeContext.Provider>
+                  ) : sync ? (
+                    /* Team sync, over the scope and view it returns to. Its tasks open
              in the floating window below (openTask, not navOpenIssue: opening one must
              not leave the page), and Escape does not close it: a meeting
              page must not vanish on a stray key. */
-                      <div
-                        data-workspace-view="sync"
-                        className="animate-in fade-in slide-in-from-bottom-1 [flex:1] [display:flex] [flex-direction:column] [overflow:hidden]"
-                      >
-                        {tasksLoading ? (
-                          <TasksLoadingView what="Team sync" />
-                        ) : (
-                          <TeamSync
-                            place={sync}
-                            onPlace={placeSync}
-                            onCorrect={correctSync}
-                            onClose={closeSync}
-                            onOpenTask={openTask}
-                            onShowTask={showTaskOn}
-                            onShowPerson={showPersonOn}
-                          />
-                        )}
-                      </div>
-                    ) : (
-                      scopeInfo &&
-                      view !== 'kanban' && (
-                        <div key={scope + view} data-workspace-view={view} className={VIEW_CLASS}>
-                          <ViewBoundary onBack={backToWorkspace}>
-                            <Suspense fallback={<ViewLoading />}>
-                              {tasksLoading ? (
-                                <TasksLoadingView
-                                  what={view === 'roadmap' ? 'The roadmap' : 'The overview'}
-                                />
-                              ) : null}
-                              {view === 'overview' && !tasksLoading && (
-                                <Overview info={scopeInfo} actions={actions} />
-                              )}
-                              {/* The roadmap's toolbar row is its own — the window controls, the
+                    <div
+                      data-workspace-view="sync"
+                      className="animate-in fade-in slide-in-from-bottom-1 [flex:1] [display:flex] [flex-direction:column] [overflow:hidden]"
+                    >
+                      {tasksLoading ? (
+                        <TasksLoadingView what="Team sync" />
+                      ) : (
+                        <TeamSync
+                          place={sync}
+                          onPlace={placeSync}
+                          onCorrect={correctSync}
+                          onClose={closeSync}
+                          onOpenTask={openTask}
+                          onShowTask={showTaskOn}
+                          onShowPerson={showPersonOn}
+                        />
+                      )}
+                    </div>
+                  ) : (
+                    scopeInfo &&
+                    view !== 'kanban' && (
+                      <div key={scope + view} data-workspace-view={view} className={VIEW_CLASS}>
+                        <ViewBoundary onBack={backToWorkspace}>
+                          <Suspense fallback={<ViewLoading />}>
+                            {tasksLoading ? (
+                              <TasksLoadingView
+                                what={view === 'roadmap' ? 'The roadmap' : 'The overview'}
+                              />
+                            ) : null}
+                            {view === 'overview' && !tasksLoading && (
+                              <Overview info={scopeInfo} actions={actions} />
+                            )}
+                            {/* The roadmap's toolbar row is its own — the window controls, the
                     estimate walk and the auto-correct count are all local to it and
                     cannot be handed up to the bar. So the bar hands the FILTERS
                     down instead, ready-made: App holds the state, the roadmap holds
@@ -2000,96 +2000,95 @@ function App() {
                     above ViewFilters.
                     `filters` (not effFilters) on purpose — the controls edit the raw
                     object for the same reason TopBar does. */}
-                              {view === 'roadmap' && !tasksLoading && (
-                                <Roadmap
-                                  info={scopeInfo}
-                                  filters={roadmapFilters}
-                                  actions={actions}
-                                  filterControls={(phone) => (
-                                    <ViewFilters
-                                      info={scopeInfo}
-                                      filters={filters}
-                                      setFilters={setFilters}
-                                      actions={actions}
-                                      searchWidth={180}
-                                      hideSearch={phone}
-                                      hide={['mine', 'stale', 'focus']}
-                                    />
-                                  )}
-                                  focusPlan={focusPlan}
-                                  onFocusConsumed={() => setFocusPlan(null)}
-                                  revealTask={revealTask}
-                                  onRevealConsumed={() => setRevealTask(null)}
-                                />
-                              )}
-                            </Suspense>
-                          </ViewBoundary>
-                        </div>
-                      )
-                    )}
-                  </UnsentScopeContext.Provider>
-                </Suspense>
-              </ViewBoundary>
-            )}
-            {/* The Board stays loaded, hidden, while every other page of its
+                            {view === 'roadmap' && !tasksLoading && (
+                              <Roadmap
+                                info={scopeInfo}
+                                filters={roadmapFilters}
+                                actions={actions}
+                                filterControls={(phone) => (
+                                  <ViewFilters
+                                    info={scopeInfo}
+                                    filters={filters}
+                                    setFilters={setFilters}
+                                    actions={actions}
+                                    searchWidth={180}
+                                    hideSearch={phone}
+                                    hide={['mine', 'stale', 'focus']}
+                                  />
+                                )}
+                                focusPlan={focusPlan}
+                                onFocusConsumed={() => setFocusPlan(null)}
+                                revealTask={revealTask}
+                                onRevealConsumed={() => setRevealTask(null)}
+                              />
+                            )}
+                          </Suspense>
+                        </ViewBoundary>
+                      </div>
+                    )
+                  )}
+                </UnsentScopeContext.Provider>
+              </Suspense>
+            </ViewBoundary>
+          )}
+          {/* The Board stays loaded, hidden, while every other page of its
              scope shows (ViewKeeper): it is the most used view, and mounting
              a large one takes seconds. A new scope mounts it anew, as
              before, and the old one comes apart after the next view paints. */}
-            <UnsentScopeContext.Provider value={unsent.page}>
-              <ViewKeeper id={keepBoard} view="kanban" shown={boardActive} className={VIEW_CLASS}>
-                {scopeInfo && (
-                  <ViewBoundary onBack={backToWorkspace}>
-                    <Suspense fallback={<ViewLoading />}>
-                      {mobile ? (
-                        <MobileTaskList
-                          info={scopeInfo}
-                          filters={filters}
-                          setFilters={setFilters}
-                          actions={actions}
-                          revealTask={revealTask}
-                          onRevealConsumed={() => setRevealTask(null)}
-                        />
-                      ) : (
-                        <Kanban
-                          info={scopeInfo}
-                          filters={effFilters}
-                          tweaks={tweaks}
-                          actions={actions}
-                          revealTask={revealTask}
-                          onRevealConsumed={() => setRevealTask(null)}
-                        />
-                      )}
-                    </Suspense>
-                  </ViewBoundary>
-                )}
-              </ViewKeeper>
-            </UnsentScopeContext.Provider>
-          </main>
-          {/* the floating window — everywhere but the inbox, which embeds the same
+          <UnsentScopeContext.Provider value={unsent.page}>
+            <ViewKeeper id={keepBoard} view="kanban" shown={boardActive} className={VIEW_CLASS}>
+              {scopeInfo && (
+                <ViewBoundary onBack={backToWorkspace}>
+                  <Suspense fallback={<ViewLoading />}>
+                    {mobile ? (
+                      <MobileTaskList
+                        info={scopeInfo}
+                        filters={filters}
+                        setFilters={setFilters}
+                        actions={actions}
+                        revealTask={revealTask}
+                        onRevealConsumed={() => setRevealTask(null)}
+                      />
+                    ) : (
+                      <Kanban
+                        info={scopeInfo}
+                        filters={effFilters}
+                        tweaks={tweaks}
+                        actions={actions}
+                        revealTask={revealTask}
+                        onRevealConsumed={() => setRevealTask(null)}
+                      />
+                    )}
+                  </Suspense>
+                </ViewBoundary>
+              )}
+            </ViewKeeper>
+          </UnsentScopeContext.Provider>
+        </main>
+        {/* the floating window — everywhere but the inbox, which embeds the same
           component in its right pane instead of stacking one over the other */}
-          {!settingsPage && !inboxOpen && openIssue && (
-            <DeferredOverlay onClose={closeIssue}>
-              <UnsentScopeContext.Provider value={unsent.task}>
-                <IssueDetail
-                  issueId={openIssue}
-                  onClose={closeIssue}
-                  onOpen={openTask}
-                  onPlanOnRoadmap={planOnRoadmap}
-                  unreadTs={undefined}
-                  onPopOut={undefined}
-                  onShowOnBoard={showOnBoard}
-                />
-              </UnsentScopeContext.Provider>
-            </DeferredOverlay>
-          )}
-          {!settingsPage && paletteOpen && (
-            <DeferredOverlay onClose={() => setPaletteOpen(false)}>
-              <SearchPalette ctx={paletteCtx} onClose={() => setPaletteOpen(false)} />
-            </DeferredOverlay>
-          )}
-          {!settingsPage && <ToastHost toasts={toasts} dismiss={dismissToast} />}
-        </WorkspaceShell>
-      )}
+        {!settingsPage && !inboxOpen && openIssue && (
+          <DeferredOverlay onClose={closeIssue}>
+            <UnsentScopeContext.Provider value={unsent.task}>
+              <IssueDetail
+                issueId={openIssue}
+                onClose={closeIssue}
+                onOpen={openTask}
+                onPlanOnRoadmap={planOnRoadmap}
+                unreadTs={undefined}
+                onPopOut={undefined}
+                onShowOnBoard={showOnBoard}
+              />
+            </UnsentScopeContext.Provider>
+          </DeferredOverlay>
+        )}
+        {!settingsPage && paletteOpen && (
+          <DeferredOverlay onClose={() => setPaletteOpen(false)}>
+            <SearchPalette ctx={paletteCtx} onClose={() => setPaletteOpen(false)} />
+          </DeferredOverlay>
+        )}
+        {!settingsPage && <ToastHost toasts={toasts} dismiss={dismissToast} />}
+      </WorkspaceShell>
       {dialogs}
       {settingsPage && <ToastHost toasts={toasts} dismiss={dismissToast} />}
     </>
