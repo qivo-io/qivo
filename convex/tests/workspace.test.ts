@@ -515,7 +515,7 @@ describe('windows', () => {
           issue_id: task.id,
           name: 'evidence.txt',
           size_bytes: 1,
-          storage_id: await ctx.storage.store(new Blob() as never),
+          storage_id: await ctx.storage.store(new Blob([]) as never),
           inline: false,
           created_at: NOW,
           task_archived: task === c ? true : undefined,

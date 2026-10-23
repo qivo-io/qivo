@@ -5,7 +5,7 @@ import {
   guardWindow,
   isAppURL,
   isOAuthProviderURL,
-} from './navigation'
+} from './navigation.js'
 
 const APP = 'https://qivo.io'
 

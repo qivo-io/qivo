@@ -196,7 +196,9 @@ computers that run a signed build.
 The build refuses `--prepackaged`. electron-builder runs none of its
 packing hooks for an app it did not pack itself, so the checks on the update
 feed would not run. Package the app in the same run that writes the
-installer.
+installer. The build also refuses to write an installer when another
+`afterPack` hook replaces the one in `desktop/electron-builder.cjs`, for
+example with `-c.afterPack=<file>` on the command line.
 
 On Ubuntu 26.04 (or another x64 Linux build host), create all three Linux
 artifacts with:

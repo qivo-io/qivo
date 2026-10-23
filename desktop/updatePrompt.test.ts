@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createUpdatePrompt } from './updatePrompt'
+import { createUpdatePrompt } from './updatePrompt.js'
 
 function setup() {
   const state = { available: true, blocked: false }

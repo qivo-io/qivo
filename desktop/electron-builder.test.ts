@@ -1,33 +1,64 @@
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
+import net, { type AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { Arch, build, type Configuration, Packager, Platform } from 'electron-builder'
+import {
+  type AfterPackContext,
+  Arch,
+  build,
+  type Configuration,
+  Packager,
+  Platform,
+} from 'electron-builder'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 const require = createRequire(import.meta.url)
 const configPath = require.resolve('./electron-builder.cjs')
 const feed = 'https://downloads.qivo.io/desktop'
 
+/** Sets these environment variables, removing those set to undefined, and returns a function that restores them. */
+function setEnv(values: Record<string, string | undefined>) {
+  const previous = Object.keys(values).map((name) => [name, process.env[name]] as const)
+  const assign = (entries: Iterable<readonly [string, string | undefined]>) => {
+    for (const [name, value] of entries) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
+  assign(Object.entries(values))
+  return () => assign(previous)
+}
+
 /** Sets the build-time feed, or removes it, and returns a function that restores it. */
 function setFeed(updateUrl?: string) {
-  const previous = process.env.QIVO_DESKTOP_UPDATE_URL
-  if (updateUrl) process.env.QIVO_DESKTOP_UPDATE_URL = updateUrl
-  else delete process.env.QIVO_DESKTOP_UPDATE_URL
-  return () => {
-    if (previous === undefined) delete process.env.QIVO_DESKTOP_UPDATE_URL
-    else process.env.QIVO_DESKTOP_UPDATE_URL = previous
-  }
+  return setEnv({ QIVO_DESKTOP_UPDATE_URL: updateUrl || undefined })
 }
 
 /** Loads the build config as electron-builder would with this build-time feed. */
-function loadConfig(updateUrl?: string) {
+function loadConfig(updateUrl?: string): Configuration {
   const restore = setFeed(updateUrl)
   try {
-    return require(configPath)()
+    const createConfig: () => Configuration = require(configPath)
+    return createConfig()
   } finally {
     restore()
   }
+}
+
+/** Runs the config's afterPack hook on a packed app. */
+async function afterPack(config: Configuration, context: AfterPackContext): Promise<unknown> {
+  if (typeof config.afterPack !== 'function') throw new Error('the config has no afterPack hook')
+  return await config.afterPack(context)
+}
+
+/** Returns a local port that nothing listens on. */
+async function closedPort() {
+  const server = net.createServer()
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address() as AddressInfo
+  await new Promise((resolve) => server.close(resolve))
+  return port
 }
 
 describe('desktop package fuses', () => {
@@ -59,7 +90,11 @@ describe('desktop update feed in the build', () => {
   })
   afterEach(() => fs.rmSync(runDirectory, { recursive: true, force: true }))
 
-  /** Packs a fake app for this platform whose resources hold this app-update.yml, or none. */
+  /**
+   * Packs a fake app for this platform whose resources hold this
+   * app-update.yml, or none. The context holds only what the hook reads when
+   * the app holds the file or the platform is Windows.
+   */
   function packed(updateConfig?: string, electronPlatformName = 'win32') {
     const appOutDir = fs.mkdtempSync(path.join(runDirectory, 'app-'))
     const resources = path.join(appOutDir, 'resources')
@@ -69,7 +104,7 @@ describe('desktop update feed in the build', () => {
       electronPlatformName,
       appOutDir,
       packager: { getResourcesDir: (outDir: string) => path.join(outDir, 'resources') },
-    }
+    } as unknown as AfterPackContext
   }
 
   const unsigned = `provider: generic\nurl: ${feed}\nupdaterCacheDirName: qivo-desktop-updater\n`
@@ -91,25 +126,25 @@ describe('desktop update feed in the build', () => {
       `${unsigned}publisherName: '  '\n`,
       `${unsigned}publisherName:\n  - Qivo AB\n  - ''\n`,
     ])
-      await expect(loadConfig(feed).afterPack(packed(config)), config).rejects.toThrow(
+      await expect(afterPack(loadConfig(feed), packed(config)), config).rejects.toThrow(
         'known publisher',
       )
     // a feed from another publish setting than QIVO_DESKTOP_UPDATE_URL
-    await expect(loadConfig().afterPack(packed(unsigned))).rejects.toThrow('known publisher')
+    await expect(afterPack(loadConfig(), packed(unsigned))).rejects.toThrow('known publisher')
   })
 
   it('passes a signed Windows build and a Windows build without a feed', async () => {
-    await expect(loadConfig(feed).afterPack(packed(signed))).resolves.toBeUndefined()
+    await expect(afterPack(loadConfig(feed), packed(signed))).resolves.toBeUndefined()
     await expect(
-      loadConfig(feed).afterPack(packed(`${unsigned}publisherName: Qivo AB\n`)),
+      afterPack(loadConfig(feed), packed(`${unsigned}publisherName: Qivo AB\n`)),
     ).resolves.toBeUndefined()
-    await expect(loadConfig().afterPack(packed())).resolves.toBeUndefined()
+    await expect(afterPack(loadConfig(), packed())).resolves.toBeUndefined()
     // a Windows target that writes no app-update.yml never checks for updates
-    await expect(loadConfig(feed).afterPack(packed())).resolves.toBeUndefined()
+    await expect(afterPack(loadConfig(feed), packed())).resolves.toBeUndefined()
   })
 
   it('fails a macOS build with a feed, even a signed one', async () => {
-    await expect(loadConfig(feed).afterPack(packed(signed, 'darwin'))).rejects.toThrow(
+    await expect(afterPack(loadConfig(feed), packed(signed, 'darwin'))).rejects.toThrow(
       'A darwin build cannot have an update feed',
     )
   })
@@ -119,27 +154,51 @@ describe('desktop builds through electron-builder', () => {
   // electron-builder searches upward for node_modules, so the project lives
   // outside this checkout.
   let project = ''
-  // A stand-in for the 7-Zip that electron-builder would otherwise download.
-  // It writes an empty archive at the path ending in .zip. electron-builder
-  // keeps the first 7-Zip path it finds for the whole process, so the
-  // stand-in lives as long as this file's tests. It is a shell script, so the
-  // one build that runs 7-Zip skips on Windows.
-  let sevenZip = ''
-  const previous7za = process.env.ELECTRON_BUILDER_7ZIP_PATH
-  beforeAll(() => {
-    sevenZip = fs.mkdtempSync(path.join(os.tmpdir(), 'qivo-desktop-7za-'))
-    const stub = path.join(sevenZip, '7za')
+  // Holds a stand-in for the 7-Zip that electron-builder would otherwise
+  // download, and an empty download cache. The stand-in writes an empty
+  // archive at the path ending in .zip. electron-builder keeps the first 7-Zip
+  // path it finds for the whole process, so the stand-in lives as long as this
+  // file's tests. It is a shell script, so the one build that runs 7-Zip skips
+  // on Windows.
+  let tools = ''
+  let restoreEnv = () => {}
+  beforeAll(async () => {
+    tools = fs.mkdtempSync(path.join(os.tmpdir(), 'qivo-desktop-tools-'))
+    const stub = path.join(tools, '7za')
     fs.writeFileSync(
       stub,
       '#!/bin/sh\nfor arg; do case "$arg" in *.zip) : > "$arg" ;; esac; done\n',
     )
     fs.chmodSync(stub, 0o755)
-    process.env.ELECTRON_BUILDER_7ZIP_PATH = stub
+    // Every mirror electron-builder downloads its tools and Electron from, and
+    // the proxies it sends requests through, point at a closed local port, and
+    // its cache starts empty. A build that tries to download anything then
+    // fails at once without reaching the network.
+    const closed = `http://127.0.0.1:${await closedPort()}/`
+    const downloads = [
+      'ELECTRON_BUILDER_BINARIES_DOWNLOAD_OVERRIDE_URL',
+      'NPM_CONFIG_ELECTRON_BUILDER_BINARIES_MIRROR',
+      'npm_config_electron_builder_binaries_mirror',
+      'npm_package_config_electron_builder_binaries_mirror',
+      'ELECTRON_BUILDER_BINARIES_MIRROR',
+      'npm_config_electron_mirror',
+      'NPM_CONFIG_ELECTRON_MIRROR',
+      'npm_package_config_electron_mirror',
+      'ELECTRON_MIRROR',
+      'HTTPS_PROXY',
+      'https_proxy',
+      'HTTP_PROXY',
+      'http_proxy',
+    ]
+    restoreEnv = setEnv({
+      ...Object.fromEntries(downloads.map((name) => [name, closed])),
+      ELECTRON_BUILDER_CACHE: path.join(tools, 'cache'),
+      ELECTRON_BUILDER_7ZIP_PATH: stub,
+    })
   })
   afterAll(() => {
-    if (previous7za === undefined) delete process.env.ELECTRON_BUILDER_7ZIP_PATH
-    else process.env.ELECTRON_BUILDER_7ZIP_PATH = previous7za
-    fs.rmSync(sevenZip, { recursive: true, force: true })
+    restoreEnv()
+    fs.rmSync(tools, { recursive: true, force: true })
   })
   beforeEach(() => {
     project = fs.mkdtempSync(path.join(os.tmpdir(), 'qivo-desktop-build-'))
@@ -284,6 +343,20 @@ describe('desktop builds through electron-builder', () => {
         }),
       )
       expect(result, prepackaged).toEqual({ error: expect.stringContaining(refused), files: [] })
+    }
+  }, 60_000)
+
+  it('refuses to write a package when another afterPack hook replaces the check', async () => {
+    // as `-c.afterPack=<file>` on the command line does
+    write('hook.cjs', 'module.exports = () => {}')
+    for (const afterPack of [path.join(project, 'hook.cjs'), null]) {
+      const result = await run(feed, () =>
+        build({ ...options, projectDir: project, config: configuration({ afterPack }) }),
+      )
+      expect(result.error, String(afterPack)).toContain(
+        'without --prepackaged and keep the afterPack hook of desktop/electron-builder.cjs',
+      )
+      expect(result.files.filter((file) => /\.(deb|rpm|AppImage)$/.test(file))).toEqual([])
     }
   }, 60_000)
 })

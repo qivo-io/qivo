@@ -1,10 +1,14 @@
+// @ts-check
 const fs = require('node:fs')
 const path = require('node:path')
 // Read app-update.yml with the js-yaml copy electron-updater itself loads, and
-// resolve feeds with the electron-builder copy that runs the build.
+// resolve feeds with the electron-builder copy that runs the build. js-yaml
+// ships no types.
+/** @type {{ load(text: string): unknown }} */
 const yaml = require(
   require.resolve('js-yaml', { paths: [path.dirname(require.resolve('electron-updater'))] }),
 )
+/** @type {typeof import('app-builder-lib/out/publish/PublishManager')} */
 const { getPublishConfigs, getPublishConfigsForUpdateInfo } = require(
   require.resolve('app-builder-lib/out/publish/PublishManager', {
     paths: [path.dirname(require.resolve('electron-builder'))],
@@ -12,6 +16,8 @@ const { getPublishConfigs, getPublishConfigsForUpdateInfo } = require(
 )
 
 const rootPackage = require('../package.json')
+
+/** @typedef {import('electron-builder').AfterPackContext} AfterPackContext */
 
 /**
  * Fails a Windows build that has an update feed but names no publisher.
@@ -23,11 +29,16 @@ const rootPackage = require('../package.json')
  * run any installer the feed offers. electron-builder writes the file before
  * afterPack runs, for a feed from QIVO_DESKTOP_UPDATE_URL or from any other
  * publish setting, so this checks every file it finds.
+ * @param {string} configPath
  */
 function requireWindowsPublisher(configPath) {
   if (!fs.existsSync(configPath)) return
+  const updateConfig = yaml.load(fs.readFileSync(configPath, 'utf8'))
   // electron-updater skips the check when publisherName is missing or null.
-  const { publisherName } = yaml.load(fs.readFileSync(configPath, 'utf8')) ?? {}
+  const publisherName =
+    updateConfig && typeof updateConfig === 'object' && 'publisherName' in updateConfig
+      ? updateConfig.publisherName
+      : undefined
   const publishers = Array.isArray(publisherName) ? publisherName : [publisherName]
   if (!publishers.length || !publishers.every((name) => typeof name === 'string' && name.trim()))
     throw new Error(
@@ -41,6 +52,7 @@ function requireWindowsPublisher(configPath) {
  * app-update.yml again after afterPack and may pass their own publish
  * settings, so this checks each target's settings as well as the platform and
  * top-level ones.
+ * @param {AfterPackContext} context
  */
 async function resolvesFeed({ packager, arch, targets }) {
   for (const options of [null, ...targets.map((target) => target.options)]) {
@@ -61,6 +73,8 @@ async function resolvesFeed({ packager, arch, targets }) {
  * decide what the app installs. Qivo configures no macOS build, so a macOS
  * feed is refused too. This refuses both an app-update.yml already in the
  * app and a feed electron-builder would write later.
+ * @param {AfterPackContext} context
+ * @param {string} configPath
  */
 async function refuseFeed(context, configPath) {
   if (!fs.existsSync(configPath) && !(await resolvesFeed(context))) return
@@ -71,7 +85,10 @@ async function refuseFeed(context, configPath) {
   )
 }
 
-/** Checks the update feed of an app electron-builder has just packed. */
+/**
+ * Checks the update feed of an app electron-builder has just packed.
+ * @param {AfterPackContext} context
+ */
 async function checkUpdateFeed(context) {
   const configPath = path.join(
     context.packager.getResourcesDir(context.appOutDir),
@@ -84,6 +101,7 @@ async function checkUpdateFeed(context) {
 /**
  * Returns the build configuration. electron-builder calls this once for each
  * build, so every build counts the apps it checked itself.
+ * @returns {import('electron-builder').Configuration}
  */
 module.exports = () => {
   const updateUrl = process.env.QIVO_DESKTOP_UPDATE_URL
@@ -96,8 +114,8 @@ module.exports = () => {
     }
   }
   // electron-builder skips afterPack for an app it did not pack itself, such
-  // as one given with --prepackaged, so a build that checked no app makes no
-  // package.
+  // as one given with --prepackaged, and a hook set on the command line
+  // replaces this one, so a build that checked no app makes no package.
   let checkedApps = 0
 
   return {
@@ -184,7 +202,7 @@ module.exports = () => {
     artifactBuildStarted() {
       if (!checkedApps)
         throw new Error(
-          'Package the Qivo desktop app without --prepackaged, so the build checks its update feed before it writes an installer.',
+          'Package the Qivo desktop app without --prepackaged and keep the afterPack hook of desktop/electron-builder.cjs, so the build checks its update feed before it writes an installer.',
         )
     },
   }

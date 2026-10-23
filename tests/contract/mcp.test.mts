@@ -810,15 +810,20 @@ describe('task events over stateless MCP', () => {
     const listing = await send('events/list', {})
     expect(listing.status).toBe(200)
     expect(listing.headers.get('mcp-session-id')).toBeNull()
-    expect(
-      (await listing.json()).result.events.map((event: { name: string }) => event.name),
-    ).toEqual(['task.created', 'task.updated', 'task.deleted', 'task.restored', 'comment.created'])
+    const { result } = (await listing.json()) as { result: { events: { name: string }[] } }
+    expect(result.events.map((event) => event.name)).toEqual([
+      'task.created',
+      'task.updated',
+      'task.deleted',
+      'task.restored',
+      'comment.created',
+    ])
     const refused = await send('events/subscribe', {
       name: 'task.updated',
       arguments: {},
       delivery: { mode: 'webhook', url: 'https://127.0.0.1/events', secret: 'unused' },
     })
-    expect((await refused.json()).error).toMatchObject({ code: -32602 })
+    expect(((await refused.json()) as { error: unknown }).error).toMatchObject({ code: -32602 })
   })
 })
 

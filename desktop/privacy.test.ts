@@ -6,7 +6,7 @@ import { NsisUpdater, Provider, type UpdateInfo } from 'electron-updater'
 // its options type, and the package entry does not export it.
 import type { ProviderRuntimeOptions } from 'electron-updater/out/providers/Provider.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { disableStagingUserId, keepSpellcheckOffline, sharedStagingUserId } from './privacy'
+import { disableStagingUserId, keepSpellcheckOffline, sharedStagingUserId } from './privacy.js'
 
 type AppAdapter = NonNullable<ConstructorParameters<typeof NsisUpdater>[1]>
 

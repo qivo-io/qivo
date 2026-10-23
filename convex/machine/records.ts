@@ -295,10 +295,6 @@ export const TEXT_FILE_MAX_BYTES = LIMITS.textFile.max * 1024
 /* The media type of a text file attached without one. */
 const TEXT_FILE_TYPE = 'text/plain; charset=utf-8'
 
-/* The Convex isolate's Blob, which encodes a string part as UTF-8.
- * convex/env.d.ts declares the type without its constructor. */
-declare const Blob: { new (parts: string[], options: { type: string }): Blob }
-
 /* What attach_text_file checks before it stores the text and again when it
  * attaches it, with the text's `size` in UTF-8 bytes. */
 const vTextFile = {

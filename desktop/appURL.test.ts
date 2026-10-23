@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { productionAppURL, resolveAppURL } from './appURL'
+import { productionAppURL, resolveAppURL } from './appURL.js'
 
 describe('desktop app URL', () => {
   it('loads production in a packaged build, whatever the environment says', () => {

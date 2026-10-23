@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { secureSession } from './session'
+import { secureSession } from './session.js'
 
 type Session = Parameters<typeof secureSession>[0]
 type RequestHandler = NonNullable<Parameters<Session['setPermissionRequestHandler']>[0]>

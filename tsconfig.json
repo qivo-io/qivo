@@ -5,7 +5,10 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      /* scripts/perf/page.mjs builds scripts/perf/entry.tsx against the src
+         of the commit it measures. */
+      "@perf/*": ["./src/*"]
     },
     "jsx": "react-jsx",
     "useDefineForClassFields": true,
@@ -31,5 +34,5 @@
        scripts can load it as it is (scripts/benchmark-live.mjs). */
     "allowImportingTsExtensions": true
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src", "vite.config.ts", "scripts/perf/entry.tsx"]
 }

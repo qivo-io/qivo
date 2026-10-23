@@ -3,7 +3,7 @@ import type { LookupAddress } from 'node:dns'
 import { lookup } from 'node:dns/promises'
 import type { Server } from 'node:https'
 import { createServer } from 'node:https'
-import type { Socket } from 'node:net'
+import type { Duplex } from 'node:stream'
 import { Webhook } from 'standardwebhooks'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LIMITS } from '../convex/lib/limits'
@@ -92,7 +92,7 @@ vi.mock('node:https', async (importOriginal) => {
 
 const secret = `whsec_${Buffer.alloc(32, 7).toString('base64')}`
 let server: Server
-const sockets = new Set<Socket>()
+const sockets = new Set<Duplex>()
 let received: { body: string; headers: Record<string, string | string[] | undefined> }[] = []
 beforeAll(async () => {
   receiver.ca = testCertificate

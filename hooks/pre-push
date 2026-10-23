@@ -7,6 +7,10 @@
 set -e
 
 cd "$(git rev-parse --show-toplevel)"
+# Git exports GIT_DIR to the hook. In a linked worktree it names the worktree's
+# Git directory, and a test's `git init` would then set core.bare in the real
+# repository's config, so the gate finds the repository from its directory.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
 
 # Show errors locally; CI also emits advisory warnings as annotations.
 run() {
@@ -28,10 +32,12 @@ printf 'quality gate\n'
 run 'biome ci'          npx biome ci . --diagnostic-level=error
 run 'lint'              npm run --silent lint
 run 'UI conventions'    npm run --silent check:ui
+run 'typecheck coverage' npm run --silent check:typecheck
 run 'typecheck'         npm run --silent typecheck
 run 'typecheck:strict'  npm run --silent typecheck:strict
 run 'typecheck:convex'  npm run --silent typecheck:convex
 run 'typecheck:desktop' npm run --silent typecheck:desktop
+run 'typecheck:node'    npm run --silent typecheck:node
 run 'build'             npm run --silent build
 # Match verify:local's worker cap so fixture-heavy tests have CPU headroom.
 run 'test'              npm test --silent -- --maxWorkers=2
