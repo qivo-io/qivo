@@ -2149,7 +2149,12 @@ async function storedTaskKey(run: Run, taskId: string): Promise<string | undefin
 /* A new window key for stored task `taskId`, which has none, given also to
  * the relation rows of it already written back. A restore that began before
  * restores gave keys wrote those without one, and they would load in the
- * first window, away from their task (lib/workspaceParts.ts). */
+ * first window, away from their task (lib/workspaceParts.ts). The writes
+ * count toward the step's budget but do not stop at it: a restore step
+ * goes past it by at most one task's relation rows (LIMITS), and a reveal
+ * too large for one transaction goes back to moving (recoverJobs), after
+ * which a restore keys the rows in budgeted steps. Only a restore spanning
+ * that release finds any such rows. */
 async function firstTaskKey(run: Run, taskId: string): Promise<string> {
   const window_key = newWindowKey()
   for (const row of await strayRows(run.ctx, taskId, null)) {
