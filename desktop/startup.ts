@@ -49,6 +49,19 @@ export function linuxAutostartEntry(executablePath: string): string {
   ].join('\n')
 }
 
+/**
+ * Returns the AppImage file to start at logon, or undefined when Qivo is not
+ * running from an AppImage. The AppImage runtime sets `APPIMAGE` to the file
+ * it started, replacing any inherited value, and runs Qivo from a temporary
+ * `.mount_*` or `appimage_extracted_*` folder. Qivo reads `APPIMAGE` only
+ * when it runs from such a folder, so a value inherited by a .deb or .rpm
+ * install cannot make its logon entry start another program.
+ */
+export function appImagePath(executablePath: string, env: NodeJS.ProcessEnv): string | undefined {
+  const folder = path.basename(path.dirname(executablePath))
+  return /^(\.mount_|appimage_extracted_)/.test(folder) ? env.APPIMAGE : undefined
+}
+
 /** Development launches never register the development Electron executable. */
 export function createLoginStartup(options: StartupOptions) {
   const loginOptions = { path: options.executablePath, args: [startupArgument] }

@@ -1,3 +1,6 @@
+const fs = require('node:fs')
+const path = require('node:path')
+
 const updateUrl = process.env.QIVO_DESKTOP_UPDATE_URL
 const rootPackage = require('../package.json')
 
@@ -8,6 +11,29 @@ if (updateUrl) {
       'QIVO_DESKTOP_UPDATE_URL must be an HTTPS URL without credentials, query, or hash.',
     )
   }
+}
+
+/**
+ * Fails a Windows build that has an update feed but names no publisher.
+ * electron-updater checks a downloaded Windows installer's signature only
+ * when app-update.yml names its publisher, which electron-builder takes from
+ * the signing settings: the certificate in `win.signtoolOptions` or
+ * `CSC_LINK`, `win.signtoolOptions.publisherName`, or
+ * `win.azureSignOptions.publisherName`. Without one, the installed app would
+ * run any installer the feed offers. electron-builder writes the file before
+ * this hook runs.
+ */
+async function requireWindowsPublisher(context) {
+  if (!updateUrl || context.electronPlatformName !== 'win32') return
+  const configPath = path.join(
+    context.packager.getResourcesDir(context.appOutDir),
+    'app-update.yml',
+  )
+  if (!fs.existsSync(configPath)) return
+  if (!/^publisherName:/m.test(fs.readFileSync(configPath, 'utf8')))
+    throw new Error(
+      'A Windows build with QIVO_DESKTOP_UPDATE_URL must be signed with a known publisher, so the installed app checks the signature of every update.',
+    )
 }
 
 module.exports = {
@@ -81,7 +107,9 @@ module.exports = {
     createStartMenuShortcut: true,
   },
   // The update feed is written into the installed app only when
-  // QIVO_DESKTOP_UPDATE_URL is set. The package command never publishes; the
-  // artifacts are uploaded to that HTTPS feed after signing and validation.
+  // QIVO_DESKTOP_UPDATE_URL is set, and the installed app checks no other. The
+  // package command never publishes; the artifacts are uploaded to that HTTPS
+  // feed after signing and validation.
   publish: updateUrl ? [{ provider: 'generic', url: updateUrl }] : null,
+  afterPack: requireWindowsPublisher,
 }

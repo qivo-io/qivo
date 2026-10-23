@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createLoginStartup, linuxAutostartEntry, startupArgument } from './startup'
+import { appImagePath, createLoginStartup, linuxAutostartEntry, startupArgument } from './startup'
 
 let directory: string
 
@@ -64,6 +64,15 @@ describe('desktop logon startup', () => {
     expect(fs.existsSync(filePath)).toBe(false)
     expect(fs.readFileSync(otherApp, 'utf8')).toBe('other app')
     expect(() => setStartup(false)).not.toThrow()
+  })
+
+  it('reads APPIMAGE only when Qivo runs from an AppImage', () => {
+    const env = { APPIMAGE: '/home/user/Applications/Qivo.AppImage' }
+    expect(appImagePath('/tmp/.mount_QivoAbC123/qivo', env)).toBe(env.APPIMAGE)
+    expect(appImagePath('/tmp/appimage_extracted_0123abcd/qivo', env)).toBe(env.APPIMAGE)
+    // a .deb or .rpm install that inherited the variable
+    expect(appImagePath('/opt/Qivo/qivo', env)).toBeUndefined()
+    expect(appImagePath('/opt/Qivo/qivo', { APPIMAGE: '/tmp/other' })).toBeUndefined()
   })
 
   it('registers the stable AppImage path instead of its temporary mount', () => {
