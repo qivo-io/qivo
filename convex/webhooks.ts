@@ -23,12 +23,12 @@ import {
   WEBHOOK_RETRY_BASE_MS,
 } from './lib/taskEvents'
 import { eventOwner, eventOwnerProfile } from './model/taskEvents'
+import { countDeletedDeliveries } from './model/usage'
 import {
   readWebhookHealth,
   removeWebhookSubscription,
   writeWebhookHealth,
 } from './model/webhookHealth'
-import { countDeletedDeliveries } from './model/usage'
 import { pruneRemovedWebhookOwners } from './model/webhookOwners'
 import { dispatchWebhooksRef, requestWebhookDispatch } from './model/webhookQueue'
 

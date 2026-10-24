@@ -16,8 +16,8 @@
 import { components } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { deletionBegun, subscriptionFor } from '../lib/billingAccess'
 import { getBillableUsers } from '../lib/billableUsers'
+import { deletionBegun, subscriptionFor } from '../lib/billingAccess'
 import { isDemoDeployment } from '../lib/demo'
 import {
   monthOf,
