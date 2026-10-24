@@ -9,8 +9,10 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 /* Back or Forward to a task's address while a large workspace still loads
    its tasks in stages (store/liveParts.ts), on App and the real store: the
    task window waits for a task still to arrive, the address keeps naming
-   it, and the task opens once it arrives. Settings opens meanwhile, but its
-   pages that read every task wait. */
+   it, and the task opens once it arrives, in its own scope. The waiting
+   window closes, and a task that never arrives closes it once every task
+   has loaded. Settings opens meanwhile, but its pages that read every task
+   wait. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
@@ -30,6 +32,8 @@ vi.mock('./lib/auth', () => ({
 }))
 
 const AT = '2026-09-14T08:00:00.000Z'
+// All projects' Board, which names no organization
+const ALL_BOARD = '/app/~/board/all'
 // 12,800 task numbers make 64 task windows; the last starts at fc000000
 const LAST_WINDOW = 'fc000000'
 
@@ -136,6 +140,12 @@ const back = (address: string) =>
     window.dispatchEvent(new PopStateEvent('popstate'))
   })
 
+/** Closes the task window with Escape, as a person would. */
+const close = () =>
+  act(async () => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  })
+
 /** Lets the last task window answer. */
 const arrive = () =>
   act(async () => {
@@ -167,6 +177,43 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     )
     expect(document.querySelector('[data-task-loading]')).toBeNull()
     expect(location.pathname).toBe(address)
+    // it opened in its own project, so closing it shows that project's
+    // Board, not All projects
+    await close()
+    expect(location.pathname).toBe(`/app/${org}/board/p/1`)
+  })
+
+  it('closes from the waiting window, and the task does not open when it arrives', async () => {
+    const { store, org } = await bootLoading()
+    await back(`/app/${org}/board/all`)
+    await back(`/app/${org}/board/tasks/qn-2`)
+    const waiting = await waitFor(
+      () => document.querySelector('[data-task-loading]'),
+      'the waiting window',
+    )
+    const closing = [...waiting.querySelectorAll('button')].find((b) => b.textContent === 'Close')
+    await act(async () => closing?.click())
+    expect(document.querySelector('[data-task-loading]')).toBeNull()
+    expect(location.pathname).toBe(ALL_BOARD)
+
+    await arrive()
+    expect(store.P.stillLoading()).toBeNull()
+    expect(document.body.textContent).not.toContain('Run the soak test')
+    expect(location.pathname).toBe(ALL_BOARD)
+  })
+
+  it('closes the window once every task has loaded without the task', async () => {
+    const { store, org } = await bootLoading()
+    await back(`/app/${org}/board/all`)
+    // no task has number 3
+    await back(`/app/${org}/board/tasks/qn-3`)
+    await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
+    expect(location.pathname).toBe(`/app/${org}/board/tasks/qn-3`)
+
+    await arrive()
+    expect(store.P.stillLoading()).toBeNull()
+    await waitFor(() => !document.querySelector('[data-task-loading]'), 'the closed window')
+    expect(location.pathname).toBe(ALL_BOARD)
   })
 
   it('says in the Inbox that the task still loads, then opens it there', async () => {
