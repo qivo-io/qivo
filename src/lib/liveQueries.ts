@@ -30,9 +30,9 @@ export type LiveTransition = {
   connection: number
 }
 
-/** A change of the socket: `overloaded` when the server closed it because
-    it ran too many queries at once (close code 1013), as
-    TooManyConcurrentRequests does. */
+/** A change of the socket: `overloaded` for a drop of the connection the
+    server closed with code 1013, try again later, as TooManyConcurrentRequests
+    does when it runs too many queries at once. */
 export type ConnectionChange = { connected: boolean; overloaded: boolean }
 
 /** The live query transport the store uses. Tests and the browser
@@ -80,21 +80,25 @@ export function createLiveQueries(
   // the newest transition's database time, in nanoseconds
   let last = 0n
   let warned = false
-  // whether the server closed the socket last for its load
-  let overloaded = false
+  // the connection the server closed for its load, by its count, if the
+  // last close the server explained was one
+  let overloadedAt: number | null = null
   return {
     serverClosed(message) {
       // "WebSocket closed with code 1013: TooManyConcurrentRequests: …"
-      overloaded = /\b1013\b/.test(message)
+      overloadedAt = /^WebSocket closed with code 1013\b/.test(message)
+        ? client.connectionState().connectionCount
+        : null
     },
     onConnection(fn) {
       let connected = client.connectionState().isWebSocketConnected
       return client.subscribeToConnectionState((state) => {
         if (state.isWebSocketConnected === connected) return
         connected = state.isWebSocketConnected
-        // Convex reports the server's reason before it reports the drop
-        fn({ connected, overloaded: !connected && overloaded })
-        if (connected) overloaded = false
+        // Convex reports the server's reason before it reports the drop,
+        // and counts a connection when it opens, so a drop of the
+        // connection the server closed for its load has its count
+        fn({ connected, overloaded: !connected && overloadedAt === state.connectionCount })
       })
     },
     watch(ref, args) {

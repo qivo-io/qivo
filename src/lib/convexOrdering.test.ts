@@ -333,6 +333,36 @@ describe('live queries over the base client', () => {
     }
   })
 
+  it('counts a close for the server’s load only for the connection it closed', async () => {
+    const { live, socket } = await start()
+    vi.useFakeTimers()
+    try {
+      // closed for its load before anything listens, as while the store boots
+      socket.readyState = 3
+      socket.onclose?.({ code: 1013, reason: 'TooManyConcurrentRequests: Too many requests.' })
+      await vi.advanceTimersByTimeAsync(5000)
+      const changes: ConnectionChange[] = []
+      live.onConnection((change) => changes.push(change))
+      const again = ScriptedSocket.last!
+      expect(again).not.toBe(socket)
+      // a lost network on the next connection explains nothing
+      again.readyState = 3
+      again.onclose?.({ code: 1006, reason: '' })
+      await Promise.resolve()
+      expect(changes).toEqual([{ connected: false, overloaded: false }])
+      await vi.advanceTimersByTimeAsync(10_000)
+      // nor does a reason that only mentions the code
+      const third = ScriptedSocket.last!
+      expect(third).not.toBe(again)
+      third.readyState = 3
+      third.onclose?.({ code: 1011, reason: 'InternalServerError: after 1013 earlier' })
+      await Promise.resolve()
+      expect(changes.at(-1)).toEqual({ connected: false, overloaded: false })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('never reads the old result for a subscription made after the last one stopped', async () => {
     const { live, list, socket, seen, transition } = await start()
     list.stop()

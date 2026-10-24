@@ -297,8 +297,12 @@ export function createLiveParts(
   }
 
   /** Sizes the wave by how long the server took for the `n` parts that
-      just answered, asked for at the present size (BOUND). */
-  function pace(n: number) {
+      just answered, asked for at the present size (BOUND), of the `first`
+      parts that answered for the first time on this connection. A part
+      that answers again only because its data changed tells nothing of
+      how long the server takes for those still unanswered. */
+  function pace(n: number, first: number) {
+    if (first === 0) return
     const now = Date.now()
     if (since !== null && n > 0) {
       const took = now - since
@@ -650,7 +654,9 @@ export function createLiveParts(
     down = false
     let news: PartsReport['side']
     let progress = false
-    // the parts asked for at the present size that answered first
+    // the parts that answered for the first time on this connection, and
+    // those of them asked for at the present size
+    let first = 0
     let arrived = 0
     for (const token of transition.tokens) {
       const slot = slots.get(token)
@@ -666,7 +672,10 @@ export function createLiveParts(
         slot.fresh = false
         continue
       }
-      if (slot !== side && !slot.fresh && (slot.sub?.turn ?? -1) >= paced) arrived++
+      if (slot !== side && !slot.fresh) {
+        first++
+        if ((slot.sub?.turn ?? -1) >= paced) arrived++
+      }
       slot.value = value
       slot.error = error
       slot.fresh = true
@@ -678,7 +687,7 @@ export function createLiveParts(
       }
     }
     if (progress) setWaiting(false)
-    if (progress) pace(arrived)
+    pace(arrived, first)
     settle({ news, progress })
   })
 
@@ -686,9 +695,13 @@ export function createLiveParts(
     if (stopped || connected !== down) return
     down = !connected
     if (!down) {
-      // the parts kept subscribed run again from now
+      // the parts kept subscribed run again from now. They go out with the
+      // new connection's query set, and the server runs it after
+      // authenticating, together with whatever arrived meanwhile, so the
+      // next wave waits for their answer (settle)
       since = unanswered() > 0 ? Date.now() : null
-      return pump()
+      if (since === null) pump()
+      return
     }
     park(overloaded)
     setWaiting(true)

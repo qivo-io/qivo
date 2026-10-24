@@ -136,13 +136,12 @@ function scripted() {
         dropped first. */
     reconnect() {
       connection++
-      // the new connection asks for every watched part at once, in an
-      // update of their own, and the server runs what comes after it in the
-      // next one
+      // the new connection asks for every watched part at once. The server
+      // authenticates it first, so it runs that set in one update with
+      // whatever else arrived before the set's answer
       for (const token of watched.keys()) unanswered.add(token)
       asked = 0
       ask(watched.size)
-      asked = 0
       for (const fn of connections) fn({ connected: true, overloaded: false })
     },
     keyOf,
@@ -751,8 +750,9 @@ describe('a bounded load', () => {
     // the last window, still in line, changed while the socket was down
     s.set('workspace:tasks', { org_id: ORG, ...WINDOWS[63] }, { value: tasksPart(['t63-new']) })
     s.reconnect()
+    // the next wave waits for the answer of the one kept
     expect(s.most.asked).toBe(BOUND.wave)
-    expect(s.most.unanswered).toBe(2 * BOUND.wave)
+    expect(s.most.unanswered).toBe(BOUND.wave)
     complete()
     // held while parts arrived again: never less than it showed, never a
     // mix of the old and the new
@@ -850,6 +850,32 @@ describe('a bounded load', () => {
     }
     const asked = s.log.slice(seen).filter((line) => line.startsWith('watch')).length
     expect(asked).toBeLessThanOrEqual(6 * (BOUND.wave / 2))
+  })
+
+  it('times the server from when it got parts to run, not from answers of parts whose data changed', () => {
+    BOUND.most = 20
+    let now = 0
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const { s } = big()
+    const root = s.keyOf('workspace:root', {})
+    now = 100
+    s.send([root])
+    // the server takes 2.9 s for the first wave while others edit, so the
+    // root answers again every half second
+    const wave = s.oldest(BOUND.wave)
+    for (let i = 0; i < 5; i++) {
+      now += 500
+      s.send([root])
+    }
+    now = 3_000
+    const seen = s.log.length
+    s.send(wave)
+    now = 3_100
+    s.send(s.oldest(Number.POSITIVE_INFINITY))
+    // a slow wave halves the next, after the one already asked for
+    expect(s.log.slice(seen).filter((line) => line.startsWith('watch'))).toHaveLength(
+      BOUND.wave / 2,
+    )
   })
 
   it('says it waits for the server from a drop until a part answers again', () => {
