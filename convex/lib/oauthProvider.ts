@@ -110,6 +110,12 @@ async function ensureConnection(ctx: GenericCtx<DataModel>, args: FunctionArgs<t
 
 export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, schemaOnly = false) {
   const resource = schemaOnly ? 'http://schema-only.invalid/mcp' : mcpResource()
+  /* The provider stores each configured resource as an oauthResource row
+   * when an auth instance starts, even one that serves no OAuth request. An
+   * instance that cannot write, such as the one http.ts builds without a
+   * context to register the routes, or one in a query, configures none, so it
+   * does not try. Every OAuth request runs in an HTTP action or a mutation. */
+  const seeded = schemaOnly || !('runMutation' in ctx) ? [] : [resource]
   const provider = oauthProvider({
     disableJwtPlugin: true,
     loginPage: `${siteUrl}/app/~/connect`,
@@ -124,8 +130,8 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
      * registered on Better Auth 1.6 have no link until
      * internal/oauthClientBackfill.ts runs, so enforcing them would refuse
      * those clients' refreshes as invalid_target until then. */
-    resources: [resource],
-    clientRegistrationDefaultResources: [resource],
+    resources: seeded,
+    clientRegistrationDefaultResources: seeded,
     enforcePerClientResources: false,
     // MCP clients often redirect to a loopback or private-use URI, which a
     // "web" client may not register.
