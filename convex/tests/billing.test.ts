@@ -1681,9 +1681,75 @@ describe('when organizations are reconciled', () => {
       await deleteOrgStep(ctx, removal!)
     })
     expect(await dueAt(t, f.org.id)).toBe(NOW)
+    // the next minute's sweep starts it; the deletion step schedules nothing
+    expect(await queued(t, 'billingSync:reconcile')).toEqual([])
+    await t.mutation(sweep, {})
     expect((await queued(t, 'billingSync:reconcile')).map((job) => job.args[0].org_id)).toEqual([
       f.org.id,
     ])
+  })
+
+  it('counts the guest organizations a deleted profile marks due against the deletion step', async () => {
+    const { t, f } = await fixture()
+    const email = 'consultant@testbed.test'
+    const guestOrgs = Array.from({ length: 300 }, () => uuid())
+    await t.run(async (ctx) => {
+      await ctx.db.patch(f.otherAdmin._id, { email })
+      for (const org_id of guestOrgs) {
+        await enrollOrganization(ctx, org_id)
+        await ctx.db.insert('profiles', {
+          id: uuid(),
+          org_id,
+          email,
+          name: 'Consultant',
+          initials: 'CO',
+          color: '#7a7ad0',
+          org_role: 'guest',
+          active: true,
+          kind: 'person',
+          created_at: NOW,
+        })
+      }
+      // a second home profile, deleted after the first
+      await ctx.db.insert('profiles', {
+        id: uuid(),
+        org_id: f.otherOrg.id,
+        email: 'colleague@testbed.test',
+        name: 'Colleague',
+        initials: 'CL',
+        color: '#7a7ad0',
+        org_role: 'user',
+        active: true,
+        kind: 'person',
+        created_at: NOW,
+      })
+      await ctx.db.insert('org_removals', {
+        org_id: f.otherOrg.id,
+        reason: 'requested',
+        ended_at: NOW,
+        delete_after: NOW,
+        phase: 'profiles',
+        created_at: NOW,
+      })
+    })
+    for (const org_id of guestOrgs) await setDue(t, org_id, iso(SYNC_SAFETY_MS / 60_000), true)
+    await t.run(async (ctx) => {
+      const removal = await ctx.db
+        .query('org_removals')
+        .withIndex('by_org', (q) => q.eq('org_id', f.otherOrg.id))
+        .unique()
+      await deleteOrgStep(ctx, removal!)
+    })
+    expect(await queued(t, 'billingSync:reconcile')).toEqual([])
+    expect(new Set(await Promise.all(guestOrgs.map((id) => dueAt(t, id))))).toEqual(new Set([NOW]))
+    // the 600 rows it read used up the step, so the other profile waits
+    const left = await t.run((ctx) =>
+      ctx.db
+        .query('profiles')
+        .withIndex('by_org', (q) => q.eq('org_id', f.otherOrg.id))
+        .collect(),
+    )
+    expect(left.map((p) => p.email)).toEqual(['colleague@testbed.test'])
   })
 
   it('polls a subscription that is past due, unpaid or incomplete, often in its first day', async () => {

@@ -330,7 +330,7 @@ describe('safe application updates', () => {
     expect(app.fetchVersion).toHaveBeenCalledTimes(4)
   })
 
-  it('asks again at once after a failed check or a clock moved back', async () => {
+  it('asks again at once after a failed or malformed check or a clock moved back', async () => {
     const app = setup()
     app.fetchVersion.mockRejectedValueOnce(new TypeError('Failed to fetch'))
     await app.monitor.check()
@@ -342,5 +342,11 @@ describe('safe application updates', () => {
     vi.setSystemTime(Date.now() - 2 * 60 * 60_000)
     await app.monitor.checkIfOlder(UPDATE_CHECK_MS)
     expect(app.fetchVersion).toHaveBeenCalledTimes(3)
+    // a manifest without a valid build id counts as no check either
+    app.fetchVersion.mockResolvedValueOnce({ buildId: '' })
+    await vi.advanceTimersByTimeAsync(UPDATE_WAKE_MS)
+    await app.monitor.checkIfOlder(UPDATE_WAKE_MS)
+    await app.monitor.checkIfOlder(UPDATE_WAKE_MS)
+    expect(app.fetchVersion).toHaveBeenCalledTimes(5)
   })
 })

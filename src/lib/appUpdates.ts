@@ -105,11 +105,13 @@ export function createAppUpdateMonitor(options: Options) {
       // Normalize even a synchronous fetch adapter failure to a later turn,
       // so finally cannot clear the slot before this assignment completes.
       await Promise.resolve()
+      let answered = false
       try {
         const value = await options.fetchVersion()
         if (disposed || !value || typeof value !== 'object' || !('buildId' in value)) return
         const id = value.buildId
         if (typeof id !== 'string' || !/^[a-zA-Z0-9._-]{1,128}$/.test(id)) return
+        answered = true
         const next = id === options.buildId ? null : id
         if (target !== next) {
           target = next
@@ -127,10 +129,10 @@ export function createAppUpdateMonitor(options: Options) {
         reconsider()
       } catch {
         // Offline, a failed deploy, HTML fallbacks and proxy errors are not
-        // evidence of a new version. A later poll/focus retries normally,
-        // because a failed check does not count as one (checkIfOlder).
-        checkedAt = previous
+        // evidence of a new version. A later poll/focus retries normally.
       } finally {
+        // a check without a valid answer does not count as one (checkIfOlder)
+        if (!answered) checkedAt = previous
         checking = undefined
       }
     })()
@@ -138,7 +140,7 @@ export function createAppUpdateMonitor(options: Options) {
   }
   return {
     check,
-    /** Checks unless the last check that did not fail started less than
+    /** Checks unless the last check with a valid answer started less than
      * `maxAgeMs` ago. A clock moved back behind that check counts as old. */
     checkIfOlder: (maxAgeMs: number) => {
       const age = checkedAt === undefined ? Number.POSITIVE_INFINITY : now() - checkedAt

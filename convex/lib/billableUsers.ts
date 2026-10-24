@@ -114,21 +114,29 @@ export async function markBillingMembershipChanged(
 /** Organization deletion removes profiles without the membership mutations
  * that call markBillingMembershipChanged. A deleted active home profile can
  * make the same email's guest profiles billable elsewhere
- * (getBillableUsers), so this asks for those organizations' reconciliation
- * before the profile goes, once per organization in `asked`. */
+ * (getBillableUsers), so this marks those organizations due before the
+ * profile goes, once per organization in `asked`, and the next minute's
+ * sweep reconciles them. It schedules nothing itself, so a step that
+ * deletes many such profiles stays within Convex's limits. Answers the rows
+ * it read, which the deletion step counts against its budget. */
 export async function markHomeProfileRemoved(
   ctx: MutationCtx,
   profile: Doc<'profiles'>,
   asked: Set<string>,
-): Promise<void> {
-  if (isDemoDeployment() || !process.env.POLAR_ACCESS_TOKEN) return
-  if (!profile.active || !hasHomeRole(profile) || profile.email === undefined) return
+): Promise<number> {
+  if (isDemoDeployment() || !process.env.POLAR_ACCESS_TOKEN) return 0
+  if (!profile.active || !hasHomeRole(profile) || profile.email === undefined) return 0
   const email = profile.email.toLowerCase()
+  const now = new Date().toISOString()
+  let read = 0
   const matches = ctx.db.query('profiles').withIndex('by_email', (q) => q.eq('email', email))
   for await (const match of matches) {
+    read += 1
     if (match.org_id === profile.org_id || match.org_role !== 'guest' || asked.has(match.org_id))
       continue
     asked.add(match.org_id)
-    await requestBillingSync(ctx, match.org_id)
+    read += 1
+    await billingDueBy(ctx, match.org_id, now)
   }
+  return read
 }

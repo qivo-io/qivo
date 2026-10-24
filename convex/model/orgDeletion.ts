@@ -104,7 +104,7 @@ const profileRows = async (ctx: MutationCtx, orgId: string, budget: RemovalBudge
   ))
 
 const profilesWithRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) => {
-  // guest organizations already asked to reconcile in this step
+  // guest organizations already marked due in this step
   const asked = new Set<string>()
   return parents(
     ctx,
@@ -211,7 +211,7 @@ const profilesWithRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget
           ),
       ]),
     async (profile) => {
-      await markHomeProfileRemoved(ctx, profile, asked)
+      budget.rows -= await markHomeProfileRemoved(ctx, profile, asked)
       await removeFile(ctx, profile.avatar_storage_id)
     },
   )
