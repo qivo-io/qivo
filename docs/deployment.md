@@ -478,7 +478,9 @@ secret with `VITE_`.
 ## Desktop installers
 
 Desktop installers are not published yet. **Desktop test build**, run by hand,
-builds unsigned Windows and Linux installers from any ref as workflow artifacts.
+builds unsigned Windows and Linux installers as workflow artifacts from any
+branch, tag or commit SHA, full or short, which its first job resolves to the
+full SHA both builds check out.
 It holds no signing credentials, never creates or changes a release and builds
 no update feed into them. The installed
 shell loads `https://qivo.io/app`, so web releases reach desktop users without

@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Branch, tag or commit to build
+        description: Branch, tag or commit SHA (full or short) to build
         required: true
         default: main
         type: string
@@ -23,14 +23,35 @@ permissions:
   contents: read
 
 jobs:
+  # actions/checkout reads a short commit SHA as a branch or tag name, so
+  # both builds check out the full SHA of the commit the ref names.
+  resolve:
+    name: Resolve the ref
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - name: Find the commit
+        id: commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ inputs.ref }}
+        run: |
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$(jq -rn --arg ref "$REF" '$ref | @uri')" --jq .sha)
+          [[ $sha =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Building \`$REF\` at $sha" >> "$GITHUB_STEP_SUMMARY"
+
   windows:
     name: Windows x64
+    needs: resolve
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.resolve.outputs.sha }}
           persist-credentials: false
 
       # The ref may predate the Node check, so the check and the range it
@@ -77,12 +98,13 @@ jobs:
 
   linux:
     name: Linux x64
+    needs: resolve
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.resolve.outputs.sha }}
           persist-credentials: false
 
       # The ref may predate the Node check, so the check and the range it
