@@ -13,7 +13,7 @@ import { v } from 'convex/values'
 import type { ProfileKind } from '../lib/enums'
 import { badRequest } from '../lib/functions'
 import { limitedWhole } from '../lib/limitRules'
-import { DEFAULT_PAGE_SIZE, LIMITS, type Limit, MIB } from '../lib/limits'
+import { cutText, DEFAULT_PAGE_SIZE, LIMITS, type Limit, MIB } from '../lib/limits'
 import { readLimitedBody } from '../lib/requestBody'
 import { plainText } from '../model/activity'
 import { REST_AUTH_401, REST_PERSON_AUTH_401 } from './auth'
@@ -189,6 +189,27 @@ export function listOffset(raw: string | number | undefined, archived: boolean):
 export const optionalJson = (raw: string): Record<string, unknown> =>
   raw.trim() === '' ? {} : needJson(raw)
 
+/** The most caller-sent names a refusal lists, and the most characters it
+ * shows of each, so a refusal stays short whatever the request held. */
+export const NAMES_LISTED = 10
+export const NAME_SHOWN_MAX = 100
+
+/** `text`, something a caller sent, cut to NAME_SHOWN_MAX characters for a
+ * refusal to show, a cut one ending in "…". An emoji at the cut is kept whole
+ * or left out. */
+export const shownName = (text: string): string =>
+  text.length > NAME_SHOWN_MAX ? `${cutText(text, NAME_SHOWN_MAX)}…` : text
+
+/** `names` quoted and joined by ", ", at most NAMES_LISTED of them, each cut
+ * by shownName, followed by how many more there were. */
+export function quotedNames(names: readonly string[]): string {
+  const listed = names
+    .slice(0, NAMES_LISTED)
+    .map((name) => `"${shownName(name)}"`)
+    .join(', ')
+  return names.length > NAMES_LISTED ? `${listed} and ${names.length - NAMES_LISTED} more` : listed
+}
+
 /** Refuses the fields of a REST body that `known` does not name, so a
  * misspelled field is refused instead of being dropped. Every REST route
  * that reads a body calls it, after the refusals that name a field the body
@@ -197,10 +218,11 @@ export const optionalJson = (raw: string): Record<string, unknown> =>
 export function refuseUnknownFields(b: Record<string, unknown>, known: readonly string[]): void {
   const unknown = Object.keys(b).filter((key) => !known.includes(key))
   if (unknown.length === 0) return
-  const names = unknown.map((key) => `"${key}"`).join(', ')
   const takes =
     known.length === 0 ? 'this request takes no body' : `this request takes ${known.join(', ')}`
-  throw badRequest(`unknown field${unknown.length > 1 ? 's' : ''} ${names}; ${takes}`)
+  throw badRequest(
+    `unknown field${unknown.length > 1 ? 's' : ''} ${quotedNames(unknown)}; ${takes}`,
+  )
 }
 
 /** Refuses the query parameters in `names` that `known` does not name, the
@@ -209,12 +231,13 @@ export function refuseUnknownFields(b: Record<string, unknown>, known: readonly 
 export function refuseUnknownParams(names: Iterable<string>, known: readonly string[]): void {
   const unknown = [...new Set(names)].filter((name) => !known.includes(name))
   if (unknown.length === 0) return
-  const list = unknown.map((name) => `"${name}"`).join(', ')
   const takes =
     known.length === 0
       ? 'this request takes no query parameters'
       : `this request takes ${known.join(', ')}`
-  throw badRequest(`unknown query parameter${unknown.length > 1 ? 's' : ''} ${list}; ${takes}`)
+  throw badRequest(
+    `unknown query parameter${unknown.length > 1 ? 's' : ''} ${quotedNames(unknown)}; ${takes}`,
+  )
 }
 
 /** REST's refusal for a request body whose bytes are not UTF-8. Decoding it

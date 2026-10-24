@@ -292,8 +292,10 @@ A `GET` request's body is never used, only read and dropped like any
 unused body. Every route also refuses a query
 parameter it does not take, such as `unknown query parameter "stauts"; this
 request takes project, status, …`, or `…; this request takes no query
-parameters`, so a misspelled filter never answers an unfiltered list. Fields a
-route refuses with their own sentence, such as `project_id` on a task, keep
+parameters`, so a misspelled filter never answers an unfiltered list. Either
+refusal names at most 10 fields or parameters and then counts the rest, such
+as `and 5 more`. A name longer than 100 characters is cut and ends with `…`.
+Fields a route refuses with their own sentence, such as `project_id` on a task, keep
 that sentence. Before October 2026 most routes ignored unknown fields and
 query parameters, and a body that was not UTF-8 was stored with U+FFFD in
 place of each bad byte sequence.

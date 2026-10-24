@@ -168,10 +168,13 @@ import {
   LONE_SURROGATE,
   listOffset,
   MCP_NO_WRITE,
+  NAMES_LISTED,
   MCP_PROVENANCE as PROVENANCE,
   pageLimit,
   pretty,
+  quotedNames,
   readBody,
+  shownName,
   WRITE_CONFLICT,
   WRITE_CONFLICT_RETRY_AFTER,
 } from './shared'
@@ -1196,9 +1199,12 @@ function validateArgs(tool: ToolDef, raw: unknown): string | null {
   )
   if (unknown.length > 0) {
     // names only, never values, so the log shows whether clients send them routinely
-    console.info('MCP call refused unknown arguments', { tool: tool.name, keys: unknown })
-    const keys = unknown.map((key) => `"${key}"`).join(', ')
-    problems.push(`Unrecognized key${unknown.length > 1 ? 's' : ''}: ${keys}`)
+    console.info('MCP call refused unknown arguments', {
+      tool: tool.name,
+      keys: unknown.slice(0, NAMES_LISTED).map(shownName),
+      count: unknown.length,
+    })
+    problems.push(`Unrecognized key${unknown.length > 1 ? 's' : ''}: ${quotedNames(unknown)}`)
   }
   return problems.length > 0 ? problems.join(', ') : null
 }
@@ -1236,6 +1242,17 @@ type ToolOutcome =
   | { kind: 'protocol'; error: { code: number; message: string } }
   | { kind: 'result'; result: Record<string, unknown> }
 
+/* `value`, something the caller sent, as an MCP error echoes it: a string
+ * cut by shownName, an array or object by its kind, such as
+ * `[object Array]`, and any other value as String gives it. So an error is
+ * never much longer than its request. */
+const echoed = (value: unknown): string =>
+  typeof value === 'string'
+    ? shownName(value)
+    : typeof value === 'object' && value !== null
+      ? Object.prototype.toString.call(value)
+      : String(value)
+
 async function callTool(
   params: Record<string, unknown> | undefined,
   run: ToolRunner,
@@ -1243,7 +1260,7 @@ async function callTool(
   const name = params?.name
   const tool = typeof name === 'string' ? TOOL_INDEX.get(name)?.def : undefined
   if (tool === undefined) {
-    return { kind: 'protocol', error: { code: -32602, message: `Tool ${String(name)} not found` } }
+    return { kind: 'protocol', error: { code: -32602, message: `Tool ${echoed(name)} not found` } }
   }
   const raw = params?.arguments
   const creates = createExpectedRefusal(tool, raw)
@@ -1319,6 +1336,10 @@ export async function dispatchMcp(a: {
   if (typeof body !== 'object' || body === null) return jsonRes(400, INVALID_MESSAGE)
   const msg = body as Record<string, unknown>
   if (msg.jsonrpc !== '2.0' || typeof msg.method !== 'string') return jsonRes(400, INVALID_MESSAGE)
+  // JSON-RPC ids are strings, numbers or null. Any other would be echoed back
+  // in full in the answer.
+  if ('id' in msg && msg.id !== null && typeof msg.id !== 'string' && typeof msg.id !== 'number')
+    return jsonRes(400, INVALID_MESSAGE)
   const method = msg.method
   const isNotification = !('id' in msg)
   const id = isNotification ? null : (msg.id as unknown)
@@ -1437,14 +1458,14 @@ async function modernLeg(a: {
   const hdrMethod = a.headers.get('Mcp-Method')
   if (hdrMethod === null) {
     return mismatch(
-      `the body names method ${method} but the required Mcp-Method header is absent`,
+      `the body names method ${echoed(method)} but the required Mcp-Method header is absent`,
       '(missing)',
     )
   }
   if (hdrMethod !== method) {
     return mismatch(
-      `the body names method ${method} but the Mcp-Method header names ${hdrMethod}`,
-      hdrMethod,
+      `the body names method ${echoed(method)} but the Mcp-Method header names ${echoed(hdrMethod)}`,
+      echoed(hdrMethod),
     )
   }
   if (method === 'tools/call') {
@@ -1452,14 +1473,14 @@ async function modernLeg(a: {
     const hdrName = a.headers.get('Mcp-Name')
     if (hdrName === null) {
       return mismatch(
-        `the body carries params.name="${name}" but the required Mcp-Name header is absent`,
+        `the body carries params.name="${echoed(params?.name)}" but the required Mcp-Name header is absent`,
         '(missing)',
       )
     }
     if (hdrName !== name) {
       return mismatch(
-        `the body carries params.name="${name}" but the Mcp-Name header names "${hdrName}"`,
-        hdrName,
+        `the body carries params.name="${echoed(params?.name)}" but the Mcp-Name header names "${echoed(hdrName)}"`,
+        echoed(hdrName),
       )
     }
   }
@@ -1480,8 +1501,12 @@ async function modernLeg(a: {
       jsonrpc: '2.0',
       error: {
         code: -32022,
-        message: `Unsupported protocol version: ${String(pv)}`,
-        data: { supported: [MODERN_VERSION], requested: pv },
+        message: `Unsupported protocol version: ${echoed(pv)}`,
+        data: {
+          supported: [MODERN_VERSION],
+          requested:
+            typeof pv === 'string' || (typeof pv === 'object' && pv !== null) ? echoed(pv) : pv,
+        },
       },
       id,
     })
