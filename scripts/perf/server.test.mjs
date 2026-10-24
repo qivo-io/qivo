@@ -107,6 +107,17 @@ describe('the benchmark server', () => {
     expect(posted.find((m) => m.to === 'known').text).toBeTruthy()
   })
 
+  it('answers the appearance mode the page asks for, dark unless it asks for light', async () => {
+    const modeOf = async (params) => {
+      const { posted, send } = await server(`tasks=20&latency=0&mbps=100000${params}`)
+      await send({ type: 'query', id: 'appearance', name: 'appearance:get', args: {} })
+      return JSON.parse(posted.find((m) => m.to === 'appearance').text).mode
+    }
+    expect(await modeOf('&appearance=light')).toBe('light')
+    expect(await modeOf('')).toBe('dark')
+    expect(await modeOf('&appearance=sepia')).toBe('dark')
+  })
+
   it('answers a scenario that fails with its failure', async () => {
     const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
     // no comment thread is open
