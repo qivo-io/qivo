@@ -834,6 +834,27 @@ describe('independent app and admin browser sessions', () => {
     expect(saved(ADMIN_PREFIX)).toEqual({ cookie: '{}', cache: '{}' })
   })
 
+  it('a sign-out that ends after another tab signed in keeps the newer session', async () => {
+    let answer = () => {}
+    const answered = new Promise<void>((resolve) => (answer = resolve))
+    // The clients take fetch when they are created.
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/sign-out')) await answered
+      return service.fetch(input, init)
+    })
+    const { admin } = pair()
+    const oldToken = await login(admin, 'operator@example.test')
+    const signedOut = admin.signOut()
+    await vi.advanceTimersByTimeAsync(0)
+    // another tab of the console signs in while the sign-out runs
+    const otherTab = createAuthSession(ADMIN_PREFIX, socket().client)
+    const newToken = await login(otherTab, 'operator@example.test')
+    answer()
+    await signedOut
+    expect(service.revoked).toEqual([oldToken])
+    expect(saved(ADMIN_PREFIX).cookie).toContain(newToken)
+  })
+
   it('a sign-out pressed again while it runs sends one request', async () => {
     const { admin } = pair()
     const token = await login(admin, 'operator@example.test')

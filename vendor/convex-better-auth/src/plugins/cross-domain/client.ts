@@ -1,9 +1,10 @@
 /* Copied from get-convex/better-auth src/plugins/cross-domain/client.ts at
  * 3f41cbcf (Apache-2.0, see ../../../LICENSE). Qivo changed it:
  * - A sign-out clears the stored cookies and session only once the server
- *   answers that it ended the session. Upstream clears them before the
- *   request, so a sign-out the server refused left the session alive on the
- *   server with no way to end it from this browser.
+ *   answers that it ended the session, and only while they still hold the
+ *   session it ended. Upstream clears them before the request, so a
+ *   sign-out the server refused left the session alive on the server with
+ *   no way to end it from this browser.
  * - Formatting and types: the fetch option type comes from Better Auth's
  *   client plugin type instead of @better-fetch/fetch, which Qivo does not
  *   install directly. */
@@ -56,6 +57,9 @@ export function getSetCookie(header: string, prevCookie?: string) {
   }
   return JSON.stringify(toSetCookie)
 }
+
+/** The session token in a Cookie header value, if it holds one. */
+const sessionToken = (cookie: string) => /(?:^|;\s*)[^=;]*session_token=([^;]*)/.exec(cookie)?.[1]
 
 /** The Cookie header value for the stored cookies that have not expired. */
 export function getCookie(cookie: string) {
@@ -124,6 +128,17 @@ export const crossDomainClient = (
         hooks: {
           async onSuccess(context) {
             if (!storage) return
+            if (context.request.url.toString().includes('/sign-out')) {
+              // A sign-in in another tab while this sign-out ran stored a
+              // newer session under the same prefix, which stays.
+              const sent = sessionToken(context.request.headers.get('Better-Auth-Cookie') ?? '')
+              const stored = sessionToken(getCookie(storage.getItem(cookieName) || '{}'))
+              if (stored && stored !== sent) return
+              await storage.setItem(cookieName, '{}')
+              store?.atoms.session?.set({ data: null, error: null, isPending: false })
+              await storage.setItem(localCacheName, '{}')
+              return
+            }
             const setCookie = context.response.headers.get('set-better-auth-cookie')
             if (setCookie) {
               const prevCookie = storage.getItem(cookieName)
@@ -146,13 +161,6 @@ export const crossDomainClient = (
                   store?.notify('$sessionSignal')
                 }
               }
-            }
-
-            if (context.request.url.toString().includes('/sign-out')) {
-              await storage.setItem(cookieName, '{}')
-              store?.atoms.session?.set({ data: null, error: null, isPending: false })
-              await storage.setItem(localCacheName, '{}')
-              return
             }
 
             if (context.request.url.toString().includes('/get-session') && !opts?.disableCache) {
