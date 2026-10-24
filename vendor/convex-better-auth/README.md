@@ -48,6 +48,11 @@ TypeScript rules like any other code.
   gone. `/convex/jwks`, `/convex/token` and the JWT are unchanged.
 - `registerRoutes` no longer redirects `/.well-known/openid-configuration`.
 - `updateOne` returns null when no row matches.
+- Upstream bugs fixed: pagination resumes from `continueCursor`, so a page
+  that stops early is not read twice; a single-row lookup reads on past a
+  page with no match; an `in` clause the query does not expand is applied to
+  each row instead of dropped; `updateMany` checks unique constraints one row
+  at a time, so a bulk update cannot give two rows the same composite key.
 - Types replace `any`, and the code follows the repository's formatting.
 
 ## What was left out

@@ -1,5 +1,7 @@
 /* Copied from get-convex/better-auth src/client/adapter.ts at 3f41cbcf
  * (Apache-2.0, see ../../LICENSE). Qivo changed it for Better Auth 1.7:
+ * - Pagination resumes from continueCursor, never splitCursor, so a page
+ *   that stops early is not read twice.
  * - Better Auth 1.7 passes `modelKey` to every adapter method. The adapter
  *   drops it before it calls the component, whose validators refuse unknown
  *   arguments (as get-convex/better-auth#430 does).
@@ -47,7 +49,8 @@ export type AdapterApi = {
   deleteMany: FunctionReference<'mutation', 'internal'>
 }
 
-const handlePagination = async (
+/** Collects every page of a paginated component call, up to `limit` rows. */
+export const handlePagination = async (
   next: ({ paginationOpts }: { paginationOpts: PaginationOptions }) => Promise<PageResult>,
   { limit, numItems }: { limit?: number; numItems?: number } = {},
 ) => {
@@ -58,10 +61,10 @@ const handlePagination = async (
     count: 0,
   }
   const onResult = (result: PageResult) => {
-    state.cursor =
-      result.pageStatus === 'SplitRecommended' || result.pageStatus === 'SplitRequired'
-        ? (result.splitCursor ?? result.continueCursor)
-        : result.continueCursor
+    // A page holds every match up to continueCursor, also when it stopped
+    // early and suggests a split. Resuming from splitCursor, as upstream
+    // does, reads the second half of the page again.
+    state.cursor = result.continueCursor
     if (result.page) {
       state.docs.push(...result.page)
       state.isDone = (limit && state.docs.length >= limit) || result.isDone

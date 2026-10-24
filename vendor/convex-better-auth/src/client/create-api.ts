@@ -5,6 +5,9 @@
  *   Better Auth 1.7 asks of them (as get-convex/better-auth#430 does).
  * - updateOne returns null instead of throwing when no document matches,
  *   which is what Better Auth's update expects (as #430 does).
+ * - updateMany patches one document at a time, so the unique check of each
+ *   sees the ones before it. Upstream checked them all at once, which let a
+ *   bulk update give two documents the same composite key.
  * - Types replace `any`. */
 import type { BetterAuthDBSchema } from 'better-auth/db'
 import { getAuthTables } from 'better-auth/db'
@@ -244,7 +247,9 @@ export const createApi = (
               `Attempted to set unique fields in multiple documents in ${args.input.model} with the same value. Fields: ${Object.keys(update).join(', ')}`,
             )
           }
-          await asyncMap(page, async (doc) => {
+          // One document at a time, so each unique check sees the documents
+          // patched before it.
+          for (const doc of page) {
             await checkUniqueFields(ctx, schema, betterAuthSchema, args.input.model, update, doc)
             await ctx.db.patch(doc._id as GenericId<string>, update)
             if (args.onUpdateHandle) {
@@ -254,7 +259,7 @@ export const createApi = (
                 oldDoc: doc,
               })
             }
-          })
+          }
         }
         return { ...result, count: page.length, ids: page.map((doc) => doc._id) }
       },

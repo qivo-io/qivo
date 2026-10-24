@@ -14,6 +14,11 @@
  *   index that covers the most of them and filters the rest, instead of
  *   reading the whole table. Better Auth 1.7 looks a password account up by
  *   accountId, providerId and userId, which no generated index starts with.
+ * - An `in` clause the query does not expand is applied to each document.
+ *   Upstream expands only the first one and dropped the others.
+ * - listOne reads on past a page that holds no match until it finds one or
+ *   reaches the end. A page stops after 200 documents, so a first match
+ *   further on was missed.
  * - Types replace `any`, and common-tags is not used. */
 
 import type { BetterAuthDBSchema } from 'better-auth/db'
@@ -412,7 +417,7 @@ const generateQuery = (
         matchesAbsent(w) ||
         ((!w.operator || w.operator === 'eq') && !eqFields?.includes(w.field)) ||
         (w.operator !== undefined &&
-          ['contains', 'starts_with', 'ends_with', 'ne', 'not_in'].includes(w.operator)),
+          ['in', 'contains', 'starts_with', 'ends_with', 'ne', 'not_in'].includes(w.operator)),
     )
   })
 }
@@ -554,16 +559,23 @@ export const paginate = async (
   }
 }
 
-/** The first document that matches, or null. */
+/** The first document that matches, or null. A page that ends before it
+ * finds a match is not the end, so it reads on until it finds one or reaches
+ * the end. */
 export const listOne = async (
   ctx: GenericQueryCtx<GenericDataModel>,
   schema: AnySchema,
   betterAuthSchema: BetterAuthDBSchema,
   args: AdapterArgs,
-): Promise<Doc | null> =>
-  (
-    await paginate(ctx, schema, betterAuthSchema, {
+): Promise<Doc | null> => {
+  let cursor: string | null = null
+  for (;;) {
+    const result: PaginationResult<Doc> = await paginate(ctx, schema, betterAuthSchema, {
       ...args,
-      paginationOpts: { numItems: 1, cursor: null },
+      paginationOpts: { numItems: 1, cursor },
     })
-  ).page[0] ?? null
+    if (result.page[0]) return result.page[0]
+    if (result.isDone) return null
+    cursor = result.continueCursor
+  }
+}

@@ -2,10 +2,11 @@
  * (vendor/convex-better-auth), through the component functions the adapter
  * calls, and the component schema Qivo builds from the generated one. */
 import { describe, expect, it, vi } from 'vitest'
+import { handlePagination } from '../../vendor/convex-better-auth/src/client/adapter'
 import { components } from '../_generated/api'
 import authSchema from '../betterAuth/schema'
 import { tables as generated } from '../betterAuth/schema.generated'
-import { newT, runInAuth } from './helpers.setup'
+import { newT, runInAuth, type T } from './helpers.setup'
 
 const RESOURCE = 'https://some.convex.site/mcp'
 
@@ -73,6 +74,103 @@ describe('the copied Convex adapter', () => {
       ).page.map((row: { token: string }) => row.token)
     expect(await tokens('eq')).toEqual(['live'])
     expect(await tokens('ne')).toEqual(['gone'])
+  })
+})
+
+/** Plants access tokens of client 'c' in creation order, one for each
+ * userId given. */
+const plantTokens = (t: T, userIds: string[]) =>
+  runInAuth(t, async (ctx) => {
+    for (const [index, userId] of userIds.entries())
+      await ctx.db.insert('oauthAccessToken', {
+        token: `t${index}`,
+        clientId: 'c',
+        userId,
+        scopes: [],
+      })
+  })
+
+describe('reads that span pages', () => {
+  it('collects every match once when a page stops early at the scan limit', async () => {
+    const t = newT()
+    // Every other token matches, so a page scans 200 tokens to find 100.
+    await plantTokens(
+      t,
+      Array.from({ length: 300 }, (_, index) => (index % 2 ? 'u2' : 'u1')),
+    )
+    const { docs } = await handlePagination(({ paginationOpts }) =>
+      t.query(components.betterAuth.adapter.findMany, {
+        model: 'oauthAccessToken',
+        where: [
+          { field: 'clientId', value: 'c' },
+          { field: 'userId', operator: 'ne', value: 'u2' },
+        ],
+        paginationOpts,
+      }),
+    )
+    const tokens = docs.map((doc) => doc.token)
+    expect(tokens).toHaveLength(150)
+    expect(new Set(tokens).size).toBe(150)
+  })
+
+  it('finds a single row that comes after a page with no match', async () => {
+    const t = newT()
+    await plantTokens(t, [...Array.from({ length: 250 }, () => 'u1'), 'u2'])
+    const where = [
+      { field: 'clientId' as const, value: 'c' },
+      { field: 'userId' as const, value: 'u2' },
+    ]
+    expect(
+      await t.query(components.betterAuth.adapter.findOne, { model: 'oauthAccessToken', where }),
+    ).toMatchObject({ token: 't250' })
+    expect(
+      await t.mutation(components.betterAuth.adapter.updateOne, {
+        input: { model: 'oauthAccessToken', where, update: { revoked: 1 } },
+      }),
+    ).toMatchObject({ token: 't250', revoked: 1 })
+    expect(
+      await t.query(components.betterAuth.adapter.findOne, {
+        model: 'oauthAccessToken',
+        where: [
+          { field: 'clientId', value: 'c' },
+          { field: 'userId', value: 'u3' },
+        ],
+      }),
+    ).toBeNull()
+  })
+
+  it('applies every in clause, not only the first', async () => {
+    const t = newT()
+    await plantTokens(t, ['u1', 'u2'])
+    const found = await t.query(components.betterAuth.adapter.findMany, {
+      model: 'oauthAccessToken',
+      where: [
+        { field: 'clientId', operator: 'in', value: ['c'] },
+        { field: 'userId', operator: 'in', value: ['u1'] },
+      ],
+      paginationOpts: { numItems: 10, cursor: null },
+    })
+    expect(found.page.map((row: { userId: string }) => row.userId)).toEqual(['u1'])
+  })
+
+  it('refuses a bulk update that would give two rows the same composite key', async () => {
+    const t = newT()
+    for (const clientId of ['a', 'b'])
+      await t.mutation(components.betterAuth.adapter.create, {
+        input: { model: 'oauthClientResource', data: { clientId, resourceId: RESOURCE } },
+      })
+    await expect(
+      t.mutation(components.betterAuth.adapter.updateMany, {
+        input: {
+          model: 'oauthClientResource',
+          where: [{ field: 'resourceId', value: RESOURCE }],
+          update: { clientId: 'c' },
+        },
+        paginationOpts: { numItems: 10, cursor: null },
+      }),
+    ).rejects.toThrow('oauthClientResource unique constraint clientId+resourceId already exists')
+    const links = await runInAuth(t, (ctx) => ctx.db.query('oauthClientResource').collect())
+    expect(links.map((link) => link.clientId).sort()).toEqual(['a', 'b'])
   })
 })
 
