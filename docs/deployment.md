@@ -364,6 +364,28 @@ demo to a deployment of a commit before the release that replaced
 `snapshot.forMe` with the parts (the release after v0.1.52). Roll forward
 instead.
 
+## Node.js version
+
+`engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
+Its lower bound is the oldest Node 24 release with the security fixes Qivo
+needs. Every `actions/setup-node` step reads it with `check-latest: true`, so
+each run installs the newest Node 24 release instead of an older one in the
+runner's cache. The step after it runs `node scripts/node-version.mjs`, which
+fails the job when the Node is outside the range. The Vercel build command
+runs the same check before it builds, and so does `npm run verify:local`.
+`scripts/node-version.test.mjs` fails when a workflow or the Vercel build
+command leaves out the check.
+
+Vercel lets a project choose only the major and builds with the newest patch
+it has rolled out. When a new security release raises the lower bound before
+Vercel has it, every Vercel build fails at the check until Vercel catches up.
+Raise the lower bound when a Node security release fixes a problem that
+affects Qivo's builds or deploy tooling.
+
+Convex runs `'use node'` actions on the major that `node.nodeVersion` in
+`convex.json` names and picks the patch itself. A local backend runs them on
+the `node` first on `PATH`.
+
 ## Environment configuration
 
 The `staging` and `production` GitHub environments provide these variables.
