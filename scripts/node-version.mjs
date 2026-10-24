@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 /* Fails when this Node is older than the minimum package.json `engines`
  * names, or outside its major. Every workflow job runs it after setup-node,
- * and the Vercel build command runs it first, so a runner or build image with
- * an older Node 24 stops the job instead of building or deploying with it.
- * setup-node's `check-latest` picks the newest Node 24 on each run, so the
- * minimum moves only when a security release must be the floor. */
-import { readFileSync } from 'node:fs'
+ * so a runner with an older Node 24 stops the job instead of building or
+ * deploying with it. setup-node's `check-latest` picks the newest Node 24 on
+ * each run, so the minimum moves only when a security release must be the
+ * floor. With `--warn` it reports the same problem and exits 0: the Vercel
+ * build command runs it that way, because Vercel picks the patch itself and
+ * a failure would stop every deploy until Vercel rolls out a newer one. */
+import { readFileSync, realpathSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
 
 const RANGE = /^>=(\d+)\.(\d+)\.(\d+) <(\d+)$/
 
@@ -32,12 +35,22 @@ export function nodeVersionProblem(version, engines) {
   return `Node ${version} does not satisfy package.json engines.node ${engines}. Use Node ${minimum.join('.')} or a later ${minimum[0]}.x release.`
 }
 
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+// import.meta.main arrived in Node 24.2. On an older Node the fallback
+// resolves the entry the way Node does, so a Windows path, a space or a
+// symlink cannot make a direct run skip the check.
+const isMain =
+  import.meta.main ??
+  (process.argv[1] !== undefined &&
+    import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href)
+
+if (isMain) {
   const { engines } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
   const problem = nodeVersionProblem(process.version, engines.node)
-  if (problem) {
+  if (!problem)
+    console.log(`Node ${process.version} satisfies package.json engines.node ${engines.node}.`)
+  else if (process.argv.includes('--warn')) console.warn(`Warning: ${problem}`)
+  else {
     console.error(problem)
     process.exit(1)
   }
-  console.log(`Node ${process.version} satisfies package.json engines.node ${engines.node}.`)
 }

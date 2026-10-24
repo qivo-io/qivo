@@ -371,16 +371,23 @@ Its lower bound is the oldest Node 24 release with the security fixes Qivo
 needs. Every `actions/setup-node` step reads it with `check-latest: true`, so
 each run installs the newest Node 24 release instead of an older one in the
 runner's cache. The step after it runs `node scripts/node-version.mjs`, which
-fails the job when the Node is outside the range. The Vercel build command
-runs the same check before it builds, and so does `npm run verify:local`.
-`scripts/node-version.test.mjs` fails when a workflow or the Vercel build
-command leaves out the check.
+fails the job when the Node is outside the range. `npm run verify:local` runs
+the same check first. **Desktop test build** can build an older ref that has
+no check, so it takes the check and the range from a sparse checkout of the
+workflow's own commit. `scripts/node-version.test.mjs` fails when a workflow
+leaves out the check.
 
 Vercel lets a project choose only the major and builds with the newest patch
-it has rolled out. When a new security release raises the lower bound before
-Vercel has it, every Vercel build fails at the check until Vercel catches up.
-Raise the lower bound when a Node security release fixes a problem that
-affects Qivo's builds or deploy tooling.
+it has rolled out, which can trail a Node security release by days. The
+Vercel build command therefore runs the check with `--warn`, which prints the
+Node version, and a warning when it is below the range, without failing the
+build. A failing check there would stop every preview, staging and production
+deploy until Vercel caught up. Each hosted build writes its Node version into
+`version.json` as `node`, so `curl https://qivo.io/version.json` and
+`curl https://preview.qivo.io/version.json` show which Node built production
+and staging. Raise the lower bound when a Node security release fixes a
+problem that affects Qivo's builds or deploy tooling, then check those files
+after the next deploys.
 
 Convex runs `'use node'` actions on the major that `node.nodeVersion` in
 `convex.json` names and picks the patch itself. A local backend runs them on

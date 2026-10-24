@@ -1,6 +1,18 @@
 import { spawnSync } from 'node:child_process'
-import { readdirSync, readFileSync } from 'node:fs'
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { writeDeploymentReceipt } from './deployment-receipt.mjs'
 import { minimumNode, nodeVersionProblem } from './node-version.mjs'
 
 const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')
@@ -24,24 +36,59 @@ describe('the Node version check', () => {
       expect(() => minimumNode(range)).toThrow(/engines\.node must read/)
   })
 
+  /** Runs the command at `script` as if this Node were `version`. With
+   * `withoutMain` a load hook hides import.meta.main, as on a Node before 24.2. */
+  const run = (script, version, { args = [], withoutMain = false } = {}) => {
+    const hooks = `import { registerHooks } from 'node:module'
+      registerHooks({ load(url, context, next) {
+        const result = next(url, context)
+        return url.endsWith('/node-version.mjs')
+          ? { ...result, source: String(result.source).replace('import.meta.main ??', 'undefined ??') }
+          : result
+      } })`
+    const imports = [
+      `data:text/javascript,Object.defineProperty(process,'version',{value:'${version}'})`,
+      ...(withoutMain ? [`data:text/javascript,${encodeURIComponent(hooks)}`] : []),
+    ]
+    return spawnSync(
+      process.execPath,
+      [...imports.flatMap((url) => ['--import', url]), script, ...args],
+      { encoding: 'utf8' },
+    )
+  }
+
   it('fails as a command on an older Node and passes on the minimum', () => {
-    const as = (version) =>
-      spawnSync(
-        process.execPath,
-        [
-          '--import',
-          `data:text/javascript,Object.defineProperty(process,'version',{value:'${version}'})`,
-          'scripts/node-version.mjs',
-        ],
-        { encoding: 'utf8' },
-      )
     const minimum = `v${minimumNode(engines).join('.')}`
-    const older = as('v24.21.0')
+    const older = run('scripts/node-version.mjs', 'v24.21.0')
     expect(older.status).toBe(1)
     expect(older.stderr).toContain(`Node v24.21.0 does not satisfy package.json engines.node`)
-    const current = as(minimum)
+    const current = run('scripts/node-version.mjs', minimum)
     expect(current.status).toBe(0)
     expect(current.stdout).toContain(`Node ${minimum} satisfies`)
+  })
+
+  it('only warns on an older Node with --warn, as the Vercel build runs it', () => {
+    const older = run('scripts/node-version.mjs', 'v24.21.0', { args: ['--warn'] })
+    expect(older.status).toBe(0)
+    expect(older.stderr).toContain('Warning: Node v24.21.0 does not satisfy')
+  })
+
+  it('still checks from a path with a space or through a symlink', () => {
+    const root = mkdtempSync(join(tmpdir(), 'node version '))
+    try {
+      mkdirSync(join(root, 'scripts'))
+      copyFileSync('scripts/node-version.mjs', join(root, 'scripts/node-version.mjs'))
+      copyFileSync('package.json', join(root, 'package.json'))
+      symlinkSync(root, join(root, 'link'))
+      for (const script of ['scripts/node-version.mjs', 'link/scripts/node-version.mjs'])
+        for (const withoutMain of [false, true]) {
+          const older = run(join(root, script), 'v24.21.0', { withoutMain })
+          expect(older.status, `${script} ${withoutMain}`).toBe(1)
+          expect(older.stderr).toContain('Node v24.21.0 does not satisfy')
+        }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 
@@ -72,11 +119,21 @@ describe('every place that picks a Node for Qivo', () => {
         const indent = step[1]
         const end = lines.findIndex((next, at) => at > index && next.startsWith(`${indent}- `))
         const inputs = lines.slice(index + 1, end).map((input) => input.trim())
-        expect(inputs, name).toContain('node-version-file: package.json')
+        const file = inputs.find((input) => input.startsWith('node-version-file: '))
+        const directory = /^node-version-file: ((?:\.node-check\/)?)package\.json$/.exec(file)?.[1]
+        expect(directory, `${name}: ${file}`).toBeDefined()
+        // A workflow that builds a chosen ref takes the check and its range
+        // from its own commit, since an older ref has neither.
+        if (/ref: \$\{\{ inputs\.ref \}\}/.test(text)) {
+          expect(directory, name).toBe('.node-check/')
+          expect(text, name).toContain(
+            '          path: .node-check\n          sparse-checkout: |\n            /package.json\n            /scripts/node-version.mjs\n          sparse-checkout-cone-mode: false\n',
+          )
+        }
         expect(inputs, name).toContain('check-latest: true')
         expect(lines.slice(end, end + 2), name).toEqual([
           `${indent}- name: Check the Node version`,
-          `${indent}  run: node scripts/node-version.mjs`,
+          `${indent}  run: node ${directory}scripts/node-version.mjs`,
         ])
       })
       // Every workflow that runs Node sets it up; the runner's own Node is unchecked.
@@ -87,9 +144,29 @@ describe('every place that picks a Node for Qivo', () => {
     expect(setups).toBeGreaterThanOrEqual(5)
   })
 
-  it('checks the Node of every Vercel build before it builds', () => {
+  it('reports the Node of every Vercel build before it builds', () => {
     expect(JSON.parse(read('vercel.json')).buildCommand).toMatch(
-      /^node scripts\/node-version\.mjs && /,
+      /^node scripts\/node-version\.mjs --warn && /,
     )
+  })
+
+  it('names the Node that built a hosted app in its version.json', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'qivo-receipt-'))
+    try {
+      writeFileSync(join(directory, 'version.json'), JSON.stringify({ buildId: 'build' }))
+      const commit = '0'.repeat(40)
+      writeDeploymentReceipt(
+        { VERCEL_GIT_COMMIT_SHA: commit, QIVO_ENVIRONMENT: 'staging' },
+        directory,
+      )
+      expect(JSON.parse(readFileSync(join(directory, 'version.json'), 'utf8'))).toEqual({
+        buildId: 'build',
+        commit,
+        environment: 'staging',
+        node: process.version,
+      })
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 })
