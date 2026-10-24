@@ -1,19 +1,10 @@
 import { spawnSync } from 'node:child_process'
-import {
-  copyFileSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { writeDeploymentReceipt } from './deployment-receipt.mjs'
-import { minimumNode, nodeVersionProblem } from './node-version.mjs'
+import { minimumNode, nodeVersionProblem } from './node-engines.mjs'
 
 const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')
 const engines = JSON.parse(read('package.json')).engines.node
@@ -36,59 +27,45 @@ describe('the Node version check', () => {
       expect(() => minimumNode(range)).toThrow(/engines\.node must read/)
   })
 
-  /** Runs the command at `script` as if this Node were `version`. With
-   * `withoutMain` a load hook hides import.meta.main, as on a Node before 24.2. */
-  const run = (script, version, { args = [], withoutMain = false } = {}) => {
-    const hooks = `import { registerHooks } from 'node:module'
-      registerHooks({ load(url, context, next) {
-        const result = next(url, context)
-        return url.endsWith('/node-version.mjs')
-          ? { ...result, source: String(result.source).replace('import.meta.main ??', 'undefined ??') }
-          : result
-      } })`
-    const imports = [
-      `data:text/javascript,Object.defineProperty(process,'version',{value:'${version}'})`,
-      ...(withoutMain ? [`data:text/javascript,${encodeURIComponent(hooks)}`] : []),
-    ]
-    return spawnSync(
+  /** Runs Node with `args` as if this Node were `version`. */
+  const run = (version, ...args) =>
+    spawnSync(
       process.execPath,
-      [...imports.flatMap((url) => ['--import', url]), script, ...args],
+      [
+        '--import',
+        `data:text/javascript,Object.defineProperty(process,'version',{value:'${version}'})`,
+        ...args,
+      ],
       { encoding: 'utf8' },
     )
-  }
 
   it('fails as a command on an older Node and passes on the minimum', () => {
     const minimum = `v${minimumNode(engines).join('.')}`
-    const older = run('scripts/node-version.mjs', 'v24.21.0')
+    const older = run('v24.21.0', 'scripts/node-version.mjs')
     expect(older.status).toBe(1)
     expect(older.stderr).toContain(`Node v24.21.0 does not satisfy package.json engines.node`)
-    const current = run('scripts/node-version.mjs', minimum)
+    const current = run(minimum, 'scripts/node-version.mjs')
     expect(current.status).toBe(0)
     expect(current.stdout).toContain(`Node ${minimum} satisfies`)
   })
 
   it('only warns on an older Node with --warn, as the Vercel build runs it', () => {
-    const older = run('scripts/node-version.mjs', 'v24.21.0', { args: ['--warn'] })
+    const older = run('v24.21.0', 'scripts/node-version.mjs', '--warn')
     expect(older.status).toBe(0)
     expect(older.stderr).toContain('Warning: Node v24.21.0 does not satisfy')
   })
 
-  it('still checks from a path with a space or through a symlink', () => {
-    const root = mkdtempSync(join(tmpdir(), 'node version '))
-    try {
-      mkdirSync(join(root, 'scripts'))
-      copyFileSync('scripts/node-version.mjs', join(root, 'scripts/node-version.mjs'))
-      copyFileSync('package.json', join(root, 'package.json'))
-      symlinkSync(root, join(root, 'link'))
-      for (const script of ['scripts/node-version.mjs', 'link/scripts/node-version.mjs'])
-        for (const withoutMain of [false, true]) {
-          const older = run(join(root, script), 'v24.21.0', { withoutMain })
-          expect(older.status, `${script} ${withoutMain}`).toBe(1)
-          expect(older.stderr).toContain('Node v24.21.0 does not satisfy')
-        }
-    } finally {
-      rmSync(root, { recursive: true, force: true })
-    }
+  // The command has no entry-module test that a symlink, a flag or an
+  // import could make false and so skip the check.
+  it('checks however the command is loaded', () => {
+    const imported = run(
+      'v24.21.0',
+      '--input-type=module',
+      '--eval',
+      "await import('./scripts/node-version.mjs')",
+    )
+    expect(imported.status).toBe(1)
+    expect(imported.stderr).toContain('Node v24.21.0 does not satisfy')
   })
 })
 
@@ -108,8 +85,16 @@ describe('every place that picks a Node for Qivo', () => {
     read(`.github/workflows/${name}`),
   ])
 
+  /** The jobs of a workflow, each from its key under `jobs:` to the next. */
+  const jobsOf = (text) =>
+    text
+      .slice(text.indexOf('\njobs:\n'))
+      .split(/\n(?= {2}[\w-]+:[ \t]*$)/m)
+      .slice(1)
+
   it('sets up the newest Node of the engines range and checks it before any other step', () => {
     let setups = 0
+    let nodeJobs = 0
     for (const [name, text] of workflows) {
       const lines = text.split('\n')
       lines.forEach((line, index) => {
@@ -127,7 +112,7 @@ describe('every place that picks a Node for Qivo', () => {
         if (/ref: \$\{\{ inputs\.ref \}\}/.test(text)) {
           expect(directory, name).toBe('.node-check/')
           expect(text, name).toContain(
-            '          path: .node-check\n          sparse-checkout: |\n            /package.json\n            /scripts/node-version.mjs\n          sparse-checkout-cone-mode: false\n',
+            '          path: .node-check\n          sparse-checkout: |\n            /package.json\n            /scripts/node-engines.mjs\n            /scripts/node-version.mjs\n          sparse-checkout-cone-mode: false\n',
           )
         }
         expect(inputs, name).toContain('check-latest: true')
@@ -136,12 +121,16 @@ describe('every place that picks a Node for Qivo', () => {
           `${indent}  run: node ${directory}scripts/node-version.mjs`,
         ])
       })
-      // Every workflow that runs Node sets it up; the runner's own Node is unchecked.
-      if (/\b(?:node|npm|npx) \S/.test(text.replaceAll(/^\s*#.*$/gm, '')))
-        expect(text, name).toContain('uses: actions/setup-node@')
+      // Every job that runs Node sets it up; the runner's own Node is unchecked.
+      for (const job of jobsOf(text))
+        if (/\b(?:node|npm|npx) \S/.test(job.replaceAll(/^\s*#.*$/gm, ''))) {
+          nodeJobs++
+          expect(job, `${name} ${job.split('\n')[0]}`).toContain('uses: actions/setup-node@')
+        }
       expect(text, name).not.toMatch(/node-version:/)
     }
     expect(setups).toBeGreaterThanOrEqual(5)
+    expect(nodeJobs).toBe(setups)
   })
 
   it('reports the Node of every Vercel build before it builds', () => {

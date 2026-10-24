@@ -43,8 +43,9 @@ Resume the coordinated upgrade using [the upgrade checklist](docs/better-auth-up
 when supported. Keep the advisory visible until resolved; do not bypass peer
 dependencies or upgrade the OAuth provider alone.
 
-Use Node 24, `npm ci`, `npm run desktop:install`, then
-`npm run verify:local`. Run builds/tests sequentially with at most two workers.
+Use Node 24.22.1 or a later 24.x release, `npm ci`,
+`npm run desktop:install`, then `npm run verify:local`. Run builds/tests
+sequentially with at most two workers.
 Do not run `test:contract`, seeds, resets, live smoke drives or production
 commands without explicit scope: those can modify hosted data. Real user data
 must be preserved; never assume any deployment is disposable.
