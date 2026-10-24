@@ -172,8 +172,8 @@ export const CHECKOUT_POLL_GRACE_MS = 60 * 60_000
 
 /** A reconciliation runs this long before a period ends, so the renewal
  * uses the current seats. A retry after a lost run (SWEEP_FENCE_MS) still
- * lands before the end, and a failure from here to the end retries every
- * minute (release). */
+ * lands before the end, and a failure from here to the end retries a
+ * minute later (release), which the sweep meets within two. */
 export const PRE_RENEWAL_MS = 15 * 60_000
 
 /** A reconciliation runs this long after a period ends, so a lost renewal
@@ -304,7 +304,8 @@ export const claim = internalMutation({
  * error, and sets when the organization is next due. A failure retries
  * after 1, 2, 4 and up to 60 minutes, or at its next time (nextSyncDue)
  * when that is sooner, so failures cannot push a check past a renewal, and
- * every minute in the PRE_RENEWAL_MS before a period ends, so the renewal
+ * a minute after each failure in the PRE_RENEWAL_MS before a period ends
+ * (the sweep meets these times up to a minute late), so the renewal
  * still gets the seats once Polar answers again. A due time set while the
  * lock was held (claim) is kept when it is sooner. */
 export const release = internalMutation({
@@ -896,7 +897,10 @@ export const pump = internalAction({
  * that are due (pump) and sends the free-period reminders whose time came
  * within the last REMINDER_WINDOW_MS (reminders). Targeted times go first,
  * then organizations enrolled before due times existed, which have none,
- * then the safety pass. A minute with nothing due reads seven index ranges
+ * then the safety pass. A due time waits for the first sweep at or after
+ * it, so a reconciliation that sets one a minute out runs again about two
+ * minutes later, and every time here is met up to a minute late. A minute
+ * with nothing due reads seven index ranges
  * and writes nothing. Pump and the reminders run in their own
  * transactions, so a failure in either cannot undo the reconciliations
  * this one starts. */
