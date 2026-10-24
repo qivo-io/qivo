@@ -41,11 +41,13 @@
    TooManyConcurrentRequests. The server runs one socket's new
    subscriptions in updates of up to 20 queries at once, each update the
    subscriptions that arrived while the one before ran. So parts subscribe
-   in waves (BOUND): a wave of at most BOUND.wave parts while at most a
-   wave is unanswered, which keeps the next update waiting behind the
-   running one without making it larger. A local backend is bound by its
-   processors, so a smaller wave finishes as soon, each query holding its
-   turn for less time, and leaves turns for other clients.
+   in waves (BOUND): a wave of parts while at most a wave is unanswered,
+   which keeps the next update waiting behind the running one without
+   making it larger. The wave starts small and grows while the server
+   answers fast, up to the 20 the server would run anyway, so a lone boot
+   on a deployment with turns to spare runs few small updates. It halves when answers slow down, which is when queries
+   wait for a turn: a backend short of processors or busy with other
+   clients then runs each query for less time and leaves turns for them.
 
    - A window that answers `split` keeps serving while its two halves load,
      and gives way to them in the first complete transition that holds both.
@@ -115,10 +117,15 @@ export const STALL = { ms: 60_000 }
 export const STAGES = { most: 32, first: 16, batch: Number.POSITIVE_INFINITY }
 
 /** How many part queries the registry has the server run at once: it
-    subscribes at most `wave` parts while at most `wave` are unanswered, so
-    each server update holds about one wave. A close for the server's load
-    halves the wave, down to `least`, until the workspace is complete. */
-export const BOUND = { wave: 8, least: 2 }
+    subscribes at most a wave of parts while at most a wave is unanswered,
+    so each server update holds about one wave. The wave starts at `wave`
+    and stays between `least` and `most`, the most queries the server runs
+    at once for one socket. It grows by half once a wave's worth of parts
+    each answered within `fast` ms of the server having parts to run, and
+    halves when a part took more than `slow` or the server closed the
+    socket for its load; after such a close it does not grow until the
+    workspace is complete. */
+export const BOUND = { wave: 8, least: 2, most: 20, fast: 1_000, slow: 2_000 }
 
 /** What the store hears after each transition, and when the workspace
     fails outside one. */
@@ -159,8 +166,9 @@ const WINDOWED = {
 /* One part, its subscription while it has one, and what the transitions
    brought it. */
 type Slot = {
-  /** the subscription, null while the part waits for its turn (BOUND) */
-  sub: { token: string; stop: () => void } | null
+  /** the subscription, null while the part waits for its turn (BOUND),
+      with the number of subscriptions made before it */
+  sub: { token: string; stop: () => void; turn: number } | null
   /** the part's place in line: parts made earlier subscribe first */
   seq: number
   ref: FunctionReference<'query'>
@@ -212,8 +220,19 @@ export function createLiveParts(
   // the parts waiting for their turn, in line
   const queue: Slot[] = []
   let seq = 0
-  // the most parts a wave subscribes, smaller after a close for load
+  // the most parts a wave subscribes (BOUND), and whether a close for the
+  // server's load keeps it from growing
   let wave = BOUND.wave
+  let strained = false
+  // subscriptions made so far, and how many there were when the wave
+  // last changed: only parts asked for after that tell of the new size
+  let turns = 0
+  let paced = 0
+  // parts asked for at the present size that answered fast in a row
+  let quick = 0
+  // when the server last got parts to run with none unanswered before, or
+  // last answered some while it had more, null with none unanswered
+  let since: number | null = null
   // whether the socket dropped and has not connected again
   let down = false
   let waitingNow = false
@@ -237,7 +256,7 @@ export function createLiveParts(
     return slot
   }
   const subscribe = (slot: Slot) => {
-    slot.sub = live.watch(slot.ref, slot.args)
+    slot.sub = { ...live.watch(slot.ref, slot.args), turn: turns++ }
     slots.set(slot.sub.token, slot)
   }
   /** Ends `slot`'s subscription, or its wait in line. */
@@ -273,7 +292,26 @@ export function createLiveParts(
       the next connection sends every subscription at once. */
   function pump() {
     if (stopped || down || queue.length === 0 || unanswered() > wave) return
+    if (since === null) since = Date.now()
     for (const slot of queue.splice(0, wave)) subscribe(slot)
+  }
+
+  /** Sizes the wave by how long the server took for the `n` parts that
+      just answered, asked for at the present size (BOUND). */
+  function pace(n: number) {
+    const now = Date.now()
+    if (since !== null && n > 0) {
+      const took = now - since
+      const before = wave
+      quick = took < BOUND.fast ? quick + n : 0
+      if (took > BOUND.slow) wave = Math.max(BOUND.least, Math.floor(wave / 2))
+      else if (quick >= wave && !strained) wave = Math.min(BOUND.most, Math.ceil(wave * 1.5))
+      if (wave !== before) {
+        paced = turns
+        quick = 0
+      }
+    }
+    since = unanswered() > 0 ? now : null
   }
 
   /** On a drop of the socket, keeps the first wave of subscribed parts
@@ -281,7 +319,13 @@ export function createLiveParts(
       wave, not every part; after a close for the server's load, a smaller
       one. */
   function park(overloaded: boolean) {
-    if (overloaded) wave = Math.max(BOUND.least, Math.floor(wave / 2))
+    if (overloaded) {
+      wave = Math.max(BOUND.least, Math.floor(wave / 2))
+      strained = true
+      paced = turns
+      quick = 0
+    }
+    since = null
     const on = [...slots.values()].filter((slot) => slot !== side).sort((a, b) => a.seq - b.seq)
     for (const slot of on.slice(wave)) {
       unsubscribe(slot)
@@ -548,6 +592,7 @@ export function createLiveParts(
         dirty = false
         completed = true
         wave = BOUND.wave
+        strained = false
         for (const org of orgs.values())
           for (const kind of KINDS) {
             const list = org.kinds[kind]
@@ -605,6 +650,8 @@ export function createLiveParts(
     down = false
     let news: PartsReport['side']
     let progress = false
+    // the parts asked for at the present size that answered first
+    let arrived = 0
     for (const token of transition.tokens) {
       const slot = slots.get(token)
       if (!slot) continue
@@ -619,6 +666,7 @@ export function createLiveParts(
         slot.fresh = false
         continue
       }
+      if (slot !== side && !slot.fresh && (slot.sub?.turn ?? -1) >= paced) arrived++
       slot.value = value
       slot.error = error
       slot.fresh = true
@@ -630,13 +678,18 @@ export function createLiveParts(
       }
     }
     if (progress) setWaiting(false)
+    if (progress) pace(arrived)
     settle({ news, progress })
   })
 
   const stopConnection = live.onConnection(({ connected, overloaded }) => {
     if (stopped || connected !== down) return
     down = !connected
-    if (!down) return pump()
+    if (!down) {
+      // the parts kept subscribed run again from now
+      since = unanswered() > 0 ? Date.now() : null
+      return pump()
+    }
     park(overloaded)
     setWaiting(true)
   })

@@ -466,7 +466,7 @@ describe('a staged load', () => {
   beforeEach(() => {
     Object.assign(STAGES, { most: 32, first: 8, batch: 32 })
     // these stages run without waves (a bounded load)
-    BOUND.wave = Number.POSITIVE_INFINITY
+    Object.assign(BOUND, { wave: Number.POSITIVE_INFINITY, most: Number.POSITIVE_INFINITY })
   })
   afterEach(() => {
     Object.assign(STAGES, stages)
@@ -691,11 +691,13 @@ function serveOrg(s: ReturnType<typeof scripted>, id: string, windows: number) {
 
 describe('a bounded load', () => {
   const bound = { ...BOUND }
+  // a wave of 8 that does not grow, unless a test lets it
   beforeEach(() => {
-    Object.assign(BOUND, { wave: 8, least: 2 })
+    Object.assign(BOUND, { wave: 8, least: 2, most: 8, fast: 1_000, slow: 2_000 })
   })
   afterEach(() => {
     Object.assign(BOUND, bound)
+    vi.restoreAllMocks()
   })
 
   /** A large workspace booting; `onWait` hears whether it waits for the
@@ -796,6 +798,58 @@ describe('a bounded load', () => {
     complete()
     expect(ids()).toEqual(all)
     expect(s.most.asked).toBeLessThanOrEqual(BOUND.wave)
+  })
+
+  /** The parts each transition asked for, from the watches between them,
+      while the server takes `took()` ms for each, starting at boot. */
+  function paced(took: (i: number) => number, sends = 12) {
+    let now = 0
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const run = big()
+    const asked: number[] = []
+    let seen = run.s.log.length
+    for (let i = 0; i < sends; i++) {
+      asked.push(run.s.log.slice(seen).filter((line) => line.startsWith('watch')).length)
+      seen = run.s.log.length
+      now += took(i)
+      run.s.send(run.s.oldest(Number.POSITIVE_INFINITY))
+    }
+    return { ...run, asked }
+  }
+
+  it('grows the wave by half while the server answers fast, never above the most it runs for one socket', () => {
+    BOUND.most = 20
+    const { asked, s } = paced(() => 100)
+    // the root, then a wave of 8 answered fast, then one of 12, of 18
+    expect(asked.slice(1, 5)).toEqual([8, 12, 18, 20])
+    expect(Math.max(...asked)).toBe(BOUND.most)
+    expect(s.most.unanswered).toBeLessThanOrEqual(2 * BOUND.most)
+  })
+
+  it('halves the wave when the server answers slowly, down to the least', () => {
+    BOUND.most = 20
+    const { asked } = paced(() => 3_000)
+    // the root answered slowly, and so did the wave of 4 after it
+    expect(asked.slice(1, 6)).toEqual([4, 2, 2, 2, 2])
+  })
+
+  it('keeps the wave between fast and slow answers, and does not grow it after a close for the server’s load until complete', () => {
+    BOUND.most = 20
+    expect(Math.max(...paced(() => 1_500).asked)).toBe(BOUND.wave)
+    vi.restoreAllMocks()
+    let now = 0
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const { s } = big()
+    s.send()
+    s.drop(true)
+    s.reconnect()
+    const seen = s.log.length
+    for (let i = 0; i < 6; i++) {
+      now += 100
+      s.send(s.oldest(Number.POSITIVE_INFINITY))
+    }
+    const asked = s.log.slice(seen).filter((line) => line.startsWith('watch')).length
+    expect(asked).toBeLessThanOrEqual(6 * (BOUND.wave / 2))
   })
 
   it('says it waits for the server from a drop until a part answers again', () => {
