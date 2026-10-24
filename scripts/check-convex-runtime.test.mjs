@@ -13,8 +13,9 @@ afterEach(() => fs.rmSync(repository, { recursive: true, force: true }))
 
 /**
  * Writes a repository with the real convex/ config, its Node types, the
- * repository's scripts and these files in convex/ (or, with a leading
- * `../`, beside it), and runs its
+ * installed convex, the repository's scripts and these files in convex/ (or,
+ * with a leading `../`, beside it, where `../node_modules/convex/` replaces
+ * the installed convex), and runs its
  * `npm run typecheck:convex` there, which is the one package.json holds.
  * `env` adds to the run's environment.
  */
@@ -43,8 +44,10 @@ function typecheck(files, env = {}) {
     'node_modules/.bin',
     'node_modules/typescript',
     'node_modules/@types/node',
+    'node_modules/convex',
   ])
-    fs.symlinkSync(path.join(root, link), path.join(repository, link))
+    if (!fs.existsSync(path.join(repository, link)))
+      fs.symlinkSync(path.join(root, link), path.join(repository, link))
   const result = spawnSync('npm', ['run', '--silent', 'typecheck:convex'], {
     cwd: repository,
     env: { ...process.env, ...env },
@@ -190,6 +193,27 @@ describe('the convex typecheck', { timeout: 60_000 }, () => {
       'convex/node.ts:10:62 - process holds only env in the default runtime, so read process.env.',
     ])
   })
+  it('fails on the global object passed on, through which a Node global could pass unseen', () => {
+    const { status, output } = typecheck({
+      'alias.ts': [
+        'const g = globalThis',
+        'export const aliased = g.Buffer',
+        'export const { Buffer: taken } = globalThis',
+        "export const nested = [globalThis.globalThis.Buffer, globalThis['globalThis'].process.cwd()]",
+        'type Env = { process: { env: Record<string, string | undefined> } }',
+        'export const env = (globalThis as unknown as Env).process.env',
+        '',
+      ].join('\n'),
+    })
+    expect(status).toBe(1)
+    expect(output.split('\n').filter((line) => line.startsWith('convex/'))).toEqual([
+      'convex/alias.ts:1:11 - this passes on the global object, which the check cannot follow. Read each global from it by name, as in globalThis.URL.',
+      'convex/alias.ts:3:34 - this passes on the global object, which the check cannot follow. Read each global from it by name, as in globalThis.URL.',
+      'convex/alias.ts:4:46 - Buffer is a Node global, which the default runtime does not provide.',
+      'convex/alias.ts:4:79 - process holds only env in the default runtime, so read process.env.',
+    ])
+  })
+
   it('passes reads of web types through mapped types and unions, and imports named by a template', () => {
     const { status, output } = typecheck({
       'web.ts': [
@@ -250,6 +274,35 @@ describe('the convex typecheck', { timeout: 60_000 }, () => {
     ])
   })
 
+  it("trusts only the declaration files Convex writes in convex/_generated and a component's", () => {
+    const declaration = 'export declare const encode: (text: string) => string\n'
+    const encode = "export const encode = (text) => Buffer.from(text).toString('base64')\n"
+    const { status, output } = typecheck({
+      '_generated/api.d.ts': declaration,
+      '_generated/api.js': encode,
+      '_generated/extra.d.ts': declaration,
+      '_generated/extra.js': encode,
+      '../shared/_generated/server.d.ts': declaration,
+      '../shared/_generated/server.js': encode,
+      'part/convex.config.ts': 'export default {}\n',
+      'part/_generated/server.d.ts': declaration,
+      'part/_generated/server.js': encode,
+      'uses.ts': [
+        "import { encode } from './_generated/api'",
+        "import { encode as extra } from './_generated/extra'",
+        "import { encode as shared } from '../shared/_generated/server'",
+        "import { encode as part } from './part/_generated/server'",
+        "export const encoded = [encode('x'), extra('x'), shared('x'), part('x')]",
+        '',
+      ].join('\n'),
+    })
+    expect(status).toBe(1)
+    expect(output.split('\n').filter((line) => line.startsWith('convex/'))).toEqual([
+      'convex/uses.ts:2:33 - ./_generated/extra resolves to convex/_generated/extra.d.ts, which the check cannot read.',
+      'convex/uses.ts:3:34 - ../shared/_generated/server resolves to shared/_generated/server.d.ts, which the check cannot read.',
+    ])
+  })
+
   it('follows imports when TypeScript reports its paths in lowercase, as it does on macOS and Windows', () => {
     const { status, output } = typecheck(
       {
@@ -270,6 +323,30 @@ describe('the convex typecheck', { timeout: 60_000 }, () => {
     expect(output.split('\n').filter((line) => line.startsWith('convex/'))).toEqual([
       "convex/Site.ts:1:25 - ./Encode starts with 'use node', and the default runtime cannot run it.",
       'convex/lib/Bytes.helpers.ts:1:39 - Buffer is a Node global, which the default runtime does not provide.',
+    ])
+  })
+
+  it('fails when the installed convex changes the bundler rules it copies, and not for a comment', () => {
+    const convex = (file) => fs.readFileSync(path.join(root, 'node_modules/convex', file), 'utf8')
+    const index = convex('src/bundler/index.ts')
+    const changed = index
+      .replace('function* walkDir(', '// Walks a directory.\nfunction* walkDir(')
+      .replace(
+        '["http", "crons", "schema", "auth.config"]',
+        '["http", "crons", "schema", "auth.config", "jobs"]',
+      )
+    expect(changed).not.toContain('"auth.config"].includes(')
+    expect(changed).toContain('// Walks a directory.')
+    const { status, output } = typecheck({
+      'site.ts': "export const site = new URL('https://qivo.io')\n",
+      '../node_modules/convex/package.json': JSON.stringify({ name: 'convex', version: '9.9.9' }),
+      '../node_modules/convex/src/bundler/index.ts': changed,
+      '../node_modules/convex/src/bundler/debugBundle.ts': convex('src/bundler/debugBundle.ts'),
+    })
+    expect(status).toBe(1)
+    expect(output.split('\n').filter((line) => line.startsWith('convex 9.9.9'))).toEqual([
+      "convex 9.9.9 changed mustBeIsolate in src/bundler/index.ts. Compare it with the bundler rules in scripts/check-convex-runtime.mjs, update them, and then its hash in copiedRules to '85e9641126723a9e'.",
+      'convex 9.9.9 has no src/cli/lib/components/definition/bundle.ts, whose bundler rules the check copies.',
     ])
   })
 })

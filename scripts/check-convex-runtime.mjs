@@ -17,12 +17,18 @@
  * Node's types. Tests, which Convex skips, keep Node's globals. Whatever the
  * check cannot settle, such as an import it cannot follow, fails too.
  *
- * The bundler rules below are those of convex 1.47: its entryPoints,
- * hasUseNodeDirective (with useNodeDirectiveRegex) and mustBeIsolate in
- * convex/dist/esm/bundler/index.js, and the schema, auth config and
- * component definition bundles. */
+ * The bundler rules below copy those of convex 1.48, which are 1.47's: its
+ * entryPoints, hasUseNodeDirective (with useNodeDirectiveRegex) and
+ * mustBeIsolate in convex/src/bundler/index.ts, the schema, auth config and
+ * component definition bundles, and the async_hooks shim. `copiedRules`
+ * holds a hash of each piece of that code, and the check fails when the
+ * installed convex holds other code, so an update cannot leave the copy
+ * behind. */
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import path from 'node:path'
+import { parseSync } from 'oxc-parser'
 import * as ts from 'typescript/unstable/ast'
 import { API, SymbolFlags } from 'typescript/unstable/sync'
 import { closeTypeScriptAPI } from './typescript-api.mjs'
@@ -115,8 +121,115 @@ const config = path.resolve('convex/tsconfig.json')
 const convexDirectory = path.dirname(config)
 const nodeTypes = /[/\\]node_modules[/\\](?:@types[/\\]node|undici-types)[/\\]/
 const nodeModules = /[/\\]node_modules[/\\]/
-// Convex writes these, and their declaration files describe its own JavaScript.
-const generated = /[/\\]_generated[/\\][^/\\]+$/
+/* The declaration files Convex's codegen writes in the _generated/ of
+ * convex/ and of each component, which describe its own JavaScript. */
+const generatedDeclarations = ['api.d.ts', 'api_cjs.d.cts', 'dataModel.d.ts', 'server.d.ts']
+
+/* The code in the convex package that the rules here copy, by file and by
+ * the name of a declaration in it, with a hash from `fingerprint`. When a
+ * convex update changes one, compare the new code with the copy here, update
+ * the copy and then the hash. The check cannot import the rules instead:
+ * convex's bundler modules import @babel/parser and @sentry/node, which
+ * only its prebuilt CLI bundle holds, and that bundle exports nothing. */
+const copiedRules = {
+  'src/bundler/index.ts': {
+    walkDir: 'c6131d2ce38ab6bd',
+    ENTRY_POINT_EXTENSIONS: '1fddb10d0f632c65',
+    entryPoints: '4dea6af4991c8209',
+    useNodeDirectiveRegex: 'f4c3869d8a4462bb',
+    hasUseNodeDirective: '1526ac09c48f4105',
+    mustBeIsolate: '5e8df05911bcfa6a',
+    determineEnvironment: '385ec093c4513b0a',
+    entryPointsByEnvironment: 'e431b33bd59963ef',
+    bundleSchema: 'b23b3b29d3256e88',
+    bundleAuthConfig: '3a144e0c4535dc5a',
+  },
+  'src/bundler/debugBundle.ts': { 'innerEsbuild.nodeShimsPlugin': '8bd24d3b801c9ef2' },
+  'src/cli/lib/components/definition/bundle.ts': {
+    sharedEsbuildOptions: '26245a67bd200624',
+    bundleImplementations: '9232edb1125b2d2c',
+  },
+}
+
+/**
+ * Returns a hash of a piece of code that ignores its comments and how much
+ * space separates its tokens, so that only a change to the code changes it.
+ */
+function fingerprint(text, comments, start) {
+  let code = ''
+  let at = start
+  for (const comment of comments) {
+    code += `${text.slice(at - start, comment.start - start)} `
+    at = comment.end
+  }
+  code += text.slice(at - start)
+  const normal = code.replace(/\s+/g, ' ').trim()
+  return createHash('sha256').update(normal).digest('hex').slice(0, 16)
+}
+
+/**
+ * Returns why the installed convex's bundler code differs from the code the
+ * rules here copy, one reason per piece, or nothing when it is the same.
+ */
+function copiedRulesDrift() {
+  const manifest = createRequire(path.resolve('package.json')).resolve('convex/package.json')
+  const convex = path.dirname(manifest)
+  const { version } = JSON.parse(fs.readFileSync(manifest, 'utf8'))
+  const reasons = []
+  for (const [file, pieces] of Object.entries(copiedRules)) {
+    const source = path.join(convex, file)
+    if (!fs.existsSync(source)) {
+      reasons.push(`convex ${version} has no ${file}, whose bundler rules the check copies.`)
+      continue
+    }
+    const text = fs.readFileSync(source, 'utf8')
+    const { program, comments, errors } = parseSync(source, text)
+    if (errors.length) {
+      reasons.push(`convex ${version}'s ${file} does not parse: ${errors[0].message}`)
+      continue
+    }
+    /* Every function and variable the file declares by name, by that name
+     * after those of the declarations around it, as in innerEsbuild.nodeShimsPlugin. */
+    const declared = new Map()
+    const visit = (node, scope) => {
+      if (Array.isArray(node)) {
+        for (const child of node) visit(child, scope)
+        return
+      }
+      if (!node || typeof node.type !== 'string') return
+      let inner = scope
+      if (
+        (node.type === 'FunctionDeclaration' || node.type === 'VariableDeclarator') &&
+        node.id?.type === 'Identifier'
+      ) {
+        inner = scope ? `${scope}.${node.id.name}` : node.id.name
+        declared.set(inner, [...(declared.get(inner) ?? []), node])
+      }
+      for (const [key, value] of Object.entries(node))
+        if (key !== 'parent' && value && typeof value === 'object') visit(value, inner)
+    }
+    visit(program, '')
+    for (const [name, pinned] of Object.entries(pieces)) {
+      const nodes = declared.get(name) ?? []
+      if (nodes.length !== 1) {
+        reasons.push(
+          nodes.length
+            ? `convex ${version}'s ${file} declares ${name} ${nodes.length} times, so the check cannot tell which one its rules copy.`
+            : `convex ${version}'s ${file} has no ${name}, whose rules the check copies.`,
+        )
+        continue
+      }
+      const [{ start, end }] = nodes
+      const inside = comments.filter((comment) => comment.start >= start && comment.end <= end)
+      const hash = fingerprint(text.slice(start, end), inside, start)
+      if (hash !== pinned)
+        reasons.push(
+          `convex ${version} changed ${name} in ${file}. Compare it with the bundler rules in scripts/check-convex-runtime.mjs, update them, and then its hash in copiedRules to '${hash}'.`,
+        )
+    }
+  }
+  return reasons
+}
 
 /**
  * Returns the files Convex bundles for the default runtime from convex/ or a
@@ -124,9 +237,11 @@ const generated = /[/\\]_generated[/\\][^/\\]+$/
  * when they say 'use node': script extensions, outside the top _generated/,
  * no leading dot or #, not schema.ts or schema.js, one dot in the name and no
  * space in the path. `isolated` always run in the default runtime. A
- * directory with a convex.config.ts is a component, bundled as a root of its own.
+ * directory with a convex.config.ts is a component, bundled as a root of its
+ * own. `roots` holds convex/ and those directories.
  */
-function bundledFiles(root, found = { entries: [], isolated: [] }) {
+function bundledFiles(root, found = { entries: [], isolated: [], roots: [] }) {
+  found.roots.push(root)
   const walk = (directory) => {
     // Sorted, as Convex walks them, so the failures come in the same order everywhere.
     const sorted = fs
@@ -290,7 +405,8 @@ function isReference(name) {
 }
 
 const api = new API()
-const failures = []
+// An update to convex that changes the rules the check copies fails it.
+const failures = copiedRulesDrift()
 let checked = 0
 let nodeFiles = 0
 try {
@@ -331,7 +447,15 @@ try {
   }
   const unclear = (key) =>
     `${relative(sources.get(key).fileName)} - Convex may run it in either runtime. Write 'use node' alone on its line at the top of the file, or no line that reads as one.`
-  const { entries, isolated } = bundledFiles(convexDirectory)
+  const { entries, isolated, roots } = bundledFiles(convexDirectory)
+  // By TypeScript's canonical path, as `target` below holds it.
+  const convexWritten = new Set(
+    roots.flatMap((root) =>
+      generatedDeclarations.map(
+        (name) => program.getSourceFile(path.join(root, '_generated', name))?.path,
+      ),
+    ),
+  )
   for (const file of [...entries, ...isolated]) {
     const key = program.getSourceFile(file)?.path
     if (!key || !sources.has(key)) {
@@ -399,7 +523,7 @@ try {
             )
           else if (read === 'unclear') failures.push(unclear(target))
           else add(target)
-        } else if (!nodeModules.test(target) && !generated.test(target))
+        } else if (!nodeModules.test(target) && !convexWritten.has(target))
           // Such as a declaration file, whose JavaScript beside it Convex bundles.
           failures.push(
             `${at(key, specifier)} - ${specifier.text} resolves to ${relative(target)}, which the check cannot read.`,
@@ -465,25 +589,42 @@ try {
       const reason = refusal(symbol, name)
       if (reason) failures.push(`${at(key, name)} - ${reason}`)
       if (!globalObjects.has(symbol.id)) return
+      /* The global object may only be read from by name, as in
+       * `globalThis.URL`. Any other use, such as `const g = globalThis` or
+       * `const { Buffer } = globalThis`, would let a global through unseen.
+       * A name read from it that is the global object again, as in
+       * `globalThis.self`, holds to the same rule. */
       let object = name
-      while (unchanged(object.parent) && object.parent.expression === object) object = object.parent
-      const member = object.parent
-      if (ts.isPropertyAccessExpression(member) && member.expression === object) {
-        if (!ts.isIdentifier(member.name)) return
-        const read = checker.resolveName(member.name.text, SymbolFlags.Value, undefined, false)
-        const reason = read && refusal(read, member)
-        if (reason) failures.push(`${at(key, member.name)} - ${reason}`)
-      } else if (ts.isElementAccessExpression(member) && member.expression === object) {
-        const argument = member.argumentExpression
-        if (!ts.isStringLiteral(argument) && !ts.isNoSubstitutionTemplateLiteral(argument)) {
+      for (;;) {
+        while (unchanged(object.parent) && object.parent.expression === object)
+          object = object.parent
+        const member = object.parent
+        let global
+        if (ts.isPropertyAccessExpression(member) && member.expression === object) {
+          if (!ts.isIdentifier(member.name)) return
+          global = member.name
+        } else if (ts.isElementAccessExpression(member) && member.expression === object) {
+          global = member.argumentExpression
+          if (!ts.isStringLiteral(global) && !ts.isNoSubstitutionTemplateLiteral(global)) {
+            failures.push(
+              `${at(key, global)} - this reads a global named at runtime, which the check cannot follow. Name it with a string.`,
+            )
+            return
+          }
+        } else {
           failures.push(
-            `${at(key, argument)} - this reads a global named at runtime, which the check cannot follow. Name it with a string.`,
+            `${at(key, object)} - this passes on the global object, which the check cannot follow. Read each global from it by name, as in globalThis.URL.`,
           )
           return
         }
-        const read = checker.resolveName(argument.text, SymbolFlags.Value, undefined, false)
+        const read = checker.resolveName(global.text, SymbolFlags.Value, undefined, false)
+        if (read && globalObjects.has(read.id)) {
+          object = member
+          continue
+        }
         const reason = read && refusal(read, member)
-        if (reason) failures.push(`${at(key, argument)} - ${reason}`)
+        if (reason) failures.push(`${at(key, global)} - ${reason}`)
+        return
       }
     })
   }
