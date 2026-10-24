@@ -18,7 +18,7 @@ import {
   USER_PROFILE_FIELDS,
 } from './lib/authData'
 import { type AuthMailState, authMailPlugin, RESEND, recordAuthMail } from './lib/authMail'
-import { AUTH_ROUTES, DEMO_AUTH_ROUTES, serveOnly } from './lib/authRoutes'
+import { servedAuthRoutes, serveOnly } from './lib/authRoutes'
 import { stopValidationEarly } from './lib/authValidation'
 import {
   clampDemoSession,
@@ -332,10 +332,8 @@ export const createAuthOptions = (
 /* Every instance that serves auth answers only the routes Qivo uses
  * (lib/authRoutes.ts) and checks a large request only until its first
  * problem (lib/authValidation.ts). */
-const servedRoutes = () => (isDemoDeployment() ? DEMO_AUTH_ROUTES : AUTH_ROUTES)
-
 export const createAuth = (ctx: GenericCtx<DataModel>) =>
-  serveOnly(stopValidationEarly(betterAuth(createAuthOptions(ctx))), servedRoutes())
+  serveOnly(stopValidationEarly(betterAuth(createAuthOptions(ctx))), servedAuthRoutes())
 
 /* Operator recovery-link capture (adminAuth.ts): a SECOND Better Auth
  * instance over the same options whose sendResetPassword writes the minted
@@ -349,5 +347,5 @@ export const createAuth = (ctx: GenericCtx<DataModel>) =>
 export const createCaptureAuth = (ctx: GenericCtx<DataModel>, captured: { url: string | null }) =>
   serveOnly(
     stopValidationEarly(betterAuth(createAuthOptions(ctx, { recovery: captured }))),
-    servedRoutes(),
+    servedAuthRoutes(),
   )

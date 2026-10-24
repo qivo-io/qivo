@@ -1,15 +1,15 @@
 /* The Better Auth routes Qivo serves over HTTP, and who calls each one.
  *
  * Better Auth's router serves every endpoint of every plugin, and a plugin
- * may answer other paths before the router does: the OAuth provider answers
- * /api/auth/.well-known/oauth-authorization-server. Anyone can reach a
- * served route, so createAuth (auth.ts) answers 404 to every request whose
- * method and path no route here lists, before Better Auth reads it. A route
- * that a Better Auth update adds is refused until it is listed here. Calls
- * through auth.api, such as adminAuth.ts's, run in-process and never pass
- * the router, so this does not limit them. convex/tests/authRoutes.test.ts
- * checks that every route listed is one Better Auth serves and that every
- * other one answers 404.
+ * may answer other paths before the router does, as the OAuth provider
+ * answers its metadata. Anyone can reach a served route, so every request
+ * whose method and path no route here lists is refused before its body is
+ * read: http.ts answers it, and createAuth (auth.ts) answers it 404 before
+ * Better Auth sees it. A route that a Better Auth update adds is refused
+ * until it is listed here. Calls through auth.api, such as adminAuth.ts's,
+ * run in-process and never pass the router, so this does not limit them.
+ * convex/tests/authRoutes.test.ts checks that Better Auth answers every
+ * route listed and that every other one answers 404.
  *
  * Some refused routes would also do harm. The provider token routes
  * (/get-access-token, /refresh-token, /account-info) answer from tokens Qivo
@@ -19,6 +19,8 @@
  * /oauth2/update-client stores metadata of any size. zod checks every entry
  * of /admin/has-permission's record before the session, which
  * lib/authValidation.ts cannot stop early. */
+
+import { isDemoDeployment } from './demo'
 
 /** The routes every deployment but the demo serves, as `METHOD /path`
  * under /api/auth. A `:name` segment matches any one segment. */
@@ -55,6 +57,11 @@ export const AUTH_ROUTES = [
   'POST /oauth2/token',
   'POST /oauth2/introspect',
   'POST /oauth2/revoke',
+  // the authorization server's metadata after the issuer's path, which the
+  // OAuth provider answers itself, for clients that look for it there
+  // rather than where http.ts serves it (docs/mcp.md)
+  'GET /.well-known/oauth-authorization-server',
+  'HEAD /.well-known/oauth-authorization-server',
 ] as const
 
 /** The routes the demo serves: its anonymous sign-in and the session and
@@ -67,6 +74,10 @@ export const DEMO_AUTH_ROUTES = [
   'GET /convex/token',
   'GET /convex/jwks',
 ] as const
+
+/** The routes this deployment serves. */
+export const servedAuthRoutes = (): readonly string[] =>
+  isDemoDeployment() ? DEMO_AUTH_ROUTES : AUTH_ROUTES
 
 /* Where Convex routes Better Auth's requests (registerRoutes). */
 const AUTH_BASE_PATH = '/api/auth'

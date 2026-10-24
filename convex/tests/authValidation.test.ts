@@ -227,28 +227,63 @@ describe('stopValidationEarly', () => {
     expect(unreached.map(([name]) => name)).toEqual(['signInEmail body'])
   })
 
+  /* The objects and records a schema checks at its root, through optional,
+   * default and pipe wrappers and both sides of an intersection. */
+  type Node = { _zod: { def: Record<string, unknown> & { type: string }; innerType?: unknown } }
+  const rootsOf = (schema: Node): Node[] => {
+    const { def } = schema._zod
+    if (def.type === 'object' || def.type === 'record') return [schema]
+    if (def.type === 'intersection')
+      return [def.left, def.right].flatMap((side) => rootsOf(side as Node))
+    const inner =
+      def.type === 'pipe' ? def.in : def.type === 'lazy' ? schema._zod.innerType : def.innerType
+    return inner ? rootsOf(inner as Node) : []
+  }
+
+  /* Values that pass `schema`'s root check and hold more values than a full
+   * check takes: every field holding a large array, which the fields' own
+   * checks refuse, and one key no field has holding it, which an object
+   * drops, so its answer is the one for an empty object. */
+  const largeValuesFor = (schema: Node): unknown[] => {
+    const large = Array(AUTH_FULL_CHECK_VALUES + 1).fill(0)
+    const fields = rootsOf(schema).flatMap(({ _zod: { def } }) =>
+      def.type === 'object' ? Object.keys(def.shape as object) : [],
+    )
+    const everyField = Object.fromEntries(fields.map((key) => [key, large]))
+    return [...(fields.length > 0 ? [everyField] : []), { notAField: large }]
+  }
+
   it('checks a large request early on every body and query schema, with the same answer', async () => {
     // A schema holding a `catch` is checked in full, so none of these does.
     const schemas = [...schemasOf(auth.api)] as [string, typeof social][]
     expect(schemas.some(([name]) => name.endsWith(' query'))).toBe(true)
-    const large = Array(AUTH_FULL_CHECK_VALUES + 1).fill(0)
     const late = []
     const differ = []
+    const answers = { accepted: 0, refused: 0 }
     for (const [name, schema] of schemas) {
+      expect([name, rootsOf(schema as unknown as Node).length > 0]).toEqual([name, true])
       const safeParse = vi.spyOn(schema, 'safeParse')
       try {
-        const result = await schema['~standard'].validate(large)
-        const early = safeParse.mock.calls.some(
-          ([, ctx]) => ctx !== undefined && 'abortEarly' in ctx && ctx.abortEarly === true,
-        )
-        if (!early) late.push(name)
-        if (!result.issues !== schema.safeParse(large).success) differ.push(name)
+        for (const value of largeValuesFor(schema as unknown as Node)) {
+          safeParse.mockClear()
+          const result = await schema['~standard'].validate(value)
+          const early = safeParse.mock.calls.some(
+            ([, ctx]) => ctx !== undefined && 'abortEarly' in ctx && ctx.abortEarly === true,
+          )
+          if (!early) late.push(name)
+          const full = schema.safeParse(value).success
+          if (!result.issues !== full) differ.push(name)
+          answers[full ? 'accepted' : 'refused'] += 1
+        }
       } finally {
         safeParse.mockRestore()
       }
     }
     expect(late).toEqual([])
     expect(differ).toEqual([])
+    // both answers occur, so a check that answered either one always would differ
+    expect(answers.accepted).toBeGreaterThan(10)
+    expect(answers.refused).toBeGreaterThan(10)
   })
 
   /* A schema of its own, wrapped as stopValidationEarly wraps an endpoint's. */

@@ -89,19 +89,37 @@ function requestFor(route: string) {
   })
 }
 
+/* The routes the OAuth provider answers before the router does, with its
+ * metadata (onRequest), on every deployment but the demo. */
+const BEFORE_THE_ROUTER = [
+  'GET /.well-known/oauth-authorization-server',
+  'HEAD /.well-known/oauth-authorization-server',
+]
+
 /* Paths a plugin answers outside the router's endpoints, or no route at all. */
 const OUTSIDE_THE_ROUTER = [
-  'GET /.well-known/oauth-authorization-server',
+  ...BEFORE_THE_ROUTER,
+  'POST /.well-known/oauth-authorization-server',
   'GET /.well-known/openid-configuration',
   'GET /convex/.well-known/openid-configuration',
   'GET /no-such-route',
   'POST /no-such-route',
 ]
 
-describe.each(KINDS)('the auth routes a %s deployment serves', (_, routes, env) => {
-  it('lists only routes Better Auth serves', () => {
-    const served = routesOf(authOf(env))
-    expect(routes.filter((route) => !served.some((each) => takes(each, route)))).toEqual([])
+describe.each(KINDS)('the auth routes a %s deployment serves', (kind, routes, env) => {
+  it('lists only routes Better Auth serves', async () => {
+    const auth = authOf(env)
+    const served = routesOf(auth)
+    const unserved = routes.filter((route) => !served.some((each) => takes(each, route)))
+    expect(unserved).toEqual(kind === 'demo' ? [] : BEFORE_THE_ROUTER)
+    for (const route of unserved) {
+      const response = await auth.handler(requestFor(route))
+      expect([route, response.status, response.headers.get('Content-Type')]).toEqual([
+        route,
+        200,
+        'application/json',
+      ])
+    }
   })
 
   it('answers 404 before reading the request on every other route', async () => {
@@ -136,7 +154,8 @@ describe('the auth routes over HTTP', () => {
     ['POST', '/admin/has-permission', { permission: {} }],
     ['POST', '/admin/set-role', { userId: 'x', role: '' }],
     ['GET', '/ok', null],
-    ['GET', '/.well-known/oauth-authorization-server', null],
+    ['GET', '/.well-known/openid-configuration', null],
+    ['GET', '/convex/.well-known/openid-configuration', null],
   ])('answers %s %s with 404 before validation', async (method, path, body) => {
     const response = await http(newT(), `/api/auth${path}`, {
       method,
@@ -146,10 +165,34 @@ describe('the auth routes over HTTP', () => {
     expect(await response.text()).toBe('Not Found')
   })
 
+  it('answers 404 before reading a body over the cap', async () => {
+    const response = await http(newT(), '/api/auth/link-social', {
+      method: 'POST',
+      body: JSON.stringify({ filler: 'x'.repeat(AUTH_BODY_MAX_BYTES) }),
+    })
+    expect(response.status).toBe(404)
+    expect(await response.text()).toBe('Not Found')
+  })
+
   it('still answers a route it serves', async () => {
     const response = await http(newT(), '/api/auth/get-session', { method: 'GET' })
     expect(response.status).toBe(200)
     expect(await response.text()).toBe('null')
+  })
+
+  it('serves the same metadata after the issuer path as before it, and no OpenID configuration', async () => {
+    const t = newT()
+    const metadata = async (path: string) => {
+      const response = await http(t, path, { method: 'GET' })
+      expect([path, response.status]).toEqual([path, 200])
+      return response.json()
+    }
+    const appended = await metadata('/api/auth/.well-known/oauth-authorization-server')
+    expect(appended).toEqual(await metadata('/.well-known/oauth-authorization-server/api/auth'))
+    expect(appended).toMatchObject({ issuer: expect.stringMatching(/\/api\/auth$/) })
+    // no redirect to the Convex plugin's configuration, which nothing serves
+    const root = await http(t, '/.well-known/openid-configuration', { method: 'GET' })
+    expect([root.status, root.headers.get('Location')]).toEqual([404, null])
   })
 })
 
@@ -162,6 +205,7 @@ describe('servesAuthRoute', () => {
     expect(at('POST', '/api/auth/oauth2/token')).toBe(true)
     expect(at('GET', '/api/auth/reset-password/a-token')).toBe(true)
     expect(at('GET', '/api/auth/callback/google')).toBe(true)
+    expect(at('HEAD', '/api/auth/.well-known/oauth-authorization-server')).toBe(true)
   })
 
   it('refuses anything that only resembles a listed route', () => {

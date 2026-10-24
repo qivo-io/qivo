@@ -290,6 +290,18 @@ describe('public demo ownership and authentication', () => {
       headers: { Origin: 'https://demo.qivo.io' },
     })
     expect(discovery.status).toBe(403)
+    // the demo has no authorization server, and serves no metadata for one
+    for (const path of [
+      '/.well-known/openid-configuration',
+      '/.well-known/oauth-authorization-server',
+      '/.well-known/oauth-authorization-server/api/auth',
+    ]) {
+      const answer = await fetch(path, {
+        method: 'GET',
+        headers: { Origin: 'https://demo.qivo.io' },
+      })
+      expect([path, answer.status, answer.headers.get('Location')]).toEqual([path, 404, null])
+    }
     expect(
       (
         await fetch('/api/auth/sign-in/anonymous', {

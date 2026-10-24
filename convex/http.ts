@@ -5,7 +5,7 @@ import { internal } from './_generated/api'
 import { appOrigins, authComponent, createAuth } from './auth'
 import { registerBilling } from './billingHttp'
 import { registerDemoReporting } from './demoReportingHttp'
-import { DEMO_AUTH_ROUTES, servesAuthRoute } from './lib/authRoutes'
+import { servedAuthRoutes, servesAuthRoute } from './lib/authRoutes'
 import { boundValidationAnswer } from './lib/authValidation'
 import { isDemoDeployment } from './lib/demo'
 import { demoVisitorPlatform } from './lib/demoVisitor'
@@ -83,33 +83,35 @@ async function readAuthBody(request: Request, oauthClient = false): Promise<Requ
 /* Auth lives at /api/auth/* (OAuth callbacks /api/auth/callback/{microsoft,google}).
  * CORS allowedOrigins are concatenated with Better Auth's trusted origins
  * (SITE_URL plus exact ADDITIONAL_APP_ORIGINS), while the explicit localhost
- * entry preserves the original local dev allowance. The demo's refusals
- * come before the body is read, and its admission check after, so a body
- * that never arrives takes no admission. */
+ * entry preserves the original local dev allowance. A route Qivo does not
+ * serve (lib/authRoutes.ts) and the demo's refusals are answered before the
+ * body is read, and the demo's admission check after, so a body that never
+ * arrives takes no admission. */
 const createHttpAuth: typeof createAuth = (ctx) => {
   const auth = createAuth(ctx)
   return {
     ...auth,
     handler: async (original: Request) => {
-      const path = new URL(original.url).pathname.replace(/\/$/, '')
+      if (!servesAuthRoute(servedAuthRoutes(), original))
+        return isDemoDeployment()
+          ? new Response(
+              JSON.stringify({ message: 'This feature requires a regular workspace.' }),
+              {
+                status: 403,
+                headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+              },
+            )
+          : new Response('Not Found', { status: 404 })
       const anonymous =
-        isDemoDeployment() && original.method === 'POST' && path === '/api/auth/sign-in/anonymous'
-      if (isDemoDeployment()) {
-        if (!servesAuthRoute(DEMO_AUTH_ROUTES, original))
-          return new Response(
-            JSON.stringify({ message: 'This feature requires a regular workspace.' }),
-            {
-              status: 403,
-              headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
-            },
-          )
-        if (anonymous) {
-          const origin = original.headers.get('Origin')
-          if (origin !== null && !appOrigins().includes(origin))
-            return new Response(null, { status: 403 })
-          if (!original.headers.get('Content-Type')?.toLowerCase().startsWith('application/json'))
-            return new Response(null, { status: 415 })
-        }
+        isDemoDeployment() &&
+        original.method === 'POST' &&
+        new URL(original.url).pathname === '/api/auth/sign-in/anonymous'
+      if (anonymous) {
+        const origin = original.headers.get('Origin')
+        if (origin !== null && !appOrigins().includes(origin))
+          return new Response(null, { status: 403 })
+        if (!original.headers.get('Content-Type')?.toLowerCase().startsWith('application/json'))
+          return new Response(null, { status: 415 })
       }
       const request = await readAuthBody(original)
       if (request instanceof Response) return request
@@ -152,9 +154,8 @@ const createHttpAuth: typeof createAuth = (ctx) => {
 }
 /* The component builds the auth routes itself, so this handler drops the
  * rest of the request body before its answer goes out, as answerAfterBody
- * does for every other route. The component's CORS preflight and its
- * /.well-known/openid-configuration redirect never reach it
- * (lib/requestBody.ts). A validation error's message is cut to a bounded
+ * does for every other route. The component's CORS preflight never reaches
+ * it (lib/requestBody.ts). A validation error's message is cut to a bounded
  * length (lib/authValidation.ts). */
 const createHttpAuthAfterBody: typeof createAuth = (ctx) => {
   const auth = createHttpAuth(ctx)
@@ -169,6 +170,17 @@ const createHttpAuthAfterBody: typeof createAuth = (ctx) => {
     },
   }
 }
+/* The component redirects /.well-known/openid-configuration to the Convex
+ * plugin's OpenID configuration unless a route answers it already. Qivo
+ * serves no usable one: the OAuth provider's endpoint of the same name
+ * replaces the plugin's, and the demo's names endpoints the demo refuses.
+ * Convex checks tokens with the keys at /api/auth/convex/jwks
+ * (auth.config.ts), so this route answers 404 in the redirect's place. */
+http.route({
+  path: '/.well-known/openid-configuration',
+  method: 'GET',
+  handler: answerAfterBody(async () => new Response('Not Found', { status: 404 })),
+})
 authComponent.registerRoutes(http, createHttpAuthAfterBody, {
   cors: {
     allowedOrigins: isDemoDeployment() ? [] : ['http://localhost:5199'],
@@ -294,10 +306,13 @@ for (const path of [
   http.route({ path, method: 'GET', handler: resourceMetadata })
   http.route({ path, method: 'OPTIONS', handler: metadataPreflight })
 }
-for (const path of [
-  '/.well-known/oauth-authorization-server/api/auth',
-  '/.well-known/oauth-authorization-server',
-]) {
+// The demo has no authorization server (auth.ts), so it serves no metadata.
+for (const path of isDemoDeployment()
+  ? []
+  : [
+      '/.well-known/oauth-authorization-server/api/auth',
+      '/.well-known/oauth-authorization-server',
+    ]) {
   http.route({ path, method: 'GET', handler: serverMetadata })
   http.route({ path, method: 'OPTIONS', handler: metadataPreflight })
 }

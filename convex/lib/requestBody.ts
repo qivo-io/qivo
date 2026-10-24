@@ -9,10 +9,9 @@
  * createHttpAuthAfterBody) calls discardBody itself, and hands Better Auth,
  * which reads a body with no bound in time or size, a copy whose body
  * bufferedRequest has already read (http.ts readAuthBody). Its CORS preflight
- * for /api/auth/* and its /.well-known/openid-configuration redirect answer
- * without a handler of ours. Those two take OPTIONS and GET, which browsers
- * send without a body. convex/tests/requestBody.test.ts refuses any other
- * module that imports httpAction. */
+ * for /api/auth/* answers without a handler of ours. It takes OPTIONS, which
+ * browsers send without a body. convex/tests/requestBody.test.ts refuses any
+ * other module that imports httpAction. */
 
 import { httpAction } from '../_generated/server'
 import { MIB } from './limits'
