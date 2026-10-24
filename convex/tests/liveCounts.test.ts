@@ -5,10 +5,11 @@
  * writes go on between its steps, and the root part sends them only once
  * they are counted. */
 
-import { makeFunctionReference } from 'convex/server'
+import { getFunctionName, makeFunctionReference } from 'convex/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
-import { COUNT_PAGE } from '../internal/liveCountsBackfill'
+import type { ActionCtx } from '../_generated/server'
+import { COUNT_PAGE, dryCount } from '../internal/liveCountsBackfill'
 import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
 import {
   as,
@@ -193,6 +194,56 @@ describe('live counts', () => {
     expect(await rootRow(t, f)).toMatchObject(done ?? {})
   })
 
+  it('a step ends a page early once it has read its bytes', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    Object.assign(COUNT_PAGE, { bytes: 100_000 })
+    // descriptions over what the app takes now, as earlier releases stored
+    const long = []
+    for (let i = 0; i < 3; i++)
+      long.push(
+        await plantIssue(t, { org_id, project_id: f.sub.id, description: 'x'.repeat(60_000) }),
+      )
+    const step = () =>
+      t.mutation(internal.internal.liveCountsBackfill.step, { org_id, recount: false })
+    // the first task, read twice to find any that share its number, fills
+    // the bytes
+    expect(await step()).toBeNull()
+    expect((await countersOf(t, org_id))?.counted?.tasks).toBe(long[0].num)
+    let done = null
+    for (let n = 0; done === null && n < 10; n++) done = await step()
+    expect(done).toEqual(await expectLiveCounts(t, org_id))
+  })
+
+  it('a dry run compares counts only with a state no write moved while it counted', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    await backfill(t, { dry_run: false })
+    const state = () => t.query(internal.internal.liveCountsBackfill.state, { org_id })
+    /** An action context whose queries `t` answers, with a task created
+     * before each of its first `writes` reads of the state, so after a
+     * count. */
+    const racing = (writes: number): Pick<ActionCtx, 'runQuery'> => ({
+      runQuery: async (query, ...args) => {
+        const name = getFunctionName(query)
+        if (name === 'internal/liveCountsBackfill:state' && writes-- > 0) await create(t, f)
+        return await t.query(makeFunctionReference<'query'>(name), args[0])
+      },
+    })
+
+    // a create while it counted counts again, and then matches
+    const once = await dryCount(racing(1), await state())
+    expect(once.settled).toBe(true)
+    expect(once.counts).toEqual(once.state.stored)
+    expect(once.counts).toEqual(await expectLiveCounts(t, org_id))
+
+    // creates through every count leave it unsettled, never differing
+    const busy = await dryCount(racing(Number.POSITIVE_INFINITY), await state())
+    expect(busy.settled).toBe(false)
+  })
+
   it('a dry run writes nothing and finds counts their rows do not give, which a recount mends', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -212,7 +263,7 @@ describe('live counts', () => {
     const row = await countersOf(t, org_id)
     await t.run((ctx) => ctx.db.patch(row?._id ?? ('' as never), { active_tasks: 7 }))
     const found = await backfill(t, { dry_run: true })
-    expect(found).toMatchObject({ counted: 0, differing: 1 })
+    expect(found).toMatchObject({ counted: 0, differing: 1, unsettled: 0 })
     expect(found.differ).toEqual([
       { org_id, active_tasks: 1, live_projects: 4, stored: { active_tasks: 7, live_projects: 4 } },
     ])

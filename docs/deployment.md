@@ -519,10 +519,11 @@ counts it, and until then the app sizes its windows by the task and project
 numbers handed out, as earlier releases did, so it loads as before. Run the
 backfill on every hosted deployment once it serves that release, as the
 module's header says: read its dry run first, then run it. A later dry run
-lists any organization whose counts differ from its rows. Earlier releases
-do not accept the fields, so a rollback past that release fails to deploy
-once any organization holds them, which every new organization does. Roll
-forward instead. A release that does not keep the counts leaves them wrong
+lists any organization whose counts differ from its rows, and apart from
+them any whose writes kept changing it while it counted, to check again.
+Earlier releases do not accept the fields, so a rollback past that release
+fails to deploy once any organization holds them, which every new
+organization does. Roll forward instead. A release that does not keep the counts leaves them wrong
 after any task or project write, and `"recount": true` counts every
 organization again.
 

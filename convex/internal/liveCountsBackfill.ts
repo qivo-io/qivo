@@ -20,7 +20,9 @@
  *
  * Read the dry run first. It writes nothing and reports, for every
  * organization, the counts it would write, and for one counted already
- * whether its counts match its rows. With the private helper:
+ * whether its counts match its rows. It lists an organization that writes
+ * kept changing while it counted as unsettled, to check again with a later
+ * dry run (dryCount). With the private helper:
  *   H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"
  *   "$H" staging npx convex run internal/liveCountsBackfill:run '{"dry_run": true}'
  *   "$H" staging npx convex run internal/liveCountsBackfill:run '{"dry_run": false}'
@@ -40,16 +42,23 @@
  * activity, sends no task event and changes nothing a person sees, except
  * how many windows the app opens at its next load. */
 import { makeFunctionReference } from 'convex/server'
-import { v } from 'convex/values'
+import { getDocumentSize, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
-import type { QueryCtx } from '../_generated/server'
+import type { ActionCtx, QueryCtx } from '../_generated/server'
 import { internalAction, internalMutation, internalQuery } from '../_generated/server'
-import { countersRow, liveCountsOf } from '../model/orgs'
+import { MIB } from '../lib/limits'
+import { DOCUMENT_MAX_BYTES } from '../model/comments'
+import { countersRow, liveCountsOf, numbersOf, type OrgCounters } from '../model/orgs'
 
-/** Rows of each table one step reads, and the most organizations a dry run
- * lists. 100 tasks of the largest stored descriptions read about 8 MiB,
- * inside Convex's 16 MiB. Tests lower them. */
-export const COUNT_PAGE = { issues: 100, projects: 500, listed: 100 }
+/** Rows of each table one page reads, the bytes it reads before it ends
+ * early, as Convex counts a document's size, and the most organizations a
+ * dry run lists. A stored description can come close to Convex's document
+ * size limit (internal/overCapRows.ts keeps those it finds), so a page reads
+ * no more rows at a time than its unspent bytes could hold at that size
+ * (countPage). While no two rows share a number, each table's page then
+ * reads at most its bytes and two documents more, so a step's two pages
+ * stay inside Convex's 16 MiB. Tests lower them. */
+export const COUNT_PAGE = { issues: 100, projects: 100, bytes: 4 * MIB, listed: 100 }
 
 /** Where a count starts, below every task and project number. */
 const START = Number.MIN_SAFE_INTEGER
@@ -61,31 +70,45 @@ const FIELD = { issues: 'active_tasks', projects: 'live_projects' } as const
 
 /** One page of the organization's rows of `table` numbered past `after`:
  * how many the windows read, and the number counted through, or null when
- * no row is numbered past `after`. Every row with the page's last number
- * is in it, should two share one. */
+ * no row is numbered past `after`. The page reads in parts, each no larger
+ * than its unspent bytes could hold at Convex's document size limit, and
+ * ends at COUNT_PAGE rows or bytes. Every row with a part's last number is
+ * in it, should two share one. */
 async function countPage(
   ctx: QueryCtx,
   orgId: string,
   table: Table,
   after: number,
 ): Promise<{ rows: number; through: number } | null> {
-  const past = (from: number) =>
-    ctx.db.query(table).withIndex('by_org_num', (q) => q.eq('org_id', orgId).gt('num', from))
-  const page: Doc<Table>[] = await past(after).take(COUNT_PAGE[table])
-  const last = page.at(-1)?.num
-  if (last === undefined) return null
-  const tail =
-    page.length < COUNT_PAGE[table]
-      ? []
-      : await ctx.db
-          .query(table)
-          .withIndex('by_org_num', (q) => q.eq('org_id', orgId).eq('num', last))
-          .collect()
-  const rows = [...page.filter((row) => row.num < last || tail.length === 0), ...tail]
-  return {
-    rows: rows.filter((row) => table === 'projects' || row.archived_at === undefined).length,
-    through: last,
+  let through = after
+  let read = 0
+  let bytes = 0
+  let rows = 0
+  for (;;) {
+    const fits = Math.max(1, Math.floor((COUNT_PAGE.bytes - bytes) / DOCUMENT_MAX_BYTES))
+    const want = Math.min(COUNT_PAGE[table] - read, fits)
+    const from = through
+    const part: Doc<Table>[] = await ctx.db
+      .query(table)
+      .withIndex('by_org_num', (q) => q.eq('org_id', orgId).gt('num', from))
+      .take(want)
+    const last = part.at(-1)?.num
+    if (last === undefined) break
+    const tail =
+      part.length < want
+        ? []
+        : await ctx.db
+            .query(table)
+            .withIndex('by_org_num', (q) => q.eq('org_id', orgId).eq('num', last))
+            .collect()
+    for (const row of [...part, ...tail]) bytes += getDocumentSize(row)
+    const counted = [...part.filter((row) => row.num < last || tail.length === 0), ...tail]
+    read += counted.length
+    rows += counted.filter((row) => table === 'projects' || row.archived_at === undefined).length
+    through = last
+    if (part.length < want || read >= COUNT_PAGE[table] || bytes >= COUNT_PAGE.bytes) break
   }
+  return through === after ? null : { rows, through }
 }
 
 /** The counts of one organization. */
@@ -131,26 +154,40 @@ export const step = internalMutation({
  * give and those it holds once counted. */
 type OrgReport = Counts & { org_id: string; stored?: Counts }
 
-/** A page of organizations with the counts they hold, null until counted. */
-type OrgPage = {
-  orgs: { org_id: string; stored: Counts | null }[]
-  cursor: string
-  done: boolean
+/** What an organization holds: its counts, null until counted, and the
+ * numbers handed out, which every create moves. */
+type OrgState = { org_id: string; stored: Counts | null; numbers: OrgCounters }
+
+/** The organization's state (OrgState). */
+async function stateOf(ctx: QueryCtx, orgId: string): Promise<OrgState> {
+  const row = await countersRow(ctx, orgId)
+  const { active_tasks, live_projects } = liveCountsOf(row)
+  const counted = active_tasks !== undefined && live_projects !== undefined
+  return {
+    org_id: orgId,
+    stored: counted ? { active_tasks, live_projects } : null,
+    numbers: numbersOf(row),
+  }
 }
 
-/** One page of organizations, by id, with the counts they hold. */
+/** A page of organizations with their states. */
+type OrgPage = { orgs: OrgState[]; cursor: string; done: boolean }
+
+/** One page of organizations, by id, with their states. */
 export const orgPage = internalQuery({
   args: { cursor: v.union(v.string(), v.null()) },
   handler: async (ctx, { cursor }): Promise<OrgPage> => {
     const page = await ctx.db.query('organizations').paginate({ cursor, numItems: 100 })
-    const orgs: OrgPage['orgs'] = []
-    for (const org of page.page) {
-      const { active_tasks, live_projects } = liveCountsOf(await countersRow(ctx, org.id))
-      const counted = active_tasks !== undefined && live_projects !== undefined
-      orgs.push({ org_id: org.id, stored: counted ? { active_tasks, live_projects } : null })
-    }
+    const orgs: OrgState[] = []
+    for (const org of page.page) orgs.push(await stateOf(ctx, org.id))
     return { orgs, cursor: page.continueCursor, done: page.isDone }
   },
+})
+
+/** One organization's state, as a dry run reads it after a count. */
+export const state = internalQuery({
+  args: { org_id: v.string() },
+  handler: async (ctx, { org_id }): Promise<OrgState> => await stateOf(ctx, org_id),
 })
 
 /** Counts, without writing, one page of the organization's rows of `table`
@@ -181,6 +218,9 @@ export const audit = internalMutation({
 const orgPageRef = makeFunctionReference<'query', { cursor: string | null }, OrgPage>(
   'internal/liveCountsBackfill:orgPage',
 )
+const stateRef = makeFunctionReference<'query', { org_id: string }, OrgState>(
+  'internal/liveCountsBackfill:state',
+)
 const checkRef = makeFunctionReference<
   'query',
   { org_id: string; table: Table; after: number },
@@ -195,13 +235,51 @@ const auditRef = makeFunctionReference<'mutation', Counts & { counted: number },
   'internal/liveCountsBackfill:audit',
 )
 
+/** How many times a dry run counts an organization whose state a write
+ * moves while it counts. */
+const DRY_TRIES = 3
+
+/** Counts the organization's rows without writing, page by page in queries
+ * of their own, then reads its state again. Writes can land between those
+ * queries, so the counts match a state only when it held still across the
+ * count; it counts again while the state moved, at most DRY_TRIES times.
+ * Answers the counts, the state read after them and whether it held still
+ * (`settled`). A write undone within one count, such as an archive and its
+ * restore, leaves the state as it was and can still show as a difference,
+ * which a later dry run no longer shows. */
+export async function dryCount(
+  ctx: Pick<ActionCtx, 'runQuery'>,
+  before: OrgState,
+): Promise<{ counts: Counts; state: OrgState; settled: boolean }> {
+  let state = before
+  for (let tries = 1; ; tries++) {
+    const counts = { active_tasks: 0, live_projects: 0 }
+    for (const table of TABLES) {
+      let after = START
+      for (;;) {
+        const got = await ctx.runQuery(checkRef, { org_id: state.org_id, table, after })
+        if (got === null) break
+        counts[FIELD[table]] += got.rows
+        after = got.through
+      }
+    }
+    const now = await ctx.runQuery(stateRef, { org_id: state.org_id })
+    // stateOf builds both, so their keys come in the same order
+    const settled = JSON.stringify(now) === JSON.stringify(state)
+    if (settled || tries === DRY_TRIES) return { counts, state: now, settled }
+    state = now
+  }
+}
+
 /** Counts every organization not counted yet, or every one with
  * `recount`, and answers how many it counted and their totals. A dry run
- * writes nothing. It counts each organization's rows page by page,
- * answers the same totals for those it would count, lists up to
- * COUNT_PAGE.listed of them, and lists the organizations counted already
- * whose counts their rows do not give (`differ`, `differing` in all). A
- * run that wrote ends with its audit row. */
+ * writes nothing. It counts each organization's rows (dryCount), answers
+ * the same totals for those it would count, lists up to COUNT_PAGE.listed
+ * of them, and lists the organizations counted already whose counts their
+ * rows do not give (`differ`, `differing` in all). An organization that
+ * writes kept changing through every count is listed in `unsettled_orgs`
+ * (`unsettled` in all) instead, for a later dry run. A run that wrote ends
+ * with its audit row. */
 export const run = internalAction({
   args: { dry_run: v.boolean(), recount: v.optional(v.boolean()) },
   handler: async (ctx, { dry_run, recount = false }) => {
@@ -213,38 +291,35 @@ export const run = internalAction({
     }
     const toCount: OrgReport[] = []
     const differ: OrgReport[] = []
+    const unsettledOrgs: string[] = []
     let differing = 0
+    let unsettled = 0
     let cursor: string | null = null
     for (;;) {
       const page: OrgPage = await ctx.runQuery(orgPageRef, { cursor })
-      for (const { org_id, stored } of page.orgs) {
+      for (const org of page.orgs) {
+        const { org_id } = org
         totals.orgs++
-        const counts = stored === null || recount
+        const due = org.stored === null || recount
         if (!dry_run) {
-          if (!counts) continue
+          if (!due) continue
           let done: Counts | null = null
           while (done === null) done = await ctx.runMutation(stepRef, { org_id, recount })
           add(done)
           continue
         }
-        const report: OrgReport = { org_id, active_tasks: 0, live_projects: 0 }
-        for (const table of TABLES) {
-          let after = START
-          for (;;) {
-            const got = await ctx.runQuery(checkRef, { org_id, table, after })
-            if (got === null) break
-            report[FIELD[table]] += got.rows
-            after = got.through
-          }
-        }
-        if (stored !== null) {
-          report.stored = stored
+        const { counts, state, settled } = await dryCount(ctx, org)
+        const report: OrgReport = { org_id, ...counts }
+        if (!settled) {
+          if (unsettled++ < COUNT_PAGE.listed) unsettledOrgs.push(org_id)
+        } else if (state.stored !== null) {
+          report.stored = state.stored
           const same =
-            stored.active_tasks === report.active_tasks &&
-            stored.live_projects === report.live_projects
+            state.stored.active_tasks === counts.active_tasks &&
+            state.stored.live_projects === counts.live_projects
           if (!same && differing++ < COUNT_PAGE.listed) differ.push(report)
         }
-        if (!counts) continue
+        if (!due) continue
         add(report)
         if (toCount.length < COUNT_PAGE.listed) toCount.push(report)
       }
@@ -257,6 +332,14 @@ export const run = internalAction({
         active_tasks: totals.active_tasks,
         live_projects: totals.live_projects,
       })
-    return { dry_run, ...totals, differing, to_count: toCount, differ }
+    return {
+      dry_run,
+      ...totals,
+      differing,
+      to_count: toCount,
+      differ,
+      unsettled,
+      unsettled_orgs: unsettledOrgs,
+    }
   },
 })
