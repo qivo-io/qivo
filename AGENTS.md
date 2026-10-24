@@ -33,8 +33,8 @@ it; do not bypass the sandbox. Production actions still require approval.
 
 ## Product and verification
 
-This is the public Qivo application repository. Private design specifications,
-operational notes and source migration records are in qivo-internal. Use only
+This is the public Qivo application repository. Private design specifications
+and operational notes are in qivo-internal. Use only
 `AGENTS.md` for agent instructions. Read `README.md` and `package.json`.
 
 When reviewing authentication dependency updates, check whether a published

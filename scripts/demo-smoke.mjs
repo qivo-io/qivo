@@ -1,6 +1,7 @@
 /* Public Try workflow against an explicitly configured, isolated demo DEV
  * deployment. Never loads .env.local, seeds Northstar's shared fixture, or
- * uses a production key. See docs/verification.md for target configuration. */
+ * uses a production key. See qivo-internal docs/verification.md for target
+ * configuration. */
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'

@@ -1,7 +1,7 @@
 /* The pieces both person-by-person walks render: the weekly Update Estimate
    modal (src/panels/UpdateEstimate.tsx, hooks `data-ue-*`) and the Team sync
    page (src/views/TeamSync.tsx, hooks `data-sync-*`). One walk, two presets
-   (docs/team-sync-brief.md): each piece takes the hook prefix of the walk it
+   (deviation #316): each piece takes the hook prefix of the walk it
    sits in, so drives keep telling the two apart. */
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'

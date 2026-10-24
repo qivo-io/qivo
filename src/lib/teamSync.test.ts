@@ -390,7 +390,7 @@ describe('rowMarks', () => {
     // handed before the sync, and nothing since the hand-off's own write
     const r2 = { ...r, reviewAt: at(23), updatedAt: at(23) + 400 }
     expect(rowMarks(r2, base).since).toEqual({ kind: 'waiting', at: at(23) })
-    // however long ago that sync was: the brief tests the hand-off only
+    // however long ago that sync was: the rule tests the hand-off only
     expect(rowMarks(r2, { ...base, since: at(27) }).since).toEqual({ kind: 'waiting', at: at(23) })
     // a comment or a later write since the hand-off is a touch
     expect(rowMarks(r2, { ...base, lastCommentAt: at(24) }).since).toBeNull()

@@ -1,10 +1,11 @@
-/* Team sync: the pure rules behind the meeting page (docs/team-sync-brief.md).
+/* Team sync: the pure rules behind the meeting page (deviation #316, and the
+   guide's docs/guide/planning-against-real-capacity.md#team-sync).
    Everything here is a function of plain inputs (tasks, people, projects, the
    tasks' stamps, the latest comment per task, a reading point and today), so
    the page reads the store once per render and the rules test on small
    fixtures. Nothing here writes, and nothing imports the store at runtime.
 
-   Vocabulary, as the brief uses it:
+   Vocabulary:
    · a ROW is an open (To Do, In Progress, In Review) leaf task in scope;
    · a task's OWNER is `IssueVM.owner`: the reviewer while it waits In Review
      with one, else the assignee (convex/lib/review.ts);

@@ -2,7 +2,7 @@
    and one-click controls, the mention window, the Done-since and Waiting-on-
    review items, and the load chip. Everything reads the live store; every
    change made from a card stamps the page owner and ticks the row
-   (docs/team-sync-brief.md, "Each row carries"). */
+   (deviation #316). */
 import { memo, type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { AssigneeAvatar, OwnerPickList } from '@/components/AssigneeAvatar'
 import { LimitedTextarea } from '@/components/LimitedField'
@@ -153,7 +153,7 @@ export function TitleButton({
   )
 }
 
-/* The one "since the last sync" mark, in the brief's words. */
+/* The one "since the last sync" mark. */
 function SinceText({ mark, now }: { mark: SinceMark; now: number }) {
   const when = dayLabel(mark.at, now)
   if (mark.kind === 'untouched' || mark.kind === 'waiting')
