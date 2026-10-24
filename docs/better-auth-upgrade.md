@@ -217,6 +217,18 @@ Qivo does not use (SSO, SCIM, Stripe, passkey, API keys).
    new schema drops stays optional in `schema.ts` until a backfill removes it.
 5. Run `npm run verify:local` and the checks below, then the hands-on checks
    on a disposable local backend.
+6. After the merge, verify the exact candidate on staging with the private
+   fixture accounts: browser sign-in, consent approval and cancellation, the
+   read-only refusal, permitted task changes, refresh, disconnect and
+   reconnect. Hosted smoke tools can create and delete data, so use them only
+   with explicit scope for the target and its writes, and keep fixture
+   credentials outside this checkout.
+7. Google and Microsoft sign-in and billing stay off and untested on staging,
+   and so does email. The candidate's branch preview sends real mail, so try
+   the email flows there ([deployment](deployment.md)). Passing tests does not
+   show that these integrations work, so record each gap before a production
+   release that affects them. A release still needs a separately authorized
+   stable GitHub Release; this document does not authorize one.
 
 ### Checks to keep passing
 
