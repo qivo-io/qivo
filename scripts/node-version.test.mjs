@@ -109,7 +109,7 @@ describe('every place that picks a Node for Qivo', () => {
         expect(directory, `${name}: ${file}`).toBeDefined()
         // A workflow that builds a chosen ref takes the check and its range
         // from its own commit, since an older ref has neither.
-        if (/ref: \$\{\{ inputs\.ref \}\}/.test(text)) {
+        if (/ref: \$\{\{ (?:inputs\.ref|needs\.resolve\.outputs\.sha) \}\}/.test(text)) {
           expect(directory, name).toBe('.node-check/')
           expect(text, name).toContain(
             '          path: .node-check\n          sparse-checkout: |\n            /package.json\n            /scripts/node-engines.mjs\n            /scripts/node-version.mjs\n          sparse-checkout-cone-mode: false\n',

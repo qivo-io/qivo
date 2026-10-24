@@ -1163,6 +1163,13 @@ function App() {
         }
         return
       }
+      /* An address that is not the page's own, such as one to a task or
+         project that is gone, gives way to the page's in place, as on a
+         boot: the url-sync effect would leave it when the page stays the
+         same. A task still to arrive keeps its address (held). */
+      const own = buildPath(next)
+      if (!held && (location.pathname !== own || location.hash))
+        history.replaceState(history.state, '', own)
       /* A return belongs to the visit that opened its page. A pop that stays
          on the page keeps it (Back through Settings' pages, a phone layer, a
          task closing over the sync); one that leaves drops it, so a later

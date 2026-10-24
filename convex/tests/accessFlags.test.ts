@@ -63,6 +63,88 @@ async function perProjectFlags(
   return out
 }
 
+/* The person's own rows, which navigation reads whole (collect) and a step
+ * of OWN_READS reads in part (take). */
+const OWN_TABLES = ['project_access', 'team_members']
+
+/** Waits out `n` turns of the microtask queue; a transaction has no timers. */
+async function turns(n: number) {
+  for (let i = 0; i < n; i++) await Promise.resolve()
+}
+
+/* `ctx`, where navigation's read of the person's grants or memberships
+ * (collect) and the read of the same rows at a step of OWN_READS (take)
+ * answer in a fixed order: each read by_profile of OWN_TABLES waits until
+ * its table was asked both ways, the `first` way answers, and the other
+ * answers once what awaits the first has run. convex-test leaves that order
+ * to chance. A table asked one way only throws rather than waiting for
+ * ever, and `asked` says which ways each table was read, so a test can
+ * tell that the order it set applied. */
+function ordered(
+  ctx: QueryCtx,
+  first: 'take' | 'collect',
+): { ctx: QueryCtx; asked: () => Record<string, string[]> } {
+  const tables = new Map<
+    string,
+    { asked: Set<string>; both: PromiseWithResolvers<void>; firstDone: PromiseWithResolvers<void> }
+  >()
+  const turn = async (table: string, read: 'take' | 'collect', run: () => unknown) => {
+    let gate = tables.get(table)
+    if (gate === undefined) {
+      gate = {
+        asked: new Set(),
+        both: Promise.withResolvers(),
+        firstDone: Promise.withResolvers(),
+      }
+      tables.set(table, gate)
+    }
+    gate.asked.add(read)
+    if (gate.asked.size === 2) gate.both.resolve()
+    const both = await Promise.race([gate.both.promise.then(() => true), turns(10_000)])
+    if (!both) throw new Error(`ordered: ${table} was only read by ${read}`)
+    if (read !== first) await gate.firstDone.promise
+    const rows = await run()
+    // the other answers after the callbacks of the first answer
+    if (read === first) void turns(100).then(() => gate.firstDone.resolve())
+    return rows
+  }
+  const bound = (target: object, key: string | symbol) => {
+    const value = Reflect.get(target, key, target)
+    return typeof value === 'function' ? value.bind(target) : value
+  }
+  const db = new Proxy(ctx.db, {
+    get: (target, key) =>
+      key !== 'query'
+        ? bound(target, key)
+        : (table: Parameters<typeof target.query>[0]) =>
+            new Proxy(target.query(table), {
+              get: (query, key) =>
+                key !== 'withIndex'
+                  ? bound(query, key)
+                  : (...args: unknown[]) => {
+                      const range: { take: () => unknown; collect: () => unknown } = Reflect.apply(
+                        query.withIndex,
+                        query,
+                        args,
+                      )
+                      if (args[0] !== 'by_profile' || !OWN_TABLES.includes(table)) return range
+                      return new Proxy(range, {
+                        get: (range, key) =>
+                          key === 'take' || key === 'collect'
+                            ? (...args: unknown[]) =>
+                                turn(table, key, () => Reflect.apply(range[key], range, args))
+                            : bound(range, key),
+                      })
+                    },
+            }),
+  })
+  return {
+    ctx: { ...ctx, db },
+    asked: () =>
+      Object.fromEntries([...tables].map(([table, gate]) => [table, [...gate.asked].sort()])),
+  }
+}
+
 describe('accessFlags', () => {
   it('equals canSeeProject and hasProjectLevel for every role, kind, credential and grant shape', async () => {
     const seen = new Set<string>()
@@ -451,6 +533,53 @@ describe('accessFlags', () => {
         process.off('unhandledRejection', note)
       }
       expect(unhandled, `${many ? 'many teams' : 'one team'}`).toEqual([])
+    }
+  })
+
+  it("counts each read of the person's own grants and memberships in shared, whichever of navigation's and a step's read answers first", async () => {
+    for (const org_role of ['guest', 'user'] as const) {
+      const t = newT()
+      const f = await withOrg(t)
+      const me = await plantSeat(t, { org_id: f.org.id, name: 'Subject', org_role })
+      await t.run(async (ctx) => {
+        for (const p of [f.sub, f.sub2])
+          await ctx.db.insert('project_access', {
+            project_id: p.id,
+            profile_id: me.id,
+            level: 'user',
+          })
+        // a team of the person that shares nothing
+        const team_id = await newTeam(ctx, f.org.id)
+        await ctx.db.insert('team_members', { team_id, profile_id: me.id, is_leader: false })
+      })
+      // the third project asked reads the person's own rows while
+      // navigation under the meta reads them too
+      Object.assign(OWN_READS, { steps: [3] })
+      const shared: ReturnType<typeof projectLevelsOf>['shared'][] = []
+      for (const first of ['take', 'collect'] as const) {
+        await t.run(async (ctx) => {
+          const own = ordered(ctx, first)
+          const levels = projectLevelsOf(own.ctx, me)
+          expect(await levels.level(f.sub.id)).toBe(await projectLevel(ctx, me, f.sub))
+          const [meta, sub2] = await Promise.all([levels.level(f.meta.id), levels.level(f.sub2.id)])
+          expect(meta).toBe(await projectLevel(ctx, me, f.meta, true))
+          expect(sub2).toBe(await projectLevel(ctx, me, f.sub2))
+          // both ways, so `first` set the order
+          expect(own.asked(), org_role).toEqual(
+            org_role === 'guest'
+              ? { project_access: ['collect', 'take'] }
+              : { project_access: ['collect', 'take'], team_members: ['collect', 'take'] },
+          )
+          shared.push({ ...levels.shared })
+        })
+      }
+      expect(shared[0], org_role).toEqual(shared[1])
+      // both reads of the two grants; for a user, both reads of the one
+      // membership, then navigation's check of the team and read of its
+      // shares
+      expect([shared[0].ranges, shared[0].documents], org_role).toEqual(
+        org_role === 'guest' ? [2, 4] : [6, 7],
+      )
     }
   })
 

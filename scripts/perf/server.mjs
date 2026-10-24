@@ -39,6 +39,8 @@
 //                        paused, long-titled and unowned tasks
 //   latency (100)        ms before every answer
 //   mbps (8)             bandwidth every result waits for
+//   appearance (dark)    the signed-in person's appearance mode, dark or
+//                        light, which the app reads from appearance:get
 import { chunkLists } from '../../convex/lib/arrayLimit'
 import { idWindows, startWindows } from '../../convex/lib/idWindows'
 import { splitWorkspace } from '../../convex/lib/workspaceJoin'
@@ -62,6 +64,7 @@ const peopleCount = Math.max(2, option('people', 50))
 const hiddenCount = option('hidden', 4)
 const varied = parameters.get('shape') === 'varied'
 const shownLoad = parameters.get('shownload') === '1'
+const appearance = parameters.get('appearance') === 'light' ? 'light' : 'dark'
 const fixtureTime = new Date()
 const now = fixtureTime.toISOString()
 const day = (offset) => {
@@ -555,7 +558,7 @@ const read = (name, args = {}) => {
     case 'prefs:get':
       return null
     case 'appearance:get':
-      return { mode: 'dark', image_source: 'none', custom_image: null }
+      return { mode: appearance, image_source: 'none', custom_image: null }
     case 'appearance:dailyImage':
       return null
     case 'billing:status':
