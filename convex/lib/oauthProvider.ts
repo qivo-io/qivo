@@ -310,7 +310,7 @@ export function oauthHooks(ctx: GenericCtx<DataModel>) {
       : undefined
   return {
     before: createAuthMiddleware(async (endpoint) => {
-      // The only client creation endpoint Qivo serves (auth.ts disabledPaths).
+      // The only client creation endpoint Qivo serves (lib/authRoutes.ts).
       if (endpoint.path === '/oauth2/register') await admitClientRegistration(ctx, endpoint.body)
       if (endpoint.path === '/oauth2/authorize') {
         // Provider 1.6 drops `resource` from its parsed authorize schema. Read

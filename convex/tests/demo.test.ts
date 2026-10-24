@@ -3,7 +3,7 @@ import { createFunctionHandle, makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { createAuthOptions } from '../auth'
+import { createAuth, createAuthOptions } from '../auth'
 import authSchema from '../betterAuth/schema'
 import { MARKETING_DEMO, MARKETING_DEMO_VERSION } from '../internal/marketingDemoData'
 import { byId } from '../lib/db'
@@ -205,15 +205,18 @@ describe('public demo ownership and authentication', () => {
     )
   })
 
-  it('disables anonymous auth on normal deployments and preserves stable plugin schema', () => {
+  it('disables anonymous auth on normal deployments and preserves stable plugin schema', async () => {
+    const anonymousSignIn = () =>
+      createAuth({} as never).handler(
+        new Request('https://some.convex.site/api/auth/sign-in/anonymous', { method: 'POST' }),
+      )
     const demo = createAuthOptions({} as never)
     expect(demo.session).toEqual({ expiresIn: 86400, disableSessionRefresh: true })
     expect(demo.emailAndPassword.enabled).toBe(false)
-    expect(demo.disabledPaths).toContain('/delete-anonymous-user')
     vi.stubEnv('APP_MODE', 'normal')
     const normal = createAuthOptions({} as never)
     expect(normal.emailAndPassword.enabled).toBe(true)
-    expect(normal.disabledPaths).toContain('/sign-in/anonymous')
+    expect((await anonymousSignIn()).status).toBe(404)
     const shape = createAuthOptions({} as never, { schemaOnly: true })
     expect(shape.plugins.some((plugin) => plugin.id === 'anonymous')).toBe(true)
   })
@@ -264,7 +267,7 @@ describe('public demo ownership and authentication', () => {
   it('refuses external auth routes and foreign-origin admission before allocating data', async () => {
     const fetch = (
       path: string,
-      init: { method: string; headers: Record<string, string>; body: string },
+      init: { method: string; headers: Record<string, string>; body?: string },
     ): Promise<Response> => (t as unknown as { fetch: typeof fetch }).fetch(path, init)
     const request = {
       method: 'POST',
@@ -281,6 +284,12 @@ describe('public demo ownership and authentication', () => {
     ]) {
       expect((await fetch(`/api/auth${path}`, request)).status).toBe(403)
     }
+    // Convex checks the demo's tokens with its keys, never this discovery
+    const discovery = await fetch('/api/auth/convex/.well-known/openid-configuration', {
+      method: 'GET',
+      headers: { Origin: 'https://demo.qivo.io' },
+    })
+    expect(discovery.status).toBe(403)
     expect(
       (
         await fetch('/api/auth/sign-in/anonymous', {

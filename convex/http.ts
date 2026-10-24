@@ -5,6 +5,7 @@ import { internal } from './_generated/api'
 import { appOrigins, authComponent, createAuth } from './auth'
 import { registerBilling } from './billingHttp'
 import { registerDemoReporting } from './demoReportingHttp'
+import { DEMO_AUTH_ROUTES, servesAuthRoute } from './lib/authRoutes'
 import { boundValidationAnswer } from './lib/authValidation'
 import { isDemoDeployment } from './lib/demo'
 import { demoVisitorPlatform } from './lib/demoVisitor'
@@ -94,16 +95,7 @@ const createHttpAuth: typeof createAuth = (ctx) => {
       const anonymous =
         isDemoDeployment() && original.method === 'POST' && path === '/api/auth/sign-in/anonymous'
       if (isDemoDeployment()) {
-        const permitted =
-          original.method === 'POST'
-            ? ['/api/auth/sign-in/anonymous', '/api/auth/sign-out']
-            : [
-                '/api/auth/get-session',
-                '/api/auth/convex/token',
-                '/api/auth/convex/jwks',
-                '/api/auth/convex/.well-known/openid-configuration',
-              ]
-        if (!permitted.includes(path))
+        if (!servesAuthRoute(DEMO_AUTH_ROUTES, original))
           return new Response(
             JSON.stringify({ message: 'This feature requires a regular workspace.' }),
             {
