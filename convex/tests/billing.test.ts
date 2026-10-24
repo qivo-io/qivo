@@ -3,15 +3,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Id } from '../_generated/dataModel'
 import {
-  CHECKOUT_POLL_MS,
+  PAYMENT_POLL_MS,
+  POST_RENEWAL_MS,
+  PRE_RENEWAL_MS,
   REMINDER_PAGE,
-  RENEWAL_MARGIN_MS,
+  RENEWAL_POLL_MS,
   STORAGE_ATTEMPTS,
   STORAGE_RETRY_MS,
   STORAGE_STALL_MS,
   SYNC_PAGE,
   SYNC_SAFETY_MS,
 } from '../billingSync'
+import { markBillingMembershipChanged } from '../lib/billableUsers'
 import { addCalendarMonths } from '../lib/billingAccess'
 import type { BillingPlan, BillingSummary, BillingUsage } from '../lib/billingTypes'
 import { LIMITS, PLAN_CURRENCIES, PLAN_CURRENCY } from '../lib/limits'
@@ -91,6 +94,11 @@ const release = makeFunctionReference<
 const reminders = makeFunctionReference<'mutation', { now: number; cursor: string }, null>(
   'billingSync:reminders',
 )
+const webhook = makeFunctionReference<
+  'action',
+  { event_id: string; subscription_id: string },
+  null
+>('billingSync:webhook')
 const restartStorage = makeFunctionReference<
   'mutation',
   { period: Id<'billing_periods'> },
@@ -1347,15 +1355,20 @@ describe('when organizations are reconciled', () => {
     const end = Date.parse(END)
     vi.setSystemTime(end - 60 * 60_000)
     expect(await settle(t, f.org.id, { seats: 5 })).toBe(
-      new Date(end - RENEWAL_MARGIN_MS).toISOString(),
+      new Date(end - PRE_RENEWAL_MS).toISOString(),
     )
     vi.setSystemTime(end - 60_000)
     expect(await settle(t, f.org.id, { seats: 5 })).toBe(
-      new Date(end + RENEWAL_MARGIN_MS).toISOString(),
+      new Date(end + POST_RENEWAL_MS).toISOString(),
     )
-    // no renewal arrived: poll within the day of access after the period
+    // No renewal arrived: poll within the day of access after the period,
+    // faster than any organization can pass an allowance of 125,000 calls
+    // in the waived pending bucket. The old poll every 30 minutes could.
     vi.setSystemTime(end + 10 * 60_000)
-    expect(await settle(t, f.org.id, { seats: 5 })).toBe(new Date(end + 40 * 60_000).toISOString())
+    expect(await settle(t, f.org.id, { seats: 5 })).toBe(
+      new Date(end + 10 * 60_000 + RENEWAL_POLL_MS).toISOString(),
+    )
+    expect(RENEWAL_POLL_MS).toBeLessThan((5 * 25_000 * 60_000) / 6_000)
     vi.setSystemTime(end + 25 * 60 * 60_000)
     expect(await settle(t, f.org.id, { seats: 5 })).toBe(
       new Date(end + 25 * 60 * 60_000 + SYNC_SAFETY_MS).toISOString(),
@@ -1371,7 +1384,7 @@ describe('when organizations are reconciled', () => {
         .unique()
       await ctx.db.patch(sub!._id, { checkout_id: uuid() })
     })
-    expect(await settle(t, f.org.id)).toBe(iso(CHECKOUT_POLL_MS / 60_000))
+    expect(await settle(t, f.org.id)).toBe(iso(PAYMENT_POLL_MS / 60_000))
     await t.run(async (ctx) => {
       const plan = await ctx.db
         .query('billing_plans')
@@ -1418,8 +1431,111 @@ describe('when organizations are reconciled', () => {
     )
     await t.action(reconcile, { org_id: f.org.id })
     const sub = await stored(t, f.org.id)
-    expect(sub).toMatchObject({ sync_error: undefined, sync_attempts: undefined })
-    expect(sub?.sync_due_at).toBe(iso(SYNC_SAFETY_MS / 60_000))
+    expect([sub?.sync_error, sub?.sync_attempts, sub?.sync_due_at]).toEqual([
+      undefined,
+      undefined,
+      iso(SYNC_SAFETY_MS / 60_000),
+    ])
+  })
+
+  it('lets no failure push the check before a renewal past it', async () => {
+    const { t, f } = await fixture()
+    await t.mutation(apply, { payload: remote(f.org.id) })
+    await sample(t)
+    const end = Date.parse(END)
+    // five failures in a row, the last 20 minutes before the renewal
+    await t.run(async (ctx) => {
+      const sub = await ctx.db
+        .query('billing_subscriptions')
+        .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+        .unique()
+      await ctx.db.patch(sub!._id, { sync_attempts: 5 })
+    })
+    vi.setSystemTime(end - 20 * 60_000)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('unavailable', { status: 503 })),
+    )
+    await t.action(reconcile, { org_id: f.org.id })
+    // the 32-minute backoff alone would retry 12 minutes after the renewal
+    expect(await stored(t, f.org.id)).toMatchObject({
+      sync_attempts: 6,
+      sync_due_at: new Date(end - PRE_RENEWAL_MS).toISOString(),
+    })
+  })
+
+  it('polls a subscription that is past due or unpaid until its payment is known', async () => {
+    const { t, f } = await fixture()
+    for (const status of ['past_due', 'unpaid']) {
+      await t.mutation(apply, { payload: remote(f.org.id, { status, modified_at: iso(1) }) })
+      vi.setSystemTime(Date.parse(iso(1)))
+      expect(await settle(t, f.org.id, { seats: 5 })).toBe(iso(1 + PAYMENT_POLL_MS / 60_000))
+      vi.setSystemTime(NOW)
+    }
+  })
+
+  it('follows a renewal that Polar moved', async () => {
+    const { t, f } = await fixture()
+    await t.mutation(apply, { payload: remote(f.org.id) })
+    await sample(t)
+    const end = Date.parse(END)
+    vi.setSystemTime(end - PRE_RENEWAL_MS)
+    // the check before the old end reads the end Polar moved a day later
+    const moved = new Date(end + 24 * 60 * 60_000).toISOString()
+    await t.mutation(apply, {
+      payload: remote(f.org.id, { current_period_end: moved, modified_at: iso(60) }),
+    })
+    expect(await settle(t, f.org.id, { seats: 5 })).toBe(
+      new Date(end - PRE_RENEWAL_MS + SYNC_SAFETY_MS).toISOString(),
+    )
+    vi.setSystemTime(Date.parse(moved) - 60 * 60_000)
+    expect(await settle(t, f.org.id, { seats: 5 })).toBe(
+      new Date(Date.parse(moved) - PRE_RENEWAL_MS).toISOString(),
+    )
+  })
+
+  it('marks a membership change and a webhook due, so a reconciliation that never runs still happens', async () => {
+    const { t, f } = await fixture()
+    await setDue(t, f.org.id, iso(SYNC_SAFETY_MS / 60_000))
+    await t.run((ctx) => markBillingMembershipChanged(ctx, f.org.id))
+    expect(await stored(t, f.org.id)).toMatchObject({ sync_due_at: NOW })
+    // the scheduled reconciliation dies before it claims; the sweep runs it
+    await t.run(async (ctx) => {
+      for (const job of await ctx.db.system.query('_scheduled_functions').collect())
+        await ctx.scheduler.cancel(job._id)
+    })
+    await t.mutation(sweep, {})
+    expect((await queued(t, 'billingSync:reconcile')).map((job) => job.args[0].org_id)).toEqual([
+      f.org.id,
+    ])
+
+    await setDue(t, f.org.id, iso(SYNC_SAFETY_MS / 60_000))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(remote(f.org.id))),
+    )
+    await t.action(webhook, { event_id: 'renewal-1', subscription_id: providerId })
+    expect(await stored(t, f.org.id)).toMatchObject({ sync_due_at: NOW })
+  })
+
+  it('starts targeted times before the safety pass when the page is full', async () => {
+    const { t, f } = await fixture()
+    SYNC_PAGE.size = 1
+    const renewing = uuid()
+    await t.run((ctx) => enrollOrganization(ctx, renewing))
+    await t.run(async (ctx) => {
+      const sub = await ctx.db
+        .query('billing_subscriptions')
+        .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+        .unique()
+      // the older safety pass waits for the renewal check behind it
+      await ctx.db.patch(sub!._id, { sync_due_at: iso(-30), sync_safety: true })
+    })
+    await setDue(t, renewing, iso(-1))
+    await t.mutation(sweep, {})
+    expect((await queued(t, 'billingSync:reconcile')).map((job) => job.args[0].org_id)).toEqual([
+      renewing,
+    ])
   })
 
   it('reminds the admins of free periods ending soon or ended recently, a page at a time', async () => {

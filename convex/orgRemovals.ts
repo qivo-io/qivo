@@ -115,7 +115,7 @@ const recordRequestRef = makeFunctionReference<
   { delete_after: string }
 >('orgRemovals:recordRequest')
 const applyRef = makeFunctionReference<'mutation', { payload: string }, null>('billingSync:apply')
-const reconcileRef = makeFunctionReference<'action', OrgArg, null>('billingSync:reconcile')
+const requestSyncRef = makeFunctionReference<'mutation', OrgArg, null>('billingSync:requestSync')
 type Delivery = { to: string; org_name: string; delete_after: string; reason: string; url: string }
 const noticeReadyRef = makeFunctionReference<'query', { key: string }, Delivery | null>(
   'orgRemovals:noticeReady',
@@ -263,7 +263,7 @@ export const verifyNoCheckout = internalAction({
     if (!candidate) return null
     try {
       if ((await listPolarSubscriptions(org_id)).length > 0) {
-        await ctx.scheduler.runAfter(0, reconcileRef, { org_id })
+        await ctx.runMutation(requestSyncRef, { org_id })
         return null
       }
       if (await checkoutOpen(ctx, org_id, candidate.checkout_id)) return null
@@ -327,7 +327,7 @@ export const begin = internalAction({
         )
         if (live) {
           if (due.reason !== 'requested') await ctx.runMutation(abortRef, { org_id })
-          await ctx.scheduler.runAfter(0, reconcileRef, { org_id })
+          await ctx.runMutation(requestSyncRef, { org_id })
           return null
         }
         if (await checkoutOpen(ctx, org_id, due.checkout_id)) return null

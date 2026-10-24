@@ -616,6 +616,9 @@ export default defineSchema({
     // (billingSync.ts nextSyncDue). Absent until the first reconciliation,
     // which the sweep then treats as due.
     sync_due_at: v.optional(v.string()),
+    // True when sync_due_at is only the six-hour safety pass, which the
+    // sweep starts after every other due organization.
+    sync_safety: v.optional(v.boolean()),
     // Reconciliations that failed in a row, which set the retry's delay.
     sync_attempts: v.optional(v.number()),
     updated_at: v.string(),
@@ -624,7 +627,7 @@ export default defineSchema({
     .index('by_uuid', ['id'])
     .index('by_org', ['org_id'])
     .index('by_provider', ['polar_subscription_id'])
-    .index('by_sync_due', ['sync_due_at'])
+    .index('by_sync_due', ['sync_safety', 'sync_due_at'])
     .index('by_complimentary_until', ['complimentary_until']),
 
   billing_periods: defineTable({

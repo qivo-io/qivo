@@ -1,6 +1,7 @@
 import { makeFunctionReference } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
+import { subscriptionFor } from './billingAccess'
 import { isDemoDeployment } from './demo'
 import type { OrgRole, ProfileKind } from './enums'
 
@@ -75,9 +76,21 @@ const reconcileBilling = makeFunctionReference<'action', { org_id: string }, nul
   'billingSync:reconcile',
 )
 
+/** Asks for the organization's reconciliation with Polar now: marks its
+ * billing due (billingSync.ts sweep) and schedules the reconciliation, in
+ * the caller's transaction. The scheduled run is not retried if it fails
+ * before it starts, so the mark makes the next minute's sweep run it then. */
+export async function requestBillingSync(ctx: MutationCtx, orgId: string): Promise<void> {
+  const sub = await subscriptionFor(ctx, orgId)
+  const now = new Date().toISOString()
+  if (sub?.sync_due_at !== undefined && (sub.sync_due_at > now || sub.sync_safety))
+    await ctx.db.patch(sub._id, { sync_due_at: now, sync_safety: undefined })
+  await ctx.scheduler.runAfter(0, reconcileBilling, { org_id: orgId })
+}
+
 /** A home membership change can change the bills of guest organizations too.
  * Pass both old and new email after an address change, and the old email after
- * deletion. Scheduling commits with the membership mutation; provider calls
+ * deletion. The request commits with the membership mutation; provider calls
  * happen separately. Demo workspaces never synchronize paid subscriptions. */
 export async function markBillingMembershipChanged(
   ctx: MutationCtx,
@@ -90,5 +103,5 @@ export async function markBillingMembershipChanged(
     const profiles = ctx.db.query('profiles').withIndex('by_email', (q) => q.eq('email', email))
     for await (const profile of profiles) orgIds.add(profile.org_id)
   }
-  for (const id of orgIds) await ctx.scheduler.runAfter(0, reconcileBilling, { org_id: id })
+  for (const id of orgIds) await requestBillingSync(ctx, id)
 }

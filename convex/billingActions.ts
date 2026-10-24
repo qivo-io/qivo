@@ -2,7 +2,7 @@ import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import { internalMutation, internalQuery } from './_generated/server'
-import { CHECKOUT_POLL_MS, subscriptionPayload } from './billingSync'
+import { PAYMENT_POLL_MS, subscriptionPayload } from './billingSync'
 import { getBillableUsers } from './lib/billableUsers'
 import { billingEnabled, subscriptionFor } from './lib/billingAccess'
 import { billingPlanFields } from './lib/billingTypes'
@@ -180,11 +180,11 @@ export const finishCheckout = internalMutation({
   handler: async (ctx, { org_id, token, checkout_id, url, expires_at }) => {
     const sub = await subscriptionFor(ctx, org_id)
     require(sub?.checkout_lock === token, rule('Checkout preparation expired. Try again.'))
-    const poll = new Date(Date.now() + CHECKOUT_POLL_MS).toISOString()
+    const poll = new Date(Date.now() + PAYMENT_POLL_MS).toISOString()
     await ctx.db.patch(sub._id, {
       checkout_lock: undefined,
       checkout_lock_until: undefined,
-      // A saved checkout is reconciled every CHECKOUT_POLL_MS until Polar
+      // A saved checkout is reconciled every PAYMENT_POLL_MS until Polar
       // reports its subscription or its end, even if no webhook arrives.
       ...(checkout_id && url && expires_at
         ? {
@@ -192,6 +192,7 @@ export const finishCheckout = internalMutation({
             checkout_url: url,
             checkout_expires_at: expires_at,
             sync_due_at: sub.sync_due_at && sub.sync_due_at < poll ? sub.sync_due_at : poll,
+            sync_safety: undefined,
           }
         : {}),
     })

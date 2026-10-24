@@ -8,7 +8,7 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from './_generated/server'
-import { getBillableUsers } from './lib/billableUsers'
+import { getBillableUsers, requestBillingSync } from './lib/billableUsers'
 import { billingEnabled, subscriptionFor } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { badRequest, notFound, require, rule } from './lib/functions'
@@ -49,6 +49,9 @@ const releaseRef = makeFunctionReference<
 >('billingSync:release')
 const reconcileRef = makeFunctionReference<'action', { org_id: string }, null>(
   'billingSync:reconcile',
+)
+const requestSyncRef = makeFunctionReference<'mutation', { org_id: string }, null>(
+  'billingSync:requestSync',
 )
 const eventsRef = makeFunctionReference<'query', Record<string, never>, Doc<'billing_events'>[]>(
   'billingSync:pendingEvents',
@@ -120,35 +123,50 @@ export function subscriptionPayload(s: PolarSubscription): string {
 }
 
 /** How long an organization goes without a reconciliation when nothing
- * asks for one sooner. Membership changes and webhooks reconcile at once,
- * a pending checkout, a period's end and a storage sample have their own
- * times (nextSyncDue), and a failure retries sooner. This pass catches what
- * those miss: a webhook Polar gave up on after its 10 retries, or a change
- * made in Polar without one. Four reads a day per organization keep Polar
- * calls far below its 500 a minute. */
+ * asks for one sooner. Membership changes and webhooks reconcile at once, a
+ * pending checkout, an unpaid subscription, a period's end and a storage
+ * sample have their own times (nextSyncDue), and a failure retries sooner.
+ * This pass catches what those miss: a webhook Polar gave up on after its 10
+ * retries, or a change made in Polar without one, such as a revocation.
+ * Four reads a day per organization keep Polar calls far below its 500 a
+ * minute. */
 export const SYNC_SAFETY_MS = 6 * 60 * 60_000
 
 /** How many reconciliations one sweep starts, SYNC_PAGE.spacing apart, so
- * they reach Polar at about one a second. A reconciliation makes one to
- * three Polar requests, so the sweep stays under 180 a minute and leaves
- * Polar's other 320 to checkouts, webhooks and the reconciliations that
- * membership changes start. Tests lower `size`. */
+ * they reach Polar at about one a second: 86,400 a day. A reconciliation
+ * makes one to three Polar requests, so the sweep stays under 180 a minute
+ * and leaves Polar's other 320 to checkouts, webhooks and the
+ * reconciliations that membership changes start. The safety pass gets what
+ * the targeted times leave, so it holds its six hours up to about 21,600
+ * organizations and stretches past that. Tests lower `size`. */
 export const SYNC_PAGE = { size: 60, spacing: 1_000 }
 
-/** How often a pending checkout is reconciled, so a paid checkout whose
- * webhook is lost still activates within minutes. */
-export const CHECKOUT_POLL_MS = 2 * 60_000
+/** How often a pending checkout, and a subscription Polar reports past due
+ * or unpaid, is reconciled, so a payment whose webhook is lost still
+ * restores access within minutes. */
+export const PAYMENT_POLL_MS = 2 * 60_000
 
-/** Reconciliations run this long before and after a period ends, so the
- * renewal uses the current seats and a lost renewal webhook is caught. */
-export const RENEWAL_MARGIN_MS = 5 * 60_000
+/** A reconciliation runs this long before a period ends, so the renewal
+ * uses the current seats. A retry after a lost run (SWEEP_FENCE_MS) or a
+ * failure still lands before the end. */
+export const PRE_RENEWAL_MS = 15 * 60_000
+
+/** A reconciliation runs this long after a period ends, so a lost renewal
+ * webhook is caught. */
+export const POST_RENEWAL_MS = 5 * 60_000
 
 /** How often a period that has ended without a renewal is reconciled,
- * within the 24 hours of access subscriptionWritable allows after it. */
-export const RENEWAL_POLL_MS = 30 * 60_000
+ * within the 24 hours of access subscriptionWritable allows after it.
+ * Calls made before the renewal is known count in a waived pending bucket
+ * (billingUsage.ts usagePeriod). At the 6,000 calls a minute every
+ * organization shares (MACHINE_INGRESS_LIMIT), the smallest allowance,
+ * 5 seats of 25,000 calls, takes about 21 minutes to pass, so no block can
+ * be waived between two of these. */
+export const RENEWAL_POLL_MS = 5 * 60_000
 
 /** How long the sweep keeps an organization it scheduled out of its next
- * pages, so a reconciliation still waiting to start is not scheduled twice. */
+ * pages, so a reconciliation still waiting to start is not scheduled twice.
+ * A reconciliation that never starts runs again after it. */
 const SWEEP_FENCE_MS = 5 * 60_000
 
 /** How long a reconciliation holds its lock. */
@@ -160,24 +178,30 @@ const SYNC_RETRY_ERROR = 'Billing synchronization needs attention. Automatic ret
 
 const iso = (ms: number) => new Date(ms).toISOString()
 
-/** When the organization next needs a reconciliation: SYNC_SAFETY_MS from
- * now, or sooner for a pending checkout, a period's end or a storage sample
- * that apply must start again if it stalls or stopped. Times already past
- * are left out, because the reconciliation that reads them has just run. */
+/** When the organization next needs a reconciliation, and whether that is
+ * only the safety pass: SYNC_SAFETY_MS from now, or sooner for a pending
+ * checkout, an unpaid subscription, a period's end or a storage sample that
+ * apply must start again if it stalls or stopped. Times already past are
+ * left out, because the reconciliation that reads them has just run. Every
+ * reconciliation applies the period Polar reports, so when Polar moves a
+ * renewal the next times follow the new end; one it moves without a
+ * webhook after the check before the old end is read at the check after
+ * it, and then every RENEWAL_POLL_MS until the renewal is known. */
 async function nextSyncDue(
   ctx: QueryCtx,
   sub: Doc<'billing_subscriptions'>,
   now: number,
-): Promise<string> {
+): Promise<{ due: string; safety: boolean }> {
   let due = now + SYNC_SAFETY_MS
   const by = (at: number) => {
     if (at > now) due = Math.min(due, at)
   }
-  if (sub.checkout_id) by(now + CHECKOUT_POLL_MS)
+  if (sub.checkout_id || sub.status === 'past_due' || sub.status === 'unpaid')
+    by(now + PAYMENT_POLL_MS)
   if (sub.current_period_end && !sub.ended_at) {
     const end = Date.parse(sub.current_period_end)
-    if (now < end - RENEWAL_MARGIN_MS) by(end - RENEWAL_MARGIN_MS)
-    else if (now < end + RENEWAL_MARGIN_MS) by(end + RENEWAL_MARGIN_MS)
+    if (now < end - PRE_RENEWAL_MS) by(end - PRE_RENEWAL_MS)
+    else if (now < end + POST_RENEWAL_MS) by(end + POST_RENEWAL_MS)
     else if (now < end + 24 * 60 * 60_000) by(now + RENEWAL_POLL_MS)
   }
   const subscriptionId = sub.polar_subscription_id
@@ -195,7 +219,7 @@ async function nextSyncDue(
         by(Date.parse(period.storage_failed_at) + STORAGE_RETRY_MS + 60_000)
     }
   }
-  return iso(due)
+  return { due: iso(due), safety: due === now + SYNC_SAFETY_MS }
 }
 
 /** Takes the organization's reconciliation lock and returns what the
@@ -214,12 +238,12 @@ export const claim = internalMutation({
     if (!plan?.polar_product_id) {
       // nothing to reconcile until the plan connects; leave the sweep's pages
       if (sub.sync_due_at === undefined || sub.sync_due_at <= iso(now))
-        await ctx.db.patch(sub._id, { sync_due_at: iso(now + SYNC_SAFETY_MS) })
+        await ctx.db.patch(sub._id, { sync_due_at: iso(now + SYNC_SAFETY_MS), sync_safety: true })
       return null
     }
     if (sub.sync_lock_until && sub.sync_lock_until > iso(now)) {
-      if (sub.sync_due_at === undefined || sub.sync_due_at > iso(now))
-        await ctx.db.patch(sub._id, { sync_due_at: iso(now) })
+      if (sub.sync_due_at === undefined || sub.sync_due_at > iso(now) || sub.sync_safety)
+        await ctx.db.patch(sub._id, { sync_due_at: iso(now), sync_safety: undefined })
       return null
     }
     const token = newUuid()
@@ -227,15 +251,21 @@ export const claim = internalMutation({
     const until = iso(now + SYNC_LEASE_MS)
     // The due time equals the lock's end while nothing else asks, so a
     // reconciliation that dies runs again once its lock has expired.
-    await ctx.db.patch(sub._id, { sync_lock: token, sync_lock_until: until, sync_due_at: until })
+    await ctx.db.patch(sub._id, {
+      sync_lock: token,
+      sync_lock_until: until,
+      sync_due_at: until,
+      sync_safety: undefined,
+    })
     return { token, sub, product_id: plan.polar_product_id, plan, seats }
   },
 })
 
 /** Ends a reconciliation: frees its lock, records the seats it sent or its
  * error, and sets when the organization is next due. A failure retries
- * after 1, 2, 4 and up to 60 minutes. A due time set while the lock was
- * held (claim) is kept when it is sooner. */
+ * after 1, 2, 4 and up to 60 minutes, or at its next time (nextSyncDue)
+ * when that is sooner, so failures cannot push a check past a renewal. A
+ * due time set while the lock was held (claim) is kept when it is sooner. */
 export const release = internalMutation({
   args: {
     org_id: v.string(),
@@ -247,21 +277,33 @@ export const release = internalMutation({
     const sub = await subscriptionFor(ctx, org_id)
     if (!sub || sub.sync_lock !== token) return null
     const now = Date.now()
-    const failed = error === SYNC_RETRY_ERROR
-    const attempts = failed ? (sub.sync_attempts ?? 0) + 1 : undefined
-    let due = attempts
-      ? iso(now + Math.min(60, 2 ** (attempts - 1)) * 60_000)
-      : await nextSyncDue(ctx, sub, now)
+    const attempts = error === SYNC_RETRY_ERROR ? (sub.sync_attempts ?? 0) + 1 : undefined
+    let { due, safety } = await nextSyncDue(ctx, sub, now)
+    const sooner = (at: string) => {
+      if (at < due) [due, safety] = [at, false]
+    }
+    if (attempts) sooner(iso(now + Math.min(60, 2 ** (attempts - 1)) * 60_000))
     if (sub.sync_due_at !== undefined && sub.sync_due_at !== sub.sync_lock_until)
-      due = sub.sync_due_at < due ? sub.sync_due_at : due
+      sooner(sub.sync_due_at)
     await ctx.db.patch(sub._id, {
       sync_lock: undefined,
       sync_lock_until: undefined,
       sync_error: error,
       sync_due_at: due,
+      sync_safety: safety || undefined,
       sync_attempts: attempts,
       ...(seats !== undefined ? { next_seats: seats, synced_at: isoNow() } : {}),
     })
+    return null
+  },
+})
+
+/** Asks for the organization's reconciliation now, for the actions that
+ * need one (lib/billableUsers.ts requestBillingSync). */
+export const requestSync = internalMutation({
+  args: { org_id: v.string() },
+  handler: async (ctx, { org_id }): Promise<null> => {
+    await requestBillingSync(ctx, org_id)
     return null
   },
 })
@@ -684,7 +726,7 @@ export const webhook = internalAction({
     const remote = await getPolarSubscription(subscription_id)
     await ctx.runMutation(applyRef, { payload: subscriptionPayload(remote), event_id })
     if (remote.externalCustomerId)
-      await ctx.scheduler.runAfter(0, reconcileRef, { org_id: remote.externalCustomerId })
+      await ctx.runMutation(requestSyncRef, { org_id: remote.externalCustomerId })
     return null
   },
 })
@@ -803,12 +845,23 @@ export const sweep = internalMutation({
   handler: async (ctx): Promise<null> => {
     if (!billingEnabled() || !polarConfigured()) return null
     const now = Date.now()
+    // Targeted times go first; the safety pass gets the rest of the page.
     const due = await ctx.db
       .query('billing_subscriptions')
-      .withIndex('by_sync_due', (q) => q.lte('sync_due_at', iso(now)))
+      .withIndex('by_sync_due', (q) => q.eq('sync_safety', undefined).lte('sync_due_at', iso(now)))
       .take(SYNC_PAGE.size)
+    if (due.length < SYNC_PAGE.size)
+      due.push(
+        ...(await ctx.db
+          .query('billing_subscriptions')
+          .withIndex('by_sync_due', (q) => q.eq('sync_safety', true).lte('sync_due_at', iso(now)))
+          .take(SYNC_PAGE.size - due.length)),
+      )
     for (const [i, sub] of due.entries()) {
-      await ctx.db.patch(sub._id, { sync_due_at: iso(now + SWEEP_FENCE_MS) })
+      await ctx.db.patch(sub._id, {
+        sync_due_at: iso(now + SWEEP_FENCE_MS),
+        sync_safety: undefined,
+      })
       await ctx.scheduler.runAfter(i * SYNC_PAGE.spacing, reconcileRef, { org_id: sub.org_id })
     }
     const event = await ctx.db
