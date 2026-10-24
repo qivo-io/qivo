@@ -11,6 +11,8 @@
  *   `_creationTime` and on fields never written (as #430 does).
  * - The component API is typed by its function references, as in #430, not
  *   by the published component's generated types.
+ * - findOne with only OR clauses answers null when none matches. Upstream
+ *   then queried every clause at once, which the component refuses.
  * - The experimental joins override and remeda are left out; Qivo enables
  *   no joins. Types replace `any`. */
 import type { CustomAdapter, DBAdapterDebugLogOption } from 'better-auth/adapters'
@@ -259,6 +261,7 @@ export const convexAdapter = <
               })
               if (result) return result
             }
+            return null
           }
           return await ctx.runQuery(api.adapter.findOne, { ...data, where: parseWhere(data.where) })
         },

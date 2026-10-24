@@ -19,6 +19,10 @@
  * - listOne reads on past a page that holds no match until it finds one or
  *   reaches the end. A page stops after 200 documents, so a first match
  *   further on was missed.
+ * - The queries for the values of an `in` clause merge on the fields their
+ *   index orders by after its equality fields. Upstream merged on the sort
+ *   field and _creationTime only, which throws for an index with more
+ *   fields, such as providerId_userId for a providerId clause.
  * - Types replace `any`, and common-tags is not used. */
 
 import type { BetterAuthDBSchema } from 'better-auth/db'
@@ -422,6 +426,19 @@ const generateQuery = (
   })
 }
 
+/** The fields a query from generateQuery is ordered by after its equality
+ * fields. The queries for the values of an `in` clause share them, and
+ * mergedStream merges on them. */
+const streamOrder = (schema: AnySchema, args: AdapterArgs) => {
+  const { index, eqFields } = findIndex(schema, args) ?? {}
+  if (!index || index.indexDescriptor === 'by_creation_time') return ['_creationTime']
+  const fields =
+    schema.tables[args.model]
+      ?.[' indexes']()
+      .find(({ indexDescriptor }) => indexDescriptor === index.indexDescriptor)?.fields ?? []
+  return [...fields, '_creationTime'].slice(eqFields?.length ?? 0)
+}
+
 // This is the core function for reading from the database, it parses and
 // validates where conditions, selects indexes, and allows the caller to
 // optionally paginate as needed. Every response is a pagination result.
@@ -528,17 +545,13 @@ export const paginate = async (
         continueCursor: '',
       }
     }
-    const streams = inWhere.value.map((value) =>
-      generateQuery(ctx, schema, {
-        ...args,
-        where: args.where?.map((w) => (w === inWhere ? { ...w, operator: 'eq', value } : w)),
-      }),
-    )
+    const expanded = inWhere.value.map((value) => ({
+      ...args,
+      where: args.where?.map((w) => (w === inWhere ? { ...w, operator: 'eq' as const, value } : w)),
+    }))
     const result = await mergedStream(
-      streams,
-      [args.sortBy?.field !== 'createdAt' && args.sortBy?.field, '_creationTime'].flatMap((f) =>
-        f ? [f] : [],
-      ),
+      expanded.map((query) => generateQuery(ctx, schema, query)),
+      expanded[0] ? streamOrder(schema, expanded[0]) : ['_creationTime'],
     ).paginate(paginationOpts)
     return {
       ...result,

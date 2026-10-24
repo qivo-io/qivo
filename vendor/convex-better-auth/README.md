@@ -52,7 +52,17 @@ TypeScript rules like any other code.
   that stops early is not read twice; a single-row lookup reads on past a
   page with no match; an `in` clause the query does not expand is applied to
   each row instead of dropped; `updateMany` checks unique constraints one row
-  at a time, so a bulk update cannot give two rows the same composite key.
+  at a time, so a bulk update cannot give two rows the same composite key;
+  the queries for the values of an `in` clause merge on the fields their
+  index orders by, so an index with more fields no longer throws; `findOne`
+  with only OR clauses answers null when none matches instead of throwing.
+- Known and not changed, because Qivo reaches none of them: a row whose id
+  Better Auth chooses (`forceAllowId`) cannot be stored, so DPoP,
+  `private_key_jwt`, Magic Link, email OTP and Sign In with Ethereum do not
+  work (see the upgrade notes); a `sortBy` on `id` is not mapped to `_id`;
+  `create-schema` writes `./schema.ts` when no output file is given; a
+  single-row lookup that no index narrows reads until it finds a match or
+  hits Convex's read limits.
 - Types replace `any`, and the code follows the repository's formatting.
 
 ## What was left out

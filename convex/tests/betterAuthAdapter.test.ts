@@ -4,6 +4,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { handlePagination } from '../../vendor/convex-better-auth/src/client/adapter'
 import { components } from '../_generated/api'
+import { createAuth } from '../auth'
 import authSchema from '../betterAuth/schema'
 import { tables as generated } from '../betterAuth/schema.generated'
 import { newT, runInAuth, type T } from './helpers.setup'
@@ -74,6 +75,33 @@ describe('the copied Convex adapter', () => {
       ).page.map((row: { token: string }) => row.token)
     expect(await tokens('eq')).toEqual(['live'])
     expect(await tokens('ne')).toEqual(['gone'])
+  })
+})
+
+describe('the client adapter', () => {
+  it('answers null for a lookup of only OR clauses that nothing matches, and finds a match', async () => {
+    const t = newT()
+    const lookup = (email: string) =>
+      t.run(async (ctx) =>
+        (await createAuth(ctx).$context).adapter.findOne<{ email: string }>({
+          model: 'user',
+          where: [
+            { field: 'email', value: email, connector: 'OR' },
+            { field: 'name', value: 'Nobody', connector: 'OR' },
+          ],
+        }),
+      )
+    expect(await lookup('nobody@example.test')).toBeNull()
+    await runInAuth(t, (ctx) =>
+      ctx.db.insert('user', {
+        email: 'someone@example.test',
+        emailVerified: true,
+        name: 'Someone',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }),
+    )
+    expect(await lookup('someone@example.test')).toMatchObject({ email: 'someone@example.test' })
   })
 })
 
@@ -209,6 +237,37 @@ describe('index choice', () => {
     } finally {
       warn.mockRestore()
     }
+  })
+
+  it('merges an in clause over an index with fields after the equality fields', async () => {
+    const t = newT()
+    await runInAuth(t, async (ctx) => {
+      const at = Date.now()
+      for (const [providerId, userId] of [
+        ['microsoft', 'u2'],
+        ['credential', 'u1'],
+        ['google', 'u3'],
+        ['microsoft', 'u1'],
+      ])
+        await ctx.db.insert('account', {
+          accountId: `${providerId}-${userId}`,
+          providerId,
+          userId,
+          createdAt: at,
+          updatedAt: at,
+        })
+    })
+    // Each value reads providerId_userId, which orders by userId first.
+    const found = await t.query(components.betterAuth.adapter.findMany, {
+      model: 'account',
+      where: [{ field: 'providerId', operator: 'in', value: ['microsoft', 'credential'] }],
+      paginationOpts: { numItems: 10, cursor: null },
+    })
+    expect(found.page.map((row: { accountId: string }) => row.accountId).sort()).toEqual([
+      'credential-u1',
+      'microsoft-u1',
+      'microsoft-u2',
+    ])
   })
 })
 
