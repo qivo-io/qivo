@@ -144,27 +144,49 @@ const copiedRules = {
     bundleSchema: 'b23b3b29d3256e88',
     bundleAuthConfig: '3a144e0c4535dc5a',
   },
-  'src/bundler/debugBundle.ts': { 'innerEsbuild.nodeShimsPlugin': '8bd24d3b801c9ef2' },
+  'src/bundler/debugBundle.ts': { innerEsbuild: 'cc715595b58b01f4' },
   'src/cli/lib/components/definition/bundle.ts': {
     sharedEsbuildOptions: '26245a67bd200624',
     bundleImplementations: '9232edb1125b2d2c',
   },
 }
 
+// The nodes whose text is a value, whose spacing therefore counts.
+const literalTypes = new Set(['JSXText', 'Literal', 'TemplateElement'])
+
 /**
- * Returns a hash of a piece of code that ignores its comments and how much
- * space separates its tokens, so that only a change to the code changes it.
+ * Returns a hash of the code of a declaration that ignores its comments and
+ * how much space separates its tokens, so that only a change to the code
+ * changes it. The text of strings, regular expressions, templates and JSX
+ * stays as written, since its spacing is part of the value.
  */
-function fingerprint(text, comments, start) {
-  let code = ''
-  let at = start
-  for (const comment of comments) {
-    code += `${text.slice(at - start, comment.start - start)} `
-    at = comment.end
+function fingerprint(text, node, comments) {
+  const kept = new Set()
+  const visit = (child) => {
+    if (Array.isArray(child)) return child.forEach(visit)
+    if (!child || typeof child !== 'object') return
+    if (literalTypes.has(child.type)) return kept.add(child)
+    for (const [key, value] of Object.entries(child)) if (key !== 'parent') visit(value)
   }
-  code += text.slice(at - start)
-  const normal = code.replace(/\s+/g, ' ').trim()
-  return createHash('sha256').update(normal).digest('hex').slice(0, 16)
+  visit(node)
+  const inside = comments.filter(
+    (comment) => comment.start >= node.start && comment.end <= node.end,
+  )
+  const spans = [...kept, ...inside].sort((a, b) => a.start - b.start)
+  // The code between two literals, with each comment in it as a space.
+  let between = ''
+  let code = ''
+  let at = node.start
+  for (const span of spans) {
+    between += text.slice(at, span.start)
+    if (kept.has(span)) {
+      code += between.replace(/\s+/g, ' ') + text.slice(span.start, span.end)
+      between = ''
+    } else between += ' '
+    at = span.end
+  }
+  code += (between + text.slice(at, node.end)).replace(/\s+/g, ' ')
+  return createHash('sha256').update(code.trim()).digest('hex').slice(0, 16)
 }
 
 /**
@@ -219,9 +241,7 @@ function copiedRulesDrift() {
         )
         continue
       }
-      const [{ start, end }] = nodes
-      const inside = comments.filter((comment) => comment.start >= start && comment.end <= end)
-      const hash = fingerprint(text.slice(start, end), inside, start)
+      const hash = fingerprint(text, nodes[0], comments)
       if (hash !== pinned)
         reasons.push(
           `convex ${version} changed ${name} in ${file}. Compare it with the bundler rules in scripts/check-convex-runtime.mjs, update them, and then its hash in copiedRules to '${hash}'.`,

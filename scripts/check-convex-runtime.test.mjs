@@ -326,26 +326,38 @@ describe('the convex typecheck', { timeout: 60_000 }, () => {
     ])
   })
 
-  it('fails when the installed convex changes the bundler rules it copies, and not for a comment', () => {
+  it('fails when the installed convex changes the bundler rules it copies, and not for a comment or spacing', () => {
     const convex = (file) => fs.readFileSync(path.join(root, 'node_modules/convex', file), 'utf8')
-    const index = convex('src/bundler/index.ts')
-    const changed = index
-      .replace('function* walkDir(', '// Walks a directory.\nfunction* walkDir(')
-      .replace(
-        '["http", "crons", "schema", "auth.config"]',
-        '["http", "crons", "schema", "auth.config", "jobs"]',
-      )
-    expect(changed).not.toContain('"auth.config"].includes(')
-    expect(changed).toContain('// Walks a directory.')
+    const edit = (text, from, to) => {
+      expect(text).toContain(from)
+      return text.replace(from, to)
+    }
+    let index = convex('src/bundler/index.ts')
+    index = edit(index, 'function* walkDir(', '// Walks a directory.\nfunction* walkDir(  ')
+    index = edit(
+      index,
+      '["http", "crons", "schema", "auth.config"]',
+      '["http", "crons", "schema", "auth.config", "jobs"]',
+    )
+    // The spacing inside a string is part of the code.
+    index = edit(index, '.includes("use node")', '.includes("use  node")')
+    // The async_hooks shim, left out of the bundle's plugins.
+    const debugBundle = edit(
+      convex('src/bundler/debugBundle.ts'),
+      'plugins: [nodeShimsPlugin, ...plugins]',
+      'plugins',
+    )
     const { status, output } = typecheck({
       'site.ts': "export const site = new URL('https://qivo.io')\n",
       '../node_modules/convex/package.json': JSON.stringify({ name: 'convex', version: '9.9.9' }),
-      '../node_modules/convex/src/bundler/index.ts': changed,
-      '../node_modules/convex/src/bundler/debugBundle.ts': convex('src/bundler/debugBundle.ts'),
+      '../node_modules/convex/src/bundler/index.ts': index,
+      '../node_modules/convex/src/bundler/debugBundle.ts': debugBundle,
     })
     expect(status).toBe(1)
     expect(output.split('\n').filter((line) => line.startsWith('convex 9.9.9'))).toEqual([
+      "convex 9.9.9 changed hasUseNodeDirective in src/bundler/index.ts. Compare it with the bundler rules in scripts/check-convex-runtime.mjs, update them, and then its hash in copiedRules to '103b9ea19ec0ba3d'.",
       "convex 9.9.9 changed mustBeIsolate in src/bundler/index.ts. Compare it with the bundler rules in scripts/check-convex-runtime.mjs, update them, and then its hash in copiedRules to '85e9641126723a9e'.",
+      "convex 9.9.9 changed innerEsbuild in src/bundler/debugBundle.ts. Compare it with the bundler rules in scripts/check-convex-runtime.mjs, update them, and then its hash in copiedRules to 'aed6f9dc31e79ca3'.",
       'convex 9.9.9 has no src/cli/lib/components/definition/bundle.ts, whose bundler rules the check copies.',
     ])
   })
