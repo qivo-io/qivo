@@ -117,14 +117,27 @@ describe('main — a demo preview build names the backend a preview before it pu
   /* `convex deploy` runs this script as its --cmd and pushes the functions
      only after it returns, and crons.ts registers no job when
      QIVO_ENVIRONMENT is preview at push time. */
-  it('sets QIVO_ENVIRONMENT=preview on the claimed deployment before the build', () => {
+  it('sets QIVO_ENVIRONMENT=preview on the claimed deployment before the build', async () => {
     const run = vi.fn(() => '')
-    main(preview, { run, finish: vi.fn(), receipt: vi.fn() })
+    const fetch = vi.fn(async () => new Response(null, { status: 200 }))
+    await main(preview, { run, finish: vi.fn(), receipt: vi.fn(), fetch })
     const commands = run.mock.calls.map(([command, args]) => [command, ...args].join(' '))
     const set = commands.indexOf(
       'npx convex env set QIVO_ENVIRONMENT preview --deployment fixture-otter-12',
     )
     expect(set).toBeGreaterThan(-1)
     expect(set).toBeLessThan(commands.indexOf('npm run build'))
+    expect(fetch.mock.calls.map(([url, init]) => `${init.method} ${url}`)).toEqual([
+      'PATCH https://api.convex.dev/v1/deployments/fixture-otter-12',
+    ])
+  })
+
+  it('fails the build, before any command, when the expiry cannot be set', async () => {
+    const run = vi.fn(() => '')
+    const fetch = vi.fn(async () => new Response(null, { status: 500 }))
+    await expect(
+      main(preview, { run, finish: vi.fn(), receipt: vi.fn(), fetch, sleep: async () => {} }),
+    ).rejects.toThrow('Could not set the expiry of preview deployment fixture-otter-12 (HTTP 500')
+    expect(run).not.toHaveBeenCalled()
   })
 })

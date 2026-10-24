@@ -9,6 +9,7 @@ import {
   ignoredTheTarget,
   isPreviewDeployKey,
   previewSiteUrl,
+  setPreviewExpiry,
 } from './vercel-build.mjs'
 
 /** Files only the website build writes. It skips the demo, so finding one means the
@@ -49,12 +50,19 @@ export function finishDemoBuild(directory = 'dist') {
     writeFileSync(join(directory, name), guidance)
 }
 
-/* The build command. `run` is execFileSync, `finish` is finishDemoBuild and
- * `receipt` writes dist/version.json; the tests pass their own to see which
- * commands run. */
-export function main(
+/* The build command. `run` is execFileSync, `finish` is finishDemoBuild,
+ * `receipt` writes dist/version.json, and `fetch` and `sleep` reach the
+ * Management API; the tests pass their own to see which commands and
+ * requests run. */
+export async function main(
   env,
-  { run = execFileSync, finish = finishDemoBuild, receipt = writeDeploymentReceipt } = {},
+  {
+    run = execFileSync,
+    finish = finishDemoBuild,
+    receipt = writeDeploymentReceipt,
+    fetch,
+    sleep,
+  } = {},
 ) {
   assertDemoTarget(env)
   const preview = isPreviewDeployKey(env.CONVEX_DEPLOY_KEY)
@@ -70,7 +78,8 @@ export function main(
     return out.trim()
   }
   if (preview) {
-    // Same claim → origin setup → build → push ordering as normal previews.
+    // Same claim → expiry → origin setup → build → push ordering as normal previews.
+    await setPreviewExpiry(env, name, { fetch, sleep })
     command(['set', 'SITE_URL', previewSiteUrl(env)])
     command(['set', 'APP_MODE', 'demo'])
     // before convex pushes the functions, so crons.ts registers no job
@@ -90,4 +99,4 @@ export function main(
   receipt(env)
 }
 
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) main(process.env)
+if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) await main(process.env)

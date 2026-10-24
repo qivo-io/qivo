@@ -60,16 +60,8 @@ export function ignoredTheTarget(output) {
   return /Ignoring `--prod`, `--preview-name`, or `--deployment-name` flags/.test(output)
 }
 
-function setPreviewSiteUrl(env, run) {
+function setPreviewSiteUrl(env, name, run) {
   const siteUrl = previewSiteUrl(env)
-  const name = deploymentName(env)
-  if (name === null) {
-    throw new Error(
-      `vercel-build: cannot read a deployment name out of VITE_CONVEX_URL ` +
-        `("${env.VITE_CONVEX_URL ?? ''}") — refusing to ship a preview whose backend ` +
-        `trusts the wrong origin`,
-    )
-  }
   console.log(`[vercel-build] SITE_URL ${siteUrl} → deployment ${name}`)
   /* execFile, never a shell: the origin and the deployment name are derived
      from build-time input and go straight into argv here. Output is captured
@@ -85,6 +77,57 @@ function setPreviewSiteUrl(env, run) {
       `vercel-build: convex ignored --deployment ${name} and wrote SITE_URL somewhere else`,
     )
   }
+}
+
+/* How long a branch preview's backend lives after the branch's last push.
+ * Without it Convex deletes a preview 14 days after creating it (5 on Free
+ * and Starter), however recently the branch was pushed. */
+export const PREVIEW_LIFETIME_DAYS = 3
+const PREVIEW_EXPIRY_ATTEMPTS = 4
+
+/* Moves the preview deployment `name`'s deletion to PREVIEW_LIFETIME_DAYS
+ * from now through Convex's Management API, which takes the build's preview
+ * deploy key as a Bearer token for previews in the key's project. The CLI
+ * honours CONVEX_PROVISION_HOST for the same API, so this does too. The key
+ * travels only in the Authorization header. Retries every failure, then
+ * throws naming the deployment and the HTTP status only, never the key or
+ * the response body. `fetch` and `sleep` are the tests' to replace. */
+export async function setPreviewExpiry(
+  env,
+  name,
+  { fetch = globalThis.fetch, sleep = (ms) => new Promise((done) => setTimeout(done, ms)) } = {},
+) {
+  const host = env.CONVEX_PROVISION_HOST || 'https://api.convex.dev'
+  const expiresAt = Date.now() + PREVIEW_LIFETIME_DAYS * 24 * 60 * 60 * 1000
+  let failure = 'no response'
+  for (let attempt = 1; attempt <= PREVIEW_EXPIRY_ATTEMPTS; attempt++) {
+    if (attempt > 1) await sleep(1000 * 2 ** (attempt - 2))
+    try {
+      const response = await fetch(`${host}/v1/deployments/${encodeURIComponent(name)}`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${env.CONVEX_DEPLOY_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ expiresAt }),
+      })
+      if (response.ok) {
+        console.log(
+          `Preview deployment ${name} expires at ${new Date(expiresAt).toISOString()}, ` +
+            `${PREVIEW_LIFETIME_DAYS} days after this push.`,
+        )
+        return
+      }
+      failure = `HTTP ${response.status}`
+    } catch {
+      // a network error's message may quote the request, so only its absence is kept
+      failure = 'no response'
+    }
+  }
+  throw new Error(
+    `Could not set the expiry of preview deployment ${name} (${failure}, ` +
+      `${PREVIEW_EXPIRY_ATTEMPTS} attempts).`,
+  )
 }
 
 /* One bare address, the rule of ADDR in convex/lib/email.ts, which
@@ -121,19 +164,31 @@ export function websiteOrigin(env) {
   return isPreviewDeployKey(env.CONVEX_DEPLOY_KEY) ? previewSiteUrl(env) : env.QIVO_APP_ORIGIN
 }
 
-/* The build command. `run` is execFileSync, and `receipt` writes
- * dist/version.json; the tests pass their own to see which commands run. */
-export function main(env, { run = execFileSync, receipt = writeDeploymentReceipt } = {}) {
+/* The build command. `run` is execFileSync, `receipt` writes
+ * dist/version.json, and `fetch` and `sleep` reach the Management API; the
+ * tests pass their own to see which commands and requests run. */
+export async function main(
+  env,
+  { run = execFileSync, receipt = writeDeploymentReceipt, fetch, sleep } = {},
+) {
   if (isPreviewDeployKey(env.CONVEX_DEPLOY_KEY)) {
     if (env.QIVO_ENVIRONMENT !== 'preview')
       throw new Error('Preview environment identity required.')
-    setPreviewSiteUrl(env, run)
+    const name = deploymentName(env)
+    if (name === null) {
+      throw new Error(
+        `vercel-build: cannot read a deployment name out of VITE_CONVEX_URL ` +
+          `("${env.VITE_CONVEX_URL ?? ''}") — refusing to ship a preview whose backend ` +
+          `trusts the wrong origin`,
+      )
+    }
+    // first, so a build that fails later still leaves a backend that expires
+    await setPreviewExpiry(env, name, { fetch, sleep })
+    setPreviewSiteUrl(env, name, run)
     // before convex pushes the functions, so crons.ts registers no job
-    run(
-      'npx',
-      ['convex', 'env', 'set', 'QIVO_ENVIRONMENT', 'preview', '--deployment', deploymentName(env)],
-      { stdio: 'inherit' },
-    )
+    run('npx', ['convex', 'env', 'set', 'QIVO_ENVIRONMENT', 'preview', '--deployment', name], {
+      stdio: 'inherit',
+    })
   } else {
     if (deploymentName(env) !== env.QIVO_CONVEX_DEPLOYMENT)
       throw new Error('The injected Convex URL does not match the configured backend.')
@@ -161,5 +216,5 @@ export function main(env, { run = execFileSync, receipt = writeDeploymentReceipt
 
 // import for the tests, run only as the build command
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
-  main(process.env)
+  await main(process.env)
 }

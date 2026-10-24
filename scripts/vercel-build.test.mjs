@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { address } from '../convex/lib/mailConfig'
 import {
   deploymentName,
@@ -6,8 +6,10 @@ import {
   isOneAddress,
   isPreviewDeployKey,
   main,
+  PREVIEW_LIFETIME_DAYS,
   previewSiteUrl,
   requireProductionBackendEnv,
+  setPreviewExpiry,
   websiteOrigin,
 } from './vercel-build.mjs'
 
@@ -208,7 +210,7 @@ describe('main — the build refuses a production backend before it builds', () 
   const built = (run) =>
     run.mock.calls.some(([command, args]) => command === 'npm' && args[1] === 'build')
 
-  it('stops before npm run build when the backend lacks the mail settings', () => {
+  it('stops before npm run build when the backend lacks the mail settings', async () => {
     for (const values of [
       identity,
       { ...identity, LETTERMINT_API_KEY: 'test-only-token' },
@@ -216,7 +218,9 @@ describe('main — the build refuses a production backend before it builds', () 
     ]) {
       const run = runner(values)
       const receipt = vi.fn()
-      expect(() => main(production, { run, receipt })).toThrow(/before releasing to production/)
+      await expect(main(production, { run, receipt })).rejects.toThrow(
+        /before releasing to production/,
+      )
       expect(built(run)).toBe(false)
       expect(receipt).not.toHaveBeenCalled()
     }
@@ -224,7 +228,7 @@ describe('main — the build refuses a production backend before it builds', () 
 
   /* crons.ts drops every job under QIVO_ENVIRONMENT=preview, so a stable
      backend set to it by mistake must never get this build's push. */
-  it('stops before npm run build when the backend names another environment', () => {
+  it('stops before npm run build when the backend names another environment', async () => {
     const builds = [
       [production, 'preview'],
       [production, 'staging'],
@@ -233,22 +237,25 @@ describe('main — the build refuses a production backend before it builds', () 
     ]
     for (const [build, backend] of builds) {
       const run = runner({ ...identity, QIVO_ENVIRONMENT: backend })
-      expect(() => main(build, { run, receipt: vi.fn() }), backend).toThrow(
+      await expect(main(build, { run, receipt: vi.fn() }), backend).rejects.toThrow(
         'Backend QIVO_ENVIRONMENT does not match the build.',
       )
       expect(built(run)).toBe(false)
     }
   })
 
-  it('builds once the backend has them', () => {
+  it('builds once the backend has them', async () => {
     const run = runner({
       ...identity,
       LETTERMINT_API_KEY: 'test-only-token',
       MAIL_FROM: 'no-reply@qivo.io',
     })
     const receipt = vi.fn()
-    main(production, { run, receipt })
+    const fetch = vi.fn()
+    await main(production, { run, receipt, fetch })
     expect(built(run)).toBe(true)
+    // a stable deployment keeps no expiry
+    expect(fetch).not.toHaveBeenCalled()
     expect(receipt).toHaveBeenCalledWith(production)
   })
 })
@@ -260,13 +267,14 @@ describe('main — a preview build names the backend a preview before it pushes'
     VITE_CONVEX_URL: 'https://fixture-otter-12.convex.cloud',
     VERCEL_BRANCH_URL: 'qivo-git-x-fixture.vercel.app',
   }
+  const accepted = () => vi.fn(async () => new Response(null, { status: 200 }))
 
   /* `convex deploy` runs this script as its --cmd and pushes the functions
      only after it returns, also on a branch's first build, and crons.ts
      registers no job when QIVO_ENVIRONMENT is preview at push time. */
-  it('sets QIVO_ENVIRONMENT=preview on the claimed deployment before the build', () => {
+  it('sets QIVO_ENVIRONMENT=preview on the claimed deployment before the build', async () => {
     const run = vi.fn(() => '')
-    main(preview, { run, receipt: vi.fn() })
+    await main(preview, { run, receipt: vi.fn(), fetch: accepted() })
     const commands = run.mock.calls.map(([command, args]) => [command, ...args].join(' '))
     const set = commands.indexOf(
       'npx convex env set QIVO_ENVIRONMENT preview --deployment fixture-otter-12',
@@ -275,13 +283,128 @@ describe('main — a preview build names the backend a preview before it pushes'
     expect(set).toBeLessThan(commands.indexOf('npm run build'))
   })
 
-  it('refuses a preview key whose build is not a preview', () => {
+  it('sets the claimed deployment to expire before it configures or builds anything', async () => {
+    const order = []
+    const run = vi.fn((command, args) => {
+      order.push([command, ...args.slice(0, 3)].join(' '))
+      return ''
+    })
+    const fetch = vi.fn(async (url) => {
+      order.push(`PATCH ${url}`)
+      return new Response(null, { status: 200 })
+    })
+    await main(preview, { run, receipt: vi.fn(), fetch })
+    expect(order[0]).toBe('PATCH https://api.convex.dev/v1/deployments/fixture-otter-12')
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails the build, before any command, when the expiry cannot be set', async () => {
+    const run = vi.fn(() => '')
+    const receipt = vi.fn()
+    const fetch = vi.fn(async () => new Response(null, { status: 401 }))
+    await expect(main(preview, { run, receipt, fetch, sleep: async () => {} })).rejects.toThrow(
+      'Could not set the expiry of preview deployment fixture-otter-12 (HTTP 401, 4 attempts).',
+    )
+    expect(run).not.toHaveBeenCalled()
+    expect(receipt).not.toHaveBeenCalled()
+  })
+
+  it('refuses a preview key whose build is not a preview', async () => {
     for (const environment of ['production', 'staging', undefined]) {
       const run = vi.fn(() => '')
-      expect(() => main({ ...preview, QIVO_ENVIRONMENT: environment }, { run })).toThrow(
-        'Preview environment identity required.',
-      )
+      const fetch = vi.fn()
+      await expect(
+        main({ ...preview, QIVO_ENVIRONMENT: environment }, { run, fetch }),
+      ).rejects.toThrow('Preview environment identity required.')
       expect(run).not.toHaveBeenCalled()
+      expect(fetch).not.toHaveBeenCalled()
     }
+  })
+})
+
+describe('setPreviewExpiry — each push moves when the preview backend is deleted', () => {
+  const key = 'preview:fixture-team:qivo|test-only-secret'
+  const env = { CONVEX_DEPLOY_KEY: key }
+  const day = 24 * 60 * 60 * 1000
+  afterEach(() => vi.restoreAllMocks())
+
+  /** Every line the call prints, to check that the key is never among them. */
+  const printed = () => {
+    const lines = []
+    for (const method of ['log', 'error', 'warn', 'info'])
+      vi.spyOn(console, method).mockImplementation((...args) => lines.push(args.join(' ')))
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => lines.push(String(chunk)))
+    vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => lines.push(String(chunk)))
+    return lines
+  }
+
+  it('sends PATCH expiresAt, 3 days ahead, with the key only in the Authorization header', async () => {
+    const lines = printed()
+    const fetch = vi.fn(async () => new Response(null, { status: 200 }))
+    const before = Date.now()
+    await setPreviewExpiry(env, 'fixture-otter-12', { fetch })
+    const after = Date.now()
+    expect(PREVIEW_LIFETIME_DAYS).toBe(3)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    const [url, init] = fetch.mock.calls[0]
+    expect(url).toBe('https://api.convex.dev/v1/deployments/fixture-otter-12')
+    expect(url).not.toContain('test-only-secret')
+    expect(init.method).toBe('PATCH')
+    expect(init.headers).toEqual({
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+    })
+    const body = JSON.parse(init.body)
+    expect(Object.keys(body)).toEqual(['expiresAt'])
+    expect(body.expiresAt).toBeGreaterThanOrEqual(before + 3 * day)
+    expect(body.expiresAt).toBeLessThanOrEqual(after + 3 * day)
+    expect(lines.join('\n')).toContain(
+      `Preview deployment fixture-otter-12 expires at ${new Date(body.expiresAt).toISOString()}`,
+    )
+    expect(lines.join('\n')).not.toContain('test-only-secret')
+  })
+
+  it('uses the API host the CLI is pointed at', async () => {
+    printed()
+    const fetch = vi.fn(async () => new Response(null, { status: 200 }))
+    await setPreviewExpiry({ ...env, CONVEX_PROVISION_HOST: 'http://127.0.0.1:9' }, 'x-y-1', {
+      fetch,
+    })
+    expect(fetch.mock.calls[0][0]).toBe('http://127.0.0.1:9/v1/deployments/x-y-1')
+  })
+
+  it('retries a failure and succeeds once Convex accepts', async () => {
+    printed()
+    const answers = [
+      () => Promise.reject(new TypeError('fetch failed')),
+      () => Promise.resolve(new Response('busy', { status: 503 })),
+      () => Promise.resolve(new Response(null, { status: 200 })),
+    ]
+    const fetch = vi.fn(() => answers.shift()())
+    const sleep = vi.fn(async () => {})
+    await setPreviewExpiry(env, 'fixture-otter-12', { fetch, sleep })
+    expect(fetch).toHaveBeenCalledTimes(3)
+    expect(sleep.mock.calls).toEqual([[1000], [2000]])
+  })
+
+  it('gives up after 4 attempts naming the deployment and status, never the key or body', async () => {
+    const lines = printed()
+    for (const [answer, failure] of [
+      [() => Promise.resolve(new Response(`echo ${key}`, { status: 403 })), 'HTTP 403'],
+      [() => Promise.reject(new TypeError(`bad header Bearer ${key}`)), 'no response'],
+    ]) {
+      const fetch = vi.fn(answer)
+      const error = await setPreviewExpiry(env, 'fixture-otter-12', {
+        fetch,
+        sleep: async () => {},
+      }).catch((caught) => caught)
+      expect(fetch).toHaveBeenCalledTimes(4)
+      expect(error.message).toBe(
+        `Could not set the expiry of preview deployment fixture-otter-12 (${failure}, 4 attempts).`,
+      )
+      expect(error.message).not.toContain('test-only-secret')
+      expect(error.cause).toBeUndefined()
+    }
+    expect(lines.join('\n')).not.toContain('test-only-secret')
   })
 })

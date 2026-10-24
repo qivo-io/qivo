@@ -9,7 +9,7 @@ repository.
 
 | Source event | Destination |
 | --- | --- |
-| Feature branch push | Vercel branch preview, website included, with its own Convex preview deployment that runs no cron jobs |
+| Feature branch push | Vercel branch preview, website included, with its own Convex preview deployment that runs no cron jobs and is deleted 3 days after the branch's last push |
 | Successful main CI and secret scanning | Staging website, docs and app at `preview.qivo.io` |
 | **Deploy staging** run by hand from main | The same, for example after a provider failure |
 | **Prepare release** run by hand from main | A draft GitHub Release for the commit staging serves. Deploys nothing |
@@ -17,7 +17,7 @@ repository.
 
 ```text
  feature branch ──► CI + secret scan, branch preview (own empty Convex backend,
-       │             no cron jobs)
+       │             no cron jobs, deleted 3 days after the last push)
        │
        ▼ pull request merged
  main ─────► CI + secret scan ──► Deploy staging
@@ -117,12 +117,22 @@ or on staging for jobs that need neither billing nor demo mode. Convex refuses
 a push whose job names a missing function, which a preview push no longer
 checks, so `convex/tests/crons.test.ts` checks it before staging does.
 
-Convex keeps a preview deployment for 14 days after it was created on the
-Professional, Business and Enterprise plans, and for 5 days on Free and
-Starter, not until its pull request closes. Each one counts against the
-team's deployment limit. The operator therefore deletes the previews of
-branches that have no open pull request, using the private operator
-instructions.
+A branch preview's Convex backend is deleted 3 days after the branch's last
+push, whether or not its pull request is still open. Each preview build sets
+the deletion time to 3 days ahead through the Convex Management API, before
+it changes anything else on the backend, using the preview deploy key the
+build already holds. Every push therefore moves the date. Until then the
+backend keeps its data, its environment variables, including the mail
+settings it was created with, and its functions. The branch site loses its
+backend when it is deleted. The next push after that creates a new, empty
+backend with the project's current default environment variables. The demo's
+preview builds do the same, although the demo's Vercel project creates no
+previews. The build tries the call 4 times and then fails, naming the
+deployment and the HTTP status, so a preview whose date was not set is
+noticed at once instead of piling up against the team's deployment limit.
+Without the call, Convex would keep a preview for 14 days after it was
+created on the Professional, Business and Enterprise plans, and for 5 days on
+Free and Starter.
 
 Every deployment sends the same `Content-Security-Policy` on `/app` and
 `/admin` (`vercel.json`). It lets those pages run scripts only from the
@@ -451,8 +461,8 @@ its existing dedicated demo settings.
 
 Convex also stores the explicit `QIVO_ENVIRONMENT` and exact `SITE_URL`.
 Stable builds check them against their intended destination before pushing
-backend code. Preview builds set their newly claimed branch backend's origin
-and environment. No deployment infers safety from a hostname alone.
+backend code. Preview builds set their newly claimed branch backend's
+deletion time, origin and environment. No deployment infers safety from a hostname alone.
 
 Production sends sign-up, password reset, invitation, billing and deletion
 mail through Lettermint, so its Convex deployment also needs
@@ -467,7 +477,8 @@ Mail flows can therefore be tried on a branch preview before a release. A
 preview build does not require the settings, and staging, a separate Convex
 project, has neither. When the Lettermint token changes, update the project
 default as well as production. Existing development and preview deployments
-keep the copy they were created with.
+keep the copy they were created with. A preview gets the new token when its
+branch is next pushed after its backend was deleted.
 
 The website build takes its origin from `SITE_ORIGIN`, which
 `scripts/vercel-build.mjs` sets to `QIVO_APP_ORIGIN` for stable builds and to
