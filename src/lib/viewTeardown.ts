@@ -25,21 +25,28 @@ const COMMIT_WAIT_MS = 500
 type Options = {
   /** runs a task soon, without the clamping nested timers get */
   post?: (task: () => void) => void
-  /** runs a callback once the next frame has painted */
+  /** runs a callback once the next frame has painted, or soon in a hidden tab */
   painted?: (callback: () => void) => void
   /** runs a callback after `ms` */
   later?: (callback: () => void, ms: number) => () => void
 }
 
-const afterPaint = (callback: () => void) => requestAnimationFrame(() => postMessageTask(callback))
+/* In a tab the person cannot see, frames wait until it shows again, and a
+   view that leaves there, such as a kept page released after a while
+   without input (lib/inputIdle.ts), would free nothing until then. Nothing
+   paints there, so its teardown starts at once. */
+const afterPaint = (callback: () => void) =>
+  document.hidden
+    ? postMessageTask(callback)
+    : requestAnimationFrame(() => postMessageTask(callback))
 const afterMs = (callback: () => void, ms: number) => {
   const timer = setTimeout(callback, ms)
   return () => clearTimeout(timer)
 }
 
 /** A kept view's teardown. Its parts register how they unmount; `leave`
-    unmounts them in slices once the next frame has painted and calls
-    `done` when none is left. */
+    unmounts them in slices once the next frame has painted, or at once in
+    a hidden tab, and calls `done` when none is left. */
 export function createTeardown({
   post = postMessageTask,
   painted = afterPaint,

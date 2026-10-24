@@ -143,12 +143,13 @@ function Roadmap({
   actions: Record<string, (...args: unknown[]) => void>
   filterControls: (mobile: boolean) => React.ReactNode
   focusPlan: { id: string; n: number } | null
-  onFocusConsumed?: () => void
+  /** Gets the nonce of the request taken. */
+  onFocusConsumed?: (n: number) => void
   /* Show a task without planning it (Team sync's Roadmap jump): { id, n }
      like focusPlan, n a nonce. Its bar scrolls into view and wears the
      planning spotlight for a moment; no session, no card, nothing written. */
   revealTask?: { id: string; n: number } | null
-  onRevealConsumed?: () => void
+  onRevealConsumed?: (n: number) => void
 }) {
   const phone = useMobile()
   useUpdateBlocker(P.roadmapUndo.count > 0)
@@ -901,20 +902,23 @@ function Roadmap({
   const takenPlan = useRefR<number | null>(null)
   useEffectR(() => {
     if (!revealTask) return
-    if (revealTask.n === takenReveal.current) {
-      onRevealConsumed?.()
+    // App drops the request only while it is still this one
+    const { n } = revealTask
+    const consumed = () => onRevealConsumed?.(n)
+    if (n === takenReveal.current) {
+      consumed()
       return
     }
-    takenReveal.current = revealTask.n
+    takenReveal.current = n
     if (mobile) setMobileLayout('timeline')
     const it = P.issueById[revealTask.id]
     if (!it) {
-      onRevealConsumed?.()
+      consumed()
       return
     }
     openTo(it)
     setRevealed(revealTask)
-    return bringIntoView(it.id, onRevealConsumed)
+    return bringIntoView(it.id, consumed)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revealTask?.n])
   useEffectR(() => {
@@ -925,11 +929,13 @@ function Roadmap({
 
   useEffectR(() => {
     if (!focusPlan) return
-    if (focusPlan.n === takenPlan.current) {
-      onFocusConsumed?.()
+    const { n } = focusPlan
+    const consumed = () => onFocusConsumed?.(n)
+    if (n === takenPlan.current) {
+      consumed()
       return
     }
-    takenPlan.current = focusPlan.n
+    takenPlan.current = n
     if (mobile) setMobileLayout('timeline')
     const it = P.issueById[focusPlan.id]
     // A group's dates come from its subtasks, so it has nothing to plan. A
@@ -939,19 +945,19 @@ function Roadmap({
     if (it && P.isGroup(it)) {
       openTo(it)
       setRevealed(focusPlan)
-      return bringIntoView(it.id, onFocusConsumed)
+      return bringIntoView(it.id, consumed)
     }
     const request = ++planRequest.current
     const loadEpoch = P.gridEpoch
     const undoDisabledAtStart = P.roadmapUndo.disabled
     if (!it) {
-      onFocusConsumed?.()
+      consumed()
       return
     }
     // The task can change after the detail window requested planning.
     if (it.status === 'backlog') {
       window.showToast?.('Move this task out of Backlog before planning it on the roadmap', 'error')
-      onFocusConsumed?.()
+      consumed()
       return
     }
     // the planning task must be visible and draggable: a bar the session
@@ -996,7 +1002,7 @@ function Roadmap({
     // Pan to the (possibly just placed) bar and center it. Consuming earlier
     // changes focusPlan and cancels these frames in the effect cleanup
     // before the task can be scrolled into view.
-    return bringIntoView(it.id, onFocusConsumed)
+    return bringIntoView(it.id, consumed)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusPlan?.n])
 

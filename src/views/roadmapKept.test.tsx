@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { act, useEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { KeptView } from '../components/KeptView'
+import { withoutTaken } from '../lib/reveal'
 import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
 
 /* A kept Roadmap (components/KeptView) shown again runs its effects again
    with the props it held: a request to plan or show a task that it took
-   before it hid must not start again. */
+   before it hid must not start again, nor take a newer request with it. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -56,6 +57,8 @@ beforeEach(() => {
     tasks.push(() => callback(performance.now())),
   )
   vi.stubGlobal('cancelAnimationFrame', () => {})
+  // jsdom has no element scrolling
+  Element.prototype.scrollTo = () => {}
   window.showToast = vi.fn()
   container = document.createElement('div')
   document.body.append(container)
@@ -115,5 +118,59 @@ describe('a kept Roadmap shown again', { timeout: BOARD_TEST_TIMEOUT * 2 }, () =
     while (tasks.length) await act(async () => tasks.shift()?.())
     expect(document.querySelector('[data-plan-card]')).toBeNull()
     expect(consumed).toHaveBeenCalledTimes(1)
+  })
+  it('leaves the request made while it hid, as it lets go of the one it held', async () => {
+    const board = await loadBoard(network, (snap) => {
+      snap.issues.push({ ...taskRow(snap, 't1', 'todo', 1), assignee_id: null })
+      snap.issues.push({ ...taskRow(snap, 't2', 'todo', 2), assignee_id: null })
+    })
+    const { Roadmap } = await import('./Roadmap')
+    const actions = new Proxy({}, { get: () => () => {} }) as Parameters<
+      typeof Roadmap
+    >[0]['actions']
+    const idOf = (uuid: string) => board.P.issues.find((it) => it.uuid === uuid)?.id ?? ''
+    type Plan = { id: string; n: number } | null
+    // App's request, and its Plan on roadmap
+    let pending: Plan = null
+    let ask = (_: Plan) => {}
+    function Page({
+      shown,
+      info,
+    }: {
+      shown: boolean
+      info: Parameters<typeof Roadmap>[0]['info']
+    }) {
+      const [plan, setPlan] = useState<Plan>({ id: idOf('t1'), n: 1 })
+      useEffect(() => {
+        pending = plan
+        ask = setPlan
+      })
+      return (
+        <KeptView view="roadmap" shown={shown} className="view">
+          <Roadmap
+            info={info}
+            filters={FILTERS}
+            actions={actions}
+            filterControls={() => null}
+            focusPlan={plan}
+            onFocusConsumed={(n) => setPlan(withoutTaken(n))}
+          />
+        </KeptView>
+      )
+    }
+    const render = (shown: boolean) =>
+      board.renderView(root, (info) => <Page shown={shown} info={info} />)
+    board.P.roadmapContext(true, false)
+    await render(true)
+    expect(document.querySelector(`[data-plan-card="${idOf('t1')}"]`)).not.toBeNull()
+    // the person leaves before the request is consumed, and asks to plan
+    // another task while the Roadmap is hidden
+    await render(false)
+    tasks.length = 0
+    await act(async () => ask({ id: idOf('t2'), n: 2 }))
+    await render(true)
+    while (tasks.length) await act(async () => tasks.shift()?.())
+    expect(document.querySelector(`[data-plan-card="${idOf('t2')}"]`)).not.toBeNull()
+    expect(pending).toBeNull()
   })
 })

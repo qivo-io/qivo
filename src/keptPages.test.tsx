@@ -221,4 +221,22 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     )
     expect(threads.at(-1)?.stopped).toBe(false)
   })
+
+  it("opens the next Inbox task in the pane after the person left the Inbox from the task's pop-out", async () => {
+    const org = await boot()
+    await go(`/app/${org}/inbox/tasks/qn-1`)
+    const inbox = await shownPage('inbox')
+    const popOut = await waitFor(
+      () => inbox.querySelector<HTMLElement>('[data-task-popout]'),
+      'the pop-out button',
+    )
+    await act(async () => popOut.click())
+    await waitFor(() => document.querySelector('[role="dialog"]'), 'the popped-out window')
+    await go(`/app/${org}/board/tasks/qn-1`)
+    await shownPage('kanban')
+    await go(`/app/${org}/inbox/tasks/qn-2`)
+    expect(await shownPage('inbox')).toBe(inbox)
+    await waitFor(() => inbox.querySelector('[data-task-popout]'), 'the next task in the pane')
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
 })

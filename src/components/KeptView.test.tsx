@@ -410,4 +410,21 @@ describe('ViewKeeper', () => {
     expect(views()[0].dataset.workspaceView).toBe('kanban')
     expect(views()[0].querySelectorAll('[data-part]')).toHaveLength(10)
   })
+  it('takes a view apart in a hidden tab, where no frame paints', async () => {
+    await keep('a', true)
+    await keep('a', false)
+    const old = views()[0]
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
+    try {
+      // released after a while without input, as the tab sits in the background
+      await keep(null, false)
+      for (let i = 0; i < 50 && old.isConnected; i++)
+        await act(async () => new Promise((resolve) => setTimeout(resolve, 20)))
+    } finally {
+      Reflect.deleteProperty(document, 'hidden')
+    }
+    expect(frames.size).toBe(0)
+    expect(old.isConnected).toBe(false)
+    expect(views()).toHaveLength(0)
+  })
 })

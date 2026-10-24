@@ -49,7 +49,7 @@ import { isLandscapeRoadmapOpen } from './lib/landscape'
 import { createUnsentScope, type UnsentScope, UnsentScopeContext } from './lib/leaveGuard'
 import { afterProjectSaved } from './lib/newProjectAccess'
 import { createPopRefusal } from './lib/popRefusal'
-import type { RevealRequest } from './lib/reveal'
+import { type RevealRequest, withoutTaken } from './lib/reveal'
 import {
   ARCHIVED_TASKS_PAGE,
   buildPath,
@@ -851,7 +851,7 @@ function App() {
   // "Plan on roadmap": spotlight an issue on the roadmap after jumping there
   // from the issue window. { id, n } — n is a nonce so re-planning the same
   // issue re-triggers the spotlight even when the id is unchanged.
-  const [focusPlan, setFocusPlan] = useState(null)
+  const [focusPlan, setFocusPlan] = useState<{ id: string; n: number } | null>(null)
   const focusN = useRef(0)
   // Show a task in the view: its bar on the Roadmap (Team sync's jump, a
   // parent's Plan on roadmap), or its card on the Board behind its task
@@ -1978,9 +1978,9 @@ function App() {
               />
             )}
             focusPlan={focusPlan}
-            onFocusConsumed={() => setFocusPlan(null)}
+            onFocusConsumed={(n) => setFocusPlan(withoutTaken(n))}
             revealTask={revealTask}
-            onRevealConsumed={() => setRevealTask(null)}
+            onRevealConsumed={(n) => setRevealTask(withoutTaken(n))}
           />
         )
       case 'kanban':
@@ -1992,7 +1992,7 @@ function App() {
             setFilters={setFilters}
             actions={actions}
             revealTask={revealTask}
-            onRevealConsumed={() => setRevealTask(null)}
+            onRevealConsumed={(n) => setRevealTask(withoutTaken(n))}
           />
         ) : (
           <Kanban
@@ -2001,7 +2001,7 @@ function App() {
             tweaks={tweaks}
             actions={actions}
             revealTask={revealTask}
-            onRevealConsumed={() => setRevealTask(null)}
+            onRevealConsumed={(n) => setRevealTask(withoutTaken(n))}
           />
         )
     }

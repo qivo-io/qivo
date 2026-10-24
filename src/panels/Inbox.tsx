@@ -449,6 +449,9 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
      the point: it is a second frame on the pane's task, so navigating inside
      it moves the pane too and closing it puts you back where you were. */
   const [poppedOut, setPoppedOut] = useState(false)
+  // A move with no task here ends it too, such as leaving the Inbox, which
+  // stays loaded (components/KeptView): the next task opens in the pane.
+  if (poppedOut && !openIssue) setPoppedOut(false)
   // the text typed in the pane and its pop-out, and in the pop-out alone,
   // so closing either asks first (DiscardPrompt)
   const taskScope = useContext(UnsentScopeContext)

@@ -36,19 +36,17 @@
 /* A full-view empty card keeps the navigation beside its actual frame.
    Match only the direct view body or Roadmap's empty frame: an empty note
    inside a populated timeline or resource panel must not resize the shell.
-   A kept view's body sits in a display: contents wrapper (KeptView.tsx). */
+   Every view's body sits in a display: contents wrapper (KeptView.tsx). */
 .planner-shell:has(
-  > main > [data-workspace-view] > .qivo-empty-state,
   > main > [data-workspace-view] > [data-kept-content] > .qivo-empty-state,
-  > main > [data-workspace-view] > .roadmap-view > .qivo-empty-state
+  > main > [data-workspace-view] > [data-kept-content] > .roadmap-view > .qivo-empty-state
 ) {
   --workspace-content-max: 640px;
 }
 .planner-shell
   :is(
-    [data-workspace-view],
     [data-workspace-view] > [data-kept-content],
-    [data-workspace-view] > .roadmap-view
+    [data-workspace-view] > [data-kept-content] > .roadmap-view
   )
   > .qivo-empty-state {
   flex: 0 1 auto;

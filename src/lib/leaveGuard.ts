@@ -1,4 +1,12 @@
-import { createContext, type FocusEvent, useContext, useLayoutEffect, useState } from 'react'
+import {
+  createContext,
+  type FocusEvent,
+  type FormEvent,
+  useContext,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
 import { flushSync } from 'react-dom'
 import { useUpdateBlocker } from './updateSafety'
 import { useLatest } from './useLatest'
@@ -154,10 +162,10 @@ export function installLeaveGuard(unsaved: () => boolean, win: Window = window) 
     for fields that keep typed text without a draft state of their own. Put
     `typed` on the form's `onInputCapture`. The text also holds back a
     version reload, which would otherwise stop at the close warning. `what`
-    is as for useUnsaved. */
-export function useTypedUnsaved(what: string | null = 'text') {
+    is as for useUnsaved, and so is `onDiscard`. */
+export function useTypedUnsaved(what: string | null = 'text', onDiscard?: () => void) {
   const [typed, setTyped] = useState(false)
-  useUnsaved(typed, what)
+  useUnsaved(typed, what, undefined, onDiscard)
   useUpdateBlocker(typed)
   return { typed: () => setTyped(true), reset: () => setTyped(false) }
 }
@@ -170,15 +178,31 @@ export function useTypedUnsaved(what: string | null = 'text') {
     because `paused()` holds or because the field's handler refused the
     value and marked the field `aria-invalid`, such as a number out of
     range. A new saved value remounts the field and ends the draft, and the
-    lease with it. `what` names the field in a window's question. The lease
-    ends in the same task as the blur's check, so a close that left the
-    field (DiscardPrompt) already finds it gone. */
+    lease with it. A Discard puts the saved value back in the field, which
+    can stay in the page, hidden, after the close (components/KeptView).
+    `what` names the field in a window's question. The lease ends in the
+    same task as the blur's check, so a close that left the field
+    (DiscardPrompt) already finds it gone. */
 export function useFieldUnsaved(paused: () => boolean, saved: string, what = 'text') {
-  const { typed, reset } = useTypedUnsaved(what)
-  // a new saved value is the trigger
-  useLayoutEffect(reset, [saved])
+  // the field typed in, for a Discard
+  const typedIn = useRef<HTMLInputElement | null>(null)
+  const { typed, reset } = useTypedUnsaved(what, () => {
+    if (typedIn.current) typedIn.current.value = typedIn.current.defaultValue
+    reset()
+  })
+  // a new saved value is the trigger, not a hidden page shown again, whose
+  // effects run again (components/KeptView)
+  const savedFor = useRef(saved)
+  useLayoutEffect(() => {
+    if (savedFor.current === saved) return
+    savedFor.current = saved
+    reset()
+  }, [saved])
   return {
-    onInput: typed,
+    onInput: (event: FormEvent<HTMLInputElement>) => {
+      typedIn.current = event.currentTarget
+      typed()
+    },
     onBlurCapture: (event: FocusEvent<HTMLInputElement>) => {
       const field = event.currentTarget
       setTimeout(() => {
