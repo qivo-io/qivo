@@ -12,14 +12,7 @@
  * (lib/workspaceParts.ts byLoad). */
 
 import { joinLists } from './arrayLimit.ts'
-import {
-  type IdWindow,
-  idWindows,
-  inIdWindow,
-  piecesAfter,
-  WINDOW_ROWS,
-  windowCount,
-} from './idWindows.ts'
+import { type IdWindow, idWindows, inIdWindow, piecesAfter, startWindows } from './idWindows.ts'
 import { blendInbox } from './inbox.ts'
 import { LIMITS } from './limits.ts'
 import type {
@@ -288,13 +281,10 @@ export async function readWorkspace(query: QueryByName): Promise<Workspace | nul
     return rows
   }
   const orgs: OrgParts[] = []
-  for (const { id, next_issue_num, next_project_num } of root.orgs) {
+  for (const row of root.orgs) {
+    const { id } = row
     // as the app chooses them (src/store/liveParts.ts)
-    const counts = {
-      tasks: windowCount(next_issue_num, WINDOW_ROWS.tasks),
-      people: 1,
-      projects: windowCount(next_project_num, WINDOW_ROWS.projects),
-    }
+    const counts = { ...startWindows(row), people: 1 }
     const windows = async <P>(kind: keyof typeof WINDOWED_NAMES): Promise<P[]> => {
       const rows: unknown[] = []
       for (const w of idWindows(counts[kind])) rows.push(...(await windowRows(kind, id, w)))

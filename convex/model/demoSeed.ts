@@ -34,6 +34,7 @@ import {
   newOrgDefaults,
   newTeamDefaults,
   setCounters,
+  tallyRow,
 } from './orgs'
 import { cleanProjectName, projectDescription } from './projects'
 import { deleteStamp, writeStamp } from './syncStamps'
@@ -306,6 +307,7 @@ export async function writeNorthstarStep(
         track_delay: teamDefaults.track_delay_default,
         created_at: now,
       })
+      await tallyRow(ctx, 'projects', null, { org_id: org.id, num: index + 1 })
       if (!p.parent)
         for (const team of data.teams)
           await ctx.db.insert('project_team_access', {
@@ -422,6 +424,7 @@ export async function writeNorthstarStep(
       )
       const issue = await ctx.db.get(issueDocId)
       require(issue !== null, rule(SEED_ROW_MISSING.task))
+      await tallyRow(ctx, 'issues', null, issue)
       shared.tasks.set(i.key, issue)
       await notifyIssueInsert(ctx, { issue, actor: atlas, now, preload, skipTaskEvent: true })
     }

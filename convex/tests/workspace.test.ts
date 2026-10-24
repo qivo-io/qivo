@@ -17,6 +17,7 @@ import {
   isIdWindow,
   MOST_PIECES,
   piecesAfter,
+  startWindows,
   windowCount,
 } from '../lib/idWindows'
 import { PAGE, readProjects, readTasks } from '../lib/workspaceParts'
@@ -419,7 +420,7 @@ describe('reads a window cannot bound by its rows', () => {
 })
 
 describe('windows', () => {
-  it('cover every id once, halve to their middle, and start as many as the counters ask', () => {
+  it('cover every id once, halve to their middle, and start as many as the counts ask', () => {
     const four = idWindows(4)
     expect(four).toEqual([
       { from: '', to: '40000000' },
@@ -434,6 +435,14 @@ describe('windows', () => {
     expect(windowCount(0, 100)).toBe(1)
     expect(windowCount(250, 100)).toBe(4)
     expect(windowCount(10_000_000, 100)).toBe(1024)
+    // by the rows the windows read once the server counted them, else by
+    // the numbers handed out
+    const aged = { next_issue_num: 6500, next_project_num: 4001 }
+    expect(startWindows(aged)).toEqual({ tasks: 64, projects: 32 })
+    expect(startWindows({ ...aged, active_tasks: 300, live_projects: 10 })).toEqual({
+      tasks: 2,
+      projects: 1,
+    })
   })
 
   it('cut into as many pieces of the grid as asked, and halve when asked for no valid count', () => {

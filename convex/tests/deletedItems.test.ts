@@ -39,6 +39,7 @@ import {
   as,
   chargeFilteredReads,
   countersFor,
+  expectLiveCounts,
   expectRefusal,
   messagesFor,
   NOW,
@@ -2182,6 +2183,8 @@ describe("an organization's deletion", () => {
         created_at: NOW,
       }),
     )
+    // counted, so each step below keeps the counts while the organization lasts
+    await t.action(internal.internal.liveCountsBackfill.run, { dry_run: false })
     vi.setSystemTime((await requestDeletion(t, f)) + 60_000)
     await t.action(internal.orgRemovals.begin, { org_id: f.org.id })
     expect((await removalOf(t, f.org.id))?.phase).toBe('profiles')
@@ -2211,6 +2214,7 @@ describe("an organization's deletion", () => {
       if (removal.phase === undefined) throw new Error('the deletion lost its phase')
       phases.push(removal.phase)
       expect(phases.length).toBeLessThan(2000)
+      await expectLiveCounts(t, f.org.id)
       await t.mutation(internal.orgRemovals.step, { org_id: f.org.id })
     }
     expect(phases.filter((phase) => phase === 'trash').length).toBeGreaterThan(5)

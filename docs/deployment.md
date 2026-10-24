@@ -314,8 +314,12 @@ To restore an earlier version, publish a new, higher version that targets the
 older main commit, from the GitHub interface. That commit needs a successful
 staging record, which every commit that passed staging keeps. The release also
 restores that commit's website and docs and deploys its Convex functions, so
-it is only safe when the backend schema and data remain compatible. Commits
-from before the website moved into this repository cannot be released again.
+it is only safe when the backend schema and data remain compatible. Several
+releases added fields that earlier releases refuse, such as the live task
+and project counts, so a release of a commit before one of them fails to
+deploy (see Recovery and compatibility).
+Commits from before the website moved into this repository cannot be
+released again.
 
 Vercel Instant Rollback changes only the frontend, leaves the Convex functions
 in place and stops Vercel from moving the domain to later deployments until
@@ -508,6 +512,29 @@ the module's header says, and check that `remaining` reports 0 on every
 page of both tables. Earlier releases do not accept the field, so a
 rollback past that release fails to deploy; it is a rollback floor anyway
 (see Rollback and hotfixes).
+
+Each organization's `org_counters` row counts its active tasks and its
+projects (`active_tasks`, `live_projects`), the rows the app's windows read,
+and the app starts that many windows of each kind. Every write that adds,
+archives, restores or deletes a task or project keeps the counts, and a new
+organization starts at zero. An organization created before the release
+that added them has none until the one-time `internal/liveCountsBackfill`
+counts it, and until then the app sizes its windows by the task and project
+numbers handed out, as earlier releases did, so it loads as before. Run the
+backfill on every hosted deployment once it serves that release, as the
+module's header says: read its dry run first, then run it. A call that
+does not finish in about five minutes answers a `cursor`; call it again
+with the same arguments and that `cursor` until it answers `done`. A
+later dry run lists any organization whose counts differ from its rows,
+and apart from them any whose writes kept changing it while it counted, to
+check again.
+`"recount": true` counts every organization again, which mends counts a
+dry run lists as differing. Both list an organization without an
+`org_counters` row as skipped; its next create makes the row, and a later
+run counts it. Earlier releases do not accept the fields, and every new
+organization holds them from its start, so the release that added them is
+a rollback floor for the backend as soon as it deploys (see Rollback and
+hotfixes). Roll forward instead.
 
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to

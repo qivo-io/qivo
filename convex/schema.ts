@@ -783,6 +783,18 @@ export default defineSchema({
     org_id: v.string(),
     next_issue_num: v.number(),
     next_project_num: v.number(),
+    // The rows the app's windows read (lib/workspaceParts.ts): the
+    // organization's active tasks (in issues, no archived_at) and its
+    // projects in the live tables, archived ones included. Every write that
+    // adds, removes, archives or restores one keeps them (model/orgs.ts
+    // tallyRow), and the app sizes an organization's first windows by them
+    // (lib/idWindows.ts startWindows). Absent until
+    // internal/liveCountsBackfill counts the organization. While it counts,
+    // `counted` holds the task and project numbers it has counted through,
+    // and a write moves the counts only for a row at or below them.
+    active_tasks: v.optional(v.number()),
+    live_projects: v.optional(v.number()),
+    counted: v.optional(v.object({ tasks: v.number(), projects: v.number() })),
   }).index('by_org', ['org_id']),
 
   // Team sync stamps (model/syncStamps.ts, lib/teamSync.ts), one row per

@@ -19,7 +19,7 @@ import {
 } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { convexTest, type TestConvex } from 'convex-test'
-import { onTestFinished, TestRunner, vi } from 'vitest'
+import { expect, onTestFinished, TestRunner, vi } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
@@ -791,6 +791,32 @@ export const countersFor = (t: T, orgId: string): Promise<OrgCounters> =>
     if (org === null) throw new Error(`organization ${orgId} not found`)
     return await countersOf(ctx, org)
   })
+
+/** Expects organization `orgId` counted (schema.ts org_counters
+ * active_tasks and live_projects), its counts those of the rows its windows
+ * read, which are its active tasks and its projects. Answers them. */
+export async function expectLiveCounts(t: T, orgId: string) {
+  const { row, rows } = await t.run(async (ctx) => ({
+    row: await countersRow(ctx, orgId),
+    rows: {
+      active_tasks: (
+        await ctx.db
+          .query('issues')
+          .withIndex('by_org_archived', (q) => q.eq('org_id', orgId).eq('archived_at', undefined))
+          .collect()
+      ).length,
+      live_projects: (
+        await ctx.db
+          .query('projects')
+          .withIndex('by_org', (q) => q.eq('org_id', orgId))
+          .collect()
+      ).length,
+    },
+  }))
+  expect(row?.counted).toBeUndefined()
+  expect({ active_tasks: row?.active_tasks, live_projects: row?.live_projects }).toEqual(rows)
+  return rows
+}
 
 /** Overwrites the organization's stored counters, for fixtures that plant
  * numbered rows directly. */

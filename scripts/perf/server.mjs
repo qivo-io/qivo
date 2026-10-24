@@ -40,7 +40,7 @@
 //   latency (100)        ms before every answer
 //   mbps (8)             bandwidth every result waits for
 import { chunkLists } from '../../convex/lib/arrayLimit'
-import { idWindows, WINDOW_ROWS, windowCount } from '../../convex/lib/idWindows'
+import { idWindows, startWindows } from '../../convex/lib/idWindows'
 import { splitWorkspace } from '../../convex/lib/workspaceJoin'
 
 // the page passes its parameters as the worker's name (scripts/perf/transport.mjs)
@@ -365,6 +365,9 @@ const snapshot = {
       created_at: now,
       next_issue_num: count + hiddenTasks.length + 1,
       next_project_num: 20 + hiddenCount + 1,
+      // every task is active, and both programs and their projects are live
+      active_tasks: count + hiddenTasks.length,
+      live_projects: 12 + hiddenCount,
       date_format: 'iso',
       week_start: 1,
       week_one_rule: 'first4day',
@@ -505,7 +508,7 @@ const comments = []
 let messageCount = 0
 const roadmapCounts = new Map()
 /* The windows of the workspace's parts, as the app chooses them from the
-   counters (src/store/liveParts.ts), kept from the first read, so a window
+   counts (src/store/liveParts.ts), kept from the first read, so a window
    keeps its bounds while rows come and go. */
 let windowsOf = null
 /* The parts cut from the workspace as it is now, until the next change. */
@@ -514,10 +517,11 @@ let partsCache = null
 function partsNow() {
   if (partsCache) return partsCache
   const [row] = snapshot.orgs
+  const start = startWindows(row)
   windowsOf ??= {
-    tasks: idWindows(windowCount(row.next_issue_num, WINDOW_ROWS.tasks)),
+    tasks: idWindows(start.tasks),
     people: idWindows(1),
-    projects: idWindows(windowCount(row.next_project_num, WINDOW_ROWS.projects)),
+    projects: idWindows(start.projects),
   }
   partsCache = splitWorkspace(snapshot, (_org, kind) => windowsOf[kind])[0]
   return partsCache
@@ -775,7 +779,10 @@ const scenarios = {
     shown.add(row.id)
     wireRows.set(row.id, wireTask(row))
     loadRows.set(row.id, loadRow(row))
-    snapshot.orgs = [{ ...snapshot.orgs[0], next_issue_num: snapshot.orgs[0].next_issue_num + 1 }]
+    const [org] = snapshot.orgs
+    snapshot.orgs = [
+      { ...org, next_issue_num: org.next_issue_num + 1, active_tasks: org.active_tasks + 1 },
+    ]
     settleTasks()
     return emitWorkspace()
   },

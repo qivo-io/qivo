@@ -133,7 +133,7 @@ import {
   notifyFollowersOfChange,
   scheduleArchivedReads,
 } from './messages'
-import { newUuid } from './orgs'
+import { newUuid, tallyRow } from './orgs'
 import { emitTaskEvent } from './taskEvents'
 
 /** How long a deleted item waits before the nightly expiry purges it. */
@@ -480,10 +480,18 @@ function wrapRow(
 const tooLarge = (item: Pick<Item, 'id' | 'org_id'>, live: LiveRow, ownerId: string): boolean =>
   estimateDocumentBytes(wrapRow(item, live, ownerId)) > STORED_ROW_MAX_BYTES
 
+/** Deletes `live` from its table, a task or project out of its
+ * organization's live counts (model/orgs.ts tallyRow). */
+async function deleteLive(ctx: MutationCtx, live: LiveRow): Promise<void> {
+  await ctx.db.delete(live.doc._id)
+  if (live.table === 'issues' || live.table === 'projects')
+    await tallyRow(ctx, live.table, live.doc, null)
+}
+
 /** Deletes a live row for good, an attachment with its bytes. */
 async function discard(ctx: MutationCtx, live: LiveRow): Promise<void> {
   if (live.table === 'issue_attachments') await ctx.storage.delete(live.doc.storage_id)
-  await ctx.db.delete(live.doc._id)
+  await deleteLive(ctx, live)
 }
 
 /** Moves `live` into `item`'s stored rows, travelling with `ownerId`, and
@@ -506,7 +514,7 @@ export async function storeRow(
     return false
   }
   await uncountedWriter(ctx.db).insert('deleted_rows', stored)
-  await ctx.db.delete(live.doc._id)
+  await deleteLive(ctx, live)
   return true
 }
 
@@ -854,7 +862,7 @@ async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boo
   const parent_id = await takeParent(run.ctx, task, run.item)
   if (mode === 'keep')
     await storeTask(run.ctx, run.item, tallyOf(run), fitToStore(run.item, { ...task, parent_id }))
-  else await run.ctx.db.delete(task._id)
+  else await deleteLive(run.ctx, { table: 'issues', doc: task })
   run.budget.tasks -= 1
   charge(run.budget, task)
   return true
@@ -2398,6 +2406,7 @@ async function writeTask(
     relations_marked: undefined,
     updated_at: run.now,
   })
+  await tallyRow(run.ctx, 'issues', null, doc)
   await run.ctx.db.delete(t.row._id)
   if (!inReveal) {
     const light = await run.ctx.db
@@ -2620,10 +2629,9 @@ async function sendBack(run: Run, reason: RestoreBlock): Promise<JobState> {
  * whole when nothing moved before the reveal. */
 async function revealProjects(run: Run): Promise<void> {
   for (const row of await storedOf(run, 'projects')) {
-    await uncountedWriter(run.ctx.db).insert(
-      'projects',
-      await cleanProject(run, docOf(row, 'projects')),
-    )
+    const project = await cleanProject(run, docOf(row, 'projects'))
+    await uncountedWriter(run.ctx.db).insert('projects', project)
+    await tallyRow(run.ctx, 'projects', null, project)
     await run.ctx.db.delete(row._id)
     run.budget.rows -= 1
     run.budget.bytes -= estimateDocumentBytes(row)
@@ -3860,7 +3868,7 @@ export async function clearOrgTrash(
           ctx.db.query('issues').withIndex('by_project', (q) => q.eq('project_id', row.owner_id)),
           async (task) => {
             if (!(await clearLiveRows(ctx, task.id, budget))) return false
-            await ctx.db.delete(task._id)
+            await deleteLive(ctx, { table: 'issues', doc: task })
             return true
           },
         )

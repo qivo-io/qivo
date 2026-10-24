@@ -7,7 +7,8 @@
  * - root: the caller's seats and organizations, or null with no seat. It
  *   reads the caller's profiles, each organization and its counters, so it
  *   reruns on seat changes, organization settings and every task or project
- *   created (the counters).
+ *   created, archived, restored or deleted (the numbers and live counts in
+ *   org_counters).
  * - catalog (per organization): teams and labels. One range each.
  * - people (per window of the organization's profile ids,
  *   lib/idWindows.ts): profiles with their Team sync stamps and team
@@ -43,7 +44,8 @@
  * (lib/access.ts projectLevelsOf, OWN_READS). An edit of one of those
  * reruns the parts that read it. Each windowed part stays inside Convex's limits at any size by
  * answering `split` or `overflow` (lib/workspaceParts.ts), and the app
- * chooses the windows from the organization's counters, without asking.
+ * chooses the windows from the organization's counts of the rows they read,
+ * without asking (lib/idWindows.ts startWindows).
  * A windowed part refuses (bad_request) a window that is not one of
  * lib/idWindows.ts's grid. */
 

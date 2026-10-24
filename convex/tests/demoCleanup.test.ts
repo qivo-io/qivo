@@ -6,8 +6,9 @@ import authSchema from '../betterAuth/schema'
 import { MARKETING_DEMO, marketingId } from '../internal/marketingDemoData'
 import { moveProjectToTrash, moveTasksToTrash, TRASH_BUDGET } from '../model/deletedItems'
 import { demoMonday, PUBLIC_DEMO_STEPS, provisionPublicDemoStep } from '../model/demoSeed'
+import { countersRow, tallyRow } from '../model/orgs'
 import schema from '../schema'
-import { countersFor, expectRefusal, newT, type T, uuid } from './helpers.setup'
+import { countersFor, expectLiveCounts, expectRefusal, newT, type T, uuid } from './helpers.setup'
 
 declare class Blob {
   constructor(parts: unknown[], options?: { type?: string })
@@ -99,6 +100,10 @@ async function deleteDemo(t: T, receipt: Doc<'demo_sessions'>): Promise<string[]
       throw new Error('demo deletion did not finish within its bounded batch target')
     phases.push(current.cleanup_phase ?? 'sessions')
     await t.mutation(purge, { demo_id: receipt.id })
+    // each batch keeps the live counts while the organization lasts
+    const orgId = receipt.org_id
+    if (orgId !== undefined && (await t.run((ctx) => countersRow(ctx, orgId))) !== null)
+      await expectLiveCounts(t, orgId)
     const progress = await t.run((ctx) => ctx.db.get(receipt._id))
     if (progress?.cleanup_phase === 'uploads') {
       vi.setSystemTime(
@@ -256,6 +261,7 @@ describe('public Northstar provisioning and bounded deletion', () => {
     const right = await rows(t, b.org_id!)
     expect(left.tasks).toHaveLength(MARKETING_DEMO.issues.length)
     expect(left.projects).toHaveLength(15)
+    await expectLiveCounts(t, a.org_id!)
     expect(left.profiles).toHaveLength(8)
     expect(left.profiles.filter((p) => p.auth_user_id)).toHaveLength(1)
     expect(left.profiles.find((p) => p.auth_user_id)?.name).toBe('Nora Berg')
@@ -377,6 +383,7 @@ describe('public Northstar provisioning and bounded deletion', () => {
       void ignoredId
       void ignoredTime
       await ctx.db.insert('issues', record)
+      await tallyRow(ctx, 'issues', null, record)
       // a Team sync stamp row whose profile is already gone
       await ctx.db.insert('sync_stamps', {
         org_id: a.org_id!,

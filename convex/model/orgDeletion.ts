@@ -41,7 +41,7 @@ import { require, rule } from '../lib/functions'
 import { budgetSpent, REMOVAL_BUDGET, type RemovalBudget, sweep } from './cascade'
 import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
-import { deleteOrgBookkeeping } from './orgs'
+import { deleteOrgBookkeeping, tallyRow } from './orgs'
 
 type Row = { _id: Id<TableNames> }
 
@@ -279,6 +279,7 @@ const taskRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
             { before: (row) => removeFile(ctx, row.storage_id) },
           ),
       ]),
+    (issue) => tallyRow(ctx, 'issues', issue, null),
   )
 
 /** Projects with their milestones and access grants. */
@@ -314,6 +315,7 @@ const projectRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
               .withIndex('by_project', (q) => q.eq('project_id', project.id)),
           ),
       ]),
+    (project) => tallyRow(ctx, 'projects', project, null),
   )
 
 /** Teams with their members and project grants. */

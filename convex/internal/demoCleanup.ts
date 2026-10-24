@@ -21,7 +21,7 @@ import { require, rule } from '../lib/functions'
 import { clearOrgTrash } from '../model/deletedItems'
 import { recordDemoCreated } from '../model/demoMetrics'
 import { drainDemoUploads } from '../model/demoUploads'
-import { deleteOrgBookkeeping } from '../model/orgs'
+import { deleteOrgBookkeeping, tallyRow } from '../model/orgs'
 import { marketingId } from './marketingDemoData'
 
 const BATCH = 64
@@ -151,6 +151,7 @@ async function taskRows(ctx: MutationCtx, orgId: string, budget: Budget): Promis
     )
       return false
     await ctx.db.delete(issue._id)
+    await tallyRow(ctx, 'issues', issue, null)
     budget.left--
   }
   return false
@@ -192,6 +193,7 @@ async function projectRows(ctx: MutationCtx, orgId: string, budget: Budget): Pro
     )
       return false
     await ctx.db.delete(project._id)
+    await tallyRow(ctx, 'projects', project, null)
     budget.left--
   }
   return false

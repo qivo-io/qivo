@@ -1,5 +1,5 @@
 import type { QueryCtx } from '../_generated/server'
-import { idWindows, WINDOW_ROWS, windowCount } from '../lib/idWindows'
+import { idWindows, startWindows, type WindowCounts } from '../lib/idWindows'
 import { logActivity } from '../model/activity'
 import * as workspace from '../workspace'
 import { NOW, newT, patchCounters, withOrg } from './helpers.setup'
@@ -60,19 +60,14 @@ async function readParts(identity: Identity, orgId: string) {
     })
     return { name, ...out, ms: performance.now() - started }
   }
-  /* The windows of `kind`, as the app chooses them from the counters. */
+  /* The windows of `kind`, as the app chooses them from the counts. */
   const windowsOf = async (kind: string) => {
     const root = (await identity.query(async (ctx) => await run(workspace.root, ctx, {}))) as {
-      orgs: { id: string; next_issue_num: number; next_project_num: number }[]
+      orgs: (WindowCounts & { id: string })[]
     }
     const org = root.orgs.find((o) => o.id === orgId)
-    const n =
-      kind === 'people'
-        ? 1
-        : kind === 'projects'
-          ? windowCount(org?.next_project_num ?? 0, WINDOW_ROWS.projects)
-          : windowCount(org?.next_issue_num ?? 0, WINDOW_ROWS.tasks)
-    return idWindows(n)
+    const start = org === undefined ? { tasks: 1, projects: 1 } : startWindows(org)
+    return idWindows(kind === 'people' ? 1 : kind === 'projects' ? start.projects : start.tasks)
   }
   const parts = [
     await measured('root', workspace.root, {}),

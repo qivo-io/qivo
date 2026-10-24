@@ -8,6 +8,8 @@
  *   counters         the per-org issue and project numbers (org_counters),
  *                    and the helpers that insert an organization with its
  *                    org_counters row and delete that row
+ *   live counts      the active tasks and live projects the app's windows
+ *                    read (org_counters), kept by tallyRow
  *   column defaults  including the organization-wide upload cap
  *   last admin       an org may never lose its last admin
  *   last team        an org may never lose its last team
@@ -233,13 +235,15 @@ export const countersRow = (ctx: QueryCtx, orgId: string) =>
     .withIndex('by_org', (q) => q.eq('org_id', orgId))
     .unique()
 
+/** The numbers of org_counters row `row`, zero without one. */
+export const numbersOf = (row: Doc<'org_counters'> | null): OrgCounters => ({
+  next_issue_num: row?.next_issue_num ?? 0,
+  next_project_num: row?.next_project_num ?? 0,
+})
+
 /** The organization's counters, zero before its org_counters row exists. */
 export async function countersOf(ctx: QueryCtx, org: Doc<'organizations'>): Promise<OrgCounters> {
-  const row = await countersRow(ctx, org.id)
-  return {
-    next_issue_num: row?.next_issue_num ?? 0,
-    next_project_num: row?.next_project_num ?? 0,
-  }
+  return numbersOf(await countersRow(ctx, org.id))
 }
 
 /** The organization's org_counters row, created zeroed on first use.
@@ -278,7 +282,8 @@ export const nextIssueNum = (ctx: MutationCtx, org: Doc<'organizations'>): Promi
 export const nextProjectNum = (ctx: MutationCtx, org: Doc<'organizations'>): Promise<number> =>
   bump(ctx, org, 'next_project_num')
 
-/** Sets the counters, for the demo seed and the Northstar wipe only. */
+/** Sets the counters, for the demo seed and the Northstar wipe only. The
+ * live counts follow the rows they write and delete (tallyRow). */
 export async function setCounters(
   ctx: MutationCtx,
   org: Doc<'organizations'>,
@@ -288,17 +293,92 @@ export async function setCounters(
   await ctx.db.patch(row._id, counters)
 }
 
-/** Inserts an organization with its org_counters row. Every path that creates an organization uses it; `counters` lets a
- * fixture start numbering past rows it plants. */
+/** Inserts an organization with its org_counters row, its live counts at
+ * zero. Every path that creates an organization uses it; `counters` lets a
+ * fixture start numbering past rows it plants, which it tallies (tallyRow). */
 export async function insertOrgRows(
   ctx: MutationCtx,
   row: WithoutSystemFields<Doc<'organizations'>>,
   counters: OrgCounters = { next_issue_num: 0, next_project_num: 0 },
 ): Promise<Id<'organizations'>> {
   const id = await ctx.db.insert('organizations', row)
-  await ctx.db.insert('org_counters', { org_id: row.id, ...counters })
+  await ctx.db.insert('org_counters', {
+    org_id: row.id,
+    ...counters,
+    active_tasks: 0,
+    live_projects: 0,
+  })
   return id
 }
+
+/* ------------------------------------------------------------- live counts
+ * org_counters active_tasks and live_projects count the rows the app's
+ * windows read, which are the active tasks and the projects in the live
+ * tables. Every write that inserts or deletes a task or project, or sets or
+ * clears a task's archived_at, calls tallyRow in its transaction, except
+ * model/cascade.ts deleteOrgDeep, which deletes the counters with the rows
+ * in one transaction. An organization created before them has none until
+ * internal/liveCountsBackfill counts it, and the app sizes its windows by
+ * its numbers until then (lib/idWindows.ts startWindows). The counts share
+ * the row with the numbers, so archives, restores and deletes in one
+ * organization conflict with each other and with its creates, as its
+ * creates already did, and Convex runs the one that lost again. */
+
+export type LiveCounts = Pick<Doc<'org_counters'>, 'active_tasks' | 'live_projects'>
+
+/** The live counts of org_counters row `row` as the app may use them:
+ * none until they are counted, and none while a backfill counts them. */
+export const liveCountsOf = (row: Doc<'org_counters'> | null): LiveCounts =>
+  row?.counted === undefined && row?.active_tasks !== undefined && row.live_projects !== undefined
+    ? { active_tasks: row.active_tasks, live_projects: row.live_projects }
+    : {}
+
+/** A task or project as tallyRow reads it. */
+type Tallied = Pick<Doc<'issues'>, 'org_id' | 'num' | 'archived_at'>
+
+/** Whether the windows read `row` of `table`, a task while it is active and
+ * a project while it exists. */
+const tallied = (table: 'issues' | 'projects', row: Tallied | null) =>
+  row !== null && (table === 'projects' || row.archived_at === undefined)
+
+/** Moves the organizations' live counts for writes to `table` that each
+ * turned a `before` row into an `after` one, null for no row: an insert, a
+ * delete, or a patch of archived_at (`after` as the row reads after the
+ * patch). Reads each organization's counters once, and a write that changes
+ * neither count costs nothing. Counts an organization has not got stay
+ * absent, and while internal/liveCountsBackfill counts them, a row numbered
+ * past where it has counted waits for the backfill. */
+export async function tallyRows(
+  ctx: MutationCtx,
+  table: 'issues' | 'projects',
+  writes: readonly (readonly [before: Tallied | null, after: Tallied | null])[],
+): Promise<void> {
+  const field = table === 'issues' ? 'active_tasks' : 'live_projects'
+  const kind = table === 'issues' ? 'tasks' : 'projects'
+  const moves = new Map<string, { num: number; by: number }[]>()
+  for (const [before, after] of writes) {
+    const by = Number(tallied(table, after)) - Number(tallied(table, before))
+    const row = after ?? before
+    if (by === 0 || row === null) continue
+    moves.set(row.org_id, [...(moves.get(row.org_id) ?? []), { num: row.num, by }])
+  }
+  for (const [orgId, rows] of moves) {
+    const counters = await countersRow(ctx, orgId)
+    const now = counters?.[field]
+    if (counters === null || now === undefined) continue
+    const through = counters.counted?.[kind] ?? Number.POSITIVE_INFINITY
+    const by = rows.reduce((n, row) => (row.num > through ? n : n + row.by), 0)
+    if (by !== 0) await ctx.db.patch(counters._id, { [field]: now + by })
+  }
+}
+
+/** tallyRows for one write. */
+export const tallyRow = (
+  ctx: MutationCtx,
+  table: 'issues' | 'projects',
+  before: Tallied | null,
+  after: Tallied | null,
+): Promise<void> => tallyRows(ctx, table, [[before, after]])
 
 /** Deletes the organization's org_counters row, if any. Every organization
  * delete (model/cascade.ts deleteOrgDeep, the last step of

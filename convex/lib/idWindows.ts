@@ -128,8 +128,46 @@ export const idShare = (w: IdWindow) => (pointOf(w.to) - pointOf(w.from)) / SPAC
 export const inIdWindow = (id: string, w: IdWindow) => id >= w.from && (w.to === null || id < w.to)
 
 /** About how many rows the app's first windows of each kind hold, from the
- * organization's counters (lib/workspaceParts.ts PAGE has the split
- * points). The people of an organization have no counter, so they start in
- * one window, which a large organization overflows at once, and its answer
- * says how many pieces to cut it into (cutPieces). */
+ * organization's counts (startWindows; lib/workspaceParts.ts PAGE has the
+ * split points). The people of an organization have no count, so they
+ * start in one window, which a large organization overflows at once, and
+ * its answer says how many pieces to cut it into (cutPieces). */
 export const WINDOW_ROWS = { tasks: 200, projects: 250 }
+
+/** An organization as the root part sends it (lib/workspaceParts.ts
+ * readRoot): its numbers, and the rows its windows read once the server
+ * counts them (schema.ts org_counters). */
+export type WindowCounts = {
+  next_issue_num: number
+  next_project_num: number
+  active_tasks?: number
+  live_projects?: number
+}
+
+/** About how many tasks the task windows of organization `org` read. Until
+ * the server has counted its active tasks, the task numbers it handed out
+ * stand in, which count every task ever created. */
+export const tasksIn = (org: WindowCounts): number => org.active_tasks ?? org.next_issue_num
+
+/** How many task and project windows the app starts organization `org`
+ * with, sized by the rows its windows read (tasksIn, and its projects,
+ * archived ones included), or by the numbers it handed out until the
+ * server has counted them. */
+export const startWindows = (org: WindowCounts) => ({
+  tasks: windowCount(tasksIn(org), WINDOW_ROWS.tasks),
+  projects: windowCount(org.live_projects ?? org.next_project_num, WINDOW_ROWS.projects),
+})
+
+/** Live counts `counts` rounded up to the rows of the windows they start,
+ * from which startWindows chooses the same windows, for a reader who may
+ * not learn how much hidden work an organization holds. */
+export const roundedCounts = (
+  counts: Pick<WindowCounts, 'active_tasks' | 'live_projects'>,
+): Pick<WindowCounts, 'active_tasks' | 'live_projects'> =>
+  counts.active_tasks === undefined || counts.live_projects === undefined
+    ? {}
+    : {
+        active_tasks: windowCount(counts.active_tasks, WINDOW_ROWS.tasks) * WINDOW_ROWS.tasks,
+        live_projects:
+          windowCount(counts.live_projects, WINDOW_ROWS.projects) * WINDOW_ROWS.projects,
+      }
