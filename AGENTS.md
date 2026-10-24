@@ -105,9 +105,10 @@ the output of `git merge-base origin/main HEAD` after `git fetch origin`.
    `cr review --agent --committed --base-commit BASE` and
    `greptile review -b BASE --json`. Greptile's summary sometimes says that
    the supplied `git diff` was empty and still describes the change, which
-   it then reviewed another way. If the summary does not describe the
-   change, Greptile reviewed nothing. Run it once more with the instruction
-   in the private review README named below.
+   it then reviewed another way. If the summary does not describe what the
+   diff changes, beyond what the commit messages say, Greptile reviewed
+   nothing. Run it once more with the instruction in the private review
+   README named below. If that run also reviews nothing, step 5 failed.
 6. Fix the valid findings and commit.
 7. Push and open the pull request. Merge it once its `quality`, `secrets`
    and `Vercel – qivo` checks pass on the head commit. The `Vercel – qivo`
