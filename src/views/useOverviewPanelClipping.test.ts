@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
-import { act, createElement } from 'react'
+import { Activity, type ActivityProps, act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useOverviewPanelClipping } from './useOverviewPanelClipping'
 
 /* The section clipping follows sections appearing, not the rows a
-   section's lists mount in slices. */
+   section's lists mount in slices, and a kept page that hides and shows
+   again does not render for it. */
 
 let container: HTMLDivElement
 let root: Root
@@ -32,8 +33,11 @@ afterEach(async () => {
   vi.restoreAllMocks()
 })
 
+let renders = 0
+
 /* One section with a list in its body, as the Overview draws it. */
 function Pane() {
+  renders++
   const { paneRef } = useOverviewPanelClipping(true)
   return createElement(
     'div',
@@ -74,5 +78,23 @@ describe('the Overview section clipping', () => {
     pane.append(section)
     await observed()
     expect(query).toHaveBeenCalled()
+  })
+
+  it('does not render the page again as a kept page hides and shows', async () => {
+    const page = (mode: 'visible' | 'hidden') =>
+      act(async () =>
+        root.render(createElement(Activity, { mode } as ActivityProps, createElement(Pane))),
+      )
+    await page('visible')
+    const pane = container.querySelector<HTMLElement>('[data-pane]')!
+    const section = pane.querySelector<HTMLElement>('.overview-section')!
+    expect(section.style.getPropertyValue('clip-path')).not.toBe('')
+    renders = 0
+    await page('hidden')
+    await page('visible')
+    // one render each for the new mode, none for the pane's ref
+    expect(renders).toBe(2)
+    // and the clipping is back on the pane shown again
+    expect(section.style.getPropertyValue('clip-path')).not.toBe('')
   })
 })

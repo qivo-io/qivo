@@ -93,6 +93,18 @@ const TooltipTarget = React.forwardRef<
   },
   ref,
 ) {
+  // A kept page (components/KeptView) detaches every ref as it hides and
+  // attaches it again as it shows. Only an element goes on to Radix, whose
+  // trigger then stays meanwhile, so the page's tooltips do not render
+  // again, hidden or before the page paints.
+  const attach = React.useCallback(
+    (element: HTMLElement | null) => {
+      if (!element) return
+      if (typeof ref === 'function') ref(element)
+      else if (ref) ref.current = element
+    },
+    [ref],
+  )
   // An empty tooltip must not report an open to Radix's shared provider:
   // that would close real tooltips and bypass the next tooltip's hover delay.
   // Original child handlers are still composed by Slot below.
@@ -101,7 +113,7 @@ const TooltipTarget = React.forwardRef<
     : {}
   return (
     <Slot.Root
-      ref={ref}
+      ref={attach}
       {...(tabIndex === undefined ? {} : { tabIndex })}
       {...tooltipEvents}
       {...props}

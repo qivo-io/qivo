@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from 'react'
+import { useCallback, useLayoutEffect, useState } from 'react'
 
 type PaintProperty = 'clip-path' | '--overview-panel-clip'
 type ClipStyle = { original: string; priority: string; applied: string }
@@ -8,9 +8,15 @@ type ClipUpdate = { element: HTMLElement; property: PaintProperty; value: string
    to the sticky rounded border, leaving no empty strip inside the panel. */
 export function useOverviewPanelClipping(enabled: boolean) {
   const [pane, setPane] = useState<HTMLDivElement | null>(null)
+  /* A kept page (components/KeptView) detaches its refs as it hides and
+     attaches them again as it shows. The pane stays meanwhile, so the page
+     around it does not render again, hidden or before it paints. */
+  const paneRef = useCallback((element: HTMLDivElement | null) => {
+    if (element) setPane(element)
+  }, [])
 
   useLayoutEffect(() => {
-    if (!enabled || !pane) return
+    if (!enabled || !pane?.isConnected) return
 
     let frame = 0
     const painted = new Map<HTMLElement, Map<PaintProperty, ClipStyle>>()
@@ -182,5 +188,5 @@ export function useOverviewPanelClipping(enabled: boolean) {
     }
   }, [enabled, pane])
 
-  return { paneRef: setPane }
+  return { paneRef }
 }
