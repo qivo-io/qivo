@@ -363,6 +363,43 @@ export const finishMonth = internalMutation({
   },
 })
 
+/** Reads and stores organization `org_id`'s row for the closed `month`.
+ * False when the organization is gone or being deleted. */
+async function storeOrgMonth(
+  ctx: Pick<ActionCtx, 'runQuery' | 'runMutation'>,
+  org_id: string,
+  month: string,
+  now: number,
+): Promise<boolean> {
+  const usage = await orgUsage(ctx, org_id, month, now)
+  if (usage === null) return false
+  return await ctx.runMutation(internal.usage.saveMonth, {
+    org_id,
+    month,
+    counts: usage.counts,
+    api_estimated: usage.api_estimated,
+  })
+}
+
+/** Refuses a key that is not a month, and a month that has not ended. */
+function closedMonth(month: string, now: number): void {
+  spanOf(month)
+  require(month < monthOf(now), badRequest('only a month that has ended can be stored'))
+}
+
+/** Stores one organization's closed month, for the marketing demo's seed,
+ * which must not rewrite other organizations' rows. */
+export const closeOrgMonth = internalAction({
+  args: { org_id: v.string(), month: v.string() },
+  handler: async (ctx, { org_id, month }): Promise<null> => {
+    if (isDemoDeployment()) return null
+    const now = Date.now()
+    closedMonth(month, now)
+    await storeOrgMonth(ctx, org_id, month, now)
+    return null
+  },
+})
+
 const closeArgs = {
   // the month to store; the month before the current one when absent
   month: v.optional(v.string()),
@@ -384,8 +421,7 @@ export const closeMonth = internalAction({
     if (isDemoDeployment()) return null
     const now = Date.now()
     const month = a.month ?? previousMonth(now)
-    spanOf(month)
-    require(month < monthOf(now), badRequest('only a month that has ended can be stored'))
+    closedMonth(month, now)
     const page: { ids: string[]; next: Cursor } = await ctx.runQuery(internal.usage.orgPage, {
       cursor: a.cursor ?? null,
     })
@@ -393,15 +429,7 @@ export const closeMonth = internalAction({
     let failed = a.failed ?? 0
     await inParallel(page.ids, async (org_id) => {
       try {
-        const usage = await orgUsage(ctx, org_id, month, now)
-        if (usage === null) return
-        const stored: boolean = await ctx.runMutation(internal.usage.saveMonth, {
-          org_id,
-          month,
-          counts: usage.counts,
-          api_estimated: usage.api_estimated,
-        })
-        if (stored) saved += 1
+        if (await storeOrgMonth(ctx, org_id, month, now)) saved += 1
       } catch (e) {
         failed += 1
         console.error('[usage] organization skipped', {

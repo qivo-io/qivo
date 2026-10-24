@@ -290,6 +290,32 @@ invitation email is older than that then shows only **Invited**, without
 whether or when it was sent and without **Copy sign-up link**. **Resend
 invite** emails them again.
 
+## Organization usage. Platform operators
+
+**Qivo Admin → Usage** shows what each organization used in one month, so
+limits and add-on prices can follow real use. Pick a month. Early on the 1st,
+Qivo stores the month that just ended for every organization; the current
+month is counted when you open the page. Each column sorts, and the first
+rows give the median, the 90th and 99th percentile and the maximum across
+organizations. **Download CSV** saves the month.
+
+The columns are billable seats, guests, agents, people active in the month
+(signed in, made a change, commented or called the API), active tasks,
+projects, changes, comments, REST and MCP calls, stored bytes (attachments,
+description images, files in Deleted items and profile pictures), webhook
+deliveries and the requests they took, and invitation, billing and deletion
+emails. Seats, tasks, projects and bytes are counted when the month is
+stored. Calls from a paid billing period that crosses the month's start or
+end are split by time and marked ≈. Verification and password reset emails
+belong to a person, so they appear as one line for people without an
+organization.
+
+Open an organization to see its months side by side. **Show people** counts
+each person's changes, comments and calls per key for one month, from the
+records Qivo already keeps. Organization admins never see this page. Qivo
+deletes a stored month after 800 days, and deleting an organization deletes
+its usage.
+
 ## Demo usage. Platform operators
 
 Open **Qivo Admin → Demos** on the regular site. The deployment manager must

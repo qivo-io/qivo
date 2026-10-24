@@ -5,7 +5,7 @@
  * passwords nor a public reset function reach deployment. Normal deployment
  * never runs this fixture. Seed, reset and wipe are explicit operator commands. */
 import { getDocumentSize, v } from 'convex/values'
-import { components } from '../_generated/api'
+import { components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { internalMutation, internalQuery } from '../_generated/server'
@@ -14,6 +14,7 @@ import { refuseProduction } from '../lib/deployment'
 import type { StoredTable } from '../lib/enums'
 import { badRequest, conflict, require, rule } from '../lib/functions'
 import { DEFAULT_MESSAGE_RETENTION_DAYS, LIMITS, MIB } from '../lib/limits'
+import { monthOf } from '../lib/usage'
 import { pendingRemoval } from '../model/cascade'
 import {
   layoutHash,
@@ -519,14 +520,88 @@ async function holdsNoWork(ctx: QueryCtx, orgId: string): Promise<boolean> {
 }
 
 /* One call of a seed: a part of the reserved-id check, which writes
- * nothing, or a step of the Northstar work. Every part comes first, so a
- * collision refuses before the seed writes anything; each work step checks
- * the uuids it writes again in its own transaction, since a row could take
- * one after the parts ran. */
+ * nothing, a step of the Northstar work, or last the usage history
+ * (seedUsage). Every part comes first, so a collision refuses before the
+ * seed writes anything; each work step checks the uuids it writes again in
+ * its own transaction, since a row could take one after the parts ran. */
 const SEED_STEPS = [
   ...Array.from({ length: RESERVED_PARTS }, (_, part) => ({ kind: 'check' as const, part })),
   ...NORTHSTAR_STEPS.map((step) => ({ kind: 'work' as const, step })),
+  { kind: 'usage' as const },
 ]
+
+/* REST and MCP calls a month for Qivo Admin's Usage page: Atlas through the
+ * team's CI, Nora and Leo through their desktop assistant. */
+const USAGE_CALLERS = [
+  { key: 'atlas', credential: 'Northstar CI', calls: 4200 },
+  { key: 'nora', credential: 'Claude Desktop', calls: 380 },
+  { key: 'leo', credential: 'Claude Desktop', calls: 150 },
+] as const
+/* Invitation emails in each of the five closed months, newest first. */
+const USAGE_INVITES = [3, 1, 0, 2, 1]
+
+/**
+ * The demo's usage history for Qivo Admin's Usage page, the seed's last
+ * step: API calls in the month of `now` and the five before it, growing
+ * month by month, and the invitation emails of the closed months. It writes
+ * exact values, so a reseed leaves the same rows, and a wipe keeps them, as
+ * it keeps the logins. Then it stores the five closed months' usage rows of
+ * this organization only (usage.ts closeOrgMonth).
+ */
+async function seedUsage(ctx: MutationCtx, org: Doc<'organizations'>, now: string) {
+  const d = new Date(now)
+  const months = Array.from({ length: 6 }, (_, i) =>
+    monthOf(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - i, 1)),
+  )
+  for (const caller of USAGE_CALLERS) {
+    const profile_id = await id(`person:${caller.key}`)
+    const credential_id = `marketing_demo:${caller.key}`
+    for (const [i, month] of months.entries()) {
+      // The current month is under way, so it holds about a third of a month.
+      const calls = Math.round((caller.calls * (i === 0 ? 0.35 : 1)) / (1 + 0.12 * i))
+      const period_start = `month:${month}`
+      const row = await ctx.db
+        .query('billing_usage')
+        .withIndex('by_subject_credential_period', (q) =>
+          q
+            .eq('org_id', org.id)
+            .eq('profile_id', profile_id)
+            .eq('credential_id', credential_id)
+            .eq('period_start', period_start),
+        )
+        .unique()
+      if (row) await ctx.db.patch(row._id, { calls, credential_name: caller.credential })
+      else
+        await ctx.db.insert('billing_usage', {
+          org_id: org.id,
+          profile_id,
+          credential_id,
+          credential_name: caller.credential,
+          period_start,
+          calls,
+        })
+    }
+  }
+  for (const [i, count] of USAGE_INVITES.entries()) {
+    const month = months[i + 1]
+    const row = await ctx.db
+      .query('usage_counts')
+      .withIndex('by_org_month_metric', (q) =>
+        q.eq('org_id', org.id).eq('month', month).eq('metric', 'mail_invitations'),
+      )
+      .unique()
+    if (row) await ctx.db.patch(row._id, { count })
+    else
+      await ctx.db.insert('usage_counts', {
+        org_id: org.id,
+        month,
+        metric: 'mail_invitations',
+        count,
+      })
+  }
+  for (const month of months.slice(1))
+    await ctx.scheduler.runAfter(0, internal.usage.closeOrgMonth, { org_id: org.id, month })
+}
 
 /** A fingerprint of SEED_STEPS, the check parts and the dataset's uuids and
  * version. A seed stores it with its step and refuses to resume when it
@@ -674,6 +749,7 @@ async function seedStep(
     anchor !== undefined &&
     step !== undefined, rule(RESET_TO_CHANGE))
   if (step.kind === 'check') await assertReservedPart(ctx, owner.org, step.part)
+  else if (step.kind === 'usage') await seedUsage(ctx, owner.org, seed.now)
   else {
     // Between two calls the app can change the demo. Setup resets the
     // counters, so it needs the demo as empty as the first call left it;
