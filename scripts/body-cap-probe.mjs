@@ -89,7 +89,7 @@ export const CASES = {
     path: '/api/auth/body-cap-probe',
     size: MIB_PLUS_ONE,
     chunked: false,
-    expect: ['403', '413'],
+    expect: ['403', '404'],
   },
   'auth-over': { path: SIGN_IN, size: MIB_PLUS_ONE, chunked: false, expect: ['403', '413'] },
   'oauth-token-over': {

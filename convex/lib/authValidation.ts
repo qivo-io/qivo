@@ -8,31 +8,39 @@
  * such as `scopes` on /sign-in/social, so got a 2.2 MB answer, and zod spent
  * about 60 ms and 25 MiB building the 32,000 problems.
  *
- * Two bounds fix that. stopValidationEarly makes zod stop at the first
- * problem when a request holds more than AUTH_FULL_CHECK_VALUES values, so a
- * large invalid request costs about what a valid one does. A smaller request
- * is checked in full and answers as before. stopValidationEarly reaches every
- * schema the router checks with but /sign-in/email's, which Better Auth builds
- * again for every request; that body takes four scalar fields, so it lists at
- * most four problems. zod checks every entry of a record even when it stops
- * early, so auth.ts turns off /admin/has-permission, the one route whose
- * record entries can fail. boundValidationAnswer then cuts the answer's message to
- * AUTH_VALIDATION_MESSAGE_MAX characters at the end of a listed problem and
- * says how many it left out, which also bounds the answer of any check
- * stopValidationEarly does not reach. */
+ * stopValidationEarly fixes that in each schema's own check. It makes zod
+ * stop at the first problem when a request holds more than
+ * AUTH_FULL_CHECK_VALUES values, so a large invalid request costs about what
+ * a valid one does. A smaller request is checked in full. Either way it then
+ * keeps only as many problems as Better Call can list in
+ * AUTH_VALIDATION_MESSAGE_MAX characters, and the last one kept says how many
+ * it left out. A request whose problems fit answers as before.
+ * stopValidationEarly reaches every schema the router checks with but
+ * /sign-in/email's, which Better Auth builds again for every request; that
+ * body takes four scalar fields, so it lists at most four problems. zod
+ * checks every entry of a record even when it stops early, so
+ * lib/authRoutes.ts serves no route whose record entries can fail.
+ * boundValidationAnswer cuts the message of any check stopValidationEarly
+ * does not reach. */
 
 import { AUTH_FULL_CHECK_VALUES, AUTH_VALIDATION_MESSAGE_MAX, cutText } from './limits'
+
+/* A problem zod found, with the parts of it Better Call lists. */
+type Issue = {
+  readonly message: string
+  readonly path?: ReadonlyArray<PropertyKey | { readonly key: PropertyKey }>
+}
 
 /* A Standard Schema result, as Better Call reads it. */
 type StandardResult =
   | { readonly value: unknown; readonly issues?: undefined }
-  | { readonly issues: ReadonlyArray<{ readonly message: string }> }
+  | { readonly issues: ReadonlyArray<Issue> }
 
 /* The parts of a zod schema stopValidationEarly uses. `abortEarly` is the
  * internal parse option zod's own `validate` sets: an array or object stops
  * before its next value once one has an aborting problem, such as a wrong
  * type, which is why checkEarly makes every definition abort. A zod without
- * it parses in full, which boundValidationAnswer still bounds. */
+ * it parses in full, which boundIssues still bounds. */
 type ZodSchema = ZodNode & {
   '~standard': {
     readonly vendor: string
@@ -41,9 +49,7 @@ type ZodSchema = ZodNode & {
   safeParse(
     value: unknown,
     ctx: { abortEarly: true },
-  ):
-    | { success: true; data: unknown }
-    | { success: false; error: { issues: ReadonlyArray<{ readonly message: string }> } }
+  ): { success: true; data: unknown } | { success: false; error: { issues: ReadonlyArray<Issue> } }
 }
 
 const isZodSchema = (value: unknown): value is ZodSchema =>
@@ -139,35 +145,58 @@ function checkEarly(schema: ZodSchema, definitions: Definition[], value: unknown
   return 'error' in result ? { issues: result.error.issues } : { value: result.data }
 }
 
+/* What zod's safeParse throws when the schema holds an asynchronous check,
+ * which a synchronous check cannot run. zod throws it from one place, with
+ * this message and no name of its own. */
+const ASYNC_CHECK_MESSAGE =
+  'Encountered Promise during synchronous parse. Use .parseAsync() instead.'
+
+const isAsyncCheck = (error: unknown) =>
+  error instanceof Error && error.message === ASYNC_CHECK_MESSAGE
+
 /** Makes every body and query check of `auth`'s endpoints stop at the first
- * problem when the request holds more than AUTH_FULL_CHECK_VALUES values. A
- * valid request gets the same value either way, since the stop only comes
- * after a problem. A schema zod cannot check synchronously keeps its own
- * check. It changes the schemas in place, so every instance sharing one
+ * problem when the request holds more than AUTH_FULL_CHECK_VALUES values,
+ * and list only as many problems as boundIssues keeps. A valid request gets
+ * the same value either way, since the stop only comes after a problem.
+ * A schema that holds a `catch` is always checked in full, since its
+ * fallback reads the problems the stop would leave out, and so does one zod
+ * cannot check synchronously. Any other error in the early check fails the
+ * request. It changes the schemas in place, so every instance sharing one
  * gets the change, and returns `auth`. */
 export function stopValidationEarly<Auth extends { api: Record<string, { options?: object }> }>(
   auth: Auth,
 ): Auth {
   for (const { options } of Object.values(auth.api)) {
     if (!options) continue
-    const body = 'body' in options ? options.body : undefined
-    const query = 'query' in options ? options.query : undefined
-    for (const schema of [body, query]) {
+    const parts = [
+      ['body', 'body' in options ? options.body : undefined],
+      ['query', 'query' in options ? options.query : undefined],
+    ] as const
+    for (const [location, schema] of parts) {
       if (!isZodSchema(schema) || stopping.has(schema)) continue
       stopping.add(schema)
       const standard = schema['~standard']
       let definitions: Definition[] | undefined
+      let early: boolean | undefined
+      const check = (value: unknown) => {
+        if (holdsAtMost(value, AUTH_FULL_CHECK_VALUES)) return standard.validate(value)
+        definitions ??= definitionsOf(schema)
+        early ??= !definitions.some((def) => def.type === 'catch')
+        if (!early) return standard.validate(value)
+        try {
+          return checkEarly(schema, definitions, value)
+        } catch (error) {
+          if (!isAsyncCheck(error)) throw error
+          return standard.validate(value)
+        }
+      }
+      const bounded = (result: StandardResult): StandardResult =>
+        result.issues ? { issues: boundIssues(result.issues, location) } : result
       schema['~standard'] = {
         ...standard,
         validate: (value) => {
-          if (holdsAtMost(value, AUTH_FULL_CHECK_VALUES)) return standard.validate(value)
-          try {
-            definitions ??= definitionsOf(schema)
-            return checkEarly(schema, definitions, value)
-          } catch {
-            // an asynchronous check, which safeParse refuses
-            return standard.validate(value)
-          }
+          const result = check(value)
+          return result instanceof Promise ? result.then(bounded) : bounded(result)
         },
       }
     }
@@ -178,33 +207,63 @@ export function stopValidationEarly<Auth extends { api: Record<string, { options
 /* Better Call's separator between two listed problems. */
 const SEPARATOR = '; '
 
-/** `message`, a Better Call validation message of problems joined by "; ",
- * cut to AUTH_VALIDATION_MESSAGE_MAX characters at the end of a listed problem,
- * with how many problems it left out. A first problem longer than that is
- * cut inside, ending in "…". */
-export function shortValidationMessage(message: string): string {
-  if (message.length <= AUTH_VALIDATION_MESSAGE_MAX) return message
-  // Every listed problem starts with its path in brackets.
-  const problems = message.split(`${SEPARATOR}[`).map((text, i) => (i === 0 ? text : `[${text}`))
-  const note = (left: number) =>
-    `${SEPARATOR}and ${left} more ${left === 1 ? 'problem' : 'problems'}`
-  const room = AUTH_VALIDATION_MESSAGE_MAX - note(problems.length).length
-  let kept = problems[0].length > room ? `${cutText(problems[0], room - 1)}…` : problems[0]
+/* An issue's place in the request, as Better Call lists it after `body.`
+ * or `query.`. */
+const placeOf = (path: Issue['path'] = []) =>
+  path.map((key) => (typeof key === 'object' ? key.key : key)).join('.')
+
+/** `issue` as Better Call lists it in a validation message. */
+export const problemText = (issue: Issue, location: string): string =>
+  `[${issue.path?.length ? `${location}.${placeOf(issue.path)}` : location}] ${issue.message}`
+
+/* The end of a cut list of problems, counting the ones it left out. */
+const note = (left: number) => `${SEPARATOR}and ${left} more ${left === 1 ? 'problem' : 'problems'}`
+
+/** `issues` as Better Call lists them under `location` in at most
+ * AUTH_VALIDATION_MESSAGE_MAX characters: all of them when they fit, or else
+ * the first ones that fit, the last of them ending with how many were left
+ * out. A first problem too long on its own keeps the start of its place and
+ * of its message, each ending in "…". Each problem is cut whole, whatever
+ * its message holds. */
+export function boundIssues(issues: ReadonlyArray<Issue>, location: string): ReadonlyArray<Issue> {
+  const texts = issues.map((issue) => problemText(issue, location))
+  const total = texts.reduce(
+    (sum, text) => sum + text.length,
+    SEPARATOR.length * (texts.length - 1),
+  )
+  if (total <= AUTH_VALIDATION_MESSAGE_MAX) return issues
+  const room = AUTH_VALIDATION_MESSAGE_MAX - note(issues.length).length
+  let length = texts[0].length
   let count = 1
-  while (
-    count < problems.length &&
-    kept.length + SEPARATOR.length + problems[count].length <= room
-  ) {
-    kept += SEPARATOR + problems[count]
+  while (count < texts.length && length + SEPARATOR.length + texts[count].length <= room) {
+    length += SEPARATOR.length + texts[count].length
     count += 1
   }
-  return count < problems.length ? kept + note(problems.length - count) : kept
+  const kept = issues.slice(0, count)
+  if (length > room) {
+    const [first] = issues
+    const place = placeOf(first.path)
+    const placeMax = Math.floor(room / 2)
+    const path = place.length > placeMax ? [`${cutText(place, placeMax - 1)}…`] : first.path
+    const left = room - problemText({ path, message: '' }, location).length
+    const message =
+      first.message.length > left ? `${cutText(first.message, left - 1)}…` : first.message
+    kept[0] = { ...first, path, message }
+  }
+  if (count < issues.length)
+    kept[count - 1] = {
+      ...kept[count - 1],
+      message: kept[count - 1].message + note(issues.length - count),
+    }
+  return kept
 }
 
 /** `response`, unchanged unless it is Better Auth's 400 VALIDATION_ERROR
- * answer with a message over AUTH_VALIDATION_MESSAGE_MAX characters. That one gets
- * the same status, headers and fields, with the message cut by
- * shortValidationMessage. */
+ * answer with a message over AUTH_VALIDATION_MESSAGE_MAX characters, which
+ * only a check stopValidationEarly does not reach gives. That one gets the
+ * same status, headers and fields, with the message cut to
+ * AUTH_VALIDATION_MESSAGE_MAX characters, ending in "…". Without zod's
+ * problems it cannot tell where one ends, so it does not count them. */
 export async function boundValidationAnswer(response: Response): Promise<Response> {
   if (
     response.status !== 400 ||
@@ -229,7 +288,8 @@ export async function boundValidationAnswer(response: Response): Promise<Respons
     return response
   const headers = new Headers(response.headers)
   headers.delete('Content-Length')
-  return new Response(JSON.stringify({ ...body, message: shortValidationMessage(body.message) }), {
+  const message = `${cutText(body.message, AUTH_VALIDATION_MESSAGE_MAX - 1)}…`
+  return new Response(JSON.stringify({ ...body, message }), {
     status: response.status,
     statusText: response.statusText,
     headers,

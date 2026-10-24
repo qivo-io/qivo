@@ -1,6 +1,6 @@
 /* Short Better Auth validation errors (lib/authValidation.ts). A request
  * that holds more than AUTH_FULL_CHECK_VALUES values is checked only until
- * its first problems, and no validation error answers with a message over
+ * its first problem, and no validation error answers with a message over
  * AUTH_VALIDATION_MESSAGE_MAX characters. A smaller request, valid or not,
  * is checked and answered as Better Auth does on its own. */
 /// <reference types="vite/client" />
@@ -8,11 +8,13 @@ import type { AuthContext } from '@better-auth/core'
 import { getEndpoints } from 'better-auth/api'
 import { describe, expect, it, vi } from 'vitest'
 import { createAuth } from '../auth'
+import { AUTH_ROUTES, servesAuthRoute } from '../lib/authRoutes'
 import {
+  boundIssues,
   boundValidationAnswer,
   definitionsOf,
   holdsAtMost,
-  shortValidationMessage,
+  problemText,
   stopValidationEarly,
 } from '../lib/authValidation'
 import {
@@ -57,24 +59,16 @@ const schemasOf = (endpoints: Record<string, { options?: object }>): Map<string,
 const NOT_A_STRING = 'Invalid input: expected string, received number'
 
 describe('validation errors on the auth routes', () => {
-  it.each([
-    ['/sign-in/social', (scopes: number[]) => ({ provider: 'google', scopes }), 'scopes'],
-    ['/link-social', (scopes: number[]) => ({ provider: 'google', scopes }), 'scopes'],
-    [
-      '/link-social',
-      (scopes: number[]) => ({ provider: 'google', idToken: { token: 'x', scopes } }),
-      'idToken.scopes',
-    ],
-    [
-      '/oauth2/update-consent',
-      (scopes: number[]) => ({ id: 'x', update: { scopes } }),
-      'update.scopes',
-    ],
-  ])('answers a 64 KiB invalid array on %s with its first problem', async (path, build, field) => {
-    const response = await post(newT(), path, numbersFilling(build, AUTH_BODY_MAX_BYTES))
+  it('answers a 64 KiB invalid array with its first problem', async () => {
+    const build = (scopes: number[]) => ({ provider: 'google', scopes })
+    const response = await post(
+      newT(),
+      '/sign-in/social',
+      numbersFilling(build, AUTH_BODY_MAX_BYTES),
+    )
     expect(response.status).toBe(400)
     expect(await response.text()).toBe(
-      JSON.stringify({ message: `[body.${field}.0] ${NOT_A_STRING}`, code: 'VALIDATION_ERROR' }),
+      JSON.stringify({ message: `[body.scopes.0] ${NOT_A_STRING}`, code: 'VALIDATION_ERROR' }),
     )
   })
 
@@ -107,12 +101,6 @@ describe('validation errors on the auth routes', () => {
     expect(code).toBe('VALIDATION_ERROR')
     expect(message.length).toBeLessThanOrEqual(AUTH_VALIDATION_MESSAGE_MAX)
     expect(message).toMatch(/^\[body\.redirect_uris\.0\] .*; and \d+ more problems$/)
-  })
-
-  it('does not serve the admin permission check, whose record zod checks in full', async () => {
-    const permission = Object.fromEntries(Array.from({ length: 5_000 }, (_, i) => [`k${i}`, 1]))
-    const response = await post(newT(), '/admin/has-permission', JSON.stringify({ permission }))
-    expect(response.status).toBe(404)
   })
 
   it('lists the first of many problems in a request checked in full and counts the rest', async () => {
@@ -239,38 +227,130 @@ describe('stopValidationEarly', () => {
     expect(unreached.map(([name]) => name)).toEqual(['signInEmail body'])
   })
 
-  it('checks a large request early on every body and query schema', async () => {
+  /* The objects and records a schema checks at its root, through optional,
+   * default and pipe wrappers and both sides of an intersection. */
+  type Node = { _zod: { def: Record<string, unknown> & { type: string }; innerType?: unknown } }
+  const rootsOf = (schema: Node): Node[] => {
+    const { def } = schema._zod
+    if (def.type === 'object' || def.type === 'record') return [schema]
+    if (def.type === 'intersection')
+      return [def.left, def.right].flatMap((side) => rootsOf(side as Node))
+    const inner =
+      def.type === 'pipe' ? def.in : def.type === 'lazy' ? schema._zod.innerType : def.innerType
+    return inner ? rootsOf(inner as Node) : []
+  }
+
+  /* Values that pass `schema`'s root check and hold more values than a full
+   * check takes: every field holding a large array, which the fields' own
+   * checks refuse, and one key no field has holding it, which an object
+   * drops, so its answer is the one for an empty object. */
+  const largeValuesFor = (schema: Node): unknown[] => {
+    const large = Array(AUTH_FULL_CHECK_VALUES + 1).fill(0)
+    const fields = rootsOf(schema).flatMap(({ _zod: { def } }) =>
+      def.type === 'object' ? Object.keys(def.shape as object) : [],
+    )
+    const everyField = Object.fromEntries(fields.map((key) => [key, large]))
+    return [...(fields.length > 0 ? [everyField] : []), { notAField: large }]
+  }
+
+  it('checks a large request early on every body and query schema, with the same answer', async () => {
+    // A schema holding a `catch` is checked in full, so none of these does.
     const schemas = [...schemasOf(auth.api)] as [string, typeof social][]
     expect(schemas.some(([name]) => name.endsWith(' query'))).toBe(true)
-    const large = Array(AUTH_FULL_CHECK_VALUES + 1).fill(0)
     const late = []
+    const differ = []
+    const answers = { accepted: 0, refused: 0 }
     for (const [name, schema] of schemas) {
+      expect([name, rootsOf(schema as unknown as Node).length > 0]).toEqual([name, true])
       const safeParse = vi.spyOn(schema, 'safeParse')
       try {
-        await schema['~standard'].validate(large)
-        const early = safeParse.mock.calls.some(
-          ([, ctx]) => ctx !== undefined && 'abortEarly' in ctx && ctx.abortEarly === true,
-        )
-        if (!early) late.push(name)
+        for (const value of largeValuesFor(schema as unknown as Node)) {
+          safeParse.mockClear()
+          const result = await schema['~standard'].validate(value)
+          const early = safeParse.mock.calls.some(
+            ([, ctx]) => ctx !== undefined && 'abortEarly' in ctx && ctx.abortEarly === true,
+          )
+          if (!early) late.push(name)
+          const full = schema.safeParse(value).success
+          if (!result.issues !== full) differ.push(name)
+          answers[full ? 'accepted' : 'refused'] += 1
+        }
       } finally {
         safeParse.mockRestore()
       }
     }
     expect(late).toEqual([])
+    expect(differ).toEqual([])
+    // both answers occur, so a check that answered either one always would differ
+    expect(answers.accepted).toBeGreaterThan(10)
+    expect(answers.refused).toBeGreaterThan(10)
+  })
+
+  /* A schema of its own, wrapped as stopValidationEarly wraps an endpoint's. */
+  const wrapped = <Schema extends object>(schema: Schema) => {
+    stopValidationEarly({ api: { endpoint: { options: { body: schema } } } })
+    return schema
+  }
+  const word = social.shape.scopes.unwrap().element
+
+  it('checks a large request in full when the schema holds a catch, which reads the problems', async () => {
+    // The fallback counts the problems, so the early stop's single problem
+    // would make the refinement refuse a request the full check accepts.
+    const counted = wrapped(
+      word
+        .array()
+        .catch(((ctx: { error: { issues: unknown[] } }) => ctx.error.issues.length) as never)
+        .refine((count: unknown) => count !== 1),
+    )
+    expect(counted.safeParse(Array(large).fill(1))).toEqual({ success: true, data: large })
+    expect(await counted['~standard'].validate(Array(large).fill(1))).toEqual({ value: large })
+  })
+
+  it('checks a large request with an asynchronous check in full', async () => {
+    const pending = wrapped(word.refine(async (value) => value === 'ok').array())
+    expect(await pending['~standard'].validate(Array(large).fill('ok'))).toEqual({
+      value: Array(large).fill('ok'),
+    })
+    const result = await pending['~standard'].validate(['no', ...Array(large).fill('ok'), 'no'])
+    expect(result.issues?.map(({ path }) => path)).toEqual([[0], [large + 1]])
+  })
+
+  it('fails a large request whose early check breaks, rather than checking it another way', async () => {
+    const broken = wrapped(word.array())
+    vi.spyOn(broken, 'safeParse').mockImplementation(() => {
+      throw new TypeError('a fault in the early check')
+    })
+    try {
+      expect(() => broken['~standard'].validate(Array(large).fill('ok'))).toThrow(
+        'a fault in the early check',
+      )
+      // a small request never takes the early check
+      expect(await broken['~standard'].validate(['ok'])).toEqual({ value: ['ok'] })
+    } finally {
+      vi.restoreAllMocks()
+    }
   })
 
   it('serves no record whose entries can fail, which zod would check in full', () => {
     // A record of any value under string keys cannot fail, so zod lists no
     // problem for its entries.
-    const disabled = new Set(auth.options.disabledPaths)
+    const served = (path: string, method: string) =>
+      servesAuthRoute(
+        AUTH_ROUTES,
+        new Request(`https://some.convex.site/api/auth${path.replace(/:[^/]+/g, 'x')}`, { method }),
+      )
     const cannotFail = (part: unknown) => {
       const { type, checks } = (part as { _zod: { def: { type: string; checks?: unknown[] } } })
         ._zod.def
       return ['any', 'unknown'].includes(type) || (type === 'string' && !checks?.length)
     }
-    const endpoints: Record<string, { path: string }> = auth.api
+    const endpoints: Record<string, { path?: string; options: { method: string | string[] } }> =
+      auth.api
     const failing = [...schemasOf(auth.api)]
-      .filter(([name]) => !disabled.has(endpoints[name.split(' ')[0]].path))
+      .filter(([name]) => {
+        const { path, options } = endpoints[name.split(' ')[0]]
+        return path !== undefined && [options.method].flat().some((method) => served(path, method))
+      })
       .filter(([, schema]) =>
         definitionsOf(schema as Parameters<typeof definitionsOf>[0]).some(
           (def) => def.type === 'record' && !(cannotFail(def.keyType) && cannotFail(def.valueType)),
@@ -303,39 +383,57 @@ describe('holdsAtMost', () => {
   })
 })
 
-describe('shortValidationMessage', () => {
-  const problem = (i: number) => `[body.scopes.${i}] ${NOT_A_STRING}`
+describe('boundIssues', () => {
+  const issue = (i: number, message = NOT_A_STRING) => ({ path: ['scopes', i], message })
+  const issues = (count: number, message?: string) =>
+    Array.from({ length: count }, (_, i) => issue(i, message))
+  const listed = (kept: ReturnType<typeof boundIssues>) =>
+    kept.map((each) => problemText(each, 'body')).join('; ')
 
-  it('keeps a message within the limit as it is', () => {
-    const message = Array.from({ length: 3 }, (_, i) => problem(i)).join('; ')
-    expect(shortValidationMessage(message)).toBe(message)
+  it('keeps problems that fit as they are', () => {
+    const few = issues(3)
+    expect(boundIssues(few, 'body')).toBe(few)
   })
 
   it('ends at a listed problem and counts the ones left out', () => {
-    const message = Array.from({ length: 500 }, (_, i) => problem(i)).join('; ')
-    const short = shortValidationMessage(message)
-    expect(short.length).toBeLessThanOrEqual(AUTH_VALIDATION_MESSAGE_MAX)
-    const listed = short.split('; ')
-    const note = listed.pop()
-    expect(listed).toEqual(Array.from({ length: listed.length }, (_, i) => problem(i)))
-    expect(note).toBe(`and ${500 - listed.length} more problems`)
+    const kept = boundIssues(issues(500), 'body')
+    expect(listed(kept).length).toBeLessThanOrEqual(AUTH_VALIDATION_MESSAGE_MAX)
+    expect(kept.slice(0, -1)).toEqual(issues(kept.length - 1))
+    expect(kept.at(-1)).toEqual(
+      issue(kept.length - 1, `${NOT_A_STRING}; and ${500 - kept.length} more problems`),
+    )
+  })
+
+  it('keeps a problem whose message looks like a list of problems whole', () => {
+    // The message names a value the request sent, which may hold "; [".
+    const odd = 'Unrecognized key: "a; [body.b] c"'
+    const kept = boundIssues(issues(500, odd), 'body')
+    const message = listed(kept)
+    expect(message.length).toBeLessThanOrEqual(AUTH_VALIDATION_MESSAGE_MAX)
+    expect(kept.slice(0, -1)).toEqual(issues(kept.length - 1, odd))
+    expect(message).toMatch(new RegExp(`; and ${500 - kept.length} more problems$`))
   })
 
   it('keeps an emoji at the cut whole or leaves it out', () => {
-    const long = `[body.permission.${'k'.repeat(AUTH_VALIDATION_MESSAGE_MAX)}] Invalid input`
-    // the first problem is cut at 2,026 characters, before "…; and 1 more problem"
-    for (const at of [2024, 2025, 2026]) {
-      const short = shortValidationMessage(`${long.slice(0, at)}😀${long.slice(at)}; ${problem(1)}`)
-      expect(short.length).toBeLessThanOrEqual(AUTH_VALIDATION_MESSAGE_MAX)
-      expect(short.isWellFormed()).toBe(true)
+    const long = 'x'.repeat(AUTH_VALIDATION_MESSAGE_MAX)
+    for (const at of [2000, 2001, 2002, 2003]) {
+      const kept = boundIssues(
+        [issue(0, `${long.slice(0, at)}😀${long.slice(at)}`), issue(1)],
+        'body',
+      )
+      expect(listed(kept).length).toBeLessThanOrEqual(AUTH_VALIDATION_MESSAGE_MAX)
+      expect(listed(kept).isWellFormed()).toBe(true)
     }
   })
 
-  it('cuts a first problem longer than the limit inside it', () => {
-    const long = `[body.permission.${'k'.repeat(10_000)}] Invalid input`
-    const short = shortValidationMessage(`${long}; ${problem(1)}`)
-    expect(short.length).toBeLessThanOrEqual(AUTH_VALIDATION_MESSAGE_MAX)
-    expect(short).toMatch(/^\[body\.permission\.k+…; and 1 more problem$/)
+  it('cuts the place and message of a first problem longer than the limit', () => {
+    const long = {
+      path: ['permission', 'k'.repeat(10_000)],
+      message: `Invalid ${'input '.repeat(1_000)}`,
+    }
+    const message = listed(boundIssues([long, issue(1)], 'body'))
+    expect(message.length).toBeLessThanOrEqual(AUTH_VALIDATION_MESSAGE_MAX)
+    expect(message).toMatch(/^\[body\.permission\.k+…\] Invalid [input ]+…; and 1 more problem$/)
   })
 })
 
@@ -362,7 +460,7 @@ describe('boundValidationAnswer', () => {
     }
   })
 
-  it('shortens a long validation error and keeps its status, headers and other fields', async () => {
+  it('cuts a long validation error and keeps its status, headers and other fields', async () => {
     const answer = json(
       400,
       { message: problemsOf(500), code: 'VALIDATION_ERROR' },
@@ -373,10 +471,10 @@ describe('boundValidationAnswer', () => {
     expect(short.headers.get('Set-Cookie')).toBe('a=b; Path=/')
     expect(short.headers.get('Access-Control-Allow-Origin')).toBe('*')
     expect(short.headers.get('Content-Length')).toBeNull()
-    expect(JSON.parse(await short.text())).toEqual({
-      message: shortValidationMessage(problemsOf(500)),
-      code: 'VALIDATION_ERROR',
-    })
+    const { message, code } = JSON.parse(await short.text())
+    expect(code).toBe('VALIDATION_ERROR')
+    expect(message).toHaveLength(AUTH_VALIDATION_MESSAGE_MAX)
+    expect(message).toBe(`${problemsOf(500).slice(0, AUTH_VALIDATION_MESSAGE_MAX - 1)}…`)
   })
 })
 

@@ -1,6 +1,6 @@
 /* OAuth client registration limits (oauthRegistrations.ts admit, the Better
  * Auth hook in lib/oauthProvider.ts), the client management endpoints Qivo
- * does not serve (auth.ts disabledPaths) and the cleanup of clients and
+ * does not serve (lib/authRoutes.ts) and the cleanup of clients and
  * counters nobody uses (sweepClients, sweepCounters). Registration runs
  * through the real HTTP handler and Better Auth provider. convex-test 0.0.58
  * reports no client address, so an HTTP registration here counts against the

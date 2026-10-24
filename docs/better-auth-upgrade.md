@@ -109,17 +109,23 @@ behaviors after the upgrade.
   and concurrent refresh preserve access control and independent grants.
 - App and admin sessions remain separate. Browser login can continue to
   consent, while public machine-endpoint CORS does not grant cookie access.
+- Qivo serves only the Better Auth routes `convex/lib/authRoutes.ts` lists
+  and answers 404 to every other one, including routes the new release adds.
+  `convex/tests/authRoutes.test.ts` fails when a listed route is no longer
+  one Better Auth serves. List a new route only once Qivo calls it, and name
+  the caller beside it.
 - A validation error stays short (`convex/tests/authValidation.test.ts`).
-  `convex/lib/authValidation.ts` relies on Better Call joining one
-  `[body.path] message` per problem with `; `, on the router checking with
-  the schemas `auth.api` holds, all but `/sign-in/email`'s, and on zod
+  `convex/lib/authValidation.ts` relies on Better Call listing each problem
+  as `[body.path] message` and joining them with `; `, on the router checking
+  with the schemas `auth.api` holds, all but `/sign-in/email`'s, and on zod
   internals: the `abortEarly` parse option, a settable `~standard` property,
   each schema's definition under `_zod.def` (and `_zod.innerType` for a lazy
-  schema), and the `abort` setting zod reads from a definition while it
-  parses. zod checks every entry of a record even when it stops early, so a
-  route whose body holds a record that can fail stays in `disabledPaths`
-  (`convex/auth.ts`), as `/admin/has-permission` does. The test checks each
-  of these.
+  schema), the `abort` setting zod reads from a definition while it parses,
+  a `catch` schema's definition type and the message of the error
+  `safeParse` throws for an asynchronous check. zod checks every entry of a
+  record even when it stops early, so a route whose body holds a record that
+  can fail stays off the list in `convex/lib/authRoutes.ts`, as
+  `/admin/has-permission` does. The test checks each of these.
 
 After local checks pass, verify the exact candidate on isolated staging with
 private fixture accounts. Cover browser sign-in, consent approval and

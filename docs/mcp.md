@@ -673,6 +673,14 @@ The MCP endpoint advertises its protected-resource metadata in
 `/.well-known/oauth-protected-resource/mcp` plus the root alias. The metadata
 names the canonical MCP resource and authorization server. Use those values
 for discovery instead of guessing authorization or token endpoints.
+The authorization server's metadata is at
+`/.well-known/oauth-authorization-server/api/auth`, at the root alias
+`/.well-known/oauth-authorization-server` and at
+`/api/auth/.well-known/oauth-authorization-server`. Qivo publishes no OpenID
+Connect discovery document, so the `openid-configuration` locations get HTTP
+`404`. Qivo serves the endpoints that metadata names and the browser sign-in
+and consent routes. Every other path under `/api/auth` gets HTTP `404`, for
+example an OpenID Connect userinfo or end-session request.
 The initial 401 challenge advertises
 `scope="qivo:read qivo:write offline_access"` so clients following it request
 normal task access and automatic renewal. A client can request a smaller

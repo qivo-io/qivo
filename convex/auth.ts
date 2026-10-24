@@ -18,6 +18,7 @@ import {
   USER_PROFILE_FIELDS,
 } from './lib/authData'
 import { type AuthMailState, authMailPlugin, RESEND, recordAuthMail } from './lib/authMail'
+import { servedAuthRoutes, serveOnly } from './lib/authRoutes'
 import { stopValidationEarly } from './lib/authValidation'
 import {
   clampDemoSession,
@@ -96,17 +97,6 @@ export const appOrigins = (opts?: { schemaOnly?: boolean }): string[] => {
   }
   return origins
 }
-
-/* Better Auth routes that answer from a social login's stored provider
- * tokens. Qivo stores none (databaseHooks below), so they could only fail
- * or answer with an empty token, and nothing in Qivo calls them. */
-const PROVIDER_TOKEN_PATHS = ['/get-access-token', '/refresh-token', '/account-info']
-
-/* The admin plugin's permission check over HTTP. Qivo's admin calls the
- * plugin in-process (adminAuth.ts), never this route, and zod checks every
- * key of its permission record before the session, so an unauthenticated
- * 64 KiB body made it build thousands of problems (lib/authValidation.ts). */
-const ADMIN_PERMISSION_PATHS = ['/admin/has-permission']
 
 /* The endpoint a mail callback runs in, or null outside one (a direct call). */
 const currentEndpoint = () => getCurrentAuthContext().catch(() => null)
@@ -203,40 +193,6 @@ export const createAuthOptions = (
     database: oauthAdapter(ctx, authComponent.adapter(ctx)),
     hooks: demo ? {} : oauthHooks(ctx),
     session: demo ? { expiresIn: DEMO_TTL_MS / 1_000, disableSessionRefresh: true } : undefined,
-    disabledPaths: demo
-      ? [
-          '/sign-up/email',
-          '/sign-in/email',
-          '/sign-in/social',
-          '/request-password-reset',
-          '/reset-password',
-          '/send-verification-email',
-          '/verify-email',
-          '/change-email',
-          '/change-password',
-          '/set-password',
-          '/link-social',
-          '/delete-user',
-          '/delete-anonymous-user',
-          ...PROVIDER_TOKEN_PATHS,
-          ...ADMIN_PERMISSION_PATHS,
-        ]
-      : [
-          '/sign-in/anonymous',
-          '/delete-anonymous-user',
-          // Clients register through /oauth2/register, which is limited
-          // (lib/oauthRegistration.ts). Qivo uses none of the provider's
-          // client management endpoints, and update-client would store
-          // client metadata of any size.
-          '/oauth2/create-client',
-          '/oauth2/update-client',
-          '/oauth2/client/rotate-secret',
-          '/oauth2/delete-client',
-          '/oauth2/get-client',
-          '/oauth2/get-clients',
-          ...PROVIDER_TOKEN_PATHS,
-          ...ADMIN_PERMISSION_PATHS,
-        ],
     /* No deployment stores the personal data lib/authData.ts lists. A create
      * leaves those fields out. An update that carries a provider token or a
      * picture writes null instead, which also clears what an older row held.
@@ -373,10 +329,11 @@ export const createAuthOptions = (
   } satisfies BetterAuthOptions
 }
 
-/* Every instance that serves auth checks a large request only until its
- * first problems (lib/authValidation.ts). */
+/* Every instance that serves auth answers only the routes Qivo uses
+ * (lib/authRoutes.ts) and checks a large request only until its first
+ * problem (lib/authValidation.ts). */
 export const createAuth = (ctx: GenericCtx<DataModel>) =>
-  stopValidationEarly(betterAuth(createAuthOptions(ctx)))
+  serveOnly(stopValidationEarly(betterAuth(createAuthOptions(ctx))), servedAuthRoutes())
 
 /* Operator recovery-link capture (adminAuth.ts): a SECOND Better Auth
  * instance over the same options whose sendResetPassword writes the minted
@@ -388,4 +345,7 @@ export const createAuth = (ctx: GenericCtx<DataModel>) =>
  * no login never invokes the callback (anti-enumeration), so a still-null ref
  * means user-not-found. */
 export const createCaptureAuth = (ctx: GenericCtx<DataModel>, captured: { url: string | null }) =>
-  stopValidationEarly(betterAuth(createAuthOptions(ctx, { recovery: captured })))
+  serveOnly(
+    stopValidationEarly(betterAuth(createAuthOptions(ctx, { recovery: captured }))),
+    servedAuthRoutes(),
+  )

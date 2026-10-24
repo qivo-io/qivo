@@ -62,6 +62,7 @@ import type * as lib_archivedTasks from "../lib/archivedTasks.js";
 import type * as lib_arrayLimit from "../lib/arrayLimit.js";
 import type * as lib_authData from "../lib/authData.js";
 import type * as lib_authMail from "../lib/authMail.js";
+import type * as lib_authRoutes from "../lib/authRoutes.js";
 import type * as lib_authValidation from "../lib/authValidation.js";
 import type * as lib_avatarColors from "../lib/avatarColors.js";
 import type * as lib_backgroundPreviews from "../lib/backgroundPreviews.js";
@@ -253,6 +254,7 @@ declare const fullApi: ApiFromModules<{
   "lib/arrayLimit": typeof lib_arrayLimit;
   "lib/authData": typeof lib_authData;
   "lib/authMail": typeof lib_authMail;
+  "lib/authRoutes": typeof lib_authRoutes;
   "lib/authValidation": typeof lib_authValidation;
   "lib/avatarColors": typeof lib_avatarColors;
   "lib/backgroundPreviews": typeof lib_backgroundPreviews;

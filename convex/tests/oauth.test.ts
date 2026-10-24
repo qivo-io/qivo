@@ -1017,7 +1017,7 @@ describe('OAuth organization selection', () => {
 describe('OAuth revocation, replay and live account checks', () => {
   it('uses Basic client identity consistently when replay also carries a different body client_id', async () => {
     const f = await fixture()
-    // Qivo serves no client management endpoints (auth.ts disabledPaths), so
+    // Qivo serves no client management endpoints (lib/authRoutes.ts), so
     // the person creates the confidential client through the server API.
     const client: Json = await f.t.run((ctx) =>
       createAuth(ctx).api.createOAuthClient({
