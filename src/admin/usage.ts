@@ -1,7 +1,7 @@
 /* The Usage view's columns, month picker and CSV export
    (views/Usage.tsx), kept apart so the view file exports only components. */
 import { monthOf, type UsageField } from '../../convex/lib/usage'
-import { fmtBytes, type UsageMonth } from './api'
+import type { UsageMonth } from './api'
 
 /** One column of the usage table, in the order shown. */
 export type Column = { key: UsageField; label: string; bytes?: boolean; hint: string }
@@ -44,9 +44,6 @@ export function pickerMonths(now: number): string[] {
     monthOf(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - i, 1)),
   )
 }
-
-export const fmtValue = (column: Column, value: number | null): string =>
-  value === null ? '—' : column.bytes ? fmtBytes(value) : value.toLocaleString()
 
 const MONTH_LABEL = new Intl.DateTimeFormat(undefined, {
   month: 'long',

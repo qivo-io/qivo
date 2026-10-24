@@ -21,6 +21,7 @@ import { HoverTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { spread, type UsageField } from '../../../convex/lib/usage'
 import {
+  fmtBytes,
   fmtWhen,
   type OrgUsageMonth,
   orgUsageMonths,
@@ -31,7 +32,10 @@ import {
   usageMonth,
 } from '../api'
 import { AdminEmptyState, AdminPageHeader, AdminToolbar, ErrorNote, Loading } from '../ui'
-import { fmtMonth, fmtValue, pickerMonths, USAGE_COLUMNS, usageCsv } from '../usage'
+import { type Column, fmtMonth, pickerMonths, USAGE_COLUMNS, usageCsv } from '../usage'
+
+const fmtValue = (column: Column, value: number | null): string =>
+  value === null ? '—' : column.bytes ? fmtBytes(value) : value.toLocaleString()
 
 function download(name: string, text: string) {
   const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }))
