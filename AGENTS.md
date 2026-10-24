@@ -167,7 +167,10 @@ production. See `docs/deployment.md` for configuration and release requirements.
 
 Never manually deploy production to test this workflow. Preserve existing
 customer data and backend identities. Staging has its own backend and private
-credentials. Deployments never seed or reset data. Use `QIVO_ENVIRONMENT` to
+credentials. Deployments never seed or reset data. They keep data, except
+that Convex deletes a branch preview's backend 3 days after the branch's last
+push. That deletion does not make a preview disposable, so seeds and resets
+need explicit scope there too. Use `QIVO_ENVIRONMENT` to
 identify the target explicitly, and keep fixture credentials outside this
 checkout in the private directory chosen by `QIVO_FIXTURE_CREDENTIALS_DIR`.
 Only a disposable local backend (`--local`) may keep them under the

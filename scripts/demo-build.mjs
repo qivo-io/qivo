@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import http from 'node:http'
 import { join } from 'node:path'
 import { assertDemoTarget } from './demo-deploy.mjs'
 import { writeDeploymentReceipt } from './deployment-receipt.mjs'
@@ -9,6 +10,7 @@ import {
   ignoredTheTarget,
   isPreviewDeployKey,
   previewSiteUrl,
+  setPreviewExpiry,
 } from './vercel-build.mjs'
 
 /** Files only the website build writes. It skips the demo, so finding one means the
@@ -49,12 +51,19 @@ export function finishDemoBuild(directory = 'dist') {
     writeFileSync(join(directory, name), guidance)
 }
 
-/* The build command. `run` is execFileSync, `finish` is finishDemoBuild and
- * `receipt` writes dist/version.json; the tests pass their own to see which
- * commands run. */
-export function main(
+/* The build command. `run` is execFileSync, `finish` is finishDemoBuild,
+ * `receipt` writes dist/version.json, and `fetch` and `sleep` reach the
+ * Management API; the tests pass their own to see which commands and
+ * requests run. */
+export async function main(
   env,
-  { run = execFileSync, finish = finishDemoBuild, receipt = writeDeploymentReceipt } = {},
+  {
+    run = execFileSync,
+    finish = finishDemoBuild,
+    receipt = writeDeploymentReceipt,
+    fetch,
+    sleep,
+  } = {},
 ) {
   assertDemoTarget(env)
   const preview = isPreviewDeployKey(env.CONVEX_DEPLOY_KEY)
@@ -70,7 +79,8 @@ export function main(
     return out.trim()
   }
   if (preview) {
-    // Same claim → origin setup → build → push ordering as normal previews.
+    // Same claim → expiry → origin setup → build → push ordering as normal previews.
+    await setPreviewExpiry(env, { fetch, sleep })
     command(['set', 'SITE_URL', previewSiteUrl(env)])
     command(['set', 'APP_MODE', 'demo'])
     // before convex pushes the functions, so crons.ts registers no job
@@ -90,4 +100,9 @@ export function main(
   receipt(env)
 }
 
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) main(process.env)
+if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+  /* the CLI sends its requests through HTTPS_PROXY or HTTP_PROXY when one is
+     set, so fetch does too. Node 24.14 added this, and Vercel picks the patch. */
+  http.setGlobalProxyFromEnv?.()
+  await main(process.env)
+}

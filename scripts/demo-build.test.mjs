@@ -104,6 +104,43 @@ describe('demo build output', () => {
   })
 })
 
+/** A Management API stand-in that keeps the expiry each PATCH sets and
+ * answers GET with it, the way Convex reads a deployment back. */
+const managementApi = () => {
+  let expiresAt = null
+  return vi.fn(async (_url, init) => {
+    if (init.method !== 'PATCH') return Response.json({ deploymentType: 'preview', expiresAt })
+    expiresAt = JSON.parse(init.body).expiresAt
+    return new Response(null, { status: 200 })
+  })
+}
+
+describe('main — the public demo build sends no request', () => {
+  const demo = {
+    QIVO_ENVIRONMENT: 'demo',
+    VITE_APP_MODE: 'demo',
+    DEMO_CONVEX_DEPLOYMENT: 'demo-fixture-123',
+    CONVEX_DEPLOY_KEY: 'prod:demo-fixture-123|test-only',
+    VITE_CONVEX_URL: 'https://demo-fixture-123.convex.cloud',
+  }
+  afterEach(() => vi.unstubAllGlobals())
+
+  // an expiry on demo.qivo.io's backend would schedule its deletion
+  it('builds the dedicated backend without touching the Management API', async () => {
+    const values = { QIVO_ENVIRONMENT: 'demo', APP_MODE: 'demo', SITE_URL: 'https://demo.qivo.io' }
+    const run = vi.fn((_command, args) => (args[2] === 'get' ? `${values[args[3]]}\n` : ''))
+    const fetch = vi.fn()
+    const global = vi.fn()
+    vi.stubGlobal('fetch', global)
+    await main(demo, { run, finish: vi.fn(), receipt: vi.fn(), fetch })
+    expect(run.mock.calls.some(([command, args]) => command === 'npm' && args[1] === 'build')).toBe(
+      true,
+    )
+    expect(fetch).not.toHaveBeenCalled()
+    expect(global).not.toHaveBeenCalled()
+  })
+})
+
 describe('main — a demo preview build names the backend a preview before it pushes', () => {
   const preview = {
     QIVO_ENVIRONMENT: 'preview',
@@ -117,14 +154,42 @@ describe('main — a demo preview build names the backend a preview before it pu
   /* `convex deploy` runs this script as its --cmd and pushes the functions
      only after it returns, and crons.ts registers no job when
      QIVO_ENVIRONMENT is preview at push time. */
-  it('sets QIVO_ENVIRONMENT=preview on the claimed deployment before the build', () => {
+  it('sets QIVO_ENVIRONMENT=preview on the claimed deployment before the build', async () => {
     const run = vi.fn(() => '')
-    main(preview, { run, finish: vi.fn(), receipt: vi.fn() })
+    const fetch = managementApi()
+    await main(preview, { run, finish: vi.fn(), receipt: vi.fn(), fetch })
     const commands = run.mock.calls.map(([command, args]) => [command, ...args].join(' '))
     const set = commands.indexOf(
       'npx convex env set QIVO_ENVIRONMENT preview --deployment fixture-otter-12',
     )
     expect(set).toBeGreaterThan(-1)
     expect(set).toBeLessThan(commands.indexOf('npm run build'))
+    expect(fetch.mock.calls.map(([url, init]) => `${init.method} ${url}`)).toEqual([
+      'PATCH https://api.convex.dev/v1/deployments/fixture-otter-12',
+      'GET https://api.convex.dev/v1/deployments/fixture-otter-12',
+    ])
+  })
+
+  it('fails the build, before any command, when the expiry cannot be set', async () => {
+    const run = vi.fn(() => '')
+    const fetch = vi.fn(async () => new Response(null, { status: 500 }))
+    await expect(
+      main(preview, { run, finish: vi.fn(), receipt: vi.fn(), fetch, sleep: async () => {} }),
+    ).rejects.toThrow('Could not set the expiry of preview deployment fixture-otter-12 (HTTP 500')
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  // the key would otherwise go to /v1/deployments/null
+  it('refuses a deployment URL it cannot read before any request', async () => {
+    const run = vi.fn(() => '')
+    const fetch = vi.fn()
+    await expect(
+      main(
+        { ...preview, VITE_CONVEX_URL: 'https://x-y-1.convex.site' },
+        { run, finish: vi.fn(), receipt: vi.fn(), fetch },
+      ),
+    ).rejects.toThrow('The injected Convex URL does not match the dedicated demo deployment.')
+    expect(run).not.toHaveBeenCalled()
+    expect(fetch).not.toHaveBeenCalled()
   })
 })

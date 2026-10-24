@@ -53,6 +53,8 @@ requires private generated credentials and an absolute
 local backend (`--local`) may keep them in a private directory under the
 checkout's git-ignored `dev-temp/`, which the dev server does not serve.
 Deployments never provision shared accounts or reset data automatically.
+They keep data, except that Convex deletes a branch preview's backend 3 days
+after the branch's last push.
 
 After configuring your development backend, `npm run dev` runs Convex and Vite
 on port 5199. `/` redirects to the planner at `/app`, and the operator console
@@ -96,7 +98,8 @@ Successful main CI deploys the app, website and docs to persistent staging at
 `https://preview.qivo.io`. Staging uses its own Vercel project, a separate
 Convex backend and private credentials, and is access-protected. Feature
 branches get isolated previews that include the website. Ordinary deployments
-preserve test data.
+preserve test data. Branch previews are the exception, because each preview's
+backend is deleted 3 days after the branch's last push.
 
 Production follows a published GitHub Release. **Prepare release** (a manual
 GitHub Actions workflow) drafts a release for exactly the commit staging
