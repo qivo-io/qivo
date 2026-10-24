@@ -1,7 +1,7 @@
 import { oauthProviderClient } from '@better-auth/oauth-provider/client'
 import type { ConvexClient } from 'convex/browser'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createAuthSession, NO_QUERY } from './authSession'
+import { createAuthSession, NO_QUERY, SignOutFailed } from './authSession'
 import { oauthConnectRequest } from './oauthConnection'
 
 const SITE_URL = 'https://auth-session-test.convex.site'
@@ -811,16 +811,32 @@ describe('independent app and admin browser sessions', () => {
     expect(await adminSocket.token()).toBeNull()
   })
 
-  it('a failed sign-out request still clears only its own local jar and socket', async () => {
+  it('a sign-out the server refuses keeps the session to try again', async () => {
+    const { admin, adminSocket } = pair()
+    const token = await login(admin, 'operator@example.test')
+    const before = saved(ADMIN_PREFIX)
+    service.fail('/sign-out', 503)
+    await expect(admin.signOut()).rejects.toBeInstanceOf(SignOutFailed)
+    expect(adminSocket.clearAuth).not.toHaveBeenCalled()
+    expect(saved(ADMIN_PREFIX)).toEqual(before)
+    expect(admin.authClient.getCookie()).toContain(token)
+    service.recover()
+    await admin.signOut()
+    expect(service.revoked).toEqual([token])
+    expect(adminSocket.clearAuth).toHaveBeenCalledOnce()
+    expect(saved(ADMIN_PREFIX)).toEqual({ cookie: '{}', cache: '{}' })
+  })
+
+  it('an offline sign-out still clears only its own local jar and socket', async () => {
     const { app, admin, appSocket, adminSocket } = pair()
     const appToken = await login(app, 'nora@example.test')
     const adminToken = await login(admin, 'operator@example.test')
     const appBefore = saved(APP_PREFIX)
     service.fail('/sign-out')
-    await expect(admin.signOut()).rejects.toThrow('Simulated offline request')
+    await admin.signOut()
     expect(adminSocket.clearAuth).toHaveBeenCalledOnce()
     expect(appSocket.clearAuth).not.toHaveBeenCalled()
-    expect(saved(ADMIN_PREFIX)).toEqual({ cookie: '{}', cache: '{}' })
+    expect(saved(ADMIN_PREFIX)).toEqual({ cookie: null, cache: null })
     expect(saved(APP_PREFIX)).toEqual(appBefore)
     expect(await appSocket.token()).toBe(`jwt:${appToken}:nora@example.test`)
     // A failed HTTP request cannot establish that server revocation happened.

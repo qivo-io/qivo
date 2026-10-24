@@ -53,6 +53,17 @@ function retryPause(attempt: number, onWait?: (wake: () => void) => void): Promi
   })
 }
 
+/** What the person reads when the server refused a sign-out. */
+export const SIGN_OUT_FAILED = 'Qivo could not sign you out. Try again.'
+
+/** Thrown by a sign-out the server refused. The person is still signed in
+    and can try again. */
+export class SignOutFailed extends Error {
+  constructor() {
+    super(SIGN_OUT_FAILED)
+  }
+}
+
 /* Each entry point creates its own session. The cross-domain plugin stores
  * its cookie jar and session cache under this prefix, sends only that jar in
  * Better-Auth-Cookie, and omits ambient browser cookies. App/admin pages can
@@ -258,15 +269,24 @@ export function createAuthSession(
     return connect(generation, onLost)
   }
 
-  // The plugin clears only this prefix; the server revokes only its session.
-  // Callers reload afterward, re-arming this page's socket on the next mount.
+  /* Ends the session on the server, then forgets it in this browser. The
+     plugin clears only this prefix; the server ends only its session.
+     Callers reload afterward, re-arming this page's socket on the next
+     mount. A server that answers with an error did not end the session, so
+     the session stays here for another try and this throws SignOutFailed.
+     When the server cannot be reached, the session is forgotten here anyway,
+     so signing out works offline, and the server ends it at its expiry. */
   async function signOut(): Promise<void> {
-    armGeneration++
+    let answer: Awaited<ReturnType<typeof authClient.signOut>>
     try {
-      await authClient.signOut({})
-    } finally {
-      client.client.clearAuth()
+      answer = await authClient.signOut({})
+    } catch {
+      clearLocalSession()
+      return
     }
+    if (answer.error) throw new SignOutFailed()
+    armGeneration++
+    client.client.clearAuth()
   }
 
   // Expiry is enforced on the server. This removes the local credential even

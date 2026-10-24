@@ -17,13 +17,6 @@ export const tables = {
     .index('accountId_providerId', ['accountId', 'providerId'])
     .index('providerId_userId', ['providerId', 'userId'])
     .index('userId', ['userId']),
-  /* `sessionId_expiresAt` lets a session's end revoke only its live access
-   * tokens (oauth.ts revokeSessionAccessTokens), however many expired ones a
-   * long session holds. */
-  oauthAccessToken: generatedTables.oauthAccessToken.index('sessionId_expiresAt', [
-    'sessionId',
-    'expiresAt',
-  ]),
   oauthConsent: generatedTables.oauthConsent.index('clientId_referenceId_userId', ['clientId', 'referenceId', 'userId']),
 }
 

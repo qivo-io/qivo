@@ -48,6 +48,9 @@ TypeScript rules like any other code.
   gone. `/convex/jwks`, `/convex/token` and the JWT are unchanged.
 - `registerRoutes` no longer redirects `/.well-known/openid-configuration`.
 - `updateOne` returns null when no row matches.
+- The cross-domain client clears the stored cookies at sign-out only after
+  the server answers that it ended the session, so a refused sign-out keeps
+  the session in the browser to try again.
 - Upstream bugs fixed: pagination resumes from `continueCursor`, so a page
   that stops early is not read twice; a single-row lookup reads on past a
   page with no match; an `in` clause the query does not expand is applied to

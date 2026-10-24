@@ -51,8 +51,7 @@ out. `@convex-dev/better-auth` is no longer installed.
 - **Schema.** `convex/betterAuth/schema.generated.ts` holds the 1.7 tables,
   among them `oauthResource`, `oauthClientResource` and
   `oauthClientAssertion`, and new optional fields on the token and client
-  tables. `convex/betterAuth/schema.ts` keeps the consent index and adds an
-  index of access tokens by session and expiry, for sign-out (below), and
+  tables. `convex/betterAuth/schema.ts` keeps the consent index and adds
   `account.microsoftTenantId`. It no longer accepts `oauthClient.public` and
   `oauthClient.type`, which 1.6 wrote and 1.7 dropped (see
   [Existing data and deployment order](#existing-data-and-deployment-order)).
@@ -66,7 +65,10 @@ out. `@convex-dev/better-auth` is no longer installed.
 - **Per-client resource links are enforced**
   (`enforcePerClientResources: true`). Better Auth 1.7 refuses a client that
   asks for a resource it is not linked to with `invalid_target`, at
-  authorization, code exchange and refresh. Registration links every client
+  authorization, code exchange and refresh. Better Auth checks the link at
+  authorization only when the request names a resource, so the authorize
+  hook fills in the MCP resource when a request leaves it out, as the token
+  endpoint does. Registration links every client
   to the MCP resource, and the client backfill linked those registered on
   1.6. Qivo's own checks also refuse every other resource for every client:
   the authorize hook and `validateOAuthQuery` in `convex/lib/oauth.ts`, the
@@ -81,9 +83,10 @@ out. `@convex-dev/better-auth` is no longer installed.
   above, which compare with `mcpResource()`.
 - **Client authentication and metadata.** Registration makes every client
   public (`none`). The token and revocation endpoints refuse a request that
-  authenticates a client with a secret, an assertion or an `Authorization`
-  header with HTTP `401` and `invalid_client` (`oauthHooks` in
-  `convex/lib/oauthProvider.ts`). Better Auth 1.7's metadata also lists the
+  authenticates a client with `invalid_client` (`oauthHooks` in
+  `convex/lib/oauthProvider.ts`): HTTP `401` with a `WWW-Authenticate`
+  challenge of the same scheme for an `Authorization` header, as RFC 6749
+  section 5.2 asks, and HTTP `400` for a secret or an assertion in the body. Better Auth 1.7's metadata also lists the
   secret and `private_key_jwt` methods and their signing algorithms, so
   `servedServerMetadata` lists `none` as the only method of both endpoints,
   on every path the metadata is served at.
@@ -112,25 +115,38 @@ out. `@convex-dev/better-auth` is no longer installed.
   reads a Bearer token there as an initial access token, which Qivo does not
   issue, and would answer HTTP `401`. 1.7 also checks redirect URIs by
   application type; `docs/mcp.md` lists the rules.
-- **Sign-out.** Ending a browser session revokes the OAuth access tokens
+- **Sign-out.** Ending a browser session ends the OAuth access tokens
   issued in it, whether the session ends at sign-out, at a ban, when Better
   Auth deletes it after it expired or in any call that ends many sessions at
   once. Better Auth 1.7 revokes only the oldest 100 tokens of a session, and
   each refresh adds one. It runs the session delete hooks of a bulk delete
   for the oldest 100 sessions only, and only after the session row is gone,
   so a failed revocation used to leave the tokens valid until they expired.
-  Qivo's session delete trigger (`revokeEndedSessionAccess` in
+  Qivo's session delete trigger (`endSessionAccess` in
   `convex/lib/oauthProvider.ts`, set in `convex/auth.ts`) runs in the
-  transaction that deletes each session row and revokes every live access
-  token of that session, so the delete and the revocation succeed or fail
-  together. Better Auth answers a failed delete at sign-out as a success and
-  clears the browser's cookie; the session row and its tokens then stay as
-  they were, as for a session that never ended. `/mcp` refuses a revoked
-  token. A refresh token with `offline_access`, which Qivo's clients
-  request, stays valid, so a connected client renews its access token
-  without a new approval. A login removal from the console deletes the
-  login and then its sessions and tokens, and `/mcp` refuses every token of
-  a missing or banned login.
+  transaction that deletes each session row and stores one
+  `oauth_ended_sessions` row with the time the session ended, so the delete
+  and the record succeed or fail together, and the work stays one write
+  however many tokens the session holds. `oauthConnections.lookupAccess`
+  refuses every access token of the session created before that time, and a
+  scheduled cleanup deletes the record once those tokens have expired
+  (`OAUTH_ACCESS_TOKEN_TTL_SECONDS` in `convex/lib/oauth.ts`, plus a minute).
+  A refresh token with `offline_access`, which Qivo's clients request, stays
+  valid, and the access tokens it issues later work, so a connected client
+  renews its access without a new approval.
+- **A failed sign-out says so.** Better Auth answers a sign-out whose
+  session delete failed with HTTP `200` and clears the cookie. Qivo's after
+  hook on `/sign-out` (`oauthHooks`) deletes a session that is still stored
+  once more, and if that fails too, answers HTTP `503` with
+  `SIGN_OUT_FAILED` and without clearing the session cookie. The
+  cross-domain client in the copy clears the stored session only after a
+  sign-out succeeds, and the app, the consent page and the operator console
+  keep the person signed in and ask them to try again
+  (`signOut` in `src/lib/authSession.ts`). A sign-out that cannot reach the
+  server still clears the session in the browser, and the server session
+  ends at its expiry. A login removal from the console deletes the login and
+  then its sessions and tokens, and `/mcp` refuses every token of a missing
+  or banned login.
 - **Qivo's own deletes** of OAuth clients (the unused-client sweep, the OAuth
   smoke cleanup and the demo purge) also delete the client's resource links.
   The operator's and the console's login deletes keep the clients, as before.
@@ -251,18 +267,22 @@ Qivo does not use (SSO, SCIM, Stripe, passkey, API keys).
 
 - Discovery, registration, S256 PKCE, exact client and redirect binding,
   signed consent and scope limits work (`convex/tests/oauth.test.ts`).
-- A client without a resource link is refused. Foreign and repeated
-  resource parameters fail for a linked one. An omitted resource keeps the
-  canonical default, and refresh cannot widen its grant.
+- A client without a resource link is refused, also when it leaves the
+  resource out. Foreign and repeated resource parameters fail for a linked
+  one. An omitted resource keeps the canonical default, and refresh cannot
+  widen its grant.
 - The metadata on every path lists `none` as the only client
   authentication method and no introspection endpoint, and the token and
   revocation endpoints refuse a secret, an assertion and an `Authorization`
-  header.
+  header, the header with its challenge.
 - The metadata lists no DPoP algorithms, and a token request with a `DPoP`
   header gets a Bearer token.
 - Sign-out ends every access token of the session, also after more than 100
-  refreshes. A call that ends more than 100 sessions ends the tokens of each,
-  and a failed revocation leaves the session in place.
+  refreshes, and a refresh after it still renews. A call that ends more than
+  100 sessions ends the tokens of each. A sign-out whose session delete fails
+  twice answers HTTP `503` and keeps the session and its cookie, and the
+  browser client keeps the session to try again
+  (`src/lib/authSession.test.ts`).
 - Expiry, disconnect, reconnect, replay detection, concurrent code exchange
   and concurrent refresh keep access control and independent grants.
 - App and admin sessions stay separate. Browser login can continue to

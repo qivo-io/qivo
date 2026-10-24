@@ -14,7 +14,7 @@ import { NO_QUERY } from '../lib/authSession'
 import { convex } from '../lib/convex'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { AdminApp } from './AdminApp'
-import { armConvexAuth, authClient, signOut } from './auth'
+import { armConvexAuth, authClient, signOutAndReload } from './auth'
 
 type Phase = 'loading' | 'signedOut' | 'denied' | 'ready'
 
@@ -130,10 +130,16 @@ export function AdminGate() {
         <p className="mb-6 text-base leading-normal text-text-2">
           Your account does not have platform administrator access.
         </p>
+        {error && (
+          <div role="alert" className="mb-6 text-sm text-danger">
+            {error}
+          </div>
+        )}
         <Button
           type="button"
           onClick={() => {
-            void signOut().then(() => location.reload())
+            setError('')
+            signOutAndReload(setError)
           }}
         >
           Use another account

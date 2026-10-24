@@ -6,6 +6,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import type { api } from '../../convex/_generated/api'
 import { authClient } from '../lib/auth'
+import { SIGN_OUT_FAILED } from '../lib/authSession'
 import { connectionScopeLabel, connectionScopes, consentFailure } from '../lib/oauthConnection'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { P } from '../store/planner'
@@ -17,7 +18,9 @@ export function OAuthConnect({
   onUseAnotherAccount,
 }: {
   oauthQuery: string
-  onUseAnotherAccount: () => void
+  /** Signs out to use another account. Resolves false when the server
+      refused the sign-out, so this page stays and says so. */
+  onUseAnotherAccount: () => Promise<boolean>
 }) {
   const [context, setContext] = useState<Context | null>(null)
   const [allowChanges, setAllowChanges] = useState(true)
@@ -71,6 +74,14 @@ export function OAuthConnect({
     }
   }
 
+  const switchAccount = async () => {
+    setBusy(true)
+    setError('')
+    if (await onUseAnotherAccount()) return
+    setError(SIGN_OUT_FAILED)
+    setBusy(false)
+  }
+
   if (!context) {
     return (
       <div>
@@ -114,7 +125,7 @@ export function OAuthConnect({
         size="sm"
         className="mt-1 -ml-2"
         disabled={busy}
-        onClick={onUseAnotherAccount}
+        onClick={() => void switchAccount()}
       >
         Use another account
       </Button>

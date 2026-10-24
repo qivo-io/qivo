@@ -324,11 +324,10 @@ export const revokeReplay = internalMutation({
 
 /* The live grant behind an OAuth access token, or null. `access` is what the
  * token's own scopes allow (lib/access.ts credentialAccess). A revoked token
- * counts as gone: the access tokens of a browser session are revoked in the
- * transaction that ends the session, such as at sign-out
- * (lib/oauthProvider.ts revokeEndedSessionAccess). So does a
- * token bound to a DPoP key, whose proof Qivo cannot check (lib/oauthProvider.ts
- * never issues one). */
+ * counts as gone, and so does one issued in a browser session before the
+ * session ended, such as at sign-out (lib/oauthProvider.ts endSessionAccess).
+ * So does a token bound to a DPoP key, whose proof Qivo cannot check
+ * (lib/oauthProvider.ts never issues one). */
 export const lookupAccess = internalQuery({
   args: { tokenHash: v.string(), resource: v.string() },
   handler: async (ctx, args) => {
@@ -337,9 +336,11 @@ export const lookupAccess = internalQuery({
       model: 'oauthAccessToken',
       where: [{ field: 'token', value: args.tokenHash }],
     })) as {
+      _creationTime: number
       referenceId?: string
       userId?: string
       clientId: string
+      sessionId?: string | null
       expiresAt: number
       revoked?: number | null
       confirmation?: string | null
@@ -353,6 +354,14 @@ export const lookupAccess = internalQuery({
       token.expiresAt <= Date.now()
     )
       return null
+    const { sessionId } = token
+    if (sessionId) {
+      const ended = await ctx.db
+        .query('oauth_ended_sessions')
+        .withIndex('by_session', (q) => q.eq('session_id', sessionId))
+        .first()
+      if (ended && token._creationTime <= ended.ended_at) return null
+    }
     const row = await byId(ctx, 'oauth_connections', token.referenceId)
     if (
       !row?.approved_at ||
@@ -387,6 +396,15 @@ export const lookupAccess = internalQuery({
       scopes: token.scopes,
       access: credentialAccess({ table: 'oauth_connections', scopes: token.scopes }, profile),
     }
+  },
+})
+
+/** Deletes an ended session's record once the access tokens issued before
+ * it have expired (lib/oauthProvider.ts endSessionAccess). */
+export const forgetEndedSession = internalMutation({
+  args: { id: v.id('oauth_ended_sessions') },
+  handler: async (ctx, { id }) => {
+    if (await ctx.db.get(id)) await ctx.db.delete(id)
   },
 })
 

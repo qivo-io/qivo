@@ -645,8 +645,8 @@ these mechanisms; support is not a claim that every assistant has been tested.
 
 ## OAuth protocol and deployment
 
-Browser clients can register and exchange, inspect or revoke tokens across
-origins. Public CORS applies only to those four machine endpoints, which
+Browser clients can register and exchange or revoke tokens across origins.
+Public CORS applies only to those three machine endpoints, which
 ignore session cookies and return no credentialed CORS headers. Browser
 sign-in, consent and operator routes retain the app-origin restrictions.
 
@@ -700,9 +700,10 @@ The authorization server's metadata is at
 Connect discovery document, so the `openid-configuration` locations get HTTP
 `404`. Every client is public, so the metadata lists `none` as the only
 client authentication method of the token and revocation endpoints: a
-request names its client with `client_id` alone, and one that sends a
-secret, an assertion or an `Authorization` header gets HTTP `401` with
-`invalid_client`. Qivo serves no token introspection endpoint, which its MCP
+request names its client with `client_id` alone. One that sends an
+`Authorization` header gets HTTP `401` with `invalid_client` and a
+`WWW-Authenticate` challenge of the same scheme, and one that sends a secret
+or an assertion in the body gets HTTP `400` with `invalid_client`. Qivo serves no token introspection endpoint, which its MCP
 endpoint does not need, so the metadata names none. Qivo serves the
 endpoints that metadata names and the browser sign-in and consent routes. Every other path under `/api/auth` gets HTTP `404`, for
 example an OpenID Connect userinfo or end-session request.
@@ -764,8 +765,9 @@ connection prevents access and refresh and hides the grant from the person's
 list. Signing out of the browser session that approved a connection ends the
 access tokens issued in that session, so the client's next request gets HTTP
 `401`; its refresh token, which `offline_access` keeps, renews access without
-a new approval. The same holds whenever the session ends, such as when its
-login is banned, and for every session that ends at once. Its revoked grant and replay hashes are retained so old signed consent
+a new approval. The access tokens also end whenever the session ends some
+other way, and for every session that ends at once. A ban ends them too, but
+a banned login cannot renew access until the ban is lifted. Its revoked grant and replay hashes are retained so old signed consent
 and credentials cannot revive it. Reuse of a consumed code or refresh token revokes the
 connection, including credentials issued by a concurrent refresh; clients
 must serialize refresh requests. A fresh connection creates a new grant.

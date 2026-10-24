@@ -108,24 +108,3 @@ export const deleteClients = mutation({
     return { count: deleting.length, isDone: clients.length <= numItems }
   },
 })
-
-/** Revokes the access tokens of an ended browser session that are neither
- * revoked nor expired at `revokedAt`. The session's delete trigger runs it in
- * the transaction that deletes the session (auth.ts revokeEndedSessionAccess),
- * so a session never ends while one of its access tokens stays live: if this
- * fails, the session stays too. Better Auth 1.7 revokes them at sign-out as
- * well, but only the oldest 100, and a connection adds one token each time it
- * refreshes. */
-export const revokeSessionAccessTokens = mutation({
-  args: { sessionId: v.string(), revokedAt: v.number() },
-  handler: async (ctx, { sessionId, revokedAt }) => {
-    const live = await ctx.db
-      .query('oauthAccessToken')
-      .withIndex('sessionId_expiresAt', (q) =>
-        q.eq('sessionId', sessionId).gt('expiresAt', revokedAt),
-      )
-      .collect()
-    for (const token of live)
-      if (token.revoked == null) await ctx.db.patch(token._id, { revoked: revokedAt })
-  },
-})

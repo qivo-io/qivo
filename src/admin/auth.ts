@@ -1,4 +1,4 @@
-import { createAuthSession } from '../lib/authSession'
+import { createAuthSession, SignOutFailed } from '../lib/authSession'
 import { convex } from '../lib/convex'
 import { beginUpdateBlock } from '../lib/updateSafety'
 
@@ -13,4 +13,16 @@ export async function signOut() {
   } finally {
     releaseUpdateBlock()
   }
+}
+
+/** Signs out and reloads. A sign-out the server refused keeps the operator
+    signed in and hands its sentence to `onRefused` to show. */
+export function signOutAndReload(onRefused: (message: string) => void) {
+  void signOut().then(
+    () => location.reload(),
+    (failure: unknown) => {
+      if (failure instanceof SignOutFailed) onRefused(failure.message)
+      else location.reload()
+    },
+  )
 }

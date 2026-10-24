@@ -41,10 +41,10 @@ import {
 } from './lib/microsoftAccounts'
 import { oauthAdapter } from './lib/oauthAdapter'
 import {
+  endSessionAccess,
   oauthHooks,
   qivoOAuthProvider,
   registerOAuthCode,
-  revokeEndedSessionAccess,
 } from './lib/oauthProvider'
 import { type AuthLetterIntent, sendAuthLetter } from './mail'
 
@@ -170,7 +170,7 @@ export const authComponent = createClient<DataModel, typeof authSchema>(componen
       onCreate: registerDemoUser,
       onDelete: async (ctx, user) => expireDeletedDemoUser(ctx, user._id),
     },
-    session: { onCreate: clampDemoSession, onDelete: revokeEndedSessionAccess },
+    session: { onCreate: clampDemoSession, onDelete: endSessionAccess },
   },
 })
 

@@ -5,10 +5,16 @@ import { type FunctionArgs, type GenericMutationCtx, makeFunctionReference } fro
 import { ConvexError } from 'convex/values'
 import type { GenericCtx } from '../../vendor/convex-better-auth/src/client'
 import { requireRunMutationCtx } from '../../vendor/convex-better-auth/src/utils'
-import { components } from '../_generated/api'
-import type { DataModel } from '../_generated/dataModel'
+import type { DataModel, Id } from '../_generated/dataModel'
 import { sha256hex } from '../machine/auth'
-import { clientDisplayName, mcpResource, OAUTH_SCOPES, validateOAuthQuery } from './oauth'
+import { isDemoDeployment } from './demo'
+import {
+  clientDisplayName,
+  mcpResource,
+  OAUTH_ACCESS_TOKEN_TTL_SECONDS,
+  OAUTH_SCOPES,
+  validateOAuthQuery,
+} from './oauth'
 import { clientMetadataTooLarge, OAUTH_CLIENT_METADATA_MAX_BYTES } from './oauthRegistration'
 
 export const authorizationHash = (authUserId: string, query: URLSearchParams) =>
@@ -91,20 +97,37 @@ export async function registerOAuthCode(
   if (!ok) throw invalid()
 }
 
-/** Revokes every live access token issued in a browser session that ends,
- * such as at sign-out, a ban or an expired session's cleanup. It is the
- * session's delete trigger (auth.ts), which runs in the transaction that
- * deletes the session row, so the two succeed or fail together, also when
- * one call deletes many sessions. Its refresh tokens, which `offline_access`
- * keeps, stay. */
-export async function revokeEndedSessionAccess(
+const forgetEndedSessionRef = makeFunctionReference<
+  'mutation',
+  { id: Id<'oauth_ended_sessions'> },
+  null
+>('oauthConnections:forgetEndedSession')
+
+/** Ends the access tokens issued in a browser session that ends, such as at
+ * sign-out, a ban or an expired session's cleanup. It is the session's delete
+ * trigger (auth.ts), which runs in the transaction that deletes the session
+ * row, so the two succeed or fail together, also when one call deletes many
+ * sessions. It writes one record for the session, however many tokens the
+ * session holds, and /mcp refuses every token issued before it
+ * (oauthConnections.ts lookupAccess). The record goes once those tokens have
+ * expired. The session's refresh tokens, which `offline_access` keeps, stay,
+ * and an access token they issue later works. */
+export async function endSessionAccess(
   ctx: GenericMutationCtx<DataModel>,
   session: { _id: string },
 ) {
-  await ctx.runMutation(components.betterAuth.oauth.revokeSessionAccessTokens, {
-    sessionId: session._id,
-    revokedAt: Date.now(),
+  // The demo has no OAuth provider, so no session holds an access token.
+  if (isDemoDeployment()) return
+  const endedAt = Date.now()
+  const id = await ctx.db.insert('oauth_ended_sessions', {
+    session_id: session._id,
+    ended_at: endedAt,
   })
+  await ctx.scheduler.runAt(
+    endedAt + (OAUTH_ACCESS_TOKEN_TTL_SECONDS + 60) * 1_000,
+    forgetEndedSessionRef,
+    { id },
+  )
 }
 
 const invalid = (description = 'This connection is invalid or has been disconnected.') =>
@@ -139,6 +162,7 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
     consentPage: `${siteUrl}/app/~/connect`,
     scopes: OAUTH_SCOPES,
     grantTypes: ['authorization_code', 'refresh_token'],
+    accessTokenExpiresIn: OAUTH_ACCESS_TOKEN_TTL_SECONDS,
     /* Qivo serves one protected resource, the MCP endpoint. Every client is
      * linked to it at registration, Better Auth 1.7 refuses a client that asks
      * for a resource it is not linked to (invalid_target), and binds each
@@ -389,8 +413,9 @@ async function admitClientRegistration(ctx: GenericCtx<DataModel>, body: unknown
 }
 
 /** Better Auth hooks for the OAuth provider. They limit client registration,
- * check authorize and token requests before the provider handles them, and
- * revoke a grant whose code or refresh token is replayed. */
+ * check authorize and token requests before the provider handles them,
+ * revoke a grant whose code or refresh token is replayed, and answer a
+ * sign-out that could not end its session as a failure. */
 export function oauthHooks(ctx: GenericCtx<DataModel>) {
   const requestBody = (value: unknown): Record<string, unknown> | undefined =>
     value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -439,22 +464,34 @@ export function oauthHooks(ctx: GenericCtx<DataModel>) {
             error_description: 'Use PKCE S256, qivo:read and the canonical Qivo MCP resource.',
           })
         }
+        // Single-resource server: omission means this same resource, as at
+        // the token endpoint below. The provider checks the client's link to
+        // a resource only when the request names one.
+        const parsed = requestBody(endpoint.query)
+        if (parsed && !query.has('resource')) parsed.resource = mcpResource()
       }
       if (endpoint.path === '/oauth2/token' || endpoint.path === '/oauth2/revoke') {
         // Every client is public (registration above), so a request that
-        // authenticates a client, with a secret or an assertion, is refused,
-        // as the metadata says (servedServerMetadata).
+        // authenticates a client is refused, as the metadata says
+        // (servedServerMetadata): with 401 and the challenge of the header
+        // scheme it tried, or with 400 for a secret or an assertion in the
+        // body (RFC 6749 section 5.2).
+        const scheme = endpoint.headers?.get('authorization')?.trim().split(/\s+/)[0]
         const body = requestBody(endpoint.body)
         if (
-          endpoint.headers?.has('authorization') ||
+          scheme !== undefined ||
           ['client_secret', 'client_assertion', 'client_assertion_type'].some(
             (field) => body?.[field] !== undefined,
           )
         )
-          throw new APIError('UNAUTHORIZED', {
-            error: 'invalid_client',
-            error_description: 'Qivo clients are public. Send only client_id, without a secret.',
-          })
+          throw new APIError(
+            scheme ? 'UNAUTHORIZED' : 'BAD_REQUEST',
+            {
+              error: 'invalid_client',
+              error_description: 'Qivo clients are public. Send only client_id, without a secret.',
+            },
+            scheme ? { 'WWW-Authenticate': scheme } : undefined,
+          )
       }
       if (endpoint.path === '/oauth2/token') {
         const body = requestBody(endpoint.body)
@@ -472,6 +509,35 @@ export function oauthHooks(ctx: GenericCtx<DataModel>) {
       }
     }),
     after: createAuthMiddleware(async (endpoint) => {
+      if (endpoint.path === '/sign-out') {
+        /* Better Auth answers a sign-out whose session delete failed as a
+         * success and clears the cookie, so the session and its access tokens
+         * (endSessionAccess) would outlive a sign-out the person saw succeed.
+         * A session still stored is deleted once more here; if that fails,
+         * the answer is an error that keeps the cookie, so the app keeps the
+         * person signed in and says so (lib/authSession.ts signOut). */
+        const { context } = endpoint
+        const token = await endpoint.getSignedCookie(
+          context.authCookies.sessionToken.name,
+          context.secret,
+        )
+        if (!token) return
+        try {
+          const stored = await context.adapter.findOne({
+            model: 'session',
+            where: [{ field: 'token', value: token }],
+          })
+          if (stored) await context.internalAdapter.deleteSession(token)
+        } catch (error) {
+          context.logger.error('The session could not be ended at sign-out', error)
+          context.responseHeaders?.delete('set-cookie')
+          throw new APIError('SERVICE_UNAVAILABLE', {
+            code: 'SIGN_OUT_FAILED',
+            message: 'Qivo could not sign you out. Try again.',
+          })
+        }
+        return
+      }
       if (endpoint.path !== '/oauth2/token') return
       endpoint.setHeader('Cache-Control', 'no-store')
       endpoint.setHeader('Pragma', 'no-cache')

@@ -8,8 +8,8 @@ import { generateCodeChallenge } from 'better-auth/oauth2'
 import { describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import { createAuth } from '../auth'
-import * as authOAuth from '../betterAuth/oauth'
 import authSchema from '../betterAuth/schema'
+import * as demo from '../demo'
 import { LIMITS, NAME_MAX } from '../lib/limits'
 import { NO_ORGANIZATION, ORGANIZATION_GONE } from '../lib/oauth'
 import { sha256hex } from '../machine/auth'
@@ -590,7 +590,9 @@ describe('OAuth provider and MCP integration', () => {
       ] as const) {
         const response = await authenticated(path, { ...values, ...extra }, authorization)
         const result = await json(response)
-        expect(response.status, `${path} ${JSON.stringify(result)}`).toBe(401)
+        // A client that tried Basic gets its challenge (RFC 6749 section 5.2).
+        expect(response.status, `${path} ${JSON.stringify(result)}`).toBe(authorization ? 401 : 400)
+        expect(response.headers.get('www-authenticate'), path).toBe(authorization ? 'Basic' : null)
         expect(result.error, path).toBe('invalid_client')
       }
     }
@@ -1040,6 +1042,10 @@ describe('OAuth consent and resource binding', () => {
     await authorizationRefusal(await authorize(await authorization(f, clientId)), [
       'invalid_target',
     ])
+    // Leaving out the resource means the MCP resource, so it is refused too.
+    const omitted = await authorization(f, clientId)
+    omitted.query.delete('resource')
+    await authorizationRefusal(await authorize(omitted), ['invalid_target'])
     await oauthRefusal(await exchange(pending, pendingCode), ['invalid_target'])
     await oauthRefusal(await refresh(f, clientId, renewed.refresh_token), ['invalid_target'])
   })
@@ -1301,14 +1307,16 @@ describe('OAuth revocation, replay and live account checks', () => {
     const f = await fixture()
     const c = await connect(f)
     expect(await toolData(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
-    const signOut = await http(f.t, '/api/auth/sign-out', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Origin: APP, 'better-auth-cookie': f.cookie },
-      body: '{}',
-    })
-    expect(signOut.status).toBe(200)
-    // Better Auth 1.7 revokes the token, and Qivo refuses a revoked token.
+    expect((await signOut(f)).status).toBe(200)
     await deniedAccess(f, c.access_token)
+    // The session's record goes once its access tokens have expired.
+    const [ended] = await f.t.run((ctx) => ctx.db.query('oauth_ended_sessions').collect())
+    const cleanup = await f.t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
+    expect(
+      cleanup.filter((job) => job.name === 'oauthConnections:forgetEndedSession'),
+    ).toMatchObject([
+      { args: [{ id: ended._id }], scheduledTime: ended.ended_at + (3_600 + 60) * 1_000 },
+    ])
     // An offline_access refresh token outlives the session, so the client
     // renews without a new approval.
     const renewed = await tokens(await refresh(f, c.request.clientId, c.refresh_token))
@@ -1334,39 +1342,50 @@ describe('OAuth revocation, replay and live account checks', () => {
         })
     })
     const c = await connect(f)
-    const signOut = await http(f.t, '/api/auth/sign-out', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Origin: APP, 'better-auth-cookie': f.cookie },
-      body: '{}',
-    })
-    expect(signOut.status).toBe(200)
+    expect((await signOut(f)).status).toBe(200)
     await deniedAccess(f, c.access_token)
   })
 
-  it('keeps the session with its access tokens when revoking them fails at sign-out, and ends both on a retry', async () => {
+  it('answers a sign-out whose session cannot be ended as a failure that keeps the cookie, and ends both on a retry', async () => {
     const f = await fixture()
     const c = await connect(f)
     const sessions = () => runInAuth(f.t, async (ctx) => await ctx.db.query('session').collect())
     const [session] = await sessions()
-    vi.spyOn(
-      authOAuth.revokeSessionAccessTokens as unknown as { _handler: () => Promise<void> },
-      '_handler',
-    ).mockRejectedValueOnce(new Error('injected revocation failure'))
+    // The session's delete trigger (lib/oauthProvider.ts endSessionAccess).
+    const trigger = () =>
+      vi.spyOn(demo.onDelete as unknown as { _handler: () => Promise<void> }, '_handler')
+    // Every delete of the session fails, Better Auth's and Qivo's second try.
+    const end = trigger().mockRejectedValue(new Error('injected session end failure'))
     const failed = await signOut(f)
+    const answer = await json(failed)
+    expect(failed.status, JSON.stringify(answer)).toBe(503)
+    expect(answer.code).toBe('SIGN_OUT_FAILED')
+    // The session cookie stays. The convex plugin still drops its cached
+    // JWT, which the session mints again.
+    expect(failed.headers.get('set-better-auth-cookie') ?? '').not.toContain('session_token')
+    expect(failed.headers.get('set-cookie')).toBeNull()
     expect((await sessions()).map((row) => row._id)).toEqual([session._id])
     expect(await toolData(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
-    // Better Auth answers a failed session delete as a sign-out anyway.
-    expect(failed.status).toBe(200)
-    expect((await signOut(f)).status).toBe(200)
+    end.mockRestore()
+    // One failed delete is retried within the same sign-out.
+    trigger().mockRejectedValueOnce(new Error('injected session end failure'))
+    const retried = await signOut(f)
+    expect(retried.status).toBe(200)
+    expect(retried.headers.get('set-better-auth-cookie')).toContain('session_token=;')
     expect(await sessions()).toEqual([])
     await deniedAccess(f, c.access_token)
   })
 
-  it('revokes the access tokens of every session when one call ends more than 100', async () => {
+  it('ends the access tokens of every session when one call ends more than 100', async () => {
     const f = await fixture()
     const c = await connect(f)
-    // 120 more sessions of the login, each with a live access token.
+    // 120 more sessions of the login, each with a live access token of the
+    // connection. The last one's token is known, as a client would hold it.
+    const lastToken = 'planted-access-of-the-last-session'
     await runInAuth(f.t, async (ctx) => {
+      const issued = await ctx.db.query('oauthAccessToken').unique()
+      if (!issued) throw new Error('the connection has no access token')
+      const { _id, _creationTime, ...fields } = issued
       for (let index = 0; index < 120; index += 1) {
         const now = Date.now()
         const sessionId = await ctx.db.insert('session', {
@@ -1377,28 +1396,23 @@ describe('OAuth revocation, replay and live account checks', () => {
           updatedAt: now,
         })
         await ctx.db.insert('oauthAccessToken', {
-          token: `planted-access-${index}`,
-          clientId: c.request.clientId,
+          ...fields,
+          token: index === 119 ? await sha256hex(lastToken) : `planted-access-${index}`,
           sessionId,
-          userId: f.userId,
-          scopes: ['qivo:read'],
-          expiresAt: now + 3_600_000,
         })
       }
     })
+    expect(await toolData(await mcp(f, `qvo_${lastToken}`, 'list_projects'))).toBeInstanceOf(Array)
     // Ending every session of a login, as a ban does.
     await f.t.run((ctx) =>
       createAuth(ctx).api.revokeSessions({ headers: new Headers({ cookie: f.cookie }) }),
     )
-    const left = await runInAuth(f.t, async (ctx) => ({
-      sessions: await ctx.db.query('session').collect(),
-      live: (await ctx.db.query('oauthAccessToken').collect()).filter(
-        (token) => token.revoked == null,
-      ),
-    }))
-    expect(left.sessions).toEqual([])
-    expect(left.live).toEqual([])
+    const left = await runInAuth(f.t, async (ctx) => await ctx.db.query('session').collect())
+    expect(left).toEqual([])
+    const ended = await f.t.run((ctx) => ctx.db.query('oauth_ended_sessions').collect())
+    expect(ended).toHaveLength(121)
     await deniedAccess(f, c.access_token)
+    await deniedAccess(f, `qvo_${lastToken}`)
   })
 
   it('refuses refresh under another client without consuming the legitimate refresh token', async () => {

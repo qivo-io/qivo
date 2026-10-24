@@ -1,8 +1,12 @@
 /* Copied from get-convex/better-auth src/plugins/cross-domain/client.ts at
- * 3f41cbcf (Apache-2.0, see ../../../LICENSE). Qivo changed it only in
- * formatting and types: the fetch option type comes from Better Auth's client
- * plugin type instead of @better-fetch/fetch, which Qivo does not install
- * directly. The behavior is upstream's. */
+ * 3f41cbcf (Apache-2.0, see ../../../LICENSE). Qivo changed it:
+ * - A sign-out clears the stored cookies and session only once the server
+ *   answers that it ended the session. Upstream clears them before the
+ *   request, so a sign-out the server refused left the session alive on the
+ *   server with no way to end it from this browser.
+ * - Formatting and types: the fetch option type comes from Better Auth's
+ *   client plugin type instead of @better-fetch/fetch, which Qivo does not
+ *   install directly. */
 import type { BetterAuthClientPlugin, ClientStore } from 'better-auth/client'
 import { parseSetCookieHeader } from 'better-auth/cookies'
 import { VERSION } from '../../version'
@@ -144,6 +148,13 @@ export const crossDomainClient = (
               }
             }
 
+            if (context.request.url.toString().includes('/sign-out')) {
+              await storage.setItem(cookieName, '{}')
+              store?.atoms.session?.set({ data: null, error: null, isPending: false })
+              await storage.setItem(localCacheName, '{}')
+              return
+            }
+
             if (context.request.url.toString().includes('/get-session') && !opts?.disableCache) {
               const data = context.data
               storage.setItem(localCacheName, JSON.stringify(data))
@@ -177,11 +188,6 @@ export const crossDomainClient = (
           const cookie = getCookie(storage.getItem(cookieName) || '{}')
           options.credentials = 'omit'
           options.headers = { ...options.headers, 'Better-Auth-Cookie': cookie }
-          if (url.includes('/sign-out')) {
-            await storage.setItem(cookieName, '{}')
-            store?.atoms.session?.set({ data: null, error: null, isPending: false })
-            await storage.setItem(localCacheName, '{}')
-          }
           return { url, options: options as FetchOptions }
         },
       },

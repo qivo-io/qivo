@@ -53,7 +53,7 @@ import { creatorGrant, grantsAfterHandover } from '../../convex/lib/projectGrant
 import { resolveReviewHours, reviewStamp } from '../../convex/lib/review'
 import { firstSittingDay, nextSyncStamp, SYNC_OWNERS_MAX } from '../../convex/lib/teamSync'
 import { armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
-import { NO_QUERY } from '../lib/authSession'
+import { NO_QUERY, SignOutFailed } from '../lib/authSession'
 import { avatarCacheScope, createAvatarImageCache } from '../lib/avatarImageCache'
 import { createAvatarSources } from '../lib/avatarSources'
 import { browserBackendUrl, configuredConvexDeploymentUrl } from '../lib/backendUrl'
@@ -8604,7 +8604,9 @@ export const PLANNER = {
       server or a field holds typed text, the first press says what would be
       lost, and only a second press within SIGN_OUT_CONFIRM_MS goes ahead,
       without the close warning asking again. Signing out works offline
-      too, because it clears the sign-in stored in this browser. */
+      too, because it clears the sign-in stored in this browser. When the
+      server answers that it could not end the session, the person stays
+      signed in and is told to try again (lib/authSession.ts signOut). */
   signOut: () => {
     const waiting = syncStatus.unconfirmed()
     if ((waiting || hasUnsaved()) && Date.now() - signOutWarnedAt > SIGN_OUT_CONFIRM_MS) {
@@ -8618,17 +8620,24 @@ export const PLANNER = {
       toast(`${what}. Press ${again} and lose ${waiting > 1 ? 'them' : 'it'}.`)
       return
     }
-    unconfirmedNote.forgetAll()
-    clearAvatarSources()
     // a demo can start again in this page, so its warning stays armed
     if (DEMO_MODE) {
+      unconfirmedNote.forgetAll()
+      clearAvatarSources()
       notifyDemoEnded('lost')
       return
     }
-    leaveDeliberately()
     void authSignOut().then(
-      () => location.reload(),
-      () => location.reload(),
+      () => {
+        unconfirmedNote.forgetAll()
+        clearAvatarSources()
+        leaveDeliberately()
+        location.reload()
+      },
+      (failure: unknown) => {
+        if (failure instanceof SignOutFailed) toast(failure.message)
+        else location.reload()
+      },
     )
   },
 }

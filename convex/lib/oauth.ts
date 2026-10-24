@@ -3,6 +3,9 @@ import { badRequest, forbidden } from './functions'
 import { cutText, NAME_MAX } from './limits'
 
 export const OAUTH_SCOPES = ['qivo:read', 'qivo:write', 'offline_access']
+/** How long an OAuth access token lasts, as Better Auth's default. An ended
+ * session's record lasts as long (lib/oauthProvider.ts endSessionAccess). */
+export const OAUTH_ACCESS_TOKEN_TTL_SECONDS = 3_600
 export const oauthIssuer = () => {
   const origin = process.env.CONVEX_SITE_URL
   if (!origin) throw new Error('CONVEX_SITE_URL is not set')

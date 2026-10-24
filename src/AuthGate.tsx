@@ -36,7 +36,7 @@ import { LimitedInput } from './components/LimitedField'
 import { OAuthConnect } from './components/OAuthConnect'
 import { Icon } from './components/qivo'
 import { authClient, signOut as authSignOut, handleOAuthReturn } from './lib/auth'
-import { NO_QUERY } from './lib/authSession'
+import { NO_QUERY, SignOutFailed } from './lib/authSession'
 import { convex } from './lib/convex'
 import { overLimit } from './lib/fieldLimits'
 import { lazyFromModule } from './lib/lazyModule'
@@ -657,19 +657,28 @@ export function AuthGate() {
     setBusy(false)
   }
 
-  const signOutAndReload = () => {
+  /* Signs out and reloads. Resolves false when the server refused the
+     sign-out: the person stays signed in on this screen, which says so. */
+  const signOutAndReload = async (): Promise<boolean> => {
+    signingOut.current = true
+    try {
+      await authSignOut()
+    } catch (failure) {
+      if (failure instanceof SignOutFailed) {
+        signingOut.current = false
+        showError(failure.message, 'form')
+        return false
+      }
+    }
     // a sign-out clears the crash note too (lib/unconfirmedNote), and the
     // person chose to leave, so the reload does not ask about text typed here
     unconfirmedNote.forgetAll()
     leaveDeliberately()
-    signingOut.current = true
     loadAttempt.current++
     setAppearanceAccount(null)
     setPhase('loading')
-    void authSignOut().then(
-      () => location.reload(),
-      () => location.reload(),
-    )
+    location.reload()
+    return true
   }
 
   // The connection URL carries the signed authorization request. Keep this
@@ -730,7 +739,7 @@ export function AuthGate() {
           type="button"
           variant="ghost"
           className="[width:100%] [justify-content:center] [margin-top:8px]"
-          onClick={signOutAndReload}
+          onClick={() => void signOutAndReload()}
         >
           Sign out
         </Button>
@@ -806,7 +815,7 @@ export function AuthGate() {
           type="button"
           variant="ghost"
           className="[width:100%] [justify-content:center] [margin-top:8px]"
-          onClick={signOutAndReload}
+          onClick={() => void signOutAndReload()}
         >
           Use another account
         </Button>
@@ -870,7 +879,7 @@ export function AuthGate() {
           type="button"
           variant="ghost"
           className="[width:100%] [justify-content:center] [margin-top:8px]"
-          onClick={signOutAndReload}
+          onClick={() => void signOutAndReload()}
         >
           Use another account
         </Button>
