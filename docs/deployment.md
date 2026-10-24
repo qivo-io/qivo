@@ -37,8 +37,10 @@ Normal deployments never provision fixture users, seed a workspace or reset
 data. Staging starts with its own synthetic data and private test accounts.
 Its auth secrets, storage, API credentials and backend are separate from
 production. Mail delivery, social sign-in and billing are not configured in
-staging, so those flows cannot be tested there. Do not import customer data
-into staging or reuse production service credentials there.
+staging, so those flows cannot be tested there. Branch previews send real mail
+instead (see [Environment configuration](#environment-configuration)). Do not
+import customer data into staging or reuse production service credentials
+there.
 
 ## Shipping a change
 
@@ -432,6 +434,13 @@ mail through Lettermint, so its Convex deployment also needs
 `LETTERMINT_API_KEY` and `MAIL_FROM` (one address, such as
 `no-reply@qivo.io`). A production build refuses to push backend code until
 both are set. Set them before you publish the release.
+
+Branch previews send the same mail. The Convex project that holds production,
+development and the branch previews has both settings as default environment
+variables, which Convex copies into each new deployment when it creates it.
+Mail flows can therefore be tried on a branch preview before a release. A
+preview build does not require the settings, and staging, a separate Convex
+project, has neither.
 
 The website build takes its origin from `SITE_ORIGIN`, which
 `scripts/vercel-build.mjs` sets to `QIVO_APP_ORIGIN` for stable builds and to

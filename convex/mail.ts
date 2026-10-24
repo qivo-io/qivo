@@ -4,9 +4,10 @@
  * and organization invitations. MAIL_FROM supplies From; customer replies go to
  * support. No inbound mail is processed here.
  *
- * LETTERMINT_API_KEY (a project API token) and MAIL_FROM belong only in the
- * selected Convex deployment. Never log tokens, recipients or auth URLs. Local
- * auth-link logging requires an explicit loopback development opt-in. */
+ * LETTERMINT_API_KEY (a project API token) and MAIL_FROM are Convex deployment
+ * settings, never frontend ones (.env.example says which deployments get
+ * them). Never log tokens, recipients or auth URLs. Local auth-link logging
+ * requires an explicit loopback development opt-in. */
 
 import type { AuthMailOutcome } from './lib/authMail'
 import { address, localAuthEmailLogging, mailFrom, mailSendUrl } from './lib/mailConfig'
