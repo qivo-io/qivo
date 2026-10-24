@@ -38,7 +38,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REF: ${{ inputs.ref }}
         run: |
-          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$(jq -rn --arg ref "$REF" '$ref | @uri')" --jq .sha)
+          # the SHA alone: the full answer holds the commit's diff, which
+          # GitHub refuses to build for a very large commit
+          sha=$(gh api -H 'Accept: application/vnd.github.sha' \
+            "repos/$GITHUB_REPOSITORY/commits/$(jq -rn --arg ref "$REF" '$ref | @uri')")
           [[ $sha =~ ^[0-9a-f]{40}$ ]]
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "Building \`$REF\` at $sha" >> "$GITHUB_STEP_SUMMARY"

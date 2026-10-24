@@ -327,13 +327,13 @@ and Qivo's copy of its Convex adapter are described in
 
 Desktop installers are not published yet. Run **Desktop test build** in GitHub
 Actions with a branch, tag or commit SHA (full or short) to get Windows and
-Linux installers as workflow artifacts, kept for 7 days. The workflow never creates or changes a
-GitHub Release and sets no update feed, so test installs never update
-themselves. The installers are unsigned, so Windows SmartScreen warns about
-them. The workflow can build any ref, including code that is not reviewed, so
-it must never receive signing credentials. The Linux job uses Ubuntu 24.04 to
-keep the glibc baseline portable; the resulting Debian package is suitable for
-Ubuntu 26.04.
+Linux installers as workflow artifacts, kept for 7 days. The workflow never
+creates or changes a GitHub Release and sets no update feed, so test installs
+never update themselves. The installers are unsigned, so Windows SmartScreen
+warns about them. The workflow can build any ref, including code that is not
+reviewed, so it must never receive signing credentials. The Linux job uses
+Ubuntu 24.04 to keep the glibc baseline portable; the resulting Debian package
+is suitable for Ubuntu 26.04.
 
 The shell loads the hosted web app, so web releases reach desktop users within
 about a minute without a new installer. When desktop publishing starts, the

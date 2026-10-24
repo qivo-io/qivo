@@ -483,6 +483,9 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
         return
       }
       if (waiting) {
+        // as its Back to inbox (closeTask): a pop-out left from the task
+        // before must not catch the next one
+        setPoppedOut(false)
         openTask(null)
         return
       }

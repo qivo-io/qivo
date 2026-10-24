@@ -12,7 +12,8 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
    it, and the task opens once it arrives, in its own scope. The waiting
    window closes, and a task that never arrives closes it once every task
    has loaded. Settings opens meanwhile, but its pages that read every task
-   wait. */
+   wait. Back to a task or project that is gone, once every task has
+   loaded, names the page it shows in place. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
@@ -43,6 +44,8 @@ let root: Root
 beforeEach(() => {
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
   Range.prototype.getBoundingClientRect = () => new DOMRect()
+  // closing a task returns focus to its card, which then scrolls into view
+  Element.prototype.scrollIntoView = () => {}
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal(
     'matchMedia',
@@ -217,16 +220,6 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     expect(location.pathname).toBe(ALL_BOARD)
   })
 
-  it('names the page it shows when Back reaches a task that is gone after every task loaded', async () => {
-    const { org } = await bootLoading(false)
-    await back(`/app/${org}/board/all`)
-    expect(location.pathname).toBe(ALL_BOARD)
-    // the page stays All projects' Board
-    await back(`/app/${org}/board/tasks/qn-3`)
-    expect(document.querySelector('[role="dialog"]')).toBeNull()
-    expect(location.pathname).toBe(ALL_BOARD)
-  })
-
   it('says in the Inbox that the task still loads, then opens it there', async () => {
     const { org } = await bootLoading()
     await back(`/app/${org}/inbox/tasks/qn-2`)
@@ -257,4 +250,25 @@ describe('Settings while tasks load', { timeout: 30_000 }, () => {
       'the Labels page',
     )
   })
+})
+
+describe('Back to an address that is gone', { timeout: 30_000 }, () => {
+  it.each([
+    ['a task', 'board/tasks/qn-3'],
+    ['a project', 'board/p/9'],
+  ])(
+    'names the page it shows in place when Back reaches %s that is gone, once every task loaded',
+    async (_, gone) => {
+      const { org } = await bootLoading(false)
+      await back(`/app/${org}/board/all`)
+      expect(location.pathname).toBe(ALL_BOARD)
+      const entries = history.length
+      // the page stays All projects' Board
+      await back(`/app/${org}/${gone}`)
+      expect(document.querySelector('[role="dialog"]')).toBeNull()
+      expect(location.pathname).toBe(ALL_BOARD)
+      // replaced, not pushed: Back from here leaves the page
+      expect(history.length).toBe(entries + 1)
+    },
+  )
 })

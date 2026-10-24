@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { getFunctionName } from 'convex/server'
-import { act, useState } from 'react'
+import { act, useEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
@@ -10,7 +10,8 @@ import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
    in stages (store/liveParts.ts): picking it reads nothing yet, and the
    task opens in the pane once it arrives, its item read then. Back or
    Forward to such a task (App pendingTask) shows the pane that says so,
-   on a phone too, and Escape closes that pane first. */
+   on a phone too, and Escape closes that pane first, with any pop-out
+   left from the task before. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
@@ -61,8 +62,8 @@ afterEach(async () => {
 /** Loads a large workspace whose last task window, holding task QN-2 and
     its Inbox item, is still to arrive, and renders the Inbox as App holds
     it, the pane showing the task the address names, `address` at first.
-    Answers the store, the fixture, the tasks the Inbox opened, its exits
-    and its reads. */
+    Answers the store, the fixture, the tasks the Inbox opened, its exits,
+    its reads and a way to move the address as Back or Forward would. */
 async function loadingInbox(address: string | null = null) {
   vi.resetModules()
   const snap: Snapshot = plannerFixture()
@@ -81,6 +82,32 @@ async function loadingInbox(address: string | null = null) {
     updated_at: AT,
     has_hidden_subtasks: false,
     has_hidden_parent: false,
+  })
+  // a task in the first stage's windows, which have loaded, with its own item
+  snap.issues.push({
+    id: '00000000-a',
+    org_id: snap.orgs[0].id,
+    project_id: snap.projects[0].id,
+    num: 1,
+    title: 'Write the load plan',
+    description: '',
+    status: 'todo',
+    priority: 'medium',
+    paused: false,
+    created_at: AT,
+    updated_at: AT,
+    has_hidden_subtasks: false,
+    has_hidden_parent: false,
+  })
+  snap.messages.push({
+    id: 'message-b',
+    org_id: snap.orgs[0].id,
+    recipient_id: snap.profiles[0].id,
+    issue_id: '00000000-a',
+    issue_title: 'Write the load plan',
+    kind: 'comment',
+    detail: 'New comment',
+    created_at: '2026-09-14T08:30:00.000Z',
   })
   snap.messages.push({
     id: 'message-a',
@@ -108,10 +135,14 @@ async function loadingInbox(address: string | null = null) {
   const { usePlannerVersion } = await import('../store/usePlannerVersion')
   const opened: (string | null)[] = []
   const onExit = vi.fn()
+  const go = { to: (_handle: string | null) => {} }
   /** The Inbox as App holds it: the task the pane shows is the address's. */
   function Host() {
     usePlannerVersion()
     const [openIssue, setOpenIssue] = useState<string | null>(address)
+    useEffect(() => {
+      go.to = setOpenIssue
+    }, [])
     return (
       <Inbox
         showOnBoard={vi.fn()}
@@ -132,7 +163,8 @@ async function loadingInbox(address: string | null = null) {
       </TooltipProvider>,
     ),
   )
-  return { store, snap, opened, onExit, reads }
+  const goTo = (handle: string | null) => act(async () => go.to(handle))
+  return { store, snap, opened, onExit, reads, goTo }
 }
 
 /** Lets the last task window answer. */
@@ -199,5 +231,34 @@ describe('the Inbox at a task still to arrive', { timeout: 20_000 }, () => {
     expect(container.querySelector('[data-task-loading]')).toBeNull()
     await pressEscape()
     expect(onExit).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes a pop-out left from the task before when Escape closes the pane', async () => {
+    const { store, opened, goTo } = await loadingInbox()
+    const task = store.P.issues.find((it) => it.uuid === '00000000-a')
+    await goTo(task?.id ?? null)
+    const popOut = await vi.waitFor(() => {
+      const button = container.querySelector<HTMLButtonElement>('[data-task-popout]')
+      if (!button) throw new Error('missing the pop-out button')
+      return button
+    })
+    await act(async () => popOut.click())
+    expect(document.querySelector('[data-task-scrim]')).not.toBeNull()
+    // Back to a task still to arrive, which leaves the pop-out
+    await goTo('qn-2')
+    expect(container.querySelector('[data-task-loading]')).not.toBeNull()
+    expect(document.querySelector('[data-task-scrim]')).toBeNull()
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    })
+    expect(opened).toEqual([null])
+    // the next item opens in the pane, not in a pop-out
+    const open = container.querySelector<HTMLButtonElement>(
+      '[data-message="00000000-a"] .inbox-message-open',
+    )
+    await act(async () => open?.click())
+    expect(opened.at(-1)).toBeTruthy()
+    expect(container.querySelector('[data-task-popout]')).not.toBeNull()
+    expect(document.querySelector('[data-task-scrim]')).toBeNull()
   })
 })
