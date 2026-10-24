@@ -3,7 +3,9 @@
  * is exactly what pg_cron ran, so do not "fix" 02:30 to local time. The whole
  * pg_net/Vault/cron-secret/Monday-sentinel apparatus is cut: failures appear
  * in the Convex dashboard logs, and each run writes one platform_audit_log
- * row (jobs.ts; files.reapOrphans writes its own). */
+ * row (jobs.ts; files.reapOrphans writes its own).
+ *
+ * A branch preview registers none of them (see the export below). */
 
 import { cronJobs, makeFunctionReference } from 'convex/server'
 import { internal } from './_generated/api'
@@ -136,4 +138,13 @@ crons.interval(
 // (auditRetention.ts).
 crons.daily('expire-audit-log', { hourUTC: 4, minuteUTC: 45 }, internal.auditRetention.expire, {})
 
-export default crons
+/* Convex reads this module, with the deployment's environment variables, when
+ * functions are pushed, and only then. The preview builds set
+ * QIVO_ENVIRONMENT=preview before their first push (scripts/vercel-build.mjs,
+ * scripts/demo-build.mjs), so a branch preview runs no cron job. Every
+ * other value keeps every job. A missing or unknown value keeps them too,
+ * though http.ts already refuses that push and the jobs of the last push stay.
+ * A stable backend holding `preview` by mistake would lose every job, so the
+ * stable builds of both scripts refuse to push to a backend whose
+ * QIVO_ENVIRONMENT differs from the build's. */
+export default process.env.QIVO_ENVIRONMENT === 'preview' ? cronJobs() : crons

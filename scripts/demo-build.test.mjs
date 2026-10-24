@@ -1,8 +1,8 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import { finishDemoBuild, WEBSITE_OUTPUT } from './demo-build.mjs'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { finishDemoBuild, main, WEBSITE_OUTPUT } from './demo-build.mjs'
 import { assertDemoTarget } from './demo-deploy.mjs'
 
 describe('dedicated demo deployment target', () => {
@@ -101,5 +101,30 @@ describe('demo build output', () => {
       else mkdirSync(join(directory, name))
       expect(() => finishDemoBuild(directory), name).toThrow(/must not include the website/)
     }
+  })
+})
+
+describe('main — a demo preview build names the backend a preview before it pushes', () => {
+  const preview = {
+    QIVO_ENVIRONMENT: 'preview',
+    VITE_APP_MODE: 'demo',
+    DEMO_CONVEX_PROJECT: 'team:demo',
+    CONVEX_DEPLOY_KEY: 'preview:team:demo|test-only',
+    VITE_CONVEX_URL: 'https://fixture-otter-12.convex.cloud',
+    VERCEL_BRANCH_URL: 'qivo-demo-git-x-fixture.vercel.app',
+  }
+
+  /* `convex deploy` runs this script as its --cmd and pushes the functions
+     only after it returns, and crons.ts registers no job when
+     QIVO_ENVIRONMENT is preview at push time. */
+  it('sets QIVO_ENVIRONMENT=preview on the claimed deployment before the build', () => {
+    const run = vi.fn(() => '')
+    main(preview, { run, finish: vi.fn(), receipt: vi.fn() })
+    const commands = run.mock.calls.map(([command, args]) => [command, ...args].join(' '))
+    const set = commands.indexOf(
+      'npx convex env set QIVO_ENVIRONMENT preview --deployment fixture-otter-12',
+    )
+    expect(set).toBeGreaterThan(-1)
+    expect(set).toBeLessThan(commands.indexOf('npm run build'))
   })
 })
