@@ -55,6 +55,14 @@ function Board({ label, layers = false }: { label: string; layers?: boolean }) {
 
 let container: HTMLDivElement
 let root: Root
+/* Frames paint only when a test says so (painted, wait): jsdom's own frames
+   come on a timer, and on a busy machine one could paint inside an act. */
+let frames: FrameRequestCallback[] = []
+const paint = () => {
+  const due = frames
+  frames = []
+  for (const frame of due) frame(performance.now())
+}
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
@@ -67,6 +75,11 @@ beforeEach(() => {
       disconnect() {}
     },
   )
+  frames = []
+  vi.stubGlobal('requestAnimationFrame', (frame: FrameRequestCallback) => frames.push(frame))
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => {
+    frames[id - 1] = () => {}
+  })
   counts.mounts = 0
   counts.renders.length = 0
   counts.running = 0
@@ -84,7 +97,7 @@ afterEach(async () => {
 /** Lets the frame paint and the task after it run. */
 const painted = () =>
   act(async () => {
-    await new Promise((resolve) => requestAnimationFrame(resolve))
+    paint()
     await new Promise((resolve) => setTimeout(resolve, 20))
   })
 
@@ -258,7 +271,12 @@ const keep = (id: string | null, shown: boolean) =>
     ),
   )
 const views = () => [...container.children] as HTMLElement[]
-const wait = (ms: number) => act(() => new Promise((resolve) => setTimeout(resolve, ms)))
+/** Lets a frame paint and `ms` pass. */
+const wait = (ms: number) =>
+  act(async () => {
+    paint()
+    await new Promise((resolve) => setTimeout(resolve, ms))
+  })
 
 describe('ViewKeeper', () => {
   it('keeps the view of one id across hides, and takes the old one apart in slices when the id changes', async () => {
