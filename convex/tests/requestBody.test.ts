@@ -562,7 +562,7 @@ describe('Better Auth bodies', () => {
     // mid-minute and both sign-ins share their windows (after `stalled`,
     // which puts the real timers back)
     vi.useFakeTimers({ toFake: ['Date'] })
-    vi.setSystemTime(Date.UTC(2026, 9, 24, 12, 0, 30))
+    vi.setSystemTime(Date.parse(NOW) + 30_000)
     onTestFinished(() => {
       vi.useRealTimers()
     })
