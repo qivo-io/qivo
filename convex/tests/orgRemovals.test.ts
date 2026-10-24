@@ -703,6 +703,51 @@ describe('deleting the organization', () => {
     expect((await orgRows(t, f.org.id)).profiles).toBeGreaterThan(0)
   })
 
+  /* Moves the organization to the safety pass at `due`, runs `check`, and
+   * answers its due time and the reconciliations waiting to run. */
+  const marksDue = async (t: T, orgId: string, due: string, check: () => Promise<unknown>) => {
+    const row = () =>
+      t.run((ctx) =>
+        ctx.db
+          .query('billing_subscriptions')
+          .withIndex('by_org', (q) => q.eq('org_id', orgId))
+          .unique(),
+      )
+    const id = (await row())!._id
+    await t.run((ctx) => ctx.db.patch(id, { sync_due_at: due, sync_safety: true }))
+    await check()
+    const jobs = await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
+    return {
+      due: (await row())?.sync_due_at,
+      queued: jobs.filter(
+        (job) => job.name === 'billingSync:reconcile' && job.state.kind === 'pending',
+      ).length,
+    }
+  }
+
+  it('asks to reconcile a live Polar subscription Qivo has not applied at the checkout deadline', async () => {
+    const { t, f } = await billed()
+    polar({ list: () => [remote(f.org.id)] })
+    vi.setSystemTime(Date.parse(at(3)) + 60_000)
+    expect(
+      await marksDue(t, f.org.id, at(9), () =>
+        t.action(internal.orgRemovals.verifyNoCheckout, { org_id: f.org.id }),
+      ),
+    ).toEqual({ due: new Date(Date.now()).toISOString(), queued: 1 })
+  })
+
+  it('asks to reconcile a live Polar subscription Qivo has not applied on the deletion date', async () => {
+    const { t, f } = await billed()
+    await applied(t, remote(f.org.id, { status: 'canceled', ended_at: NOW }))
+    vi.setSystemTime(Date.parse(at(30)) + 60_000)
+    polar({ list: () => [remote(f.org.id, { id: replacementId, current_period_end: at(59) })] })
+    expect(
+      await marksDue(t, f.org.id, at(40), () =>
+        t.action(internal.orgRemovals.begin, { org_id: f.org.id }),
+      ),
+    ).toEqual({ due: new Date(Date.now()).toISOString(), queued: 1 })
+  })
+
   it('holds a deletion an admin asked for while a subscription is live', async () => {
     const { t, f } = await billed()
     await applied(t, remote(f.org.id))

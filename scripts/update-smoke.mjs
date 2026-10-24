@@ -40,6 +40,7 @@ assert.match(initialVersion, /^[a-zA-Z0-9._-]{1,128}$/, 'Invalid build version m
 
 const log = (message) => console.log(`[update-smoke] ${message}`)
 const QUIET_PROOF_MS = 6_000 // longer than the production monitor's five-second quiet period
+const WAKE_GAP_MS = 2 * 60_000 + 1_000 // past the monitor's UPDATE_WAKE_MS
 const STAMP = randomUUID().slice(0, 8)
 const MIME = {
   '.js': 'text/javascript',
@@ -83,6 +84,9 @@ function assertChunkRequested(name, expected) {
 const browser = await chromium.launch({ headless: true })
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
 const page = await context.newPage()
+// The page's clock runs at real speed, so publishVersion can move it past
+// the monitor's two-minute wake gap (src/lib/appUpdates.ts UPDATE_WAKE_MS).
+await page.clock.install()
 page.setDefaultTimeout(15_000)
 page.on('pageerror', () => pageErrors++)
 const notice = page.locator('[data-app-update]')
@@ -134,7 +138,10 @@ async function publishVersion(suffix) {
   servedVersion = `smoke-${STAMP}-${suffix}`
   const previousRequests = versionRequests
   // Focus is a real production check trigger; the regular poll stays at its
-  // production interval rather than accelerating the code under test.
+  // production interval rather than accelerating the code under test. Focus
+  // checks only once the last check is two minutes old, so the page's clock
+  // moves past that first.
+  await page.clock.fastForward(WAKE_GAP_MS)
   const response = page.waitForResponse(
     (response) => new URL(response.url()).pathname === '/version.json',
   )

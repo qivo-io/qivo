@@ -3688,8 +3688,9 @@ const removalOrg = (change: AccessRemoval) =>
    lib/billingAccess.ts orgWriteBlock), for each organization whose settings
    page can start a removal (P.watchWriteBlock), with how many pages watch
    it. The workspace leaves it out, because its root part would then read the billing
-   row that the billing sync rewrites every minute and rerun for every
-   member. `refused` records a read-only refusal the status has not caught up
+   row and rerun for every member each time the billing sync writes it, which
+   happens on every reconciliation (billingSync.ts), every two minutes while a
+   checkout or payment is pending. `refused` records a read-only refusal the status has not caught up
    with (see removeAtOnce) until the status answers again. `message` is the
    server's sentence for the block (lib/billingAccess.ts orgWriteBlock). */
 const writeBlocks = new Map<

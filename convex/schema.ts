@@ -612,12 +612,24 @@ export default defineSchema({
     sync_lock_until: v.optional(v.string()),
     sync_error: v.optional(v.string()),
     synced_at: v.optional(v.string()),
+    // When the minute sweep next reconciles this organization with Polar
+    // (billingSync.ts nextSyncDue). Absent only on rows enrolled before due
+    // times existed, which the sweep treats as due after the other targeted
+    // times.
+    sync_due_at: v.optional(v.string()),
+    // True when sync_due_at is only the six-hour safety pass, which the
+    // sweep starts after every other due organization.
+    sync_safety: v.optional(v.boolean()),
+    // Reconciliations that failed in a row, which set the retry's delay.
+    sync_attempts: v.optional(v.number()),
     updated_at: v.string(),
     created_at: v.string(),
   })
     .index('by_uuid', ['id'])
     .index('by_org', ['org_id'])
-    .index('by_provider', ['polar_subscription_id']),
+    .index('by_provider', ['polar_subscription_id'])
+    .index('by_sync_due', ['sync_safety', 'sync_due_at'])
+    .index('by_complimentary_until', ['complimentary_until']),
 
   billing_periods: defineTable({
     org_id: v.string(),

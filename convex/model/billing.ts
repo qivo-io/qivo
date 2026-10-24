@@ -63,6 +63,8 @@ export async function enrollOrganization(ctx: MutationCtx, orgId: string, planId
     billed_seats: 0,
     next_seats: Math.max(plan.minimum_seats, count.total),
     cancel_at_period_end: false,
+    // reconciled once among the other due organizations (billingSync.ts sweep)
+    sync_due_at: now,
     // Only organizations enrolled while billing runs get a checkout deadline.
     ...(billingEnabled()
       ? { checkout_due_at: new Date(Date.parse(now) + CHECKOUT_DAYS * DAY_MS).toISOString() }

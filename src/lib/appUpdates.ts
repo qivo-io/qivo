@@ -17,6 +17,16 @@ type Options = {
 }
 
 export const UPDATE_QUIET_MS = 5_000
+
+/** How old the last version check may grow while the tab is visible. Each
+ * check is one Vercel request, so a tab open all working day makes about 50
+ * instead of 480. */
+export const UPDATE_CHECK_MS = 10 * 60_000
+
+/** How old the last check must be before returning to the tab, focusing the
+ * window or coming back online checks again, so switching windows often
+ * cannot add a request each time. */
+export const UPDATE_WAKE_MS = 2 * 60_000
 export const UPDATE_RELOAD_KEY = 'qivo:update-reload'
 
 export function createAppUpdateMonitor(options: Options) {
@@ -28,6 +38,7 @@ export function createAppUpdateMonitor(options: Options) {
   let automaticPaused = false
   let timer: ReturnType<typeof setTimeout> | undefined
   let checking: Promise<void> | undefined
+  let checkedAt: number | undefined
 
   const publish = () => {
     if (!disposed)
@@ -88,15 +99,19 @@ export function createAppUpdateMonitor(options: Options) {
   const check = (): Promise<void> => {
     if (disposed || reloading) return Promise.resolve()
     if (checking) return checking
+    const previous = checkedAt
+    checkedAt = now()
     checking = (async () => {
       // Normalize even a synchronous fetch adapter failure to a later turn,
       // so finally cannot clear the slot before this assignment completes.
       await Promise.resolve()
+      let answered = false
       try {
         const value = await options.fetchVersion()
         if (disposed || !value || typeof value !== 'object' || !('buildId' in value)) return
         const id = value.buildId
         if (typeof id !== 'string' || !/^[a-zA-Z0-9._-]{1,128}$/.test(id)) return
+        answered = true
         const next = id === options.buildId ? null : id
         if (target !== next) {
           target = next
@@ -116,6 +131,8 @@ export function createAppUpdateMonitor(options: Options) {
         // Offline, a failed deploy, HTML fallbacks and proxy errors are not
         // evidence of a new version. A later poll/focus retries normally.
       } finally {
+        // a check without a valid answer does not count as one (checkIfOlder)
+        if (!answered) checkedAt = previous
         checking = undefined
       }
     })()
@@ -123,6 +140,12 @@ export function createAppUpdateMonitor(options: Options) {
   }
   return {
     check,
+    /** Checks unless the last check with a valid answer started less than
+     * `maxAgeMs` ago. A clock moved back behind that check counts as old. */
+    checkIfOlder: (maxAgeMs: number) => {
+      const age = checkedAt === undefined ? Number.POSITIVE_INFINITY : now() - checkedAt
+      return age >= 0 && age < maxAgeMs ? Promise.resolve() : check()
+    },
     reconsider,
     activity,
     reloadNow: () => reload(true),
