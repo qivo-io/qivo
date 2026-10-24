@@ -1,15 +1,18 @@
 /* Monthly usage (usage.ts, model/usage.ts). The suite stores a month for a
  * small fixture at the smallest page sizes and checks every figure against
  * what it planted, reruns it, and covers the mail and webhook counters, the
- * retention sweep, an organization's deletion and the operator gate. */
+ * sign-ins a sign-out would erase, the retention sweep, an organization's
+ * deletion and the operator gate. */
 /// <reference types="vite/client" />
 
+import { hashPassword } from 'better-auth/crypto'
+import { type DefaultFunctionArgs, type FunctionReference, getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { overlapShare, spread } from '../lib/usage'
 import { USAGE_PAGE } from '../model/usage'
-import { USAGE_EXPIRY } from '../usage'
+import { orgUsage, USAGE_EXPIRY } from '../usage'
 import {
   as,
   expectRefusal,
@@ -29,6 +32,11 @@ const DEFAULT_EXPIRY = { ...USAGE_EXPIRY }
 const RUN = Date.parse('2026-04-01T05:15:00.000Z')
 const MARCH = '2026-03'
 const iso = (s: string) => new Date(s).toISOString()
+const APP = 'http://localhost:5199'
+const PASSWORD = 'Hermetic usage password 271828!'
+type FetchInit = { method?: string; headers?: Record<string, string>; body?: string }
+const http = (t: T, path: string, init?: FetchInit): Promise<Response> =>
+  (t as unknown as { fetch(path: string, init?: FetchInit): Promise<Response> }).fetch(path, init)
 const runSteps = (t: T) => t.finishAllScheduledFunctions(() => vi.runAllTimers())
 
 beforeEach(() => {
@@ -46,21 +54,20 @@ afterEach(() => {
 const smallestPages = () =>
   Object.assign(USAGE_PAGE, { orgs: 1, rows: 1, profiles: 1, issues: 1, comments: 1 })
 
-/** A platform operator. */
-async function operator(t: T) {
+/** A Better Auth login with no organization. */
+async function login(t: T, email: string): Promise<string> {
   const user = await t.mutation(components.betterAuth.adapter.create, {
     input: {
       model: 'user',
-      data: {
-        name: 'operator',
-        email: 'operator@platform.test',
-        emailVerified: true,
-        createdAt: RUN,
-        updatedAt: RUN,
-      },
+      data: { name: email, email, emailVerified: true, createdAt: RUN, updatedAt: RUN },
     },
   })
-  const userId = user._id as string
+  return user._id as string
+}
+
+/** A platform operator. */
+async function operator(t: T) {
+  const userId = await login(t, 'operator@platform.test')
   await t.run(async (ctx) => {
     await ctx.db.insert('platform_admins', {
       auth_user_id: userId,
@@ -148,6 +155,21 @@ async function plantMarch(t: T, f: OrgFixture) {
     })
     const avatar = await ctx.storage.store(new Blob(['y'.repeat(7)]) as never)
     await ctx.db.patch(f.admin._id, { avatar_storage_id: avatar })
+    // An account background of 50 bytes with a preview of 9, which belongs
+    // to the login, not the organization.
+    await ctx.db.insert('custom_backgrounds', {
+      id: uuid(),
+      auth_user_id: f.user.auth_user_id as string,
+      storage_id: await ctx.storage.store(new Blob(['b'.repeat(50)]) as never),
+      preview_storage_id: await ctx.storage.store(new Blob(['p'.repeat(9)]) as never),
+      name: 'Fjord',
+      mime: 'image/jpeg',
+      width: 10,
+      height: 10,
+      byte_size: 50,
+      sha256: 'f'.repeat(64),
+      uploaded_at: iso('2026-03-03'),
+    })
     await ctx.db.insert('billing_usage', usageRow(org, f.user.id, `month:${MARCH}`, 10))
     await ctx.db.insert('billing_usage', usageRow(org, f.agent.id, `month:${MARCH}`, 5))
     await ctx.db.insert('billing_usage', usageRow(org, f.viewer.id, 'month:2026-02', 7))
@@ -280,6 +302,79 @@ describe('the monthly job', () => {
         .collect(),
     )
     expect(runs.map((row) => row.detail)).toEqual([{ month: MARCH, saved: 2, failed: 0 }])
+    expect(await t.query(internal.usage.unattributed, { month: MARCH })).toEqual({
+      mail_verification: 0,
+      mail_password_reset: 0,
+      mail_account_notes: 0,
+      background_bytes: 59,
+    })
+  })
+
+  it('reads a page’s other tasks on their own once its comments pass the byte budget', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const tasks = [
+      await plantIssue(t, { org_id: f.org.id, project_id: f.meta.id }),
+      await plantIssue(t, { org_id: f.org.id, project_id: f.meta.id }),
+      await plantIssue(t, { org_id: f.org.id, project_id: f.meta.id }),
+    ]
+    await t.run(async (ctx) => {
+      for (const task of tasks)
+        await ctx.db.insert('comments', {
+          id: uuid(),
+          issue_id: task.id,
+          author: f.user.id,
+          body: 'x'.repeat(1000),
+          created_at: iso('2026-03-05'),
+        })
+    })
+    // The first task's one comment fills the budget.
+    Object.assign(USAGE_PAGE, { commentBytes: 1000 })
+    const page = await t.query(internal.usage.comments, {
+      org_id: f.org.id,
+      month: MARCH,
+      cursor: null,
+    })
+    expect(page.comments).toBe(1)
+    expect(page.deferred).toHaveLength(2)
+    await t.action(internal.usage.closeOrgMonth, { org_id: f.org.id, month: MARCH })
+    expect((await storedRows(t))[0].counts.comments).toBe(3)
+  })
+
+  it('counts a delivery the retention sweep moves while the month is read', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // Finished in March and more than a week ago, so the sweep deletes it.
+    vi.setSystemTime(Date.parse('2026-03-20'))
+    await t.run(async (ctx) => {
+      await ctx.db.insert('webhook_deliveries', {
+        id: uuid(),
+        org_id: f.org.id,
+        subscription_id: uuid(),
+        project_id: f.meta.id,
+        task_id: uuid(),
+        name: 'task.updated',
+        payload: '{}',
+        status: 'delivered',
+        attempts: 2,
+        completed_at: Date.parse('2026-03-02'),
+        created_at: Date.parse('2026-03-02'),
+      })
+    })
+    // The sweep runs after the counts were read and before the stored rows.
+    let swept = false
+    const runner = {
+      runQuery: async (ref: FunctionReference<'query', 'internal'>, args: DefaultFunctionArgs) => {
+        if (getFunctionName(ref) === 'usage:webhooks' && !swept) {
+          swept = true
+          await t.mutation(internal.webhooks.sweep, {})
+        }
+        return await t.query(ref, args)
+      },
+    } as Parameters<typeof orgUsage>[0]
+    const usage = await orgUsage(runner, f.org.id, MARCH, Date.now())
+    expect(swept).toBe(true)
+    expect(usage?.counts).toMatchObject({ webhook_deliveries: 1, webhook_attempts: 2 })
   })
 
   it('replaces the month’s row on a rerun', async () => {
@@ -381,6 +476,18 @@ describe('the counters', () => {
     await t.mutation(internal.invites.settle, { row: sent, sent: true, uncertain: false })
     await t.mutation(internal.invites.settle, { row: sent, sent: true, uncertain: false })
     await t.mutation(internal.invites.settle, { row: unsent, sent: false, uncertain: true })
+    // A send that settles after its organization's deletion finished.
+    const late = await t.run((ctx) =>
+      ctx.db.insert('platform_audit_log', {
+        ts: iso('2026-04-01'),
+        actor_email: 'system',
+        action: 'invite_email',
+        target_org_id: uuid(),
+        channel: 'app',
+        detail: {},
+      }),
+    )
+    await t.mutation(internal.invites.settle, { row: late, sent: true, uncertain: false })
     expect(await countsOf(t)).toEqual([
       { org_id: f.org.id, month: '2026-04', metric: 'mail_invitations', count: 1 },
     ])
@@ -395,10 +502,11 @@ describe('the counters', () => {
     expect(await countsOf(t)).toEqual([
       { org_id: undefined, month: '2026-04', metric: 'mail_password_reset', count: 2 },
     ])
-    expect(await t.query(internal.usage.mailWithoutOrg, { month: '2026-04' })).toEqual({
+    expect(await t.query(internal.usage.unattributed, { month: '2026-04' })).toEqual({
       mail_verification: 0,
       mail_password_reset: 2,
       mail_account_notes: 0,
+      background_bytes: null,
     })
   })
 
@@ -442,6 +550,85 @@ describe('the counters', () => {
   })
 })
 
+describe('sign-ins', () => {
+  const kept = (t: T) =>
+    t.run(async (ctx) =>
+      (await ctx.db.query('usage_sign_ins').collect()).map(({ auth_user_id, month }) => ({
+        auth_user_id,
+        month,
+      })),
+    )
+
+  it('counts a person who signed in and out within the month and did nothing else', async () => {
+    vi.useRealTimers()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.parse('2026-03-10T09:00:00Z'))
+    vi.stubEnv('SITE_URL', APP)
+    vi.stubEnv('CONVEX_SITE_URL', 'https://some.convex.site')
+    vi.stubEnv('BETTER_AUTH_SECRET', 'usage-hermetic-secret-not-a-real-deployment-271828')
+    const t = newT()
+    const f = await withOrg(t)
+    const userId = f.viewer.auth_user_id as string
+    await t.mutation(components.betterAuth.adapter.create, {
+      input: {
+        model: 'account',
+        data: {
+          accountId: userId,
+          userId,
+          providerId: 'credential',
+          password: await hashPassword(PASSWORD),
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      },
+    })
+    const signIn = await http(t, '/api/auth/sign-in/email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: APP, 'better-auth-cookie': '' },
+      body: JSON.stringify({ email: f.viewer.email, password: PASSWORD }),
+    })
+    expect(signIn.status).toBe(200)
+    const cookie = signIn.headers
+      .get('set-better-auth-cookie')
+      ?.match(/(?:^|,\s*)([^=;,]*session_token=[^;]+)/)?.[1]
+    vi.setSystemTime(Date.parse('2026-03-12T09:00:00Z'))
+    const signOut = await http(t, '/api/auth/sign-out', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: APP,
+        'better-auth-cookie': cookie as string,
+      },
+      body: '{}',
+    })
+    expect(signOut.status).toBe(200)
+    expect(await runInAuth(t, (ctx) => ctx.db.query('session').collect())).toEqual([])
+    expect(await kept(t)).toEqual([{ auth_user_id: userId, month: MARCH }])
+    vi.setSystemTime(RUN)
+    await t.action(internal.usage.closeOrgMonth, { org_id: f.org.id, month: MARCH })
+    expect((await storedRows(t))[0].counts.active_people).toBe(1)
+  })
+
+  it('keeps each month a session was used in once, back to what retention keeps', async () => {
+    const t = newT()
+    const userId = await login(t, 'ghost@test.local')
+    for (let i = 0; i < 2; i++)
+      await t.mutation(internal.usage.keepSignIn, {
+        auth_user_id: userId,
+        // 800 days before RUN is in January 2024, so December 2023 is left out.
+        created_at: Date.parse('2023-12-20'),
+        updated_at: Date.parse('2024-02-03'),
+      })
+    expect(await kept(t)).toEqual([
+      { auth_user_id: userId, month: '2024-01' },
+      { auth_user_id: userId, month: '2024-02' },
+    ])
+    // Deleting the login deletes them.
+    await t.mutation(internal.adminAuth.deleteOrphanLogin, { email: 'ghost@test.local' })
+    expect(await kept(t)).toEqual([])
+  })
+})
+
 describe('retention and deletion', () => {
   it('deletes rows of months older than 800 days, page by page', async () => {
     const t = newT()
@@ -449,6 +636,7 @@ describe('retention and deletion', () => {
     // 800 days before RUN is in January 2024, so December 2023 goes.
     await t.run(async (ctx) => {
       for (const month of ['2023-11', '2023-12', '2024-01', MARCH]) {
+        await ctx.db.insert('usage_sign_ins', { auth_user_id: 'login', month })
         await ctx.db.insert('usage_counts', {
           org_id: f.org.id,
           month,
@@ -470,8 +658,13 @@ describe('retention and deletion', () => {
     const left = await t.run(async (ctx) => ({
       months: (await ctx.db.query('usage_months').collect()).map((row) => row.month).sort(),
       counts: (await ctx.db.query('usage_counts').collect()).map((row) => row.month).sort(),
+      sign_ins: (await ctx.db.query('usage_sign_ins').collect()).map((row) => row.month).sort(),
     }))
-    expect(left).toEqual({ months: ['2024-01', MARCH], counts: ['2024-01', MARCH] })
+    expect(left).toEqual({
+      months: ['2024-01', MARCH],
+      counts: ['2024-01', MARCH],
+      sign_ins: ['2024-01', MARCH],
+    })
   })
 
   it('goes with its organization', async () => {
@@ -506,18 +699,22 @@ describe('retention and deletion', () => {
       })
     })
     await t.mutation(internal.billingMail.sent, { key: 'late' })
-    const before = await t.run((ctx) => ctx.db.query('usage_counts').collect())
+    // The organization's counts, beside the month's account background total.
+    const orgCounts = (t: T) =>
+      t.run(async (ctx) =>
+        (await ctx.db.query('usage_counts').collect()).filter((row) => row.org_id !== undefined),
+      )
+    const before = await orgCounts(t)
     expect(before.map((row) => [row.metric, row.count])).toEqual([['mail_invitations', 1]])
     await t.mutation(internal.orgRemovals.step, { org_id: f.org.id })
     await runSteps(t)
     const left = await t.run(async (ctx) => ({
       org: await ctx.db.query('organizations').collect(),
       months: await ctx.db.query('usage_months').collect(),
-      counts: await ctx.db.query('usage_counts').collect(),
     }))
     expect(left.org.map((org) => org.id)).toEqual([f.otherOrg.id])
     expect(left.months.map((row) => row.org_id)).toEqual([f.otherOrg.id])
-    expect(left.counts).toEqual([])
+    expect(await orgCounts(t)).toEqual([])
   })
 })
 
@@ -576,8 +773,10 @@ describe('Qivo Admin', () => {
         activityRow(f.org.id, '2026-04-01T02:00:00Z', f.user.id),
       )
     })
+    expect(march.unattributed.background_bytes).toBe(59)
     const april = await op.action(api.usage.monthTable, { month: '2026-04' })
     expect(april.current).toBe(true)
+    expect(april.unattributed.background_bytes).toBe(59)
     expect(april.rows.find((row) => row.org_id === f.org.id)).toMatchObject({
       computed_at: null,
       // the viewer's row on the 1st, the task deletion's and the one above

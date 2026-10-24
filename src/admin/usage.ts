@@ -1,6 +1,6 @@
 /* The Usage view's columns, month picker and CSV export
    (views/Usage.tsx), kept apart so the view file exports only components. */
-import { monthOf, type UsageField } from '../../convex/lib/usage'
+import { monthOf, retentionCutoff, type UsageField } from '../../convex/lib/usage'
 import type { UsageMonth } from './api'
 
 /** One column of the usage table, in the order shown. */
@@ -36,13 +36,17 @@ export const USAGE_COLUMNS: readonly Column[] = [
   { key: 'mail_deletion_notices', label: 'Deletion mail', hint: 'Deletion notices' },
 ]
 
-/** The months the picker offers: this month and the 26 before it, newest
- * first, as stored rows are kept for 800 days. */
+/** The months the picker offers, newest first: this month back to the
+ * oldest one retention keeps (convex/lib/usage.ts retentionCutoff). */
 export function pickerMonths(now: number): string[] {
   const d = new Date(now)
-  return Array.from({ length: 27 }, (_, i) =>
-    monthOf(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - i, 1)),
-  )
+  const oldest = retentionCutoff(now)
+  const months: string[] = []
+  for (let i = 0; ; i++) {
+    const month = monthOf(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - i, 1))
+    if (month < oldest) return months
+    months.push(month)
+  }
 }
 
 const MONTH_LABEL = new Intl.DateTimeFormat(undefined, {
@@ -53,32 +57,57 @@ const MONTH_LABEL = new Intl.DateTimeFormat(undefined, {
 export const fmtMonth = (month: string): string =>
   MONTH_LABEL.format(new Date(`${month}-01T00:00:00Z`))
 
+/** The figures that belong to no organization, in the order shown. */
+export const UNATTRIBUTED_COLUMNS = [
+  'background_bytes',
+  'mail_verification',
+  'mail_password_reset',
+  'mail_account_notes',
+] as const satisfies readonly (keyof UsageMonth['unattributed'])[]
+
+/* Text a spreadsheet would read as a formula: an organization's name is
+   chosen by its admins, and the operator opens the file. */
+const FORMULA = /^[=+\-@\t\r]/
+
+/** One CSV cell. Text that starts like a formula gets a leading
+ * apostrophe, so a spreadsheet shows it as text. */
+function cell(value: string | number | boolean | null): string {
+  let text = value === null ? '' : String(value)
+  if (typeof value === 'string' && FORMULA.test(text)) text = `'${text}`
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+}
+
 /** The month as CSV: one line per organization with every count in whole
- * units (bytes, not formatted sizes). */
+ * units (bytes, not formatted sizes), then one line for what belongs to no
+ * organization, in columns of its own. */
 export function usageCsv(table: UsageMonth): string {
-  const cell = (value: string | number | boolean | null) => {
-    const text = value === null ? '' : String(value)
-    return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
-  }
   const head = [
     'month',
     'org_id',
     'organization',
     ...USAGE_COLUMNS.map((c) => c.key),
+    ...UNATTRIBUTED_COLUMNS,
     'api_estimated',
     'computed_at',
   ]
-  const lines = table.rows.map((row) =>
-    [
-      table.month,
-      row.org_id,
-      row.name,
-      ...USAGE_COLUMNS.map((c) => row.counts[c.key]),
-      row.api_estimated,
-      row.computed_at,
-    ]
-      .map(cell)
-      .join(','),
-  )
-  return `${[head.join(','), ...lines].join('\r\n')}\r\n`
+  const blank = (n: number) => Array.from({ length: n }, () => null)
+  const lines = table.rows.map((row) => [
+    table.month,
+    row.org_id,
+    row.name,
+    ...USAGE_COLUMNS.map((c) => row.counts[c.key]),
+    ...blank(UNATTRIBUTED_COLUMNS.length),
+    row.api_estimated,
+    row.computed_at,
+  ])
+  lines.push([
+    table.month,
+    null,
+    'No organization',
+    ...blank(USAGE_COLUMNS.length),
+    ...UNATTRIBUTED_COLUMNS.map((key) => table.unattributed[key]),
+    null,
+    null,
+  ])
+  return `${[head, ...lines].map((line) => line.map(cell).join(',')).join('\r\n')}\r\n`
 }

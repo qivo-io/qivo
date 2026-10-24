@@ -1,5 +1,5 @@
-/* The reads behind an organization's monthly usage (usage.ts), and the one
- * counter Qivo writes for it.
+/* The reads behind an organization's monthly usage (usage.ts), and the
+ * few rows Qivo writes for it.
  *
  * Every figure except mail comes from rows Qivo already keeps, read one
  * bounded page at a time, so measuring adds no write to the paths it
@@ -7,7 +7,9 @@
  * adds one to a usage_counts row (countUsage). Webhook deliveries are
  * deleted a week after they finish, so the retention sweep (webhooks.ts)
  * adds the ones it deletes to usage_counts by the month they finished, and
- * a month's count is those plus the deliveries still stored.
+ * a month's count is those plus the deliveries still stored. Better Auth
+ * deletes a sign-in session at sign-out, so the months a deleted session
+ * was used in are kept as usage_sign_ins rows (keepSignIns).
  *
  * Each page function reads at most USAGE_PAGE of one range and returns
  * where the next page starts. They are plain functions over a QueryCtx;
@@ -22,10 +24,13 @@ import { isDemoDeployment } from '../lib/demo'
 import {
   monthOf,
   monthRange,
+  monthsBetween,
   ORG_METRICS,
   overlapShare,
+  PERSON_FILES,
   PERSON_MAIL,
   type PersonMail,
+  retentionCutoff,
   type UsageCounts,
   type UsageMetric,
 } from '../lib/usage'
@@ -46,35 +51,47 @@ export const USAGE_PAGE = {
   comments: 50,
   /** Bytes the paged range of one page may read. */
   bytes: 8 * 1024 * 1024,
+  /** Bytes of comments one page of tasks may read, by docBytes, before the
+   * rest of its tasks are paged on their own. */
+  commentBytes: 4 * 1024 * 1024,
 }
 
-const DAY_MS = 86_400_000
+/** An upper bound of a document's size: no UTF-16 unit takes more than 3
+ * bytes in UTF-8. */
+const docBytes = (doc: object): number => JSON.stringify(doc).length * 3
 
-/** Days a usage_months or usage_counts row is kept after its month. */
-export const USAGE_RETENTION_DAYS = 800
+/** The organization `orgId` while it exists and its deletion has not begun. */
+async function liveOrg(ctx: QueryCtx, orgId: string): Promise<boolean> {
+  const org = await ctx.db
+    .query('organizations')
+    .withIndex('by_uuid', (q) => q.eq('id', orgId))
+    .unique()
+  return org !== null && !(await deletionBegun(ctx, orgId))
+}
 
-/** Rows older than this month are deleted (usage.ts expire). */
-export const retentionCutoff = (now: number): string => monthOf(now - USAGE_RETENTION_DAYS * DAY_MS)
+/** The usage_counts row of one organization, or none, month and metric. */
+const countRow = (ctx: QueryCtx, orgId: string | undefined, month: string, metric: UsageMetric) =>
+  ctx.db
+    .query('usage_counts')
+    .withIndex('by_org_month_metric', (q) =>
+      q.eq('org_id', orgId).eq('month', month).eq('metric', metric),
+    )
+    .unique()
 
 /** Adds `n` to one usage_counts row of the month `at` falls in. Leave out
  * `org_id` for mail that belongs to a person. Counts nothing on the demo
  * deployment, whose organizations are deleted without their usage, or for
- * an organization whose deletion has begun, which may already have deleted
- * its counts. */
+ * an organization that is gone or whose deletion has begun, which may
+ * already have deleted its counts. */
 export async function countUsage(
   ctx: MutationCtx,
   a: { org_id?: string; metric: UsageMetric; at?: number; n?: number },
 ): Promise<void> {
   const n = a.n ?? 1
   if (n <= 0 || isDemoDeployment()) return
-  if (a.org_id !== undefined && (await deletionBegun(ctx, a.org_id))) return
+  if (a.org_id !== undefined && !(await liveOrg(ctx, a.org_id))) return
   const month = monthOf(a.at ?? Date.now())
-  const row = await ctx.db
-    .query('usage_counts')
-    .withIndex('by_org_month_metric', (q) =>
-      q.eq('org_id', a.org_id).eq('month', month).eq('metric', a.metric),
-    )
-    .unique()
+  const row = await countRow(ctx, a.org_id, month, a.metric)
   if (row) await ctx.db.patch(row._id, { count: row.count + n })
   else
     await ctx.db.insert('usage_counts', {
@@ -83,6 +100,54 @@ export async function countUsage(
       metric: a.metric,
       count: n,
     })
+}
+
+/** Stores the bytes of account backgrounds when `month`'s rows were
+ * stored, replacing an earlier value. */
+export async function setPersonFiles(ctx: MutationCtx, month: string, bytes: number) {
+  const row = await countRow(ctx, undefined, month, PERSON_FILES)
+  if (row) await ctx.db.patch(row._id, { count: bytes })
+  else await ctx.db.insert('usage_counts', { month, metric: PERSON_FILES, count: bytes })
+}
+
+/** The bytes of account backgrounds stored with `month`, or null. */
+export async function storedPersonFiles(ctx: QueryCtx, month: string): Promise<number | null> {
+  return (await countRow(ctx, undefined, month, PERSON_FILES))?.count ?? null
+}
+
+/** Keeps the months a sign-in session of login `authUserId` was used in,
+ * from its creation to its last refresh, as Better Auth deletes it.
+ * Months older than retention keeps are left out, so a session holds at
+ * most about 27. Nothing is kept on the demo deployment. */
+export async function keepSignIns(
+  ctx: MutationCtx,
+  authUserId: string,
+  session: { createdAt: number; updatedAt: number },
+  now: number,
+): Promise<void> {
+  if (isDemoDeployment()) return
+  const oldest = monthRange(retentionCutoff(now))?.start ?? now
+  const months = monthsBetween(
+    Math.max(session.createdAt, oldest),
+    Math.min(session.updatedAt, now),
+  )
+  for (const month of months) {
+    const kept = await ctx.db
+      .query('usage_sign_ins')
+      .withIndex('by_user_month', (q) => q.eq('auth_user_id', authUserId).eq('month', month))
+      .first()
+    if (kept === null) await ctx.db.insert('usage_sign_ins', { auth_user_id: authUserId, month })
+  }
+}
+
+/** Deletes the kept sign-in months of a deleted login. Retention keeps
+ * about 27, so one transaction holds them all. */
+export async function forgetSignIns(ctx: MutationCtx, authUserId: string): Promise<void> {
+  for (const row of await ctx.db
+    .query('usage_sign_ins')
+    .withIndex('by_user_month', (q) => q.eq('auth_user_id', authUserId))
+    .collect())
+    await ctx.db.delete(row._id)
 }
 
 /** A month's start and end in milliseconds and as ISO text. */
@@ -161,27 +226,15 @@ export async function usageHead(
 ): Promise<UsageHead | null> {
   const span = monthSpan(month)
   if (span === null) return null
-  const org = await ctx.db
-    .query('organizations')
-    .withIndex('by_uuid', (q) => q.eq('id', orgId))
-    .unique()
-  if (org === null) return null
-  if (await deletionBegun(ctx, orgId)) return null
+  if (!(await liveOrg(ctx, orgId))) return null
   const { total } = await getBillableUsers(ctx, orgId)
   const counters = await countersRow(ctx, orgId)
   const counting = counters?.counted !== undefined
   const counted = Object.fromEntries(
     ORG_METRICS.map((metric) => [metric, 0]),
   ) as UsageHead['counted']
-  for (const metric of ORG_METRICS) {
-    const row = await ctx.db
-      .query('usage_counts')
-      .withIndex('by_org_month_metric', (q) =>
-        q.eq('org_id', orgId).eq('month', month).eq('metric', metric),
-      )
-      .unique()
-    counted[metric] = row?.count ?? 0
-  }
+  for (const metric of ORG_METRICS)
+    counted[metric] = (await countRow(ctx, orgId, month, metric))?.count ?? 0
   const { buckets, estimated } = await apiBuckets(ctx, orgId, month, span, now)
   return {
     billable: total,
@@ -193,18 +246,20 @@ export async function usageHead(
   }
 }
 
+/** The webhook deliveries of `month` the retention sweep has deleted so
+ * far, and the requests they took. */
+export async function retainedDeliveries(ctx: QueryCtx, orgId: string, month: string) {
+  return {
+    deliveries: (await countRow(ctx, orgId, month, 'webhook_deliveries'))?.count ?? 0,
+    attempts: (await countRow(ctx, orgId, month, 'webhook_attempts'))?.count ?? 0,
+  }
+}
+
 /** Mail sent to people rather than for an organization in `month`. */
 export async function personMail(ctx: QueryCtx, month: string): Promise<PersonMail> {
   const mail = Object.fromEntries(PERSON_MAIL.map((metric) => [metric, 0])) as PersonMail
-  for (const metric of PERSON_MAIL) {
-    const row = await ctx.db
-      .query('usage_counts')
-      .withIndex('by_org_month_metric', (q) =>
-        q.eq('org_id', undefined).eq('month', month).eq('metric', metric),
-      )
-      .unique()
-    mail[metric] = row?.count ?? 0
-  }
+  for (const metric of PERSON_MAIL)
+    mail[metric] = (await countRow(ctx, undefined, month, metric))?.count ?? 0
   return mail
 }
 
@@ -224,12 +279,18 @@ const listOf = (map: Map<string, number>): PerPerson => [...map].map(([id, n]) =
 type Session = { createdAt: number; updatedAt: number }
 
 /** Whether login `authUserId` had a sign-in session created before the
- * month ended and created or refreshed after it began. It reads the newest
- * SESSIONS_READ sessions through the userId index; a bound on updatedAt
- * would make the adapter scan the whole table, as no index has it. Better
- * Auth deletes a session at sign-out, so a person who signed in and out
- * within the month and did nothing else is missed. */
+ * month ended and created or refreshed after it began: a deleted one kept
+ * by keepSignIns, or one still stored. It reads the newest SESSIONS_READ
+ * stored sessions through the userId index; a bound on updatedAt would make
+ * the adapter scan the whole table, as no index has it. */
 async function signedIn(ctx: QueryCtx, authUserId: string, span: Span): Promise<boolean> {
+  const kept = await ctx.db
+    .query('usage_sign_ins')
+    .withIndex('by_user_month', (q) =>
+      q.eq('auth_user_id', authUserId).eq('month', monthOf(span.start)),
+    )
+    .first()
+  if (kept !== null) return true
   const sessions = (await ctx.runQuery(components.betterAuth.adapter.findMany, {
     model: 'session',
     where: [{ field: 'userId', value: authUserId }],
@@ -292,32 +353,39 @@ const commentIn = (comment: Doc<'comments'>, span: Span) =>
  * One page of the organization's tasks with their comments in the month,
  * and the comments per author. Comments name no organization, so the page
  * goes through the tasks, active and archived. A task with more than
- * USAGE_PAGE.comments comments stored since the month began is named in
- * `deferred` and paged on its own (taskCommentsPage). Tasks in Deleted
- * items are left out with their comments.
+ * USAGE_PAGE.comments comments stored since the month began, and every task
+ * after the page's comments reach USAGE_PAGE.commentBytes, is named in
+ * `deferred` and paged on its own (taskCommentsPage). So the tasks (half of
+ * USAGE_PAGE.bytes), the comments and the one task read past the budget
+ * stay well under the 16 MiB a transaction may read. Tasks in Deleted items
+ * are left out with their comments.
  */
 export async function commentsPage(ctx: QueryCtx, orgId: string, span: Span, cursor: Cursor) {
   const page = await ctx.db
     .query('issues')
     .withIndex('by_org', (q) => q.eq('org_id', orgId))
-    .paginate({ cursor, numItems: USAGE_PAGE.issues, maximumBytesRead: USAGE_PAGE.bytes })
+    .paginate({ cursor, numItems: USAGE_PAGE.issues, maximumBytesRead: USAGE_PAGE.bytes / 2 })
   const authors = new Map<string, number>()
   const deferred: string[] = []
   let comments = 0
-  await Promise.all(
-    page.page.map(async (task) => {
-      const rows = await taskComments(ctx, task.id, span).take(USAGE_PAGE.comments + 1)
-      if (rows.length > USAGE_PAGE.comments) {
-        deferred.push(task.id)
-        return
+  let bytes = 0
+  for (const task of page.page) {
+    if (bytes >= USAGE_PAGE.commentBytes) {
+      deferred.push(task.id)
+      continue
+    }
+    const rows = await taskComments(ctx, task.id, span).take(USAGE_PAGE.comments + 1)
+    for (const row of rows) bytes += docBytes(row)
+    if (rows.length > USAGE_PAGE.comments) {
+      deferred.push(task.id)
+      continue
+    }
+    for (const row of rows)
+      if (commentIn(row, span)) {
+        comments += 1
+        tally(authors, row.author)
       }
-      for (const row of rows)
-        if (commentIn(row, span)) {
-          comments += 1
-          tally(authors, row.author)
-        }
-    }),
-  )
+  }
   return { comments, by_author: listOf(authors), deferred, next: nextOf(page) }
 }
 
@@ -401,6 +469,21 @@ export async function webhooksPage(ctx: QueryCtx, orgId: string, span: Span, cur
     attempts += row.attempts
   }
   return { deliveries, attempts, next: nextOf(page) }
+}
+
+/** One page of every login's account backgrounds, with the bytes of each
+ * image and its preview. They belong to a login, not an organization. */
+export async function backgroundsPage(ctx: QueryCtx, cursor: Cursor) {
+  const page = await ctx.db
+    .query('custom_backgrounds')
+    .paginate({ cursor, numItems: USAGE_PAGE.rows, maximumBytesRead: USAGE_PAGE.bytes })
+  let bytes = 0
+  for (const row of page.page) {
+    bytes += row.byte_size
+    if (row.preview_storage_id !== undefined)
+      bytes += (await ctx.db.system.get(row.preview_storage_id))?.size ?? 0
+  }
+  return { bytes, next: nextOf(page) }
 }
 
 /** Adds the webhook deliveries the retention sweep is about to delete to

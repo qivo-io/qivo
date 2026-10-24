@@ -151,6 +151,24 @@ async function countAuthMail(ctx: GenericCtx<DataModel>, intent: AuthLetterInten
   }
 }
 
+/** Keeps the months a deleted sign-in session was used in, for the usage
+ * figures. A failure is logged and never fails the sign-out. */
+async function keepSignIn(
+  ctx: GenericCtx<DataModel>,
+  session: { userId: string; createdAt: Date | number; updatedAt: Date | number },
+) {
+  if (!isRunMutationCtx(ctx)) return
+  try {
+    await ctx.runMutation(internal.usage.keepSignIn, {
+      auth_user_id: session.userId,
+      created_at: new Date(session.createdAt).getTime(),
+      updated_at: new Date(session.updatedAt).getTime(),
+    })
+  } catch (e) {
+    console.error('[usage] sign-in not kept', { name: (e as Error)?.name ?? 'error' })
+  }
+}
+
 /* Every token gets its own `jti`. Two tokens minted for one session in the
    same second are otherwise the same bytes, and the Convex client, which
    then sees no new sign-in, never schedules the next refresh. The app asks
@@ -194,7 +212,13 @@ export const authComponent = createClient<DataModel, typeof authSchema>(componen
       onCreate: registerDemoUser,
       onDelete: async (ctx, user) => expireDeletedDemoUser(ctx, user._id),
     },
-    session: { onCreate: clampDemoSession, onDelete: endSessionAccess },
+    session: {
+      onCreate: clampDemoSession,
+      onDelete: async (ctx, session) => {
+        await endSessionAccess(ctx, session)
+        await keepSignIn(ctx, session)
+      },
+    },
   },
 })
 
@@ -282,9 +306,11 @@ export const createAuthOptions = (
         },
         delete: {
           after: async (user) => {
-            await requireRunMutationCtx(ctx).runMutation(internal.appearance.clearForDeletedLogin, {
+            const runner = requireRunMutationCtx(ctx)
+            await runner.runMutation(internal.appearance.clearForDeletedLogin, {
               auth_user_id: user.id,
             })
+            await runner.runMutation(internal.usage.forgetLogin, { auth_user_id: user.id })
           },
         },
       },

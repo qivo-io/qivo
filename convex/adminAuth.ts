@@ -49,6 +49,7 @@ import { DEFAULT_MESSAGE_RETENTION_DAYS } from './lib/limits'
 import { audit } from './model/admin'
 import { newUuid } from './model/orgs'
 import { assertNameShape, cleanName } from './model/people'
+import { forgetSignIns } from './model/usage'
 
 /* Web Crypto exists in the Convex isolate; convex/tsconfig's lib is ESNext
  * only, which does not declare the global (same move as model/orgs). */
@@ -337,6 +338,7 @@ export const insertBreakGlass = internalMutation({
  * other logins may hold grants through the same client. */
 async function removeAuthUserRows(ctx: MutationCtx, userId: string): Promise<void> {
   await ctx.runMutation(internal.appearance.clearForDeletedLogin, { auth_user_id: userId })
+  await forgetSignIns(ctx, userId)
   for (const model of ['oauthConsent', 'account'] as const) {
     let cursor: string | null = null
     for (;;) {

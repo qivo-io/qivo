@@ -28,6 +28,28 @@ export function previousMonth(ms: number): string {
   return monthOf(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1))
 }
 
+/** The months from the one `from` falls in to the one `to` falls in, oldest
+ * first, or none when `to` is earlier. */
+export function monthsBetween(from: number, to: number): string[] {
+  const out: string[] = []
+  const d = new Date(from)
+  for (let i = 0; ; i++) {
+    const month = monthOf(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + i, 1))
+    if (month > monthOf(to)) return out
+    out.push(month)
+  }
+}
+
+const DAY_MS = 86_400_000
+
+/** Days a usage_months, usage_counts or usage_sign_ins row is kept after
+ * its month. */
+export const USAGE_RETENTION_DAYS = 800
+
+/** The oldest month whose rows are kept at `now`. Older ones are deleted
+ * (usage.ts expire). */
+export const retentionCutoff = (now: number): string => monthOf(now - USAGE_RETENTION_DAYS * DAY_MS)
+
 /* The counts one usage row holds. Members are counted when the row is
  * computed, which for a closed month is just after it ended; the rest count
  * what happened during the month.
@@ -83,7 +105,12 @@ export const PERSON_MAIL = [
   'mail_password_reset',
   'mail_account_notes',
 ] as const
-export const vUsageMetric = literals(...ORG_METRICS, ...PERSON_MAIL)
+/* The bytes of the files that belong to a login rather than an
+ * organization, account backgrounds and their previews, when the month's
+ * rows were stored. Unlike the others it is set, not added to (usage.ts
+ * closeMonth). */
+export const PERSON_FILES = 'background_bytes'
+export const vUsageMetric = literals(...ORG_METRICS, ...PERSON_MAIL, PERSON_FILES)
 export type UsageMetric = Infer<typeof vUsageMetric>
 
 /** A kind of mail sent to a person rather than for an organization. */
@@ -91,6 +118,11 @@ export type PersonMailMetric = (typeof PERSON_MAIL)[number]
 
 /** Mail sent to a person rather than for an organization, by kind. */
 export type PersonMail = Record<PersonMailMetric, number>
+
+/** What a month holds outside every organization: account mail by kind,
+ * and the bytes of account backgrounds, null for a closed month stored
+ * without them. */
+export type Unattributed = PersonMail & { background_bytes: number | null }
 
 /** The value below which `p` of `sorted` (ascending) falls, by the nearest
  * rank, or null for an empty list. */

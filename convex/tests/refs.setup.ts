@@ -198,6 +198,8 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   // Better Auth login ids — not rows in this schema
   'profiles.auth_user_id',
   'roadmap_history.auth_user_id',
+  // the months a deleted sign-in session was used in (model/usage.ts)
+  'usage_sign_ins.auth_user_id',
   // OAuth identities and clients live inside the Better Auth component.
   'oauth_connections.auth_user_id',
   'oauth_connections.client_id',

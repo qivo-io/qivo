@@ -100,7 +100,7 @@ export function Usage() {
   const stats = table
     ? USAGE_COLUMNS.map((c) => spread(table.rows.map((row) => row.counts[c.key])))
     : []
-  const mail = table?.person_mail
+  const outside = table?.unattributed
 
   return (
     <div className="min-w-0 space-y-6">
@@ -148,8 +148,8 @@ export function Usage() {
               : table.rows.length === 0
                 ? 'No usage was stored for this month.'
                 : `Stored ${fmtWhen(table.rows[0]?.computed_at ?? null)}.`}{' '}
-            {mail &&
-              `Mail to people without an organization: ${mail.mail_verification} verification, ${mail.mail_password_reset} password reset, ${mail.mail_account_notes} account notes.`}
+            {outside &&
+              `Account mail, not assigned to an organization: ${outside.mail_verification} verification, ${outside.mail_password_reset} password reset, ${outside.mail_account_notes} account notes. Account backgrounds, which belong to a login: ${outside.background_bytes === null ? 'not stored for this month' : fmtBytes(outside.background_bytes)}.`}
           </p>
         )}
       </AdminToolbar>
@@ -289,6 +289,8 @@ function OrgUsage({
   const [people, setPeople] = useState<UsagePeople | null>(null)
   const [peopleBusy, setPeopleBusy] = useState(false)
   const heading = useRef<HTMLHeadingElement>(null)
+  // The latest people request; an answer to an earlier one is dropped.
+  const peopleRequest = useRef(0)
 
   useEffect(() => {
     let active = true
@@ -311,13 +313,21 @@ function OrgUsage({
   }, [])
 
   function loadPeople() {
+    const request = ++peopleRequest.current
+    const latest = () => request === peopleRequest.current
     setPeopleBusy(true)
     setPeople(null)
     setError('')
     orgUsagePeople(org.org_id, peopleMonth)
-      .then(setPeople)
-      .catch((cause: Error) => setError(cause.message))
-      .finally(() => setPeopleBusy(false))
+      .then((result) => {
+        if (latest()) setPeople(result)
+      })
+      .catch((cause: Error) => {
+        if (latest()) setError(cause.message)
+      })
+      .finally(() => {
+        if (latest()) setPeopleBusy(false)
+      })
   }
 
   return (
@@ -380,8 +390,10 @@ function OrgUsage({
                 aria-label="Month for the people breakdown"
                 value={peopleMonth}
                 onChange={(event) => {
+                  peopleRequest.current += 1
                   setPeopleMonth(event.target.value)
                   setPeople(null)
+                  setPeopleBusy(false)
                 }}
               >
                 {choices.map((m) => (

@@ -307,8 +307,10 @@ deliveries and the requests they took, and invitation, billing and deletion
 emails. Seats, tasks, projects and bytes are counted when the month is
 stored. Calls from a paid billing period that crosses the month's start or
 end are split by time and marked ≈. Verification and password reset emails
-belong to a person, so they appear as one line for people without an
-organization.
+and account backgrounds belong to a login, not to one organization, so the
+page and the CSV show them as separate totals that no organization's row
+includes. A person who signed in and later signed out still counts as
+active in the months they were signed in.
 
 Open an organization to see its months side by side. **Show people** counts
 each person's changes, comments and calls per key for one month, from the

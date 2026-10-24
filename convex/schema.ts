@@ -748,7 +748,8 @@ export default defineSchema({
   // and kind, with person mail (verification, password reset) under no
   // organization, and the webhook deliveries the retention sweep deleted, by
   // the month they finished. One row per organization, month and metric
-  // (usage.ts countUsage).
+  // (usage.ts countUsage). The bytes of account backgrounds when a month
+  // was stored are one more row under no organization (setPersonFiles).
   usage_counts: defineTable({
     org_id: v.optional(v.string()),
     month: v.string(), // YYYY-MM
@@ -756,6 +757,17 @@ export default defineSchema({
     count: v.number(),
   })
     .index('by_org_month_metric', ['org_id', 'month', 'metric'])
+    .index('by_month', ['month']),
+
+  // A month a login's sign-in session was used in, kept when Better Auth
+  // deletes the session at sign-out or once it expired, so the month still
+  // counts the person as active (model/usage.ts keepSignIns). Deleted after
+  // USAGE_RETENTION_DAYS and with the login.
+  usage_sign_ins: defineTable({
+    auth_user_id: v.string(),
+    month: v.string(), // YYYY-MM
+  })
+    .index('by_user_month', ['auth_user_id', 'month'])
     .index('by_month', ['month']),
 
   organizations: defineTable({

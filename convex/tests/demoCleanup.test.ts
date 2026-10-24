@@ -212,6 +212,7 @@ const APP_SHARED = [
   // Usage is neither counted nor stored in APP_MODE=demo (model/usage.ts).
   'usage_months',
   'usage_counts',
+  'usage_sign_ins',
 ]
 const AUTH_OWNED = [
   'user',

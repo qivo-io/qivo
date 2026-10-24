@@ -15,6 +15,8 @@
  * The current month is never stored. The page computes it from the same
  * reads when an operator opens it (monthTable, orgMonths), and the
  * per-person breakdown of any month is computed the same way (orgPeople).
+ * The last step also stores the bytes of account backgrounds, which belong
+ * to a login rather than an organization, as one total for the month.
  *
  * The reads are in model/usage.ts. Each internal query is one transaction
  * over one bounded page, and an action strings them together, so no
@@ -42,8 +44,9 @@ import {
   monthOf,
   monthRange,
   PERSON_MAIL,
-  type PersonMail,
   previousMonth,
+  retentionCutoff,
+  type Unattributed,
   type UsageCounts,
   vUsageCounts,
 } from './lib/usage'
@@ -51,16 +54,21 @@ import { audit } from './model/admin'
 import {
   activityPage,
   apiPage,
+  backgroundsPage,
   commentsPage,
   countUsage,
   deletedPage,
   filesPage,
+  forgetSignIns,
+  keepSignIns,
   monthSpan,
   type PerPerson,
   personMail,
   profilesPage,
-  retentionCutoff,
+  retainedDeliveries,
   type Span,
+  setPersonFiles,
+  storedPersonFiles,
   taskCommentsPage,
   USAGE_PAGE,
   type UsageHead,
@@ -133,9 +141,24 @@ export const webhooks = internalQuery({
     await webhooksPage(ctx, org_id, spanOf(month), cursor),
 })
 
-export const mailWithoutOrg = internalQuery({
+export const retained = internalQuery({
+  args: { org_id: v.string(), month: v.string() },
+  handler: async (ctx, { org_id, month }) => await retainedDeliveries(ctx, org_id, month),
+})
+
+export const backgrounds = internalQuery({
+  args: { cursor: vCursor },
+  handler: async (ctx, { cursor }) => await backgroundsPage(ctx, cursor),
+})
+
+/** Account mail of `month`, and the account background bytes stored with
+ * it, null for a month stored without them. */
+export const unattributed = internalQuery({
   args: { month: v.string() },
-  handler: async (ctx, { month }): Promise<PersonMail> => await personMail(ctx, month),
+  handler: async (ctx, { month }): Promise<Unattributed> => ({
+    ...(await personMail(ctx, month)),
+    background_bytes: await storedPersonFiles(ctx, month),
+  }),
 })
 
 /** Counts one authentication letter (verification, password reset or an
@@ -148,9 +171,39 @@ export const countPersonMail = internalMutation({
   },
 })
 
+/** Keeps the months of a sign-in session Better Auth deleted, at sign-out
+ * or when an expired one is presented (auth.ts), so they still count. */
+export const keepSignIn = internalMutation({
+  args: { auth_user_id: v.string(), created_at: v.number(), updated_at: v.number() },
+  handler: async (ctx, a): Promise<null> => {
+    await keepSignIns(
+      ctx,
+      a.auth_user_id,
+      { createdAt: a.created_at, updatedAt: a.updated_at },
+      Date.now(),
+    )
+    return null
+  },
+})
+
+/** Deletes the kept sign-in months of a deleted login (auth.ts). */
+export const forgetLogin = internalMutation({
+  args: { auth_user_id: v.string() },
+  handler: async (ctx, { auth_user_id }): Promise<null> => {
+    await forgetSignIns(ctx, auth_user_id)
+    return null
+  },
+})
+
 /* ---------------------------------------------------- one organization */
 
 type Runner = Pick<ActionCtx, 'runQuery'>
+
+/** Reads of the stored deliveries at most, while the retention sweep moves
+ * some of them into usage_counts. The sweep runs every 15 minutes, so a
+ * second read is rare; a sweep during the last read could still go
+ * uncounted. */
+const WEBHOOK_READS = 3
 
 /** Reads every page of a paged internal query, handing each page to `take`. */
 async function eachPage<P extends { next: Cursor }>(
@@ -294,13 +347,32 @@ export async function orgUsage(
       counts.deleted_file_bytes += page.deleted_file_bytes
     },
   )
-  await eachPage(
-    (cursor) => ctx.runQuery(internal.usage.webhooks, { org_id, month, cursor }),
-    (page) => {
-      counts.webhook_deliveries += page.deliveries
-      counts.webhook_attempts += page.attempts
-    },
-  )
+  // The deliveries the sweep deleted plus the ones still stored, read again
+  // when the sweep moved some from one to the other meanwhile.
+  let retained = {
+    deliveries: top.counted.webhook_deliveries,
+    attempts: top.counted.webhook_attempts,
+  }
+  for (let read = 1; ; read++) {
+    let deliveries = retained.deliveries
+    let attempts = retained.attempts
+    await eachPage(
+      (cursor) => ctx.runQuery(internal.usage.webhooks, { org_id, month, cursor }),
+      (page) => {
+        deliveries += page.deliveries
+        attempts += page.attempts
+      },
+    )
+    counts.webhook_deliveries = deliveries
+    counts.webhook_attempts = attempts
+    const after: { deliveries: number; attempts: number } = await ctx.runQuery(
+      internal.usage.retained,
+      { org_id, month },
+    )
+    const same = after.deliveries === retained.deliveries && after.attempts === retained.attempts
+    if (same || read === WEBHOOK_READS) break
+    retained = after
+  }
   const list = [...people.values()].filter(
     (p) => p.signed_in || p.changes > 0 || p.comments > 0 || p.api_calls > 0,
   )
@@ -381,6 +453,27 @@ async function storeOrgMonth(
   })
 }
 
+/** The bytes of every account background and its preview now. */
+async function backgroundBytes(ctx: Runner): Promise<number> {
+  let bytes = 0
+  await eachPage(
+    (cursor) => ctx.runQuery(internal.usage.backgrounds, { cursor }),
+    (page) => {
+      bytes += page.bytes
+    },
+  )
+  return bytes
+}
+
+/** Stores the bytes of account backgrounds with a closed month. */
+export const savePersonFiles = internalMutation({
+  args: { month: v.string(), bytes: v.number() },
+  handler: async (ctx, { month, bytes }): Promise<null> => {
+    await setPersonFiles(ctx, month, bytes)
+    return null
+  },
+})
+
 /** Refuses a key that is not a month, and a month that has not ended. */
 function closedMonth(month: string, now: number): void {
   spanOf(month)
@@ -439,9 +532,23 @@ export const closeMonth = internalAction({
         })
       }
     })
-    if (page.next !== null)
+    if (page.next !== null) {
       await ctx.scheduler.runAfter(0, closeMonthRef, { month, cursor: page.next, saved, failed })
-    else await ctx.runMutation(internal.usage.finishMonth, { month, saved, failed })
+      return null
+    }
+    try {
+      await ctx.runMutation(internal.usage.savePersonFiles, {
+        month,
+        bytes: await backgroundBytes(ctx),
+      })
+    } catch (e) {
+      failed += 1
+      console.error('[usage] account backgrounds not counted', {
+        month,
+        name: (e as Error)?.name ?? 'error',
+      })
+    }
+    await ctx.runMutation(internal.usage.finishMonth, { month, saved, failed })
     return null
   },
 })
@@ -451,24 +558,23 @@ export const USAGE_EXPIRY = { page: 200 }
 
 const expireRef = makeFunctionReference<'mutation', Record<string, never>, null>('usage:expire')
 
-/** Deletes usage_months and usage_counts rows of months older than
- * USAGE_RETENTION_DAYS, a page at a time, scheduling the next step while a
- * full page came back. */
+/** Deletes usage_months, usage_counts and usage_sign_ins rows of months
+ * older than USAGE_RETENTION_DAYS, a page of each at a time, scheduling the
+ * next step while a full page came back. */
 export const expire = internalMutation({
   args: {},
   handler: async (ctx): Promise<null> => {
     const cutoff = retentionCutoff(Date.now())
-    const months = await ctx.db
-      .query('usage_months')
-      .withIndex('by_month', (q) => q.lt('month', cutoff))
-      .take(USAGE_EXPIRY.page)
-    const counted = await ctx.db
-      .query('usage_counts')
-      .withIndex('by_month', (q) => q.lt('month', cutoff))
-      .take(USAGE_EXPIRY.page)
-    for (const row of [...months, ...counted]) await ctx.db.delete(row._id)
-    if (months.length === USAGE_EXPIRY.page || counted.length === USAGE_EXPIRY.page)
-      await ctx.scheduler.runAfter(0, expireRef, {})
+    let full = false
+    for (const table of ['usage_months', 'usage_counts', 'usage_sign_ins'] as const) {
+      const rows = await ctx.db
+        .query(table)
+        .withIndex('by_month', (q) => q.lt('month', cutoff))
+        .take(USAGE_EXPIRY.page)
+      for (const row of rows) await ctx.db.delete(row._id)
+      if (rows.length === USAGE_EXPIRY.page) full = true
+    }
+    if (full) await ctx.scheduler.runAfter(0, expireRef, {})
     return null
   },
 })
@@ -552,16 +658,16 @@ function askedMonth(month: string, now: number): { current: boolean } {
   return { current: month === current }
 }
 
-/** The Usage page's table for `month`: every organization's row, and the
- * mail sent to people without an organization. A closed month shows its
- * stored rows, and an organization without one is left out; the current
- * month is computed now for every organization. */
+/** The Usage page's table for `month`: every organization's row, and what
+ * belongs to no organization, account mail and account backgrounds. A
+ * closed month shows its stored rows, and an organization without one is
+ * left out; the current month is computed now for every organization. */
 export const monthTable = platformAction({
   args: { month: v.string() },
   handler: async (
     ctx,
     { month },
-  ): Promise<{ month: string; current: boolean; rows: UsageRow[]; person_mail: PersonMail }> => {
+  ): Promise<{ month: string; current: boolean; rows: UsageRow[]; unattributed: Unattributed }> => {
     const now = Date.now()
     const { current } = askedMonth(month, now)
     const orgs = await allOrgs(ctx)
@@ -590,8 +696,11 @@ export const monthTable = platformAction({
         },
       )
     }
-    const person_mail: PersonMail = await ctx.runQuery(internal.usage.mailWithoutOrg, { month })
-    return { month, current, rows, person_mail }
+    const stored: Unattributed = await ctx.runQuery(internal.usage.unattributed, { month })
+    const unattributed = current
+      ? { ...stored, background_bytes: await backgroundBytes(ctx) }
+      : stored
+    return { month, current, rows, unattributed }
   },
 })
 

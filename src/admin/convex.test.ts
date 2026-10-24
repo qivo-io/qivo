@@ -125,7 +125,10 @@ describe('console changes', () => {
     goOffline()
     await gate.runAction(api.adminStats.listOrgs, {})
     await gate.runAction(api.adminPeople.userPage, { search: '', cursor: null })
-    expect(client.action).toHaveBeenCalledTimes(2)
+    await gate.runAction(api.usage.monthTable, { month: '2026-03' })
+    await gate.runAction(api.usage.orgMonths, { org_id: 'o1' })
+    await gate.runAction(api.usage.orgPeople, { org_id: 'o1', month: '2026-03' })
+    expect(client.action).toHaveBeenCalledTimes(5)
   })
 
   it('pauses the other changes while a changing action takes too long, without counting it', async () => {
