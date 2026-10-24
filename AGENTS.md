@@ -83,14 +83,23 @@ the output of `git merge-base origin/main HEAD` after `git fetch origin`.
 2. Fix the valid findings and commit.
 3. Claude Opus 5.5, as a `delegate_task` child with provider `claudeAgent`
    and model `claude-opus-5-5`, at `effort: xhigh`. It runs at
-   `effort: ultracode` with the prompt's multi-agent workflow section instead
-   when the change alters sign-in, sessions or tokens, access control, outside
-   input such as the REST API, MCP, webhooks and uploads, stored data through
-   deletion, migrations or the schema, billing, or deployment and secrets,
-   and for a pull request from a fork. UI, tests, docs and dependency updates
-   stay at `xhigh` unless they do one of these things. When unsure, use
-   `ultracode`. The private review README named below lists what each area
-   covers.
+   `effort: ultracode` with the prompt's multi-agent workflow section
+   instead when the change comes from a fork or alters one of these areas:
+   - sign-in, sessions and tokens
+   - access control
+   - outside input, such as the REST API, MCP, webhooks and uploads
+   - stored data, such as deletion, restore, export, migrations, the schema
+     and how the app saves a person's edits
+   - billing
+   - the desktop shell
+   - deployment, CI, secrets and the credential and production rules in
+     this file
+
+   Changes to UI, tests, docs, the review steps or dependencies stay at
+   `xhigh` unless they do one of these things, as an update of Better Auth
+   or Electron does. Judge what the change does, not only which files it
+   touches, and when unsure, use `ultracode`. The private review README
+   named below lists what each area covers.
 4. Fix the valid findings and commit.
 5. The CodeRabbit and Greptile CLIs, side by side, with
    `cr review --agent --committed --base-commit BASE` and
