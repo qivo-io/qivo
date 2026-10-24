@@ -189,7 +189,7 @@
   --r-xl: 16px; /* dialogs, empty-state tiles */
   --r-pill: 999px;
 
-  /* ---- Alignment controls (docs/alignment-design.md) ----------------------
+  /* ---- Alignment controls (qivo-internal docs/alignment-design.md) --------
      Ordinary controls share one 32px target across pages and dialogs.
      Keep the existing aliases for callers; portrait triggers deliberately
      grow to 46px, while plotted data and decorative badges keep their scale. */

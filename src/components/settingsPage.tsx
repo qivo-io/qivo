@@ -2,7 +2,8 @@
    top to bottom: a PageTitle, then SettingsSections (outlined boxes named on
    their border) holding SettingsFields and SettingsGroups. The rules they
    encode — sizes, spacing, when something is a box, a group, a field or a
-   row — are written down in docs/design-spec.md §3.2; change both together. */
+   row — are written down in qivo-internal docs/design-spec.md §3.2; change
+   both together. */
 import type React from 'react'
 import { cn } from '@/lib/utils'
 

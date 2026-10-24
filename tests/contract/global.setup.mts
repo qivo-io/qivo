@@ -22,9 +22,9 @@
  *      and can leave the demo empty or part seeded; the next pass's reset
  *      refills it); contract asserts about seeded shapes are only valid
  *      immediately after. ANCHOR
- *      is the production scenario's Monday (docs/marketing-demo.md) so a
- *      pass never moves the dates local screenshots are matched against;
- *      CONTRACT_ANCHOR overrides it.
+ *      is the production scenario's Monday (qivo-internal
+ *      docs/marketing-demo.md) so a pass never moves the dates local
+ *      screenshots are matched against; CONTRACT_ANCHOR overrides it.
  *   2. Mint one qvt_ person token (Nora) and one qva_ agent key (Atlas), both
  *      resolved by their deterministic profile ids (marketingId) — a name
  *      lookup would be ambiguous once any other organization on the

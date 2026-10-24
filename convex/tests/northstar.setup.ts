@@ -19,7 +19,7 @@ import { newOrgDefaults } from '../model/orgs'
 import { NOW, type T } from './helpers.setup'
 
 export const NORTHSTAR = 'northstar-labs'
-/* The production scenario's anchor Monday (docs/marketing-demo.md). */
+/* The production scenario's anchor Monday (qivo-internal docs/marketing-demo.md). */
 export const NORTHSTAR_ANCHOR = '2026-09-07'
 
 /* The deterministic id of any dataset row: `id('issue:pcb-revb')`,
