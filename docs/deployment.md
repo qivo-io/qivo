@@ -440,7 +440,9 @@ development and the branch previews has both settings as default environment
 variables, which Convex copies into each new deployment when it creates it.
 Mail flows can therefore be tried on a branch preview before a release. A
 preview build does not require the settings, and staging, a separate Convex
-project, has neither.
+project, has neither. When the Lettermint token changes, update the project
+default as well as production. Existing development and preview deployments
+keep the copy they were created with.
 
 The website build takes its origin from `SITE_ORIGIN`, which
 `scripts/vercel-build.mjs` sets to `QIVO_APP_ORIGIN` for stable builds and to
