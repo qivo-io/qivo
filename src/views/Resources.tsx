@@ -95,7 +95,11 @@ function ResourceStrip({
       onActiveWeek?.(lockedCell.current?.week ?? null)
     }
   }, [highlightContext, lockContext, onActiveWeek])
-  useEffect(() => () => onActiveWeek?.(null), [onActiveWeek])
+  // a kept Roadmap shown again (components/KeptView) gets its week back
+  useEffect(() => {
+    onActiveWeek?.(lockedCell.current?.week ?? null)
+    return () => onActiveWeek?.(null)
+  }, [onActiveWeek])
   const scopeSet = new Set([info.id, ...info.subIds])
   const scopeOnly = viewMode === 'scope' && !info.wide
   const capById = new Map(users.map((u) => [u.id, plannableHoursOf(u)]))

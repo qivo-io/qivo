@@ -5,7 +5,16 @@ import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
 import { DropdownChevron } from '@/components/ui/select'
 import { HoverTooltip } from '@/components/ui/tooltip'
-import { keptBoardScope } from '@/lib/keptBoard'
+import { useInputIdle } from '@/lib/inputIdle'
+import {
+  KEEP_IDLE_MS,
+  keptPages,
+  MAIN_PAGES,
+  type MainPage,
+  NO_PAGES,
+  releasePages,
+  showsScope,
+} from '@/lib/keptPages'
 import { cn } from '@/lib/utils'
 import { BillingNotice } from './components/BillingNotice'
 import { ViewKeeper } from './components/KeptView'
@@ -489,6 +498,9 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
 /** A workspace view's container, which enters with a short rise. */
 const VIEW_CLASS =
   'animate-in fade-in slide-in-from-bottom-1 [flex:1] [display:flex] [flex-direction:column] [overflow:hidden]'
+/** The container of a kept page that brings its own entrance (the Inbox
+    and Projects). */
+const PAGE_CLASS = '[flex:1] [display:flex] [flex-direction:column] [overflow:hidden]'
 
 const VIEWS = [
   { id: 'overview', label: 'Overview', icon: 'chart', kbd: '1' },
@@ -887,18 +899,38 @@ function App() {
   // scopeInfo returns null for exactly that dead scope, and a full description
   // for the live ones (both sentinels included).
   const scopeInfo = P.scopeInfo(scope)
+  /** The main page on screen, none while Settings shows. */
+  const shownPage: MainPage | null = settingsPage
+    ? null
+    : sync
+      ? 'sync'
+      : inboxOpen
+        ? 'inbox'
+        : projectsOpen
+          ? 'projects'
+          : view === 'overview' || view === 'roadmap' || view === 'kanban'
+            ? view
+            : null
   // the Board (or the phone's task list) is what the main pane shows
-  const boardActive = view === 'kanban' && !settingsPage && !inboxOpen && !projectsOpen && !sync
-  /* The scope whose Board stays loaded, hidden, while every other page of
-     that scope shows (lib/keptBoard.ts, components/KeptView.tsx). */
-  const [keptBoard, setKeptBoard] = useState<string | null>(null)
-  const keepBoard = keptBoardScope({
-    kept: keptBoard,
-    scope,
-    scopeLive: !!scopeInfo,
-    boardShown: boardActive,
-  })
-  if (keepBoard !== keptBoard) setKeptBoard(keepBoard)
+  const boardActive = shownPage === 'kanban'
+  /* The main pages that stay loaded, hidden, while another page shows
+     (lib/keptPages.ts, components/KeptView.tsx), until the person leaves
+     the app alone for KEEP_IDLE_MS. */
+  const [kept, setKept] = useState(NO_PAGES)
+  const keep = keptPages({ kept, scope, scopeLive: !!scopeInfo, shown: shownPage })
+  if (keep !== kept) setKept(keep)
+  useInputIdle(KEEP_IDLE_MS, () => setKept(releasePages(keep, shownPage)))
+  /** The id a page's ViewKeeper keeps it under: its scope for a page that
+      shows one, so a new scope mounts it anew; null once it is not kept. */
+  const keptId = (page: MainPage) =>
+    keep.pages.includes(page) ? (showsScope(page) ? keep.scope : page) : null
+  /* The Inbox's task pane is a window over it: a hidden Inbox holds none,
+     as leaving the Inbox closes its task. A hidden Team sync holds the
+     place it showed last. */
+  const inboxTask = shownPage === 'inbox' ? openIssue : null
+  const lastSync = useRef(sync)
+  if (sync) lastSync.current = sync
+  const syncPlace = sync ?? lastSync.current
   // Where the user is, as the address mirrors it: a project create that
   // finishes saving moves the user into the project only if this is unchanged.
   // The ref follows committed renders only.
@@ -1769,8 +1801,9 @@ function App() {
     </DeferredOverlay>
   )
 
-  /* Settings owns the screen. The workspace stays mounted after it,
-     hidden, for the kept Board (KeptView). */
+  /* Settings owns the screen, and goes when the person leaves it. The
+     workspace stays mounted after it, hidden, for the kept pages
+     (KeptView). */
   const settingsView = settingsPage
     ? (() => {
         // null from either sentinel scope, on purpose. Archived tasks shows ONE
@@ -1860,12 +1893,138 @@ function App() {
     setView('overview')
   }
 
+  /** What the main page `page` shows. A page that is not shown keeps what
+      it rendered last (KeptView), so what this gives it then goes unused. */
+  const pageContent = (page: MainPage): ReactNode => {
+    switch (page) {
+      case 'projects':
+        return <ProjectDirectory actions={actions} />
+      case 'inbox':
+        // openTask does not use navOpenIssue on purpose: the inbox's right pane IS
+        // the task window, so opening a task must NOT leave the inbox — and
+        // `openIssue` is what that pane shows, which is why the address
+        // (/inbox/tasks/<task>) restores it
+        return (
+          <UnsentScopeContext.Provider value={unsent.task}>
+            <Inbox
+              showOnBoard={showOnBoard}
+              onExit={() => move({ inboxOpen: false }, () => setInboxOpen(false))}
+              openTask={(id) => (id ? openTask(id) : closeIssue())}
+              openIssue={inboxTask}
+              onPlanOnRoadmap={planOnRoadmap}
+            />
+          </UnsentScopeContext.Provider>
+        )
+      case 'sync':
+        /* Team sync, over the scope and view it returns to. Its tasks open in
+           the floating window below (openTask, not navOpenIssue: opening one
+           must not leave the page), and Escape does not close it: a meeting
+           page must not vanish on a stray key. */
+        if (!syncPlace) return null
+        return tasksLoading ? (
+          <TasksLoadingView what="Team sync" />
+        ) : (
+          <TeamSync
+            place={syncPlace}
+            onPlace={placeSync}
+            onCorrect={correctSync}
+            onClose={closeSync}
+            onOpenTask={openTask}
+            onShowTask={showTaskOn}
+            onShowPerson={showPersonOn}
+          />
+        )
+      case 'overview':
+        if (!scopeInfo) return null
+        return tasksLoading ? (
+          <TasksLoadingView what="The overview" />
+        ) : (
+          <Overview info={scopeInfo} actions={actions} />
+        )
+      case 'roadmap':
+        if (!scopeInfo) return null
+        return tasksLoading ? (
+          <TasksLoadingView what="The roadmap" />
+        ) : (
+          /* The roadmap's toolbar row is its own — the window controls, the
+             estimate walk and the auto-correct count are all local to it and
+             cannot be handed up to the bar. So the bar hands the FILTERS
+             down instead, ready-made: App holds the state, the roadmap holds
+             the row, and the controls themselves have one definition shared
+             with the board, in the same order — but three of them are left
+             out here. `My tasks` is HIDDEN: the Assignee roster's
+             `Me only` row throws the same flag and its trigger reads
+             "Me only" while it is on, so nothing is lost. `Stale` and
+             `Focus` are hidden AND inert: the roadmap takes
+             `roadmapFilters`, the effective filters with `stale` and
+             `focus` forced off, because a filter this view does not show
+             must not narrow it (deviations #236 and #241) — see the note
+             above ViewFilters.
+             `filters` (not effFilters) on purpose — the controls edit the raw
+             object for the same reason TopBar does. */
+          <Roadmap
+            info={scopeInfo}
+            filters={roadmapFilters}
+            actions={actions}
+            filterControls={(phone) => (
+              <ViewFilters
+                info={scopeInfo}
+                filters={filters}
+                setFilters={setFilters}
+                actions={actions}
+                searchWidth={180}
+                hideSearch={phone}
+                hide={['mine', 'stale', 'focus']}
+              />
+            )}
+            focusPlan={focusPlan}
+            onFocusConsumed={() => setFocusPlan(null)}
+            revealTask={revealTask}
+            onRevealConsumed={() => setRevealTask(null)}
+          />
+        )
+      case 'kanban':
+        if (!scopeInfo) return null
+        return mobile ? (
+          <MobileTaskList
+            info={scopeInfo}
+            filters={filters}
+            setFilters={setFilters}
+            actions={actions}
+            revealTask={revealTask}
+            onRevealConsumed={() => setRevealTask(null)}
+          />
+        ) : (
+          <Kanban
+            info={scopeInfo}
+            filters={effFilters}
+            tweaks={tweaks}
+            actions={actions}
+            revealTask={revealTask}
+            onRevealConsumed={() => setRevealTask(null)}
+          />
+        )
+    }
+  }
+  /** What a kept page holds besides data: the layout, and the place it
+      shows where that is the page's own (the Inbox's task, Team sync's
+      step). A page shown again for another one renders it at once, and the
+      Inbox drops its task pane as it hides. */
+  const pageVariant = (page: MainPage) => {
+    const layout = mobile ? 'phone' : 'desktop'
+    if (page === 'inbox') return `${layout}:${inboxTask ?? ''}`
+    if (page === 'sync')
+      return `${layout}:${syncPlace ? `${syncPlace.scope}:${syncPlace.step}` : ''}`
+    return layout
+  }
+
   return (
     <>
       {settingsView}
-      {/* While Settings shows, the workspace stays, hidden, holding only the
-         kept Board in place, so its elements keep their layout, and a Board
-         whose scope went while Settings showed can come apart in slices. */}
+      {/* While Settings shows, the workspace stays, hidden, holding the
+         kept pages in place, so their elements keep their layout, and a
+         page whose scope went while Settings showed can come apart in
+         slices. */}
       <WorkspaceShell
         className="planner-shell"
         hidden={!!settingsPage}
@@ -1930,153 +2089,27 @@ function App() {
             />
           )}
           {!settingsPage && <TasksLoadingBar />}
-          {/* the Board has a boundary of its own, below, and so has each view */}
-          {!settingsPage && (
-            <ViewBoundary
-              key={sync ? 'sync' : inboxOpen ? 'inbox' : projectsOpen ? 'projects' : 'views'}
-              onBack={backToWorkspace}
-            >
-              <Suspense fallback={<ViewLoading />}>
-                <UnsentScopeContext.Provider value={unsent.page}>
-                  {projectsOpen ? (
-                    <ProjectDirectory actions={actions} />
-                  ) : inboxOpen ? (
-                    // openTask does not use navOpenIssue on purpose: the inbox's right pane IS
-                    // the task window, so opening a task must NOT leave the inbox — and
-                    // `openIssue` is what that pane shows, which is why the address
-                    // (/inbox/tasks/<task>) restores it
-                    <UnsentScopeContext.Provider value={unsent.task}>
-                      <Inbox
-                        showOnBoard={showOnBoard}
-                        onExit={() => move({ inboxOpen: false }, () => setInboxOpen(false))}
-                        openTask={(id) => (id ? openTask(id) : closeIssue())}
-                        openIssue={openIssue}
-                        onPlanOnRoadmap={planOnRoadmap}
-                      />
-                    </UnsentScopeContext.Provider>
-                  ) : sync ? (
-                    /* Team sync, over the scope and view it returns to. Its tasks open
-             in the floating window below (openTask, not navOpenIssue: opening one must
-             not leave the page), and Escape does not close it: a meeting
-             page must not vanish on a stray key. */
-                    <div
-                      data-workspace-view="sync"
-                      className="animate-in fade-in slide-in-from-bottom-1 [flex:1] [display:flex] [flex-direction:column] [overflow:hidden]"
-                    >
-                      {tasksLoading ? (
-                        <TasksLoadingView what="Team sync" />
-                      ) : (
-                        <TeamSync
-                          place={sync}
-                          onPlace={placeSync}
-                          onCorrect={correctSync}
-                          onClose={closeSync}
-                          onOpenTask={openTask}
-                          onShowTask={showTaskOn}
-                          onShowPerson={showPersonOn}
-                        />
-                      )}
-                    </div>
-                  ) : (
-                    scopeInfo &&
-                    view !== 'kanban' && (
-                      <div key={scope + view} data-workspace-view={view} className={VIEW_CLASS}>
-                        <ViewBoundary onBack={backToWorkspace}>
-                          <Suspense fallback={<ViewLoading />}>
-                            {tasksLoading ? (
-                              <TasksLoadingView
-                                what={view === 'roadmap' ? 'The roadmap' : 'The overview'}
-                              />
-                            ) : null}
-                            {view === 'overview' && !tasksLoading && (
-                              <Overview info={scopeInfo} actions={actions} />
-                            )}
-                            {/* The roadmap's toolbar row is its own — the window controls, the
-                    estimate walk and the auto-correct count are all local to it and
-                    cannot be handed up to the bar. So the bar hands the FILTERS
-                    down instead, ready-made: App holds the state, the roadmap holds
-                    the row, and the controls themselves have one definition shared
-                    with the board, in the same order — but three of them are left
-                    out here. `My tasks` is HIDDEN: the Assignee roster's
-                    `Me only` row throws the same flag and its trigger reads
-                    "Me only" while it is on, so nothing is lost. `Stale` and
-                    `Focus` are hidden AND inert: the roadmap takes
-                    `roadmapFilters`, the effective filters with `stale` and
-                    `focus` forced off, because a filter this view does not show
-                    must not narrow it (deviations #236 and #241) — see the note
-                    above ViewFilters.
-                    `filters` (not effFilters) on purpose — the controls edit the raw
-                    object for the same reason TopBar does. */}
-                            {view === 'roadmap' && !tasksLoading && (
-                              <Roadmap
-                                info={scopeInfo}
-                                filters={roadmapFilters}
-                                actions={actions}
-                                filterControls={(phone) => (
-                                  <ViewFilters
-                                    info={scopeInfo}
-                                    filters={filters}
-                                    setFilters={setFilters}
-                                    actions={actions}
-                                    searchWidth={180}
-                                    hideSearch={phone}
-                                    hide={['mine', 'stale', 'focus']}
-                                  />
-                                )}
-                                focusPlan={focusPlan}
-                                onFocusConsumed={() => setFocusPlan(null)}
-                                revealTask={revealTask}
-                                onRevealConsumed={() => setRevealTask(null)}
-                              />
-                            )}
-                          </Suspense>
-                        </ViewBoundary>
-                      </div>
-                    )
-                  )}
-                </UnsentScopeContext.Provider>
-              </Suspense>
-            </ViewBoundary>
-          )}
-          {/* The Board stays loaded, hidden, while every other page of its
-             scope shows (ViewKeeper): it is the most used view, and mounting
-             a large one takes seconds. A new scope mounts it anew, as
-             before, and the old one comes apart after the next view paints. */}
-          <UnsentScopeContext.Provider value={unsent.page}>
-            <ViewKeeper
-              id={keepBoard}
-              view="kanban"
-              shown={boardActive}
-              layout={mobile ? 'phone' : 'desktop'}
-              className={VIEW_CLASS}
-            >
-              {scopeInfo && (
+          {/* Every main page the person opened stays loaded, hidden, while
+             another one shows (lib/keptPages.ts, ViewKeeper): coming back
+             shows it as it was, without mounting it again. A new scope
+             mounts the pages of that scope anew, and the old ones come
+             apart after the next page paints. Each page has a boundary of
+             its own. */}
+          {MAIN_PAGES.map((page) => (
+            <UnsentScopeContext.Provider key={page} value={unsent.page}>
+              <ViewKeeper
+                id={keptId(page)}
+                view={page}
+                shown={shownPage === page}
+                variant={pageVariant(page)}
+                className={page === 'inbox' || page === 'projects' ? PAGE_CLASS : VIEW_CLASS}
+              >
                 <ViewBoundary onBack={backToWorkspace}>
-                  <Suspense fallback={<ViewLoading />}>
-                    {mobile ? (
-                      <MobileTaskList
-                        info={scopeInfo}
-                        filters={filters}
-                        setFilters={setFilters}
-                        actions={actions}
-                        revealTask={revealTask}
-                        onRevealConsumed={() => setRevealTask(null)}
-                      />
-                    ) : (
-                      <Kanban
-                        info={scopeInfo}
-                        filters={effFilters}
-                        tweaks={tweaks}
-                        actions={actions}
-                        revealTask={revealTask}
-                        onRevealConsumed={() => setRevealTask(null)}
-                      />
-                    )}
-                  </Suspense>
+                  <Suspense fallback={<ViewLoading />}>{pageContent(page)}</Suspense>
                 </ViewBoundary>
-              )}
-            </ViewKeeper>
-          </UnsentScopeContext.Provider>
+              </ViewKeeper>
+            </UnsentScopeContext.Provider>
+          ))}
         </main>
         {/* the floating window — everywhere but the inbox, which embeds the same
           component in its right pane instead of stacking one over the other */}

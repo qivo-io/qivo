@@ -158,18 +158,21 @@ describe('KeptView', () => {
     expect(board()?.dataset.board).toBe('second')
   })
 
-  it('renders new content in the commit that shows it when it was kept for another layout', async () => {
+  it('renders new content in the commit that shows it when it was kept for another variant', async () => {
     const tree = (shown: boolean, label: string, layout: string) =>
       act(async () =>
         root.render(
-          <KeptView view="kanban" shown={shown} layout={layout} className="view">
+          <KeptView view="kanban" shown={shown} variant={layout} className="view">
             <Board label={label} />
           </KeptView>,
         ),
       )
     await tree(true, 'desktop', 'desktop')
-    // it hides as the layout changes, holding the old layout's content
+    await tree(false, 'desktop', 'desktop')
+    // the layout changes while it hides: it holds the old layout's content
+    counts.renders.length = 0
     await tree(false, 'phone', 'phone')
+    expect(counts.renders).toEqual([])
     expect(board()?.dataset.board).toBe('desktop')
     await tree(true, 'phone', 'phone')
     expect(board()?.dataset.board).toBe('phone')
@@ -179,6 +182,32 @@ describe('KeptView', () => {
     expect(board()?.dataset.board).toBe('phone')
     await painted()
     expect(board()?.dataset.board).toBe('phone again')
+  })
+
+  it('renders new content in the commit that hides it only when that is for another variant', async () => {
+    const tree = (shown: boolean, label: string, variant: string) =>
+      act(async () =>
+        root.render(
+          <KeptView view="inbox" shown={shown} variant={variant} className="view">
+            <Board label={label} />
+          </KeptView>,
+        ),
+      )
+    await tree(true, 'with a task', 'task')
+    counts.renders.length = 0
+    // the Inbox hides without its task pane
+    await tree(false, 'without', '')
+    expect(counts.renders).toEqual(['without'])
+    expect(board()?.dataset.board).toBe('without')
+    expect(counts.mounts).toBe(1)
+    // while hidden, and as it hides for the same variant, it does not render
+    await tree(false, 'other', '')
+    await tree(true, 'other', '')
+    await painted()
+    counts.renders.length = 0
+    await tree(false, 'again', '')
+    expect(counts.renders).toEqual([])
+    expect(board()?.dataset.board).toBe('other')
   })
 
   it('marks its blocks to skip their items for good while hidden, and unmarks them as it shows', async () => {

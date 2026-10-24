@@ -6647,8 +6647,8 @@ export const PLANNER = {
      asked again as two halves, down to one person. Someone whose own answer
      is still cut short is listed in P.lastCommentsCut, which the page names
      so no card lacks its mark without a word. The page calls this with the
-     home organization whenever they change, and with null on unmount. No
-     owners means no subscription. A new organization empties the marks; new
+     home organization whenever they change, and with no owners when it
+     goes or hides. No owners means no subscription. A new organization empties the marks; new
      owners in the same one keep the old marks until every part has
      answered, so stepping through the walk does not blank them. A part that
      fails shows no marks for its people until its subscription answers

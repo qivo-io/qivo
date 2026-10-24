@@ -462,7 +462,13 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     setPoppedOut(false)
     openTask(null)
   }
+  // A kept Inbox shown again (components/KeptView) stays where it was: the
+  // place goes back only when the pane closed since this last ran.
+  const restoredFor = useRef<string | null>(null)
   useEffect(() => {
+    const at = `${mobile}\n${!!paneIssue}\n${deadItem}`
+    if (restoredFor.current === at) return
+    restoredFor.current = at
     if (mobile && !paneIssue && !deadItem && listScrollRef.current) {
       listScrollRef.current.scrollTop = queueScrollTop.current
     }

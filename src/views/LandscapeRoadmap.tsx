@@ -6,24 +6,28 @@ import { LandscapeContext } from '@/lib/landscape'
 import { useRootMark } from '@/lib/rootMark'
 import { useHideOthers } from '@/lib/useHideOthers'
 import { useMobileBackLayer } from '@/lib/useMobile'
+import { useViewHidden } from '@/lib/viewHidden'
 import { Icon } from '../components/qivo'
 import { useAppearance } from '../lib/appearanceContext'
 
-/** A landscape canvas even with the phone's portrait rotation lock enabled.
- * Portaling beside the workspace keeps its entrance animation from becoming
- * the containing block for this full-viewport screen. Task/editor layers can
- * still open above it, and its menus share the transformed coordinate space. */
-export function LandscapeRoadmap({
-  children,
-  title,
-  onClose,
-  planning,
-}: {
+type LandscapeProps = {
   children: ReactNode
   title: string
   onClose: () => void
   planning: boolean
-}) {
+}
+
+/** A landscape canvas even with the phone's portrait rotation lock enabled.
+ * Portaling beside the workspace keeps its entrance animation from becoming
+ * the containing block for this full-viewport screen. Task/editor layers can
+ * still open above it, and its menus share the transformed coordinate space.
+ * A layer like the dialogs, it goes while its kept Roadmap hides
+ * (lib/viewHidden.ts) and opens again, anew, when it shows. */
+export function LandscapeRoadmap(props: LandscapeProps) {
+  return useViewHidden() ? null : <LandscapeLayer {...props} />
+}
+
+function LandscapeLayer({ children, title, onClose, planning }: LandscapeProps) {
   const appearance = useAppearance()
   const [size, setSize] = useState(() => ({ width: innerWidth, height: innerHeight }))
   const [host, setHost] = useState<HTMLDivElement | null>(null)

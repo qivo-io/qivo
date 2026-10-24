@@ -80,6 +80,19 @@ opens its sub-project where you can see and assign it.
 Qivo saves your last view, scope and Roadmap window per user on the server.
 They follow you across devices and reloads.
 
+## Pages stay as you left them
+
+Each page you open stays loaded while you use Qivo: the Overview, the Board,
+the Roadmap, the Inbox, Team sync and Projects. Going back to one shows it at
+once, scrolled where you left it, and changes made while it was out of sight
+follow right after. The Overview, the Board and the Roadmap belong to the
+sidebar choice, such as a project or All projects. Choosing another one loads
+them again for it. Settings loads each time you open it.
+
+After 30 minutes without using Qivo (no pointer, key, touch or scroll wheel
+input in it), only the page on screen stays loaded. The others load again
+when you open them.
+
 ## Filters (Board and Roadmap)
 
 Desktop Board has a text filter, **My tasks**, **Assignee**, **Priority**,

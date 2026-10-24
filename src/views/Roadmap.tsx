@@ -172,12 +172,6 @@ function Roadmap({
       .querySelector<HTMLButtonElement>('.mobile-roadmap-open-timeline button')
       ?.focus({ preventScroll: true })
   }, [mobileLayout])
-  useEffectR(() => {
-    if (focusPlan && mobile) setMobileLayout('timeline')
-  }, [focusPlan?.n])
-  useEffectR(() => {
-    if (revealTask && mobile) setMobileLayout('timeline')
-  }, [revealTask?.n])
   // App makes its actions again every render; the rows keep one identity
   const onOpenIssue = useLatest(actions.openIssue)
   const onScope = useLatest(actions.setScope)
@@ -203,9 +197,12 @@ function Roadmap({
     if (planned.current?.id === id) planned.current.writes.push(saved)
   }
   sessionRef.current = session
+  // the session ends when the Roadmap goes, and when it hides (a kept page,
+  // components/KeptView): leaving the page leaves the planning
   useEffectR(
     () => () => {
       sessionRef.current = null
+      setSession(null)
     },
     [],
   )
@@ -458,6 +455,7 @@ function Roadmap({
   // strip sizing: "normal" shares the pane, "max" fills the space below the
   // week header, "min" leaves only the strip's header bar
   const [stripMode, setStripMode] = useStateR('normal')
+  const fittedPhone = useRefR(false)
   useEffectR(() => {
     if (!mobile) return
     // On a small phone, the sticky week/project headings otherwise consume
@@ -467,7 +465,9 @@ function Roadmap({
       if (Math.min(innerWidth, innerHeight) < 360)
         setStripMode((mode) => (mode === 'normal' ? 'min' : mode))
     }
-    fitPhone()
+    // once a mount: a kept Roadmap shown again keeps the strip as it was
+    if (!fittedPhone.current) fitPhone()
+    fittedPhone.current = true
     window.addEventListener('resize', fitPhone)
     return () => window.removeEventListener('resize', fitPhone)
   }, [mobile])
@@ -894,8 +894,19 @@ function Roadmap({
      revealTask.n like focusPlan; `revealed` holds the ring after the signal
      is consumed. */
   const [revealed, setRevealed] = useStateR<{ id: string; n: number } | null>(null)
+  /* The nonces of the requests taken. A kept Roadmap (components/KeptView)
+     shown again runs its effects again with the props it held, which can
+     be a request it took before it hid: that one goes, not again. */
+  const takenReveal = useRefR<number | null>(null)
+  const takenPlan = useRefR<number | null>(null)
   useEffectR(() => {
     if (!revealTask) return
+    if (revealTask.n === takenReveal.current) {
+      onRevealConsumed?.()
+      return
+    }
+    takenReveal.current = revealTask.n
+    if (mobile) setMobileLayout('timeline')
     const it = P.issueById[revealTask.id]
     if (!it) {
       onRevealConsumed?.()
@@ -914,6 +925,12 @@ function Roadmap({
 
   useEffectR(() => {
     if (!focusPlan) return
+    if (focusPlan.n === takenPlan.current) {
+      onFocusConsumed?.()
+      return
+    }
+    takenPlan.current = focusPlan.n
+    if (mobile) setMobileLayout('timeline')
     const it = P.issueById[focusPlan.id]
     // A group's dates come from its subtasks, so it has nothing to plan. A
     // request for one (it can gain a subtask after the detail window asked)

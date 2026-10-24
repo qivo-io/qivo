@@ -492,14 +492,21 @@ export function TeamSync({
   useEffect(() => {
     P.watchTeamSync(P.homeOrg || null, ownerKey ? ownerKey.split(',') : [])
   }, [P.homeOrg, ownerKey])
-  useEffect(() => () => P.watchTeamSync(null), [])
+  // gone or hidden (a kept page, components/KeptView), it asks about no
+  // one, which keeps the marks it had for its return
+  useEffect(() => () => P.watchTeamSync(P.homeOrg || null), [])
 
   useEffect(() => {
     shown.current = { step, idx, scope: scopeKey }
   })
   // each step opens at its top, header first (Next sits at the bottom of a
-  // long page); instant, since the page never animates
+  // long page); instant, since the page never animates. A kept page shown
+  // again (components/KeptView) stays where it was.
+  const scrolledFor = useRef<string | null>(null)
   useLayoutEffect(() => {
+    const at = `${scopeKey}\n${step}`
+    if (scrolledFor.current === at) return
+    scrolledFor.current = at
     scroller.current?.scrollTo({ top: 0, behavior: 'instant' })
   }, [step, scopeKey])
   // correct a place the walk cannot show, in place (App replaces the URL);

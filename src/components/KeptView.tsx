@@ -5,21 +5,25 @@ import { useLatest } from '@/lib/useLatest'
 import { createHiddenState, HiddenViewContext } from '@/lib/viewHidden'
 import { createTeardown, TeardownContext } from '@/lib/viewTeardown'
 
-/* The Board stays loaded while every other page of its scope shows:
-   opening it again shows it as it was, without mounting its cards again.
-   While hidden it sits after the shown view, in React's Activity, which
+/* A main page stays loaded while the other pages show (lib/keptPages.ts):
+   opening it again shows it as it was, without mounting it again. While
+   hidden it sits beside the shown page, in React's Activity, which
    stops its effects (its timers, observers and listeners) and renders its
    updates only when nothing else waits. It does not render for its
    parent's new props until it shows again, and not in the task that shows
    it: that task shows it as it was, and the render for its parent's new
    props follows in a task of its own once that frame has painted, as the
-   next update would. Its floating layers
-   (lib/viewHidden.ts) close a commit before the rest hides, so no pop-up
-   of it stays in the page.
+   next update would, unless what it held was made for another variant
+   (another layout, or another task in the Inbox's pane). The commit that
+   hides it renders its parent's new content only when that is for another
+   variant. Its floating
+   layers (lib/viewHidden.ts) close a commit before the rest hides, so no
+   pop-up of it stays in the page, and what it portals elsewhere, such as
+   the Roadmap's toolbar row, Activity hides with `display: none`.
 
    Activity hides its elements with `display: none`, which makes the browser
    tear down the layout of every element in it and build it again on show:
-   at 10,000 tasks that cost more than mounting the Board. So the container
+   for a large Board that cost more than mounting it. So the container
    hides them with `content-visibility: hidden`, which keeps their layout
    and their scroll positions but skips drawing, finding and reading them,
    and takes back the `display: none` that Activity puts on its own
@@ -30,13 +34,13 @@ import { createTeardown, TeardownContext } from '@/lib/viewTeardown'
    data-hidden-view in place of data-workspace-view, so what looks for the
    shown view's elements, or puts focus back (lib/viewHidden.ts OUT_OF_USE),
    passes it by. It is not `inert` and keeps its pointer events: both are
-   inherited, so changing either would restyle every element of the Board
-   when it shows again. Its blocks that skip their cards while offscreen
+   inherited, so changing either would restyle every element of the page
+   when it shows again. Its blocks that skip their items while offscreen
    (DeferredList.tsx) skip them for good while it hides (lib/keptBlocks.ts).
 
-   When its scope goes, the kept Board leaves (ViewKeeper): it stays hidden
-   until the next view has painted, then comes apart a slice at a time
-   (lib/viewTeardown.ts) before it goes. */
+   When it is no longer kept, as its scope went or the person left the app
+   alone for a while, the page leaves (ViewKeeper): it stays hidden until the next view has painted, then
+   comes apart a slice at a time (lib/viewTeardown.ts) before it goes. */
 
 /** A hidden view takes no room and draws nothing. */
 const HIDDEN = '[content-visibility:hidden] !h-0 ![flex:none]'
@@ -54,14 +58,14 @@ const Frozen = memo(
 
 /** Shows `children` as the workspace view `view` while `shown`, in a
     container styled with `className`; while not shown, keeps it mounted,
-    hidden and inactive. Content kept for another `layout` (the phone's or
-    the desktop's) is not shown as it was: the commit that shows it renders
-    the new content. Once `leaving`, it comes apart in slices after it has
+    hidden and inactive. Content kept for another `variant` (such as the
+    phone's or the desktop's layout) is not shown as it was: the commit that
+    shows it renders the new content. Once `leaving`, it comes apart in slices after it has
     hidden, then calls `onGone`. */
 export function KeptView({
   view,
   shown,
-  layout = '',
+  variant = '',
   leaving = false,
   onGone,
   className,
@@ -69,7 +73,7 @@ export function KeptView({
 }: {
   view: string
   shown: boolean
-  layout?: string
+  variant?: string
   leaving?: boolean
   onGone?: () => void
   className: string
@@ -83,13 +87,20 @@ export function KeptView({
   if (shown && mode !== 'visible') setMode('visible')
   // shown again, it shows what it held at once, and renders its parent's
   // new content in a task of its own once that has painted, unless what it
-  // held was made for another layout
+  // held was made for another variant. The commit that hides it renders the
+  // new content when that is for another variant, so it holds that, such
+  // as the Inbox without its task pane. Both refs follow committed renders.
   const [current, setCurrent] = useState(true)
-  const [heldFor, setHeldFor] = useState(layout)
+  const heldFor = useRef(variant)
+  const wasShown = useRef(shown)
+  const stale = heldFor.current !== variant
   if (!shown && current) setCurrent(false)
-  if (shown && !current && heldFor !== layout) setCurrent(true)
-  const frozen = !shown || !current
-  if (!frozen && heldFor !== layout) setHeldFor(layout)
+  if (shown && !current && stale) setCurrent(true)
+  const frozen = shown ? !current && !stale : !(stale && wasShown.current)
+  useLayoutEffect(() => {
+    wasShown.current = shown
+    if (!frozen) heldFor.current = variant
+  })
   useEffect(() => {
     if (!shown || current) return
     let stopped = false
@@ -179,14 +190,14 @@ export function ViewKeeper({
   id,
   view,
   shown,
-  layout,
+  variant,
   className,
   children,
 }: {
   id: string | null
   view: string
   shown: boolean
-  layout?: string
+  variant?: string
   className: string
   children: ReactNode
 }) {
@@ -212,7 +223,7 @@ export function ViewKeeper({
         key={slot.n}
         view={view}
         shown={current && shown}
-        layout={layout}
+        variant={variant}
         leaving={!current}
         onGone={() => gone(slot.n)}
         className={className}
