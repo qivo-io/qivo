@@ -103,9 +103,13 @@ the output of `git merge-base origin/main HEAD` after `git fetch origin`.
 4. Fix the valid findings and commit.
 5. The CodeRabbit and Greptile CLIs, side by side, with
    `cr review --agent --committed --base-commit BASE` and
-   `greptile review -b BASE --json`. When the change touches `AGENTS.md`, add
-   `--include AGENTS.md` to the Greptile command. Without it Greptile leaves
-   that file's changes out and reviews an empty diff.
+   `greptile review -b BASE --json`. Greptile's summary sometimes says that
+   the supplied `git diff` was empty. The CLI sends the branch as one
+   combined diff, so in Greptile's copy `git diff HEAD^ HEAD` is the whole
+   change. Such a run reviewed the change only if the summary names the diff
+   it reviewed instead and describes this branch's change. Otherwise run it
+   once more with the instruction in the private review README named below.
+   If that run also reviews nothing, step 5 failed.
 6. Fix the valid findings and commit.
 7. Push and open the pull request. Merge it once its `quality`, `secrets`
    and `Vercel – qivo` checks pass on the head commit. The `Vercel – qivo`
@@ -116,7 +120,7 @@ the output of `git merge-base origin/main HEAD` after `git fetch origin`.
 
 If a step fails, times out or cannot run, stop before step 7 and report it.
 A change that touches only lockfiles follows the lockfile rule for step 5 in
-the private review README named below instead, because neither CLI can
+the private review README named below instead, because CodeRabbit cannot
 review it.
 A commit added after the pull request opens, other than a rebase without
 conflict edits, gets step 1 on its own diff, and the fixes, before the merge.
