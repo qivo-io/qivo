@@ -105,3 +105,25 @@ export async function markBillingMembershipChanged(
   }
   for (const id of orgIds) await requestBillingSync(ctx, id)
 }
+
+/** Organization deletion removes profiles without the membership mutations
+ * that call markBillingMembershipChanged. A deleted active home profile can
+ * make the same email's guest profiles billable elsewhere
+ * (getBillableUsers), so this asks for those organizations' reconciliation
+ * before the profile goes, once per organization in `asked`. */
+export async function markHomeProfileRemoved(
+  ctx: MutationCtx,
+  profile: Doc<'profiles'>,
+  asked: Set<string>,
+): Promise<void> {
+  if (isDemoDeployment() || !process.env.POLAR_ACCESS_TOKEN) return
+  if (!profile.active || !hasHomeRole(profile) || profile.email === undefined) return
+  const email = profile.email.toLowerCase()
+  const matches = ctx.db.query('profiles').withIndex('by_email', (q) => q.eq('email', email))
+  for await (const match of matches) {
+    if (match.org_id === profile.org_id || match.org_role !== 'guest' || asked.has(match.org_id))
+      continue
+    asked.add(match.org_id)
+    await requestBillingSync(ctx, match.org_id)
+  }
+}

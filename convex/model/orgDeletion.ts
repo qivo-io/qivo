@@ -35,6 +35,7 @@
 
 import type { Doc, Id, TableNames } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
+import { markHomeProfileRemoved } from '../lib/billableUsers'
 import { byId } from '../lib/db'
 import { ORG_REMOVAL_PHASES, type OrgRemovalPhase } from '../lib/enums'
 import { require, rule } from '../lib/functions'
@@ -102,8 +103,10 @@ const profileRows = async (ctx: MutationCtx, orgId: string, budget: RemovalBudge
     ctx.db.query('sync_stamps').withIndex('by_org', (q) => q.eq('org_id', orgId)),
   ))
 
-const profilesWithRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
-  parents(
+const profilesWithRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) => {
+  // guest organizations already asked to reconcile in this step
+  const asked = new Set<string>()
+  return parents(
     ctx,
     budget,
     ctx.db.query('profiles').withIndex('by_org', (q) => q.eq('org_id', orgId)),
@@ -207,8 +210,12 @@ const profilesWithRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget
               .withIndex('by_key', (q) => q.eq('key', `profile:${profile.id}`)),
           ),
       ]),
-    (profile) => removeFile(ctx, profile.avatar_storage_id),
+    async (profile) => {
+      await markHomeProfileRemoved(ctx, profile, asked)
+      await removeFile(ctx, profile.avatar_storage_id)
+    },
   )
+}
 
 /** Everything in Deleted items, from one budget: clearOrgTrash counts its
  * rows and their bytes as this file's steps do. */
