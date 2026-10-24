@@ -612,12 +612,20 @@ export default defineSchema({
     sync_lock_until: v.optional(v.string()),
     sync_error: v.optional(v.string()),
     synced_at: v.optional(v.string()),
+    // When the minute sweep next reconciles this organization with Polar
+    // (billingSync.ts nextSyncDue). Absent until the first reconciliation,
+    // which the sweep then treats as due.
+    sync_due_at: v.optional(v.string()),
+    // Reconciliations that failed in a row, which set the retry's delay.
+    sync_attempts: v.optional(v.number()),
     updated_at: v.string(),
     created_at: v.string(),
   })
     .index('by_uuid', ['id'])
     .index('by_org', ['org_id'])
-    .index('by_provider', ['polar_subscription_id']),
+    .index('by_provider', ['polar_subscription_id'])
+    .index('by_sync_due', ['sync_due_at'])
+    .index('by_complimentary_until', ['complimentary_until']),
 
   billing_periods: defineTable({
     org_id: v.string(),

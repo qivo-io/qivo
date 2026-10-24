@@ -1,7 +1,12 @@
 import { X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { type AppUpdateState, createAppUpdateMonitor } from '../lib/appUpdates'
+import {
+  type AppUpdateState,
+  createAppUpdateMonitor,
+  UPDATE_CHECK_MS,
+  UPDATE_WAKE_MS,
+} from '../lib/appUpdates'
 import { floatSlot } from '../lib/floatStack'
 import { isUpdateBlocked, subscribeUpdateSafety } from '../lib/updateSafety'
 import { Button } from './ui/button'
@@ -82,7 +87,14 @@ export function AppUpdates() {
     const wake = () => {
       pointerDown = false
       activity()
-      if (document.visibilityState === 'visible' && navigator.onLine) void monitor.check()
+      if (document.visibilityState === 'visible' && navigator.onLine)
+        void monitor.checkIfOlder(UPDATE_WAKE_MS)
+    }
+    // A chunk that no longer exists is evidence of a new build, so it always checks.
+    const onPreloadError = () => {
+      pointerDown = false
+      activity()
+      if (navigator.onLine) void monitor.check()
     }
     const events = ['keydown', 'input', 'change', 'focusin', 'focusout'] as const
     for (const event of events) document.addEventListener(event, activity, true)
@@ -95,10 +107,15 @@ export function AppUpdates() {
     document.addEventListener('visibilitychange', wake)
     window.addEventListener('focus', wake)
     window.addEventListener('online', wake)
-    window.addEventListener('vite:preloadError', wake)
+    window.addEventListener('vite:preloadError', onPreloadError)
     const unsubscribe = subscribeUpdateSafety(activity)
+    // The minute tick only reads the clock; a request goes out once the
+    // last check is UPDATE_CHECK_MS old, so a visible tab sees a release
+    // within about 11 minutes, and a tab the user comes back to after two
+    // minutes away checks at once (wake).
     const interval = setInterval(() => {
-      if (document.visibilityState === 'visible' && navigator.onLine) void monitor.check()
+      if (document.visibilityState === 'visible' && navigator.onLine)
+        void monitor.checkIfOlder(UPDATE_CHECK_MS)
     }, 60_000)
     void monitor.check()
     return () => {
@@ -116,7 +133,7 @@ export function AppUpdates() {
       document.removeEventListener('visibilitychange', wake)
       window.removeEventListener('focus', wake)
       window.removeEventListener('online', wake)
-      window.removeEventListener('vite:preloadError', wake)
+      window.removeEventListener('vite:preloadError', onPreloadError)
     }
   }, [])
 

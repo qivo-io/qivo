@@ -12,15 +12,12 @@ import { internal } from './_generated/api'
 
 const crons = cronJobs()
 
+// Starts the reconciliations, usage deliveries and free-period reminders
+// that are due; a minute with none writes nothing (billingSync.ts).
 crons.interval(
   'billing reconciliation',
   { minutes: 1 },
-  makeFunctionReference<'action', Record<string, never>, null>('billingSync:sweep'),
-)
-crons.interval(
-  'billing usage delivery',
-  { minutes: 1 },
-  makeFunctionReference<'action', Record<string, never>, null>('billingSync:pump'),
+  makeFunctionReference<'mutation', Record<string, never>, null>('billingSync:sweep'),
 )
 
 // was '30 2 * * *' (0070:265)

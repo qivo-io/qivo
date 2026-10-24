@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createAppUpdateMonitor } from './appUpdates'
+import { createAppUpdateMonitor, UPDATE_CHECK_MS, UPDATE_WAKE_MS } from './appUpdates'
 
 type UpdateOptions = Parameters<typeof createAppUpdateMonitor>[0]
 
@@ -304,5 +304,29 @@ describe('safe application updates', () => {
     await vi.advanceTimersByTimeAsync(10_000)
     expect(app.onChange).toHaveBeenCalledTimes(notificationsAtDisposal)
     expect(app.reload).not.toHaveBeenCalled()
+  })
+
+  it('asks for the version only once the last check is old enough', async () => {
+    const app = setup()
+    app.fetchVersion.mockResolvedValue({ buildId: 'build-1' })
+    await app.monitor.checkIfOlder(UPDATE_CHECK_MS)
+    expect(app.fetchVersion).toHaveBeenCalledOnce()
+    // a minute tick or a wake soon after a check reads only the clock
+    await vi.advanceTimersByTimeAsync(UPDATE_WAKE_MS - 1)
+    await app.monitor.checkIfOlder(UPDATE_WAKE_MS)
+    await app.monitor.checkIfOlder(UPDATE_CHECK_MS)
+    expect(app.fetchVersion).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(1)
+    await app.monitor.checkIfOlder(UPDATE_WAKE_MS)
+    expect(app.fetchVersion).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(UPDATE_CHECK_MS - 1)
+    await app.monitor.checkIfOlder(UPDATE_CHECK_MS)
+    expect(app.fetchVersion).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1)
+    await app.monitor.checkIfOlder(UPDATE_CHECK_MS)
+    expect(app.fetchVersion).toHaveBeenCalledTimes(3)
+    // a direct check, as after a missing chunk, never waits
+    await app.monitor.check()
+    expect(app.fetchVersion).toHaveBeenCalledTimes(4)
   })
 })

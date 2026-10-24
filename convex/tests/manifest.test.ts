@@ -193,15 +193,14 @@ billingSync:apply mutation internal {"type":"object","value":{"payload":{"fieldT
 billingSync:claim mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billingSync:eventReady mutation internal {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
 billingSync:eventResult mutation internal {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"success":{"fieldType":{"type":"boolean"},"optional":false}}}
-billingSync:organizations query internal {"type":"object","value":{}}
 billingSync:pendingEvents query internal {"type":"object","value":{}}
 billingSync:pump action internal {"type":"object","value":{}}
 billingSync:reconcile action internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billingSync:release mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"token":{"fieldType":{"type":"string"},"optional":false},"seats":{"fieldType":{"type":"number"},"optional":true},"error":{"fieldType":{"type":"string"},"optional":true}}}
-billingSync:reminders mutation internal {"type":"object","value":{}}
+billingSync:reminders mutation internal {"type":"object","value":{"now":{"fieldType":{"type":"number"},"optional":false},"cursor":{"fieldType":{"type":"string"},"optional":false}}}
 billingSync:restartStorage mutation internal {"type":"object","value":{"period":{"fieldType":{"type":"id","tableName":"billing_periods"},"optional":false}}}
 billingSync:storageStep mutation internal {"type":"object","value":{"period":{"fieldType":{"type":"id","tableName":"billing_periods"},"optional":false},"run":{"fieldType":{"type":"string"},"optional":false},"phase":{"fieldType":{"type":"union","value":[{"type":"literal","value":"own"},{"type":"literal","value":"unscoped"},{"type":"literal","value":"tasks"}]},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true},"size":{"fieldType":{"type":"number"},"optional":true},"bytes":{"fieldType":{"type":"number"},"optional":false}}}
-billingSync:sweep action internal {"type":"object","value":{}}
+billingSync:sweep mutation internal {"type":"object","value":{}}
 billingSync:webhook action internal {"type":"object","value":{"event_id":{"fieldType":{"type":"string"},"optional":false},"subscription_id":{"fieldType":{"type":"string"},"optional":false}}}
 comments:create mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"issue_id":{"fieldType":{"type":"string"},"optional":false},"body":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 comments:remove mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"expected":{"fieldType":{"type":"object","value":{"body":{"fieldType":{"type":"string"},"optional":false}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
