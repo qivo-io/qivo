@@ -44,7 +44,7 @@ import {
   oauthHooks,
   qivoOAuthProvider,
   registerOAuthCode,
-  revokeSessionAccess,
+  revokeEndedSessionAccess,
 } from './lib/oauthProvider'
 import { type AuthLetterIntent, sendAuthLetter } from './mail'
 
@@ -170,7 +170,7 @@ export const authComponent = createClient<DataModel, typeof authSchema>(componen
       onCreate: registerDemoUser,
       onDelete: async (ctx, user) => expireDeletedDemoUser(ctx, user._id),
     },
-    session: { onCreate: clampDemoSession },
+    session: { onCreate: clampDemoSession, onDelete: revokeEndedSessionAccess },
   },
 })
 
@@ -205,7 +205,7 @@ export const createAuthOptions = (
     /* crossDomain does not feed ctx.trustedOrigins — must be explicit or
      * originCheck rejects OAuth/reset redirects back to the app. */
     trustedOrigins: appOrigins(opts),
-    database: oauthAdapter(ctx, authComponent.adapter(ctx)),
+    database: oauthAdapter(authComponent.adapter(ctx)),
     hooks: demo ? {} : oauthHooks(ctx),
     session: demo ? { expiresIn: DEMO_TTL_MS / 1_000, disableSessionRefresh: true } : undefined,
     /* No deployment stores the personal data lib/authData.ts lists. A create
@@ -221,8 +221,6 @@ export const createAuthOptions = (
             data: { ...session, ...fieldsSetTo(SESSION_REQUEST_FIELDS, undefined) },
           }),
         },
-        // The demo has no OAuth provider, so no session holds an access token.
-        delete: demo ? undefined : { after: (session) => revokeSessionAccess(ctx, session.id) },
       },
       account: {
         create: {

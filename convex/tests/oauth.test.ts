@@ -5,9 +5,10 @@
 /// <reference types="vite/client" />
 import { hashPassword } from 'better-auth/crypto'
 import { generateCodeChallenge } from 'better-auth/oauth2'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import { createAuth } from '../auth'
+import * as authOAuth from '../betterAuth/oauth'
 import authSchema from '../betterAuth/schema'
 import { LIMITS, NAME_MAX } from '../lib/limits'
 import { NO_ORGANIZATION, ORGANIZATION_GONE } from '../lib/oauth'
@@ -330,6 +331,26 @@ async function deniedAccess(f: Fx, accessToken: string) {
   expect(response.headers.get('www-authenticate')).toContain('resource_metadata=')
 }
 
+function signOut(f: Fx) {
+  return http(f.t, '/api/auth/sign-out', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: APP, 'better-auth-cookie': f.cookie },
+    body: '{}',
+  })
+}
+
+/** Removes every resource link of a client, as a client registered before
+ * links existed would have none. */
+function unlink(f: Fx, clientId: string) {
+  return runInAuth(f.t, async (ctx) => {
+    for (const link of await ctx.db
+      .query('oauthClientResource')
+      .withIndex('clientId_resourceId', (q) => q.eq('clientId', clientId))
+      .collect())
+      await ctx.db.delete(link._id)
+  })
+}
+
 /** A DPoP proof (RFC 9449) for a token request, signed with a new P-256 key. */
 async function dpopProof() {
   const base64url = (bytes: Uint8Array) =>
@@ -483,6 +504,111 @@ describe('OAuth provider and MCP integration', () => {
         await ctx.db.patch(token._id, { confirmation: JSON.stringify({ jkt: 'bound-key' }) })
     })
     await deniedAccess(f, issued.access_token)
+  })
+
+  it('advertises only public clients and no introspection on every metadata path, as the endpoints answer', async () => {
+    const f = await fixture()
+    for (const path of [
+      '/.well-known/oauth-authorization-server',
+      '/.well-known/oauth-authorization-server/api/auth',
+      '/api/auth/.well-known/oauth-authorization-server',
+    ]) {
+      const response = await http(f.t, path)
+      const server = await json(response)
+      expect(response.status, path).toBe(200)
+      expect(server.token_endpoint_auth_methods_supported, path).toEqual(['none'])
+      expect(server.revocation_endpoint, path).toBe(`${SITE}/api/auth/oauth2/revoke`)
+      expect(server.revocation_endpoint_auth_methods_supported, path).toEqual(['none'])
+      for (const field of [
+        'introspection_endpoint',
+        'introspection_endpoint_auth_methods_supported',
+        'introspection_endpoint_auth_signing_alg_values_supported',
+        'token_endpoint_auth_signing_alg_values_supported',
+        'revocation_endpoint_auth_signing_alg_values_supported',
+      ])
+        expect(server, path).not.toHaveProperty(field)
+    }
+    // A registration that asks for a secret gets a public client.
+    const registered = await http(
+      f.t,
+      '/api/auth/oauth2/register',
+      body({
+        client_name: 'Secret seeker',
+        redirect_uris: [REDIRECT],
+        token_endpoint_auth_method: 'client_secret_basic',
+        scope: WRITE,
+      }),
+    )
+    const asked = await json(registered)
+    expect(registered.status, JSON.stringify(asked)).toBe(201)
+    expect(asked.token_endpoint_auth_method).toBe('none')
+    expect(asked.client_secret).toBeUndefined()
+    // Even a confidential client, which only the server API can create, is
+    // refused when it authenticates with its secret, by either method.
+    const confidential: Json = {
+      ...(await f.t.run((ctx) =>
+        createAuth(ctx).api.createOAuthClient({
+          body: {
+            client_name: 'Confidential client',
+            redirect_uris: [REDIRECT],
+            token_endpoint_auth_method: 'client_secret_basic',
+            scope: WRITE,
+            grant_types: ['authorization_code', 'refresh_token'],
+          },
+          headers: new Headers({ cookie: f.cookie }),
+        }),
+      )),
+    }
+    expect(confidential.client_secret).toBeTypeOf('string')
+    const basic = `Basic ${btoa(`${confidential.client_id}:${confidential.client_secret}`)}`
+    const c = await connect(f)
+    const authenticated = (path: string, values: Record<string, string>, authorization?: string) =>
+      http(f.t, path, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          ...(authorization ? { Authorization: authorization } : {}),
+        },
+        body: form(values),
+      })
+    for (const [path, values] of [
+      [
+        '/api/auth/oauth2/token',
+        { grant_type: 'refresh_token', refresh_token: 'qvr_unknown', resource: RESOURCE },
+      ],
+      ['/api/auth/oauth2/revoke', { token: c.access_token, token_type_hint: 'access_token' }],
+    ] as const) {
+      for (const [extra, authorization] of [
+        [{}, basic],
+        [
+          {
+            client_id: confidential.client_id as string,
+            client_secret: confidential.client_secret as string,
+          },
+          undefined,
+        ],
+      ] as const) {
+        const response = await authenticated(path, { ...values, ...extra }, authorization)
+        const result = await json(response)
+        expect(response.status, `${path} ${JSON.stringify(result)}`).toBe(401)
+        expect(result.error, path).toBe('invalid_client')
+      }
+    }
+    expect(await toolData(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
+    // The public client revokes its own token with its client_id alone.
+    const revoked = await authenticated('/api/auth/oauth2/revoke', {
+      client_id: c.request.clientId,
+      token: c.access_token,
+      token_type_hint: 'access_token',
+    })
+    expect(revoked.status, await revoked.clone().text()).toBe(200)
+    await deniedAccess(f, c.access_token)
+    // Qivo serves no introspection endpoint.
+    const introspected = await authenticated('/api/auth/oauth2/introspect', {
+      client_id: c.request.clientId,
+      token: c.refresh_token,
+    })
+    expect(introspected.status).toBe(404)
   })
 
   it('uses discovered scopes for DCR, S256 consent, task planning and rotating refresh', async () => {
@@ -877,54 +1003,45 @@ describe('OAuth consent and resource binding', () => {
     }
   })
 
-  it('refuses every other resource for a 1.6 client and a new one without per-client links', async () => {
+  it('refuses a client without its resource link, and every other resource for a linked one', async () => {
     const f = await fixture()
-    // A second resource Better Auth knows. With per-client links off, only
-    // Qivo's own resource checks refuse it.
+    // A second resource Better Auth knows, which no client is linked to.
     const OTHER = 'https://other.example.test/api'
     await runInAuth(f.t, (ctx) =>
       ctx.db.insert('oauthResource', { identifier: OTHER, name: 'Other service' }),
     )
-    const legacy = await connect(f)
-    // What Better Auth 1.6 stored: no resource link and the legacy `public`.
-    await runInAuth(f.t, async (ctx) => {
-      const clientId = legacy.request.clientId
-      for (const link of await ctx.db
-        .query('oauthClientResource')
-        .withIndex('clientId_resourceId', (q) => q.eq('clientId', clientId))
-        .collect())
-        await ctx.db.delete(link._id)
-      const client = await ctx.db
-        .query('oauthClient')
-        .withIndex('clientId', (q) => q.eq('clientId', clientId))
-        .unique()
-      if (!client) throw new Error('the client is gone')
-      await ctx.db.patch(client._id, { public: true, applicationType: undefined })
-    })
-    const current = await connect(f)
-    for (const c of [legacy, current]) {
-      const clientId = c.request.clientId
-      const foreign = await authorization(f, clientId)
-      foreign.query.set('resource', OTHER)
-      await authorizationRefusal(await authorize(foreign), ['invalid_target', 'invalid_request'])
-      const request = await authorization(f, clientId)
-      const code = await codeFor(request)
-      await oauthRefusal(await exchange(request, code, { resource: OTHER }), [
-        'invalid_target',
-        'invalid_request',
-        'invalid_grant',
-      ])
-      await oauthRefusal(await refresh(f, clientId, c.refresh_token, { resource: OTHER }), [
-        'invalid_target',
-        'invalid_request',
-        'invalid_grant',
-      ])
-      // The refusals consumed nothing: the grant still renews for the MCP resource.
-      const renewed = await tokens(await refresh(f, clientId, c.refresh_token))
-      expect(await toolData(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
-        Array,
-      )
-    }
+    const linked = await connect(f)
+    const clientId = linked.request.clientId
+    const foreign = await authorization(f, clientId)
+    foreign.query.set('resource', OTHER)
+    await authorizationRefusal(await authorize(foreign), ['invalid_target', 'invalid_request'])
+    const request = await authorization(f, clientId)
+    const code = await codeFor(request)
+    await oauthRefusal(await exchange(request, code, { resource: OTHER }), [
+      'invalid_target',
+      'invalid_request',
+      'invalid_grant',
+    ])
+    await oauthRefusal(await refresh(f, clientId, linked.refresh_token, { resource: OTHER }), [
+      'invalid_target',
+      'invalid_request',
+      'invalid_grant',
+    ])
+    // The refusals consumed nothing: the grant still renews for the MCP resource.
+    const renewed = await tokens(await refresh(f, clientId, linked.refresh_token))
+    expect(await toolData(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
+      Array,
+    )
+    // Without its link, the same client may not authorize, exchange a code
+    // or refresh for the MCP resource.
+    const pending = await authorization(f, clientId)
+    const pendingCode = await codeFor(pending)
+    await unlink(f, clientId)
+    await authorizationRefusal(await authorize(await authorization(f, clientId)), [
+      'invalid_target',
+    ])
+    await oauthRefusal(await exchange(pending, pendingCode), ['invalid_target'])
+    await oauthRefusal(await refresh(f, clientId, renewed.refresh_token), ['invalid_target'])
   })
 
   it('requires S256 PKCE and refuses signed consent query tampering and scope expansion', async () => {
@@ -1180,69 +1297,6 @@ describe('OAuth organization selection', () => {
 })
 
 describe('OAuth revocation, replay and live account checks', () => {
-  it('uses Basic client identity consistently when replay also carries a different body client_id', async () => {
-    const f = await fixture()
-    // Qivo serves no client management endpoints (lib/authRoutes.ts), so
-    // the person creates the confidential client through the server API.
-    const client: Json = {
-      ...(await f.t.run((ctx) =>
-        createAuth(ctx).api.createOAuthClient({
-          body: {
-            client_name: 'Confidential client',
-            redirect_uris: [REDIRECT],
-            token_endpoint_auth_method: 'client_secret_basic',
-            scope: WRITE,
-            grant_types: ['authorization_code', 'refresh_token'],
-          },
-          headers: new Headers({ cookie: f.cookie }),
-        }),
-      )),
-    }
-    expect(client.client_secret).toBeTypeOf('string')
-    const authorizationRequest = await authorization(f, client.client_id as string)
-    const basic = `Basic ${btoa(`${client.client_id}:${client.client_secret}`)}`
-    // Better Auth 1.7 takes a confidential client's secret only by the
-    // method it registered, here client_secret_basic.
-    const code = await codeFor(authorizationRequest)
-    const c = {
-      request: authorizationRequest,
-      ...(await tokens(
-        await http(f.t, '/api/auth/oauth2/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic },
-          body: form({
-            grant_type: 'authorization_code',
-            code,
-            code_verifier: authorizationRequest.verifier,
-            redirect_uri: REDIRECT,
-            resource: RESOURCE,
-          }),
-        }),
-      )),
-    }
-    const other = await connect(f)
-    const request = () =>
-      http(f.t, '/api/auth/oauth2/token', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          Authorization: basic,
-        },
-        body: form({
-          grant_type: 'refresh_token',
-          client_id: other.request.clientId,
-          refresh_token: c.refresh_token,
-          resource: RESOURCE,
-        }),
-      })
-    // The provider gives Basic precedence on confidential-client requests.
-    const rotated = await tokens(await request())
-    await oauthRefusal(await request(), ['invalid_grant'])
-    await deniedAccess(f, c.access_token)
-    await deniedAccess(f, rotated.access_token)
-    expect(await toolData(await mcp(f, other.access_token, 'list_projects'))).toBeInstanceOf(Array)
-  })
-
   it('ends the access token of a connection with the browser session it was granted in, and renews it', async () => {
     const f = await fixture()
     const c = await connect(f)
@@ -1289,100 +1343,62 @@ describe('OAuth revocation, replay and live account checks', () => {
     await deniedAccess(f, c.access_token)
   })
 
-  it('keeps a grant stored by Better Auth 1.6 working before and after the client backfill', async () => {
+  it('keeps the session with its access tokens when revoking them fails at sign-out, and ends both on a retry', async () => {
     const f = await fixture()
     const c = await connect(f)
-    // Strip what only Better Auth 1.7 writes, so the client, its consent and
-    // its tokens hold what 1.6 stored, and the client has no resource link.
-    const only17 = {
-      oauthClient: [
-        'applicationType',
-        'backchannelLogoutSessionRequired',
-        'backchannelLogoutUri',
-        'clientCredentialsScopes',
-        'clientDiscoveryId',
-        'dpopBoundAccessTokens',
-        'jwks',
-        'jwksUri',
-      ],
-      oauthRefreshToken: [
-        'authorizationCodeId',
-        'confirmation',
-        'requestedUserInfoClaims',
-        'resources',
-        'rotatedAt',
-        'rotationReplayExpiresAt',
-        'rotationReplayResponse',
-      ],
-      oauthAccessToken: [
-        'authorizationCodeId',
-        'confirmation',
-        'requestedUserInfoClaims',
-        'resources',
-        'revoked',
-      ],
-      oauthConsent: ['requestedUserInfoClaims', 'resources'],
-    } as const
-    await runInAuth(f.t, async (ctx) => {
-      for (const link of await ctx.db.query('oauthClientResource').collect())
-        await ctx.db.delete(link._id)
-      for (const [table, fields] of Object.entries(only17) as [
-        keyof typeof only17,
-        readonly string[],
-      ][])
-        for (const row of await ctx.db.query(table).collect())
-          await ctx.db.replace(row._id, {
-            ...Object.fromEntries(
-              Object.entries(row).filter(
-                ([field]) => !field.startsWith('_') && !fields.includes(field),
-              ),
-            ),
-            ...(table === 'oauthClient' ? { public: true, type: 'native' } : {}),
-          } as never)
-    })
+    const sessions = () => runInAuth(f.t, async (ctx) => await ctx.db.query('session').collect())
+    const [session] = await sessions()
+    vi.spyOn(
+      authOAuth.revokeSessionAccessTokens as unknown as { _handler: () => Promise<void> },
+      '_handler',
+    ).mockRejectedValueOnce(new Error('injected revocation failure'))
+    const failed = await signOut(f)
+    expect((await sessions()).map((row) => row._id)).toEqual([session._id])
     expect(await toolData(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
-    const renewed = await tokens(await refresh(f, c.request.clientId, c.refresh_token))
-    expect(await toolData(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
-      Array,
-    )
-    expect(
-      await f.t.action(internal.internal.oauthClientBackfill.run, { dry_run: false }),
-    ).toMatchObject({
-      legacy: 1,
-      linked: 1,
-      review: 0,
-    })
-    const after = await tokens(await refresh(f, c.request.clientId, renewed.refresh_token))
-    expect(await toolData(await mcp(f, after.access_token, 'list_projects'))).toBeInstanceOf(Array)
+    // Better Auth answers a failed session delete as a sign-out anyway.
+    expect(failed.status).toBe(200)
+    expect((await signOut(f)).status).toBe(200)
+    expect(await sessions()).toEqual([])
+    await deniedAccess(f, c.access_token)
   })
 
-  it('serves a 1.6 client as 1.6 did until the backfill, public or confidential', async () => {
+  it('revokes the access tokens of every session when one call ends more than 100', async () => {
     const f = await fixture()
     const c = await connect(f)
-    const patchClient = (fields: Record<string, unknown>) =>
-      runInAuth(f.t, async (ctx) => {
-        const client = await ctx.db
-          .query('oauthClient')
-          .withIndex('clientId', (q) => q.eq('clientId', c.request.clientId))
-          .unique()
-        if (!client) throw new Error('the client is gone')
-        await ctx.db.patch(client._id, fields)
-      })
-    // Better Auth 1.6 skipped the secret for a client it marked public,
-    // whatever its tokenEndpointAuthMethod; 1.7 reads only the method.
-    await patchClient({ public: true, tokenEndpointAuthMethod: undefined })
-    const renewed = await tokens(await refresh(f, c.request.clientId, c.refresh_token))
-    expect(await toolData(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
-      Array,
+    // 120 more sessions of the login, each with a live access token.
+    await runInAuth(f.t, async (ctx) => {
+      for (let index = 0; index < 120; index += 1) {
+        const now = Date.now()
+        const sessionId = await ctx.db.insert('session', {
+          token: `planted-session-${index}`,
+          userId: f.userId,
+          expiresAt: now + 86_400_000,
+          createdAt: now,
+          updatedAt: now,
+        })
+        await ctx.db.insert('oauthAccessToken', {
+          token: `planted-access-${index}`,
+          clientId: c.request.clientId,
+          sessionId,
+          userId: f.userId,
+          scopes: ['qivo:read'],
+          expiresAt: now + 3_600_000,
+        })
+      }
+    })
+    // Ending every session of a login, as a ban does.
+    await f.t.run((ctx) =>
+      createAuth(ctx).api.revokeSessions({ headers: new Headers({ cookie: f.cookie }) }),
     )
-    // A client 1.6 asked a secret of never refreshes without one.
-    await patchClient({ public: false, tokenEndpointAuthMethod: 'none' })
-    await oauthRefusal(await refresh(f, c.request.clientId, renewed.refresh_token), [
-      'invalid_client',
-    ])
-    await patchClient({ public: undefined })
-    const again = await tokens(await refresh(f, c.request.clientId, renewed.refresh_token))
-    expect(again.access_token).toMatch(/^qvo_/)
+    const left = await runInAuth(f.t, async (ctx) => ({
+      sessions: await ctx.db.query('session').collect(),
+      live: (await ctx.db.query('oauthAccessToken').collect()).filter(
+        (token) => token.revoked == null,
+      ),
+    }))
+    expect(left.sessions).toEqual([])
+    expect(left.live).toEqual([])
+    await deniedAccess(f, c.access_token)
   })
 
   it('refuses refresh under another client without consuming the legitimate refresh token', async () => {

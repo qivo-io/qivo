@@ -143,7 +143,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                   name?: null | string;
                   policy?: null | string;
                   postLogoutRedirectUris?: null | Array<string>;
-                  public?: null | boolean;
                   redirectUris: Array<string>;
                   referenceId?: null | string;
                   requirePKCE?: null | boolean;
@@ -156,7 +155,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                   subjectType?: null | string;
                   tokenEndpointAuthMethod?: null | string;
                   tos?: null | string;
-                  type?: null | string;
                   updatedAt?: null | number;
                   uri?: null | string;
                   userId?: null | string;
@@ -481,8 +479,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                     | "dpopBoundAccessTokens"
                     | "referenceId"
                     | "metadata"
-                    | "public"
-                    | "type"
                     | "_id";
                   mode?: "sensitive" | "insensitive";
                   operator?:
@@ -972,8 +968,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                     | "dpopBoundAccessTokens"
                     | "referenceId"
                     | "metadata"
-                    | "public"
-                    | "type"
                     | "_id";
                   mode?: "sensitive" | "insensitive";
                   operator?:
@@ -1593,7 +1587,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                   name?: null | string;
                   policy?: null | string;
                   postLogoutRedirectUris?: null | Array<string>;
-                  public?: null | boolean;
                   redirectUris?: Array<string>;
                   referenceId?: null | string;
                   requirePKCE?: null | boolean;
@@ -1606,7 +1599,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                   subjectType?: null | string;
                   tokenEndpointAuthMethod?: null | string;
                   tos?: null | string;
-                  type?: null | string;
                   updatedAt?: null | number;
                   uri?: null | string;
                   userId?: null | string;
@@ -1649,8 +1641,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                     | "dpopBoundAccessTokens"
                     | "referenceId"
                     | "metadata"
-                    | "public"
-                    | "type"
                     | "_id";
                   mode?: "sensitive" | "insensitive";
                   operator?:
@@ -2243,7 +2233,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                   name?: null | string;
                   policy?: null | string;
                   postLogoutRedirectUris?: null | Array<string>;
-                  public?: null | boolean;
                   redirectUris?: Array<string>;
                   referenceId?: null | string;
                   requirePKCE?: null | boolean;
@@ -2256,7 +2245,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                   subjectType?: null | string;
                   tokenEndpointAuthMethod?: null | string;
                   tos?: null | string;
-                  type?: null | string;
                   updatedAt?: null | number;
                   uri?: null | string;
                   userId?: null | string;
@@ -2299,8 +2287,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                     | "dpopBoundAccessTokens"
                     | "referenceId"
                     | "metadata"
-                    | "public"
-                    | "type"
                     | "_id";
                   mode?: "sensitive" | "insensitive";
                   operator?:
@@ -2895,7 +2881,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                   name?: null | string;
                   policy?: null | string;
                   postLogoutRedirectUris?: null | Array<string>;
-                  public?: null | boolean;
                   redirectUris?: Array<string>;
                   referenceId?: null | string;
                   requirePKCE?: null | boolean;
@@ -2908,7 +2893,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                   subjectType?: null | string;
                   tokenEndpointAuthMethod?: null | string;
                   tos?: null | string;
-                  type?: null | string;
                   updatedAt?: null | number;
                   uri?: null | string;
                   userId?: null | string;
@@ -2951,8 +2935,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                     | "dpopBoundAccessTokens"
                     | "referenceId"
                     | "metadata"
-                    | "public"
-                    | "type"
                     | "_id";
                   mode?: "sensitive" | "insensitive";
                   operator?:
@@ -3275,20 +3257,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       >;
     };
     oauth: {
-      clientBackfillCheck: FunctionReference<
-        "query",
-        "internal",
-        { cursor: string | null; resource: string },
-        any,
-        Name
-      >;
-      clientBackfillPage: FunctionReference<
-        "mutation",
-        "internal",
-        { cursor: string | null; resource: string },
-        any,
-        Name
-      >;
       deleteClients: FunctionReference<
         "mutation",
         "internal",
@@ -3306,7 +3274,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       revokeSessionAccessTokens: FunctionReference<
         "mutation",
         "internal",
-        { cursor: string | null; revokedAt: number; sessionId: string },
+        { revokedAt: number; sessionId: string },
         any,
         Name
       >;

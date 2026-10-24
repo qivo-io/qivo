@@ -110,126 +110,22 @@ export const deleteClients = mutation({
 })
 
 /** Revokes the access tokens of an ended browser session that are neither
- * revoked nor expired, on one page of up to 500 tokens from `cursor`,
- * newest first. Returns the cursor of the next page, or null when no token
- * is left. Better Auth 1.7 revokes them at sign-out too, but reads only the
- * oldest 100, and a connection adds one token each time it refreshes
- * (lib/oauthProvider.ts revokeSessionAccess). */
+ * revoked nor expired at `revokedAt`. The session's delete trigger runs it in
+ * the transaction that deletes the session (auth.ts revokeEndedSessionAccess),
+ * so a session never ends while one of its access tokens stays live: if this
+ * fails, the session stays too. Better Auth 1.7 revokes them at sign-out as
+ * well, but only the oldest 100, and a connection adds one token each time it
+ * refreshes. */
 export const revokeSessionAccessTokens = mutation({
-  args: { sessionId: v.string(), cursor: v.union(v.string(), v.null()), revokedAt: v.number() },
-  handler: async (ctx, { sessionId, cursor, revokedAt }) => {
-    const page = await stream(ctx.db, schema)
+  args: { sessionId: v.string(), revokedAt: v.number() },
+  handler: async (ctx, { sessionId, revokedAt }) => {
+    const live = await ctx.db
       .query('oauthAccessToken')
-      .withIndex('sessionId', (q) => q.eq('sessionId', sessionId))
-      .order('desc')
-      .paginate({ cursor, numItems: 500 })
-    for (const token of page.page)
-      if (token.revoked == null && (token.expiresAt ?? Number.POSITIVE_INFINITY) > revokedAt)
-        await ctx.db.patch(token._id, { revoked: revokedAt })
-    return page.isDone ? null : page.continueCursor
-  },
-})
-
-/** What the Better Auth 1.7 client backfill found on one page, or changed. */
-type ClientBackfillCounts = {
-  /** Clients that still held 1.6's `public` or `type`. */
-  legacy: number
-  /** Public clients whose tokenEndpointAuthMethod was not 'none'. */
-  madePublic: number
-  /** Clients without a link to the resource. */
-  linked: number
-  /** Extra links for a client and resource that already had one. */
-  duplicates: number
-  /** Clients a person must look at: a 1.6 type other than 'web' or
-   * 'native', such as 'user-agent-based', which 1.7 has no application type
-   * for, or a confidential client whose method is 'none'. The backfill
-   * leaves their `public` and `type` as they are, so every run reports them
-   * again until a person has decided. */
-  review: number
-}
-
-/* One page of clients from `cursor`, for the backfill and its check, which
- * share it so both find the same rows. For each client it maps 1.6's `type`
- * to `applicationType` per Better Auth's upgrade guide, keeps
- * tokenEndpointAuthMethod 'none' for public clients only, removes `public`
- * and `type`, links the client to `resource` and drops duplicate links. A
- * client for review keeps its `public` and `type` and is named in
- * `reviewClientIds`. `write` null counts without writing. */
-async function walkClients(
-  ctx: QueryCtx,
-  cursor: string | null,
-  resource: string,
-  write: MutationCtx | null,
-) {
-  const page = await stream(ctx.db, schema)
-    .query('oauthClient')
-    .withIndex('by_creation_time')
-    .paginate({ cursor, numItems: 100, maximumBytesRead: 4 * 1024 * 1024 })
-  const counts: ClientBackfillCounts = {
-    legacy: 0,
-    madePublic: 0,
-    linked: 0,
-    duplicates: 0,
-    review: 0,
-  }
-  const reviewClientIds: string[] = []
-  for (const client of page.page) {
-    if (client.public != null || client.type != null) {
-      counts.legacy += 1
-      const knownType = client.type == null || client.type === 'web' || client.type === 'native'
-      if (!knownType || (client.public === false && client.tokenEndpointAuthMethod === 'none')) {
-        counts.review += 1
-        reviewClientIds.push(client.clientId)
-      } else {
-        const patch: Partial<Doc<'oauthClient'>> = { public: undefined, type: undefined }
-        if (client.type === 'web' || client.type === 'native')
-          patch.applicationType = client.applicationType ?? client.type
-        if (client.public === true && client.tokenEndpointAuthMethod !== 'none') {
-          patch.tokenEndpointAuthMethod = 'none'
-          counts.madePublic += 1
-        }
-        if (write) await write.db.patch(client._id, patch)
-      }
-    }
-    const links = await ctx.db
-      .query('oauthClientResource')
-      .withIndex('clientId_resourceId', (q) => q.eq('clientId', client.clientId))
+      .withIndex('sessionId_expiresAt', (q) =>
+        q.eq('sessionId', sessionId).gt('expiresAt', revokedAt),
+      )
       .collect()
-    const seen = new Set<string>()
-    for (const link of links) {
-      if (!seen.has(link.resourceId)) {
-        seen.add(link.resourceId)
-        continue
-      }
-      counts.duplicates += 1
-      if (write) await write.db.delete(link._id)
-    }
-    if (!seen.has(resource)) {
-      counts.linked += 1
-      if (write)
-        await write.db.insert('oauthClientResource', {
-          clientId: client.clientId,
-          resourceId: resource,
-          createdAt: Date.now(),
-        })
-    }
-  }
-  return { ...counts, reviewClientIds, cursor: page.isDone ? null : page.continueCursor }
-}
-
-const clientBackfillArgs = { cursor: v.union(v.string(), v.null()), resource: v.string() }
-
-/** Counts, without writing, what the client backfill would change on one
- * page (internal/oauthClientBackfill.ts). `cursor` is null when no page is
- * left. */
-export const clientBackfillCheck = query({
-  args: clientBackfillArgs,
-  handler: async (ctx, { cursor, resource }) => await walkClients(ctx, cursor, resource, null),
-})
-
-/** Backfills one page of clients for Better Auth 1.7 and counts what it
- * changed (internal/oauthClientBackfill.ts). */
-export const clientBackfillPage = mutation({
-  args: clientBackfillArgs,
-  handler: async (ctx, { cursor, resource }) => await walkClients(ctx, cursor, resource, ctx),
+    for (const token of live)
+      if (token.revoked == null) await ctx.db.patch(token._id, { revoked: revokedAt })
+  },
 })

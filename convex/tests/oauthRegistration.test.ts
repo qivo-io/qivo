@@ -494,7 +494,7 @@ function plantClient(t: T, clientId: string, fields: Json = {}) {
         clientId,
         name: clientId,
         redirectUris: [`${BROWSER}/callback`],
-        public: true,
+        tokenEndpointAuthMethod: 'none',
         createdAt: Date.now(),
         updatedAt: Date.now(),
         ...fields,
