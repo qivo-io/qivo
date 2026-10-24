@@ -234,7 +234,10 @@ http.route({
 /* Public OAuth clients may run on any browser origin. These machine
  * endpoints receive public CORS; authorization and consent keep the app's
  * existing session rules. Ignore ambient/session cookies here so registration
- * and token operations use only the explicit OAuth client credentials. */
+ * and token operations use only the explicit OAuth client credentials.
+ * Registration also ignores an Authorization header: Better Auth 1.7 reads a
+ * Bearer token there as an RFC 7591 initial access token, which Qivo does not
+ * issue, and would refuse the open registration with 401. */
 const oauthMachineHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -251,6 +254,7 @@ const oauthMachine = answerAfterBody(async (ctx, request) => {
     const headers = new Headers(read.headers)
     headers.delete('Cookie')
     headers.delete('Better-Auth-Cookie')
+    if (new URL(read.url).pathname.endsWith('/oauth2/register')) headers.delete('Authorization')
     response = await boundValidationAnswer(
       await createAuth(ctx).handler(new Request(read, { headers })),
     )

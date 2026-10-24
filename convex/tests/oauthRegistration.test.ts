@@ -59,10 +59,10 @@ const metadata = (overrides: Json = {}): Json => ({
   ...overrides,
 })
 
-const register = (t: T, body: Json = metadata()) =>
+const register = (t: T, body: Json = metadata(), headers: Record<string, string> = {}) =>
   http(t, '/api/auth/oauth2/register', {
     method: 'POST',
-    headers: { Origin: BROWSER, 'Content-Type': 'application/json' },
+    headers: { Origin: BROWSER, 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify(body),
   })
 
@@ -444,12 +444,44 @@ describe('registered clients', () => {
 
   it('registers a client that redirects to a loopback or private-use address', async () => {
     const t = newT()
-    for (const uri of ['http://127.0.0.1:33418/callback', 'com.example.app:/callback']) {
+    for (const uri of [
+      'http://127.0.0.1:33418/callback',
+      'com.example.app:/callback',
+      'cursor://anysphere.cursor-retrieval/oauth/callback',
+    ]) {
       const response = await register(t, metadata({ redirect_uris: [uri] }))
       const client = await json(response)
       expect([uri, response.status]).toEqual([uri, 201])
       expect(client.application_type).toBe('native')
     }
+  })
+
+  it('refuses a redirect address that Better Auth 1.7 allows no client to use', async () => {
+    const t = newT()
+    for (const [uri, applicationType] of [
+      ['myapp://callback', undefined],
+      ['myapp:/callback', undefined],
+      ['http://localhost./callback', undefined],
+      ['http://example.test/callback', undefined],
+      ['http://127.0.0.1:33418/callback', 'web'],
+    ]) {
+      const response = await register(
+        t,
+        metadata({ redirect_uris: [uri], application_type: applicationType }),
+      )
+      expect([uri, response.status]).toEqual([uri, 400])
+      expect((await json(response)).error).toBe('invalid_redirect_uri')
+    }
+    expect(await clients(t)).toEqual([])
+  })
+
+  it('ignores a Bearer token sent with a registration', async () => {
+    const t = newT()
+    // Qivo takes no initial access tokens (RFC 7591), so an old access token
+    // a client sends along must not turn open registration into a 401.
+    const response = await register(t, metadata(), { Authorization: 'Bearer qvo_1111111111' })
+    expect(response.status).toBe(201)
+    expect((await json(response)).token_endpoint_auth_method).toBe('none')
   })
 })
 
