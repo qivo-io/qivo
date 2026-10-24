@@ -6,9 +6,10 @@
  * as Better Auth's upgrade guide ("Migrate OAuth client records") says.
  *
  * Until it runs, clients keep working: betterAuth/schema.ts still accepts
- * `public` and `type`, the provider reads neither, and lib/oauthProvider.ts
- * does not require a client's resource link. Once it has run on every
- * deployment, a later change removes the two fields from the schema and
+ * `public` and `type`, lib/oauthAdapter.ts answers a client by its 1.6
+ * `public` as 1.6 did, and lib/oauthProvider.ts does not require a client's
+ * resource link. Once it has run on every deployment, a later change removes
+ * the two fields from the schema, that answer in lib/oauthAdapter.ts and
  * this file.
  *
  * Check a deployment before changing it. `remaining` is a query, so it

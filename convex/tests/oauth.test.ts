@@ -1289,23 +1289,71 @@ describe('OAuth revocation, replay and live account checks', () => {
     await deniedAccess(f, c.access_token)
   })
 
-  it('keeps refreshing a client that Better Auth 1.6 registered, without a resource link', async () => {
+  it('keeps a grant stored by Better Auth 1.6 working before and after the client backfill', async () => {
     const f = await fixture()
     const c = await connect(f)
+    // Strip what only Better Auth 1.7 writes, so the client, its consent and
+    // its tokens hold what 1.6 stored, and the client has no resource link.
+    const only17 = {
+      oauthClient: [
+        'applicationType',
+        'backchannelLogoutSessionRequired',
+        'backchannelLogoutUri',
+        'clientCredentialsScopes',
+        'clientDiscoveryId',
+        'dpopBoundAccessTokens',
+        'jwks',
+        'jwksUri',
+      ],
+      oauthRefreshToken: [
+        'authorizationCodeId',
+        'confirmation',
+        'requestedUserInfoClaims',
+        'resources',
+        'rotatedAt',
+        'rotationReplayExpiresAt',
+        'rotationReplayResponse',
+      ],
+      oauthAccessToken: [
+        'authorizationCodeId',
+        'confirmation',
+        'requestedUserInfoClaims',
+        'resources',
+        'revoked',
+      ],
+      oauthConsent: ['requestedUserInfoClaims', 'resources'],
+    } as const
     await runInAuth(f.t, async (ctx) => {
       for (const link of await ctx.db.query('oauthClientResource').collect())
         await ctx.db.delete(link._id)
-      const client = await ctx.db
-        .query('oauthClient')
-        .withIndex('clientId', (q) => q.eq('clientId', c.request.clientId))
-        .unique()
-      if (!client) throw new Error('the client is gone')
-      await ctx.db.patch(client._id, { public: true, applicationType: undefined })
+      for (const [table, fields] of Object.entries(only17) as [
+        keyof typeof only17,
+        readonly string[],
+      ][])
+        for (const row of await ctx.db.query(table).collect())
+          await ctx.db.replace(row._id, {
+            ...Object.fromEntries(
+              Object.entries(row).filter(
+                ([field]) => !field.startsWith('_') && !fields.includes(field),
+              ),
+            ),
+            ...(table === 'oauthClient' ? { public: true, type: 'native' } : {}),
+          } as never)
     })
+    expect(await toolData(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
     const renewed = await tokens(await refresh(f, c.request.clientId, c.refresh_token))
     expect(await toolData(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
       Array,
     )
+    expect(
+      await f.t.action(internal.internal.oauthClientBackfill.run, { dry_run: false }),
+    ).toMatchObject({
+      legacy: 1,
+      linked: 1,
+      review: 0,
+    })
+    const after = await tokens(await refresh(f, c.request.clientId, renewed.refresh_token))
+    expect(await toolData(await mcp(f, after.access_token, 'list_projects'))).toBeInstanceOf(Array)
   })
 
   it('serves a 1.6 client as 1.6 did until the backfill, public or confidential', async () => {
