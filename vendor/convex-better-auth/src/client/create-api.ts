@@ -221,7 +221,7 @@ export const createApi = (
           if (current !== undefined && current !== null && typeof current !== 'number') {
             throw new Error(`Cannot increment non-numeric field ${args.input.model}.${field}`)
           }
-          update[field] = (current ?? 0) + delta
+          update[field] = (typeof current === 'number' ? current : 0) + delta
         }
         return await applySingleUpdate(ctx, args.input.model, doc, update, args.onUpdateHandle)
       },

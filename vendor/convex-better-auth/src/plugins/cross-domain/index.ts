@@ -1,6 +1,7 @@
 /* Copied from get-convex/better-auth src/plugins/cross-domain/index.ts at
  * 3f41cbcf (Apache-2.0, see ../../../LICENSE). Changed by Qivo only in
- * formatting and types; the behavior is upstream's. */
+ * formatting and types, which also hold without strictNullChecks, as the
+ * app's tsconfig reads this file; the behavior is upstream's. */
 import type { BetterAuthPlugin } from 'better-auth'
 import { createAuthEndpoint, createAuthMiddleware } from 'better-auth/api'
 import { setSessionCookie } from 'better-auth/cookies'
@@ -8,6 +9,9 @@ import { generateRandomString } from 'better-auth/crypto'
 import { oneTimeToken as oneTimeTokenPlugin } from 'better-auth/plugins/one-time-token'
 import { z } from 'zod'
 import { VERSION } from '../../version'
+
+/** The redirect targets a request may name, which this plugin makes absolute. */
+type CallbackURLs = { callbackURL?: string; newUserCallbackURL?: string; errorCallbackURL?: string }
 
 /** The Better Auth plugin that lets an app on another origin sign in. The
  * browser keeps the cookies in storage and sends them in a
@@ -69,34 +73,33 @@ export const crossDomain = ({ siteUrl }: { siteUrl: string }) => {
               ctx.method === 'GET' && ctx.path?.startsWith('/verify-email') && !isExpoNative(ctx),
             ),
           handler: createAuthMiddleware(async (ctx) => {
-            if (ctx.query?.callbackURL) {
-              ctx.query.callbackURL = rewriteCallbackURL(ctx.query.callbackURL)
-            }
+            const query = ctx.query as CallbackURLs | undefined
+            if (query?.callbackURL) query.callbackURL = rewriteCallbackURL(query.callbackURL)
             return { context: ctx }
           }),
         },
         {
           matcher: (ctx) => Boolean(ctx.method === 'POST' && !isExpoNative(ctx)),
           handler: createAuthMiddleware(async (ctx) => {
+            const body = ctx.body as CallbackURLs | undefined
             // Set callbackURL to siteUrl for redirect-triggering paths with
             // no callbackURL defined.
             if (
-              ctx.body &&
-              !ctx.body.callbackURL &&
+              body &&
+              !body.callbackURL &&
               (ctx.path?.startsWith('/sign-in/social') ||
                 ctx.path?.startsWith('/sign-in/oauth2') ||
                 ctx.path?.startsWith('/sign-in/magic-link') ||
                 ctx.path?.startsWith('/send-verification-email'))
             ) {
-              ctx.body.callbackURL = siteUrl
+              body.callbackURL = siteUrl
             }
-            if (ctx.body?.callbackURL)
-              ctx.body.callbackURL = rewriteCallbackURL(ctx.body.callbackURL)
-            if (ctx.body?.newUserCallbackURL) {
-              ctx.body.newUserCallbackURL = rewriteCallbackURL(ctx.body.newUserCallbackURL)
+            if (body?.callbackURL) body.callbackURL = rewriteCallbackURL(body.callbackURL)
+            if (body?.newUserCallbackURL) {
+              body.newUserCallbackURL = rewriteCallbackURL(body.newUserCallbackURL)
             }
-            if (ctx.body?.errorCallbackURL) {
-              ctx.body.errorCallbackURL = rewriteCallbackURL(ctx.body.errorCallbackURL)
+            if (body?.errorCallbackURL) {
+              body.errorCallbackURL = rewriteCallbackURL(body.errorCallbackURL)
             }
             return { context: ctx }
           }),

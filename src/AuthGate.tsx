@@ -36,6 +36,7 @@ import { LimitedInput } from './components/LimitedField'
 import { OAuthConnect } from './components/OAuthConnect'
 import { Icon } from './components/qivo'
 import { authClient, signOut as authSignOut, handleOAuthReturn } from './lib/auth'
+import { NO_QUERY } from './lib/authSession'
 import { convex } from './lib/convex'
 import { overLimit } from './lib/fieldLimits'
 import { lazyFromModule } from './lib/lazyModule'
@@ -371,7 +372,7 @@ export function AuthGate() {
       // social sign-in stick; a no-op when the param is absent
       await handleOAuthReturn()
       if (!active) return
-      const sessionResult = await authClient.getSession()
+      const sessionResult = await authClient.getSession(NO_QUERY)
       const { data, error: sessionError } = sessionResult
       if (!active) return
       if (authError || sessionError) {

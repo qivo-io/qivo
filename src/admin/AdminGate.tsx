@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api } from '../../convex/_generated/api'
 import { asciiEmail } from '../../convex/lib/email'
+import { NO_QUERY } from '../lib/authSession'
 import { convex } from '../lib/convex'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { AdminApp } from './AdminApp'
@@ -70,7 +71,7 @@ export function AdminGate() {
        form is the actionable terminal state — the operator can read what
        happened and retry by signing in. */
     void authClient
-      .getSession()
+      .getSession(NO_QUERY)
       .then(({ data }) => {
         if (!data?.session) {
           setPhase('signedOut')

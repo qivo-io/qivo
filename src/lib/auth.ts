@@ -1,5 +1,5 @@
 import { oauthProviderClient } from '@better-auth/oauth-provider/client'
-import { createAuthSession } from './authSession'
+import { createAuthSession, NO_QUERY } from './authSession'
 import { convex } from './convex'
 import { DEMO_MODE } from './demoMode'
 
@@ -27,6 +27,7 @@ export async function handleOAuthReturn(): Promise<void> {
   const session = result.data?.session
   if (!session) return
   await authClient.getSession({
+    ...NO_QUERY,
     fetchOptions: { headers: { Authorization: `Bearer ${session.token}` } },
   })
   authClient.updateSession()

@@ -1,7 +1,7 @@
 import { oauthProviderClient } from '@better-auth/oauth-provider/client'
 import type { ConvexClient } from 'convex/browser'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createAuthSession } from './authSession'
+import { createAuthSession, NO_QUERY } from './authSession'
 import { oauthConnectRequest } from './oauthConnection'
 
 const SITE_URL = 'https://auth-session-test.convex.site'
@@ -207,7 +207,7 @@ function authService(baseURL = SITE_URL) {
 async function login(session: AuthSession, email: string) {
   const result = await session.authClient.signIn.email({ email, password: 'test-password' })
   expect(result.error).toBeNull()
-  const current = await session.authClient.getSession()
+  const current = await session.authClient.getSession(NO_QUERY)
   expect(current.error).toBeNull()
   expect(current.data?.user.email).toBe(email)
   return current.data.session.token
@@ -275,10 +275,10 @@ describe('independent app and admin browser sessions', () => {
     const session = createAuthSession(prefix, target.client, undefined, anonymous)
     expect(target.setAuth).not.toHaveBeenCalled()
     expect(service.requests).toEqual([])
-    expect((await session.authClient.getSession()).data).toBeNull()
+    expect((await session.authClient.getSession(NO_QUERY)).data).toBeNull()
     expect(target.setAuth).not.toHaveBeenCalled()
     if (anonymous) {
-      const result = await session.authClient.signIn.anonymous()
+      const result = await session.authClient.signIn.anonymous(NO_QUERY)
       expect(result.error).toBeNull()
     } else {
       await login(session, 'nora@example.test')
@@ -303,7 +303,7 @@ describe('independent app and admin browser sessions', () => {
     vi.stubGlobal('fetch', service.fetch)
     const demoSocket = socket()
     const demo = createAuthSession('qivo-demo', demoSocket.client, undefined, true)
-    const signedIn = await demo.authClient.signIn.anonymous()
+    const signedIn = await demo.authClient.signIn.anonymous(NO_QUERY)
     expect(signedIn.error).toBeNull()
     expect(String(service.fetch.mock.calls[0][0])).toBe(
       'http://localhost:58955/__qivo_http/api/auth/sign-in/anonymous',
@@ -320,7 +320,7 @@ describe('independent app and admin browser sessions', () => {
     const before = [saved(APP_PREFIX), saved(ADMIN_PREFIX)]
     const demoSocket = socket()
     const demo = createAuthSession('qivo-demo', demoSocket.client, undefined, true)
-    const result = await demo.authClient.signIn.anonymous()
+    const result = await demo.authClient.signIn.anonymous(NO_QUERY)
     expect(result.error).toBeNull()
     await authenticate(demo, demoSocket)
     expect(demo.authClient.getCookie()).toContain('better-auth.session_token=')
@@ -412,7 +412,7 @@ describe('independent app and admin browser sessions', () => {
     })
     expect(window.location.href).toBe('https://app.example.test/app/~/connect?resumed=1')
     expect(service.oauthQueries.at(-1)).toBe(signed.toString())
-    const current = await app.authClient.getSession()
+    const current = await app.authClient.getSession(NO_QUERY)
     expect(current.data?.user.email).toBe('nora@example.test')
     expect(await appSocket.token()).toBe(`jwt:${current.data.session.token}:nora@example.test`)
     expect(saved(ADMIN_PREFIX)).toEqual(before)
@@ -431,7 +431,7 @@ describe('independent app and admin browser sessions', () => {
     expect(admin.authClient.getCookie()).toBe('')
     expect(admin.authClient.getSessionData()).toBeNull()
     expect(saved(ADMIN_PREFIX)).toEqual({ cookie: null, cache: null })
-    expect((await admin.authClient.getSession()).data).toBeNull()
+    expect((await admin.authClient.getSession(NO_QUERY)).data).toBeNull()
     await authenticate(admin, adminSocket)
     expect(await adminSocket.token()).toBeNull()
     expect(service.requests.slice(-2).map((request) => request.cookie)).toEqual(['', ''])
@@ -516,10 +516,10 @@ describe('independent app and admin browser sessions', () => {
         session: { token: otherToken },
         user: { email: otherEmail },
       })
-      expect((await other.authClient.getSession()).data?.session.token).toBe(otherToken)
+      expect((await other.authClient.getSession(NO_QUERY)).data?.session.token).toBe(otherToken)
       expect(await otherSocket.token()).toBe(`jwt:${otherToken}:${otherEmail}`)
       expect(await ownSocket.token()).toBeNull()
-      expect((await own.authClient.getSession()).data).toBeNull()
+      expect((await own.authClient.getSession(NO_QUERY)).data).toBeNull()
       expect(saved(otherPrefix)).toEqual(otherBefore)
     },
   )
@@ -654,7 +654,7 @@ describe('independent app and admin browser sessions', () => {
     const appBefore = saved(APP_PREFIX)
     service.sessions.delete(adminToken)
     expect(await adminSocket.token()).toBeNull()
-    expect((await admin.authClient.getSession()).data).toBeNull()
+    expect((await admin.authClient.getSession(NO_QUERY)).data).toBeNull()
     expect(admin.authClient.getCookie()).toBe('')
     expect(admin.authClient.getSessionData()).toBeNull()
     expect(saved(APP_PREFIX)).toEqual(appBefore)

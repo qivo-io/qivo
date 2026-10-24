@@ -124,7 +124,7 @@ export const convex = (opts: {
         {
           matcher: (ctx) => !ctx.context.adapter.options?.isRunMutationCtx,
           handler: createAuthMiddleware(async (ctx) => {
-            ctx.query = { ...ctx.query, disableRefresh: true }
+            ctx.query = { ...(ctx.query as Record<string, unknown>), disableRefresh: true }
             ctx.context.internalAdapter.deleteSession = async () => {}
             const skipWrite = (method: string) => {
               if (ctx.path) {
@@ -189,6 +189,7 @@ export const convex = (opts: {
                 ...ctx,
                 // Better Auth 1.7 reads these with get(), so not a plain object.
                 headers: new Headers(),
+                body: undefined,
                 method: 'GET',
                 asResponse: false,
                 returnHeaders: false,

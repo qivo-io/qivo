@@ -14,6 +14,7 @@ import {
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
+import { NO_QUERY } from '../lib/authSession'
 import { authClient, signOut } from './auth'
 import { Audit } from './views/Audit'
 import { Backgrounds } from './views/Backgrounds'
@@ -50,7 +51,7 @@ export function AdminApp() {
   const [operator, setOperator] = useState('')
 
   useEffect(() => {
-    void authClient.getSession().then(({ data }) => setOperator(data?.user.email ?? ''))
+    void authClient.getSession(NO_QUERY).then(({ data }) => setOperator(data?.user.email ?? ''))
   }, [])
 
   return (
