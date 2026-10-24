@@ -31,13 +31,24 @@ export function loadBrowserDemo(baseURL, { cwd = ROOT, env } = {}) {
   ) {
     throw new Error('Browser smoke drives require a localhost development server origin.')
   }
-  const target = resolveTarget({ target: 'dev' }, env)
+  // A disposable local backend, seeded with marketing-demo.mjs --local, names
+  // the deployment its credentials are stored under in QIVO_LOCAL_DEPLOYMENT.
+  const target =
+    env.QIVO_FIXTURE_LOCAL === 'true'
+      ? resolveTarget(
+          { target: 'local', deployment: env.QIVO_LOCAL_DEPLOYMENT, siteUrl: base.origin },
+          env,
+        )
+      : resolveTarget({ target: 'dev' }, env)
   if (env.VITE_CONVEX_URL && env.VITE_CONVEX_URL !== target.url) {
     throw new Error(
       'The local app Convex URL does not match the development credential deployment.',
     )
   }
-  const credentials = loadCredentials(fixtureDirectory(cwd, env), target)
+  const credentials = loadCredentials(
+    fixtureDirectory(cwd, env, { local: target.target === 'local' }),
+    target,
+  )
   if (!credentials) {
     throw new Error(
       'Northstar development credentials are missing. Run npm run demo -- seed --dev first.',

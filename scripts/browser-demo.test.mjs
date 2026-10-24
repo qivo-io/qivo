@@ -54,6 +54,40 @@ describe('Northstar browser fixture', () => {
     ).toThrow(/does not match/)
   })
 
+  it('loads the credentials of a disposable local backend by its deployment name', () => {
+    const local = {
+      QIVO_FIXTURE_LOCAL: 'true',
+      QIVO_LOCAL_ADMIN_KEY: 'local-admin-key',
+      QIVO_LOCAL_DEPLOYMENT: 'local-c7-3212',
+      VITE_CONVEX_URL: 'http://127.0.0.1:3212',
+    }
+    const cwd = mkdtempSync(join(tmpdir(), 'qivo-browser-demo-'))
+    const directory = mkdtempSync(join(tmpdir(), 'qivo-browser-credentials-'))
+    folders.push(cwd, directory)
+    const target = resolveTarget(
+      {
+        target: 'local',
+        deployment: local.QIVO_LOCAL_DEPLOYMENT,
+        siteUrl: 'http://localhost:5470',
+      },
+      local,
+    )
+    loadCredentials(directory, target, { create: true })
+    const demo = loadBrowserDemo('http://localhost:5470', {
+      cwd,
+      env: { ...local, QIVO_FIXTURE_CREDENTIALS_DIR: directory },
+    })
+    expect(demo.target).toMatchObject({ target: 'local', url: 'http://127.0.0.1:3212' })
+    expect(demo.account('nora').email).toBe('nora@demo.qivo.io')
+    // a local backend never takes a cloud deploy key
+    expect(() =>
+      loadBrowserDemo('http://localhost:5470', {
+        cwd: '/unused',
+        env: { ...local, CONVEX_DEPLOY_KEY: env.CONVEX_DEPLOY_KEY },
+      }),
+    ).toThrow(/refuses CONVEX_DEPLOY_KEY/)
+  })
+
   it('requires existing credentials instead of generating another password set', () => {
     const options = fixture()
     const { cwd } = options
