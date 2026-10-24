@@ -87,6 +87,7 @@ function or variable it copies them from. It fails when an installed `convex`
 declares one differently, so a Convex update gets a review of the copy here
 and of the module rules in `scripts/convex-api-modules.mjs`.
 It needs no deployment credentials and does not reset any hosted data.
+`npm run verify:static` runs every check of this gate except the tests.
 Do not run full gates concurrently across agents. `npm run test:contract`, demo
 reset/seed commands and browser smoke tools can write to a backend; they are
 not part of the safe migration gate and must target an authorized isolated
