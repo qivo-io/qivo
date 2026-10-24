@@ -4,7 +4,7 @@ import type { Id } from '../_generated/dataModel'
 import type { ActionCtx } from '../_generated/server'
 import http from '../http'
 import { DEMO_STORAGE_BYTES, drainDemoUploads } from '../model/demoUploads'
-import { as, expectRefusal, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
+import { as, expectRefusal, NOW, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
 
 declare class Request {
   constructor(
@@ -205,6 +205,10 @@ describe('private demo upload boundaries', () => {
 
   it('caps pre-auth admissions durably and closes admission without disabling cleanup', async () => {
     const t = newT()
+    // admission counts per minute, so the clock stands still mid-minute and
+    // all 12 calls share one window
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.parse(NOW) + 30_000)
     const answers = await Promise.all(
       Array.from({ length: 12 }, () => t.mutation(internal.demoUploads.admit, {})),
     )

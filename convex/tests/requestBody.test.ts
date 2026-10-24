@@ -6,7 +6,7 @@
  * bytes and 32 MiB, so an early one is not lost to a reset connection. */
 /// <reference types="vite/client" />
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { Doc } from '../_generated/dataModel'
 import { DEMO_REPORT_MAX_BYTES } from '../lib/demoReporting'
 import { AUTH_BODY_MAX_BYTES, LIMITS } from '../lib/limits'
@@ -558,6 +558,14 @@ describe('Better Auth bodies', () => {
         (await ctx.db.query('demo_admission').collect()).map(({ key, count }) => ({ key, count })),
       )
     expect(await admissions()).toEqual([])
+    // admission counts per minute and per day, so the clock stands still
+    // mid-minute and both sign-ins share their windows (after `stalled`,
+    // which puts the real timers back)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.parse(NOW) + 30_000)
+    onTestFinished(() => {
+      vi.useRealTimers()
+    })
     const signIn = () =>
       http(t, path, { method: 'POST', headers: { ...origin, ...json }, body: '{}' })
     expect((await signIn()).status).toBe(200)
