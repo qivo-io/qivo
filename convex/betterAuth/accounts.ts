@@ -46,7 +46,7 @@ export const setMicrosoftTenant = mutation({
   handler: async (ctx, { id, oid, tid }) => {
     const accountId = ctx.db.normalizeId('account', id)
     const account = accountId ? await ctx.db.get(accountId) : null
-    if (!account || account.providerId !== 'microsoft' || account.accountId !== oid) return false
+    if (account?.providerId !== 'microsoft' || account.accountId !== oid) return false
     if (!OBJECT_ID.test(tid)) return false
     if (account.microsoftTenantId !== tid)
       await ctx.db.patch(account._id, { microsoftTenantId: tid })
