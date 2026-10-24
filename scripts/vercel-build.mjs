@@ -98,10 +98,12 @@ export async function setPreviewExpiry(
   { fetch = globalThis.fetch, sleep = (ms) => new Promise((done) => setTimeout(done, ms)) } = {},
 ) {
   const host = env.CONVEX_PROVISION_HOST || 'https://api.convex.dev'
-  const expiresAt = Date.now() + PREVIEW_LIFETIME_DAYS * 24 * 60 * 60 * 1000
   let failure = 'no response'
   for (let attempt = 1; attempt <= PREVIEW_EXPIRY_ATTEMPTS; attempt++) {
     if (attempt > 1) await sleep(1000 * 2 ** (attempt - 2))
+    /* counted from each attempt, so a retry never moves the deletion back
+       behind what a newer push's build has set meanwhile */
+    const expiresAt = Date.now() + PREVIEW_LIFETIME_DAYS * 24 * 60 * 60 * 1000
     try {
       const response = await fetch(`${host}/v1/deployments/${encodeURIComponent(name)}`, {
         method: 'PATCH',

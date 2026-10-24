@@ -381,10 +381,21 @@ describe('setPreviewExpiry — each push moves when the preview backend is delet
       () => Promise.resolve(new Response(null, { status: 200 })),
     ]
     const fetch = vi.fn(() => answers.shift()())
-    const sleep = vi.fn(async () => {})
+    // a newer push's build may set the expiry while this one waits
+    let now = Date.UTC(2026, 9, 24, 12)
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const sleep = vi.fn(async (ms) => {
+      now += ms
+    })
     await setPreviewExpiry(env, 'fixture-otter-12', { fetch, sleep })
     expect(fetch).toHaveBeenCalledTimes(3)
     expect(sleep.mock.calls).toEqual([[1000], [2000]])
+    const start = Date.UTC(2026, 9, 24, 12)
+    expect(fetch.mock.calls.map(([, init]) => JSON.parse(init.body).expiresAt)).toEqual([
+      start + 3 * day,
+      start + 1000 + 3 * day,
+      start + 3000 + 3 * day,
+    ])
   })
 
   it('gives up after 4 attempts naming the deployment and status, never the key or body', async () => {
