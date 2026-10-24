@@ -222,6 +222,24 @@ describe('main — the build refuses a production backend before it builds', () 
     }
   })
 
+  /* crons.ts drops every job under QIVO_ENVIRONMENT=preview, so a stable
+     backend set to it by mistake must never get this build's push. */
+  it('stops before npm run build when the backend names another environment', () => {
+    const builds = [
+      [production, 'preview'],
+      [production, 'staging'],
+      [production, ''],
+      [{ ...production, QIVO_ENVIRONMENT: 'staging' }, 'preview'],
+    ]
+    for (const [build, backend] of builds) {
+      const run = runner({ ...identity, QIVO_ENVIRONMENT: backend })
+      expect(() => main(build, { run, receipt: vi.fn() }), backend).toThrow(
+        'Backend QIVO_ENVIRONMENT does not match the build.',
+      )
+      expect(built(run)).toBe(false)
+    }
+  })
+
   it('builds once the backend has them', () => {
     const run = runner({
       ...identity,

@@ -9,7 +9,7 @@ repository.
 
 | Source event | Destination |
 | --- | --- |
-| Feature branch push | Vercel branch preview, website included, with its own Convex preview deployment that runs no scheduled jobs |
+| Feature branch push | Vercel branch preview, website included, with its own Convex preview deployment that runs no cron jobs |
 | Successful main CI and secret scanning | Staging website, docs and app at `preview.qivo.io` |
 | **Deploy staging** run by hand from main | The same, for example after a provider failure |
 | **Prepare release** run by hand from main | A draft GitHub Release for the commit staging serves. Deploys nothing |
@@ -17,7 +17,7 @@ repository.
 
 ```text
  feature branch ──► CI + secret scan, branch preview (own empty Convex backend,
-       │             no scheduled jobs)
+       │             no cron jobs)
        │
        ▼ pull request merged
  main ─────► CI + secret scan ──► Deploy staging
@@ -100,18 +100,22 @@ staging and has preview deployment creation disabled. Private operators can
 provision synthetic data deliberately using the private setup instructions.
 A later deployment preserves it.
 
-A branch preview's Convex backend runs no scheduled jobs. Its build sets
+A branch preview's Convex backend runs no cron jobs. Its build sets
 `QIVO_ENVIRONMENT=preview` before Convex pushes the functions, also on the
 branch's first build, and `convex/crons.ts` registers no job under that
 value. A changed value takes effect only at the next push. Every other
-environment registers every job. Nothing on a preview therefore runs on a
-timer. It has no retention or archive sweeps, no expiry of Deleted items or the audit log,
-no recovery of a stopped deletion, webhook or billing step, no organization
-retention and no demo cleanup recovery. Work that a request starts, such as a
-webhook delivery or the steps of a deletion, still runs. The same holds for
-demo branch previews. A preview exists to check that the functions and schema
-push, and to open its branch site by hand. Test scheduled work on a local
-backend or on staging.
+environment registers every job. A preview therefore has no retention or
+archive sweeps, no expiry of Deleted items or the audit log, no organization
+retention, no recovery of a stopped deletion or webhook step, no billing
+reconciliation or usage delivery to Polar, and none of the demo cleanup and
+metrics jobs. Work that a request starts still runs, including the delays it
+schedules, such as webhook delivery and its retries, the steps of a deletion,
+a snoozed item's wake and a demo's 24-hour expiry. The same holds for demo
+branch previews. A preview exists to check that the functions and schema
+push, and to open its branch site by hand. Test cron jobs on a local backend,
+or on staging for jobs that need neither billing nor demo mode. Convex refuses
+a push whose job names a missing function, which a preview push no longer
+checks, so `convex/tests/crons.test.ts` checks it before staging does.
 
 Convex keeps a preview deployment for 14 days after it was created, not until
 its pull request closes, and each one counts against the team's deployment

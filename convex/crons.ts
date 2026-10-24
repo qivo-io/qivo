@@ -139,10 +139,12 @@ crons.interval(
 crons.daily('expire-audit-log', { hourUTC: 4, minuteUTC: 45 }, internal.auditRetention.expire, {})
 
 /* Convex reads this module, with the deployment's environment variables, when
- * functions are pushed, and only then. The preview build sets
- * QIVO_ENVIRONMENT=preview before its first push (scripts/vercel-build.mjs),
- * so a branch preview runs no scheduled job. Every other value keeps every
- * job. A missing or unknown value keeps them too, though http.ts already
- * refuses that push and the jobs of the last push stay, so production can
- * never lose its retention, recovery and deletion work through this line. */
+ * functions are pushed, and only then. The preview builds set
+ * QIVO_ENVIRONMENT=preview before their first push (scripts/vercel-build.mjs,
+ * scripts/demo-build.mjs), so a branch preview runs no cron job. Every
+ * other value keeps every job. A missing or unknown value keeps them too,
+ * though http.ts already refuses that push and the jobs of the last push stay.
+ * A stable backend holding `preview` by mistake would lose every job, so the
+ * stable builds of both scripts refuse to push to a backend whose
+ * QIVO_ENVIRONMENT differs from the build's. */
 export default process.env.QIVO_ENVIRONMENT === 'preview' ? cronJobs() : crons

@@ -49,18 +49,23 @@ export function finishDemoBuild(directory = 'dist') {
     writeFileSync(join(directory, name), guidance)
 }
 
-function main(env) {
+/* The build command. `run` is execFileSync, `finish` is finishDemoBuild and
+ * `receipt` writes dist/version.json; the tests pass their own to see which
+ * commands run. */
+export function main(
+  env,
+  { run = execFileSync, finish = finishDemoBuild, receipt = writeDeploymentReceipt } = {},
+) {
   assertDemoTarget(env)
   const preview = isPreviewDeployKey(env.CONVEX_DEPLOY_KEY)
   const name = deploymentName(env)
   if (!name || (!preview && name !== env.DEMO_CONVEX_DEPLOYMENT))
     throw new Error('The injected Convex URL does not match the dedicated demo deployment.')
   const command = (args) => {
-    const out = execFileSync(
-      'npx',
-      ['convex', 'env', ...args, ...(preview ? ['--deployment', name] : [])],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
-    )
+    const out = run('npx', ['convex', 'env', ...args, ...(preview ? ['--deployment', name] : [])], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
     if (ignoredTheTarget(out)) throw new Error('Convex ignored the requested demo target.')
     return out.trim()
   }
@@ -68,6 +73,7 @@ function main(env) {
     // Same claim → origin setup → build → push ordering as normal previews.
     command(['set', 'SITE_URL', previewSiteUrl(env)])
     command(['set', 'APP_MODE', 'demo'])
+    // before convex pushes the functions, so crons.ts registers no job
     command(['set', 'QIVO_ENVIRONMENT', 'preview'])
     // Admission is enabled explicitly after verification, including previews.
   } else if (
@@ -79,9 +85,9 @@ function main(env) {
       'Configure APP_MODE=demo and SITE_URL=https://demo.qivo.io on the dedicated backend first.',
     )
   }
-  execFileSync('npm', ['run', 'build'], { stdio: 'inherit' })
-  finishDemoBuild()
-  writeDeploymentReceipt(env)
+  run('npm', ['run', 'build'], { stdio: 'inherit' })
+  finish()
+  receipt(env)
 }
 
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) main(process.env)
