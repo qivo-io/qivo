@@ -86,8 +86,9 @@ function waitFor<T>(find: () => T | null | undefined, what: string) {
 }
 
 /** Boots App on a large workspace whose last task window, holding task
-    QN-2, is still to arrive. Answers the store and the organization's slug. */
-async function bootLoading() {
+    QN-2, is still to arrive, or with every task loaded when not `held`.
+    Answers the store and the organization's slug. */
+async function bootLoading(held = true) {
   vi.resetModules()
   const snap: Snapshot = plannerFixture()
   snap.orgs[0].next_issue_num = 64 * 200
@@ -115,9 +116,9 @@ async function bootLoading() {
   network.query.mockResolvedValue(null)
   network.mutation.mockResolvedValue(null)
   const store = await import('./store/planner')
-  double.live?.holdWindow(LAST_WINDOW)
+  if (held) double.live?.holdWindow(LAST_WINDOW)
   await store.initStore()
-  expect(store.P.stillLoading()).not.toBeNull()
+  expect(store.P.stillLoading() !== null).toBe(held)
   // App's views load their code only while the socket counts as connected
   const { syncStatus } = await import('./lib/syncStatus')
   syncStatus.setSocket({ connected: true, everConnected: true })
@@ -213,6 +214,16 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     await arrive()
     expect(store.P.stillLoading()).toBeNull()
     await waitFor(() => !document.querySelector('[data-task-loading]'), 'the closed window')
+    expect(location.pathname).toBe(ALL_BOARD)
+  })
+
+  it('names the page it shows when Back reaches a task that is gone after every task loaded', async () => {
+    const { org } = await bootLoading(false)
+    await back(`/app/${org}/board/all`)
+    expect(location.pathname).toBe(ALL_BOARD)
+    // the page stays All projects' Board
+    await back(`/app/${org}/board/tasks/qn-3`)
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
     expect(location.pathname).toBe(ALL_BOARD)
   })
 
