@@ -44,7 +44,7 @@ import { stampOfRow } from '../model/syncStamps'
 import { isOrgStaff, projectLevelsOf } from './access'
 import { chunkLists } from './arrayLimit'
 import { byId } from './db'
-import { cutPieces, halve, type IdWindow } from './idWindows.ts'
+import { cutPieces, halve, type IdWindow, roundedCounts } from './idWindows.ts'
 import { loadInbox, newestFirst, recentlyReadFirst } from './inbox'
 import { INBOX_LIMIT } from './limits'
 import { loadRowFor, type OrgLoadRow } from './loadRows'
@@ -287,10 +287,14 @@ export async function readRoot(
     const org = await byId(ctx, 'organizations', me.org_id)
     if (org === null) continue // a seat in a vanished org contributes nothing
     const counters = await countersRow(ctx, org.id)
+    /* Staff see hidden work counted anonymously (capacity views). Guests
+     * and Viewers may not learn how much there is, so they get the counts
+     * rounded up to the windows they start. */
+    const live = liveCountsOf(counters)
     orgs.push(
       orgRowFor(
         org,
-        { ...numbersOf(counters), ...liveCountsOf(counters) },
+        { ...numbersOf(counters), ...(isOrgStaff(me) ? live : roundedCounts(live)) },
         me.org_role === 'admin',
       ),
     )

@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { ActionCtx } from '../_generated/server'
 import { COUNT_PAGE, dryCount } from '../internal/liveCountsBackfill'
+import { startWindows, type WindowCounts } from '../lib/idWindows'
 import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
 import {
   as,
@@ -42,10 +43,11 @@ const countersOf = (t: T, orgId: string) =>
 const backfill = (t: T, args: { dry_run: boolean; recount?: boolean }) =>
   t.action(internal.internal.liveCountsBackfill.run, args)
 
-/** The organization's row in the root part, as `f.user` reads it. */
-const rootRow = async (t: T, f: OrgFixture) => {
-  const root = await as(t, f.user).query(makeFunctionReference<'query'>('workspace:root'), {})
-  return (root as { orgs: { id: string }[] }).orgs.find((o) => o.id === f.org.id)
+/** The organization's row in the root part, as `who` (`f.user` unless
+ * given) reads it. */
+const rootRow = async (t: T, f: OrgFixture, who: OrgFixture['user'] = f.user) => {
+  const root = await as(t, who).query(makeFunctionReference<'query'>('workspace:root'), {})
+  return (root as { orgs: (WindowCounts & { id: string })[] }).orgs.find((o) => o.id === f.org.id)
 }
 
 const create = (t: T, f: OrgFixture, extra: { parent_id?: string } = {}) =>
@@ -146,6 +148,20 @@ describe('live counts', () => {
     await runSteps(t)
     expect(await expectLiveCounts(t, org_id)).toEqual({ active_tasks: 0, live_projects: 4 })
   }, 60_000)
+
+  it('sends the exact counts only to staff, and guests and Viewers the same windows', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    for (let i = 0; i < 3; i++) await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await backfill(t, { dry_run: false })
+    const exact = await expectLiveCounts(t, f.org.id)
+    for (const staff of [f.admin, f.user]) expect(await rootRow(t, f, staff)).toMatchObject(exact)
+    for (const reader of [f.guest, f.viewer]) {
+      const row = await rootRow(t, f, reader)
+      expect(row).toMatchObject({ active_tasks: 200, live_projects: 250 })
+      expect(startWindows(row as WindowCounts)).toEqual({ tasks: 1, projects: 1 })
+    }
+  })
 
   it('counts an organization exactly while its rows change between the steps', async () => {
     const t = newT()
@@ -269,6 +285,29 @@ describe('live counts', () => {
     ])
     await backfill(t, { dry_run: false, recount: true })
     expect(await expectLiveCounts(t, org_id)).toEqual({ active_tasks: 1, live_projects: 4 })
+  })
+
+  it('skips an organization without an org_counters row, and counts it once a create makes one', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    await plantIssue(t, { org_id, project_id: f.sub.id })
+    const row = await countersOf(t, org_id)
+    await t.run((ctx) => ctx.db.delete(row?._id ?? ('' as never)))
+    const step = () =>
+      t.mutation(internal.internal.liveCountsBackfill.step, { org_id, recount: false })
+    expect(await step()).toBe('skipped')
+
+    const skipped = { counted: 1, skipped: 1, skipped_orgs: [org_id] }
+    const dry = await backfill(t, { dry_run: true })
+    expect(dry).toMatchObject(skipped)
+    expect(dry.to_count.map((o) => o.org_id)).not.toContain(org_id)
+    expect(await backfill(t, { dry_run: false })).toMatchObject(skipped)
+    expect(await countersOf(t, org_id)).toBeNull()
+
+    await create(t, f)
+    expect(await backfill(t, { dry_run: false })).toMatchObject({ counted: 1, skipped: 0 })
+    expect(await expectLiveCounts(t, org_id)).toEqual({ active_tasks: 2, live_projects: 4 })
   })
 
   it('the guest fixture counts the rows it plants, also when it plants them again', async () => {

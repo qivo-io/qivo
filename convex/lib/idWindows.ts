@@ -157,3 +157,17 @@ export const startWindows = (org: WindowCounts) => ({
   tasks: windowCount(tasksIn(org), WINDOW_ROWS.tasks),
   projects: windowCount(org.live_projects ?? org.next_project_num, WINDOW_ROWS.projects),
 })
+
+/** Live counts `counts` rounded up to the rows of the windows they start,
+ * from which startWindows chooses the same windows, for a reader who may
+ * not learn how much hidden work an organization holds. */
+export const roundedCounts = (
+  counts: Pick<WindowCounts, 'active_tasks' | 'live_projects'>,
+): Pick<WindowCounts, 'active_tasks' | 'live_projects'> =>
+  counts.active_tasks === undefined || counts.live_projects === undefined
+    ? {}
+    : {
+        active_tasks: windowCount(counts.active_tasks, WINDOW_ROWS.tasks) * WINDOW_ROWS.tasks,
+        live_projects:
+          windowCount(counts.live_projects, WINDOW_ROWS.projects) * WINDOW_ROWS.projects,
+      }

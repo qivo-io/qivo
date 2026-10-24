@@ -35,9 +35,11 @@
  * deployment:functions:runInternalActions.
  *
  * A run counts the organizations not counted yet and leaves the others as
- * they are. `"recount": true` counts every organization again, for example
- * after a rollback to a release that did not keep the counts. A run that
- * wrote adds one platform_audit_log row (action 'live_counts_backfill',
+ * they are. `"recount": true` counts every organization again, to mend
+ * counts a dry run lists as differing from their rows. An organization
+ * without an org_counters row has nothing to hold its counts: a run lists
+ * it as skipped, and once its next create makes the row (model/orgs.ts
+ * ensureCounters), a later run counts it. A run that wrote adds one platform_audit_log row (action 'live_counts_backfill',
  * actor 'system') with its totals. Running it again is safe. It writes no
  * activity, sends no task event and changes nothing a person sees, except
  * how many windows the app opens at its next load. */
@@ -117,14 +119,14 @@ type Counts = { active_tasks: number; live_projects: number }
 /** One step of the organization's count, in its own transaction. It
  * starts the count, counts one page of each table not done, and ends the
  * count once no row is numbered past where it counted. Leaves an organization counted already
- * alone unless `recount`. Answers its counts once it is counted, else
- * null. */
+ * alone unless `recount`. Answers its counts once it is counted, null
+ * while it counts, and 'skipped' without an org_counters row, such as for an
+ * organization deleted meanwhile. */
 export const step = internalMutation({
   args: { org_id: v.string(), recount: v.boolean() },
-  handler: async (ctx, { org_id, recount }): Promise<Counts | null> => {
+  handler: async (ctx, { org_id, recount }): Promise<Counts | 'skipped' | null> => {
     let row = await countersRow(ctx, org_id)
-    // an organization deleted meanwhile
-    if (row === null) return { active_tasks: 0, live_projects: 0 }
+    if (row === null) return 'skipped'
     if (row.counted === undefined) {
       if (row.active_tasks !== undefined && row.live_projects !== undefined && !recount)
         return { active_tasks: row.active_tasks, live_projects: row.live_projects }
@@ -154,9 +156,10 @@ export const step = internalMutation({
  * give and those it holds once counted. */
 type OrgReport = Counts & { org_id: string; stored?: Counts }
 
-/** What an organization holds: its counts, null until counted, and the
- * numbers handed out, which every create moves. */
-type OrgState = { org_id: string; stored: Counts | null; numbers: OrgCounters }
+/** What an organization holds: whether it has an org_counters row, its
+ * counts, null until counted, and the numbers handed out, which every
+ * create moves. */
+type OrgState = { org_id: string; has_row: boolean; stored: Counts | null; numbers: OrgCounters }
 
 /** The organization's state (OrgState). */
 async function stateOf(ctx: QueryCtx, orgId: string): Promise<OrgState> {
@@ -165,6 +168,7 @@ async function stateOf(ctx: QueryCtx, orgId: string): Promise<OrgState> {
   const counted = active_tasks !== undefined && live_projects !== undefined
   return {
     org_id: orgId,
+    has_row: row !== null,
     stored: counted ? { active_tasks, live_projects } : null,
     numbers: numbersOf(row),
   }
@@ -229,7 +233,7 @@ const checkRef = makeFunctionReference<
 const stepRef = makeFunctionReference<
   'mutation',
   { org_id: string; recount: boolean },
-  Counts | null
+  Counts | 'skipped' | null
 >('internal/liveCountsBackfill:step')
 const auditRef = makeFunctionReference<'mutation', Counts & { counted: number }, null>(
   'internal/liveCountsBackfill:audit',
@@ -278,8 +282,10 @@ export async function dryCount(
  * of them, and lists the organizations counted already whose counts their
  * rows do not give (`differ`, `differing` in all). An organization that
  * writes kept changing through every count is listed in `unsettled_orgs`
- * (`unsettled` in all) instead, for a later dry run. A run that wrote ends
- * with its audit row. */
+ * (`unsettled` in all) instead, for a later dry run. Both list the
+ * organizations without an org_counters row, which a run cannot count, in
+ * `skipped_orgs` (`skipped` in all). A run that wrote ends with its audit
+ * row. */
 export const run = internalAction({
   args: { dry_run: v.boolean(), recount: v.optional(v.boolean()) },
   handler: async (ctx, { dry_run, recount = false }) => {
@@ -292,20 +298,30 @@ export const run = internalAction({
     const toCount: OrgReport[] = []
     const differ: OrgReport[] = []
     const unsettledOrgs: string[] = []
+    const skippedOrgs: string[] = []
     let differing = 0
     let unsettled = 0
+    let skipped = 0
+    const skip = (orgId: string) => {
+      if (skipped++ < COUNT_PAGE.listed) skippedOrgs.push(orgId)
+    }
     let cursor: string | null = null
     for (;;) {
       const page: OrgPage = await ctx.runQuery(orgPageRef, { cursor })
       for (const org of page.orgs) {
         const { org_id } = org
         totals.orgs++
+        if (!org.has_row) {
+          skip(org_id)
+          continue
+        }
         const due = org.stored === null || recount
         if (!dry_run) {
           if (!due) continue
-          let done: Counts | null = null
+          let done: Counts | 'skipped' | null = null
           while (done === null) done = await ctx.runMutation(stepRef, { org_id, recount })
-          add(done)
+          if (done === 'skipped') skip(org_id)
+          else add(done)
           continue
         }
         const { counts, state, settled } = await dryCount(ctx, org)
@@ -340,6 +356,8 @@ export const run = internalAction({
       differ,
       unsettled,
       unsettled_orgs: unsettledOrgs,
+      skipped,
+      skipped_orgs: skippedOrgs,
     }
   },
 })

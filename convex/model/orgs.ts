@@ -319,7 +319,10 @@ export async function insertOrgRows(
  * model/cascade.ts deleteOrgDeep, which deletes the counters with the rows
  * in one transaction. An organization created before them has none until
  * internal/liveCountsBackfill counts it, and the app sizes its windows by
- * its numbers until then (lib/idWindows.ts startWindows). */
+ * its numbers until then (lib/idWindows.ts startWindows). The counts share
+ * the row with the numbers, so archives, restores and deletes in one
+ * organization conflict with each other and with its creates, as its
+ * creates already did, and Convex runs the one that lost again. */
 
 export type LiveCounts = Pick<Doc<'org_counters'>, 'active_tasks' | 'live_projects'>
 
