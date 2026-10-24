@@ -21,7 +21,7 @@ import { markBillingMembershipChanged } from '../lib/billableUsers'
 import { addCalendarMonths } from '../lib/billingAccess'
 import type { BillingPlan, BillingSummary, BillingUsage } from '../lib/billingTypes'
 import { LIMITS, PLAN_CURRENCIES, PLAN_CURRENCY } from '../lib/limits'
-import { enrollOrganization, STORAGE_PAGE, storageUsage } from '../model/billing'
+import { enrollOrganization, nextReminder, STORAGE_PAGE, storageUsage } from '../model/billing'
 import { deleteOrgStep } from '../model/orgDeletion'
 import {
   as,
@@ -97,7 +97,7 @@ const release = makeFunctionReference<
 >('billingSync:release')
 const reminders = makeFunctionReference<
   'mutation',
-  { now: number; threshold: number; cursor: string | null },
+  { now: number; lane?: 'due' | 'unset'; threshold?: number; cursor: string | null },
   null
 >('billingSync:reminders')
 const reserveCheckout = makeFunctionReference<'mutation', { org_id: string }, { token: string }>(
@@ -713,7 +713,11 @@ describe('provider state, retries and billing snapshots', () => {
     expect(sent).toMatchObject({ attempts: 1, sent_at: NOW })
   })
 
-  it('reads and records the storage of an organization with 5,000 tasks within the transaction limits', async () => {
+  /* An organization with the 5,000 tasks below, on transaction limits as the
+   * backend sets them. convex-test reads every stored document for each
+   * index lookup, and counting the files looks up each task once, so each
+   * test below counts them once. */
+  async function fiveThousandTasks() {
     const { t, f } = await fixture({ transactionLimits: true })
     await t.mutation(apply, { payload: remote(f.org.id), event_id: 'first-period' })
     // 5,000 tasks, 4,500 of them with a 2 MB file, a third of those in PCB.
@@ -765,7 +769,11 @@ describe('provider state, retries and billing snapshots', () => {
         created_at: NOW,
       }),
     )
+    return { t, f }
+  }
 
+  it('reports the storage of an organization with 5,000 tasks within the transaction limits', async () => {
+    const { t, f } = await fiveThousandTasks()
     // the admin Billing page
     const report = await as(t, f.admin).action(usageReport, { org_id: f.org.id })
     expect(report.storage_bytes).toBe(9_000_000_000)
@@ -773,8 +781,11 @@ describe('provider state, retries and billing snapshots', () => {
       { project_id: f.sub.id, name: 'Firmware', storage_bytes: 6_000_000_000 },
       { project_id: f.sub2.id, name: 'Board rev', storage_bytes: 3_000_000_000 },
     ])
+  }, 120_000)
 
-    // the renewal into the next period samples the same figure
+  it('records the storage of an organization with 5,000 tasks at renewal within the transaction limits', async () => {
+    const { t, f } = await fiveThousandTasks()
+    // the renewal into the next period samples the figure the Billing page shows
     const next = { start: END, end: '2026-11-01T12:00:00.000Z' }
     await t.mutation(apply, {
       payload: remote(f.org.id, {
@@ -1338,11 +1349,17 @@ describe('when organizations are reconciled', () => {
     t.run(async (ctx) =>
       (await ctx.db.query('billing_notices').collect()).map((n) => [n.profile_id, n.kind]),
     )
-  /* Gives the organization a free period until `until`, enrolling it first. */
+  /* Gives the organization a free period until `until`, enrolling it first,
+   * with its next reminder as if the sweep had sent every reminder up to an
+   * hour ago. */
   const grantUntil = (t: T, orgId: string, until: string, updated = NOW) =>
     t.run(async (ctx) => {
       const sub = await enrollOrganization(ctx, orgId)
-      await ctx.db.patch(sub!._id, { complimentary_until: until, updated_at: updated })
+      await ctx.db.patch(sub!._id, {
+        complimentary_until: until,
+        updated_at: updated,
+        remind_at: nextReminder(until, Date.now() - 60 * 60_000),
+      })
     })
   /* Takes the lock and frees it again, as a reconciliation that finds
    * nothing to change does, and answers the due time it leaves. */
@@ -1367,27 +1384,30 @@ describe('when organizations are reconciled', () => {
     expect(await stored(t, f.org.id)).toEqual(before)
   })
 
-  it('starts due organizations a page at a time, targeted times first, then those without one, then the safety pass', async () => {
+  it('starts due organizations a page at a time, the safety pass its share, then targeted times, then those without one', async () => {
     const { t, f } = await fixture()
-    SYNC_PAGE.size = 2
-    const [late, early, safe] = [uuid(), uuid(), uuid()]
+    SYNC_PAGE.size = 3
+    SYNC_PAGE.safety = 1
+    const [late, early, safe, safer] = [uuid(), uuid(), uuid(), uuid()]
     await t.run(async (ctx) => {
-      for (const id of [late, early, safe]) await enrollOrganization(ctx, id)
+      for (const id of [late, early, safe, safer]) await enrollOrganization(ctx, id)
     })
     // f.org has no due time, as for an organization enrolled before due times
     await setDue(t, f.org.id, undefined)
     await setDue(t, late, iso(-1))
     await setDue(t, early, iso(-2))
     await setDue(t, safe, iso(-30), true)
+    await setDue(t, safer, iso(-40), true)
     await t.mutation(sweep, {})
     const first = await queued(t, 'billingSync:reconcile')
-    expect(first.map((job) => job.args[0].org_id)).toEqual([early, late])
+    expect(first.map((job) => job.args[0].org_id)).toEqual([early, late, safer])
     expect(first[1].scheduledTime - first[0].scheduledTime).toBe(SYNC_PAGE.spacing)
     await t.mutation(sweep, {})
     const second = await queued(t, 'billingSync:reconcile')
-    expect(second.slice(2).map((job) => job.args[0].org_id)).toEqual([f.org.id, safe])
+    // what the targeted times leave goes to the safety pass too
+    expect(second.slice(3).map((job) => job.args[0].org_id)).toEqual([f.org.id, safe])
     await t.mutation(sweep, {})
-    expect(await queued(t, 'billingSync:reconcile')).toHaveLength(4)
+    expect(await queued(t, 'billingSync:reconcile')).toHaveLength(5)
   })
 
   it('starts usage delivery once a usage event is due', async () => {
@@ -1823,61 +1843,112 @@ describe('when organizations are reconciled', () => {
     expect(await stored(t, f.org.id)).toMatchObject({ sync_due_at: NOW })
   })
 
-  it('starts targeted times before the safety pass when the page is full', async () => {
-    const { t, f } = await fixture()
-    SYNC_PAGE.size = 1
-    const renewing = uuid()
-    await t.run((ctx) => enrollOrganization(ctx, renewing))
+  it('keeps the safety pass on time while unpaid organizations fill every page', async () => {
+    const { t } = await fixture()
+    // 120 organizations in their first unpaid day are polled every
+    // PAYMENT_POLL_MS: 60 due each minute, a full page, which before left
+    // the safety pass nothing at all
+    const unpaid = Array.from({ length: 120 }, () => uuid())
+    const safety = Array.from({ length: 40 }, () => uuid())
     await t.run(async (ctx) => {
-      const sub = await ctx.db
-        .query('billing_subscriptions')
-        .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
-        .unique()
-      // the older safety pass waits for the renewal check behind it
-      await ctx.db.patch(sub!._id, { sync_due_at: iso(-30), sync_safety: true })
+      for (const id of [...unpaid, ...safety]) await enrollOrganization(ctx, id)
     })
-    await setDue(t, renewing, iso(-1))
+    for (const id of unpaid) await setDue(t, id, iso(-1))
+    for (const id of safety) await setDue(t, id, iso(-5), true)
+    const started = async () =>
+      new Set((await queued(t, 'billingSync:reconcile')).map((job) => job.args[0].org_id))
     await t.mutation(sweep, {})
-    expect((await queued(t, 'billingSync:reconcile')).map((job) => job.args[0].org_id)).toEqual([
-      renewing,
-    ])
+    const first = await started()
+    expect(first.size).toBe(SYNC_PAGE.size)
+    expect(safety.filter((id) => first.has(id))).toHaveLength(SYNC_PAGE.safety)
+    expect(unpaid.filter((id) => first.has(id))).toHaveLength(SYNC_PAGE.size - SYNC_PAGE.safety)
+    // the next minute starts the other 10, a minute late at most
+    vi.setSystemTime(Date.parse(NOW) + 60_000)
+    await t.mutation(sweep, {})
+    const second = await started()
+    expect(safety.filter((id) => second.has(id))).toHaveLength(40)
+    expect(second.size).toBe(2 * SYNC_PAGE.size)
   })
 
-  it('reminds the admins of free periods within an hour of each reminder time, a page at a time', async () => {
+  /* Runs the sweep at `at` and every reminders step it queues. */
+  const remindAt = async (t: T, at: string) => {
+    vi.setSystemTime(Date.parse(at))
+    await t.mutation(sweep, {})
+    for (;;) {
+      const [job] = await queued(t, 'billingSync:reminders')
+      if (!job) return
+      await t.run((ctx) => ctx.scheduler.cancel(job._id))
+      await t.mutation(reminders, job.args[0])
+    }
+  }
+
+  it('reminds the admins of free periods at each reminder time, a page at a time', async () => {
     const { t, f } = await fixture()
     REMINDER_PAGE.size = 1
     await grantUntil(t, f.org.id, iso(7 * 24 * 60 - 30))
     // ended half an hour ago, and its members' pages have not refreshed since
     await grantUntil(t, f.otherOrg.id, iso(-30), iso(-60))
-    await grantUntil(t, uuid(), iso(-10))
     // between its reminder times; the old code reminded it every minute
-    await grantUntil(t, uuid(), iso(3 * 24 * 60))
+    const quiet = uuid()
+    await grantUntil(t, quiet, iso(3 * 24 * 60))
     await t.mutation(sweep, {})
     // the reminders run apart from the sweep, so their failure cannot undo
     // the reconciliations the sweep started
     expect(await notices(t)).toEqual([])
     expect((await queued(t, 'billingSync:reconcile')).length).toBeGreaterThan(0)
-    const jobs = await queued(t, 'billingSync:reminders')
-    expect(jobs.map((job) => job.args[0])).toEqual([
-      { now: Date.parse(NOW), threshold: 7 * 86_400_000, cursor: null },
-      { now: Date.parse(NOW), threshold: 0, cursor: null },
-    ])
-    for (const job of jobs) await t.mutation(reminders, job.args[0])
+    const [job] = await queued(t, 'billingSync:reminders')
+    expect(job.args[0]).toEqual({ now: Date.parse(NOW), lane: 'due', cursor: null })
+    await remindAt(t, NOW)
     expect(await notices(t)).toEqual([
       [f.admin.id, 'seven_days'],
       [f.otherAdmin.id, 'expired'],
     ])
     // the end touches the row once, so members' pages read the expiry
     expect((await stored(t, f.otherOrg.id))?.updated_at).toBe(NOW)
-    const next = (await queued(t, 'billingSync:reminders')).find(
-      (job) => job.args[0].cursor && job.args[0].threshold === 0,
-    )
-    await t.mutation(reminders, next!.args[0])
+    expect((await stored(t, f.otherOrg.id))?.remind_at).toBeNull()
+    expect((await stored(t, f.org.id))?.remind_at).toBe(iso(6 * 24 * 60 - 30))
+    expect((await stored(t, quiet))?.remind_at).toBe(iso(2 * 24 * 60))
+    // nothing more is due, and nothing goes out twice
+    await remindAt(t, iso(1))
     expect(await notices(t)).toHaveLength(2)
-    // an hour after their reminder times, the free periods are out of range
-    vi.setSystemTime(Date.parse(iso(51)))
-    const before = (await queued(t, 'billingSync:reminders')).length
-    await t.mutation(sweep, {})
-    expect(await queued(t, 'billingSync:reminders')).toHaveLength(before)
+  })
+
+  it.each([
+    ['two hours', iso(6 * 24 * 60 - 60), iso(6 * 24 * 60 + 60), ['one_day']],
+    ['two days', iso(-60), iso(2 * 24 * 60 - 60), ['seven_days']],
+    // only the latest reminder that came due goes out
+    ['two days, past the end', iso(6 * 24 * 60 - 60), iso(8 * 24 * 60 - 60), ['expired']],
+  ])('sends a reminder late after a sweep outage of %s, and once', async (_, stop, back, kinds) => {
+    const { t, f } = await fixture()
+    await grantUntil(t, f.org.id, iso(7 * 24 * 60))
+    await remindAt(t, stop)
+    const before = (await notices(t)).length
+    await remindAt(t, back)
+    expect((await notices(t)).slice(before)).toEqual(kinds.map((kind) => [f.admin.id, kind]))
+    await remindAt(t, new Date(Date.parse(back) + 60_000).toISOString())
+    expect(await notices(t)).toHaveLength(before + kinds.length)
+  })
+
+  it('fills in the next reminder of a free period granted before reminder times were stored', async () => {
+    const { t, f } = await fixture()
+    // an end that came half an hour ago still sends, as the release before did
+    await grantUntil(t, f.org.id, iso(-30))
+    await grantUntil(t, f.otherOrg.id, iso(3 * 24 * 60))
+    await t.run(async (ctx) => {
+      for (const sub of await ctx.db.query('billing_subscriptions').collect())
+        await ctx.db.patch(sub._id, { remind_at: undefined })
+    })
+    await remindAt(t, NOW)
+    expect((await stored(t, f.org.id))?.remind_at).toBe(iso(-30))
+    expect((await stored(t, f.otherOrg.id))?.remind_at).toBe(iso(2 * 24 * 60))
+    await remindAt(t, iso(1))
+    expect(await notices(t)).toEqual([[f.admin.id, 'expired']])
+  })
+
+  it('stops a reminders step that an earlier release queued', async () => {
+    const { t, f } = await fixture()
+    await grantUntil(t, f.org.id, iso(-30))
+    await t.mutation(reminders, { now: Date.parse(NOW), threshold: 0, cursor: null })
+    expect(await notices(t)).toEqual([])
   })
 })

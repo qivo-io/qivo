@@ -623,6 +623,20 @@ export default defineSchema({
     sync_safety: v.optional(v.boolean()),
     // Reconciliations that failed in a row, which set the retry's delay.
     sync_attempts: v.optional(v.number()),
+    // When the hourly organization sweep next reads this row
+    // (orgRemovals.ts): when its service may end or its checkout deadline
+    // pass (model/orgRetention.ts retentionDue), or, while the organization
+    // has a removal, the removal's date. Never later than the first time the
+    // sweep has work for it. Null when nothing can fall due without a write.
+    // Absent only on rows written before it existed, which the sweep reads
+    // and fills in.
+    retention_at: v.optional(v.union(v.string(), v.null())),
+    // The time of the free period's next reminder that has not gone out
+    // (model/billing.ts nextReminder), which the minute sweep reads until it
+    // has, so a reminder an outage held back goes out late. Null when none is
+    // left. Absent only on rows written before it existed, which the sweep
+    // fills in.
+    remind_at: v.optional(v.union(v.string(), v.null())),
     updated_at: v.string(),
     created_at: v.string(),
   })
@@ -630,7 +644,8 @@ export default defineSchema({
     .index('by_org', ['org_id'])
     .index('by_provider', ['polar_subscription_id'])
     .index('by_sync_due', ['sync_safety', 'sync_due_at'])
-    .index('by_complimentary_until', ['complimentary_until']),
+    .index('by_retention', ['retention_at'])
+    .index('by_remind', ['remind_at']),
 
   billing_periods: defineTable({
     org_id: v.string(),
@@ -849,7 +864,9 @@ export default defineSchema({
     created_at: v.string(),
   })
     .index('by_org', ['org_id'])
-    .index('by_progress', ['progress_at']),
+    // progress_at is absent until deletion begins, so the hourly sweep reads
+    // the removals still waiting whose date has passed in one range.
+    .index('by_progress', ['progress_at', 'delete_after']),
 
   // Per-organization number counters (model/orgs.ts). Task and project
   // creation write this row instead of the organization row, which every
