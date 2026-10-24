@@ -30,13 +30,17 @@ function commandsFor(mode) {
   }
 }
 
+// The Node check runs first and only warns, so the build log names an older
+// Node in Vercel's build image without stopping the deploy.
+const check = ['node', 'scripts/node-version.mjs', '--warn']
+
 test('the committed Vercel command routes demo builds without the shared seed', () => {
-  expect(commandsFor('demo')).toEqual([['node', 'scripts/demo-deploy.mjs']])
+  expect(commandsFor('demo')).toEqual([check, ['node', 'scripts/demo-deploy.mjs']])
 })
 
 test.each([undefined, '', 'app'])(
   'the committed Vercel command preserves normal builds with mode %s',
   (mode) => {
-    expect(commandsFor(mode)).toEqual([['node', 'scripts/app-deploy.mjs']])
+    expect(commandsFor(mode)).toEqual([check, ['node', 'scripts/app-deploy.mjs']])
   },
 )

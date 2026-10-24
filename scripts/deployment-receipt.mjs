@@ -1,7 +1,8 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-/** Add nonsecret source identity to the uncached client version manifest. */
+/** Add nonsecret source identity to the uncached client version manifest,
+ * with the Node that built it, since Vercel picks the patch release itself. */
 export function writeDeploymentReceipt(env, directory = 'dist') {
   if (!/^[0-9a-f]{40}$/.test(env.VERCEL_GIT_COMMIT_SHA || ''))
     throw new Error('Hosted builds require an exact Git commit identity.')
@@ -15,6 +16,7 @@ export function writeDeploymentReceipt(env, directory = 'dist') {
       ...version,
       commit: env.VERCEL_GIT_COMMIT_SHA,
       environment: env.QIVO_ENVIRONMENT,
+      node: process.version,
     }),
   )
 }

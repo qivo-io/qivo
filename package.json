@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:contract": "vitest run --config vitest.contract.config.mts",
-    "verify:local": "npx biome ci . --error-on-warnings && npm run lint && npm run check:ui && npm run check:typecheck && npm run typecheck && npm run typecheck:strict && npm run typecheck:convex && npm run typecheck:desktop && npm run typecheck:node && npm run build && npm test -- --maxWorkers=2",
+    "verify:local": "node scripts/node-version.mjs && npx biome ci . --error-on-warnings && npm run lint && npm run check:ui && npm run check:typecheck && npm run typecheck && npm run typecheck:strict && npm run typecheck:convex && npm run typecheck:desktop && npm run typecheck:node && npm run build && npm test -- --maxWorkers=2",
     "check:ui": "node scripts/check-ui-migration.mjs",
     "check:typecheck": "node scripts/check-typecheck-coverage.mjs",
     "typecheck": "tsc --noEmit",
@@ -103,7 +103,7 @@
     "shell-quote": "1.11.0"
   },
   "engines": {
-    "node": "24.x"
+    "node": ">=24.22.1 <25"
   },
   "allowScripts": {
     "esbuild": true,

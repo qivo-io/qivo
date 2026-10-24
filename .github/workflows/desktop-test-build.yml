@@ -33,13 +33,29 @@ jobs:
           ref: ${{ inputs.ref }}
           persist-credentials: false
 
+      # The ref may predate the Node check, so the check and the range it
+      # enforces come from this workflow's own commit.
+      - uses: actions/checkout@v7
+        with:
+          path: .node-check
+          sparse-checkout: |
+            /package.json
+            /scripts/node-engines.mjs
+            /scripts/node-version.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - uses: actions/setup-node@v7
         with:
-          node-version-file: package.json
+          node-version-file: .node-check/package.json
+          check-latest: true
           cache: npm
           cache-dependency-path: |
             package-lock.json
             desktop/package-lock.json
+
+      - name: Check the Node version
+        run: node .node-check/scripts/node-version.mjs
 
       - name: Install web and desktop dependencies
         run: |
@@ -69,13 +85,29 @@ jobs:
           ref: ${{ inputs.ref }}
           persist-credentials: false
 
+      # The ref may predate the Node check, so the check and the range it
+      # enforces come from this workflow's own commit.
+      - uses: actions/checkout@v7
+        with:
+          path: .node-check
+          sparse-checkout: |
+            /package.json
+            /scripts/node-engines.mjs
+            /scripts/node-version.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - uses: actions/setup-node@v7
         with:
-          node-version-file: package.json
+          node-version-file: .node-check/package.json
+          check-latest: true
           cache: npm
           cache-dependency-path: |
             package-lock.json
             desktop/package-lock.json
+
+      - name: Check the Node version
+        run: node .node-check/scripts/node-version.mjs
 
       - name: Install RPM packaging tools
         run: sudo apt-get update && sudo apt-get install --no-install-recommends -y rpm

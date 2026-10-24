@@ -255,7 +255,8 @@ async function main() {
   process.exit(clean ? 0 : 1)
 }
 
-// import.meta.main arrived in Node 24.2, and the engines field takes any 24.x
+// import.meta.main arrived in Node 24.2, and a local run may use an older 24.x
+// than the engines field names
 const isMain =
   import.meta.main ??
   (process.argv[1] !== undefined &&

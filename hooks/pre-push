@@ -29,6 +29,7 @@ run() {
 }
 
 printf 'quality gate\n'
+run 'node version'      node scripts/node-version.mjs
 run 'biome ci'          npx biome ci . --diagnostic-level=error
 run 'lint'              npm run --silent lint
 run 'UI conventions'    npm run --silent check:ui
