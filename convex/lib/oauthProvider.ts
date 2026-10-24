@@ -1,10 +1,11 @@
 import { getCurrentAuthContext } from '@better-auth/core/context'
 import { getOAuthProviderState, oauthProvider } from '@better-auth/oauth-provider'
-import type { GenericCtx } from '@convex-dev/better-auth'
-import { requireRunMutationCtx } from '@convex-dev/better-auth/utils'
 import { APIError, createAuthMiddleware } from 'better-auth/api'
 import { type FunctionArgs, makeFunctionReference } from 'convex/server'
 import { ConvexError } from 'convex/values'
+import type { GenericCtx } from '../../vendor/convex-better-auth/src/client'
+import { requireRunMutationCtx } from '../../vendor/convex-better-auth/src/utils'
+import { components } from '../_generated/api'
 import type { DataModel } from '../_generated/dataModel'
 import { sha256hex } from '../machine/auth'
 import { clientDisplayName, mcpResource, OAUTH_SCOPES, validateOAuthQuery } from './oauth'
@@ -90,6 +91,24 @@ export async function registerOAuthCode(
   if (!ok) throw invalid()
 }
 
+/** Revokes every live access token issued in a browser session that has
+ * ended, such as at sign-out, page by page. Better Auth 1.7's own sign-out
+ * revocation reads only the oldest 100 tokens of the session, so a
+ * connection that refreshed more often than that would keep its newest,
+ * live token. Its refresh tokens, which `offline_access` keeps, stay. */
+export async function revokeSessionAccess(ctx: GenericCtx<DataModel>, sessionId: string) {
+  const runner = requireRunMutationCtx(ctx)
+  const revokedAt = Date.now()
+  let cursor: string | null = null
+  do {
+    cursor = await runner.runMutation(components.betterAuth.oauth.revokeSessionAccessTokens, {
+      sessionId,
+      cursor,
+      revokedAt,
+    })
+  } while (cursor !== null)
+}
+
 const invalid = (description = 'This connection is invalid or has been disconnected.') =>
   new APIError('BAD_REQUEST', { error: 'invalid_grant', error_description: description })
 
@@ -110,15 +129,43 @@ async function ensureConnection(ctx: GenericCtx<DataModel>, args: FunctionArgs<t
 
 export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, schemaOnly = false) {
   const resource = schemaOnly ? 'http://schema-only.invalid/mcp' : mcpResource()
+  /* The provider stores each configured resource as an oauthResource row
+   * when an auth instance starts, even one that serves no OAuth request. An
+   * instance that cannot write, such as the one http.ts builds without a
+   * context to register the routes, or one in a query, configures none, so it
+   * does not try. Every OAuth request runs in an HTTP action or a mutation. */
+  const seeded = schemaOnly || !('runMutation' in ctx) ? [] : [resource]
   const provider = oauthProvider({
     disableJwtPlugin: true,
     loginPage: `${siteUrl}/app/~/connect`,
     consentPage: `${siteUrl}/app/~/connect`,
     scopes: OAUTH_SCOPES,
     grantTypes: ['authorization_code', 'refresh_token'],
-    validAudiences: [resource],
+    /* Qivo serves one protected resource, the MCP endpoint. Every new client
+     * is linked to it, and Better Auth 1.7 binds each grant to it. Per-client
+     * links are not enforced: with one resource they add no check that Qivo
+     * does not already make for every client, linked or not. The authorize
+     * hook and validateOAuthQuery, the token endpoint's onRequest and before
+     * hook, customTokenResponseFields and the grant's stored resource
+     * (oauthConnections.ts claimIssuance and lookupAccess) all refuse any
+     * resource but mcpResource(). Clients registered on Better Auth 1.6 have
+     * no link until internal/oauthClientBackfill.ts runs, so enforcing links
+     * would refuse those clients as invalid_target until then. A second
+     * resource needs enforcement on, every client linked only to what it may
+     * use, and those single-resource checks replaced
+     * (docs/better-auth-upgrade.md). */
+    resources: seeded,
+    clientRegistrationDefaultResources: seeded,
+    enforcePerClientResources: false,
+    // MCP clients often redirect to a loopback or private-use URI, which a
+    // "web" client may not register.
+    clientRegistrationDefaultApplicationType: 'infer',
     allowDynamicClientRegistration: true,
     allowUnauthenticatedClientRegistration: true,
+    /* oauthConnections.getContext calls getOAuthClientPublicPrelogin through
+     * auth.api, which runs in-process, and Better Auth refuses that call when
+     * this is off. Its HTTP route stays unserved (lib/authRoutes.ts), so this
+     * opens nothing to the network. */
     allowPublicClientPrelogin: true,
     clientRegistrationDefaultScopes: OAUTH_SCOPES,
     storeTokens: { hash: sha256hex },
@@ -171,10 +218,12 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
         return id
       },
     },
-    customTokenResponseFields: async ({ grantType, user, scopes, verificationValue }) => {
+    customTokenResponseFields: async ({ grantType: granted, user, scopes, verificationValue }) => {
       const endpoint = await getCurrentAuthContext()
-      if (!user || (grantType !== 'authorization_code' && grantType !== 'refresh_token'))
-        throw invalid()
+      const grantType = (['authorization_code', 'refresh_token'] as const).find(
+        (kind) => kind === granted,
+      )
+      if (!user || !grantType) throw invalid()
       const raw =
         grantType === 'authorization_code' ? endpoint.body?.code : endpoint.body?.refresh_token
       if (
@@ -211,6 +260,12 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
     ...provider,
     onRequest: async (request: Request, context: Parameters<typeof provider.onRequest>[1]) => {
       const url = new URL(request.url)
+      if (url.pathname.endsWith('/.well-known/oauth-authorization-server')) {
+        const result = await provider.onRequest(request, context)
+        return result && 'response' in result
+          ? { response: await withoutDpopMetadata(result.response) }
+          : result
+      }
       if (url.pathname.endsWith('/oauth2/token') && request.method === 'POST') {
         // OAuth token requests are form encoded. Inspect the raw form before
         // Better Call can collapse repeated values while parsing its schema.
@@ -243,10 +298,33 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
             ),
           }
         }
+        /* Qivo does not support DPoP (RFC 9449): the MCP endpoint checks no
+         * proof, and the adapter cannot store the proof reservations Better
+         * Auth makes. A server without DPoP ignores the header and issues a
+         * Bearer token, whose token_type tells the client (RFC 9449 section
+         * 5), so the header is dropped before the provider sees it. */
+        if (request.headers.has('DPoP')) {
+          const headers = new Headers(request.headers)
+          headers.delete('DPoP')
+          const bearer = new Request(request, { headers })
+          return (await provider.onRequest(bearer, context)) ?? { request: bearer }
+        }
       }
       return provider.onRequest(request, context)
     },
   }
+}
+
+/** Authorization server metadata without `dpop_signing_alg_values_supported`,
+ * which Better Auth 1.7 always lists. Qivo does not support DPoP
+ * (qivoOAuthProvider onRequest). Any other response passes unchanged. */
+export async function withoutDpopMetadata(response: Response): Promise<Response> {
+  if (!response.ok || !response.body) return response
+  const metadata: Record<string, unknown> = JSON.parse(await response.text())
+  delete metadata.dpop_signing_alg_values_supported
+  const headers = new Headers(response.headers)
+  headers.delete('Content-Length')
+  return new Response(JSON.stringify(metadata), { status: response.status, headers })
 }
 
 /** The client address the backend reports for the current HTTP request, or
@@ -311,7 +389,19 @@ export function oauthHooks(ctx: GenericCtx<DataModel>) {
   return {
     before: createAuthMiddleware(async (endpoint) => {
       // The only client creation endpoint Qivo serves (lib/authRoutes.ts).
-      if (endpoint.path === '/oauth2/register') await admitClientRegistration(ctx, endpoint.body)
+      if (endpoint.path === '/oauth2/register') {
+        await admitClientRegistration(ctx, endpoint.body)
+        // Every registration is a public client that uses PKCE and gets no
+        // secret, as Better Auth 1.6 made every unauthenticated one. 1.7
+        // would make a registration without this field a confidential
+        // client_secret_basic client.
+        const body = requestBody(endpoint.body)
+        if (body) {
+          body.token_endpoint_auth_method = 'none'
+          // Qivo issues Bearer tokens only (qivoOAuthProvider onRequest).
+          delete body.dpop_bound_access_tokens
+        }
+      }
       if (endpoint.path === '/oauth2/authorize') {
         // Provider 1.6 drops `resource` from its parsed authorize schema. Read
         // the actual URL before that loss, including repeated parameters.
@@ -324,6 +414,13 @@ export function oauthHooks(ctx: GenericCtx<DataModel>) {
                   .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
                   .join('&'),
               )
+        // A DPoP key bound here would make the token request need a proof,
+        // and Qivo does not support DPoP (qivoOAuthProvider onRequest).
+        if (query.has('dpop_jkt'))
+          throw new APIError('BAD_REQUEST', {
+            error: 'invalid_request',
+            error_description: 'Qivo does not support DPoP. Leave out dpop_jkt.',
+          })
         try {
           validateOAuthQuery(query)
         } catch {

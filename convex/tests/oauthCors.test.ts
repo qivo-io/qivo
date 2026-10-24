@@ -119,7 +119,7 @@ describe('OAuth browser client CORS', () => {
         scope: 'qivo:read',
       }),
     })
-    expect(response.status).toBe(200)
+    expect(response.status).toBe(201)
     publicResponse(response)
     const client = await json(response)
     expect(client.client_id).toBeTypeOf('string')

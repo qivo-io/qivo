@@ -1,8 +1,9 @@
 # Qivo MCP server
 
 The temporary `demo.qivo.io` service is browser-only: it does not issue or
-accept external agent credentials or OAuth connections. Use a regular Qivo
-workspace for this interface.
+accept external agent credentials or OAuth connections. Its MCP endpoint
+answers every MCP `POST` with HTTP `403`, and it serves no OAuth metadata. Use
+a regular Qivo workspace for this interface.
 
 Qivo exposes the planner to Claude (and any MCP client) through a
 [Model Context Protocol](https://modelcontextprotocol.io) server — a Convex
@@ -658,7 +659,26 @@ returns HTTP `429` with `Retry-After` set to the seconds left in the hour.
 When Qivo cannot check the limits, it refuses the registration with HTTP
 `503` and `Retry-After: 60`. Client metadata may be at most 8 KiB of JSON;
 larger registrations get HTTP `400` with `invalid_client_metadata`, and one
-whose body is over 64 KiB gets HTTP `413` (see below). Register
+whose body is over 64 KiB gets HTTP `413` (see below). A registration that
+succeeds answers HTTP `201`. Every client Qivo registers is public: it uses
+PKCE and gets no secret, and its `token_endpoint_auth_method` is `none`
+whatever the registration asked for. Registration takes no initial access
+token and ignores an `Authorization` header. Each redirect URI must be
+absolute, with no fragment and no user name or password. A registration
+whose redirect URIs are all `https` on hosts other than loopback registers a
+`web` client. One with a redirect URI to `http://localhost`,
+`http://127.0.0.1` or `http://[::1]` (any port and path), or with a
+private-use scheme, registers a `native` client. A private-use redirect URI
+is either a scheme with a period and no host, such as
+`com.example.app:/callback`, or a scheme with a host and a path, such as
+`cursor://anysphere.cursor-retrieval/oauth/callback`. Any other redirect URI
+gets HTTP `400` with `invalid_redirect_uri`, for example `myapp://callback`
+(no path), `myapp:/callback` (no period), `http://localhost./callback`,
+plain `http` on any other host, and a loopback URI in a registration that
+asks for `"application_type": "web"`. Qivo issues Bearer tokens
+only and does not support DPoP: the token endpoint ignores a `DPoP` header,
+an authorization request with `dpop_jkt` gets `invalid_request`, and a
+registration's `dpop_bound_access_tokens` is dropped. Register
 once and keep the client ID. A daily cleanup deletes a client that nobody
 approved on its first run after the client turns three days old, which is
 three to four days after it registered. A client stays while a consent, a
@@ -723,43 +743,37 @@ a network error. Send the request again with a shorter body or over a better
 connection.
 
 A registration whose metadata has the wrong form, such as a number in
-`redirect_uris`, is answered with HTTP `400` and `{"message":
-"[body.redirect_uris.0] Invalid input: expected string, received number",
-"code": "VALIDATION_ERROR"}`. The message names each problem with its place
-in the body, separated by `; `. It holds at most 2,048 characters and then
-ends with `; and 40 more problems`, counting the ones it left out. A body that
-holds more than 1,000 values, counting every object, array and value in it,
-is checked only until its first problems, so its message may name only the
-first. Fix what it names and register again.
+`redirect_uris`, is answered with HTTP `400` and `{"error":
+"invalid_redirect_uri", "error_description": "redirect_uris[0] must be a
+string"}`. Most other registration fields that have the wrong form get
+`invalid_client_metadata`. The token, revocation and introspection endpoints
+answer a body with the wrong form with HTTP `400` in the same shape, with
+`invalid_request`, or `unsupported_grant_type` for an unknown `grant_type`.
+The description names the first problem and its place in the body. Fix what
+it names and send the request again.
 
 Each approval has an immutable user, profile, organization, client and
 resource binding. Revocation, inactive or removed membership, and the
 provider token's expiry are checked when authenticating requests. Deleting a
 connection prevents access and refresh and hides the grant from the person's
-list. Its revoked grant and replay hashes are retained so old signed consent
+list. Signing out of the browser session that approved a connection ends the
+access tokens issued in that session, so the client's next request gets HTTP
+`401`; its refresh token, which `offline_access` keeps, renews access without
+a new approval. Its revoked grant and replay hashes are retained so old signed consent
 and credentials cannot revive it. Reuse of a consumed code or refresh token revokes the
 connection, including credentials issued by a concurrent refresh; clients
 must serialize refresh requests. A fresh connection creates a new grant.
 
-The Better Auth provider is pinned to `1.6.31`, which remains in the affected
-range of the resource-binding advisory
-[GHSA-p2fr-6hmx-4528](https://github.com/advisories/GHSA-p2fr-6hmx-4528)
-and is still reported by `npm audit`. The reported scenario lets a client
-approved for one service obtain a token for another configured service.
-Qivo has one allowed audience and uses opaque access tokens rather than JWT
-access tokens, avoiding that cross-service scenario in the current
-configuration. The upstream 1.6 release is still unpatched. Qivo additionally
+The OAuth provider is Better Auth `1.7.12`, which fixes the resource-binding
+advisory [GHSA-p2fr-6hmx-4528](https://github.com/advisories/GHSA-p2fr-6hmx-4528)
+of the 1.6 line: the provider binds each grant to the resource it was
+approved for. The MCP endpoint is the one resource Qivo configures. Qivo also
 checks resource parameters and stores an immutable resource binding on each
 grant; regression tests cover foreign and repeated resource indicators and
-the canonical default when omitted.
-
-The fix is in the 1.7 release line, but the current Convex adapter declares
-`better-auth >=1.6.11 <1.7.0`. Upgrade the adapter and provider together when
-compatible. Do not add another audience without revisiting these checks and
-the provider upgrade.
-The [pending security upgrade checklist](better-auth-upgrade.md)
-records the release conditions, package/schema steps, required regression
-checks, safeguards to retain and rollback criteria for that upgrade.
+the canonical default when omitted. Do not add another resource without
+revisiting these checks. [Better Auth and Qivo's copy of the Convex
+adapter](better-auth-upgrade.md) describes the release Qivo runs and how to
+move to a later one.
 
 ## Protocol revision
 

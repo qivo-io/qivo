@@ -59,10 +59,10 @@ const metadata = (overrides: Json = {}): Json => ({
   ...overrides,
 })
 
-const register = (t: T, body: Json = metadata()) =>
+const register = (t: T, body: Json = metadata(), headers: Record<string, string> = {}) =>
   http(t, '/api/auth/oauth2/register', {
     method: 'POST',
-    headers: { Origin: BROWSER, 'Content-Type': 'application/json' },
+    headers: { Origin: BROWSER, 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify(body),
   })
 
@@ -276,7 +276,7 @@ describe('client registration over HTTP', () => {
   it('counts each registration and answers 429 with Retry-After once the limit is full', async () => {
     const t = newT()
     const accepted = await register(t)
-    expect(accepted.status).toBe(200)
+    expect(accepted.status).toBe(201)
     expect((await json(accepted)).client_id).toBeTypeOf('string')
     const unknown = await sourceKey(null)
     expect(await counters(t)).toEqual(
@@ -299,7 +299,7 @@ describe('client registration over HTTP', () => {
     const t = newT()
     const report = reportRequestMetadata()
     report({ ip: '2001:db8:1:2::5' })
-    expect((await register(t)).status).toBe(200)
+    expect((await register(t)).status).toBe(201)
     expect(await counters(t)).toEqual(
       expect.arrayContaining([
         { key: await sourceKey('2001:db8:1:2::5'), window_start: WINDOW, count: 1 },
@@ -311,21 +311,21 @@ describe('client registration over HTTP', () => {
     expect((await register(t)).status).toBe(429)
     // another /64 in the same /48 still registers until the /48 is full
     report({ ip: '2001:db8:1:3::5' })
-    expect((await register(t)).status).toBe(200)
+    expect((await register(t)).status).toBe(201)
     await setCounter(t, await sourceKey('2001:db8:1:3::5', 1), OAUTH_REGISTRATIONS_PER_NETWORK)
     report({ ip: '2001:db8:1:4::5' })
     expect((await register(t)).status).toBe(429)
     report({ ip: '2001:db8:2:1::5' })
-    expect((await register(t)).status).toBe(200)
+    expect((await register(t)).status).toBe(201)
     report({ ip: '203.0.113.7' })
-    expect((await register(t)).status).toBe(200)
+    expect((await register(t)).status).toBe(201)
     expect(await clients(t)).toHaveLength(4)
   })
 
   it('counts a request whose metadata omits the address against the unknown source', async () => {
     const t = newT()
     reportRequestMetadata()({})
-    expect((await register(t)).status).toBe(200)
+    expect((await register(t)).status).toBe(201)
     expect(await counters(t)).toEqual(
       expect.arrayContaining([{ key: await sourceKey(null), window_start: WINDOW, count: 1 }]),
     )
@@ -420,6 +420,68 @@ describe('client registration over HTTP', () => {
     expect(owned.softwareStatement ?? null).toBeNull()
     for (const path of ['client/rotate-secret', 'delete-client', 'get-clients'])
       expect((await signedIn(path, { client_id: 'owned' })).status, path).toBe(404)
+  })
+})
+
+describe('registered clients', () => {
+  it('registers every client as public and links it to the MCP resource', async () => {
+    const t = newT()
+    for (const method of [undefined, 'client_secret_basic', 'client_secret_post', 'none']) {
+      const response = await register(t, metadata({ token_endpoint_auth_method: method }))
+      const client = await json(response)
+      expect([method, response.status]).toEqual([method, 201])
+      expect(client.token_endpoint_auth_method).toBe('none')
+      expect(client.client_secret).toBeUndefined()
+      expect(client.resources).toEqual(['https://some.convex.site/mcp'])
+    }
+    const stored = (await clients(t)) as {
+      tokenEndpointAuthMethod?: string
+      clientSecret?: string
+    }[]
+    expect(stored.map((client) => client.tokenEndpointAuthMethod)).toEqual(Array(4).fill('none'))
+    expect(stored.some((client) => client.clientSecret)).toBe(false)
+  })
+
+  it('registers a client that redirects to a loopback or private-use address', async () => {
+    const t = newT()
+    for (const uri of [
+      'http://127.0.0.1:33418/callback',
+      'com.example.app:/callback',
+      'cursor://anysphere.cursor-retrieval/oauth/callback',
+    ]) {
+      const response = await register(t, metadata({ redirect_uris: [uri] }))
+      const client = await json(response)
+      expect([uri, response.status]).toEqual([uri, 201])
+      expect(client.application_type).toBe('native')
+    }
+  })
+
+  it('refuses a redirect address that Better Auth 1.7 allows no client to use', async () => {
+    const t = newT()
+    for (const [uri, applicationType] of [
+      ['myapp://callback', undefined],
+      ['myapp:/callback', undefined],
+      ['http://localhost./callback', undefined],
+      ['http://example.test/callback', undefined],
+      ['http://127.0.0.1:33418/callback', 'web'],
+    ]) {
+      const response = await register(
+        t,
+        metadata({ redirect_uris: [uri], application_type: applicationType }),
+      )
+      expect([uri, response.status]).toEqual([uri, 400])
+      expect((await json(response)).error).toBe('invalid_redirect_uri')
+    }
+    expect(await clients(t)).toEqual([])
+  })
+
+  it('ignores a Bearer token sent with a registration', async () => {
+    const t = newT()
+    // Qivo takes no initial access tokens (RFC 7591), so an old access token
+    // a client sends along must not turn open registration into a 401.
+    const response = await register(t, metadata(), { Authorization: 'Bearer qvo_1111111111' })
+    expect(response.status).toBe(201)
+    expect((await json(response)).token_endpoint_auth_method).toBe('none')
   })
 })
 
@@ -539,6 +601,29 @@ describe('unused client cleanup', () => {
     vi.setSystemTime(NOW + 2 * OAUTH_UNUSED_CLIENT_TTL_MS)
     await sweep(t)
     expect(await ids(t)).toEqual(['accessing', 'connected', 'consented', 'refreshing'])
+  })
+
+  it('deletes the resource links of a client with it', async () => {
+    const t = newT()
+    await plantClients(t)
+    for (const clientId of ['unused', 'consented'])
+      await t.mutation(components.betterAuth.adapter.create, {
+        input: {
+          model: 'oauthClientResource',
+          data: { clientId, resourceId: 'https://some.convex.site/mcp' },
+        },
+      })
+    vi.setSystemTime(NOW + 2 * OAUTH_UNUSED_CLIENT_TTL_MS)
+    await sweep(t)
+    expect(await ids(t)).not.toContain('unused')
+    const links = await t.run(
+      async (ctx) =>
+        await ctx.runQuery(components.betterAuth.adapter.findMany, {
+          model: 'oauthClientResource',
+          paginationOpts: { numItems: 10, cursor: null },
+        }),
+    )
+    expect(links.page.map((link: { clientId: string }) => link.clientId)).toEqual(['consented'])
   })
 
   it('walks every client in bounded legs', async () => {

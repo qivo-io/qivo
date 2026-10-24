@@ -6,6 +6,7 @@ import { AppUpdates } from './components/AppUpdates'
 import { Button } from './components/ui/button'
 import { Progress } from './components/ui/progress'
 import { armConvexAuth, authClient, clearLocalSession } from './lib/auth'
+import { NO_QUERY } from './lib/authSession'
 import { convex } from './lib/convex'
 import { DEMO_ENDED_EVENT, WORKSPACE_SIGNUP_URL } from './lib/demoMode'
 import {
@@ -116,7 +117,10 @@ export function DemoGate() {
             return !!session.data?.session
           },
           signIn: async () => {
-            const result = await authClient.signIn.anonymous({ fetchOptions: { signal } })
+            const result = await authClient.signIn.anonymous({
+              ...NO_QUERY,
+              fetchOptions: { signal },
+            })
             if (result.error) throw new Error(result.error.message || 'Could not start your demo.')
           },
           authenticate: armConvexAuth,

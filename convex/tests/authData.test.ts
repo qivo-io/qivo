@@ -14,6 +14,10 @@ declare function btoa(value: string): string
 const APP = 'http://localhost:5199'
 const BROWSER = 'Mozilla/5.0 (X11; Linux x86_64) Chrome/140.0 Safari/537.36'
 const MICROSOFT_TENANT = '72f988bf-86f1-41af-91ab-2d7cd011db47'
+/* Bo's object id in the tenant's directory, which Better Auth 1.7 keys the
+ * account by, and the app-specific `sub` that 1.6 keyed it by. */
+const MICROSOFT_OID = '00000000-0000-4000-8000-0000000000b0'
+const MICROSOFT_SUB = 'microsoft-bo'
 
 const base64url = (value: object) =>
   btoa(JSON.stringify(value)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
@@ -29,7 +33,7 @@ const json = (value: unknown) =>
 /* The providers' side of both code flows. Each token endpoint answers with
  * every credential a provider can return, and Graph answers the photo
  * request, so anything left out of the rows was left out by Qivo. */
-function providerNetwork() {
+function providerNetwork(microsoft: Record<string, unknown> = {}) {
   return vi.fn(async (input: unknown) => {
     const url = String(input)
     if (url === 'https://oauth2.googleapis.com/token')
@@ -56,13 +60,15 @@ function providerNetwork() {
         expires_in: 3599,
         scope: 'openid profile email',
         id_token: idToken({
-          sub: 'microsoft-bo',
+          sub: MICROSOFT_SUB,
+          oid: MICROSOFT_OID,
           tid: MICROSOFT_TENANT,
           iss: `https://login.microsoftonline.com/${MICROSOFT_TENANT}/v2.0`,
           email: 'bo@example.test',
           // verified here only so the sign-up mails nothing
           email_verified: true,
           name: 'Bo Example',
+          ...microsoft,
         }),
       })
     if (url.startsWith('https://graph.microsoft.com/'))
@@ -181,8 +187,76 @@ describe('sign-in stores no provider tokens, picture or request metadata', () =>
     expect(users[0]).toMatchObject({ email: 'bo@example.test', name: 'Bo Example' })
     expect(users[0]).not.toHaveProperty('image')
     expect(accounts).toHaveLength(1)
-    expect(accounts[0]).toMatchObject({ providerId: 'microsoft', accountId: 'microsoft-bo' })
+    expect(accounts[0]).toMatchObject({
+      providerId: 'microsoft',
+      accountId: MICROSOFT_OID,
+      microsoftTenantId: MICROSOFT_TENANT,
+    })
     for (const field of PROVIDER_TOKEN_FIELDS) expect(accounts[0]).not.toHaveProperty(field)
+  })
+
+  it('signs in without a tenant when the token names none it can trust, and records none', async () => {
+    for (const claims of [
+      { tid: undefined },
+      { iss: 'https://login.microsoftonline.com/00000000-0000-4000-8000-000000000999/v2.0' },
+    ]) {
+      const t = newT()
+      vi.stubGlobal('fetch', providerNetwork(claims))
+      await signIn(t, 'microsoft')
+      const { accounts } = await authRows(t)
+      expect(accounts).toHaveLength(1)
+      expect(accounts[0].accountId).toBe(MICROSOFT_OID)
+      expect(accounts[0]).not.toHaveProperty('microsoftTenantId')
+    }
+  })
+
+  /* A user and the Microsoft account Better Auth 1.6 stored for them, keyed by `sub`. */
+  const microsoftLogin = (t: T, accountId: string, email = 'bo@example.test') =>
+    runInAuth(t, async (ctx) => {
+      const at = Date.now()
+      const userId = await ctx.db.insert('user', {
+        name: 'Bo Example',
+        email,
+        emailVerified: true,
+        createdAt: at,
+        updatedAt: at,
+      })
+      await ctx.db.insert('account', {
+        accountId,
+        providerId: 'microsoft',
+        userId,
+        createdAt: at,
+        updatedAt: at,
+      })
+      return userId
+    })
+
+  it('moves a Microsoft account from sub to oid at the next sign-in, whatever the email says', async () => {
+    const t = newT()
+    const userId = await microsoftLogin(t, MICROSOFT_SUB)
+    // Entra does not verify the email claim, and this one changed since.
+    vi.stubGlobal('fetch', providerNetwork({ email: 'bo.new@example.test', email_verified: false }))
+    await signIn(t, 'microsoft')
+    const { users, sessions, accounts } = await authRows(t)
+    expect(users.map((user) => user._id)).toEqual([userId])
+    expect(accounts).toHaveLength(1)
+    expect(accounts[0]).toMatchObject({
+      accountId: MICROSOFT_OID,
+      userId,
+      microsoftTenantId: MICROSOFT_TENANT,
+    })
+    expect(sessions.map((session) => session.userId)).toEqual([userId])
+  })
+
+  it('leaves a sub-keyed account alone when another account already has the oid', async () => {
+    const t = newT()
+    const old = await microsoftLogin(t, MICROSOFT_SUB, 'bo.old@example.test')
+    const current = await microsoftLogin(t, MICROSOFT_OID)
+    await signIn(t, 'microsoft')
+    const { sessions, accounts } = await authRows(t)
+    expect(accounts.find((account) => account.userId === old)?.accountId).toBe(MICROSOFT_SUB)
+    expect(accounts.find((account) => account.userId === current)?.accountId).toBe(MICROSOFT_OID)
+    expect(sessions.map((session) => session.userId)).toEqual([current])
   })
 
   it('linking Google to a password login leaves the password account as it was', async () => {

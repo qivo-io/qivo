@@ -53,6 +53,7 @@ import { creatorGrant, grantsAfterHandover } from '../../convex/lib/projectGrant
 import { resolveReviewHours, reviewStamp } from '../../convex/lib/review'
 import { firstSittingDay, nextSyncStamp, SYNC_OWNERS_MAX } from '../../convex/lib/teamSync'
 import { armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
+import { NO_QUERY } from '../lib/authSession'
 import { avatarCacheScope, createAvatarImageCache } from '../lib/avatarImageCache'
 import { createAvatarSources } from '../lib/avatarSources'
 import { browserBackendUrl, configuredConvexDeploymentUrl } from '../lib/backendUrl'
@@ -9116,7 +9117,7 @@ export async function initStore(
   // AuthGate already had to establish this session before it could render
   // the workspace. Reuse that result on the first boot; retries and callers
   // such as DemoGate omit it and perform their own session read.
-  const session = knownSession ?? (await authClient.getSession())
+  const session = knownSession ?? (await authClient.getSession(NO_QUERY))
   if (session.error) throw new Error(session.error.message || 'could not reach the sign-in service')
   if (!session.data?.session) return null
   // a session exists but the Convex socket may still be anonymous (the

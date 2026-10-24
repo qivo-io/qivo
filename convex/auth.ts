@@ -1,11 +1,15 @@
 import { getCurrentAuthContext } from '@better-auth/core/context'
-import { type AuthFunctions, createClient, type GenericCtx } from '@convex-dev/better-auth'
-import { convex, crossDomain } from '@convex-dev/better-auth/plugins'
-import { requireRunMutationCtx } from '@convex-dev/better-auth/utils'
 import { type BetterAuthOptions, betterAuth } from 'better-auth/minimal'
 import { admin } from 'better-auth/plugins'
 import { anonymous } from 'better-auth/plugins/anonymous'
 import { makeFunctionReference } from 'convex/server'
+import {
+  type AuthFunctions,
+  createClient,
+  type GenericCtx,
+} from '../vendor/convex-better-auth/src/client'
+import { convex, crossDomain } from '../vendor/convex-better-auth/src/plugins'
+import { requireRunMutationCtx } from '../vendor/convex-better-auth/src/utils'
 import { components, internal } from './_generated/api'
 import type { DataModel } from './_generated/dataModel'
 import authConfig from './auth.config'
@@ -30,8 +34,18 @@ import {
   requireDemoDeployment,
 } from './lib/demo'
 import { deploymentEnvironment } from './lib/deployment'
+import {
+  type MicrosoftSignIn,
+  recordMicrosoftTenant,
+  rekeyMicrosoftAccount,
+} from './lib/microsoftAccounts'
 import { oauthAdapter } from './lib/oauthAdapter'
-import { oauthHooks, qivoOAuthProvider, registerOAuthCode } from './lib/oauthProvider'
+import {
+  oauthHooks,
+  qivoOAuthProvider,
+  registerOAuthCode,
+  revokeSessionAccess,
+} from './lib/oauthProvider'
 import { type AuthLetterIntent, sendAuthLetter } from './mail'
 
 /* SITE_URL = the APP origin (http://localhost:5199 in dev, https://qivo.io in
@@ -185,6 +199,7 @@ export const createAuthOptions = (
   const deliver = async (intent: AuthLetterIntent, to: string, url: string) =>
     recordAuthMail(mail, await sendAuthLetter({ intent, to, url }))
   const recovery = opts?.recovery
+  const microsoft: { signIn: MicrosoftSignIn } = { signIn: null }
   return {
     baseURL: process.env.CONVEX_SITE_URL,
     /* crossDomain does not feed ctx.trustedOrigins — must be explicit or
@@ -206,6 +221,8 @@ export const createAuthOptions = (
             data: { ...session, ...fieldsSetTo(SESSION_REQUEST_FIELDS, undefined) },
           }),
         },
+        // The demo has no OAuth provider, so no session holds an access token.
+        delete: demo ? undefined : { after: (session) => revokeSessionAccess(ctx, session.id) },
       },
       account: {
         create: {
@@ -213,12 +230,14 @@ export const createAuthOptions = (
             holdsAny(account, PROVIDER_TOKEN_FIELDS)
               ? { data: { ...account, ...fieldsSetTo(PROVIDER_TOKEN_FIELDS, undefined) } }
               : undefined,
+          after: (account) => recordMicrosoftTenant(ctx, account, microsoft.signIn),
         },
         update: {
           before: async (update) =>
             holdsAny(update, PROVIDER_TOKEN_FIELDS)
               ? { data: { ...update, ...fieldsSetTo(PROVIDER_TOKEN_FIELDS, null) } }
               : undefined,
+          after: (account) => recordMicrosoftTenant(ctx, account, microsoft.signIn),
         },
       },
       verification: { create: { after: (verification) => registerOAuthCode(ctx, verification) } },
@@ -300,6 +319,14 @@ export const createAuthOptions = (
               disableDefaultScope: true,
               scope: ['openid', 'profile', 'email'],
               disableProfilePhoto: true,
+              /* Changes no user field. Better Auth calls it with the ID
+               * token before it looks the account up, which is when an
+               * account Better Auth 1.6 keyed by `sub` moves to `oid`. The
+               * account hooks record the token's tenant beside it. */
+              mapProfileToUser: async (profile) => {
+                microsoft.signIn = await rekeyMicrosoftAccount(ctx, profile)
+                return {}
+              },
             },
           }
         : {}),

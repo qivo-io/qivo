@@ -1,7 +1,7 @@
-/* Local install of @convex-dev/better-auth (docs /features/local-install):
- * the component is defined in-repo so its schema can carry the admin
- * plugin's fields (user.role/banned/banReason/banExpires,
- * session.impersonatedBy), which the published component schema lacks. */
+/* The Better Auth component, defined in-repo. Its schema (schema.ts) holds
+ * the tables of the Better Auth options Qivo uses, the admin plugin's fields
+ * among them, and its functions (adapter.ts) come from Qivo's copy of the
+ * Convex adapter (vendor/convex-better-auth). */
 import { defineComponent } from 'convex/server'
 
 const component = defineComponent('betterAuth')

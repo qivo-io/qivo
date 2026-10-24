@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as accounts from "../accounts.js";
 import type * as adapter from "../adapter.js";
 import type * as auth from "../auth.js";
 import type * as oauth from "../oauth.js";
@@ -20,6 +21,7 @@ import type {
 import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
+  accounts: typeof accounts;
   adapter: typeof adapter;
   auth: typeof auth;
   oauth: typeof oauth;

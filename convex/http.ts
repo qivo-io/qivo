@@ -13,6 +13,7 @@ import { FILE_TOKEN_TTL_SECONDS, type FileTokenKind, verifyFileToken } from './l
 import { badRequest } from './lib/functions'
 import { AUTH_BODY_MAX_BYTES } from './lib/limits'
 import { mcpResource, OAUTH_SCOPES, oauthIssuer } from './lib/oauth'
+import { withoutDpopMetadata } from './lib/oauthProvider'
 import {
   manualImageDimensions,
   PANORAMA_MAX_BYTES,
@@ -170,12 +171,10 @@ const createHttpAuthAfterBody: typeof createAuth = (ctx) => {
     },
   }
 }
-/* The component redirects /.well-known/openid-configuration to the Convex
- * plugin's OpenID configuration unless a route answers it already. Qivo
- * serves no usable one: the OAuth provider's endpoint of the same name
- * replaces the plugin's, and the demo's names endpoints the demo refuses.
- * Convex checks tokens with the keys at /api/auth/convex/jwks
- * (auth.config.ts), so this route answers 404 in the redirect's place. */
+/* Qivo publishes no OpenID Connect discovery document. Convex checks tokens
+ * with the keys at /api/auth/convex/jwks (auth.config.ts), and the OAuth
+ * provider's document of this name is not served (lib/authRoutes.ts), so the
+ * root location answers 404 too. */
 http.route({
   path: '/.well-known/openid-configuration',
   method: 'GET',
@@ -235,7 +234,10 @@ http.route({
 /* Public OAuth clients may run on any browser origin. These machine
  * endpoints receive public CORS; authorization and consent keep the app's
  * existing session rules. Ignore ambient/session cookies here so registration
- * and token operations use only the explicit OAuth client credentials. */
+ * and token operations use only the explicit OAuth client credentials.
+ * Registration also ignores an Authorization header: Better Auth 1.7 reads a
+ * Bearer token there as an RFC 7591 initial access token, which Qivo does not
+ * issue, and would refuse the open registration with 401. */
 const oauthMachineHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -252,6 +254,7 @@ const oauthMachine = answerAfterBody(async (ctx, request) => {
     const headers = new Headers(read.headers)
     headers.delete('Cookie')
     headers.delete('Better-Auth-Cookie')
+    if (new URL(read.url).pathname.endsWith('/oauth2/register')) headers.delete('Authorization')
     response = await boundValidationAnswer(
       await createAuth(ctx).handler(new Request(read, { headers })),
     )
@@ -294,19 +297,24 @@ const resourceMetadata = answerAfterBody(
     ),
 )
 const serverMetadata = answerAfterBody(async (ctx, request) =>
-  oauthProviderAuthServerMetadata(createAuth(ctx), { headers: oauthMetadataHeaders })(request),
+  withoutDpopMetadata(
+    await oauthProviderAuthServerMetadata(createAuth(ctx), { headers: oauthMetadataHeaders })(
+      request,
+    ),
+  ),
 )
 const metadataPreflight = answerAfterBody(
   async () => new Response(null, { status: 204, headers: oauthMetadataHeaders }),
 )
-for (const path of [
-  '/.well-known/oauth-protected-resource/mcp',
-  '/.well-known/oauth-protected-resource',
-]) {
+/* The demo has no authorization server (auth.ts) and accepts no MCP
+ * credential, so it serves no OAuth metadata, and its MCP endpoint names none
+ * (machine/mcp.ts). */
+for (const path of isDemoDeployment()
+  ? []
+  : ['/.well-known/oauth-protected-resource/mcp', '/.well-known/oauth-protected-resource']) {
   http.route({ path, method: 'GET', handler: resourceMetadata })
   http.route({ path, method: 'OPTIONS', handler: metadataPreflight })
 }
-// The demo has no authorization server (auth.ts), so it serves no metadata.
 for (const path of isDemoDeployment()
   ? []
   : [

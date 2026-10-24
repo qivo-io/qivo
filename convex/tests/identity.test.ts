@@ -5,12 +5,8 @@
  * are driven FOR REAL by registering the LOCAL Better Auth component
  * (convex/betterAuth/ — schema + adapter, the exact modules the deployment
  * runs) on the convex-test backend and seeding user/session rows through the
- * component adapter. @convex-dev/better-auth/test's register(t) does load
- * under this config, but is NOT used: it registers the package's PUBLISHED
- * component (schema without the admin() fields, adapter bound to the
- * package's own static options) — under our local install that is a
- * different component than the one deployed. registerComponent with the
- * local schema + modules is the local-install analog of the same helper. */
+ * component adapter. registerComponent with the component's own schema and
+ * modules registers the same component the deployment runs. */
 /// <reference types="vite/client" />
 import { beforeEach, describe, expect, it } from 'vitest'
 import { api, components, internal } from '../_generated/api'

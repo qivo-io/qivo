@@ -37,10 +37,12 @@ This is the public Qivo application repository. Private design specifications
 and operational notes are in qivo-internal. Use only
 `AGENTS.md` for agent instructions. Read `README.md` and `package.json`.
 
-When reviewing authentication dependency updates, check whether a published
-Convex Better Auth adapter supports a patched Better Auth 1.7 or later release.
-Resume the coordinated upgrade using [the upgrade checklist](docs/better-auth-upgrade.md)
-when supported. Keep the advisory visible until resolved; do not bypass peer
+Qivo runs Better Auth with its own copy of the Convex adapter in
+`vendor/convex-better-auth/` (owner decision, 2026-10-24). When reviewing
+authentication dependency updates, move `better-auth`, `@better-auth/core`
+and `@better-auth/oauth-provider` together and port the copy, following
+[the Better Auth notes](docs/better-auth-upgrade.md). Check Better Auth's
+repository advisories, which `npm audit` does not show. Do not bypass peer
 dependencies or upgrade the OAuth provider alone.
 
 Use Node 24.22.1 or a later 24.x release, `npm ci`,

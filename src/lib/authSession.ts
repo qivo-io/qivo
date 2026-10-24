@@ -1,9 +1,14 @@
 import type { oauthProviderClient } from '@better-auth/oauth-provider/client'
-import { convexClient, crossDomainClient } from '@convex-dev/better-auth/client/plugins'
 import { createAuthClient } from 'better-auth/client'
 import { anonymousClient } from 'better-auth/client/plugins'
 import type { ConvexClient } from 'convex/browser'
+import { convexClient, crossDomainClient } from '../../vendor/convex-better-auth/src/client/plugins'
 import { convexSiteUrl } from './backendUrl'
+
+/** An empty query, for the auth client calls that send none. Better Auth
+    1.7 types every call's query as required when strictNullChecks is off,
+    as in the app's tsconfig; with it on, the query is optional. */
+export const NO_QUERY = { query: {} }
 
 /** The first wait between auth retries. Each wait doubles, up to RETRY_MAX_MS. */
 const RETRY_FIRST_MS = 1_000
@@ -78,6 +83,7 @@ export function createAuthSession(
   async function requestToken(): Promise<string | null | typeof UNANSWERED> {
     try {
       const { data, error } = await authClient.convex.token({
+        ...NO_QUERY,
         fetchOptions: { throw: false, timeout: REQUEST_TIMEOUT_MS },
       })
       if (error) return refusesSession(error.status) ? null : UNANSWERED
@@ -257,7 +263,7 @@ export function createAuthSession(
   async function signOut(): Promise<void> {
     armGeneration++
     try {
-      await authClient.signOut()
+      await authClient.signOut({})
     } finally {
       client.client.clearAuth()
     }
