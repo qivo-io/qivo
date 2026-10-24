@@ -320,7 +320,7 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
  * (qivoOAuthProvider onRequest). Any other response passes unchanged. */
 export async function withoutDpopMetadata(response: Response): Promise<Response> {
   if (!response.ok || !response.body) return response
-  const metadata: Record<string, unknown> = await response.json()
+  const metadata: Record<string, unknown> = JSON.parse(await response.text())
   delete metadata.dpop_signing_alg_values_supported
   const headers = new Headers(response.headers)
   headers.delete('Content-Length')
