@@ -2036,7 +2036,13 @@ function App() {
              a large one takes seconds. A new scope mounts it anew, as
              before, and the old one comes apart after the next view paints. */}
           <UnsentScopeContext.Provider value={unsent.page}>
-            <ViewKeeper id={keepBoard} view="kanban" shown={boardActive} className={VIEW_CLASS}>
+            <ViewKeeper
+              id={keepBoard}
+              view="kanban"
+              shown={boardActive}
+              layout={mobile ? 'phone' : 'desktop'}
+              className={VIEW_CLASS}
+            >
               {scopeInfo && (
                 <ViewBoundary onBack={backToWorkspace}>
                   <Suspense fallback={<ViewLoading />}>

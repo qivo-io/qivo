@@ -54,11 +54,14 @@ const Frozen = memo(
 
 /** Shows `children` as the workspace view `view` while `shown`, in a
     container styled with `className`; while not shown, keeps it mounted,
-    hidden and inactive. Once `leaving`, it comes apart in slices after it
-    has hidden, then calls `onGone`. */
+    hidden and inactive. Content kept for another `layout` (the phone's or
+    the desktop's) is not shown as it was: the commit that shows it renders
+    the new content. Once `leaving`, it comes apart in slices after it has
+    hidden, then calls `onGone`. */
 export function KeptView({
   view,
   shown,
+  layout = '',
   leaving = false,
   onGone,
   className,
@@ -66,6 +69,7 @@ export function KeptView({
 }: {
   view: string
   shown: boolean
+  layout?: string
   leaving?: boolean
   onGone?: () => void
   className: string
@@ -78,9 +82,14 @@ export function KeptView({
   const [mode, setMode] = useState<'visible' | 'closing' | 'hidden'>('visible')
   if (shown && mode !== 'visible') setMode('visible')
   // shown again, it shows what it held at once, and renders its parent's
-  // new content in a task of its own once that has painted
+  // new content in a task of its own once that has painted, unless what it
+  // held was made for another layout
   const [current, setCurrent] = useState(true)
+  const [heldFor, setHeldFor] = useState(layout)
   if (!shown && current) setCurrent(false)
+  if (shown && !current && heldFor !== layout) setCurrent(true)
+  const frozen = !shown || !current
+  if (!frozen && heldFor !== layout) setHeldFor(layout)
   useEffect(() => {
     if (!shown || current) return
     let stopped = false
@@ -142,7 +151,7 @@ export function KeptView({
             {/* the one element Activity hides, and so the one shown again;
                a Suspense inside keeps its own hidden content hidden */}
             <div data-kept-content className="contents">
-              <Frozen frozen={!shown || !current}>{children}</Frozen>
+              <Frozen frozen={frozen}>{children}</Frozen>
             </div>
           </Activity>
         </TeardownContext.Provider>
@@ -170,12 +179,14 @@ export function ViewKeeper({
   id,
   view,
   shown,
+  layout,
   className,
   children,
 }: {
   id: string | null
   view: string
   shown: boolean
+  layout?: string
   className: string
   children: ReactNode
 }) {
@@ -201,6 +212,7 @@ export function ViewKeeper({
         key={slot.n}
         view={view}
         shown={current && shown}
+        layout={layout}
         leaving={!current}
         onGone={() => gone(slot.n)}
         className={className}

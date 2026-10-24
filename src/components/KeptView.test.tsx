@@ -57,10 +57,11 @@ let container: HTMLDivElement
 let root: Root
 /* Frames paint only when a test says so (painted, wait): jsdom's own frames
    come on a timer, and on a busy machine one could paint inside an act. */
-let frames: FrameRequestCallback[] = []
+const frames = new Map<number, FrameRequestCallback>()
+let lastFrame = 0
 const paint = () => {
-  const due = frames
-  frames = []
+  const due = [...frames.values()]
+  frames.clear()
   for (const frame of due) frame(performance.now())
 }
 
@@ -75,11 +76,12 @@ beforeEach(() => {
       disconnect() {}
     },
   )
-  frames = []
-  vi.stubGlobal('requestAnimationFrame', (frame: FrameRequestCallback) => frames.push(frame))
-  vi.stubGlobal('cancelAnimationFrame', (id: number) => {
-    frames[id - 1] = () => {}
+  frames.clear()
+  vi.stubGlobal('requestAnimationFrame', (frame: FrameRequestCallback) => {
+    frames.set(++lastFrame, frame)
+    return lastFrame
   })
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id))
   counts.mounts = 0
   counts.renders.length = 0
   counts.running = 0
@@ -154,6 +156,53 @@ describe('KeptView', () => {
     await painted()
     expect(counts.renders).toEqual(['second'])
     expect(board()?.dataset.board).toBe('second')
+  })
+
+  it('renders new content in the commit that shows it when it was kept for another layout', async () => {
+    const tree = (shown: boolean, label: string, layout: string) =>
+      act(async () =>
+        root.render(
+          <KeptView view="kanban" shown={shown} layout={layout} className="view">
+            <Board label={label} />
+          </KeptView>,
+        ),
+      )
+    await tree(true, 'desktop', 'desktop')
+    // it hides as the layout changes, holding the old layout's content
+    await tree(false, 'phone', 'phone')
+    expect(board()?.dataset.board).toBe('desktop')
+    await tree(true, 'phone', 'phone')
+    expect(board()?.dataset.board).toBe('phone')
+    // kept for the layout it shows in, it shows as it was first
+    await tree(false, 'phone', 'phone')
+    await tree(true, 'phone again', 'phone')
+    expect(board()?.dataset.board).toBe('phone')
+    await painted()
+    expect(board()?.dataset.board).toBe('phone again')
+  })
+
+  it('marks its blocks to skip their items for good while hidden, and unmarks them as it shows', async () => {
+    const idle: IdleRequestCallback[] = []
+    vi.stubGlobal('requestIdleCallback', (step: IdleRequestCallback) => idle.push(step))
+    vi.stubGlobal('cancelIdleCallback', () => {})
+    const tree = (shown: boolean) =>
+      act(async () =>
+        root.render(
+          <KeptView view="kanban" shown={shown} className="view">
+            <div className="deferred-block" />
+            <div className="deferred-block" />
+          </KeptView>,
+        ),
+      )
+    const marked = () => container.querySelectorAll('[data-kept-hidden]').length
+    await tree(true)
+    await tree(false)
+    expect(marked()).toBe(0)
+    for (const step of idle.splice(0)) step({ didTimeout: false, timeRemaining: () => 50 })
+    expect(marked()).toBe(2)
+    // gone in the commit that shows it, before any frame paints
+    await tree(true)
+    expect(marked()).toBe(0)
   })
 
   it('applies its own updates made while hidden once it shows', async () => {

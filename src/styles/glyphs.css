@@ -65,9 +65,10 @@
 }
 
 /* Lucide's pause (the paused mark's, at stroke 2) and user (Unassigned's
-   portrait, at 1.75) in the text color, one element each (qivo/icon.tsx
-   glyph). An inline <svg> costs the page on every frame for as long as it
-   is in the page, shown or not, and a kept Board holds thousands. */
+   portrait, at 1.75) in the text color, one element each
+   (components/rowElements.tsx glyph). An inline <svg> costs the page on
+   every frame for as long as it is in the page, shown or not, and a kept
+   Board holds thousands. */
 .glyph {
   display: block;
   flex-shrink: 0;
