@@ -745,9 +745,12 @@ connection.
 A registration whose metadata has the wrong form, such as a number in
 `redirect_uris`, is answered with HTTP `400` and `{"error":
 "invalid_redirect_uri", "error_description": "redirect_uris[0] must be a
-string"}`. The token, revocation and introspection endpoints answer the same
-way. The description names the first problem and its place in the body. Fix
-what it names and register again.
+string"}`. Most other registration fields that have the wrong form get
+`invalid_client_metadata`. The token, revocation and introspection endpoints
+answer a body with the wrong form with HTTP `400` in the same shape, with
+`invalid_request`, or `unsupported_grant_type` for an unknown `grant_type`.
+The description names the first problem and its place in the body. Fix what
+it names and send the request again.
 
 Each approval has an immutable user, profile, organization, client and
 resource binding. Revocation, inactive or removed membership, and the
