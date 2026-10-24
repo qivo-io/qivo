@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { act, lazy, Suspense, useEffect, useState } from 'react'
+import { act, lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { type RevealRequest, useReveal } from '@/lib/reveal'
 import { OUT_OF_USE } from '@/lib/viewHidden'
 import { useDropped } from '@/lib/viewTeardown'
 import { KeptView, ViewKeeper } from './KeptView'
@@ -195,6 +196,39 @@ describe('KeptView', () => {
     await act(async () => {})
     await show(true, 'board', true)
     expect(document.querySelector('[data-menu]')).not.toBeNull()
+  })
+
+  it('does not take a reveal request again that it took before it hid', async () => {
+    const taken: string[] = []
+    const mounted: string[] = []
+    function Revealer({ request }: { request: RevealRequest | null }) {
+      const pane = useRef<HTMLDivElement>(null)
+      useReveal(
+        request,
+        () => taken.push(request?.id ?? ''),
+        pane,
+        (id) => mounted.push(id),
+      )
+      return <div ref={pane} />
+    }
+    const tree = (shown: boolean, request: RevealRequest | null) =>
+      act(async () =>
+        root.render(
+          <KeptView view="kanban" shown={shown} className="view">
+            <Revealer request={request} />
+          </KeptView>,
+        ),
+      )
+    await tree(true, { id: 'a', n: 1 })
+    await painted()
+    // it hides before the parent's cleared request reaches it, and comes
+    // back for another
+    await tree(false, { id: 'a', n: 1 })
+    await tree(true, { id: 'b', n: 2 })
+    await painted()
+    await painted()
+    expect(taken).toEqual(['a', 'b'])
+    expect(mounted).toEqual(['a', 'b'])
   })
 })
 

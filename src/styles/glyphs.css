@@ -104,7 +104,8 @@
   .glyph {
     background: CanvasText;
   }
-  .delay-banner::after {
+  /* as specific as the Slipping rule above, which would keep its yellow */
+  .delay-banner[data-delay]::after {
     background: CanvasText;
     mask:
       url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 6v6l-4 2'/%3E%3C/svg%3E")

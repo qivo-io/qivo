@@ -61,8 +61,10 @@ const reducedMotion = () =>
     reduced motion is on or the card is more than two screens away, and
     corrects once where cards that rendered meanwhile moved it. Scrolling
     yields to the person: a wheel, touch, press or key stops the
-    correction. `onConsumed` runs as soon as the request is taken. Nothing
-    happens when the pane does not show the task. */
+    correction. `onConsumed` runs as soon as the request is taken. A
+    request is taken once: a view that shows again (KeptView) runs its
+    effects again, and may still hold a request it took before it hid.
+    Nothing happens when the pane does not show the task. */
 export function useReveal(
   request: RevealRequest | null | undefined,
   onConsumed: (() => void) | undefined,
@@ -73,9 +75,11 @@ export function useReveal(
   const mountTask = useLatest(mount)
   // the running reveal's cancel; consuming the request must not stop it
   const cancel = useRef(() => {})
+  const taken = useRef<number | null>(null)
   useEffect(() => () => cancel.current(), [])
   useEffect(() => {
-    if (!request) return
+    if (!request || request.n === taken.current) return
+    taken.current = request.n
     cancel.current()
     consumed()
     const frames: number[] = []
