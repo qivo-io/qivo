@@ -127,3 +127,80 @@ describe('application stylesheets', () => {
     expect(resolves('../assets/fonts/missing.woff2', TOKENS)).toBe(false)
   })
 })
+
+/* app.html fixes the document's base URL at the site root with a <base>, so
+ * a route change costs no walk over the page's elements. A relative URL in
+ * the application resolves against `/` then, not against the route it is
+ * on: `#part` or `?tab=x` would leave for the website. So the application
+ * writes every URL it links, loads or navigates to whole. */
+const APP_SOURCE = new URL('../src/', import.meta.url)
+const WHOLE = /^(?:\/|[a-z][a-z0-9+.-]*:)/i
+const URL_PLACES = [
+  // a JSX attribute that holds a URL, as a string or a plain literal
+  /\b(?:href|src|action|formAction|poster)=(?:"([^"]*)"|'([^']*)'|\{\s*(?:'([^']*)'|"([^"]*)"|`([^`$]*)`)\s*\})/g,
+  // the URL of a history entry, after the state and the unused title
+  /\b(?:pushState|replaceState)\([^()]*?,\s*(?:''|""|``)\s*,\s*(?:'([^']*)'|"([^"]*)"|`([^`$]*)`)/g,
+  // a navigation
+  /\b(?:location\.(?:assign|replace)|window\.open)\(\s*(?:'([^']*)'|"([^"]*)"|`([^`$]*)`)/g,
+  /\blocation\.href\s*=\s*(?:'([^']*)'|"([^"]*)"|`([^`$]*)`)/g,
+]
+
+/** The URLs written out in `source` that the base would resolve against the
+    site root rather than against the route. */
+function relativeUrls(source) {
+  const found = []
+  for (const place of URL_PLACES)
+    for (const match of source.matchAll(place)) {
+      const url = match.slice(1).find((group) => group !== undefined)
+      if (url !== undefined && !WHOLE.test(url)) found.push(url)
+    }
+  return found
+}
+
+describe('URLs under the base', () => {
+  it('app.html sets the base at the site root before anything it loads', () => {
+    const html = page('app.html')
+    const base = html.search(/<base href="\/" \/>/)
+    expect(base).toBeGreaterThan(0)
+    expect(html.match(/<base\b/g)).toHaveLength(1)
+    for (const loads of [/<link\b/, /<script\b/]) expect(base).toBeLessThan(html.search(loads))
+  })
+
+  it('finds a relative URL the base would move, and passes whole ones', () => {
+    for (const source of [
+      '<a href="#details">',
+      "<a href='settings'>",
+      '<img src={"avatar.png"} />',
+      "history.pushState(null, '', '?view=board')",
+      "history.pushState({ ...history.state, layer: id }, '', '#layer')",
+      'history.replaceState(history.state, "", "")',
+      'window.open(`help`)',
+      "location.assign('../app')",
+      'location.href = "#top"',
+    ])
+      expect(relativeUrls(source), source).toHaveLength(1)
+    for (const source of [
+      '<a href="/app/acme/board">',
+      '<a href={WORKSPACE_SIGNUP_URL}>',
+      '<img src={url} />',
+      "<a href='https://qivo.io/docs'>",
+      '<a href="mailto:help@qivo.io">',
+      "history.pushState({ qivoPrevious: location.pathname }, '', buildPath(was))",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: source text the scan reads
+      "history.replaceState(null, '', `/app/${slug}/board/all`)",
+      "history.pushState({ ...history.state, qivoLayer: id }, '', location.href)",
+      "window.open(href, '_blank', 'noopener')",
+      "location.replace('qivo://auth')",
+    ])
+      expect(relativeUrls(source), source).toEqual([])
+  })
+
+  it('the application writes no relative URL', () => {
+    const files = readdirSync(APP_SOURCE, { recursive: true }).filter(
+      (path) => /\.(?:ts|tsx)$/.test(path) && !/\.test\.(?:ts|tsx)$/.test(path),
+    )
+    expect(files.length).toBeGreaterThan(100)
+    for (const path of files)
+      expect(relativeUrls(readFileSync(new URL(path, APP_SOURCE), 'utf8')), path).toEqual([])
+  })
+})
