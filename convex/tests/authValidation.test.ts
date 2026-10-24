@@ -83,13 +83,14 @@ describe('validation errors on the auth routes', () => {
     })
     expect(response.status).toBe(400)
     expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*')
+    // The OAuth provider answers in the OAuth error form, with the first problem.
     expect(JSON.parse(await response.text())).toEqual({
-      message: `[body.redirect_uris.0] ${NOT_A_STRING}`,
-      code: 'VALIDATION_ERROR',
+      error: 'invalid_redirect_uri',
+      error_description: 'redirect_uris[0] must be a string',
     })
   })
 
-  it('cuts a client registration checked in full and keeps the CORS headers', async () => {
+  it('answers a client registration checked in full with its first problem and the CORS headers', async () => {
     const response = await http(newT(), '/api/auth/oauth2/register', {
       method: 'POST',
       headers: { Origin: 'https://client.example.test', 'Content-Type': 'application/json' },
@@ -97,10 +98,10 @@ describe('validation errors on the auth routes', () => {
     })
     expect(response.status).toBe(400)
     expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*')
-    const { message, code } = JSON.parse(await response.text())
-    expect(code).toBe('VALIDATION_ERROR')
-    expect(message.length).toBeLessThanOrEqual(AUTH_VALIDATION_MESSAGE_MAX)
-    expect(message).toMatch(/^\[body\.redirect_uris\.0\] .*; and \d+ more problems$/)
+    expect(JSON.parse(await response.text())).toEqual({
+      error: 'invalid_redirect_uri',
+      error_description: 'redirect_uris[0] must be a string',
+    })
   })
 
   it('lists the first of many problems in a request checked in full and counts the rest', async () => {
@@ -228,13 +229,15 @@ describe('stopValidationEarly', () => {
   })
 
   /* The objects and records a schema checks at its root, through optional,
-   * default and pipe wrappers and both sides of an intersection. */
+   * default and pipe wrappers, both sides of an intersection and every
+   * option of a union. */
   type Node = { _zod: { def: Record<string, unknown> & { type: string }; innerType?: unknown } }
   const rootsOf = (schema: Node): Node[] => {
     const { def } = schema._zod
     if (def.type === 'object' || def.type === 'record') return [schema]
     if (def.type === 'intersection')
       return [def.left, def.right].flatMap((side) => rootsOf(side as Node))
+    if (def.type === 'union') return (def.options as Node[]).flatMap(rootsOf)
     const inner =
       def.type === 'pipe' ? def.in : def.type === 'lazy' ? schema._zod.innerType : def.innerType
     return inner ? rootsOf(inner as Node) : []

@@ -1,21 +1,18 @@
 import { getCurrentAuthContext } from '@better-auth/core/context'
 import type { DBAdapter } from '@better-auth/core/db/adapter'
-import type { GenericCtx } from '@convex-dev/better-auth'
-import { requireRunMutationCtx } from '@convex-dev/better-auth/utils'
 import type { BetterAuthOptions } from 'better-auth/minimal'
-import { components } from '../_generated/api'
-import type { DataModel } from '../_generated/dataModel'
 import { sha256hex } from '../machine/auth'
 
 type LazyAdapter = (options: BetterAuthOptions) => DBAdapter
-const fields = new Set(['id', 'token', 'clientId', 'userId', 'referenceId', 'sessionId', 'revoked'])
 
-// Wrap the final Better Auth adapter, after its transforms. The provider uses
-// incrementOne as a CAS even though it increments no columns. Delegating that
-// fallback to Convex's generic equality filter compares undefined !== null.
-// Keep this workaround narrow and fail closed if a future provider changes it.
+// Wrap the final Better Auth adapter, after its transforms, to keep a
+// refresh token's replay from touching other connections. The provider's
+// rotation claims a refresh token with incrementOne on `revoked eq null`,
+// which the adapter runs as one mutation that also matches a never-revoked
+// token, whose `revoked` Convex stores as absent
+// (vendor/convex-better-auth/src/client/adapter-utils.ts).
 export const oauthAdapter =
-  (ctx: GenericCtx<DataModel>, factory: LazyAdapter): LazyAdapter =>
+  (factory: LazyAdapter): LazyAdapter =>
   (options) => {
     const adapter = factory(options)
     const narrowFamily = async (operation: {
@@ -65,40 +62,6 @@ export const oauthAdapter =
       deleteMany: async (operation) => {
         const where = await narrowFamily(operation)
         return where === null ? 0 : adapter.deleteMany({ ...operation, where: where || [] })
-      },
-      incrementOne: async (operation) => {
-        if (operation.model !== 'oauthRefreshToken') return adapter.incrementOne(operation)
-        if (
-          Object.keys(operation.increment).length ||
-          !operation.set ||
-          Object.keys(operation.set).length !== 1 ||
-          !('revoked' in operation.set)
-        )
-          throw new Error('Unsupported OAuth refresh CAS operation')
-        const revoked = operation.set.revoked
-        const revokedAt =
-          revoked instanceof Date ? revoked.getTime() : typeof revoked === 'number' ? revoked : NaN
-        if (
-          !Number.isFinite(revokedAt) ||
-          !operation.where ||
-          operation.where.some(
-            (guard) =>
-              !fields.has(guard.field) ||
-              (guard.operator !== undefined && guard.operator !== 'eq') ||
-              (guard.connector !== undefined && guard.connector !== 'AND') ||
-              (guard.mode !== undefined && guard.mode !== 'sensitive') ||
-              (typeof guard.value !== 'string' && guard.value !== null),
-          )
-        )
-          throw new Error('Unsupported OAuth refresh CAS predicates')
-        const where = operation.where.map(({ field, value }) => ({ field, value })) as {
-          field: 'id' | 'token' | 'clientId' | 'userId' | 'referenceId' | 'sessionId' | 'revoked'
-          value: string | null
-        }[]
-        return (await requireRunMutationCtx(ctx).runMutation(
-          components.betterAuth.oauth.claimRefreshToken,
-          { where, revokedAt },
-        )) as never
       },
     }
   }

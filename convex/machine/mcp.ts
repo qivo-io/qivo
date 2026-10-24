@@ -78,6 +78,7 @@ import {
   userJson,
 } from '../lib/core'
 import { byId } from '../lib/db'
+import { isDemoDeployment } from '../lib/demo'
 import {
   type CredentialAccess,
   ISSUE_STATUSES,
@@ -2382,7 +2383,18 @@ const mcpPost = answerAfterBody(async (ctx, request) => {
  * stamps the call and then dispatches it. Every mutation it runs retries
  * write conflicts and time outs (conflictRetrying). It answers the auth-to-dispatch race
  * itself and throws every other failure to mcpPost. */
+/* The demo's answer to every MCP request. It accepts no credential and has no
+ * authorization server, so it names none for a client to discover. */
+const demoUnavailable = (): Response =>
+  new Response(
+    JSON.stringify({
+      error: 'The Qivo demo does not serve MCP. Connect your client to a regular Qivo workspace.',
+    }),
+    { status: 403, headers: withCors({ 'Content-Type': 'application/json' }) },
+  )
+
 async function mcpResponse(ctx: ActionCtx, request: Request): Promise<Response> {
+  if (isDemoDeployment()) return demoUnavailable()
   const runMutation = conflictRetrying(ctx)
   if (!(await runMutation(internal.billingMetering.ingress, { shard: ingressShard() })))
     return rateLimited(serviceBusy)

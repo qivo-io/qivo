@@ -14,7 +14,16 @@ import { NO_ORGANIZATION, ORGANIZATION_GONE } from '../lib/oauth'
 import { sha256hex } from '../machine/auth'
 import { TOOLS } from '../machine/mcp'
 import { BODY_MAX_BYTES } from '../machine/shared'
-import { expectRefusal, newT, plantIssue, plantSeat, type T, uuid, withOrg } from './helpers.setup'
+import {
+  expectRefusal,
+  newT,
+  plantIssue,
+  plantSeat,
+  runInAuth,
+  type T,
+  uuid,
+  withOrg,
+} from './helpers.setup'
 
 declare class URLSearchParams {
   constructor(input?: string | Record<string, string>)
@@ -121,7 +130,7 @@ async function register(f: Fx, scope = WRITE, clientName = 'Hermetic MCP client'
     }),
   )
   const client = await json(response)
-  expect(response.status, JSON.stringify(client)).toBe(200)
+  expect(response.status, JSON.stringify(client)).toBe(201)
   expect(client.client_id).toBeTypeOf('string')
   expect(client.client_secret).toBeUndefined()
   expect(client.token_endpoint_auth_method).toBe('none')
@@ -625,6 +634,23 @@ describe('OAuth provider and MCP integration', () => {
 })
 
 describe('OAuth consent and resource binding', () => {
+  it('runs the public-client prelogin for the consent page in-process only', async () => {
+    const f = await fixture()
+    const request = await authorization(f, await register(f))
+    const oauthQuery = await consentPage(request)
+    // The provider refuses this call unless allowPublicClientPrelogin is on.
+    const context = await f.as.mutation(api.oauthConnections.getContext, {
+      oauth_query: oauthQuery,
+    })
+    expect(context.resource).toBe(RESOURCE)
+    const response = await http(f.t, '/api/auth/oauth2/public-client-prelogin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: APP },
+      body: JSON.stringify({ client_id: request.clientId, oauth_query: oauthQuery }),
+    })
+    expect(response.status).toBe(404)
+  })
+
   it('defaults an omitted resource to the same canonical MCP grant throughout authorization and refresh', async () => {
     const f = await fixture()
     const request = await authorization(f, await register(f))
@@ -1019,25 +1045,39 @@ describe('OAuth revocation, replay and live account checks', () => {
     const f = await fixture()
     // Qivo serves no client management endpoints (lib/authRoutes.ts), so
     // the person creates the confidential client through the server API.
-    const client: Json = await f.t.run((ctx) =>
-      createAuth(ctx).api.createOAuthClient({
-        body: {
-          client_name: 'Confidential client',
-          redirect_uris: [REDIRECT],
-          token_endpoint_auth_method: 'client_secret_basic',
-          scope: WRITE,
-          grant_types: ['authorization_code', 'refresh_token'],
-        },
-        headers: new Headers({ cookie: f.cookie }),
-      }),
-    )
+    const client: Json = {
+      ...(await f.t.run((ctx) =>
+        createAuth(ctx).api.createOAuthClient({
+          body: {
+            client_name: 'Confidential client',
+            redirect_uris: [REDIRECT],
+            token_endpoint_auth_method: 'client_secret_basic',
+            scope: WRITE,
+            grant_types: ['authorization_code', 'refresh_token'],
+          },
+          headers: new Headers({ cookie: f.cookie }),
+        }),
+      )),
+    }
     expect(client.client_secret).toBeTypeOf('string')
     const authorizationRequest = await authorization(f, client.client_id as string)
+    const basic = `Basic ${btoa(`${client.client_id}:${client.client_secret}`)}`
+    // Better Auth 1.7 takes a confidential client's secret only by the
+    // method it registered, here client_secret_basic.
+    const code = await codeFor(authorizationRequest)
     const c = {
       request: authorizationRequest,
       ...(await tokens(
-        await exchange(authorizationRequest, await codeFor(authorizationRequest), {
-          client_secret: client.client_secret as string,
+        await http(f.t, '/api/auth/oauth2/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: basic },
+          body: form({
+            grant_type: 'authorization_code',
+            code,
+            code_verifier: authorizationRequest.verifier,
+            redirect_uri: REDIRECT,
+            resource: RESOURCE,
+          }),
         }),
       )),
     }
@@ -1047,7 +1087,7 @@ describe('OAuth revocation, replay and live account checks', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
-          Authorization: `Basic ${btoa(`${c.request.clientId}:${client.client_secret}`)}`,
+          Authorization: basic,
         },
         body: form({
           grant_type: 'refresh_token',
@@ -1062,6 +1102,45 @@ describe('OAuth revocation, replay and live account checks', () => {
     await deniedAccess(f, c.access_token)
     await deniedAccess(f, rotated.access_token)
     expect(await toolData(await mcp(f, other.access_token, 'list_projects'))).toBeInstanceOf(Array)
+  })
+
+  it('ends the access token of a connection with the browser session it was granted in, and renews it', async () => {
+    const f = await fixture()
+    const c = await connect(f)
+    expect(await toolData(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
+    const signOut = await http(f.t, '/api/auth/sign-out', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: APP, 'better-auth-cookie': f.cookie },
+      body: '{}',
+    })
+    expect(signOut.status).toBe(200)
+    // Better Auth 1.7 revokes the token, and Qivo refuses a revoked token.
+    await deniedAccess(f, c.access_token)
+    // An offline_access refresh token outlives the session, so the client
+    // renews without a new approval.
+    const renewed = await tokens(await refresh(f, c.request.clientId, c.refresh_token))
+    expect(await toolData(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
+      Array,
+    )
+  })
+
+  it('keeps refreshing a client that Better Auth 1.6 registered, without a resource link', async () => {
+    const f = await fixture()
+    const c = await connect(f)
+    await runInAuth(f.t, async (ctx) => {
+      for (const link of await ctx.db.query('oauthClientResource').collect())
+        await ctx.db.delete(link._id)
+      const client = await ctx.db
+        .query('oauthClient')
+        .withIndex('clientId', (q) => q.eq('clientId', c.request.clientId))
+        .unique()
+      if (!client) throw new Error('the client is gone')
+      await ctx.db.patch(client._id, { public: true, applicationType: undefined })
+    })
+    const renewed = await tokens(await refresh(f, c.request.clientId, c.refresh_token))
+    expect(await toolData(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
+      Array,
+    )
   })
 
   it('refuses refresh under another client without consuming the legitimate refresh token', async () => {
@@ -1313,46 +1392,51 @@ describe('Convex refresh-token compare-and-set adapter', () => {
       },
     })
     expect(row.revoked).toBeUndefined()
+    // The where clause and the writes of Better Auth 1.7's rotation
+    // (oauth-provider createRefreshToken), with Qivo's own predicates.
     const guards = [
-      { field: 'id' as const, value: row._id as string },
-      { field: 'revoked' as const, value: null },
+      { field: '_id' as const, value: row._id as string },
+      { field: 'revoked' as const, operator: 'eq' as const, value: null },
       { field: 'userId' as const, value: f.userId },
       { field: 'referenceId' as const, value: 'grant-a' },
     ]
+    const claim = (extra: { field: 'token' | 'clientId'; value: string }[]) => {
+      const now = Date.now()
+      return f.t.mutation(components.betterAuth.adapter.incrementOne, {
+        input: {
+          model: 'oauthRefreshToken',
+          where: [...guards, ...extra],
+          increment: {},
+          set: { revoked: now, rotatedAt: now },
+        },
+      })
+    }
     for (const wrong of [
       { field: 'token' as const, value: 'wrong-hash' },
       { field: 'clientId' as const, value: 'client-b' },
     ]) {
-      const unmatched = await f.t.mutation(components.betterAuth.oauth.claimRefreshToken, {
-        where: [...guards, wrong],
-        revokedAt: Date.now(),
-      })
-      // Internal compare-and-set uses a null result for a non-matching row;
-      // the provider translates it into an explicit invalid_grant response.
-      expect(unmatched).toBeNull()
+      // A null result is the provider's cue to answer invalid_grant.
+      expect(await claim([wrong])).toBeNull()
       const unchanged = await f.t.query(components.betterAuth.adapter.findOne, {
         model: 'oauthRefreshToken',
         where: [{ field: '_id', value: row._id as string }],
       })
       expect(unchanged?.revoked).toBeUndefined()
     }
-    const claim = () =>
-      f.t.mutation(components.betterAuth.oauth.claimRefreshToken, {
-        where: [
-          ...guards,
-          { field: 'token', value: 'stored-hash' },
-          { field: 'clientId', value: 'client-a' },
-        ],
-        revokedAt: Date.now(),
-      })
-    const outcomes = await Promise.all([claim(), claim()])
+    const right = [
+      { field: 'token' as const, value: 'stored-hash' },
+      { field: 'clientId' as const, value: 'client-a' },
+    ]
+    const outcomes = await Promise.all([claim(right), claim(right)])
     expect(outcomes.filter((outcome) => outcome !== null)).toHaveLength(1)
     const claimed = await f.t.query(components.betterAuth.adapter.findOne, {
       model: 'oauthRefreshToken',
       where: [{ field: '_id', value: row._id as string }],
     })
     expect(claimed?.revoked).toBeTypeOf('number')
-    expect(Object.values(claimed!)).not.toContain(null)
+    expect(claimed?.rotatedAt).toBe(claimed?.revoked)
+    // A claimed token is not claimed again.
+    expect(await claim(right)).toBeNull()
   })
 })
 

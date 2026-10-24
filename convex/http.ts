@@ -170,12 +170,10 @@ const createHttpAuthAfterBody: typeof createAuth = (ctx) => {
     },
   }
 }
-/* The component redirects /.well-known/openid-configuration to the Convex
- * plugin's OpenID configuration unless a route answers it already. Qivo
- * serves no usable one: the OAuth provider's endpoint of the same name
- * replaces the plugin's, and the demo's names endpoints the demo refuses.
- * Convex checks tokens with the keys at /api/auth/convex/jwks
- * (auth.config.ts), so this route answers 404 in the redirect's place. */
+/* Qivo publishes no OpenID Connect discovery document. Convex checks tokens
+ * with the keys at /api/auth/convex/jwks (auth.config.ts), and the OAuth
+ * provider's document of this name is not served (lib/authRoutes.ts), so the
+ * root location answers 404 too. */
 http.route({
   path: '/.well-known/openid-configuration',
   method: 'GET',
@@ -299,14 +297,15 @@ const serverMetadata = answerAfterBody(async (ctx, request) =>
 const metadataPreflight = answerAfterBody(
   async () => new Response(null, { status: 204, headers: oauthMetadataHeaders }),
 )
-for (const path of [
-  '/.well-known/oauth-protected-resource/mcp',
-  '/.well-known/oauth-protected-resource',
-]) {
+/* The demo has no authorization server (auth.ts) and accepts no MCP
+ * credential, so it serves no OAuth metadata, and its MCP endpoint names none
+ * (machine/mcp.ts). */
+for (const path of isDemoDeployment()
+  ? []
+  : ['/.well-known/oauth-protected-resource/mcp', '/.well-known/oauth-protected-resource']) {
   http.route({ path, method: 'GET', handler: resourceMetadata })
   http.route({ path, method: 'OPTIONS', handler: metadataPreflight })
 }
-// The demo has no authorization server (auth.ts), so it serves no metadata.
 for (const path of isDemoDeployment()
   ? []
   : [

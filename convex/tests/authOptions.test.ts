@@ -1,6 +1,6 @@
 import { runWithEndpointContext } from '@better-auth/core/context'
-import type { GenericCtx } from '@convex-dev/better-auth'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { GenericCtx } from '../../vendor/convex-better-auth/src/client'
 import type { DataModel } from '../_generated/dataModel'
 import { appOrigins, createAuthOptions, tokenPayload } from '../auth'
 

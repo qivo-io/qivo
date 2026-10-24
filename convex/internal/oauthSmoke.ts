@@ -45,12 +45,7 @@ export const cleanup = internalMutation({
       for (const use of uses) await ctx.db.delete(use._id)
       await ctx.db.delete(row._id)
     }
-    for (const model of [
-      'oauthAccessToken',
-      'oauthRefreshToken',
-      'oauthConsent',
-      'oauthClient',
-    ] as const) {
+    for (const model of ['oauthAccessToken', 'oauthRefreshToken', 'oauthConsent'] as const) {
       let cursor: string | null = null
       for (;;) {
         const result: { isDone: boolean; continueCursor: string } = await ctx.runMutation(
@@ -63,6 +58,15 @@ export const cleanup = internalMutation({
         if (result.isDone) break
         cursor = result.continueCursor
       }
+    }
+    // the client last, with its resource links
+    for (;;) {
+      const result = await ctx.runMutation(components.betterAuth.oauth.deleteClients, {
+        field: 'clientId',
+        value: args.client_id,
+        numItems: 100,
+      })
+      if (result.isDone) break
     }
     return true
   },

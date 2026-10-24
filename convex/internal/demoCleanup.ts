@@ -437,7 +437,6 @@ const AUTH_MODELS = [
   'oauthAccessToken',
   'oauthRefreshToken',
   'oauthConsent',
-  'oauthClient',
 ] as const
 async function authRows(ctx: MutationCtx, authId: string, budget: Budget): Promise<boolean> {
   for (const model of AUTH_MODELS) {
@@ -454,7 +453,15 @@ async function authRows(ctx: MutationCtx, authId: string, budget: Budget): Promi
     budget.left -= result.count
     if (!result.isDone) return false
   }
-  return true
+  // The clients last, each with its resource links. A link counts with its client.
+  if (budget.left <= 0) return false
+  const clients = await ctx.runMutation(components.betterAuth.oauth.deleteClients, {
+    field: 'userId',
+    value: authId,
+    numItems: budget.left,
+  })
+  budget.left -= clients.count
+  return clients.isDone
 }
 
 const PHASES = [

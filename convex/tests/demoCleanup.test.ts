@@ -215,11 +215,13 @@ const AUTH_OWNED = [
   'oauthAccessToken',
   'oauthRefreshToken',
   'oauthConsent',
+  'oauthClientResource',
 ]
-const AUTH_SHARED = ['jwks']
+const AUTH_SHARED = ['jwks', 'oauthResource']
 // Anonymous signin and token minting create no verification entries. Demo HTTP
 // and auth routes prohibit reset, email verification, social login and OTT.
-const AUTH_IMPOSSIBLE = ['verification']
+// The demo runs no OAuth provider, so no client authenticates with an assertion.
+const AUTH_IMPOSSIBLE = ['verification', 'oauthClientAssertion']
 
 async function ownedSnapshot(t: T) {
   return t.run(async (ctx) => {

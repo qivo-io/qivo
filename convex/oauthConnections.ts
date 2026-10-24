@@ -323,7 +323,9 @@ export const revokeReplay = internalMutation({
 })
 
 /* The live grant behind an OAuth access token, or null. `access` is what the
- * token's own scopes allow (lib/access.ts credentialAccess). */
+ * token's own scopes allow (lib/access.ts credentialAccess). A token Better
+ * Auth revoked counts as gone: Better Auth 1.7 revokes the access tokens of a
+ * browser session when that session ends, such as at sign-out. */
 export const lookupAccess = internalQuery({
   args: { tokenHash: v.string(), resource: v.string() },
   handler: async (ctx, args) => {
@@ -336,9 +338,15 @@ export const lookupAccess = internalQuery({
       userId?: string
       clientId: string
       expiresAt: number
+      revoked?: number | null
       scopes: string[]
     } | null
-    if (!token?.referenceId || !Number.isFinite(token.expiresAt) || token.expiresAt <= Date.now())
+    if (
+      !token?.referenceId ||
+      token.revoked != null ||
+      !Number.isFinite(token.expiresAt) ||
+      token.expiresAt <= Date.now()
+    )
       return null
     const row = await byId(ctx, 'oauth_connections', token.referenceId)
     if (

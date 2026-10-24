@@ -1,8 +1,8 @@
 import type { oauthProviderClient } from '@better-auth/oauth-provider/client'
-import { convexClient, crossDomainClient } from '@convex-dev/better-auth/client/plugins'
 import { createAuthClient } from 'better-auth/client'
 import { anonymousClient } from 'better-auth/client/plugins'
 import type { ConvexClient } from 'convex/browser'
+import { convexClient, crossDomainClient } from '../../vendor/convex-better-auth/src/client/plugins'
 import { convexSiteUrl } from './backendUrl'
 
 /** The first wait between auth retries. Each wait doubles, up to RETRY_MAX_MS. */

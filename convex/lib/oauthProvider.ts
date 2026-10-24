@@ -1,10 +1,10 @@
 import { getCurrentAuthContext } from '@better-auth/core/context'
 import { getOAuthProviderState, oauthProvider } from '@better-auth/oauth-provider'
-import type { GenericCtx } from '@convex-dev/better-auth'
-import { requireRunMutationCtx } from '@convex-dev/better-auth/utils'
 import { APIError, createAuthMiddleware } from 'better-auth/api'
 import { type FunctionArgs, makeFunctionReference } from 'convex/server'
 import { ConvexError } from 'convex/values'
+import type { GenericCtx } from '../../vendor/convex-better-auth/src/client'
+import { requireRunMutationCtx } from '../../vendor/convex-better-auth/src/utils'
 import type { DataModel } from '../_generated/dataModel'
 import { sha256hex } from '../machine/auth'
 import { clientDisplayName, mcpResource, OAUTH_SCOPES, validateOAuthQuery } from './oauth'
@@ -116,9 +116,26 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
     consentPage: `${siteUrl}/app/~/connect`,
     scopes: OAUTH_SCOPES,
     grantTypes: ['authorization_code', 'refresh_token'],
-    validAudiences: [resource],
+    /* Qivo serves one protected resource, the MCP endpoint. Every new client
+     * is linked to it, and Better Auth 1.7 binds each grant to it. Per-client
+     * links are not enforced: with one resource they add no check that
+     * onRequest and the grant's stored resource do not already make
+     * (oauthConnections.ts claimIssuance and lookupAccess), and clients
+     * registered on Better Auth 1.6 have no link until
+     * internal/oauthClientBackfill.ts runs, so enforcing them would refuse
+     * those clients' refreshes as invalid_target until then. */
+    resources: [resource],
+    clientRegistrationDefaultResources: [resource],
+    enforcePerClientResources: false,
+    // MCP clients often redirect to a loopback or private-use URI, which a
+    // "web" client may not register.
+    clientRegistrationDefaultApplicationType: 'infer',
     allowDynamicClientRegistration: true,
     allowUnauthenticatedClientRegistration: true,
+    /* oauthConnections.getContext calls getOAuthClientPublicPrelogin through
+     * auth.api, which runs in-process, and Better Auth refuses that call when
+     * this is off. Its HTTP route stays unserved (lib/authRoutes.ts), so this
+     * opens nothing to the network. */
     allowPublicClientPrelogin: true,
     clientRegistrationDefaultScopes: OAUTH_SCOPES,
     storeTokens: { hash: sha256hex },
@@ -171,10 +188,12 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
         return id
       },
     },
-    customTokenResponseFields: async ({ grantType, user, scopes, verificationValue }) => {
+    customTokenResponseFields: async ({ grantType: granted, user, scopes, verificationValue }) => {
       const endpoint = await getCurrentAuthContext()
-      if (!user || (grantType !== 'authorization_code' && grantType !== 'refresh_token'))
-        throw invalid()
+      const grantType = (['authorization_code', 'refresh_token'] as const).find(
+        (kind) => kind === granted,
+      )
+      if (!user || !grantType) throw invalid()
       const raw =
         grantType === 'authorization_code' ? endpoint.body?.code : endpoint.body?.refresh_token
       if (
@@ -311,7 +330,15 @@ export function oauthHooks(ctx: GenericCtx<DataModel>) {
   return {
     before: createAuthMiddleware(async (endpoint) => {
       // The only client creation endpoint Qivo serves (lib/authRoutes.ts).
-      if (endpoint.path === '/oauth2/register') await admitClientRegistration(ctx, endpoint.body)
+      if (endpoint.path === '/oauth2/register') {
+        await admitClientRegistration(ctx, endpoint.body)
+        // Every registration is a public client that uses PKCE and gets no
+        // secret, as Better Auth 1.6 made every unauthenticated one. 1.7
+        // would make a registration without this field a confidential
+        // client_secret_basic client.
+        const body = requestBody(endpoint.body)
+        if (body) body.token_endpoint_auth_method = 'none'
+      }
       if (endpoint.path === '/oauth2/authorize') {
         // Provider 1.6 drops `resource` from its parsed authorize schema. Read
         // the actual URL before that loss, including repeated parameters.

@@ -295,6 +295,8 @@ describe('public demo ownership and authentication', () => {
       '/.well-known/openid-configuration',
       '/.well-known/oauth-authorization-server',
       '/.well-known/oauth-authorization-server/api/auth',
+      '/.well-known/oauth-protected-resource',
+      '/.well-known/oauth-protected-resource/mcp',
     ]) {
       const answer = await fetch(path, {
         method: 'GET',
@@ -302,6 +304,17 @@ describe('public demo ownership and authentication', () => {
       })
       expect([path, answer.status, answer.headers.get('Location')]).toEqual([path, 404, null])
     }
+    // and its MCP endpoint refuses without pointing a client at one
+    const mcp = await fetch('/mcp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    })
+    expect(mcp.status).toBe(403)
+    expect(mcp.headers.get('WWW-Authenticate')).toBeNull()
+    expect(await mcp.json()).toEqual({
+      error: 'The Qivo demo does not serve MCP. Connect your client to a regular Qivo workspace.',
+    })
     expect(
       (
         await fetch('/api/auth/sign-in/anonymous', {
