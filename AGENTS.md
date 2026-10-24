@@ -119,14 +119,16 @@ Before step 1, commit everything, rebase onto `origin/main` and pass
    - Astra again, on step 2's commits alone, with the commit that step 1
      reviewed as its base. Skip it when step 2 committed nothing.
 4. Fix the valid findings and commit.
-5. Fetch, and rebase if `origin/main` moved. Run `npm run verify:static`,
-   the checks of `verify:local` without the tests, and leave the tests to
-   CI. Push and open the pull request. Merge it once its `quality`,
-   `secrets` and `Vercel – qivo` checks pass on the head commit. The
-   `Vercel – qivo` preview is the only run of `convex deploy` before main.
-   If a check fails, fix the cause, with a new commit if the change caused
-   it, and wait for the checks again. If a check is cancelled or does not
-   finish, do not merge, and report it.
+5. Fetch, and rebase if `origin/main` moved. Pass `npm run verify:static`,
+   the checks of `verify:local` without the tests, on the final commit, and
+   leave the tests to CI. Conflict edits from the rebase and fixes that
+   `verify:static` needed get an Astra review of their own diff, and the
+   fixes, before the push. Push and open the pull request. Merge it once its
+   `quality`, `secrets` and `Vercel – qivo` checks pass on the head commit.
+   The `Vercel – qivo` preview is the only run of `convex deploy` before
+   main. If a check fails, fix the cause, with a new commit if the change
+   caused it, and wait for the checks again. If a check is cancelled or does
+   not finish, do not merge, and report it.
 
 If a step fails, times out or cannot run, stop before step 5 and report it.
 A change that touches only lockfiles follows the lockfile rule for step 3 in
@@ -137,6 +139,8 @@ conflict edits, gets an Astra review of its own diff, and the fixes, before
 the merge.
 A pull request opened another way, for example by Dependabot or from a fork,
 gets steps 1 to 4 on its head, then merges on the same checks as step 5.
+Do not install, build or test a fork's code on this machine, which holds the
+private credentials. CI's `quality` job runs its checks without secrets.
 
 `${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/evaluations/pr-reviews/pre-pr/README.md`
 has the exact steps, the reviewer prompt and how to record each step. Read it
@@ -155,9 +159,11 @@ with:
   follow-up review.
 - Each reviewer's findings, with your verdict on each one and your severity
   for each correct one.
-- Each Opus finding that reports the same problem as an Astra finding, and
-  each Greptile finding that reports the same problem as a CodeRabbit
-  finding, so the findings that only one of them reported can be counted.
+- Each Opus finding that reports the same problem as an Astra finding, each
+  Greptile finding that reports the same problem as a CodeRabbit finding,
+  and each finding of Astra's review of the fixes that CodeRabbit or
+  Greptile also reported, so the findings that only one of them reported can
+  be counted.
 
 Check the record with
 `python3 "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/evaluations/pr-reviews/pre-pr/check_records.py" RECORD`
