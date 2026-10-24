@@ -55,8 +55,10 @@ HTTP `201` with a public client, whose `token_endpoint_auth_method` is `none`
 and which gets no secret. Registration ignores an `Authorization` header.
 Token and revocation requests name the client with `client_id` alone. One
 that sends an `Authorization` header gets HTTP `401` with `invalid_client`
-and a `WWW-Authenticate` challenge, and one that sends a secret or an
-assertion in the body gets HTTP `400` with `invalid_client`. Qivo serves no token introspection endpoint.
+and a `WWW-Authenticate` challenge, or HTTP `400` with `invalid_request` when
+its scheme is malformed, and one that sends a secret or an assertion in the
+body gets HTTP `400` with `invalid_client`. An empty header or field counts
+as absent. Qivo serves no token introspection endpoint.
 A redirect URI must be `https`, `http` on an exact loopback host, or a
 private-use scheme with a period and no host (`com.example.app:/callback`)
 or with a host and a path (`cursor://anysphere.cursor-retrieval/oauth/callback`);

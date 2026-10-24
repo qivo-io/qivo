@@ -49,12 +49,18 @@ const NAV_ICONS = {
 export function AdminApp() {
   const [view, setView] = useState<View>('dashboard')
   const [operator, setOperator] = useState('')
-  // a sign-out the server refused, for the operator to try again
+  const [signingOut, setSigningOut] = useState(false)
+  // a sign-out the server could not complete, for the operator to try again
   const [signOutError, setSignOutError] = useState('')
-  const signOut = () => {
+  const signOut = async () => {
     setSignOutError('')
-    signOutAndReload(setSignOutError)
+    setSigningOut(true)
+    const refused = await signOutAndReload()
+    if (!refused) return
+    setSignOutError(refused)
+    setSigningOut(false)
   }
+  const signOutControl = { signingOut, onSignOut: () => void signOut() }
 
   useEffect(() => {
     void authClient.getSession(NO_QUERY).then(({ data }) => setOperator(data?.user.email ?? ''))
@@ -67,17 +73,17 @@ export function AdminApp() {
     >
       <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-[var(--chrome)] lg:flex">
         <AdminBrand />
-        <AdminNav view={view} setView={setView} onSignOut={signOut} />
+        <AdminNav view={view} setView={setView} {...signOutControl} />
         <div className="flex-1" />
-        <AdminAccount operator={operator} onSignOut={signOut} />
+        <AdminAccount operator={operator} {...signOutControl} />
       </aside>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-20 border-b border-border bg-[var(--chrome)]/95 px-3 py-3 backdrop-blur lg:hidden">
           <div className="flex items-center justify-between gap-3">
             <AdminBrand compact />
-            <AdminAccount operator={operator} onSignOut={signOut} compact />
+            <AdminAccount operator={operator} {...signOutControl} compact />
           </div>
-          <AdminNav view={view} setView={setView} onSignOut={signOut} mobile />
+          <AdminNav view={view} setView={setView} {...signOutControl} mobile />
         </header>
         <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-6 sm:px-6 sm:py-8">
           <div
@@ -117,11 +123,13 @@ function AdminBrand({ compact = false }: { compact?: boolean }) {
 function AdminNav({
   view,
   setView,
+  signingOut,
   onSignOut,
   mobile = false,
 }: {
   view: View
   setView: (view: View) => void
+  signingOut: boolean
   onSignOut: () => void
   mobile?: boolean
 }) {
@@ -161,10 +169,11 @@ function AdminNav({
             variant="ghost"
             size="sm"
             className="w-full justify-start gap-3 rounded-md border border-border bg-surface-2 px-3 text-sm hover:bg-surface-3"
+            disabled={signingOut}
             onClick={onSignOut}
           >
             <LogOut className="size-4" aria-hidden="true" />
-            <span>Sign out</span>
+            <span>{signingOut ? 'Signing out…' : 'Sign out'}</span>
           </Button>
         </div>
       )}
@@ -174,10 +183,12 @@ function AdminNav({
 
 function AdminAccount({
   operator,
+  signingOut,
   onSignOut,
   compact = false,
 }: {
   operator: string
+  signingOut: boolean
   onSignOut: () => void
   compact?: boolean
 }) {
@@ -201,10 +212,11 @@ function AdminAccount({
           size="sm"
           aria-label="Sign out"
           className="shrink-0 gap-2 px-2"
+          disabled={signingOut}
           onClick={onSignOut}
         >
           <LogOut className="size-4" aria-hidden="true" />
-          <span>Sign out</span>
+          <span>{signingOut ? 'Signing out…' : 'Sign out'}</span>
         </Button>
       )}
     </div>

@@ -360,7 +360,8 @@ export const lookupAccess = internalQuery({
         .query('oauth_ended_sessions')
         .withIndex('by_session', (q) => q.eq('session_id', sessionId))
         .first()
-      if (ended && token._creationTime <= ended.ended_at) return null
+      // only a token issued after the end, such as by a refresh, may pass
+      if (ended && !(token._creationTime > ended.ended_at)) return null
     }
     const row = await byId(ctx, 'oauth_connections', token.referenceId)
     if (

@@ -67,7 +67,7 @@ function authService(baseURL = SITE_URL) {
   const socialRequests: Record<string, unknown>[] = []
   let serial = 0
   let failPath: string | undefined
-  let failStatus: number | undefined
+  let failStatus: number | 'hang' | undefined
   const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
     const request = new Request(input, init)
     const url = new URL(request.url)
@@ -79,6 +79,12 @@ function authService(baseURL = SITE_URL) {
     expect(request.credentials).toBe('omit')
     expect(request.headers.has('Cookie')).toBe(false)
     if (path === failPath) {
+      if (failStatus === 'hang')
+        return new Promise<Response>((_, reject) =>
+          request.signal.addEventListener('abort', () =>
+            reject(new DOMException('Simulated request that never answers', 'AbortError')),
+          ),
+        )
       if (failStatus) return Response.json({ message: 'Unavailable' }, { status: failStatus })
       throw new TypeError('Simulated offline request')
     }
@@ -193,8 +199,9 @@ function authService(baseURL = SITE_URL) {
     requests,
     oauthQueries,
     socialRequests,
-    /** Fails every request to `path`: offline, or with `status`. */
-    fail: (path: string, status?: number) => {
+    /** Fails every request to `path`: offline, with `status`, or with no
+        answer until the request is aborted. */
+    fail: (path: string, status?: number | 'hang') => {
       failPath = path
       failStatus = status
     },
@@ -825,6 +832,29 @@ describe('independent app and admin browser sessions', () => {
     expect(service.revoked).toEqual([token])
     expect(adminSocket.clearAuth).toHaveBeenCalledOnce()
     expect(saved(ADMIN_PREFIX)).toEqual({ cookie: '{}', cache: '{}' })
+  })
+
+  it('a sign-out pressed again while it runs sends one request', async () => {
+    const { admin } = pair()
+    const token = await login(admin, 'operator@example.test')
+    await Promise.all([admin.signOut(), admin.signOut()])
+    expect(service.requests.filter((request) => request.path === '/sign-out')).toHaveLength(1)
+    expect(service.revoked).toEqual([token])
+  })
+
+  it.each([
+    ['a refusal that repeats on every try', 403],
+    ['no answer in time', 'hang' as const],
+  ])('a sign-out that gets %s forgets the session here', async (_, failure) => {
+    const { admin, adminSocket } = pair()
+    const token = await login(admin, 'operator@example.test')
+    service.fail('/sign-out', failure)
+    const signedOut = admin.signOut()
+    await vi.advanceTimersByTimeAsync(15_000)
+    await signedOut
+    expect(adminSocket.clearAuth).toHaveBeenCalledOnce()
+    expect(saved(ADMIN_PREFIX)).toEqual({ cookie: null, cache: null })
+    expect(service.sessions.has(token)).toBe(true)
   })
 
   it('an offline sign-out still clears only its own local jar and socket', async () => {

@@ -137,12 +137,18 @@ export function AdminGate() {
         )}
         <Button
           type="button"
+          disabled={busy}
           onClick={() => {
             setError('')
-            signOutAndReload(setError)
+            setBusy(true)
+            void signOutAndReload().then((refused) => {
+              if (!refused) return
+              setError(refused)
+              setBusy(false)
+            })
           }}
         >
-          Use another account
+          {busy ? 'Signing out…' : 'Use another account'}
         </Button>
       </section>,
     )

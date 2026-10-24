@@ -8,6 +8,7 @@ import { generateCodeChallenge } from 'better-auth/oauth2'
 import { describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import { createAuth } from '../auth'
+import { findMany } from '../betterAuth/adapter'
 import authSchema from '../betterAuth/schema'
 import * as demo from '../demo'
 import { LIMITS, NAME_MAX } from '../lib/limits'
@@ -331,11 +332,11 @@ async function deniedAccess(f: Fx, accessToken: string) {
   expect(response.headers.get('www-authenticate')).toContain('resource_metadata=')
 }
 
-function signOut(f: Fx) {
+function signOut(f: Fx, body: Json = {}) {
   return http(f.t, '/api/auth/sign-out', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Origin: APP, 'better-auth-cookie': f.cookie },
-    body: '{}',
+    body: JSON.stringify(body),
   })
 }
 
@@ -611,6 +612,50 @@ describe('OAuth provider and MCP integration', () => {
       token: c.refresh_token,
     })
     expect(introspected.status).toBe(404)
+  })
+
+  it('refuses every other client authentication at token and revoke, and reads empty values as none', async () => {
+    const f = await fixture()
+    const c = await connect(f)
+    const post = (path: string, values: Record<string, string>, authorization?: string) =>
+      http(f.t, path, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          ...(authorization === undefined ? {} : { Authorization: authorization }),
+        },
+        body: form(values),
+      })
+    const revoke = { client_id: c.request.clientId, token: c.access_token }
+    for (const path of ['/api/auth/oauth2/token', '/api/auth/oauth2/revoke']) {
+      const values =
+        path === '/api/auth/oauth2/token'
+          ? {
+              grant_type: 'refresh_token',
+              refresh_token: 'qvr_unknown',
+              client_id: c.request.clientId,
+            }
+          : revoke
+      const bearer = await post(path, values, 'Bearer some-token')
+      expect(bearer.status, path).toBe(401)
+      expect(bearer.headers.get('www-authenticate'), path).toBe('Bearer')
+      expect((await json(bearer)).error, path).toBe('invalid_client')
+      const malformed = await post(path, values, '=abc def')
+      expect(malformed.status, path).toBe(400)
+      expect(malformed.headers.get('www-authenticate'), path).toBeNull()
+      expect((await json(malformed)).error, path).toBe('invalid_request')
+      const assertion = await post(path, {
+        ...values,
+        client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+        client_assertion: 'a.b.c',
+      })
+      expect(assertion.status, path).toBe(400)
+      expect((await json(assertion)).error, path).toBe('invalid_client')
+    }
+    // An empty header and an empty secret send no authentication.
+    const revoked = await post('/api/auth/oauth2/revoke', { ...revoke, client_secret: '' }, '')
+    expect(revoked.status, await revoked.clone().text()).toBe(200)
+    await deniedAccess(f, c.access_token)
   })
 
   it('uses discovered scopes for DCR, S256 consent, task planning and rotating refresh', async () => {
@@ -1413,6 +1458,73 @@ describe('OAuth revocation, replay and live account checks', () => {
     expect(ended).toHaveLength(121)
     await deniedAccess(f, c.access_token)
     await deniedAccess(f, `qvo_${lastToken}`)
+  })
+
+  it('signs out from a connect page whose signed request has expired', async () => {
+    const f = await fixture()
+    const c = await connect(f)
+    // What the app's OAuth client plugin adds to a POST from the connect page.
+    const expired = `client_id=${c.request.clientId}&exp=1&sig=expired`
+    const answer = await signOut(f, { oauth_query: expired })
+    expect(answer.status, await answer.clone().text()).toBe(200)
+    await deniedAccess(f, c.access_token)
+  })
+
+  it('answers a sign-out whose session delete Better Auth skipped as a failure', async () => {
+    const f = await fixture()
+    const c = await connect(f)
+    // Better Auth's delete looks the row up first and skips it, without an
+    // error, when that lookup fails.
+    const handler = findMany as unknown as {
+      _handler: (ctx: unknown, args: { model: string }) => Promise<unknown>
+    }
+    const original = handler._handler
+    const lookup = vi.spyOn(handler, '_handler').mockImplementation((ctx, args) => {
+      if (args.model === 'session') throw new Error('injected session lookup failure')
+      return original(ctx, args)
+    })
+    const failed = await signOut(f)
+    lookup.mockRestore()
+    expect(failed.status, await failed.clone().text()).toBe(503)
+    expect(failed.headers.get('set-better-auth-cookie') ?? '').not.toContain('session_token')
+    expect(await toolData(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
+  })
+
+  it('leaves the session of a sign-out Better Auth refused', async () => {
+    const f = await fixture()
+    const c = await connect(f)
+    const refused = await signOut(f, { disableRedirect: 'not a boolean' })
+    expect(refused.status, await refused.clone().text()).toBe(400)
+    const sessions = await runInAuth(f.t, async (ctx) => await ctx.db.query('session').collect())
+    expect(sessions).toHaveLength(1)
+    expect(await toolData(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
+  })
+
+  it('refuses a token issued before its session ended and passes one issued after', async () => {
+    const f = await fixture()
+    const c = await connect(f)
+    const issued = await runInAuth(
+      f.t,
+      async (ctx) => await ctx.db.query('oauthAccessToken').unique(),
+    )
+    if (!issued?.sessionId) throw new Error('the token has no session')
+    const end = (endedAt: number) =>
+      f.t.run(async (ctx) => {
+        for (const row of await ctx.db.query('oauth_ended_sessions').collect())
+          await ctx.db.delete(row._id)
+        await ctx.db.insert('oauth_ended_sessions', {
+          session_id: issued.sessionId as string,
+          ended_at: endedAt,
+        })
+      })
+    await end(issued._creationTime - 1)
+    expect(await toolData(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
+    await end(issued._creationTime)
+    await deniedAccess(f, c.access_token)
+    // The cleanup removes the record once the tokens it refuses have expired.
+    const [record] = await f.t.run((ctx) => ctx.db.query('oauth_ended_sessions').collect())
+    await f.t.mutation(internal.oauthConnections.forgetEndedSession, { id: record._id })
+    expect(await f.t.run((ctx) => ctx.db.query('oauth_ended_sessions').collect())).toEqual([])
   })
 
   it('refuses refresh under another client without consuming the legitimate refresh token', async () => {

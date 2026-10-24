@@ -1,6 +1,6 @@
 import { getCurrentAuthContext } from '@better-auth/core/context'
 import { getOAuthProviderState, oauthProvider } from '@better-auth/oauth-provider'
-import { APIError, createAuthMiddleware } from 'better-auth/api'
+import { APIError, createAuthMiddleware, isAPIError } from 'better-auth/api'
 import { type FunctionArgs, type GenericMutationCtx, makeFunctionReference } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import type { GenericCtx } from '../../vendor/convex-better-auth/src/client'
@@ -412,6 +412,9 @@ async function admitClientRegistration(ctx: GenericCtx<DataModel>, body: unknown
     )
 }
 
+/** An HTTP authentication scheme (RFC 9110 section 11.1, a token). */
+const AUTH_SCHEME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/
+
 /** Better Auth hooks for the OAuth provider. They limit client registration,
  * check authorize and token requests before the provider handles them,
  * revoke a grant whose code or refresh token is replayed, and answer a
@@ -436,6 +439,13 @@ export function oauthHooks(ctx: GenericCtx<DataModel>) {
           // Qivo issues Bearer tokens only (qivoOAuthProvider onRequest).
           delete body.dpop_bound_access_tokens
         }
+      }
+      if (endpoint.path === '/sign-out') {
+        // The app's OAuth client adds the page's signed authorization request
+        // to every POST, also a sign-out from the connect page. The provider
+        // refuses it once it expires, and a sign-out resumes no authorization.
+        const body = requestBody(endpoint.body)
+        if (body) delete body.oauth_query
       }
       if (endpoint.path === '/oauth2/authorize') {
         // Provider 1.6 drops `resource` from its parsed authorize schema. Read
@@ -475,13 +485,19 @@ export function oauthHooks(ctx: GenericCtx<DataModel>) {
         // authenticates a client is refused, as the metadata says
         // (servedServerMetadata): with 401 and the challenge of the header
         // scheme it tried, or with 400 for a secret or an assertion in the
-        // body (RFC 6749 section 5.2).
-        const scheme = endpoint.headers?.get('authorization')?.trim().split(/\s+/)[0]
+        // body (RFC 6749 section 5.2). Empty values send nothing, as Better
+        // Auth reads them.
+        const scheme = endpoint.headers?.get('authorization')?.trim().split(/\s+/)[0] || undefined
+        if (scheme !== undefined && !AUTH_SCHEME.test(scheme))
+          throw new APIError('BAD_REQUEST', {
+            error: 'invalid_request',
+            error_description: 'The Authorization header is malformed.',
+          })
         const body = requestBody(endpoint.body)
         if (
           scheme !== undefined ||
           ['client_secret', 'client_assertion', 'client_assertion_type'].some(
-            (field) => body?.[field] !== undefined,
+            (field) => body?.[field] !== undefined && body[field] !== '',
           )
         )
           throw new APIError(
@@ -513,21 +529,27 @@ export function oauthHooks(ctx: GenericCtx<DataModel>) {
         /* Better Auth answers a sign-out whose session delete failed as a
          * success and clears the cookie, so the session and its access tokens
          * (endSessionAccess) would outlive a sign-out the person saw succeed.
-         * A session still stored is deleted once more here; if that fails,
-         * the answer is an error that keeps the cookie, so the app keeps the
-         * person signed in and says so (lib/authSession.ts signOut). */
+         * A session still stored is deleted once more here; if it stays, the
+         * answer is an error that keeps the cookie, so the app keeps the
+         * person signed in and says so (lib/authSession.ts signOut). A
+         * sign-out Better Auth refused, such as a malformed body, ended
+         * nothing and clears no cookie, so it stays as it is. */
         const { context } = endpoint
+        if (isAPIError(context.returned)) return
         const token = await endpoint.getSignedCookie(
           context.authCookies.sessionToken.name,
           context.secret,
         )
         if (!token) return
+        const stored = () =>
+          context.adapter.findOne({ model: 'session', where: [{ field: 'token', value: token }] })
         try {
-          const stored = await context.adapter.findOne({
-            model: 'session',
-            where: [{ field: 'token', value: token }],
-          })
-          if (stored) await context.internalAdapter.deleteSession(token)
+          if (await stored()) {
+            // Better Auth skips the delete without an error when its own
+            // lookup of the row fails.
+            await context.internalAdapter.deleteSession(token)
+            if (await stored()) throw new Error('The session is still stored')
+          }
         } catch (error) {
           context.logger.error('The session could not be ended at sign-out', error)
           context.responseHeaders?.delete('set-cookie')

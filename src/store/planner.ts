@@ -2015,6 +2015,8 @@ let unconfirmedReport: string | null = null
    SIGN_OUT_CONFIRM_MS goes ahead. */
 const SIGN_OUT_CONFIRM_MS = 5_000
 let signOutWarnedAt = Number.NEGATIVE_INFINITY
+/* Whether a sign-out request is under way (PLANNER.signOut). */
+let signingOut = false
 /* A delivery that ends the trouble but waits to be painted (owe). The
    trouble ends when that paint lands, not before, so nobody edits the stale
    rows still on screen in the meantime. */
@@ -8606,7 +8608,8 @@ export const PLANNER = {
       without the close warning asking again. Signing out works offline
       too, because it clears the sign-in stored in this browser. When the
       server answers that it could not end the session, the person stays
-      signed in and is told to try again (lib/authSession.ts signOut). */
+      signed in and is told to try again (lib/authSession.ts signOut). A
+      press while a sign-out runs does nothing. */
   signOut: () => {
     const waiting = syncStatus.unconfirmed()
     if ((waiting || hasUnsaved()) && Date.now() - signOutWarnedAt > SIGN_OUT_CONFIRM_MS) {
@@ -8627,18 +8630,22 @@ export const PLANNER = {
       notifyDemoEnded('lost')
       return
     }
-    void authSignOut().then(
-      () => {
-        unconfirmedNote.forgetAll()
-        clearAvatarSources()
-        leaveDeliberately()
-        location.reload()
-      },
-      (failure: unknown) => {
+    if (signingOut) return
+    signingOut = true
+    const leave = () => {
+      unconfirmedNote.forgetAll()
+      clearAvatarSources()
+      leaveDeliberately()
+      location.reload()
+    }
+    void authSignOut()
+      .then(leave, (failure: unknown) => {
         if (failure instanceof SignOutFailed) toast(failure.message)
-        else location.reload()
-      },
-    )
+        else leave()
+      })
+      .finally(() => {
+        signingOut = false
+      })
   },
 }
 

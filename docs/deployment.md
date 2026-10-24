@@ -600,6 +600,18 @@ backend that still holds any of them, such as a development backend that
 never ran the clear or data restored from an older backup, takes v0.1.40
 first, `internal/retiredFields:clear`, and then the later release.
 
+OAuth clients in the Better Auth component no longer have the fields
+`public` and `type`. Every hosted deployment with OAuth clients cleared them
+with the one-time `internal/oauthClientBackfill`, whose `remaining` check
+reported 0 on staging, development and production before the fields were
+dropped; the demo has no OAuth clients. Convex refuses to deploy a later
+commit to a backend where any `oauthClient` row still holds one of them, for
+example data restored from a backup taken before the backfill. Every main
+commit from v0.1.76 (`1906eb2`) up to the release that dropped the fields
+has the backfill. Deploy the newest of them, as an older one may refuse data
+from a later schema addition, run the backfill as its header says, wait
+until `remaining` reports 0 on every page, and then deploy the later commit.
+
 An image a description save took out keeps a `dropped_at` for a day, in
 Deleted items for as long as its task stays there. Releases before the one
 that added it do not accept that field, so a rollback past it fails to

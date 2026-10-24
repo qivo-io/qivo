@@ -80,13 +80,19 @@ out. `@convex-dev/better-auth` is no longer installed.
   authorize, code exchange and refresh, even when Better Auth knows a second
   resource. If Qivo ever serves a second resource, link each client only to
   the resources it may use and replace the single-resource checks listed
-  above, which compare with `mcpResource()`.
+  above, which compare with `mcpResource()`. Because registration is the
+  only time a client is linked, changing `MCP_RESOURCE_URL` leaves every
+  existing client linked to the old resource, so each one is refused and
+  must register again.
 - **Client authentication and metadata.** Registration makes every client
   public (`none`). The token and revocation endpoints refuse a request that
   authenticates a client with `invalid_client` (`oauthHooks` in
   `convex/lib/oauthProvider.ts`): HTTP `401` with a `WWW-Authenticate`
   challenge of the same scheme for an `Authorization` header, as RFC 6749
-  section 5.2 asks, and HTTP `400` for a secret or an assertion in the body. Better Auth 1.7's metadata also lists the
+  section 5.2 asks, HTTP `400` with `invalid_request` for a header whose
+  scheme is malformed, and HTTP `400` for a secret or an assertion in the
+  body. An empty header or field counts as absent, as Better Auth reads it.
+  Better Auth 1.7's metadata also lists the
   secret and `private_key_jwt` methods and their signing algorithms, so
   `servedServerMetadata` lists `none` as the only method of both endpoints,
   on every path the metadata is served at.
@@ -137,14 +143,20 @@ out. `@convex-dev/better-auth` is no longer installed.
 - **A failed sign-out says so.** Better Auth answers a sign-out whose
   session delete failed with HTTP `200` and clears the cookie. Qivo's after
   hook on `/sign-out` (`oauthHooks`) deletes a session that is still stored
-  once more, and if that fails too, answers HTTP `503` with
-  `SIGN_OUT_FAILED` and without clearing the session cookie. The
-  cross-domain client in the copy clears the stored session only after a
-  sign-out succeeds, and the app, the consent page and the operator console
-  keep the person signed in and ask them to try again
-  (`signOut` in `src/lib/authSession.ts`). A sign-out that cannot reach the
-  server still clears the session in the browser, and the server session
-  ends at its expiry. A login removal from the console deletes the login and
+  once more and looks it up again, and if it is still stored, answers HTTP
+  `503` with `SIGN_OUT_FAILED` and without clearing the session cookie. A
+  sign-out Better Auth refused, such as one with a malformed body, ends
+  nothing. The hook also drops the signed authorization request that the
+  app's OAuth client adds to a sign-out from the connect page, which the
+  provider would refuse once it expires. The cross-domain client in the copy
+  clears the stored session only after a sign-out succeeds. After a fault or
+  a rate limit (HTTP `5xx` or `429`), the app, the consent page and the
+  operator console keep the person signed in and ask them to try again
+  (`signOut` in `src/lib/authSession.ts`). Any other refusal would repeat on
+  every try, so the browser forgets the session then, as it does when the
+  server cannot be reached or gives no answer within 15 seconds; the server
+  session then ends at its expiry. A press while a sign-out runs joins it,
+  and the controls show that it runs. A login removal from the console deletes the login and
   then its sessions and tokens, and `/mcp` refuses every token of a missing
   or banned login.
 - **Qivo's own deletes** of OAuth clients (the unused-client sweep, the OAuth
@@ -187,8 +199,10 @@ its `client_id`.
    Convex refuses to deploy a schema that a stored row breaks, so a
    deployment where a client still holds `public` or `type`, such as one
    restored from a backup taken before the backfill, refuses the later
-   release. Deploy v0.1.76 there, run `internal/oauthClientBackfill:run` as
-   that release's file header says, and then deploy the later release.
+   release. Deploy the newest main commit that still has the backfill, from
+   v0.1.76 (`1906eb2`) on, run `internal/oauthClientBackfill:run` as its
+   file header says, and then deploy the later release
+   (`docs/deployment.md`, "Recovery and compatibility").
 3. `internal/microsoftAccounts:count` counts the Microsoft accounts, how many
    still use `sub`, and how many have no tenant recorded. Each person's next
    Microsoft sign-in moves theirs. If the move cannot happen, because
@@ -280,9 +294,10 @@ Qivo does not use (SSO, SCIM, Stripe, passkey, API keys).
 - Sign-out ends every access token of the session, also after more than 100
   refreshes, and a refresh after it still renews. A call that ends more than
   100 sessions ends the tokens of each. A sign-out whose session delete fails
-  twice answers HTTP `503` and keeps the session and its cookie, and the
-  browser client keeps the session to try again
-  (`src/lib/authSession.test.ts`).
+  twice, or that Better Auth skipped, answers HTTP `503` and keeps the
+  session and its cookie, and the browser client keeps the session to try
+  again (`src/lib/authSession.test.ts`). A sign-out with an expired signed
+  authorization request ends the session.
 - Expiry, disconnect, reconnect, replay detection, concurrent code exchange
   and concurrent refresh keep access control and independent grants.
 - App and admin sessions stay separate. Browser login can continue to

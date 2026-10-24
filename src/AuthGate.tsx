@@ -171,6 +171,8 @@ export function AuthGate() {
   const reloadAfterCodeFailure = useRef(false)
   const mounted = useRef(true)
   const signingOut = useRef(false)
+  // a sign-out under way, which disables the screen's other controls
+  const [signOutPending, setSignOutPending] = useState(false)
   /* Which failure reached the loadFailed screen. The two are not the same
      story: a snapshot that failed to load leaves the account untouched and is
      worth saying so, while a session fetch that never completed cannot claim
@@ -657,15 +659,17 @@ export function AuthGate() {
     setBusy(false)
   }
 
-  /* Signs out and reloads. Resolves false when the server refused the
-     sign-out: the person stays signed in on this screen, which says so. */
+  /* Signs out and reloads. Resolves false when the server could not sign
+     the person out now: they stay signed in on this screen, which says so. */
   const signOutAndReload = async (): Promise<boolean> => {
     signingOut.current = true
+    setSignOutPending(true)
     try {
       await authSignOut()
     } catch (failure) {
       if (failure instanceof SignOutFailed) {
         signingOut.current = false
+        setSignOutPending(false)
         showError(failure.message, 'form')
         return false
       }
@@ -718,6 +722,7 @@ export function AuthGate() {
           type="button"
           variant="primary"
           className="[width:100%] [justify-content:center]"
+          disabled={signOutPending}
           onClick={() => {
             // Browsers can retain a failed module import for this document.
             // A fresh document can request the repaired workspace code again.
@@ -739,9 +744,10 @@ export function AuthGate() {
           type="button"
           variant="ghost"
           className="[width:100%] [justify-content:center] [margin-top:8px]"
+          disabled={signOutPending}
           onClick={() => void signOutAndReload()}
         >
-          Sign out
+          {signOutPending ? 'Signing out…' : 'Sign out'}
         </Button>
       </div>,
     )
@@ -806,7 +812,7 @@ export function AuthGate() {
           variant="primary"
           data-auth-resend
           className="[width:100%] [justify-content:center]"
-          disabled={busy}
+          disabled={busy || signOutPending}
           onClick={() => void sendVerification(true)}
         >
           {busy ? 'Sending…' : 'Resend confirmation email'}
@@ -815,9 +821,10 @@ export function AuthGate() {
           type="button"
           variant="ghost"
           className="[width:100%] [justify-content:center] [margin-top:8px]"
+          disabled={signOutPending}
           onClick={() => void signOutAndReload()}
         >
-          Use another account
+          {signOutPending ? 'Signing out…' : 'Use another account'}
         </Button>
         <div className="[margin-top:24px] [text-align:center]">
           <Button
@@ -870,7 +877,7 @@ export function AuthGate() {
         <Button
           variant="primary"
           className="[width:100%] [justify-content:center]"
-          disabled={busy || !orgName.trim() || overLimit(LIMITS.orgName, orgName)}
+          disabled={busy || signOutPending || !orgName.trim() || overLimit(LIMITS.orgName, orgName)}
           type="submit"
         >
           {busy ? 'Creating…' : 'Create organization'}
@@ -879,9 +886,10 @@ export function AuthGate() {
           type="button"
           variant="ghost"
           className="[width:100%] [justify-content:center] [margin-top:8px]"
+          disabled={signOutPending}
           onClick={() => void signOutAndReload()}
         >
-          Use another account
+          {signOutPending ? 'Signing out…' : 'Use another account'}
         </Button>
       </form>,
     )

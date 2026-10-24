@@ -311,7 +311,35 @@ describe('the pause while Qivo cannot save', () => {
     expect(reload).not.toHaveBeenCalled()
     expect(notes()).toHaveLength(2)
     P.signOut()
+    // the notes go only once the server has ended the session
+    expect(notes()).toHaveLength(2)
+    await settle()
     expect(notes()).toEqual([])
+    expect(reload).toHaveBeenCalled()
+  })
+
+  it('keeps the person signed in and every note when the server could not sign them out', async () => {
+    await boot()
+    const { P } = store
+    const auth = await import('../lib/auth')
+    const { SignOutFailed, SIGN_OUT_FAILED } = await import('../lib/authSession')
+    let refuse = () => {}
+    vi.mocked(auth.signOut).mockImplementationOnce(
+      () => new Promise((_, reject) => (refuse = () => reject(new SignOutFailed()))),
+    )
+    storage.set('qivo.unconfirmed.v1:org-8:someone-else:closed-page', '[]')
+    P.signOut()
+    // a second press while the first runs sends no second request
+    P.signOut()
+    expect(auth.signOut).toHaveBeenCalledTimes(1)
+    refuse()
+    await settle()
+    expect(showToast).toHaveBeenLastCalledWith(SIGN_OUT_FAILED, 'error')
+    expect(notes()).toHaveLength(1)
+    expect(reload).not.toHaveBeenCalled()
+    // the next press tries again
+    P.signOut()
+    expect(auth.signOut).toHaveBeenCalledTimes(2)
     await settle()
     expect(reload).toHaveBeenCalled()
   })
