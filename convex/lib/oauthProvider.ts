@@ -143,12 +143,17 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
     grantTypes: ['authorization_code', 'refresh_token'],
     /* Qivo serves one protected resource, the MCP endpoint. Every new client
      * is linked to it, and Better Auth 1.7 binds each grant to it. Per-client
-     * links are not enforced: with one resource they add no check that
-     * onRequest and the grant's stored resource do not already make
-     * (oauthConnections.ts claimIssuance and lookupAccess), and clients
-     * registered on Better Auth 1.6 have no link until
-     * internal/oauthClientBackfill.ts runs, so enforcing them would refuse
-     * those clients' refreshes as invalid_target until then. */
+     * links are not enforced: with one resource they add no check that Qivo
+     * does not already make for every client, linked or not. The authorize
+     * hook and validateOAuthQuery, the token endpoint's onRequest and before
+     * hook, customTokenResponseFields and the grant's stored resource
+     * (oauthConnections.ts claimIssuance and lookupAccess) all refuse any
+     * resource but mcpResource(). Clients registered on Better Auth 1.6 have
+     * no link until internal/oauthClientBackfill.ts runs, so enforcing links
+     * would refuse those clients as invalid_target until then. A second
+     * resource needs enforcement on, every client linked only to what it may
+     * use, and those single-resource checks replaced
+     * (docs/better-auth-upgrade.md). */
     resources: seeded,
     clientRegistrationDefaultResources: seeded,
     enforcePerClientResources: false,
