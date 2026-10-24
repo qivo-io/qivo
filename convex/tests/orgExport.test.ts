@@ -331,7 +331,6 @@ describe('organization export', () => {
       })
       await ctx.db.insert('project_team_access', {
         project_id: f.meta.id,
-        org_id: f.meta.org_id,
         team_id: f.team.id,
         level: 'user',
       })
@@ -729,7 +728,6 @@ describe('organization export', () => {
       await ctx.db.insert('teams', { ...team, id: teamId, org_id: f.otherOrg.id })
       await ctx.db.insert('project_team_access', {
         project_id: f.meta.id,
-        org_id: f.meta.org_id,
         team_id: teamId,
         level: 'user',
       })

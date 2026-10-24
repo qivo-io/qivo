@@ -255,8 +255,7 @@ function exportRow(doc: Doc<OrgExportSection>, section: OrgExportSection): OrgEx
     section === 'issue_links' ||
     section === 'issue_labels' ||
     section === 'issue_attachments' ||
-    section === 'team_members' ||
-    section === 'project_team_access'
+    section === 'team_members'
   ) {
     delete row.org_id
     delete row.task_archived

@@ -1704,12 +1704,7 @@ describe('a project item while it moves', () => {
           is_leader: false,
         })
         for (const project_id of projects)
-          await ctx.db.insert('project_team_access', {
-            org_id: f.org.id,
-            project_id,
-            team_id,
-            level: 'user',
-          })
+          await ctx.db.insert('project_team_access', { project_id, team_id, level: 'user' })
       }
     })
     TRASH_BUDGET.rows = 1

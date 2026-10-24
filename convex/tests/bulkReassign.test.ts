@@ -88,12 +88,7 @@ async function crowded(
       created_at: NOW,
     })
     for (const team_id of [f.team.id, platform])
-      await ctx.db.insert('project_team_access', {
-        project_id: f.meta.id,
-        org_id: f.meta.org_id,
-        team_id,
-        level: 'user',
-      })
+      await ctx.db.insert('project_team_access', { project_id: f.meta.id, team_id, level: 'user' })
     const person = async (name: string, team_id: string) => {
       const _id = await ctx.db.insert('profiles', {
         id: uuid(),
@@ -315,7 +310,6 @@ describe('reassigning the tasks of an access removal', () => {
           })
           await ctx.db.insert('project_team_access', {
             project_id: f.meta.id,
-            org_id: f.meta.org_id,
             team_id: f.team.id,
             level: 'user',
           })
@@ -402,7 +396,6 @@ describe('reassigning the tasks of an access removal', () => {
     await t.run(async (ctx) => {
       await ctx.db.insert('project_team_access', {
         project_id: f.meta.id,
-        org_id: f.meta.org_id,
         team_id: f.team.id,
         level: 'user',
       })
@@ -633,7 +626,6 @@ describe('reassigning the tasks of an access removal', () => {
         })
         await ctx.db.insert('project_team_access', {
           project_id: fx.meta.id,
-          org_id: fx.meta.org_id,
           team_id: id,
           level: 'viewer',
         })
@@ -710,7 +702,6 @@ async function manyHolders(n: number, limits: Parameters<typeof newT>[0] = {}) {
         })
         await ctx.db.insert('project_team_access', {
           project_id: f.meta.id,
-          org_id: f.meta.org_id,
           team_id: f.team.id,
           level: 'user',
         })
@@ -915,7 +906,6 @@ describe('a removal of many people', () => {
           created_at: NOW,
         })
         await ctx.db.insert('project_team_access', {
-          org_id: f.org.id,
           project_id: id,
           team_id: f.team.id,
           level: 'viewer',

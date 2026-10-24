@@ -2609,8 +2609,7 @@ async function writeGrantBack(run: Run, row: Doc<'deleted_rows'>): Promise<boole
       )
       .first()
     if (share === null || held !== null) return false
-    // a share stored before shares had org_id gets its project's
-    await db.insert('project_team_access', { ...share, org_id: run.item.org_id })
+    await db.insert('project_team_access', share)
     return true
   }
   return false

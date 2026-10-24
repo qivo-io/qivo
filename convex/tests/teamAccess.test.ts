@@ -271,7 +271,6 @@ describe('project team sharing', () => {
         await ctx.db.delete(grant._id)
       await ctx.db.insert('project_team_access', {
         project_id: f.otherProject.id,
-        org_id: f.otherProject.org_id,
         team_id: sharedTeamId,
         level: 'user',
       })
@@ -283,7 +282,6 @@ describe('project team sharing', () => {
       })
       await ctx.db.insert('project_team_access', {
         project_id: f.hidden.id,
-        org_id: f.hidden.org_id,
         team_id: foreignTeamId,
         level: 'user',
       })

@@ -1771,7 +1771,6 @@ describe('restoring a project item', () => {
       })
       await ctx.db.insert('project_team_access', {
         project_id: f.sub.id,
-        org_id: f.sub.org_id,
         team_id: team,
         level: 'user',
       })
@@ -1896,12 +1895,7 @@ describe('restoring a project item', () => {
     const [kept, demoted, removed] = await plantPeople(t, f, 3)
     await t.run(async (ctx) => {
       for (const team_id of [team, gone])
-        await ctx.db.insert('project_team_access', {
-          project_id: f.sub.id,
-          org_id: f.sub.org_id,
-          team_id,
-          level: 'user',
-        })
+        await ctx.db.insert('project_team_access', { project_id: f.sub.id, team_id, level: 'user' })
     })
     await deleteProject(t, f, f.meta.id)
     await runSteps(t)
@@ -1948,12 +1942,7 @@ describe('restoring a project item', () => {
     const [team] = await plantTeams(t, f, 1)
     const people = await plantPeople(t, f, 8)
     await t.run((ctx) =>
-      ctx.db.insert('project_team_access', {
-        project_id: f.sub.id,
-        org_id: f.sub.org_id,
-        team_id: team,
-        level: 'user',
-      }),
+      ctx.db.insert('project_team_access', { project_id: f.sub.id, team_id: team, level: 'user' }),
     )
     await deleteProject(t, f, f.meta.id)
     await runSteps(t)
@@ -2136,7 +2125,6 @@ describe('restoring a project item', () => {
       })
       await ctx.db.insert('project_team_access', {
         project_id: f.sub2.id,
-        org_id: f.sub2.org_id,
         team_id: f.team.id,
         level: 'user',
       })
@@ -4130,7 +4118,6 @@ describe('a project item at the sub-project cap', () => {
       if (own !== null) await ctx.db.delete(own._id)
       await ctx.db.insert('project_team_access', {
         project_id: f.sub.id,
-        org_id: f.sub.org_id,
         team_id: team,
         level: 'user',
       })
@@ -4167,7 +4154,6 @@ describe('a project item at the sub-project cap', () => {
     await t.run((ctx) =>
       ctx.db.insert('project_team_access', {
         project_id: f.sub.id,
-        org_id: f.sub.org_id,
         team_id: f.team.id,
         level: 'user',
       }),

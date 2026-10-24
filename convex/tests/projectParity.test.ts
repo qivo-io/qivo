@@ -1054,7 +1054,6 @@ describe('project access, one user or team at a time', () => {
       })
       await ctx.db.insert('project_team_access', {
         project_id: fx.sub.id,
-        org_id: fx.sub.org_id,
         team_id: fx.team.id,
         level: 'user',
       })
@@ -1399,7 +1398,6 @@ describe('reading one project', () => {
       await ctx.db.patch(fx.meta._id, { review_hours: 4 })
       await ctx.db.insert('project_team_access', {
         project_id: fx.sub.id,
-        org_id: fx.sub.org_id,
         team_id: fx.team.id,
         level: 'viewer',
       })

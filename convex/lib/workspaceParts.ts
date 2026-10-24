@@ -511,11 +511,7 @@ export async function readProjects(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWind
       // person's grants can outlive their profile for a moment
       // (model/cascade.ts removeProfile).
       access: access.flat().map(rowOf),
-      // without the organization id, which only serves index reads
-      teamAccess: teamAccess.flat().map((share) => {
-        const { org_id: _orgId, ...row } = rowOf(share)
-        return row
-      }),
+      teamAccess: teamAccess.flat().map(rowOf),
       milestones: milestones.flat().map(rowOf),
     }),
     ...(await softSplit(ctx, w, read.split || shown.length > PAGE.projects.split, caller.shared)),

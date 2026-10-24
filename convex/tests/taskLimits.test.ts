@@ -1372,7 +1372,6 @@ describe('the follower limit', () => {
       })
       await ctx.db.insert('project_team_access', {
         project_id: fx.meta.id,
-        org_id: fx.meta.org_id,
         team_id: team,
         level: 'viewer',
       })

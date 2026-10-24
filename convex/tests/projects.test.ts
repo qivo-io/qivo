@@ -473,7 +473,6 @@ describe('projects.update', () => {
       for (const team_id of [f.team.id, crew])
         await ctx.db.insert('project_team_access', {
           project_id: f.meta.id,
-          org_id: f.meta.org_id,
           team_id,
           level: 'user',
         })

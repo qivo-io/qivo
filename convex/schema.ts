@@ -141,19 +141,10 @@ const projectTeamAccessTable = defineTable({
   project_id: v.string(), // explicit shares may target a project or sub-project
   team_id: v.string(), // same organization as the project
   level: vGrantLevel,
-  // server-owned: the project's organization, so a person in many teams
-  // reads the shares of their organization in one range instead of one
-  // range a team (lib/access.ts projectLevelsOf). Every writer sets it. A
-  // share stored before it has none until internal/rangeKeysBackfill gives it
-  // one, and readers fall back to reading team by team while any share
-  // lacks it.
-  org_id: v.optional(v.string()),
 })
   .index('by_project', ['project_id'])
   .index('by_team', ['team_id'])
   .index('by_project_team', ['project_id', 'team_id'])
-  // every share on an organization's projects, and those without org_id
-  .index('by_org', ['org_id'])
 
 const issuesTable = defineTable({
   id: v.string(),

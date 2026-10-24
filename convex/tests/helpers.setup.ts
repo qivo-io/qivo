@@ -81,18 +81,11 @@ export const allowUnkeyedRows = (t: T): void => {
 
 /* The rows of `table`, read a small page per transaction, so a suite's
  * low transactionLimits never refuse the check. */
-async function allRows<N extends 'profiles' | 'teams' | 'projects' | 'issues'>(
+async function allRows<N extends 'profiles' | 'teams' | 'issues' | 'team_members'>(
   t: T,
   table: N,
 ): Promise<Doc<N>[]>
-async function allRows(
-  t: T,
-  table: 'team_members' | 'project_team_access',
-): Promise<Doc<'team_members' | 'project_team_access'>[]>
-async function allRows(
-  t: T,
-  table: 'profiles' | 'teams' | 'projects' | 'issues' | 'team_members' | 'project_team_access',
-) {
+async function allRows(t: T, table: 'profiles' | 'teams' | 'issues' | 'team_members') {
   const rows: Doc<typeof table>[] = []
   let cursor: string | null = null
   for (;;) {
@@ -109,29 +102,26 @@ async function allRows(
 /**
  * Throws when a row of `t` was written without the fields that let the
  * workspace parts read it in one range, or with a wrong one (schema.ts): a
- * membership's org_id is its person's organization, a share's its
- * project's, else their team's, and a subtask's parent_key its parent's
+ * membership's org_id is its person's organization, else its team's, and a
+ * subtask's parent_key its parent's
  * window key (lib/db.ts parentKeyOf). A row whose reference is gone only
  * needs the field. Every test checks its instance when it finishes (newT),
  * so a writer or fixture that leaves one out fails its tests.
  */
 export async function assertRangeKeys(t: T): Promise<void> {
-  const [profiles, teams, projects, issues, members, shares] = await Promise.all([
+  const [profiles, teams, issues, members] = await Promise.all([
     allRows(t, 'profiles'),
     allRows(t, 'teams'),
-    allRows(t, 'projects'),
     allRows(t, 'issues'),
     allRows(t, 'team_members'),
-    allRows(t, 'project_team_access'),
   ])
-  const orgOf = new Map([...profiles, ...teams, ...projects].map((row) => [row.id, row.org_id]))
+  const orgOf = new Map([...profiles, ...teams].map((row) => [row.id, row.org_id]))
   const tasks = new Map(issues.map((task) => [task.id, task]))
   const wrong: string[] = []
-  for (const row of [...members, ...shares]) {
-    const first = orgOf.get('profile_id' in row ? row.profile_id : row.project_id)
-    const want = first ?? orgOf.get(row.team_id)
+  for (const row of members) {
+    const want = orgOf.get(row.profile_id) ?? orgOf.get(row.team_id)
     if (want === undefined ? row.org_id === undefined : row.org_id !== want)
-      wrong.push(`${'profile_id' in row ? 'membership' : 'share'} with org_id ${row.org_id}`)
+      wrong.push(`membership with org_id ${row.org_id}`)
   }
   for (const task of issues) {
     if (task.parent_id === undefined) {

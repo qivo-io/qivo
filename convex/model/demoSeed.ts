@@ -313,7 +313,6 @@ export async function writeNorthstarStep(
             project_id: projectIds[p.key],
             team_id: teamIds[team.key],
             level: team.key === p.team ? 'user' : 'viewer',
-            org_id: org.id,
           })
     }
     for (const l of data.labels)

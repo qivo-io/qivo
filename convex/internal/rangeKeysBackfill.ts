@@ -1,25 +1,22 @@
-/* One-time migration: give every team membership and team share stored
- * before they had one an `org_id`, and every subtask stored before it had
- * one a `parent_key` (schema.ts), so the app's workspace parts read them in
- * one range: a people window its people's memberships, a person in many
- * teams their organization's shares, and a task window its tasks' active
- * subtasks (lib/workspaceParts.ts, lib/access.ts projectLevelsOf). A row
- * whose value differs from what it should be gets the right one, so a run
- * also repairs those.
+/* One-time migration: give every team membership stored before it had one
+ * an `org_id`, and every subtask stored before it had one a `parent_key`
+ * (schema.ts), so the app's workspace parts read them in one range: a
+ * people window its people's memberships, and a task window its tasks'
+ * active subtasks (lib/workspaceParts.ts). A row whose value differs from
+ * what it should be gets the right one, so a run also repairs those.
  *
  * Until it runs, the readers find the rows without the field in one more
- * range and read as before for them: person by person, team by team, task
- * by task. So the app shows the same either way, only slower. New rows get
- * the fields when they are written, and a restore from Deleted items writes
- * them too, so the stored copies in deleted_rows need none.
+ * range and read as before for them, person by person and task by task. So
+ * the app shows the same either way, only slower. New rows get the fields
+ * when they are written, and a restore from Deleted items writes them too,
+ * so the stored copies in deleted_rows need none.
  *
- * A membership takes its person's organization, else its team's; a share
- * its project's, else its team's; a subtask its parent's window key, from
- * the parent's stored copy while a restore has not written it back yet, ''
- * when the parent is gone, and a top-level task none. A row this cannot
- * place counts as an orphan and is left as it is: a membership or share
- * whose person or project and team are all gone, which grants nothing, and
- * a subtask whose parent has no window key yet. Run
+ * A membership takes its person's organization, else its team's; a subtask
+ * its parent's window key, from the parent's stored copy while a restore has
+ * not written the parent back yet, '' when the parent is gone, and a
+ * top-level task none. A row this cannot place counts as an orphan and is
+ * left as it is: a membership whose person and team are both gone, which
+ * grants nothing, and a subtask whose parent has no window key yet. Run
  * internal/windowKeysBackfill to zero first, then this.
  *
  * Check a deployment before changing it. `remaining` is a query, so it
@@ -27,11 +24,11 @@
  * counts the rows of one page of a table that still need a write (`rows`)
  * and that it cannot place (`orphans`). Start with
  * `{"table": "team_members"}`, pass the returned `cursor` back until `done`
- * is true, then do the same for `"project_team_access"` and `"issues"`. A
- * page whose rows read too much counts nothing and answers `fewer`; ask
- * again with the same `cursor` and with `"rows"` set to it. If every page
- * reports zero of both, the deployment has nothing left, and the readers'
- * fallbacks never run there. With the private helper:
+ * is true, then do the same for `"issues"`. A page whose rows read too
+ * much counts nothing and answers `fewer`; ask again with the same `cursor`
+ * and with `"rows"` set to it. If every page reports zero of both, the
+ * deployment has nothing left, and the readers' fallbacks never run there.
+ * With the private helper:
  *   H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"
  *   "$H" staging npx convex run internal/rangeKeysBackfill:remaining '{"table": "team_members"}'
  *
@@ -65,26 +62,22 @@ import { byId, parentKeyOf } from '../lib/db'
 /** Rows per page of each table, for the check and for each step of the
  * run, the bytes the page itself may read, the bytes the page and its rows'
  * reads may reach before it asks for fewer rows, and how long one run walks
- * pages. A membership or share reads its person or project and its team by
- * id, two ranges, and writes at most one patch. A subtask reads its
+ * pages. A membership reads its person and its team by id, two ranges, and
+ * writes at most one patch. A subtask reads its
  * parent's body, and its stored copy while the parent is in Deleted items,
  * up to about 64 KB each today but up to 1 MiB for one stored before the
  * description cap, so `reads` stops a page with large parents short of
  * Convex's 16 MiB. Tests lower them. */
 export const BACKFILL_PAGE = {
-  rows: { team_members: 500, project_team_access: 500, issues: 50 },
+  rows: { team_members: 500, issues: 50 },
   bytes: 4 * 1024 * 1024,
   reads: 8 * 1024 * 1024,
   runMs: 60_000,
 }
 
-const vTable = v.union(
-  v.literal('team_members'),
-  v.literal('project_team_access'),
-  v.literal('issues'),
-)
-type KeyedTable = 'team_members' | 'project_team_access' | 'issues'
-const TABLES: readonly KeyedTable[] = ['team_members', 'project_team_access', 'issues']
+const vTable = v.union(v.literal('team_members'), v.literal('issues'))
+type KeyedTable = 'team_members' | 'issues'
+const TABLES: readonly KeyedTable[] = ['team_members', 'issues']
 
 /** What one page found, and where the next one starts. A page whose reads
  * passed BACKFILL_PAGE.reads counts and writes nothing and answers `fewer`,
@@ -110,19 +103,19 @@ const auditRef = makeFunctionReference<'mutation', { counts: Counts }, null>(
 )
 
 /* What a row's field should hold, `place`, none for a top-level task, and
- * whether the row cannot be placed (an orphan). An orphaned membership or
- * share is left as it is. A subtask under a parent without a key holds
+ * whether the row cannot be placed (an orphan). An orphaned membership is
+ * left as it is. A subtask under a parent without a key holds
  * none, so readers ask for it as before, until the parent gets a key. A
  * subtask whose parent is in Deleted items, as a project restore writes a
  * task before its parent, holds the key its parent comes back with, as
  * model/deletedItems.ts restoredParentKey gives it. */
 type Want = { place: string | undefined; orphan: boolean }
 
-/* The organization of the profile, project or team with these ids, read
+/* The organization of the profile or team with these ids, read
  * once per page. */
 function orgOf(ctx: QueryCtx) {
   const known = new Map<string, Promise<string | undefined>>()
-  return (table: 'profiles' | 'projects' | 'teams', id: string) => {
+  return (table: 'profiles' | 'teams', id: string) => {
     const key = `${table}:${id}`
     let org = known.get(key)
     if (org === undefined) {
@@ -181,11 +174,7 @@ async function walk(
       const place = await parentKey(row.parent_id)
       return { place, orphan: place === undefined }
     }
-    const first =
-      'profile_id' in row
-        ? await org('profiles', row.profile_id)
-        : await org('projects', row.project_id)
-    const place = first ?? (await org('teams', row.team_id))
+    const place = (await org('profiles', row.profile_id)) ?? (await org('teams', row.team_id))
     return { place, orphan: place === undefined }
   }
   const wants: Want[] = []
@@ -254,7 +243,6 @@ export const audit = internalMutation({
   args: {
     counts: v.object({
       team_members: vCount,
-      project_team_access: vCount,
       issues: vCount,
     }),
   },
@@ -293,7 +281,6 @@ export const run = internalAction({
   ): Promise<{ dry_run: boolean; next: From | null } & Counts> => {
     const counts: Counts = {
       team_members: { rows: 0, orphans: 0 },
-      project_team_access: { rows: 0, orphans: 0 },
       issues: { rows: 0, orphans: 0 },
     }
     const started = Date.now()

@@ -406,12 +406,7 @@ describe('reads a window cannot bound by its rows', () => {
             created_at: NOW,
           })
           for (const team_id of teams)
-            await ctx.db.insert('project_team_access', {
-              org_id: f.org.id,
-              project_id: id,
-              team_id,
-              level: 'viewer',
-            })
+            await ctx.db.insert('project_team_access', { project_id: id, team_id, level: 'viewer' })
           return id
         }),
       )
@@ -1136,12 +1131,7 @@ describe('many projects', () => {
         const grant = (project_id: string, level: 'user' | 'viewer') =>
           ctx.db.insert('project_access', { project_id, profile_id: me.id, level })
         const share = (project_id: string, team_id: string) =>
-          ctx.db.insert('project_team_access', {
-            org_id: f.org.id,
-            project_id,
-            team_id,
-            level: 'user',
-          })
+          ctx.db.insert('project_team_access', { project_id, team_id, level: 'user' })
         const parent = await project({ type: 'meta' })
         const sub = (extra: Partial<Doc<'projects'>> = {}) =>
           project({ parent_id: parent, ...extra })
@@ -1294,7 +1284,6 @@ describe('many projects', () => {
           const sub = await project(3000 + 3 * n + k, { parent_id: parent })
           if (n % 6 === 0 && k === 1)
             await ctx.db.insert('project_team_access', {
-              org_id: f.org.id,
               project_id: sub,
               team_id: teams[n % 3],
               level: 'user',

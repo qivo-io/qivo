@@ -7,12 +7,7 @@ export type { TableNames }
 type InternalFields<T extends TableNames> =
   | '_id'
   | '_creationTime'
-  | (T extends
-      | 'issue_links'
-      | 'issue_labels'
-      | 'issue_attachments'
-      | 'team_members'
-      | 'project_team_access'
+  | (T extends 'issue_links' | 'issue_labels' | 'issue_attachments' | 'team_members'
       ? 'org_id'
       : never)
   | (T extends 'issue_links' | 'issue_labels' | 'issue_attachments' | 'issue_subscriptions'

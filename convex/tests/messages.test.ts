@@ -1157,7 +1157,6 @@ describe('notifyCommentInsert (model — composed by phase 5 comments.create)', 
           created_at: NOW,
         })
         await ctx.db.insert('project_team_access', {
-          org_id: f.org.id,
           project_id: i === 7 ? f.hidden.id : f.sub.id,
           team_id: id,
           level: 'user',
@@ -1228,7 +1227,6 @@ describe('notifyCommentInsert (model — composed by phase 5 comments.create)', 
       })
       await ctx.db.insert('project_team_access', {
         project_id: f.sub.id,
-        org_id: f.sub.org_id,
         team_id: team,
         level: 'user',
       })
@@ -1290,7 +1288,6 @@ describe('notifyCommentInsert (model — composed by phase 5 comments.create)', 
       })
       await ctx.db.insert('project_team_access', {
         project_id: f.sub.id,
-        org_id: f.sub.org_id,
         team_id: team,
         level: 'user',
       })

@@ -37,10 +37,7 @@
  * know what the caller can see reads the projects its rows name, the
  * caller's grants and the team shares on them, and the teams those shares
  * name with the caller's memberships of them; where it asks about many
- * projects, all of the caller's grants, memberships and team shares
- * instead, and for a caller in many teams every team share on the
- * organization's projects, so a share edit anywhere in the organization
- * reruns it.
+ * projects, all of the caller's grants, memberships and team shares instead.
  * A part that asks whether a parent shows for navigation (a top-level
  * project the caller holds no level on, lib/access.ts levelUnder) reads all of the caller's grants, memberships and
  * team shares, the parent's sub-projects, and the teams of those

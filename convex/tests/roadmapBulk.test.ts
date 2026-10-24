@@ -55,12 +55,7 @@ async function planted(
       created_at: NOW,
     })
     for (const team_id of [f.team.id, platform])
-      await ctx.db.insert('project_team_access', {
-        project_id: f.meta.id,
-        org_id: f.meta.org_id,
-        team_id,
-        level: 'user',
-      })
+      await ctx.db.insert('project_team_access', { project_id: f.meta.id, team_id, level: 'user' })
     const out: string[] = []
     for (let i = 0; i < CROWD; i++) {
       const id = uuid()

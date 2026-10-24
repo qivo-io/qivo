@@ -165,38 +165,25 @@ describe('accessFlags', () => {
             for (const me of [{ ...subject, org_role, kind }, f.viewer, f.guest, f.otherAdmin]) {
               // project by project, the person's own rows read from the first
               // project on, and own rows too many to read at once, the
-              // projects asked in both orders; then the organization's
-              // shares not read at once, and read at once while the shares
-              // have no org_id, stored before it
-              for (const [own, unkeyed] of [
-                [DEFAULT_OWN_READS, false],
-                [
-                  {
-                    ...DEFAULT_OWN_READS,
-                    steps: [1, 2],
-                    manyTeams: 1,
-                  },
-                  false,
-                ],
-                [
-                  {
-                    ...DEFAULT_OWN_READS,
-                    steps: [1],
-                    lookups: 0,
-                    rows: 0,
-                    manyTeams: 1,
-                    orgTeams: 0,
-                    bytes: 0,
-                  },
-                  false,
-                ],
-                [{ ...DEFAULT_OWN_READS, steps: [1, 2], manyTeams: 1, orgShares: 0 }, false],
-                [{ ...DEFAULT_OWN_READS, steps: [1, 2], manyTeams: 1 }, true],
-              ] as const) {
+              // projects asked in both orders
+              for (const own of [
+                DEFAULT_OWN_READS,
+                {
+                  ...DEFAULT_OWN_READS,
+                  steps: [1, 2],
+                  manyTeams: 1,
+                },
+                {
+                  ...DEFAULT_OWN_READS,
+                  steps: [1],
+                  lookups: 0,
+                  rows: 0,
+                  manyTeams: 1,
+                  orgTeams: 0,
+                  bytes: 0,
+                },
+              ]) {
                 Object.assign(OWN_READS, structuredClone(own))
-                const shares = await ctx.db.query('project_team_access').collect()
-                for (const share of shares)
-                  await ctx.db.patch(share._id, { org_id: unkeyed ? undefined : share.org_id })
                 const asked = (order: readonly Doc<'projects'>[]) =>
                   order.flatMap((p) => [true, false].map((navigation) => ({ p, navigation })))
                 const expectSame = async (
@@ -206,7 +193,7 @@ describe('accessFlags', () => {
                 ) => {
                   expect(
                     level,
-                    `${name}: ${me.name} as ${me.org_role} ${me.kind} on ${p.key}, navigation ${navigation}, own reads ${JSON.stringify(own)}, unkeyed ${unkeyed}, ${how}`,
+                    `${name}: ${me.name} as ${me.org_role} ${me.kind} on ${p.key}, navigation ${navigation}, own reads ${JSON.stringify(own)}, ${how}`,
                   ).toBe(await projectLevel(ctx, me, p, navigation))
                   seen.add(String(level))
                 }
@@ -222,7 +209,6 @@ describe('accessFlags', () => {
                   all.map(({ p, navigation }) => levels.level(p.id, navigation)),
                 )
                 for (const [i, one] of all.entries()) await expectSame(one, answers[i], 'at once')
-                for (const share of shares) await ctx.db.patch(share._id, { org_id: share.org_id })
               }
               Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
             }
@@ -285,8 +271,6 @@ describe('accessFlags', () => {
     const t = newT()
     const f = await withOrg(t)
     const me = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
-    // team by team, without the organization's shares at once
-    OWN_READS.orgShares = 0
     // eight teams of the person, one of them shares the meta's sub-project,
     // beside 24 teams with 64 KiB legacy icons, 1.5 MiB in all
     await t.run(async (ctx) => {
@@ -314,7 +298,6 @@ describe('accessFlags', () => {
         if (i === 0)
           await ctx.db.insert('project_team_access', {
             project_id: f.sub.id,
-            org_id: f.sub.org_id,
             team_id: id,
             level: 'user',
           })
@@ -340,8 +323,7 @@ describe('accessFlags', () => {
     const t = newT()
     const f = await withOrg(t)
     const me = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
-    // team by team, without the organization's shares at once
-    Object.assign(OWN_READS, { manyTeams: 2, orgTeams: 1, orgShares: 0 })
+    Object.assign(OWN_READS, { manyTeams: 2, orgTeams: 1 })
     // ten small teams first, then the person's two, one sharing the
     // sub-project, past the two rows the scan may read
     await t.run(async (ctx) => {
@@ -357,7 +339,6 @@ describe('accessFlags', () => {
         if (i === 0)
           await ctx.db.insert('project_team_access', {
             project_id: f.sub.id,
-            org_id: f.sub.org_id,
             team_id: id,
             level: 'user',
           })
@@ -368,9 +349,8 @@ describe('accessFlags', () => {
       expect(await levels.level(f.meta.id)).toBe('viewer')
       expect(await levels.level(f.meta.id)).toBe(await projectLevel(ctx, me, f.meta))
       // two memberships, the scan's first three rows, both teams by their
-      // own read and the one share, not the organization's 13 teams, and
-      // the one share the read of the organization's shares stopped at
-      expect(levels.shared.documents).toBe(2 + 3 + 2 + 1 + 1)
+      // own read and the one share, not the organization's 13 teams
+      expect(levels.shared.documents).toBe(2 + 3 + 2 + 1)
     })
   })
 
@@ -388,7 +368,6 @@ describe('accessFlags', () => {
       for (const p of [f.sub, f.sub2])
         await ctx.db.insert('project_team_access', {
           project_id: p.id,
-          org_id: p.org_id,
           team_id: f.team.id,
           level: 'user',
         })
@@ -475,7 +454,6 @@ describe('accessFlags', () => {
           })
           await ctx.db.insert('project_team_access', {
             project_id: f.sub.id,
-            org_id: f.sub.org_id,
             team_id: id,
             level: 'user',
           })

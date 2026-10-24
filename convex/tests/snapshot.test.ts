@@ -1404,7 +1404,6 @@ describe('navigation-only parents', () => {
       })
       await ctx.db.insert('project_team_access', {
         project_id: f.sub2.id,
-        org_id: f.sub2.org_id,
         team_id: f.team.id,
         level: 'viewer',
       })
@@ -1418,7 +1417,6 @@ describe('navigation-only parents', () => {
       })
       await ctx.db.insert('project_team_access', {
         project_id: f.meta.id,
-        org_id: f.meta.org_id,
         team_id: parentTeam,
         level: 'user',
       })

@@ -2513,7 +2513,6 @@ describe('a navigation-only parent hides its other sub-projects', () => {
       })
       await ctx.db.insert('project_team_access', {
         project_id: f.sub2.id,
-        org_id: f.sub2.org_id,
         team_id: f.team.id,
         level: 'user',
       })

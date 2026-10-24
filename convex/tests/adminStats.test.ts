@@ -130,7 +130,6 @@ async function consoleFixture(t: T): Promise<OrgFixture> {
     })
     await ctx.db.insert('project_team_access', {
       project_id: f.meta.id,
-      org_id: f.meta.org_id,
       team_id: f.team.id,
       level: 'user',
     })

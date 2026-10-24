@@ -1,8 +1,7 @@
 /* The fields that let the workspace parts read in one range (schema.ts: a
- * membership's and a team share's org_id, a subtask's parent_key): every
- * writer and fixture sets them (helpers.setup.ts assertRangeKeys), a people
- * window reads its memberships, a task window its subtasks and a person in
- * many teams their organization's shares in one range each, every part
+ * membership's org_id, a subtask's parent_key): every writer and fixture
+ * sets them (helpers.setup.ts assertRangeKeys), a people window reads its
+ * memberships and a task window its subtasks in one range each, every part
  * reads as before for rows without them, and internal/rangeKeysBackfill
  * fills them while the parts keep answering the same. */
 
@@ -11,10 +10,9 @@ import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { BACKFILL_PAGE } from '../internal/rangeKeysBackfill'
-import { OWN_READS, projectLevel, projectLevelsOf } from '../lib/access'
 import { newWindowKey } from '../lib/db'
 import { halve, type IdWindow } from '../lib/idWindows'
-import { PAGE, readPeople, readProjects, readTasks } from '../lib/workspaceParts'
+import { PAGE, readPeople, readTasks } from '../lib/workspaceParts'
 import {
   allowUnkeyedRows,
   as,
@@ -32,11 +30,9 @@ import {
 } from './helpers.setup'
 
 const DEFAULT_PAGE = structuredClone(PAGE)
-const DEFAULT_OWN_READS = structuredClone(OWN_READS)
 const DEFAULT_BACKFILL = structuredClone(BACKFILL_PAGE)
 afterEach(() => {
   Object.assign(PAGE, structuredClone(DEFAULT_PAGE))
-  Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
   Object.assign(BACKFILL_PAGE, structuredClone(DEFAULT_BACKFILL))
 })
 
@@ -86,19 +82,17 @@ async function plantTeam(t: T, f: OrgFixture, name: string) {
   return id
 }
 
-/* Takes org_id off memberships and shares, and parent_key off tasks, as
- * rows stored before them. */
+/* Takes org_id off memberships, and parent_key off tasks, as rows stored
+ * before them. */
 const unkey = (
   t: T,
   rows: {
     members?: readonly Doc<'team_members'>[]
-    shares?: readonly Doc<'project_team_access'>[]
     tasks?: readonly Doc<'issues'>[]
   },
 ) =>
   t.run(async (ctx) => {
     for (const m of rows.members ?? []) await ctx.db.patch(m._id, { org_id: undefined })
-    for (const s of rows.shares ?? []) await ctx.db.patch(s._id, { org_id: undefined })
     for (const task of rows.tasks ?? []) await ctx.db.patch(task._id, { parent_key: undefined })
   })
 
@@ -268,103 +262,6 @@ describe('a tasks window', () => {
   })
 })
 
-describe('a person in many teams', () => {
-  /* `me` in 20 teams, and 40 sub-projects with a task each, shared with
-   * one of 30 teams, half of them the person's */
-  async function teamsAndShares(t: T, f: OrgFixture) {
-    const me = await plantSeat(t, { org_id: f.org.id, org_role: 'user', name: 'Many' })
-    const teams: string[] = []
-    for (let i = 0; i < 30; i++) teams.push(await plantTeam(t, f, `T${i}`))
-    await t.run(async (ctx) => {
-      for (const team_id of teams.slice(0, 20))
-        await ctx.db.insert('team_members', {
-          team_id,
-          profile_id: me.id,
-          is_leader: false,
-          org_id: f.org.id,
-        })
-    })
-    const subs: Doc<'projects'>[] = []
-    for (let i = 0; i < 40; i++) {
-      const sub = await plantProject(t, {
-        org_id: f.org.id,
-        type: 'project',
-        parent_id: f.hidden.id,
-      })
-      subs.push(sub)
-      await plantIssue(t, { org_id: f.org.id, project_id: sub.id })
-      await t.run((ctx) =>
-        ctx.db.insert('project_team_access', {
-          project_id: sub.id,
-          team_id: teams[i % 2 === 0 ? i % 20 : 20 + (i % 10)],
-          level: 'user',
-          org_id: f.org.id,
-        }),
-      )
-    }
-    return { me, subs }
-  }
-
-  it("reads the organization's shares in one range instead of one range a project or a team, and as before while one lacks org_id", async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    const { me, subs } = await teamsAndShares(t, f)
-    OWN_READS.steps = [1]
-    const read = () =>
-      t.run(async (ctx) => {
-        const { ctx: counted, counts } = counting(ctx)
-        const answer = await readTasks(counted, me, whole)
-        if (answer.state !== 'ok') throw new Error(answer.state)
-        const levels = []
-        for (const p of subs) levels.push(await projectLevel(ctx, me, p))
-        return { shown: answer.issues.map((i) => i.project_id).sort(), counts, levels }
-      })
-    const keyed = await read()
-    // the person's teams share every other project
-    expect(keyed.shown).toEqual(
-      subs
-        .filter((_, i) => i % 2 === 0)
-        .map((p) => p.id)
-        .sort(),
-    )
-    expect(keyed.counts['project_team_access:by_org']).toBe(2)
-    expect(keyed.counts['project_team_access:by_project']).toBeUndefined()
-    expect(keyed.counts['project_team_access:by_team']).toBeUndefined()
-    // a share stored before org_id: project by project, the same
-    allowUnkeyedRows(t)
-    const share = await t.run(
-      async (ctx) =>
-        (await ctx.db
-          .query('project_team_access')
-          .withIndex('by_project', (q) => q.eq('project_id', subs[5].id))
-          .first())!,
-    )
-    await unkey(t, { shares: [share] })
-    const unkeyed = await read()
-    expect(unkeyed.shown).toEqual(keyed.shown)
-    expect(unkeyed.levels).toEqual(keyed.levels)
-    expect(unkeyed.counts['project_team_access:by_project']).toBeGreaterThanOrEqual(39)
-  })
-
-  it("shows a parent for navigation from the organization's shares, without reading team by team", async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    const { me, subs } = await teamsAndShares(t, f)
-    const answer = await t.run(async (ctx) => {
-      const { ctx: counted, counts } = counting(ctx)
-      const levels = projectLevelsOf(counted, me)
-      const level = await levels.level(f.hidden.id)
-      const projects = await readProjects(counted, me, whole)
-      return { level, counts, projects }
-    })
-    expect(answer.level).toBe('viewer')
-    expect(answer.counts['project_team_access:by_team']).toBeUndefined()
-    if (answer.projects.state !== 'ok') throw new Error(answer.projects.state)
-    expect(answer.projects.projects.map((p) => p.id)).toContain(f.hidden.id)
-    expect(answer.projects.projects.map((p) => p.id)).toContain(subs[0].id)
-  })
-})
-
 describe('the range keys check', () => {
   type Ctx = Parameters<Parameters<T['run']>[0]>[0]
   type Planted = { f: OrgFixture; parent: Doc<'issues'>; kid: Doc<'issues'> }
@@ -389,21 +286,12 @@ describe('the range keys check', () => {
           org_id: f.otherOrg.id,
         }),
     ],
-    [
-      'share',
-      (ctx, { f }) =>
-        ctx.db.insert('project_team_access', {
-          project_id: f.sub.id,
-          team_id: f.team.id,
-          level: 'user',
-        }),
-    ],
     ['subtask', (ctx, { kid }) => ctx.db.patch(kid._id, { parent_key: undefined })],
     ['subtask', (ctx, { kid }) => ctx.db.patch(kid._id, { parent_key: newWindowKey() })],
     ['top-level', (ctx, { parent }) => ctx.db.patch(parent._id, { parent_key: newWindowKey() })],
   ]
 
-  it('refuses a membership, a share or a subtask written without its field, or with a wrong one', async () => {
+  it('refuses a membership or a subtask written without its field, or with a wrong one', async () => {
     for (const [what, write] of cases) {
       const t = newT()
       const f = await withOrg(t)
@@ -496,12 +384,6 @@ describe('internal/rangeKeysBackfill', () => {
             is_leader: false,
             org_id: f.org.id,
           })
-        await ctx.db.insert('project_team_access', {
-          project_id: f.sub2.id,
-          team_id,
-          level: 'viewer',
-          org_id: f.org.id,
-        })
       }
     })
     const parents: Doc<'issues'>[] = []
@@ -517,17 +399,16 @@ describe('internal/rangeKeysBackfill', () => {
     // every row as stored before the fields
     const stored = await t.run(async (ctx) => ({
       members: await ctx.db.query('team_members').collect(),
-      shares: await ctx.db.query('project_team_access').collect(),
       kids: (await ctx.db.query('issues').collect()).filter((task) => task.parent_id !== undefined),
     }))
-    await unkey(t, { members: stored.members, shares: stored.shares, tasks: stored.kids })
+    await unkey(t, { members: stored.members, tasks: stored.kids })
     expect(await everything(t, f)).toEqual(shown)
     // a wrong one, a top-level task with one, and rows it cannot place: a
     // membership of a gone person and team, a subtask under a parent without
     // a window key
     const keyless = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await t.run(async (ctx) => {
-      await ctx.db.patch(stored.shares[0]._id, { org_id: f.otherOrg.id })
+      await ctx.db.patch(stored.members[0]._id, { org_id: f.otherOrg.id })
       await ctx.db.patch(parents[0]._id, { parent_key: 'stray' })
       await ctx.db.insert('team_members', { team_id: uuid(), profile_id: uuid(), is_leader: false })
       await ctx.db.patch(keyless._id, { window_key: undefined })
@@ -537,7 +418,7 @@ describe('internal/rangeKeysBackfill', () => {
     /* every page of `remaining` for each table, summed */
     const remaining = async () => {
       const out: Record<string, { rows: number; orphans: number }> = {}
-      for (const table of ['team_members', 'project_team_access', 'issues'] as const) {
+      for (const table of ['team_members', 'issues'] as const) {
         out[table] = { rows: 0, orphans: 0 }
         let cursor: string | null = null
         for (;;) {
@@ -551,10 +432,9 @@ describe('internal/rangeKeysBackfill', () => {
       }
       return out
     }
-    BACKFILL_PAGE.rows = { team_members: 2, project_team_access: 2, issues: 2 }
+    BACKFILL_PAGE.rows = { team_members: 2, issues: 2 }
     const before = {
       team_members: { rows: stored.members.length, orphans: 1 },
-      project_team_access: { rows: stored.shares.length, orphans: 0 },
       // the six subtasks, the stray key; the subtask under the keyless parent
       issues: { rows: 7, orphans: 1 },
     }
@@ -566,24 +446,22 @@ describe('internal/rangeKeysBackfill', () => {
     })
     // a run that stops at its time goes on from where it stopped
     BACKFILL_PAGE.runMs = 0
-    let from:
-      | { table: 'team_members' | 'project_team_access' | 'issues'; cursor: string | null }
-      | undefined
+    let from: { table: 'team_members' | 'issues'; cursor: string | null } | undefined
     const pieces: { rows: number; orphans: number }[] = []
     for (let runs = 0; runs < 100; runs++) {
       const part = await t.action(internal.internal.rangeKeysBackfill.run, { dry_run: true, from })
-      pieces.push(part.team_members, part.project_team_access, part.issues)
+      pieces.push(part.team_members, part.issues)
       if (part.next === null) break
       from = part.next
     }
-    expect(pieces.length / 3).toBeGreaterThan(3)
+    expect(pieces.length / 2).toBeGreaterThan(3)
     expect(pieces.reduce((n, c) => n + c.rows + c.orphans, 0)).toBe(
       Object.values(before).reduce((n, c) => n + c.rows + c.orphans, 0),
     )
     BACKFILL_PAGE.runMs = DEFAULT_BACKFILL.runMs
     expect(await remaining()).toEqual(before)
     // page by page, every part answers the same after each
-    for (const table of ['team_members', 'project_team_access', 'issues'] as const) {
+    for (const table of ['team_members', 'issues'] as const) {
       let cursor: string | null = null
       for (;;) {
         const page: { cursor: string | null; done: boolean } = await t.mutation(
@@ -597,7 +475,6 @@ describe('internal/rangeKeysBackfill', () => {
     }
     const left = {
       team_members: { rows: 0, orphans: 1 },
-      project_team_access: { rows: 0, orphans: 0 },
       issues: { rows: 0, orphans: 1 },
     }
     expect(await remaining()).toEqual(left)
@@ -613,7 +490,7 @@ describe('internal/rangeKeysBackfill', () => {
     // the orphaned membership is the only row left without its field
     const members = await t.run((ctx) => ctx.db.query('team_members').collect())
     expect(members.filter((m) => m.org_id === undefined)).toHaveLength(1)
-    const share = await t.run((ctx) => ctx.db.get(stored.shares[0]._id))
-    expect(share?.org_id).toBe(f.org.id)
+    const repaired = await t.run((ctx) => ctx.db.get(stored.members[0]._id))
+    expect(repaired?.org_id).toBe(f.org.id)
   })
 })

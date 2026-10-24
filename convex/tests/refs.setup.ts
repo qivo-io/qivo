@@ -40,7 +40,6 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'org_counters', field: 'org_id', target: 'organizations' },
   { table: 'teams', field: 'org_id', target: 'organizations' },
   { table: 'team_members', field: 'org_id', target: 'organizations' },
-  { table: 'project_team_access', field: 'org_id', target: 'organizations' },
   { table: 'team_members', field: 'team_id', target: 'teams' },
   { table: 'team_members', field: 'profile_id', target: 'profiles' },
   { table: 'profiles', field: 'org_id', target: 'organizations' },
