@@ -15,7 +15,6 @@ import {
   type ReactNode,
   type SyntheticEvent,
 } from 'react'
-import { Icon } from '@/components/qivo/icon'
 import { Avatar as UiAvatar } from '@/components/ui/avatar'
 import { avatarHooks } from '@/components/ui/avatar-hooks'
 import { buttonElement } from '@/components/ui/button-element'
@@ -24,6 +23,23 @@ import { staticTooltipTarget } from '@/components/ui/tooltip-target'
 import type { StaticControls } from '@/lib/liveControls'
 import { cn } from '@/lib/utils'
 import { type IssueVM, P } from '@/store/planner'
+
+/** The Lucide glyphs drawn by one element each (styles/glyphs.css). */
+type GlyphName = 'pause' | 'user'
+
+/** Lucide's `name` as one element painted through a mask, `size` pixels
+    square, in `color` (the text color by default). Rows that a page holds
+    thousands of, such as Board cards, use it in place of Icon: an inline
+    <svg> costs every frame while it is in the page, even hidden. */
+export function glyph(name: GlyphName, size: number, color?: string) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`glyph glyph-${name}`}
+      style={{ width: size, height: size, color }}
+    />
+  )
+}
 
 /** HoverTooltip: `children` with `content` as its tooltip. */
 export function hoverTooltip(
@@ -78,8 +94,8 @@ export function avatar(
         'aria-label': 'Unassigned',
         style: { width: size, height: size },
         className:
-          'grid place-items-center rounded-[5px] border border-dashed border-border-strong bg-surface-3',
-        children: <Icon name="user" size={size * 0.55} color="var(--text-3)" />,
+          'flex items-center justify-center rounded-[5px] border border-dashed border-border-strong bg-surface-3',
+        children: glyph('user', size * 0.55, 'var(--text-3)'),
       }),
     )
   // null until an uploaded picture's signed URL arrives (0097)
@@ -100,8 +116,10 @@ export function avatar(
         backgroundColor: u.color,
         boxShadow: ring ? '0 0 0 2px var(--surface-1)' : undefined,
       },
+      // centered by flex: a grid would keep its track sizes for every
+      // portrait, and a Board holds thousands
       className: cn(
-        'grid place-items-center rounded-[5px] font-semibold text-white',
+        'flex items-center justify-center rounded-[5px] font-semibold text-white',
         size === 20 ? 'rounded-[4px] text-[10px]' : '[font-size:var(--fs-sm)]',
       ),
       // one text node when there is no picture
@@ -263,16 +281,12 @@ export const OWNER_WRAP = {
   onClick: (event: MouseEvent) => event.stopPropagation(),
 }
 
-/** The portrait variant's face: `face` in a 28px box, or 18px when `compact`. */
+/** The portrait variant's face: `face`, a 28px portrait, as it is, or in
+    an 18px box that shrinks it when `compact`. */
 export function portraitFace(compact: boolean, face: ReactNode) {
+  if (!compact) return face
   return (
-    <span
-      className={
-        compact
-          ? 'inline-flex size-[18px] shrink-0 [&>*]:!size-[18px] [&>*]:!rounded-[4px] [&>*]:!text-[9px]'
-          : 'inline-flex size-7 shrink-0'
-      }
-    >
+    <span className="inline-flex size-[18px] shrink-0 [&>*]:!size-[18px] [&>*]:!rounded-[4px] [&>*]:!text-[9px]">
       {face}
     </span>
   )

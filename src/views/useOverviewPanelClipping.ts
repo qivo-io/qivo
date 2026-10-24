@@ -144,7 +144,17 @@ export function useOverviewPanelClipping(enabled: boolean) {
     }
     // Live task changes can add sections or move their natural edges. Ignore
     // attributes so the clips themselves never trigger another measurement.
-    const mutationObserver = new MutationObserver(() => {
+    // Rows coming and going inside a section's body, as its lists mount in
+    // slices, add or remove no section part; the body's ResizeObserver
+    // covers the height they change.
+    const mutationObserver = new MutationObserver((records) => {
+      if (
+        records.every(
+          (record) =>
+            record.target instanceof Element && record.target.closest('.overview-section-body'),
+        )
+      )
+        return
       syncObserved()
       schedule()
     })

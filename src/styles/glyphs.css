@@ -43,20 +43,72 @@
     center / 100% 100% no-repeat;
 }
 
-/* Both glyphs paint a background, which forced colors (Windows High
+/* The delay banner's block (kanbanCards.tsx DelayBanner): 30px of the
+   roadmap's yellow (Slipping) or red (Delayed) at the band's end, carrying
+   Lucide's clock-8 in white at stroke 2.4, 14px square. */
+.delay-banner {
+  position: relative;
+}
+.delay-banner::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  right: 0;
+  width: 30px;
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 6v6l-4 2'/%3E%3C/svg%3E")
+    center / 14px 14px no-repeat,
+    var(--delay-banner-late-block);
+}
+.delay-banner[data-delay="behind"]::after {
+  background-color: var(--delay-banner-behind-block);
+}
+
+/* Lucide's pause (the paused mark's, at stroke 2) and user (Unassigned's
+   portrait, at 1.75) in the text color, one element each (qivo/icon.tsx
+   glyph). An inline <svg> costs the page on every frame for as long as it
+   is in the page, shown or not, and a kept Board holds thousands. */
+.glyph {
+  display: block;
+  flex-shrink: 0;
+  background: currentColor;
+}
+.glyph-pause {
+  mask:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='14' y='3' width='5' height='18' rx='1'/%3E%3Crect x='5' y='3' width='5' height='18' rx='1'/%3E%3C/svg%3E")
+    center / 100% 100% no-repeat;
+}
+.glyph-user {
+  mask:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2'/%3E%3Ccircle cx='12' cy='7' r='4'/%3E%3C/svg%3E")
+    center / 100% 100% no-repeat;
+}
+
+/* The glyphs paint a background, which forced colors (Windows High
    Contrast) and printing without backgrounds would drop: draw them in the
    text color there. */
 .prio-bars,
-.due-date::before {
+.due-date::before,
+.glyph,
+.delay-banner::after {
   print-color-adjust: exact;
 }
 @media (forced-colors: active) {
   .prio-bars,
-  .due-date::before {
+  .due-date::before,
+  .glyph,
+  .delay-banner::after {
     forced-color-adjust: none;
   }
-  .due-date::before {
+  .due-date::before,
+  .glyph {
     background: CanvasText;
+  }
+  .delay-banner::after {
+    background: CanvasText;
+    mask:
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 6v6l-4 2'/%3E%3C/svg%3E")
+      center / 14px 14px no-repeat;
   }
   .prio-bars {
     background: linear-gradient(to right, CanvasText var(--prio-fill), GrayText var(--prio-fill));

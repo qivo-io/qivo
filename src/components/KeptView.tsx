@@ -1,4 +1,6 @@
 import { Activity, memo, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { settleHiddenBlocks } from '@/lib/keptBlocks'
+import { postMessageTask } from '@/lib/postTask'
 import { useLatest } from '@/lib/useLatest'
 import { createHiddenState, HiddenViewContext } from '@/lib/viewHidden'
 import { createTeardown, TeardownContext } from '@/lib/viewTeardown'
@@ -8,7 +10,10 @@ import { createTeardown, TeardownContext } from '@/lib/viewTeardown'
    While hidden it sits after the shown view, in React's Activity, which
    stops its effects (its timers, observers and listeners) and renders its
    updates only when nothing else waits. It does not render for its
-   parent's new props until it shows again. Its floating layers
+   parent's new props until it shows again, and not in the task that shows
+   it: that task shows it as it was, and the render for its parent's new
+   props follows in a task of its own once that frame has painted, as the
+   next update would. Its floating layers
    (lib/viewHidden.ts) close a commit before the rest hides, so no pop-up
    of it stays in the page.
 
@@ -26,7 +31,8 @@ import { createTeardown, TeardownContext } from '@/lib/viewTeardown'
    shown view's elements, or puts focus back (lib/viewHidden.ts OUT_OF_USE),
    passes it by. It is not `inert` and keeps its pointer events: both are
    inherited, so changing either would restyle every element of the Board
-   when it shows again.
+   when it shows again. Its blocks that skip their cards while offscreen
+   (DeferredList.tsx) skip them for good while it hides (lib/keptBlocks.ts).
 
    When its scope goes, the kept Board leaves (ViewKeeper): it stays hidden
    until the next view has painted, then comes apart a slice at a time
@@ -34,6 +40,9 @@ import { createTeardown, TeardownContext } from '@/lib/viewTeardown'
 
 /** A hidden view takes no room and draws nothing. */
 const HIDDEN = '[content-visibility:hidden] !h-0 ![flex:none]'
+
+/** Runs `callback` in a task once the next frame has painted. */
+const afterPaint = (callback: () => void) => requestAnimationFrame(() => postMessageTask(callback))
 
 /** What `children` rendered last while `frozen` was false. */
 const Frozen = memo(
@@ -68,6 +77,20 @@ export function KeptView({
   // hiding takes two commits: the layers close, then Activity hides the rest
   const [mode, setMode] = useState<'visible' | 'closing' | 'hidden'>('visible')
   if (shown && mode !== 'visible') setMode('visible')
+  // shown again, it shows what it held at once, and renders its parent's
+  // new content in a task of its own once that has painted
+  const [current, setCurrent] = useState(true)
+  if (!shown && current) setCurrent(false)
+  useEffect(() => {
+    if (!shown || current) return
+    let stopped = false
+    afterPaint(() => {
+      if (!stopped) setCurrent(true)
+    })
+    return () => {
+      stopped = true
+    }
+  }, [shown, current])
   useLayoutEffect(() => {
     if (shown) {
       hidden.set(false)
@@ -95,6 +118,12 @@ export function KeptView({
     watch.observe(element, { subtree: true, childList: true, attributeFilter: ['style'] })
     return () => watch.disconnect()
   }, [mode, teardown])
+  // once hidden, its blocks stop skipping their items only while offscreen,
+  // and their marks come off in the commit that shows it
+  useLayoutEffect(
+    () => (mode === 'hidden' && box.current ? settleHiddenBlocks(box.current) : undefined),
+    [mode],
+  )
   const gone = useLatest(() => onGone?.())
   useEffect(
     () => (leaving && mode === 'hidden' ? teardown.leave(gone) : undefined),
@@ -113,7 +142,7 @@ export function KeptView({
             {/* the one element Activity hides, and so the one shown again;
                a Suspense inside keeps its own hidden content hidden */}
             <div data-kept-content className="contents">
-              <Frozen frozen={!shown}>{children}</Frozen>
+              <Frozen frozen={!shown || !current}>{children}</Frozen>
             </div>
           </Activity>
         </TeardownContext.Provider>

@@ -80,6 +80,13 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
+/** Lets the frame paint and the task after it run. */
+const painted = () =>
+  act(async () => {
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  })
+
 const show = (shown: boolean, label = 'board', layers = false) =>
   act(async () =>
     root.render(
@@ -119,14 +126,19 @@ describe('KeptView', () => {
     expect(counts.mounts).toBe(1)
   })
 
-  it('does not render for new props while hidden, and shows the latest ones', async () => {
+  it('does not render for new props while hidden, and shows the latest ones after it shows', async () => {
     await show(true, 'first')
     await show(false, 'first')
     counts.renders.length = 0
     await show(false, 'second')
     expect(counts.renders).toEqual([])
     expect(board()?.dataset.board).toBe('first')
+    // the task that shows it shows it as it was, without a render
     await show(true, 'second')
+    expect(counts.renders).toEqual([])
+    expect(board()?.dataset.board).toBe('first')
+    await painted()
+    expect(counts.renders).toEqual(['second'])
     expect(board()?.dataset.board).toBe('second')
   })
 

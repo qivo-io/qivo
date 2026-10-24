@@ -31,3 +31,11 @@
   /* Focus rings may extend beyond the block's paint containment. */
   content-visibility: visible;
 }
+
+/* A block of a kept view behind another page (KeptView.tsx) skips its
+   items until the view shows again, and keeps their layout: the browser
+   checks a block that skips only while offscreen on every frame
+   (lib/keptBlocks.ts marks it). */
+.deferred-block[data-kept-hidden] {
+  content-visibility: hidden;
+}
