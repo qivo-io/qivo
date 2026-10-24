@@ -438,6 +438,9 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
      instead and the pane says so. */
   const paneIssue = openIssue ? P.issueById[openIssue] : null
   const [deadItem, setDeadItem] = useState(null as string | null) // item id (= issue uuid)
+  // Back or Forward to a task still to arrive (App pendingTask): the pane
+  // says it is loading
+  const waiting = !paneIssue && !deadItem && !!openIssue && P.stillLoading() !== null
   // deadItem while its task may be one still to arrive (selectNow)
   const arriving = useRef<string | null>(null)
   /* The pane is the discussion alone — no details column fits beside a 380px
@@ -479,11 +482,15 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
         setDeadItem(null)
         return
       }
+      if (waiting) {
+        openTask(null)
+        return
+      }
       onExit?.()
     }
     window.addEventListener('keydown', k)
     return () => window.removeEventListener('keydown', k)
-  }, [onExit, paneIssue, deadItem])
+  }, [onExit, paneIssue, deadItem, waiting, openTask])
 
   const q = mobile ? '' : search.trim()
   const visible = P.messageGroups
@@ -576,7 +583,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   return (
     <div
       data-inbox
-      data-inbox-mobile-detail={mobile && (paneIssue || deadItem) ? '' : undefined}
+      data-inbox-mobile-detail={mobile && (paneIssue || deadItem || waiting) ? '' : undefined}
       className="inbox-layout animate-in fade-in slide-in-from-bottom-1"
     >
       {/* left: the message list */}
@@ -839,8 +846,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
                 : 'This task is still loading. It opens here once it arrives.'}
             </PaneNote>
           </>
-        ) : openIssue && P.stillLoading() !== null ? (
-          // Back or Forward to a task still to arrive (App pendingTask)
+        ) : waiting ? (
           <>
             {mobile && (
               <Button
