@@ -161,7 +161,7 @@ Qivo does not use (SSO, SCIM, Stripe, passkey, API keys).
    the APIs the plugins call. Note each change in the header of the file it
    touches.
 4. Regenerate the schema from `convex/betterAuth`:
-   `npx auth@<release> generate --output convex/betterAuth/schema.generated.ts`.
+   `npx auth@<release> generate --output schema.generated.ts`.
    Format it, read the diff, and keep `schema.ts`'s additions in step
    (`convex/tests/betterAuthAdapter.test.ts` checks the indexes). A field the
    new schema drops stays optional in `schema.ts` until a backfill removes it.

@@ -3,7 +3,7 @@
  * To regenerate the schema, from your project root:
  *
  *   cd convex/betterAuth
- *   npx auth generate --output convex/betterAuth/schema.generated.ts
+ *   npx auth generate --output schema.generated.ts
  *
  * To customize the schema, generate to an alternate file and import
  * the table definitions to your schema file. See
