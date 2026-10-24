@@ -19,7 +19,10 @@ import {
 
 declare const crypto: { randomUUID(): string }
 
+// A receipt page may write a count for each receipt. Document and file
+// pages only add sizes, so they take more rows; PAGE_BYTES bounds them all.
 const PAGE = 64
+const SIZE_PAGE = 512
 const PAGE_BYTES = 512 * 1024
 const STALE_MS = 10 * 60_000
 const RESTART_MS = 2 * 60 * 60_000
@@ -86,10 +89,11 @@ export const samplePage = internalMutation({
       .unique()
     if (!scan || scan.run_id !== run_id || scan.step !== step || scan.schema_key !== SCHEMA_KEY)
       return null
+    const rows = scan.phase === 'receipts' ? PAGE : SIZE_PAGE
     const options = {
       cursor: scan.cursor ?? null,
-      numItems: PAGE,
-      maximumRowsRead: PAGE,
+      numItems: rows,
+      maximumRowsRead: rows,
       maximumBytesRead: PAGE_BYTES,
     }
     let phase = scan.phase
@@ -103,6 +107,14 @@ export const samplePage = internalMutation({
       if (page.isDone) phase = 'database'
       else cursor = page.continueCursor
     } else if (phase === 'database') {
+      // An empty table adds nothing. Pass each one at the start of this step
+      // instead of spending a step on it: most are empty without demos.
+      while (
+        scan.cursor === undefined &&
+        tableIndex < DEMO_STORAGE_TABLES.length - 1 &&
+        !(await ctx.db.query(DEMO_STORAGE_TABLES[tableIndex]).first())
+      )
+        tableIndex++
       const page = await ctx.db.query(DEMO_STORAGE_TABLES[tableIndex]).paginate(options)
       for (const row of page.page) databaseBytes += estimateDocumentBytes(row)
       if (page.isDone) {

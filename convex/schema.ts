@@ -128,6 +128,8 @@ const projectsTable = defineTable({
   .index('by_parent', ['parent_id'])
   .index('by_team', ['team_id'])
   .index('by_lead', ['lead_id']) // projects_lead_idx — removeProfile's SET NULL
+  // The nightly archive pages the live projects (archived_at absent).
+  .index('by_archived_org', ['archived_at', 'org_id'])
 
 const projectAccessTable = defineTable({
   project_id: v.string(), // explicit grants may target a project or sub-project
@@ -202,10 +204,12 @@ const issuesTable = defineTable({
   // the app's task and hidden load windows: a range of active tasks' window
   // keys (lib/workspaceParts.ts)
   .index('by_org_archived_window', ['org_id', 'archived_at', 'window_key'])
-  // The nightly archive reads only Done tasks past the shortest threshold.
-  .index('by_org_archived_status_done', ['org_id', 'archived_at', 'status', 'done_at'])
-  // The nightly repair finds active tasks still flagged relations_marked.
-  .index('by_org_archived_marked', ['org_id', 'archived_at', 'relations_marked'])
+  // The nightly archive reads only a live project's Done tasks past the
+  // threshold.
+  .index('by_project_archived_status_done', ['project_id', 'archived_at', 'status', 'done_at'])
+  // The nightly repair finds the organizations with active tasks still
+  // flagged relations_marked, and each one's flagged tasks.
+  .index('by_archived_marked_org', ['archived_at', 'relations_marked', 'org_id'])
   .index('by_org_num', ['org_id', 'num'])
   .index('by_project', ['project_id'])
   // An access removal reads only the open tasks of the projects it touches.
@@ -371,6 +375,8 @@ export default defineSchema({
     cleanup_progress_at: v.optional(v.number()),
     cleanup_scheduled_id: v.optional(v.id('_scheduled_functions')),
     cleanup_file_after: v.optional(v.number()),
+    // No longer written: the purge now waits for checkStoredFiles instead of
+    // paging every stored file. Remove once no receipt holds one.
     cleanup_file_cursor: v.optional(v.string()),
     cleanup_file_wait_until: v.optional(v.number()),
     // Counters a receipt kept before demo_write_counts. New writes count
@@ -431,6 +437,14 @@ export default defineSchema({
     .index('by_state_started', ['state', 'started_at'])
     .index('by_state_lease', ['state', 'lease_until'])
     .index('by_expiry', ['expires_at']),
+
+  // At most one row: how far the demo upload recovery and the demo purge have
+  // checked stored files (model/demoUploads.ts checkStoredFiles). No row
+  // makes the next check start at the oldest file.
+  demo_upload_sweeps: defineTable({
+    // the creation time of the newest file it checked, epoch milliseconds
+    checked_through: v.number(),
+  }),
 
   // Anonymous admission counters contain no addresses or workspace data.
   // Global admission windows expire automatically; no client IP is stored.
@@ -1078,6 +1092,14 @@ export default defineSchema({
     .index('by_profile_expiry', ['profile_id', 'expires_at'])
     .index('by_expiry', ['expires_at']),
 
+  // At most one row, written by the last leg of each finished files.ts
+  // reapOrphans run. No row makes the next run a full one.
+  orphan_reaps: defineTable({
+    // every stored file created at or before this has been checked
+    files_through: v.number(), // epoch milliseconds
+    full_at: v.number(), // the start of the last finished full run, epoch milliseconds
+  }),
+
   milestones: milestonesTable,
 
   /* Deleted items (model/deletedItems.ts). Deleting a task or a project
@@ -1460,7 +1482,10 @@ export default defineSchema({
     kind: vMessageKind,
     detail: v.string(),
     created_at: v.string(),
-    read_at: v.optional(v.string()), // client-writable (markRead/markUnread; snooze and wake clear it)
+    // client-writable (markRead/markUnread; snooze and wake clear it). A
+    // write that leaves a row read and not snoozed keeps message_sweeps in
+    // step (model/messages.ts noteSweepable).
+    read_at: v.optional(v.string()),
     // Snooze: the item is hidden on every client until this ISO instant, when
     // the scheduled messages.wake clears it (or an arrival does — news wakes
     // the row). Every row of one (recipient, issue) item carries the SAME
@@ -1493,8 +1518,31 @@ export default defineSchema({
     // the snoozed ones, which an archive step also releases
     .index('by_issue_snoozed', ['issue_id', 'snoozed_until'])
     .index('by_actor', ['actor_id']) // messages_actor_idx — removeProfile's SET NULL
-    // the nightly sweep's fallback wake finds a recipient's overdue snoozes
-    .index('by_recipient_snoozed', ['recipient_id', 'snoozed_until']),
+    // the nightly sweep's fallback wake finds the overdue snoozes of every
+    // recipient in one range
+    .index('by_snoozed', ['snoozed_until']),
+
+  // When the nightly read-message sweep next visits a profile (jobs.ts
+  // sweepReadMessages): no later than the oldest of its read, unsnoozed
+  // messages falls due under its retention period. At most one row per
+  // profile, and none for a profile with nothing the sweep could delete.
+  // The writes that make a message read keep it in step
+  // (model/messages.ts noteSweepable), and the sweep moves it to the next
+  // due time or deletes it.
+  message_sweeps: defineTable({
+    profile_id: v.string(),
+    due_at: v.string(), // ISO instant
+  })
+    .index('by_profile', ['profile_id'])
+    .index('by_due', ['due_at']),
+
+  // At most one row: when the read-message sweep finished giving every
+  // profile with a retention period a message_sweeps row, which covers the
+  // messages read before that table existed. No row makes the next run do
+  // it (jobs.ts sweepReadMessages).
+  message_sweep_seeds: defineTable({
+    seeded_at: v.string(), // ISO instant
+  }),
 
   user_prefs: defineTable({
     profile_id: v.string(),

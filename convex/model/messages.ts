@@ -42,6 +42,7 @@ import { reviewerOwns, taskOwnerId } from '../lib/review'
 import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { scheduleArchiveMarks } from './archiveMarks'
 import { newUuid } from './orgs'
+import { messageRetentionDays } from './people'
 import { emitTaskEvent } from './taskEvents'
 
 /* The line a reviewer reads when a task becomes theirs to review. */
@@ -128,7 +129,9 @@ export async function wakeSnoozedItem(
   for (const r of item) {
     if (r._id === newest._id) {
       if (!waking.has(r._id)) continue
-      await ctx.db.patch(r._id, { snoozed_until: undefined, read_at: r.read_at ?? now })
+      const readAt = r.read_at ?? now
+      await ctx.db.patch(r._id, { snoozed_until: undefined, read_at: readAt })
+      await noteSweepable(ctx, a.recipient_id, readAt)
     } else if (waking.has(r._id) || r.read_at !== undefined) {
       await ctx.db.delete(r._id)
     } else {
@@ -137,6 +140,57 @@ export async function wakeSnoozedItem(
     written += 1
   }
   return written
+}
+
+/* ------------------------------------------------------- sweep schedule
+ * The nightly read-message sweep (jobs.ts sweepReadMessages) visits only
+ * the profiles whose message_sweeps row is due. The rule that keeps it from
+ * skipping a row: a profile with a retention period that holds a read,
+ * unsnoozed message has a sweep row due no later than that message's
+ * read_at plus the period. Every write here that leaves a row read and not
+ * snoozed calls noteSweepable with the row's read_at (mark read, mark all
+ * read, the archive's read steps, a notice stored read, and a snooze that
+ * ends on a read row), and a change of the period calls lowerSweepDue
+ * (profiles.ts setMessageRetention). The sweep moves the row to the next
+ * due time it finds, or deletes it. Deletion is always decided from the
+ * messages themselves, so a row due too early costs one visit and nothing
+ * else. */
+
+/** Brings `profileId`'s message_sweeps row forward to `due`, adding the row
+ * when it has none. A row already due by then stays as it is. */
+export async function lowerSweepDue(
+  ctx: MutationCtx,
+  profileId: string,
+  due: string,
+): Promise<void> {
+  const row = await ctx.db
+    .query('message_sweeps')
+    .withIndex('by_profile', (q) => q.eq('profile_id', profileId))
+    .first()
+  if (row === null) await ctx.db.insert('message_sweeps', { profile_id: profileId, due_at: due })
+  else if (row.due_at > due) await ctx.db.patch(row._id, { due_at: due })
+}
+
+/** Records that a message of `recipient`, read at `readAt`, is now read and
+ * not snoozed, so the sweep deletes it once the recipient's retention
+ * period has passed. A recipient who keeps read messages, or who is gone,
+ * needs nothing. */
+export async function noteSweepable(
+  ctx: MutationCtx,
+  recipient: Doc<'profiles'> | string,
+  readAt: string,
+): Promise<void> {
+  const p = typeof recipient === 'string' ? await byId(ctx, 'profiles', recipient) : recipient
+  const days = p === null ? null : messageRetentionDays(p)
+  if (p === null || days === null) return
+  await lowerSweepDue(ctx, p.id, new Date(Date.parse(readAt) + days * 86_400_000).toISOString())
+}
+
+/* Adds `readAt` to `earliest`, the oldest read_at that became sweepable per
+ * recipient in one step, for noteSweepable once the step is done. */
+function noteEarliest(earliest: Map<string, string>, recipientId: string, readAt: string): void {
+  const known = earliest.get(recipientId)
+  if (known === undefined || readAt < known) earliest.set(recipientId, readAt)
 }
 
 /* Oldest first by (created_at, id), the total order the prune uses too. */
@@ -566,12 +620,19 @@ export async function postMessage(
   // only drop the snooze (no woke_at — the new row's created_at floats and
   // announces the item), and the scheduled wake later finds nothing to do.
   // An arrival stored read drops it too, so every row of the item keeps the
-  // same stamp; the archive's background step would drop it anyway.
+  // same stamp; the archive's background step would drop it anyway. A read
+  // row that loses its snooze, like an arrival stored read, can be swept.
+  let sweepable = row.read_at
   if (rows[0]?.snoozed_until !== undefined) {
     for (const r of await pairRows(ctx, pair)) {
-      if (r.snoozed_until !== undefined) await ctx.db.patch(r._id, { snoozed_until: undefined })
+      if (r.snoozed_until === undefined) continue
+      await ctx.db.patch(r._id, { snoozed_until: undefined })
+      if (r.read_at !== undefined && (sweepable === undefined || r.read_at < sweepable)) {
+        sweepable = r.read_at
+      }
     }
   }
+  if (sweepable !== undefined) await noteSweepable(ctx, recipient, sweepable)
   // The prune (pruneReadMessages): the item keeps its newest row, read or
   // not, and no other read row. A read row newer than the arrival survives
   // it: one of this same instant, or any row newer than a background step's
@@ -819,6 +880,7 @@ export async function markMessagesRead(
   for (const issue_id of issues) {
     await pruneReadMessages(ctx, { recipient_id: me.id, issue_id })
   }
+  if (issues.size > 0) await noteSweepable(ctx, me, now)
   return issues
 }
 
@@ -983,6 +1045,7 @@ export async function markAllMessagesRead(
   for (const issue_id of new Set(batch.map((row) => row.issue_id))) {
     await pruneStampedItem(ctx, { recipient_id: me.id, issue_id }, INBOX_BATCH)
   }
+  if (batch.length > 0) await noteSweepable(ctx, me, now)
   return { marked: batch, hasMore: rows.length > INBOX_BATCH, before: cutoff }
 }
 
@@ -1080,7 +1143,7 @@ export async function snoozeMessages(
  * stored before, every archive path schedules background steps
  * (scheduleArchivedReads). Those paths are archiveIssueCore and the machine
  * toggle in updateIssueCore with the subtree they stamp, the nightly sweep
- * (jobs.ts archiveOrg) and archiveProjectCore. The marking happens
+ * (jobs.ts archiveProject) and archiveProjectCore. The marking happens
  * in steps because one task can have many followers with up to
  * ITEM_UNREAD_CAP + 1 rows each, so a big subtree, a project or a nightly
  * leg could pass the archiving transaction's write limit. Each step marks
@@ -1162,13 +1225,15 @@ const stepLimit = (limit: number | undefined, fallback: number): number =>
  * prune, are never scanned and the step reads at most about `budget` rows
  * however many people follow the task. The snoozed range is checked even
  * when the unread rows used the whole budget, so a read row that kept its
- * snooze is never left to wake unread later. `more` says rows remain for
+ * snooze is never left to wake unread later. Each row it leaves read adds
+ * its read_at to `earliest` (noteEarliest). `more` says rows remain for
  * the next step. */
 async function readTaskMessages(
   ctx: MutationCtx,
   issueId: string,
   now: string,
   budget: number,
+  earliest: Map<string, string>,
 ): Promise<{ marked: number; more: boolean }> {
   const unread = await ctx.db
     .query('messages')
@@ -1195,10 +1260,16 @@ async function readTaskMessages(
       touched.push(row)
     }
   }
+  for (const row of touched) noteEarliest(earliest, row.recipient_id, row.read_at ?? now)
   for (const recipient_id of new Set(touched.map((row) => row.recipient_id))) {
     await pruneStampedItem(ctx, { recipient_id, issue_id: issueId }, budget)
   }
   return { marked: touched.length, more }
+}
+
+/* Calls noteSweepable once per recipient a read step left rows read for. */
+async function noteSweepables(ctx: MutationCtx, earliest: Map<string, string>): Promise<void> {
+  for (const [recipientId, readAt] of earliest) await noteSweepable(ctx, recipientId, readAt)
 }
 
 /**
@@ -1226,6 +1297,7 @@ export async function readArchivedTaskMessages(
     return project
   }
   let rest: readonly string[] = []
+  const earliest = new Map<string, string>()
   for (const [i, issueId] of a.issues.entries()) {
     if (budget === 0) {
       rest = a.issues.slice(i)
@@ -1239,13 +1311,14 @@ export async function readArchivedTaskMessages(
     ) {
       continue
     }
-    const step = await readTaskMessages(ctx, issue.id, a.now, budget)
+    const step = await readTaskMessages(ctx, issue.id, a.now, budget, earliest)
     budget -= step.marked
     if (step.more) {
       rest = a.issues.slice(i)
       break
     }
   }
+  await noteSweepables(ctx, earliest)
   if (rest.length > 0) {
     await ctx.scheduler.runAfter(0, readArchivedTasksRef, { issues: [...rest], batch: a.batch })
   }
@@ -1290,18 +1363,20 @@ export async function readArchivedProjectMessages(
       maximumBytesRead: ARCHIVED_READ_TASK_BYTES,
     })
   let unfinished = false
+  const earliest = new Map<string, string>()
   for (const task of page.page) {
     if (budget === 0) {
       unfinished = true
       break
     }
-    const step = await readTaskMessages(ctx, task.id, a.now, budget)
+    const step = await readTaskMessages(ctx, task.id, a.now, budget, earliest)
     budget -= step.marked
     if (step.more) {
       unfinished = true
       break
     }
   }
+  await noteSweepables(ctx, earliest)
   if (!unfinished && page.isDone) return
   await ctx.scheduler.runAfter(0, readArchivedProjectRef, {
     project_id: project.id,
@@ -1927,7 +2002,7 @@ export async function notifyIssueInsert(
  * descendants (model/issues.ts archiveSubtree), so one archive click is one
  * message, the root's, per subscriber. The flag sits upstream of the
  * fan-out, so it cannot multiply per subscriber. The nightly archive sweep
- * (jobs.ts archiveOrg) does not call this and posts no message.
+ * (jobs.ts archiveProject) does not call this and posts no message.
  *
  * Ownership (#314): when the task passes to someone else (lib/review.ts's
  * taskOwnerId), the new owner starts following it. A reviewer handed the

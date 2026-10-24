@@ -32,10 +32,28 @@ async function reserveWorker(ctx: MutationCtx, kind: WorkerKind): Promise<void> 
   else await ctx.db.insert('webhook_workers', { kind, generation, scheduled_job, rerun: false })
 }
 
+const DUE_STATUSES = ['pending', 'queued', 'sending'] as const
+
+/** Whether a delivery is due by `now`: at most one row per status. */
+async function deliveryDue(ctx: MutationCtx, now: number): Promise<boolean> {
+  const first = await Promise.all(
+    DUE_STATUSES.map((status) =>
+      ctx.db
+        .query('webhook_deliveries')
+        .withIndex('by_status_scheduled', (q) => q.eq('status', status).lte('scheduled_for', now))
+        .first(),
+    ),
+  )
+  return first.some((row) => row !== null)
+}
+
+/* The cron and every wake reserve a worker only when its batch would find
+ * work, so an idle minute writes nothing. A reservation whose job died stays
+ * until then; the first wake that finds work replaces it (reserveWorker). */
 export const expand = internalMutation({
   args: {},
   handler: async (ctx): Promise<null> => {
-    await reserveWorker(ctx, 'expand')
+    if (await ctx.db.query('webhook_events').first()) await reserveWorker(ctx, 'expand')
     return null
   },
 })
@@ -43,7 +61,7 @@ export const expand = internalMutation({
 export const dispatch = internalMutation({
   args: {},
   handler: async (ctx): Promise<null> => {
-    await reserveWorker(ctx, 'dispatch')
+    if (await deliveryDue(ctx, Date.now())) await reserveWorker(ctx, 'dispatch')
     return null
   },
 })
@@ -125,7 +143,7 @@ async function dispatchBatch(ctx: MutationCtx): Promise<boolean> {
   const now = Date.now()
   const due = (
     await Promise.all(
-      (['pending', 'queued', 'sending'] as const).map((status) =>
+      DUE_STATUSES.map((status) =>
         ctx.db
           .query('webhook_deliveries')
           .withIndex('by_status_scheduled', (q) => q.eq('status', status).lte('scheduled_for', now))
@@ -188,13 +206,5 @@ async function dispatchBatch(ctx: MutationCtx): Promise<boolean> {
   // Only continue a batch that still has due work. Future leases are recovered
   // by the cron; completions and retry timers wake their own newly ready work.
   // Keeping future timer chains alive multiplies every expansion/finish wake.
-  const dueRemains = await Promise.all(
-    (['pending', 'queued', 'sending'] as const).map((status) =>
-      ctx.db
-        .query('webhook_deliveries')
-        .withIndex('by_status_scheduled', (q) => q.eq('status', status).lte('scheduled_for', now))
-        .first(),
-    ),
-  )
-  return dueRemains.some((row) => row !== null)
+  return deliveryDue(ctx, now)
 }

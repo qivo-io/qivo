@@ -161,8 +161,61 @@ export async function assertDemoFileOwnership(
     throw forbidden('This file does not belong to this demo upload.')
 }
 
+/** How many stored files one page of checkStoredFiles reads. */
+export const CHECK_FILES = 64
+
+/** Checks the next page of stored files for bytes nothing records, as a
+ * receiver that crashed after storing them leaves. Each file is checked
+ * once, oldest first: those created after the last one checked
+ * (demo_upload_sweeps) and before every receiver that could still claim one
+ * started, with 120 seconds for commits to settle. A file that nothing uses
+ * and no live ticket holds is deleted. One in use or held then is deleted by
+ * whatever releases it: its ticket's expiry (demoUploads.ts sweep), its
+ * demo's purge (drainDemoUploads), or files.ts reapOrphans. Returns the
+ * creation time of the last file checked and whether the page was full. */
+export async function checkStoredFiles(
+  ctx: MutationCtx,
+  progress: Doc<'demo_upload_sweeps'> | null,
+): Promise<{ through: number; full: boolean }> {
+  const now = Date.now()
+  const from = progress?.checked_through ?? 0
+  const workers = await ctx.db
+    .query('demo_uploads')
+    .withIndex('by_state_lease', (q) => q.eq('state', 'receiving').gt('lease_until', now))
+    .take(1001)
+  const safeBefore =
+    workers.length === 1001
+      ? 0
+      : Math.min(now - 120_000, ...workers.map((worker) => worker.started_at ?? 0))
+  if (safeBefore <= from) return { through: from, full: false }
+  const files = await ctx.db.system
+    .query('_storage')
+    .withIndex('by_creation_time', (q) =>
+      q.gt('_creationTime', from).lt('_creationTime', safeBefore),
+    )
+    .take(CHECK_FILES)
+  for (const file of files) {
+    if (await storageIdInUse(ctx, file._id)) continue
+    const ticket = await ctx.db
+      .query('demo_uploads')
+      .withIndex('by_storage', (q) => q.eq('storage_id', file._id))
+      .unique()
+    if (ticket && ticket.expires_at > now) continue
+    await ctx.storage.delete(file._id)
+  }
+  if (!files.length) return { through: from, full: false }
+  const through = files[files.length - 1]._creationTime
+  if (progress) await ctx.db.patch(progress._id, { checked_through: through })
+  else await ctx.db.insert('demo_upload_sweeps', { checked_through: through })
+  return { through, full: files.length === CHECK_FILES }
+}
+
 /** Cleanup keeps the receipt until receiving work finishes or its runtime
- * limit elapses. Late finalizers always refuse missing/expired ownership. */
+ * limit elapses. Late finalizers always refuse missing/expired ownership.
+ * Bytes a crashed receiver of the demo left are recorded nowhere. They
+ * predate the barrier, so the demo waits until checkStoredFiles has checked
+ * every file created before it, and checks pages itself meanwhile. It reads
+ * only files no check has read yet, not every stored file. */
 export async function drainDemoUploads(ctx: MutationCtx, demoId: string): Promise<boolean> {
   const rows = await ctx.db
     .query('demo_uploads')
@@ -188,37 +241,23 @@ export async function drainDemoUploads(ctx: MutationCtx, demoId: string): Promis
     return false
   }
   if (Date.now() < receipt.cleanup_file_after) return false
-  const quietBefore = receipt.cleanup_file_after - 120_000
-  // An unknown orphan may belong to another receiving request. Only sweep
-  // the settled interval: newer jobs/files fall outside this receipt's scan.
-  const workers = await ctx.db
-    .query('demo_uploads')
-    .withIndex('by_state_lease', (q) => q.eq('state', 'receiving').gt('lease_until', Date.now()))
-    .take(1001)
-  if (
-    workers.length === 1001 ||
-    workers.some((worker) => (worker.started_at ?? 0) <= quietBefore)
-  ) {
-    await ctx.db.patch(receipt._id, { cleanup_file_wait_until: Date.now() + 5000 })
-    return false
-  }
-  const page = await ctx.db.system
-    .query('_storage')
-    .paginate({ cursor: receipt.cleanup_file_cursor ?? null, numItems: 64 })
-  for (const file of page.page) {
-    if (Math.floor(file._creationTime) > quietBefore || (await storageIdInUse(ctx, file._id)))
-      continue
-    const owner = await ctx.db
-      .query('demo_uploads')
-      .withIndex('by_storage', (q) => q.eq('storage_id', file._id))
-      .unique()
-    if (owner) continue
-    await eraseFile(ctx, file._id)
-  }
-  if (!page.isDone)
-    await ctx.db.patch(receipt._id, {
-      cleanup_file_cursor: page.continueCursor,
-      cleanup_file_wait_until: undefined,
-    })
-  return page.isDone
+  // Files whose creation millisecond is at or before the barrier's start.
+  const quietBefore = receipt.cleanup_file_after - 120_000 + 1
+  const { through, full } = await checkStoredFiles(
+    ctx,
+    await ctx.db.query('demo_upload_sweeps').first(),
+  )
+  const unchecked =
+    through < quietBefore &&
+    (await ctx.db.system
+      .query('_storage')
+      .withIndex('by_creation_time', (q) =>
+        q.gt('_creationTime', through).lt('_creationTime', quietBefore),
+      )
+      .first())
+  if (!unchecked) return true
+  // A full page continues at once. Otherwise a receiver that could still
+  // claim a file, or the settling time, holds the check back.
+  if (!full) await ctx.db.patch(receipt._id, { cleanup_file_wait_until: Date.now() + 5000 })
+  return false
 }

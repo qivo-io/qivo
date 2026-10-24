@@ -119,6 +119,10 @@ export const REF_EDGES: readonly RefEdge[] = [
 
 /* Ref-shaped fields that are deliberately NOT integrity edges. */
 export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
+  // When the read-message sweep next visits a profile. It outlives a removed
+  // profile until it falls due, at most the profile's retention period, and
+  // the sweep then finds the profile gone and deletes it (jobs.ts).
+  'message_sweeps.profile_id',
   // Polar resource IDs and webhook delivery IDs belong to the provider,
   // not to rows in this schema. Period subscription_id is also a Polar ID.
   'billing_plans.polar_product_id',

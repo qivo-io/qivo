@@ -424,10 +424,25 @@ export const gatewayAvatar = internalQuery({
  *     demo --allow deployment:functions:runInternalMutations --purpose reap-orphans -- \
  *     npx convex run files:reapOrphans
  * A run has three phases: expired upload tickets, then account appearance
- * rows, then every stored file in creation order. Each leg is one
- * transaction that handles at most one REAP_PAGES page of its phase and
- * schedules the next leg with the running counts. The leg with nothing left
- * writes the run's one reap_orphans audit row.
+ * rows, then stored files in creation order. Each leg is one transaction
+ * that handles at most one REAP_PAGES page of its phase and schedules the
+ * next leg with the running counts. The leg with nothing left writes the
+ * run's one reap_orphans audit row and the orphan_reaps row.
+ *
+ * Most runs are incremental. Every path that drops a file's last reference
+ * deletes its bytes in the same transaction, so the orphans a run finds are
+ * new files: uploads never attached or confirmed, and cleanups that failed.
+ * An incremental run skips the accounts phase and reads only the files
+ * created after the last finished run's cutoff (orphan_reaps.files_through)
+ * and at or before its own, the run's start less the floor. A younger file
+ * falls to the next run. A run is full when no run has finished yet or the
+ * last finished full run started REAP_FULL_AFTER_MS or more ago, so every
+ * fourth weekly run is full. A full run reads every appearance row and every
+ * stored file, so it catches a login removed outside the auth API and a file
+ * that lost its last reference without its bytes after a run checked it.
+ * Only a run's last leg moves the cutoff, so after a run fails or stops the
+ * next run reads the same files again. Deleting the orphan_reaps row makes
+ * the next run full.
  *
  * The 60-minute floor (0033:34-38) keeps a sweep from racing an upload whose
  * attach is seconds away. It is measured from the run's start, which every
@@ -437,9 +452,9 @@ export const gatewayAvatar = internalQuery({
  * that checks its file makes one of the two transactions retry. The leg
  * then keeps the file, or the attach finds the bytes gone and refuses. A
  * file that loses its last reference after its leg survives until the next
- * run. A failed leg ends the run without an audit row and earlier legs stay
- * committed, so a missing weekly reap_orphans row in Admin › Audit is the
- * signal. */
+ * full run. A failed leg ends the run without an audit row and earlier legs
+ * stay committed, so a missing weekly reap_orphans row in Admin › Audit is
+ * the signal. */
 
 /** The most rows one reapOrphans leg handles in each phase. A stored file
  * older than the floor costs storageIdInUse's index ranges, eight with the
@@ -457,12 +472,17 @@ export const REAP_PAGES = { tickets: 1000, accounts: 64, files: 256 }
  * a file while the ticket it was uploaded for can still confirm it. */
 const REAP_FLOOR_MS = 60 * 60 * 1000
 
+/* How long after a full run's start the next run is full again. One day
+ * short of four weeks, so a weekly cron that starts a little early still
+ * makes every fourth run full. */
+const REAP_FULL_AFTER_MS = 27 * 24 * 60 * 60 * 1000
+
 const vReapCounts = v.object({
   deleted: v.number(), // unreferenced files deleted
   // unreferenced files held after a restore instead; optional for legs
   // scheduled before the count existed
   held: v.optional(v.number()),
-  kept: v.number(), // files kept, in use or younger than the floor
+  kept: v.number(), // files read and kept, in use or younger than the floor
   tickets: v.number(), // expired upload tickets deleted
   accounts: v.number(), // removed logins whose appearance and backgrounds were cleared
 })
@@ -476,10 +496,21 @@ const reapArgs = {
   now: v.optional(v.number()), // the run's start, epoch milliseconds
   counts: v.optional(vReapCounts),
   restored: v.optional(v.boolean()), // hold unreferenced files, as after a restore
+  // An incremental run's lower bound, the last run's cutoff in epoch
+  // milliseconds. A full run, and a leg from before incremental runs, has none.
+  since: v.optional(v.number()),
 }
 type ReapLeg = ObjectType<typeof reapArgs>
 
 const reapLegRef = makeFunctionReference<'mutation', ReapLeg, null>('files:reapOrphans')
+
+/* The lower bound of a run starting at `now`: the last finished run's
+ * cutoff, or undefined when the run is full (header above). */
+async function reapSince(ctx: MutationCtx, now: number): Promise<number | undefined> {
+  const state = await ctx.db.query('orphan_reaps').first()
+  if (state === null || now - state.full_at >= REAP_FULL_AFTER_MS) return undefined
+  return state.files_through
+}
 
 /* One leg of the orphan sweep (header above). Empty arguments start a run. */
 export const reapOrphans = internalMutation({
@@ -490,6 +521,8 @@ export const reapOrphans = internalMutation({
       held: 0,
       ...(a.counts ?? { deleted: 0, kept: 0, tickets: 0, accounts: 0 }),
     }
+    // the first leg chooses the run's kind and every later leg carries it
+    const since = a.now === undefined ? await reapSince(ctx, now) : a.since
     let next: Pick<ReapLeg, 'phase' | 'cursor'> | null = null
     if ((a.phase ?? 'tickets') === 'tickets') {
       // Tickets own no bytes until the receiver commits the completed upload,
@@ -504,7 +537,7 @@ export const reapOrphans = internalMutation({
         counts.tickets += Math.min(expired.length, REAP_PAGES.tickets)
         more ||= expired.length > REAP_PAGES.tickets
       }
-      next = { phase: more ? 'tickets' : 'accounts' }
+      next = { phase: more ? 'tickets' : since === undefined ? 'accounts' : 'files' }
     } else if (a.phase === 'accounts') {
       // Raw component/CLI deletion can bypass the auth API hook. Preserve a
       // banned user's preferences; only an absent login makes them orphaned.
@@ -524,9 +557,13 @@ export const reapOrphans = internalMutation({
     } else {
       const cutoff = now - REAP_FLOOR_MS
       const restore = await restoreState(ctx)
-      const page = await ctx.db.system
-        .query('_storage')
-        .paginate({ cursor: a.cursor ?? null, numItems: REAP_PAGES.files })
+      const stored = ctx.db.system.query('_storage')
+      const page = await (since === undefined
+        ? stored
+        : stored.withIndex('by_creation_time', (q) =>
+            q.gt('_creationTime', since).lte('_creationTime', cutoff),
+          )
+      ).paginate({ cursor: a.cursor ?? null, numItems: REAP_PAGES.files })
       for (const file of page.page) {
         if (file._creationTime > cutoff || (await storageIdInUse(ctx, file._id))) {
           counts.kept += 1
@@ -548,6 +585,7 @@ export const reapOrphans = internalMutation({
         ...next,
         now,
         counts,
+        since,
         ...(a.restored ? { restored: true } : {}),
       })
       return null
@@ -558,6 +596,15 @@ export const reapOrphans = internalMutation({
       action: 'reap_orphans',
       detail: counts,
     })
+    // every file created up to the cutoff has now been checked by a finished run
+    const state = await ctx.db.query('orphan_reaps').first()
+    const done = {
+      files_through: now - REAP_FLOOR_MS,
+      // an incremental run keeps the last full run's start, and 0 makes the next run full
+      full_at: since === undefined ? now : (state?.full_at ?? 0),
+    }
+    if (state === null) await ctx.db.insert('orphan_reaps', done)
+    else await ctx.db.patch(state._id, done)
     return null
   },
 })

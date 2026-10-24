@@ -289,6 +289,38 @@ describe('bounded demo storage sampling', () => {
     ])
   })
 
+  it('measures every row in few steps, passing empty tables and paging 512 rows', async () => {
+    const t = newT()
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 600; i++)
+        await ctx.db.insert('demo_admission', { key: `window ${i}`, count: 1, expires_at: NOW })
+      await ctx.db.insert('platform_audit_log', {
+        ts: new Date(NOW).toISOString(),
+        actor_email: 'system',
+        action: 'reap_orphans',
+        detail: {},
+      })
+    })
+    await t.mutation(sample, {})
+    const expectedBytes = await t.run(async (ctx) => {
+      let bytes = 0
+      for (const table of DEMO_STORAGE_TABLES)
+        for (const row of await ctx.db.query(table).collect()) bytes += estimateDocumentBytes(row)
+      return bytes
+    })
+    const report = await finishSample(t)
+    expect(report.storage).toMatchObject({ databaseBytes: expectedBytes, fileBytes: 0 })
+    const steps = await t.run(async (ctx) =>
+      (await ctx.db.system.query('_scheduled_functions').collect()).filter(
+        (job) => job.name === 'internal/demoMetrics:samplePage',
+      ),
+    )
+    // receipts, two pages of demo_admission, one of each other table with
+    // rows (the sample adds demo_metrics), the last table and the files, not
+    // one step for each of about 70 tables and ten for demo_admission
+    expect(steps).toHaveLength(7)
+  })
+
   it('fences repeated page delivery and resumes a stalled scan without double-counting its pages', async () => {
     const t = newT()
     await t.mutation(sample, {})
