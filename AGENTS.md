@@ -73,59 +73,70 @@ CodeRabbit and Greptile do not review pull requests on GitHub.
 `.coderabbit.yaml` and `.greptile/config.json` turn their automatic reviews
 off, and they stay off. Do not start a review on GitHub with an
 `@coderabbitai` or `@greptileai` comment. Every change instead gets these
-reviews on this machine before its pull request opens, one after another,
-each on the committed branch after the fixes of the step before. `BASE` is
-the output of `git merge-base origin/main HEAD` after `git fetch origin`.
+reviews on this machine before its pull request opens. Each step reviews the
+committed branch after the fixes of the step before. `BASE` is the output of
+`git merge-base origin/main HEAD` after `git fetch origin`.
 
-1. GPT 6 Astra at `ultra`, as a T3 `delegate_task` child with provider
-   `codex`, model `gpt-6-astra` and `reasoningEffort: ultra`. It is a normal
-   task with the reviewer prompt, not `codex exec review`.
-2. Fix the valid findings and commit.
-3. Claude Opus 5.5, as a `delegate_task` child with provider `claudeAgent`
-   and model `claude-opus-5-5`, at `effort: xhigh`. It runs at
-   `effort: ultracode` with the prompt's multi-agent workflow section
-   instead when the change comes from a fork or alters one of these areas:
-   - sign-in, sessions and tokens
-   - access control
-   - outside input, such as the REST API, MCP, webhooks and uploads
-   - stored data, such as deletion, restore, export, migrations, the schema
-     and how the app saves a person's edits
-   - billing
-   - the desktop shell
-   - deployment, CI, secrets and the credential and production rules in
-     this file
+Before step 1, commit everything, rebase onto `origin/main` and pass
+`npm run verify:local` on that commit.
 
-   Changes to UI, tests, docs, the review steps or dependencies stay at
-   `xhigh` unless they do one of these things, as an update of Better Auth
-   or Electron does. Judge what the change does, not only which files it
-   touches, and when unsure, use `ultracode`. The private review README
-   named below lists what each area covers.
+1. GPT 6 Astra and Claude Opus 5.5 review the same commit side by side,
+   each in its own read-only checkout. Wait for both before you fix
+   anything.
+   - Astra is a T3 `delegate_task` child with provider `codex`, model
+     `gpt-6-astra` and `reasoningEffort: ultra`. It is a normal task with
+     the reviewer prompt, not `codex exec review`.
+   - Opus is a `delegate_task` child with provider `claudeAgent` and model
+     `claude-opus-5-5`, at `effort: xhigh`. It runs at `effort: ultracode`
+     with the prompt's multi-agent workflow section instead when the change
+     alters one of these areas:
+     - sign-in, sessions and tokens
+     - access control
+     - outside input, such as the REST API, MCP, webhooks and uploads
+     - stored data, such as deletion, restore, export, migrations, the
+       schema and how the app saves a person's edits
+     - billing
+     - the desktop shell
+     - deployment, CI, secrets and the credential and production rules in
+       this file
+
+     Changes to UI, tests, docs, the review steps or dependencies stay at
+     `xhigh` unless they do one of these things, as an update of Better
+     Auth or Electron does. Judge what the change does, not only which files
+     it touches, and when unsure, use `ultracode`. The private review README
+     named below lists what each area covers.
+2. Fix the valid findings of both reviews and commit.
+3. Side by side, on the fixed branch:
+   - The CodeRabbit and Greptile CLIs, with
+     `cr review --agent --committed --base-commit BASE` and
+     `greptile review -b BASE --json`. Greptile's summary sometimes says
+     that the supplied `git diff` was empty. The CLI sends the branch as one
+     combined diff, so in Greptile's copy `git diff HEAD^ HEAD` is the whole
+     change. Such a run reviewed the change only if the summary names the
+     diff it reviewed instead and describes this branch's change. Otherwise
+     run it once more with the instruction in the private review README
+     named below. If that run also reviews nothing, step 3 failed.
+   - Astra again, on step 2's commits alone, with the commit that step 1
+     reviewed as its base. Skip it when step 2 committed nothing.
 4. Fix the valid findings and commit.
-5. The CodeRabbit and Greptile CLIs, side by side, with
-   `cr review --agent --committed --base-commit BASE` and
-   `greptile review -b BASE --json`. Greptile's summary sometimes says that
-   the supplied `git diff` was empty. The CLI sends the branch as one
-   combined diff, so in Greptile's copy `git diff HEAD^ HEAD` is the whole
-   change. Such a run reviewed the change only if the summary names the diff
-   it reviewed instead and describes this branch's change. Otherwise run it
-   once more with the instruction in the private review README named below.
-   If that run also reviews nothing, step 5 failed.
-6. Fix the valid findings and commit.
-7. Push and open the pull request. Merge it once its `quality`, `secrets`
-   and `Vercel – qivo` checks pass on the head commit. The `Vercel – qivo`
-   preview is the only run of `convex deploy` before main. If a check fails,
-   fix the cause, with a new commit if the change caused it, and wait for the
-   checks again. If a check is cancelled or does not finish, do not merge,
-   and report it.
+5. Fetch, and rebase if `origin/main` moved. Run `npm run verify:static`,
+   the checks of `verify:local` without the tests, and leave the tests to
+   CI. Push and open the pull request. Merge it once its `quality`,
+   `secrets` and `Vercel – qivo` checks pass on the head commit. The
+   `Vercel – qivo` preview is the only run of `convex deploy` before main.
+   If a check fails, fix the cause, with a new commit if the change caused
+   it, and wait for the checks again. If a check is cancelled or does not
+   finish, do not merge, and report it.
 
-If a step fails, times out or cannot run, stop before step 7 and report it.
-A change that touches only lockfiles follows the lockfile rule for step 5 in
+If a step fails, times out or cannot run, stop before step 5 and report it.
+A change that touches only lockfiles follows the lockfile rule for step 3 in
 the private review README named below instead, because CodeRabbit cannot
 review it.
 A commit added after the pull request opens, other than a rebase without
-conflict edits, gets step 1 on its own diff, and the fixes, before the merge.
+conflict edits, gets an Astra review of its own diff, and the fixes, before
+the merge.
 A pull request opened another way, for example by Dependabot or from a fork,
-gets steps 1 to 6 on its head, then merges on the same checks as step 7.
+gets steps 1 to 4 on its head, then merges on the same checks as step 5.
 
 `${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/evaluations/pr-reviews/pre-pr/README.md`
 has the exact steps, the reviewer prompt and how to record each step. Read it
@@ -139,17 +150,18 @@ in `${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/evaluations/pr-reviews/pr
 with:
 
 - The branch name and the pull request number, or no number if the flow
-  stopped before step 7 opened one.
+  stopped before step 5 opened one.
 - Every step, including one that failed, timed out or was skipped, and every
   follow-up review.
 - Each reviewer's findings, with your verdict on each one and your severity
   for each correct one.
-- Each Greptile finding that reports the same problem as a CodeRabbit
+- Each Opus finding that reports the same problem as an Astra finding, and
+  each Greptile finding that reports the same problem as a CodeRabbit
   finding, so the findings that only one of them reported can be counted.
 
 Check the record with
 `python3 "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/evaluations/pr-reviews/pre-pr/check_records.py" RECORD`
-and commit it to qivo-internal before your session ends, once step 7 has
+and commit it to qivo-internal before your session ends, once step 5 has
 opened the pull request or a step has stopped the flow. Update and commit it
 again after each follow-up review and when you merge the pull request. The
 README above has the record format and the commands.
