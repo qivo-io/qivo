@@ -78,7 +78,8 @@ committed branch after the fixes of the step before. `BASE` is the output of
 `git merge-base origin/main HEAD` after `git fetch origin`.
 
 Before step 1, commit everything, rebase onto `origin/main` and pass
-`npm run verify:local` on that commit.
+`npm run verify:local` on that commit. A pull request from a fork skips this,
+because its code does not run on this machine (see below).
 
 1. GPT 6 Astra and Claude Opus 5.5 review the same commit side by side,
    each in its own read-only checkout. Wait for both before you fix
