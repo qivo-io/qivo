@@ -9,7 +9,7 @@ import { getFunctionName, makeFunctionReference } from 'convex/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { ActionCtx } from '../_generated/server'
-import { COUNT_PAGE, dryCount } from '../internal/liveCountsBackfill'
+import { COUNT_PAGE, dryCount, RUN } from '../internal/liveCountsBackfill'
 import { startWindows, type WindowCounts } from '../lib/idWindows'
 import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
 import {
@@ -27,8 +27,10 @@ import { deleteProject, deleteTask, installTrashTimers, itemFor, runSteps } from
 
 installTrashTimers()
 const DEFAULT_COUNT_PAGE = { ...COUNT_PAGE }
+const DEFAULT_RUN = { ...RUN }
 afterEach(() => {
   Object.assign(COUNT_PAGE, DEFAULT_COUNT_PAGE)
+  Object.assign(RUN, DEFAULT_RUN)
 })
 
 /** The organization's org_counters row. */
@@ -40,7 +42,7 @@ const countersOf = (t: T, orgId: string) =>
       .unique(),
   )
 
-const backfill = (t: T, args: { dry_run: boolean; recount?: boolean }) =>
+const backfill = (t: T, args: { dry_run: boolean; recount?: boolean; cursor?: string }) =>
   t.action(internal.internal.liveCountsBackfill.run, args)
 
 /** The organization's row in the root part, as `who` (`f.user` unless
@@ -308,6 +310,27 @@ describe('live counts', () => {
     await create(t, f)
     expect(await backfill(t, { dry_run: false })).toMatchObject({ counted: 1, skipped: 0 })
     expect(await expectLiveCounts(t, org_id)).toEqual({ active_tasks: 2, live_projects: 4 })
+  })
+
+  it('a call past its time answers a cursor, and the calls from it go through every organization once', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    Object.assign(RUN, { orgs: 1, ms: 0 })
+    /** Every call of a run, each from the cursor the one before answered. */
+    const calls = async (dry_run: boolean) => {
+      const got = [await backfill(t, { dry_run })]
+      for (let last = got[0]; last.cursor !== null && got.length < 5; got.push(last))
+        last = await backfill(t, { dry_run, cursor: last.cursor })
+      return got
+    }
+    for (const dry_run of [true, false]) {
+      const got = await calls(dry_run)
+      expect(got[0]).toMatchObject({ orgs: 1, done: false })
+      expect(got.at(-1)).toMatchObject({ done: true, cursor: null })
+      expect(got.reduce((n, call) => n + call.counted, 0)).toBe(2)
+    }
+    expect(await expectLiveCounts(t, f.org.id)).toEqual({ active_tasks: 1, live_projects: 4 })
   })
 
   it('the guest fixture counts the rows it plants, also when it plants them again', async () => {

@@ -26,6 +26,10 @@
  *   H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"
  *   "$H" staging npx convex run internal/liveCountsBackfill:run '{"dry_run": true}'
  *   "$H" staging npx convex run internal/liveCountsBackfill:run '{"dry_run": false}'
+ * A call stops after RUN.ms, well inside Convex's action time limit, and
+ * then answers `done: false` with a `cursor`. Call it again with the same
+ * arguments and `"cursor"` set to it until `done` is true. Each call reports
+ * the organizations it went through.
  *
  * Run it only after the deployment serves this release, and only with the
  * owner's approval. On production, take and verify a backup first
@@ -39,8 +43,9 @@
  * counts a dry run lists as differing from their rows. An organization
  * without an org_counters row has nothing to hold its counts: a run lists
  * it as skipped, and once its next create makes the row (model/orgs.ts
- * ensureCounters), a later run counts it. A run that wrote adds one platform_audit_log row (action 'live_counts_backfill',
- * actor 'system') with its totals. Running it again is safe. It writes no
+ * ensureCounters), a later run counts it. A call that wrote adds one
+ * platform_audit_log row (action 'live_counts_backfill', actor 'system')
+ * with its totals. Running it again is safe. It writes no
  * activity, sends no task event and changes nothing a person sees, except
  * how many windows the app opens at its next load. */
 import { makeFunctionReference } from 'convex/server'
@@ -61,6 +66,10 @@ import { countersRow, liveCountsOf, numbersOf, type OrgCounters } from '../model
  * reads at most its bytes and two documents more, so a step's two pages
  * stay inside Convex's 16 MiB. Tests lower them. */
 export const COUNT_PAGE = { issues: 100, projects: 100, bytes: 4 * MIB, listed: 100 }
+
+/** Organizations one page of a run reads, and how long one call of run
+ * goes on before it answers where to go on from. Tests lower them. */
+export const RUN = { orgs: 100, ms: 5 * 60_000 }
 
 /** Where a count starts, below every task and project number. */
 const START = Number.MIN_SAFE_INTEGER
@@ -181,7 +190,7 @@ type OrgPage = { orgs: OrgState[]; cursor: string; done: boolean }
 export const orgPage = internalQuery({
   args: { cursor: v.union(v.string(), v.null()) },
   handler: async (ctx, { cursor }): Promise<OrgPage> => {
-    const page = await ctx.db.query('organizations').paginate({ cursor, numItems: 100 })
+    const page = await ctx.db.query('organizations').paginate({ cursor, numItems: RUN.orgs })
     const orgs: OrgState[] = []
     for (const org of page.page) orgs.push(await stateOf(ctx, org.id))
     return { orgs, cursor: page.continueCursor, done: page.isDone }
@@ -276,19 +285,22 @@ export async function dryCount(
 }
 
 /** Counts every organization not counted yet, or every one with
- * `recount`, and answers how many it counted and their totals. A dry run
- * writes nothing. It counts each organization's rows (dryCount), answers
+ * `recount`, from `cursor` on, and answers how many it counted and their
+ * totals. Past RUN.ms it stops after a page of organizations and answers
+ * the `cursor` to go on from, else `done`. A dry run writes nothing. It
+ * counts each organization's rows (dryCount), answers
  * the same totals for those it would count, lists up to COUNT_PAGE.listed
  * of them, and lists the organizations counted already whose counts their
  * rows do not give (`differ`, `differing` in all). An organization that
  * writes kept changing through every count is listed in `unsettled_orgs`
  * (`unsettled` in all) instead, for a later dry run. Both list the
  * organizations without an org_counters row, which a run cannot count, in
- * `skipped_orgs` (`skipped` in all). A run that wrote ends with its audit
+ * `skipped_orgs` (`skipped` in all). A call that wrote ends with its audit
  * row. */
 export const run = internalAction({
-  args: { dry_run: v.boolean(), recount: v.optional(v.boolean()) },
-  handler: async (ctx, { dry_run, recount = false }) => {
+  args: { dry_run: v.boolean(), recount: v.optional(v.boolean()), cursor: v.optional(v.string()) },
+  handler: async (ctx, { dry_run, recount = false, cursor: from }) => {
+    const until = Date.now() + RUN.ms
     const totals = { orgs: 0, counted: 0, active_tasks: 0, live_projects: 0 }
     const add = (counts: Counts) => {
       totals.counted++
@@ -305,7 +317,8 @@ export const run = internalAction({
     const skip = (orgId: string) => {
       if (skipped++ < COUNT_PAGE.listed) skippedOrgs.push(orgId)
     }
-    let cursor: string | null = null
+    let cursor: string | null = from ?? null
+    let done = false
     for (;;) {
       const page: OrgPage = await ctx.runQuery(orgPageRef, { cursor })
       for (const org of page.orgs) {
@@ -318,10 +331,10 @@ export const run = internalAction({
         const due = org.stored === null || recount
         if (!dry_run) {
           if (!due) continue
-          let done: Counts | 'skipped' | null = null
-          while (done === null) done = await ctx.runMutation(stepRef, { org_id, recount })
-          if (done === 'skipped') skip(org_id)
-          else add(done)
+          let got: Counts | 'skipped' | null = null
+          while (got === null) got = await ctx.runMutation(stepRef, { org_id, recount })
+          if (got === 'skipped') skip(org_id)
+          else add(got)
           continue
         }
         const { counts, state, settled } = await dryCount(ctx, org)
@@ -339,8 +352,9 @@ export const run = internalAction({
         add(report)
         if (toCount.length < COUNT_PAGE.listed) toCount.push(report)
       }
-      if (page.done) break
+      done = page.done
       cursor = page.cursor
+      if (done || Date.now() >= until) break
     }
     if (!dry_run)
       await ctx.runMutation(auditRef, {
@@ -358,6 +372,8 @@ export const run = internalAction({
       unsettled_orgs: unsettledOrgs,
       skipped,
       skipped_orgs: skippedOrgs,
+      done,
+      cursor: done ? null : cursor,
     }
   },
 })

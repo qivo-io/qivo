@@ -522,9 +522,12 @@ that added them has none until the one-time `internal/liveCountsBackfill`
 counts it, and until then the app sizes its windows by the task and project
 numbers handed out, as earlier releases did, so it loads as before. Run the
 backfill on every hosted deployment once it serves that release, as the
-module's header says: read its dry run first, then run it. A later dry run
-lists any organization whose counts differ from its rows, and apart from
-them any whose writes kept changing it while it counted, to check again.
+module's header says: read its dry run first, then run it. A call that
+does not finish in about five minutes answers a `cursor`; call it again
+with the same arguments and that `cursor` until it answers `done`. A
+later dry run lists any organization whose counts differ from its rows,
+and apart from them any whose writes kept changing it while it counted, to
+check again.
 `"recount": true` counts every organization again, which mends counts a
 dry run lists as differing. Both list an organization without an
 `org_counters` row as skipped; its next create makes the row, and a later
