@@ -128,6 +128,7 @@ export function main(env, { run = execFileSync, receipt = writeDeploymentReceipt
     if (env.QIVO_ENVIRONMENT !== 'preview')
       throw new Error('Preview environment identity required.')
     setPreviewSiteUrl(env, run)
+    // before convex pushes the functions, so crons.ts registers no job
     run(
       'npx',
       ['convex', 'env', 'set', 'QIVO_ENVIRONMENT', 'preview', '--deployment', deploymentName(env)],

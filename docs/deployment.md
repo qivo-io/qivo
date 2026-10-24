@@ -9,14 +9,15 @@ repository.
 
 | Source event | Destination |
 | --- | --- |
-| Feature branch push | Vercel branch preview, website included, with its own Convex preview deployment |
+| Feature branch push | Vercel branch preview, website included, with its own Convex preview deployment that runs no scheduled jobs |
 | Successful main CI and secret scanning | Staging website, docs and app at `preview.qivo.io` |
 | **Deploy staging** run by hand from main | The same, for example after a provider failure |
 | **Prepare release** run by hand from main | A draft GitHub Release for the commit staging serves. Deploys nothing |
 | Publishing that draft (a stable release) | Website, docs and app at `qivo.io`, and the public demo |
 
 ```text
- feature branch ──► CI + secret scan, branch preview (own empty Convex backend)
+ feature branch ──► CI + secret scan, branch preview (own empty Convex backend,
+       │             no scheduled jobs)
        │
        ▼ pull request merged
  main ─────► CI + secret scan ──► Deploy staging
@@ -98,6 +99,24 @@ do not share staging data. The `qivo-staging` project serves only persistent
 staging and has preview deployment creation disabled. Private operators can
 provision synthetic data deliberately using the private setup instructions.
 A later deployment preserves it.
+
+A branch preview's Convex backend runs no scheduled jobs. Its build sets
+`QIVO_ENVIRONMENT=preview` before Convex pushes the functions, also on the
+branch's first build, and `convex/crons.ts` registers no job under that
+value. A changed value takes effect only at the next push. Every other
+environment registers every job. Nothing on a preview therefore runs on a
+timer. It has no retention or archive sweeps, no expiry of Deleted items or the audit log,
+no recovery of a stopped deletion, webhook or billing step, no organization
+retention and no demo cleanup recovery. Work that a request starts, such as a
+webhook delivery or the steps of a deletion, still runs. The same holds for
+demo branch previews. A preview exists to check that the functions and schema
+push, and to open its branch site by hand. Test scheduled work on a local
+backend or on staging.
+
+Convex keeps a preview deployment for 14 days after it was created, not until
+its pull request closes, and each one counts against the team's deployment
+limit. The operator therefore deletes the previews of branches that have no
+open pull request, using the private operator instructions.
 
 Every deployment sends the same `Content-Security-Policy` on `/app` and
 `/admin` (`vercel.json`). It lets those pages run scripts only from the

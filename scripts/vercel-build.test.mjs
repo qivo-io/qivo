@@ -234,3 +234,36 @@ describe('main — the build refuses a production backend before it builds', () 
     expect(receipt).toHaveBeenCalledWith(production)
   })
 })
+
+describe('main — a preview build names the backend a preview before it pushes', () => {
+  const preview = {
+    QIVO_ENVIRONMENT: 'preview',
+    CONVEX_DEPLOY_KEY: 'preview:fixture-team:qivo|test-only',
+    VITE_CONVEX_URL: 'https://fixture-otter-12.convex.cloud',
+    VERCEL_BRANCH_URL: 'qivo-git-x-fixture.vercel.app',
+  }
+
+  /* `convex deploy` runs this script as its --cmd and pushes the functions
+     only after it returns, also on a branch's first build, and crons.ts
+     registers no job when QIVO_ENVIRONMENT is preview at push time. */
+  it('sets QIVO_ENVIRONMENT=preview on the claimed deployment before the build', () => {
+    const run = vi.fn(() => '')
+    main(preview, { run, receipt: vi.fn() })
+    const commands = run.mock.calls.map(([command, args]) => [command, ...args].join(' '))
+    const set = commands.indexOf(
+      'npx convex env set QIVO_ENVIRONMENT preview --deployment fixture-otter-12',
+    )
+    expect(set).toBeGreaterThan(-1)
+    expect(set).toBeLessThan(commands.indexOf('npm run build'))
+  })
+
+  it('refuses a preview key whose build is not a preview', () => {
+    for (const environment of ['production', 'staging', undefined]) {
+      const run = vi.fn(() => '')
+      expect(() => main({ ...preview, QIVO_ENVIRONMENT: environment }, { run })).toThrow(
+        'Preview environment identity required.',
+      )
+      expect(run).not.toHaveBeenCalled()
+    }
+  })
+})
