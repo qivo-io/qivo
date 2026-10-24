@@ -330,6 +330,33 @@ async function deniedAccess(f: Fx, accessToken: string) {
   expect(response.headers.get('www-authenticate')).toContain('resource_metadata=')
 }
 
+/** A DPoP proof (RFC 9449) for a token request, signed with a new P-256 key. */
+async function dpopProof() {
+  const base64url = (bytes: Uint8Array) =>
+    btoa(String.fromCharCode(...bytes))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '')
+  const part = (value: Json) => base64url(new TextEncoder().encode(JSON.stringify(value)))
+  const keys = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, [
+    'sign',
+    'verify',
+  ])
+  const { kty, crv, x, y } = await crypto.subtle.exportKey('jwk', keys.publicKey)
+  const input = `${part({ typ: 'dpop+jwt', alg: 'ES256', jwk: { kty, crv, x, y } })}.${part({
+    jti: uuid(),
+    htm: 'POST',
+    htu: `${SITE}/api/auth/oauth2/token`,
+    iat: Math.floor(Date.now() / 1000),
+  })}`
+  const signature = await crypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    keys.privateKey,
+    new TextEncoder().encode(input),
+  )
+  return `${input}.${base64url(new Uint8Array(signature))}`
+}
+
 async function initialScopes(t: T) {
   const response = await http(
     t,
@@ -394,6 +421,68 @@ describe('OAuth provider and MCP integration', () => {
     expect(server.code_challenge_methods_supported).toEqual(['S256'])
     expect(server.registration_endpoint).toBe(`${SITE}/api/auth/oauth2/register`)
     expect(server.token_endpoint).toBe(`${SITE}/api/auth/oauth2/token`)
+  })
+
+  it('advertises no DPoP, issues Bearer tokens to a client that sends a proof, and refuses bound tokens', async () => {
+    const f = await fixture()
+    for (const path of [
+      '/.well-known/oauth-authorization-server/api/auth',
+      '/api/auth/.well-known/oauth-authorization-server',
+    ]) {
+      const response = await http(f.t, path)
+      const server = await json(response)
+      expect(response.status, path).toBe(200)
+      expect(server.token_endpoint).toBe(`${SITE}/api/auth/oauth2/token`)
+      expect(server, path).not.toHaveProperty('dpop_signing_alg_values_supported')
+    }
+    const registered = await http(
+      f.t,
+      '/api/auth/oauth2/register',
+      body({
+        client_name: 'DPoP client',
+        redirect_uris: [REDIRECT],
+        grant_types: ['authorization_code', 'refresh_token'],
+        response_types: ['code'],
+        scope: WRITE,
+        dpop_bound_access_tokens: true,
+      }),
+    )
+    const client = await json(registered)
+    expect(registered.status, JSON.stringify(client)).toBe(201)
+    expect(client.dpop_bound_access_tokens).not.toBe(true)
+    const clientId = client.client_id as string
+    const keyBound = await authorization(f, clientId)
+    keyBound.query.set('dpop_jkt', '0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I')
+    await authorizationRefusal(await authorize(keyBound), ['invalid_request'])
+    const request = await authorization(f, clientId)
+    const code = await codeFor(request)
+    const issued = await tokens(
+      await http(f.t, '/api/auth/oauth2/token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          DPoP: await dpopProof(),
+        },
+        body: form({
+          grant_type: 'authorization_code',
+          client_id: clientId,
+          code,
+          code_verifier: request.verifier,
+          redirect_uri: REDIRECT,
+          resource: RESOURCE,
+        }),
+      }),
+    )
+    expect(await toolData(await mcp(f, issued.access_token, 'list_projects'))).toBeInstanceOf(Array)
+    // A token bound to a key, which Qivo never issues, is refused.
+    await runInAuth(f.t, async (ctx) => {
+      for (const token of await ctx.db
+        .query('oauthAccessToken')
+        .withIndex('clientId', (q) => q.eq('clientId', clientId))
+        .collect())
+        await ctx.db.patch(token._id, { confirmation: JSON.stringify({ jkt: 'bound-key' }) })
+    })
+    await deniedAccess(f, issued.access_token)
   })
 
   it('uses discovered scopes for DCR, S256 consent, task planning and rotating refresh', async () => {
@@ -1122,6 +1211,32 @@ describe('OAuth revocation, replay and live account checks', () => {
     expect(await toolData(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
       Array,
     )
+  })
+
+  it('ends the newest access token at sign-out after more than 100 refreshes in the session', async () => {
+    const f = await fixture()
+    // What 120 earlier refreshes left in the session: expired, never revoked.
+    await runInAuth(f.t, async (ctx) => {
+      const session = await ctx.db.query('session').unique()
+      if (!session) throw new Error('the session is gone')
+      for (let index = 0; index < 120; index += 1)
+        await ctx.db.insert('oauthAccessToken', {
+          token: `expired-${index}`,
+          clientId: 'earlier-client',
+          sessionId: session._id,
+          userId: f.userId,
+          scopes: ['qivo:read'],
+          expiresAt: Date.now() - 60_000,
+        })
+    })
+    const c = await connect(f)
+    const signOut = await http(f.t, '/api/auth/sign-out', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: APP, 'better-auth-cookie': f.cookie },
+      body: '{}',
+    })
+    expect(signOut.status).toBe(200)
+    await deniedAccess(f, c.access_token)
   })
 
   it('keeps refreshing a client that Better Auth 1.6 registered, without a resource link', async () => {

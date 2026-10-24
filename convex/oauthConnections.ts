@@ -325,7 +325,9 @@ export const revokeReplay = internalMutation({
 /* The live grant behind an OAuth access token, or null. `access` is what the
  * token's own scopes allow (lib/access.ts credentialAccess). A token Better
  * Auth revoked counts as gone: Better Auth 1.7 revokes the access tokens of a
- * browser session when that session ends, such as at sign-out. */
+ * browser session when that session ends, such as at sign-out. So does a
+ * token bound to a DPoP key, whose proof Qivo cannot check (lib/oauthProvider.ts
+ * never issues one). */
 export const lookupAccess = internalQuery({
   args: { tokenHash: v.string(), resource: v.string() },
   handler: async (ctx, args) => {
@@ -339,11 +341,13 @@ export const lookupAccess = internalQuery({
       clientId: string
       expiresAt: number
       revoked?: number | null
+      confirmation?: string | null
       scopes: string[]
     } | null
     if (
       !token?.referenceId ||
       token.revoked != null ||
+      token.confirmation != null ||
       !Number.isFinite(token.expiresAt) ||
       token.expiresAt <= Date.now()
     )

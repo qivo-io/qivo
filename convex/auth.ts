@@ -40,7 +40,12 @@ import {
   rekeyMicrosoftAccount,
 } from './lib/microsoftAccounts'
 import { oauthAdapter } from './lib/oauthAdapter'
-import { oauthHooks, qivoOAuthProvider, registerOAuthCode } from './lib/oauthProvider'
+import {
+  oauthHooks,
+  qivoOAuthProvider,
+  registerOAuthCode,
+  revokeSessionAccess,
+} from './lib/oauthProvider'
 import { type AuthLetterIntent, sendAuthLetter } from './mail'
 
 /* SITE_URL = the APP origin (http://localhost:5199 in dev, https://qivo.io in
@@ -216,6 +221,8 @@ export const createAuthOptions = (
             data: { ...session, ...fieldsSetTo(SESSION_REQUEST_FIELDS, undefined) },
           }),
         },
+        // The demo has no OAuth provider, so no session holds an access token.
+        delete: demo ? undefined : { after: (session) => revokeSessionAccess(ctx, session.id) },
       },
       account: {
         create: {

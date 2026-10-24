@@ -5,6 +5,7 @@ import { type FunctionArgs, makeFunctionReference } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import type { GenericCtx } from '../../vendor/convex-better-auth/src/client'
 import { requireRunMutationCtx } from '../../vendor/convex-better-auth/src/utils'
+import { components } from '../_generated/api'
 import type { DataModel } from '../_generated/dataModel'
 import { sha256hex } from '../machine/auth'
 import { clientDisplayName, mcpResource, OAUTH_SCOPES, validateOAuthQuery } from './oauth'
@@ -88,6 +89,24 @@ export async function registerOAuthCode(
     credentialHash: verification.identifier,
   })
   if (!ok) throw invalid()
+}
+
+/** Revokes every live access token issued in a browser session that has
+ * ended, such as at sign-out, page by page. Better Auth 1.7's own sign-out
+ * revocation reads only the oldest 100 tokens of the session, so a
+ * connection that refreshed more often than that would keep its newest,
+ * live token. Its refresh tokens, which `offline_access` keeps, stay. */
+export async function revokeSessionAccess(ctx: GenericCtx<DataModel>, sessionId: string) {
+  const runner = requireRunMutationCtx(ctx)
+  const revokedAt = Date.now()
+  let cursor: string | null = null
+  do {
+    cursor = await runner.runMutation(components.betterAuth.oauth.revokeSessionAccessTokens, {
+      sessionId,
+      cursor,
+      revokedAt,
+    })
+  } while (cursor !== null)
 }
 
 const invalid = (description = 'This connection is invalid or has been disconnected.') =>
@@ -236,6 +255,12 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
     ...provider,
     onRequest: async (request: Request, context: Parameters<typeof provider.onRequest>[1]) => {
       const url = new URL(request.url)
+      if (url.pathname.endsWith('/.well-known/oauth-authorization-server')) {
+        const result = await provider.onRequest(request, context)
+        return result && 'response' in result
+          ? { response: await withoutDpopMetadata(result.response) }
+          : result
+      }
       if (url.pathname.endsWith('/oauth2/token') && request.method === 'POST') {
         // OAuth token requests are form encoded. Inspect the raw form before
         // Better Call can collapse repeated values while parsing its schema.
@@ -268,10 +293,33 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
             ),
           }
         }
+        /* Qivo does not support DPoP (RFC 9449): the MCP endpoint checks no
+         * proof, and the adapter cannot store the proof reservations Better
+         * Auth makes. A server without DPoP ignores the header and issues a
+         * Bearer token, whose token_type tells the client (RFC 9449 section
+         * 5), so the header is dropped before the provider sees it. */
+        if (request.headers.has('DPoP')) {
+          const headers = new Headers(request.headers)
+          headers.delete('DPoP')
+          const bearer = new Request(request, { headers })
+          return (await provider.onRequest(bearer, context)) ?? { request: bearer }
+        }
       }
       return provider.onRequest(request, context)
     },
   }
+}
+
+/** Authorization server metadata without `dpop_signing_alg_values_supported`,
+ * which Better Auth 1.7 always lists. Qivo does not support DPoP
+ * (qivoOAuthProvider onRequest). Any other response passes unchanged. */
+export async function withoutDpopMetadata(response: Response): Promise<Response> {
+  if (!response.ok || !response.body) return response
+  const metadata: Record<string, unknown> = await response.json()
+  delete metadata.dpop_signing_alg_values_supported
+  const headers = new Headers(response.headers)
+  headers.delete('Content-Length')
+  return new Response(JSON.stringify(metadata), { status: response.status, headers })
 }
 
 /** The client address the backend reports for the current HTTP request, or
@@ -343,7 +391,11 @@ export function oauthHooks(ctx: GenericCtx<DataModel>) {
         // would make a registration without this field a confidential
         // client_secret_basic client.
         const body = requestBody(endpoint.body)
-        if (body) body.token_endpoint_auth_method = 'none'
+        if (body) {
+          body.token_endpoint_auth_method = 'none'
+          // Qivo issues Bearer tokens only (qivoOAuthProvider onRequest).
+          delete body.dpop_bound_access_tokens
+        }
       }
       if (endpoint.path === '/oauth2/authorize') {
         // Provider 1.6 drops `resource` from its parsed authorize schema. Read
@@ -357,6 +409,13 @@ export function oauthHooks(ctx: GenericCtx<DataModel>) {
                   .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
                   .join('&'),
               )
+        // A DPoP key bound here would make the token request need a proof,
+        // and Qivo does not support DPoP (qivoOAuthProvider onRequest).
+        if (query.has('dpop_jkt'))
+          throw new APIError('BAD_REQUEST', {
+            error: 'invalid_request',
+            error_description: 'Qivo does not support DPoP. Leave out dpop_jkt.',
+          })
         try {
           validateOAuthQuery(query)
         } catch {

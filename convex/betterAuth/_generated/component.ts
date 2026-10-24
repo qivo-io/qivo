@@ -3303,6 +3303,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         any,
         Name
       >;
+      revokeSessionAccessTokens: FunctionReference<
+        "mutation",
+        "internal",
+        { cursor: string | null; revokedAt: number; sessionId: string },
+        any,
+        Name
+      >;
       unusedClients: FunctionReference<
         "query",
         "internal",

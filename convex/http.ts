@@ -13,6 +13,7 @@ import { FILE_TOKEN_TTL_SECONDS, type FileTokenKind, verifyFileToken } from './l
 import { badRequest } from './lib/functions'
 import { AUTH_BODY_MAX_BYTES } from './lib/limits'
 import { mcpResource, OAUTH_SCOPES, oauthIssuer } from './lib/oauth'
+import { withoutDpopMetadata } from './lib/oauthProvider'
 import {
   manualImageDimensions,
   PANORAMA_MAX_BYTES,
@@ -292,7 +293,11 @@ const resourceMetadata = answerAfterBody(
     ),
 )
 const serverMetadata = answerAfterBody(async (ctx, request) =>
-  oauthProviderAuthServerMetadata(createAuth(ctx), { headers: oauthMetadataHeaders })(request),
+  withoutDpopMetadata(
+    await oauthProviderAuthServerMetadata(createAuth(ctx), { headers: oauthMetadataHeaders })(
+      request,
+    ),
+  ),
 )
 const metadataPreflight = answerAfterBody(
   async () => new Response(null, { status: 204, headers: oauthMetadataHeaders }),

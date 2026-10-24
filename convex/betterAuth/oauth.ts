@@ -109,6 +109,27 @@ export const deleteClients = mutation({
   },
 })
 
+/** Revokes the access tokens of an ended browser session that are neither
+ * revoked nor expired, on one page of up to 500 tokens from `cursor`,
+ * newest first. Returns the cursor of the next page, or null when no token
+ * is left. Better Auth 1.7 revokes them at sign-out too, but reads only the
+ * oldest 100, and a connection adds one token each time it refreshes
+ * (lib/oauthProvider.ts revokeSessionAccess). */
+export const revokeSessionAccessTokens = mutation({
+  args: { sessionId: v.string(), cursor: v.union(v.string(), v.null()), revokedAt: v.number() },
+  handler: async (ctx, { sessionId, cursor, revokedAt }) => {
+    const page = await stream(ctx.db, schema)
+      .query('oauthAccessToken')
+      .withIndex('sessionId', (q) => q.eq('sessionId', sessionId))
+      .order('desc')
+      .paginate({ cursor, numItems: 500 })
+    for (const token of page.page)
+      if (token.revoked == null && (token.expiresAt ?? Number.POSITIVE_INFINITY) > revokedAt)
+        await ctx.db.patch(token._id, { revoked: revokedAt })
+    return page.isDone ? null : page.continueCursor
+  },
+})
+
 /** What the Better Auth 1.7 client backfill found on one page, or changed. */
 type ClientBackfillCounts = {
   /** Clients that still held 1.6's `public` or `type`. */
