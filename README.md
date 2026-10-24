@@ -73,10 +73,16 @@ Only the files that start with `'use node'` and the tests may, because Convex
 bundles every other file for the default runtime, whichever files import it.
 Convex runs the top-level `http`, `crons`, `schema`, `auth.config` and
 `convex.config` files there whatever their directive. The check also fails on
-an import it cannot follow.
+an import it cannot follow, on `globalThis` or `self` used other than to read
+a global by name, as in `const g = globalThis`, and on a component outside a
+`convex/` directory with a `convex.config.ts`.
 Types and `import type` may still name Node's types, and a file may import
 `AsyncLocalStorage` and `AsyncResource` from `async_hooks`, which the default
 runtime provides.
+The check copies these rules from the Convex bundler and pins a hash of each
+function or variable it copies them from. It fails when an installed `convex`
+declares one differently, so a Convex update gets a review of the copy here
+and of the module rules in `scripts/convex-api-modules.mjs`.
 It needs no deployment credentials and does not reset any hosted data.
 Do not run full gates concurrently across agents. `npm run test:contract`, demo
 reset/seed commands and browser smoke tools can write to a backend; they are
