@@ -205,7 +205,7 @@ export const createAuthOptions = (
     /* crossDomain does not feed ctx.trustedOrigins — must be explicit or
      * originCheck rejects OAuth/reset redirects back to the app. */
     trustedOrigins: appOrigins(opts),
-    database: oauthAdapter(authComponent.adapter(ctx)),
+    database: oauthAdapter(ctx, authComponent.adapter(ctx)),
     hooks: demo ? {} : oauthHooks(ctx),
     session: demo ? { expiresIn: DEMO_TTL_MS / 1_000, disableSessionRefresh: true } : undefined,
     /* No deployment stores the personal data lib/authData.ts lists. A create

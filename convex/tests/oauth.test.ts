@@ -1308,6 +1308,35 @@ describe('OAuth revocation, replay and live account checks', () => {
     )
   })
 
+  it('serves a 1.6 client as 1.6 did until the backfill, public or confidential', async () => {
+    const f = await fixture()
+    const c = await connect(f)
+    const patchClient = (fields: Record<string, unknown>) =>
+      runInAuth(f.t, async (ctx) => {
+        const client = await ctx.db
+          .query('oauthClient')
+          .withIndex('clientId', (q) => q.eq('clientId', c.request.clientId))
+          .unique()
+        if (!client) throw new Error('the client is gone')
+        await ctx.db.patch(client._id, fields)
+      })
+    // Better Auth 1.6 skipped the secret for a client it marked public,
+    // whatever its tokenEndpointAuthMethod; 1.7 reads only the method.
+    await patchClient({ public: true, tokenEndpointAuthMethod: undefined })
+    const renewed = await tokens(await refresh(f, c.request.clientId, c.refresh_token))
+    expect(await toolData(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
+      Array,
+    )
+    // A client 1.6 asked a secret of never refreshes without one.
+    await patchClient({ public: false, tokenEndpointAuthMethod: 'none' })
+    await oauthRefusal(await refresh(f, c.request.clientId, renewed.refresh_token), [
+      'invalid_client',
+    ])
+    await patchClient({ public: undefined })
+    const again = await tokens(await refresh(f, c.request.clientId, renewed.refresh_token))
+    expect(again.access_token).toMatch(/^qvo_/)
+  })
+
   it('refuses refresh under another client without consuming the legitimate refresh token', async () => {
     const f = await fixture()
     const c = await connect(f)
