@@ -509,6 +509,23 @@ page of both tables. Earlier releases do not accept the field, so a
 rollback past that release fails to deploy; it is a rollback floor anyway
 (see Rollback and hotfixes).
 
+Each organization's `org_counters` row counts its active tasks and its
+projects (`active_tasks`, `live_projects`), the rows the app's windows read,
+and the app starts that many windows of each kind. Every write that adds,
+archives, restores or deletes a task or project keeps the counts, and a new
+organization starts at zero. An organization created before the release
+that added them has none until the one-time `internal/liveCountsBackfill`
+counts it, and until then the app sizes its windows by the task and project
+numbers handed out, as earlier releases did, so it loads as before. Run the
+backfill on every hosted deployment once it serves that release, as the
+module's header says: read its dry run first, then run it. A later dry run
+lists any organization whose counts differ from its rows. Earlier releases
+do not accept the fields, so a rollback past that release fails to deploy
+once any organization holds them, which every new organization does. Roll
+forward instead. A release that does not keep the counts leaves them wrong
+after any task or project write, and `"recount": true` counts every
+organization again.
+
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to
 deploy. Roll forward instead. Later releases no longer accept those fields,

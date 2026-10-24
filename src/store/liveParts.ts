@@ -3,8 +3,9 @@
 
    The registry subscribes to the root part, and for each organization it
    names to the catalog, the inbox, and windows of its task, people and
-   project ids (convex/lib/idWindows.ts), as many as its counters say it
-   fills. After each transition it
+   project ids (convex/lib/idWindows.ts), as many as its counts of active
+   tasks and projects say it fills (startWindows), chosen once when it
+   adds the organization. After each transition it
    tells the store (report) whether every part it needs holds a current
    answer. Only then is the workspace complete, joined from them
    (convex/lib/workspaceJoin.ts); otherwise the store keeps what it shows,
@@ -71,8 +72,8 @@ import {
   idShare,
   idWindows,
   piecesAfter,
-  WINDOW_ROWS,
-  windowCount,
+  startWindows,
+  tasksIn,
 } from '../../convex/lib/idWindows'
 import {
   type CatalogPart,
@@ -225,16 +226,13 @@ export function createLiveParts(
       orgs.delete(id)
       moved = true
     }
-    // as many windows as the counters say each new organization fills
-    const count = (rows: number, kind: keyof typeof WINDOW_ROWS) =>
-      idWindows(windowCount(rows, WINDOW_ROWS[kind]))
+    // as many windows as each new organization's counts say it fills
     const added = (answer === null ? [] : answer.orgs)
       .filter((row) => !orgs.has(row.id))
-      .map((row) => ({
-        row,
-        tasks: count(row.next_issue_num, 'tasks'),
-        projects: count(row.next_project_num, 'projects'),
-      }))
+      .map((row) => {
+        const start = startWindows(row)
+        return { row, tasks: idWindows(start.tasks), projects: idWindows(start.projects) }
+      })
     // the catalog, the inbox and one people window besides the windows
     const parts = added.reduce((n, o) => n + 3 + o.tasks.length + o.projects.length, 0)
     // stages only while a partial workspace can show
@@ -395,8 +393,8 @@ export function createLiveParts(
     if (answer === null) return partial ? null : { value: null, loaded: 1 }
     const parts: OrgParts[] = []
     let loaded = 0
-    const tasksIn = (row: (typeof answer.orgs)[number]) => Math.max(1, row.next_issue_num)
-    const allTasks = answer.orgs.reduce((n, row) => n + tasksIn(row), 0)
+    const weight = (row: (typeof answer.orgs)[number]) => Math.max(1, tasksIn(row))
+    const allTasks = answer.orgs.reduce((n, row) => n + weight(row), 0)
     for (const row of answer.orgs) {
       const { id } = row
       const org = orgs.get(id)
@@ -410,7 +408,7 @@ export function createLiveParts(
           if (got === null && !some) return null
           if (got === null) continue
           rows.push(...got)
-          if (kind === 'tasks') loaded += (idShare(n) * tasksIn(row)) / allTasks
+          if (kind === 'tasks') loaded += (idShare(n) * weight(row)) / allTasks
         }
         return rows
       }

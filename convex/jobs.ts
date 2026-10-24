@@ -41,7 +41,7 @@ import { deletionBegun } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { scheduleMarkClears } from './model/archiveMarks'
 import { ITEM_UNREAD_CAP, scheduleArchivedReads, wakeSnoozedItem } from './model/messages'
-import { DEFAULT_ARCHIVE_DAYS } from './model/orgs'
+import { DEFAULT_ARCHIVE_DAYS, tallyRows } from './model/orgs'
 import { messageRetentionDays } from './model/people'
 import { emitTaskEvent, eventSubscriptions } from './model/taskEvents'
 
@@ -290,6 +290,11 @@ async function archiveLeg(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg |
     checks += cost
     patched.push(task)
   }
+  await tallyRows(
+    ctx,
+    'issues',
+    patched.map((task) => [task, { ...task, archived_at: a.now }] as const),
+  )
   await scheduleArchivedReads(ctx, { issues: patched.map((task) => task.id) })
   const archived = a.archived + patched.length
   // The same page again. The tasks archived here have left its range.

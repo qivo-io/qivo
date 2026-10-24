@@ -18,6 +18,7 @@ import {
   assertNotLastAdmin,
   assertNotLastTeam,
   assertSlugAvailable,
+  countersRow,
   generateSlug,
   nameInitials,
   narrateSlugChange,
@@ -244,8 +245,12 @@ describe('identity.createOrganization — the whole door', () => {
     expect(org).not.toBeNull()
     expect(org!.name).toBe('Nimbus Labs')
     expect(org!.slug).toBe('nimbus-labs')
-    // the counters start in their own row
+    // the counters start in their own row, the live counts counted from the start
     expect(await countersFor(t, orgId)).toEqual({ next_issue_num: 0, next_project_num: 0 })
+    expect(await t.run((ctx) => countersRow(ctx, orgId))).toMatchObject({
+      active_tasks: 0,
+      live_projects: 0,
+    })
     expect(org!.date_format).toBe('YYYY-MM-DD')
     expect(org!.week_start).toBe(1)
     expect(org!.week_one_rule).toBe('first4day')

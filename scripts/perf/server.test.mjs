@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { idWindows, WINDOW_ROWS, windowCount } from '../../convex/lib/idWindows'
+import { idWindows, startWindows } from '../../convex/lib/idWindows'
 
 /* The browser benchmark's stand-in server (scripts/perf/server.mjs), loaded
    as its worker would be, with the page's parameters as the worker's name. */
@@ -142,7 +142,7 @@ describe('the benchmark server', () => {
     const { posted, send } = await server('tasks=500&latency=0&mbps=100000')
     await send({ type: 'query', id: 'root', name: 'workspace:root', args: {} })
     const [org] = JSON.parse(posted.find((m) => m.to === 'root').text).orgs
-    const windows = idWindows(windowCount(org.next_issue_num, WINDOW_ROWS.tasks))
+    const windows = idWindows(startWindows(org).tasks)
     expect(windows.length).toBeGreaterThan(2)
     for (const [i, w] of windows.entries())
       send({ type: 'watch', id: `w${i}`, name: 'workspace:tasks', args: { org_id: org.id, ...w } })

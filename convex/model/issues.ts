@@ -118,7 +118,7 @@ import {
   orgProfile,
   scheduleArchivedReads,
 } from './messages'
-import { nextIssueNum } from './orgs'
+import { nextIssueNum, tallyRow, tallyRows } from './orgs'
 import { reviewHoursFor } from './projects'
 import { emitTaskEvent } from './taskEvents'
 import { assertWeekPair, cleanRemaining, cleanTaskDate, roundTenths } from './taskValues'
@@ -1467,6 +1467,7 @@ export async function createIssueCore(
     badRequest(DUPLICATE_TASK_ID),
   )
   const issue = (await byId(ctx, 'issues', args.id)) as Doc<'issues'>
+  await tallyRow(ctx, 'issues', null, issue)
   // the attach clears the parent's hours; its dates are calculated, never
   // written. A new task is active in an active project (the arrival guard),
   // so it always makes its parent a group.
@@ -1772,6 +1773,7 @@ export async function updateIssueCore(
   // -- the row write: ONE patch, the folded archive toggle included
   await ctx.db.patch(issue._id, w)
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
+  await tallyRow(ctx, 'issues', issue, after)
   // -- cascade, then clear-on-attach
   if (toggle === 'restored') {
     // the restore cascade: the ancestor chain surfaces (suppressed echoes),
@@ -2280,6 +2282,11 @@ async function archiveSubtree(
     const after: Doc<'issues'> = { ...c, archived_at: now, updated_at: now }
     await emitTaskEvent(ctx, { name: 'task.updated', issue: after, before: c, actor, now })
   }
+  await tallyRows(
+    ctx,
+    'issues',
+    kids.map((c) => [c, { ...c, archived_at: now }] as const),
+  )
   return kids.map((c) => c.id)
 }
 
@@ -2311,6 +2318,7 @@ export async function archiveIssueCore(
   }
   const before = { ...issue }
   await ctx.db.patch(issue._id, { archived_at: now, updated_at: now })
+  await tallyRow(ctx, 'issues', issue, { ...issue, archived_at: now })
   const descendants = await archiveSubtree(ctx, issue.id, now, me)
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
   await notifyIssueUpdate(ctx, { before, after, actor: me, now }) // the root's own write narrates
@@ -2385,6 +2393,7 @@ async function restoreAncestors(
       updated_at: now,
     })
     const pAfter = (await ctx.db.get(parent._id)) as Doc<'issues'>
+    await tallyRow(ctx, 'issues', parent, pAfter)
     if (wasArchived) restored.push(pAfter)
     // cascade echo: only the Restored line is suppressed — a cleared
     // remaining still narrates to this ancestor's subscribers
@@ -2499,6 +2508,7 @@ export async function unarchiveIssueCore(
     updated_at: now,
   })
   const rootAfter = (await ctx.db.get(issue._id)) as Doc<'issues'>
+  await tallyRow(ctx, 'issues', issue, rootAfter)
   const restored = await restoreAncestors(ctx, { row: rootAfter, actor: me, now })
   // the relation rows' marks are cleared in the background; the label
   // search reads these tasks through their own indexes until then

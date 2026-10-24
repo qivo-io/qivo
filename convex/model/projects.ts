@@ -52,7 +52,7 @@ import {
   type View,
 } from './expected'
 import { scheduleArchivedReads } from './messages'
-import { nextProjectNum } from './orgs'
+import { nextProjectNum, tallyRow } from './orgs'
 
 /* The first step of a restore's regroup chain (regroup.ts), referenced by
  * name as model/messages.ts references its steps. */
@@ -380,6 +380,7 @@ export async function createProjectCore(
   )
   const project = await byId(ctx, 'projects', p.id)
   require(project !== null, notFound('project not found'))
+  await tallyRow(ctx, 'projects', null, project)
   // Grant rows ride along on either project level. Root grants are inherited
   // by children by the access helpers; child grants can further narrow a
   // workstream without introducing an owning team. A sub-project's creator

@@ -43,7 +43,7 @@ import type { IssueStatus } from '../lib/enums'
 import { DEFAULT_MESSAGE_RETENTION_DAYS } from '../lib/limits'
 import { DEFAULT_PLANNABLE_HOURS } from '../lib/workload'
 import { deleteOrgDeep, pendingRemoval } from '../model/cascade'
-import { insertOrgRows, newOrgDefaults, newTeamDefaults } from '../model/orgs'
+import { insertOrgRows, newOrgDefaults, newTeamDefaults, tallyRow } from '../model/orgs'
 import { projectDescription } from '../model/projects'
 
 /* The seat's login: `<key>@demo.qivo.io` is the Northstar roster's address
@@ -133,15 +133,15 @@ export const zzGuestOrg = internalMutation({
      * the HIDDEN sibling they are NOT invited to — the control that proves a
      * grant reaches one project, not the organization. Nums 1..4 in insert
      * order. */
-    const project = (
+    const project = async (
       id: string,
       num: number,
       key: string,
       name: string,
       sort_order: number,
       shape: { parent_id?: string },
-    ) =>
-      ctx.db.insert('projects', {
+    ) => {
+      const row = {
         id,
         org_id: ZZ.org,
         type: shape.parent_id === undefined ? 'meta' : 'project',
@@ -154,7 +154,10 @@ export const zzGuestOrg = internalMutation({
         track_delay: true, // the 0064 column default the SQL rows took
         created_at: now,
         window_key: newWindowKey(),
-      })
+      } as const
+      await ctx.db.insert('projects', row)
+      await tallyRow(ctx, 'projects', null, row)
+    }
     await project(ZZ.sharedMeta, 1, 'ZGM', 'ZZ Shared Project', 0, {})
     await project(ZZ.sharedSub, 2, 'ZGS', 'ZZ Shared Sub', 0, { parent_id: ZZ.sharedMeta })
     await project(ZZ.hiddenMeta, 3, 'ZGH', 'ZZ Hidden Project', 1, {})
@@ -191,15 +194,15 @@ export const zzGuestOrg = internalMutation({
     /* FIRST issue of this organization on purpose: it takes num 1, so "QN-1"
      * exists twice across the blend and only the org-prefixed URL can name
      * this one. created_by stays absent — the SQL rows had none. */
-    const issue = (
+    const issue = async (
       id: string,
       num: number,
       project_id: string,
       title: string,
       status: IssueStatus,
       load?: { remaining_hours: number },
-    ) =>
-      ctx.db.insert('issues', {
+    ) => {
+      const row = {
         id,
         window_key: newWindowKey(),
         project_id,
@@ -220,7 +223,10 @@ export const zzGuestOrg = internalMutation({
         status_at: now,
         created_at: now,
         updated_at: now,
-      })
+      } as const
+      await ctx.db.insert('issues', row)
+      await tallyRow(ctx, 'issues', null, row)
+    }
     await issue(ZZ.sharedTask, 1, ZZ.sharedSub, 'ZZ shared task', 'backlog')
 
     /* Scheduled + estimated work for the staff member, one visible to the

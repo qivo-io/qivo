@@ -470,6 +470,34 @@ describe('a staged load', () => {
     expect(small.last()?.state).toBe('complete')
   })
 
+  it('sizes the windows by the active tasks and projects, not by the numbers handed out', async () => {
+    // 12,800 task and 4,001 project numbers, of which 300 tasks are active
+    // and 10 projects are left, so it gets two task windows and one project
+    // window
+    const s = scripted()
+    serve(s)
+    const aged = { ...BIG.orgs[0], next_project_num: 4001, active_tasks: 300, live_projects: 10 }
+    s.set('workspace:root', {}, { value: { ...BIG, orgs: [aged] } })
+    const reports: PartsReport[] = []
+    createLiveParts(
+      s.live,
+      (r) => reports.push(r),
+      () => true,
+    )
+    s.send()
+    const tasks = [...s.watched.keys()].filter((k) => k.startsWith('workspace:tasks'))
+    const projects = [...s.watched.keys()].filter((k) => k.startsWith('workspace:projects'))
+    expect(tasks).toEqual(
+      [LEFT, RIGHT].map((w) => s.keyOf('workspace:tasks', { org_id: ORG, ...w })),
+    )
+    expect(projects).toHaveLength(1)
+    await tick()
+    s.send()
+    expect(reports.map((r) => r.workspace.state)).not.toContain('partial')
+    const w = reports.at(-1)?.workspace
+    expect(w?.state === 'complete' && w.value?.issues.map((i) => i.id)).toEqual(['a', 'b', 'c'])
+  })
+
   it('watches the first task windows before the people and project windows', () => {
     const { s } = big()
     const order = s.log.filter((l) => l.startsWith('watch ')).map((l) => l.split('{')[0])

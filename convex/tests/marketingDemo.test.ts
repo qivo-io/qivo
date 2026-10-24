@@ -25,6 +25,7 @@ import { newOrgDefaults, newTeamDefaults } from '../model/orgs'
 import schema from '../schema'
 import {
   countersFor,
+  expectLiveCounts,
   expectRefusal,
   NOW,
   newT,
@@ -1174,6 +1175,7 @@ describe('marketing demo rebuild ownership', () => {
   it('wipe removes work but preserves the roster and allows reseeding with stable issue UUIDs', async () => {
     const t = newAuthT()
     const result = await seeded(t)
+    const counted = await expectLiveCounts(t, result.org_id)
     const roster = await profiles(t, result.org_id)
     const issueIds = (await t.run(async (ctx) => ctx.db.query('issues').collect())).map((i) => i.id)
     expect(await wipe(t)).toMatchObject({
@@ -1214,9 +1216,12 @@ describe('marketing demo rebuild ownership', () => {
           .collect(),
       ).toHaveLength(1)
     })
-    // the wipe rewinds the counters, so the reseed numbers tasks from 1
+    // the wipe rewinds the counters, so the reseed numbers tasks from 1, and
+    // the live counts follow the rows it deleted and writes
     expect(await countersFor(t, result.org_id)).toEqual({ next_issue_num: 0, next_project_num: 0 })
+    expect(await expectLiveCounts(t, result.org_id)).toEqual({ active_tasks: 0, live_projects: 0 })
     await seed(t, NEXT_ANCHOR)
+    expect(await expectLiveCounts(t, result.org_id)).toEqual(counted)
     expect((await t.run(async (ctx) => ctx.db.query('issues').collect())).map((i) => i.id)).toEqual(
       issueIds,
     )

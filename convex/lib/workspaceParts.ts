@@ -7,11 +7,12 @@
  * picks a task's or project's window key at random when it inserts the row
  * (lib/db.ts newWindowKey), so no writer can crowd rows into one window,
  * and the ids writers choose say nothing about where a row lands. The app
- * chooses the windows from the organization's counters, so each window
- * stays far inside Convex's limits per query (4,096 index ranges, 32,000
- * documents, 16 MiB read, 1 s) and a change re-sends only the window that
- * holds it. A window reads its rows, and each kind of their relation rows,
- * in one index range, by organization and key, not one range per row (a
+ * chooses the windows from the organization's counts of the rows they read
+ * (lib/idWindows.ts startWindows), so each window stays far inside
+ * Convex's limits per query (4,096 index ranges, 32,000 documents, 16 MiB
+ * read, 1 s) and a change re-sends only the window that holds it. A
+ * window reads its rows, and each kind of their relation rows, in one
+ * index range, by organization and key, not one range per row (a
  * relation row carries its task's key as task_key). A window keeps its
  * bounds while rows come and go. One that grew past PAGE's soft budget answers `split: true`, and the
  * app cuts it in two (lib/idWindows.ts halve) while it keeps answering.
@@ -31,7 +32,13 @@ import type { IndexRange } from 'convex/server'
 import type { Doc, TableNames } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { shownLabelColor } from '../model/labels'
-import { countersOf, type OrgCounters } from '../model/orgs'
+import {
+  countersRow,
+  type LiveCounts,
+  liveCountsOf,
+  numbersOf,
+  type OrgCounters,
+} from '../model/orgs'
 import { shownAvatarColor } from '../model/people'
 import { stampOfRow } from '../model/syncStamps'
 import { isOrgStaff, projectLevelsOf } from './access'
@@ -83,12 +90,18 @@ function relationRow<
 }
 
 /* An organization as the app receives it. Billing is admin-only; the
- * counters come from org_counters (model/orgs.ts countersOf). The retired
- * gravatar_avatars setting stays out. */
+ * counters and the live counts, once counted, come from org_counters
+ * (model/orgs.ts numbersOf, liveCountsOf). The retired gravatar_avatars
+ * setting stays out. */
 type OrgRow = Omit<AppRow<'organizations'>, 'billing' | 'gravatar_avatars'> &
-  OrgCounters & { billing?: Doc<'organizations'>['billing'] }
+  OrgCounters &
+  LiveCounts & { billing?: Doc<'organizations'>['billing'] }
 
-const orgRowFor = (doc: Doc<'organizations'>, counters: OrgCounters, isAdmin: boolean): OrgRow => {
+const orgRowFor = (
+  doc: Doc<'organizations'>,
+  counters: OrgCounters & LiveCounts,
+  isAdmin: boolean,
+): OrgRow => {
   const { _id, _creationTime, billing, gravatar_avatars: _gravatar, ...rest } = doc
   const row = { ...rest, ...counters }
   return isAdmin && billing !== undefined ? { ...row, billing } : row
@@ -273,7 +286,14 @@ export async function readRoot(
   for (const me of ctx.myProfiles.values()) {
     const org = await byId(ctx, 'organizations', me.org_id)
     if (org === null) continue // a seat in a vanished org contributes nothing
-    orgs.push(orgRowFor(org, await countersOf(ctx, org), me.org_role === 'admin'))
+    const counters = await countersRow(ctx, org.id)
+    orgs.push(
+      orgRowFor(
+        org,
+        { ...numbersOf(counters), ...liveCountsOf(counters) },
+        me.org_role === 'admin',
+      ),
+    )
   }
   return {
     auth_user_id: ctx.authUserId,
