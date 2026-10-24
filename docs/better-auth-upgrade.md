@@ -134,9 +134,10 @@ and reconnect. Hosted smoke tools can create and delete data; use them only
 with explicit scope for the target and those writes. Keep fixture credentials
 outside the public checkout.
 
-Email, Google/Microsoft sign-in and billing remain disabled and untested
-until their separate test setup is authorized. Passing core tests does not
-establish that these integrations work. Record those gaps and resolve
+Google/Microsoft sign-in and billing remain disabled and untested until their
+separate test setup is authorized, and so does email on staging. The
+candidate's branch preview sends real mail, so try the email flows there.
+Passing core tests does not establish that these integrations work. Record those gaps and resolve
 integration migration requirements before a production upgrade that affects
 them.
 

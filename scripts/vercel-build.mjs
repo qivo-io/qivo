@@ -99,8 +99,10 @@ export const isOneAddress = (s) => s.length <= 254 && ONE_ADDRESS.test(s)
 /* Production sends sign-up, password reset, invitation, billing and deletion
  * mail, so this refuses a production build, before any function is pushed,
  * unless its backend has the Lettermint token and a MAIL_FROM of one address.
- * Staging, previews and the demo send none. `read` returns one trimmed
- * backend value, which is only tested and never printed. */
+ * Branch previews get both from the Convex project's defaults and send mail
+ * too, but their build does not require them. Staging and the demo send none.
+ * `read` returns one trimmed backend value, which is only tested and never
+ * printed. */
 export function requireProductionBackendEnv(env, read) {
   if (env.QIVO_ENVIRONMENT !== 'production') return
   const token = read('LETTERMINT_API_KEY')
