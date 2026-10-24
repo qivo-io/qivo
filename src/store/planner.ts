@@ -8609,8 +8609,9 @@ export const PLANNER = {
       too, because it clears the sign-in stored in this browser. When the
       server answers that it could not end the session, the person stays
       signed in and is told to try again (lib/authSession.ts signOut). A
-      press while a sign-out runs does nothing. */
-  signOut: () => {
+      press while a sign-out runs does nothing. Returns the sign-out request
+      when this press started one, for the control to show that it runs. */
+  signOut: (): Promise<void> | undefined => {
     const waiting = syncStatus.unconfirmed()
     if ((waiting || hasUnsaved()) && Date.now() - signOutWarnedAt > SIGN_OUT_CONFIRM_MS) {
       signOutWarnedAt = Date.now()
@@ -8638,7 +8639,7 @@ export const PLANNER = {
       leaveDeliberately()
       location.reload()
     }
-    void authSignOut()
+    return authSignOut()
       .then(leave, (failure: unknown) => {
         if (failure instanceof SignOutFailed) toast(failure.message)
         else leave()

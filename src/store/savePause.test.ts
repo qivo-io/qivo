@@ -328,9 +328,10 @@ describe('the pause while Qivo cannot save', () => {
       () => new Promise((_, reject) => (refuse = () => reject(new SignOutFailed()))),
     )
     storage.set('qivo.unconfirmed.v1:org-8:someone-else:closed-page', '[]')
-    P.signOut()
+    // the press that starts the request hands it to the control
+    expect(P.signOut()).toBeInstanceOf(Promise)
     // a second press while the first runs sends no second request
-    P.signOut()
+    expect(P.signOut()).toBeUndefined()
     expect(auth.signOut).toHaveBeenCalledTimes(1)
     refuse()
     await settle()
