@@ -323,7 +323,12 @@ describe('memoized task rows', () => {
     expect(await rerenderedBy(() => (page.prompt = null))).toEqual(['three'])
     // another reading point or another day renders them all
     expect(await rerenderedBy(() => (page.since = 1))).toEqual(['one', 'three', 'two'])
-    expect(await rerenderedBy(() => (page.now += 86_400_000))).toEqual(['one', 'three', 'two'])
+    // the next calendar day, since 24 hours stays on the same date in the
+    // first hour of the day summer time ends
+    const tomorrow = new Date(page.now)
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    const nextDay = tomorrow.getTime()
+    expect(await rerenderedBy(() => (page.now = nextDay))).toEqual(['one', 'three', 'two'])
     expect(await renderedBy(rename('three'))).toEqual(['three'])
     expect(await renderedBy(() => {})).toEqual([])
     // the blocker is done, so the card it blocks drops its mark
