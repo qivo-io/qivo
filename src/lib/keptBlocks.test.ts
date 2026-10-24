@@ -81,6 +81,22 @@ describe('settleHiddenBlocks', () => {
     expect(container.querySelectorAll('[data-kept-hidden]')).toHaveLength(3)
   })
 
+  it('marks every block left when blocks before the next one go between steps', () => {
+    const { container, read } = setup(10)
+    const queue = idleQueue(4)
+    settleHiddenBlocks(container, queue)
+    queue.run()
+    // a leaving view drops its first blocks
+    const blocks = [...container.getElementsByClassName('deferred-block')]
+    for (const block of blocks.slice(0, 3)) block.remove()
+    queue.run()
+    queue.run()
+    expect(queue.waiting).toBe(0)
+    expect(container.querySelectorAll('.deferred-block:not([data-kept-hidden])')).toHaveLength(0)
+    // each block read once
+    expect(new Set(read).size).toBe(read.length)
+  })
+
   it('stops when the view shows again before it is done, and takes its marks off', () => {
     const { container, read } = setup(10)
     const queue = idleQueue(4)

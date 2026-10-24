@@ -35,10 +35,16 @@ export function settleHiddenBlocks(container: Element, { idle = whenIdle }: Opti
   const blocks = container.getElementsByClassName('deferred-block')
   const marked: Element[] = []
   let next = 0
+  let last: Element | undefined
   let cancel = () => {}
   const step = (deadline: { timeRemaining: () => number }) => {
+    // a block that went or came before `next`, as a leaving view drops its
+    // blocks in slices, moved the rest: walk again, past the marked ones
+    if (next > 0 && blocks[next - 1] !== last) next = 0
     while (next < blocks.length && deadline.timeRemaining() > SPARE_MS) {
       const block = blocks[next++]
+      last = block
+      if (block.hasAttribute(MARK)) continue
       block.setAttribute(MARK, '')
       marked.push(block)
       void getComputedStyle(block).contentVisibility
