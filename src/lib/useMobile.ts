@@ -32,8 +32,41 @@ export function useMobile() {
   return useSyncExternalStore(subscribePhone, () => phoneQuery().matches)
 }
 
+/* The history marker of a layer that closed without its Back step, as a
+   finished dialog does, until the page steps back over it. A layer that
+   opens meanwhile takes its entry over instead (useMobileBackLayer). */
+let retired: { id: string; previous: unknown; marked: string } | null = null
+// a step back over a retired marker that has not landed yet
+let stepping: Promise<void> | null = null
+
+/** Steps back over layer `id`'s marker, pushed at address `marked` over an
+    entry with state `previous`, once the layers opening in the same turn
+    had their chance to take it over, so the next Back leaves the page
+    instead of landing on an entry with the page's own address. An address
+    changed in place meanwhile is not the entry's below, so the marker then
+    becomes the page's own entry, as it did before. */
+function retire(id: string, previous: unknown, marked: string) {
+  retired = { id, previous, marked }
+  setTimeout(() => {
+    if (retired?.id !== id) return
+    retired = null
+    if (history.state?.qivoLayer !== id) return
+    if (location.href !== marked) {
+      history.replaceState(previous, '', location.href)
+      return
+    }
+    stepping = new Promise<void>((resolve) =>
+      window.addEventListener('popstate', () => resolve(), { once: true }),
+    ).then(() => {
+      stepping = null
+    })
+    history.back()
+  }, 0)
+}
+
 /** Give a phone overlay one Back step without changing its underlying URL.
- * Completion may unmount it directly; only its own history marker is cleared.
+ * Completion may unmount it directly; the page then steps back over its
+ * history marker (retire), or the next layer takes the marker's entry over.
  * An explicit enabled value keeps a phone layer through landscape rotation.
  * A close repeated before its Back step lands is dropped, never a second Back.
  * `onClose` may return false to stay open (a dialog busy with something that
@@ -78,21 +111,41 @@ export function useMobileBackLayer(
     // A task's Plan action mounts Roadmap before App's URL-sync effect runs.
     // Register after that effect so the layer belongs to the destination URL
     // and its marker cannot be covered by the route's own history entry.
-    queueMicrotask(() => {
+    let marked = ''
+    const register = () => {
       if (disposed) return
-      previous = history.state
-      history.pushState({ ...history.state, qivoLayer: id }, '', location.href)
+      if (stepping) {
+        // after the step back over a retired marker, which would undo a push
+        void stepping.then(register)
+        return
+      }
+      marked = location.href
+      // the marker of a layer that just closed without its Back step
+      const left = retired && history.state?.qivoLayer === retired.id ? retired : null
+      if (left) retired = null
+      if (left?.marked === marked) {
+        previous = left.previous
+        history.replaceState({ ...history.state, qivoLayer: id }, '', marked)
+      } else {
+        // one whose address changed in place is the page's own entry now
+        if (left) history.replaceState(left.previous, '', marked)
+        previous = history.state
+        history.pushState({ ...history.state, qivoLayer: id }, '', marked)
+      }
       active.current = true
       registered = true
       window.addEventListener('popstate', pop)
-    })
+    }
+    queueMicrotask(register)
     return () => {
       disposed = true
       window.removeEventListener('popstate', pop)
+      const backPending = leaving.current
       active.current = false
       leaving.current = false
-      if (registered && history.state?.qivoLayer === id)
-        history.replaceState(previous, '', location.href)
+      // closed without its Back step, as a finished dialog does
+      if (registered && history.state?.qivoLayer === id && !backPending)
+        retire(id, previous, marked)
     }
   }, [useHistory, open, id])
   return close

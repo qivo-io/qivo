@@ -11,9 +11,10 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
    task window waits for a task still to arrive, the address keeps naming
    it, and the task opens once it arrives, in its own scope. The waiting
    window closes, and a task that never arrives closes it once every task
-   has loaded. Settings opens meanwhile, but its pages that read every task
-   wait. Back to a task or project that is gone, once every task has
-   loaded, names the page it shows in place. */
+   has loaded. A task address Back reaches during the first load, before
+   App shows, is held the same way. Settings opens meanwhile, but its pages
+   that read every task wait. Back to a task or project that is gone, once
+   every task has loaded, names the page it shows in place. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
@@ -90,8 +91,10 @@ function waitFor<T>(find: () => T | null | undefined, what: string) {
 
 /** Boots App on a large workspace whose last task window, holding task
     QN-2, is still to arrive, or with every task loaded when not `held`.
+    With `reached`, Back or Forward reaches the address it builds from the
+    organization's slug after the load began and before App's first render.
     Answers the store and the organization's slug. */
-async function bootLoading(held = true) {
+async function bootLoading(held = true, reached?: (org: string) => string) {
   vi.resetModules()
   const snap: Snapshot = plannerFixture()
   snap.orgs[0].next_issue_num = 64 * 200
@@ -122,6 +125,7 @@ async function bootLoading(held = true) {
   if (held) double.live?.holdWindow(LAST_WINDOW)
   await store.initStore()
   expect(store.P.stillLoading() !== null).toBe(held)
+  if (reached) history.pushState(null, '', reached(store.P.org.slug))
   // App's views load their code only while the socket counts as connected
   const { syncStatus } = await import('./lib/syncStatus')
   syncStatus.setSocket({ connected: true, everConnected: true })
@@ -228,6 +232,30 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     await arrive()
     await waitFor(() => document.body.textContent?.includes('Run the soak test'), "the task's pane")
     expect(document.querySelector('[data-task-loading]')).toBeNull()
+  })
+})
+
+describe('Back to a task during the first load', { timeout: 30_000 }, () => {
+  it('holds its address when the load began in stages, then opens the task', async () => {
+    const { store } = await bootLoading(true, (slug) => `/app/${slug}/inbox/tasks/qn-2`)
+    const address = `/app/${store.P.org.slug}/inbox/tasks/qn-2`
+    expect(location.pathname).toBe(address)
+    await waitFor(() => document.querySelector('[data-task-loading]'), 'the loading note')
+    await arrive()
+    await waitFor(() => document.body.textContent?.includes('Run the soak test'), "the task's pane")
+    expect(location.pathname).toBe(address)
+  })
+
+  it('closes the window in place once every task has loaded without the task', async () => {
+    const { store } = await bootLoading(true, (slug) => `/app/${slug}/board/tasks/qn-3`)
+    expect(location.pathname).toBe(`/app/${store.P.org.slug}/board/tasks/qn-3`)
+    await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
+    const entries = history.length
+    await arrive()
+    await waitFor(() => !document.querySelector('[data-task-loading]'), 'the closed window')
+    // the page it shows, named in place as Back to a gone task names it
+    expect(location.pathname).toBe(`/app/${store.P.org.slug}`)
+    expect(history.length).toBe(entries)
   })
 })
 

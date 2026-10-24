@@ -800,6 +800,16 @@ function App() {
   // into the first visible project instead
   const liveScope = (s) => !!s && (P.isWideScope(s) || !!P.project(s))
   const uiScope = liveScope(ui0.scope) ? ui0.scope : null
+  /* A task still to arrive that the boot address names. A task address
+     makes the first load wait for every task (AuthGate), but Back or
+     Forward during that load can reach one after the load began in stages.
+     The boot then holds it as onPop does (pendingTask), where it would
+     otherwise rewrite the address to the page's own. */
+  const [held0] = useState(() =>
+    !r0?.issue && P.stillLoading() !== null
+      ? taskSegmentOf(location.pathname, location.hash)
+      : undefined,
+  )
   // issue URLs carry no scope segment (the issue names its own project):
   // keep the saved scope when the issue lives inside it, else jump to the
   // issue's sub-project — link recipients land on a board that shows it.
@@ -824,13 +834,13 @@ function App() {
     // scope/settings routes without a view mean overview
     r0?.view
       ? r0.view
-      : r0?.issue || r0?.sync || (mobile && (r0?.settings || r0?.projects || r0?.inbox))
+      : r0?.issue || held0 || r0?.sync || (mobile && (r0?.settings || r0?.projects || r0?.inbox))
         ? uiView
         : r0
           ? 'overview'
           : uiView,
   )
-  const [openIssue, setOpenIssue] = useState(r0?.issue || null)
+  const [openIssue, setOpenIssue] = useState(r0?.issue || held0 || null)
   // A new task's handle is a preview that moves when another person's create
   // takes its number while the write waits. The open window follows its task,
   // with every move of one repaint applied at once.
@@ -989,7 +999,21 @@ function App() {
      while the page is the one Back or Forward set (`page`), and the task
      opens once it arrives, in the scope Back or Forward would have chosen
      for it (`scope`, `preferred`) unless the page moved meanwhile, or the
-     window closes once every task has loaded without it. */
+     window closes once every task has loaded without it. The boot holds
+     its own address's task the same way (held0), with the boot's scope
+     rule. */
+  const [bootHold] = useState(() =>
+    held0
+      ? {
+          pathname: location.pathname,
+          hash: location.hash,
+          ref: held0,
+          page: pageKey({ scope, view, settingsPage, inboxOpen, projectsOpen, sync }),
+          scope: r0?.scope,
+          preferred: uiScope,
+        }
+      : null,
+  )
   const pendingTask = useRef<{
     pathname: string
     hash: string
@@ -997,7 +1021,7 @@ function App() {
     page: string
     scope?: string
     preferred: string | null
-  } | null>(null)
+  } | null>(bootHold)
   // the project an "Archived tasks" entry asked for; null = derive from the
   // current scope (Settings' own Archived tasks item, deep links)
   const [archiveProject, setArchiveProject] = useState<string | null>(null)
