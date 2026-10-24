@@ -335,8 +335,10 @@ reviewed, so it must never receive signing credentials. The Linux job uses
 Ubuntu 24.04 to keep the glibc baseline portable; the resulting Debian package
 is suitable for Ubuntu 26.04.
 
-The shell loads the hosted web app, so web releases reach desktop users within
-about a minute without a new installer. When desktop publishing starts, the
+The shell loads the hosted web app, so web releases reach desktop users without
+a new installer: within about 11 minutes while the window stays visible, and at
+once when the window is focused after two minutes or more since the last check
+(`src/lib/appUpdates.ts`). When desktop publishing starts, the
 installers belong on the same GitHub Release as the web version, attached to
 the draft before it is published, because the stable update feed
 (`releases/latest/download/`) always reads the newest stable release. A new

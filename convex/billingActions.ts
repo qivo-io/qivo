@@ -132,6 +132,9 @@ const clearEndedRef = makeFunctionReference<
   { org_id: string; checkout_id: string },
   null
 >('billingActions:clearEndedCheckout')
+const requestSyncRef = makeFunctionReference<'mutation', { org_id: string }, null>(
+  'billingSync:requestSync',
+)
 
 export const reserveCheckout = internalMutation({
   args: { org_id: v.string() },
@@ -258,9 +261,13 @@ export const checkout = orgAction({
       // Recover a successful checkout whose webhook was delayed before allowing
       // another purchase. The external customer ID is the authenticated org UUID.
       const existing = await listPolarSubscriptions(ctx.orgId)
-      require(!existing.some((s) => LIVE_POLAR_STATUSES.includes(s.status)), rule(
-        'This organization already has a subscription. Refresh Billing or use Manage billing.',
-      ))
+      if (existing.some((s) => LIVE_POLAR_STATUSES.includes(s.status))) {
+        // Billing has not applied it yet, so a refresh soon shows it.
+        await ctx.runMutation(requestSyncRef, { org_id: ctx.orgId })
+        throw rule(
+          'This organization already has a subscription. Refresh Billing or use Manage billing.',
+        )
+      }
       await validateProduct(reservation.plan)
       require(reservation.plan.polar_product_id, rule(
         'This plan is not connected to checkout yet.',

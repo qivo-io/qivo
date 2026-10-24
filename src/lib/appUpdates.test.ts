@@ -329,4 +329,18 @@ describe('safe application updates', () => {
     await app.monitor.check()
     expect(app.fetchVersion).toHaveBeenCalledTimes(4)
   })
+
+  it('asks again at once after a failed check or a clock moved back', async () => {
+    const app = setup()
+    app.fetchVersion.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    await app.monitor.check()
+    // coming back online right after the failure checks again
+    await app.monitor.checkIfOlder(UPDATE_WAKE_MS)
+    expect(app.fetchVersion).toHaveBeenCalledTimes(2)
+    await app.monitor.checkIfOlder(UPDATE_WAKE_MS)
+    expect(app.fetchVersion).toHaveBeenCalledTimes(2)
+    vi.setSystemTime(Date.now() - 2 * 60 * 60_000)
+    await app.monitor.checkIfOlder(UPDATE_CHECK_MS)
+    expect(app.fetchVersion).toHaveBeenCalledTimes(3)
+  })
 })

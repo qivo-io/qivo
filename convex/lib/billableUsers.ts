@@ -76,15 +76,20 @@ const reconcileBilling = makeFunctionReference<'action', { org_id: string }, nul
   'billingSync:reconcile',
 )
 
+/** Makes the organization's reconciliation due by `at` (billingSync.ts
+ * sweep), unless a time other than the safety pass already comes sooner. */
+export async function billingDueBy(ctx: MutationCtx, orgId: string, at: string): Promise<void> {
+  const sub = await subscriptionFor(ctx, orgId)
+  if (sub && (sub.sync_due_at === undefined || sub.sync_due_at > at || sub.sync_safety))
+    await ctx.db.patch(sub._id, { sync_due_at: at, sync_safety: undefined })
+}
+
 /** Asks for the organization's reconciliation with Polar now: marks its
  * billing due (billingSync.ts sweep) and schedules the reconciliation, in
  * the caller's transaction. The scheduled run is not retried if it fails
  * before it starts, so the mark makes the next minute's sweep run it then. */
 export async function requestBillingSync(ctx: MutationCtx, orgId: string): Promise<void> {
-  const sub = await subscriptionFor(ctx, orgId)
-  const now = new Date().toISOString()
-  if (sub?.sync_due_at !== undefined && (sub.sync_due_at > now || sub.sync_safety))
-    await ctx.db.patch(sub._id, { sync_due_at: now, sync_safety: undefined })
+  await billingDueBy(ctx, orgId, new Date().toISOString())
   await ctx.scheduler.runAfter(0, reconcileBilling, { org_id: orgId })
 }
 

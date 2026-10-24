@@ -613,8 +613,9 @@ export default defineSchema({
     sync_error: v.optional(v.string()),
     synced_at: v.optional(v.string()),
     // When the minute sweep next reconciles this organization with Polar
-    // (billingSync.ts nextSyncDue). Absent until the first reconciliation,
-    // which the sweep then treats as due.
+    // (billingSync.ts nextSyncDue). Absent only on rows enrolled before due
+    // times existed, which the sweep treats as due after the other targeted
+    // times.
     sync_due_at: v.optional(v.string()),
     // True when sync_due_at is only the six-hour safety pass, which the
     // sweep starts after every other due organization.

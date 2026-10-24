@@ -4,7 +4,9 @@ import { api } from '../_generated/api'
 import type { Id } from '../_generated/dataModel'
 import {
   CHECKOUT_POLL_GRACE_MS,
+  DUNNING_POLL_MS,
   PAYMENT_POLL_MS,
+  PAYMENT_POLL_WINDOW_MS,
   POST_RENEWAL_MS,
   PRE_RENEWAL_MS,
   REMINDER_PAGE,
@@ -93,9 +95,19 @@ const release = makeFunctionReference<
   { org_id: string; token: string; seats?: number; error?: string },
   null
 >('billingSync:release')
-const reminders = makeFunctionReference<'mutation', { now: number; cursor: string | null }, null>(
-  'billingSync:reminders',
+const reminders = makeFunctionReference<
+  'mutation',
+  { now: number; threshold: number; cursor: string | null },
+  null
+>('billingSync:reminders')
+const reserveCheckout = makeFunctionReference<'mutation', { org_id: string }, { token: string }>(
+  'billingActions:reserveCheckout',
 )
+const finishCheckout = makeFunctionReference<
+  'mutation',
+  { org_id: string; token: string; checkout_id?: string; url?: string; expires_at?: string },
+  null
+>('billingActions:finishCheckout')
 const webhook = makeFunctionReference<
   'action',
   { event_id: string; subscription_id: string },
@@ -391,6 +403,7 @@ describe('billing authority and plan versions', () => {
           ),
         )
       vi.stubGlobal('fetch', fetchMock)
+      await t.run((ctx) => ctx.db.patch(sub._id, { sync_due_at: iso(360), sync_safety: true }))
       await expectRefusal(
         as(t, f.admin).action(checkout, { org_id: f.org.id }),
         'rule',
@@ -400,6 +413,9 @@ describe('billing authority and plan versions', () => {
       expect(cleared).not.toHaveProperty('checkout_id')
       expect(cleared).not.toHaveProperty('checkout_url')
       expect(cleared).not.toHaveProperty('checkout_lock')
+      // the refusal says to refresh Billing, so the subscription is read now
+      expect(cleared).toMatchObject({ sync_due_at: NOW })
+      expect(cleared).not.toHaveProperty('sync_safety')
     },
   )
 })
@@ -1058,7 +1074,19 @@ describe('provider state, retries and billing snapshots', () => {
     expect(await periodAt(t, START)).not.toHaveProperty('storage_bytes')
     expect(errors).toHaveBeenCalledTimes(1)
 
+    await t.run(async (ctx) => {
+      const sub = await ctx.db
+        .query('billing_subscriptions')
+        .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+        .unique()
+      await ctx.db.patch(sub!._id, { sync_due_at: iso(100_000), sync_safety: true })
+    })
     expect(await t.mutation(restartStorage, { period: stopped!._id })).toBe(true)
+    // a reconciliation starts the sample again if it stalls once more
+    expect(await stored(t, f.org.id)).toMatchObject({
+      sync_due_at: new Date(Date.now() + STORAGE_STALL_MS + 60_000).toISOString(),
+    })
+    expect(await stored(t, f.org.id)).not.toHaveProperty('sync_safety')
     const restarts = await t.run(async (ctx) =>
       (await ctx.db.query('platform_audit_log').collect()).filter(
         (row) => row.action === 'billing.storage_sample_restarted',
@@ -1298,13 +1326,23 @@ describe('when organizations are reconciled', () => {
       ),
     )
   const dueAt = async (t: T, orgId: string) => (await stored(t, orgId))?.sync_due_at
-  const setDue = (t: T, orgId: string, due: string | undefined) =>
+  const setDue = (t: T, orgId: string, due: string | undefined, safety?: true) =>
     t.run(async (ctx) => {
       const sub = await ctx.db
         .query('billing_subscriptions')
         .withIndex('by_org', (q) => q.eq('org_id', orgId))
         .unique()
-      await ctx.db.patch(sub!._id, { sync_due_at: due })
+      await ctx.db.patch(sub!._id, { sync_due_at: due, sync_safety: safety })
+    })
+  const notices = (t: T) =>
+    t.run(async (ctx) =>
+      (await ctx.db.query('billing_notices').collect()).map((n) => [n.profile_id, n.kind]),
+    )
+  /* Gives the organization a free period until `until`, enrolling it first. */
+  const grantUntil = (t: T, orgId: string, until: string, updated = NOW) =>
+    t.run(async (ctx) => {
+      const sub = await enrollOrganization(ctx, orgId)
+      await ctx.db.patch(sub!._id, { complimentary_until: until, updated_at: updated })
     })
   /* Takes the lock and frees it again, as a reconciliation that finds
    * nothing to change does, and answers the due time it leaves. */
@@ -1317,34 +1355,61 @@ describe('when organizations are reconciled', () => {
   it('writes and schedules nothing in a minute when no organization is due', async () => {
     const { t, f } = await fixture()
     await setDue(t, f.org.id, iso(1))
+    // a free period between its reminder times
+    await grantUntil(t, f.otherOrg.id, iso(3 * 24 * 60))
+    await setDue(t, f.otherOrg.id, iso(1))
     const before = await stored(t, f.org.id)
     await t.mutation(sweep, {})
     // the old sweep scheduled a reconciliation for every organization each minute
     expect(await queued(t, 'billingSync:reconcile')).toEqual([])
     expect(await queued(t, 'billingSync:pump')).toEqual([])
+    expect(await queued(t, 'billingSync:reminders')).toEqual([])
     expect(await stored(t, f.org.id)).toEqual(before)
   })
 
-  it('starts due organizations a page at a time, oldest first, a second apart, and only once', async () => {
+  it('starts due organizations a page at a time, targeted times first, then those without one, then the safety pass', async () => {
     const { t, f } = await fixture()
     SYNC_PAGE.size = 2
-    const [late, early] = [uuid(), uuid()]
+    const [late, early, safe] = [uuid(), uuid(), uuid()]
     await t.run(async (ctx) => {
-      await enrollOrganization(ctx, late)
-      await enrollOrganization(ctx, early)
+      for (const id of [late, early, safe]) await enrollOrganization(ctx, id)
     })
-    // f.org has no due time yet, as for an organization enrolled before them
+    // f.org has no due time, as for an organization enrolled before due times
+    await setDue(t, f.org.id, undefined)
     await setDue(t, late, iso(-1))
     await setDue(t, early, iso(-2))
+    await setDue(t, safe, iso(-30), true)
     await t.mutation(sweep, {})
     const first = await queued(t, 'billingSync:reconcile')
-    expect(first.map((job) => job.args[0].org_id)).toEqual([f.org.id, early])
+    expect(first.map((job) => job.args[0].org_id)).toEqual([early, late])
     expect(first[1].scheduledTime - first[0].scheduledTime).toBe(SYNC_PAGE.spacing)
     await t.mutation(sweep, {})
     const second = await queued(t, 'billingSync:reconcile')
-    expect(second.slice(2).map((job) => job.args[0].org_id)).toEqual([late])
+    expect(second.slice(2).map((job) => job.args[0].org_id)).toEqual([f.org.id, safe])
     await t.mutation(sweep, {})
-    expect(await queued(t, 'billingSync:reconcile')).toHaveLength(3)
+    expect(await queued(t, 'billingSync:reconcile')).toHaveLength(4)
+  })
+
+  it('starts usage delivery once a usage event is due', async () => {
+    const { t, f } = await fixture()
+    await setDue(t, f.org.id, iso(10))
+    await t.run((ctx) =>
+      ctx.db.insert('billing_events', {
+        id: uuid(),
+        org_id: f.org.id,
+        kind: 'api',
+        period_start: START,
+        units: 1,
+        attempts: 0,
+        next_attempt_at: iso(1),
+        created_at: NOW,
+      }),
+    )
+    await t.mutation(sweep, {})
+    expect(await queued(t, 'billingSync:pump')).toEqual([])
+    vi.setSystemTime(Date.parse(iso(1)))
+    await t.mutation(sweep, {})
+    expect(await queued(t, 'billingSync:pump')).toHaveLength(1)
   })
 
   it('reconciles a paid organization again by its storage sample, its renewal or the safety pass', async () => {
@@ -1380,6 +1445,18 @@ describe('when organizations are reconciled', () => {
   it('polls a pending checkout and leaves an unconnected plan for the safety pass', async () => {
     const { t, f, planId } = await fixture()
     const expires = iso(60)
+    // saving the checkout moves the organization off the safety pass
+    await setDue(t, f.org.id, iso(SYNC_SAFETY_MS / 60_000), true)
+    const { token } = await t.mutation(reserveCheckout, { org_id: f.org.id })
+    await t.mutation(finishCheckout, {
+      org_id: f.org.id,
+      token,
+      checkout_id: uuid(),
+      url: 'https://sandbox.polar.sh/checkout/example',
+      expires_at: expires,
+    })
+    expect(await stored(t, f.org.id)).toMatchObject({ sync_due_at: iso(PAYMENT_POLL_MS / 60_000) })
+    expect(await stored(t, f.org.id)).not.toHaveProperty('sync_safety')
     await t.run(async (ctx) => {
       const sub = await ctx.db
         .query('billing_subscriptions')
@@ -1550,6 +1627,22 @@ describe('when organizations are reconciled', () => {
     vi.setSystemTime(Date.parse(iso(PAYMENT_POLL_MS / 60_000)))
     await t.action(reconcile, { org_id: f.org.id })
     expect((await stored(t, f.org.id))?.checkout_id).toBeUndefined()
+    // A checkout that succeeded without a live subscription is kept while it
+    // is polled, then the canceled subscription read again clears it, so it
+    // cannot hold off the organization's deletion for ever.
+    await t.run(async (ctx) => {
+      const sub = await ctx.db
+        .query('billing_subscriptions')
+        .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+        .unique()
+      await ctx.db.patch(sub!._id, { checkout_id: checkoutId, checkout_expires_at: expires })
+    })
+    checkoutStatus = 'succeeded'
+    await t.action(reconcile, { org_id: f.org.id })
+    expect((await stored(t, f.org.id))?.checkout_id).toBe(checkoutId)
+    vi.setSystemTime(Date.parse(expires) + CHECKOUT_POLL_GRACE_MS)
+    await t.action(reconcile, { org_id: f.org.id })
+    expect((await stored(t, f.org.id))?.checkout_id).toBeUndefined()
   })
 
   it('asks a guest organization to reconcile when a deletion removes the guest home profile', async () => {
@@ -1593,14 +1686,31 @@ describe('when organizations are reconciled', () => {
     ])
   })
 
-  it('polls a subscription that is past due or unpaid until its payment is known', async () => {
+  it('polls a subscription that is past due, unpaid or incomplete, often in its first day', async () => {
     const { t, f } = await fixture()
     for (const status of ['past_due', 'unpaid']) {
       await t.mutation(apply, { payload: remote(f.org.id, { status, modified_at: iso(1) }) })
       vi.setSystemTime(Date.parse(iso(1)))
       expect(await settle(t, f.org.id, { seats: 5 })).toBe(iso(1 + PAYMENT_POLL_MS / 60_000))
+      // unpaid has no end of its own, so after the first day every half hour
+      const later = Date.parse(iso(1)) + PAYMENT_POLL_WINDOW_MS
+      vi.setSystemTime(later)
+      expect(await settle(t, f.org.id, { seats: 5 })).toBe(
+        new Date(later + DUNNING_POLL_MS).toISOString(),
+      )
       vi.setSystemTime(NOW)
     }
+    // Polar reports an incomplete payment, stored as pending, and ends it
+    // within about a day, after which the safety pass reads it.
+    await t.mutation(apply, {
+      payload: remote(f.org.id, { status: 'incomplete', modified_at: iso(2) }),
+    })
+    expect(await stored(t, f.org.id)).toMatchObject({ status: 'pending' })
+    vi.setSystemTime(Date.parse(iso(2)))
+    expect(await settle(t, f.org.id)).toBe(iso(2 + PAYMENT_POLL_MS / 60_000))
+    const later = Date.parse(iso(2)) + PAYMENT_POLL_WINDOW_MS
+    vi.setSystemTime(later)
+    expect(await settle(t, f.org.id)).toBe(new Date(later + SYNC_SAFETY_MS).toISOString())
   })
 
   it('follows a renewal that Polar moved', async () => {
@@ -1667,45 +1777,41 @@ describe('when organizations are reconciled', () => {
     ])
   })
 
-  it('reminds the admins of free periods ending soon or ended recently, a page at a time', async () => {
+  it('reminds the admins of free periods within an hour of each reminder time, a page at a time', async () => {
     const { t, f } = await fixture()
     REMINDER_PAGE.size = 1
-    const grant = (orgId: string, until: string) =>
-      t.run(async (ctx) => {
-        const sub = await enrollOrganization(ctx, orgId)
-        await ctx.db.patch(sub!._id, { complimentary_until: until })
-      })
-    await grant(f.org.id, iso(3 * 24 * 60))
-    await grant(f.otherOrg.id, iso(-24 * 60))
-    const notices = () =>
-      t.run(async (ctx) =>
-        (await ctx.db.query('billing_notices').collect()).map((n) => [n.profile_id, n.kind]),
-      )
+    await grantUntil(t, f.org.id, iso(7 * 24 * 60 - 30))
+    // ended half an hour ago, and its members' pages have not refreshed since
+    await grantUntil(t, f.otherOrg.id, iso(-30), iso(-60))
+    await grantUntil(t, uuid(), iso(-10))
+    // between its reminder times; the old code reminded it every minute
+    await grantUntil(t, uuid(), iso(3 * 24 * 60))
     await t.mutation(sweep, {})
     // the reminders run apart from the sweep, so their failure cannot undo
     // the reconciliations the sweep started
-    expect(await notices()).toEqual([])
+    expect(await notices(t)).toEqual([])
     expect((await queued(t, 'billingSync:reconcile')).length).toBeGreaterThan(0)
-    const [first] = await queued(t, 'billingSync:reminders')
-    expect(first.args[0]).toEqual({ now: Date.parse(NOW), cursor: null })
-    await t.mutation(reminders, first.args[0])
-    // the first page holds the free period that ended, the second the one ending
-    expect(await notices()).toEqual([[f.otherAdmin.id, 'expired']])
-    const next = (await queued(t, 'billingSync:reminders')).find((job) => job.args[0].cursor)!
-    await t.mutation(reminders, next.args[0])
-    expect(await notices()).toEqual([
-      [f.otherAdmin.id, 'expired'],
-      [f.admin.id, 'seven_days'],
+    const jobs = await queued(t, 'billingSync:reminders')
+    expect(jobs.map((job) => job.args[0])).toEqual([
+      { now: Date.parse(NOW), threshold: 7 * 86_400_000, cursor: null },
+      { now: Date.parse(NOW), threshold: 0, cursor: null },
     ])
-    // a free period that ended longer ago than the organization's deletion
-    // takes is past the range
-    await t.run(async (ctx) => {
-      for (const notice of await ctx.db.query('billing_notices').collect())
-        await ctx.db.delete(notice._id)
-    })
-    await grant(f.org.id, iso(-40 * 24 * 60))
-    REMINDER_PAGE.size = 64
-    await t.mutation(reminders, { now: Date.parse(NOW), cursor: null })
-    expect(await notices()).toEqual([[f.otherAdmin.id, 'expired']])
+    for (const job of jobs) await t.mutation(reminders, job.args[0])
+    expect(await notices(t)).toEqual([
+      [f.admin.id, 'seven_days'],
+      [f.otherAdmin.id, 'expired'],
+    ])
+    // the end touches the row once, so members' pages read the expiry
+    expect((await stored(t, f.otherOrg.id))?.updated_at).toBe(NOW)
+    const next = (await queued(t, 'billingSync:reminders')).find(
+      (job) => job.args[0].cursor && job.args[0].threshold === 0,
+    )
+    await t.mutation(reminders, next!.args[0])
+    expect(await notices(t)).toHaveLength(2)
+    // an hour after their reminder times, the free periods are out of range
+    vi.setSystemTime(Date.parse(iso(51)))
+    const before = (await queued(t, 'billingSync:reminders')).length
+    await t.mutation(sweep, {})
+    expect(await queued(t, 'billingSync:reminders')).toHaveLength(before)
   })
 })

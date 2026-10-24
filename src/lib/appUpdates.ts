@@ -99,6 +99,7 @@ export function createAppUpdateMonitor(options: Options) {
   const check = (): Promise<void> => {
     if (disposed || reloading) return Promise.resolve()
     if (checking) return checking
+    const previous = checkedAt
     checkedAt = now()
     checking = (async () => {
       // Normalize even a synchronous fetch adapter failure to a later turn,
@@ -126,7 +127,9 @@ export function createAppUpdateMonitor(options: Options) {
         reconsider()
       } catch {
         // Offline, a failed deploy, HTML fallbacks and proxy errors are not
-        // evidence of a new version. A later poll/focus retries normally.
+        // evidence of a new version. A later poll/focus retries normally,
+        // because a failed check does not count as one (checkIfOlder).
+        checkedAt = previous
       } finally {
         checking = undefined
       }
@@ -135,9 +138,12 @@ export function createAppUpdateMonitor(options: Options) {
   }
   return {
     check,
-    /** Checks unless the last check started less than `maxAgeMs` ago. */
-    checkIfOlder: (maxAgeMs: number) =>
-      checkedAt !== undefined && now() - checkedAt < maxAgeMs ? Promise.resolve() : check(),
+    /** Checks unless the last check that did not fail started less than
+     * `maxAgeMs` ago. A clock moved back behind that check counts as old. */
+    checkIfOlder: (maxAgeMs: number) => {
+      const age = checkedAt === undefined ? Number.POSITIVE_INFINITY : now() - checkedAt
+      return age >= 0 && age < maxAgeMs ? Promise.resolve() : check()
+    },
     reconsider,
     activity,
     reloadNow: () => reload(true),
