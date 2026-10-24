@@ -17,7 +17,7 @@ export type TrustedOriginsOption =
 /** The part of a Better Auth instance that registerRoutes reads. */
 type RegisterableAuth = {
   handler: (request: Request) => Promise<Response>
-  options: { basePath?: string; [key: string]: unknown }
+  options: { basePath?: string; trustedOrigins?: TrustedOriginsOption; [key: string]: unknown }
   $context: Promise<{ options: { trustedOrigins?: TrustedOriginsOption; [key: string]: unknown } }>
 }
 

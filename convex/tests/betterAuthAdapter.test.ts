@@ -1,7 +1,7 @@
 /* Qivo's changes to its copy of the Convex adapter for Better Auth 1.7
  * (vendor/convex-better-auth), through the component functions the adapter
  * calls, and the component schema Qivo builds from the generated one. */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { components } from '../_generated/api'
 import authSchema from '../betterAuth/schema'
 import { tables as generated } from '../betterAuth/schema.generated'
@@ -73,6 +73,44 @@ describe('the copied Convex adapter', () => {
       ).page.map((row: { token: string }) => row.token)
     expect(await tokens('eq')).toEqual(['live'])
     expect(await tokens('ne')).toEqual(['gone'])
+  })
+})
+
+describe('index choice', () => {
+  it('uses the index that covers most equality clauses and filters the rest', async () => {
+    const t = newT()
+    await runInAuth(t, async (ctx) => {
+      const at = Date.now()
+      for (const [accountId, userId] of [
+        ['a', 'u1'],
+        ['a', 'u2'],
+        ['b', 'u1'],
+      ])
+        await ctx.db.insert('account', {
+          accountId,
+          providerId: 'credential',
+          userId,
+          createdAt: at,
+          updatedAt: at,
+        })
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      // How Better Auth 1.7 looks up a password account; no index starts with all three.
+      const found = await t.query(components.betterAuth.adapter.findMany, {
+        model: 'account',
+        where: [
+          { field: 'accountId', value: 'a' },
+          { field: 'providerId', value: 'credential' },
+          { field: 'userId', value: 'u2' },
+        ],
+        paginationOpts: { numItems: 10, cursor: null },
+      })
+      expect(found.page.map((row: { userId: string }) => row.userId)).toEqual(['u2'])
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
   })
 })
 

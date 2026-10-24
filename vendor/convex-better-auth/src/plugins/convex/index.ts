@@ -4,6 +4,8 @@
  *   builds one. Its after hooks and the /convex/.well-known/openid-configuration
  *   endpoint are gone. Convex reads the keys from /convex/jwks
  *   (auth-config.ts), and the JWT is signed as before.
+ * - The JWT cookie hook calls the token endpoint with empty Headers, not an
+ *   empty object, which Better Auth 1.7 reads with get().
  * - The query-context hook also turns consumeOne and incrementOne into no-ops,
  *   as get-convex/better-auth#430 does, since 1.7 calls them more often.
  * - The static JWKS option, the deprecated jwtExpirationSeconds, the basePath
@@ -185,7 +187,8 @@ export const convex = (opts: {
               ctx.context.session = ctx.context.session ?? ctx.context.newSession
               const { token } = await jwt.endpoints.getToken({
                 ...ctx,
-                headers: {},
+                // Better Auth 1.7 reads these with get(), so not a plain object.
+                headers: new Headers(),
                 method: 'GET',
                 asResponse: false,
                 returnHeaders: false,

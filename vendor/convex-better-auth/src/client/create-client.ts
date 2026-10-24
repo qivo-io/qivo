@@ -7,6 +7,9 @@
  * - registerRoutes no longer redirects /.well-known/openid-configuration to
  *   the convex() plugin's discovery document, which is gone (see
  *   ../plugins/convex/index.ts).
+ * - The CORS check reads the options' trusted origins when they set them,
+ *   and only otherwise the static instance's context, whose plugin init
+ *   (Better Auth 1.7's OAuth resource seed) fails without a database.
  * - The component API includes incrementOne (see create-api.ts).
  * - Types replace `any`. */
 import type {
@@ -22,7 +25,7 @@ import { httpActionGeneric, internalMutationGeneric } from 'convex/server'
 import type { GenericValidator, Infer } from 'convex/values'
 import { ConvexError, v } from 'convex/values'
 import { corsRouter } from 'convex-helpers/server/cors'
-import type { CreateAuth, GenericCtx } from '../utils'
+import type { CreateAuth, GenericCtx, TrustedOriginsOption } from '../utils'
 import { type AdapterApi, convexAdapter } from './adapter'
 
 /** The app's internal mutations that run the triggers (triggersApi). */
@@ -207,9 +210,16 @@ export const createClient = <
         typeof opts.cors === 'boolean'
           ? { allowedOrigins: [], allowedHeaders: [], exposedHeaders: [] }
           : opts.cors
+      let trustedOriginsOption: TrustedOriginsOption | undefined
       const cors = corsRouter(http, {
         allowedOrigins: async (request) => {
-          const trustedOriginsOption = (await staticAuth.$context).options.trustedOrigins ?? []
+          // The options' own list when they set one: building the static
+          // instance's context would also run its plugins' init, such as the
+          // OAuth provider's resource seed, without a database.
+          trustedOriginsOption ??=
+            staticAuth.options.trustedOrigins ??
+            (await staticAuth.$context).options.trustedOrigins ??
+            []
           const rawOrigins = Array.isArray(trustedOriginsOption)
             ? trustedOriginsOption
             : await trustedOriginsOption(request)

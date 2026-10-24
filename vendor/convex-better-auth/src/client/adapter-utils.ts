@@ -10,6 +10,10 @@
  *   because an index lookup on null does not find absent fields; it is
  *   applied to each document instead. Better Auth 1.7 sends these clauses,
  *   for example to rotate a refresh token that is not yet revoked.
+ * - When no index starts with every equality clause of a query, it uses the
+ *   index that covers the most of them and filters the rest, instead of
+ *   reading the whole table. Better Auth 1.7 looks a password account up by
+ *   accountId, providerId and userId, which no generated index starts with.
  * - Types replace `any`, and common-tags is not used. */
 
 import type { BetterAuthDBSchema } from 'better-auth/db'
@@ -189,16 +193,36 @@ const findIndex = (
             : true
         return fieldsMatch && boundFieldMatch
       })
-  if (!index) return { indexFields }
+  const eqValues = new Map(indexEqFields)
+  // With only equality clauses and no index that starts with all of them, use
+  // the index whose leading fields cover the most of them; the clauses it
+  // leaves out are applied to each document (generateQuery).
+  const partial =
+    index || boundField || sortField
+      ? undefined
+      : indexes
+          .map(({ indexDescriptor, fields }) => {
+            const covered = fields.findIndex((field) => !eqValues.has(field))
+            return {
+              indexDescriptor,
+              fields: fields.slice(0, covered === -1 ? fields.length : covered),
+            }
+          })
+          .filter(({ fields }) => fields.length > 0)
+          .sort((a, b) => b.fields.length - a.fields.length)[0]
+  const chosen = index ?? partial
+  if (!chosen) return { indexFields }
+  const eqFields = index ? indexEqFields.map(([field]) => field) : chosen.fields
   return {
     index: {
-      indexDescriptor: index.indexDescriptor,
-      fields: [...index.fields, '_creationTime'],
+      indexDescriptor: chosen.indexDescriptor,
+      fields: [...chosen.fields, '_creationTime'],
     },
+    eqFields,
     boundField,
     sortField,
     values: {
-      eq: indexEqFields.map(([, value]) => value),
+      eq: eqFields.map((field) => eqValues.get(field) ?? null),
       lt: lowerBound?.operator === 'lt' ? lowerBound.value : undefined,
       lte: lowerBound?.operator === 'lte' ? lowerBound.value : undefined,
       gt: upperBound?.operator === 'gt' ? upperBound.value : undefined,
@@ -334,7 +358,7 @@ const generateQuery = (
   schema: AnySchema,
   args: AdapterArgs,
 ) => {
-  const { index, values, boundField, indexFields } = findIndex(schema, args) ?? {}
+  const { index, values, boundField, indexFields, eqFields } = findIndex(schema, args) ?? {}
   const usableIndex = index?.indexDescriptor === 'by_creation_time' ? undefined : index
   const db = ctx.db as unknown as GenericDatabaseReader<DataModelFromSchemaDefinition<AnySchema>>
   const query = stream(db, schema).query(args.model)
@@ -386,6 +410,7 @@ const generateQuery = (
       args.where,
       (w) =>
         matchesAbsent(w) ||
+        ((!w.operator || w.operator === 'eq') && !eqFields?.includes(w.field)) ||
         (w.operator !== undefined &&
           ['contains', 'starts_with', 'ends_with', 'ne', 'not_in'].includes(w.operator)),
     )
