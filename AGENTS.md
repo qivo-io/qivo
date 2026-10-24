@@ -81,9 +81,16 @@ the output of `git merge-base origin/main HEAD` after `git fetch origin`.
    `codex`, model `gpt-6-astra` and `reasoningEffort: ultra`. It is a normal
    task with the reviewer prompt, not `codex exec review`.
 2. Fix the valid findings and commit.
-3. Claude Opus 5.5 at `ultracode`, as a `delegate_task` child with provider
-   `claudeAgent`, model `claude-opus-5-5` and `effort: ultracode`, with the
-   prompt's multi-agent workflow section.
+3. Claude Opus 5.5, as a `delegate_task` child with provider `claudeAgent`
+   and model `claude-opus-5-5`, at `effort: xhigh`. It runs at
+   `effort: ultracode` with the prompt's multi-agent workflow section instead
+   when the change alters sign-in, sessions or tokens, access control, outside
+   input such as the REST API, MCP, webhooks and uploads, stored data through
+   deletion, migrations or the schema, billing, or deployment and secrets,
+   and for a pull request from a fork. UI, tests, docs and dependency updates
+   stay at `xhigh` unless they do one of these things. When unsure, use
+   `ultracode`. The private review README named below lists what each area
+   covers.
 4. Fix the valid findings and commit.
 5. The CodeRabbit and Greptile CLIs, side by side, with
    `cr review --agent --committed --base-commit BASE` and
