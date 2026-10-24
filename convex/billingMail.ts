@@ -5,6 +5,7 @@ import { billingEnabled, subscriptionFor } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { sendBillingReminder } from './mail'
 import { audit } from './model/admin'
+import { countUsage } from './model/usage'
 
 const input = {
   to: v.string(),
@@ -68,6 +69,8 @@ export const ready = internalQuery({
     }
   },
 })
+/** Marks a billing reminder delivered and counts it in the organization's
+ * mail usage. */
 export const sent = internalMutation({
   args: { key: v.string() },
   handler: async (ctx, { key }) => {
@@ -75,8 +78,10 @@ export const sent = internalMutation({
       .query('billing_notices')
       .withIndex('by_key', (q) => q.eq('key', key))
       .unique()
-    if (notice && !notice.sent_at)
+    if (notice && !notice.sent_at) {
       await ctx.db.patch(notice._id, { sent_at: new Date().toISOString() })
+      await countUsage(ctx, { org_id: notice.org_id, metric: 'mail_billing_reminders' })
+    }
     return null
   },
 })

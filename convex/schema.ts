@@ -57,6 +57,7 @@ import {
 } from './lib/enums'
 import { vPanoramaStatus } from './lib/panorama'
 import { vEventFilters, vEventName, vEventOwner } from './lib/taskEvents'
+import { vUsageCounts, vUsageMetric } from './lib/usage'
 
 /* `task_archived` on a task's relation rows (links, label assignments, follows
  * and attachments) marks a row that the label search of REST and MCP
@@ -727,6 +728,35 @@ export default defineSchema({
     window_start: v.number(),
     count: v.number(),
   }).index('by_key', ['key']),
+
+  // One organization's usage in one closed UTC month, for Qivo Admin's Usage
+  // page (usage.ts). The monthly job writes it early on the 1st and a rerun
+  // replaces it. Deleted after USAGE_RETENTION_DAYS and with the organization.
+  usage_months: defineTable({
+    org_id: v.string(),
+    month: v.string(), // YYYY-MM
+    counts: vUsageCounts,
+    // Part of api_calls was split by time from a paid billing period that
+    // crosses the month's start or end (usage.ts apiBuckets).
+    api_estimated: v.boolean(),
+    computed_at: v.string(),
+  })
+    .index('by_org_month', ['org_id', 'month'])
+    .index('by_month', ['month']),
+
+  // Counts nothing else keeps: mail the provider accepted, by organization
+  // and kind, with person mail (verification, password reset) under no
+  // organization, and the webhook deliveries the retention sweep deleted, by
+  // the month they finished. One row per organization, month and metric
+  // (usage.ts countUsage).
+  usage_counts: defineTable({
+    org_id: v.optional(v.string()),
+    month: v.string(), // YYYY-MM
+    metric: vUsageMetric,
+    count: v.number(),
+  })
+    .index('by_org_month_metric', ['org_id', 'month', 'metric'])
+    .index('by_month', ['month']),
 
   organizations: defineTable({
     id: v.string(),

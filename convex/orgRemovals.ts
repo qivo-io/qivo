@@ -72,6 +72,7 @@ import {
   serviceEndedAt,
   syncOrgRemoval,
 } from './model/orgRetention'
+import { countUsage } from './model/usage'
 
 /** A deletion whose last step committed longer ago than this is restarted. */
 export const STALLED_MS = 5 * 60_000
@@ -581,7 +582,8 @@ export const noticeReady = internalQuery({
   },
 })
 
-/** Marks a deletion email delivered. */
+/** Marks a deletion email delivered and counts it in the organization's
+ * mail usage. */
 export const noticeSent = internalMutation({
   args: { key: v.string() },
   handler: async (ctx, { key }): Promise<null> => {
@@ -589,7 +591,10 @@ export const noticeSent = internalMutation({
       .query('billing_notices')
       .withIndex('by_key', (q) => q.eq('key', key))
       .unique()
-    if (notice && !notice.sent_at) await ctx.db.patch(notice._id, { sent_at: isoNow() })
+    if (notice && !notice.sent_at) {
+      await ctx.db.patch(notice._id, { sent_at: isoNow() })
+      await countUsage(ctx, { org_id: notice.org_id, metric: 'mail_deletion_notices' })
+    }
     return null
   },
 })

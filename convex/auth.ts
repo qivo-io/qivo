@@ -9,7 +9,7 @@ import {
   type GenericCtx,
 } from '../vendor/convex-better-auth/src/client'
 import { convex, crossDomain } from '../vendor/convex-better-auth/src/plugins'
-import { requireRunMutationCtx } from '../vendor/convex-better-auth/src/utils'
+import { isRunMutationCtx, requireRunMutationCtx } from '../vendor/convex-better-auth/src/utils'
 import { components, internal } from './_generated/api'
 import type { DataModel } from './_generated/dataModel'
 import authConfig from './auth.config'
@@ -46,6 +46,7 @@ import {
   qivoOAuthProvider,
   registerOAuthCode,
 } from './lib/oauthProvider'
+import type { PersonMailMetric } from './lib/usage'
 import { type AuthLetterIntent, sendAuthLetter } from './mail'
 
 /* SITE_URL = the APP origin (http://localhost:5199 in dev, https://qivo.io in
@@ -127,6 +128,29 @@ const registersThroughProvider = (path: string | undefined) =>
 const userClaims = (user: Record<string, unknown>) =>
   Object.fromEntries(Object.entries(user).filter(([key]) => key !== 'id' && key !== 'image'))
 
+/* The usage metric of each authentication letter. These letters belong to a
+ * person, so they count without an organization (usage.ts). */
+const AUTH_MAIL_METRIC = {
+  verify: 'mail_verification',
+  reset: 'mail_password_reset',
+  existing: 'mail_account_notes',
+  unknown: 'mail_account_notes',
+} as const satisfies Record<AuthLetterIntent, PersonMailMetric>
+
+/** Counts one authentication letter the provider accepted. A count that
+ * fails is logged and never fails the request whose letter went out. */
+async function countAuthMail(ctx: GenericCtx<DataModel>, intent: AuthLetterIntent) {
+  if (!isRunMutationCtx(ctx)) return
+  try {
+    await ctx.runMutation(internal.usage.countPersonMail, { metric: AUTH_MAIL_METRIC[intent] })
+  } catch (e) {
+    console.error('[usage] authentication letter not counted', {
+      intent,
+      name: (e as Error)?.name ?? 'error',
+    })
+  }
+}
+
 /* Every token gets its own `jti`. Two tokens minted for one session in the
    same second are otherwise the same bytes, and the Convex client, which
    then sees no new sign-in, never schedules the next refresh. The app asks
@@ -196,8 +220,12 @@ export const createAuthOptions = (
     throw new Error('The demo environment requires APP_MODE=demo')
   if (demo) requireDemoDeployment()
   const mail: AuthMailState = { outcome: null }
-  const deliver = async (intent: AuthLetterIntent, to: string, url: string) =>
-    recordAuthMail(mail, await sendAuthLetter({ intent, to, url }))
+  const deliver = async (intent: AuthLetterIntent, to: string, url: string) => {
+    const outcome = await sendAuthLetter({ intent, to, url })
+    recordAuthMail(mail, outcome)
+    // A letter only logged for local development is not counted.
+    if (outcome === 'sent' && process.env.LETTERMINT_API_KEY) await countAuthMail(ctx, intent)
+  }
   const recovery = opts?.recovery
   const microsoft: { signIn: MicrosoftSignIn } = { signIn: null }
   return {

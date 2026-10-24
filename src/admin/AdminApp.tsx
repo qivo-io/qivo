@@ -5,6 +5,7 @@ import {
   BarChart3,
   Building2,
   CreditCard,
+  Gauge,
   Images,
   LayoutDashboard,
   LogOut,
@@ -22,13 +23,15 @@ import { BillingPlans } from './views/BillingPlans'
 import { Dashboard } from './views/Dashboard'
 import { Demos } from './views/Demos'
 import { Orgs } from './views/Orgs'
+import { Usage } from './views/Usage'
 import { Users } from './views/Users'
 
-type View = 'dashboard' | 'orgs' | 'users' | 'billing' | 'demos' | 'backgrounds' | 'audit'
+type View = 'dashboard' | 'orgs' | 'usage' | 'users' | 'billing' | 'demos' | 'backgrounds' | 'audit'
 
 const NAV: { key: View; label: string }[] = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'orgs', label: 'Organizations' },
+  { key: 'usage', label: 'Usage' },
   { key: 'users', label: 'Users' },
   { key: 'billing', label: 'Billing plans' },
   { key: 'demos', label: 'Demos' },
@@ -39,6 +42,7 @@ const NAV: { key: View; label: string }[] = [
 const NAV_ICONS = {
   dashboard: LayoutDashboard,
   orgs: Building2,
+  usage: Gauge,
   users: UsersRound,
   billing: CreditCard,
   demos: BarChart3,
@@ -97,6 +101,7 @@ export function AdminApp() {
             )}
             {view === 'dashboard' && <Dashboard />}
             {view === 'orgs' && <Orgs />}
+            {view === 'usage' && <Usage />}
             {view === 'users' && <Users />}
             {view === 'billing' && <BillingPlans />}
             {view === 'demos' && <Demos />}

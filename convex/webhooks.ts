@@ -28,6 +28,7 @@ import {
   removeWebhookSubscription,
   writeWebhookHealth,
 } from './model/webhookHealth'
+import { countDeletedDeliveries } from './model/usage'
 import { pruneRemovedWebhookOwners } from './model/webhookOwners'
 import { dispatchWebhooksRef, requestWebhookDispatch } from './model/webhookQueue'
 
@@ -501,7 +502,9 @@ export async function occupiedDeliveries(
   return { rows, hasMore, recovering }
 }
 
-/** Drain retention in bounded transactions until the backlog is caught up. */
+/** Drain retention in bounded transactions until the backlog is caught up.
+ * Deleted deliveries are added to their organization's usage first
+ * (model/usage.ts countDeletedDeliveries). */
 export const sweep = internalMutation({
   args: {},
   handler: async (ctx): Promise<null> => {
@@ -516,6 +519,7 @@ export const sweep = internalMutation({
         q.gt('completed_at', 0).lt('completed_at', Date.now() - WEBHOOK_MAX_TTL_MS),
       )
       .take(500)
+    await countDeletedDeliveries(ctx, completed)
     for (const row of completed) await ctx.db.delete(row._id)
     if (expired.length === 200 || completed.length === 500)
       await ctx.scheduler.runAfter(0, internalSweepRef, {})
