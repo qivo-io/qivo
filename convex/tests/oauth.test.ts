@@ -877,6 +877,56 @@ describe('OAuth consent and resource binding', () => {
     }
   })
 
+  it('refuses every other resource for a 1.6 client and a new one without per-client links', async () => {
+    const f = await fixture()
+    // A second resource Better Auth knows. With per-client links off, only
+    // Qivo's own resource checks refuse it.
+    const OTHER = 'https://other.example.test/api'
+    await runInAuth(f.t, (ctx) =>
+      ctx.db.insert('oauthResource', { identifier: OTHER, name: 'Other service' }),
+    )
+    const legacy = await connect(f)
+    // What Better Auth 1.6 stored: no resource link and the legacy `public`.
+    await runInAuth(f.t, async (ctx) => {
+      const clientId = legacy.request.clientId
+      for (const link of await ctx.db
+        .query('oauthClientResource')
+        .withIndex('clientId_resourceId', (q) => q.eq('clientId', clientId))
+        .collect())
+        await ctx.db.delete(link._id)
+      const client = await ctx.db
+        .query('oauthClient')
+        .withIndex('clientId', (q) => q.eq('clientId', clientId))
+        .unique()
+      if (!client) throw new Error('the client is gone')
+      await ctx.db.patch(client._id, { public: true, applicationType: undefined })
+    })
+    const current = await connect(f)
+    for (const c of [legacy, current]) {
+      const clientId = c.request.clientId
+      const foreign = await authorization(f, clientId)
+      foreign.query.set('resource', OTHER)
+      await authorizationRefusal(await authorize(foreign), ['invalid_target', 'invalid_request'])
+      const request = await authorization(f, clientId)
+      const code = await codeFor(request)
+      await oauthRefusal(await exchange(request, code, { resource: OTHER }), [
+        'invalid_target',
+        'invalid_request',
+        'invalid_grant',
+      ])
+      await oauthRefusal(await refresh(f, clientId, c.refresh_token, { resource: OTHER }), [
+        'invalid_target',
+        'invalid_request',
+        'invalid_grant',
+      ])
+      // The refusals consumed nothing: the grant still renews for the MCP resource.
+      const renewed = await tokens(await refresh(f, clientId, c.refresh_token))
+      expect(await toolData(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
+        Array,
+      )
+    }
+  })
+
   it('requires S256 PKCE and refuses signed consent query tampering and scope expansion', async () => {
     const f = await fixture()
     const clientId = await register(f)

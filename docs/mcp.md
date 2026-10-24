@@ -2,8 +2,8 @@
 
 The temporary `demo.qivo.io` service is browser-only: it does not issue or
 accept external agent credentials or OAuth connections. Its MCP endpoint
-answers every request with HTTP `403`, and it serves no OAuth metadata. Use a
-regular Qivo workspace for this interface.
+answers every MCP `POST` with HTTP `403`, and it serves no OAuth metadata. Use
+a regular Qivo workspace for this interface.
 
 Qivo exposes the planner to Claude (and any MCP client) through a
 [Model Context Protocol](https://modelcontextprotocol.io) server — a Convex
@@ -663,7 +663,10 @@ whose body is over 64 KiB gets HTTP `413` (see below). A registration that
 succeeds answers HTTP `201`. Every client Qivo registers is public: it uses
 PKCE and gets no secret, and its `token_endpoint_auth_method` is `none`
 whatever the registration asked for. A redirect URI on a loopback address or
-a private-use scheme registers a `native` client. Register
+a private-use scheme registers a `native` client. Qivo issues Bearer tokens
+only and does not support DPoP: the token endpoint ignores a `DPoP` header,
+an authorization request with `dpop_jkt` gets `invalid_request`, and a
+registration's `dpop_bound_access_tokens` is dropped. Register
 once and keep the client ID. A daily cleanup deletes a client that nobody
 approved on its first run after the client turns three days old, which is
 three to four days after it registered. A client stays while a consent, a

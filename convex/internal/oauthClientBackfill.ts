@@ -26,15 +26,18 @@
  *   "$H" staging npx convex run internal/oauthClientBackfill:run '{"dry_run": true}'
  *   "$H" staging npx convex run internal/oauthClientBackfill:run '{"dry_run": false}'
  *
- * A `review` count names clients a person must look at, which the run
- * leaves as they are: a 1.6 'user-agent-based' client, or a confidential
- * client whose method is 'none'. Qivo registers neither. The demo runs no
- * OAuth provider and has no clients to migrate.
+ * `review` counts the clients a person must look at, and `reviewClientIds`
+ * names them: a 1.6 type other than 'web' or 'native', such as
+ * 'user-agent-based', or a confidential client whose method is 'none'. The
+ * run links them but leaves their `public` and `type`, so every later run
+ * reports them again until a person has decided what each should be. Qivo
+ * registered neither kind. The demo runs no OAuth provider and has no
+ * clients to migrate.
  *
  * A run that writes adds one platform_audit_log row (action
- * 'oauth_client_backfill', actor 'system') with its counts. The results hold
- * counts only. Running it again is safe, and a migrated deployment reports
- * zeros. */
+ * 'oauth_client_backfill', actor 'system') with its counts and the client
+ * ids for review. Running it again is safe, and a migrated deployment
+ * reports zeros, or only the clients for review. */
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import { components } from '../_generated/api'
@@ -50,7 +53,10 @@ type Counts = {
   review: number
 }
 
-const auditRef = makeFunctionReference<'mutation', Counts, null>(
+/** The counts with the clients a person must look at. */
+type Result = Counts & { reviewClientIds: string[] }
+
+const auditRef = makeFunctionReference<'mutation', Result, null>(
   'internal/oauthClientBackfill:audit',
 )
 
@@ -73,6 +79,7 @@ export const audit = internalMutation({
     linked: v.number(),
     duplicates: v.number(),
     review: v.number(),
+    reviewClientIds: v.array(v.string()),
   },
   handler: async (ctx, counts) => {
     await ctx.db.insert('platform_audit_log', {
@@ -90,21 +97,23 @@ export const audit = internalMutation({
  * its audit row. */
 export const run = internalAction({
   args: { dry_run: v.boolean() },
-  handler: async (ctx, { dry_run }): Promise<Counts & { dry_run: boolean }> => {
+  handler: async (ctx, { dry_run }): Promise<Result & { dry_run: boolean }> => {
     const counts: Counts = { legacy: 0, madePublic: 0, linked: 0, duplicates: 0, review: 0 }
+    const reviewClientIds: string[] = []
     const resource = mcpResource()
     let cursor: string | null = null
     do {
-      const page: Counts & { cursor: string | null } = dry_run
+      const page: Result & { cursor: string | null } = dry_run
         ? await ctx.runQuery(components.betterAuth.oauth.clientBackfillCheck, { cursor, resource })
         : await ctx.runMutation(components.betterAuth.oauth.clientBackfillPage, {
             cursor,
             resource,
           })
       for (const key of Object.keys(counts) as (keyof Counts)[]) counts[key] += page[key]
+      reviewClientIds.push(...page.reviewClientIds)
       cursor = page.cursor
     } while (cursor !== null)
-    if (!dry_run) await ctx.runMutation(auditRef, counts)
-    return { dry_run, ...counts }
+    if (!dry_run) await ctx.runMutation(auditRef, { ...counts, reviewClientIds })
+    return { dry_run, ...counts, reviewClientIds }
   },
 })

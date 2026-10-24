@@ -41,6 +41,8 @@ out. `@convex-dev/better-auth` is no longer installed.
   written. An `eq null` clause also matches a field Convex stores as absent,
   which refresh-token rotation relies on, so Qivo's own refresh claim
   (`claimRefreshToken`) is gone. A unique index of several fields is enforced.
+  The copy also fixes four upstream bugs in reads that span pages, which its
+  README lists.
 - **The `convex()` plugin** no longer builds the `oidc-provider` plugin,
   which 1.7 removed. `/api/auth/convex/.well-known/openid-configuration` is
   gone; Convex reads keys from `/api/auth/convex/jwks` (`convex/auth.config.ts`).
@@ -53,16 +55,39 @@ out. `@convex-dev/better-auth` is no longer installed.
   `oauthClient.public` and `oauthClient.type`, which 1.6 wrote and 1.7
   dropped, and adds `account.microsoftTenantId`.
 - **OAuth provider** (`convex/lib/oauthProvider.ts`). The MCP endpoint is the
-  one configured resource, and every new client is linked to it. Per-client
-  links are not enforced, since with one resource they add no check that the
-  grant's stored resource does not already make, and clients registered on
-  1.6 have no link until the backfill below runs. Registration keeps making
-  every client public, as 1.6 did for unauthenticated registrations, and
-  infers a native client from a loopback or private-use redirect. A
-  registration answers HTTP `201`. OAuth endpoints answer a validation error
-  as `{ "error", "error_description" }` with the first problem.
+  one configured resource, and every new client is linked to it. Registration
+  keeps making every client public, as 1.6 did for unauthenticated
+  registrations, and infers a native client from a loopback or private-use
+  redirect. A registration answers HTTP `201`. OAuth endpoints answer a
+  validation error as `{ "error", "error_description" }` with the first
+  problem.
+- **Per-client resource links are not enforced**
+  (`enforcePerClientResources: false`). Better Auth 1.7 can refuse a client
+  that asks for a resource it is not linked to. Qivo has one resource, and
+  its own checks already refuse every other resource for every client, linked
+  or not: the authorize hook and `validateOAuthQuery` in
+  `convex/lib/oauth.ts`, the token endpoint's `onRequest` and before hook, the
+  issuance check in `customTokenResponseFields`, and the grant's stored
+  resource, which `oauthConnections.lookupAccess` compares on every MCP
+  request. A link to the one resource would add no check, while enforcing
+  links would refuse every refresh of a client registered on 1.6, which has
+  no link until the backfill below runs. `convex/tests/oauth.test.ts` shows
+  that authorize, code exchange and refresh refuse any other resource for a
+  1.6 client and a new one, even when Better Auth knows a second resource.
+  If Qivo ever serves a second resource, turn enforcement on, make sure the
+  backfill has linked every client, link each client only to the resources
+  it may use, and replace the single-resource checks listed above, which
+  compare with `mcpResource()`.
+- **DPoP.** Better Auth 1.7 supports DPoP-bound tokens (RFC 9449), but the
+  copy cannot store the proof reservations it makes, which need a chosen
+  document id, and `/mcp` checks no proof. Qivo issues Bearer tokens only:
+  the token endpoint ignores a `DPoP` header, as a server without DPoP does,
+  authorize refuses `dpop_jkt`, registration drops `dpop_bound_access_tokens`,
+  the metadata lists no DPoP algorithms, and `/mcp` refuses a bound token.
 - **Sign-out.** Ending a browser session revokes the OAuth access tokens
-  issued in it. `/mcp` refuses a revoked token. A refresh token with
+  issued in it. Better Auth 1.7 revokes only the oldest 100, and each refresh
+  adds a token to the session, so Qivo's own session delete hook revokes all
+  of them, newest first. `/mcp` refuses a revoked token. A refresh token with
   `offline_access`, which Qivo's clients request, stays valid, so a connected
   client renews its access token without a new approval.
 - **Qivo's own deletes** of OAuth clients (the unused-client sweep, the OAuth
@@ -103,13 +128,17 @@ its `client_id`.
    `{"dry_run": false}`. The file's header has the commands. It maps `type`
    to `applicationType`, keeps `tokenEndpointAuthMethod: none` for public
    clients only, removes `public` and `type`, links every client to the MCP
-   resource and drops duplicate links.
+   resource and drops duplicate links. A client whose 1.6 fields have no 1.7
+   meaning, a `type` other than `web` or `native` or a confidential client
+   with the method `none`, keeps them and is named in `reviewClientIds` on
+   every run until a person decides. Qivo registered neither kind.
 3. `internal/microsoftAccounts:count` counts the Microsoft accounts, how many
    still use `sub`, and how many have no tenant recorded. Each person's next
    Microsoft sign-in moves theirs. If the move cannot happen, because
    another account already holds the `oid`, the sign-in goes to that account.
 4. A later change removes `public` and `type` from the schema and the
-   backfill, once the backfill has run everywhere.
+   backfill, once the backfill has run everywhere and reports no client for
+   review.
 
 This release is a rollback floor. It writes fields the 1.6 schema does not
 have, such as `oauthRefreshToken.rotatedAt` at every refresh and
@@ -172,8 +201,13 @@ Qivo does not use (SSO, SCIM, Stripe, passkey, API keys).
 
 - Discovery, registration, S256 PKCE, exact client and redirect binding,
   signed consent and scope limits work (`convex/tests/oauth.test.ts`).
-- Foreign and repeated resource parameters fail. An omitted resource keeps
-  the canonical default, and refresh cannot widen its grant.
+- Foreign and repeated resource parameters fail, for a client with a
+  resource link and one without. An omitted resource keeps the canonical
+  default, and refresh cannot widen its grant.
+- The metadata lists no DPoP algorithms, and a token request with a `DPoP`
+  header gets a Bearer token.
+- Sign-out ends every access token of the session, also after more than 100
+  refreshes.
 - Expiry, disconnect, reconnect, replay detection, concurrent code exchange
   and concurrent refresh keep access control and independent grants.
 - App and admin sessions stay separate. Browser login can continue to

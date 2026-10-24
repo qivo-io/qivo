@@ -39,6 +39,8 @@ const plant = (t: T) =>
       type: 'user-agent-based',
       tokenEndpointAuthMethod: 'client_secret_basic',
     })
+    // confidential, but with no way to authenticate
+    await client('confidential-none', { public: false, tokenEndpointAuthMethod: 'none' })
     const link = (clientId: string) =>
       ctx.db.insert('oauthClientResource', { clientId, resourceId: RESOURCE })
     await link('public-none')
@@ -52,8 +54,10 @@ const rows = (t: T) =>
     links: await ctx.db.query('oauthClientResource').collect(),
   }))
 
-const FOUND = { legacy: 3, madePublic: 1, linked: 2, duplicates: 1, review: 1 }
-const NONE = { legacy: 0, madePublic: 0, linked: 0, duplicates: 0, review: 0 }
+const REVIEW = { review: 2, reviewClientIds: ['confidential-agent', 'confidential-none'] }
+const FOUND = { legacy: 4, madePublic: 1, linked: 3, duplicates: 1, ...REVIEW }
+// what a second run finds: only the clients still waiting for a person
+const LEFT = { legacy: 2, madePublic: 0, linked: 0, duplicates: 0, ...REVIEW }
 
 describe('OAuth client backfill', () => {
   it('counts what it would change and writes nothing in a check or a dry run', async () => {
@@ -71,7 +75,7 @@ describe('OAuth client backfill', () => {
     expect(await t.run((ctx) => ctx.db.query('platform_audit_log').collect())).toEqual([])
   })
 
-  it('maps the 1.6 fields, links every client once, and finds nothing on a second run', async () => {
+  it('maps the 1.6 fields, links every client once, and finds only the clients for review on a second run', async () => {
     const t = newT()
     await plant(t)
     expect(await t.action(internal.internal.oauthClientBackfill.run, { dry_run: false })).toEqual({
@@ -80,20 +84,30 @@ describe('OAuth client backfill', () => {
     })
     const { clients, links } = await rows(t)
     const byId = Object.fromEntries(clients.map((client) => [client.clientId, client]))
-    for (const client of clients) {
-      expect(client).not.toHaveProperty('public')
-      expect(client).not.toHaveProperty('type')
+    for (const id of ['public-none', 'public-native', 'current']) {
+      expect(byId[id]).not.toHaveProperty('public')
+      expect(byId[id]).not.toHaveProperty('type')
     }
     expect(byId['public-none'].tokenEndpointAuthMethod).toBe('none')
     expect(byId['public-native']).toMatchObject({
       tokenEndpointAuthMethod: 'none',
       applicationType: 'native',
     })
-    // left for a person to review
-    expect(byId['confidential-agent'].tokenEndpointAuthMethod).toBe('client_secret_basic')
+    // left for a person to review, with the 1.6 fields that show why
+    expect(byId['confidential-agent']).toMatchObject({
+      public: false,
+      type: 'user-agent-based',
+      tokenEndpointAuthMethod: 'client_secret_basic',
+    })
     expect(byId['confidential-agent']).not.toHaveProperty('applicationType')
+    expect(byId['confidential-none']).toMatchObject({
+      public: false,
+      tokenEndpointAuthMethod: 'none',
+    })
     expect(links.map((link) => [link.clientId, link.resourceId]).sort()).toEqual(
-      ['confidential-agent', 'current', 'public-native', 'public-none'].map((id) => [id, RESOURCE]),
+      ['confidential-agent', 'confidential-none', 'current', 'public-native', 'public-none'].map(
+        (id) => [id, RESOURCE],
+      ),
     )
     const audit = await t.run((ctx) => ctx.db.query('platform_audit_log').collect())
     expect(audit.map(({ action, detail }) => ({ action, detail }))).toEqual([
@@ -101,8 +115,11 @@ describe('OAuth client backfill', () => {
     ])
     expect(await t.action(internal.internal.oauthClientBackfill.run, { dry_run: false })).toEqual({
       dry_run: false,
-      ...NONE,
+      ...LEFT,
     })
+    expect(
+      await t.query(internal.internal.oauthClientBackfill.remaining, { cursor: null }),
+    ).toEqual({ ...LEFT, cursor: null })
   })
 })
 

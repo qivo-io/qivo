@@ -140,9 +140,11 @@ type ClientBackfillCounts = {
   linked: number
   /** Extra links for a client and resource that already had one. */
   duplicates: number
-  /** Clients a person must look at: a 1.6 'user-agent-based' type, which 1.7
-   * has no application type for, or a confidential client whose method is
-   * 'none'. The backfill leaves those two fields as they are. */
+  /** Clients a person must look at: a 1.6 type other than 'web' or
+   * 'native', such as 'user-agent-based', which 1.7 has no application type
+   * for, or a confidential client whose method is 'none'. The backfill
+   * leaves their `public` and `type` as they are, so every run reports them
+   * again until a person has decided. */
   review: number
 }
 
@@ -150,8 +152,9 @@ type ClientBackfillCounts = {
  * share it so both find the same rows. For each client it maps 1.6's `type`
  * to `applicationType` per Better Auth's upgrade guide, keeps
  * tokenEndpointAuthMethod 'none' for public clients only, removes `public`
- * and `type`, links the client to `resource` and drops duplicate links.
- * `write` null counts without writing. */
+ * and `type`, links the client to `resource` and drops duplicate links. A
+ * client for review keeps its `public` and `type` and is named in
+ * `reviewClientIds`. `write` null counts without writing. */
 async function walkClients(
   ctx: QueryCtx,
   cursor: string | null,
@@ -169,20 +172,24 @@ async function walkClients(
     duplicates: 0,
     review: 0,
   }
+  const reviewClientIds: string[] = []
   for (const client of page.page) {
     if (client.public != null || client.type != null) {
       counts.legacy += 1
-      const patch: Partial<Doc<'oauthClient'>> = { public: undefined, type: undefined }
-      if (client.type === 'web' || client.type === 'native') {
-        patch.applicationType = client.applicationType ?? client.type
-      } else if (client.type != null) counts.review += 1
-      if (client.public === true && client.tokenEndpointAuthMethod !== 'none') {
-        patch.tokenEndpointAuthMethod = 'none'
-        counts.madePublic += 1
-      } else if (client.public === false && client.tokenEndpointAuthMethod === 'none') {
+      const knownType = client.type == null || client.type === 'web' || client.type === 'native'
+      if (!knownType || (client.public === false && client.tokenEndpointAuthMethod === 'none')) {
         counts.review += 1
+        reviewClientIds.push(client.clientId)
+      } else {
+        const patch: Partial<Doc<'oauthClient'>> = { public: undefined, type: undefined }
+        if (client.type === 'web' || client.type === 'native')
+          patch.applicationType = client.applicationType ?? client.type
+        if (client.public === true && client.tokenEndpointAuthMethod !== 'none') {
+          patch.tokenEndpointAuthMethod = 'none'
+          counts.madePublic += 1
+        }
+        if (write) await write.db.patch(client._id, patch)
       }
-      if (write) await write.db.patch(client._id, patch)
     }
     const links = await ctx.db
       .query('oauthClientResource')
@@ -207,7 +214,7 @@ async function walkClients(
         })
     }
   }
-  return { ...counts, cursor: page.isDone ? null : page.continueCursor }
+  return { ...counts, reviewClientIds, cursor: page.isDone ? null : page.continueCursor }
 }
 
 const clientBackfillArgs = { cursor: v.union(v.string(), v.null()), resource: v.string() }
