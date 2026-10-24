@@ -645,8 +645,8 @@ these mechanisms; support is not a claim that every assistant has been tested.
 
 ## OAuth protocol and deployment
 
-Browser clients can register and exchange, inspect or revoke tokens across
-origins. Public CORS applies only to those four machine endpoints, which
+Browser clients can register and exchange or revoke tokens across origins.
+Public CORS applies only to those three machine endpoints, which
 ignore session cookies and return no credentialed CORS headers. Browser
 sign-in, consent and operator routes retain the app-origin restrictions.
 
@@ -698,8 +698,16 @@ The authorization server's metadata is at
 `/.well-known/oauth-authorization-server` and at
 `/api/auth/.well-known/oauth-authorization-server`. Qivo publishes no OpenID
 Connect discovery document, so the `openid-configuration` locations get HTTP
-`404`. Qivo serves the endpoints that metadata names and the browser sign-in
-and consent routes. Every other path under `/api/auth` gets HTTP `404`, for
+`404`. Every client is public, so the metadata lists `none` as the only
+client authentication method of the token and revocation endpoints: a
+request names its client with `client_id` alone. One that sends an
+`Authorization` header gets HTTP `401` with `invalid_client` and a
+`WWW-Authenticate` challenge of the same scheme, or HTTP `400` with
+`invalid_request` when the scheme is malformed, and one that sends a secret
+or an assertion in the body gets HTTP `400` with `invalid_client`. An empty
+header or field counts as absent. Qivo serves no token introspection endpoint, which its MCP
+endpoint does not need, so the metadata names none. Qivo serves the
+endpoints that metadata names and the browser sign-in and consent routes. Every other path under `/api/auth` gets HTTP `404`, for
 example an OpenID Connect userinfo or end-session request.
 The initial 401 challenge advertises
 `scope="qivo:read qivo:write offline_access"` so clients following it request
@@ -714,8 +722,12 @@ nothing and issues no code.
 `MCP_RESOURCE_URL` defaults to `CONVEX_SITE_URL + /mcp`. Set it explicitly to
 `https://api.qivo.io/mcp` for the public custom domain, whose metadata paths
 must reach the same Convex backend. The issuer is `CONVEX_SITE_URL + /api/auth`
-and the browser consent page uses `SITE_URL + /app/~/connect`. Changing the
-canonical resource requires approving new connections. See `.env.example`.
+and the browser consent page uses `SITE_URL + /app/~/connect`. Each client
+is linked to the canonical resource when it registers, and Qivo refuses a
+client that is not linked to it with `invalid_target`. Changing the
+canonical resource therefore ends every existing connection, and each
+client must register again, which usually means removing the connector and
+adding it again. See `.env.example`.
 
 Authorization requests use `response_type=code`, S256 PKCE, an exactly
 registered redirect URI, scopes and the canonical `resource`. Token and
@@ -746,7 +758,7 @@ A registration whose metadata has the wrong form, such as a number in
 `redirect_uris`, is answered with HTTP `400` and `{"error":
 "invalid_redirect_uri", "error_description": "redirect_uris[0] must be a
 string"}`. Most other registration fields that have the wrong form get
-`invalid_client_metadata`. The token, revocation and introspection endpoints
+`invalid_client_metadata`. The token and revocation endpoints
 answer a body with the wrong form with HTTP `400` in the same shape, with
 `invalid_request`, or `unsupported_grant_type` for an unknown `grant_type`.
 The description names the first problem and its place in the body. Fix what
@@ -759,7 +771,12 @@ connection prevents access and refresh and hides the grant from the person's
 list. Signing out of the browser session that approved a connection ends the
 access tokens issued in that session, so the client's next request gets HTTP
 `401`; its refresh token, which `offline_access` keeps, renews access without
-a new approval. Its revoked grant and replay hashes are retained so old signed consent
+a new approval. The access tokens also end when the session is deleted some
+other way, such as when Qivo removes an expired session that is used again,
+and for every session that ends at once. A ban ends them too, but a banned
+login cannot renew access until the ban is lifted. A session that only
+expires and is never used again stays stored, so its access tokens run to
+their own expiry, at most one hour. Its revoked grant and replay hashes are retained so old signed consent
 and credentials cannot revive it. Reuse of a consumed code or refresh token revokes the
 connection, including credentials issued by a concurrent refresh; clients
 must serialize refresh requests. A fresh connection creates a new grant.
@@ -767,7 +784,8 @@ must serialize refresh requests. A fresh connection creates a new grant.
 The OAuth provider is Better Auth `1.7.12`, which fixes the resource-binding
 advisory [GHSA-p2fr-6hmx-4528](https://github.com/advisories/GHSA-p2fr-6hmx-4528)
 of the 1.6 line: the provider binds each grant to the resource it was
-approved for. The MCP endpoint is the one resource Qivo configures. Qivo also
+approved for. The MCP endpoint is the one resource Qivo configures, and the
+provider refuses a client that is not linked to it. Qivo also
 checks resource parameters and stores an immutable resource binding on each
 grant; regression tests cover foreign and repeated resource indicators and
 the canonical default when omitted. Do not add another resource without

@@ -25,7 +25,7 @@ vi.mock('./auth', () => ({
     getSession: async () => auth.session,
     signIn: { email: auth.signIn },
   },
-  signOut: vi.fn(),
+  signOutAndReload: vi.fn(),
 }))
 vi.mock('../lib/convex', () => ({ convex: { query: async () => true } }))
 vi.mock('./AdminApp', () => ({ AdminApp: () => <p>Operator console</p> }))

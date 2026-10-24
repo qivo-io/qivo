@@ -154,6 +154,9 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'billing_usage.profile_id',
   'billing_usage.credential_id',
   'billing_notices.profile_id',
+  // A Better Auth session id, kept after the session row is deleted
+  // (lib/oauthProvider.ts endSessionAccess).
+  'oauth_ended_sessions.session_id',
   // Demo receipts/ledgers outlive planning parents while bounded cleanup runs.
   'demo_sessions.auth_user_id',
   'demo_sessions.org_id',

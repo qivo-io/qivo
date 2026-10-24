@@ -1,4 +1,5 @@
 /* Personal profile, appearance, Inbox retention and assistant connections. */
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'
 import { CopyValue } from '../../components/CopyValue'
@@ -30,6 +31,7 @@ export function AccountPage({
   setPage: (page: string) => void
   onBackPage?: (page: string) => void
 }) {
+  const [signingOut, setSigningOut] = useState(false)
   const profile = P.user(P.CURRENT_USER)
   const me: Pick<UserVM, 'id' | 'name' | 'email' | 'orgRole'> = profile ?? {
     id: '',
@@ -94,8 +96,17 @@ export function AccountPage({
                   {me.orgRole === 'admin' ? ', Admin' : ''}
                 </div>
               </div>
-              <Button type="button" onClick={() => P.signOut()}>
-                {DEMO_MODE ? 'Leave demo' : 'Sign out'}
+              <Button
+                type="button"
+                disabled={signingOut}
+                onClick={() => {
+                  const pending = P.signOut()
+                  if (!pending) return
+                  setSigningOut(true)
+                  void pending.finally(() => setSigningOut(false))
+                }}
+              >
+                {signingOut ? 'Signing out…' : DEMO_MODE ? 'Leave demo' : 'Sign out'}
               </Button>
             </div>
           </SettingsField>

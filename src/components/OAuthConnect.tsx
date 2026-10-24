@@ -6,6 +6,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import type { api } from '../../convex/_generated/api'
 import { authClient } from '../lib/auth'
+import { SIGN_OUT_FAILED } from '../lib/authSession'
 import { connectionScopeLabel, connectionScopes, consentFailure } from '../lib/oauthConnection'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { P } from '../store/planner'
@@ -17,12 +18,17 @@ export function OAuthConnect({
   onUseAnotherAccount,
 }: {
   oauthQuery: string
-  onUseAnotherAccount: () => void
+  /** Signs out to use another account. Resolves false when the server
+      could not sign the person out now, so this page stays and says so. */
+  onUseAnotherAccount: () => Promise<boolean>
 }) {
   const [context, setContext] = useState<Context | null>(null)
   const [allowChanges, setAllowChanges] = useState(true)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [signingOut, setSigningOut] = useState(false)
+  // a decision or a sign-out under way holds every control
+  const locked = busy || signingOut
   const [returning, setReturning] = useState(false)
   useUpdateBlocker(true)
 
@@ -48,7 +54,7 @@ export function OAuthConnect({
   }, [oauthQuery])
 
   const decide = async (accept: boolean) => {
-    if (!context || busy) return
+    if (!context || locked) return
     setBusy(true)
     setError('')
     try {
@@ -69,6 +75,14 @@ export function OAuthConnect({
       setError('Check your connection, then try again.')
       setBusy(false)
     }
+  }
+
+  const switchAccount = async () => {
+    setSigningOut(true)
+    setError('')
+    if (await onUseAnotherAccount()) return
+    setError(SIGN_OUT_FAILED)
+    setSigningOut(false)
   }
 
   if (!context) {
@@ -113,10 +127,10 @@ export function OAuthConnect({
         variant="ghost"
         size="sm"
         className="mt-1 -ml-2"
-        disabled={busy}
-        onClick={onUseAnotherAccount}
+        disabled={locked}
+        onClick={() => void switchAccount()}
       >
-        Use another account
+        {signingOut ? 'Signing out…' : 'Use another account'}
       </Button>
       <div className="my-5 rounded-md border border-border bg-surface-2 p-3">
         <div className="text-xs text-text-2">Organization</div>
@@ -139,7 +153,7 @@ export function OAuthConnect({
           <Checkbox
             id="oauth-allow-changes"
             checked={allowChanges}
-            disabled={busy}
+            disabled={locked}
             onCheckedChange={(checked) => setAllowChanges(checked === true)}
           />
           <div>
@@ -162,13 +176,13 @@ export function OAuthConnect({
         </p>
       )}
       <div className="flex flex-wrap justify-end gap-2">
-        <Button type="button" variant="ghost" disabled={busy} onClick={() => void decide(false)}>
+        <Button type="button" variant="ghost" disabled={locked} onClick={() => void decide(false)}>
           Cancel
         </Button>
         <Button
           type="button"
           variant="primary"
-          disabled={busy || !hasAccess}
+          disabled={locked || !hasAccess}
           onClick={() => void decide(true)}
         >
           {busy ? 'Connecting…' : 'Connect'}

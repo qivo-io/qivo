@@ -17,18 +17,6 @@ export const tables = {
     .index('accountId_providerId', ['accountId', 'providerId'])
     .index('providerId_userId', ['providerId', 'userId'])
     .index('userId', ['userId']),
-  // Better Auth 1.6 wrote `public` on every client it registered, and Convex
-  // refuses a schema that a stored row breaks, so the two fields 1.7 dropped
-  // stay optional here. internal/oauthClientBackfill.ts maps them to
-  // applicationType and removes them; once it has run on every deployment, a
-  // later change removes these two fields and the backfill.
-  oauthClient: defineTable({
-    ...generatedTables.oauthClient.validator.fields,
-    public: v.optional(v.union(v.null(), v.boolean())),
-    type: v.optional(v.union(v.null(), v.string())),
-  })
-    .index('clientId', ['clientId'])
-    .index('userId', ['userId']),
   oauthConsent: generatedTables.oauthConsent.index('clientId_referenceId_userId', ['clientId', 'referenceId', 'userId']),
 }
 

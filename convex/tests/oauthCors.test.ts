@@ -36,7 +36,7 @@ function publicResponse(response: Response) {
 }
 
 describe('OAuth browser client CORS', () => {
-  it.each(['register', 'token', 'introspect', 'revoke'])(
+  it.each(['register', 'token', 'revoke'])(
     'allows noncredentialed preflight for the exact %s endpoint',
     async (endpoint) => {
       const response = await http(fixture(), `/api/auth/oauth2/${endpoint}`, preflight(BROWSER))
@@ -49,7 +49,7 @@ describe('OAuth browser client CORS', () => {
     },
   )
 
-  it.each(['token', 'introspect', 'revoke'])(
+  it.each(['token', 'revoke'])(
     'exposes the %s protocol refusal to a browser instead of hiding it behind CORS',
     async (endpoint) => {
       const body =

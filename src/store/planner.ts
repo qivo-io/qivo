@@ -53,7 +53,7 @@ import { creatorGrant, grantsAfterHandover } from '../../convex/lib/projectGrant
 import { resolveReviewHours, reviewStamp } from '../../convex/lib/review'
 import { firstSittingDay, nextSyncStamp, SYNC_OWNERS_MAX } from '../../convex/lib/teamSync'
 import { armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
-import { NO_QUERY } from '../lib/authSession'
+import { NO_QUERY, SignOutFailed } from '../lib/authSession'
 import { avatarCacheScope, createAvatarImageCache } from '../lib/avatarImageCache'
 import { createAvatarSources } from '../lib/avatarSources'
 import { browserBackendUrl, configuredConvexDeploymentUrl } from '../lib/backendUrl'
@@ -2015,6 +2015,8 @@ let unconfirmedReport: string | null = null
    SIGN_OUT_CONFIRM_MS goes ahead. */
 const SIGN_OUT_CONFIRM_MS = 5_000
 let signOutWarnedAt = Number.NEGATIVE_INFINITY
+/* Whether a sign-out request is under way (PLANNER.signOut). */
+let signingOut = false
 /* A delivery that ends the trouble but waits to be painted (owe). The
    trouble ends when that paint lands, not before, so nobody edits the stale
    rows still on screen in the meantime. */
@@ -8604,8 +8606,12 @@ export const PLANNER = {
       server or a field holds typed text, the first press says what would be
       lost, and only a second press within SIGN_OUT_CONFIRM_MS goes ahead,
       without the close warning asking again. Signing out works offline
-      too, because it clears the sign-in stored in this browser. */
-  signOut: () => {
+      too, because it clears the sign-in stored in this browser. When the
+      server answers that it could not end the session, the person stays
+      signed in and is told to try again (lib/authSession.ts signOut). A
+      press while a sign-out runs does nothing. Returns the sign-out request
+      when this press started one, for the control to show that it runs. */
+  signOut: (): Promise<void> | undefined => {
     const waiting = syncStatus.unconfirmed()
     if ((waiting || hasUnsaved()) && Date.now() - signOutWarnedAt > SIGN_OUT_CONFIRM_MS) {
       signOutWarnedAt = Date.now()
@@ -8618,18 +8624,29 @@ export const PLANNER = {
       toast(`${what}. Press ${again} and lose ${waiting > 1 ? 'them' : 'it'}.`)
       return
     }
-    unconfirmedNote.forgetAll()
-    clearAvatarSources()
     // a demo can start again in this page, so its warning stays armed
     if (DEMO_MODE) {
+      unconfirmedNote.forgetAll()
+      clearAvatarSources()
       notifyDemoEnded('lost')
       return
     }
-    leaveDeliberately()
-    void authSignOut().then(
-      () => location.reload(),
-      () => location.reload(),
-    )
+    if (signingOut) return
+    signingOut = true
+    const leave = () => {
+      unconfirmedNote.forgetAll()
+      clearAvatarSources()
+      leaveDeliberately()
+      location.reload()
+    }
+    return authSignOut()
+      .then(leave, (failure: unknown) => {
+        if (failure instanceof SignOutFailed) toast(failure.message)
+        else leave()
+      })
+      .finally(() => {
+        signingOut = false
+      })
   },
 }
 

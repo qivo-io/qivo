@@ -4,6 +4,7 @@ import { anonymousClient } from 'better-auth/client/plugins'
 import type { ConvexClient } from 'convex/browser'
 import { convexClient, crossDomainClient } from '../../vendor/convex-better-auth/src/client/plugins'
 import { convexSiteUrl } from './backendUrl'
+import { beginUpdateBlock } from './updateSafety'
 
 /** An empty query, for the auth client calls that send none. Better Auth
     1.7 types every call's query as required when strictNullChecks is off,
@@ -51,6 +52,17 @@ function retryPause(attempt: number, onWait?: (wake: () => void) => void): Promi
     if (events) window.addEventListener('online', done)
     onWait?.(done)
   })
+}
+
+/** What the person reads when the server could not sign them out now. */
+export const SIGN_OUT_FAILED = 'Qivo could not sign you out. Try again.'
+
+/** Thrown by a sign-out the server could not complete now, after a fault or
+    a rate limit. The person is still signed in and can try again. */
+export class SignOutFailed extends Error {
+  constructor() {
+    super(SIGN_OUT_FAILED)
+  }
 }
 
 /* Each entry point creates its own session. The cross-domain plugin stores
@@ -258,14 +270,44 @@ export function createAuthSession(
     return connect(generation, onLost)
   }
 
-  // The plugin clears only this prefix; the server revokes only its session.
-  // Callers reload afterward, re-arming this page's socket on the next mount.
-  async function signOut(): Promise<void> {
-    armGeneration++
+  /* Ends the session on the server, then forgets it in this browser. The
+     plugin clears only this prefix; the server ends only its session.
+     Callers reload afterward, re-arming this page's socket on the next
+     mount. A press while a sign-out runs joins it. A fault or a rate limit
+     (5xx, 429) did not end the session, and another try can, so the session
+     stays here and this throws SignOutFailed. Any other refusal repeats on
+     every try, and a server that cannot be reached or does not answer in
+     time cannot end it now, so the session is forgotten here anyway: signing
+     out works offline, and the server ends the session at its expiry. */
+  let signingOut: Promise<void> | null = null
+  function signOut(): Promise<void> {
+    signingOut ??= endSession().finally(() => {
+      signingOut = null
+    })
+    return signingOut
+  }
+
+  async function endSession(): Promise<void> {
+    // an app update's reload would drop the request and its answer
+    const releaseUpdateBlock = beginUpdateBlock()
     try {
-      await authClient.signOut({})
-    } finally {
+      let answer: Awaited<ReturnType<typeof authClient.signOut>>
+      try {
+        answer = await authClient.signOut({ fetchOptions: { timeout: REQUEST_TIMEOUT_MS } })
+      } catch {
+        clearLocalSession()
+        return
+      }
+      if (answer.error) {
+        const { status } = answer.error
+        if (status >= 500 || status === 429) throw new SignOutFailed()
+        clearLocalSession()
+        return
+      }
+      armGeneration++
       client.client.clearAuth()
+    } finally {
+      releaseUpdateBlock()
     }
   }
 

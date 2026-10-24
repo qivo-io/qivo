@@ -272,14 +272,12 @@ describe('index choice', () => {
 })
 
 describe('the component schema', () => {
-  it('keeps every generated field and index of the tables it extends', () => {
-    for (const name of ['account', 'oauthClient'] as const) {
-      const ours = authSchema.tables[name]
-      const theirs = generated[name]
-      expect(Object.keys(ours.validator.fields)).toEqual(
-        expect.arrayContaining(Object.keys(theirs.validator.fields)),
-      )
-      expect(ours[' indexes']()).toEqual(theirs[' indexes']())
-    }
+  it('keeps every generated field and index of the account table it extends', () => {
+    const ours = authSchema.tables.account
+    const theirs = generated.account
+    expect(Object.keys(ours.validator.fields)).toEqual(
+      expect.arrayContaining(Object.keys(theirs.validator.fields)),
+    )
+    expect(ours[' indexes']()).toEqual(theirs[' indexes']())
   })
 })

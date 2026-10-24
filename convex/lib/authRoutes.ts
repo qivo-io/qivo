@@ -55,7 +55,6 @@ export const AUTH_ROUTES = [
   'POST /oauth2/consent',
   'POST /oauth2/register',
   'POST /oauth2/token',
-  'POST /oauth2/introspect',
   'POST /oauth2/revoke',
   // the authorization server's metadata after the issuer's path, which the
   // OAuth provider answers itself, for clients that look for it there

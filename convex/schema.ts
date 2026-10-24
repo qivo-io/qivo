@@ -1485,6 +1485,15 @@ export default defineSchema({
     .index('by_hash', ['kind', 'credential_hash'])
     .index('by_connection', ['connection_id']),
 
+  // A browser session that ended, such as at sign-out or a ban. The OAuth
+  // access tokens issued in it before `ended_at` are refused
+  // (oauthConnections.ts lookupAccess). The row goes once every such token
+  // has expired (lib/oauthProvider.ts endSessionAccess).
+  oauth_ended_sessions: defineTable({
+    session_id: v.string(),
+    ended_at: v.number(),
+  }).index('by_session', ['session_id']),
+
   // Curated platform backgrounds. Removed rows keep provenance + hashes so a
   // declined photo cannot be silently reimported. Their bytes are deleted.
   panorama_images: defineTable({

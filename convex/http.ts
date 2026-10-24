@@ -13,7 +13,7 @@ import { FILE_TOKEN_TTL_SECONDS, type FileTokenKind, verifyFileToken } from './l
 import { badRequest } from './lib/functions'
 import { AUTH_BODY_MAX_BYTES } from './lib/limits'
 import { mcpResource, OAUTH_SCOPES, oauthIssuer } from './lib/oauth'
-import { withoutDpopMetadata } from './lib/oauthProvider'
+import { servedServerMetadata } from './lib/oauthProvider'
 import {
   manualImageDimensions,
   PANORAMA_MAX_BYTES,
@@ -272,7 +272,7 @@ const oauthMachine = answerAfterBody(async (ctx, request) => {
 const oauthMachinePreflight = answerAfterBody(
   async () => new Response(null, { status: 204, headers: oauthMachineHeaders }),
 )
-for (const endpoint of ['register', 'token', 'introspect', 'revoke']) {
+for (const endpoint of ['register', 'token', 'revoke']) {
   const path = `/api/auth/oauth2/${endpoint}`
   http.route({ path, method: 'POST', handler: oauthMachine })
   http.route({ path, method: 'OPTIONS', handler: oauthMachinePreflight })
@@ -297,7 +297,7 @@ const resourceMetadata = answerAfterBody(
     ),
 )
 const serverMetadata = answerAfterBody(async (ctx, request) =>
-  withoutDpopMetadata(
+  servedServerMetadata(
     await oauthProviderAuthServerMetadata(createAuth(ctx), { headers: oauthMetadataHeaders })(
       request,
     ),

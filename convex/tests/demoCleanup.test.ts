@@ -206,6 +206,9 @@ const APP_SHARED = [
   'billing_webhooks',
   'billing_notices',
   'machine_rate_limits',
+  // The demo runs no OAuth provider, so it records no ended session
+  // (lib/oauthProvider.ts endSessionAccess).
+  'oauth_ended_sessions',
 ]
 const AUTH_OWNED = [
   'user',
