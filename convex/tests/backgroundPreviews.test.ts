@@ -285,7 +285,8 @@ describe('preview identity, storage ownership and cleanup', () => {
         preview_version: BACKGROUND_PREVIEW_VERSION,
       })
       expect(await exists(t, image.storage_id)).toBe(true)
-      expect(await fileState(t, previous)).toBe('held')
+      // a library preview's public URL must not outlive its row
+      expect(await fileState(t, previous)).toBe(kind === 'library' ? 'gone' : 'held')
       expect(await exists(t, next)).toBe(true)
       expect(await t.query(internal.backgroundPreviews.source, jobArgs(image))).toBe(false)
       expect(await t.mutation(internal.backgroundPreviews.backfill, { kind })).toEqual({

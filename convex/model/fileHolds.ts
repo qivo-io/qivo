@@ -12,8 +12,9 @@
  * row records the file with the time it may be erased. eraseFile erases a
  * file at once. It is for a file that no committed row ever named, such as an
  * upload refused in the same transaction or bytes nobody confirmed, for the
- * public demo and for the operator's panorama library (panoramaImages.ts
- * remove).
+ * public demo and for the operator's panorama library, whose storage URLs
+ * are permanent and public (panoramaImages.ts remove, and a replaced
+ * library preview in backgroundPreviews.ts attach).
  *
  * The public demo keeps no backups and promises deletion 24 hours after a
  * demo starts, so on the demo (lib/demo.ts isDemoDeployment) releaseFile

@@ -119,7 +119,12 @@ export const attach = internalMutation({
       preview_storage_id: args.preview_storage_id,
       preview_version: args.preview_version,
     })
-    await releaseFile(ctx, previous)
+    // A library preview's storage URL is permanent and needs no sign in, so
+    // a replaced one is erased at once, as panoramaImages.ts remove erases a
+    // removed image. Holding it would keep a taken-down photo public.
+    if (args.kind === 'library') {
+      if (previous && !(await storageIdInUse(ctx, previous))) await eraseFile(ctx, previous)
+    } else await releaseFile(ctx, previous)
     return true
   },
 })

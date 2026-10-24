@@ -217,7 +217,15 @@ const profilesWithRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget
       before: async (profile) => {
         budget.rows -= await markHomeProfileRemoved(ctx, profile, asked)
       },
-      after: (profile) => releaseFile(ctx, profile.avatar_storage_id),
+      after: async (profile) => {
+        if (profile.avatar_storage_id === undefined) return
+        // Letting go of a picture reads about as many index ranges as the
+        // profile's own rows and can write a hold, so it costs a row too.
+        // Without that, a step of 256 profiles with pictures reads more
+        // than Convex's 4,096 ranges.
+        budget.rows -= 1
+        await releaseFile(ctx, profile.avatar_storage_id)
+      },
     },
   )
 }

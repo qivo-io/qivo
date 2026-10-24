@@ -18,7 +18,8 @@ import { api, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import crons from '../crons'
 import { storageUsage } from '../model/billing'
-import { ERASE_EVERY_MS, ERASE_PAGE, HOLD_MS, releaseFile } from '../model/fileHolds'
+import { ERASE_EVERY_MS, ERASE_PAGE, eraseDueFiles, HOLD_MS, releaseFile } from '../model/fileHolds'
+import { deleteOrgStep } from '../model/orgDeletion'
 import {
   as,
   expectRefusal,
@@ -205,6 +206,75 @@ describe('the eraser', () => {
     expect(await holds(t)).toEqual([])
     expect(await fileState(t, kept.row.storage_id)).toBe('kept')
     expect(await fileState(t, lost.row.storage_id)).toBe('gone')
+  })
+
+  it('reads only the holds that are due', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const { row } = await attached(t, f)
+    await remove(t, f, row)
+    const [due] = await holds(t)
+    // twenty files let go a day later
+    await t.run(async (ctx) => {
+      for (let n = 0; n < 20; n++) {
+        const storage_id = await ctx.storage.store(new Blob([new Uint8Array(12)]) as never)
+        await ctx.db.insert('file_holds', {
+          storage_id,
+          size_bytes: 12,
+          erase_at: due.erase_at + DAY,
+        })
+      }
+    })
+    const read = await t.run(async (ctx) => {
+      await eraseDueFiles(ctx, due.erase_at, { erased: 0, kept: 0 })
+      return (await ctx.meta.getTransactionMetrics()).documentsRead.used
+    })
+    expect(await fileState(t, row.storage_id)).toBe('gone')
+    expect(await holds(t)).toHaveLength(20)
+    // the due hold, and its file, which the erase reads again
+    expect(read).toBe(3)
+  })
+})
+
+describe('an organization deletion', () => {
+  it('holds every picture, each step within the index range limit', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // agents with pictures and no other rows, the most profiles a step reaches
+    const faces = await t.run(async (ctx) => {
+      const { _id, _creationTime, ...agent } = f.agent
+      const ids: Id<'_storage'>[] = []
+      for (let n = 0; n < 300; n++) {
+        const avatar_storage_id = await ctx.storage.store(new Blob([new Uint8Array(12)]) as never)
+        await ctx.db.insert('profiles', { ...agent, id: uuid(), avatar_storage_id })
+        ids.push(avatar_storage_id)
+      }
+      await ctx.db.insert('org_removals', {
+        org_id: f.org.id,
+        reason: 'requested',
+        ended_at: NOW,
+        delete_after: NOW,
+        created_at: NOW,
+        phase: 'profiles',
+      })
+      return ids
+    })
+    const ranges: number[] = []
+    for (let step = 0; step < 20; step++) {
+      const done = await t.run(async (ctx) => {
+        const removal = await ctx.db
+          .query('org_removals')
+          .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+          .unique()
+        if (removal === null || removal.phase !== 'profiles') return true
+        await deleteOrgStep(ctx, removal)
+        ranges.push((await ctx.meta.getTransactionMetrics()).databaseQueries.used)
+        return false
+      })
+      if (done) break
+    }
+    expect(Math.max(...ranges)).toBeLessThan(4096)
+    for (const face of faces) expect(await fileState(t, face)).toBe('held')
   })
 })
 
