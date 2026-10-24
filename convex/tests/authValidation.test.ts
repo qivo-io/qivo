@@ -6,10 +6,11 @@
 /// <reference types="vite/client" />
 import type { AuthContext } from '@better-auth/core'
 import { getEndpoints } from 'better-auth/api'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createAuth } from '../auth'
 import {
   boundValidationAnswer,
+  definitionsOf,
   holdsAtMost,
   shortValidationMessage,
   stopValidationEarly,
@@ -92,6 +93,26 @@ describe('validation errors on the auth routes', () => {
       message: `[body.redirect_uris.0] ${NOT_A_STRING}`,
       code: 'VALIDATION_ERROR',
     })
+  })
+
+  it('cuts a client registration checked in full and keeps the CORS headers', async () => {
+    const response = await http(newT(), '/api/auth/oauth2/register', {
+      method: 'POST',
+      headers: { Origin: 'https://client.example.test', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ redirect_uris: Array(AUTH_FULL_CHECK_VALUES - 100).fill(1) }),
+    })
+    expect(response.status).toBe(400)
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*')
+    const { message, code } = JSON.parse(await response.text())
+    expect(code).toBe('VALIDATION_ERROR')
+    expect(message.length).toBeLessThanOrEqual(AUTH_VALIDATION_MESSAGE_MAX)
+    expect(message).toMatch(/^\[body\.redirect_uris\.0\] .*; and \d+ more problems$/)
+  })
+
+  it('does not serve the admin permission check, whose record zod checks in full', async () => {
+    const permission = Object.fromEntries(Array.from({ length: 5_000 }, (_, i) => [`k${i}`, 1]))
+    const response = await post(newT(), '/admin/has-permission', JSON.stringify({ permission }))
+    expect(response.status).toBe(404)
   })
 
   it('lists the first of many problems in a request checked in full and counts the rest', async () => {
@@ -216,6 +237,47 @@ describe('stopValidationEarly', () => {
     expect([...routed.keys()]).toEqual([...own.keys()])
     const unreached = [...own].filter(([name, schema]) => routed.get(name) !== schema)
     expect(unreached.map(([name]) => name)).toEqual(['signInEmail body'])
+  })
+
+  it('checks a large request early on every body and query schema', async () => {
+    const schemas = [...schemasOf(auth.api)] as [string, typeof social][]
+    expect(schemas.some(([name]) => name.endsWith(' query'))).toBe(true)
+    const large = Array(AUTH_FULL_CHECK_VALUES + 1).fill(0)
+    const late = []
+    for (const [name, schema] of schemas) {
+      const safeParse = vi.spyOn(schema, 'safeParse')
+      try {
+        await schema['~standard'].validate(large)
+        const early = safeParse.mock.calls.some(
+          ([, ctx]) => ctx !== undefined && 'abortEarly' in ctx && ctx.abortEarly === true,
+        )
+        if (!early) late.push(name)
+      } finally {
+        safeParse.mockRestore()
+      }
+    }
+    expect(late).toEqual([])
+  })
+
+  it('serves no record whose entries can fail, which zod would check in full', () => {
+    // A record of any value under string keys cannot fail, so zod lists no
+    // problem for its entries.
+    const disabled = new Set(auth.options.disabledPaths)
+    const cannotFail = (part: unknown) => {
+      const { type, checks } = (part as { _zod: { def: { type: string; checks?: unknown[] } } })
+        ._zod.def
+      return ['any', 'unknown'].includes(type) || (type === 'string' && !checks?.length)
+    }
+    const endpoints: Record<string, { path: string }> = auth.api
+    const failing = [...schemasOf(auth.api)]
+      .filter(([name]) => !disabled.has(endpoints[name.split(' ')[0]].path))
+      .filter(([, schema]) =>
+        definitionsOf(schema as Parameters<typeof definitionsOf>[0]).some(
+          (def) => def.type === 'record' && !(cannotFail(def.keyType) && cannotFail(def.valueType)),
+        ),
+      )
+      .map(([name]) => name)
+    expect(failing).toEqual([])
   })
 
   it('changes a schema once however many instances share it', async () => {

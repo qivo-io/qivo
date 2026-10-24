@@ -489,10 +489,11 @@ so it cannot store garbled text. Such a request still counts as a call.
 A request's `id` must be a string, a number or `null`. Any other `id`, such
 as an array or an object, is answered with HTTP `400` and `{"jsonrpc": "2.0",
 "error": {"code": -32600, "message": "Bad Request: the request body is not a
-valid JSON-RPC message"}, "id": null}`. An error that repeats what the
-request sent, such as an unknown tool name, a method or a protocol version,
+valid JSON-RPC message"}, "id": null}`. A protocol error that repeats a tool
+name, a method, a protocol version or an `Mcp-Method` or `Mcp-Name` header
 shows at most 100 characters of it and ends a longer one with `…`. It names
 an array or object by its kind, such as `Tool [object Array] not found`.
+A tool's own refusal repeats a value such as a task ref in full.
 
 When enabled organization billing has expired or needs payment, writing tools
 return a readable billing refusal while reading keeps its normal access rules.
@@ -1154,8 +1155,8 @@ nothing. For example, `set_project_access` with a misspelled `on_held_task`
 answers `Input validation error: Invalid arguments for tool
 set_project_access: Unrecognized key: "on_held_task"`, and several unknown
 arguments read `Unrecognized keys: "a", "b"`. The list names at most 10
-arguments, each cut to 100 characters, and ends with `and 5 more` when there
-were more. `arguments` must be a JSON
+arguments and then counts the rest, such as `and 5 more`. A name longer than
+100 characters is cut and ends with `…`. `arguments` must be a JSON
 object, or absent or `null` for none. Any other value is refused, for
 example `Invalid input: expected object, received string`. Only the
 tools that take no arguments, `get_me`, `list_teams`, `list_users` and

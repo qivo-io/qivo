@@ -109,6 +109,29 @@ describe('MCP echoes', () => {
     )
   })
 
+  it('matches a name that is not a string with the header as text, as before', async () => {
+    const res = await dispatchMcp({
+      headers: new Headers({
+        'Content-Type': 'application/json',
+        'Mcp-Method': 'tools/call',
+        'Mcp-Name': '5',
+      }),
+      bodyText: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'tools/call',
+        params: { name: 5, _meta: META },
+        id: 1,
+      }),
+      runTool: async () => {
+        throw new Error('no tool runs')
+      },
+    })
+    expect(JSON.parse(await res.text()).error).toEqual({
+      code: -32602,
+      message: 'Tool 5 not found',
+    })
+  })
+
   it('cuts a long method and names an array protocol version by its kind', async () => {
     const method = 'm'.repeat(60_000)
     const mismatch = await send(

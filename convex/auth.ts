@@ -102,6 +102,12 @@ export const appOrigins = (opts?: { schemaOnly?: boolean }): string[] => {
  * or answer with an empty token, and nothing in Qivo calls them. */
 const PROVIDER_TOKEN_PATHS = ['/get-access-token', '/refresh-token', '/account-info']
 
+/* The admin plugin's permission check over HTTP. Qivo's admin calls the
+ * plugin in-process (adminAuth.ts), never this route, and zod checks every
+ * key of its permission record before the session, so an unauthenticated
+ * 64 KiB body made it build thousands of problems (lib/authValidation.ts). */
+const ADMIN_PERMISSION_PATHS = ['/admin/has-permission']
+
 /* The endpoint a mail callback runs in, or null outside one (a direct call). */
 const currentEndpoint = () => getCurrentAuthContext().catch(() => null)
 
@@ -213,6 +219,7 @@ export const createAuthOptions = (
           '/delete-user',
           '/delete-anonymous-user',
           ...PROVIDER_TOKEN_PATHS,
+          ...ADMIN_PERMISSION_PATHS,
         ]
       : [
           '/sign-in/anonymous',
@@ -228,6 +235,7 @@ export const createAuthOptions = (
           '/oauth2/get-client',
           '/oauth2/get-clients',
           ...PROVIDER_TOKEN_PATHS,
+          ...ADMIN_PERMISSION_PATHS,
         ],
     /* No deployment stores the personal data lib/authData.ts lists. A create
      * leaves those fields out. An update that carries a provider token or a

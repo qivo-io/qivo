@@ -1469,8 +1469,7 @@ async function modernLeg(a: {
     )
   }
   if (method === 'tools/call') {
-    // a name that is not a string matches no header
-    const name = typeof params?.name === 'string' ? params.name : null
+    const name = typeof params?.name === 'string' ? params.name : String(params?.name)
     const hdrName = a.headers.get('Mcp-Name')
     if (hdrName === null) {
       return mismatch(

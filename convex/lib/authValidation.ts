@@ -1,7 +1,8 @@
 /* How long a Better Auth validation error may be, and what it may cost.
  *
- * Better Auth checks every request body and query with zod before anything
- * else, a session included, and Better Call answers a failure with one
+ * Better Auth checks every request body and query with zod as the endpoint
+ * starts, after its request checks and the `before` hooks, and ahead of any
+ * session check. Better Call answers a failure with one
  * `[body.path] message` for every problem zod found, joined by "; ". A
  * 64 KiB body that holds an array of 32,000 numbers where strings belong,
  * such as `scopes` on /sign-in/social, so got a 2.2 MB answer, and zod spent
@@ -10,10 +11,12 @@
  * Two bounds fix that. stopValidationEarly makes zod stop at the first
  * problem when a request holds more than AUTH_FULL_CHECK_VALUES values, so a
  * large invalid request costs about what a valid one does. A smaller request
- * is checked in full and answers as before. It reaches every schema the
- * router checks with but /sign-in/email's, which Better Auth builds again for
- * every request; that body takes four scalar fields, so it lists at most four
- * problems. boundValidationAnswer then cuts the answer's message to
+ * is checked in full and answers as before. stopValidationEarly reaches every
+ * schema the router checks with but /sign-in/email's, which Better Auth builds
+ * again for every request; that body takes four scalar fields, so it lists at
+ * most four problems. zod checks every entry of a record even when it stops
+ * early, so auth.ts turns off /admin/has-permission, the one route whose
+ * record entries can fail. boundValidationAnswer then cuts the answer's message to
  * AUTH_VALIDATION_MESSAGE_MAX characters at the end of a listed problem and
  * says how many it left out, which also bounds the answer of any check
  * stopValidationEarly does not reach. */
@@ -26,9 +29,10 @@ type StandardResult =
   | { readonly issues: ReadonlyArray<{ readonly message: string }> }
 
 /* The parts of a zod schema stopValidationEarly uses. `abortEarly` is the
- * parse option zod's own `validate` sets: a container stops before its next
- * value once one has failed. A zod without it parses in full, which
- * boundValidationAnswer still bounds. */
+ * internal parse option zod's own `validate` sets: an array or object stops
+ * before its next value once one has an aborting problem, such as a wrong
+ * type, which is why checkEarly makes every definition abort. A zod without
+ * it parses in full, which boundValidationAnswer still bounds. */
 type ZodSchema = ZodNode & {
   '~standard': {
     readonly vendor: string
@@ -53,7 +57,8 @@ const isZodSchema = (value: unknown): value is ZodSchema =>
 type ZodNode = { _zod: { def: Definition; innerType?: unknown } }
 
 /* A zod definition. `abort` makes the problem its check finds end the
- * value's check, as aborting problems such as a wrong type always do. */
+ * value's check, as aborting problems such as a wrong type always do. zod
+ * reads it while it parses. */
 type Definition = { [part: string]: unknown; abort?: boolean }
 
 const isZodNode = (value: unknown): value is ZodNode =>
@@ -116,12 +121,13 @@ export function holdsAtMost(value: unknown, limit: number): boolean {
  * still list 2,000 problems. Every definition in the schema therefore aborts
  * while the check runs, and gets its own setting back after. The check is
  * synchronous, so no other check sees the change. A valid value gets the same
- * result, since `abort` only acts on a problem. */
+ * result, since `abort` only acts on a problem. A record is the exception:
+ * zod checks each of its entries whatever either setting says. */
 function checkEarly(schema: ZodSchema, definitions: Definition[], value: unknown): StandardResult {
   const settings = definitions.map((def) => def.abort)
-  for (const def of definitions) def.abort = true
   let result: ReturnType<ZodSchema['safeParse']>
   try {
+    for (const def of definitions) def.abort = true
     result = schema.safeParse(value, { abortEarly: true })
   } finally {
     definitions.forEach((def, i) => {
