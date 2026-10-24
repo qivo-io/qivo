@@ -33,6 +33,48 @@ function panelPath(
   return `M ${left + t} ${top} H ${right - t} A ${t} ${t} 0 0 1 ${right} ${top + t} V ${bottom - b} A ${b} ${b} 0 0 1 ${right - b} ${bottom} H ${left + b} A ${b} ${b} 0 0 1 ${left} ${bottom - b} V ${top + t} A ${t} ${t} 0 0 1 ${left + t} ${top} Z`
 }
 
+/** A lane or a project group's panel and the parts the clips follow. */
+type LaneParts = {
+  panel: HTMLElement
+  body: HTMLElement | null
+  foot: HTMLElement | null
+  heading: HTMLElement | null
+}
+
+const PANEL = '.board-lane, [data-board-group]'
+const PARTS = {
+  body: '.board-lane-body',
+  foot: '[data-lane-foot]',
+  heading: '.board-panel-heading',
+}
+
+/** The panels in `pane`, each with the first of each part it holds, in
+    page order. The walk passes over the status cells, which hold the cards
+    and no part: a search of the whole pane would read every card, twice
+    for a foot, which comes after them. */
+function laneParts(pane: HTMLElement) {
+  const panels: LaneParts[] = []
+  const walker = document.createTreeWalker(pane, NodeFilter.SHOW_ELEMENT, {
+    acceptNode: (node) =>
+      (node as Element).hasAttribute('data-board-cell')
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_ACCEPT,
+  })
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!(node instanceof HTMLElement)) continue
+    if (node.matches(PANEL)) {
+      panels.push({ panel: node, body: null, foot: null, heading: null })
+      continue
+    }
+    // panels do not nest, so a part belongs to the last panel, if in it
+    const parts = panels.at(-1)
+    if (!parts?.panel.contains(node)) continue
+    for (const part of ['body', 'foot', 'heading'] as const)
+      if (!parts[part] && node.matches(PARTS[part])) parts[part] = node
+  }
+  return panels
+}
+
 /* Intersect the body's visible rectangle with the material's actual lower
    corners. A natural body can end above the corner, or partway through it;
    rounding that shorter rectangle would put the arc at the wrong height. */
@@ -98,12 +140,7 @@ export function useBoardPanelClipping() {
     /* Each lane or side-board with its parts, found again only when the
        pane's structure changes (syncObserved). Finding them on every frame
        walked every card of a large Board. */
-    let panels: {
-      panel: HTMLElement
-      body: HTMLElement | null
-      foot: HTMLElement | null
-      heading: HTMLElement | null
-    }[] = []
+    let panels: LaneParts[] = []
     const paneStyle = getComputedStyle(pane)
     const borderRight = Number.parseFloat(paneStyle.borderRightWidth) || 0
     const borderBottom = Number.parseFloat(paneStyle.borderBottomWidth) || 0
@@ -249,14 +286,7 @@ export function useBoardPanelClipping() {
     }
     const resizeObserver = new ResizeObserver(schedule)
     const syncObserved = () => {
-      panels = [...pane.querySelectorAll<HTMLElement>('.board-lane, [data-board-group]')].map(
-        (panel) => ({
-          panel,
-          body: panel.querySelector<HTMLElement>('.board-lane-body'),
-          foot: panel.querySelector<HTMLElement>('[data-lane-foot]'),
-          heading: panel.querySelector<HTMLElement>('.board-panel-heading'),
-        }),
-      )
+      panels = laneParts(pane)
       const next = new Set<Element>([pane])
       for (const { body, foot, heading } of panels)
         for (const part of [body, foot, heading]) if (part) next.add(part)

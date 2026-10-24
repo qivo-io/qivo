@@ -18,11 +18,14 @@ const transport = join(here, 'transport.mjs')
 
 /** Builds the benchmark page from the checkout at `source` into `outDir`,
     with `temporary` as the build root. The page always uses this
-    checkout's entry and transport. */
+    checkout's entry and transport, and the <base> of the checkout's
+    app.html, if it has one, which changes what a route change costs. */
 export async function buildPage(source, outDir, temporary) {
+  const app = await readFile(join(source, 'app.html'), 'utf8').catch(() => '')
+  const base = /<base\b[^>]*>/i.exec(app)?.[0] ?? ''
   await writeFile(
     join(temporary, 'index.html'),
-    `<html><body><div id="root"></div><script type="module" src="${entry}"></script></body></html>`,
+    `<html><head>${base}</head><body><div id="root"></div><script type="module" src="${entry}"></script></body></html>`,
   )
   await build({
     configFile: false,
@@ -74,7 +77,7 @@ export async function checkoutOf(root, commit, temporary) {
   const folder = join(temporary, `baseline-${commit.slice(0, 12)}`)
   await mkdir(folder)
   const archive = join(temporary, 'baseline.tar')
-  await gitIn(root, ['archive', '-o', archive, commit, 'src', 'convex', 'scripts'])
+  await gitIn(root, ['archive', '-o', archive, commit, 'app.html', 'src', 'convex', 'scripts'])
   await promisify(execFile)('tar', ['-xf', archive, '-C', folder])
   await symlink(join(root, 'node_modules'), join(folder, 'node_modules'))
   return folder

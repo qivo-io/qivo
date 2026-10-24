@@ -1,6 +1,6 @@
 import { memo, useId, useRef } from 'react'
 import { AssigneeAvatar } from '@/components/AssigneeAvatar'
-import { Icon, PausedMark } from '@/components/qivo'
+import { PausedMark } from '@/components/qivo'
 import {
   hoverTooltip,
   priorityIcon,
@@ -27,22 +27,19 @@ type CardActions = {
 
 /** Delay is still a per-task exception, including inside a sibling group.
  * A neutral band names the state and ends in a block of the roadmap's
- * yellow or red carrying a clock (tokens.css, deviation #312). The Team sync
- * page draws the same banner on its rows. */
+ * yellow or red carrying a clock (tokens.css, deviation #312), the band's
+ * ::after (styles/glyphs.css), so a card's banner is one element. The Team
+ * sync page draws the same banner on its rows. */
 function DelayBanner({ it, id }: { it: IssueVM; id?: string }) {
   if (!P.delayColor(it)) return null
   const behind = P.delayOf(it)?.status === 'behind'
   return (
     <span
       id={id}
-      className="flex w-full items-stretch justify-between bg-[var(--delay-banner)] text-xs font-extrabold tracking-[.05em] text-text-1"
+      data-delay={behind ? 'behind' : 'late'}
+      className="delay-banner block w-full bg-[var(--delay-banner)] py-1 pr-10 pl-2.5 text-xs font-extrabold tracking-[.05em] text-text-1"
     >
-      <span className="px-2.5 py-1">{behind ? 'Slipping' : 'Delayed'}</span>
-      <span
-        className={`flex w-[30px] shrink-0 items-center justify-center text-white ${behind ? 'bg-[var(--delay-banner-behind-block)]' : 'bg-[var(--delay-banner-late-block)]'}`}
-      >
-        <Icon name="clock8" size={14} strokeWidth={2.4} />
-      </span>
+      {behind ? 'Slipping' : 'Delayed'}
     </span>
   )
 }
@@ -215,6 +212,11 @@ function TaskRow({
   const describedBy = [banner && `${ids}delay`, paused && `${ids}paused`, `${ids}meta`]
     .filter(Boolean)
     .join(' ')
+  const title = clampedTitle(
+    statics,
+    it.title,
+    'line-clamp-4 min-w-0 break-words text-base font-medium leading-[1.35]',
+  )
   return (
     <div
       role="presentation"
@@ -243,7 +245,9 @@ function TaskRow({
         {parentHeader ? (
           <ParentHeading it={it} place={place} statics={statics} />
         ) : (
-          <span className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_28px] items-center gap-x-2 p-2">
+          // a row, not a grid: a grid keeps its track sizes per card, which
+          // a Board of thousands of cards holds megabytes of
+          <span className="flex w-full min-w-0 items-center gap-x-2 p-2">
             {buttonElement({
               type: 'button',
               variant: 'unstyled',
@@ -251,17 +255,19 @@ function TaskRow({
               'aria-label': it.title,
               'aria-describedby': describedBy,
               className:
-                'min-w-0 cursor-inherit text-left font-normal outline-none focus-visible:ring-2 focus-visible:ring-primary',
+                'min-w-0 flex-1 cursor-inherit text-left font-normal outline-none focus-visible:ring-2 focus-visible:ring-primary',
               children: (
                 <>
-                  <span className="flex min-w-0 items-start gap-2">
-                    {paused && <PausedGlyph id={`${ids}paused`} />}
-                    {clampedTitle(
-                      statics,
-                      it.title,
-                      'line-clamp-4 min-w-0 break-words text-base font-medium leading-[1.35]',
-                    )}
-                  </span>
+                  {/* the paused mark sits before the title, in a row of
+                     their own; a title alone needs no row */}
+                  {paused ? (
+                    <span className="flex min-w-0 items-start gap-2">
+                      <PausedGlyph id={`${ids}paused`} />
+                      {title}
+                    </span>
+                  ) : (
+                    title
+                  )}
                   <span
                     id={`${ids}meta`}
                     className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-3"

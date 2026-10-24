@@ -127,3 +127,109 @@ describe('application stylesheets', () => {
     expect(resolves('../assets/fonts/missing.woff2', TOKENS)).toBe(false)
   })
 })
+
+/* app.html fixes the document's base URL at the site root with a <base>, so
+ * a route change costs no walk over the page's elements. A relative URL in
+ * the application resolves against `/` then, not against the route it is
+ * on: `#part` or `?tab=x` would leave for the website. So the application
+ * writes every URL it links, loads or navigates to whole. */
+const APP_SOURCE = new URL('../src/', import.meta.url)
+const WHOLE = /^(?:\/|[a-z][a-z0-9+.-]*:)/i
+/* A URL written out: a quoted string or a template literal, alone or the
+ * first part of a `+`. Only the text before a template's first `${` is
+ * checked, and a URL that starts with an interpolation or is a variable is
+ * not: a scan of the source text cannot know what those hold. */
+const LITERAL = String.raw`(?:'([^']*)'|"([^"]*)"|\`([^\`$]*)(\$\{)?[^\`]*\`)`
+const WRITTEN = String.raw`(?:"([^"]*)"|'([^']*)'|\{\s*${LITERAL})`
+const URL_PLACES = [
+  // a JSX attribute that holds a URL
+  new RegExp(String.raw`\b(?:href|src|action|formAction|poster)=${WRITTEN}`, 'g'),
+  // the URL of a history entry, after the state and the unused title
+  new RegExp(
+    String.raw`\b(?:pushState|replaceState)\([^()]*?,\s*(?:''|""|\`\`)\s*,\s*${LITERAL}`,
+    'g',
+  ),
+  // a navigation or a request
+  new RegExp(
+    String.raw`\b(?:location\.(?:assign|replace)|window\.open|fetch|sendBeacon)\(\s*${LITERAL}`,
+    'g',
+  ),
+  new RegExp(String.raw`\blocation\.href\s*=\s*${LITERAL}`, 'g'),
+]
+
+/** The URLs written out in `source` that the base would resolve against the
+    site root rather than against the route. */
+function relativeUrls(source) {
+  const found = []
+  for (const place of URL_PLACES)
+    for (const match of source.matchAll(place)) {
+      const at = match.slice(1).findIndex((group) => group !== undefined)
+      const url = match[at + 1]
+      // an empty template literal before an interpolation is not checked
+      if (url === '' && match[at + 2] !== undefined) continue
+      if (url !== undefined && !WHOLE.test(url)) found.push(url)
+    }
+  return found
+}
+
+describe('URLs under the base', () => {
+  it('app.html sets the base at the site root before anything it loads', () => {
+    const html = page('app.html')
+    const base = html.search(/<base href="\/" \/>/)
+    expect(base).toBeGreaterThan(0)
+    expect(html.match(/<base\b/g)).toHaveLength(1)
+    for (const loads of [/<link\b/, /<script\b/]) expect(base).toBeLessThan(html.search(loads))
+  })
+
+  it('finds a relative URL the base would move, and passes whole ones', () => {
+    for (const source of [
+      '<a href="#details">',
+      "<a href='settings'>",
+      '<img src={"avatar.png"} />',
+      "history.pushState(null, '', '?view=board')",
+      "history.pushState({ ...history.state, layer: id }, '', '#layer')",
+      'history.replaceState(history.state, "", "")',
+      'window.open(`help`)',
+      "location.assign('../app')",
+      'location.href = "#top"',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: source text the scan reads
+      '<a href={`#${section}`}>',
+      "<a href={'#' + id}>",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: source text the scan reads
+      "history.pushState(null, '', `?tab=${tab}`)",
+      "fetch('api/tasks')",
+      "navigator.sendBeacon('log', body)",
+    ])
+      expect(relativeUrls(source), source).toHaveLength(1)
+    for (const source of [
+      '<a href="/app/acme/board">',
+      '<a href={WORKSPACE_SIGNUP_URL}>',
+      '<img src={url} />',
+      "<a href='https://qivo.io/docs'>",
+      '<a href="mailto:help@qivo.io">',
+      "history.pushState({ qivoPrevious: location.pathname }, '', buildPath(was))",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: source text the scan reads
+      "history.replaceState(null, '', `/app/${slug}/board/all`)",
+      "history.pushState({ ...history.state, qivoLayer: id }, '', location.href)",
+      "window.open(href, '_blank', 'noopener')",
+      "location.replace('qivo://auth')",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: source text the scan reads
+      '<a href={`/app/${slug}#${part}`}>',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: source text the scan reads
+      '<a href={`${origin}/app`}>',
+      "<a href={'/app/' + slug}>",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: source text the scan reads
+      'fetch(`/version.json?t=${Date.now()}`)',
+    ])
+      expect(relativeUrls(source), source).toEqual([])
+  })
+
+  it('the application writes no relative URL', () => {
+    const files = readdirSync(APP_SOURCE, { recursive: true }).filter(
+      (path) => /\.(?:ts|tsx)$/.test(path) && !/\.test\.(?:ts|tsx)$/.test(path),
+    )
+    expect(files.length).toBeGreaterThan(100)
+    for (const path of files)
+      expect(relativeUrls(readFileSync(new URL(path, APP_SOURCE), 'utf8')), path).toEqual([])
+  })
+})

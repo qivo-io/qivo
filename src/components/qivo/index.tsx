@@ -42,7 +42,14 @@ import { useMenuBackLayer } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
 import { useViewHidden } from '@/lib/viewHidden'
 import { P } from '../../store/planner'
-import { type AvatarSize, avatar, POPOVER_CLOSED, priorityIcon, projectName } from '../rowElements'
+import {
+  type AvatarSize,
+  avatar,
+  glyph,
+  POPOVER_CLOSED,
+  priorityIcon,
+  projectName,
+} from '../rowElements'
 import { Icon } from './icon'
 
 /* The one paused mark: the amber pause glyph, named for readers and drives
@@ -68,7 +75,7 @@ function PausedMark({
       aria-label="Paused"
       className={cn('inline-flex shrink-0', className)}
     >
-      <Icon name="pause" size={size} color="var(--warn)" strokeWidth={2} />
+      {glyph('pause', size, 'var(--warn)')}
     </span>
   )
 }

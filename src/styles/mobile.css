@@ -99,7 +99,10 @@
     grid-row: 2;
     min-height: 0;
   }
-  .planner-shell > main {
+  /* more specific than workspace.css's rule that puts a phone shell's
+     main in row 4, under the bottom navigation, so this one holds
+     whichever of the two stylesheets the page loads last */
+  .planner-shell.workspace-shell > main {
     grid-column: 1;
     grid-row: 3;
   }
