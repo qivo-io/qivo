@@ -590,8 +590,9 @@ async function seedUsage(ctx: MutationCtx, org: Doc<'organizations'>, now: strin
         q.eq('org_id', org.id).eq('month', month).eq('metric', 'mail_invitations'),
       )
       .unique()
-    if (row) await ctx.db.patch(row._id, { count })
-    else
+    if (row && count === 0) await ctx.db.delete(row._id)
+    else if (row) await ctx.db.patch(row._id, { count })
+    else if (count > 0)
       await ctx.db.insert('usage_counts', {
         org_id: org.id,
         month,
