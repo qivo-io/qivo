@@ -174,6 +174,17 @@ export const DEMO_FILE_BYTES = 5 * MIB
  * (lib/oauthRegistration.ts); a sign-up or sign-in takes under 1 KiB. */
 export const AUTH_BODY_MAX_BYTES = 64 * 1024
 
+/** The most values (every object, array and scalar, at any depth) a sign-in
+ * request's body or query may hold for Better Auth to check every one and
+ * list every problem (lib/authValidation.ts). A sign-in, sign-up or OAuth
+ * client registration holds under 100. Over this, the check stops at the
+ * first problems. */
+export const AUTH_FULL_CHECK_VALUES = 1_000
+
+/** The longest message, in characters, a sign-in request's validation error
+ * answers with (lib/authValidation.ts). */
+export const AUTH_VALIDATION_MESSAGE_MAX = 2_048
+
 export const LIMITS = {
   title: text('Task title', 255, 'a task title'),
   description: text(

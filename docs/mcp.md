@@ -486,6 +486,14 @@ text a client encoded as Latin-1 or Windows-1252, is answered with HTTP
 error: the request body is not UTF-8"}, "id": null}` before any tool runs,
 so it cannot store garbled text. Such a request still counts as a call.
 
+A request's `id` must be a string, a number or `null`. Any other `id`, such
+as an array or an object, is answered with HTTP `400` and `{"jsonrpc": "2.0",
+"error": {"code": -32600, "message": "Bad Request: the request body is not a
+valid JSON-RPC message"}, "id": null}`. An error that repeats what the
+request sent, such as an unknown tool name, a method or a protocol version,
+shows at most 100 characters of it and ends a longer one with `…`. It names
+an array or object by its kind, such as `Tool [object Array] not found`.
+
 When enabled organization billing has expired or needs payment, writing tools
 return a readable billing refusal while reading keeps its normal access rules.
 The same happens while an organization is read-only before its deletion, and
@@ -704,6 +712,16 @@ end hands it on gets no answer (see
 [Request limits and billing](#request-limits-and-billing)). Treat those like
 a network error. Send the request again with a shorter body or over a better
 connection.
+
+A registration whose metadata has the wrong form, such as a number in
+`redirect_uris`, is answered with HTTP `400` and `{"message":
+"[body.redirect_uris.0] Invalid input: expected string, received number",
+"code": "VALIDATION_ERROR"}`. The message names each problem with its place
+in the body, separated by `; `. It holds at most 2,048 characters and then
+ends with `; and 40 more problems`, counting the ones it left out. A body that
+holds more than 1,000 values, counting every object, array and value in it,
+is checked only until its first problems, so its message may name only the
+first. Fix what it names and register again.
 
 Each approval has an immutable user, profile, organization, client and
 resource binding. Revocation, inactive or removed membership, and the
@@ -1135,7 +1153,9 @@ An argument the schema does not know is refused, and the call changes
 nothing. For example, `set_project_access` with a misspelled `on_held_task`
 answers `Input validation error: Invalid arguments for tool
 set_project_access: Unrecognized key: "on_held_task"`, and several unknown
-arguments read `Unrecognized keys: "a", "b"`. `arguments` must be a JSON
+arguments read `Unrecognized keys: "a", "b"`. The list names at most 10
+arguments, each cut to 100 characters, and ends with `and 5 more` when there
+were more. `arguments` must be a JSON
 object, or absent or `null` for none. Any other value is refused, for
 example `Invalid input: expected object, received string`. Only the
 tools that take no arguments, `get_me`, `list_teams`, `list_users` and

@@ -109,6 +109,12 @@ behaviors after the upgrade.
   and concurrent refresh preserve access control and independent grants.
 - App and admin sessions remain separate. Browser login can continue to
   consent, while public machine-endpoint CORS does not grant cookie access.
+- A validation error stays short (`convex/tests/authValidation.test.ts`).
+  `convex/lib/authValidation.ts` relies on Better Call joining one
+  `[body.path] message` per problem with `; `, and on zod's `abortEarly`
+  parse option and settable `~standard` property, and on the router checking
+  with the schemas `auth.api` holds, all but `/sign-in/email`'s. The test
+  checks each of these.
 
 After local checks pass, verify the exact candidate on isolated staging with
 private fixture accounts. Cover browser sign-in, consent approval and

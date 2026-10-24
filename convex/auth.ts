@@ -18,6 +18,7 @@ import {
   USER_PROFILE_FIELDS,
 } from './lib/authData'
 import { type AuthMailState, authMailPlugin, RESEND, recordAuthMail } from './lib/authMail'
+import { stopValidationEarly } from './lib/authValidation'
 import {
   clampDemoSession,
   DEMO_TTL_MS,
@@ -364,7 +365,10 @@ export const createAuthOptions = (
   } satisfies BetterAuthOptions
 }
 
-export const createAuth = (ctx: GenericCtx<DataModel>) => betterAuth(createAuthOptions(ctx))
+/* Every instance that serves auth checks a large request only until its
+ * first problems (lib/authValidation.ts). */
+export const createAuth = (ctx: GenericCtx<DataModel>) =>
+  stopValidationEarly(betterAuth(createAuthOptions(ctx)))
 
 /* Operator recovery-link capture (adminAuth.ts): a SECOND Better Auth
  * instance over the same options whose sendResetPassword writes the minted
@@ -376,4 +380,4 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => betterAuth(createAuthO
  * no login never invokes the callback (anti-enumeration), so a still-null ref
  * means user-not-found. */
 export const createCaptureAuth = (ctx: GenericCtx<DataModel>, captured: { url: string | null }) =>
-  betterAuth(createAuthOptions(ctx, { recovery: captured }))
+  stopValidationEarly(betterAuth(createAuthOptions(ctx, { recovery: captured })))

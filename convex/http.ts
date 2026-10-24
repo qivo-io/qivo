@@ -5,6 +5,7 @@ import { internal } from './_generated/api'
 import { appOrigins, authComponent, createAuth } from './auth'
 import { registerBilling } from './billingHttp'
 import { registerDemoReporting } from './demoReportingHttp'
+import { boundValidationAnswer } from './lib/authValidation'
 import { isDemoDeployment } from './lib/demo'
 import { demoVisitorPlatform } from './lib/demoVisitor'
 import { FILE_TOKEN_TTL_SECONDS, type FileTokenKind, verifyFileToken } from './lib/fileTokens'
@@ -161,14 +162,15 @@ const createHttpAuth: typeof createAuth = (ctx) => {
  * rest of the request body before its answer goes out, as answerAfterBody
  * does for every other route. The component's CORS preflight and its
  * /.well-known/openid-configuration redirect never reach it
- * (lib/requestBody.ts). */
+ * (lib/requestBody.ts). A validation error's message is cut to a bounded
+ * length (lib/authValidation.ts). */
 const createHttpAuthAfterBody: typeof createAuth = (ctx) => {
   const auth = createHttpAuth(ctx)
   return {
     ...auth,
     handler: async (request: Request) => {
       try {
-        return await auth.handler(request)
+        return await boundValidationAnswer(await auth.handler(request))
       } finally {
         await discardBody(request).catch(() => {})
       }
@@ -246,7 +248,9 @@ const oauthMachine = answerAfterBody(async (ctx, request) => {
     const headers = new Headers(read.headers)
     headers.delete('Cookie')
     headers.delete('Better-Auth-Cookie')
-    response = await createAuth(ctx).handler(new Request(read, { headers }))
+    response = await boundValidationAnswer(
+      await createAuth(ctx).handler(new Request(read, { headers })),
+    )
   }
   const responseHeaders = new Headers(response.headers)
   responseHeaders.delete('Set-Cookie')
