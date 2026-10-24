@@ -24,7 +24,8 @@
  * with the tasks a moving project left under its stored project. Running
  * before the tasks phase, as the public demo's cleanup runs it, leaves the
  * later phases only live rows that nothing in Deleted items still names.
- * Bytes go with their row unless another row still names them.
+ * A file is let go with its row unless another row still names it, and is
+ * held for a restore before it is erased (model/fileHolds.ts).
  *
  * Left alone, as deleteOrgDeep leaves them: Better Auth logins (a login may
  * hold seats elsewhere), per-login appearance and roadmap history, pending
@@ -42,43 +43,45 @@ import { require, rule } from '../lib/functions'
 import { budgetSpent, REMOVAL_BUDGET, type RemovalBudget, sweep } from './cascade'
 import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
+import { releaseFile } from './fileHolds'
 import { deleteOrgBookkeeping, tallyRow } from './orgs'
 
 type Row = { _id: Id<TableNames> }
 
+/** What runs on each row of a range: `before` ahead of its delete, `after`
+ * once it is deleted, such as letting go of the file it named. */
+type Hooks<R> = { before?: (row: R) => Promise<void>; after?: (row: R) => Promise<void> }
+
 /** Deletes the rows of `rows`, one index range read in one pass, until it
- * ends (true) or the budget is spent (false), running `before` on each row
- * first. */
+ * ends (true) or the budget is spent (false), running `hooks` on each row. */
 const drain = <R extends Row>(
   ctx: MutationCtx,
   budget: RemovalBudget,
   rows: AsyncIterable<R>,
-  options: { before?: (row: R) => Promise<void> } = {},
+  hooks: Hooks<R> = {},
 ) =>
   sweep(budget, rows, async (row) => {
-    if (options.before) await options.before(row)
+    if (hooks.before) await hooks.before(row)
     await ctx.db.delete(row._id)
+    if (hooks.after) await hooks.after(row)
   })
 
-/** Deletes a stored file if it still exists. */
-async function removeFile(ctx: MutationCtx, id: Id<'_storage'> | undefined) {
-  if (id !== undefined && (await ctx.db.system.get(id))) await ctx.storage.delete(id)
-}
-
 /** Deletes the parent rows of `rows`, one index range read in one pass,
- * each after `children` reports its own ranges empty. */
+ * each after `children` reports its own ranges empty, running `hooks` on
+ * each. */
 async function parents<R extends Row>(
   ctx: MutationCtx,
   budget: RemovalBudget,
   rows: AsyncIterable<R>,
   children: (row: R) => Promise<boolean>,
-  before?: (row: R) => Promise<void>,
+  hooks: Hooks<R> = {},
 ): Promise<boolean> {
   if (budgetSpent(budget)) return false
   for await (const row of rows) {
     if (!(await children(row))) return false
-    if (before) await before(row)
+    if (hooks.before) await hooks.before(row)
     await ctx.db.delete(row._id)
+    if (hooks.after) await hooks.after(row)
     budget.rows -= 1
     budget.bytes -= estimateDocumentBytes(row)
     if (budgetSpent(budget)) return false
@@ -210,9 +213,11 @@ const profilesWithRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget
               .withIndex('by_key', (q) => q.eq('key', `profile:${profile.id}`)),
           ),
       ]),
-    async (profile) => {
-      budget.rows -= await markHomeProfileRemoved(ctx, profile, asked)
-      await removeFile(ctx, profile.avatar_storage_id)
+    {
+      before: async (profile) => {
+        budget.rows -= await markHomeProfileRemoved(ctx, profile, asked)
+      },
+      after: (profile) => releaseFile(ctx, profile.avatar_storage_id),
     },
   )
 }
@@ -283,10 +288,10 @@ const taskRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
             ctx.db
               .query('issue_attachments')
               .withIndex('by_issue', (q) => q.eq('issue_id', issue.id)),
-            { before: (row) => removeFile(ctx, row.storage_id) },
+            { after: (row) => releaseFile(ctx, row.storage_id) },
           ),
       ]),
-    (issue) => tallyRow(ctx, 'issues', issue, null),
+    { before: (issue) => tallyRow(ctx, 'issues', issue, null) },
   )
 
 /** Projects with their milestones and access grants. */
@@ -322,7 +327,7 @@ const projectRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
               .withIndex('by_project', (q) => q.eq('project_id', project.id)),
           ),
       ]),
-    (project) => tallyRow(ctx, 'projects', project, null),
+    { before: (project) => tallyRow(ctx, 'projects', project, null) },
   )
 
 /** Teams with their members and project grants. */

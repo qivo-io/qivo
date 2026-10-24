@@ -10,6 +10,7 @@ import { STALLED_MS, SWEEP_PAGES } from '../orgRemovals'
 import {
   as,
   expectRefusal,
+  fileState,
   newT,
   plantIssue,
   type T,
@@ -639,7 +640,7 @@ describe('deleting the organization', () => {
           .unique(),
       ),
     ).toBeNull()
-    expect(await t.run((ctx) => ctx.db.system.get(storage))).toBeNull()
+    expect(await fileState(t, storage)).toBe('held')
     expect(await orgRows(t, f.otherOrg.id)).toEqual(others)
     await assertNoDanglingRefs(t, 'organization deletion')
   })

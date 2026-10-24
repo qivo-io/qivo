@@ -15,6 +15,7 @@ import { WRITE_CONFLICT_RETRY_AFTER } from '../machine/shared'
 import {
   as,
   expectRefusal,
+  fileState,
   newT,
   plantIssue,
   plantSeat,
@@ -196,6 +197,9 @@ const settings = (caller: Caller) => caller.query(api.appearance.get, {})
 const customRows = (t: T) => t.run((ctx) => ctx.db.query('custom_backgrounds').collect())
 const storedRows = (t: T) => t.run((ctx) => ctx.db.system.query('_storage').collect())
 const exists = (t: T, sid: Id<'_storage'>) => t.run(async (ctx) => !!(await ctx.storage.get(sid)))
+/** fileState of every stored file, in storage order. */
+const fileStates = async (t: T) =>
+  Promise.all((await storedRows(t)).map((file) => fileState(t, file._id)))
 async function upload(
   t: T,
   caller: Caller,
@@ -593,14 +597,14 @@ describe('private custom background uploads', () => {
     const oldFile = (await customRows(t)).find((row) => row.id === initial.image.id)!.storage_id
     const replacement = await upload(t, owner.caller, jpeg(1920, 1080, 1))
     expect(replacement.image.id).not.toBe(initial.image.id)
-    expect(await exists(t, oldFile)).toBe(false)
+    expect(await fileState(t, oldFile)).toBe('held')
     expect(await customRows(t)).toHaveLength(2)
     await owner.caller.mutation(api.appearance.save, { mode: 'light', image_source: 'custom' })
     await owner.caller.mutation(api.appearance.removeCustom, {})
     expect(await settings(owner.caller)).toEqual({ ...DEFAULT, mode: 'light' })
     expect(await settings(other.caller)).toMatchObject({ custom_image: another.image })
     expect(await customRows(t)).toHaveLength(1)
-    expect(await storedRows(t)).toHaveLength(1)
+    expect((await fileStates(t)).sort()).toEqual(['held', 'held', 'kept'])
     await noLibraryChanges(t)
   })
 
@@ -745,7 +749,7 @@ describe('private custom background uploads', () => {
     expect(JSON.parse(await response.text())).toMatchObject({ error: { code: 'conflict' } })
     expect(await settings(owner.caller)).toEqual(DEFAULT)
     expect(await customRows(t)).toEqual([])
-    expect(await storedRows(t)).toEqual([])
+    expect(await fileStates(t)).toEqual(['held'])
   })
 
   it('fences custom bytes from attachment, avatar and operator library adoption', async () => {
@@ -903,7 +907,7 @@ describe('private custom background gateway', () => {
         await (response as Response & { arrayBuffer(): Promise<ArrayBuffer> }).arrayBuffer(),
       ),
     ).toEqual(bytes)
-    expect(await exists(t, legacy.preview)).toBe(false)
+    expect(await fileState(t, legacy.preview)).toBe('held')
     expect(await exists(t, legacy.original)).toBe(true)
     for (const storageId of [legacy.original, legacy.preview, replacement])
       expect(JSON.stringify({ current, after })).not.toContain(storageId)
@@ -933,8 +937,8 @@ describe('private custom background gateway', () => {
         })
       expect((await getRequest(t, urls!.preview_url!)).status).toBe(404)
       if (operation === 'delete') await reap(t)
-      expect(await exists(t, files.preview)).toBe(operation === 'ban')
-      expect(await exists(t, files.original)).toBe(operation === 'ban')
+      expect(await fileState(t, files.preview)).toBe(operation === 'ban' ? 'kept' : 'held')
+      expect(await fileState(t, files.original)).toBe(operation === 'ban' ? 'kept' : 'held')
     },
   )
 
@@ -1026,7 +1030,7 @@ describe('private custom background gateway', () => {
     expect(await t.run((ctx) => ctx.db.query('account_appearance').collect())).toHaveLength(1)
     expect(await t.run((ctx) => ctx.db.query('background_uploads').collect())).toEqual([])
     expect(await customRows(t)).toHaveLength(1)
-    expect(await storedRows(t)).toHaveLength(1)
+    expect((await fileStates(t)).sort()).toEqual(['held', 'kept'])
     expect(await settings(other.caller)).toMatchObject({ custom_image: otherImage.image })
     await noLibraryChanges(t)
   })

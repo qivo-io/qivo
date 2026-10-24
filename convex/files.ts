@@ -78,6 +78,7 @@ import {
   reserveDemoUpload,
 } from './model/demoUploads'
 import { reapDroppedImage as reapDropped } from './model/descriptionImages'
+import { type EraseCounts, eraseDueFiles, eraseFile, releaseFile } from './model/fileHolds'
 import { assertProfileExpected } from './model/people'
 
 /* The byte-reference fence and the attach result live in the shared
@@ -174,8 +175,8 @@ export const attach = orgMutation({
 
 /* ------------------------------------------------------- removeAttachment
  * ia_delete (LAST 0018:38-40): any project member may delete ANY attachment
- * on the issue, not only their own. Row + bytes die in one transaction
- * (success path, no rollback concern), through model/attachments.ts
+ * on the issue, not only their own. The row goes and its file is held for a
+ * restore (model/fileHolds.ts), through model/attachments.ts
  * removeAttachmentCore, which REST and MCP run too. */
 export const removeAttachment = orgMutation({
   args: { id: v.string() },
@@ -239,9 +240,9 @@ export const setAvatar = authedMutation({
     if (await storageIdInUse(ctx, storage_id)) throw badRequest('this file is already in use')
     const prev = target.avatar_storage_id
     await ctx.db.patch(target._id, { avatar_storage_id: storage_id })
-    // row-swap and old-byte delete commit atomically — the old bytes-first/
-    // rows-first ceremony (bc022c2 planner:3402-3440) collapses here
-    if (prev !== undefined) await ctx.storage.delete(prev)
+    // row-swap and the old picture's release commit atomically — the old
+    // bytes-first/rows-first ceremony (bc022c2 planner:3402-3440) collapses here
+    await releaseFile(ctx, prev)
     return null
   },
 })
@@ -259,7 +260,7 @@ export const clearAvatar = authedMutation({
     const prev = target.avatar_storage_id
     if (prev === undefined) return null
     await ctx.db.patch(target._id, { avatar_storage_id: undefined })
-    await ctx.storage.delete(prev)
+    await releaseFile(ctx, prev)
     return null
   },
 })
@@ -381,8 +382,12 @@ export const gatewayAvatar = internalQuery({
  * longer exists. The references are issue_attachments.storage_id, the
  * attachments held in Deleted items (deleted_rows.storage_id),
  * profiles.avatar_storage_id and the panorama_images and custom_backgrounds
- * originals and previews (model/attachments.ts storageIdInUse). Component
- * storage (Better Auth) is isolated from this _storage table.
+ * originals and previews (model/attachments.ts storageIdInUse). A deleted
+ * file counts as in use while it is held (model/fileHolds.ts), so the sweep
+ * leaves it to eraseHeldFiles. A restore rewinds file_holds with every other
+ * table, so a file uploaded after the restored backup is named by nothing
+ * and this sweep erases it. Component storage (Better Auth) is isolated from
+ * this _storage table.
  *
  * The weekly cron (crons.ts) starts a run with empty arguments, and so does
  * a manual run, which returns when the first leg ends. Name the deployment
@@ -415,9 +420,9 @@ export const gatewayAvatar = internalQuery({
  * signal. */
 
 /** The most rows one reapOrphans leg handles in each phase. A stored file
- * older than the floor costs storageIdInUse's index ranges, seven with the
- * Deleted items check, so a files leg reads about 1,800 of Convex's 4,096
- * and has room for more references. A tickets leg reads two ranges and
+ * older than the floor costs storageIdInUse's index ranges, eight with the
+ * Deleted items check and the hold, so a files leg reads about 2,050 of
+ * Convex's 4,096 and has room for more references. A tickets leg reads two ranges and
  * deletes at most two pages. An account costs a Better Auth lookup and, for
  * a removed login, its cleanup. Tests lower these. */
 export const REAP_PAGES = { tickets: 1000, accounts: 64, files: 256 }
@@ -496,7 +501,7 @@ export const reapOrphans = internalMutation({
           counts.kept += 1
           continue
         }
-        await ctx.storage.delete(file._id)
+        await eraseFile(ctx, file._id)
         counts.deleted += 1
       }
       if (!page.isDone) next = { phase: 'files', cursor: page.continueCursor }
@@ -511,6 +516,37 @@ export const reapOrphans = internalMutation({
       action: 'reap_orphans',
       detail: counts,
     })
+    return null
+  },
+})
+
+/* ---------------------------------------------------------- eraseHeldFiles
+ * Erases the deleted files whose hold has ended (model/fileHolds.ts). The
+ * hourly cron (crons.ts) starts a run with empty arguments. Each leg handles
+ * one ERASE_PAGE of the holds due at the run's start and schedules the next
+ * leg while due holds are left, so a run reads only due holds. A file a row
+ * names again, as after a restore, loses its hold and stays. The last leg
+ * logs its counts when it handled any hold. `now` lets a test or a manual
+ * check move the clock; the cron never passes it. */
+
+const eraseArgs = {
+  now: v.optional(v.number()), // the run's start, epoch milliseconds
+  counts: v.optional(v.object({ erased: v.number(), kept: v.number() })),
+}
+
+const eraseLegRef = makeFunctionReference<'mutation', ObjectType<typeof eraseArgs>, null>(
+  'files:eraseHeldFiles',
+)
+
+/* One leg of the eraser (header above). Empty arguments start a run. */
+export const eraseHeldFiles = internalMutation({
+  args: eraseArgs,
+  handler: async (ctx, a): Promise<null> => {
+    const now = a.now ?? Date.now()
+    const counts: EraseCounts = a.counts ?? { erased: 0, kept: 0 }
+    if (await eraseDueFiles(ctx, now, counts)) {
+      await ctx.scheduler.runAfter(0, eraseLegRef, { now, counts })
+    } else if (counts.erased + counts.kept > 0) console.log('erased held files', counts)
     return null
   },
 })

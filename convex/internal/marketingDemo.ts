@@ -25,6 +25,7 @@ import {
   type SampleAvatar,
   writeNorthstarStep,
 } from '../model/demoSeed'
+import { releaseFile, storageIdInUse } from '../model/fileHolds'
 import { wipeWorkStep } from '../model/orgDeletion'
 import { assertSlugAvailable, insertOrgRows, newOrgDefaults, setCounters } from '../model/orgs'
 import {
@@ -810,23 +811,11 @@ export const adoptAvatar = internalMutation({
       meta.size <= LIMITS.avatarSize.max * MIB, badRequest(
       `marketing demo: avatar must be an image of at most ${LIMITS.avatarSize.max} MiB`,
     ))
-    const other = await ctx.db
-      .query('profiles')
-      .withIndex('by_avatar', (q) => q.eq('avatar_storage_id', args.storage_id))
-      .first()
-    const attachment = await ctx.db
-      .query('issue_attachments')
-      .withIndex('by_storage', (q) => q.eq('storage_id', args.storage_id))
-      .first()
-    const trashed = await ctx.db
-      .query('deleted_rows')
-      .withIndex('by_storage', (q) => q.eq('storage_id', args.storage_id))
-      .first()
-    require(other === null && attachment === null && trashed === null, badRequest(
+    require(!(await storageIdInUse(ctx, args.storage_id)), badRequest(
       'marketing demo: avatar bytes already belong to another record',
     ))
     await ctx.db.patch(profile._id, { avatar_storage_id: args.storage_id })
-    if (profile.avatar_storage_id !== undefined) await ctx.storage.delete(profile.avatar_storage_id)
+    await releaseFile(ctx, profile.avatar_storage_id)
     return null
   },
 })

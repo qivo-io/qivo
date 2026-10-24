@@ -55,60 +55,13 @@ import { badRequest, conflict, notFound, rule } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
 import { attachmentTooLarge, LIMITS, MIB } from '../lib/limits'
 import { logActivity, signedDetail } from './activity'
+import { eraseFile, releaseFile, storageIdInUse } from './fileHolds'
 import { assertCanEdit } from './issues'
 import { attachmentLimitMb, newUuid } from './orgs'
 
-/* The cross-tenant byte-destruction fence (0089 §3's vector, reborn as
- * storage ids): a storage id referenced by ANY attachment row, live or held
- * in Deleted items, or ANY profile's avatar, curated background, or private
- * custom background must never gain a second referent, because the second
- * row's delete would destroy the first row's bytes. The same answer keeps
- * files.ts reapOrphans and the demo sweepers away from trashed bytes. The
- * trash is checked after the live attachments, so a file a live attachment
- * names still costs one read. */
-export async function storageIdInUse(ctx: QueryCtx, storageId: Id<'_storage'>): Promise<boolean> {
-  const att = await ctx.db
-    .query('issue_attachments')
-    .withIndex('by_storage', (q) => q.eq('storage_id', storageId))
-    .first()
-  if (att !== null) return true
-  const trashed = await ctx.db
-    .query('deleted_rows')
-    .withIndex('by_storage', (q) => q.eq('storage_id', storageId))
-    .first()
-  if (trashed !== null) return true
-  const prof = await ctx.db
-    .query('profiles')
-    .withIndex('by_avatar', (q) => q.eq('avatar_storage_id', storageId))
-    .first()
-  if (prof !== null) return true
-  const panorama =
-    (await ctx.db
-      .query('panorama_images')
-      .withIndex('by_storage', (q) => q.eq('storage_id', storageId))
-      .first()) !== null
-  if (panorama) return true
-  if (
-    await ctx.db
-      .query('panorama_images')
-      .withIndex('by_preview_storage', (q) => q.eq('preview_storage_id', storageId))
-      .first()
-  )
-    return true
-  if (
-    await ctx.db
-      .query('custom_backgrounds')
-      .withIndex('by_preview_storage', (q) => q.eq('preview_storage_id', storageId))
-      .first()
-  )
-    return true
-  return (
-    (await ctx.db
-      .query('custom_backgrounds')
-      .withIndex('by_storage', (q) => q.eq('storage_id', storageId))
-      .first()) !== null
-  )
-}
+/* The byte fence and the file holds live in model/fileHolds.ts; other
+ * modules still import storageIdInUse from here and from files.ts. */
+export { storageIdInUse } from './fileHolds'
 
 /* The issue's owning organization controls all attachments, including inline
  * images and projects without a team (attachmentLimitMb). */
@@ -198,7 +151,8 @@ export async function attachFileCore(
   }
   const cap = await attachmentCapMb(ctx, issue.org_id)
   if (meta.size > cap * MIB) {
-    await ctx.storage.delete(a.storage_id)
+    // no committed row ever named these bytes, so they go at once
+    await eraseFile(ctx, a.storage_id)
     return { refused: { code: 'rule', message: attachmentTooLarge(cap) } }
   }
   const rowId = await insertUnique(
@@ -238,7 +192,8 @@ export async function attachFileCore(
 }
 
 /**
- * Deletes `attachment` of `issue`, row and bytes in one transaction, with
+ * Deletes `attachment` of `issue` and lets go of its file, which is held
+ * for a restore before it is erased (model/fileHolds.ts releaseFile), with
  * the app's activity row ('removed an attachment from', or 'removed an image
  * from' for an inline image), signed with `provenance` for a machine caller.
  * Any member with Edit on the task's project may remove any attachment.
@@ -256,8 +211,8 @@ export async function removeAttachmentCore(
   const { me, attachment, issue } = a
   await assertCanEdit(ctx, me, issue.project_id)
   if (attachment.issue_id !== issue.id) throw notFound('attachment not found')
-  await ctx.storage.delete(attachment.storage_id)
   await ctx.db.delete(attachment._id)
+  await releaseFile(ctx, attachment.storage_id)
   await logActivity(ctx, {
     org_id: issue.org_id,
     actor_id: me.id,
@@ -409,7 +364,7 @@ export async function finishTicketUpload(
     ticket.storage_id !== undefined ||
     inUse
   ) {
-    if (!inUse) await ctx.storage.delete(a.storageId)
+    if (!inUse) await eraseFile(ctx, a.storageId)
     return false
   }
   await ctx.db.patch(ticket._id, { storage_id: a.storageId })
@@ -442,7 +397,7 @@ export async function abandonTicketUpload(
     ticket?.storage_id !== a.storageId &&
     !(await storageIdInUse(ctx, a.storageId))
   ) {
-    await ctx.storage.delete(a.storageId)
+    await eraseFile(ctx, a.storageId)
   }
   if (
     ticket !== null &&

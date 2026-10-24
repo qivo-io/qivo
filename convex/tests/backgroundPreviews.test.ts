@@ -6,6 +6,7 @@ import { imageRow } from '../panoramaImages'
 import {
   as,
   expectRefusal,
+  fileState,
   NOW,
   newT,
   plantIssue,
@@ -284,7 +285,7 @@ describe('preview identity, storage ownership and cleanup', () => {
         preview_version: BACKGROUND_PREVIEW_VERSION,
       })
       expect(await exists(t, image.storage_id)).toBe(true)
-      expect(await exists(t, previous)).toBe(false)
+      expect(await fileState(t, previous)).toBe('held')
       expect(await exists(t, next)).toBe(true)
       expect(await t.query(internal.backgroundPreviews.source, jobArgs(image))).toBe(false)
       expect(await t.mutation(internal.backgroundPreviews.backfill, { kind })).toEqual({

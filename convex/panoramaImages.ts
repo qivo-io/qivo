@@ -18,6 +18,7 @@ import {
 } from './lib/panorama'
 import { calendarWeekForKey } from './lib/panoramaWeeks'
 import { audit } from './model/admin'
+import { eraseFile } from './model/fileHolds'
 
 const stateFor = (ctx: QueryCtx) =>
   ctx.db
@@ -183,10 +184,13 @@ export const remove = platformMutation({
       (row) => row.image_id === id || clearedWeeks.has(calendarWeekForKey(row.day)),
     )
     for (const date of dates) await ctx.db.delete(date._id)
-    if (image.storage_id && (await ctx.db.system.get(image.storage_id)))
-      await ctx.storage.delete(image.storage_id)
-    if (image.preview_storage_id && (await ctx.db.system.get(image.preview_storage_id)))
-      await ctx.storage.delete(image.preview_storage_id)
+    // A removed library image is erased at once, never held
+    // (model/fileHolds.ts). Its storage URLs are permanent and need no sign
+    // in, and removal can be a takedown, so a hold would keep the photo
+    // public for a week. A restore without files then finds the image
+    // unavailable (availableApprovedImage), and the operator imports it again.
+    if (image.storage_id) await eraseFile(ctx, image.storage_id)
+    if (image.preview_storage_id) await eraseFile(ctx, image.preview_storage_id)
     await ctx.db.patch(image._id, {
       status: 'removed',
       storage_id: undefined,
@@ -370,7 +374,6 @@ export const forDate = internalQuery({
 export const discardImport = internalMutation({
   args: { storage_id: v.id('_storage') },
   handler: async (ctx, { storage_id }) => {
-    if ((await ctx.db.system.get(storage_id)) && !(await storageIdInUse(ctx, storage_id)))
-      await ctx.storage.delete(storage_id)
+    if (!(await storageIdInUse(ctx, storage_id))) await eraseFile(ctx, storage_id)
   },
 })

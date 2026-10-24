@@ -21,7 +21,7 @@ import { ConvexError } from 'convex/values'
 import { convexTest, type TestConvex } from 'convex-test'
 import { expect, onTestFinished, TestRunner, vi } from 'vitest'
 import { internal } from '../_generated/api'
-import type { Doc } from '../_generated/dataModel'
+import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import authSchema from '../betterAuth/schema'
 import type { ReapCounts } from '../files'
@@ -262,6 +262,19 @@ function order(a: Json | undefined, b: Json | undefined): number {
   if (a === undefined || a === null || b === undefined || b === null) return 0
   return a < b ? -1 : a > b ? 1 : 0
 }
+
+/** What became of stored file `id`: 'gone' once erased, 'held' while the
+ * hold of its deletion keeps it for a restore (model/fileHolds.ts), else
+ * 'kept'. */
+export const fileState = (t: T, id: Id<'_storage'>): Promise<'gone' | 'held' | 'kept'> =>
+  t.run(async (ctx) => {
+    if ((await ctx.db.system.get(id)) === null) return 'gone'
+    const hold = await ctx.db
+      .query('file_holds')
+      .withIndex('by_storage', (q) => q.eq('storage_id', id))
+      .unique()
+    return hold === null ? 'kept' : 'held'
+  })
 
 /** Runs one orphan sweep (files.reapOrphans) through all of its legs and
  * returns the counts from the one reap_orphans audit row it wrote. Works with

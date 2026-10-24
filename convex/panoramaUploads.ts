@@ -25,6 +25,7 @@ import {
   validatePanoramaDimensions,
 } from './lib/panoramaImage'
 import { audit } from './model/admin'
+import { eraseFile } from './model/fileHolds'
 import { ensureState, imageRow, operatorEmail } from './panoramaImages'
 
 declare const crypto: { randomUUID(): string }
@@ -161,7 +162,8 @@ export const retainFile = internalMutation({
         )
       if (!existing.storage_id || !(await ctx.db.system.get(existing.storage_id)))
         throw rule('the existing image file is no longer available')
-      await ctx.storage.delete(args.storage_id)
+      // the duplicate upload was never named by a row
+      await eraseFile(ctx, args.storage_id)
       await ctx.scheduler.runAfter(0, internal.backgroundPreviewProcessor.generate, {
         kind: 'library',
         id: existing.id,

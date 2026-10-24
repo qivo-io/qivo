@@ -11,6 +11,7 @@ import {
 } from './lib/demo'
 import { forbidden } from './lib/functions'
 import { beginDemoUpload, demoCanRead, demoUploadFor, retainDemoUpload } from './model/demoUploads'
+import { eraseFile } from './model/fileHolds'
 
 /** Only the HTTP auth handler calls this; callers cannot select a window or
  * a limit. Global quotas remain effective with spoofed forwarding headers. */
@@ -81,12 +82,7 @@ export const abandon = internalMutation({
     // A lost response can follow a successful finish. Preserve those bytes
     // for the caller's retry or the demo's scheduled cleanup.
     if (ticket?.state === 'stored') return null
-    if (
-      storage_id &&
-      (await ctx.db.system.get(storage_id)) &&
-      !(await storageIdInUse(ctx, storage_id))
-    )
-      await ctx.storage.delete(storage_id)
+    if (storage_id && !(await storageIdInUse(ctx, storage_id))) await eraseFile(ctx, storage_id)
     if (ticket) await ctx.db.delete(ticket._id)
     return null
   },
@@ -117,8 +113,7 @@ export const sweep = internalMutation({
         if (receipt) await ctx.db.patch(ticket._id, { expires_at: receipt.expires_at })
         continue
       }
-      if (ticket.storage_id && (await ctx.db.system.get(ticket.storage_id)))
-        await ctx.storage.delete(ticket.storage_id)
+      if (ticket.storage_id) await eraseFile(ctx, ticket.storage_id)
       await ctx.db.delete(ticket._id)
     }
     // Storage writes and metadata commits cross an action boundary. A crash
@@ -141,7 +136,7 @@ export const sweep = internalMutation({
         .withIndex('by_storage', (q) => q.eq('storage_id', file._id))
         .unique()
       if (ticket && ticket.expires_at > now) continue
-      await ctx.storage.delete(file._id)
+      await eraseFile(ctx, file._id)
     }
     if (!page.isDone)
       await ctx.scheduler.runAfter(1000, internal.demoUploads.sweep, {

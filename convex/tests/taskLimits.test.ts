@@ -34,6 +34,7 @@ import { INLINE_TRIMS, ITEM_UNREAD_CAP, notifyCommentInsert } from '../model/mes
 import {
   as,
   expectRefusal,
+  fileState,
   messagesFor,
   NOW,
   newT,
@@ -979,7 +980,7 @@ describe('the attachment, link and label limits', () => {
       vi.advanceTimersByTime(DROPPED_KEEP_MS + 1)
       await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
       expect(await attachment(fx, gone)).toBeNull()
-      expect(await fx.t.run((ctx) => ctx.storage.getUrl(bytes!))).toBeNull()
+      expect(await fileState(fx.t, bytes!)).toBe('held')
       expect((await attachment(fx, back))?.dropped_at).toBeUndefined()
     } finally {
       vi.useRealTimers()

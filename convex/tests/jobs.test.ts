@@ -31,6 +31,7 @@ import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
 import { messageRetentionDays } from '../model/people'
 import {
   as,
+  fileState,
   messagesFor,
   NOW,
   newT,
@@ -1553,9 +1554,11 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     vi.setSystemTime(Date.now() + HOUR + 60_000)
     const fresh = await storeBlob(t)
 
-    expect(await reap(t)).toEqual({ deleted: 5, kept: 7, tickets: 6, accounts: 1 })
+    // the removed login's backgrounds are held, so the files phase keeps them
+    expect(await reap(t)).toEqual({ deleted: 5, kept: 9, tickets: 6, accounts: 1 })
 
-    for (const id of [...orphans, ...removed]) expect(await blobExists(t, id)).toBe(false)
+    for (const id of orphans) expect(await blobExists(t, id)).toBe(false)
+    for (const id of removed) expect(await fileState(t, id)).toBe('held')
     for (const id of [attached, avatar, ...library, ...custom, fresh])
       expect(await blobExists(t, id)).toBe(true)
     expect(await ticketCount(t)).toEqual({ background: 1, attachment: 1 })
@@ -1567,9 +1570,9 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     expect(rows[0].actor_email).toBe('system')
     expect(rows[0].actor_auth_id).toBeUndefined()
     // tickets: 3 expired of each kind in pages of 2. accounts: 2 rows in
-    // pages of 1. files: 12 left in pages of 2. The first leg is the call.
+    // pages of 1. files: 14 in pages of 2. The first leg is the call.
     const legs = await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
-    expect(legs.filter((job) => job.name.includes('reapOrphans'))).toHaveLength(2 + 2 + 6 - 1)
+    expect(legs.filter((job) => job.name.includes('reapOrphans'))).toHaveLength(2 + 2 + 7 - 1)
   })
 
   it('keeps a file attached between legs', async () => {

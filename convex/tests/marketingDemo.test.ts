@@ -27,6 +27,7 @@ import {
   countersFor,
   expectLiveCounts,
   expectRefusal,
+  fileState,
   NOW,
   newT,
   plantIssue,
@@ -907,7 +908,7 @@ describe('marketing demo rebuild ownership', () => {
     expect(Date.parse(moved.start_week!) - Date.parse(scheduled.start_week!)).toBe(56 * 86_400_000)
     expect(await t.run(async (ctx) => ctx.db.get(manual._id))).toBeNull()
     expect(await t.run(async (ctx) => ctx.db.get(commentId))).toBeNull()
-    expect(await t.run(async (ctx) => ctx.db.system.get(file))).toBeNull()
+    expect(await fileState(t, file)).toBe('held')
     expect(await t.run(async (ctx) => ctx.db.system.get(avatar))).not.toBeNull()
     expect(
       await t.run(async (ctx) => ({

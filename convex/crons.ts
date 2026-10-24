@@ -9,6 +9,7 @@
 
 import { cronJobs, makeFunctionReference } from 'convex/server'
 import { internal } from './_generated/api'
+import { ERASE_EVERY_MS } from './model/fileHolds'
 
 const crons = cronJobs()
 
@@ -50,6 +51,17 @@ crons.weekly(
   'reap-orphan-files',
   { dayOfWeek: 'sunday', hourUTC: 3, minuteUTC: 0 },
   internal.files.reapOrphans,
+  {},
+)
+
+// Erases deleted files whose 7-day hold has ended. The hold is one interval
+// shorter than 7 days, so every file is erased within 7 days of its deletion
+// (model/fileHolds.ts). The empty arguments start a run; each leg schedules
+// the next (files.ts).
+crons.interval(
+  'erase-held-files',
+  { minutes: ERASE_EVERY_MS / 60_000 },
+  internal.files.eraseHeldFiles,
   {},
 )
 

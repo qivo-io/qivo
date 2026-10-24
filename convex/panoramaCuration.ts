@@ -37,6 +37,7 @@ import { panoramaFilename } from './lib/panoramaFilename'
 import { validatePanoramaFile } from './lib/panoramaImage'
 import { sha256hex } from './machine/auth'
 import { audit } from './model/admin'
+import { eraseFile } from './model/fileHolds'
 import {
   assignmentForWeek,
   ensureState,
@@ -627,7 +628,8 @@ async function retainUnsplashUpload(
       )
     if (!existing.storage_id || !(await ctx.db.system.get(existing.storage_id)))
       throw rule('the existing image file is no longer available')
-    await ctx.storage.delete(storage_id)
+    // the duplicate upload was never named by a row
+    await eraseFile(ctx, storage_id)
     await ctx.scheduler.runAfter(0, internal.backgroundPreviewProcessor.generate, {
       kind: 'library',
       id: existing.id,

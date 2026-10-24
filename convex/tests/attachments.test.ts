@@ -21,6 +21,7 @@ import {
   allMessages,
   as,
   expectRefusal,
+  fileState,
   NOW,
   newT,
   type OrgFixture,
@@ -385,12 +386,12 @@ describe('files.removeAttachment', () => {
     return { t, fx, issue, sid, attId: result.attachment.id }
   }
 
-  it('any project member may delete any attachment (not uploader-only) — row, bytes and verb', async () => {
+  it('any project member may delete any attachment (not uploader-only) — row, held bytes and verb', async () => {
     const { t, fx, sid, attId, issue } = await planted()
     // guest holds 'user' via the meta grant and did NOT upload this file
     await as(t, fx.guest).mutation(api.files.removeAttachment, { org_id: fx.org.id, id: attId })
     expect(await attachmentRows(t)).toEqual([])
-    expect(await storageExists(t, sid)).toBe(false)
+    expect(await fileState(t, sid)).toBe('held')
     const events = await activityFor(t, fx.org.id)
     const last = events[events.length - 1]
     expect(last.verb).toBe('removed an attachment from')
@@ -434,7 +435,7 @@ describe('files.removeAttachment', () => {
 })
 
 describe('files.setAvatar / clearAvatar', () => {
-  it('self sets; a swap deletes the OLD bytes in the same mutation', async () => {
+  it('self sets; a swap holds the OLD bytes in the same mutation', async () => {
     const { t, fx } = await setup()
     const first = await storeBlob(t, 128, 'image/webp')
     await as(t, fx.user).mutation(api.files.setAvatar, {
@@ -448,7 +449,7 @@ describe('files.setAvatar / clearAvatar', () => {
       storage_id: second,
     })
     expect((await profileRow(t, fx.user.id))?.avatar_storage_id).toBe(second)
-    expect(await storageExists(t, first)).toBe(false)
+    expect(await fileState(t, first)).toBe('held')
     expect(await storageExists(t, second)).toBe(true)
   })
 
@@ -534,7 +535,7 @@ describe('files.setAvatar / clearAvatar', () => {
     expect(await storageExists(t, otherFace)).toBe(true)
   })
 
-  it('clearAvatar deletes the bytes; clearing nothing is a no-op; rights match setAvatar', async () => {
+  it('clearAvatar holds the bytes; clearing nothing is a no-op; rights match setAvatar', async () => {
     const { t, fx } = await setup()
     const sid = await giveAvatar(t, fx.user)
     await expectRefusal(
@@ -543,7 +544,7 @@ describe('files.setAvatar / clearAvatar', () => {
     )
     await as(t, fx.user).mutation(api.files.clearAvatar, { profile_id: fx.user.id })
     expect((await profileRow(t, fx.user.id))?.avatar_storage_id).toBeUndefined()
-    expect(await storageExists(t, sid)).toBe(false)
+    expect(await fileState(t, sid)).toBe('held')
     // idempotent second clear
     await as(t, fx.user).mutation(api.files.clearAvatar, { profile_id: fx.user.id })
   })

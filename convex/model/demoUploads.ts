@@ -3,6 +3,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { storageIdInUse } from '../files'
 import { isDemoDeployment, requireActiveDemo } from '../lib/demo'
 import { forbidden, rule } from '../lib/functions'
+import { eraseFile } from './fileHolds'
 
 declare const crypto: { randomUUID(): string }
 
@@ -173,8 +174,7 @@ export async function drainDemoUploads(ctx: MutationCtx, demoId: string): Promis
       waiting = true
       continue
     }
-    if (row.storage_id && (await ctx.db.system.get(row.storage_id)))
-      await ctx.storage.delete(row.storage_id)
+    if (row.storage_id) await eraseFile(ctx, row.storage_id)
     await ctx.db.delete(row._id)
   }
   if (waiting || rows.length >= 32) return false
@@ -213,7 +213,7 @@ export async function drainDemoUploads(ctx: MutationCtx, demoId: string): Promis
       .withIndex('by_storage', (q) => q.eq('storage_id', file._id))
       .unique()
     if (owner) continue
-    await ctx.storage.delete(file._id)
+    await eraseFile(ctx, file._id)
   }
   if (!page.isDone)
     await ctx.db.patch(receipt._id, {

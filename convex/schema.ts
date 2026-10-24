@@ -1010,6 +1010,18 @@ export default defineSchema({
   issue_subscriptions: issueSubscriptionsTable,
   issue_attachments: issueAttachmentsTable,
 
+  // A deleted file waiting to be erased (model/fileHolds.ts). No row names
+  // its file any more; it is kept until `erase_at` so a restore from a
+  // backup without files finds it, then files.ts eraseHeldFiles erases it.
+  // One row per file. `size_bytes` is the file's size when it was let go.
+  file_holds: defineTable({
+    storage_id: v.id('_storage'),
+    size_bytes: v.number(),
+    erase_at: v.number(), // epoch milliseconds
+  })
+    .index('by_storage', ['storage_id'])
+    .index('by_erase_at', ['erase_at']),
+
   // A REST upload in progress (model/attachments.ts). It names the caller
   // that asked for the upload URL, the task it attaches to and when it
   // expires. Only that caller may confirm it, once, for that task, with a

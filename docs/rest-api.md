@@ -2104,7 +2104,10 @@ and the reverse.
 
 `DELETE` needs Edit access to the task's project, as in the app, where
 anyone with Edit may remove any file, not only their own. It deletes the
-file and answers `{ "deleted": true, "id": "…", "name": "wiring.pdf", "key":
+file, which no link serves from then on and whose contents Qivo erases
+within 7 days
+([Deleted items](guide/how-work-is-organized.md#deleted-items)), and
+answers `{ "deleted": true, "id": "…", "name": "wiring.pdf", "key":
 "QN-26" }`, writing a `removed an attachment from` activity row. An id that
 is not a file of that task is a `404` (`attachment not found`). A
 description image (`inline: true`) is a `400` (`this image belongs to the

@@ -19,6 +19,7 @@ import { LIMITS } from '../lib/limits'
 import { hasPendingCheckout } from './billing'
 import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
+import { releaseFile } from './fileHolds'
 import { deleteOrgBookkeeping } from './orgs'
 import { deleteStamp } from './syncStamps'
 import { emitTaskEvent } from './taskEvents'
@@ -272,7 +273,7 @@ const ACTED_ROWS_FIRST_PASS = 500
  *
  * The work is split so that removal stays within one transaction's limits
  * however much work and history the profile holds. This transaction ends
- * access. It deletes the profile row and avatar bytes and the rate-limit
+ * access. It deletes the profile row, lets go of its picture and deletes the rate-limit
  * row, clears the profile from every project it leads (refusing past
  * LIMITS.removalLeads.max), and revokes the OAuth connections as 'deleted', so
  * the person's own list hides them at once. Every session, credential and
@@ -306,9 +307,10 @@ const ACTED_ROWS_FIRST_PASS = 500
  *   (0074:23), user_prefs (0036:11), the Team sync stamp (sync_stamps),
  *   agent_keys by profile (0100:47), mcp_tokens (0030:11).
  *
- * Storage: the avatar bytes die HERE (phase 5 on); phase 7 owns only avatar
- * upload/serving (setAvatar/clearAvatar and their replace-time deletes) and
- * the attachment upload path. Attachment bytes die with their task, in
+ * Storage: the avatar is let go HERE (phase 5 on), and held for a restore
+ * before it is erased (model/fileHolds.ts); phase 7 owns only avatar
+ * upload/serving (setAvatar/clearAvatar and their replace-time releases) and
+ * the attachment upload path. Attachment files go with their task, in
  * Deleted items or deleteOrgDeep, never with a profile. */
 export async function removeProfile(
   ctx: MutationCtx,
@@ -383,9 +385,9 @@ export async function removeProfile(
   const earlier = await pendingRemoval(ctx, profile.id)
   if (earlier) await ctx.db.replace(earlier._id, job)
   else await ctx.db.insert('profile_removals', job)
-  // storage, then the row; ctx.storage.delete is transactional
-  if (profile.avatar_storage_id !== undefined) await ctx.storage.delete(profile.avatar_storage_id)
+  // the row, then its picture, which is held for a restore (model/fileHolds.ts)
   await ctx.db.delete(profile._id)
+  await releaseFile(ctx, profile.avatar_storage_id)
 }
 
 /** The whole organization, every org-scoped row and byte, then the org row,
@@ -509,8 +511,8 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
       .query('issue_attachments')
       .withIndex('by_issue', (q) => q.eq('issue_id', i.id))
       .collect()) {
-      await ctx.storage.delete(a.storage_id)
       await ctx.db.delete(a._id)
+      await releaseFile(ctx, a.storage_id)
     }
     await ctx.db.delete(i._id)
   }
@@ -593,8 +595,8 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
       .collect())
       await ctx.db.delete(m._id)
     await deleteProfileRateLimit(ctx, pr.id)
-    if (pr.avatar_storage_id !== undefined) await ctx.storage.delete(pr.avatar_storage_id)
     await ctx.db.delete(pr._id)
+    await releaseFile(ctx, pr.avatar_storage_id)
   }
   // a Team sync stamp row left without its profile, by a rollback or a
   // manual edit

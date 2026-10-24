@@ -36,6 +36,7 @@ import {
   as,
   chargeFilteredReads,
   expectRefusal,
+  fileState,
   messagesFor,
   NOW,
   newT,
@@ -1188,7 +1189,7 @@ describe('restoring a task item', () => {
     expect(await liveTask(t, root2.id)).not.toBeNull()
     expect(await liveTask(t, lost.id)).toBeNull()
     expect(await storedIssue(t, lost.id)).toBeUndefined()
-    expect(await blobExists(t, lostFile.storage_id)).toBe(false)
+    expect(await fileState(t, lostFile.storage_id)).toBe('held')
     // deleted for good, it has no history left
     expect(await historyOf(t, lost.id)).toEqual([])
     expect((await historyOf(t, root2.id)).map((e) => e.verb)).toEqual(['deleted', 'restored'])
@@ -3644,7 +3645,7 @@ describe('restore calls', () => {
     await t.run(async (ctx) => startPurge(ctx, (await byId(ctx, 'deleted_items', projectItem.id))!))
     await runSteps(t)
     expect(await itemById(t, projectItem.id)).toBeNull()
-    expect(await blobExists(t, file.storage_id)).toBe(false)
+    expect(await fileState(t, file.storage_id)).toBe('held')
     await assertNoDanglingRefs(t, 'after the project item of a late split was purged')
   })
 
@@ -3665,7 +3666,7 @@ describe('restore calls', () => {
       issue_attachments: [],
       issue_links: [],
     })
-    expect(await blobExists(t, file.storage_id)).toBe(false)
+    expect(await fileState(t, file.storage_id)).toBe('held')
     expect(await historyOf(t, sub.id)).toEqual([])
     await assertNoDanglingRefs(t, 'after a late split deleted the subtask for good')
     await assertNoOrphanHistory(t, 'after a late split deleted the subtask for good')

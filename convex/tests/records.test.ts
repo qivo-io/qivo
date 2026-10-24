@@ -22,7 +22,7 @@
 
 import { ConvexError } from 'convex/values'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
-import { internal } from '../_generated/api'
+import { api, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import { verifyFileToken } from '../lib/fileTokens'
 import type { Refusal, RefusalCode } from '../lib/functions'
@@ -41,7 +41,9 @@ import {
 } from '../model/attachments'
 import {
   activityFor,
+  as,
   expectRefusal,
+  fileState,
   NOW,
   newT,
   type OrgFixture,
@@ -438,7 +440,7 @@ describe('removing an attachment', () => {
       key: `QN-${issue.num}`,
     })
     expect(await attachmentRow(fx.t, att.id)).toBeNull()
-    expect(await storageExists(fx.t, att.storage_id)).toBe(false)
+    expect(await fileState(fx.t, att.storage_id)).toBe('held')
     const [row] = await activityFor(fx.t, fx.org.id)
     expect(row).toMatchObject({
       actor_id: fx.agent.id,
@@ -455,6 +457,48 @@ describe('removing an attachment', () => {
       name: 'b.txt',
     })
     expect((await activityFor(fx.t, fx.org.id)).at(-1)?.detail).toBe('b.txt, via MCP')
+  })
+
+  it('holds the file where no read reaches it and no attach can take it', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const att = await plantAttachment(fx, issue)
+    const list = () =>
+      fx.t.query(internal.machine.records.restListAttachments, {
+        callerId: fx.agent.id,
+        access: 'read',
+        ref: issue.id,
+      })
+    const url = new URL((await list())[0].url)
+    const link = `${url.pathname}${url.search}`
+    expect((await fetchPath(fx.t, link)).status).toBe(200)
+    await mcpDelete(fx, fx.agent.id, issue.id, att.id)
+    expect(await fileState(fx.t, att.storage_id)).toBe('held')
+    // the gateway, REST and MCP read a file through its row, which is gone
+    expect((await fetchPath(fx.t, link)).status).toBe(404)
+    expect(await list()).toEqual([])
+    const viaMcp = await fx.t.query(internal.machine.mcp.getIssue, {
+      today: TODAY,
+      callerId: fx.agent.id,
+      access: 'read',
+      ref: issue.id,
+    })
+    expect((JSON.parse(viaMcp) as { attachments: unknown[] }).attachments).toEqual([])
+    // the held bytes cannot come back under a new row, from the app or a
+    // machine upload, which share attachFileCore
+    await refused(
+      as(fx.t, fx.user).mutation(api.files.attach, {
+        org_id: fx.org.id,
+        id: uuid(),
+        issue_id: issue.id,
+        storage_id: att.storage_id,
+        name: 'again.pdf',
+        inline: false,
+      }),
+      'bad_request',
+      'this file is already attached',
+    )
+    expect(await fileState(fx.t, att.storage_id)).toBe('held')
   })
 
   it('needs Edit on the project, as in the app', async () => {

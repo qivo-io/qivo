@@ -1920,7 +1920,9 @@ not the credential, so a link fetched before a token was revoked works until
 it expires. Images open in the browser and other types download.
 
 `delete_attachment` deletes one file and writes a `removed an attachment
-from` activity row signed `via MCP`. Anyone with Edit access to the
+from` activity row signed `via MCP`. No link serves the file from then on,
+and Qivo erases its contents within 7 days
+([Deleted items](guide/how-work-is-organized.md#deleted-items)). Anyone with Edit access to the
 project may delete any file, not only their own. An id that is not a file of
 that task reads `attachment "<id>" not found on QN-<n>`. A description
 image goes when the description stops showing it, so `delete_attachment`

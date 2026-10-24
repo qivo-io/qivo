@@ -41,6 +41,7 @@ import {
   countersFor,
   expectLiveCounts,
   expectRefusal,
+  fileState,
   messagesFor,
   NOW,
   newT,
@@ -1370,7 +1371,7 @@ describe('purging', () => {
     expect(await itemById(t, item.id)).toBeNull()
     expect(await storedRows(t, item.id)).toEqual([])
     expect(await storedTasks(t, item.id)).toEqual([])
-    expect(await blobExists(t, planted.attachment.storage_id)).toBe(false)
+    expect(await fileState(t, planted.attachment.storage_id)).toBe('held')
     await t.run(async (ctx) => {
       expect(await byId(ctx, 'labels', planted.labelId)).not.toBeNull()
       expect(await byId(ctx, 'issues', to.id)).not.toBeNull()
@@ -1463,7 +1464,7 @@ describe('purging', () => {
     expect(await itemById(t, earlyItem.id)).toBeNull()
     expect(await storedRows(t, earlyItem.id)).toEqual([])
     expect(await itemById(t, subItem.id)).toBeNull()
-    expect(await blobExists(t, keptFile.storage_id)).toBe(false)
+    expect(await fileState(t, keptFile.storage_id)).toBe('held')
     // a task item from another project stays
     expect((await itemFor(t, elsewhere.id)).state).toBe('ready')
     // the history of the tasks purged with it goes; the task that moved out
@@ -1634,7 +1635,7 @@ describe('purging', () => {
       expect(await ctx.db.query('comments').collect()).toEqual([])
       expect(await ctx.db.query('deleted_rows').collect()).toEqual([])
     })
-    expect(await blobExists(t, strandedFile.storage_id)).toBe(false)
+    expect(await fileState(t, strandedFile.storage_id)).toBe('held')
     expect(await historyOf(t, stranded.id)).toEqual([])
     expect((await liveTask(t, child.id))?.parent_id).toBeUndefined()
     // the detached child keeps its own history
@@ -2019,7 +2020,7 @@ describe('organization teardown', () => {
     expect(await t.run((ctx) => ctx.db.query('deleted_item_jobs').collect())).toEqual([])
     for (const table of ['issues', 'comments', 'issue_attachments'] as const)
       expect(await t.run((ctx) => ctx.db.query(table).collect()), table).toEqual([])
-    for (const file of files) expect(await blobExists(t, file)).toBe(false)
+    for (const file of files) expect(await fileState(t, file)).toBe('held')
     // the other organization keeps its item and its bytes
     expect(await itemById(t, elsewhere.item.id)).toEqual(elsewhere.item)
     expect(await blobExists(t, elsewhere.file)).toBe(true)
@@ -2069,7 +2070,7 @@ describe('organization teardown', () => {
           .collect(),
       ),
     ).toEqual([])
-    for (const file of files) expect(await blobExists(t, file)).toBe(false)
+    for (const file of files) expect(await fileState(t, file)).toBe('held')
     // live work and the other organization stay
     expect(
       await t.run((ctx) =>
@@ -2135,7 +2136,7 @@ describe('organization teardown', () => {
     ).toEqual({ purged: 1, waiting: 0 })
     await runSteps(t)
     expect(await storedIssue(t, temporary.id)).toBeUndefined()
-    expect(await blobExists(t, file.storage_id)).toBe(false)
+    expect(await fileState(t, file.storage_id)).toBe('held')
     expect(await itemById(t, keptItem.id)).toEqual(keptItem)
   })
 })
@@ -2228,7 +2229,7 @@ describe("an organization's deletion", () => {
     for (const table of ['deleted_item_jobs', 'deleted_item_parents'] as const)
       expect(await t.run((ctx) => ctx.db.query(table).collect()), table).toEqual([])
     expect(await liveRowsOf(t, draining)).toBe(0)
-    for (const file of trashOnly) expect(await blobExists(t, file)).toBe(false)
+    for (const file of trashOnly) expect(await fileState(t, file)).toBe('held')
     expect(await blobExists(t, readyFile)).toBe(true)
     expect(await t.run((ctx) => byId(ctx, 'organizations', f.org.id))).toBeNull()
     expect(await itemById(t, elsewhere.item.id)).toEqual(elsewhere.item)
@@ -2338,7 +2339,7 @@ describe("an organization's deletion", () => {
       expect(await itemById(t, id)).toBeNull()
       expect(await storedRows(t, id)).toEqual([])
     }
-    expect(await blobExists(t, file.storage_id)).toBe(false)
+    expect(await fileState(t, file.storage_id)).toBe('held')
     // the organization is still read-only, waiting for its deletion date
     expect((await removalOf(t, f.org.id))?.phase).toBeUndefined()
     expect(await t.run((ctx) => byId(ctx, 'organizations', f.org.id))).not.toBeNull()

@@ -5,6 +5,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { findAuthUser, loginBanned } from '../lib/access'
 import type { AppearanceMode, ImageSource } from '../lib/enums'
 import { forbidden } from '../lib/functions'
+import { releaseFile } from './fileHolds'
 
 export const appearanceFor = (ctx: QueryCtx, authId: string) =>
   ctx.db
@@ -79,13 +80,14 @@ export async function appearanceSettings(
   }
 }
 
+/** Deletes custom background `image` and lets go of its file and preview,
+ * which are held for a restore before they are erased (model/fileHolds.ts). */
 export async function removeCustomBackground(ctx: MutationCtx, image: Doc<'custom_backgrounds'>) {
-  // storageIdInUse prevents another attachment/avatar/background adopting this
-  // id for its entire lifetime. The row and its exclusive bytes die together.
-  if (await ctx.db.system.get(image.storage_id)) await ctx.storage.delete(image.storage_id)
-  if (image.preview_storage_id && (await ctx.db.system.get(image.preview_storage_id)))
-    await ctx.storage.delete(image.preview_storage_id)
+  // storageIdInUse prevents another attachment/avatar/background adopting
+  // these ids for their entire lifetime, the hold included.
   await ctx.db.delete(image._id)
+  await releaseFile(ctx, image.storage_id)
+  await releaseFile(ctx, image.preview_storage_id)
 }
 
 export async function clearAccountAppearance(ctx: MutationCtx, authId: string) {

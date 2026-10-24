@@ -21,6 +21,7 @@ import { require, rule } from '../lib/functions'
 import { clearOrgTrash } from '../model/deletedItems'
 import { recordDemoCreated } from '../model/demoMetrics'
 import { drainDemoUploads } from '../model/demoUploads'
+import { eraseFile } from '../model/fileHolds'
 import { deleteOrgBookkeeping, tallyRow } from '../model/orgs'
 import { marketingId } from './marketingDemoData'
 
@@ -62,8 +63,10 @@ async function drain<Row extends { _id: Id<TableNames> }>(
   return rows.length < limit
 }
 
+/* The demo keeps no backups, so its files are erased at once, never held
+ * (model/fileHolds.ts). */
 async function removeFile(ctx: MutationCtx, id: Id<'_storage'> | undefined) {
-  if (id !== undefined && (await ctx.db.system.get(id))) await ctx.storage.delete(id)
+  if (id !== undefined) await eraseFile(ctx, id)
 }
 
 /** Deleted items, within the batch's rows and TRASH_BYTES. Only this phase
