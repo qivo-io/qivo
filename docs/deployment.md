@@ -117,10 +117,12 @@ or on staging for jobs that need neither billing nor demo mode. Convex refuses
 a push whose job names a missing function, which a preview push no longer
 checks, so `convex/tests/crons.test.ts` checks it before staging does.
 
-Convex keeps a preview deployment for 14 days after it was created, not until
-its pull request closes, and each one counts against the team's deployment
-limit. The operator therefore deletes the previews of branches that have no
-open pull request, using the private operator instructions.
+Convex keeps a preview deployment for 14 days after it was created on the
+Professional, Business and Enterprise plans, and for 5 days on Free and
+Starter, not until its pull request closes. Each one counts against the
+team's deployment limit. The operator therefore deletes the previews of
+branches that have no open pull request, using the private operator
+instructions.
 
 Every deployment sends the same `Content-Security-Policy` on `/app` and
 `/admin` (`vercel.json`). It lets those pages run scripts only from the
