@@ -232,7 +232,7 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
           </Button>
         </div>
 
-        {/* Team sync (docs/team-sync-brief.md): the meeting page, always
+        {/* Team sync (deviation #316): the meeting page, always
           about the home organization, so a login without one has no row.
           No hover help, like every row of this rail. */}
         {P.homeOrg && (

@@ -1,5 +1,5 @@
 /* Team sync: the page for the short, regular team meeting agile teams call a
-   standup (docs/team-sync-brief.md; the Update Estimate walk, grown).
+   standup (deviation #316; the Update Estimate walk, grown).
    A walk over one scope (all projects, a team's projects, or one project):
    the team opening first, then one page per person with three columns (Done
    since their last sync, On it, Next), then one collapsed page for the

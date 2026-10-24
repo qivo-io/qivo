@@ -6632,7 +6632,7 @@ export const PLANNER = {
     show('idle')
   },
 
-  /* ---- Team sync (docs/team-sync-brief.md) ----
+  /* ---- Team sync (deviation #316) ----
      The page's one fact the snapshot lacks: when each open task was last
      commented on (api.teamSync.lastComments), for its "untouched" and
      "changed" marks. Subscribed only while the page is open, and only for
