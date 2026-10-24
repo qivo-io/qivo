@@ -209,6 +209,9 @@ const APP_SHARED = [
   // The demo runs no OAuth provider, so it records no ended session
   // (lib/oauthProvider.ts endSessionAccess).
   'oauth_ended_sessions',
+  // Usage is neither counted nor stored in APP_MODE=demo (model/usage.ts).
+  'usage_months',
+  'usage_counts',
 ]
 const AUTH_OWNED = [
   'user',

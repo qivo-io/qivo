@@ -224,20 +224,24 @@ const listOf = (map: Map<string, number>): PerPerson => [...map].map(([id, n]) =
 type Session = { createdAt: number; updatedAt: number }
 
 /** Whether login `authUserId` had a sign-in session created before the
- * month ended and created or refreshed after it began. Better Auth deletes
- * a session at sign-out, so a person who signed in and out within the month
- * and did nothing else is missed. */
+ * month ended and created or refreshed after it began. It reads the newest
+ * SESSIONS_READ sessions through the userId index; a bound on updatedAt
+ * would make the adapter scan the whole table, as no index has it. Better
+ * Auth deletes a session at sign-out, so a person who signed in and out
+ * within the month and did nothing else is missed. */
 async function signedIn(ctx: QueryCtx, authUserId: string, span: Span): Promise<boolean> {
   const sessions = (await ctx.runQuery(components.betterAuth.adapter.findMany, {
     model: 'session',
-    where: [
-      { field: 'userId', value: authUserId },
-      { field: 'updatedAt', operator: 'gte', value: span.start },
-    ],
-    paginationOpts: { numItems: 20, cursor: null },
+    where: [{ field: 'userId', value: authUserId }],
+    sortBy: { field: 'createdAt', direction: 'desc' },
+    paginationOpts: { numItems: SESSIONS_READ, cursor: null },
   })) as { page: Session[] }
   return sessions.page.some((s) => s.createdAt < span.end && s.updatedAt >= span.start)
 }
+
+/** Sessions read per login. A login holds one per device it stays signed
+ * in on. */
+const SESSIONS_READ = 50
 
 /** One page of profiles: guests and agents among the active ones, the
  * bytes of their pictures, and the ones signed in during the month. */
