@@ -3,6 +3,7 @@
  * production already have their own explicit origins and environment identity.
  * No deployment path seeds users or resets workspace data. */
 import { execFileSync } from 'node:child_process'
+import http from 'node:http'
 import { writeDeploymentReceipt } from './deployment-receipt.mjs'
 
 /* The CLI takes its preview branch iff the deploy key is a preview key —
@@ -79,56 +80,88 @@ function setPreviewSiteUrl(env, name, run) {
   }
 }
 
-/* How long a branch preview's backend lives after the branch's last push.
- * Without it Convex deletes a preview 14 days after creating it (5 on Free
- * and Starter), however recently the branch was pushed. */
+/* How long a branch preview's backend lives after the branch's last preview
+ * build. Without it Convex deletes a preview 14 days after creating it (5 on
+ * Free and Starter), however recently the branch was pushed. */
 export const PREVIEW_LIFETIME_DAYS = 3
 const PREVIEW_EXPIRY_ATTEMPTS = 4
+// per request, so an API that accepts the connection and never answers fails the build in minutes
+const PREVIEW_EXPIRY_TIMEOUT_MS = 15_000
 
-/* Moves the preview deployment `name`'s deletion to PREVIEW_LIFETIME_DAYS
- * from now through Convex's Management API, which takes the build's preview
- * deploy key as a Bearer token for previews in the key's project. The CLI
- * honours CONVEX_PROVISION_HOST for the same API, so this does too. The key
- * travels only in the Authorization header. Retries every failure, then
- * throws naming the deployment and the HTTP status only, never the key or
- * the response body. `fetch` and `sleep` are the tests' to replace. */
+/* Moves the claimed preview deployment's deletion to PREVIEW_LIFETIME_DAYS
+ * from now through Convex's Management API (PATCH and GET
+ * /v1/deployments/{name} in https://api.convex.dev/v1/openapi.json), which
+ * takes the build's preview deploy key as a Bearer token for previews in the
+ * key's project. Before any request it refuses unless this is a preview
+ * build with a preview key and a readable deployment name that is not a
+ * stable one, so no edit elsewhere can schedule the deletion of production,
+ * staging or the demo. It reads the date back and counts it as set only when
+ * Convex reports it. The CLI honours CONVEX_PROVISION_HOST for the same API,
+ * so this does too. The key travels only in the Authorization header. Every
+ * failure is retried, then this throws naming the deployment and each
+ * attempt's HTTP status, never the key or a response body. `fetch` and
+ * `sleep` are the tests' to replace. */
 export async function setPreviewExpiry(
   env,
-  name,
   { fetch = globalThis.fetch, sleep = (ms) => new Promise((done) => setTimeout(done, ms)) } = {},
 ) {
+  const name = deploymentName(env)
+  if (
+    !isPreviewDeployKey(env.CONVEX_DEPLOY_KEY) ||
+    env.QIVO_ENVIRONMENT !== 'preview' ||
+    name === null ||
+    [env.QIVO_CONVEX_DEPLOYMENT, env.DEMO_CONVEX_DEPLOYMENT].includes(name)
+  )
+    throw new Error('Only a branch preview build may set its deployment to expire.')
   const host = env.CONVEX_PROVISION_HOST || 'https://api.convex.dev'
-  let failure = 'no response'
+  const url = `${host}/v1/deployments/${encodeURIComponent(name)}`
+  const request = (init) =>
+    fetch(url, {
+      ...init,
+      headers: { Authorization: `Bearer ${env.CONVEX_DEPLOY_KEY}`, ...init.headers },
+      signal: AbortSignal.timeout(PREVIEW_EXPIRY_TIMEOUT_MS),
+    })
+  const failures = []
   for (let attempt = 1; attempt <= PREVIEW_EXPIRY_ATTEMPTS; attempt++) {
     if (attempt > 1) await sleep(1000 * 2 ** (attempt - 2))
     /* counted from each attempt, so a retry never moves the deletion back
        behind what a newer push's build has set meanwhile */
     const expiresAt = Date.now() + PREVIEW_LIFETIME_DAYS * 24 * 60 * 60 * 1000
     try {
-      const response = await fetch(`${host}/v1/deployments/${encodeURIComponent(name)}`, {
+      const patched = await request({
         method: 'PATCH',
-        headers: {
-          Authorization: `Bearer ${env.CONVEX_DEPLOY_KEY}`,
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ expiresAt }),
       })
-      if (response.ok) {
+      if (!patched.ok) {
+        failures.push(`HTTP ${patched.status}`)
+        continue
+      }
+      const read = await request({ method: 'GET' })
+      if (!read.ok) {
+        failures.push(`HTTP ${read.status} reading it back`)
+        continue
+      }
+      const saved = await read.json().then(
+        (deployment) => deployment?.expiresAt,
+        () => undefined,
+      )
+      // a minute either way, in case Convex rounds the time it stores
+      if (typeof saved === 'number' && Math.abs(saved - expiresAt) <= 60_000) {
         console.log(
-          `Preview deployment ${name} expires at ${new Date(expiresAt).toISOString()}, ` +
+          `Preview deployment ${name} expires at ${new Date(saved).toISOString()}, ` +
             `${PREVIEW_LIFETIME_DAYS} days after this push.`,
         )
         return
       }
-      failure = `HTTP ${response.status}`
+      failures.push('a different date read back')
     } catch {
       // a network error's message may quote the request, so only its absence is kept
-      failure = 'no response'
+      failures.push('no response')
     }
   }
   throw new Error(
-    `Could not set the expiry of preview deployment ${name} (${failure}, ` +
-      `${PREVIEW_EXPIRY_ATTEMPTS} attempts).`,
+    `Could not set the expiry of preview deployment ${name} (${failures.join(', ')}).`,
   )
 }
 
@@ -185,7 +218,7 @@ export async function main(
       )
     }
     // first, so a build that fails later still leaves a backend that expires
-    await setPreviewExpiry(env, name, { fetch, sleep })
+    await setPreviewExpiry(env, { fetch, sleep })
     setPreviewSiteUrl(env, name, run)
     // before convex pushes the functions, so crons.ts registers no job
     run('npx', ['convex', 'env', 'set', 'QIVO_ENVIRONMENT', 'preview', '--deployment', name], {
@@ -218,5 +251,8 @@ export async function main(
 
 // import for the tests, run only as the build command
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+  /* the CLI sends its requests through HTTPS_PROXY or HTTP_PROXY when one is
+     set, so fetch does too. Node 24.14 added this, and Vercel picks the patch. */
+  http.setGlobalProxyFromEnv?.()
   await main(process.env)
 }

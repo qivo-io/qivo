@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import http from 'node:http'
 import { join } from 'node:path'
 import { assertDemoTarget } from './demo-deploy.mjs'
 import { writeDeploymentReceipt } from './deployment-receipt.mjs'
@@ -79,7 +80,7 @@ export async function main(
   }
   if (preview) {
     // Same claim → expiry → origin setup → build → push ordering as normal previews.
-    await setPreviewExpiry(env, name, { fetch, sleep })
+    await setPreviewExpiry(env, { fetch, sleep })
     command(['set', 'SITE_URL', previewSiteUrl(env)])
     command(['set', 'APP_MODE', 'demo'])
     // before convex pushes the functions, so crons.ts registers no job
@@ -99,4 +100,9 @@ export async function main(
   receipt(env)
 }
 
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) await main(process.env)
+if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+  /* the CLI sends its requests through HTTPS_PROXY or HTTP_PROXY when one is
+     set, so fetch does too. Node 24.14 added this, and Vercel picks the patch. */
+  http.setGlobalProxyFromEnv?.()
+  await main(process.env)
+}

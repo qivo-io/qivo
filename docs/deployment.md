@@ -35,13 +35,14 @@ repository.
 ```
 
 Normal deployments never provision fixture users, seed a workspace or reset
-data. Staging starts with its own synthetic data and private test accounts.
-Its auth secrets, storage, API credentials and backend are separate from
-production. Mail delivery, social sign-in and billing are not configured in
-staging, so those flows cannot be tested there. Branch previews send real mail
-instead (see [Environment configuration](#environment-configuration)). Do not
-import customer data into staging or reuse production service credentials
-there.
+data. Branch previews are the one exception to keeping data, because each
+preview's backend is deleted 3 days after the branch's last push. Staging
+starts with its own synthetic data and private test accounts. Its auth
+secrets, storage, API credentials and backend are separate from production.
+Mail delivery, social sign-in and billing are not configured in staging, so
+those flows cannot be tested there. Branch previews send real mail instead
+(see [Environment configuration](#environment-configuration)). Do not import
+customer data into staging or reuse production service credentials there.
 
 ## Shipping a change
 
@@ -121,18 +122,23 @@ A branch preview's Convex backend is deleted 3 days after the branch's last
 push, whether or not its pull request is still open. Each preview build sets
 the deletion time to 3 days ahead through the Convex Management API, before
 it changes anything else on the backend, using the preview deploy key the
-build already holds. Every push therefore moves the date. Until then the
-backend keeps its data, its environment variables, including the mail
-settings it was created with, and its functions. The branch site loses its
-backend when it is deleted. The next push after that creates a new, empty
-backend with the project's current default environment variables. The demo's
-preview builds do the same, although the demo's Vercel project creates no
-previews. The build tries the call 4 times and then fails, naming the
-deployment and the HTTP status, so a preview whose date was not set is
-noticed at once instead of piling up against the team's deployment limit.
-Without the call, Convex would keep a preview for 14 days after it was
-created on the Professional, Business and Enterprise plans, and for 5 days on
-Free and Starter.
+build already holds, and reads the time back. Every push therefore moves the
+date. A push whose build fails or is cancelled before that step leaves the
+date the build before it set. Until then the backend keeps its data, its
+environment variables, including the mail settings it was created with, and
+its functions. The branch site loses its backend when it is deleted. The next
+push after that creates a new, empty backend with the project's current
+default environment variables. The demo's preview builds do the same,
+although the demo's Vercel project creates no previews. Only a build with a
+preview deploy key and `QIVO_ENVIRONMENT=preview` sends the request, so the
+production, staging and public demo builds never set a deletion time. The
+build tries 4 times, waiting at most 15 seconds for each request, and then
+fails, naming the deployment and each attempt's HTTP status or that no
+response came, so a preview whose date was not set is noticed at once
+instead of piling up against the team's deployment limit. Without the call,
+Convex would keep a preview for 14 days after it was created on the
+Professional, Business and Enterprise plans, and for 5 days on Free and
+Starter.
 
 Every deployment sends the same `Content-Security-Policy` on `/app` and
 `/admin` (`vercel.json`). It lets those pages run scripts only from the
