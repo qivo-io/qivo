@@ -662,8 +662,20 @@ larger registrations get HTTP `400` with `invalid_client_metadata`, and one
 whose body is over 64 KiB gets HTTP `413` (see below). A registration that
 succeeds answers HTTP `201`. Every client Qivo registers is public: it uses
 PKCE and gets no secret, and its `token_endpoint_auth_method` is `none`
-whatever the registration asked for. A redirect URI on a loopback address or
-a private-use scheme registers a `native` client. Qivo issues Bearer tokens
+whatever the registration asked for. Registration takes no initial access
+token and ignores an `Authorization` header. Each redirect URI must be
+absolute, with no fragment and no user name or password. A registration
+whose redirect URIs are all `https` on hosts other than loopback registers a
+`web` client. One with a redirect URI to `http://localhost`,
+`http://127.0.0.1` or `http://[::1]` (any port and path), or with a
+private-use scheme, registers a `native` client. A private-use redirect URI
+is either a scheme with a period and no host, such as
+`com.example.app:/callback`, or a scheme with a host and a path, such as
+`cursor://anysphere.cursor-retrieval/oauth/callback`. Any other redirect URI
+gets HTTP `400` with `invalid_redirect_uri`, for example `myapp://callback`
+(no path), `myapp:/callback` (no period), `http://localhost./callback`,
+plain `http` on any other host, and a loopback URI in a registration that
+asks for `"application_type": "web"`. Qivo issues Bearer tokens
 only and does not support DPoP: the token endpoint ignores a `DPoP` header,
 an authorization request with `dpop_jkt` gets `invalid_request`, and a
 registration's `dpop_bound_access_tokens` is dropped. Register

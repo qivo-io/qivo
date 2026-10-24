@@ -52,8 +52,12 @@ Metadata Documents, device-code approval or WorkOS `auth.md` registration
 endpoints. OAuth client registration creates no Qivo user or project access;
 a signed-in person must approve access. A registration that succeeds answers
 HTTP `201` with a public client, whose `token_endpoint_auth_method` is `none`
-and which gets no secret. Qivo issues Bearer tokens only, not DPoP-bound
-ones. Register once and keep the client ID.
+and which gets no secret. Registration ignores an `Authorization` header.
+A redirect URI must be `https`, `http` on an exact loopback host, or a
+private-use scheme with a period and no host (`com.example.app:/callback`)
+or with a host and a path (`cursor://anysphere.cursor-retrieval/oauth/callback`);
+any other gets HTTP `400` with `invalid_redirect_uri`. Qivo issues Bearer
+tokens only, not DPoP-bound ones. Register once and keep the client ID.
 Each hour Qivo accepts 60 registration requests from one source address, 120
 from one IPv6 /48 network over all of its /64 networks, and 600 for the whole
 server. Past a limit, registration returns HTTP `429` with `Retry-After`. A

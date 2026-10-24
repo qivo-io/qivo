@@ -78,18 +78,34 @@ out. `@convex-dev/better-auth` is no longer installed.
   backfill has linked every client, link each client only to the resources
   it may use, and replace the single-resource checks listed above, which
   compare with `mcpResource()`.
+- **Writes with a chosen id.** Some Better Auth features create a row whose
+  id they choose, so that a second attempt with the same id fails: DPoP proof
+  reservations, `private_key_jwt` client assertions (`oauthClientAssertion`),
+  and the verification reservations of the Magic Link, email OTP and Sign In
+  with Ethereum plugins. Convex chooses every document id, so the copy cannot
+  store such a row, and none of these features works with it. Qivo uses none
+  of them. Supporting one needs a table keyed by that id and a uniqueness
+  check in the copy.
 - **DPoP.** Better Auth 1.7 supports DPoP-bound tokens (RFC 9449), but the
-  copy cannot store the proof reservations it makes, which need a chosen
-  document id, and `/mcp` checks no proof. Qivo issues Bearer tokens only:
-  the token endpoint ignores a `DPoP` header, as a server without DPoP does,
-  authorize refuses `dpop_jkt`, registration drops `dpop_bound_access_tokens`,
-  the metadata lists no DPoP algorithms, and `/mcp` refuses a bound token.
-- **Sign-out.** Ending a browser session revokes the OAuth access tokens
-  issued in it. Better Auth 1.7 revokes only the oldest 100, and each refresh
-  adds a token to the session, so Qivo's own session delete hook revokes all
-  of them, newest first. `/mcp` refuses a revoked token. A refresh token with
-  `offline_access`, which Qivo's clients request, stays valid, so a connected
-  client renews its access token without a new approval.
+  copy cannot store their proof reservations (see above), and `/mcp` checks
+  no proof. Qivo issues Bearer tokens only: the token endpoint ignores a
+  `DPoP` header, as a server without DPoP does, authorize refuses
+  `dpop_jkt`, registration drops `dpop_bound_access_tokens`, the metadata
+  lists no DPoP algorithms, and `/mcp` refuses a bound token.
+- **Registration** ignores an `Authorization` header, because Better Auth 1.7
+  reads a Bearer token there as an initial access token, which Qivo does not
+  issue, and would answer HTTP `401`. 1.7 also checks redirect URIs by
+  application type; `docs/mcp.md` lists the rules.
+- **Sign-out.** Signing out ends a browser session and revokes the OAuth
+  access tokens issued in it. Better Auth 1.7 revokes only the oldest 100,
+  and each refresh adds a token to the session, so Qivo's own session delete
+  hook revokes all of them, newest first. `/mcp` refuses a revoked token. A
+  refresh token with `offline_access`, which Qivo's clients request, stays
+  valid, so a connected client renews its access token without a new
+  approval. A ban or a login removal from the console ends every session of
+  the login at once, and Better Auth runs the session delete hook for the
+  oldest 100 sessions only. `/mcp` refuses every token of a banned or removed
+  login whether it is revoked or not, so this ends no access late.
 - **Qivo's own deletes** of OAuth clients (the unused-client sweep, the OAuth
   smoke cleanup and the demo purge) also delete the client's resource links.
   The operator's and the console's login deletes keep the clients, as before.
@@ -120,7 +136,12 @@ client reconnects: a grant created on 1.6 refreshes, and its client keeps
 its `client_id`.
 
 1. Merging deploys staging. The schema accepts every 1.6 row, so the deploy
-   needs no backfill first.
+   needs no backfill first. Until the backfill has written a client, Qivo
+   answers it as 1.6 served it (`convex/lib/oauthAdapter.ts`): a client 1.6
+   marked `public` with the method `none`, and a confidential one never with
+   `none`. Better Auth 1.7 reads only the method, so otherwise a public client
+   stored without `none` would need a secret it does not have, and a
+   confidential one stored with `none` would need none.
 2. On each deployment, after it serves this release and with the owner's
    approval, run the client backfill. Check first with
    `internal/oauthClientBackfill:remaining`, then
@@ -136,9 +157,9 @@ its `client_id`.
    still use `sub`, and how many have no tenant recorded. Each person's next
    Microsoft sign-in moves theirs. If the move cannot happen, because
    another account already holds the `oid`, the sign-in goes to that account.
-4. A later change removes `public` and `type` from the schema and the
-   backfill, once the backfill has run everywhere and reports no client for
-   review.
+4. A later change removes `public` and `type` from the schema, the backfill
+   and `convex/lib/oauthAdapter.ts`, once the backfill has run everywhere and
+   reports no client for review.
 
 This release is a rollback floor. It writes fields the 1.6 schema does not
 have, such as `oauthRefreshToken.rotatedAt` at every refresh and
