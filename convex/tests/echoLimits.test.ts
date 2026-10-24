@@ -52,6 +52,13 @@ describe('REST unknown names', () => {
       `unknown field "${'x'.repeat(NAME_SHOWN_MAX)}…"; this request takes no body`,
     )
   })
+
+  it('keeps an emoji at the cut whole or leaves it out', () => {
+    const name = `${'x'.repeat(NAME_SHOWN_MAX - 1)}😀${'x'.repeat(10)}`
+    expect(refusal(() => refuseUnknownFields({ [name]: 1 }, []))).toBe(
+      `unknown field "${'x'.repeat(NAME_SHOWN_MAX - 1)}…"; this request takes no body`,
+    )
+  })
 })
 
 describe('MCP echoes', () => {

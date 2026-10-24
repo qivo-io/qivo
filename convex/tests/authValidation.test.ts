@@ -178,6 +178,32 @@ describe('stopValidationEarly', () => {
     ])
   })
 
+  it.each([
+    [
+      'empty contacts',
+      { redirect_uris: ['https://client.example.test/cb'], contacts: Array(large).fill('') },
+      'contacts',
+    ],
+    [
+      'redirect URIs that are not URLs',
+      { redirect_uris: Array(large).fill('not a url') },
+      'redirect_uris',
+    ],
+  ])('stops at the first problem of a large request of %s', async (_, body, field) => {
+    expect(registration.safeParse(body).error?.issues.length).toBeGreaterThanOrEqual(large)
+    const result = await registration['~standard'].validate(body)
+    expect(result.issues?.map(({ path }) => path)).toEqual([[field, 0]])
+  })
+
+  it('leaves zod checking a small request in full after a large one', async () => {
+    const small = { redirect_uris: ['not a url', 'nor this'], contacts: ['', ''] }
+    const issues = registration.safeParse(small).error?.issues
+    expect(issues).toHaveLength(6) // a URL problem and a parse problem for each URL
+    await registration['~standard'].validate({ ...small, contacts: Array(large).fill('') })
+    expect(registration.safeParse(small).error?.issues).toEqual(issues)
+    expect((await registration['~standard'].validate(small)).issues).toEqual(issues)
+  })
+
   it('reaches every schema the router checks with but /sign-in/email', () => {
     // The router builds its endpoints again for every request. Only
     // /sign-in/email's builds its body schema again too, so the router checks
@@ -231,6 +257,16 @@ describe('shortValidationMessage', () => {
     const note = listed.pop()
     expect(listed).toEqual(Array.from({ length: listed.length }, (_, i) => problem(i)))
     expect(note).toBe(`and ${500 - listed.length} more problems`)
+  })
+
+  it('keeps an emoji at the cut whole or leaves it out', () => {
+    const long = `[body.permission.${'k'.repeat(AUTH_VALIDATION_MESSAGE_MAX)}] Invalid input`
+    // the first problem is cut at 2,026 characters, before "…; and 1 more problem"
+    for (const at of [2024, 2025, 2026]) {
+      const short = shortValidationMessage(`${long.slice(0, at)}😀${long.slice(at)}; ${problem(1)}`)
+      expect(short.length).toBeLessThanOrEqual(AUTH_VALIDATION_MESSAGE_MAX)
+      expect(short.isWellFormed()).toBe(true)
+    }
   })
 
   it('cuts a first problem longer than the limit inside it', () => {

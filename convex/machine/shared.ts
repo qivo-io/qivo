@@ -13,7 +13,7 @@ import { v } from 'convex/values'
 import type { ProfileKind } from '../lib/enums'
 import { badRequest } from '../lib/functions'
 import { limitedWhole } from '../lib/limitRules'
-import { DEFAULT_PAGE_SIZE, LIMITS, type Limit, MIB } from '../lib/limits'
+import { cutText, DEFAULT_PAGE_SIZE, LIMITS, type Limit, MIB } from '../lib/limits'
 import { readLimitedBody } from '../lib/requestBody'
 import { plainText } from '../model/activity'
 import { REST_AUTH_401, REST_PERSON_AUTH_401 } from './auth'
@@ -195,9 +195,10 @@ export const NAMES_LISTED = 10
 export const NAME_SHOWN_MAX = 100
 
 /** `text`, something a caller sent, cut to NAME_SHOWN_MAX characters for a
- * refusal to show, a cut one ending in "…". */
+ * refusal to show, a cut one ending in "…". An emoji at the cut is kept whole
+ * or left out. */
 export const shownName = (text: string): string =>
-  text.length > NAME_SHOWN_MAX ? `${text.slice(0, NAME_SHOWN_MAX)}…` : text
+  text.length > NAME_SHOWN_MAX ? `${cutText(text, NAME_SHOWN_MAX)}…` : text
 
 /** `names` quoted and joined by ", ", at most NAMES_LISTED of them, each cut
  * by shownName, followed by how many more there were. */

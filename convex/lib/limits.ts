@@ -640,8 +640,8 @@ export const overText = (limit: Limit, value: string): boolean => value.length >
 
 /** The first `max` UTF-16 code units of `text`, one fewer when the last of
  * them would split a surrogate pair, so an emoji is kept whole or left out.
- * For display text and names Qivo writes itself, never for a person's input,
- * which is refused instead. */
+ * For display text and names Qivo writes itself and for input a refusal
+ * shows, never to shorten a person's input, which is refused instead. */
 export function cutText(text: string, max: number): string {
   if (text.length <= max) return text
   const last = text.charCodeAt(max - 1)
