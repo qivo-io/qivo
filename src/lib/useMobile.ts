@@ -115,7 +115,8 @@ function settle() {
  * history marker (settle) once the turn ends, together with every other
  * layer that closed in it.
  * An explicit enabled value keeps a phone layer through landscape rotation.
- * A close repeated before its Back step lands is dropped, never a second Back.
+ * A close repeated while one waits for the page's moves or its Back step is
+ * on its way is dropped, so `onClose` runs once and the page takes one Back.
  * `onClose` may return false to stay open (a dialog busy with something that
  * must finish). After a Back step the layer then pushes its marker again, so
  * the next Back still closes the layer instead of leaving the page. `onClose`
@@ -132,14 +133,19 @@ export function useMobileBackLayer(
   closeRef.current = onClose
   const active = useRef(false)
   const leaving = useRef(false)
-  const close = () =>
+  // a close waiting for the page's moves to land (whenHistorySettled)
+  const queued = useRef(false)
+  const close = () => {
+    if (queued.current || leaving.current) return
+    queued.current = true
     whenHistorySettled(() => {
+      queued.current = false
       if (active.current && history.state?.qivoLayer === id) {
-        if (leaving.current) return
         leaving.current = true
         history.back()
       } else closeRef.current(close)
     })
+  }
   useEffect(() => {
     if (!useHistory || !open) return
     let disposed = false

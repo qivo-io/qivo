@@ -103,7 +103,11 @@ describe('useMobileBackLayer', () => {
     stopping = false
     window.addEventListener('popstate', page)
   })
-  afterEach(() => {
+  afterEach(async () => {
+    // closes the layers while the index is in place, so the page's step over
+    // their markers lands now, not on the next test's history
+    await act(async () => root.render(null))
+    await settle()
     window.removeEventListener('popstate', page)
     removeIndex()
   })
@@ -251,6 +255,37 @@ describe('useMobileBackLayer', () => {
     await show({ a: false, b: true })
     await settle()
     expect(history.state?.qivoLayer).toBeTruthy()
+  })
+
+  it('closes once for a close repeated before its Back step lands', async () => {
+    const onClose = vi.fn()
+    await layers({ a: { open: true, onClose } })
+    await act(async () => {
+      closes.a()
+      closes.a()
+    })
+    await settle()
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(heard).toEqual(['/page'])
+  })
+
+  it('asks once for a refused close repeated before its Back step lands', async () => {
+    // a dialog holding unsent text asks instead of closing
+    const onClose = vi.fn(() => false)
+    await layers({ a: { open: true, onClose } })
+    await act(async () => {
+      closes.a()
+      closes.a()
+    })
+    await settle()
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(heard).toEqual(['/page'])
+    expect(history.state?.qivoLayer).toBeTruthy()
+    // the dialog's own close after the question still takes its Back step
+    await act(async () => closes.a())
+    await settle()
+    expect(onClose).toHaveBeenCalledTimes(2)
+    expect(heard).toEqual(['/page', '/page'])
   })
 
   it('takes no second step for a layer that unmounts while its Back step is on its way', async () => {
