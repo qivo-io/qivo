@@ -322,13 +322,15 @@ export const heldRef = (open: string | null | undefined) =>
     organization picks the readable key: a held task's own reference. */
 const refOf = (open: string) => heldRef(open) ?? open
 
-/* The organization, key and uuid each task handle was last named by. A task
-   that leaves the store while its window is open (IssueDetail TaskGone)
-   keeps that name, so the address goes on naming the task the window still
-   speaks of, in its own organization, instead of a `~` that names none. Once
-   its organization has left the store too, the address names it by its
-   uuid, because `~` would read its key in the home organization. */
-const named = new Map<string, Pick<IssueVM, 'org' | 'key' | 'uuid'>>()
+/* The organization, its address segment, the key and uuid each task handle
+   was last named by. A task that leaves the store while its window is open
+   (IssueDetail TaskGone) keeps that name, so the address goes on naming the
+   task the window still speaks of, in its own organization, instead of a
+   `~` that names none. Once its organization has left the store too, the
+   address names it by its uuid, because `~` would read its key in the home
+   organization; that new address replaces the old one in place
+   (namedBefore). */
+const named = new Map<string, Pick<IssueVM, 'org' | 'key' | 'uuid'> & { seg: string }>()
 const NAMED_MAX = 64
 
 /** The task handle `open` names: the live task, or the one it last was. */
@@ -339,9 +341,21 @@ function taskNamed(open: string) {
     return was && orgSegment(was.org) === ORG_NONE ? { ...was, key: was.uuid } : was
   }
   named.delete(open)
-  named.set(open, { org: it.org, key: it.key, uuid: it.uuid })
+  named.set(open, { org: it.org, key: it.key, uuid: it.uuid, seg: orgSegment(it.org) })
   if (named.size > NAMED_MAX) named.delete(named.keys().next().value ?? open)
   return it
+}
+
+/** Whether `path` names the task handle `open` by the organization and key
+    it was last named by, as the address did before that organization left
+    the store. */
+function namedBefore(path: string, open: string | null | undefined) {
+  const was = open ? named.get(open) : undefined
+  return (
+    !!was &&
+    orgSegmentOf(path) === was.seg &&
+    taskSegmentOf(path, '')?.toLowerCase() === was.key.toLowerCase()
+  )
 }
 
 /** Whether the address names a task (taskSegmentOf). */
@@ -512,7 +526,9 @@ export function pathMatchesState(path: string, s: UiState): boolean {
   // the task the address names, a held one by its reference
   const held = heldRef(s.openIssue)
   const issue =
-    held !== undefined && taskSegmentOf(path, '') === held ? s.openIssue : r.issue || null
+    (held !== undefined && taskSegmentOf(path, '') === held) || namedBefore(path, s.openIssue)
+      ? s.openIssue
+      : r.issue || null
   // a login with no home organization has no Team sync: the address it
   // followed shows the page underneath, so it is rewritten, not stacked
   if (r.sync && !P.homeOrg) return true

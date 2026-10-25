@@ -352,6 +352,24 @@ describe('buildPath', () => {
     ])
     // so a reload or a Back to them opens no task, not the home QN-5
     for (const path of paths) expect(parsePath(path)?.issue).toBeUndefined()
+    // and each replaces the address that named the task before, in place
+    expect(
+      pathMatchesState('/app/acme/inbox/tasks/qn-5', { inboxOpen: true, openIssue: open }),
+    ).toBe(true)
+    expect(
+      pathMatchesState('/app/acme/board/all/tasks/qn-5', {
+        scope: 'all',
+        view: 'kanban',
+        openIssue: open,
+      }),
+    ).toBe(true)
+    // while another task's address, or another page's, is still a move
+    expect(
+      pathMatchesState('/app/acme/inbox/tasks/qn-6', { inboxOpen: true, openIssue: open }),
+    ).toBe(false)
+    expect(
+      pathMatchesState('/app/acme/board/all/tasks/qn-5', { inboxOpen: true, openIssue: open }),
+    ).toBe(false)
   })
 
   it('full-screen pages still outrank the scope', () => {
