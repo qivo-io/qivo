@@ -538,7 +538,8 @@ function UnreadDivider({ place = 'mark', note }: { place?: 'mark' | 'tail'; note
    menuWidth is a minimum; the menu respects trigger width and available height.
    An action row invokes onSelect without changing the selected value; trailing
    content belongs only to the closed trigger. backLayer gives the menu a phone
-   Back entry and waits for it to close before applying a pick. */
+   Back entry; a pick closes the menu and applies at once, with no history
+   step (lib/useMobile useMenuBackLayer). */
 const ACTION_VALUE = '\0action' // no option id can collide with it
 function FieldSelect<T extends string>({
   value,
