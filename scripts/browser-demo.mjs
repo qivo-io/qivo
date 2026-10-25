@@ -9,10 +9,34 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ConvexHttpClient } from 'convex/browser'
 import { makeFunctionReference } from 'convex/server'
-import { fixtureDirectory, loadCredentials, resolveTarget } from './marketing-demo.mjs'
+import {
+  DemoCliError,
+  fixtureDirectory,
+  loadCredentials,
+  resolveTarget,
+} from './marketing-demo.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
+/* What a drive against a local backend reads in place of the seed's flags,
+ * for marketing-demo.mjs messages, which name the flags. */
+const LOCAL_INPUTS =
+  "A local drive takes the seed's --deployment from QIVO_LOCAL_DEPLOYMENT, its --url from VITE_CONVEX_URL and its --site-url from the drive's base URL."
+
+/** The command that seeds the Northstar demo a drive's `target` names. */
+function seedCommand(target) {
+  return target.target === 'local'
+    ? `npm run demo -- seed --local --deployment ${target.deployment} --url ${target.url} --site-url ${target.siteUrl}`
+    : 'npm run demo -- seed --dev'
+}
+
+/** Northstar's drive setup for the dev server at `baseURL`, against the
+ * development deployment or, with QIVO_FIXTURE_LOCAL=true, the disposable
+ * local backend that QIVO_LOCAL_DEPLOYMENT and VITE_CONVEX_URL name. The
+ * local seed binds its credentials to its exact backend and site origins,
+ * and the backend checks its SITE_URL and sign-in origins exactly, so a drive
+ * there opens the seed's --site-url, with localhost and 127.0.0.1 as
+ * different origins. */
 export function loadBrowserDemo(baseURL, { cwd = ROOT, env } = {}) {
   if (!env) {
     const envFile = join(cwd, '.env.local')
@@ -31,27 +55,42 @@ export function loadBrowserDemo(baseURL, { cwd = ROOT, env } = {}) {
   ) {
     throw new Error('Browser smoke drives require a localhost development server origin.')
   }
-  // A disposable local backend, seeded with marketing-demo.mjs --local, names
-  // the deployment its credentials are stored under in QIVO_LOCAL_DEPLOYMENT.
-  const target =
-    env.QIVO_FIXTURE_LOCAL === 'true'
+  const local = env.QIVO_FIXTURE_LOCAL === 'true'
+  let target
+  try {
+    target = local
       ? resolveTarget(
           { target: 'local', deployment: env.QIVO_LOCAL_DEPLOYMENT, siteUrl: base.origin },
           env,
         )
       : resolveTarget({ target: 'dev' }, env)
-  if (env.VITE_CONVEX_URL && env.VITE_CONVEX_URL !== target.url) {
+  } catch (error) {
+    if (local && error instanceof DemoCliError)
+      throw new DemoCliError(`${error.message} ${LOCAL_INPUTS}`)
+    throw error
+  }
+  // a local target takes its backend from VITE_CONVEX_URL itself
+  if (!local && env.VITE_CONVEX_URL && env.VITE_CONVEX_URL !== target.url) {
     throw new Error(
       'The local app Convex URL does not match the development credential deployment.',
     )
   }
-  const credentials = loadCredentials(
-    fixtureDirectory(cwd, env, { local: target.target === 'local' }),
-    target,
-  )
+  const directory = fixtureDirectory(cwd, env, { local })
+  let credentials
+  try {
+    credentials = loadCredentials(directory, target)
+  } catch (error) {
+    if (local && error instanceof DemoCliError)
+      throw new DemoCliError(
+        `${error.message} A local drive reads the credentials that ${seedCommand(target)} stored, with each origin spelled the same way (localhost and 127.0.0.1 differ).`,
+      )
+    throw error
+  }
   if (!credentials) {
     throw new Error(
-      'Northstar development credentials are missing. Run npm run demo -- seed --dev first.',
+      local
+        ? `Northstar credentials for the local backend are missing. Run ${seedCommand(target)} first.`
+        : 'Northstar development credentials are missing. Run npm run demo -- seed --dev first.',
     )
   }
   return {
@@ -95,20 +134,28 @@ export async function purgeDeletedTasks(demo, taskIds) {
 }
 
 export async function inspectBrowserDemo(demo) {
+  const { target } = demo
+  const local = target.target === 'local'
   let state
   try {
     state = await devClient(demo).query(makeFunctionReference('internal/marketingDemo:inspect'), {
-      expected_site_url: demo.target.siteUrl,
+      expected_site_url: target.siteUrl,
     })
   } catch {
     throw new Error(
-      'Could not inspect the Northstar development demo. Check the dev deployment and importer permissions.',
+      local
+        ? `Could not inspect Northstar on the local backend at ${target.url}. Check that it runs, that QIVO_LOCAL_ADMIN_KEY is its admin key and that its SITE_URL is ${target.siteUrl}.`
+        : 'Could not inspect the Northstar development demo. Check the dev deployment and importer permissions.',
     )
   }
   if (state.state !== 'ready')
-    throw new Error('Northstar is not ready. Run npm run demo -- seed --dev first.')
+    throw new Error(
+      `Northstar is not ready${local ? ' on the local backend' : ''}. Run ${seedCommand(target)} first.`,
+    )
   if (state.credential_set_id !== demo.credentials.value.credential_set_id) {
-    throw new Error('Northstar credentials do not match the development ownership receipt.')
+    throw new Error(
+      `Northstar credentials do not match the ${local ? 'local backend' : 'development'} ownership receipt.`,
+    )
   }
   return { anchor: state.anchor, counts: state.counts }
 }

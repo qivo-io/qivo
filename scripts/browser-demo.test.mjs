@@ -7,6 +7,13 @@ import { inspectBrowserDemo, loadBrowserDemo, signInBrowser } from './browser-de
 import { loadCredentials, resolveTarget } from './marketing-demo.mjs'
 
 const env = { QIVO_ENVIRONMENT: 'development', CONVEX_DEPLOY_KEY: 'dev:tidy-otter-12|test-key' }
+/** The environment of a drive against a disposable local backend. */
+const local = {
+  QIVO_FIXTURE_LOCAL: 'true',
+  QIVO_LOCAL_ADMIN_KEY: 'local-admin-key',
+  QIVO_LOCAL_DEPLOYMENT: 'local-c7-3212',
+  VITE_CONVEX_URL: 'http://127.0.0.1:3212',
+}
 const folders = []
 /** Create private credentials for a local browser demo fixture. */
 function fixture(base = env) {
@@ -55,12 +62,6 @@ describe('Northstar browser fixture', () => {
   })
 
   it('loads the credentials of a disposable local backend by its deployment name', () => {
-    const local = {
-      QIVO_FIXTURE_LOCAL: 'true',
-      QIVO_LOCAL_ADMIN_KEY: 'local-admin-key',
-      QIVO_LOCAL_DEPLOYMENT: 'local-c7-3212',
-      VITE_CONVEX_URL: 'http://127.0.0.1:3212',
-    }
     const cwd = mkdtempSync(join(tmpdir(), 'qivo-browser-demo-'))
     const directory = mkdtempSync(join(tmpdir(), 'qivo-browser-credentials-'))
     folders.push(cwd, directory)
@@ -86,6 +87,48 @@ describe('Northstar browser fixture', () => {
         env: { ...local, CONVEX_DEPLOY_KEY: env.CONVEX_DEPLOY_KEY },
       }),
     ).toThrow(/refuses CONVEX_DEPLOY_KEY/)
+  })
+
+  it("names a local drive's inputs and its seed in the local drive's errors", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'qivo-browser-demo-'))
+    const directory = mkdtempSync(join(tmpdir(), 'qivo-browser-credentials-'))
+    folders.push(cwd, directory)
+    const options = (overrides = {}) => ({
+      cwd,
+      env: { ...local, QIVO_FIXTURE_CREDENTIALS_DIR: directory, ...overrides },
+    })
+    expect(() =>
+      loadBrowserDemo('http://localhost:5470', options({ QIVO_LOCAL_DEPLOYMENT: undefined })),
+    ).toThrow(/needs --deployment .* takes the seed's --deployment from QIVO_LOCAL_DEPLOYMENT/)
+    const seed = (site) =>
+      `npm run demo -- seed --local --deployment local-c7-3212 --url http://127.0.0.1:3212 --site-url ${site}`
+    expect(() => loadBrowserDemo('http://127.0.0.1:5470', options())).toThrow(
+      `Northstar credentials for the local backend are missing. Run ${seed('http://127.0.0.1:5470')} first.`,
+    )
+    // seeded for localhost, then driven at 127.0.0.1, which the backend tells apart
+    const seeded = {
+      target: 'local',
+      deployment: 'local-c7-3212',
+      siteUrl: 'http://localhost:5470',
+    }
+    loadCredentials(directory, resolveTarget(seeded, local), { create: true })
+    expect(() => loadBrowserDemo('http://127.0.0.1:5470', options())).toThrow(
+      `belongs to another deployment. It was not overwritten. A local drive reads the credentials that ${seed('http://127.0.0.1:5470')} stored, with each origin spelled the same way (localhost and 127.0.0.1 differ).`,
+    )
+    // the backend URL may end in a slash, as the seed's may
+    const demo = loadBrowserDemo(
+      'http://localhost:5470',
+      options({ VITE_CONVEX_URL: 'http://127.0.0.1:3212/' }),
+    )
+    vi.spyOn(ConvexHttpClient.prototype, 'query')
+      .mockResolvedValueOnce({ state: 'absent' })
+      .mockRejectedValueOnce(new Error('offline'))
+    await expect(inspectBrowserDemo(demo)).rejects.toThrow(
+      `Northstar is not ready on the local backend. Run ${seed('http://localhost:5470')} first.`,
+    )
+    await expect(inspectBrowserDemo(demo)).rejects.toThrow(
+      'Could not inspect Northstar on the local backend at http://127.0.0.1:3212. Check that it runs, that QIVO_LOCAL_ADMIN_KEY is its admin key and that its SITE_URL is http://localhost:5470.',
+    )
   })
 
   it('requires existing credentials instead of generating another password set', () => {
