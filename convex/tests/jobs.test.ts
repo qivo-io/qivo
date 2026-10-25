@@ -289,6 +289,27 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
     expect((await issueRow(t, parent.id))?.archived_at).toBeDefined()
   })
 
+  it.each([
+    ["the parent's project first", 'sub', 'sub2'],
+    ["the child's project first", 'sub2', 'sub'],
+  ] as const)(
+    'a due parent and its due child in two live projects, %s: the child goes this run and the parent the next',
+    async (_, parentIn, childIn) => {
+      const t = newT()
+      const f = await withOrg(t)
+      const due = { org_id: f.org.id, status: 'done' as const, done_at: ago(40) }
+      const parent = await plantIssue(t, { ...due, project_id: f[parentIn].id })
+      const child = await plantIssue(t, { ...due, project_id: f[childIn].id, parent_id: parent.id })
+
+      expect(await runArchive(t)).toBe(1)
+      expect((await issueRow(t, child.id))?.archived_at).toBeDefined()
+      expect((await issueRow(t, parent.id))?.archived_at).toBeUndefined()
+
+      expect(await runArchive(t)).toBe(1)
+      expect((await issueRow(t, parent.id))?.archived_at).toBeDefined()
+    },
+  )
+
   it('an archived project is left alone — its done tasks stay as the restore left them', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -570,6 +591,37 @@ describe('archiveDoneIssues keeps every leg bounded', () => {
     )
   })
 
+  it('walks the flagged organizations ARCHIVE_LIMITS.orgs a step, each once', async () => {
+    ARCHIVE_LIMITS.orgs = 2
+    const t = newT()
+    const orgs: string[] = []
+    const flagged: string[] = []
+    for (let n = 0; n < 5; n++) {
+      const org_id = uuid()
+      const project = await plantOrg(t, org_id)
+      orgs.push(org_id)
+      for (let k = 0; k < 2; k++) {
+        const task = await plantIssue(t, { org_id, project_id: project.id, relations_marked: true })
+        flagged.push(task.id)
+      }
+    }
+
+    const chains = await runLegs(t, NOW)
+
+    expect(chains.map((c) => [c.org_id, c.flagged]).sort()).toEqual(
+      orgs.map((id) => [id, 2]).sort(),
+    )
+    for (const id of flagged) expect((await issueRow(t, id))?.relations_marked).toBeUndefined()
+    const repairs = await scheduled(t, 'repairOrg')
+    expect(repairs.map((job) => job.args[0].org_id).sort()).toEqual([...orgs].sort())
+    // the cron's call and two more flagged steps, then one page of projects
+    const steps = await scheduled(t, 'archiveDoneIssues')
+    expect(steps.map((job) => job.args[0].phase)).toEqual(['flagged', 'flagged', 'projects'])
+    expect((await auditRows(t, 'archive_done_issues')).map((r) => r.detail)).toEqual([
+      { projects: 0, repairs: 5 },
+    ])
+  })
+
   it('an organization deleted after the dispatch ends its chain without an error', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -660,11 +712,13 @@ const updatedTasks = (t: T) =>
 
 /* Runs one nightly archive by hand, the dispatcher and the chains' legs in
  * schedule order, on fake timers that never fire. Nothing else runs, so the
- * task.updated events stay in the outbox. Returns the arguments of every
- * archive leg of organization `orgId`, in order. */
+ * task.updated events stay in the outbox. `dispatched` runs once before the
+ * first archive leg. Returns the arguments of every archive leg of
+ * organization `orgId`, in order. */
 async function archiveByHand(
   t: T,
   orgId: string,
+  dispatched?: () => Promise<unknown>,
 ): Promise<FunctionArgs<typeof internal.jobs.archiveProject>[]> {
   vi.useFakeTimers()
   try {
@@ -688,6 +742,8 @@ async function archiveByHand(
         await t.mutation(internal.jobs.repairOrg, job.args[0])
       } else {
         const leg = job.args[0] as FunctionArgs<typeof internal.jobs.archiveProject>
+        await dispatched?.()
+        dispatched = undefined
         if (leg.org_id === orgId) legs.push(leg)
         await t.mutation(internal.jobs.archiveProject, leg)
       }
@@ -861,6 +917,29 @@ describe('archiveDoneIssues runs one chain per organization', () => {
     )
     for (const id of tasks) expect((await issueRow(t, id))?.archived_at).toBeDefined()
   })
+
+  it.each(['archived', 'deleted', 'left without its root'] as const)(
+    'skips a project %s after the dispatch and archives the next',
+    async (change) => {
+      const t = newT()
+      const f = await withOrg(t)
+      const done = { org_id: f.org.id, status: 'done' as const, done_at: ago(40) }
+      const skipped = await plantIssue(t, { ...done, project_id: f.sub.id })
+      const kept = await plantIssue(t, { ...done, project_id: f.sub2.id })
+
+      const legs = await archiveByHand(t, f.org.id, () =>
+        t.run(async (ctx) => {
+          if (change === 'archived') await ctx.db.patch(f.sub._id, { archived_at: NOW })
+          else if (change === 'deleted') await ctx.db.delete(f.sub._id)
+          else await ctx.db.patch(f.sub._id, { parent_id: uuid() })
+        }),
+      )
+
+      expect(legs.map((leg) => leg.project_id)).toEqual([f.sub.id, f.sub2.id])
+      expect((await issueRow(t, skipped.id))?.archived_at).toBeUndefined()
+      expect((await issueRow(t, kept.id))?.archived_at).toBeDefined()
+    },
+  )
 
   it('a leg that fails every time stops only its own organization', async () => {
     // The middle organization's candidates exceed this read budget on every
