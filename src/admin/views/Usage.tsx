@@ -94,7 +94,8 @@ function monthNote(table: UsageMonth): string {
 type Sort = { key: UsageField | 'name'; desc: boolean }
 
 export function Usage() {
-  const [months] = useState(() => pickerMonths(Date.now()))
+  // Rebuilt by Refresh, so a page left open into a new month offers it.
+  const [months, setMonths] = useState(() => pickerMonths(Date.now()))
   const [month, setMonth] = useState(months[1])
   const [table, setTable] = useState<UsageMonth | null>(null)
   const [error, setError] = useState('')
@@ -158,7 +159,10 @@ export function Usage() {
               type="button"
               variant="outline"
               disabled={loading}
-              onClick={() => setAttempt((n) => n + 1)}
+              onClick={() => {
+                setMonths(pickerMonths(Date.now()))
+                setAttempt((n) => n + 1)
+              }}
             >
               {loading ? 'Loading…' : 'Refresh'}
             </Button>

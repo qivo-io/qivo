@@ -348,12 +348,19 @@ export async function orgUsage(
       },
     )
   counts.api_calls = Math.round(calls)
+  // A person's total and whether they called at all come from the exact
+  // shares; each credential's count is rounded for display.
+  const exact = new Map<string, number>()
   for (const credential of credentials.values()) {
     const p = person(credential.profile_id)
-    const n = Math.round(credential.calls)
-    p.api_calls += n
-    p.credentials.push({ id: credential.id, name: credential.name, calls: n })
+    exact.set(p.profile_id, (exact.get(p.profile_id) ?? 0) + credential.calls)
+    p.credentials.push({
+      id: credential.id,
+      name: credential.name,
+      calls: Math.round(credential.calls),
+    })
   }
+  for (const [profile_id, n] of exact) person(profile_id).api_calls = Math.round(n)
   await eachPage(
     (cursor) => ctx.runQuery(internal.usage.files, { org_id, cursor }),
     (page) => {
@@ -394,7 +401,7 @@ export async function orgUsage(
     retained = after
   }
   const list = [...people.values()].filter(
-    (p) => p.signed_in || p.changes > 0 || p.comments > 0 || p.api_calls > 0,
+    (p) => p.signed_in || p.changes > 0 || p.comments > 0 || (exact.get(p.profile_id) ?? 0) > 0,
   )
   counts.active_people = list.length
   return { counts, api_estimated: top.api_estimated, people: list }
@@ -419,15 +426,20 @@ export const orgPage = internalQuery({
 
 /** Stores organization `org_id`'s row for `month`, replacing an earlier one.
  * Writes nothing for an organization that is gone or being deleted, so a
- * run cannot leave a row behind its deletion. */
+ * run cannot leave a row behind its deletion, nor for a run that is no
+ * longer the month's, so a step of a run an operator replaced cannot
+ * overwrite the new run's rows. */
 export const saveMonth = internalMutation({
   args: {
     org_id: v.string(),
     month: v.string(),
     counts: vUsageCounts,
     api_estimated: v.boolean(),
+    // the run storing the month; absent for closeOrgMonth
+    run: v.optional(v.string()),
   },
   handler: async (ctx, a): Promise<boolean> => {
+    if (a.run !== undefined && (await runRow(ctx, a.month))?.run !== a.run) return false
     const org = await ctx.db
       .query('organizations')
       .withIndex('by_uuid', (q) => q.eq('id', a.org_id))
@@ -457,6 +469,7 @@ async function storeOrgMonth(
   org_id: string,
   month: string,
   now: number,
+  run?: string,
 ): Promise<boolean> {
   const usage = await orgUsage(ctx, org_id, month, now)
   if (usage === null) return false
@@ -465,6 +478,7 @@ async function storeOrgMonth(
     month,
     counts: usage.counts,
     api_estimated: usage.api_estimated,
+    run,
   })
 }
 
@@ -617,7 +631,7 @@ export const closeMonth = internalAction({
     let { saved, failed } = step
     await inParallel(page.ids, async (org_id) => {
       try {
-        if (await storeOrgMonth(ctx, org_id, month, now)) saved += 1
+        if (await storeOrgMonth(ctx, org_id, month, now, step.run)) saved += 1
       } catch (e) {
         failed += 1
         console.error('[usage] organization skipped', {

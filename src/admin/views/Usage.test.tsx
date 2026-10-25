@@ -109,6 +109,20 @@ describe('the month table', () => {
     expect(host.textContent).not.toContain('March org')
   })
 
+  it('offers a month that began while the page was open once it is refreshed', async () => {
+    vi.setSystemTime(Date.parse('2026-04-30T23:59:00Z'))
+    api.usageMonth.mockImplementation(async (key) => month(key))
+    await render()
+    const options = () =>
+      [...host.querySelectorAll<HTMLOptionElement>('select[aria-label="Month"] option')]
+        .slice(0, 2)
+        .map((o) => o.textContent)
+    expect(options()).toEqual(['April 2026 (so far)', 'March 2026'])
+    vi.setSystemTime(Date.parse('2026-05-01T00:01:00Z'))
+    await act(async () => button('Refresh')?.click())
+    expect(options()).toEqual(['May 2026 (so far)', 'April 2026'])
+  })
+
   it('downloads a month with no organization rows, and names the ones that failed', async () => {
     api.usageMonth.mockResolvedValue({
       ...month('2026-03'),

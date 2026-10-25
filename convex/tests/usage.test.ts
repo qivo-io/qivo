@@ -480,6 +480,28 @@ describe('the monthly job', () => {
   })
 })
 
+describe('a rerun', () => {
+  it('keeps a step of the run it replaced from writing', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await t.run(async (ctx) => {
+      await ctx.db.insert('usage_runs', { month: MARCH, seen_at: RUN, run: 'rerun' })
+    })
+    const save = (run: string) =>
+      t.mutation(internal.usage.saveMonth, {
+        org_id: f.org.id,
+        month: MARCH,
+        counts: emptyCounts,
+        api_estimated: false,
+        run,
+      })
+    expect(await save('replaced')).toBe(false)
+    expect(await storedRows(t)).toEqual([])
+    expect(await save('rerun')).toBe(true)
+    expect(await storedRows(t)).toHaveLength(1)
+  })
+})
+
 describe('REST and MCP calls', () => {
   /** Plants a bucket of 9,000 calls keyed by `key` with no recorded end, as
    * a pending interval that was never adopted leaves. */
@@ -503,6 +525,37 @@ describe('REST and MCP calls', () => {
     await openBucket(t, f, iso('2026-01-10'))
     expect(await marchCalls(t, f)).toBe(0)
     expect(await callsIn(t, f, '2026-01')).toBe(9000)
+  })
+
+  it('sums a person’s calls before rounding them', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // A paid period from 16 February to 16 March: 15 of its 28 days are in
+    // March, so each of the user's two keys has about 0.54 of a call there.
+    const paid = iso('2026-02-16')
+    await t.run(async (ctx) => {
+      await ctx.db.insert('billing_periods', {
+        org_id: f.org.id,
+        subscription_id: uuid(),
+        plan_id: uuid(),
+        period_start: paid,
+        period_end: iso('2026-03-16'),
+        seats: 5,
+        profile_ids: [],
+        created_at: paid,
+      })
+      await ctx.db.insert('billing_usage_totals', {
+        org_id: f.org.id,
+        period_start: paid,
+        calls: 2,
+        reported_api_blocks: 0,
+      })
+      for (const key of ['agent_keys:a', 'agent_keys:b'])
+        await ctx.db.insert('billing_usage', usageRow(f.org.id, f.user.id, paid, 1, key))
+    })
+    const usage = await orgUsage(runner(t), f.org.id, MARCH, Date.now())
+    expect(usage?.counts.api_calls).toBe(1)
+    expect(usage?.people.find((p) => p.profile_id === f.user.id)?.api_calls).toBe(1)
   })
 
   it('ends an open bucket where the next known period begins', async () => {
