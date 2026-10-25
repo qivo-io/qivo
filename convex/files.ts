@@ -432,17 +432,18 @@ export const gatewayAvatar = internalQuery({
  * Most runs are incremental. Every path that drops a file's last reference
  * deletes its bytes in the same transaction, so the orphans a run finds are
  * new files: uploads never attached or confirmed, and cleanups that failed.
- * An incremental run skips the accounts phase and reads only the files
- * created after the last finished run's cutoff (orphan_reaps.files_through)
- * and at or before its own, the run's start less the floor. A younger file
- * falls to the next run. A run is full when no run has finished yet or the
- * last finished full run started REAP_FULL_AFTER_MS or more ago, so every
- * fourth weekly run is full. A full run reads every appearance row and every
- * stored file, so it catches a login removed outside the auth API and a file
- * that lost its last reference without its bytes after a run checked it.
- * Only a run's last leg moves the cutoff, so after a run fails or stops the
- * next run reads the same files again. Deleting the orphan_reaps row makes
- * the next run full.
+ * An incremental run reads only the files created after the last finished
+ * run's cutoff (orphan_reaps.files_through) and at or before its own, the
+ * run's start less the floor. A younger file falls to the next run. A run is
+ * full when no run has finished yet or the last finished full run started
+ * REAP_FULL_AFTER_MS or more ago, so every fourth weekly run is full. A full
+ * run reads every stored file, so it catches a file that lost its last
+ * reference without its bytes after a run checked it. Every run, full or
+ * incremental, checks every appearance row, so a login removed outside the
+ * auth API loses its appearance and backgrounds at the next run. Only a
+ * run's last leg moves the cutoff, so after a run fails or stops the next
+ * run reads the same files again. Deleting the orphan_reaps row makes the
+ * next run full.
  *
  * The 60-minute floor (0033:34-38) keeps a sweep from racing an upload whose
  * attach is seconds away. It is measured from the run's start, which every
@@ -461,8 +462,9 @@ export const gatewayAvatar = internalQuery({
  * Deleted items check and the hold, and one more to erase it, so a files
  * leg reads about 2,310 of Convex's 4,096 with the page and the restore
  * check, and has room for more references. A tickets leg reads two ranges
- * and deletes at most two pages. An account costs a Better Auth lookup and,
- * for a removed login, its cleanup. Tests lower these. */
+ * and deletes at most two pages. An accounts leg looks up its page's logins
+ * in one Better Auth call, which reads each login, and clears each removed
+ * login's appearance and backgrounds. Tests lower these. */
 export const REAP_PAGES = { tickets: 1000, accounts: 64, files: 256 }
 
 /* A sweep never deletes a file younger than this when its run starts.
@@ -537,20 +539,28 @@ export const reapOrphans = internalMutation({
         counts.tickets += Math.min(expired.length, REAP_PAGES.tickets)
         more ||= expired.length > REAP_PAGES.tickets
       }
-      next = { phase: more ? 'tickets' : since === undefined ? 'accounts' : 'files' }
+      next = { phase: more ? 'tickets' : 'accounts' }
     } else if (a.phase === 'accounts') {
       // Raw component/CLI deletion can bypass the auth API hook. Preserve a
       // banned user's preferences; only an absent login makes them orphaned.
       const page = await ctx.db
         .query('account_appearance')
         .paginate({ cursor: a.cursor ?? null, numItems: REAP_PAGES.accounts })
-      for (const settings of page.page) {
-        const user = await ctx.runQuery(components.betterAuth.adapter.findOne, {
-          model: 'user',
-          where: [{ field: '_id', value: settings.auth_user_id }],
-        })
-        if (user) continue
-        await clearAccountAppearance(ctx, settings.auth_user_id)
+      const ids = page.page.map((settings) => settings.auth_user_id)
+      // One lookup for the page. The vendored adapter's paginate answers
+      // `_id in` with one get per id and the whole answer at once. A failed
+      // lookup throws, so the leg clears nothing.
+      const users = (await ctx.runQuery(components.betterAuth.adapter.findMany, {
+        model: 'user',
+        where: [{ field: '_id', operator: 'in', value: ids }],
+        paginationOpts: { numItems: ids.length, cursor: null },
+      })) as { page: Array<{ _id: string }>; isDone: boolean }
+      // a partial answer would make the logins it left out look removed
+      if (!users.isDone) throw new Error('the login lookup answered only part of the page')
+      const live = new Set(users.page.map((user) => user._id))
+      for (const id of ids) {
+        if (live.has(id)) continue
+        await clearAccountAppearance(ctx, id)
         counts.accounts += 1
       }
       next = page.isDone ? { phase: 'files' } : { phase: 'accounts', cursor: page.continueCursor }

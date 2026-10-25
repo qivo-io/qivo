@@ -2256,7 +2256,8 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
   })
 
   /* Incremental runs. A run reads the files stored since the last finished
-   * run's cutoff, and every fourth weekly run reads them all. */
+   * run's cutoff, and every fourth weekly run reads them all. Every run
+   * checks every appearance row. */
   const WEEK = 7 * DAY
 
   const reapLegs = (t: T) =>
@@ -2290,40 +2291,77 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     expect(await reap(t)).toEqual({ deleted: 3, kept: 1, tickets: 0, accounts: 0 })
     for (const id of [young, ...later]) expect(await blobExists(t, id)).toBe(false)
     expect(await blobExists(t, attached)).toBe(true)
-    // the call is the tickets leg; 2 legs read the 4 new files in pages of
-    // 2 and none of the 20 old ones
-    expect((await reapLegs(t)) - before).toBe(2)
+    // the call is the tickets leg; 1 leg reads the empty appearance table
+    // and 2 legs read the 4 new files in pages of 2 and none of the 20 old ones
+    expect((await reapLegs(t)) - before).toBe(3)
   })
 
-  it('a full run every fourth week catches a file and a login dropped without their bytes', async () => {
+  it('a full run every fourth week catches a file dropped without its bytes', async () => {
     const t = newT()
     const f = await withOrg(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     vi.useFakeTimers({ toFake: ['Date'] })
     const file = await storeBlob(t)
     await attach(t, issue, file)
-    const gone = await login(t, 'gone')
-    const background = await customBackground(t, gone)
     vi.setSystemTime(Date.now() + HOUR + 60_000)
-    expect(await reap(t)).toEqual({ deleted: 0, kept: 3, tickets: 0, accounts: 0 })
+    expect(await reap(t)).toEqual({ deleted: 0, kept: 1, tickets: 0, accounts: 0 })
 
-    // writes outside the app drop the reference and the login, and keep the bytes
+    // a write outside the app drops the reference and keeps the bytes
     await t.run(async (ctx) => {
       for (const row of await ctx.db.query('issue_attachments').collect())
         await ctx.db.delete(row._id)
-    })
-    await t.mutation(components.betterAuth.adapter.deleteOne, {
-      input: { model: 'user', where: [{ field: '_id', value: gone }] },
     })
     for (let week = 1; week < 4; week++) {
       vi.setSystemTime(Date.now() + WEEK)
       expect(await reap(t)).toEqual({ deleted: 0, kept: 0, tickets: 0, accounts: 0 })
     }
-    for (const id of [file, ...background]) expect(await blobExists(t, id)).toBe(true)
+    expect(await blobExists(t, file)).toBe(true)
 
     vi.setSystemTime(Date.now() + WEEK)
-    expect(await reap(t)).toEqual({ deleted: 1, kept: 0, tickets: 0, accounts: 1 })
-    for (const id of [file, ...background]) expect(await blobExists(t, id)).toBe(false)
+    expect(await reap(t)).toEqual({ deleted: 1, kept: 0, tickets: 0, accounts: 0 })
+    expect(await blobExists(t, file)).toBe(false)
+  })
+
+  it('the next weekly run catches a login dropped without its backgrounds', async () => {
+    const t = newT()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const gone = await login(t, 'gone')
+    const background = await customBackground(t, gone)
+    vi.setSystemTime(Date.now() + HOUR + 60_000)
+    expect(await reap(t)).toEqual({ deleted: 0, kept: 2, tickets: 0, accounts: 0 })
+
+    // a component write outside the auth API drops the login and keeps its rows
+    await t.mutation(components.betterAuth.adapter.deleteOne, {
+      input: { model: 'user', where: [{ field: '_id', value: gone }] },
+    })
+    vi.setSystemTime(Date.now() + WEEK)
+    // an incremental run, which reads no stored file
+    expect(await reap(t)).toEqual({ deleted: 0, kept: 0, tickets: 0, accounts: 1 })
+    for (const id of background) expect(await blobExists(t, id)).toBe(false)
+    expect(await t.run((ctx) => ctx.db.query('account_appearance').collect())).toEqual([])
+  })
+
+  it('an accounts page with a live and a removed login clears only the removed one', async () => {
+    const t = newT()
+    Object.assign(REAP_PAGES, { accounts: 4 })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const kept = await login(t, 'kept')
+    const gone = await login(t, 'gone')
+    const custom = await customBackground(t, kept)
+    const removed = await customBackground(t, gone)
+    await t.mutation(components.betterAuth.adapter.deleteOne, {
+      input: { model: 'user', where: [{ field: '_id', value: gone }] },
+    })
+    vi.setSystemTime(Date.now() + HOUR + 60_000)
+
+    expect(await reap(t)).toEqual({ deleted: 0, kept: 2, tickets: 0, accounts: 1 })
+    for (const id of removed) expect(await blobExists(t, id)).toBe(false)
+    for (const id of custom) expect(await blobExists(t, id)).toBe(true)
+    const appearance = await t.run((ctx) => ctx.db.query('account_appearance').collect())
+    expect(appearance.map((row) => row.auth_user_id)).toEqual([kept])
+    // the call is the tickets leg; both rows sit on the one accounts leg's
+    // page, and 1 leg reads the files
+    expect(await reapLegs(t)).toBe(2)
   })
 
   it('a leg queued before incremental runs, with no lower bound, finishes a full run', async () => {
