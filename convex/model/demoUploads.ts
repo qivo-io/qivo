@@ -164,21 +164,58 @@ export async function assertDemoFileOwnership(
 /** How many stored files one page of checkStoredFiles reads. */
 export const CHECK_FILES = 64
 
+/** How far the checks have read stored files (schema.ts demo_upload_sweeps). */
+type Checked = Pick<Doc<'demo_upload_sweeps'>, 'checked_through' | 'checked_at'>
+
+/* Up to `count` stored files created before `before` that no check has
+ * read, oldest first. Convex does not make _creationTime unique, so a full
+ * page can end inside a group of files created at one time. The next read
+ * then starts at that time, that time included, and skips the files of the
+ * group that checked_at lists. */
+async function uncheckedFiles(ctx: QueryCtx, checked: Checked, before: number, count: number) {
+  const { checked_through: from, checked_at: seen = [] } = checked
+  if (before <= from) return []
+  const files = await ctx.db.system
+    .query('_storage')
+    .withIndex('by_creation_time', (q) => {
+      const after = checked.checked_at ? q.gte('_creationTime', from) : q.gt('_creationTime', from)
+      return after.lt('_creationTime', before)
+    })
+    .take(count + seen.length)
+  return files.filter((file) => !seen.includes(file._id)).slice(0, count)
+}
+
+/* The progress after a check of `files`, the unchecked files read from
+ * `checked` on. A page that was not full read every file up to the time of
+ * its last one. A full page may end inside a group of files created at one
+ * time, so it lists the files of that group it checked. */
+function checkedAfter(
+  checked: Checked,
+  files: readonly { _id: Id<'_storage'>; _creationTime: number }[],
+  full: boolean,
+): Checked {
+  const through = files.at(-1)?._creationTime ?? checked.checked_through
+  if (!full) return { checked_through: through }
+  const group = files.filter((file) => file._creationTime === through).map((file) => file._id)
+  const before = through === checked.checked_through ? (checked.checked_at ?? []) : []
+  return { checked_through: through, checked_at: [...before, ...group] }
+}
+
 /** Checks the next page of stored files for bytes nothing records, as a
  * receiver that crashed after storing them leaves. Each file is checked
- * once, oldest first: those created after the last one checked
- * (demo_upload_sweeps) and before every receiver that could still claim one
- * started, with 120 seconds for commits to settle. A file that nothing uses
- * and no live ticket holds is deleted. One in use or held then is deleted by
- * whatever releases it: its ticket's expiry (demoUploads.ts sweep), its
- * demo's purge (drainDemoUploads), or files.ts reapOrphans. Returns the
- * creation time of the last file checked and whether the page was full. */
+ * once, oldest first: those no check has read yet (demo_upload_sweeps) and
+ * created before every receiver that could still claim one started, with
+ * 120 seconds for commits to settle. A file that nothing uses and no live
+ * ticket holds is deleted. One in use or held then is deleted by whatever
+ * releases it: its ticket's expiry (demoUploads.ts sweep), its demo's purge
+ * (drainDemoUploads), or files.ts reapOrphans. Returns the progress after
+ * the page and whether the page was full. */
 export async function checkStoredFiles(
   ctx: MutationCtx,
   progress: Doc<'demo_upload_sweeps'> | null,
-): Promise<{ through: number; full: boolean }> {
+): Promise<{ checked: Checked; full: boolean }> {
   const now = Date.now()
-  const from = progress?.checked_through ?? 0
+  const checked: Checked = progress ?? { checked_through: 0 }
   const workers = await ctx.db
     .query('demo_uploads')
     .withIndex('by_state_lease', (q) => q.eq('state', 'receiving').gt('lease_until', now))
@@ -187,13 +224,8 @@ export async function checkStoredFiles(
     workers.length === 1001
       ? 0
       : Math.min(now - 120_000, ...workers.map((worker) => worker.started_at ?? 0))
-  if (safeBefore <= from) return { through: from, full: false }
-  const files = await ctx.db.system
-    .query('_storage')
-    .withIndex('by_creation_time', (q) =>
-      q.gt('_creationTime', from).lt('_creationTime', safeBefore),
-    )
-    .take(CHECK_FILES)
+  if (safeBefore <= checked.checked_through) return { checked, full: false }
+  const files = await uncheckedFiles(ctx, checked, safeBefore, CHECK_FILES)
   for (const file of files) {
     if (await storageIdInUse(ctx, file._id)) continue
     const ticket = await ctx.db
@@ -203,11 +235,12 @@ export async function checkStoredFiles(
     if (ticket && ticket.expires_at > now) continue
     await ctx.storage.delete(file._id)
   }
-  if (!files.length) return { through: from, full: false }
-  const through = files[files.length - 1]._creationTime
-  if (progress) await ctx.db.patch(progress._id, { checked_through: through })
-  else await ctx.db.insert('demo_upload_sweeps', { checked_through: through })
-  return { through, full: files.length === CHECK_FILES }
+  const full = files.length === CHECK_FILES
+  const next = checkedAfter(checked, files, full)
+  // an empty page writes only to drop a group it has now read whole
+  if (progress && (files.length || progress.checked_at)) await ctx.db.replace(progress._id, next)
+  else if (!progress && files.length) await ctx.db.insert('demo_upload_sweeps', next)
+  return { checked: next, full }
 }
 
 /** Cleanup keeps the receipt until receiving work finishes or its runtime
@@ -243,19 +276,11 @@ export async function drainDemoUploads(ctx: MutationCtx, demoId: string): Promis
   if (Date.now() < receipt.cleanup_file_after) return false
   // Files whose creation millisecond is at or before the barrier's start.
   const quietBefore = receipt.cleanup_file_after - 120_000 + 1
-  const { through, full } = await checkStoredFiles(
+  const { checked, full } = await checkStoredFiles(
     ctx,
     await ctx.db.query('demo_upload_sweeps').first(),
   )
-  const unchecked =
-    through < quietBefore &&
-    (await ctx.db.system
-      .query('_storage')
-      .withIndex('by_creation_time', (q) =>
-        q.gt('_creationTime', through).lt('_creationTime', quietBefore),
-      )
-      .first())
-  if (!unchecked) return true
+  if (!(await uncheckedFiles(ctx, checked, quietBefore, 1)).length) return true
   // A full page continues at once. Otherwise a receiver that could still
   // claim a file, or the settling time, holds the check back.
   if (!full) await ctx.db.patch(receipt._id, { cleanup_file_wait_until: Date.now() + 5000 })

@@ -3,6 +3,7 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
+import type { Id } from '../_generated/dataModel'
 import type { ActionCtx } from '../_generated/server'
 import authSchema from '../betterAuth/schema'
 import http from '../http'
@@ -337,6 +338,67 @@ describe('demo upload independent review regressions', () => {
         (file) => file !== null,
       ),
     ).toBe(true)
+  })
+
+  /* Stores 63 files created at one time and 2 created a millisecond later,
+   * none of them recorded, so a page of 64 ends between the last two.
+   * convex-test gives an insert 0.001 ms after the one before, which rounds
+   * away above 2^52 ms, so there the inserts of one millisecond share a time,
+   * as Convex allows. */
+  const TIED = 2 ** 52
+  async function tiedFiles(t: T) {
+    const store = (n: number) =>
+      t.run(async (ctx) => {
+        const ids = []
+        for (let i = 0; i < n; i++) ids.push(await ctx.storage.store(new Blob(['lost']) as never))
+        return ids
+      })
+    vi.setSystemTime(TIED)
+    const files = await store(63)
+    vi.setSystemTime(TIED + 1)
+    files.push(...(await store(2)))
+    const times = await t.run((ctx) =>
+      Promise.all(files.map(async (id) => (await ctx.db.system.get(id))!._creationTime)),
+    )
+    expect(times.filter((time) => time === TIED + 1)).toHaveLength(2)
+    return files
+  }
+  /* Those of `files` still stored. */
+  const stored = (t: T, files: Id<'_storage'>[]) =>
+    t.run(async (ctx) =>
+      (await Promise.all(files.map((id) => ctx.db.system.get(id)))).filter(Boolean),
+    )
+
+  it('checks a file created at the same time as the last file of a full page', async () => {
+    const { t } = await setup()
+    const files = await tiedFiles(t)
+    vi.setSystemTime(TIED + 121_000)
+    await t.mutation(internal.demoUploads.sweep, {})
+    await t.finishAllScheduledFunctions(() => vi.runAllTimers())
+    expect(await stored(t, files)).toEqual([])
+  })
+
+  it('purges a demo only after it checked the file tied with the last file of a page', async () => {
+    const { t, authId } = await setup()
+    const receipt = await t.run(async (ctx) => {
+      const receipt = (await ctx.db
+        .query('demo_sessions')
+        .withIndex('by_auth_user', (q) => q.eq('auth_user_id', authId))
+        .unique())!
+      await ctx.db.patch(receipt._id, { status: 'deleting' })
+      return receipt
+    })
+    const files = await tiedFiles(t)
+    const drain = () => t.run((ctx) => drainDemoUploads(ctx, receipt.id))
+    vi.setSystemTime(TIED + 2)
+    expect(await drain()).toBe(false)
+    const barrier = (await t.run((ctx) => ctx.db.get(receipt._id)))!.cleanup_file_after!
+    vi.setSystemTime(barrier + 1)
+    // a page of 64, then the 65th file, which shares the last one's time
+    expect(await drain()).toBe(false)
+    expect(await stored(t, files)).toHaveLength(1)
+    expect(await drain()).toBe(true)
+    expect(await stored(t, files)).toEqual([])
   })
 
   it('deletes a demo with its crashed receiver bytes without rereading checked files', async () => {

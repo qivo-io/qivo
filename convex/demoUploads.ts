@@ -131,8 +131,11 @@ export const sweep = internalMutation({
     }
     // Storage writes and metadata commits cross an action boundary. A crash
     // there leaves no id in the ledger (model/demoUploads.ts checkStoredFiles).
-    const { through, full } = await checkStoredFiles(ctx, progress)
-    if (full) await ctx.scheduler.runAfter(1000, internal.demoUploads.sweep, { after: through })
+    const { checked, full } = await checkStoredFiles(ctx, progress)
+    if (full)
+      await ctx.scheduler.runAfter(1000, internal.demoUploads.sweep, {
+        after: checked.checked_through,
+      })
     return null
   },
 })

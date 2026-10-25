@@ -444,6 +444,9 @@ export default defineSchema({
   demo_upload_sweeps: defineTable({
     // the creation time of the newest file it checked, epoch milliseconds
     checked_through: v.number(),
+    // After a full page, the files created at checked_through that it
+    // checked, as others created then may remain. Absent, it checked them all.
+    checked_at: v.optional(v.array(v.id('_storage'))),
   }),
 
   // Anonymous admission counters contain no addresses or workspace data.
