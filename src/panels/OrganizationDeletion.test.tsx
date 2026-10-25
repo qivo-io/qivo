@@ -8,8 +8,8 @@ import { OrganizationDeletion } from './OrganizationDeletion'
 
 /* Settings › General's Delete organization question as it closes. Cancel
    clears the typed confirmation and a finished request clears busy, so the
-   closing dialog keeps what it showed open. The request is answered by
-   hand. */
+   closing dialog keeps what it showed open, and an opening starts empty.
+   The request is answered by hand. */
 
 const server = vi.hoisted(() => ({
   requests: [] as { resolve: (value: null) => void; args: unknown }[],
@@ -60,18 +60,19 @@ function button(name: string) {
   if (!found) throw new Error(`missing ${name}`)
   return found
 }
-/** Opens the question and types the organization's address. */
-async function askAndConfirm() {
-  await act(async () => document.querySelector<HTMLElement>('[data-org-delete]')?.click())
+/** Puts `value` in the confirmation field, as typing or a paste does. */
+async function fill(value: string) {
   const input = field()
   if (!input) throw new Error('missing the confirmation field')
   await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
-      input,
-      'northstar-labs',
-    )
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value)
     input.dispatchEvent(new Event('input', { bubbles: true }))
   })
+}
+/** Opens the question and types the organization's address. */
+async function askAndConfirm() {
+  await act(async () => document.querySelector<HTMLElement>('[data-org-delete]')?.click())
+  await fill('northstar-labs')
 }
 
 describe('the Delete organization question', () => {
@@ -86,9 +87,22 @@ describe('the Delete organization question', () => {
     expect(server.requests).toHaveLength(0)
     await endClosing()
     expect(dialog()).toBeNull()
+    expect(document.activeElement).toBe(document.querySelector('[data-org-delete]'))
     // the next question starts empty
     await act(async () => document.querySelector<HTMLElement>('[data-org-delete]')?.click())
     expect(field()?.value).toBe('')
+  })
+
+  it('starts empty after a close even when the fading field took input', async () => {
+    await act(async () => document.querySelector<HTMLElement>('[data-org-delete]')?.click())
+    await fill('northstar-lab')
+    await act(async () => button('Cancel').click())
+    // a paste from the browser's Edit menu still reaches the focused field
+    await fill('northstar-labs')
+    await endClosing()
+    await act(async () => document.querySelector<HTMLElement>('[data-org-delete]')?.click())
+    expect(field()?.value).toBe('')
+    expect(confirm()?.disabled).toBe(true)
   })
 
   it('keeps its busy button while it closes after the deletion is scheduled', async () => {

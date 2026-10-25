@@ -477,6 +477,8 @@ export function MobileTaskList({
   const [status, setStatus] = useState('all')
   const [filterOpen, setFilterOpen] = useState(false)
   const closeFilters = useMobileBackLayer(filterOpen, () => setFilterOpen(false))
+  // the Filters button, which takes focus back once the filter page has closed
+  const filterButton = useRef<HTMLButtonElement>(null)
   const effective = {
     ...filters,
     search: '',
@@ -576,7 +578,11 @@ export function MobileTaskList({
             </option>
           ))}
         </NativeSelect>
-        <Button onClick={() => setFilterOpen(true)} data-on={activeFilters ? '' : undefined}>
+        <Button
+          ref={filterButton}
+          onClick={() => setFilterOpen(true)}
+          data-on={activeFilters ? '' : undefined}
+        >
           <Icon name="filter" size={16} /> Filters{activeFilters > 0 ? `, ${activeFilters}` : ''}
         </Button>
         {info.wide && info.subIds.some((id) => P.canWrite(id)) && (
@@ -598,6 +604,10 @@ export function MobileTaskList({
           className="mobile-filter-page"
           showCloseButton={false}
           aria-describedby={undefined}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault()
+            filterButton.current?.focus()
+          }}
         >
           <div className="flex items-center gap-2">
             <Button variant="ghost" onClick={closeFilters}>

@@ -125,6 +125,7 @@ describe('the Cancel subscription question', () => {
     await act(async () => confirm()?.click())
     expect(answers).toHaveLength(1)
     await endClosing()
+    expect(document.activeElement).toBe(document.querySelector('[data-billing-cancel]'))
     // the next question starts without it
     await act(async () => document.querySelector<HTMLElement>('[data-billing-cancel]')?.click())
     expect(refusal()).toBeNull()

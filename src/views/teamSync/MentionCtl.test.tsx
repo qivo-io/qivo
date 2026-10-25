@@ -152,6 +152,40 @@ function button(name: string) {
   return found
 }
 const aisha = () => document.querySelector<HTMLButtonElement>('[data-sync-mention-person="aisha"]')
+/* Opens the window on a phone and writes a note. The Back step a close
+   takes waits until the returned `land`, which runs it and waits for the
+   window to close, so a test sees the window while that step is on its
+   way. */
+async function writeOnPhone() {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+  )
+  await write('Can you check the soak report?', vi.fn())
+  // the window's Back step is pushed after it opened
+  await act(async () => await Promise.resolve())
+  expect(history.state?.qivoLayer).toBeTruthy()
+  const back = history.back.bind(history)
+  const held = vi.spyOn(history, 'back').mockImplementation(() => {})
+  return async () => {
+    expect(held).toHaveBeenCalledTimes(1)
+    held.mockRestore()
+    back()
+    await act(() => vi.waitFor(() => expect(windowOpen()).toBe(false)))
+  }
+}
+/* Ctrl+Enter in the note, the shortcut that sends it. */
+const ctrlEnter = () =>
+  act(async () => {
+    note()?.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  })
 /* The @ glyph opens a closed window and closes an open one. */
 async function toggle() {
   await act(async () => {
@@ -285,6 +319,8 @@ describe('the Team sync @ window', () => {
     expect(aisha()?.disabled).toBe(true)
     expect(button('Cancel').disabled).toBe(true)
     await act(async () => send()?.click())
+    // the note keeps focus, and a shortcut there sends nothing either
+    await ctrlEnter()
     expect(writes).toHaveLength(1)
     await endClosing()
     expect(windowOpen()).toBe(false)
@@ -295,23 +331,68 @@ describe('the Team sync @ window', () => {
     expect(note()?.readOnly).toBe(false)
   })
 
-  it('stays locked on a phone until the Back step its save asked for lands', async () => {
-    vi.stubGlobal(
-      'matchMedia',
-      vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
-    )
+  it('sends nothing from a press while it closes after Cancel', async () => {
+    playClosingAnimations()
     await write('Can you check the soak report?', vi.fn())
-    // the window's Back step is pushed after it opened
-    await act(async () => await Promise.resolve())
-    expect(history.state?.qivoLayer).toBeTruthy()
+    await act(async () => button('Cancel').click())
+    expect(document.querySelector('[data-sync-mention-window]')?.getAttribute('data-state')).toBe(
+      'closed',
+    )
+    // the fading window shows what it had, Send included
+    expect(send()?.disabled).toBe(false)
+    await act(async () => send()?.click())
+    await act(async () => send()?.click())
+    await ctrlEnter()
+    expect(writes).toHaveLength(0)
+    await endClosing()
+    expect(windowOpen()).toBe(false)
+  })
+
+  it('stays locked through a close that a send overtook, until the answer', async () => {
+    await write('Can you check the soak report?', vi.fn())
+    // the glyph's close asks about the unsent note a moment later, and the
+    // send between keeps the note, so the window closes without asking
+    await act(async () => {
+      document.querySelector<HTMLElement>('[data-sync-mention]')?.click()
+      send()?.click()
+      await pastCloseTicks()
+    })
+    expect(question()).toBeNull()
+    expect(windowOpen()).toBe(false)
+    expect(writes).toHaveLength(1)
+    // reopened while the note is on its way, it shows the note locked
+    await toggle()
+    expect(note()?.value).toBe('Can you check the soak report?')
+    expect(send()?.disabled).toBe(true)
+    expect(note()?.readOnly).toBe(true)
+    await act(async () => send()?.click())
+    expect(writes).toHaveLength(1)
+  })
+
+  it('stays locked on a phone until the Back step its save asked for lands', async () => {
+    const land = await writeOnPhone()
     await act(async () => send()?.click())
     await act(async () => writes[0].resolve(null))
-    // the close goes back through that step, which lands in a later task
+    // the close goes back through that step
     expect(windowOpen()).toBe(true)
     expect(send()?.disabled).toBe(true)
     expect(note()?.readOnly).toBe(true)
-    await act(() => vi.waitFor(() => expect(windowOpen()).toBe(false)))
+    // the window is still open, so only its lock refuses the shortcut
+    await ctrlEnter()
     expect(writes).toHaveLength(1)
+    await land()
+    expect(windowOpen()).toBe(false)
+  })
+
+  it('sends nothing on a phone while the Back step Cancel asked for is on its way', async () => {
+    const land = await writeOnPhone()
+    await act(async () => button('Cancel').click())
+    expect(windowOpen()).toBe(true)
+    await act(async () => send()?.click())
+    await ctrlEnter()
+    expect(writes).toHaveLength(0)
+    await land()
+    expect(windowOpen()).toBe(false)
   })
 
   it('closes once the server saves the comment', async () => {

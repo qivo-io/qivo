@@ -9,8 +9,8 @@ import { TooltipProvider } from './ui/tooltip'
 
 /* A task's subscribers popover on the real store as it closes. A close
    leaves the person search as it was, so the closing popover keeps what it
-   showed open, and the next opening starts over. Aisha and Leo may be
-   added; nobody follows the task yet. */
+   showed open but takes no press, and the next opening starts over. Aisha
+   and Leo may be added; nobody follows the task yet. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -132,10 +132,21 @@ describe('the task subscribers popover', () => {
     expect(popover()?.getAttribute('data-state')).toBe('closed')
     expect(search()?.value).toBe('Le')
     expect(offered()).toEqual(['leo'])
+    // the fading popover subscribes nobody
+    const writes = network.mutation.mock.calls.length
+    await press('[data-task-subscriber-add="leo"]')
+    await act(async () => {
+      document
+        .querySelector('[data-task-subscriber-add="leo"]')
+        ?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    expect(network.mutation.mock.calls.length).toBe(writes)
     await endClosing()
     expect(popover()).toBeNull()
     await press('[data-task-subscribe]')
     expect(search()).toBeNull()
-    expect(document.querySelector('[data-task-subscriber-add-open]')).not.toBeNull()
+    await press('[data-task-subscriber-add-open]')
+    expect(search()?.value).toBe('')
+    expect(offered()).toEqual(['aisha', 'leo'])
   })
 })

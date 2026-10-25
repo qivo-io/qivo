@@ -9,6 +9,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { billingDate, billingMoney } from '@/lib/billingDisplay'
@@ -291,15 +292,12 @@ function CancelSubscription({
         if (!next) setError('')
       }}
     >
-      <Button
-        type="button"
-        variant="outline"
-        data-billing-cancel
-        disabled={busy}
-        onClick={() => setOpen(true)}
-      >
-        Cancel subscription
-      </Button>
+      {/* the trigger takes focus back once the dialog has closed */}
+      <AlertDialogTrigger asChild>
+        <Button type="button" variant="outline" data-billing-cancel disabled={busy}>
+          Cancel subscription
+        </Button>
+      </AlertDialogTrigger>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Cancel subscription?</AlertDialogTitle>
@@ -331,8 +329,6 @@ function CancelSubscription({
             disabled={shown.busy}
             onClick={(event) => {
               event.preventDefault()
-              // a press while the dialog fades out
-              if (!open) return
               setError('')
               void onCancel().then((refusal) =>
                 refusal === null ? setOpen(false) : setError(refusal),

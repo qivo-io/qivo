@@ -316,23 +316,26 @@ export function MentionCtl({
   // asks first (DiscardPrompt), except the one Cancel or a saved note makes.
   const noteWindow = useUnsentScope()
   useUnsaved(open && !kept && text.trim() !== '', 'note', noteWindow)
-  const letGo = useRef(false)
+  // why the next close asks nothing: the note was saved, or Cancel or a
+  // Discard let it go
+  const letGo = useRef<'saved' | 'dropped' | null>(null)
   const close = useMobileBackLayer(open, (again) => {
     const meant = letGo.current
-    letGo.current = false
+    letGo.current = null
     if (!meant && noteWindow.held().length) {
       closeOrAsk([noteWindow], () => {
-        letGo.current = true
+        letGo.current = 'dropped'
         again()
       })
       return false
     }
     setOpen(false)
-    // a save lets the note go, which unlocks the window once it has closed.
-    // A close while the note is sent keeps the lock.
-    if (meant) setSending(false)
+    // a save unlocks the window once it has closed. Any other close while
+    // the note is sent keeps the lock until the answer.
+    if (meant === 'saved') setSending(false)
   })
-  // the lock the window last showed, which it keeps while it fades out
+  // the lock the window last showed, which it keeps while it fades out.
+  // Handlers read `sending`.
   const locked = useClosingWords(open, sending)
   const canWrite = P.canWrite(it.project)
   // the people who can see the task (a mention of anyone else notifies no
@@ -342,9 +345,11 @@ export function MentionCtl({
   )
   const person = people.find((u) => u.id === who) || null
   // the note is saved as a comment, so a comment's cap holds it
-  const ready = !!person && text.trim() !== '' && !overLimit(LIMITS.comment, text) && !locked
+  const ready = !!person && text.trim() !== '' && !overLimit(LIMITS.comment, text) && !sending
   const send = () => {
-    if (!ready) return
+    // a close that a save, Cancel or a Discard asked for can wait for the
+    // page's history, such as a phone's Back step, with the window open
+    if (!ready || letGo.current) return
     // The window closes once the server saves the note. A refused one (the
     // store toasts why, such as lost access or a body over the length cap
     // once escaped) keeps the window open, so the note is not lost.
@@ -353,14 +358,14 @@ export function MentionCtl({
     void P.addComment(it.uuid, mentionBody(person, text)).then((saved) => {
       if (!saved) return setSending(false)
       setKept(false)
-      letGo.current = true
+      letGo.current = 'saved'
       close()
       onSent()
     })
   }
   const cancel = () => {
     setKept(false)
-    letGo.current = true
+    letGo.current = 'dropped'
     close()
   }
   return (
@@ -460,7 +465,7 @@ export function MentionCtl({
             variant="primary"
             size="sm"
             data-sync-mention-send
-            disabled={!ready}
+            disabled={!ready || locked}
             onClick={send}
             className="font-semibold"
           >

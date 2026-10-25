@@ -10,6 +10,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -109,21 +110,20 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
           onOpenChange={(next) => {
             if (busy) return
             setOpen(next)
-            if (!next) {
-              setConfirm('')
-              setError('')
-            }
+            // A close and an opening both start over. The closing dialog
+            // still shows what it had (useClosingWords), and input that
+            // reached its fading field, such as a paste from the browser's
+            // Edit menu, does not carry over.
+            setConfirm('')
+            setError('')
           }}
         >
-          <Button
-            type="button"
-            variant="outline"
-            data-org-delete
-            disabled={busy}
-            onClick={() => setOpen(true)}
-          >
-            Delete organization
-          </Button>
+          {/* the trigger takes focus back once the dialog has closed */}
+          <AlertDialogTrigger asChild>
+            <Button type="button" variant="outline" data-org-delete disabled={busy}>
+              Delete organization
+            </Button>
+          </AlertDialogTrigger>
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>Delete {orgName}?</AlertDialogTitle>
@@ -160,8 +160,6 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
                 data-org-delete-confirm
                 onClick={(event) => {
                   event.preventDefault()
-                  // a press while the dialog fades out
-                  if (!open) return
                   void run(
                     () =>
                       convex.action(api.orgRemovals.request, { org_id: orgId, confirm: confirm }),

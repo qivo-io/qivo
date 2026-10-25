@@ -31,11 +31,13 @@ export function playClosingAnimations() {
 }
 
 /** Ends the exit animation of every closing window part, as the browser
-    does once it has played. */
+    does once it has played, and waits for the timer in which Radix then
+    gives focus back. */
 export async function endClosing() {
   await act(async () => {
     for (const element of document.querySelectorAll(ANIMATED))
       if (element.getAttribute('data-state') === 'closed')
         element.dispatchEvent(Object.assign(new Event('animationend'), { animationName: 'exit' }))
   })
+  await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
 }

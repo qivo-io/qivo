@@ -1,5 +1,5 @@
 import type { FunctionReturnType } from 'convex/server'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -29,6 +29,9 @@ export function ConnectedApps() {
   // a refused delete, shown in the dialog only and cleared when it opens
   const [deleteError, setDeleteError] = useState('')
   const [busy, setBusy] = useState(false)
+  // the Delete that opened the dialog, which takes focus back once it has
+  // closed, unless its connection is gone
+  const opener = useRef<HTMLButtonElement | null>(null)
   useUpdateBlocker(busy)
   // a close clears the selection, so the closing dialog keeps its words
   const shown = useClosingWords(!!selected, { name: selected?.clientName, busy })
@@ -98,7 +101,8 @@ export function ConnectedApps() {
                 size="sm"
                 className="text-danger"
                 disabled={busy}
-                onClick={() => {
+                onClick={(event) => {
+                  opener.current = event.currentTarget
                   setDeleteError('')
                   setSelected(connection)
                 }}
@@ -139,7 +143,13 @@ export function ConnectedApps() {
           if (!open && !busy) setSelected(null)
         }}
       >
-        <AlertDialogContent>
+        <AlertDialogContent
+          onCloseAutoFocus={(event) => {
+            if (!opener.current?.isConnected) return
+            event.preventDefault()
+            opener.current.focus()
+          }}
+        >
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {shown.name} connection?</AlertDialogTitle>
             <AlertDialogDescription>

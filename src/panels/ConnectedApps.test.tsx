@@ -90,6 +90,9 @@ describe('the Connected apps delete question', () => {
     expect(title()).toBe('Delete Claude Desktop connection?')
     await endClosing()
     expect(dialog()).toBeNull()
+    // focus goes back to the Delete that asked
+    const row = document.querySelector('[data-oauth-connection="claude"]')
+    expect(row && document.activeElement).toBe(row && button('Delete', row))
   })
 
   it('keeps the name and its busy button while it closes after a delete', async () => {

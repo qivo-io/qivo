@@ -45,8 +45,8 @@ export function DiscardPrompt() {
       <AlertDialogContent
         data-discard-prompt
         // no fade-out: a fading question would still hold focus and Escape
-        overlayClassName="z-[130] data-[state=closed]:animate-none"
-        className="z-[131] data-[state=closed]:animate-none"
+        overlayClassName="z-[130] data-[state=closed]:!animate-none"
+        className="z-[131] data-[state=closed]:!animate-none"
         onCloseAutoFocus={(event) => {
           // back to the text after Keep editing or Escape
           const field = takeReturnField()
