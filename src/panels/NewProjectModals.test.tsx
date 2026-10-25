@@ -4,6 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
+import { endClosing, playClosingAnimations } from '../lib/closingAnimation.setup'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
 /* The New project and New sub-project dialogs on the real store, fed one
@@ -335,5 +336,44 @@ describe('New sub-project', () => {
     await pickLead('leo')
     expect(note()).toBeNull()
     expect(P.isAdmin()).toBe(true)
+  })
+})
+
+describe('the project access picker', () => {
+  beforeEach(async () => {
+    await load('user')
+    playClosingAnimations()
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  // the teams and users the picker lists, by id
+  const listed = () =>
+    [
+      ...document.querySelectorAll(
+        '[data-project-access-team-option], [data-project-access-user-option]',
+      ),
+    ].map(
+      (option) =>
+        option.getAttribute('data-project-access-team-option') ??
+        option.getAttribute('data-project-access-user-option'),
+    )
+  const search = () => find<HTMLInputElement>('[data-project-access-search]')
+
+  it('keeps its search while it closes, and starts empty when it opens again', async () => {
+    await render(<dialogs.NewProjectModal onClose={vi.fn()} onCreate={vi.fn()} />)
+    await click('[data-new-project-access]')
+    // Aisha leads and Nora is an org admin, so neither needs a share
+    expect(listed()).toEqual(['crew', 'leo'])
+    await type(search(), 'Leo')
+    expect(listed()).toEqual(['leo'])
+    await click('[data-new-project-access]')
+    expect(find('[data-new-project-access-popup]').getAttribute('data-state')).toBe('closed')
+    expect(search().value).toBe('Leo')
+    expect(listed()).toEqual(['leo'])
+    await endClosing()
+    expect(document.querySelector('[data-new-project-access-popup]')).toBeNull()
+    await click('[data-new-project-access]')
+    expect(search().value).toBe('')
+    expect(listed()).toEqual(['crew', 'leo'])
   })
 })

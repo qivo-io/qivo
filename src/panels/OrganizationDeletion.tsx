@@ -10,11 +10,13 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { billingDate } from '@/lib/billingDisplay'
+import { useClosingWords } from '@/lib/closingWords'
 import { convex } from '@/lib/convex'
 import { holdUnsaved } from '@/lib/leaveGuard'
 import { useOrgRemovalState } from '@/lib/orgRemovalState'
@@ -37,6 +39,9 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   useUpdateBlocker(busy)
+  // Cancel clears the confirmation and the refusal, and a finished deletion
+  // clears busy, as the dialog closes. It shows them until it has faded.
+  const shown = useClosingWords(open, { confirm, error, busy })
   if (!state) return null
 
   /** Runs one admin action, closing the dialog on success and showing the
@@ -65,7 +70,7 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
   }
 
   const deletion = state.deletion
-  const matches = confirm.trim().toLowerCase() === state.slug
+  const matches = shown.confirm.trim().toLowerCase() === state.slug
   return (
     <SettingsSection
       title="Delete organization"
@@ -105,21 +110,20 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
           onOpenChange={(next) => {
             if (busy) return
             setOpen(next)
-            if (!next) {
-              setConfirm('')
-              setError('')
-            }
+            // A close and an opening both start over. The closing dialog
+            // still shows what it had (useClosingWords), and input that
+            // reached its fading field, such as a paste from the browser's
+            // Edit menu, does not carry over.
+            setConfirm('')
+            setError('')
           }}
         >
-          <Button
-            type="button"
-            variant="outline"
-            data-org-delete
-            disabled={busy}
-            onClick={() => setOpen(true)}
-          >
-            Delete organization
-          </Button>
+          {/* the trigger takes focus back once the dialog has closed */}
+          <AlertDialogTrigger asChild>
+            <Button type="button" variant="outline" data-org-delete disabled={busy}>
+              Delete organization
+            </Button>
+          </AlertDialogTrigger>
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>Delete {orgName}?</AlertDialogTitle>
@@ -136,23 +140,23 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
               <Label htmlFor="org-delete-confirm">Type {state.slug} to confirm</Label>
               <Input
                 id="org-delete-confirm"
-                value={confirm}
+                value={shown.confirm}
                 autoComplete="off"
                 spellCheck={false}
                 data-org-delete-confirm-input
                 onChange={(event) => setConfirm(event.target.value)}
               />
             </div>
-            {error && (
+            {shown.error && (
               <p role="alert" className="text-sm text-danger">
-                {error}
+                {shown.error}
               </p>
             )}
             <AlertDialogFooter>
-              <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+              <AlertDialogCancel disabled={shown.busy}>Cancel</AlertDialogCancel>
               <AlertDialogAction
                 variant="destructive"
-                disabled={busy || !matches}
+                disabled={shown.busy || !matches}
                 data-org-delete-confirm
                 onClick={(event) => {
                   event.preventDefault()
@@ -163,7 +167,7 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
                   )
                 }}
               >
-                {busy ? 'Deleting…' : 'Delete organization'}
+                {shown.busy ? 'Deleting…' : 'Delete organization'}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

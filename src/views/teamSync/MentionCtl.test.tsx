@@ -3,8 +3,9 @@ import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { TooltipProvider } from '../../components/ui/tooltip'
+import { endClosing, playClosingAnimations } from '../../lib/closingAnimation.setup'
 import { pastCloseTicks } from '../../lib/discardQuestion.setup'
 import type { UnsentScope } from '../../lib/leaveGuard'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
@@ -151,6 +152,37 @@ function button(name: string) {
   return found
 }
 const aisha = () => document.querySelector<HTMLButtonElement>('[data-sync-mention-person="aisha"]')
+/* Opens the window on a phone, with the page's history and the layers'
+   listener as main.tsx and App add them, and writes a note. The window has
+   a Back step of its own, and its own close takes none. */
+async function writeOnPhone() {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+  )
+  const pageHistory = await import('../../lib/pageHistory')
+  const removeHistory = pageHistory.installPageHistory()
+  onTestFinished(pageHistory.listenBackLayers())
+  onTestFinished(removeHistory)
+  await write('Can you check the soak report?', vi.fn())
+  // the window's Back step is pushed after it opened
+  await act(async () => await Promise.resolve())
+  expect(history.state?.qivoLayer).toBeTruthy()
+}
+const fading = () =>
+  document.querySelector('[data-sync-mention-window]')?.getAttribute('data-state') === 'closed'
+/* Ctrl+Enter in the note, the shortcut that sends it. */
+const ctrlEnter = () =>
+  act(async () => {
+    note()?.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  })
 /* The @ glyph opens a closed window and closes an open one. */
 async function toggle() {
   await act(async () => {
@@ -268,6 +300,95 @@ describe('the Team sync @ window', () => {
     })
     await act(async () => button('Cancel').click())
     expect(question()).toBeNull()
+    expect(windowOpen()).toBe(false)
+  })
+
+  it('stays locked while it closes after the save, so a press then sends nothing', async () => {
+    playClosingAnimations()
+    const onSent = vi.fn()
+    await write('Can you check the soak report?', onSent)
+    await act(async () => send()?.click())
+    await act(async () => writes[0].resolve(null))
+    const closing = document.querySelector('[data-sync-mention-window]')
+    expect(closing?.getAttribute('data-state')).toBe('closed')
+    expect(send()?.disabled).toBe(true)
+    expect(note()?.readOnly).toBe(true)
+    expect(aisha()?.disabled).toBe(true)
+    expect(button('Cancel').disabled).toBe(true)
+    await act(async () => send()?.click())
+    // the note keeps focus, and a shortcut there sends nothing either
+    await ctrlEnter()
+    expect(writes).toHaveLength(1)
+    await endClosing()
+    expect(windowOpen()).toBe(false)
+    expect(onSent).toHaveBeenCalledTimes(1)
+    // the next note starts unlocked
+    await toggle()
+    expect(note()?.value).toBe('')
+    expect(note()?.readOnly).toBe(false)
+  })
+
+  it('sends nothing from a press while it closes after Cancel', async () => {
+    playClosingAnimations()
+    await write('Can you check the soak report?', vi.fn())
+    await act(async () => button('Cancel').click())
+    expect(document.querySelector('[data-sync-mention-window]')?.getAttribute('data-state')).toBe(
+      'closed',
+    )
+    // the fading window shows what it had, Send included
+    expect(send()?.disabled).toBe(false)
+    await act(async () => send()?.click())
+    await act(async () => send()?.click())
+    await ctrlEnter()
+    expect(writes).toHaveLength(0)
+    await endClosing()
+    expect(windowOpen()).toBe(false)
+  })
+
+  it('stays locked through a close that a send overtook, until the answer', async () => {
+    await write('Can you check the soak report?', vi.fn())
+    // the glyph's close asks about the unsent note a moment later, and the
+    // send between keeps the note, so the window closes without asking
+    await act(async () => {
+      document.querySelector<HTMLElement>('[data-sync-mention]')?.click()
+      send()?.click()
+      await pastCloseTicks()
+    })
+    expect(question()).toBeNull()
+    expect(windowOpen()).toBe(false)
+    expect(writes).toHaveLength(1)
+    // reopened while the note is on its way, it shows the note locked
+    await toggle()
+    expect(note()?.value).toBe('Can you check the soak report?')
+    expect(send()?.disabled).toBe(true)
+    expect(note()?.readOnly).toBe(true)
+    await act(async () => send()?.click())
+    expect(writes).toHaveLength(1)
+  })
+
+  it('closes at once on a phone after the save, and stays locked while it fades', async () => {
+    playClosingAnimations()
+    await writeOnPhone()
+    await act(async () => send()?.click())
+    await act(async () => writes[0].resolve(null))
+    expect(fading()).toBe(true)
+    expect(send()?.disabled).toBe(true)
+    expect(note()?.readOnly).toBe(true)
+    await ctrlEnter()
+    expect(writes).toHaveLength(1)
+    await endClosing()
+    expect(windowOpen()).toBe(false)
+  })
+
+  it('closes at once on a phone after Cancel, and a press while it fades sends nothing', async () => {
+    playClosingAnimations()
+    await writeOnPhone()
+    await act(async () => button('Cancel').click())
+    expect(fading()).toBe(true)
+    await act(async () => send()?.click())
+    await ctrlEnter()
+    expect(writes).toHaveLength(0)
+    await endClosing()
     expect(windowOpen()).toBe(false)
   })
 

@@ -2,6 +2,7 @@ import { XIcon } from 'lucide-react'
 import { Dialog as DialogPrimitive } from 'radix-ui'
 import * as React from 'react'
 import { Button } from '@/components/ui/button'
+import { CLOSING_INERT, closingGuard } from '@/lib/closingGuard'
 import { cn } from '@/lib/utils'
 import { useViewHidden } from '@/lib/viewHidden'
 
@@ -64,9 +65,11 @@ const DialogContent = React.forwardRef<
         data-slot="dialog-content"
         className={cn(
           'fixed top-[calc(50%+(var(--float-inset-top)-var(--float-inset-bottom))/2)] left-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-6 rounded-lg border border-border bg-background p-5 shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
+          CLOSING_INERT,
           className,
         )}
         {...props}
+        {...closingGuard(props)}
       >
         {children}
         {showCloseButton && (
