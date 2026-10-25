@@ -10,9 +10,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { LIMITS } from '../lib/limits'
-import { wakeSnoozedItem } from '../model/messages'
+import { removeReadMessages, wakeSnoozedItem } from '../model/messages'
 import {
   as,
+  chargeFilteredReads,
   expectRefusal,
   messagesFor,
   newT,
@@ -269,5 +270,44 @@ describe('the bulk acts leave a snoozed item alone', () => {
     const left = (await messagesFor(t, f.guest.id)).map((m) => m.id).sort()
     expect(left).toEqual([snoozedUnread.id, snoozedRead.id].sort())
     expect(left).not.toContain(plainRead.id)
+  })
+
+  it('removeRead reads no snoozed row, however many were read before the rows it removes', async () => {
+    const t = newT()
+    // The backend counts the rows a filter passes over; convex-test does not.
+    chargeFilteredReads()
+    const f = await withOrg(t)
+    const base = { org_id: f.org.id, recipient_id: f.guest.id }
+    const until = inAnHour()
+    await t.run(async (ctx) => {
+      for (let n = 0; n < 100; n++) {
+        await ctx.db.insert('messages', {
+          ...base,
+          id: uuid(),
+          issue_id: uuid(),
+          issue_title: 'Snoozed task',
+          kind: 'change',
+          detail: 'snoozed',
+          created_at: '2026-01-01T00:00:00.000Z',
+          read_at: '2026-01-01T00:00:00.000Z',
+          snoozed_until: until,
+        })
+      }
+    })
+    const plainRead = await plantMessage(t, {
+      ...base,
+      issue_id: uuid(),
+      read_at: '2026-01-02T00:00:00.000Z',
+    })
+
+    const done = await t.run(async (ctx) => {
+      const { removed } = await removeReadMessages(ctx, f.guest)
+      const read = (await ctx.meta.getTransactionMetrics()).documentsRead.used
+      return { removed: removed.map((m) => m.id), read }
+    })
+
+    // the plain row, and again as it is deleted
+    expect(done).toEqual({ removed: [plainRead.id], read: 2 })
+    expect(await messagesFor(t, f.guest.id)).toHaveLength(100)
   })
 })

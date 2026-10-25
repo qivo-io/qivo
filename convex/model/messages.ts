@@ -1072,7 +1072,8 @@ export async function markAllMessagesRead(
 
 /**
  * Deletes up to INBOX_BATCH of `me`'s read rows. A snoozed row that was read
- * meanwhile is a pending reminder, not clutter, and stays. Each batch
+ * meanwhile is a pending reminder, not clutter, and stays. The index range
+ * leaves snoozed rows out, so they cost a batch nothing. Each batch
  * selects the current read rows, so a row reopened elsewhere survives.
  * Returns the rows it deleted.
  */
@@ -1082,8 +1083,9 @@ export async function removeReadMessages(
 ): Promise<{ removed: Doc<'messages'>[]; hasMore: boolean }> {
   const rows = await ctx.db
     .query('messages')
-    .withIndex('by_recipient_read', (q) => q.eq('recipient_id', me.id).gt('read_at', undefined))
-    .filter((q) => q.eq(q.field('snoozed_until'), undefined))
+    .withIndex('by_recipient_snoozed_read', (q) =>
+      q.eq('recipient_id', me.id).eq('snoozed_until', undefined).gt('read_at', undefined),
+    )
     .take(INBOX_BATCH + 1)
   const batch = rows.slice(0, INBOX_BATCH)
   for (const row of batch) await ctx.db.delete(row._id)

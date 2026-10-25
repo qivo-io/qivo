@@ -36,9 +36,10 @@
  *   starts with a full pass over every profile (SWEEP_FULL_AFTER_MS), which
  *   adds or lowers a row that a backup restore, a rollback or a write
  *   without noteSweepable left missing or late. It costs one step per
- *   SWEEP_LIMITS.profiles profiles. A step reads those profiles, the oldest
- *   read message of each with a retention period and, when there is one,
- *   its sweep row, and writes only the rows it repairs.
+ *   SWEEP_LIMITS.profiles profiles. A step reads those profiles and, by
+ *   index, the oldest read, unsnoozed message of each with a retention
+ *   period and its sweep row when there is one. It writes only the rows it
+ *   repairs.
  *
  * Convex retries a scheduled mutation after a transient error and drops the
  * calls a failed mutation scheduled. A leg that fails every time therefore
@@ -655,12 +656,14 @@ async function fullPassDue(ctx: QueryCtx, now: string): Promise<boolean> {
 }
 
 /* When the oldest of `profileId`'s read, unsnoozed messages falls due under
- * a retention period of `days`, or null when it has none. */
+ * a retention period of `days`, or null when it has none. It reads that one
+ * message by index, however many snoozed ones were read before it. */
 async function oldestDue(ctx: QueryCtx, profileId: string, days: number): Promise<string | null> {
   const oldest = await ctx.db
     .query('messages')
-    .withIndex('by_recipient_read', (q) => q.eq('recipient_id', profileId).gt('read_at', undefined))
-    .filter((q) => q.eq(q.field('snoozed_until'), undefined))
+    .withIndex('by_recipient_snoozed_read', (q) =>
+      q.eq('recipient_id', profileId).eq('snoozed_until', undefined).gt('read_at', undefined),
+    )
     .first()
   if (oldest?.read_at === undefined) return null
   return new Date(Date.parse(oldest.read_at) + days * DAY).toISOString()
@@ -672,7 +675,8 @@ async function oldestDue(ctx: QueryCtx, profileId: string, days: number): Promis
  * UNREAD message is never swept however old it is. Nothing here decides
  * that news stopped mattering because it went unanswered. A snoozed row is
  * a pending reminder and is never swept, however long ago it was read. The
- * read is an index range, so a long unread backlog costs nothing here.
+ * read is an index range of the read, unsnoozed rows, so a long unread or
+ * snoozed backlog costs nothing here.
  * Then it moves the profile's message_sweeps row to when its oldest read
  * row left falls due, or deletes the row when none is left, the profile is
  * gone or it keeps read messages. A message whose recipient row is gone is
@@ -696,10 +700,13 @@ async function sweepProfile(
     const cutoff = new Date(Date.parse(now) - days * DAY).toISOString()
     const expired = await ctx.db
       .query('messages')
-      .withIndex('by_recipient_read', (q) =>
-        q.eq('recipient_id', profileId).gt('read_at', undefined).lte('read_at', cutoff),
+      .withIndex('by_recipient_snoozed_read', (q) =>
+        q
+          .eq('recipient_id', profileId)
+          .eq('snoozed_until', undefined)
+          .gt('read_at', undefined)
+          .lte('read_at', cutoff),
       )
-      .filter((q) => q.eq(q.field('snoozed_until'), undefined))
       .take(budget + 1)
     for (const m of expired.slice(0, budget)) {
       await ctx.db.delete(m._id)

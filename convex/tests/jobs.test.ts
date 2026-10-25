@@ -34,6 +34,7 @@ import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
 import { messageRetentionDays } from '../model/people'
 import {
   as,
+  chargeFilteredReads,
   fileState,
   messagesFor,
   NOW,
@@ -1639,6 +1640,37 @@ const sweepAt = (t: T, now: string): Promise<SweepCounts[]> =>
 const messageIds = async (t: T): Promise<string[]> =>
   (await t.run((ctx) => ctx.db.query('messages').collect())).map((m) => m.id)
 
+/* The message_sweeps rows, profile to due time. */
+const sweepDues = async (t: T): Promise<Record<string, string>> =>
+  Object.fromEntries(
+    (await t.run((ctx) => ctx.db.query('message_sweeps').collect())).map((row) => [
+      row.profile_id,
+      row.due_at,
+    ]),
+  )
+
+/* Inserts `count` messages of one recipient, each about its own task, read
+ * at `read_at` and snoozed until `snoozed_until`, as marking a snoozed item
+ * read leaves them: pending reminders the sweep keeps. */
+const plantReadSnoozed = (
+  t: T,
+  m: { org_id: string; recipient_id: string; read_at: string; snoozed_until: string },
+  count: number,
+): Promise<void> =>
+  t.run(async (ctx) => {
+    for (let n = 0; n < count; n++) {
+      await ctx.db.insert('messages', {
+        ...m,
+        id: uuid(),
+        issue_id: uuid(),
+        issue_title: 'Snoozed task',
+        kind: 'change',
+        detail: 'snoozed',
+        created_at: NOW,
+      })
+    }
+  })
+
 describe('sweepReadMessages reads only what is due', () => {
   it('after the seed, a run visits only the profiles with a read message due and the overdue snoozes', async () => {
     SWEEP_LIMITS.profiles = 10
@@ -1724,6 +1756,66 @@ describe('sweepReadMessages reads only what is due', () => {
     expect(counts.reduce((sum, c) => sum + c.deleted, 0)).toBe(3)
     const ids = await messageIds(t)
     for (const m of [inApp, longRead, byArchive]) expect(ids).not.toContain(m.id)
+  })
+
+  it('a leg reads only the read, unsnoozed messages, and keeps the snoozed ones read before them', async () => {
+    const t = newT()
+    // The backend counts the rows a filter passes over; convex-test does not.
+    chargeFilteredReads()
+    const start = Date.now()
+    const at = (days: number) => new Date(start + days * DAY).toISOString()
+    const org_id = uuid()
+    const { id } = await plantSeat(t, {
+      org_id,
+      kind: 'agent',
+      name: 'Bot',
+      plannable_hours: undefined,
+    })
+    const snoozed = { org_id, recipient_id: id, snoozed_until: at(5) }
+    // under the default period the cutoff is at(-7): snoozed rows read before
+    // the expired message, and more between it and the message kept
+    await plantReadSnoozed(t, { ...snoozed, read_at: at(-30) }, 50)
+    const expired = await plantMessage(t, {
+      org_id,
+      recipient_id: id,
+      issue_id: uuid(),
+      read_at: at(-20),
+    })
+    await plantReadSnoozed(t, { ...snoozed, read_at: at(-2) }, 50)
+    const kept = await plantMessage(t, {
+      org_id,
+      recipient_id: id,
+      issue_id: uuid(),
+      read_at: at(-1),
+    })
+    await t.run((ctx) => ctx.db.insert('message_sweeps', { profile_id: id, due_at: at(-13) }))
+
+    let read = 0
+    const counts = await runLogged<SweepCounts>(
+      t,
+      async () => {
+        read = await t.run(async (ctx) => {
+          await ctx.runMutation(internal.jobs.sweepDueProfiles, {
+            profiles: [id],
+            now: at(0),
+            deleted: 0,
+          })
+          return (await ctx.meta.getTransactionMetrics()).documentsRead.used
+        })
+      },
+      'Read-message sweep finished',
+    )
+
+    // the sweep row, the profile, the expired message and again as it goes,
+    // the kept message and the row again as it moves; no snoozed row
+    expect(read).toBe(6)
+    expect(counts).toEqual([{ to: id, deleted: 1, woken: 0 }])
+    const left = await messagesFor(t, id)
+    expect(left).toHaveLength(101)
+    expect(left.filter((m) => m.snoozed_until === undefined).map((m) => m.id)).toEqual([kept.id])
+    expect(left.map((m) => m.id)).not.toContain(expired.id)
+    // due with the kept message, behind the snoozed ones read before it
+    expect(await sweepDues(t)).toEqual({ [id]: at(DEFAULT_MESSAGE_RETENTION_DAYS - 1) })
   })
 
   it('a step or leg the release before queued starts the run again or does nothing', async () => {
@@ -1825,6 +1917,54 @@ describe('sweepReadMessages keeps a sweep row for every read message', () => {
     expect(await sweepRows()).toEqual([[patient.id, at(50)]])
     const seeds = await t.run((ctx) => ctx.db.query('message_sweep_seeds').collect())
     expect(seeds.map((row) => row.seeded_at)).toEqual([at(28)])
+  })
+
+  it('a full pass step reads one message a profile, however many snoozed ones were read first', async () => {
+    const t = newT()
+    // The backend counts the rows a filter passes over; convex-test does not.
+    chargeFilteredReads()
+    const start = Date.now()
+    const at = (days: number) => new Date(start + days * DAY).toISOString()
+    const org_id = uuid()
+    const due: Record<string, string> = {}
+    for (let n = 0; n < 3; n++) {
+      const { id } = await plantSeat(t, {
+        org_id,
+        kind: 'agent',
+        name: `Bot ${n}`,
+        plannable_hours: undefined,
+      })
+      await plantReadSnoozed(
+        t,
+        { org_id, recipient_id: id, read_at: at(-20), snoozed_until: at(5) },
+        50,
+      )
+      await plantMessage(t, { org_id, recipient_id: id, issue_id: uuid(), read_at: at(-3) })
+      due[id] = at(DEFAULT_MESSAGE_RETENTION_DAYS - 3)
+    }
+
+    let read = 0
+    const counts = await runLogged<SweepCounts>(
+      t,
+      async () => {
+        read = await t.run(async (ctx) => {
+          await ctx.runMutation(internal.jobs.sweepReadMessages, { now: at(0) })
+          return (await ctx.meta.getTransactionMetrics()).documentsRead.used
+        })
+      },
+      'Read-message sweep finished',
+    )
+
+    // the three profiles and the unsnoozed message of each; it finds no
+    // sweep or seed row yet
+    expect(read).toBe(6)
+    // each row is due with that message, behind the snoozed ones, and the
+    // run goes on to its due phase, where nothing is due yet
+    expect(await sweepDues(t)).toEqual(due)
+    expect(counts).toEqual([])
+    expect((await auditRows(t, 'sweep_read_messages')).map((r) => r.detail)).toEqual([
+      { pages: 0, wake: false },
+    ])
   })
 
   type Fixture = Awaited<ReturnType<typeof withOrg>>
