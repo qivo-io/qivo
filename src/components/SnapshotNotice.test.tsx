@@ -263,6 +263,22 @@ describe('SnapshotNotice while Qivo cannot save', () => {
     expect(window.showToast).toHaveBeenCalledWith('Back online. Editing is on again.', 'success')
   })
 
+  it('says nothing about saving without a loaded workspace, as on the demo start screen', async () => {
+    await offline()
+    expect(shown()?.dataset.snapshotNotice).toBe('offline')
+    // the demo gate disposes the store when a start fails (DemoGate.tsx),
+    // and the store then passes no change of the pause on
+    store.P.loaded = false
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <notice.SnapshotNotice />
+        </TooltipProvider>,
+      ),
+    )
+    expect(shown()).toBeNull()
+  })
+
   it('says how long saving takes, and nothing once it caught up', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
     const { syncStatus, SLOW_SAVE_MS } = await import('../lib/syncStatus')
