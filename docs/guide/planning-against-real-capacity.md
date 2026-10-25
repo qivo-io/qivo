@@ -72,7 +72,8 @@ last sync. Changes save on the tasks. Use task comments for meeting notes.
 
 Open **Team sync** in the sidebar or **Sync** in the phone's bottom navigation.
 If you left a meeting without the last **Done**, for example through a row's
-Board link, these open it again on the step you left.
+Board link, the sidebar row and the **Sync** tab open it again on the step you
+left.
 The page belongs to your current organization. Its scope and each step have
 shareable addresses. Browser Back leaves the page; it does not step through
 the meeting. Escape does not close the page. Task windows open over it.
