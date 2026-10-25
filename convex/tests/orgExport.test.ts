@@ -57,6 +57,11 @@ const EXCLUDED_TABLES = [
   'background_uploads',
   // An expiring REST upload in progress belongs to one credential's caller.
   'attachment_uploads',
+  // Deleted files no row names, waiting to be erased; nothing in them is
+  // the organization's to export.
+  'file_holds',
+  // The eraser's restore witness, deployment state.
+  'restore_watch',
   'marketing_demo',
   'issue_subscriptions',
   'messages',

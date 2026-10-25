@@ -1920,7 +1920,9 @@ not the credential, so a link fetched before a token was revoked works until
 it expires. Images open in the browser and other types download.
 
 `delete_attachment` deletes one file and writes a `removed an attachment
-from` activity row signed `via MCP`. Anyone with Edit access to the
+from` activity row signed `via MCP`. No link serves the file from then on,
+and Qivo erases its contents within 7 days
+([Deleted items](guide/how-work-is-organized.md#deleted-items)). Anyone with Edit access to the
 project may delete any file, not only their own. An id that is not a file of
 that task reads `attachment "<id>" not found on QN-<n>`. A description
 image goes when the description stops showing it, so `delete_attachment`
@@ -1932,7 +1934,9 @@ tool, that takes out an image's last reference removes the image from the
 task at once: it no longer counts toward the 100 attachments and no longer
 appears in `attachments`. A save within a day that names it again brings it
 back, unless the task has 100 attachments by then, which is refused with
-the full-task sentence below. After a day the image is deleted, and a task
+the full-task sentence below. After a day the image is deleted, and Qivo
+erases its contents within 7 days after that
+([Deleted items](guide/how-work-is-organized.md#deleted-items)). A task
 keeps at most the 100 most recently removed images, so the oldest goes at
 once when a save removes more. An image that no saved description has named a day after its upload, such as one a
 closed browser tab left, is removed by the task's next description save.

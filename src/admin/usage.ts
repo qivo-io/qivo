@@ -60,6 +60,7 @@ export const fmtMonth = (month: string): string =>
 /** The figures that belong to no organization, in the order shown. */
 export const UNATTRIBUTED_COLUMNS = [
   'background_bytes',
+  'held_file_bytes',
   'mail_verification',
   'mail_password_reset',
   'mail_account_notes',

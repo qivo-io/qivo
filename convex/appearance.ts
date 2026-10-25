@@ -39,6 +39,7 @@ import {
   reserveDemoUpload,
   retainDemoUpload,
 } from './model/demoUploads'
+import { eraseFile } from './model/fileHolds'
 import { canvasImageForDate } from './panoramaImages'
 
 declare const crypto: { randomUUID(): string }
@@ -358,8 +359,7 @@ export const finalizeUpload = internalMutation({
 export const discardUpload = internalMutation({
   args: { storage_id: v.id('_storage') },
   handler: async (ctx, { storage_id }) => {
-    if ((await ctx.db.system.get(storage_id)) && !(await storageIdInUse(ctx, storage_id)))
-      await ctx.storage.delete(storage_id)
+    if (!(await storageIdInUse(ctx, storage_id))) await eraseFile(ctx, storage_id)
   },
 })
 

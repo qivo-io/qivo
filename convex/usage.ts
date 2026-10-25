@@ -21,7 +21,9 @@
  * reads when an operator opens it (monthTable, orgMonths), and the
  * per-person breakdown of any month is computed the same way (orgPeople).
  * The last step also stores the bytes of account backgrounds, which belong
- * to a login rather than an organization, as one total for the month.
+ * to a login rather than an organization, and of the deleted files held for
+ * a restore (model/fileHolds.ts), which belong to none, as two totals for
+ * the month.
  *
  * The reads are in model/usage.ts. Each internal query is one transaction
  * over one bounded page, and an action strings them together, so no
@@ -48,8 +50,10 @@ import { deletionBegun } from './lib/billingAccess'
 import { isDemoDeployment } from './lib/demo'
 import { badRequest, platformAction, require } from './lib/functions'
 import {
+  HELD_FILES,
   monthOf,
   monthRange,
+  PERSON_FILES,
   PERSON_MAIL,
   previousMonth,
   retentionCutoff,
@@ -68,6 +72,7 @@ import {
   deletedPage,
   filesPage,
   forgetSignIns,
+  heldFilesPage,
   keepSignIns,
   type MonthStatus,
   monthSpan,
@@ -80,8 +85,8 @@ import {
   type Span,
   seeMonth,
   sessionsPage,
-  setPersonFiles,
-  storedPersonFiles,
+  setMonthBytes,
+  storedMonthBytes,
   taskCommentsPage,
   USAGE_PAGE,
   type UsageHead,
@@ -173,13 +178,19 @@ export const backgrounds = internalQuery({
   handler: async (ctx, { cursor }) => await backgroundsPage(ctx, cursor),
 })
 
-/** Account mail of `month`, and the account background bytes stored with
- * it, null for a month stored without them. */
+export const heldFiles = internalQuery({
+  args: { cursor: vCursor },
+  handler: async (ctx, { cursor }) => await heldFilesPage(ctx, cursor),
+})
+
+/** Account mail of `month`, and the account background and held file
+ * bytes stored with it, each null for a month stored without it. */
 export const unattributed = internalQuery({
   args: { month: v.string() },
   handler: async (ctx, { month }): Promise<Unattributed> => ({
     ...(await personMail(ctx, month)),
-    background_bytes: await storedPersonFiles(ctx, month),
+    background_bytes: await storedMonthBytes(ctx, month, PERSON_FILES),
+    held_file_bytes: await storedMonthBytes(ctx, month, HELD_FILES),
   }),
 })
 
@@ -519,6 +530,18 @@ async function backgroundBytes(ctx: Runner): Promise<number> {
   return bytes
 }
 
+/** The bytes of every deleted file held for a restore now. */
+async function heldFileBytes(ctx: Runner): Promise<number> {
+  let bytes = 0
+  await eachPage(
+    (cursor) => ctx.runQuery(internal.usage.heldFiles, { cursor }),
+    (page) => {
+      bytes += page.bytes
+    },
+  )
+  return bytes
+}
+
 /** Refuses a key that is not a month, a month that has not ended, and one
  * older than retention keeps. */
 function closedMonth(month: string, now: number): void {
@@ -586,9 +609,10 @@ export const claimStep = internalMutation({
  * Records a finished step of run `run` of `month`. While pages remain it
  * schedules the next step, in this transaction, so a step cannot end
  * without its successor. After the last page it stores the bytes of account
- * backgrounds, or counts one more failure when they could not be read
- * (null), marks the run finished and writes one usage_month row to the
- * platform audit log. Does nothing once another run took the month.
+ * backgrounds and of held files, counting one more failure for each that
+ * could not be read (null), marks the run finished and writes one
+ * usage_month row to the platform audit log. Does nothing once another run
+ * took the month.
  */
 export const endStep = internalMutation({
   args: {
@@ -598,6 +622,7 @@ export const endStep = internalMutation({
     saved: v.number(),
     failed: v.number(),
     background_bytes: v.optional(v.union(v.number(), v.null())),
+    held_file_bytes: v.optional(v.union(v.number(), v.null())),
   },
   handler: async (ctx, a): Promise<null> => {
     const row = await runRow(ctx, a.month)
@@ -608,8 +633,13 @@ export const endStep = internalMutation({
       await ctx.scheduler.runAfter(0, closeMonthRef, { month, run })
       return null
     }
-    const failed = a.failed + (typeof a.background_bytes === 'number' ? 0 : 1)
-    if (typeof a.background_bytes === 'number') await setPersonFiles(ctx, month, a.background_bytes)
+    let failed = a.failed
+    for (const [metric, bytes] of [
+      [PERSON_FILES, a.background_bytes],
+      [HELD_FILES, a.held_file_bytes],
+    ] as const)
+      if (typeof bytes === 'number') await setMonthBytes(ctx, month, metric, bytes)
+      else failed += 1
     await ctx.db.patch(row._id, { cursor, saved, failed, finished_at: Date.now() })
     await audit(ctx, {
       actor_email: 'system',
@@ -667,14 +697,15 @@ export const closeMonth = internalAction({
       }
     })
     let background_bytes: number | null | undefined
-    if (page.next === null)
-      background_bytes = await backgroundBytes(ctx).catch((e: unknown) => {
-        console.error('[usage] account backgrounds not counted', {
-          month,
-          name: (e as Error)?.name ?? 'error',
-        })
+    let held_file_bytes: number | null | undefined
+    if (page.next === null) {
+      const notCounted = (what: string) => (e: unknown) => {
+        console.error(`[usage] ${what} not counted`, { month, name: (e as Error)?.name ?? 'error' })
         return null
-      })
+      }
+      background_bytes = await backgroundBytes(ctx).catch(notCounted('account backgrounds'))
+      held_file_bytes = await heldFileBytes(ctx).catch(notCounted('held files'))
+    }
     await ctx.runMutation(internal.usage.endStep, {
       month,
       run: step.run,
@@ -682,6 +713,7 @@ export const closeMonth = internalAction({
       saved,
       failed,
       background_bytes,
+      held_file_bytes,
     })
     return null
   },
@@ -873,7 +905,11 @@ export const monthTable = platformAction({
     }
     const stored: Unattributed = await ctx.runQuery(internal.usage.unattributed, { month })
     const unattributed = current
-      ? { ...stored, background_bytes: await backgroundBytes(ctx) }
+      ? {
+          ...stored,
+          background_bytes: await backgroundBytes(ctx),
+          held_file_bytes: await heldFileBytes(ctx),
+        }
       : stored
     const status: MonthStatus = await ctx.runQuery(internal.usage.status, { month })
     return { month, current, rows, unattributed, failed, status }

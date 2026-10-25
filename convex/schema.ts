@@ -748,8 +748,9 @@ export default defineSchema({
   // and kind, with person mail (verification, password reset) under no
   // organization, and the webhook deliveries the retention sweep deleted, by
   // the month they finished. One row per organization, month and metric
-  // (usage.ts countUsage). The bytes of account backgrounds when a month
-  // was stored are one more row under no organization (setPersonFiles).
+  // (usage.ts countUsage). The bytes of account backgrounds and of deleted
+  // files held for a restore when a month was stored are two more rows
+  // under no organization (setMonthBytes).
   usage_counts: defineTable({
     org_id: v.optional(v.string()),
     month: v.string(), // YYYY-MM
@@ -1009,6 +1010,30 @@ export default defineSchema({
 
   issue_subscriptions: issueSubscriptionsTable,
   issue_attachments: issueAttachmentsTable,
+
+  // A deleted file waiting to be erased (model/fileHolds.ts). No row names
+  // its file any more; it is kept until `erase_at` so a restore from a
+  // backup without files finds it, then its scheduled erase, or else
+  // files.ts eraseHeldFiles, erases it. One row per file. `size_bytes` is
+  // the file's size when it was let go. `after_restore` marks the hold of a
+  // file a restore left unnamed (files.ts reapOrphans), which no release
+  // made.
+  file_holds: defineTable({
+    storage_id: v.id('_storage'),
+    size_bytes: v.number(),
+    erase_at: v.number(), // epoch milliseconds
+    after_restore: v.optional(v.literal(true)),
+  })
+    .index('by_storage', ['storage_id'])
+    .index('by_erase_at', ['erase_at']),
+
+  // One row: the scheduled witness that tells the eraser whether a restore
+  // rewound the database (model/fileHolds.ts noteRestore), and when it last
+  // found one, in epoch milliseconds.
+  restore_watch: defineTable({
+    witness: v.id('_scheduled_functions'),
+    restored_at: v.optional(v.number()),
+  }),
 
   // A REST upload in progress (model/attachments.ts). It names the caller
   // that asked for the upload URL, the task it attaches to and when it

@@ -33,6 +33,7 @@ import { rule } from '../lib/functions'
 import { imageRefs, shownImages } from '../lib/imageRefs'
 import { LIMITS } from '../lib/limits'
 import { logActivity, signedDetail } from './activity'
+import { releaseFile } from './fileHolds'
 
 /** How long an image a save took out of the description stays, uncounted,
  * for a later save to bring back. */
@@ -68,12 +69,11 @@ export async function scheduleImageReap(
   await ctx.scheduler.runAfter(due, reapRef, { id })
 }
 
-/* Deletes a dropped image with its bytes. The byte fence
- * (model/attachments.ts storageIdInUse) gives every file one referent, so
- * no other row names them. */
+/* Deletes a dropped image and lets go of its file, which is held for a
+ * restore before it is erased (model/fileHolds.ts releaseFile). */
 async function deleteImage(ctx: MutationCtx, row: Doc<'issue_attachments'>): Promise<void> {
-  await ctx.storage.delete(row.storage_id)
   await ctx.db.delete(row._id)
+  await releaseFile(ctx, row.storage_id)
 }
 
 /**

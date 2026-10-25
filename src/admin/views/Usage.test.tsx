@@ -43,6 +43,7 @@ const month = (key: string, name = 'Pine Studio'): UsageMonth => ({
     mail_password_reset: 0,
     mail_account_notes: 0,
     background_bytes: null,
+    held_file_bytes: null,
   },
   rows: [{ org_id: 'o1', name, counts, api_estimated: false, computed_at: null }],
   failed: [],

@@ -11,6 +11,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Doc, Id } from '../_generated/dataModel'
 import { deleteOrgDeep, deleteTeamDeep, removeProfile } from '../model/cascade'
 import {
+  fileState,
+  keepHeldFiles,
   messagesFor,
   NOW,
   newT,
@@ -195,10 +197,6 @@ const plantAttachment = (
     return { row: (await ctx.db.get(_id)) as Doc<'issue_attachments'>, storage_id }
   })
 
-// existence probe via SYSTEM metadata (null after delete) — the app never
-// serves via getUrl; the /files gateway is the only URL surface
-const storageMeta = (t: T, id: Id<'_storage'>) => t.run(async (ctx) => await ctx.db.system.get(id))
-
 describe('the ref sweep itself', () => {
   it('covers every ref-shaped field in schema.ts — a new FK edge cannot be forgotten', () => {
     expect(uncoveredRefFields()).toEqual([])
@@ -341,7 +339,7 @@ describe('deleteTeamDeep', () => {
 })
 
 describe('deleteOrgDeep', () => {
-  it('empties every org-scoped table and reaps every byte; the other organization stands untouched', async () => {
+  it('empties every org-scoped table and holds every byte for a restore; the other organization stands untouched', async () => {
     const t = newT()
     const f = await withOrg(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -443,8 +441,8 @@ describe('deleteOrgDeep', () => {
     }
     expect(await t.run(async (ctx) => await ctx.db.query('agent_keys').collect())).toEqual([])
     expect(await t.run(async (ctx) => await ctx.db.query('marketing_demo').collect())).toEqual([])
-    expect(await storageMeta(t, attachmentBytes)).toBeNull()
-    expect(await storageMeta(t, avatarBytes)).toBeNull()
+    expect(await fileState(t, attachmentBytes)).toBe('held')
+    expect(await fileState(t, avatarBytes)).toBe('held')
     // untouched: the foreign organization, its people, project, task and label
     expect(await t.run(async (ctx) => await ctx.db.get(f.otherOrg._id))).not.toBeNull()
     expect(await rowByUuid(t, 'profiles', f.otherAdmin.id)).not.toBeNull()
@@ -459,6 +457,7 @@ describe('deleteOrgDeep', () => {
 describe('removeProfile', () => {
   // the background steps' own clock, which they stamp on archived tasks
   const STEP_TIME = '2026-03-03T03:03:03.000Z'
+  keepHeldFiles()
   beforeEach(() => {
     vi.useFakeTimers()
     vi.setSystemTime(STEP_TIME)
@@ -471,7 +470,7 @@ describe('removeProfile', () => {
   const pendingJobs = (t: T) =>
     t.run(async (ctx) => await ctx.db.query('profile_removals').collect())
 
-  it('clears access and open work at once and the history in background steps; touches only issues; deletes the whole inbox; reaps the avatar', async () => {
+  it('clears access and open work at once and the history in background steps; touches only issues; deletes the whole inbox; holds the avatar', async () => {
     const t = newT()
     const f = await withOrg(t)
     // SET NULL + touch: assignee/reporter on one issue, creator of another
@@ -670,7 +669,7 @@ describe('removeProfile', () => {
     expect((await collect(t, 'project_access')).some((g) => g.profile_id === f.user.id)).toBe(false)
     expect((await collect(t, 'user_prefs')).map((p) => p.profile_id)).toEqual([f.admin.id])
     expect((await collect(t, 'mcp_tokens')).map((p) => p.profile_id)).toEqual([f.admin.id])
-    expect(await storageMeta(t, avatarId)).toBeNull() // avatar bytes reaped
+    expect(await fileState(t, avatarId)).toBe('held') // avatar bytes held for a restore
     // the person's connection is revoked and hidden from their own list
     const revoked = (await collect(t, 'oauth_connections')).find((x) => x.profile_id === f.user.id)
     expect(revoked).toMatchObject({ revoked_at: NOW2, revocation_reason: 'deleted' })
@@ -708,7 +707,7 @@ describe('removeProfile', () => {
     expect((await rowByUuid(t, 'agent_keys', keyRow.id))!.created_by).toBeUndefined()
     const atts = await collect(t, 'issue_attachments')
     expect(atts.find((x) => x.id === att.row.id)?.uploaded_by).toBeUndefined()
-    expect(await storageMeta(t, att.storage_id)).not.toBeNull() // attachment bytes die with their ISSUE, never a profile
+    expect(await fileState(t, att.storage_id)).toBe('kept') // attachment bytes die with their ISSUE, never a profile
     expect((await rowByUuid(t, 'issues', assigned.id))!.updated_at).toBe(NOW2) // touched once
 
     // DELETE edges: the person's whole footprint, nobody else's

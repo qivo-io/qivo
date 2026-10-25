@@ -194,7 +194,7 @@ export function Usage() {
           <p role="status" className="text-sm text-text-2">
             {monthNote(table)}{' '}
             {outside &&
-              `Account mail, not assigned to an organization: ${outside.mail_verification} verification, ${outside.mail_password_reset} password reset, ${outside.mail_account_notes} account notes. Account backgrounds, which belong to a login: ${outside.background_bytes === null ? 'not stored for this month' : fmtBytes(outside.background_bytes)}.`}
+              `Account mail, not assigned to an organization: ${outside.mail_verification} verification, ${outside.mail_password_reset} password reset, ${outside.mail_account_notes} account notes. Account backgrounds, which belong to a login: ${outside.background_bytes === null ? 'not stored for this month' : fmtBytes(outside.background_bytes)}. Deleted files held for a restore, in no organization's bytes: ${outside.held_file_bytes === null ? 'not stored for this month' : fmtBytes(outside.held_file_bytes)}.`}
           </p>
         )}
       </AdminToolbar>

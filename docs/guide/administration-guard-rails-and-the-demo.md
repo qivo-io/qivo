@@ -311,7 +311,10 @@ the month is stored. Calls from a paid billing period that crosses the
 month's start or end are split by time and marked ≈. Verification, password
 reset and other account emails and account backgrounds belong to a login,
 not to one organization, so the page and the CSV show them as separate
-totals that no organization's row includes.
+totals that no organization's row includes. They also show the bytes of
+deleted files that Qivo still holds for up to 7 days
+([Deleted items](./how-work-is-organized.md#deleted-items)) as a total of
+their own, because no organization's stored bytes include them.
 
 A sign-in belongs to a login, so a person counts as signed in in every
 organization where they hold an active seat. A person who signed in and

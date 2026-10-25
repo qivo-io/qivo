@@ -19,6 +19,7 @@ import {
   reserveDemoUpload,
   retainDemoUpload,
 } from './model/demoUploads'
+import { eraseFile, releaseFile } from './model/fileHolds'
 
 async function imageFor(ctx: QueryCtx, kind: 'library' | 'custom', id: string) {
   return kind === 'library'
@@ -100,14 +101,15 @@ export const attach = internalMutation({
       (image.preview_version ?? 1) > args.preview_version ||
       !(await needsPreview(ctx, image))
     ) {
-      if (preview && !alreadyUsed) await ctx.storage.delete(args.preview_storage_id)
+      // a refused preview was never named by a row, so it goes at once
+      if (preview && !alreadyUsed) await eraseFile(ctx, args.preview_storage_id)
       return false
     }
     // Keep the previous preview readable until its replacement is adopted in
     // this transaction. A competing generation will observe the new version.
     if (isDemoDeployment() && 'auth_user_id' in image) {
       if (!args.demo_ticket_id) {
-        await ctx.storage.delete(args.preview_storage_id)
+        await eraseFile(ctx, args.preview_storage_id)
         return false
       }
       await retainDemoUpload(ctx, args.demo_ticket_id, image.auth_user_id, args.preview_storage_id)
@@ -117,8 +119,12 @@ export const attach = internalMutation({
       preview_storage_id: args.preview_storage_id,
       preview_version: args.preview_version,
     })
-    if (previous && !(await storageIdInUse(ctx, previous)) && (await ctx.db.system.get(previous)))
-      await ctx.storage.delete(previous)
+    // A library preview's storage URL is permanent and needs no sign in, so
+    // a replaced one is erased at once, as panoramaImages.ts remove erases a
+    // removed image. Holding it would keep a taken-down photo public.
+    if (args.kind === 'library') {
+      if (previous && !(await storageIdInUse(ctx, previous))) await eraseFile(ctx, previous)
+    } else await releaseFile(ctx, previous)
     return true
   },
 })

@@ -5,8 +5,9 @@
  *
  * Two dots in the basename keep the Convex CLI from deploying this module,
  * the same rule as helpers.setup.ts. installTrashTimers puts a suite on fake
- * timers, so no scheduled step runs until a test releases it, and puts back
- * the budgets tests lower. */
+ * timers, so no scheduled step runs until a test releases it, turns off the
+ * scheduled erase of held files (keepHeldFiles) and puts back the budgets
+ * tests lower. */
 /// <reference types="vite/client" />
 
 import { afterEach, beforeEach, vi } from 'vitest'
@@ -25,7 +26,15 @@ import {
   SIGHT_READ,
   TRASH_BUDGET,
 } from '../model/deletedItems'
-import { as, NOW, type OrgFixture, plantActivity, type T, uuid } from './helpers.setup'
+import {
+  as,
+  keepHeldFiles,
+  NOW,
+  type OrgFixture,
+  plantActivity,
+  type T,
+  uuid,
+} from './helpers.setup'
 
 declare class Blob {
   constructor(parts: string[])
@@ -44,11 +53,12 @@ const DEFAULT_REMOVAL_BUDGET = { ...REMOVAL_BUDGET }
 const DEFAULT_CALL = { ...CALL }
 const DEFAULT_LEGACY_READ = { ...LEGACY_READ }
 
-/** Fake timers from START for each test of the suite, and the default
- * budget, call share, legacy read, chain, depth and sight checks, retries,
- * expiry batch, purgeOrg batch and organization deletion budget back after
- * it. */
+/** Fake timers from START for each test of the suite, no scheduled erase of
+ * held files, and the default budget, call share, legacy read, chain, depth
+ * and sight checks, retries, expiry batch, purgeOrg batch and organization
+ * deletion budget back after it. */
 export function installTrashTimers(): void {
+  keepHeldFiles()
   beforeEach(() => {
     vi.useFakeTimers()
     vi.setSystemTime(START)

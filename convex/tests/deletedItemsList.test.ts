@@ -23,6 +23,7 @@ import {
   as,
   chargeFilteredReads,
   expectRefusal,
+  fileState,
   messagesFor,
   NOW,
   newT,
@@ -37,7 +38,6 @@ import {
 } from './helpers.setup'
 import {
   attach,
-  blobExists,
   installTrashTimers,
   itemById,
   itemFor,
@@ -1507,7 +1507,7 @@ describe('restore and purge calls', () => {
     await runSteps(t)
     expect(await itemById(t, readyItem.id)).toBeNull()
     expect(await itemById(t, stuckItem.id)).toBeNull()
-    expect(await blobExists(t, attachment.storage_id)).toBe(false)
+    expect(await fileState(t, attachment.storage_id)).toBe('held')
     const gone = await expectRefusal(
       purge(t, f.admin, Array.from({ length: LIMITS.purgeBatch.max + 1 }, uuid)),
       'rule',

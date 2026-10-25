@@ -115,7 +115,12 @@ export const PERSON_MAIL = [
  * rows were stored. Unlike the others it is set, not added to (usage.ts
  * closeMonth). */
 export const PERSON_FILES = 'background_bytes'
-export const vUsageMetric = literals(...ORG_METRICS, ...PERSON_MAIL, PERSON_FILES)
+/* The bytes of the deleted files Qivo still holds so a restore can bring
+ * them back (model/fileHolds.ts), when the month's rows were stored. No row
+ * names a held file, so it belongs to no organization and no organization's
+ * stored bytes include it. Set like PERSON_FILES. */
+export const HELD_FILES = 'held_file_bytes'
+export const vUsageMetric = literals(...ORG_METRICS, ...PERSON_MAIL, PERSON_FILES, HELD_FILES)
 export type UsageMetric = Infer<typeof vUsageMetric>
 
 /** A kind of mail sent to a person rather than for an organization. */
@@ -124,10 +129,13 @@ export type PersonMailMetric = (typeof PERSON_MAIL)[number]
 /** Mail sent to a person rather than for an organization, by kind. */
 export type PersonMail = Record<PersonMailMetric, number>
 
+/** The byte totals a month stores outside every organization. */
+export type MonthBytes = typeof PERSON_FILES | typeof HELD_FILES
+
 /** What a month holds outside every organization: account mail by kind,
- * and the bytes of account backgrounds, null for a closed month stored
- * without them. */
-export type Unattributed = PersonMail & { background_bytes: number | null }
+ * the bytes of account backgrounds and of deleted files held for a restore,
+ * each null for a closed month stored without it. */
+export type Unattributed = PersonMail & Record<MonthBytes, number | null>
 
 /** The value below which `p` of `sorted` (ascending) falls, by the nearest
  * rank, or null for an empty list. */

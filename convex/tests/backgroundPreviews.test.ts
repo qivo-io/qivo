@@ -6,6 +6,7 @@ import { imageRow } from '../panoramaImages'
 import {
   as,
   expectRefusal,
+  fileState,
   NOW,
   newT,
   plantIssue,
@@ -219,7 +220,7 @@ describe('preview identity, storage ownership and cleanup', () => {
       await t.mutation(internal.panoramaImages.discardImport, { storage_id })
     }
     vi.setSystemTime(Date.now() + 61 * 60_000)
-    expect(await reap(t)).toEqual({ deleted: 0, kept: 4, tickets: 0, accounts: 0 })
+    expect(await reap(t)).toEqual({ deleted: 0, held: 0, kept: 4, tickets: 0, accounts: 0 })
     expect(await exists(t, libraryPreview)).toBe(true)
     expect(await exists(t, customPreview)).toBe(true)
   })
@@ -284,7 +285,8 @@ describe('preview identity, storage ownership and cleanup', () => {
         preview_version: BACKGROUND_PREVIEW_VERSION,
       })
       expect(await exists(t, image.storage_id)).toBe(true)
-      expect(await exists(t, previous)).toBe(false)
+      // a library preview's public URL must not outlive its row
+      expect(await fileState(t, previous)).toBe(kind === 'library' ? 'gone' : 'held')
       expect(await exists(t, next)).toBe(true)
       expect(await t.query(internal.backgroundPreviews.source, jobArgs(image))).toBe(false)
       expect(await t.mutation(internal.backgroundPreviews.backfill, { kind })).toEqual({

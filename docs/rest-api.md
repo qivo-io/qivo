@@ -2104,7 +2104,10 @@ and the reverse.
 
 `DELETE` needs Edit access to the task's project, as in the app, where
 anyone with Edit may remove any file, not only their own. It deletes the
-file and answers `{ "deleted": true, "id": "…", "name": "wiring.pdf", "key":
+file, which no link serves from then on and whose contents Qivo erases
+within 7 days
+([Deleted items](guide/how-work-is-organized.md#deleted-items)), and
+answers `{ "deleted": true, "id": "…", "name": "wiring.pdf", "key":
 "QN-26" }`, writing a `removed an attachment from` activity row. An id that
 is not a file of that task is a `404` (`attachment not found`). A
 description image (`inline: true`) is a `400` (`this image belongs to the
@@ -2117,7 +2120,9 @@ API, that takes out an image's last reference removes the image from the
 task at once: it no longer counts toward the 100 attachments and no longer
 appears in `attachments`. A save within a day that names it again brings it
 back, unless the task has 100 attachments by then, which is a `400` with the
-full-task sentence above. After a day the image is deleted, and a task
+full-task sentence above. After a day the image is deleted, and Qivo
+erases its contents within 7 days after that
+([Deleted items](guide/how-work-is-organized.md#deleted-items)). A task
 keeps at most the 100 most recently removed images, so the oldest goes at
 once when a save removes more. An image that no
 saved description has named a day after its upload, such as one a closed

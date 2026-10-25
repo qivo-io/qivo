@@ -31,6 +31,7 @@ import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
 import { messageRetentionDays } from '../model/people'
 import {
   as,
+  fileState,
   messagesFor,
   NOW,
   newT,
@@ -38,6 +39,7 @@ import {
   plantMessage,
   plantProject,
   plantSeat,
+  quietWatch,
   reap,
   type T,
   uuid,
@@ -1516,9 +1518,11 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
       return job === undefined ? null : (job.args[0] as { phase: string; cursor?: string })
     })
 
-  /* Runs the waiting leg alone, under fake timers, and returns the next. */
+  /* Runs the waiting leg alone, under fake timers, and returns the next.
+   * Only timers already due fire, so the eraser's restore witness, a week
+   * out, keeps waiting as it does on a deployment. */
   async function step(t: T) {
-    vi.runOnlyPendingTimers()
+    vi.advanceTimersByTime(0)
     await t.finishInProgressScheduledFunctions()
     return await pendingLeg(t)
   }
@@ -1553,9 +1557,11 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     vi.setSystemTime(Date.now() + HOUR + 60_000)
     const fresh = await storeBlob(t)
 
-    expect(await reap(t)).toEqual({ deleted: 5, kept: 7, tickets: 6, accounts: 1 })
+    // the removed login's backgrounds are held, so the files phase keeps them
+    expect(await reap(t)).toEqual({ deleted: 5, held: 0, kept: 9, tickets: 6, accounts: 1 })
 
-    for (const id of [...orphans, ...removed]) expect(await blobExists(t, id)).toBe(false)
+    for (const id of orphans) expect(await blobExists(t, id)).toBe(false)
+    for (const id of removed) expect(await fileState(t, id)).toBe('held')
     for (const id of [attached, avatar, ...library, ...custom, fresh])
       expect(await blobExists(t, id)).toBe(true)
     expect(await ticketCount(t)).toEqual({ background: 1, attachment: 1 })
@@ -1567,9 +1573,9 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     expect(rows[0].actor_email).toBe('system')
     expect(rows[0].actor_auth_id).toBeUndefined()
     // tickets: 3 expired of each kind in pages of 2. accounts: 2 rows in
-    // pages of 1. files: 12 left in pages of 2. The first leg is the call.
+    // pages of 1. files: 14 in pages of 2. The first leg is the call.
     const legs = await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
-    expect(legs.filter((job) => job.name.includes('reapOrphans'))).toHaveLength(2 + 2 + 6 - 1)
+    expect(legs.filter((job) => job.name.includes('reapOrphans'))).toHaveLength(2 + 2 + 7 - 1)
   })
 
   it('keeps a file attached between legs', async () => {
@@ -1581,6 +1587,7 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     const [first, second, late] = [await storeBlob(t), await storeBlob(t), await storeBlob(t)]
     vi.setSystemTime(Date.now() + HOUR + 60_000)
 
+    await quietWatch(t)
     await t.mutation(internal.files.reapOrphans, {})
     let leg = await pendingLeg(t)
     while (leg !== null && !(leg.phase === 'files' && leg.cursor !== undefined)) leg = await step(t)
@@ -1593,6 +1600,7 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     expect(await blobExists(t, late)).toBe(true)
     expect((await auditRows(t, 'reap_orphans'))[0].detail).toEqual({
       deleted: 2,
+      held: 0,
       kept: 1,
       tickets: 0,
       accounts: 0,
@@ -1606,6 +1614,7 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     vi.setSystemTime(Date.now() + HOUR - 60_000)
     const start = Date.now()
 
+    await quietWatch(t)
     await t.mutation(internal.files.reapOrphans, {})
     let leg = await pendingLeg(t)
     while (leg !== null && leg.phase !== 'files') leg = await step(t)
@@ -1615,14 +1624,14 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
 
     expect(await blobExists(t, young)).toBe(true)
     const [row] = await auditRows(t, 'reap_orphans')
-    expect(row.detail).toEqual({ deleted: 0, kept: 1, tickets: 0, accounts: 0 })
+    expect(row.detail).toEqual({ deleted: 0, held: 0, kept: 1, tickets: 0, accounts: 0 })
     expect(row.ts).toBe(new Date(start).toISOString())
   })
 
   it('a zero-file run still writes its counts-only audit row', async () => {
     const t = newT()
 
-    expect(await reap(t)).toEqual({ deleted: 0, kept: 0, tickets: 0, accounts: 0 })
+    expect(await reap(t)).toEqual({ deleted: 0, held: 0, kept: 0, tickets: 0, accounts: 0 })
 
     const rows = await auditRows(t, 'reap_orphans')
     expect(rows).toHaveLength(1)
@@ -1634,7 +1643,7 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     const a = await storeBlob(t)
     const b = await storeBlob(t)
 
-    expect(await reap(t)).toEqual({ deleted: 0, kept: 2, tickets: 0, accounts: 0 })
+    expect(await reap(t)).toEqual({ deleted: 0, held: 0, kept: 2, tickets: 0, accounts: 0 })
     expect(await blobExists(t, a)).toBe(true)
     expect(await blobExists(t, b)).toBe(true)
   })
@@ -1657,7 +1666,7 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     for (let n = 0; n < 20; n++) kept.push(...(await libraryImage(t)))
     vi.setSystemTime(Date.now() + HOUR + 60_000)
 
-    expect(await reap(t)).toEqual({ deleted: 800, kept: 140, tickets: 0, accounts: 0 })
+    expect(await reap(t)).toEqual({ deleted: 800, held: 0, kept: 140, tickets: 0, accounts: 0 })
     expect(await storedCount(t)).toBe(140)
     for (const id of kept) expect(await blobExists(t, id)).toBe(true)
   })

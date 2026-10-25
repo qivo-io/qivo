@@ -167,6 +167,10 @@ const APP_SHARED = [
   // REST upload tickets: asMachineCaller refuses every machine call on a demo
   // deployment, so a demo never has one
   'attachment_uploads',
+  // the demo erases deleted files at once and holds none (model/fileHolds.ts)
+  'file_holds',
+  // the demo keeps no backups, so it watches for no restore (model/fileHolds.ts)
+  'restore_watch',
   'demo_admission', // expiring deployment admission windows, no owner/workspace data
   'demo_metrics', // durable anonymous totals, independent of demo lifetime
   'demo_metrics_daily', // aggregate UTC history survives workspace deletion

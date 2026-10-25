@@ -19,9 +19,9 @@ import {
 } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { convexTest, type TestConvex } from 'convex-test'
-import { expect, onTestFinished, TestRunner, vi } from 'vitest'
+import { afterEach, beforeEach, expect, onTestFinished, TestRunner, vi } from 'vitest'
 import { internal } from '../_generated/api'
-import type { Doc } from '../_generated/dataModel'
+import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import authSchema from '../betterAuth/schema'
 import type { ReapCounts } from '../files'
@@ -32,6 +32,7 @@ import type { Refusal, RefusalCode } from '../lib/functions'
 import { loadRowFor, type OrgLoadRow } from '../lib/loadRows'
 import { readWorkspace, type Workspace } from '../lib/workspaceJoin'
 import { type ActivityEntry, insertActivity } from '../model/activity'
+import { ERASE_TIMERS, noteRestore } from '../model/fileHolds'
 import { countersOf, countersRow, type OrgCounters } from '../model/orgs'
 import schema from '../schema'
 
@@ -263,11 +264,56 @@ function order(a: Json | undefined, b: Json | undefined): number {
   return a < b ? -1 : a > b ? 1 : 0
 }
 
+/** Turns off each held file's scheduled erase for every test of the suite
+ * (model/fileHolds.ts ERASE_TIMERS). For suites on fake timers that finish
+ * their steps by running every timer, which would otherwise erase each held
+ * file a week ahead on their clock, so they can check what a deletion
+ * holds. */
+export function keepHeldFiles(): void {
+  beforeEach(() => {
+    ERASE_TIMERS.on = false
+  })
+  afterEach(() => {
+    ERASE_TIMERS.on = true
+  })
+}
+
+/** What became of stored file `id`: 'gone' once erased, 'held' while the
+ * hold of its deletion keeps it for a restore (model/fileHolds.ts), else
+ * 'kept'. */
+export const fileState = (t: T, id: Id<'_storage'>): Promise<'gone' | 'held' | 'kept'> =>
+  t.run(async (ctx) => {
+    if ((await ctx.db.system.get(id)) === null) return 'gone'
+    const hold = await ctx.db
+      .query('file_holds')
+      .withIndex('by_storage', (q) => q.eq('storage_id', id))
+      .unique()
+    return hold === null ? 'kept' : 'held'
+  })
+
+/** One check of the restore watch the eraser keeps (model/fileHolds.ts
+ * noteRestore), answering whether it noticed a restore. A deployment without
+ * a watch counts as restored. */
+export const watchRestores = (t: T): Promise<boolean> =>
+  t.run((ctx) => noteRestore(ctx, Date.now()))
+
+/** Starts the restore watch as on a deployment that noticed no restore in
+ * the last 7 days, so its orphan sweep erases the files nothing names
+ * instead of holding them. */
+export const quietWatch = (t: T): Promise<void> =>
+  t.run(async (ctx) => {
+    await noteRestore(ctx, Date.now())
+    const row = await ctx.db.query('restore_watch').first()
+    if (row !== null) await ctx.db.patch(row._id, { restored_at: undefined })
+  })
+
 /** Runs one orphan sweep (files.reapOrphans) through all of its legs and
- * returns the counts from the one reap_orphans audit row it wrote. Works with
- * real timers, a faked Date alone, or fully faked timers. With faked timers
- * it fires only the timers already due, which the legs are, so the clock
- * stays put and later scheduled work waits. */
+ * returns the counts from the one reap_orphans audit row it wrote. It starts
+ * a quiet restore watch first, so the sweep erases as it does between
+ * restores.
+ * Works with real timers, a faked Date alone, or fully faked timers. With
+ * faked timers it fires only the timers already due, which the legs are, so
+ * the clock stays put and later scheduled work waits. */
 export async function reap(t: T): Promise<ReapCounts> {
   const audits = () =>
     t.run(async (ctx) =>
@@ -276,6 +322,7 @@ export async function reap(t: T): Promise<ReapCounts> {
       ),
     )
   const before = (await audits()).length
+  await quietWatch(t)
   await t.mutation(internal.files.reapOrphans, {})
   await t.finishAllScheduledFunctions(() => {
     if (vi.isFakeTimers()) vi.advanceTimersByTime(0)

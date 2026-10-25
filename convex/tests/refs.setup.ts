@@ -187,6 +187,8 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'archived_detaches.scheduled_id',
   // The next step of an organization deletion (orgRemovals.ts).
   'org_removals.scheduled_id',
+  // The eraser's restore witness, a scheduled function (model/fileHolds.ts).
+  'restore_watch.witness',
   // Binds a private local credentials file; not the id of a database row.
   'marketing_demo.credential_set_id',
   // dangles by design: the feed renders dead issue targets as plain text (0026)
@@ -217,6 +219,8 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'custom_backgrounds.preview_storage_id',
   // an upload ticket's file until it is confirmed; the reaper takes both
   'attachment_uploads.storage_id',
+  // a deleted file no row names, kept for a restore until its hold ends
+  'file_holds.storage_id',
   // Provider identity retained for deduplication, not an app database uuid.
   'panorama_images.source_id',
   'panorama_submissions.source_id',
