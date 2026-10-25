@@ -54,6 +54,8 @@ import { type RevealRequest, withoutTaken } from './lib/reveal'
 import {
   ARCHIVED_TASKS_PAGE,
   buildPath,
+  heldRef,
+  holdTask,
   ORG_NONE,
   orgSegmentOf,
   parseHash,
@@ -805,11 +807,13 @@ function App() {
      Forward during that load can reach one after the load began in stages.
      The boot then holds it as onPop does (pendingTask), where it would
      otherwise rewrite the address to the page's own. */
-  const [held0] = useState(() =>
-    !r0?.issue && P.stillLoading() !== null
-      ? taskSegmentOf(location.pathname, location.hash)
-      : undefined,
-  )
+  const [held0] = useState(() => {
+    const ref =
+      !r0?.issue && P.stillLoading() !== null
+        ? taskSegmentOf(location.pathname, location.hash)
+        : undefined
+    return ref === undefined ? undefined : holdTask(ref)
+  })
   // issue URLs carry no scope segment (the issue names its own project):
   // keep the saved scope when the issue lives inside it, else jump to the
   // issue's sub-project — link recipients land on a board that shows it.
@@ -995,13 +999,14 @@ function App() {
   const replaceNextHistory = useRef(false)
   /* The address Back or Forward reached while tasks still load, when it
      names a task still to arrive (lib/router taskSegmentOf). The window
-     holds its reference and says the task is loading, the address stays
-     while the page is the one Back or Forward set (`page`), and the task
-     opens once it arrives, in the scope Back or Forward would have chosen
-     for it (`scope`, `preferred`) unless the page moved meanwhile, or the
-     window closes once every task has loaded without it. The boot holds
-     its own address's task the same way (held0), with the boot's scope
-     rule. */
+     holds its reference apart from task handles (`ref`, lib/router
+     holdTask) and says the task is loading, the address stays until the
+     task arrives, and the task opens once the address's own organization
+     answers it, in the scope Back or Forward would have chosen for it
+     (`scope`, `preferred`) unless the page moved meanwhile (`page`), or
+     the window closes once every task has loaded without it. The boot
+     holds its own address's task the same way (held0), with the boot's
+     scope rule. */
   const [bootHold] = useState(() =>
     held0
       ? {
@@ -1091,14 +1096,9 @@ function App() {
     // the address is not the page's while it steps back over a refused Back
     // or Forward, and a write now would move the entry it steps back to
     if (refusal.stepping()) return
-    // a task Back or Forward reached keeps its address until it arrives,
-    // while the page stays the one it set
-    if (
-      pendingTask.current?.ref === openIssue &&
-      pendingTask.current.page ===
-        pageKey({ scope, view, settingsPage, inboxOpen, projectsOpen, sync })
-    )
-      return
+    // a task Back or Forward reached keeps its address until it arrives:
+    // its held reference names no task an address can be built for
+    if (heldRef(openIssue) !== undefined) return
     const p = buildPath({
       scope,
       view,
@@ -1190,10 +1190,11 @@ function App() {
          A Team sync address names its own scope, so the one underneath stays
          put, task or not. */
       // a task still to arrive while tasks load (pendingTask)
-      const held =
+      const ref =
         !r.issue && P.stillLoading() !== null
           ? taskSegmentOf(location.pathname, location.hash)
           : undefined
+      const held = ref === undefined ? undefined : holdTask(ref)
       const preferred = r.view && !r.scope && P.isWideScope(was.scope) ? null : was.scope
       const sc = r.sync
         ? undefined

@@ -302,6 +302,25 @@ export function taskSegmentOf(pathname: string, hash: string): string | undefine
   return at === -1 ? undefined : seg[at + 1]
 }
 
+/* The open task App holds for an address whose task is still to arrive
+   (taskSegmentOf) while tasks load. It is kept apart from task handles,
+   which are home keys ("QN-482") or uuids, so nothing that looks a handle
+   up reads it as one: a held "QN-2" from another organization's address
+   would show the home organization's QN-2. Only the organization-aware
+   parse of the address opens the task (App pendingTask). */
+const HELD = 'held:'
+
+/** The held task for the address's task reference `ref` (taskSegmentOf). */
+export const holdTask = (ref: string) => `${HELD}${ref}`
+
+/** The reference a held task (holdTask) names, or undefined for a handle. */
+export const heldRef = (open: string | null | undefined) =>
+  open?.startsWith(HELD) ? open.slice(HELD.length) : undefined
+
+/** The reference an address names the open task `open` by, before its
+    organization picks the readable key: a held task's own reference. */
+const refOf = (open: string) => heldRef(open) ?? open
+
 /** Whether the address names a task (taskSegmentOf). */
 export const addressesTask = (pathname: string, hash: string) =>
   taskSegmentOf(pathname, hash) !== undefined
@@ -375,7 +394,7 @@ function syncPath(sync: { scope: string; step: string }, openIssue?: string | nu
   else if (sync.step && sync.step !== 'team') rest += `/people/${encodeURIComponent(sync.step)}`
   if (openIssue) {
     const it = P.issueById[String(openIssue)]
-    const ref = it ? (it.org === org ? it.key : it.uuid) : String(openIssue)
+    const ref = it ? (it.org === org ? it.key : it.uuid) : refOf(String(openIssue))
     rest += `/tasks/${encodeURIComponent(ref.toLowerCase())}`
   }
   return `${APP_PREFIX}/${orgSegment(org)}${rest}`
@@ -403,7 +422,7 @@ export function buildPath(s: UiState): string {
     // it — name both, so a reload lands back on the task you were reading
     if (!s.openIssue) return at(null, '/inbox')
     const it = P.issueById[String(s.openIssue)]
-    const ref = it?.key ? it.key : String(s.openIssue)
+    const ref = it?.key ? it.key : refOf(String(s.openIssue))
     return at(it?.org, `/inbox/tasks/${encodeURIComponent(ref.toLowerCase())}`)
   }
   // Team sync owns the screen too; the scope and view below it stay as they
@@ -416,7 +435,7 @@ export function buildPath(s: UiState): string {
   if (sentinelOf(s.scope)) {
     if (!s.openIssue) return at(null, `/${viewUrl}/${s.scope}`)
     const it = P.issueById[String(s.openIssue)]
-    const ref = it?.key ? it.key : String(s.openIssue)
+    const ref = it?.key ? it.key : refOf(String(s.openIssue))
     return at(it?.org, `/${viewUrl}/${s.scope}/tasks/${encodeURIComponent(ref.toLowerCase())}`)
   }
   // the issue names its own project — no scope segment (scopeForIssue
@@ -425,7 +444,7 @@ export function buildPath(s: UiState): string {
     const it = P.issueById[String(s.openIssue)]
     // a foreign issue's handle is its uuid; the readable key + org segment is
     // the shareable form, and the uuid still parses for anything older
-    const ref = it?.key ? it.key : String(s.openIssue)
+    const ref = it?.key ? it.key : refOf(String(s.openIssue))
     return at(it?.org, `/${viewUrl}/tasks/${encodeURIComponent(ref.toLowerCase())}`)
   }
   const p = s.scope ? P.project(s.scope) : null

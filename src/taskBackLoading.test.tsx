@@ -12,9 +12,11 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
    it, and the task opens once it arrives, in its own scope. The waiting
    window closes, and a task that never arrives closes it once every task
    has loaded. A task address Back reaches during the first load, before
-   App shows, is held the same way. Settings opens meanwhile, but its pages
-   that read every task wait. Back to a task or project that is gone, once
-   every task has loaded, names the page it shows in place. */
+   App shows, is held the same way. A held address of another
+   organization never shows a home task with the same number. Settings
+   opens meanwhile, but its pages that read every task wait. Back to a task
+   or project that is gone, once every task has loaded, names the page it
+   shows in place. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
@@ -89,30 +91,56 @@ function waitFor<T>(find: () => T | null | undefined, what: string) {
   )
 }
 
+type Task = Snapshot['issues'][number]
+/** Task number `num` with id `id` in project `project` of organization `org`. */
+const task = (id: string, org: string, project: string, num: number, title: string): Task => ({
+  id,
+  org_id: org,
+  project_id: project,
+  num,
+  title,
+  description: '',
+  status: 'progress',
+  priority: 'medium',
+  paused: false,
+  created_at: AT,
+  updated_at: AT,
+  has_hidden_subtasks: false,
+  has_hidden_parent: false,
+})
+
+/** Gives the login a guest seat in a large organization, Partner Co at
+    /app/partner, whose task QN-2 is in the last task window, and moves the
+    home organization's QN-2 into the first one, which arrives first. */
+function partner(snap: Snapshot) {
+  const org = crypto.randomUUID()
+  const seat = crypto.randomUUID()
+  const project = crypto.randomUUID()
+  snap.orgs.push({ ...snap.orgs[0], id: org, name: 'Partner Co', slug: 'partner' })
+  snap.profiles.push({ ...snap.profiles[0], id: seat, org_id: org, org_role: 'guest' })
+  snap.myProfileIds.push(seat)
+  snap.projects.push({ ...snap.projects[0], id: project, org_id: org, key: 'PART' })
+  snap.access.push({ project_id: project, profile_id: seat, level: 'user' })
+  snap.issues[0] = { ...snap.issues[0], id: '10000000-b', title: 'Home task two' }
+  snap.issues.push(task('fd000000-p', org, project, 2, 'Partner task two'))
+}
+
 /** Boots App on a large workspace whose last task window, holding task
     QN-2, is still to arrive, or with every task loaded when not `held`.
     With `reached`, Back or Forward reaches the address it builds from the
     organization's slug after the load began and before App's first render.
-    Answers the store and the organization's slug. */
-async function bootLoading(held = true, reached?: (org: string) => string) {
+    `shape` changes the workspace first. Answers the store and the
+    organization's slug. */
+async function bootLoading(
+  held = true,
+  reached?: (org: string) => string,
+  shape?: (snap: Snapshot) => void,
+) {
   vi.resetModules()
   const snap: Snapshot = plannerFixture()
   snap.orgs[0].next_issue_num = 64 * 200
-  snap.issues.push({
-    id: 'fd000000-b',
-    org_id: snap.orgs[0].id,
-    project_id: snap.projects[0].id,
-    num: 2,
-    title: 'Run the soak test',
-    description: '',
-    status: 'progress',
-    priority: 'medium',
-    paused: false,
-    created_at: AT,
-    updated_at: AT,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
-  })
+  snap.issues.push(task('fd000000-b', snap.orgs[0].id, snap.projects[0].id, 2, 'Run the soak test'))
+  shape?.(snap)
   network.onUpdate.mockImplementation((ref, _args, next) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') next(structuredClone(snap))
@@ -235,6 +263,31 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
   })
 })
 
+describe("Back to another organization's task still to arrive", { timeout: 30_000 }, () => {
+  it.each([
+    ['Back', 'QN-2'],
+    ['Back', 'qn-2'],
+    ['the first load', 'QN-2'],
+  ])('never shows the home task with its number when %s reaches %s', async (when, ref) => {
+    const address = `/app/partner/board/tasks/${ref}`
+    const first = when === 'Back' ? undefined : () => address
+    const { org } = await bootLoading(true, first, partner)
+    if (when === 'Back') {
+      await back(`/app/${org}/board/all`)
+      await back(address)
+    }
+    await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
+    expect(document.body.textContent).not.toContain('Home task two')
+    expect(location.pathname).toBe(address)
+    await arrive()
+    await waitFor(
+      () => document.body.textContent?.includes('Partner task two'),
+      "the partner's task",
+    )
+    expect(document.body.textContent).not.toContain('Home task two')
+  })
+})
+
 describe('Back to a task during the first load', { timeout: 30_000 }, () => {
   it('holds its address when the load began in stages, then opens the task', async () => {
     const { store } = await bootLoading(true, (slug) => `/app/${slug}/inbox/tasks/qn-2`)
@@ -244,6 +297,28 @@ describe('Back to a task during the first load', { timeout: 30_000 }, () => {
     await arrive()
     await waitFor(() => document.body.textContent?.includes('Run the soak test'), "the task's pane")
     expect(location.pathname).toBe(address)
+  })
+
+  it('opens the task in its own project when it is not in the saved scope', async () => {
+    const { store } = await bootLoading(
+      true,
+      (slug) => `/app/${slug}/board/tasks/qn-2`,
+      // My view, saved, holds only my tasks, and nobody has QN-2
+      (snap) =>
+        localStorage.setItem(
+          `planner.ui.v1:${snap.profiles[0].id}`,
+          JSON.stringify({ scope: 'mine', view: 'kanban' }),
+        ),
+    )
+    await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
+    await arrive()
+    await waitFor(
+      () => document.body.textContent?.includes('Run the soak test'),
+      "the task's window",
+    )
+    // closing it shows its project's Board, not My view
+    await close()
+    expect(location.pathname).toBe(`/app/${store.P.org.slug}/board/p/1`)
   })
 
   it('closes the window in place once every task has loaded without the task', async () => {
