@@ -13,11 +13,13 @@ import type { Doc } from '../_generated/dataModel'
 import { createAuth } from '../auth'
 import { overlapShare, spread } from '../lib/usage'
 import { deleteOrgDeep } from '../model/cascade'
+import { releaseFile } from '../model/fileHolds'
 import { pageReadBound, USAGE_PAGE } from '../model/usage'
 import { orgUsage, RUN_STALLED_MS, USAGE_EXPIRY } from '../usage'
 import {
   as,
   expectRefusal,
+  keepHeldFiles,
   newT,
   type OrgFixture,
   plantIssue,
@@ -315,6 +317,7 @@ describe('the monthly job', () => {
       mail_password_reset: 0,
       mail_account_notes: 0,
       background_bytes: 59,
+      held_file_bytes: 0,
     })
   })
 
@@ -481,6 +484,53 @@ describe('the monthly job', () => {
         .collect(),
     )
     expect(audits.map((row) => row.detail)).toEqual([{ month: MARCH, saved: 2, failed: 0 }])
+  })
+})
+
+describe('deleted files held for a restore', () => {
+  // the job's steps run every timer, which would also run each held file's
+  // scheduled erase a week ahead
+  keepHeldFiles()
+
+  it('count in no organization’s bytes, only in a total of their own', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.meta.id })
+    await t.run(async (ctx) => {
+      for (const [name, bytes] of [
+        ['kept.pdf', 30],
+        ['removed.pdf', 12],
+      ] as const) {
+        const storage_id = await ctx.storage.store(new Blob(['x'.repeat(bytes)]) as never)
+        const _id = await ctx.db.insert('issue_attachments', {
+          org_id: f.org.id,
+          id: uuid(),
+          issue_id: task.id,
+          name,
+          size_bytes: bytes,
+          storage_id,
+          inline: false,
+          created_at: iso('2026-03-03'),
+        })
+        if (name === 'removed.pdf') {
+          await ctx.db.delete(_id)
+          await releaseFile(ctx, storage_id)
+        }
+      }
+    })
+    expect(await t.run((ctx) => ctx.db.query('file_holds').collect())).toHaveLength(1)
+    await t.action(internal.usage.closeMonth, {})
+    await runSteps(t)
+    const stored = (await storedRows(t)).find((row) => row.org_id === f.org.id)
+    expect(stored?.counts).toMatchObject({ file_bytes: 30, deleted_file_bytes: 0 })
+    expect(await t.query(internal.usage.unattributed, { month: MARCH })).toMatchObject({
+      held_file_bytes: 12,
+    })
+    // the current month, counted when an operator opens it
+    const op = await operator(t)
+    const april = await op.action(api.usage.monthTable, { month: '2026-04' })
+    expect(april.unattributed.held_file_bytes).toBe(12)
+    expect(april.rows.find((row) => row.org_id === f.org.id)?.counts.file_bytes).toBe(30)
   })
 })
 
@@ -669,6 +719,7 @@ describe('the counters', () => {
       mail_password_reset: 2,
       mail_account_notes: 0,
       background_bytes: null,
+      held_file_bytes: null,
     })
   })
 

@@ -748,8 +748,9 @@ export default defineSchema({
   // and kind, with person mail (verification, password reset) under no
   // organization, and the webhook deliveries the retention sweep deleted, by
   // the month they finished. One row per organization, month and metric
-  // (usage.ts countUsage). The bytes of account backgrounds when a month
-  // was stored are one more row under no organization (setPersonFiles).
+  // (usage.ts countUsage). The bytes of account backgrounds and of deleted
+  // files held for a restore when a month was stored are two more rows
+  // under no organization (setMonthBytes).
   usage_counts: defineTable({
     org_id: v.optional(v.string()),
     month: v.string(), // YYYY-MM

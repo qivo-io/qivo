@@ -23,12 +23,12 @@ import { deletionBegun, subscriptionFor } from '../lib/billingAccess'
 import { isDemoDeployment } from '../lib/demo'
 import {
   DAY_MS,
+  type MonthBytes,
   monthOf,
   monthRange,
   monthsBetween,
   ORG_METRICS,
   overlapShare,
-  PERSON_FILES,
   PERSON_MAIL,
   type PersonMail,
   retentionCutoff,
@@ -115,17 +115,26 @@ export async function countUsage(
     })
 }
 
-/** Stores the bytes of account backgrounds when `month`'s rows were
- * stored, replacing an earlier value. */
-export async function setPersonFiles(ctx: MutationCtx, month: string, bytes: number) {
-  const row = await countRow(ctx, undefined, month, PERSON_FILES)
+/** Stores `bytes`, the total `metric` names (account backgrounds or held
+ * files), when `month`'s rows were stored, replacing an earlier value. */
+export async function setMonthBytes(
+  ctx: MutationCtx,
+  month: string,
+  metric: MonthBytes,
+  bytes: number,
+) {
+  const row = await countRow(ctx, undefined, month, metric)
   if (row) await ctx.db.patch(row._id, { count: bytes })
-  else await ctx.db.insert('usage_counts', { month, metric: PERSON_FILES, count: bytes })
+  else await ctx.db.insert('usage_counts', { month, metric, count: bytes })
 }
 
-/** The bytes of account backgrounds stored with `month`, or null. */
-export async function storedPersonFiles(ctx: QueryCtx, month: string): Promise<number | null> {
-  return (await countRow(ctx, undefined, month, PERSON_FILES))?.count ?? null
+/** The total `metric` names stored with `month`, or null. */
+export async function storedMonthBytes(
+  ctx: QueryCtx,
+  month: string,
+  metric: MonthBytes,
+): Promise<number | null> {
+  return (await countRow(ctx, undefined, month, metric))?.count ?? null
 }
 
 /** Keeps the months a sign-in session of login `authUserId` was used in,
@@ -611,6 +620,17 @@ export async function backgroundsPage(ctx: QueryCtx, cursor: Cursor) {
     if (row.preview_storage_id !== undefined)
       bytes += (await ctx.db.system.get(row.preview_storage_id))?.size ?? 0
   }
+  return { bytes, next: nextOf(page) }
+}
+
+/** One page of the deleted files held for a restore (model/fileHolds.ts),
+ * with their bytes. No row names them, so no organization's figures do. */
+export async function heldFilesPage(ctx: QueryCtx, cursor: Cursor) {
+  const page = await ctx.db
+    .query('file_holds')
+    .paginate({ cursor, numItems: USAGE_PAGE.rows, maximumBytesRead: USAGE_PAGE.bytes })
+  let bytes = 0
+  for (const hold of page.page) bytes += hold.size_bytes
   return { bytes, next: nextOf(page) }
 }
 

@@ -14,6 +14,7 @@ const table = (rows: UsageMonth['rows']): UsageMonth => ({
     mail_password_reset: 2,
     mail_account_notes: 1,
     background_bytes: 900,
+    held_file_bytes: 300,
   },
   rows,
   failed: [],
@@ -48,10 +49,10 @@ describe('the usage CSV', () => {
     ])
     expect(line.startsWith('2026-03,o1,"Acme, ""North""",0,1,2,3,,5,')).toBe(true)
     expect(line).toContain(',1500000,')
-    expect(line.endsWith(',,,,,true,2026-04-01T05:15:00.000Z,true,false,false')).toBe(true)
+    expect(line.endsWith(',,,,,,true,2026-04-01T05:15:00.000Z,true,false,false')).toBe(true)
     // what belongs to no organization, in its own columns
     expect(outside).toBe(
-      `2026-03,,No organization,${','.repeat(USAGE_COLUMNS.length)}900,4,2,1,,,true,false,`,
+      `2026-03,,No organization,${','.repeat(USAGE_COLUMNS.length)}900,300,4,2,1,,,true,false,`,
     )
     expect(end).toBe('')
   })
