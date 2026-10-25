@@ -1400,6 +1400,8 @@ describe('sweepReadMessages — retention follows the person', () => {
     SWEEP_LIMITS.profiles = 4
     const t = newT()
     const f = await withOrg(t)
+    // one read time, so the rows fall due together and page in uuid order
+    const read_at = ago(30)
     for (let n = 0; n < 5; n++) {
       const agent = await plantSeat(t, {
         org_id: f.org.id,
@@ -1407,12 +1409,7 @@ describe('sweepReadMessages — retention follows the person', () => {
         name: `Bot ${n}`,
         plannable_hours: undefined,
       })
-      await plantMessage(t, {
-        org_id: f.org.id,
-        recipient_id: agent.id,
-        issue_id: uuid(),
-        read_at: ago(30),
-      })
+      await plantMessage(t, { org_id: f.org.id, recipient_id: agent.id, issue_id: uuid(), read_at })
     }
 
     const pages = await runLogged<SweepCounts>(
