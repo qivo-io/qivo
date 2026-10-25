@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { BillingPlan } from '../lib/billingTypes'
+import { asMachineCaller } from '../lib/core'
+import type { EventOwner } from '../lib/taskEvents'
+import { sha256hex } from '../machine/auth'
 import { enrollOrganization } from '../model/billing'
 import { REMOVAL_BUDGET } from '../model/cascade'
 import { noCheckoutDue, retentionDue, serviceEndedAt } from '../model/orgRetention'
@@ -843,6 +846,172 @@ describe('deleting the organization', () => {
       'forbidden',
       /being deleted/,
     )
+  })
+})
+
+describe('calls through access a running deletion has deleted', () => {
+  type Http = { fetch(path: string, init: object): Promise<Response> }
+  const call = (
+    t: T,
+    path: string,
+    secret: string,
+    init: { method?: string; body?: string } = {},
+  ) =>
+    (t as unknown as Http).fetch(path, {
+      method: init.method ?? 'GET',
+      headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+      body: init.body,
+    })
+  const answer = async (response: Response) => [response.status, JSON.parse(await response.text())]
+  const toolsList = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} })
+  const DELETING = { error: 'this organization is being deleted' }
+
+  /* An organization whose deletion has begun, with a working personal token
+   * of `user`, a revoked one, and a working key of its agent. */
+  async function deleting() {
+    const { t, f } = await unbilled()
+    const secrets = {
+      token: `qvt_${'live'.repeat(10)}`,
+      revoked: `qvt_${'gone'.repeat(10)}`,
+      key: `qva_${'live'.repeat(10)}`,
+    }
+    let keyOwner: EventOwner | undefined
+    await t.run(async (ctx) => {
+      for (const [name, revoked_at] of [
+        ['token', undefined],
+        ['revoked', NOW],
+      ] as const)
+        await ctx.db.insert('mcp_tokens', {
+          id: uuid(),
+          profile_id: f.user.id,
+          name,
+          token_prefix: secrets[name].slice(0, 11),
+          token_hash: await sha256hex(secrets[name]),
+          access: 'write',
+          created_at: NOW,
+          revoked_at,
+        })
+      const keyId = uuid()
+      const keyRow = await ctx.db.insert('agent_keys', {
+        id: keyId,
+        profile_id: f.agent.id,
+        name: 'Relay key',
+        key_prefix: secrets.key.slice(0, 11),
+        key_hash: await sha256hex(secrets.key),
+        created_at: NOW,
+      })
+      keyOwner = {
+        profile_id: f.agent.id,
+        credential_table: 'agent_keys',
+        credential_id: keyId,
+        credential_row_id: keyRow,
+      }
+      await ctx.db.insert('org_removals', {
+        org_id: f.org.id,
+        reason: 'requested',
+        ended_at: NOW,
+        delete_after: NOW,
+        phase: 'profiles',
+        created_at: NOW,
+      })
+    })
+    const step = () => t.mutation(internal.orgRemovals.step, { org_id: f.org.id })
+    const profileGone = (profile: Doc<'profiles'>) =>
+      t.run(async (ctx) => (await ctx.db.get(profile._id)) === null)
+    if (!keyOwner) throw new Error('the agent key was not planted')
+    return { t, f, secrets, keyOwner, step, profileGone }
+  }
+
+  it('tell a deleted member, token and key that the organization is being deleted, until it is gone', async () => {
+    const { t, f, secrets, keyOwner, step, profileGone } = await deleting()
+    // webhook management refuses as every other call, before the deletion
+    // reaches anyone
+    expect(await answer(await call(t, '/v1/webhooks', secrets.token))).toEqual([403, DELETING])
+    // small steps, so the deletion stops between the profiles it deletes
+    REMOVAL_BUDGET.rows = 4
+    for (let i = 0; i < 100 && !((await profileGone(f.user)) && (await profileGone(f.agent))); i++)
+      await step()
+    expect(await profileGone(f.user)).toBe(true)
+    expect(await profileGone(f.agent)).toBe(true)
+    expect(await removalOf(t, f.org.id)).not.toBeNull()
+
+    // the app: the deleted member learns why, a stranger learns nothing
+    await expectRefusal(
+      as(t, f.user).query(api.billing.status, { org_id: f.org.id }),
+      'forbidden',
+      /^this organization is being deleted$/,
+    )
+    await expectRefusal(
+      as(t, f.otherAdmin).query(api.billing.status, { org_id: f.org.id }),
+      'forbidden',
+      /^no profile in this organization$/,
+    )
+    // REST and MCP refuse the deleted token and key as every call into the
+    // organization; a token revoked before is no more than unknown
+    expect(await answer(await call(t, '/v1/me', secrets.token))).toEqual([403, DELETING])
+    expect(await answer(await call(t, '/v1/me', secrets.key))).toEqual([403, DELETING])
+    const mcp = (secret: string) => call(t, '/mcp', secret, { method: 'POST', body: toolsList })
+    expect(await answer(await mcp(secrets.token))).toEqual([403, DELETING])
+    expect(await answer(await mcp(secrets.key))).toEqual([403, DELETING])
+    expect(await answer(await call(t, '/v1/me', secrets.revoked))).toEqual([
+      401,
+      { error: 'unknown personal access token' },
+    ])
+    // a call whose lookup the deletion overtook, before its dispatch, and
+    // the deleted key's webhooks
+    await expectRefusal(
+      t.run((ctx) => asMachineCaller(ctx, f.agent.id, 'read')),
+      'forbidden',
+      /^this organization is being deleted$/,
+    )
+    await expectRefusal(
+      t.query(internal.webhooks.list, { owner: keyOwner }),
+      'forbidden',
+      /^this organization is being deleted$/,
+    )
+
+    // the deletion's last step deletes what it recorded with the organization
+    REMOVAL_BUDGET.rows = 256
+    await runSteps(t)
+    expect(await removalOf(t, f.org.id)).toBeNull()
+    expect(await t.run((ctx) => ctx.db.query('removed_access').collect())).toEqual([])
+    await expectRefusal(
+      as(t, f.user).query(api.billing.status, { org_id: f.org.id }),
+      'forbidden',
+      /^no profile in this organization$/,
+    )
+    expect(await answer(await call(t, '/v1/me', secrets.token))).toEqual([
+      401,
+      { error: 'unknown personal access token' },
+    ])
+  })
+
+  it('tell a deactivated member and their token the same before the deletion reaches them', async () => {
+    const { t, f, secrets } = await deleting()
+    await t.run((ctx) => ctx.db.patch(f.user._id, { active: false }))
+    await expectRefusal(
+      as(t, f.user).query(api.billing.status, { org_id: f.org.id }),
+      'forbidden',
+      /^this organization is being deleted$/,
+    )
+    expect(await answer(await call(t, '/v1/me', secrets.token))).toEqual([403, DELETING])
+    // without the deletion they stay a deactivated member and token
+    await t.run(async (ctx) => {
+      const removal = await ctx.db
+        .query('org_removals')
+        .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+        .unique()
+      await ctx.db.delete(removal!._id)
+    })
+    await expectRefusal(
+      as(t, f.user).query(api.billing.status, { org_id: f.org.id }),
+      'forbidden',
+      /^no profile in this organization$/,
+    )
+    expect(await answer(await call(t, '/v1/me', secrets.token))).toEqual([
+      401,
+      { error: 'this account has been deactivated' },
+    ])
   })
 })
 

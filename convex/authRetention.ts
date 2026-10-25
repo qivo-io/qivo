@@ -39,6 +39,7 @@ import { type ObjectType, v } from 'convex/values'
 import { components, internal } from './_generated/api'
 import { internalMutation, type MutationCtx } from './_generated/server'
 import { OAUTH_ACCESS_TOKEN_TTL_SECONDS, OAUTH_REFRESH_TOKEN_TTL_SECONDS } from './lib/oauth'
+import { audit } from './model/admin'
 
 /** Step sizes. Tests lower them. */
 export const AUTH_EXPIRY = {
@@ -158,8 +159,7 @@ const auditRun = (
   deleted: number,
   cutoff: number,
 ) =>
-  ctx.db.insert('platform_audit_log', {
-    ts: new Date().toISOString(),
+  audit(ctx, {
     actor_email: 'system',
     action,
     detail: { deleted, before: new Date(cutoff).toISOString() },

@@ -31,6 +31,7 @@ import {
   loginBanned,
   tokenExpired,
 } from '../lib/access'
+import { deletionBegun, removedWithOrg } from '../lib/billingAccess'
 import { byId } from '../lib/db'
 import { isDemoDeployment } from '../lib/demo'
 import type { CredentialAccess } from '../lib/enums'
@@ -83,9 +84,15 @@ export type MachineCredential = {
   access: CredentialAccess
 }
 
+/* A credential that would still work but for its organization's deletion,
+ * which has begun: the deletion already deleted it (removed_access), or its
+ * profile is no longer active. Every surface refuses it with the deletion's
+ * own sentence and status (lib/billingAccess.ts ORG_DELETING, 403), as it
+ * refuses every other call into that organization, rather than with a 401. */
 export type AuthResult =
   | { ok: true; cred: MachineCredential }
   | { ok: false; why: AuthFail; isAgent: boolean }
+  | { ok: false; why: 'org_deleting'; isAgent: boolean }
 
 /* Prefix routing (core.ts:171-173): `qva_` → agent leg; `qvt_` → person leg
  * (REST and MCP both take persons); anything else → missing. Secret
@@ -117,7 +124,10 @@ export const lookupCredential = internalQuery({
           .withIndex('by_hash', (q) => q.eq('token_hash', hash))
           .first()
     const token = agentKey ?? personal
-    if (token === null) return { ok: false, why: 'unknown', isAgent }
+    if (token === null) {
+      const removed = await removedWithOrg(ctx, isAgent ? 'agent_keys' : 'mcp_tokens', hash)
+      return { ok: false, why: removed ? 'org_deleting' : 'unknown', isAgent }
+    }
     if (token.revoked_at !== undefined) return { ok: false, why: 'revoked', isAgent }
     const nowMs = Date.parse(now)
     if (personal !== null && tokenExpired(personal, nowMs)) {
@@ -127,7 +137,10 @@ export const lookupCredential = internalQuery({
     const shapeOk =
       profile !== null && (isAgent ? profile.kind === 'agent' : profile.auth_user_id !== undefined)
     if (profile === null || !shapeOk) return { ok: false, why: 'wrong_kind', isAgent }
-    if (!profile.active) return { ok: false, why: 'inactive', isAgent }
+    if (!profile.active) {
+      const deleting = await deletionBegun(ctx, profile.org_id)
+      return { ok: false, why: deleting ? 'org_deleting' : 'inactive', isAgent }
+    }
     // A personal token acts as its person's login, so a platform ban stops
     // it here, before touchCredential stamps or meters anything, and so does
     // a login Better Auth no longer has, as for OAuth. This costs one Better

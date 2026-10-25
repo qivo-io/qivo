@@ -500,7 +500,9 @@ When enabled organization billing has expired or needs payment, writing tools
 return a readable billing refusal while reading keeps its normal access rules.
 The same happens while an organization is read-only before its deletion, and
 that refusal names the deletion date. Once deletion begins, every call into
-the organization is refused.
+the organization is refused with `this organization is being deleted`. A
+request whose key, token or OAuth connection the deletion has already
+removed gets that refusal as an HTTP `403` with an `error` body.
 An organization admin restores editing through **Settings → Organization →
 Billing**, where they can subscribe, open the customer portal and inspect
 usage by account and key or OAuth connection. **API access** shows each
@@ -725,7 +727,9 @@ must reach the same Convex backend. The issuer is `CONVEX_SITE_URL + /api/auth`
 and the browser consent page uses `SITE_URL + /app/~/connect`. Each client
 is linked to the canonical resource when it registers, and Qivo refuses a
 client that is not linked to it with `invalid_target`. An access token stops
-working at its next request once its client loses that link. Changing the
+working at its next request once its client loses that link, and the
+connection's webhook subscriptions get no events or deliveries from then on.
+Changing the
 canonical resource therefore ends every existing connection, and each
 client must register again, which usually means removing the connector and
 adding it again. See `.env.example`.

@@ -2,6 +2,7 @@ import type { WithoutSystemFields } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
+import type { RemovedAccessKind } from './enums'
 
 export const billingEnabled = () =>
   process.env.BILLING_ENABLED === 'true' && process.env.APP_MODE !== 'demo'
@@ -90,11 +91,38 @@ export async function deletionBegun(ctx: QueryCtx, orgId: string): Promise<boole
   return (await orgRemovalFor(ctx, orgId))?.phase !== undefined
 }
 
+/** The refusal of every call into an organization whose deletion has begun,
+ * in the app, REST and MCP. */
+export const ORG_DELETING = 'this organization is being deleted'
+
 /** Refuses every call into an organization whose deletion has begun. Before
  * that, the organization stays readable so admins can export it. */
 export async function assertOrgAvailable(ctx: QueryCtx, orgId: string): Promise<void> {
   if (await deletionBegun(ctx, orgId))
-    throw new ConvexError({ code: 'forbidden', message: 'this organization is being deleted' })
+    throw new ConvexError({ code: 'forbidden', message: ORG_DELETING })
+}
+
+/** Whether the running deletion of an organization deleted the access `key`
+ * names (removed_access): a login's seat in `orgId`, or a profile or
+ * credential of any organization. A call through such access is refused
+ * like every other call into that organization, with ORG_DELETING, rather
+ * than as a stranger's or an unknown credential's. False once the deletion
+ * has finished. */
+export async function removedWithOrg(
+  ctx: QueryCtx,
+  kind: RemovedAccessKind,
+  key: string,
+  orgId?: string,
+): Promise<boolean> {
+  const removed = await ctx.db
+    .query('removed_access')
+    .withIndex('by_key', (q) =>
+      orgId === undefined
+        ? q.eq('kind', kind).eq('key', key)
+        : q.eq('kind', kind).eq('key', key).eq('org_id', orgId),
+    )
+    .first()
+  return removed !== null && (await deletionBegun(ctx, removed.org_id))
 }
 
 export function addCalendarMonths(iso: string, months: number): string {

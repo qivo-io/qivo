@@ -49,6 +49,7 @@ import type { ActionCtx, QueryCtx } from '../_generated/server'
 import { internalMutation, internalQuery } from '../_generated/server'
 import { hasProjectLevel } from '../lib/access'
 import { archiveCursorText } from '../lib/archivedTasks'
+import { ORG_DELETING } from '../lib/billingAccess'
 import {
   accessFlags,
   applyTaskUpdate,
@@ -2269,6 +2270,11 @@ const unauthorized = (message: string): Response =>
     }),
   })
 
+/* The answer to a request whose credential its organization's deletion
+ * stopped (machine/auth.ts AuthResult), the deletion's own refusal: a 403,
+ * not a 401 that would send an OAuth client to sign in again. */
+const orgDeleting = (): Response => jsonRes(403, { error: ORG_DELETING })
+
 /* The 429 for a request past the rate limit, which names the seconds left
  * in the minute's window in its sentence and in Retry-After. The
  * per-profile limit answers tooManyRequests; the deployment-wide ingress
@@ -2409,6 +2415,10 @@ async function mcpResponse(ctx: ActionCtx, request: Request): Promise<Response> 
       tokenHash,
       resource,
     })
+    // why a grant that lookupAccess refused stopped, when its organization's
+    // deletion stopped it
+    const deleting = () => ctx.runQuery(internal.oauthConnections.refusedForDeletion, { tokenHash })
+    if (!credential && (await deleting())) return orgDeleting()
     if (
       !credential ||
       !(await runMutation(internal.oauthConnections.touch, { id: credential.connectionId }))
@@ -2438,7 +2448,10 @@ async function mcpResponse(ctx: ActionCtx, request: Request): Promise<Response> 
             return {
               error: {
                 code: -32012,
-                message: 'OAuth connection is invalid, expired or disconnected',
+                message:
+                  !live && (await deleting())
+                    ? ORG_DELETING
+                    : 'OAuth connection is invalid, expired or disconnected',
               },
             }
           const params_json = eventParamsJson(params)
@@ -2457,7 +2470,12 @@ async function mcpResponse(ctx: ActionCtx, request: Request): Promise<Response> 
             tokenHash,
             resource,
           })
-          if (!live) throw forbidden('OAuth connection is invalid, expired or disconnected')
+          if (!live)
+            throw forbidden(
+              (await deleting())
+                ? ORG_DELETING
+                : 'OAuth connection is invalid, expired or disconnected',
+            )
           const scope = toolWrites(name) ? 'qivo:write' : 'qivo:read'
           if (!live.scopes.includes(scope))
             throw forbidden(`This connection does not have the ${scope} scope.`)
@@ -2483,7 +2501,8 @@ async function mcpResponse(ctx: ActionCtx, request: Request): Promise<Response> 
   // `=== false` (not `!res.ok`): the root tsconfig typechecks this file via
   // _generated/api.d.ts under strict:false, where truthiness narrowing of the
   // discriminant does not apply
-  if (res.ok === false) return unauthorized(mcpAuth401(res))
+  if (res.ok === false)
+    return res.why === 'org_deleting' ? orgDeleting() : unauthorized(mcpAuth401(res))
   const cred = res.cred
   // per-call last_used_at stamp — every authenticated request, before any
   // routing or work, even ones that then answer 400

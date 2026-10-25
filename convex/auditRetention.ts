@@ -24,6 +24,7 @@
 import { makeFunctionReference } from 'convex/server'
 import { type ObjectType, v } from 'convex/values'
 import { internalMutation } from './_generated/server'
+import { audit } from './model/admin'
 
 /** Days an audit row is kept. Change the privacy notice with it. */
 export const AUDIT_RETENTION_DAYS = 90
@@ -68,8 +69,7 @@ export const expire = internalMutation({
       return null
     }
     if (deleted === 0) return null
-    await ctx.db.insert('platform_audit_log', {
-      ts: new Date().toISOString(),
+    await audit(ctx, {
       actor_email: 'system',
       action: 'expire_audit_log',
       detail: { deleted, before: cutoff },

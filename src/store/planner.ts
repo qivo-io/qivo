@@ -25,7 +25,7 @@ import { ConvexError } from 'convex/values'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
 import { AVATAR_COLORS } from '../../convex/lib/avatarColors'
-import { BILLING_READ_ONLY, deletionReadOnly } from '../../convex/lib/billingAccess'
+import { BILLING_READ_ONLY, deletionReadOnly, ORG_DELETING } from '../../convex/lib/billingAccess'
 import { asciiEmail, cleanEmail, emailRefusal as storedEmailRefusal } from '../../convex/lib/email'
 import { descriptionForm, FIELD_CHANGED, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
 import type { FieldChange } from '../../convex/lib/functions'
@@ -1984,6 +1984,9 @@ const readOnly = (d: ErrData) =>
 export const PAUSED_TEXT = 'Editing is paused until Qivo loads the latest changes.'
 /** The sentence a paused edit shows after every seat is gone. */
 export const NO_ACCESS_TEXT = 'You no longer have access to this workspace.'
+/** The sentence a paused edit shows when the server refused it because the
+    organization's deletion has begun, the person's last seat. */
+export const ORG_DELETING_TEXT = 'This organization is being deleted.'
 /** The sentence a paused edit shows after the sign-in ended. */
 export const SIGNED_OUT_TEXT = 'You’re signed out. Reload Qivo to sign in again.'
 /** The sentence a paused edit shows while the connection is down, the
@@ -2133,17 +2136,26 @@ const refusedOrgs = new WeakMap<object, string>()
    so a field_changed notice can say "while you were offline". */
 const offlineWaits = new WeakMap<object, OfflineWindow[]>()
 
-/** Whether a refusal says the person has no seat in the organization any
-    more (convex/lib/functions.ts loadMember), and they hold no seat in
-    another one. It can arrive before or after the snapshot delivery that
-    reports the lost seat. Someone who keeps another organization keeps
+/** Whether a refusal says the organization is being deleted
+    (convex/lib/billingAccess.ts ORG_DELETING), to a member and to someone
+    whose seat the deletion has already deleted. */
+const orgDeleting = (d: ErrData) => d.code === 'forbidden' && d.message === ORG_DELETING
+
+/** The sentence when a refusal says the person has no seat in the
+    organization any more, or that it is being deleted
+    (convex/lib/functions.ts loadMember), and they hold no seat in another
+    one, otherwise null. It can arrive before or after the snapshot delivery
+    that reports the lost seat. Someone who keeps another organization keeps
     working there, so for them, and when the refused organization is not
-    known, it stays a plain permission refusal. */
-function seatGone(e: unknown): boolean {
+    known, it stays a refusal of that one write. */
+function seatGoneText(e: unknown): string | null {
   const d = errData(e)
-  if (d.code !== 'forbidden' || d.message !== 'no profile in this organization') return false
+  const deleting = orgDeleting(d)
+  if (!deleting && (d.code !== 'forbidden' || d.message !== 'no profile in this organization'))
+    return null
   const org = typeof e === 'object' && e !== null ? refusedOrgs.get(e) : undefined
-  return [...myProfiles.keys()].every((seat) => seat === org)
+  if (![...myProfiles.keys()].every((seat) => seat === org)) return null
+  return deleting ? ORG_DELETING_TEXT : NO_ACCESS_TEXT
 }
 
 /** Whether the server refused a write because the sign-in ended
@@ -2161,7 +2173,7 @@ function refusedAsPaused(e: unknown): boolean {
   const d = errData(e)
   return (
     d.code === 'paused' ||
-    seatGone(e) ||
+    seatGoneText(e) !== null ||
     notSignedIn(e) ||
     (d.code === 'forbidden' && snapshotTrouble?.kind === 'no_access')
   )
@@ -2171,7 +2183,8 @@ function refusedAsPaused(e: unknown): boolean {
     lost seat or sign-in says so even before the snapshot reports it, and a
     write that send() paused keeps the sentence it was paused with. */
 function refusalPauseText(e: unknown) {
-  if (seatGone(e)) return NO_ACCESS_TEXT
+  const seat = seatGoneText(e)
+  if (seat !== null) return seat
   if (notSignedIn(e)) return SIGNED_OUT_TEXT
   const d = errData(e)
   return d.code === 'paused' && d.message ? String(d.message) : pausedText()
@@ -2194,7 +2207,8 @@ function toastWriteError(e: unknown, reverted = true) {
   }
   // a write that painted nothing has nothing to revert
   const after = reverted ? ' Change reverted.' : ''
-  if ((readOnly(d) || d.code === 'rule') && d.message) {
+  // the organization's deletion, to someone who keeps another one, says so
+  if ((readOnly(d) || d.code === 'rule' || orgDeleting(d)) && d.message) {
     toast(`${asSentence(String(d.message))}${after}`)
     return
   }
@@ -2405,6 +2419,7 @@ function restoreErrorText(e: unknown): string {
   const d = errData(e)
   if (refusedAsPaused(e)) return refusalPauseText(e)
   if (readOnly(d) && d.message) return d.message
+  if (orgDeleting(d)) return ORG_DELETING_TEXT
   if (d.code === 'forbidden') return "You don't have permission for that"
   if (d.message) return `Couldn't restore. ${asSentence(String(d.message))}`
   return "Couldn't restore"
@@ -2419,6 +2434,7 @@ function deletedItemsErrorText(e: unknown, failed: string): string {
   if (refusedAsPaused(e)) return refusalPauseText(e)
   // read-only for billing or a scheduled deletion says why, in its own words
   if (readOnly(d) && d.message) return d.message
+  if (orgDeleting(d)) return ORG_DELETING_TEXT
   if (d.code === 'forbidden') return "You don't have permission for that."
   if (d.code === 'rule' && d.message) {
     const m = String(d.message)
@@ -2489,7 +2505,7 @@ function toastCreateProjectError(e: unknown, label: string) {
   }
   const m = d.message ? String(d.message) : ''
   const reason = m && asSentence(m)
-  if ((d.code === 'rule' || readOnly(d)) && reason) {
+  if ((d.code === 'rule' || readOnly(d) || orgDeleting(d)) && reason) {
     toast(`Couldn't create ${label}. ${reason}`)
     return
   }
@@ -2529,6 +2545,7 @@ function slugErrorText(e: unknown): string {
     // so the reason is the answer
     return 'Use lowercase letters, digits and single hyphens; 40 characters maximum.'
   }
+  if (orgDeleting(d)) return ORG_DELETING_TEXT
   if (d.code === 'forbidden') return "You don't have permission to change the address."
   if (d.message) {
     const m = String(d.message)

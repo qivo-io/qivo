@@ -207,6 +207,8 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
     expect(note()?.textContent).toBe(
       `${task.key} was archived. Restore it to bring it back to the board.`,
     )
+    // no reason was typed, so the note keeps none
+    expect(document.querySelector('[data-task-gone-reason]')).toBeNull()
     expect(asked('issues:archivedTask')).toEqual([{ id: 'task-a' }])
 
     await click(button('Restore'))
@@ -360,6 +362,44 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
     // neither went to the server
     expect(network.mutation.mock.calls.map(([ref]) => getFunctionName(ref))).not.toContain(
       'issues:update',
+    )
+  })
+
+  it('keeps a reason typed to archive or delete the task in the note, unused, to copy', async () => {
+    const task = await open()
+    await act(async () => {
+      await vi.waitFor(() => {
+        if (document.activeElement !== dialog()) throw new Error('the window has no focus yet')
+      })
+    })
+    await click(document.querySelector<HTMLElement>('[aria-label="Task actions"]'))
+    await click(document.querySelector<HTMLElement>('[data-task-fate]'))
+    const field = document.querySelector<HTMLTextAreaElement>('[data-fate-reason]')
+    if (!field) throw new Error('the Archive or delete window did not open')
+    await type(field, 'Superseded by the\nhardware rework ')
+    await dropTask({ archived: true })
+    expect(document.querySelector('[data-fate-reason]')).toBeNull()
+    expect(note()?.textContent).toBe(
+      `${task.key} was archived. Restore it to bring it back to the board.`,
+    )
+    const kept = document.querySelector<HTMLElement>('[data-task-gone-reason]')
+    expect(kept?.textContent).toContain('The reason you typed for it was not used.')
+    expect(kept?.querySelector('p')?.textContent).toBe('Superseded by the\nhardware rework')
+    const writeText = vi.fn(async (_text: string) => {})
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    await click(button('Copy reason'))
+    expect(writeText).toHaveBeenCalledWith('Superseded by the\nhardware rework')
+    expect(window.showToast).toHaveBeenCalledWith('Copied the reason')
+    // this window sent nothing, and a refused copy leaves the reason selected
+    expect(network.mutation.mock.calls.map(([ref]) => getFunctionName(ref))).not.toContain(
+      'issues:archive',
+    )
+    writeText.mockRejectedValueOnce(new Error('denied'))
+    await click(button('Copy reason'))
+    expect(window.getSelection()?.toString()).toBe('Superseded by the\nhardware rework')
+    expect(window.showToast).toHaveBeenLastCalledWith(
+      "Couldn't copy. Copy the selected text instead.",
+      'error',
     )
   })
 

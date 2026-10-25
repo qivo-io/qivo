@@ -16,8 +16,12 @@ import { NO_ORGANIZATION, ORGANIZATION_GONE } from '../lib/oauth'
 import { sha256hex } from '../machine/auth'
 import { TOOLS } from '../machine/mcp'
 import { BODY_MAX_BYTES } from '../machine/shared'
+import { REMOVAL_BUDGET } from '../model/cascade'
+import { notifyIssueUpdate } from '../model/messages'
+import { deleteOrgStep } from '../model/orgDeletion'
 import {
   expectRefusal,
+  flushWebhookEvents,
   newT,
   plantIssue,
   plantSeat,
@@ -1110,6 +1114,110 @@ describe('OAuth consent and resource binding', () => {
       }),
     )
     await deniedAccess(f, linked.access_token)
+  })
+
+  it("stops a grant's webhook ownership, deliveries and events when its client loses the resource link", async () => {
+    const f = await fixture()
+    const c = await connect(f, READ)
+    const grant = await f.t.query(internal.oauthConnections.lookupAccess, {
+      tokenHash: await sha256hex(c.access_token.slice(4)),
+      resource: RESOURCE,
+    })
+    const owner = {
+      profile_id: grant!.profileId,
+      credential_table: 'oauth_connections' as const,
+      credential_id: grant!.connectionId,
+      credential_row_id: grant!.connectionRowId,
+    }
+    await f.t.mutation(internal.webhooks.save, {
+      owner,
+      id: uuid(),
+      name: 'task.updated',
+      filters: {},
+      url: 'https://receiver.example/events',
+      encrypted_secret: 'encrypted-test-key',
+    })
+    const issue = await plantIssue(f.t, { org_id: f.org.id, project_id: f.sub.id })
+    const retitle = async (title: string) => {
+      await f.t.run(async (ctx) => {
+        const before = (await ctx.db.get(issue._id))!
+        await ctx.db.patch(issue._id, { title })
+        const after = (await ctx.db.get(issue._id))!
+        await notifyIssueUpdate(ctx, {
+          before,
+          after,
+          actor: f.admin,
+          now: new Date().toISOString(),
+        })
+      })
+      await flushWebhookEvents(f.t)
+    }
+    const deliveries = () => f.t.run((ctx) => ctx.db.query('webhook_deliveries').collect())
+    await retitle('Queued while linked')
+    const [queued] = await deliveries()
+    expect(queued?.status).toBe('pending')
+
+    await unlink(f, c.request.clientId)
+    // subscribing and listing (eventOwner), delivery and each event's
+    // fan-out (eventOwnerProfile) all refuse the grant, as /mcp does
+    const listed = await f.t.query(internal.webhooks.list, { owner }).then(
+      () => 'listed',
+      (error: unknown) => (error as { data?: { message?: string } }).data?.message,
+    )
+    const claimed = await f.t.mutation(internal.webhooks.claim, { id: queued.id })
+    await retitle('Changed after the link went')
+    expect({ listed, claimed, deliveries: (await deliveries()).map((d) => d.status) }).toEqual({
+      listed: 'Credential is no longer valid',
+      claimed: null,
+      deliveries: ['failed'],
+    })
+  })
+
+  it('refuses a grant its organization deletion deleted with the deletion, on MCP and REST', async () => {
+    const f = await fixture()
+    const c = await connect(f, READ)
+    const now = new Date().toISOString()
+    await f.t.run((ctx) =>
+      ctx.db.insert('org_removals', {
+        org_id: f.org.id,
+        reason: 'requested',
+        ended_at: now,
+        delete_after: now,
+        phase: 'profiles',
+        created_at: now,
+      }),
+    )
+    const connections = () =>
+      f.t.run((ctx) =>
+        ctx.db
+          .query('oauth_connections')
+          .withIndex('by_profile', (q) => q.eq('profile_id', f.profile.id))
+          .collect(),
+      )
+    // small steps, so the deletion stops after it deleted the grant
+    REMOVAL_BUDGET.rows = 4
+    try {
+      for (let i = 0; i < 50 && (await connections()).length > 0; i++)
+        await f.t.run(async (ctx) => {
+          const removal = await ctx.db
+            .query('org_removals')
+            .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+            .unique()
+          if (removal) await deleteOrgStep(ctx, removal)
+        })
+    } finally {
+      REMOVAL_BUDGET.rows = 256
+    }
+    expect(await connections()).toEqual([])
+    const deleting = [403, { error: 'this organization is being deleted' }]
+    const viaMcp = await mcp(f, c.access_token, 'list_projects')
+    expect([viaMcp.status, await json(viaMcp)]).toEqual(deleting)
+    const viaRest = await http(f.t, '/v1/webhooks', {
+      headers: { Authorization: `Bearer ${c.access_token}` },
+    })
+    expect([viaRest.status, await json(viaRest)]).toEqual(deleting)
+    // a token that never worked stays an invalid one
+    await deniedAccess(f, `qvo_${'0'.repeat(40)}`)
   })
 
   it('requires S256 PKCE and refuses signed consent query tampering and scope expansion', async () => {

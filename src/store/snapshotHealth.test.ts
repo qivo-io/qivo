@@ -582,6 +582,59 @@ describe('snapshot trouble', () => {
     )
   })
 
+  it("says an edit was refused because the organization's deletion began, seat or no seat", async () => {
+    const deleting = () =>
+      new ConvexError({ code: 'forbidden', message: 'this organization is being deleted' })
+    await boot()
+    const { P } = store
+    const [task] = P.issues
+    // the refusal arrives while the last delivery still holds the seat
+    P.updateIssue(task.id, { status: 'progress' })
+    sent[0].reject(deleting())
+    await settle()
+    expect(P.issueById[task.id].status).toBe('todo')
+    expect(showToast).toHaveBeenLastCalledWith(store.ORG_DELETING_TEXT, 'error')
+    // and once the delivery without the seat came first
+    P.updateIssue(task.id, { status: 'review' })
+    live().deliver(null)
+    sent[sent.length - 1].reject(deleting())
+    await settle()
+    expect(P.issueById[task.id].status).toBe('todo')
+    expect(showToast).toHaveBeenLastCalledWith(store.ORG_DELETING_TEXT, 'error')
+    expect(showToast).not.toHaveBeenCalledWith(store.NO_ACCESS_TEXT, 'error')
+    expect(showToast.mock.calls.map(([text]) => text)).not.toContainEqual(
+      expect.stringMatching(/permission/i),
+    )
+  })
+
+  it("names the organization's deletion for its write while another organization remains", async () => {
+    const guest = crypto.randomUUID()
+    snapshot.orgs.push({ ...snapshot.orgs[0], id: guest, name: 'Partner Co', slug: 'partner' })
+    const seat = { ...snapshot.profiles[0], id: crypto.randomUUID(), org_id: guest }
+    snapshot.profiles.push({ ...seat, org_role: 'guest' })
+    snapshot.myProfileIds.push(seat.id)
+    await boot()
+    const { P } = store
+    const [task] = P.issues
+    P.updateIssue(task.id, { status: 'progress' })
+    const restore = P.unarchiveProject(snapshot.projects[0].id)
+    await settle()
+    for (const request of sent)
+      request.reject(
+        new ConvexError({ code: 'forbidden', message: 'this organization is being deleted' }),
+      )
+    expect(await restore).toBe(false)
+    await settle()
+    expect(showToast).toHaveBeenCalledWith(
+      'This organization is being deleted. Change reverted.',
+      'error',
+    )
+    expect(showToast).toHaveBeenCalledWith(store.ORG_DELETING_TEXT, 'error')
+    expect(showToast.mock.calls.map(([text]) => text)).not.toContainEqual(
+      expect.stringMatching(/permission/i),
+    )
+  })
+
   it('words a restore or delete refused after every seat is gone like the access notice', async () => {
     await boot()
     const { P } = store

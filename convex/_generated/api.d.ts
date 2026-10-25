@@ -64,6 +64,7 @@ import type * as lib_activityVisibility from "../lib/activityVisibility.js";
 import type * as lib_archiveCursorSeal from "../lib/archiveCursorSeal.js";
 import type * as lib_archivedTasks from "../lib/archivedTasks.js";
 import type * as lib_arrayLimit from "../lib/arrayLimit.js";
+import type * as lib_auditActions from "../lib/auditActions.js";
 import type * as lib_authData from "../lib/authData.js";
 import type * as lib_authMail from "../lib/authMail.js";
 import type * as lib_authRoutes from "../lib/authRoutes.js";
@@ -267,6 +268,7 @@ declare const fullApi: ApiFromModules<{
   "lib/archiveCursorSeal": typeof lib_archiveCursorSeal;
   "lib/archivedTasks": typeof lib_archivedTasks;
   "lib/arrayLimit": typeof lib_arrayLimit;
+  "lib/auditActions": typeof lib_auditActions;
   "lib/authData": typeof lib_authData;
   "lib/authMail": typeof lib_authMail;
   "lib/authRoutes": typeof lib_authRoutes;

@@ -1,6 +1,8 @@
 import { makeFunctionReference } from 'convex/server'
-import type { Doc } from '../_generated/dataModel'
+import { streamIndexRange } from 'convex-helpers/server/stream'
+import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
+import schema from '../schema'
 import { subscriptionFor } from './billingAccess'
 import { isDemoDeployment } from './demo'
 import type { OrgRole, ProfileKind } from './enums'
@@ -114,6 +116,12 @@ export async function markBillingMembershipChanged(
   for (const id of orgIds) await requestBillingSync(ctx, id)
 }
 
+/** Where a step stopped in the profiles of a home profile's email: the
+ * index key of the last profile it read, its _creationTime and _id. A
+ * position stored before the _id was kept has none and stands for every
+ * profile of that _creationTime, which the step then read in full. */
+export type MarkingPosition = { through: number; through_id?: Id<'profiles'> }
+
 /** Organization deletion removes profiles without the membership mutations
  * that call markBillingMembershipChanged. A deleted active home profile can
  * make the same email's guest profiles billable elsewhere
@@ -122,45 +130,60 @@ export async function markBillingMembershipChanged(
  * sweep reconciles them. It schedules nothing itself, so a step that
  * deletes many such profiles stays within Convex's limits.
  *
- * It reads the email's profiles in order, after the _creationTime `after`
- * when given, and counts each profile it reads and each organization it
- * marks as one row of `budget`, the deletion step's. It answers null once it
- * has read them all, or, when the budget ran out, the _creationTime through
- * which it read every one, after which the next step goes on. It never stops
- * inside a group of profiles that share a _creationTime, as an import can
- * leave, so a group larger than a step cannot hold the deletion in one
- * place. It reads such a group in one step, past the budget, so a group of a
- * few thousand guest profiles of one email, which only a crafted import
- * could make, would pass Convex's limits in every step and stall the
- * deletion. When it stops early it also ends the profile's exemption (active
- * false) in the same transaction: a reconciliation between the steps would
- * otherwise still find the home profile, count the guests of the
- * organizations already marked as exempt and use up their marks, and the
- * next renewal would bill too few seats. A step that goes on (`after` given)
- * therefore reads a profile that is no longer active. */
+ * It reads the email's profiles in index order, after `after` when given,
+ * and counts each profile it reads and each organization it marks as one
+ * row of `budget`, the deletion step's. It answers null once it has read
+ * them all, or, when the budget ran out, the position of the last profile
+ * it read, after which the next step goes on. Profiles that share a
+ * _creationTime, as an import can leave, are told apart by their _id, so
+ * a step stops inside such a group as anywhere else. Whatever the group's
+ * size, one step reads at most one more of the email's profiles than its
+ * budget has rows left (REMOVAL_BUDGET, 256 rows a step), in at most two
+ * index ranges, and marks at most half as many organizations, each with one
+ * read of its subscription and at most one write. When it stops early it also
+ * ends the profile's exemption (active false) in the same transaction: a
+ * reconciliation between the steps would otherwise still find the home
+ * profile, count the guests of the organizations already marked as exempt
+ * and use up their marks, and the next renewal would bill too few seats. A
+ * step that goes on (`after` given) therefore reads a profile that is no
+ * longer active. */
 export async function markHomeProfileRemoved(
   ctx: MutationCtx,
   profile: Doc<'profiles'>,
   asked: Set<string>,
   budget: { rows: number },
-  after?: number,
-): Promise<number | null> {
+  after?: MarkingPosition,
+): Promise<Required<MarkingPosition> | null> {
   if (isDemoDeployment() || !process.env.POLAR_ACCESS_TOKEN) return null
   if (!hasHomeRole(profile) || profile.email === undefined) return null
   if (after === undefined && !profile.active) return null
   const email = profile.email.toLowerCase()
   const now = new Date().toISOString()
-  const matches = ctx.db
-    .query('profiles')
-    .withIndex('by_email', (q) =>
-      after === undefined ? q.eq('email', email) : q.eq('email', email).gt('_creationTime', after),
-    )
-  // the _creationTime of the profile that used up the budget
-  let through: number | undefined
+  const matches =
+    after === undefined
+      ? ctx.db.query('profiles').withIndex('by_email', (q) => q.eq('email', email))
+      : streamIndexRange(
+          ctx.db,
+          schema,
+          'profiles',
+          'by_email',
+          {
+            lowerBound:
+              after.through_id === undefined
+                ? [email, after.through]
+                : [email, after.through, after.through_id],
+            lowerBoundInclusive: false,
+            upperBound: [email],
+            upperBoundInclusive: true,
+          },
+          'asc',
+        )
+  // the last profile read, where the next step goes on
+  let last: Required<MarkingPosition> | undefined
   for await (const match of matches) {
-    if (through !== undefined && match._creationTime !== through) {
+    if (last !== undefined && budget.rows <= 0) {
       if (profile.active) await ctx.db.patch(profile._id, { active: false })
-      return through
+      return last
     }
     budget.rows -= 1
     if (match.org_id !== profile.org_id && match.org_role === 'guest' && !asked.has(match.org_id)) {
@@ -168,7 +191,7 @@ export async function markHomeProfileRemoved(
       budget.rows -= 1
       await billingDueBy(ctx, match.org_id, now)
     }
-    if (budget.rows <= 0) through ??= match._creationTime
+    last = { through: match._creationTime, through_id: match._id }
   }
   return null
 }

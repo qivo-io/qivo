@@ -1,5 +1,6 @@
 /* platform_audit_log insert — admin_log_action's successor (0017), shared by
- * the operator console's modules and system jobs. A plain
+ * the operator console's modules and system jobs, and the table's only
+ * writer, so every action it stores has a label (lib/auditActions.ts). A plain
  * exported function, never a public mutation: the deny-by-default private
  * schema becomes "no public function touches it". Callers
  * resolve the actor themselves (the operator's Better Auth email, 'system'
@@ -10,11 +11,15 @@
 import { components } from '../_generated/api'
 import type { Id } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
+import type { AuditAction } from '../lib/auditActions'
 
 export type AuditEntry = {
+  /* when it happened (ISO), now unless a job dates its row to its run */
+  ts?: string
   actor_auth_id?: string
   actor_email: string
-  action: string
+  /* only an action Qivo Admin's Audit view has a label for */
+  action: AuditAction
   target_org_id?: string
   target_profile_id?: string
   /* 'app' marks the app's own invitation emails (invites.ts), which the
@@ -28,7 +33,7 @@ export async function audit(
   entry: AuditEntry,
 ): Promise<Id<'platform_audit_log'>> {
   return await ctx.db.insert('platform_audit_log', {
-    ts: new Date().toISOString(),
+    ts: entry.ts ?? new Date().toISOString(),
     actor_email: entry.actor_email,
     action: entry.action,
     ...(entry.channel !== undefined ? { channel: entry.channel } : {}),

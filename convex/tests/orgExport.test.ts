@@ -82,6 +82,9 @@ const EXCLUDED_TABLES = [
   'archived_detaches',
   // An organization's deletion schedule and progress are operational state.
   'org_removals',
+  // What a running deletion deleted of the organization's access, so its
+  // calls still hear why they are refused; gone with the organization.
+  'removed_access',
   // Personal callback destinations and encrypted secrets are not portable work.
   'webhook_events',
   'webhook_health',

@@ -115,11 +115,13 @@ const lookupEmail = (raw: string): string => {
 
 /* ------------------------------------------------------------------- audit */
 
+/* The audit row of an operator action that runs as an action, which cannot
+ * write it itself: a recovery link, or a ban or its end. */
 export const logAction = internalMutation({
   args: {
     actor_auth_id: v.optional(v.string()),
     actor_email: v.string(),
-    action: v.string(),
+    action: v.union(v.literal('recovery_link'), v.literal('ban'), v.literal('unban')),
     target_org_id: v.optional(v.string()),
     target_profile_id: v.optional(v.string()),
     detail: v.any(),

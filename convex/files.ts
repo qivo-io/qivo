@@ -62,6 +62,7 @@ import {
   rule,
 } from './lib/functions'
 import { LIMITS, MIB } from './lib/limits'
+import { audit } from './model/admin'
 import { clearAccountAppearance } from './model/appearance'
 import {
   type AttachResult,
@@ -640,7 +641,7 @@ export const reapOrphans = internalMutation({
       })
       return null
     }
-    await ctx.db.insert('platform_audit_log', {
+    await audit(ctx, {
       ts: new Date(now).toISOString(),
       actor_email: 'system',
       action: 'reap_orphans',

@@ -83,7 +83,13 @@ import {
   rosterOf,
   searchFields,
 } from './archivedTasks'
-import { assertOrgAvailable, assertOrgWritable, orgWriteBlock } from './billingAccess'
+import {
+  assertOrgAvailable,
+  assertOrgWritable,
+  ORG_DELETING,
+  orgWriteBlock,
+  removedWithOrg,
+} from './billingAccess'
 import { byId } from './db'
 import { refuseDemoFeature } from './demo'
 import {
@@ -95,7 +101,7 @@ import {
   type ProfileKind,
   type ProjectType,
 } from './enums'
-import { badRequest, notFound, type Refusal } from './functions'
+import { badRequest, forbidden, notFound, type Refusal } from './functions'
 import { limitedText } from './limitRules'
 import { LIMITS } from './limits'
 import {
@@ -179,7 +185,13 @@ export async function asMachineCaller(
 ): Promise<Caller> {
   refuseDemoFeature()
   const me = await byId(ctx, 'profiles', callerId)
-  if (me === null) throw callerGone()
+  if (me === null) {
+    // its organization's deletion deleted it after the credential lookup
+    if (await removedWithOrg(ctx, 'profile', callerId)) throw forbidden(ORG_DELETING)
+    throw callerGone()
+  }
+  // a deletion that has begun is the reason, whatever the profile's state
+  await assertOrgAvailable(ctx, me.org_id)
   if (!me.active) {
     throw new ConvexError<Refusal>({
       code: 'forbidden',
@@ -187,7 +199,6 @@ export async function asMachineCaller(
       reason: CALLER_DEACTIVATED,
     })
   }
-  await assertOrgAvailable(ctx, me.org_id)
   if ('insert' in ctx.db) {
     if (machineAccess(me, access) !== 'write') throw readOnlyRefusal(me)
     const adminRemoval =

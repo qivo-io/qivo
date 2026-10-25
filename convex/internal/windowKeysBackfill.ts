@@ -50,6 +50,7 @@ import { v } from 'convex/values'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { internalAction, internalMutation, internalQuery } from '../_generated/server'
 import { newWindowKey, strayRows } from '../lib/db'
+import { audit as writeAudit } from '../model/admin'
 
 /** Rows per page of each table, for the check and for each step of the
  * run, and the bytes one page may read. A project without a key writes one
@@ -131,12 +132,7 @@ export const remaining = internalQuery({
 export const audit = internalMutation({
   args: { issues: v.number(), projects: v.number() },
   handler: async (ctx, counts) => {
-    await ctx.db.insert('platform_audit_log', {
-      ts: new Date().toISOString(),
-      actor_email: 'system',
-      action: 'window_keys_backfill',
-      detail: counts,
-    })
+    await writeAudit(ctx, { actor_email: 'system', action: 'window_keys_backfill', detail: counts })
     return null
   },
 })

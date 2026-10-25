@@ -1278,6 +1278,35 @@ export async function findAuthUser(ctx: QueryCtx, authUserId: string): Promise<L
   })) as LoginBan | null
 }
 
+/**
+ * Whether an OAuth client may still act for its grants on `resource`: Better
+ * Auth still has the client, it is not disabled and it keeps its link to the
+ * resource. Better Auth checks the link only when it issues a token, so every
+ * use of a grant checks it here: each MCP or REST call
+ * (oauthConnections.ts lookupAccess) and each webhook subscription's owner
+ * (model/taskEvents.ts eventOwner). It costs two indexed reads of the Better
+ * Auth component, so callers make it after their cheaper checks pass.
+ */
+export async function oauthClientLive(
+  ctx: QueryCtx,
+  clientId: string,
+  resource: string,
+): Promise<boolean> {
+  const client = (await ctx.runQuery(components.betterAuth.adapter.findOne, {
+    model: 'oauthClient',
+    where: [{ field: 'clientId', value: clientId }],
+  })) as { disabled?: boolean } | null
+  if (!client || client.disabled) return false
+  const link = await ctx.runQuery(components.betterAuth.adapter.findOne, {
+    model: 'oauthClientResource',
+    where: [
+      { field: 'clientId', value: clientId },
+      { field: 'resourceId', value: resource },
+    ],
+  })
+  return link !== null
+}
+
 export const VIEWER_AGENT_READS_ONLY = 'this agent is a Viewer and can only read'
 export const CREDENTIAL_READS_ONLY = 'this credential can only read'
 

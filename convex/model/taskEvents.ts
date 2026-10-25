@@ -1,4 +1,3 @@
-import { components } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
@@ -6,8 +5,10 @@ import {
   findAuthUser,
   liveCredentialRow,
   loginBanned,
+  oauthClientLive,
   profileCanSeeProject,
 } from '../lib/access'
+import { deletionBegun } from '../lib/billingAccess'
 import { byId } from '../lib/db'
 import { isDemoDeployment } from '../lib/demo'
 import type { CredentialAccess } from '../lib/enums'
@@ -22,8 +23,11 @@ import { expandWebhookEventsRef } from './webhookQueue'
  * authorization. Answers the owner's profile and what the credential may do
  * (lib/access.ts credentialAccess), or null once the credential stops
  * authorizing anything because it was revoked, expired or replaced, its
- * account is gone or deactivated, or its person's login is banned or no
- * longer exists in Better Auth.
+ * account is gone or deactivated, its organization's deletion has begun,
+ * its person's login is banned or no longer exists in Better Auth, or, for
+ * an OAuth grant, its client was
+ * disabled or lost its link to the MCP resource (lib/access.ts
+ * oauthClientLive). Subscribing, delivery and every event's fan-out ask this.
  */
 export async function eventOwner(
   ctx: QueryCtx,
@@ -32,6 +36,9 @@ export async function eventOwner(
   if (isDemoDeployment()) return null
   const profile = await byId(ctx, 'profiles', owner.profile_id)
   if (!profile?.active) return null
+  // a deletion that has begun refuses every call into the organization
+  // (lib/billingAccess.ts assertOrgAvailable), its webhooks too
+  if (await deletionBegun(ctx, profile.org_id)) return null
   const now = Date.now()
   const credential = await liveCredentialRow(ctx, owner, now)
   if (!credential) return null
@@ -50,12 +57,10 @@ export async function eventOwner(
       credential.resource !== mcpResource()
     )
       return null
-    const client = (await ctx.runQuery(components.betterAuth.adapter.findOne, {
-      model: 'oauthClient',
-      where: [{ field: 'clientId', value: credential.client_id }],
-    })) as { disabled?: boolean } | null
+    // the same client check every MCP and REST call makes (lookupAccess)
+    if (!(await oauthClientLive(ctx, credential.client_id, credential.resource))) return null
     const user = await findAuthUser(ctx, credential.auth_user_id)
-    if (!client || client.disabled || !user || loginBanned(user, now)) return null
+    if (!user || loginBanned(user, now)) return null
     return {
       profile,
       access: credentialAccess({ table: 'oauth_connections', scopes: credential.scopes }, profile),

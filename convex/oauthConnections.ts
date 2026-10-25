@@ -2,7 +2,8 @@ import { v } from 'convex/values'
 import { components } from './_generated/api'
 import { internalMutation, internalQuery } from './_generated/server'
 import { createAuth } from './auth'
-import { credentialAccess, findAuthUser, loginBanned } from './lib/access'
+import { credentialAccess, findAuthUser, loginBanned, oauthClientLive } from './lib/access'
+import { deletionBegun, removedWithOrg } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { isDemoDeployment, refuseDemoFeature } from './lib/demo'
 import { authedMutation, authedQuery, badRequest, forbidden, notFound } from './lib/functions'
@@ -327,9 +328,9 @@ export const revokeReplay = internalMutation({
  * counts as gone, and so does one issued in a browser session before the
  * session ended, such as at sign-out (lib/sessionEnd.ts endSessionAccess).
  * So does a token bound to a DPoP key, whose proof Qivo cannot check
- * (lib/oauthProvider.ts never issues one), and one whose client lost its
- * link to the resource, which Better Auth checks only when it issues a
- * token. That link costs one indexed read of the component per call. */
+ * (lib/oauthProvider.ts never issues one), and one whose client was
+ * disabled or lost its link to the resource (lib/access.ts
+ * oauthClientLive). */
 export const lookupAccess = internalQuery({
   args: { tokenHash: v.string(), resource: v.string() },
   handler: async (ctx, args) => {
@@ -375,23 +376,10 @@ export const lookupAccess = internalQuery({
       token.scopes.some((scope) => !row.scopes.includes(scope))
     )
       return null
-    const client = (await ctx.runQuery(components.betterAuth.adapter.findOne, {
-      model: 'oauthClient',
-      where: [{ field: 'clientId', value: row.client_id }],
-    })) as { disabled?: boolean } | null
-    const link = await ctx.runQuery(components.betterAuth.adapter.findOne, {
-      model: 'oauthClientResource',
-      where: [
-        { field: 'clientId', value: row.client_id },
-        { field: 'resourceId', value: args.resource },
-      ],
-    })
+    if (!(await oauthClientLive(ctx, row.client_id, args.resource))) return null
     const user = await findAuthUser(ctx, row.auth_user_id)
     const profile = await byId(ctx, 'profiles', row.profile_id)
     if (
-      !client ||
-      client.disabled ||
-      !link ||
       !user ||
       loginBanned(user, Date.now()) ||
       !profile?.active ||
@@ -407,6 +395,28 @@ export const lookupAccess = internalQuery({
       scopes: token.scopes,
       access: credentialAccess({ table: 'oauth_connections', scopes: token.scopes }, profile),
     }
+  },
+})
+
+/** Whether an access token that lookupAccess refused stopped because its
+ * organization's deletion has begun, while it is otherwise still valid: the
+ * deletion deleted its grant (removed_access), or the grant still stands in
+ * that organization. MCP and REST then refuse it with the deletion's
+ * sentence (lib/billingAccess.ts ORG_DELETING), as every call into the
+ * organization. Only a refused token pays for this check. */
+export const refusedForDeletion = internalQuery({
+  args: { tokenHash: v.string() },
+  handler: async (ctx, args): Promise<boolean> => {
+    if (isDemoDeployment()) return false
+    const token = (await ctx.runQuery(components.betterAuth.adapter.findOne, {
+      model: 'oauthAccessToken',
+      where: [{ field: 'token', value: args.tokenHash }],
+    })) as { referenceId?: string; expiresAt: number; revoked?: number | null } | null
+    if (!token?.referenceId || token.revoked != null || !(token.expiresAt > Date.now()))
+      return false
+    const row = await byId(ctx, 'oauth_connections', token.referenceId)
+    if (row === null) return await removedWithOrg(ctx, 'oauth_connections', token.referenceId)
+    return !row.revoked_at && (await deletionBegun(ctx, row.org_id))
   },
 })
 

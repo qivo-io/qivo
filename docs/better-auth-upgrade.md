@@ -77,7 +77,9 @@ out. `@convex-dev/better-auth` is no longer installed.
   `oauthConnections.lookupAccess` compares on every MCP request. Better
   Auth checks the link only when it issues a token, so `lookupAccess` also
   reads the client's link on every request and refuses a token whose client
-  lost it.
+  lost it, and webhook ownership (`model/taskEvents.ts eventOwner`) refuses
+  the connection's subscriptions the same way (`lib/access.ts
+  oauthClientLive`).
   `convex/tests/oauth.test.ts` shows that a client without the link is
   refused, and that a linked client is refused every other resource at
   authorize, code exchange and refresh, even when Better Auth knows a second
@@ -317,7 +319,8 @@ Qivo does not use (SSO, SCIM, Stripe, passkey, API keys).
 - Discovery, registration, S256 PKCE, exact client and redirect binding,
   signed consent and scope limits work (`convex/tests/oauth.test.ts`).
 - A client without a resource link is refused, also when it leaves the
-  resource out, and so is an access token issued before the link went. Foreign and repeated resource parameters fail for a linked
+  resource out, and so are an access token issued before the link went and
+  the connection's webhook subscriptions. Foreign and repeated resource parameters fail for a linked
   one. An omitted resource keeps the canonical default, and refresh cannot
   widen its grant.
 - The metadata on every path lists `none` as the only client

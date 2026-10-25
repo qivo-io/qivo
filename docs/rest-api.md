@@ -456,7 +456,8 @@ be refused.
   in the second case, otherwise `null`. An organization admin can still
   remove access ([Request limits and billing](#request-limits-and-billing)).
   No plan, price or usage is included. Once deletion begins, every request
-  is refused with `403`.
+  is refused with `403` and `this organization is being deleted`, also one
+  with a key or token the deletion has already removed.
 - `credential.access` is `write` when this credential may make changes and
   `read` when it can only read, such as a Viewer agent's key. It is the same
   rule that refuses writes (see Authentication). A write still needs Edit

@@ -205,6 +205,7 @@ const APP_SHARED = [
   // Organization deletion never runs on a demo deployment: an admin's request
   // refuses demos, and billing, which starts every other removal, is off.
   'org_removals',
+  'removed_access',
   'panorama_images',
   'panorama_calendar',
   'panorama_curation_keys',

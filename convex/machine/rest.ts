@@ -49,6 +49,7 @@ import type { ActionCtx, QueryCtx } from '../_generated/server'
 import { internalMutation, internalQuery } from '../_generated/server'
 import { hasProjectLevel } from '../lib/access'
 import { archiveCursorText } from '../lib/archivedTasks'
+import { ORG_DELETING } from '../lib/billingAccess'
 import {
   type AccessFlag,
   accessFlags,
@@ -1509,10 +1510,16 @@ async function webhookResponse(
   const runMutation = conflictRetrying(ctx)
   let owner: EventOwner
   if (secret.startsWith('qvo_')) {
+    const tokenHash = await sha256hex(secret.slice(4))
     const credential = await ctx.runQuery(internal.oauthConnections.lookupAccess, {
-      tokenHash: await sha256hex(secret.slice(4)),
+      tokenHash,
       resource: mcpResource(),
     })
+    if (
+      !credential &&
+      (await ctx.runQuery(internal.oauthConnections.refusedForDeletion, { tokenHash }))
+    )
+      return err(ORG_DELETING, 403)
     if (
       !credential ||
       !(await runMutation(internal.oauthConnections.touch, { id: credential.connectionId }))
@@ -1539,7 +1546,10 @@ async function webhookResponse(
     }
   } else {
     const authenticated = await authenticateSecret(ctx, secret)
-    if (authenticated.ok === false) return err('Webhook credential is invalid or inactive', 401)
+    if (authenticated.ok === false)
+      return authenticated.why === 'org_deleting'
+        ? err(ORG_DELETING, 403)
+        : err('Webhook credential is invalid or inactive', 401)
     const credential = authenticated.cred
     const table = credential.isAgent ? 'agent_keys' : 'mcp_tokens'
     const allowed = await runMutation(internal.machine.auth.touchCredential, {
@@ -1645,7 +1655,8 @@ const restHandler = answerAfterBody(async (ctx, req) => {
     // `=== false` (not `!res.ok`): the root tsconfig typechecks this file via
     // _generated/api.d.ts under strict:false, where truthiness narrowing of
     // the discriminant does not apply
-    if (res.ok === false) return err(restAuth401(res), 401)
+    if (res.ok === false)
+      return res.why === 'org_deleting' ? err(ORG_DELETING, 403) : err(restAuth401(res), 401)
     kind = res.cred.isAgent ? 'agent' : 'person'
     const table = res.cred.isAgent ? 'agent_keys' : 'mcp_tokens'
     // per-call last_used_at stamp — before any routing/work, even requests
