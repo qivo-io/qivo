@@ -624,13 +624,16 @@ export async function backgroundsPage(ctx: QueryCtx, cursor: Cursor) {
 }
 
 /** One page of the deleted files held for a restore (model/fileHolds.ts),
- * with their bytes. No row names them, so no organization's figures do. */
+ * with the bytes of those still stored. No row names them, so no
+ * organization's figures do. A restore can bring back the hold of a file
+ * erased since, which the eraser then clears, so each file is looked up. */
 export async function heldFilesPage(ctx: QueryCtx, cursor: Cursor) {
   const page = await ctx.db
     .query('file_holds')
     .paginate({ cursor, numItems: USAGE_PAGE.rows, maximumBytesRead: USAGE_PAGE.bytes })
   let bytes = 0
-  for (const hold of page.page) bytes += hold.size_bytes
+  for (const hold of page.page)
+    if ((await ctx.db.system.get(hold.storage_id)) !== null) bytes += hold.size_bytes
   return { bytes, next: nextOf(page) }
 }
 

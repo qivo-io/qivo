@@ -517,8 +517,12 @@ describe('deleted files held for a restore', () => {
           await releaseFile(ctx, storage_id)
         }
       }
+      // a restore brought back the hold of a file erased since
+      const erased = await ctx.storage.store(new Blob(['x'.repeat(5)]) as never)
+      await ctx.storage.delete(erased)
+      await ctx.db.insert('file_holds', { storage_id: erased, size_bytes: 5, erase_at: RUN })
     })
-    expect(await t.run((ctx) => ctx.db.query('file_holds').collect())).toHaveLength(1)
+    expect(await t.run((ctx) => ctx.db.query('file_holds').collect())).toHaveLength(2)
     await t.action(internal.usage.closeMonth, {})
     await runSteps(t)
     const stored = (await storedRows(t)).find((row) => row.org_id === f.org.id)

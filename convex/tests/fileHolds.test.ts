@@ -397,9 +397,6 @@ describe('a restore', () => {
     await quietWatch(t)
     const backup = await backupWatch(t)
     expect(await watchRestores(t)).toBe(false)
-    // a witness that ran, after a day without the eraser, still counts
-    await runUntil(t, Date.now() + DAY + 1)
-    expect(await watchRestores(t)).toBe(false)
     expect(await state()).toEqual({ rewound: false })
     await rewindWatch(t, backup)
     // a sweep holds before the eraser notices the restore
@@ -409,6 +406,21 @@ describe('a restore', () => {
     const noticed = Date.now()
     expect(await state()).toEqual({ rewound: false, restored_at: noticed })
     expect(await watchRestores(t)).toBe(false)
+  })
+
+  it('is noticed when the backup names a witness that ran while the eraser was stopped', async () => {
+    vi.useFakeTimers()
+    const t = newT()
+    await quietWatch(t)
+    // a backup during a week without the eraser, so its witness runs
+    const backup = await backupWatch(t)
+    await runUntil(t, Date.now() + 7 * DAY + 1)
+    // the first check after the stop counts it as a restore, to be safe
+    expect(await watchRestores(t)).toBe(true)
+    expect(await watchRestores(t)).toBe(false)
+    await rewindWatch(t, backup)
+    expect(await t.run((ctx) => restoreState(ctx))).toMatchObject({ rewound: true })
+    expect(await watchRestores(t)).toBe(true)
   })
 
   it('holds what existed when it was noticed until HOLD_MS after that, and in its own run everything', async () => {

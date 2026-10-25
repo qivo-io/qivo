@@ -33,7 +33,11 @@
  * as they are. A file let go after the restored backup therefore loses its
  * hold row but keeps its scheduled erase, and is still erased in time. A
  * file whose row a restore brings back is in use again, and its scheduled
- * erase keeps it.
+ * erase keeps it. That earliest erase still runs if the file is deleted
+ * again and a later restore takes that deletion's hold away too, so after
+ * such a chain of restores a backup taken between the two deletions may
+ * miss the file. Only the pending erases in the scheduler tell that case
+ * from a file let go once, and they cannot be looked up by file.
  *
  * The eraser (files.ts eraseHeldFiles) runs every ERASE_EVERY_MS. It erases
  * the due holds a scheduled erase missed, as after a failed erase or an
@@ -87,8 +91,8 @@ export const ERASE_TIMERS = { on: true }
 
 /* How long a restore witness waits before it runs (noteRestore). The eraser
  * replaces it every ERASE_EVERY_MS, so it runs only if the eraser stops for a
- * day, and then does nothing. */
-const WITNESS_MS = 24 * 60 * 60 * 1000
+ * week. It then does nothing, and the next check counts it as a restore. */
+const WITNESS_MS = 7 * 24 * 60 * 60 * 1000
 
 const eraseHeldFileRef = makeFunctionReference<'mutation', { storage_id: Id<'_storage'> }, null>(
   'files:eraseHeldFile',
@@ -276,23 +280,26 @@ export async function eraseDueFiles(
 }
 
 /* The restore_watch row, its witness, and whether a restore rewound the
- * row: it is missing, or names a witness that a later noteRestore canceled.
- * A witness that ran, after a day without the eraser, still counts. */
+ * row: it is missing, or names a witness that is no longer pending. A later
+ * noteRestore canceled it, or it ran because the eraser stopped for a week.
+ * A witness that ran counts too, because noteRestore cannot cancel it, so a
+ * backup that names it would otherwise restore unnoticed. */
 async function watch(ctx: QueryCtx) {
   const row = await ctx.db.query('restore_watch').first()
   const witness = row === null ? null : await ctx.db.system.get(row.witness)
-  return { row, witness, rewound: witness === null || witness.state.kind === 'canceled' }
+  return { row, witness, rewound: witness === null || witness.state.kind !== 'pending' }
 }
 
 /**
  * Whether the database went back in time since the last call, as a restore
  * from a backup does, and remembers this call at `now` (epoch milliseconds).
- * The restore_watch row names a scheduled witness, which each call cancels
- * and replaces. A restore rewinds the row but not the scheduler, so the row
- * then names a witness that a later call canceled. A missing row counts as a
- * restore too, so a restore of a backup from before the row is noticed. That
- * also makes the first call on a deployment answer true. On the demo, which
- * keeps no backups, it does nothing and answers false.
+ * The restore_watch row names a pending scheduled witness, which each call
+ * cancels and replaces. A restore rewinds the row but not the scheduler, so
+ * the row then names a witness that is no longer pending. A missing row
+ * counts as a restore too, so a restore of a backup from before the row is
+ * noticed. That also makes the first call on a deployment answer true, and
+ * so does the first call after the eraser stopped for a week. On the demo,
+ * which keeps no backups, it does nothing and answers false.
  */
 export async function noteRestore(ctx: MutationCtx, now: number): Promise<boolean> {
   if (isDemoDeployment()) return false

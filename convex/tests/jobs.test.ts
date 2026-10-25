@@ -1518,9 +1518,11 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
       return job === undefined ? null : (job.args[0] as { phase: string; cursor?: string })
     })
 
-  /* Runs the waiting leg alone, under fake timers, and returns the next. */
+  /* Runs the waiting leg alone, under fake timers, and returns the next.
+   * Only timers already due fire, so the eraser's restore witness, a week
+   * out, keeps waiting as it does on a deployment. */
   async function step(t: T) {
-    vi.runOnlyPendingTimers()
+    vi.advanceTimersByTime(0)
     await t.finishInProgressScheduledFunctions()
     return await pendingLeg(t)
   }
