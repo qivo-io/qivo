@@ -20,7 +20,14 @@
    reaches the other listeners. The step still lands after it, since a
    browser counts its distance from the entry the person reached, so the
    page then steps back to that entry, and neither popstate reaches another
-   listener. */
+   listener.
+
+   A known limit: a step that the person's move overtook from near the
+   history's start would pass it, lands nowhere and fires no popstate, so the
+   person's next move within LOST_MS is taken for that step and undone.
+   Telling the two apart by where the step would land breaks when a
+   listener writes history during the person's move, and ending the step
+   early lets a writer go before the browser has run it. */
 
 let at = 0
 let moved: number | null = null

@@ -219,6 +219,79 @@ describe("a person's move that overtakes the page's own step", () => {
     expect(ran).toHaveBeenCalled()
   })
 
+  it('lets nothing write history before an overtaken step that lands nowhere has run', async () => {
+    const browser = overMarkers(['/before', '/page'], 1)
+    const heard = hear(browser)
+    browser.pick(0)
+    const step = stepBack(1)
+    // a layer waiting for the page's moves pushes its marker once they land
+    afterTraversal(() => browser.history.pushState({ qivoLayer: 'next' }, ''))
+    expect(await step).toBe(false)
+    await settle()
+    // Before, the step ended at the pick, the marker went in first, and the
+    // step, counted from it, then landed on the pick and took the marker.
+    expect(browser.history.state?.qivoLayer).toBe('next')
+    expect(position()).toBe(1)
+    expect(heard).toEqual(['/before'])
+  })
+
+  it('steps back to a marker a layer restored while the overtaken step was on its way', async () => {
+    // a layer that stays open under two finished ones
+    const browser = overMarkers(['/start', '/before', '/page'], 3)
+    let restored = 0
+    // the staying layer refuses the person's Back and restores its marker
+    browser.window.addEventListener('popstate', () => {
+      if (restored) return
+      restored += 1
+      browser.history.pushState({ qivoLayer: 'kept' }, '')
+    })
+    const heard = hear(browser)
+    browser.pick(2)
+    expect(await stepBack(2)).toBe(false)
+    await settle()
+    // Before, the step, counted from the restored marker, was taken for the
+    // person's next move: App heard /before and the layer was asked again.
+    expect(heard).toEqual(['/page'])
+    expect(restored).toBe(1)
+    expect(browser.history.state?.qivoLayer).toBe('kept')
+    expect(position()).toBe(3)
+  })
+
+  it("asks once on the page shown after a refused Back and a Forward over a dialog's step that lands nowhere", async () => {
+    // a task with unsent text, its finished dialog's marker on top
+    const browser = overMarkers(['/older', '/middle', '/task'], 1)
+    const scope = createUnsentScope()
+    scope.hold('comment')
+    let discard: (() => void) | null = null
+    const ask = vi.fn((_: unknown, go: () => void) => {
+      discard = go
+    })
+    const refusal = createPopRefusal(ask, browser.history)
+    // App's listener refuses a move while the window holds unsent text
+    browser.window.addEventListener('popstate', (event) => {
+      if (event instanceof PopStateEvent && !refusal.landed(event) && scope.held().length)
+        refusal.refuse(event, [scope])
+    })
+    // Back to the first entry before the dialog's step, which, counted from
+    // there, lands nowhere; then Forward, well within LOST_MS
+    browser.pick(0)
+    const step = stepBack(1)
+    browser.pick(1)
+    await step
+    await settle()
+    // The Forward is taken for the dialog's step and undone, a known limit
+    // (lib/historyIndex.ts), but the refusal still asks once, on the page
+    // shown, and Discard goes where the person last went.
+    expect(ask).toHaveBeenCalledTimes(1)
+    expect(browser.here()).toBe('/task')
+    expect(position()).toBe(2)
+    // Discard throws the text away, then takes the last move again
+    scope.discard()
+    discard?.()
+    await settle()
+    expect(browser.here()).toBe('/older')
+  })
+
   it('steps a refused pick back to the entry the page aimed for, and asks there', async () => {
     const browser = overMarkers(['/start', '/older', '/before', '/page'], 2)
     const scope = createUnsentScope()
