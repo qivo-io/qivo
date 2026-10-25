@@ -10,6 +10,14 @@ export const REVEAL_MS = 2400
     from the start and no later window holds it. */
 export type RevealRequest = { id: string; n: number; atOnce?: boolean }
 
+/** The state update for a request that a view took, given its nonce `n`:
+    it drops the request unless a newer one replaced it, which a kept view
+    shown again with a request it held (components/KeptView) must leave. */
+export const withoutTaken =
+  (n: number) =>
+  <R extends { n: number }>(request: R | null) =>
+    request?.n === n ? null : request
+
 const ROWS = '[data-card], [data-parent-heading]'
 
 /** The element that shows task `id` in `pane` and takes the ring: a card
@@ -61,17 +69,17 @@ const reducedMotion = () =>
     reduced motion is on or the card is more than two screens away, and
     corrects once where cards that rendered meanwhile moved it. Scrolling
     yields to the person: a wheel, touch, press or key stops the
-    correction. `onConsumed` runs as soon as the request is taken. A
+    correction. `onConsumed` gets the request's nonce as soon as it is taken. A
     request is taken once: a view that shows again (KeptView) runs its
     effects again, and may still hold a request it took before it hid.
     Nothing happens when the pane does not show the task. */
 export function useReveal(
   request: RevealRequest | null | undefined,
-  onConsumed: (() => void) | undefined,
+  onConsumed: ((n: number) => void) | undefined,
   pane: RefObject<HTMLElement | null>,
   mount: (id: string) => void,
 ) {
-  const consumed = useLatest(() => onConsumed?.())
+  const consumed = useLatest((n: number) => onConsumed?.(n))
   const mountTask = useLatest(mount)
   // the running reveal's cancel; consuming the request must not stop it
   const cancel = useRef(() => {})
@@ -81,7 +89,7 @@ export function useReveal(
     if (!request || request.n === taken.current) return
     taken.current = request.n
     cancel.current()
-    consumed()
+    consumed(request.n)
     const frames: number[] = []
     let timer = 0
     let ringed: HTMLElement | null = null

@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { flushSync } from 'react-dom'
+import { type IdleDeadline, whenIdle } from './idle'
 
 /* Mounts long lists in short slices after their first screen. Each list
    (a DeferredList) registers how many of its items still wait to mount and
@@ -43,7 +44,7 @@ type Options = {
   observer?: ObserverFactory | null
   /** runs a task when the page is idle, with the time left; none skips
       laying out the offscreen blocks ahead */
-  idle?: ((task: (deadline: { timeRemaining: () => number }) => void) => void) | null
+  idle?: ((task: (deadline: IdleDeadline) => void) => void) | null
 }
 
 /** The time one slice aims to take, the time into a frame after which
@@ -66,8 +67,9 @@ function postMessageTask(task: () => void) {
   channel.port2.postMessage(null)
 }
 
-const defaultIdle: Options['idle'] =
-  typeof requestIdleCallback === 'undefined' ? null : (task) => requestIdleCallback(task)
+const defaultIdle: Options['idle'] = (task) => {
+  whenIdle(task)
+}
 
 /* The skipped blocks idle layout reaches, and the time it leaves in an
    idle period for the browser's own work. */
@@ -212,7 +214,7 @@ export function createMountScheduler({
     warming = true
     mountedSince = false
     let queue: Element[] | null = null
-    const step = (deadline: { timeRemaining: () => number }) => {
+    const step = (deadline: IdleDeadline) => {
       if (disposed || !root || pendingLists().length) {
         warming = false
         return

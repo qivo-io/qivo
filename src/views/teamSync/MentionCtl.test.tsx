@@ -220,6 +220,17 @@ describe('the Team sync @ window', () => {
     expect(note()?.value).toBe('')
   })
 
+  it('closes the open window when the person discards the page around it', async () => {
+    const { createUnsentScope } = await import('../../lib/leaveGuard')
+    const page = createUnsentScope()
+    await write('Can you check the soak report?', vi.fn(), page)
+    expect(page.held()).toEqual(['note'])
+    // Discard on leaving the page, which a kept Team sync outlives
+    await act(async () => page.discard())
+    expect(windowOpen()).toBe(false)
+    expect(page.held()).toEqual([])
+  })
+
   it('shows the note being sent when the window opens again, and closes once it is saved', async () => {
     const onSent = vi.fn()
     await write('Can you check the soak report?', onSent)

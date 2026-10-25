@@ -586,7 +586,7 @@ function Kanban({
   actions: Record<string, (...args: unknown[]) => void>
   /** A task to scroll to and ring for a moment, behind its task window */
   revealTask?: RevealRequest | null
-  onRevealConsumed?: () => void
+  onRevealConsumed?: (n: number) => void
 }) {
   // App makes its actions again every render; the cards keep one identity
   const onOpenIssue = useLatest(actions.openIssue)

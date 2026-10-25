@@ -1,15 +1,22 @@
 // @vitest-environment jsdom
-import { act, useState } from 'react'
+import { Activity, act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DiscardPrompt } from '../components/DiscardPrompt'
 import { Input } from '../components/ui/input'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { closeOrAsk } from './discardQuestion'
-import { createUnsentScope, hasUnsaved, UnsentScopeContext, useFieldUnsaved } from './leaveGuard'
+import {
+  createUnsentScope,
+  DISCARD_MS,
+  hasUnsaved,
+  UnsentScopeContext,
+  useFieldUnsaved,
+} from './leaveGuard'
 
 /* A field that saves on blur keeps the close warning while a refused save
-   leaves its typed text in place, and drops it once nothing is unsent. */
+   leaves its typed text in place, and drops it once nothing is unsent. A
+   Discard puts its saved value back, for a field that stays in the page. */
 
 let paused = false
 let container: HTMLDivElement
@@ -143,5 +150,43 @@ describe('useFieldUnsaved', () => {
     paused = false
     await typeAndLeave('16')
     expect(page.held()).toEqual([])
+  })
+  it('puts the saved value back on a Discard, for a field that stays in the page', async () => {
+    const page = createUnsentScope()
+    await act(async () =>
+      root.render(
+        <UnsentScopeContext.Provider value={page}>
+          <Field what="remaining hours" />
+        </UnsentScopeContext.Provider>,
+      ),
+    )
+    paused = true
+    await typeAndLeave('42')
+    await act(async () => page.discard())
+    expect((container.querySelector('input') as HTMLInputElement).value).toBe('16')
+    expect(hasUnsaved()).toBe(false)
+    await act(async () => vi.advanceTimersByTime(DISCARD_MS))
+    expect(page.held()).toEqual([])
+  })
+
+  it('keeps the draft of a page that hides and shows again', async () => {
+    const page = createUnsentScope()
+    const render = (mode: 'visible' | 'hidden') =>
+      act(async () =>
+        root.render(
+          <UnsentScopeContext.Provider value={page}>
+            <Activity mode={mode}>
+              <Field what="remaining hours" />
+            </Activity>
+          </UnsentScopeContext.Provider>,
+        ),
+      )
+    await render('visible')
+    paused = true
+    await typeAndLeave('42')
+    await render('hidden')
+    await render('visible')
+    expect(page.held()).toEqual(['remaining hours'])
+    expect((container.querySelector('input') as HTMLInputElement).value).toBe('42')
   })
 })

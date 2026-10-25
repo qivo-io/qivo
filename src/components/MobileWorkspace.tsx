@@ -471,7 +471,7 @@ export function MobileTaskList({
   actions: Actions
   /** A task to scroll to and ring for a moment, behind its task window */
   revealTask?: RevealRequest | null
-  onRevealConsumed?: () => void
+  onRevealConsumed?: (n: number) => void
 }) {
   const [status, setStatus] = useState('all')
   const [filterOpen, setFilterOpen] = useState(false)

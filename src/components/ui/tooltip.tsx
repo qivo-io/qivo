@@ -4,7 +4,7 @@ import * as React from 'react'
 import { useStaticControls } from '@/lib/liveControls'
 import { passEscapeOn } from '@/lib/passEscapeOn'
 import { cn } from '@/lib/utils'
-import { useViewHidden } from '@/lib/viewHidden'
+import { LayerOpenContext, useLayerOpen, useViewHidden } from '@/lib/viewHidden'
 import {
   hasTooltipContent,
   staticTooltipTarget,
@@ -32,8 +32,18 @@ function TooltipProvider({
   )
 }
 
-function Tooltip({ ...props }: React.ComponentProps<typeof TooltipPrimitive.Root>) {
-  return <TooltipPrimitive.Root data-slot="tooltip" {...props} />
+function Tooltip({
+  open,
+  defaultOpen,
+  onOpenChange,
+  ...props
+}: React.ComponentProps<typeof TooltipPrimitive.Root>) {
+  const layer = useLayerOpen({ open, defaultOpen, onOpenChange })
+  return (
+    <LayerOpenContext.Provider value={layer.open}>
+      <TooltipPrimitive.Root data-slot="tooltip" {...layer.props} {...props} />
+    </LayerOpenContext.Provider>
+  )
 }
 
 function TooltipTrigger({ ...props }: React.ComponentProps<typeof TooltipPrimitive.Trigger>) {
@@ -46,8 +56,8 @@ function TooltipContent({
   children,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
-  // in a hidden kept view (lib/viewHidden.ts)
-  if (useViewHidden()) return null
+  // open in a hidden kept view (lib/viewHidden.ts)
+  if (useViewHidden(React.useContext(LayerOpenContext))) return null
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content
@@ -93,6 +103,18 @@ const TooltipTarget = React.forwardRef<
   },
   ref,
 ) {
+  // A kept page (components/KeptView) detaches every ref as it hides and
+  // attaches it again as it shows. Only an element goes on to Radix, whose
+  // trigger then stays meanwhile, so the page's tooltips do not render
+  // again, hidden or before the page paints.
+  const attach = React.useCallback(
+    (element: HTMLElement | null) => {
+      if (!element) return
+      if (typeof ref === 'function') ref(element)
+      else if (ref) ref.current = element
+    },
+    [ref],
+  )
   // An empty tooltip must not report an open to Radix's shared provider:
   // that would close real tooltips and bypass the next tooltip's hover delay.
   // Original child handlers are still composed by Slot below.
@@ -101,7 +123,7 @@ const TooltipTarget = React.forwardRef<
     : {}
   return (
     <Slot.Root
-      ref={ref}
+      ref={attach}
       {...(tabIndex === undefined ? {} : { tabIndex })}
       {...tooltipEvents}
       {...props}

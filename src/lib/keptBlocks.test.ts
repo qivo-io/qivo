@@ -109,4 +109,19 @@ describe('settleHiddenBlocks', () => {
     expect(read).toHaveLength(4)
     expect(container.querySelectorAll('[data-kept-hidden]')).toHaveLength(0)
   })
+
+  it('marks every block where the browser has no requestIdleCallback (Safari)', () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('requestIdleCallback', undefined)
+    try {
+      const { container } = setup(40)
+      settleHiddenBlocks(container)
+      expect(container.querySelectorAll('[data-kept-hidden]')).toHaveLength(0)
+      vi.runAllTimers()
+      expect(container.querySelectorAll('.deferred-block:not([data-kept-hidden])')).toHaveLength(0)
+    } finally {
+      vi.unstubAllGlobals()
+      vi.useRealTimers()
+    }
+  })
 })

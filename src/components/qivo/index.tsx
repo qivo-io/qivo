@@ -575,6 +575,9 @@ function FieldSelect<T extends string>({
   const close = useMenuBackLayer(open, () => setOpen(false), backLayer)
   // a menu pick arrives just before the menu's own close, which carries it
   const pick = useRef<(() => void) | null>(null)
+  // the trigger names the choice itself, also while the menu's closed list
+  // is away (SelectContent)
+  const chosen = options.find((o) => o.value === value)
   return (
     <Select
       value={value ?? undefined}
@@ -605,7 +608,14 @@ function FieldSelect<T extends string>({
         )}
         style={style}
       >
-        <SelectValue placeholder={placeholder} />
+        <SelectValue placeholder={placeholder}>
+          {chosen && (
+            <>
+              {chosen.icon}
+              <span className="truncate">{chosen.label}</span>
+            </>
+          )}
+        </SelectValue>
         {/* mr-auto hugs the glyph to the label: the trigger justifies its
             children between its ends, and the chevron keeps the far one */}
         {trailing && <span className="mr-auto flex items-center">{trailing}</span>}

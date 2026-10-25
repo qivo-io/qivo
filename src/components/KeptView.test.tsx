@@ -5,7 +5,6 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { type RevealRequest, useReveal } from '@/lib/reveal'
 import { OUT_OF_USE } from '@/lib/viewHidden'
-import { useDropped } from '@/lib/viewTeardown'
 import { KeptView, ViewKeeper } from './KeptView'
 import { AnchoredPop } from './qivo'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
@@ -158,18 +157,21 @@ describe('KeptView', () => {
     expect(board()?.dataset.board).toBe('second')
   })
 
-  it('renders new content in the commit that shows it when it was kept for another layout', async () => {
+  it('renders new content in the commit that shows it when it was kept for another variant', async () => {
     const tree = (shown: boolean, label: string, layout: string) =>
       act(async () =>
         root.render(
-          <KeptView view="kanban" shown={shown} layout={layout} className="view">
+          <KeptView view="kanban" shown={shown} variant={layout} className="view">
             <Board label={label} />
           </KeptView>,
         ),
       )
     await tree(true, 'desktop', 'desktop')
-    // it hides as the layout changes, holding the old layout's content
+    await tree(false, 'desktop', 'desktop')
+    // the layout changes while it hides: it holds the old layout's content
+    counts.renders.length = 0
     await tree(false, 'phone', 'phone')
+    expect(counts.renders).toEqual([])
     expect(board()?.dataset.board).toBe('desktop')
     await tree(true, 'phone', 'phone')
     expect(board()?.dataset.board).toBe('phone')
@@ -179,6 +181,32 @@ describe('KeptView', () => {
     expect(board()?.dataset.board).toBe('phone')
     await painted()
     expect(board()?.dataset.board).toBe('phone again')
+  })
+
+  it('renders new content in the commit that hides it only when that is for another variant', async () => {
+    const tree = (shown: boolean, label: string, variant: string) =>
+      act(async () =>
+        root.render(
+          <KeptView view="inbox" shown={shown} variant={variant} className="view">
+            <Board label={label} />
+          </KeptView>,
+        ),
+      )
+    await tree(true, 'with a task', 'task')
+    counts.renders.length = 0
+    // the Inbox hides without its task pane
+    await tree(false, 'without', '')
+    expect(counts.renders).toEqual(['without'])
+    expect(board()?.dataset.board).toBe('without')
+    expect(counts.mounts).toBe(1)
+    // while hidden, and as it hides for the same variant, it does not render
+    await tree(false, 'other', '')
+    await tree(true, 'other', '')
+    await painted()
+    counts.renders.length = 0
+    await tree(false, 'again', '')
+    expect(counts.renders).toEqual([])
+    expect(board()?.dataset.board).toBe('other')
   })
 
   it('marks its blocks to skip their items for good while hidden, and unmarks them as it shows', async () => {
@@ -294,18 +322,12 @@ describe('KeptView', () => {
   })
 })
 
-/** A part of a stand-in Board that a leaving view drops (DeferredList's
-    blocks in the real one). */
-function Part({ n }: { n: number }) {
-  const dropped = useDropped()
-  return dropped ? null : <span data-part={n} />
-}
-
+/** A stand-in Board of `count` parts. */
 function Parts({ label, count }: { label: string; count: number }) {
   return (
     <div data-board={label}>
       {Array.from({ length: count }, (_, n) => `${label}-${n}`).map((id, n) => (
-        <Part key={id} n={n} />
+        <span key={id} data-part={n} />
       ))}
     </div>
   )
@@ -328,20 +350,15 @@ const wait = (ms: number) =>
   })
 
 describe('ViewKeeper', () => {
-  it('keeps the view of one id across hides, and takes the old one apart in slices when the id changes', async () => {
+  it('keeps the view of one id across hides, and lets the old one go after a paint, once idle, when the id changes', async () => {
+    const idle: IdleRequestCallback[] = []
+    vi.stubGlobal('requestIdleCallback', (step: IdleRequestCallback) => idle.push(step))
+    vi.stubGlobal('cancelIdleCallback', () => {})
     await keep('a', true)
     await keep('a', false)
     await keep('a', true)
     expect(views()).toHaveLength(1)
     await keep('a', false)
-    // removals the test sees, one list per commit that removed parts
-    const slices: number[] = []
-    const watch = new MutationObserver((records) => {
-      const removed = records.flatMap((record) => [...record.removedNodes])
-      const parts = removed.filter((node) => node instanceof HTMLElement && node.dataset.part)
-      if (parts.length) slices.push(parts.length)
-    })
-    watch.observe(container, { childList: true, subtree: true })
     await keep('b', false)
     // the new id's view first; the old one stays whole, hidden, until a paint
     expect(
@@ -351,11 +368,17 @@ describe('ViewKeeper', () => {
     expect(old.matches(OUT_OF_USE)).toBe(true)
     expect(old.dataset.workspaceView).toBeUndefined()
     expect(old.querySelectorAll('[data-part]')).toHaveLength(10)
-    for (let i = 0; i < 50 && old.isConnected; i++) await wait(20)
-    watch.disconnect()
+    const runIdle = () =>
+      act(async () => {
+        for (const step of idle.splice(0)) step({ didTimeout: false, timeRemaining: () => 50 })
+      })
+    await runIdle()
+    expect(old.isConnected).toBe(true)
+    // the next view's first screen goes first: it waits for a paint, then idle
+    await painted()
+    expect(old.isConnected).toBe(true)
+    await runIdle()
     expect(old.isConnected).toBe(false)
-    // the parts went a few at a time, though the view was hidden all along
-    expect(slices).toEqual([4, 4, 2])
     expect(views()).toHaveLength(1)
   })
 
@@ -380,5 +403,22 @@ describe('ViewKeeper', () => {
     expect(views()).toHaveLength(1)
     expect(views()[0].dataset.workspaceView).toBe('kanban')
     expect(views()[0].querySelectorAll('[data-part]')).toHaveLength(10)
+  })
+  it('lets a view go in a hidden tab, where no frame paints', async () => {
+    await keep('a', true)
+    await keep('a', false)
+    const old = views()[0]
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
+    try {
+      // released after a while without input, as the tab sits in the background
+      await keep(null, false)
+      for (let i = 0; i < 50 && old.isConnected; i++)
+        await act(async () => new Promise((resolve) => setTimeout(resolve, 20)))
+    } finally {
+      Reflect.deleteProperty(document, 'hidden')
+    }
+    expect(frames.size).toBe(0)
+    expect(old.isConnected).toBe(false)
+    expect(views()).toHaveLength(0)
   })
 })

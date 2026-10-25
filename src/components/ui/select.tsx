@@ -73,8 +73,13 @@ const SelectContent = React.forwardRef<
   { className, children, position = 'item-aligned', align = 'center', sideOffset = 6, ...props },
   ref,
 ) {
-  // in a hidden kept view (lib/viewHidden.ts)
-  if (useViewHidden()) return null
+  // Not in a hidden kept view (lib/viewHidden.ts), nor in the render that
+  // shows it again. Radix renders the closed list too, for typing on the
+  // closed trigger, and a long one can take thousands of components: it
+  // comes back in a render after the one that shows the page.
+  const hidden = useViewHidden()
+  const wasHidden = React.useDeferredValue(hidden)
+  if (hidden || wasHidden) return null
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content

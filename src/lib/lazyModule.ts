@@ -1,4 +1,5 @@
 import { type ComponentType, createElement, lazy, useRef } from 'react'
+import { whenIdle } from './idle'
 import { type SyncStatus, syncStatus } from './syncStatus'
 
 /* A browser keeps a failed module download for the life of the page, and
@@ -122,7 +123,7 @@ export function lazyFromModule<Module extends object, Props extends object>(
 export function preloadInBackground(
   loaders: () => readonly ModuleLoader<object>[],
   status: SyncStatus = syncStatus,
-  idle: (next: () => void) => () => void = whenIdle,
+  idle: (next: () => void) => () => void = nextIdle,
 ) {
   let stopped = false
   let running = false
@@ -169,12 +170,5 @@ export function preloadInBackground(
 }
 
 /** Calls `next` once the browser is idle, or after a short wait where it
- * cannot tell. Answers a function that cancels the call. */
-function whenIdle(next: () => void): () => void {
-  if (typeof requestIdleCallback === 'function') {
-    const id = requestIdleCallback(next, { timeout: 2_000 })
-    return () => cancelIdleCallback(id)
-  }
-  const id = setTimeout(next, 50)
-  return () => clearTimeout(id)
-}
+ * cannot tell (lib/idle.ts). Answers a function that cancels the call. */
+const nextIdle = (next: () => void) => whenIdle(() => next(), { timeout: 2_000 })

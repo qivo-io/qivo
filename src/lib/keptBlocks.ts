@@ -11,21 +11,17 @@
    view, keeps a view that hides or shows from making the browser search
    all of its elements for blocks. */
 
+import { type IdleDeadline, whenIdle } from './idle'
+
 type Options = {
   /** runs `step` once the page is idle, with the time left; answers a
       function that cancels it */
-  idle?: (step: (deadline: { timeRemaining: () => number }) => void) => () => void
+  idle?: (step: (deadline: IdleDeadline) => void) => () => void
 }
 
 /** The idle time a step leaves for the browser's own work. */
 const SPARE_MS = 2
 const MARK = 'data-kept-hidden'
-
-const whenIdle: NonNullable<Options['idle']> = (step) => {
-  if (typeof requestIdleCallback === 'undefined') return () => {}
-  const id = requestIdleCallback(step)
-  return () => cancelIdleCallback(id)
-}
 
 /** Marks the blocks in the hidden view `container` in idle time, so they
     stop skipping only while offscreen. Answers a function that stops and
@@ -37,7 +33,7 @@ export function settleHiddenBlocks(container: Element, { idle = whenIdle }: Opti
   let next = 0
   let last: Element | undefined
   let cancel = () => {}
-  const step = (deadline: { timeRemaining: () => number }) => {
+  const step = (deadline: IdleDeadline) => {
     // a block that went or came before `next`, as a leaving view drops its
     // blocks in slices, moved the rest: walk again, past the marked ones
     if (next > 0 && blocks[next - 1] !== last) next = 0

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { Activity, act, type ComponentProps, forwardRef } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { hasTooltip } from '@/lib/passEscapeOn'
@@ -124,5 +124,41 @@ describe('HoverTooltip', () => {
     await pressEscape(owner)
     // no exit animation to wait for
     expect(content()).toBeNull()
+  })
+  it('does not render again as a kept page hides and shows, and still opens after', async () => {
+    // the target renders each time the tooltip's trigger renders
+    let renders = 0
+    const Owner = forwardRef<HTMLButtonElement, ComponentProps<'button'>>(
+      function Owner(props, ref) {
+        renders++
+        return (
+          <button ref={ref} type="button" {...props}>
+            Owner
+          </button>
+        )
+      },
+    )
+    // one element throughout, so only the tooltip's own updates render it
+    const tooltip = (
+      <HoverTooltip content="Change assignee">
+        <Owner />
+      </HoverTooltip>
+    )
+    const page = (mode: 'visible' | 'hidden') =>
+      act(async () =>
+        root.render(
+          <TooltipProvider>
+            <Activity mode={mode}>{tooltip}</Activity>
+          </TooltipProvider>,
+        ),
+      )
+    await page('visible')
+    renders = 0
+    await page('hidden')
+    await page('visible')
+    expect(renders).toBe(0)
+    const owner = container.querySelector('button') as HTMLButtonElement
+    await act(async () => owner.focus())
+    expect(content()?.getAttribute('data-state')).toBe('instant-open')
   })
 })

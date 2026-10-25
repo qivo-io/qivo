@@ -449,6 +449,20 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
      the point: it is a second frame on the pane's task, so navigating inside
      it moves the pane too and closing it puts you back where you were. */
   const [poppedOut, setPoppedOut] = useState(false)
+  // A move with no task here ends it too, such as leaving the Inbox, which
+  // stays loaded (components/KeptView): the next task opens in the pane.
+  if (poppedOut && !openIssue) setPoppedOut(false)
+  // Leaving ends the row picked without a task and the unread part frozen
+  // for the pane, as the Inbox's unmount did: it shows again with an empty
+  // pane.
+  useEffect(
+    () => () => {
+      arriving.current = null
+      setDeadItem(null)
+      setFrozen(null)
+    },
+    [],
+  )
   // the text typed in the pane and its pop-out, and in the pop-out alone,
   // so closing either asks first (DiscardPrompt)
   const taskScope = useContext(UnsentScopeContext)
@@ -462,7 +476,13 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     setPoppedOut(false)
     openTask(null)
   }
+  // A kept Inbox shown again (components/KeptView) stays where it was: the
+  // place goes back only when the pane closed since this last ran.
+  const restoredFor = useRef<string | null>(null)
   useEffect(() => {
+    const at = `${mobile}\n${!!paneIssue}\n${deadItem}`
+    if (restoredFor.current === at) return
+    restoredFor.current = at
     if (mobile && !paneIssue && !deadItem && listScrollRef.current) {
       listScrollRef.current.scrollTop = queueScrollTop.current
     }

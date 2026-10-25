@@ -143,19 +143,23 @@ function Roadmap({
   actions: Record<string, (...args: unknown[]) => void>
   filterControls: (mobile: boolean) => React.ReactNode
   focusPlan: { id: string; n: number } | null
-  onFocusConsumed?: () => void
+  /** Gets the nonce of the request taken. */
+  onFocusConsumed?: (n: number) => void
   /* Show a task without planning it (Team sync's Roadmap jump): { id, n }
      like focusPlan, n a nonce. Its bar scrolls into view and wears the
      planning spotlight for a moment; no session, no card, nothing written. */
   revealTask?: { id: string; n: number } | null
-  onRevealConsumed?: () => void
+  onRevealConsumed?: (n: number) => void
 }) {
   const phone = useMobile()
   useUpdateBlocker(P.roadmapUndo.count > 0)
   // Keep the phone layer after physical rotation crosses the desktop width.
-  // A fresh desktop visit still gets the ordinary workspace timeline.
+  // A fresh desktop visit still gets the ordinary workspace timeline, and so
+  // does a kept Roadmap shown again (components/KeptView): leaving it drops
+  // the layer, which closes the landscape timeline as its unmount did.
   const [mobileLayout, setMobileLayout] = useStateR<'agenda' | 'timeline' | null>(null)
   const mobile = phone || mobileLayout !== null
+  useEffectR(() => () => setMobileLayout(null), [])
   const filters = mobile ? { ...rawFilters, search: '' } : rawFilters
   const filterControls = renderFilterControls(mobile)
   const canvasPadX = mobile ? 12 : CANVAS_PAD_X
@@ -172,12 +176,6 @@ function Roadmap({
       .querySelector<HTMLButtonElement>('.mobile-roadmap-open-timeline button')
       ?.focus({ preventScroll: true })
   }, [mobileLayout])
-  useEffectR(() => {
-    if (focusPlan && mobile) setMobileLayout('timeline')
-  }, [focusPlan?.n])
-  useEffectR(() => {
-    if (revealTask && mobile) setMobileLayout('timeline')
-  }, [revealTask?.n])
   // App makes its actions again every render; the rows keep one identity
   const onOpenIssue = useLatest(actions.openIssue)
   const onScope = useLatest(actions.setScope)
@@ -203,9 +201,12 @@ function Roadmap({
     if (planned.current?.id === id) planned.current.writes.push(saved)
   }
   sessionRef.current = session
+  // the session ends when the Roadmap goes, and when it hides (a kept page,
+  // components/KeptView): leaving the page leaves the planning
   useEffectR(
     () => () => {
       sessionRef.current = null
+      setSession(null)
     },
     [],
   )
@@ -458,6 +459,7 @@ function Roadmap({
   // strip sizing: "normal" shares the pane, "max" fills the space below the
   // week header, "min" leaves only the strip's header bar
   const [stripMode, setStripMode] = useStateR('normal')
+  const fittedPhone = useRefR(false)
   useEffectR(() => {
     if (!mobile) return
     // On a small phone, the sticky week/project headings otherwise consume
@@ -467,7 +469,9 @@ function Roadmap({
       if (Math.min(innerWidth, innerHeight) < 360)
         setStripMode((mode) => (mode === 'normal' ? 'min' : mode))
     }
-    fitPhone()
+    // once a mount: a kept Roadmap shown again keeps the strip as it was
+    if (!fittedPhone.current) fitPhone()
+    fittedPhone.current = true
     window.addEventListener('resize', fitPhone)
     return () => window.removeEventListener('resize', fitPhone)
   }, [mobile])
@@ -894,16 +898,30 @@ function Roadmap({
      revealTask.n like focusPlan; `revealed` holds the ring after the signal
      is consumed. */
   const [revealed, setRevealed] = useStateR<{ id: string; n: number } | null>(null)
+  /* The nonces of the requests taken. A kept Roadmap (components/KeptView)
+     shown again runs its effects again with the props it held, which can
+     be a request it took before it hid: that one goes, not again. */
+  const takenReveal = useRefR<number | null>(null)
+  const takenPlan = useRefR<number | null>(null)
   useEffectR(() => {
     if (!revealTask) return
+    // App drops the request only while it is still this one
+    const { n } = revealTask
+    const consumed = () => onRevealConsumed?.(n)
+    if (n === takenReveal.current) {
+      consumed()
+      return
+    }
+    takenReveal.current = n
+    if (mobile) setMobileLayout('timeline')
     const it = P.issueById[revealTask.id]
     if (!it) {
-      onRevealConsumed?.()
+      consumed()
       return
     }
     openTo(it)
     setRevealed(revealTask)
-    return bringIntoView(it.id, onRevealConsumed)
+    return bringIntoView(it.id, consumed)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revealTask?.n])
   useEffectR(() => {
@@ -914,6 +932,14 @@ function Roadmap({
 
   useEffectR(() => {
     if (!focusPlan) return
+    const { n } = focusPlan
+    const consumed = () => onFocusConsumed?.(n)
+    if (n === takenPlan.current) {
+      consumed()
+      return
+    }
+    takenPlan.current = n
+    if (mobile) setMobileLayout('timeline')
     const it = P.issueById[focusPlan.id]
     // A group's dates come from its subtasks, so it has nothing to plan. A
     // request for one (it can gain a subtask after the detail window asked)
@@ -922,19 +948,19 @@ function Roadmap({
     if (it && P.isGroup(it)) {
       openTo(it)
       setRevealed(focusPlan)
-      return bringIntoView(it.id, onFocusConsumed)
+      return bringIntoView(it.id, consumed)
     }
     const request = ++planRequest.current
     const loadEpoch = P.gridEpoch
     const undoDisabledAtStart = P.roadmapUndo.disabled
     if (!it) {
-      onFocusConsumed?.()
+      consumed()
       return
     }
     // The task can change after the detail window requested planning.
     if (it.status === 'backlog') {
       window.showToast?.('Move this task out of Backlog before planning it on the roadmap', 'error')
-      onFocusConsumed?.()
+      consumed()
       return
     }
     // the planning task must be visible and draggable: a bar the session
@@ -979,7 +1005,7 @@ function Roadmap({
     // Pan to the (possibly just placed) bar and center it. Consuming earlier
     // changes focusPlan and cancels these frames in the effect cleanup
     // before the task can be scrolled into view.
-    return bringIntoView(it.id, onFocusConsumed)
+    return bringIntoView(it.id, consumed)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusPlan?.n])
 
