@@ -79,7 +79,7 @@ async function perOwner<R>(
  * disabled client or one without its link to the MCP resource, so the
  * subscription receives nothing (taskEvents.ts eventOwner, which every
  * event's fan-out, expansion and delivery asks) but keeps its quota, and
- * delivers again once the owner is allowed again. `live` otherwise. */
+ * resumes delivery once the owner is allowed again. `live` otherwise. */
 export type OwnerStanding = 'removed' | 'suspended' | 'live'
 
 /** For each of `subscriptions`, how its owner stands (OwnerStanding), for

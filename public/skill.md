@@ -572,7 +572,7 @@ subscription whose owner can no longer authorize it. It receives nothing,
 holds no quota, and the next registration in the organization removes it. The
 list shows `status: "suspended"` for an active subscription whose owner Qivo
 refuses for now, such as an inactive user. It receives nothing but keeps its
-quota, and it delivers again once its owner is allowed again.
+quota, and it resumes delivery once its owner is allowed again.
 
 ## Stays in the app
 

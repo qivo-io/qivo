@@ -2915,7 +2915,7 @@ subscription receives no events and holds no quota, and the next registration
 in the organization removes it. The list shows `status: "suspended"` for an
 active subscription whose owner Qivo refuses for now, for example because the
 owner's account is inactive. Such a subscription receives no events but keeps
-its quota, and it delivers again once its owner is allowed again.
+its quota, and it resumes delivery once its owner is allowed again.
 
 Event names are `task.created`, `task.updated`, `task.deleted`,
 `task.restored` and `comment.created`. `task.deleted` means the task moved to
