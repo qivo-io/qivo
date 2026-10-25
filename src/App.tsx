@@ -1118,13 +1118,8 @@ function App() {
       projectsOpen,
       sync,
     }
-    if (
-      held &&
-      pending?.page === pageKey(state) &&
-      location.pathname === pending.pathname &&
-      location.hash === pending.hash
-    )
-      return
+    const onHeld = held && location.pathname === pending?.pathname && location.hash === pending.hash
+    if (onHeld && pending.page === pageKey(state)) return
     const p = buildPath(state)
     // the hash term is what finally clears a translated legacy link: the path
     // is already canonical by then, so nothing else would ever rewrite it
@@ -1132,8 +1127,10 @@ function App() {
       replaceNextHistory.current = false
       return
     }
-    if (replaceNextHistory.current || pathMatchesState(location.pathname, state))
-      history.replaceState(history.state, '', p)
+    // a move from the held task's address earns an entry where it would
+    // with the task open, as once the task arrives (lib/router)
+    const inPlace = pathMatchesState(location.pathname, onHeld ? { ...state, openIssue } : state)
+    if (replaceNextHistory.current || inPlace) history.replaceState(history.state, '', p)
     else history.pushState({ qivoPrevious: location.pathname }, '', p)
     replaceNextHistory.current = false
   }, [scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync, rev, settled])

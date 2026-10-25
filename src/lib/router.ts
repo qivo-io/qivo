@@ -464,7 +464,10 @@ export function issueLink(handle: string): string {
 }
 
 // true when `path` already describes exactly this state (so the URL only
-// needs normalizing, not a new history entry)
+// needs normalizing, not a new history entry). A held open task (holdTask)
+// is the one the address names by its reference, which resolves to no task
+// yet, so App can ask what a move on that address would earn once the task
+// arrives.
 export function pathMatchesState(path: string, s: UiState): boolean {
   const built = buildPath(s)
   if (path === built) return true
@@ -483,18 +486,21 @@ export function pathMatchesState(path: string, s: UiState): boolean {
 
   const r = parsePath(path)
   if (!r) return true // the front door or a foreign path: overwrite in place
+  // the task the address names, a held one by its reference
+  const held = heldRef(s.openIssue)
+  const issue =
+    held !== undefined && taskSegmentOf(path, '') === held ? s.openIssue : r.issue || null
   // a login with no home organization has no Team sync: the address it
   // followed shows the page underneath, so it is rewritten, not stacked
   if (r.sync && !P.homeOrg) return true
-  if (r.inbox || s.inboxOpen)
-    return !!r.inbox === !!s.inboxOpen && (r.issue || null) === (s.openIssue || null)
+  if (r.inbox || s.inboxOpen) return !!r.inbox === !!s.inboxOpen && issue === (s.openIssue || null)
   if (r.projects || s.projectsOpen) return !!r.projects === !!s.projectsOpen
   if (r.settings || s.settingsPage) return (r.settings || null) === (s.settingsPage || null)
   /* Inside Team sync, a new step or scope rewrites the address in place: the
      walk must not fill the history, and Back leaves the page. Opening or
      closing a task over it is a navigation, as over the inbox. */
-  if (r.sync || s.sync) return !!r.sync === !!s.sync && (r.issue || null) === (s.openIssue || null)
-  if ((r.issue || null) !== (s.openIssue || null)) return false
+  if (r.sync || s.sync) return !!r.sync === !!s.sync && issue === (s.openIssue || null)
+  if (issue !== (s.openIssue || null)) return false
   if (s.openIssue) {
     /* Entering or leaving a sentinel scope with the window open changes the
        pane behind the task, so it earns a history entry. Reading "no scope

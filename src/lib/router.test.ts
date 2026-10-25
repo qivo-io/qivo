@@ -56,6 +56,7 @@ vi.mock('../store/planner', () => ({
 import {
   addressesTask,
   buildPath,
+  holdTask,
   issueLink,
   ORG_NONE,
   parseHash,
@@ -549,6 +550,32 @@ describe('pathMatchesState — replace in place vs. a new history entry', () => 
       false,
     )
     expect(pathMatchesState('/app/acme/board/p/1', { scope: 'p-home-7', view: 'kanban' })).toBe(
+      false,
+    )
+  })
+
+  it('reads a held task as the one its address names by reference', () => {
+    // a task still to arrive, which resolves to no task yet (App pendingTask)
+    const held = holdTask('qn-404')
+    // a viewless short link moved into a sentinel scope still normalizes in place
+    expect(
+      pathMatchesState('/app/home/tasks/qn-404', { scope: 'all', view: 'kanban', openIssue: held }),
+    ).toBe(true)
+    // so does a new step of Team sync under it
+    const sync = { scope: 'all', step: 'agents' }
+    expect(pathMatchesState('/app/home/sync/all/tasks/qn-404', { sync, openIssue: held })).toBe(
+      true,
+    )
+    // a project's task address moved into All projects earns an entry
+    expect(
+      pathMatchesState('/app/home/board/tasks/qn-404', {
+        scope: 'all',
+        view: 'kanban',
+        openIssue: held,
+      }),
+    ).toBe(false)
+    // another task's address does not name it
+    expect(pathMatchesState('/app/home/sync/all/tasks/qn-405', { sync, openIssue: held })).toBe(
       false,
     )
   })
