@@ -329,6 +329,31 @@ describe('buildPath', () => {
     expect(buildPath({ inboxOpen: true, openIssue: 'QN-404' })).toBe('/app/~/inbox/tasks/qn-404')
   })
 
+  it("names a task by its uuid once its organization left too, never the home organization's task of that number", () => {
+    const open = 'uuid-acme-5'
+    const sync = { scope: 'all', step: 'team' }
+    expect(buildPath({ inboxOpen: true, openIssue: open })).toBe('/app/acme/inbox/tasks/qn-5')
+    expect(buildPath({ sync, openIssue: open })).toBe('/app/home/sync/all/tasks/uuid-acme-5')
+    // the person loses their seat in Acme: its organization and tasks go
+    store.orgs = store.orgs.filter((o) => o.id !== ACME)
+    store.issues = store.issues.filter((i) => i.org !== ACME)
+    delete store.issueById[open]
+    const paths = [
+      buildPath({ inboxOpen: true, openIssue: open }),
+      buildPath({ scope: 'all', view: 'kanban', openIssue: open }),
+      buildPath({ view: 'kanban', openIssue: open }),
+      buildPath({ sync, openIssue: open }),
+    ]
+    expect(paths).toEqual([
+      '/app/~/inbox/tasks/uuid-acme-5',
+      '/app/~/board/all/tasks/uuid-acme-5',
+      '/app/~/board/tasks/uuid-acme-5',
+      '/app/home/sync/all/tasks/uuid-acme-5',
+    ])
+    // so a reload or a Back to them opens no task, not the home QN-5
+    for (const path of paths) expect(parsePath(path)?.issue).toBeUndefined()
+  })
+
   it('full-screen pages still outrank the scope', () => {
     expect(buildPath({ scope: 'all', view: 'kanban', inboxOpen: true })).toBe('/app/~/inbox')
     expect(buildPath({ scope: 'all', view: 'kanban', settingsPage: 'account' })).toBe(

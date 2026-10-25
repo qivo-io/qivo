@@ -325,14 +325,19 @@ const refOf = (open: string) => heldRef(open) ?? open
 /* The organization, key and uuid each task handle was last named by. A task
    that leaves the store while its window is open (IssueDetail TaskGone)
    keeps that name, so the address goes on naming the task the window still
-   speaks of, in its own organization, instead of a `~` that names none. */
+   speaks of, in its own organization, instead of a `~` that names none. Once
+   its organization has left the store too, the address names it by its
+   uuid, because `~` would read its key in the home organization. */
 const named = new Map<string, Pick<IssueVM, 'org' | 'key' | 'uuid'>>()
 const NAMED_MAX = 64
 
 /** The task handle `open` names: the live task, or the one it last was. */
 function taskNamed(open: string) {
   const it = P.issueById[open]
-  if (!it) return named.get(open)
+  if (!it) {
+    const was = named.get(open)
+    return was && orgSegment(was.org) === ORG_NONE ? { ...was, key: was.uuid } : was
+  }
   named.delete(open)
   named.set(open, { org: it.org, key: it.key, uuid: it.uuid })
   if (named.size > NAMED_MAX) named.delete(named.keys().next().value ?? open)
