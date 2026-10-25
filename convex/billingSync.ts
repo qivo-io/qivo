@@ -181,8 +181,8 @@ export const CHECKOUT_POLL_GRACE_MS = 60 * 60_000
 
 /** A reconciliation runs this long before a period ends, so the renewal
  * uses the current seats. A retry after a lost run (SWEEP_FENCE_MS) still
- * lands before the end, and a failure from here to the end retries a
- * minute later (release), which the sweep meets within two. */
+ * lands before the end, and a failure from here to the end retries at the
+ * next sweep (release). */
 export const PRE_RENEWAL_MS = 15 * 60_000
 
 /** A reconciliation runs this long after a period ends, so a lost renewal
@@ -206,6 +206,20 @@ const SWEEP_FENCE_MS = 5 * 60_000
 /** How long a reconciliation holds its lock. */
 const SYNC_LEASE_MS = 120_000
 
+/** How often the sweep runs (crons.ts). */
+export const SWEEP_INTERVAL_MS = 60_000
+
+/** The due time `ms` after a reconciliation that ends at `now`, for the
+ * times counted from it: its polls, its retries and the safety pass. The
+ * sweep meets a due time at its first run at or after it, and a
+ * reconciliation it started ends within the minute after that run, so the
+ * time is stored one SWEEP_INTERVAL_MS sooner. The run `ms` after the one
+ * that started the reconciliation then meets it, rather than the run after
+ * that, which made a 2-minute poll land every 3 minutes. After a
+ * reconciliation that a request started between two runs, the time comes
+ * up to a minute before `ms` has passed. */
+const after = (now: number, ms: number) => now + ms - SWEEP_INTERVAL_MS
+
 /** The sentence a failed reconciliation leaves in Billing. Only this error
  * retries early: the seat ceiling's sentence waits for a membership change. */
 const SYNC_RETRY_ERROR = 'Billing synchronization needs attention. Automatic retries are scheduled.'
@@ -222,34 +236,38 @@ const checkoutPolled = (sub: Doc<'billing_subscriptions'>, now: number) =>
 /** When the organization next needs a reconciliation, and whether that is
  * only the safety pass: SYNC_SAFETY_MS from now, or sooner for a pending
  * checkout, a payment Polar waits for, a period's end or a storage sample that
- * apply must start again if it stalls or stopped. Times already past are
- * left out, because the reconciliation that reads them has just run. Every
+ * apply must start again if it stalls or stopped. Intervals count from
+ * `now` (after); times already past are left out, because the
+ * reconciliation that reads them has just run. Every
  * reconciliation applies the period Polar reports, so when Polar moves a
  * renewal the next times follow the new end; one it moves without a
  * webhook after the check before the old end is read at the check after
- * it, and then every RENEWAL_POLL_MS until the renewal is known. */
+ * it, and then every RENEWAL_POLL_MS until the renewal is known. A sample
+ * that finishes computes the time again without its stall check
+ * (dropStallCheck). */
 async function nextSyncDue(
   ctx: QueryCtx,
   sub: Doc<'billing_subscriptions'>,
   now: number,
 ): Promise<{ due: string; safety: boolean }> {
-  let due = now + SYNC_SAFETY_MS
+  const safetyDue = after(now, SYNC_SAFETY_MS)
+  let due = safetyDue
   const by = (at: number) => {
     if (at > now) due = Math.min(due, at)
   }
-  if (checkoutPolled(sub, now)) by(now + PAYMENT_POLL_MS)
+  if (checkoutPolled(sub, now)) by(after(now, PAYMENT_POLL_MS))
   // past due, unpaid, or incomplete (stored as pending with its subscription)
   const dunning = sub.status === 'past_due' || sub.status === 'unpaid'
   if (dunning || (sub.status === 'pending' && sub.polar_subscription_id)) {
     const since = Date.parse(sub.past_due_at ?? sub.provider_modified_at ?? '')
-    if (now - since < PAYMENT_POLL_WINDOW_MS) by(now + PAYMENT_POLL_MS)
-    else if (dunning) by(now + DUNNING_POLL_MS)
+    if (now - since < PAYMENT_POLL_WINDOW_MS) by(after(now, PAYMENT_POLL_MS))
+    else if (dunning) by(after(now, DUNNING_POLL_MS))
   }
   if (sub.current_period_end && !sub.ended_at) {
     const end = Date.parse(sub.current_period_end)
     if (now < end - PRE_RENEWAL_MS) by(end - PRE_RENEWAL_MS)
     else if (now < end + POST_RENEWAL_MS) by(end + POST_RENEWAL_MS)
-    else if (now < end + 24 * 60 * 60_000) by(now + RENEWAL_POLL_MS)
+    else if (now < end + 24 * 60 * 60_000) by(after(now, RENEWAL_POLL_MS))
   }
   const subscriptionId = sub.polar_subscription_id
   const start = sub.current_period_start
@@ -266,7 +284,7 @@ async function nextSyncDue(
         by(Date.parse(period.storage_failed_at) + STORAGE_RETRY_MS + 60_000)
     }
   }
-  return { due: iso(due), safety: due === now + SYNC_SAFETY_MS }
+  return { due: iso(due), safety: due === safetyDue }
 }
 
 /** Takes the organization's reconciliation lock and returns what the
@@ -286,7 +304,10 @@ export const claim = internalMutation({
       // Nothing to reconcile until the plan connects, so it waits for the
       // safety pass, also after the sweep's fence or a request set a sooner time.
       if (!sub.sync_safety || sub.sync_due_at === undefined || sub.sync_due_at <= iso(now))
-        await ctx.db.patch(sub._id, { sync_due_at: iso(now + SYNC_SAFETY_MS), sync_safety: true })
+        await ctx.db.patch(sub._id, {
+          sync_due_at: iso(after(now, SYNC_SAFETY_MS)),
+          sync_safety: true,
+        })
       return null
     }
     if (sub.sync_lock_until && sub.sync_lock_until > iso(now)) {
@@ -311,12 +332,12 @@ export const claim = internalMutation({
 
 /** Ends a reconciliation: frees its lock, records the seats it sent or its
  * error, and sets when the organization is next due. A failure retries
- * after 1, 2, 4 and up to 60 minutes, or at its next time (nextSyncDue)
- * when that is sooner, so failures cannot push a check past a renewal, and
- * a minute after each failure in the PRE_RENEWAL_MS before a period ends
- * (the sweep meets these times up to a minute late), so the renewal
- * still gets the seats once Polar answers again. A due time set while the
- * lock was held (claim) is kept when it is sooner. */
+ * after 1, 2, 4 and up to 60 minutes (after), or at its next time
+ * (nextSyncDue) when that is sooner, so failures cannot push a check past a
+ * renewal, and a minute after each failure in the PRE_RENEWAL_MS before a
+ * period ends, so the renewal still gets the seats once Polar answers
+ * again. A due time set while the lock was held (claim) is kept when it is
+ * sooner. */
 export const release = internalMutation({
   args: {
     org_id: v.string(),
@@ -334,9 +355,9 @@ export const release = internalMutation({
       if (at < due) [due, safety] = [at, false]
     }
     if (attempts) {
-      sooner(iso(now + Math.min(60, 2 ** (attempts - 1)) * 60_000))
+      sooner(iso(after(now, Math.min(60, 2 ** (attempts - 1)) * 60_000)))
       const end = sub.current_period_end && !sub.ended_at ? Date.parse(sub.current_period_end) : 0
-      if (now >= end - PRE_RENEWAL_MS && now < end) sooner(iso(now + 60_000))
+      if (now >= end - PRE_RENEWAL_MS && now < end) sooner(iso(after(now, 60_000)))
     }
     if (sub.sync_due_at !== undefined && sub.sync_due_at !== sub.sync_lock_until)
       sooner(sub.sync_due_at)
@@ -654,8 +675,34 @@ export const storageStep = internalMutation({
   },
 })
 
+/* After a storage sample finishes, computes the organization's next
+ * reconciliation again (nextSyncDue), now without the sample's stall check.
+ * The release of the reconciliation whose apply started the sample usually
+ * runs before the sample ends and sets that check, so without this a sample
+ * that finished on time still cost a reconciliation STORAGE_STALL_MS later.
+ * Only a time that nextSyncDue alone sets moves, and only later: one
+ * further out than the sweep's fence and not the safety pass, while no
+ * retry is pending and no reconciliation holds the lock. A request, a
+ * retry, and a reconciliation the sweep has started or that runs keep
+ * their time; the release of one that runs computes it again itself. */
+async function dropStallCheck(ctx: MutationCtx, sub: Doc<'billing_subscriptions'>) {
+  const now = Date.now()
+  if (
+    sub.sync_due_at === undefined ||
+    sub.sync_due_at <= iso(now + SWEEP_FENCE_MS) ||
+    sub.sync_safety ||
+    sub.sync_attempts ||
+    (sub.sync_lock_until !== undefined && sub.sync_lock_until > iso(now))
+  )
+    return
+  const { due, safety } = await nextSyncDue(ctx, sub, now)
+  if (due > sub.sync_due_at)
+    await ctx.db.patch(sub._id, { sync_due_at: due, sync_safety: safety || undefined })
+}
+
 /* A storage sample's last step. It records the bytes and the blocks over
- * the allowance, and adds the period's storage charge when one is due. */
+ * the allowance, adds the period's storage charge when one is due and
+ * drops the organization's stall check (dropStallCheck). */
 async function finishStorageSample(
   ctx: MutationCtx,
   period: Doc<'billing_periods'>,
@@ -696,6 +743,7 @@ async function finishStorageSample(
       created_at: now,
     })
   }
+  if (sub !== null) await dropStallCheck(ctx, sub)
   return null
 }
 
@@ -913,10 +961,11 @@ export const pump = internalAction({
  * (reminders). The safety pass keeps up to SYNC_PAGE.safety of each page,
  * targeted times take the rest, organizations enrolled before due times
  * existed count as targeted, and the safety pass also gets what they leave.
- * A due time waits for the first sweep at or after it, so a reconciliation
- * that sets one a minute out runs again about two minutes later, and every
- * time here is met up to a minute late. A minute with nothing due reads six
- * index ranges and writes nothing. Pump and the reminders run in their own
+ * A due time waits for the first sweep at or after it, so a time here is
+ * met up to a minute late, except an interval a reconciliation counts from
+ * its own end (after), which the sweep that many minutes after the one
+ * that started it meets. A minute with nothing due reads six index ranges
+ * and writes nothing. Pump and the reminders run in their own
  * transactions, so a failure in either cannot undo the reconciliations
  * this one starts. The reminders that are due and the rows without a
  * reminder time each start their own chain of steps, so neither waits for

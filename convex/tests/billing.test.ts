@@ -14,10 +14,11 @@ import {
   STORAGE_ATTEMPTS,
   STORAGE_RETRY_MS,
   STORAGE_STALL_MS,
+  SWEEP_INTERVAL_MS,
   SYNC_PAGE,
   SYNC_SAFETY_MS,
 } from '../billingSync'
-import { markBillingMembershipChanged } from '../lib/billableUsers'
+import { billingDueBy, markBillingMembershipChanged } from '../lib/billableUsers'
 import { addCalendarMonths } from '../lib/billingAccess'
 import type { BillingPlan, BillingSummary, BillingUsage } from '../lib/billingTypes'
 import { LIMITS, PLAN_CURRENCIES, PLAN_CURRENCY } from '../lib/limits'
@@ -200,6 +201,10 @@ const storageEvents = (t: T) =>
 
 /* A provider modification time `n` minutes after NOW. */
 const iso = (n: number) => new Date(Date.parse(NOW) + n * 60_000).toISOString()
+
+/* The minutes after a reconciliation at which an interval of `ms` counted
+ * from it is stored: a minute short, for the sweep (billingSync.ts after). */
+const minutesAfter = (ms: number) => (ms - SWEEP_INTERVAL_MS) / 60_000
 
 const DEFAULT_STORAGE_PAGE = { ...STORAGE_PAGE }
 const DEFAULT_SYNC_PAGE = { ...SYNC_PAGE }
@@ -1438,8 +1443,10 @@ describe('when organizations are reconciled', () => {
     await t.mutation(apply, { payload: remote(f.org.id) })
     // the renewal started a storage sample, which apply starts again if it stalls
     expect(await settle(t, f.org.id, { seats: 5 })).toBe(iso(STORAGE_STALL_MS / 60_000 + 1))
+    // it finished, so that check is dropped and no reconciliation comes of it
     await sample(t)
-    expect(await settle(t, f.org.id, { seats: 5 })).toBe(iso(SYNC_SAFETY_MS / 60_000))
+    expect(await dueAt(t, f.org.id)).toBe(iso(minutesAfter(SYNC_SAFETY_MS)))
+    expect(await settle(t, f.org.id, { seats: 5 })).toBe(iso(minutesAfter(SYNC_SAFETY_MS)))
     const end = Date.parse(END)
     vi.setSystemTime(end - 60 * 60_000)
     expect(await settle(t, f.org.id, { seats: 5 })).toBe(
@@ -1454,13 +1461,47 @@ describe('when organizations are reconciled', () => {
     // in the waived pending bucket. The old poll every 30 minutes could.
     vi.setSystemTime(end + 10 * 60_000)
     expect(await settle(t, f.org.id, { seats: 5 })).toBe(
-      new Date(end + 10 * 60_000 + RENEWAL_POLL_MS).toISOString(),
+      new Date(end + 10 * 60_000 + RENEWAL_POLL_MS - SWEEP_INTERVAL_MS).toISOString(),
     )
     expect(RENEWAL_POLL_MS).toBeLessThan((5 * 25_000 * 60_000) / 6_000)
     vi.setSystemTime(end + 25 * 60 * 60_000)
     expect(await settle(t, f.org.id, { seats: 5 })).toBe(
-      new Date(end + 25 * 60 * 60_000 + SYNC_SAFETY_MS).toISOString(),
+      new Date(end + 25 * 60 * 60_000 + SYNC_SAFETY_MS - SWEEP_INTERVAL_MS).toISOString(),
     )
+  })
+
+  it('keeps a sooner time asked for while a storage sample ran', async () => {
+    const { t, f } = await fixture()
+    await t.mutation(apply, { payload: remote(f.org.id) })
+    expect(await settle(t, f.org.id, { seats: 5 })).toBe(iso(STORAGE_STALL_MS / 60_000 + 1))
+    // a membership change while the sample runs
+    await t.run((ctx) => billingDueBy(ctx, f.org.id, NOW))
+    await sample(t)
+    expect(await dueAt(t, f.org.id)).toBe(NOW)
+  })
+
+  it('reconciles an organization polled every PAYMENT_POLL_MS at that pace under the minute sweep', async () => {
+    const { t, f } = await fixture()
+    await t.mutation(apply, { payload: remote(f.org.id, { status: 'past_due' }) })
+    await sample(t)
+    // The sweep runs every minute from NOW, and each reconciliation it
+    // starts ends half a second later. Stored from that end, the old due
+    // time was half a second after the sweep two minutes on, so the poll
+    // landed every three minutes.
+    const started: number[] = []
+    for (let minute = 0; minute <= 6; minute++) {
+      vi.setSystemTime(Date.parse(iso(minute)))
+      await t.mutation(sweep, {})
+      for (const job of await queued(t, 'billingSync:reconcile')) {
+        await t.run((ctx) => ctx.scheduler.cancel(job._id))
+        if (job.args[0].org_id !== f.org.id) continue
+        started.push(minute)
+        vi.setSystemTime(Date.parse(iso(minute)) + 500)
+        await settle(t, f.org.id, { seats: 5 })
+      }
+    }
+    expect(PAYMENT_POLL_MS).toBe(2 * SWEEP_INTERVAL_MS)
+    expect(started).toEqual([0, 2, 4, 6])
   })
 
   it('polls a pending checkout and leaves an unconnected plan for the safety pass', async () => {
@@ -1485,11 +1526,13 @@ describe('when organizations are reconciled', () => {
         .unique()
       await ctx.db.patch(sub!._id, { checkout_id: uuid(), checkout_expires_at: expires })
     })
-    expect(await settle(t, f.org.id)).toBe(iso(PAYMENT_POLL_MS / 60_000))
+    expect(await settle(t, f.org.id)).toBe(iso(minutesAfter(PAYMENT_POLL_MS)))
     // a checkout Polar never ends stops being polled an hour after its expiry
     const late = Date.parse(expires) + CHECKOUT_POLL_GRACE_MS
     vi.setSystemTime(late)
-    expect(await settle(t, f.org.id)).toBe(new Date(late + SYNC_SAFETY_MS).toISOString())
+    expect(await settle(t, f.org.id)).toBe(
+      new Date(late + SYNC_SAFETY_MS - SWEEP_INTERVAL_MS).toISOString(),
+    )
     vi.setSystemTime(NOW)
     await t.run(async (ctx) => {
       const plan = await ctx.db
@@ -1503,7 +1546,7 @@ describe('when organizations are reconciled', () => {
     await t.mutation(sweep, {})
     expect(await t.mutation(claim, { org_id: f.org.id })).toBeNull()
     expect(await stored(t, f.org.id)).toMatchObject({
-      sync_due_at: iso(SYNC_SAFETY_MS / 60_000),
+      sync_due_at: iso(minutesAfter(SYNC_SAFETY_MS)),
       sync_safety: true,
     })
   })
@@ -1533,7 +1576,7 @@ describe('when organizations are reconciled', () => {
       await t.action(reconcile, { org_id: f.org.id })
       expect(await stored(t, f.org.id)).toMatchObject({
         sync_error: expect.stringMatching(/Automatic retries/),
-        sync_due_at: iso(minutes),
+        sync_due_at: iso(minutesAfter(minutes * 60_000)),
       })
     }
     vi.stubGlobal(
@@ -1545,7 +1588,7 @@ describe('when organizations are reconciled', () => {
     expect([sub?.sync_error, sub?.sync_attempts, sub?.sync_due_at]).toEqual([
       undefined,
       undefined,
-      iso(SYNC_SAFETY_MS / 60_000),
+      iso(minutesAfter(SYNC_SAFETY_MS)),
     ])
   })
 
@@ -1568,7 +1611,7 @@ describe('when organizations are reconciled', () => {
       vi.fn(async () => new Response('unavailable', { status: 503 })),
     )
     await t.action(reconcile, { org_id: f.org.id })
-    // the 32-minute backoff alone would retry 12 minutes after the renewal
+    // the 32-minute backoff alone would retry 11 minutes after the renewal
     expect(await stored(t, f.org.id)).toMatchObject({
       sync_attempts: 6,
       sync_due_at: new Date(end - PRE_RENEWAL_MS).toISOString(),
@@ -1591,11 +1634,14 @@ describe('when organizations are reconciled', () => {
       'fetch',
       vi.fn(async () => new Response('unavailable', { status: 503 })),
     )
-    // the 60-minute backoff and the check after the end would both miss it
+    // the 60-minute backoff and the check after the end would both miss it;
+    // the next sweep, a minute after the one that started it, retries
     for (const before of [PRE_RENEWAL_MS, PRE_RENEWAL_MS - 60_000, 60_000]) {
       vi.setSystemTime(end - before)
       await t.action(reconcile, { org_id: f.org.id })
-      expect(await dueAt(t, f.org.id)).toBe(new Date(end - before + 60_000).toISOString())
+      expect(await dueAt(t, f.org.id)).toBe(
+        new Date(end - before + 60_000 - SWEEP_INTERVAL_MS).toISOString(),
+      )
     }
     vi.setSystemTime(end + 60_000)
     await t.action(reconcile, { org_id: f.org.id })
@@ -1642,7 +1688,7 @@ describe('when organizations are reconciled', () => {
     await t.action(reconcile, { org_id: f.org.id })
     expect(await stored(t, f.org.id)).toMatchObject({
       checkout_id: checkoutId,
-      sync_due_at: iso(PAYMENT_POLL_MS / 60_000),
+      sync_due_at: iso(minutesAfter(PAYMENT_POLL_MS)),
     })
     checkoutStatus = 'expired'
     vi.setSystemTime(Date.parse(iso(PAYMENT_POLL_MS / 60_000)))
@@ -1808,12 +1854,12 @@ describe('when organizations are reconciled', () => {
     for (const status of ['past_due', 'unpaid']) {
       await t.mutation(apply, { payload: remote(f.org.id, { status, modified_at: iso(1) }) })
       vi.setSystemTime(Date.parse(iso(1)))
-      expect(await settle(t, f.org.id, { seats: 5 })).toBe(iso(1 + PAYMENT_POLL_MS / 60_000))
+      expect(await settle(t, f.org.id, { seats: 5 })).toBe(iso(1 + minutesAfter(PAYMENT_POLL_MS)))
       // unpaid has no end of its own, so after the first day every half hour
       const later = Date.parse(iso(1)) + PAYMENT_POLL_WINDOW_MS
       vi.setSystemTime(later)
       expect(await settle(t, f.org.id, { seats: 5 })).toBe(
-        new Date(later + DUNNING_POLL_MS).toISOString(),
+        new Date(later + DUNNING_POLL_MS - SWEEP_INTERVAL_MS).toISOString(),
       )
       vi.setSystemTime(NOW)
     }
@@ -1824,10 +1870,12 @@ describe('when organizations are reconciled', () => {
     })
     expect(await stored(t, f.org.id)).toMatchObject({ status: 'pending' })
     vi.setSystemTime(Date.parse(iso(2)))
-    expect(await settle(t, f.org.id)).toBe(iso(2 + PAYMENT_POLL_MS / 60_000))
+    expect(await settle(t, f.org.id)).toBe(iso(2 + minutesAfter(PAYMENT_POLL_MS)))
     const later = Date.parse(iso(2)) + PAYMENT_POLL_WINDOW_MS
     vi.setSystemTime(later)
-    expect(await settle(t, f.org.id)).toBe(new Date(later + SYNC_SAFETY_MS).toISOString())
+    expect(await settle(t, f.org.id)).toBe(
+      new Date(later + SYNC_SAFETY_MS - SWEEP_INTERVAL_MS).toISOString(),
+    )
   })
 
   it('follows a renewal that Polar moved', async () => {
@@ -1842,7 +1890,7 @@ describe('when organizations are reconciled', () => {
       payload: remote(f.org.id, { current_period_end: moved, modified_at: iso(60) }),
     })
     expect(await settle(t, f.org.id, { seats: 5 })).toBe(
-      new Date(end - PRE_RENEWAL_MS + SYNC_SAFETY_MS).toISOString(),
+      new Date(end - PRE_RENEWAL_MS + SYNC_SAFETY_MS - SWEEP_INTERVAL_MS).toISOString(),
     )
     vi.setSystemTime(Date.parse(moved) - 60 * 60_000)
     expect(await settle(t, f.org.id, { seats: 5 })).toBe(
