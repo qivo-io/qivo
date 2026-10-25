@@ -1,5 +1,5 @@
 import { ConvexError } from 'convex/values'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { SettingsSection } from '@/components/settingsPage'
 import {
   AlertDialog,
@@ -18,6 +18,7 @@ import { Label } from '@/components/ui/label'
 import { billingDate } from '@/lib/billingDisplay'
 import { useClosingWords } from '@/lib/closingWords'
 import { convex } from '@/lib/convex'
+import { restoreFocus } from '@/lib/focusVisibility'
 import { holdUnsaved } from '@/lib/leaveGuard'
 import { useOrgRemovalState } from '@/lib/orgRemovalState'
 import { useUpdateBlocker } from '@/lib/updateSafety'
@@ -31,14 +32,21 @@ const failure = (cause: unknown, fallback: string) => {
 }
 
 /** Lets an admin delete the organization after its read-only period, or
- * stop a deletion an admin asked for. */
+ * stop a deletion an admin asked for. The question stays mounted when the
+ * scheduled deletion arrives: it waits for its own request, and one that
+ * waits for nothing closes. Once it has closed without its button, focus
+ * goes to the deletion's date. */
 export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgName: string }) {
   const state = useOrgRemovalState(orgId)
   const [open, setOpen] = useState(false)
   const [confirm, setConfirm] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const opener = useRef<HTMLButtonElement>(null)
+  const scheduled = useRef<HTMLParagraphElement>(null)
   useUpdateBlocker(busy)
+  // another admin's deletion, while the question waits for nothing
+  if (state?.deletion && open && !busy) setOpen(false)
   // Cancel clears the confirmation and the refusal, and a finished deletion
   // clears busy, as the dialog closes. It shows them until it has faded.
   const shown = useClosingWords(open, { confirm, error, busy })
@@ -77,102 +85,107 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
       description="The organization becomes read-only for 30 days so admins can export its data. Then everything in it is deleted."
       data-org-deletion=""
     >
-      {deletion ? (
-        <>
-          <p data-org-deletion-date className="text-sm text-text-1">
-            {deletion.reason !== 'requested'
-              ? `The subscription has ended. The organization will be deleted on ${billingDate(deletion.delete_after)} unless someone subscribes in Billing.`
-              : deletion.keep_available
-                ? `Deletion is scheduled for ${billingDate(deletion.delete_after)}.`
-                : `Deletion is scheduled for ${billingDate(deletion.delete_after)}. To keep the organization, subscribe again in Billing first.`}
-          </p>
-          {deletion.keep_available && (
-            <Button
-              type="button"
-              variant="outline"
-              className="mt-2"
-              disabled={busy}
-              data-org-keep
-              onClick={() =>
-                void run(
-                  () => convex.mutation(api.orgRemovals.keep, { org_id: orgId }),
-                  'The deletion could not be stopped. Try again.',
-                )
-              }
-            >
-              {busy ? 'Stopping…' : 'Keep organization'}
-            </Button>
-          )}
-        </>
-      ) : (
-        <AlertDialog
-          open={open}
-          onOpenChange={(next) => {
-            if (busy) return
-            setOpen(next)
-            // A close and an opening both start over. The closing dialog
-            // still shows what it had (useClosingWords), and input that
-            // reached its fading field, such as a paste from the browser's
-            // Edit menu, does not carry over.
-            setConfirm('')
-            setError('')
-          }}
-        >
-          {/* the trigger takes focus back once the dialog has closed */}
+      <AlertDialog
+        open={open}
+        onOpenChange={(next) => {
+          if (busy) return
+          setOpen(next)
+          // A close and an opening both start over. The closing dialog
+          // still shows what it had (useClosingWords), and input that
+          // reached its fading field, such as a paste from the browser's
+          // Edit menu, does not carry over.
+          setConfirm('')
+          setError('')
+        }}
+      >
+        {deletion ? (
+          <>
+            <p ref={scheduled} tabIndex={-1} data-org-deletion-date className="text-sm text-text-1">
+              {deletion.reason !== 'requested'
+                ? `The subscription has ended. The organization will be deleted on ${billingDate(deletion.delete_after)} unless someone subscribes in Billing.`
+                : deletion.keep_available
+                  ? `Deletion is scheduled for ${billingDate(deletion.delete_after)}.`
+                  : `Deletion is scheduled for ${billingDate(deletion.delete_after)}. To keep the organization, subscribe again in Billing first.`}
+            </p>
+            {deletion.keep_available && (
+              <Button
+                type="button"
+                variant="outline"
+                className="mt-2"
+                disabled={busy}
+                data-org-keep
+                onClick={() =>
+                  void run(
+                    () => convex.mutation(api.orgRemovals.keep, { org_id: orgId }),
+                    'The deletion could not be stopped. Try again.',
+                  )
+                }
+              >
+                {busy ? 'Stopping…' : 'Keep organization'}
+              </Button>
+            )}
+          </>
+        ) : (
+          // the trigger takes focus back once the dialog has closed
           <AlertDialogTrigger asChild>
-            <Button type="button" variant="outline" data-org-delete disabled={busy}>
+            <Button ref={opener} type="button" variant="outline" data-org-delete disabled={busy}>
               Delete organization
             </Button>
           </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete {orgName}?</AlertDialogTitle>
-              <AlertDialogDescription>
-                Any paid subscription ends now, and nothing is refunded. The organization becomes
-                read-only for 30 days so admins can export its data, and is then deleted with all of
-                its projects, tasks, comments and files.{' '}
-                {state.last_export_at
-                  ? `The last export was made on ${billingDate(state.last_export_at)}.`
-                  : 'No export has been made yet.'}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <div className="grid gap-1.5">
-              <Label htmlFor="org-delete-confirm">Type {state.slug} to confirm</Label>
-              <Input
-                id="org-delete-confirm"
-                value={shown.confirm}
-                autoComplete="off"
-                spellCheck={false}
-                data-org-delete-confirm-input
-                onChange={(event) => setConfirm(event.target.value)}
-              />
-            </div>
-            {shown.error && (
-              <p role="alert" className="text-sm text-danger">
-                {shown.error}
-              </p>
-            )}
-            <AlertDialogFooter>
-              <AlertDialogCancel disabled={shown.busy}>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                variant="destructive"
-                disabled={shown.busy || !matches}
-                data-org-delete-confirm
-                onClick={(event) => {
-                  event.preventDefault()
-                  void run(
-                    () =>
-                      convex.action(api.orgRemovals.request, { org_id: orgId, confirm: confirm }),
-                    'The organization could not be deleted. Try again.',
-                  )
-                }}
-              >
-                {shown.busy ? 'Deleting…' : 'Delete organization'}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      )}
+        )}
+        <AlertDialogContent
+          onCloseAutoFocus={(event) => {
+            if (opener.current?.isConnected) return
+            event.preventDefault()
+            restoreFocus(scheduled.current)
+          }}
+        >
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {orgName}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Any paid subscription ends now, and nothing is refunded. The organization becomes
+              read-only for 30 days so admins can export its data, and is then deleted with all of
+              its projects, tasks, comments and files.{' '}
+              {state.last_export_at
+                ? `The last export was made on ${billingDate(state.last_export_at)}.`
+                : 'No export has been made yet.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="grid gap-1.5">
+            <Label htmlFor="org-delete-confirm">Type {state.slug} to confirm</Label>
+            <Input
+              id="org-delete-confirm"
+              value={shown.confirm}
+              autoComplete="off"
+              spellCheck={false}
+              data-org-delete-confirm-input
+              onChange={(event) => setConfirm(event.target.value)}
+            />
+          </div>
+          {shown.error && (
+            <p role="alert" className="text-sm text-danger">
+              {shown.error}
+            </p>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={shown.busy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={shown.busy || !matches}
+              data-org-delete-confirm
+              onClick={(event) => {
+                event.preventDefault()
+                void run(
+                  () => convex.action(api.orgRemovals.request, { org_id: orgId, confirm: confirm }),
+                  'The organization could not be deleted. Try again.',
+                )
+              }}
+            >
+              {shown.busy ? 'Deleting…' : 'Delete organization'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {error && deletion && (
         <p role="alert" className="mt-2 text-sm text-danger">
           {error}

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { act, useState } from 'react'
+import { act, useLayoutEffect, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -9,8 +10,8 @@ import { BillingOverview } from './BillingOverview'
 
 /* Billing's Cancel subscription question as it closes. Keep subscription
    clears a refusal and a finished cancellation clears the page's busy, so
-   the closing dialog keeps what it showed open. Each cancellation is
-   answered by hand. */
+   the closing dialog keeps what it showed open. A summary refresh can take
+   the question's button away. Each cancellation is answered by hand. */
 
 const SUMMARY: BillingSummary = {
   enabled: true,
@@ -47,14 +48,23 @@ const SUMMARY: BillingSummary = {
 let container: HTMLDivElement
 let root: Root
 let answers: ((refusal: string | null) => void)[]
+// a summary refresh, as the page's subscription delivers one
+let refresh: (next: BillingSummary) => void
+// whether the page's busy=false renders on its own, before the dialog hears
+// the answer
+let splitRender = false
 
 /** The page around the overview, busy while a cancellation runs, as
     BillingSettings is. */
 function Billing() {
   const [busy, setBusy] = useState(false)
+  const [billing, setBilling] = useState(SUMMARY)
+  useLayoutEffect(() => {
+    refresh = setBilling
+  }, [])
   return (
     <BillingOverview
-      billing={SUMMARY}
+      billing={billing}
       busy={busy}
       onCheckout={vi.fn()}
       onManage={vi.fn()}
@@ -64,7 +74,8 @@ function Billing() {
         try {
           return await new Promise<string | null>((resolve) => answers.push(resolve))
         } finally {
-          setBusy(false)
+          if (splitRender) flushSync(() => setBusy(false))
+          else setBusy(false)
         }
       }}
     />
@@ -75,6 +86,7 @@ beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   playClosingAnimations()
   answers = []
+  splitRender = false
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -110,6 +122,44 @@ describe('the Cancel subscription question', () => {
     expect(confirm()?.disabled).toBe(true)
     await endClosing()
     expect(dialog()).toBeNull()
+  })
+
+  it("keeps its busy button while it closes when the page's busy clears in a render of its own", async () => {
+    splitRender = true
+    await act(async () => confirm()?.click())
+    await act(async () => answers[0](null))
+    expect(dialog()?.getAttribute('data-state')).toBe('closed')
+    expect(confirm()?.textContent).toBe('Cancelling…')
+    expect(confirm()?.disabled).toBe(true)
+  })
+
+  it('stays while it cancels when a refresh takes its button away, then fades and gives focus to Manage billing', async () => {
+    await act(async () => confirm()?.click())
+    const cancelled = {
+      ...SUMMARY,
+      cancel_at_period_end: true,
+      cancel_available: false,
+      portal_available: true,
+    }
+    await act(async () => refresh(cancelled))
+    expect(document.querySelector('[data-billing-cancel]')).toBeNull()
+    expect(dialog()?.getAttribute('data-state')).toBe('open')
+    expect(confirm()?.textContent).toBe('Cancelling…')
+    await act(async () => answers[0](null))
+    expect(dialog()?.getAttribute('data-state')).toBe('closed')
+    expect(confirm()?.textContent).toBe('Cancelling…')
+    await endClosing()
+    expect(dialog()).toBeNull()
+    expect(document.activeElement).toBe(document.querySelector('[data-billing-portal]'))
+  })
+
+  it('closes a question that waits for nothing when a refresh takes its button away', async () => {
+    await act(async () => refresh({ ...SUMMARY, cancel_available: false }))
+    expect(dialog()?.getAttribute('data-state')).toBe('closed')
+    expect(confirm()?.textContent).toBe('Cancel subscription')
+    await endClosing()
+    expect(dialog()).toBeNull()
+    expect(document.activeElement).toBe(document.querySelector('[data-billing-status]'))
   })
 
   it('keeps a refusal while it closes, and a press then cancels nothing', async () => {

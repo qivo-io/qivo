@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { act, useSyncExternalStore } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -9,10 +9,22 @@ import { OrganizationDeletion } from './OrganizationDeletion'
 /* Settings › General's Delete organization question as it closes. Cancel
    clears the typed confirmation and a finished request clears busy, so the
    closing dialog keeps what it showed open, and an opening starts empty.
-   The request is answered by hand. */
+   The scheduled deletion can arrive before the request's answer. The
+   request is answered by hand. */
 
 const server = vi.hoisted(() => ({
   requests: [] as { resolve: (value: null) => void; args: unknown }[],
+  // the organization's removal state, as its subscription delivers it
+  state: {
+    slug: 'northstar-labs',
+    last_export_at: null as string | null,
+    deletion: null as null | {
+      reason: 'requested'
+      delete_after: string
+      keep_available: boolean
+    },
+  },
+  listeners: new Set<() => void>(),
 }))
 vi.mock('../lib/convex', () => ({
   convex: {
@@ -21,8 +33,28 @@ vi.mock('../lib/convex', () => ({
   },
 }))
 vi.mock('../lib/orgRemovalState', () => ({
-  useOrgRemovalState: () => ({ slug: 'northstar-labs', last_export_at: null, deletion: null }),
+  useOrgRemovalState: () =>
+    useSyncExternalStore(
+      (listener) => {
+        server.listeners.add(listener)
+        return () => server.listeners.delete(listener)
+      },
+      () => server.state,
+    ),
 }))
+/** Delivers the scheduled deletion, as the state's subscription does. */
+const scheduleDeletion = () =>
+  act(async () => {
+    server.state = {
+      ...server.state,
+      deletion: {
+        reason: 'requested',
+        delete_after: '2026-11-25T00:00:00.000Z',
+        keep_available: true,
+      },
+    }
+    for (const listener of server.listeners) listener()
+  })
 vi.mock('../store/planner', () => ({ P: { cannotSaveText: () => null } }))
 
 let container: HTMLDivElement
@@ -32,6 +64,7 @@ beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   playClosingAnimations()
   server.requests.length = 0
+  server.state = { ...server.state, deletion: null }
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -122,5 +155,32 @@ describe('the Delete organization question', () => {
     expect(confirm()?.disabled).toBe(true)
     await endClosing()
     expect(dialog()).toBeNull()
+  })
+
+  it('stays while it deletes when the deletion arrives first, then fades and gives focus to its date', async () => {
+    await askAndConfirm()
+    await act(async () => confirm()?.click())
+    await scheduleDeletion()
+    expect(document.querySelector('[data-org-delete]')).toBeNull()
+    expect(dialog()?.getAttribute('data-state')).toBe('open')
+    expect(confirm()?.textContent).toBe('Deleting…')
+    await act(async () => server.requests[0].resolve(null))
+    expect(dialog()?.getAttribute('data-state')).toBe('closed')
+    expect(confirm()?.textContent).toBe('Deleting…')
+    await endClosing()
+    expect(dialog()).toBeNull()
+    expect(document.activeElement).toBe(document.querySelector('[data-org-deletion-date]'))
+  })
+
+  it("closes a question that waits for nothing when another admin's deletion arrives", async () => {
+    await askAndConfirm()
+    await scheduleDeletion()
+    expect(dialog()?.getAttribute('data-state')).toBe('closed')
+    expect(field()?.value).toBe('northstar-labs')
+    await act(async () => confirm()?.click())
+    expect(server.requests).toHaveLength(0)
+    await endClosing()
+    expect(dialog()).toBeNull()
+    expect(document.activeElement).toBe(document.querySelector('[data-org-deletion-date]'))
   })
 })
