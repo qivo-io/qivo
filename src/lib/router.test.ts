@@ -288,6 +288,33 @@ describe('buildPath', () => {
     expect(buildPath({ settingsPage: 'desktop' })).toBe('/app/~/settings/desktop')
   })
 
+  it('keeps the address of a project settings page whose project left while it shows', () => {
+    const gone = new Set<string>()
+    const live = store.project
+    store.project = (id: string) => (gone.has(id) ? undefined : live(id))
+    expect(buildPath({ settingsPage: 'project:p-home-7' })).toBe('/app/home/settings/project/7')
+    // someone else archives or deletes it while its Archive or delete window is open
+    gone.add('p-home-7')
+    expect(buildPath({ settingsPage: 'project:p-home-7' })).toBe('/app/home/settings/project/7')
+    expect(
+      pathMatchesState('/app/home/settings/project/7', { settingsPage: 'project:p-home-7' }),
+    ).toBe(true)
+    // a project this page never named is still named by its id
+    expect(buildPath({ settingsPage: 'project:p-gone' })).toBe('/app/~/settings/project/p-gone')
+    // once the project's organization left too, by its id, never the
+    // number of a home project, and that address replaces the old one
+    expect(buildPath({ settingsPage: 'project:p-acme-1' })).toBe('/app/acme/settings/project/1')
+    gone.add('p-acme-1')
+    store.orgs = store.orgs.filter((o) => o.id !== ACME)
+    expect(buildPath({ settingsPage: 'project:p-acme-1' })).toBe('/app/~/settings/project/p-acme-1')
+    expect(
+      pathMatchesState('/app/acme/settings/project/1', { settingsPage: 'project:p-acme-1' }),
+    ).toBe(true)
+    expect(
+      pathMatchesState('/app/acme/settings/project/2', { settingsPage: 'project:p-acme-1' }),
+    ).toBe(false)
+  })
+
   it('the org settings pages ARE about an organization, so they name it', () => {
     expect(buildPath({ settingsPage: 'org-general' })).toBe('/app/home/settings/org-general')
     expect(buildPath({ settingsPage: 'org-users' })).toBe('/app/home/settings/org-users')

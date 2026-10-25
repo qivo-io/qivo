@@ -351,6 +351,25 @@ function taskNamed(open: string) {
   return it
 }
 
+/* The organization and number each project settings page was last named
+   by. A project that leaves while its page shows (its Archive or delete
+   window holds the page, ProjectSettings onHolding) keeps that address, so
+   App writes no new entry over the window's phone marker. */
+const namedProjects = new Map<string, { org: string; seg: string; num: number }>()
+
+/** Whether `path` names the settings page of the project `page` names by
+    the organization and number it was last named by. */
+function projectNamedBefore(path: string, page: string | null | undefined) {
+  const was = page?.startsWith('project:') ? namedProjects.get(page.slice(8)) : undefined
+  const seg = path.split('/').filter(Boolean)
+  return (
+    !!was &&
+    orgSegmentOf(path) === was.seg &&
+    seg.at(-2) === 'project' &&
+    seg.at(-1) === String(was.num)
+  )
+}
+
 /** Whether `path` names the task handle `open` by the organization and key
     it was last named by, as the address did before that organization left
     the store. */
@@ -451,10 +470,24 @@ export function buildPath(s: UiState): string {
   if (s.settingsPage) {
     const page = s.settingsPage
     if (page.indexOf('project:') === 0) {
-      const p = P.project(page.slice(8))
-      if (!p || p.num == null)
-        return at(p?.org, `/settings/project/${encodeURIComponent(page.slice(8))}`)
-      return at(p.org, `/settings/project/${String(p.num)}`)
+      const id = page.slice(8)
+      const p = P.project(id)
+      if (p?.num != null) {
+        namedProjects.delete(id)
+        namedProjects.set(id, { org: p.org, seg: orgSegment(p.org), num: p.num })
+        if (namedProjects.size > NAMED_MAX)
+          namedProjects.delete(namedProjects.keys().next().value ?? id)
+        return at(p.org, `/settings/project/${String(p.num)}`)
+      }
+      // a project that left while its page shows keeps the page's address,
+      // by its id once its organization left too, as `~` would read the
+      // number in the home organization
+      const was = p ? undefined : namedProjects.get(id)
+      if (was && orgSegment(was.org) !== ORG_NONE) {
+        was.seg = orgSegment(was.org)
+        return at(was.org, `/settings/project/${String(was.num)}`)
+      }
+      return at(p?.org, `/settings/project/${encodeURIComponent(id)}`)
     }
     return at(settingsOrg(page), `/settings/${encodeURIComponent(page)}`)
   }
@@ -539,7 +572,11 @@ export function pathMatchesState(path: string, s: UiState): boolean {
   if (r.sync && !P.homeOrg) return true
   if (r.inbox || s.inboxOpen) return !!r.inbox === !!s.inboxOpen && issue === (s.openIssue || null)
   if (r.projects || s.projectsOpen) return !!r.projects === !!s.projectsOpen
-  if (r.settings || s.settingsPage) return (r.settings || null) === (s.settingsPage || null)
+  if (r.settings || s.settingsPage)
+    return (
+      (r.settings || null) === (s.settingsPage || null) ||
+      (!!r.settings && projectNamedBefore(path, s.settingsPage))
+    )
   /* Inside Team sync, a new step or scope rewrites the address in place: the
      walk must not fill the history, and Back leaves the page. Opening or
      closing a task over it is a navigation, as over the inbox. */
