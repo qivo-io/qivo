@@ -261,7 +261,11 @@ deleted while you have it open, or that you can no longer open, says it is
 no longer here. If Qivo cannot check the archive, the window says so, and
 **Retry** checks again. Text you typed in the window and did not send, such
 as a comment, a new title or remaining hours, is discarded then, and Qivo
-says so.
+says so. A reason you typed in **Archive or delete…** stays in the window,
+which says it was not used, and **Copy reason** copies it. Once the task is
+back, the next **Archive or delete…** starts with that reason. If the task
+was already archived when you chose **Archive**, Qivo says that your reason
+was not used, and a window that still shows the task keeps it the same way.
 
 ## Deleting
 

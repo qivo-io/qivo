@@ -31,6 +31,7 @@ import { Label } from '@/components/ui/label'
 import { api } from '../convex/_generated/api'
 import { asciiEmail } from '../convex/lib/email'
 import { LIMITS } from '../convex/lib/limits'
+import type { SeatsDeleting } from '../convex/lib/workspaceJoin'
 import { AppearanceProvider } from './AppearanceProvider'
 import { LimitedInput } from './components/LimitedField'
 import { OAuthConnect } from './components/OAuthConnect'
@@ -72,6 +73,16 @@ function handoffDesktopOAuth(url: URL): boolean {
 }
 
 type Phase = 'loading' | 'signedOut' | 'unverified' | 'noProfile' | 'loadFailed' | 'ready'
+
+/** What the seatless screen says to a login whose seats an organization
+    deletion holds, by when the server lets it create an organization
+    (convex/lib/billingAccess.ts SeatlessCreate). */
+const SEATS_DELETING_TEXT: Record<SeatsDeleting['create'], string> = {
+  now: 'You no longer have access to it. You can create a new organization.',
+  after_deletion:
+    'You no longer have access to it. You can create a new organization once the deletion has removed you from it.',
+  blocked: 'You no longer have access to it.',
+}
 
 type SessionResult = Awaited<ReturnType<typeof authClient.getSession>>
 
@@ -859,46 +870,79 @@ export function AuthGate() {
 
   // a login with no profile anywhere: it belongs to nobody yet, so the only
   // thing to do is start an organization (an invitation would have given it a
-  // guest seat, and claimMySeats picks those up at boot)
+  // guest seat, and claimMySeats picks those up at boot). A login whose
+  // seats an organization deletion holds hears that first, and gets the
+  // form only while the server would create the organization.
   if (phase === 'noProfile') {
+    const deleting = P.seatsDeleting()
+    // an answer without `create`, from an older backend, keeps the form
+    const create = deleting?.create ?? 'now'
     return shell(
       <form onSubmit={createOrg}>
-        <div className="[font-size:var(--fs-md)] [font-weight:600] [margin-bottom:8px]">
-          Create your organization
+        <div
+          className="[font-size:var(--fs-md)] [font-weight:600] [margin-bottom:8px]"
+          data-seats-deleting={deleting ? create : undefined}
+        >
+          {deleting ? 'This organization is being deleted' : 'Create your organization'}
         </div>
         <div className="[color:var(--text-2)] [font-size:var(--fs-base)] [line-height:1.5] [margin-bottom:24px]">
-          If you expected an invitation, check which email address it was sent to.
+          {deleting
+            ? SEATS_DELETING_TEXT[create]
+            : 'If you expected an invitation, check which email address it was sent to.'}
         </div>
-        <div className="[margin-bottom:24px]">
-          <Label htmlFor="organization-name" className={labelClass}>
-            Organization name
-          </Label>
-          <LimitedInput
-            limit={LIMITS.orgName}
-            id="organization-name"
-            // the wrapper holds the counter, so it takes the label's gap
-            wrapperClassName="mt-2"
-            className="h-control bg-surface-2 px-2.5 text-base"
-            value={orgName}
-            autoFocus
-            data-create-org
-            onChange={(e) => setOrgName(e.target.value)}
-          />
-        </div>
+        {create === 'now' && (
+          <div className="[margin-bottom:24px]">
+            <Label htmlFor="organization-name" className={labelClass}>
+              Organization name
+            </Label>
+            <LimitedInput
+              limit={LIMITS.orgName}
+              id="organization-name"
+              // the wrapper holds the counter, so it takes the label's gap
+              wrapperClassName="mt-2"
+              className="h-control bg-surface-2 px-2.5 text-base"
+              value={orgName}
+              autoFocus
+              data-create-org
+              onChange={(e) => setOrgName(e.target.value)}
+            />
+          </div>
+        )}
         {error && (
           <div className="[color:var(--danger)] [font-size:var(--fs-sm)] [margin-bottom:24px]">
             {error}
           </div>
         )}
         {signOutRefusal}
-        <Button
-          variant="primary"
-          className="[width:100%] [justify-content:center]"
-          disabled={busy || signOutPending || !orgName.trim() || overLimit(LIMITS.orgName, orgName)}
-          type="submit"
-        >
-          {busy ? 'Creating…' : 'Create organization'}
-        </Button>
+        {create === 'now' ? (
+          <Button
+            variant="primary"
+            className="[width:100%] [justify-content:center]"
+            disabled={
+              busy || signOutPending || !orgName.trim() || overLimit(LIMITS.orgName, orgName)
+            }
+            type="submit"
+          >
+            {busy ? 'Creating…' : 'Create organization'}
+          </Button>
+        ) : (
+          create === 'after_deletion' && (
+            // the screen does not follow the deletion: a reload asks again,
+            // and shows the form once the deletion removed the seat, or the
+            // sign-in once the session ended. It takes focus, as the name
+            // field does on the form.
+            <Button
+              type="button"
+              variant="primary"
+              className="[width:100%] [justify-content:center]"
+              disabled={signOutPending}
+              autoFocus
+              onClick={() => location.reload()}
+            >
+              Check again
+            </Button>
+          )
+        )}
         <Button
           type="button"
           variant="ghost"

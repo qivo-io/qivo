@@ -34,6 +34,15 @@ type Ok<F extends (...args: never[]) => Promise<unknown>> = Omit<
 >
 
 export type RootAnswer = Read<typeof readRoot>
+/** The root part's answer for a login whose only seats a running
+ * organization deletion holds. */
+export type SeatsDeleting = Extract<RootAnswer, { deleting: true }>
+/** The root part's answer for a caller with a seat. */
+export type RootSeats = Exclude<RootAnswer, null | SeatsDeleting>
+
+/** The organizations of the root part's answer, none without a seat. */
+export const rootOrgs = (root: RootAnswer): RootSeats['orgs'] =>
+  root === null || 'deleting' in root ? [] : root.orgs
 export type CatalogPart = Ok<typeof readCatalog>
 export type PeoplePart = Ok<typeof readPeople>
 export type ProjectsPart = Ok<typeof readProjects>
@@ -73,11 +82,7 @@ export function partRows<A extends { state: 'ok'; more?: Record<string, unknown[
  * hold, and grants only for people it holds: a removed person's memberships
  * and grants can outlive their profile for a moment (model/cascade.ts
  * removeProfile). */
-export function joinParts(
-  root: NonNullable<RootAnswer>,
-  orgs: readonly OrgParts[],
-  deliveredAt: string,
-) {
+export function joinParts(root: RootSeats, orgs: readonly OrgParts[], deliveredAt: string) {
   const teams: CatalogPart['teams'] = []
   const labels: CatalogPart['labels'] = []
   const profiles: PeoplePart['profiles'] = []
@@ -264,7 +269,7 @@ function rowsOrThrow(name: string, answer: unknown) {
  */
 export async function readWorkspace(query: QueryByName): Promise<Workspace | null> {
   const root = (await query('workspace:root', {})) as RootAnswer
-  if (root === null) return null
+  if (root === null || 'deleting' in root) return null
   /** The answers of window `w` of `kind`, cut wherever one overflows or
    * splits. */
   const windowRows = async (

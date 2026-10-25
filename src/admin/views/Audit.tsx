@@ -1,7 +1,8 @@
 /* Audit log: what platform operators have done in the last 90 days. Older
  * entries are deleted nightly (convex/auditRetention.ts). The newest 200
  * load first; when more exist the page says so, its search and filters
- * cover the loaded entries, and Load older entries adds the next 200. */
+ * cover the loaded entries, and Load older entries adds the next 200. Each
+ * action shows its label (convex/lib/auditActions.ts). */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -15,50 +16,9 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { auditActionLabel } from '../../../convex/lib/auditActions'
 import { type AuditRow, auditLog, listOrgNames } from '../api'
 import { AdminEmptyState, AdminPageHeader, AdminToolbar, ErrorNote, Loading } from '../ui'
-
-const ACTION_LABEL: Record<string, string> = {
-  'billing.subscription': 'Updated billing subscription',
-  'billing.usage_delivery_stopped': 'Stopped usage delivery at billing boundary',
-  'billing.storage_sample_failed': 'Stopped a storage sample that kept failing',
-  'billing.storage_sample_restarted': 'Started a stopped storage sample again',
-  'billing.webhook_failed': 'Stopped processing a Polar subscription event',
-  'billing.create_plan': 'Created billing plan',
-  'billing.connect_plan': 'Connected billing plan to Polar',
-  'billing.set_default_plan': 'Changed default for new customers',
-  'billing.assign_plan': 'Assigned organization billing plan',
-  'billing.grant_complimentary': 'Granted complimentary access',
-  create_org: 'Created organization',
-  invite_member: 'Invited member',
-  invite_email: 'Invitation email',
-  notice_email_unsent: 'Billing or deletion email not confirmed delivered',
-  cancel_invite: 'Cancelled invitation',
-  set_member_role: 'Changed member role',
-  promote_org_admin: 'Promoted member to org admin',
-  recovery_link: 'Generated recovery link',
-  ban: 'Banned sign-in',
-  unban: 'Lifted sign-in ban',
-  create_break_glass: 'Created break-glass admin',
-  delete_orphan: 'Deleted orphaned login',
-  expire_sessions: 'Deleted expired sign-in sessions',
-  expire_oauth_tokens: 'Deleted spent MCP connection tokens',
-  panorama_refill_started: 'Started image import',
-  panorama_refill_completed: 'Completed image import',
-  panorama_refill_failed: 'Image import failed',
-  panorama_library_settings_updated: 'Updated image library settings',
-  panorama_image_approved: 'Approved background image',
-  panorama_image_removed: 'Removed background image',
-  panorama_date_assigned: 'Updated weekly image assignment',
-  panorama_curation_key_created: 'Created agent curation key',
-  panorama_curation_key_revoked: 'Revoked agent curation key',
-  panorama_agent_precheck: 'Agent prechecked an image',
-  panorama_agent_submission: 'Agent proposed an image',
-  panorama_agent_submission_precheck: 'Agent prechecked a submission',
-  panorama_submission_declined: 'Declined image submission',
-  panorama_submission_accepted: 'Accepted image submission',
-  panorama_submission_file_attached: 'Added licensed submission image',
-}
 
 export function Audit() {
   const [rows, setRows] = useState<AuditRow[] | null>(null)
@@ -110,7 +70,7 @@ export function Audit() {
   const actionOptions = useMemo(
     () =>
       [...new Set((rows ?? []).map((row) => row.action))].sort((a, b) =>
-        (ACTION_LABEL[a] ?? a).localeCompare(ACTION_LABEL[b] ?? b),
+        auditActionLabel(a).localeCompare(auditActionLabel(b)),
       ),
     [rows],
   )
@@ -127,7 +87,7 @@ export function Audit() {
             : ''
         return [
           row.actor_email,
-          ACTION_LABEL[row.action] ?? row.action,
+          auditActionLabel(row.action),
           orgNames[row.target_org_id ?? ''] ?? '',
           detail,
         ]
@@ -195,7 +155,7 @@ export function Audit() {
           <option value="all">All actions</option>
           {actionOptions.map((key) => (
             <option key={key} value={key}>
-              {ACTION_LABEL[key] ?? key}
+              {auditActionLabel(key)}
             </option>
           ))}
         </NativeSelect>
@@ -281,7 +241,7 @@ export function Audit() {
                           {row.actor_email || '—'}
                         </TableCell>
                         <TableCell className="max-w-64 whitespace-normal">
-                          {ACTION_LABEL[row.action] ?? row.action}
+                          {auditActionLabel(row.action)}
                         </TableCell>
                         <TableCell className="max-w-48 whitespace-normal">
                           {row.target_org_id

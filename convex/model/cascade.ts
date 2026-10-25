@@ -615,12 +615,18 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
   for (const r of await ctx.db.query('marketing_demo').collect()) {
     if (r.org_id === org.id) await ctx.db.delete(r._id)
   }
-  // a scheduled or running deletion (orgRemovals.ts) has nothing left to do
+  // a scheduled or running deletion (orgRemovals.ts) has nothing left to
+  // do, nor what it recorded of the access it deleted
   for (const removal of await ctx.db
     .query('org_removals')
     .withIndex('by_org', (q) => q.eq('org_id', org.id))
     .collect())
     await ctx.db.delete(removal._id)
+  for (const removed of await ctx.db
+    .query('removed_access')
+    .withIndex('by_org', (q) => q.eq('org_id', org.id))
+    .collect())
+    await ctx.db.delete(removed._id)
   await deleteOrgBookkeeping(ctx, org.id)
   await ctx.db.delete(org._id)
 }

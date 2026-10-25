@@ -1,12 +1,17 @@
 import { type FunctionReference, getFunctionName, makeFunctionReference } from 'convex/server'
 import type { Value } from 'convex/values'
-import { splitWorkspace, type Workspace } from '../../../convex/lib/workspaceJoin'
+import {
+  type SeatsDeleting,
+  splitWorkspace,
+  type Workspace,
+} from '../../../convex/lib/workspaceJoin'
 import type { LiveQueries, LiveTransition } from '../../lib/liveQueries'
 
 /* The live transport (lib/liveQueries.ts) for store tests, over a Convex
    client double with onUpdate. A test publishes the whole workspace as one
    value of the stand-in query WHOLE, in the shape the store keeps it (or
-   null for no seat, or fails it), and the double answers every workspace
+   null for no seat, or SEATS_DELETING when an organization deletion holds
+   the seats, or fails it), and the double answers every workspace
    part from it, each window with the rows whose ids fall in it, and tells
    the store of the parts whose answer changed in one transition, as Convex
    would. A test can hold back one task window (holdWindow). Any other
@@ -32,6 +37,14 @@ type Client = {
 /* The workspace a test publishes, which may name messagesCut false. */
 type Whole = Omit<Workspace, 'messagesCut'> & { messagesCut?: boolean }
 
+/** What a test publishes for a login whose seats a running organization
+    deletion holds. The root part answers it (convex/lib/workspaceParts.ts
+    readRoot), and every other part that it has no seat. */
+export const SEATS_DELETING: SeatsDeleting = { deleting: true, create: 'after_deletion' }
+type Published = Whole | SeatsDeleting | null
+const seatsDeleting = (value: Published): value is SeatsDeleting =>
+  value !== null && 'deleting' in value
+
 const KINDS = ['tasks', 'people', 'projects'] as const
 const PARTS: Record<string, string> = {
   'workspace:catalog': 'catalog',
@@ -43,7 +56,8 @@ const PARTS: Record<string, string> = {
 
 /** What the workspace part `name` with `args` answers while the server
     holds `whole`. */
-function answerOf(whole: Whole | null, name: string, args: Record<string, unknown>): unknown {
+function answerOf(whole: Published, name: string, args: Record<string, unknown>): unknown {
+  if (seatsDeleting(whole)) return name === 'workspace:root' ? whole : { state: 'gone' }
   if (name === 'workspace:root')
     return whole === null
       ? null
@@ -89,7 +103,7 @@ export function liveOver(client: Client): LiveQueries & {
     stop?: () => void
   }
   const watched = new Map<string, Watch>()
-  let whole: { value: Whole | null } | { error: unknown } | undefined
+  let whole: { value: Published } | { error: unknown } | undefined
   let stopWhole: (() => void) | null = null
   let at = 0
   let watches = 0
@@ -139,10 +153,10 @@ export function liveOver(client: Client): LiveQueries & {
     }
     return changed
   }
-  const receiveWhole = (value: Whole | null) => {
+  const receiveWhole = (value: Published) => {
     whole = { value }
     const changed = refresh()
-    fire(changed, value?.delivered_at)
+    fire(changed, value === null || seatsDeleting(value) ? undefined : value.delivered_at)
   }
   const failWhole = (error: unknown) => {
     whole = { error }
@@ -167,7 +181,7 @@ export function liveOver(client: Client): LiveQueries & {
     const stop = client.onUpdate(
       makeFunctionReference<'query'>(WHOLE),
       {},
-      (value: unknown) => receiveWhole(value as Whole | null),
+      (value: unknown) => receiveWhole(value as Published),
       failWhole,
     )
     stopWhole = typeof stop === 'function' ? (stop as () => void) : () => {}

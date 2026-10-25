@@ -110,6 +110,19 @@ export const ORG_REMOVAL_PHASES = [
 export const vOrgRemovalPhase = literals(...ORG_REMOVAL_PHASES)
 export type OrgRemovalPhase = (typeof ORG_REMOVAL_PHASES)[number]
 
+/* What a running organization deletion records of the access it has
+ * deleted (removed_access): a login's seat, a profile, or a credential by
+ * its table. */
+export const REMOVED_ACCESS_KINDS = [
+  'login',
+  'profile',
+  'mcp_tokens',
+  'agent_keys',
+  'oauth_connections',
+] as const
+export const vRemovedAccessKind = literals(...REMOVED_ACCESS_KINDS)
+export type RemovedAccessKind = (typeof REMOVED_ACCESS_KINDS)[number]
+
 /* Deleted items (model/deletedItems.ts). A deletion moves the rows of these
  * ten tables into deleted_rows; messages are deleted instead. */
 export const STORED_TABLES = [

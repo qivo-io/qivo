@@ -148,7 +148,7 @@ describe('archiving and deleting from the Archive or delete window', () => {
     accept('issues:archive')
     const subtree = new Set(['root', 'a', 'b', 'aa'])
     await restoredWhileHeld(
-      () => P.archiveIssue(handle('root'), ''),
+      async () => !!(await P.archiveIssue(handle('root'), '')),
       (snap) => {
         snap.issues = snap.issues.filter((issue) => !subtree.has(issue.id))
       },

@@ -54,6 +54,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { ActionCtx, QueryCtx } from '../_generated/server'
 import { internalAction, internalMutation, internalQuery } from '../_generated/server'
 import { MIB } from '../lib/limits'
+import { audit as writeAudit } from '../model/admin'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
 import { countersRow, liveCountsOf, numbersOf, type OrgCounters } from '../model/orgs'
 
@@ -218,12 +219,7 @@ export const check = internalQuery({
 export const audit = internalMutation({
   args: { counted: v.number(), active_tasks: v.number(), live_projects: v.number() },
   handler: async (ctx, totals) => {
-    await ctx.db.insert('platform_audit_log', {
-      ts: new Date().toISOString(),
-      actor_email: 'system',
-      action: 'live_counts_backfill',
-      detail: totals,
-    })
+    await writeAudit(ctx, { actor_email: 'system', action: 'live_counts_backfill', detail: totals })
     return null
   },
 })

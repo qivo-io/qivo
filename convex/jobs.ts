@@ -63,6 +63,7 @@ import type { Doc } from './_generated/dataModel'
 import { internalMutation, type MutationCtx, type QueryCtx } from './_generated/server'
 import { deletionBegun } from './lib/billingAccess'
 import { byId } from './lib/db'
+import { audit } from './model/admin'
 import { scheduleMarkClears } from './model/archiveMarks'
 import {
   ITEM_UNREAD_CAP,
@@ -523,7 +524,7 @@ async function projectsStep(ctx: MutationCtx, a: RunStep): Promise<void> {
     return
   }
   await hand()
-  await ctx.db.insert('platform_audit_log', {
+  await audit(ctx, {
     ts: a.now,
     actor_email: 'system',
     action: 'archive_done_issues',
@@ -799,7 +800,7 @@ export const sweepReadMessages = internalMutation({
 
     const wake = (await overdueSnoozes(ctx, now).first()) !== null
     if (wake) await ctx.scheduler.runAfter(0, wakeSnoozesRef, { now, woken: 0 })
-    await ctx.db.insert('platform_audit_log', {
+    await audit(ctx, {
       ts: now,
       actor_email: 'system',
       action: 'sweep_read_messages',

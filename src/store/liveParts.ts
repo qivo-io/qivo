@@ -46,7 +46,9 @@
      (convex/lib/idWindows.ts piecesAfter). A partial workspace leaves its
      tasks out until they arrive.
    - A new seat's organization waits for its parts. A seat that
-     goes leaves with the root part's answer, quietly.
+     goes leaves with the root part's answer, quietly. When the last seats
+     go because their organization is being deleted, the root part says so
+     and the report passes it on.
    - After the socket reconnects, Convex sends every result again, and none
      counts until it arrived again.
    - A part that failed, or refused to load with a sentence, makes the
@@ -84,6 +86,8 @@ import {
   type ProjectsPart,
   partRows,
   type RootAnswer,
+  rootOrgs,
+  type SeatsDeleting,
   type TasksPart,
   type Workspace,
 } from '../../convex/lib/workspaceJoin'
@@ -109,6 +113,10 @@ export type PartsReport = {
         state: 'complete'
         /** null when the caller holds no seat */
         value: Workspace | null
+        /** with no seat, the root part's answer when a running
+            organization deletion holds the caller's seats
+            (convex/lib/workspaceParts.ts readRoot) */
+        deleting?: SeatsDeleting
         /** whether any part changed since the last complete report */
         changed: boolean
       }
@@ -219,7 +227,7 @@ export function createLiveParts(
     let moved = false
     const answer = root?.fresh && root.error === undefined ? (root.value as RootAnswer) : undefined
     if (answer === undefined) return false
-    const wanted = new Set(answer === null ? [] : answer.orgs.map((org) => org.id))
+    const wanted = new Set(rootOrgs(answer).map((org) => org.id))
     for (const [id, org] of orgs) {
       if (wanted.has(id)) continue
       for (const slot of orgSlots(org)) drop(slot)
@@ -227,7 +235,7 @@ export function createLiveParts(
       moved = true
     }
     // as many windows as each new organization's counts say it fills
-    const added = (answer === null ? [] : answer.orgs)
+    const added = rootOrgs(answer)
       .filter((row) => !orgs.has(row.id))
       .map((row) => {
         const start = startWindows(row)
@@ -386,11 +394,14 @@ export function createLiveParts(
       from the task windows that are, with the share of tasks they cover,
       each organization weighted by its task count; null unless at least
       one is. */
-  function join(partial: boolean): { value: Workspace | null; loaded: number } | null {
+  function join(
+    partial: boolean,
+  ): { value: Workspace | null; loaded: number; deleting?: SeatsDeleting } | null {
     if (!root?.fresh || root.error !== undefined) return null
     const answer = root.value as RootAnswer | undefined
     if (answer === undefined) return null
     if (answer === null) return partial ? null : { value: null, loaded: 1 }
+    if ('deleting' in answer) return partial ? null : { value: null, loaded: 1, deleting: answer }
     const parts: OrgParts[] = []
     let loaded = 0
     const weight = (row: (typeof answer.orgs)[number]) => Math.max(1, tasksIn(row))
@@ -444,7 +455,12 @@ export function createLiveParts(
       const done = transition ? join(false) : null
       const some = answered && !done && staged && !completed ? join(true) : null
       if (done) {
-        workspace = { state: 'complete', value: done.value, changed: dirty }
+        workspace = {
+          state: 'complete',
+          value: done.value,
+          changed: dirty,
+          ...(done.deleting ? { deleting: done.deleting } : {}),
+        }
         dirty = false
         completed = true
         for (const org of orgs.values())

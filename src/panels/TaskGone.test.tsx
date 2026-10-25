@@ -166,6 +166,24 @@ async function type(field: HTMLInputElement | HTMLTextAreaElement, value: string
 }
 
 const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]')
+// what the note adds when a reason typed for the task went unused
+const UNUSED = 'The reason you typed for it was not used. Copy it to keep it.'
+const modalButton = (name: string) =>
+  [...document.querySelectorAll<HTMLButtonElement>('[data-modal-shell] button')].find(
+    (b) => b.textContent === name,
+  )
+
+/* Opens the task's Archive or delete window from its menu, once the window
+   took focus, which would close a menu opened before. */
+async function openFate() {
+  await act(async () => {
+    await vi.waitFor(() => {
+      if (document.activeElement !== dialog()) throw new Error('the window has no focus yet')
+    })
+  })
+  await click(document.querySelector<HTMLElement>('[aria-label="Task actions"]'))
+  await click(document.querySelector<HTMLElement>('[data-task-fate]'))
+}
 const note = () => document.querySelector<HTMLElement>('[data-task-gone] [role="status"]')
 const button = (name: string) =>
   [...document.querySelectorAll<HTMLButtonElement>('[data-task-gone] button')].find(
@@ -207,6 +225,8 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
     expect(note()?.textContent).toBe(
       `${task.key} was archived. Restore it to bring it back to the board.`,
     )
+    // no reason was typed, so the note keeps none
+    expect(document.querySelector('[data-task-gone-reason]')).toBeNull()
     expect(asked('issues:archivedTask')).toEqual([{ id: 'task-a' }])
 
     await click(button('Restore'))
@@ -362,6 +382,212 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
       'issues:update',
     )
   })
+
+  it('keeps a reason typed to archive or delete the task in the note, unused, to copy', async () => {
+    const task = await open()
+    await act(async () => {
+      await vi.waitFor(() => {
+        if (document.activeElement !== dialog()) throw new Error('the window has no focus yet')
+      })
+    })
+    await click(document.querySelector<HTMLElement>('[aria-label="Task actions"]'))
+    await click(document.querySelector<HTMLElement>('[data-task-fate]'))
+    const field = document.querySelector<HTMLTextAreaElement>('[data-fate-reason]')
+    if (!field) throw new Error('the Archive or delete window did not open')
+    await type(field, 'Superseded by the\nhardware rework ')
+    await dropTask({ archived: true })
+    expect(document.querySelector('[data-fate-reason]')).toBeNull()
+    // the note, which takes focus and speaks, says the reason went unused
+    // and points at it
+    expect(note()?.textContent).toBe(
+      `${task.key} was archived. Restore it to bring it back to the board. ${UNUSED}`,
+    )
+    const kept = document.querySelector<HTMLElement>('[data-task-gone-reason] p')
+    expect(kept?.textContent).toBe('Superseded by the\nhardware rework')
+    expect(note()?.getAttribute('aria-describedby')).toBe(kept?.id)
+    // until it is copied, closing the window or the page asks first
+    const { hasUnsaved } = await import('../lib/leaveGuard')
+    const { isUpdateBlocked } = await import('../lib/updateSafety')
+    expect(hasUnsaved()).toBe(true)
+    expect(isUpdateBlocked()).toBe(true)
+    const writeText = vi.fn(async (_text: string) => {})
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    await click(button('Copy reason'))
+    expect(writeText).toHaveBeenCalledWith('Superseded by the\nhardware rework')
+    expect(window.showToast).toHaveBeenCalledWith('Copied the reason')
+    expect(hasUnsaved()).toBe(false)
+    expect(isUpdateBlocked()).toBe(false)
+    // this window sent nothing, and a refused copy leaves the reason selected
+    expect(network.mutation.mock.calls.map(([ref]) => getFunctionName(ref))).not.toContain(
+      'issues:archive',
+    )
+    writeText.mockRejectedValueOnce(new Error('denied'))
+    await click(button('Copy reason'))
+    expect(window.getSelection()?.toString()).toBe('Superseded by the\nhardware rework')
+    expect(window.showToast).toHaveBeenLastCalledWith(
+      "Couldn't copy. Copy the selected text instead.",
+      'error',
+    )
+  })
+
+  it('keeps the reason when someone else archived the task just before this window did', async () => {
+    const task = await open()
+    await openFate()
+    const field = document.querySelector<HTMLTextAreaElement>('[data-fate-reason]')
+    if (!field) throw new Error('the Archive or delete window did not open')
+    await type(field, 'Moved to the next release')
+    // the other archive reached the server first, so this one changed
+    // nothing and posted no reason
+    archive = [{ ...snap.issues[0], archived_at: '2026-09-14T09:00:00.000Z' }]
+    network.mutation.mockImplementation(async (ref) =>
+      getFunctionName(ref) === 'issues:archive' ? { issue: null, archived: false } : null,
+    )
+    await click(modalButton('Archive'))
+    await act(async () => {
+      await vi.waitFor(() => {
+        if (!note()?.textContent?.includes('was archived')) throw new Error('no note yet')
+      })
+    })
+    expect(note()?.textContent).toBe(
+      `${task.key} was archived. Restore it to bring it back to the board. ${UNUSED}`,
+    )
+    expect(document.querySelector('[data-task-gone-reason] p')?.textContent).toBe(
+      'Moved to the next release',
+    )
+    expect(onClose).not.toHaveBeenCalled()
+    expect(window.showToast).not.toHaveBeenCalledWith(`Archived ${task.key}`)
+    expect(window.showToast).toHaveBeenCalledWith(
+      `${task.key} was already archived. The reason you typed was not used.`,
+    )
+    // the delivery that drops the task leaves the note as it is
+    snap.issues.splice(0, 1)
+    await act(async () => deliver(snap))
+    expect(document.querySelector('[data-task-gone-reason] p')?.textContent).toBe(
+      'Moved to the next release',
+    )
+  })
+
+  it('fills the next Archive or delete window with the kept reason after a restore', async () => {
+    await open()
+    await openFate()
+    const field = document.querySelector<HTMLTextAreaElement>('[data-fate-reason]')
+    if (!field) throw new Error('the Archive or delete window did not open')
+    await type(field, 'Superseded by the rework')
+    await dropTask({ archived: true })
+    await click(button('Restore'))
+    await bringBack()
+    expect(document.querySelector('[data-task-gone]')).toBeNull()
+    // the reason waits for the window, and a reload still asks about it
+    const { hasUnsaved } = await import('../lib/leaveGuard')
+    expect(hasUnsaved()).toBe(true)
+    await click(document.querySelector<HTMLElement>('[aria-label="Task actions"]'))
+    await click(document.querySelector<HTMLElement>('[data-task-fate]'))
+    expect(document.querySelector<HTMLTextAreaElement>('[data-fate-reason]')?.value).toBe(
+      'Superseded by the rework',
+    )
+  })
+
+  it('keeps the kept reason when the task is archived again before the next window opens', async () => {
+    const task = await open()
+    await openFate()
+    const field = document.querySelector<HTMLTextAreaElement>('[data-fate-reason]')
+    if (!field) throw new Error('the Archive or delete window did not open')
+    await type(field, 'Superseded by the rework')
+    await dropTask({ archived: true })
+    await click(button('Restore'))
+    await bringBack()
+    expect(document.querySelector('[data-task-gone]')).toBeNull()
+    await dropTask({ archived: true })
+    expect(note()?.textContent).toBe(
+      `${task.key} was archived. Restore it to bring it back to the board. ${UNUSED}`,
+    )
+    expect(document.querySelector('[data-task-gone-reason] p')?.textContent).toBe(
+      'Superseded by the rework',
+    )
+    const { hasUnsaved } = await import('../lib/leaveGuard')
+    expect(hasUnsaved()).toBe(true)
+  })
+
+  it('asks about an edited reason that an archive kept, although the earlier one was copied', async () => {
+    const task = await open()
+    await openFate()
+    const field = document.querySelector<HTMLTextAreaElement>('[data-fate-reason]')
+    if (!field) throw new Error('the Archive or delete window did not open')
+    await type(field, 'Superseded by the rework')
+    await dropTask({ archived: true })
+    const writeText = vi.fn(async (_text: string) => {})
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    await click(button('Copy reason'))
+    const { hasUnsaved } = await import('../lib/leaveGuard')
+    expect(hasUnsaved()).toBe(false)
+    await click(button('Restore'))
+    await bringBack()
+    // the same reason, which the clipboard holds, still needs no question
+    expect(hasUnsaved()).toBe(false)
+    await click(document.querySelector<HTMLElement>('[aria-label="Task actions"]'))
+    await click(document.querySelector<HTMLElement>('[data-task-fate]'))
+    const next = document.querySelector<HTMLTextAreaElement>('[data-fate-reason]')
+    if (!next) throw new Error('the Archive or delete window did not open again')
+    await type(next, 'Moved to the next release')
+    // it was archived again before this window's Archive
+    archive = [{ ...snap.issues[0], archived_at: '2026-09-14T09:10:00.000Z' }]
+    network.mutation.mockImplementation(async (ref) =>
+      getFunctionName(ref) === 'issues:archive' ? { issue: null, archived: false } : null,
+    )
+    await click(modalButton('Archive'))
+    await act(async () => {
+      await vi.waitFor(() => {
+        if (!document.querySelector('[data-task-gone-reason]')) throw new Error('no note yet')
+      })
+    })
+    expect(document.querySelector('[data-task-gone-reason] p')?.textContent).toBe(
+      'Moved to the next release',
+    )
+    expect(note()?.textContent).toContain(task.key)
+    expect(hasUnsaved()).toBe(true)
+  })
+
+  /* Someone else archives the task and restores it while this window's
+     archive is on its way, which then changes nothing. The deliveries say
+     so in one, or one after the other, which takes the task away under the
+     window for a moment. */
+  for (const deliveries of ['one', 'two'] as const) {
+    it(`frees the archive window with the reason when the task is back before the answer (${deliveries} deliveries)`, async () => {
+      const task = await open()
+      await openFate()
+      const field = document.querySelector<HTMLTextAreaElement>('[data-fate-reason]')
+      if (!field) throw new Error('the Archive or delete window did not open')
+      await type(field, 'Moved to the next release')
+      let answer = (_value: unknown) => {}
+      network.mutation.mockImplementation((ref) =>
+        getFunctionName(ref) === 'issues:archive'
+          ? new Promise((resolve) => {
+              answer = resolve
+            })
+          : Promise.resolve(null),
+      )
+      await click(modalButton('Archive'))
+      expect(modalButton('Archiving…')).toBeDefined()
+      const [row] = snap.issues.splice(0, 1)
+      if (deliveries === 'two') await act(async () => deliver(snap))
+      snap.issues.push({ ...row, updated_at: '2026-09-14T09:05:00.000Z' })
+      await act(async () => deliver(snap))
+      await act(async () => answer({ issue: null, archived: false }))
+      await act(async () => {
+        await vi.waitFor(() => {
+          if (!modalButton('Archive')) throw new Error('the window is still busy')
+        })
+      })
+      expect(document.querySelector<HTMLTextAreaElement>('[data-fate-reason]')?.value).toBe(
+        'Moved to the next release',
+      )
+      expect(window.showToast).toHaveBeenCalledWith(
+        `${task.key} was already archived. The reason you typed was not used.`,
+      )
+      expect(document.querySelector('[data-task-gone]')).toBeNull()
+      expect(onClose).not.toHaveBeenCalled()
+    })
+  }
 
   it('stays in the Inbox pane and its pop-out, and says so in each', async () => {
     const task = await open('admin', undefined, 'inbox')

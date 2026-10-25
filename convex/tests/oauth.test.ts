@@ -7,6 +7,7 @@ import { hashPassword } from 'better-auth/crypto'
 import { generateCodeChallenge } from 'better-auth/oauth2'
 import { describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
+import type { MutationCtx } from '../_generated/server'
 import { createAuth } from '../auth'
 import * as authTriggers from '../authTriggers'
 import { findMany } from '../betterAuth/adapter'
@@ -16,8 +17,13 @@ import { NO_ORGANIZATION, ORGANIZATION_GONE } from '../lib/oauth'
 import { sha256hex } from '../machine/auth'
 import { TOOLS } from '../machine/mcp'
 import { BODY_MAX_BYTES } from '../machine/shared'
+import { REMOVAL_BUDGET } from '../model/cascade'
+import { notifyIssueUpdate } from '../model/messages'
+import { deleteOrgStep } from '../model/orgDeletion'
+import { touch as touchConnection } from '../oauthConnections'
 import {
   expectRefusal,
+  flushWebhookEvents,
   newT,
   plantIssue,
   plantSeat,
@@ -350,6 +356,58 @@ function unlink(f: Fx, clientId: string) {
       .collect())
       await ctx.db.delete(link._id)
   })
+}
+
+/** Disables a client, as an operator can in Better Auth. */
+function disable(f: Fx, clientId: string) {
+  return runInAuth(f.t, async (ctx) => {
+    const client = await ctx.db
+      .query('oauthClient')
+      .withIndex('clientId', (q) => q.eq('clientId', clientId))
+      .unique()
+    if (client) await ctx.db.patch(client._id, { disabled: true })
+  })
+}
+
+/** Begins the organization's deletion, which no scheduled step runs. */
+function beginDeletion(f: Fx) {
+  const now = new Date().toISOString()
+  return f.t.run((ctx) =>
+    ctx.db.insert('org_removals', {
+      org_id: f.org.id,
+      reason: 'requested',
+      ended_at: now,
+      delete_after: now,
+      phase: 'profiles',
+      created_at: now,
+    }),
+  )
+}
+
+/** Steps the deletion in small steps until it deleted the person's grants,
+ * so it stops before it is over. */
+async function deleteGrants(f: Fx) {
+  const connections = () =>
+    f.t.run((ctx) =>
+      ctx.db
+        .query('oauth_connections')
+        .withIndex('by_profile', (q) => q.eq('profile_id', f.profile.id))
+        .collect(),
+    )
+  REMOVAL_BUDGET.rows = 4
+  try {
+    for (let i = 0; i < 50 && (await connections()).length > 0; i++)
+      await f.t.run(async (ctx) => {
+        const removal = await ctx.db
+          .query('org_removals')
+          .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+          .unique()
+        if (removal) await deleteOrgStep(ctx, removal)
+      })
+  } finally {
+    REMOVAL_BUDGET.rows = 256
+  }
+  expect(await connections()).toEqual([])
 }
 
 /** A DPoP proof (RFC 9449) for a token request, signed with a new P-256 key. */
@@ -1112,6 +1170,162 @@ describe('OAuth consent and resource binding', () => {
     await deniedAccess(f, linked.access_token)
   })
 
+  it.each([
+    ['its client loses the resource link', 'link', 'Credential is no longer valid'],
+    ['its client is disabled', 'disable', 'Credential is no longer valid'],
+    ['its organization deletion begins', 'deletion', 'this organization is being deleted'],
+  ] as const)(
+    "stops a grant's webhook ownership, deliveries and events when %s",
+    async (_, how, refusal) => {
+      const f = await fixture()
+      const c = await connect(f, READ)
+      const grant = await f.t.query(internal.oauthConnections.lookupAccess, {
+        tokenHash: await sha256hex(c.access_token.slice(4)),
+        resource: RESOURCE,
+      })
+      const owner = {
+        profile_id: grant!.profileId,
+        credential_table: 'oauth_connections' as const,
+        credential_id: grant!.connectionId,
+        credential_row_id: grant!.connectionRowId,
+      }
+      await f.t.mutation(internal.webhooks.save, {
+        owner,
+        id: uuid(),
+        name: 'task.updated',
+        filters: {},
+        url: 'https://receiver.example/events',
+        encrypted_secret: 'encrypted-test-key',
+      })
+      const issue = await plantIssue(f.t, { org_id: f.org.id, project_id: f.sub.id })
+      const retitle = async (title: string) => {
+        await f.t.run(async (ctx) => {
+          const before = (await ctx.db.get(issue._id))!
+          await ctx.db.patch(issue._id, { title })
+          const after = (await ctx.db.get(issue._id))!
+          await notifyIssueUpdate(ctx, {
+            before,
+            after,
+            actor: f.admin,
+            now: new Date().toISOString(),
+          })
+        })
+        await flushWebhookEvents(f.t)
+      }
+      const deliveries = () => f.t.run((ctx) => ctx.db.query('webhook_deliveries').collect())
+      await retitle('Queued while linked')
+      const [queued] = await deliveries()
+      expect(queued?.status).toBe('pending')
+
+      if (how === 'link') await unlink(f, c.request.clientId)
+      else if (how === 'disable') await disable(f, c.request.clientId)
+      else await beginDeletion(f)
+      // subscribing and listing (eventOwner), delivery and each event's
+      // fan-out (eventOwnerProfile) all refuse the grant, as /mcp does
+      if (how !== 'deletion') await deniedAccess(f, c.access_token)
+      const listed = await f.t.query(internal.webhooks.list, { owner }).then(
+        () => 'listed',
+        (error: unknown) => (error as { data?: { message?: string } }).data?.message,
+      )
+      const claimed = await f.t.mutation(internal.webhooks.claim, { id: queued.id })
+      await retitle('Changed after that')
+      expect({ listed, claimed, deliveries: (await deliveries()).map((d) => d.status) }).toEqual({
+        listed: refusal,
+        claimed: null,
+        deliveries: ['failed'],
+      })
+    },
+  )
+
+  it('refuses a grant its organization deletion deleted with the deletion, on MCP and REST', async () => {
+    const f = await fixture()
+    const c = await connect(f, READ)
+    await beginDeletion(f)
+    await deleteGrants(f)
+    const deleting = [403, { error: 'this organization is being deleted' }]
+    const viaMcp = await mcp(f, c.access_token, 'list_projects')
+    expect([viaMcp.status, await json(viaMcp)]).toEqual(deleting)
+    const viaRest = await http(f.t, '/v1/webhooks', {
+      headers: { Authorization: `Bearer ${c.access_token}` },
+    })
+    expect([viaRest.status, await json(viaRest)]).toEqual(deleting)
+    // a token that never worked stays an invalid one
+    await deniedAccess(f, `qvo_${'0'.repeat(40)}`)
+  })
+
+  it('says the deletion only to a grant nothing else stopped, before and after the deletion deletes it', async () => {
+    const f = await fixture()
+    const kept = await connect(f, READ)
+    const second = await register(f, READ, 'Second MCP client')
+    const disabled = await connect(f, READ, second)
+    const deleting = [403, { error: 'this organization is being deleted' }]
+    const answer = async (token: string) => {
+      const response = await mcp(f, token, 'list_projects')
+      return [response.status, await json(response)]
+    }
+    await beginDeletion(f)
+    await disable(f, second)
+    // the member was deactivated, which the deletion stops first; the
+    // disabled client's grant stays an invalid one
+    await f.t.run((ctx) => ctx.db.patch(f.profile._id, { active: false }))
+    expect(await answer(kept.access_token)).toEqual(deleting)
+    await deniedAccess(f, disabled.access_token)
+    await deleteGrants(f)
+    expect(await answer(kept.access_token)).toEqual(deleting)
+    await deniedAccess(f, disabled.access_token)
+    // the browser session that approved it ended, so the deleted grant's
+    // token is invalid, as without the deletion
+    expect((await signOut(f)).status).toBe(200)
+    await deniedAccess(f, kept.access_token)
+  })
+
+  it('says the deletion to a grant it deleted between the lookup and the stamp', async () => {
+    const f = await fixture()
+    const c = await connect(f, READ)
+    await beginDeletion(f)
+    const handler = touchConnection as unknown as {
+      _handler: (ctx: MutationCtx, args: { id: string }) => Promise<unknown>
+    }
+    const original = handler._handler
+    // the deletion's step runs between the two, deleting the grant and
+    // recording it, or the grant went unrecorded, as at a disconnect
+    let record = true
+    const stamp = vi.spyOn(handler, '_handler').mockImplementation(async (ctx, args) => {
+      const row = await ctx.db
+        .query('oauth_connections')
+        .withIndex('by_uuid', (q) => q.eq('id', args.id))
+        .unique()
+      if (row) {
+        await ctx.db.delete(row._id)
+        if (record)
+          await ctx.db.insert('removed_access', {
+            org_id: row.org_id,
+            kind: 'oauth_connections',
+            key: row.id,
+          })
+      }
+      return original(ctx, args)
+    })
+    try {
+      const viaMcp = await mcp(f, c.access_token, 'list_projects')
+      expect([viaMcp.status, await json(viaMcp)]).toEqual([
+        403,
+        { error: 'this organization is being deleted' },
+      ])
+      const again = await connect(f, READ)
+      record = false
+      const viaRest = await http(f.t, '/v1/webhooks', {
+        headers: { Authorization: `Bearer ${again.access_token}` },
+      })
+      expect([viaRest.status, await json(viaRest)]).toEqual([
+        401,
+        { error: 'OAuth connection is invalid, expired or disconnected' },
+      ])
+    } finally {
+      stamp.mockRestore()
+    }
+  })
+
   it('requires S256 PKCE and refuses signed consent query tampering and scope expansion', async () => {
     const f = await fixture()
     const clientId = await register(f)
@@ -1615,7 +1829,10 @@ describe('OAuth revocation, replay and live account checks', () => {
     }
   })
 
-  it('ends every session of the login at a password reset, and the access tokens issued in them', async () => {
+  // The owner decided on 2026-10-25 that a reset ends no session,
+  // connection or token, since most resets are a forgotten password, not a
+  // stolen one.
+  it('keeps every session, the OAuth connection and a personal token working at a password reset', async () => {
     const f = await fixture()
     const c = await connect(f)
     // a second browser of the same login
@@ -1624,6 +1841,23 @@ describe('OAuth revocation, replay and live account checks', () => {
       headers: { 'Content-Type': 'application/json', Origin: APP, 'better-auth-cookie': '' },
     })
     expect(other.status).toBe(200)
+    const otherCookie = other.headers
+      .get('set-better-auth-cookie')
+      ?.match(/(?:^|,\s*)([^=;,]*session_token=[^;]+)/)?.[1]
+    expect(otherCookie).toBeTruthy()
+    // a personal token of the same person
+    const personal = `qvt_${'keep'.repeat(10)}`
+    await f.t.run(async (ctx) => {
+      await ctx.db.insert('mcp_tokens', {
+        id: uuid(),
+        profile_id: f.profile.id,
+        name: 'Laptop',
+        token_prefix: personal.slice(0, 11),
+        token_hash: await sha256hex(personal),
+        access: 'write',
+        created_at: new Date().toISOString(),
+      })
+    })
     const sessions = () => runInAuth(f.t, async (ctx) => await ctx.db.query('session').collect())
     expect(await sessions()).toHaveLength(2)
     // the operator's recovery link, which a reset request mails too
@@ -1658,12 +1892,21 @@ describe('OAuth revocation, replay and live account checks', () => {
       headers: { 'Content-Type': 'application/json', Origin: APP },
     })
     expect(reset.status, await reset.clone().text()).toBe(200)
-    expect(await sessions()).toEqual([])
-    // the access token issued in the approving session stops at once
-    await deniedAccess(f, c.access_token)
-    // and each session's months are kept
-    const months = await f.t.run(async (ctx) => await ctx.db.query('usage_sign_ins').collect())
-    expect(months.map((row) => row.auth_user_id)).toEqual([f.userId])
+    // both browser sessions stay, and the other one still signs its browser in
+    expect(await sessions()).toHaveLength(2)
+    const still = await http(f.t, '/api/auth/get-session', {
+      headers: { Origin: APP, 'better-auth-cookie': otherCookie! },
+    })
+    const session = (await json(still)) as { user?: Json } | null
+    expect(session?.user?.id).toBe(f.userId)
+    // the access token issued in the approving session, its refresh token
+    // and the personal token keep working
+    expect(await toolData(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
+    const renewed = await tokens(await refresh(f, c.request.clientId, c.refresh_token))
+    expect(await toolData(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
+      Array,
+    )
+    expect(await toolData(await mcp(f, personal, 'list_projects'))).toBeInstanceOf(Array)
   })
 
   it('signs out from a connect page whose signed request has expired', async () => {

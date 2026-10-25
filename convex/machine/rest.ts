@@ -49,6 +49,7 @@ import type { ActionCtx, QueryCtx } from '../_generated/server'
 import { internalMutation, internalQuery } from '../_generated/server'
 import { hasProjectLevel } from '../lib/access'
 import { archiveCursorText } from '../lib/archivedTasks'
+import { ORG_DELETING } from '../lib/billingAccess'
 import {
   type AccessFlag,
   accessFlags,
@@ -148,7 +149,7 @@ import {
 import { newUuid, PLANNABLE_HOURS_RIGHTS, setPlannableHoursCore } from '../model/orgs'
 import { PLANNABLE_FIELDS } from '../model/people'
 import { assertRemainingShape, cleanTaskDate } from '../model/taskValues'
-import { authenticateSecret, restAuth401, sha256hex } from './auth'
+import { authenticateSecret, goneWithDeletion, restAuth401, sha256hex } from './auth'
 import { DISCUSSION_ROUTES } from './discussion'
 import { PROJECT_ROUTES, projectDetailJson } from './projects'
 import { RECORD_ROUTES } from './records'
@@ -1509,15 +1510,24 @@ async function webhookResponse(
   const runMutation = conflictRetrying(ctx)
   let owner: EventOwner
   if (secret.startsWith('qvo_')) {
+    const tokenHash = await sha256hex(secret.slice(4))
+    const resource = mcpResource()
     const credential = await ctx.runQuery(internal.oauthConnections.lookupAccess, {
-      tokenHash: await sha256hex(secret.slice(4)),
-      resource: mcpResource(),
+      tokenHash,
+      resource,
     })
     if (
       !credential ||
       !(await runMutation(internal.oauthConnections.touch, { id: credential.connectionId }))
     )
-      return err('OAuth connection is invalid, expired or disconnected', 401)
+      // a grant its organization's deletion stopped, also between the lookup
+      // and the stamp, says so
+      return (await ctx.runQuery(internal.oauthConnections.refusedForDeletion, {
+        tokenHash,
+        resource,
+      }))
+        ? err(ORG_DELETING, 403)
+        : err('OAuth connection is invalid, expired or disconnected', 401)
     if (
       !credential.scopes.includes('qivo:read') ||
       (seg[2] === 'organization' &&
@@ -1539,7 +1549,10 @@ async function webhookResponse(
     }
   } else {
     const authenticated = await authenticateSecret(ctx, secret)
-    if (authenticated.ok === false) return err('Webhook credential is invalid or inactive', 401)
+    if (authenticated.ok === false)
+      return authenticated.why === 'org_deleting'
+        ? err(ORG_DELETING, 403)
+        : err('Webhook credential is invalid or inactive', 401)
     const credential = authenticated.cred
     const table = credential.isAgent ? 'agent_keys' : 'mcp_tokens'
     const allowed = await runMutation(internal.machine.auth.touchCredential, {
@@ -1549,7 +1562,10 @@ async function webhookResponse(
       profileId: credential.profileId,
       now: new Date().toISOString(),
     })
-    if (allowed === null) return err('Webhook credential is no longer valid', 401)
+    if (allowed === null)
+      return (await goneWithDeletion(ctx, secret))
+        ? err(ORG_DELETING, 403)
+        : err('Webhook credential is no longer valid', 401)
     if (!allowed) return rateLimited()
     owner = {
       profile_id: credential.profileId,
@@ -1645,7 +1661,8 @@ const restHandler = answerAfterBody(async (ctx, req) => {
     // `=== false` (not `!res.ok`): the root tsconfig typechecks this file via
     // _generated/api.d.ts under strict:false, where truthiness narrowing of
     // the discriminant does not apply
-    if (res.ok === false) return err(restAuth401(res), 401)
+    if (res.ok === false)
+      return res.why === 'org_deleting' ? err(ORG_DELETING, 403) : err(restAuth401(res), 401)
     kind = res.cred.isAgent ? 'agent' : 'person'
     const table = res.cred.isAgent ? 'agent_keys' : 'mcp_tokens'
     // per-call last_used_at stamp — before any routing/work, even requests
@@ -1657,7 +1674,10 @@ const restHandler = answerAfterBody(async (ctx, req) => {
       profileId: res.cred.profileId,
       now: new Date().toISOString(),
     })
-    if (allowed === null) return err(CALLER[kind].gone, 401)
+    if (allowed === null)
+      return (await goneWithDeletion(ctx, secret))
+        ? err(ORG_DELETING, 403)
+        : err(CALLER[kind].gone, 401)
     if (!allowed) return rateLimited()
     const callerId = res.cred.profileId
     const access = res.cred.access

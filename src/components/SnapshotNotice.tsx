@@ -2,7 +2,7 @@ import { useId, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { floatSlot } from '../lib/floatStack'
 import { asOfText, savePauseWords } from '../lib/noticeText'
-import { P, type SnapshotTrouble } from '../store/planner'
+import { ORG_DELETING_TEXT, P, type SnapshotTrouble } from '../store/planner'
 import { usePlannerVersion } from '../store/usePlannerVersion'
 import { NoticeCard } from './NoticeCard'
 import { Button } from './ui/button'
@@ -43,8 +43,12 @@ export function SnapshotNotice() {
       title: 'You’re signed out',
       line: 'Reload Qivo to sign in again. Text you haven’t saved will be lost.',
     },
+    // the reason, when the seats went because the organization is being deleted
     no_access: {
-      title: 'You no longer have access to this workspace',
+      title:
+        trouble?.reason === ORG_DELETING_TEXT
+          ? 'This organization is being deleted'
+          : 'You no longer have access to this workspace',
       line: `${asOf}Reload Qivo to continue. Text you haven’t saved will be lost.`,
     },
   }

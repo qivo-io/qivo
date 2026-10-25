@@ -71,4 +71,26 @@ describe('the audit log', () => {
     expect(shown()).toBe(2)
     expect(button('Load older entries')).toBeDefined()
   })
+
+  it("labels every action it lists, a nightly job's and an organization deletion's included", async () => {
+    api.auditLog.mockResolvedValue({
+      rows: [
+        { ...entry(1), action: 'reap_orphans' },
+        { ...entry(2), action: 'org.deletion_requested' },
+      ],
+      next: null,
+    })
+    const { Audit } = await import('./Audit')
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <Audit />
+        </TooltipProvider>,
+      ),
+    )
+    const cells = [...host.querySelectorAll('tbody tr')].map((row) => row.textContent)
+    expect(cells[0]).toContain('Checked for files nothing refers to')
+    expect(cells[1]).toContain('Requested organization deletion')
+    expect(host.textContent).not.toMatch(/reap_orphans|org\.deletion_requested/)
+  })
 })

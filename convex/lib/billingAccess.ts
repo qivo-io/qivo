@@ -2,6 +2,7 @@ import type { WithoutSystemFields } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
+import type { RemovedAccessKind } from './enums'
 
 export const billingEnabled = () =>
   process.env.BILLING_ENABLED === 'true' && process.env.APP_MODE !== 'demo'
@@ -90,11 +91,104 @@ export async function deletionBegun(ctx: QueryCtx, orgId: string): Promise<boole
   return (await orgRemovalFor(ctx, orgId))?.phase !== undefined
 }
 
+/** The refusal of every call into an organization whose deletion has begun,
+ * in the app, REST and MCP. */
+export const ORG_DELETING = 'this organization is being deleted'
+
 /** Refuses every call into an organization whose deletion has begun. Before
  * that, the organization stays readable so admins can export it. */
 export async function assertOrgAvailable(ctx: QueryCtx, orgId: string): Promise<void> {
   if (await deletionBegun(ctx, orgId))
-    throw new ConvexError({ code: 'forbidden', message: 'this organization is being deleted' })
+    throw new ConvexError({ code: 'forbidden', message: ORG_DELETING })
+}
+
+/** Whether the deletion of `orgId` has begun and the organization is still
+ * there. Its last steps delete what the deletion recorded (removed_access)
+ * after the organization, so from then on every call gets the answer it
+ * gets once the deletion is over. */
+async function deletionRunning(ctx: QueryCtx, orgId: string): Promise<boolean> {
+  if (!(await deletionBegun(ctx, orgId))) return false
+  const org = await ctx.db
+    .query('organizations')
+    .withIndex('by_uuid', (q) => q.eq('id', orgId))
+    .unique()
+  return org !== null
+}
+
+/** Whether the running deletion of an organization deleted the access `key`
+ * names (removed_access): a login's seat in `orgId`, or a profile or
+ * credential of any organization. A call through such access is refused
+ * like every other call into that organization, with ORG_DELETING, rather
+ * than as a stranger's or an unknown credential's. False once the
+ * organization is gone. */
+export async function removedWithOrg(
+  ctx: QueryCtx,
+  kind: RemovedAccessKind,
+  key: string,
+  orgId?: string,
+): Promise<boolean> {
+  const removed = await ctx.db
+    .query('removed_access')
+    .withIndex('by_key', (q) =>
+      orgId === undefined
+        ? q.eq('kind', kind).eq('key', key)
+        : q.eq('kind', kind).eq('key', key).eq('org_id', orgId),
+    )
+    .first()
+  return removed !== null && (await deletionRunning(ctx, removed.org_id))
+}
+
+/** Whether `profile` is a home seat of its login: accepted, and not a
+ * guest's. Joining demotes a second one to a guest (identity.ts), though an
+ * admin who promotes a guest can give a login two. While a login holds any,
+ * it cannot create an organization (identity.ts createOrganization). */
+export const isHomeSeat = (profile: Pick<Doc<'profiles'>, 'org_role' | 'accepted_at'>) =>
+  profile.org_role !== 'guest' && profile.accepted_at !== undefined
+
+/** When a login whose seats a running organization deletion holds may
+ * create an organization: `now` with no home seat, `after_deletion` while
+ * deletions have not deleted its home seats yet, which their first phase
+ * does, and `blocked` while an organization that is not being deleted
+ * holds one, as a deactivated member's. */
+export type SeatlessCreate = 'now' | 'after_deletion' | 'blocked'
+
+/** Whether a running organization deletion holds a seat of the login
+ * `authUserId`, and if so when it may create an organization
+ * (SeatlessCreate), or null. A held seat is a profile the deletion has not
+ * deleted yet, active or not, or one it has (removed_access). The app's
+ * root part asks this only for a login with no seat left elsewhere
+ * (lib/workspaceParts.ts readRoot), so it can say why and what the login
+ * can do. */
+export async function seatHeldByDeletion(
+  ctx: QueryCtx,
+  authUserId: string,
+): Promise<SeatlessCreate | null> {
+  let held = false
+  // whether a home seat is in an organization that is not being deleted
+  let kept = false
+  let homes = 0
+  const profiles = ctx.db
+    .query('profiles')
+    .withIndex('by_auth', (q) => q.eq('auth_user_id', authUserId))
+  for await (const profile of profiles) {
+    const deleting = await deletionBegun(ctx, profile.org_id)
+    held ||= deleting
+    if (!isHomeSeat(profile)) continue
+    homes += 1
+    kept ||= !deleting
+  }
+  if (!held) {
+    const removed = ctx.db
+      .query('removed_access')
+      .withIndex('by_key', (q) => q.eq('kind', 'login').eq('key', authUserId))
+    for await (const row of removed) {
+      held = await deletionRunning(ctx, row.org_id)
+      if (held) break
+    }
+  }
+  if (!held) return null
+  if (homes === 0) return 'now'
+  return kept ? 'blocked' : 'after_deletion'
 }
 
 export function addCalendarMonths(iso: string, months: number): string {

@@ -1422,10 +1422,17 @@ function ArchiveOrDeleteTaskModal({
   onClose,
   onArchive,
   onDelete,
+  onReasonChange,
+  initialReason = '',
   focusAfterClose,
 }: {
   issueId: string
   onClose: () => void
+  /** the reason the field starts with, such as one the task window kept */
+  initialReason?: string
+  /** hears each change of the reason, so the task window can keep it when
+      the task leaves the board under the open window */
+  onReasonChange?: (reason: string) => void
   /** archive the task, alone when `keepSubtasks`; resolves whether the server
       archived it, and the caller closes the window when it did */
   onArchive: (reason: string, keepSubtasks: boolean) => Promise<boolean>
@@ -1435,7 +1442,11 @@ function ArchiveOrDeleteTaskModal({
 }) {
   const [plans, setPlans] = useStateM(() => readPlans(issueId))
   const [fate, setFate] = useStateM<Fate>('archive')
-  const [reason, setReason] = useStateM('')
+  const [reason, setTypedReason] = useStateM(initialReason)
+  const setReason = (value: string) => {
+    setTypedReason(value)
+    onReasonChange?.(value)
+  }
   const [archiveAll, setArchiveAll] = useStateM(true)
   const [deleteAll, setDeleteAll] = useStateM(plans.delete.deletable.length > 0)
   const [changed, setChanged] = useStateM(false)

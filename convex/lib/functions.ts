@@ -14,7 +14,7 @@ import { components } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { action, mutation, query } from '../_generated/server'
-import { assertOrgWritable, orgRemovalFor } from './billingAccess'
+import { assertOrgWritable, deletionBegun, ORG_DELETING, removedWithOrg } from './billingAccess'
 import {
   assertDemoPayload,
   consumeDemoWrite,
@@ -81,10 +81,10 @@ export function require(cond: unknown, err: ConvexError<Refusal>): asserts cond 
 }
 
 /** The signed-in login's active profiles, keyed by org_id. An organization
- * whose deletion has begun is left out and listed in `deleting`, so reads
- * across organizations, such as the snapshot, stop showing it while its
- * profiles are deleted. MutationCtx satisfies this too (writer db/storage
- * extend the readers). */
+ * whose deletion has begun is left out and listed in `deleting`, an
+ * inactive profile's too, so reads across organizations, such as the
+ * snapshot, stop showing it while its profiles are deleted. MutationCtx
+ * satisfies this too (writer db/storage extend the readers). */
 async function loadMemberships(ctx: QueryCtx) {
   const identity = await ctx.auth.getUserIdentity()
   if (identity === null) throw forbidden('not signed in')
@@ -97,10 +97,9 @@ async function loadMemberships(ctx: QueryCtx) {
   const myProfiles = new Map<string, Doc<'profiles'>>()
   const deleting = new Set<string>()
   for (const profile of mine) {
-    if (!profile.active || (demo && profile.org_id !== demo.org_id)) continue
-    if ((await orgRemovalFor(ctx, profile.org_id))?.phase !== undefined)
-      deleting.add(profile.org_id)
-    else myProfiles.set(profile.org_id, profile)
+    if (demo && profile.org_id !== demo.org_id) continue
+    if (await deletionBegun(ctx, profile.org_id)) deleting.add(profile.org_id)
+    else if (profile.active) myProfiles.set(profile.org_id, profile)
   }
   return { authUserId, myProfiles, deleting }
 }
@@ -112,12 +111,16 @@ async function loadAuthed(ctx: QueryCtx) {
 }
 
 /** private.profile_in's successor for people. A member of an organization
- * whose deletion has begun learns why they are refused. */
+ * whose deletion has begun learns why they are refused, also once the
+ * deletion has deleted their seat (lib/billingAccess.ts removedWithOrg). */
 async function loadMember(ctx: QueryCtx, orgId: string) {
   const { authUserId, myProfiles, deleting } = await loadMemberships(ctx)
-  if (deleting.has(orgId)) throw forbidden('this organization is being deleted')
+  if (deleting.has(orgId)) throw forbidden(ORG_DELETING)
   const me = myProfiles.get(orgId)
-  if (!me) throw forbidden('no profile in this organization')
+  if (!me) {
+    if (await removedWithOrg(ctx, 'login', authUserId, orgId)) throw forbidden(ORG_DELETING)
+    throw forbidden('no profile in this organization')
+  }
   return { authUserId, myProfiles, me }
 }
 

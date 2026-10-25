@@ -392,6 +392,8 @@ describe('deleteOrgDeep', () => {
         created_at: NOW,
         updated_at: NOW,
       })
+      // a running deletion's record of a seat it already deleted
+      await ctx.db.insert('removed_access', { org_id: f.org.id, kind: 'profile', key: uuid() })
       return storage_id
     })
     // the control: the other organization's own rows
@@ -444,6 +446,7 @@ describe('deleteOrgDeep', () => {
     }
     expect(await t.run(async (ctx) => await ctx.db.query('agent_keys').collect())).toEqual([])
     expect(await t.run(async (ctx) => await ctx.db.query('marketing_demo').collect())).toEqual([])
+    expect(await t.run(async (ctx) => await ctx.db.query('removed_access').collect())).toEqual([])
     expect((await collect(t, 'message_sweeps')).map((row) => row.profile_id)).toEqual([
       f.otherAdmin.id,
     ])

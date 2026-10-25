@@ -4,6 +4,7 @@ import type { Doc } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import { internalMutation, internalQuery } from './_generated/server'
 import { profileCanSeeProject, readOnlyRefusal } from './lib/access'
+import { deletionBegun, ORG_DELETING, removedWithOrg } from './lib/billingAccess'
 import { byId } from './lib/db'
 import type { CredentialAccess } from './lib/enums'
 import { badRequest, forbidden, notFound } from './lib/functions'
@@ -42,14 +43,19 @@ const FAILURE_WINDOW = WEBHOOK_MAX_TTL_MS
 
 /* The owner's live profile and what its credential may do. Subscribing,
  * listing and removing one's own subscriptions only need a valid credential,
- * so a read-only one may manage its own. */
+ * so a read-only one may manage its own. An owner whose organization's
+ * deletion has begun hears that, also once the deletion deleted it. */
 async function requireOwner(
   ctx: QueryCtx,
   owner: EventOwner,
 ): Promise<{ profile: Doc<'profiles'>; access: CredentialAccess }> {
   const resolved = await eventOwner(ctx, owner)
-  if (!resolved) throw forbidden('Credential is no longer valid')
-  return resolved
+  if (resolved) return resolved
+  const profile = await byId(ctx, 'profiles', owner.profile_id)
+  const deleting = profile
+    ? await deletionBegun(ctx, profile.org_id)
+    : await removedWithOrg(ctx, 'profile', owner.profile_id)
+  throw forbidden(deleting ? ORG_DELETING : 'Credential is no longer valid')
 }
 
 async function authorizeFilters(

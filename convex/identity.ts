@@ -20,6 +20,7 @@ import type { MutationCtx } from './_generated/server'
 import { internalMutation } from './_generated/server'
 import { authComponent } from './auth'
 import { markBillingMembershipChanged } from './lib/billableUsers'
+import { isHomeSeat } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { isDemoDeployment, refuseDemoFeature } from './lib/demo'
 import { asciiEmail } from './lib/email'
@@ -187,9 +188,7 @@ export const createOrganization = authedMutation({
     // 0118: "the gate every other reader of this address already had"
     require(user.emailVerified, rule('confirm your email address before creating an organization'))
     const mine = await seatsOf(ctx, ctx.authUserId)
-    require(!mine.some((p) => p.org_role !== 'guest' && p.accepted_at !== undefined), rule(
-      'you already belong to an organization',
-    ))
+    require(!mine.some(isHomeSeat), rule('you already belong to an organization'))
     const nm = cleanOrgName(name)
     require(nm !== '', rule('the organization needs a name'))
     // the form every seat stores (lib/email.ts), so canonical lookups find it
@@ -262,9 +261,7 @@ export const acceptInvitation = authedMutation({
     /* Home-org uniqueness re-checked at accept time — another ACCEPTED
      * non-guest seat — but demote-to-guest instead of refusing. */
     const mine = await seatsOf(ctx, ctx.authUserId)
-    const hasHome = mine.some(
-      (p) => p._id !== seat._id && p.org_role !== 'guest' && p.accepted_at !== undefined,
-    )
+    const hasHome = mine.some((p) => p._id !== seat._id && isHomeSeat(p))
     const role = seat.org_role !== 'guest' && hasHome ? 'guest' : seat.org_role
     // A role change clears the project-creation right (profiles.update).
     await ctx.db.patch(seat._id, {

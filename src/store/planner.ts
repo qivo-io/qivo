@@ -25,7 +25,7 @@ import { ConvexError } from 'convex/values'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
 import { AVATAR_COLORS } from '../../convex/lib/avatarColors'
-import { BILLING_READ_ONLY, deletionReadOnly } from '../../convex/lib/billingAccess'
+import { BILLING_READ_ONLY, deletionReadOnly, ORG_DELETING } from '../../convex/lib/billingAccess'
 import { asciiEmail, cleanEmail, emailRefusal as storedEmailRefusal } from '../../convex/lib/email'
 import { descriptionForm, FIELD_CHANGED, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
 import type { FieldChange } from '../../convex/lib/functions'
@@ -135,7 +135,7 @@ import { createTaskIndex, type TaskChanges, type TaskSources } from './taskIndex
 
 export type { UIPrefs } from './preferences'
 
-import type { Workspace } from '../../convex/lib/workspaceJoin'
+import type { SeatsDeleting, Workspace } from '../../convex/lib/workspaceJoin'
 import type { Row } from './rows'
 import { createPlannerUpdates, type StoreVersion } from './updates'
 import {
@@ -1984,6 +1984,9 @@ const readOnly = (d: ErrData) =>
 export const PAUSED_TEXT = 'Editing is paused until Qivo loads the latest changes.'
 /** The sentence a paused edit shows after every seat is gone. */
 export const NO_ACCESS_TEXT = 'You no longer have access to this workspace.'
+/** The sentence a paused edit shows when the server refused it because the
+    organization's deletion has begun, the person's last seat. */
+export const ORG_DELETING_TEXT = 'This organization is being deleted.'
 /** The sentence a paused edit shows after the sign-in ended. */
 export const SIGNED_OUT_TEXT = 'You’re signed out. Reload Qivo to sign in again.'
 /** The sentence a paused edit shows while the connection is down, the
@@ -1993,10 +1996,12 @@ export const OFFLINE_TEXT = pauseSentence('offline')
 export const SLOW_TEXT = pauseSentence('slow')
 
 /** Why the live snapshot is not current, while it is not. `no_access` means
-    a delivery found no seat left. `asOf` is the last good delivery's server
-    time, null before any. `detail` is the error text for support, empty for
-    `no_access`. `retrying` holds for one RETRY_GAP_MS window after Try again,
-    or until a delivery ends the trouble. */
+    a delivery found no seat left, with ORG_DELETING_TEXT as its `reason`
+    when the seats went because their organization is being deleted. `asOf`
+    is the last good delivery's server time, null before any. `detail` is
+    the error text for support, empty for `no_access`. `retrying` holds for
+    one RETRY_GAP_MS window after Try again, or until a delivery ends the
+    trouble. */
 export type SnapshotTrouble = {
   kind: 'failed' | 'signed_out' | 'no_access'
   since: number
@@ -2005,7 +2010,7 @@ export type SnapshotTrouble = {
   detail: string
   /** the server's sentence when a part refused to load (a 'rule' error),
       such as a part too large to load or one that did not arrive in time,
-      which retrying alone may not end */
+      which retrying alone may not end, or why the seats went */
   reason?: string
 }
 let snapshotTrouble: SnapshotTrouble | null = null
@@ -2083,7 +2088,7 @@ function pausedText(name?: string) {
   const pause = savePause()
   if (!trouble && pause) return pause.kind === 'slow' ? SLOW_TEXT : OFFLINE_TEXT
   return trouble?.kind === 'no_access'
-    ? NO_ACCESS_TEXT
+    ? (trouble.reason ?? NO_ACCESS_TEXT)
     : trouble?.kind === 'signed_out'
       ? SIGNED_OUT_TEXT
       : PAUSED_TEXT
@@ -2133,17 +2138,26 @@ const refusedOrgs = new WeakMap<object, string>()
    so a field_changed notice can say "while you were offline". */
 const offlineWaits = new WeakMap<object, OfflineWindow[]>()
 
-/** Whether a refusal says the person has no seat in the organization any
-    more (convex/lib/functions.ts loadMember), and they hold no seat in
-    another one. It can arrive before or after the snapshot delivery that
-    reports the lost seat. Someone who keeps another organization keeps
+/** Whether a refusal says the organization is being deleted
+    (convex/lib/billingAccess.ts ORG_DELETING), to a member and to someone
+    whose seat the deletion has already deleted. */
+const orgDeleting = (d: ErrData) => d.code === 'forbidden' && d.message === ORG_DELETING
+
+/** The sentence when a refusal says the person has no seat in the
+    organization any more, or that it is being deleted
+    (convex/lib/functions.ts loadMember), and they hold no seat in another
+    one, otherwise null. It can arrive before or after the snapshot delivery
+    that reports the lost seat. Someone who keeps another organization keeps
     working there, so for them, and when the refused organization is not
-    known, it stays a plain permission refusal. */
-function seatGone(e: unknown): boolean {
+    known, it stays a refusal of that one write. */
+function seatGoneText(e: unknown): string | null {
   const d = errData(e)
-  if (d.code !== 'forbidden' || d.message !== 'no profile in this organization') return false
+  const deleting = orgDeleting(d)
+  if (!deleting && (d.code !== 'forbidden' || d.message !== 'no profile in this organization'))
+    return null
   const org = typeof e === 'object' && e !== null ? refusedOrgs.get(e) : undefined
-  return [...myProfiles.keys()].every((seat) => seat === org)
+  if (![...myProfiles.keys()].every((seat) => seat === org)) return null
+  return deleting ? ORG_DELETING_TEXT : NO_ACCESS_TEXT
 }
 
 /** Whether the server refused a write because the sign-in ended
@@ -2161,7 +2175,7 @@ function refusedAsPaused(e: unknown): boolean {
   const d = errData(e)
   return (
     d.code === 'paused' ||
-    seatGone(e) ||
+    seatGoneText(e) !== null ||
     notSignedIn(e) ||
     (d.code === 'forbidden' && snapshotTrouble?.kind === 'no_access')
   )
@@ -2171,7 +2185,8 @@ function refusedAsPaused(e: unknown): boolean {
     lost seat or sign-in says so even before the snapshot reports it, and a
     write that send() paused keeps the sentence it was paused with. */
 function refusalPauseText(e: unknown) {
-  if (seatGone(e)) return NO_ACCESS_TEXT
+  const seat = seatGoneText(e)
+  if (seat !== null) return seat
   if (notSignedIn(e)) return SIGNED_OUT_TEXT
   const d = errData(e)
   return d.code === 'paused' && d.message ? String(d.message) : pausedText()
@@ -2194,7 +2209,8 @@ function toastWriteError(e: unknown, reverted = true) {
   }
   // a write that painted nothing has nothing to revert
   const after = reverted ? ' Change reverted.' : ''
-  if ((readOnly(d) || d.code === 'rule') && d.message) {
+  // the organization's deletion, to someone who keeps another one, says so
+  if ((readOnly(d) || d.code === 'rule' || orgDeleting(d)) && d.message) {
     toast(`${asSentence(String(d.message))}${after}`)
     return
   }
@@ -2405,6 +2421,7 @@ function restoreErrorText(e: unknown): string {
   const d = errData(e)
   if (refusedAsPaused(e)) return refusalPauseText(e)
   if (readOnly(d) && d.message) return d.message
+  if (orgDeleting(d)) return ORG_DELETING_TEXT
   if (d.code === 'forbidden') return "You don't have permission for that"
   if (d.message) return `Couldn't restore. ${asSentence(String(d.message))}`
   return "Couldn't restore"
@@ -2419,6 +2436,7 @@ function deletedItemsErrorText(e: unknown, failed: string): string {
   if (refusedAsPaused(e)) return refusalPauseText(e)
   // read-only for billing or a scheduled deletion says why, in its own words
   if (readOnly(d) && d.message) return d.message
+  if (orgDeleting(d)) return ORG_DELETING_TEXT
   if (d.code === 'forbidden') return "You don't have permission for that."
   if (d.code === 'rule' && d.message) {
     const m = String(d.message)
@@ -2489,7 +2507,7 @@ function toastCreateProjectError(e: unknown, label: string) {
   }
   const m = d.message ? String(d.message) : ''
   const reason = m && asSentence(m)
-  if ((d.code === 'rule' || readOnly(d)) && reason) {
+  if ((d.code === 'rule' || readOnly(d) || orgDeleting(d)) && reason) {
     toast(`Couldn't create ${label}. ${reason}`)
     return
   }
@@ -2529,6 +2547,7 @@ function slugErrorText(e: unknown): string {
     // so the reason is the answer
     return 'Use lowercase letters, digits and single hyphens; 40 characters maximum.'
   }
+  if (orgDeleting(d)) return ORG_DELETING_TEXT
   if (d.code === 'forbidden') return "You don't have permission to change the address."
   if (d.message) {
     const m = String(d.message)
@@ -5441,6 +5460,10 @@ export const PLANNER = {
   /** Why the live snapshot is stale, or null while it is current. Observe
       it through the `health` channel. */
   snapshotTrouble: (): SnapshotTrouble | null => snapshotTrouble,
+  /** The root part's answer when the last boot found no seat because the
+      login's organization is being deleted, with when the login may create
+      an organization, otherwise null. */
+  seatsDeleting: (): SeatsDeleting | null => bootSeatsDeleting,
   /** While a large workspace loads in stages, the share of its tasks that
       arrived, from 0 to 1; null once every task did. Counts, totals and
       verdicts over many tasks wait for null (store/liveParts.ts). */
@@ -6110,13 +6133,19 @@ export const PLANNER = {
      means dropping rows from the row cache, exactly what the next delivery
      holds. The Archive or delete window waits for the server, so nothing
      changes here until it accepts and a refusal leaves the task and the
-     window in place (toasted). Resolves whether the server archived it.
+     window in place (toasted). Resolves whether the server archived it, or
+     'already' when someone else had archived it first, so this call
+     changed nothing and posted no reason.
      `reason` travels as an argument, and the server posts it as a comment in
      the same transaction. With `keepSubtasks` the server detaches the task's
      active direct children first and archives the task alone, so only the
      task leaves the board and its subtasks become top-level tasks;
      otherwise the whole subtree goes with it. */
-  archiveIssue: (id: string, reason?: string, keepSubtasks = false): Promise<boolean> => {
+  archiveIssue: (
+    id: string,
+    reason?: string,
+    keepSubtasks = false,
+  ): Promise<boolean | 'already'> => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
     if (!row || !uuid || refusePausedEdit()) return Promise.resolve(false)
@@ -6136,7 +6165,8 @@ export const PLANNER = {
       // nothing paints. When it has not, the archive paints until one does.
       { keep: () => ({ workspace: archivePaint(uuid, keepSubtasks, at) }) },
     ).then(
-      () => true,
+      // an answer without `archived`, as one from before it, archived the task
+      (out) => (out?.archived === false ? 'already' : true),
       (error) => {
         if (epoch === storeEpoch) toastWriteError(error)
         return false
@@ -8686,6 +8716,11 @@ export const PLANNER = {
    they run ahead of the rows on screen until then. The parts' answers are
    not kept beside it: the base keeps each unchanged row's earlier object. */
 let hasSnapshot = false
+/* The root part's answer when the boot found no seat because a running
+   organization deletion holds the login's seats (convex/lib/workspaceParts.ts
+   readRoot), so AuthGate says so and offers a new organization only when the
+   server allows one. */
+let bootSeatsDeleting: SeatsDeleting | null = null
 /* While a large workspace loads in stages (store/liveParts.ts), the share of
    its task windows that arrived, from 0 to 1; null once it is complete. A
    partial delivery holds no write for certain, since the window a write
@@ -8835,6 +8870,7 @@ function startParts(
         }
         const snap = ws.value && anchor(ws.value)
         hasSnapshot = snap !== null
+        bootSeatsDeleting = (ws.state === 'complete' && ws.deleting) || null
         // the boot paints this delivery before anything rebuilds
         stillLoading = snap && ws.state === 'partial' ? ws.loaded : null
         loadEnds = false
@@ -8905,7 +8941,7 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
     if (DEMO_MODE) {
       recoveryHeld = false
       notifyDemoEnded()
-    } else beginTrouble('no_access', '')
+    } else beginTrouble('no_access', '', ws.deleting ? ORG_DELETING_TEXT : undefined)
     return
   }
   hasSnapshot = true
@@ -9147,6 +9183,7 @@ export async function initStore(
   stopDayWatch = null
   clearAvatarSources()
   demoDisposed = false
+  bootSeatsDeleting = null
   const epoch = storeEpoch
   const stillCurrent = () => epoch === storeEpoch && !demoDisposed
   // AuthGate already had to establish this session before it could render

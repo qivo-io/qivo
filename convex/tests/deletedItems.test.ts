@@ -2215,7 +2215,15 @@ describe("an organization's deletion", () => {
       if (removal.phase === undefined) throw new Error('the deletion lost its phase')
       phases.push(removal.phase)
       expect(phases.length).toBeLessThan(2000)
-      await expectLiveCounts(t, f.org.id)
+      // the counts hold while the organization lasts; the last steps delete
+      // what the deletion recorded after the organization and its counts
+      const org = await t.run((ctx) =>
+        ctx.db
+          .query('organizations')
+          .withIndex('by_uuid', (q) => q.eq('id', f.org.id))
+          .unique(),
+      )
+      if (org !== null) await expectLiveCounts(t, f.org.id)
       await t.mutation(internal.orgRemovals.step, { org_id: f.org.id })
     }
     expect(phases.filter((phase) => phase === 'trash').length).toBeGreaterThan(5)

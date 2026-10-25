@@ -52,6 +52,7 @@ import {
   vProjectCreators,
   vProjectType,
   vRemovalPhase,
+  vRemovedAccessKind,
   vStoredTable,
   vTrashPhase,
 } from './lib/enums'
@@ -900,15 +901,40 @@ export default defineSchema({
     scheduled_id: v.optional(v.id('_scheduled_functions')), // the next step
     // While the profiles phase marks one deleted profile's guest
     // organizations due over more than one step (model/orgDeletion.ts): that
-    // profile, and the _creationTime through which the marking read every
-    // profile with its email (lib/billableUsers.ts markHomeProfileRemoved).
-    guest_marking: v.optional(v.object({ profile_id: v.string(), through: v.number() })),
+    // profile, and the _creationTime and _id of the last profile with its
+    // email the marking read (lib/billableUsers.ts markHomeProfileRemoved).
+    // A row from before through_id stands for its whole _creationTime.
+    guest_marking: v.optional(
+      v.object({
+        profile_id: v.string(),
+        through: v.number(),
+        through_id: v.optional(v.id('profiles')),
+      }),
+    ),
     created_at: v.string(),
   })
     .index('by_org', ['org_id'])
     // progress_at is absent until deletion begins, so the hourly sweep reads
     // the removals still waiting whose date has passed in one range.
     .index('by_progress', ['progress_at', 'delete_after']),
+
+  // The access an organization's running deletion has already deleted
+  // (model/orgDeletion.ts), so that a call through it still hears that the
+  // organization is being deleted (lib/billingAccess.ts removedWithOrg)
+  // rather than that it has no seat or an unknown credential. `key` is, by
+  // `kind`, a login's Better Auth user id, a profile's uuid, a personal
+  // token's or agent key's hash, or an OAuth connection's uuid. Only access
+  // that still worked is recorded: an unrevoked agent key, an unrevoked and
+  // unexpired personal token of a login that is not banned, an approved and
+  // unrevoked connection. The deletion's last steps delete the rows after
+  // the organization.
+  removed_access: defineTable({
+    org_id: v.string(),
+    kind: vRemovedAccessKind,
+    key: v.string(),
+  })
+    .index('by_key', ['kind', 'key', 'org_id'])
+    .index('by_org', ['org_id']),
 
   // Per-organization number counters (model/orgs.ts). Task and project
   // creation write this row instead of the organization row, which every

@@ -1807,6 +1807,31 @@ describe('when organizations are reconciled', () => {
    * of them due only for the safety pass, and a second home profile deleted
    * after it. The guest profiles are inserted with the clock at `at` when
    * given. */
+  /* One more guest organization of `email`, its profile created at `at`,
+   * due later, as guestInMany's are. */
+  async function guestAt(t: T, email: string, at: number) {
+    const orgId = uuid()
+    vi.setSystemTime(at)
+    await t.run(async (ctx) => {
+      await enrollOrganization(ctx, orgId)
+      await ctx.db.insert('profiles', {
+        id: uuid(),
+        org_id: orgId,
+        email,
+        name: 'Consultant',
+        initials: 'CO',
+        color: '#7a7ad0',
+        org_role: 'guest',
+        active: true,
+        kind: 'person',
+        created_at: NOW,
+      })
+    })
+    vi.setSystemTime(NOW)
+    await setDue(t, orgId, iso(SYNC_SAFETY_MS / 60_000), true)
+    return orgId
+  }
+
   async function guestInMany(count: number, at?: number) {
     const { t, f } = await fixture()
     const email = 'consultant@testbed.test'
@@ -1947,58 +1972,70 @@ describe('when organizations are reconciled', () => {
     expect(work?.seats).toBe(6)
   })
 
-  it('finishes marking guest organizations whose profiles share one creation time', async () => {
+  it('finishes marking guest organizations whose profiles share one creation time, a budget at a time', async () => {
     // convex-test gives an insert 0.001 ms after the one before, which
     // rounds away above 2^52 ms, so there the inserts share a time, as an
     // import can leave them
     const TIED = 2 ** 52
     const { t, f, email, guestOrgs, step, left, marked, removal } = await guestInMany(300, TIED)
     // one more guest organization, its profile a millisecond after the group
-    const lastOrg = uuid()
-    vi.setSystemTime(TIED + 1)
-    await t.run(async (ctx) => {
-      await enrollOrganization(ctx, lastOrg)
-      await ctx.db.insert('profiles', {
-        id: uuid(),
-        org_id: lastOrg,
-        email,
-        name: 'Consultant',
-        initials: 'CO',
-        color: '#7a7ad0',
-        org_role: 'guest',
-        active: true,
-        kind: 'person',
-        created_at: NOW,
-      })
-    })
-    vi.setSystemTime(NOW)
-    await setDue(t, lastOrg, iso(SYNC_SAFETY_MS / 60_000), true)
-    const times = await t.run(async (ctx) =>
+    const lastOrg = await guestAt(t, email, TIED + 1)
+    const group = await t.run(async (ctx) =>
       (
         await ctx.db
           .query('profiles')
           .withIndex('by_email', (q) => q.eq('email', email))
           .collect()
-      )
-        .filter((p) => guestOrgs.includes(p.org_id))
-        .map((p) => p._creationTime),
+      ).filter((p) => guestOrgs.includes(p.org_id)),
     )
-    expect(new Set(times)).toEqual(new Set([TIED]))
+    expect(new Set(group.map((p) => p._creationTime))).toEqual(new Set([TIED]))
 
-    // The first step reads the whole group, past its budget, rather than
-    // stop inside it, and stops before the later profile.
-    await step()
-    expect(await marked()).toBe(guestOrgs.length)
-    expect(await dueAt(t, lastOrg)).not.toBe(NOW)
-    expect((await removal())?.guest_marking).toEqual({ profile_id: f.otherAdmin.id, through: TIED })
-    // The next goes on after the group. Before, every step went on from the
-    // group's time, read its first 128 profiles again and stopped there, and
-    // the deletion never ended.
-    await step()
-    expect(await dueAt(t, lastOrg)).toBe(NOW)
+    // Each step stops inside the group once its budget is spent, at the _id
+    // of the last profile it read, and the next goes on after it. Before, the
+    // first step read the whole group past its budget, as a group of a few
+    // thousand would in every step, and stopped only after it.
+    const perStep: number[] = []
+    while ((await marked()) < guestOrgs.length && perStep.length < 10) {
+      const before = await marked()
+      await step()
+      perStep.push((await marked()) - before)
+      const stopped = (await removal())?.guest_marking
+      if ((await marked()) < guestOrgs.length) {
+        expect(stopped).toMatchObject({ profile_id: f.otherAdmin.id, through: TIED })
+        expect(group.map((p) => p._id)).toContain(stopped?.through_id)
+      }
+    }
+    expect(perStep.length).toBeGreaterThan(1)
+    for (const count of perStep) expect(count).toBeLessThanOrEqual(REMOVAL_BUDGET.rows / 2)
+    expect(perStep.reduce((sum, count) => sum + count, 0)).toBe(guestOrgs.length)
     for (let i = 0; i < 3 && (await left()).length > 0; i++) await step()
+    expect(await dueAt(t, lastOrg)).toBe(NOW)
     expect((await removal())?.guest_marking).toBeUndefined()
     expect(await left()).toEqual([])
+  })
+
+  it('goes on after the whole creation time a marking stored before it kept the _id', async () => {
+    const TIED = 2 ** 52
+    const { t, f, email, step, marked, removal } = await guestInMany(3, TIED)
+    // a guest organization after the group, which the marking still owes
+    const lastOrg = await guestAt(t, email, TIED + 1)
+    // a position the earlier code stored after reading the group in full
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query('org_removals')
+        .withIndex('by_org', (q) => q.eq('org_id', f.otherOrg.id))
+        .unique()
+      await ctx.db.patch(row!._id, {
+        guest_marking: { profile_id: f.otherAdmin.id, through: TIED },
+      })
+      await ctx.db.patch(f.otherAdmin._id, { active: false })
+    })
+    await step()
+    // the group is not read again, the organization after it is marked, and
+    // the marking ends
+    expect(await marked()).toBe(0)
+    expect(await dueAt(t, lastOrg)).toBe(NOW)
+    expect((await removal())?.guest_marking).toBeUndefined()
   })
 
   it('polls a subscription that is past due, unpaid or incomplete, often in its first day', async () => {

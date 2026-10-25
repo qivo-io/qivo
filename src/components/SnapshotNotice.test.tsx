@@ -4,7 +4,9 @@ import { ConvexError } from 'convex/values'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { SeatsDeleting } from '../../convex/lib/workspaceJoin'
 import { asOfText } from '../lib/noticeText'
+import { SEATS_DELETING } from '../store/guard/liveDouble.setup'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 import { TooltipProvider } from './ui/tooltip'
 
@@ -51,7 +53,7 @@ vi.mock('../lib/auth', () => ({
 let notice: typeof import('./SnapshotNotice')
 let store: typeof import('../store/planner')
 let fail: (error: Error) => void
-let deliverLater: (snap: Snapshot | null) => void
+let deliverLater: (snap: Snapshot | SeatsDeleting | null) => void
 let subscribed: number
 let firstSnapshot: Snapshot
 let container: HTMLDivElement
@@ -194,6 +196,18 @@ describe('SnapshotNotice', () => {
     expect(button('Reload')).toBeDefined()
     expect(button('Try again')).toBeUndefined()
     expect(button('Details')).toBeUndefined()
+  })
+
+  it('says the organization is being deleted when its deletion took the last seats', async () => {
+    await act(async () => deliverLater(SEATS_DELETING))
+    expect(shown()?.dataset.snapshotNotice).toBe('no_access')
+    expect(shown()?.textContent).toContain('This organization is being deleted')
+    expect(shown()?.textContent).not.toContain('You no longer have access')
+    expect(button('Reload')).toBeDefined()
+    expect(button('Try again')).toBeUndefined()
+    // once the deletion is over, there is no seat and nothing more to say
+    await act(async () => deliverLater(null))
+    expect(shown()?.textContent).toContain('You no longer have access to this workspace')
   })
 
   it('tries again through the store and holds the button while it runs', async () => {

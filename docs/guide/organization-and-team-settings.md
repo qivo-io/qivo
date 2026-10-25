@@ -125,7 +125,13 @@ before the service ended. On the deletion date, Qivo deletes everything the
 organization owns, including uploaded files. Nobody can open the files from
 then on, and Qivo erases their contents within 7 days
 ([Deleted items](./how-work-is-organized.md#deleted-items)). Each person's
-sign-in and their other organizations remain.
+sign-in and their other organizations remain. While Qivo deletes it, the
+app, the REST API and MCP refuse every call into the organization and say
+that it is being deleted, also to people, keys and connections it has
+already removed. Someone with no other organization sees that in the app,
+also after a reload. A guest can create a new organization at once. A
+member can once the deletion has removed them from this one, which is its
+first step, and **Check again** on that screen then shows the form.
 
 Until that date, subscribing again keeps an organization whose subscription
 ended. An admin can stop a deletion an admin asked for with **Keep

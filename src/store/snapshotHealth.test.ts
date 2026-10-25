@@ -2,6 +2,8 @@ import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Id } from '../../convex/_generated/dataModel'
+import type { SeatsDeleting } from '../../convex/lib/workspaceJoin'
+import { SEATS_DELETING } from './guard/liveDouble.setup'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 /* Snapshot trouble is the live snapshot query failing after the first
@@ -28,7 +30,7 @@ vi.mock('../lib/auth', () => ({
 }))
 
 type Subscription = {
-  deliver: (snap: Snapshot | null) => void
+  deliver: (snap: Snapshot | SeatsDeleting | null) => void
   fail: (error: Error) => void
   unsubscribe: ReturnType<typeof vi.fn>
 }
@@ -44,7 +46,7 @@ describe('snapshot trouble', () => {
   let threads: { deliver: (page: unknown) => void; unsubscribe: ReturnType<typeof vi.fn> }[]
   let sent: Sent[]
   let showToast: ReturnType<typeof vi.fn>
-  let firstDelivery: 'deliver' | 'fail'
+  let firstDelivery: 'deliver' | 'fail' | 'deleting'
 
   const live = () => subscriptions[subscriptions.length - 1]
   const settle = async () => {
@@ -105,6 +107,7 @@ describe('snapshot trouble', () => {
         subscriptions.push({ deliver, fail, unsubscribe })
         if (subscriptions.length === 1) {
           if (firstDelivery === 'deliver') deliver(structuredClone(snapshot))
+          else if (firstDelivery === 'deleting') deliver(SEATS_DELETING)
           else fail(new Error(QUERY_FAILURE))
         }
       } else if (getFunctionName(ref) === 'snapshot:commentThread')
@@ -579,6 +582,93 @@ describe('snapshot trouble', () => {
     expect(showToast).not.toHaveBeenCalledWith(
       "You don't have permission for that. Change reverted.",
       'error',
+    )
+  })
+
+  it("says an edit was refused because the organization's deletion began, seat or no seat", async () => {
+    const deleting = () =>
+      new ConvexError({ code: 'forbidden', message: 'this organization is being deleted' })
+    await boot()
+    const { P } = store
+    const [task] = P.issues
+    // the refusal arrives while the last delivery still holds the seat
+    P.updateIssue(task.id, { status: 'progress' })
+    sent[0].reject(deleting())
+    await settle()
+    expect(P.issueById[task.id].status).toBe('todo')
+    expect(showToast).toHaveBeenLastCalledWith(store.ORG_DELETING_TEXT, 'error')
+    // and once the delivery without the seat came first; past the pause
+    // toast's gap, so a second toast shows
+    vi.advanceTimersByTime(1_000)
+    showToast.mockClear()
+    P.updateIssue(task.id, { status: 'review' })
+    expect(sent).toHaveLength(2)
+    live().deliver(SEATS_DELETING)
+    sent[1].reject(deleting())
+    await settle()
+    expect(P.issueById[task.id].status).toBe('todo')
+    expect(showToast).toHaveBeenCalledWith(store.ORG_DELETING_TEXT, 'error')
+    // an edit after that delivery pauses before it is sent, in the same words
+    vi.advanceTimersByTime(1_000)
+    showToast.mockClear()
+    P.updateIssue(task.id, { status: 'done' })
+    await settle()
+    expect(sent).toHaveLength(2)
+    expect(showToast).toHaveBeenCalledWith(store.ORG_DELETING_TEXT, 'error')
+    expect(showToast).not.toHaveBeenCalledWith(store.NO_ACCESS_TEXT, 'error')
+    expect(showToast.mock.calls.map(([text]) => text)).not.toContainEqual(
+      expect.stringMatching(/permission/i),
+    )
+  })
+
+  it('says the organization is being deleted when its deletion holds the last seats, until it is over', async () => {
+    await boot()
+    const { P } = store
+    live().deliver(SEATS_DELETING)
+    expect(P.snapshotTrouble()).toMatchObject({
+      kind: 'no_access',
+      reason: store.ORG_DELETING_TEXT,
+    })
+    // the last view stays and shows nothing new
+    expect(P.issues).toHaveLength(1)
+    live().deliver(null)
+    expect(P.snapshotTrouble()?.kind).toBe('no_access')
+    expect(P.snapshotTrouble()?.reason).toBeUndefined()
+  })
+
+  it('boots with no seat and says why when an organization deletion holds the seats', async () => {
+    firstDelivery = 'deleting'
+    store = await import('./planner')
+    await expect(store.initStore()).resolves.toBeNull()
+    expect(store.P.seatsDeleting()).toEqual({ deleting: true, create: 'after_deletion' })
+    expect(store.P.issues).toEqual([])
+  })
+
+  it("names the organization's deletion for its write while another organization remains", async () => {
+    const guest = crypto.randomUUID()
+    snapshot.orgs.push({ ...snapshot.orgs[0], id: guest, name: 'Partner Co', slug: 'partner' })
+    const seat = { ...snapshot.profiles[0], id: crypto.randomUUID(), org_id: guest }
+    snapshot.profiles.push({ ...seat, org_role: 'guest' })
+    snapshot.myProfileIds.push(seat.id)
+    await boot()
+    const { P } = store
+    const [task] = P.issues
+    P.updateIssue(task.id, { status: 'progress' })
+    const restore = P.unarchiveProject(snapshot.projects[0].id)
+    await settle()
+    for (const request of sent)
+      request.reject(
+        new ConvexError({ code: 'forbidden', message: 'this organization is being deleted' }),
+      )
+    expect(await restore).toBe(false)
+    await settle()
+    expect(showToast).toHaveBeenCalledWith(
+      'This organization is being deleted. Change reverted.',
+      'error',
+    )
+    expect(showToast).toHaveBeenCalledWith(store.ORG_DELETING_TEXT, 'error')
+    expect(showToast.mock.calls.map(([text]) => text)).not.toContainEqual(
+      expect.stringMatching(/permission/i),
     )
   })
 

@@ -13,7 +13,10 @@
  * Profiles go first. Once the removal has a phase, lib/billingAccess.ts
  * assertOrgAvailable refuses every app and machine call into the
  * organization, and deleting the profiles also ends their sessions,
- * credentials and OAuth connections.
+ * credentials and OAuth connections. The phase records each seat and
+ * working credential it deletes (removed_access), so their calls are refused
+ * with the same reason rather than as a stranger's until the organization
+ * is gone. The last steps delete those rows after the organization.
  *
  * Deleted items go next, whatever state their items are in
  * (model/deletedItems.ts clearOrgTrash). The Deleted items steps, their
@@ -38,10 +41,11 @@
 
 import type { Doc, Id, TableNames } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
+import { findAuthUser, loginBanned, tokenExpired } from '../lib/access'
 import { markHomeProfileRemoved } from '../lib/billableUsers'
 import { orgRemovalFor } from '../lib/billingAccess'
 import { byId } from '../lib/db'
-import { ORG_REMOVAL_PHASES, type OrgRemovalPhase } from '../lib/enums'
+import { ORG_REMOVAL_PHASES, type OrgRemovalPhase, type RemovedAccessKind } from '../lib/enums'
 import { require, rule } from '../lib/functions'
 import { budgetSpent, REMOVAL_BUDGET, type RemovalBudget, sweep } from './cascade'
 import { clearOrgTrash } from './deletedItems'
@@ -111,8 +115,26 @@ const profileRows = async (ctx: MutationCtx, orgId: string, budget: RemovalBudge
     ctx.db.query('sync_stamps').withIndex('by_org', (q) => q.eq('org_id', orgId)),
   ))
 
+/** Records access the step deletes next (removed_access), as one row of
+ * `budget`, so a call through it hears that the organization is being
+ * deleted (lib/billingAccess.ts removedWithOrg). The finish phase deletes
+ * them after the organization. */
+async function recordRemoved(
+  ctx: MutationCtx,
+  orgId: string,
+  budget: RemovalBudget,
+  kind: RemovedAccessKind,
+  key: string,
+) {
+  budget.rows -= 1
+  await ctx.db.insert('removed_access', { org_id: orgId, kind, key })
+}
+
 const profilesWithRows = async (ctx: MutationCtx, orgId: string, budget: RemovalBudget) => {
   const markGuests = await guestMarking(ctx, orgId)
+  const removed = (kind: RemovedAccessKind, key: string) =>
+    recordRemoved(ctx, orgId, budget, kind, key)
+  const now = Date.now()
   return await parents(
     ctx,
     budget,
@@ -183,6 +205,11 @@ const profilesWithRows = async (ctx: MutationCtx, orgId: string, budget: Removal
             ctx.db
               .query('agent_keys')
               .withIndex('by_profile', (q) => q.eq('profile_id', profile.id)),
+            {
+              before: async (key) => {
+                if (key.revoked_at === undefined) await removed('agent_keys', key.key_hash)
+              },
+            },
           ),
         () =>
           drain(
@@ -191,6 +218,19 @@ const profilesWithRows = async (ctx: MutationCtx, orgId: string, budget: Removal
             ctx.db
               .query('mcp_tokens')
               .withIndex('by_profile', (q) => q.eq('profile_id', profile.id)),
+            {
+              // a personal token works only while its person's login does
+              // (machine/auth.ts lookupCredential)
+              before: async (token) => {
+                if (token.revoked_at !== undefined || tokenExpired(token, now)) return
+                const user =
+                  profile.auth_user_id === undefined
+                    ? null
+                    : await findAuthUser(ctx, profile.auth_user_id)
+                if (user !== null && !loginBanned(user, now))
+                  await removed('mcp_tokens', token.token_hash)
+              },
+            },
           ),
         () =>
           drain(
@@ -215,6 +255,12 @@ const profilesWithRows = async (ctx: MutationCtx, orgId: string, budget: Removal
                   .query('oauth_credential_uses')
                   .withIndex('by_connection', (q) => q.eq('connection_id', connection.id)),
               ),
+            {
+              before: async (connection) => {
+                if (connection.approved_at && !connection.revoked_at)
+                  await removed('oauth_connections', connection.id)
+              },
+            },
           ),
         () =>
           drain(
@@ -227,6 +273,12 @@ const profilesWithRows = async (ctx: MutationCtx, orgId: string, budget: Removal
         () => markGuests(profile, budget),
       ]),
     {
+      // the seat a member's app calls and an agent's or person's machine
+      // calls between lookup and dispatch came through
+      before: async (profile) => {
+        await removed('profile', profile.id)
+        if (profile.auth_user_id !== undefined) await removed('login', profile.auth_user_id)
+      },
       after: async (profile) => {
         if (profile.avatar_storage_id === undefined) return
         // Letting go of a picture reads about as many index ranges as the
@@ -254,9 +306,9 @@ async function guestMarking(ctx: MutationCtx, orgId: string) {
   const asked = new Set<string>()
   let progress = removal.guest_marking
   return async (profile: Doc<'profiles'>, budget: RemovalBudget): Promise<boolean> => {
-    const after = progress?.profile_id === profile.id ? progress.through : undefined
-    const through = await markHomeProfileRemoved(ctx, profile, asked, budget, after)
-    const next = through === null ? undefined : { profile_id: profile.id, through }
+    const after = progress?.profile_id === profile.id ? progress : undefined
+    const stopped = await markHomeProfileRemoved(ctx, profile, asked, budget, after)
+    const next = stopped === null ? undefined : { profile_id: profile.id, ...stopped }
     if (next !== undefined || progress !== undefined) {
       progress = next
       await ctx.db.patch(removal._id, { guest_marking: next })
@@ -470,9 +522,10 @@ const billingRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
       ),
   ])
 
-/** The last step checks that every parent range is empty, Deleted items
- * included, then deletes the organization with its counters row and its
- * removal row. */
+/** The last phase checks that every parent range is empty, Deleted items
+ * included, then deletes the organization with its counters row. It runs
+ * again, finding nothing to delete, in each later step that drains the
+ * removal's removed_access rows. */
 async function finish(ctx: MutationCtx, removal: Doc<'org_removals'>): Promise<void> {
   const orgId = removal.org_id
   for (const table of ['issues', 'projects', 'teams', 'profiles', 'labels', 'sync_stamps'] as const)
@@ -501,7 +554,6 @@ async function finish(ctx: MutationCtx, removal: Doc<'org_removals'>): Promise<v
   await deleteOrgBookkeeping(ctx, orgId)
   const org = await byId(ctx, 'organizations', orgId)
   if (org) await ctx.db.delete(org._id)
-  await ctx.db.delete(removal._id)
 }
 
 const PHASE_ROWS: Record<
@@ -572,7 +624,16 @@ export async function deleteOrgStep(
   let phase: OrgRemovalPhase = removal.phase
   while (!budgetSpent(budget)) {
     if (phase === 'finish') {
+      // The organization goes first, so every call through access the
+      // profiles phase deleted hears that it is being deleted until it is
+      // gone. What that phase recorded (removed_access) goes after, over as
+      // many steps as it takes, then the removal row.
       await finish(ctx, removal)
+      const recorded = ctx.db
+        .query('removed_access')
+        .withIndex('by_org', (q) => q.eq('org_id', removal.org_id))
+      if (!(await drain(ctx, budget, recorded))) break
+      await ctx.db.delete(removal._id)
       return true
     }
     if (!(await PHASE_ROWS[phase](ctx, removal.org_id, budget))) break

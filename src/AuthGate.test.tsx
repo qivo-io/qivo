@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import type { SeatsDeleting } from '../convex/lib/workspaceJoin'
 import { SIGN_OUT_FAILED, SignOutFailed } from './lib/authSession'
 import { loadFailureText } from './lib/loadFailure'
 
@@ -39,10 +40,14 @@ vi.mock('./lib/convex', () => ({ convex: { query: vi.fn(), mutation: vi.fn() } }
 // a login with no seat, unless a test says otherwise
 const planner = vi.hoisted(() => ({
   initStore: vi.fn<() => Promise<boolean | null>>(async () => null),
+  // the root part's answer when the seatless boot found the login's
+  // organization being deleted
+  seatsDeleting: vi.fn<() => SeatsDeleting | null>(() => null),
 }))
 vi.mock('./store/planner', () => ({
   initStore: planner.initStore,
   P: {
+    seatsDeleting: planner.seatsDeleting,
     getOAuthConnectionContext: async () => ({
       oauthQuery: 'sig=s',
       clientName: 'Example App',
@@ -64,6 +69,7 @@ let root: Root
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   auth.session = { data: null, error: null }
+  planner.seatsDeleting.mockReturnValue(null)
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -187,6 +193,64 @@ describe('the address the sign-in gate sends', () => {
     expect(auth.requestPasswordReset).toHaveBeenLastCalledWith(
       expect.objectContaining({ email: stored }),
     )
+  })
+})
+
+/* A signed-in login with no seat gets the organization form, which says
+   first when an organization deletion holds its seats, and is there only
+   while the server would create the organization. */
+describe('a login with no seat', () => {
+  const heading = () => container.querySelector('[data-seats-deleting]')
+  const buttonNamed = (name: string) =>
+    [...container.querySelectorAll('button')].find((b) => b.textContent === name)
+
+  it('says why a login whose organization is being deleted has no seat, and keeps the form', async () => {
+    signIn()
+    planner.seatsDeleting.mockReturnValue({ deleting: true, create: 'now' })
+    await render()
+    await vi.waitFor(() => expect(field('organization-name')).not.toBeNull())
+    expect(heading()?.textContent).toBe('This organization is being deleted')
+    expect(container.textContent).toContain(
+      'You no longer have access to it. You can create a new organization.',
+    )
+    expect(container.textContent).not.toContain('If you expected an invitation')
+  })
+
+  it('offers no new organization while the deletion still holds the home seat, and checks again', async () => {
+    signIn()
+    planner.seatsDeleting.mockReturnValue({ deleting: true, create: 'after_deletion' })
+    await render()
+    await vi.waitFor(() => expect(heading()).not.toBeNull())
+    expect(container.textContent).toContain(
+      'You can create a new organization once the deletion has removed you from it.',
+    )
+    expect(field('organization-name')).toBeNull()
+    expect(buttonNamed('Create organization')).toBeUndefined()
+    // the screen does not follow the deletion, so Check again reloads
+    expect(document.activeElement).toBe(buttonNamed('Check again'))
+    const reload = stubLocation()
+    await act(async () => buttonNamed('Check again')?.click())
+    expect(reload).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the form for a deletion answer without a create state, from an older backend', async () => {
+    signIn()
+    planner.seatsDeleting.mockReturnValue({ deleting: true } as SeatsDeleting)
+    await render()
+    await vi.waitFor(() => expect(field('organization-name')).not.toBeNull())
+    expect(container.textContent).toContain('You can create a new organization.')
+  })
+
+  it('offers no new organization to a login whose home seat another organization holds', async () => {
+    signIn()
+    planner.seatsDeleting.mockReturnValue({ deleting: true, create: 'blocked' })
+    await render()
+    await vi.waitFor(() => expect(heading()).not.toBeNull())
+    expect(container.textContent).toContain('You no longer have access to it.')
+    expect(container.textContent).not.toContain('create a new organization')
+    expect(field('organization-name')).toBeNull()
+    expect(buttonNamed('Check again')).toBeUndefined()
+    expect(buttonNamed('Use another account')).toBeDefined()
   })
 })
 
