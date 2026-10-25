@@ -29,7 +29,7 @@ import type { Doc, Id } from '../_generated/dataModel'
 import { REAP_PAGES } from '../files'
 import { ARCHIVE_LIMITS, SWEEP_LIMITS } from '../jobs'
 import { DEFAULT_MESSAGE_RETENTION_DAYS } from '../lib/limits'
-import { ITEM_UNREAD_CAP, wakeSnoozedItem } from '../model/messages'
+import { ITEM_UNREAD_CAP, postMessage, wakeSnoozedItem } from '../model/messages'
 import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
 import { messageRetentionDays } from '../model/people'
 import {
@@ -1828,6 +1828,123 @@ describe('sweepReadMessages keeps a sweep row for every read message', () => {
     expect(await sweepRows()).toEqual([[patient.id, at(50)]])
     const seeds = await t.run((ctx) => ctx.db.query('message_sweep_seeds').collect())
     expect(seeds.map((row) => row.seeded_at)).toEqual([at(28)])
+  })
+
+  type Fixture = Awaited<ReturnType<typeof withOrg>>
+  const now = (offset = 0) => new Date(Date.now() + offset).toISOString()
+  const plantLive = (t: T, f: Fixture) => plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+  const plantShelved = (t: T, f: Fixture) =>
+    plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: NOW })
+  const notify = (t: T, f: Fixture, issue_id: string, at: string) =>
+    t.run((ctx) =>
+      postMessage(ctx, {
+        org_id: f.org.id,
+        recipient_id: f.admin.id,
+        issue_id,
+        kind: 'change',
+        body: 'Status changed',
+        actor_id: f.user.id,
+        now: at,
+      }),
+    )
+
+  /* The writes that leave a message read and not snoozed, other than the
+   * ones the test above this describe covers (markRead, readArchivedTasks
+   * and a shorter period). Each runs after the first run's full pass and
+   * leaves the admin one read message, so only the sweep row the write
+   * itself keeps brings the admin into the run eight days later, which is
+   * no full pass. Each returns the admin's messages that stay unread. */
+  const writes: [string, (t: T, f: Fixture) => Promise<string[]>][] = [
+    [
+      'mark all read',
+      async (t, f) => {
+        const live = await plantLive(t, f)
+        await plantMessage(t, { org_id: f.org.id, recipient_id: f.admin.id, issue_id: live.id })
+        await as(t, f.admin).mutation(api.messages.markAllRead, { org_id: f.org.id })
+        return []
+      },
+    ],
+    [
+      'a notice stored read on arrival',
+      async (t, f) => {
+        expect(await notify(t, f, (await plantShelved(t, f)).id, now())).toBe(true)
+        return []
+      },
+    ],
+    [
+      'a snooze that an arrival drops from a read row',
+      async (t, f) => {
+        const live = await plantLive(t, f)
+        // read while snoozed, as a mark read leaves it, and newer than the
+        // background step's notice below, so it stays the item's newest
+        await plantMessage(t, {
+          org_id: f.org.id,
+          recipient_id: f.admin.id,
+          issue_id: live.id,
+          created_at: now(-60 * 60_000),
+          read_at: now(-30 * 60_000),
+          snoozed_until: now(3 * DAY),
+        })
+        expect(await notify(t, f, live.id, now(-2 * 60 * 60_000))).toBe(true)
+        return (await messagesFor(t, f.admin.id))
+          .filter((m) => m.read_at === undefined)
+          .map((m) => m.id)
+      },
+    ],
+    [
+      'the wake of an archived item',
+      async (t, f) => {
+        const shelved = await plantShelved(t, f)
+        const until = now(-60_000)
+        await plantMessage(t, {
+          org_id: f.org.id,
+          recipient_id: f.admin.id,
+          issue_id: shelved.id,
+          snoozed_until: until,
+        })
+        await t.mutation(internal.messages.wake, {
+          recipient_id: f.admin.id,
+          issue_id: shelved.id,
+          until,
+        })
+        return []
+      },
+    ],
+    [
+      "an archived project's read step",
+      async (t, f) => {
+        const project = await plantProject(t, {
+          org_id: f.org.id,
+          type: 'project',
+          parent_id: f.meta.id,
+          archived_at: NOW,
+        })
+        const task = await plantIssue(t, { org_id: f.org.id, project_id: project.id })
+        await plantMessage(t, { org_id: f.org.id, recipient_id: f.admin.id, issue_id: task.id })
+        await t.mutation(internal.messages.readArchivedProject, { project_id: project.id })
+        return []
+      },
+    ],
+  ]
+
+  it.each(writes)('%s makes its profile due', async (_, write) => {
+    const t = newT()
+    const f = await withOrg(t)
+    await t.run((ctx) => ctx.db.patch(f.admin._id, { message_retention_days: 7 }))
+    await runSweep(t)
+    const unread = await write(t, f)
+    const read = (await messagesFor(t, f.admin.id)).filter((m) => m.read_at !== undefined)
+    expect(read.map((m) => m.snoozed_until)).toEqual([undefined])
+    const skip = (await scheduled(t, 'sweepDueProfiles')).length
+
+    const counts = await sweepAt(t, now(8 * DAY))
+
+    const visited = (await scheduled(t, 'sweepDueProfiles'))
+      .slice(skip)
+      .flatMap((job) => job.args[0].profiles)
+    expect(visited).toEqual([f.admin.id])
+    expect(counts.reduce((sum, c) => sum + c.deleted, 0)).toBe(1)
+    expect((await messagesFor(t, f.admin.id)).map((m) => m.id)).toEqual(unread)
   })
 })
 
