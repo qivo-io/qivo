@@ -309,6 +309,26 @@ describe('buildPath', () => {
     )
   })
 
+  it('keeps naming a task that left the store, in its organization, while its window shows', () => {
+    expect(buildPath({ inboxOpen: true, openIssue: 'QN-9' })).toBe('/app/home/inbox/tasks/qn-9')
+    expect(buildPath({ scope: 'all', view: 'kanban', openIssue: 'uuid-acme-5' })).toBe(
+      '/app/acme/board/all/tasks/qn-5',
+    )
+    // someone else archives or deletes them while their windows are open
+    delete store.issueById['QN-9']
+    delete store.issueById['uuid-acme-5']
+    expect(buildPath({ inboxOpen: true, openIssue: 'QN-9' })).toBe('/app/home/inbox/tasks/qn-9')
+    expect(buildPath({ scope: 'all', view: 'kanban', openIssue: 'uuid-acme-5' })).toBe(
+      '/app/acme/board/all/tasks/qn-5',
+    )
+    // so the address the window had stays, without a new entry
+    expect(
+      pathMatchesState('/app/home/inbox/tasks/qn-9', { inboxOpen: true, openIssue: 'QN-9' }),
+    ).toBe(true)
+    // a handle the address never named still names no organization
+    expect(buildPath({ inboxOpen: true, openIssue: 'QN-404' })).toBe('/app/~/inbox/tasks/qn-404')
+  })
+
   it('full-screen pages still outrank the scope', () => {
     expect(buildPath({ scope: 'all', view: 'kanban', inboxOpen: true })).toBe('/app/~/inbox')
     expect(buildPath({ scope: 'all', view: 'kanban', settingsPage: 'account' })).toBe(

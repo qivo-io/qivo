@@ -22,6 +22,7 @@
    Legacy #/ links share parseSegments and are replaced by path routes;
    unrelated hashes, including auth fragments, are ignored. */
 import { ALL_SCOPE, ISSUE_PREFIX, MINE_SCOPE, P } from '../store/planner'
+import type { IssueVM } from '../store/viewModels'
 
 export type Route = {
   scope?: string
@@ -321,6 +322,23 @@ export const heldRef = (open: string | null | undefined) =>
     organization picks the readable key: a held task's own reference. */
 const refOf = (open: string) => heldRef(open) ?? open
 
+/* The organization, key and uuid each task handle was last named by. A task
+   that leaves the store while its window is open (IssueDetail TaskGone)
+   keeps that name, so the address goes on naming the task the window still
+   speaks of, in its own organization, instead of a `~` that names none. */
+const named = new Map<string, Pick<IssueVM, 'org' | 'key' | 'uuid'>>()
+const NAMED_MAX = 64
+
+/** The task handle `open` names: the live task, or the one it last was. */
+function taskNamed(open: string) {
+  const it = P.issueById[open]
+  if (!it) return named.get(open)
+  named.delete(open)
+  named.set(open, { org: it.org, key: it.key, uuid: it.uuid })
+  if (named.size > NAMED_MAX) named.delete(named.keys().next().value ?? open)
+  return it
+}
+
 /** Whether the address names a task (taskSegmentOf). */
 export const addressesTask = (pathname: string, hash: string) =>
   taskSegmentOf(pathname, hash) !== undefined
@@ -393,7 +411,7 @@ function syncPath(sync: { scope: string; step: string }, openIssue?: string | nu
   if (sync.step === 'agents') rest += '/agents'
   else if (sync.step && sync.step !== 'team') rest += `/people/${encodeURIComponent(sync.step)}`
   if (openIssue) {
-    const it = P.issueById[String(openIssue)]
+    const it = taskNamed(String(openIssue))
     const ref = it ? (it.org === org ? it.key : it.uuid) : refOf(String(openIssue))
     rest += `/tasks/${encodeURIComponent(ref.toLowerCase())}`
   }
@@ -421,7 +439,7 @@ export function buildPath(s: UiState): string {
     // the inbox owns the screen, but a task opened from a message floats over
     // it — name both, so a reload lands back on the task you were reading
     if (!s.openIssue) return at(null, '/inbox')
-    const it = P.issueById[String(s.openIssue)]
+    const it = taskNamed(String(s.openIssue))
     const ref = it?.key ? it.key : refOf(String(s.openIssue))
     return at(it?.org, `/inbox/tasks/${encodeURIComponent(ref.toLowerCase())}`)
   }
@@ -434,14 +452,14 @@ export function buildPath(s: UiState): string {
      the issue's own sub-project and silently leave the mode). */
   if (sentinelOf(s.scope)) {
     if (!s.openIssue) return at(null, `/${viewUrl}/${s.scope}`)
-    const it = P.issueById[String(s.openIssue)]
+    const it = taskNamed(String(s.openIssue))
     const ref = it?.key ? it.key : refOf(String(s.openIssue))
     return at(it?.org, `/${viewUrl}/${s.scope}/tasks/${encodeURIComponent(ref.toLowerCase())}`)
   }
   // the issue names its own project — no scope segment (scopeForIssue
   // restores it on the way back in)
   if (s.openIssue) {
-    const it = P.issueById[String(s.openIssue)]
+    const it = taskNamed(String(s.openIssue))
     // a foreign issue's handle is its uuid; the readable key + org segment is
     // the shareable form, and the uuid still parses for anything older
     const ref = it?.key ? it.key : refOf(String(s.openIssue))
