@@ -79,7 +79,9 @@ function retire(id: string, below: unknown) {
 /** Steps back over the closed layers' markers on top of the history in
     one move. The address stays the one the page shows, so a change made in
     place over a marker, such as App naming a task that left the board,
-    moves down with it. */
+    moves down with it. A move of the person's that lands first, such as a
+    pick from the browser's Back menu, ends the step, and the entry it
+    reached keeps its own address. */
 function settle() {
   let steps = 0
   let state = history.state
@@ -102,8 +104,8 @@ function settle() {
   if (!steps) return done()
   stepping = true
   const href = location.href
-  void stepBack(steps).then(() => {
-    if (location.href !== href) history.replaceState(history.state, '', href)
+  void stepBack(steps).then((landed) => {
+    if (landed && location.href !== href) history.replaceState(history.state, '', href)
     done()
   })
 }

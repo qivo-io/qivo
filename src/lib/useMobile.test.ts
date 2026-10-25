@@ -218,6 +218,20 @@ describe('useMobileBackLayer', () => {
     expect(landscape).toHaveBeenCalledTimes(1)
   })
 
+  it("leaves alone the person's move that lands before the step over a marker", async () => {
+    const show = await layers({ a: true })
+    // a pick from the browser's Back menu, which the page did not start
+    History.prototype.go.call(history, -2)
+    await show({ a: false })
+    await settle()
+    expect(heard[0]).toBe('/before')
+    // jsdom aims the page's own step from where both set out, so it lands
+    // on /page after; the entry the person reached kept its address
+    expect(location.pathname).toBe('/page')
+    await back()
+    expect(location.pathname).toBe('/before')
+  })
+
   it('steps back over two layers that close together', async () => {
     const show = await layers({ a: true, b: false })
     await show({ a: true, b: true })

@@ -14,8 +14,10 @@
    code that reads it to decide a move waits for the page's moves to land
    (afterTraversal). The page's own steps (stepBack), such as a phone layer
    stepping back over its marker (lib/useMobile), are bookkeeping, not the
-   person's: this listener ends their popstate, so no other listener takes
-   one for a Back. */
+   person's: this listener ends the popstate that lands where one aimed, so
+   no other listener takes it for a Back. A move that lands anywhere else
+   first, such as a pick from the browser's Back menu, is the person's: it
+   reaches the other listeners, and the step ends as not landed. */
 
 let at = 0
 let moved: number | null = null
@@ -23,15 +25,17 @@ let moved: number | null = null
 let traveling = 0
 let waiting: (() => void)[] = []
 let lost: ReturnType<typeof setTimeout> | undefined
-// the page's own step on its way (stepBack), which ends its popstate
-let own: (() => void) | null = null
+// the page's own step on its way (stepBack): the position it aims for, null
+// without the index, and what hears whether it landed there
+let own: { to: number | null; done: (landed: boolean) => void } | null = null
 // the history the index stamps, and its go as the page found it
 let stamped: History | null = null
 let go: ((delta: number) => void) | null = null
 
 /** How long a move the page started may take to land. One that has not by
     then, such as one past the end of the history, which fires no popstate,
-    counts as landed, so nothing waits for it for good. */
+    stops counting, so nothing waits for it for good, and a step of the
+    page's own ends as not landed. */
 const LOST_MS = 1000
 
 /** The position `state` carries, or null. */
@@ -62,12 +66,14 @@ function started() {
     traveling = 0
     const step = own
     own = null
-    step?.()
+    step?.done(false)
     release()
   }, LOST_MS)
 }
 
-/** Records the move a popstate made, ending the page's own step's. */
+/** Records the move a popstate made. One that lands where the page's own
+    step aimed ends that step and its popstate; any other is the person's
+    and reaches the other listeners. */
 function record(event: PopStateEvent) {
   const to = positionIn((stamped ?? history).state)
   moved = to === null ? null : to - at
@@ -76,8 +82,10 @@ function record(event: PopStateEvent) {
   if (!traveling) clearTimeout(lost)
   const step = own
   own = null
-  if (step) event.stopImmediatePropagation()
-  step?.()
+  // without the index the step's aim is unknown, and the next popstate is its own
+  const landed = !!step && (step.to === null || step.to === to)
+  if (landed) event.stopImmediatePropagation()
+  step?.done(landed)
   // what waits runs once the other listeners have had this popstate
   if (!traveling && waiting.length) setTimeout(release, 0)
 }
@@ -145,12 +153,15 @@ export function afterTraversal(fn: () => void) {
 }
 
 /** Steps `distance` entries back as the page's own move. The index records
-    it, and its popstate reaches no other listener; without the index
-    installed, as in a test of one component, the others still hear it.
-    Resolves once it landed. */
-export function stepBack(distance: number): Promise<void> {
+    it, and the popstate that lands where it aimed reaches no other
+    listener. A move that lands elsewhere first, such as a pick from the
+    browser's Back menu, is the person's and reaches them, and the step
+    ends as not landed. Without the index installed, as in a test of one
+    component, the others still hear it, and the next popstate ends it.
+    Resolves with whether it landed where it aimed. */
+export function stepBack(distance: number): Promise<boolean> {
   return new Promise((resolve) => {
-    own = resolve
+    own = { to: stamped ? at - distance : null, done: resolve }
     if (!stamped) window.addEventListener('popstate', record, { once: true })
     started()
     ;(go ?? ((delta: number) => history.go(delta)))(-distance)

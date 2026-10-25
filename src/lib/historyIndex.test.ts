@@ -56,13 +56,33 @@ describe("the page's own moves", () => {
     const later = vi.fn()
     window.addEventListener('popstate', later)
     try {
-      await stepBack(1)
+      expect(await stepBack(1)).toBe(true)
       expect(position()).toBe(start - 1)
       expect(history.state?.qivoLayer).toBeUndefined()
       expect(later).not.toHaveBeenCalled()
       // the next move is the person's again
       await go(-1)
       expect(later).toHaveBeenCalledTimes(1)
+    } finally {
+      window.removeEventListener('popstate', later)
+    }
+  })
+
+  it("hands a move that lands elsewhere before its own step to later listeners, as the person's", async () => {
+    remove = installHistoryIndex()
+    history.pushState(null, '', '/app/j')
+    history.pushState(null, '', '/app/k')
+    history.pushState({ qivoLayer: 'x' }, '', '/app/k')
+    const heard: string[] = []
+    const later = () => heard.push(location.pathname)
+    window.addEventListener('popstate', later)
+    try {
+      // a pick from the browser's Back menu, which the page did not start
+      History.prototype.go.call(history, -2)
+      expect(await stepBack(1)).toBe(false)
+      expect(heard).toEqual(['/app/j'])
+      // the page's own step still lands after it
+      await vi.waitFor(() => expect(heard).toHaveLength(2))
     } finally {
       window.removeEventListener('popstate', later)
     }
