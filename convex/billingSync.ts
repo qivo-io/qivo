@@ -134,11 +134,14 @@ export function subscriptionPayload(s: PolarSubscription): string {
  * asks for one sooner. Membership changes and webhooks reconcile at once, a
  * pending checkout, an unpaid subscription, a period's end and a storage
  * sample have their own times (nextSyncDue), and a failure retries sooner.
- * This pass catches what those miss: a webhook Polar gave up on after its 10
- * retries, or a change made in Polar without one, such as a revocation.
- * Four reads a day per organization keep Polar calls far below its 500 a
- * minute. */
-export const SYNC_SAFETY_MS = 6 * 60 * 60_000
+ * This pass catches a Polar change whose webhook never arrived, because
+ * Polar gave up after its 10 retries or disabled the endpoint after 10
+ * failed deliveries in a row, such as a portal cancellation or a dashboard
+ * revocation. Charges and access do not wait for it. Once a day costs each
+ * organization about 4 function calls and 1 to 3 Polar requests, about
+ * 1,700 calls an hour and 7 to 21 of Polar's 500 requests a minute at
+ * 10,000 organizations. */
+export const SYNC_SAFETY_MS = 24 * 60 * 60_000
 
 /** How many reconciliations one sweep starts, SYNC_PAGE.spacing apart, so
  * they reach Polar at about one a second: 86,400 a day. A reconciliation
@@ -149,8 +152,8 @@ export const SYNC_SAFETY_MS = 6 * 60 * 60_000
  * requests, so a page of only seat changes, as after a Polar outage, can
  * reach about 420; requests Polar then refuses fail into the retry delay.
  * The safety pass keeps `safety` of each page whenever that many are due,
- * so it holds its six hours up to 10,800 organizations however many
- * targeted times are due, and up to 21,600 when they leave it room. Past
+ * so it holds its day up to 43,200 organizations however many targeted
+ * times are due, and up to 86,400 when they leave it room. Past
  * that it stretches. Targeted times always keep the other 30: 60
  * organizations polled every PAYMENT_POLL_MS, or 900 every DUNNING_POLL_MS,
  * before their polls stretch. Tests lower `size` and `safety`. */
@@ -444,7 +447,6 @@ export const apply = internalMutation({
         : remote.status
     const start = new Date(remote.currentPeriodStart).toISOString()
     const end = new Date(remote.currentPeriodEnd).toISOString()
-    const counts = await getBillableUsers(ctx, sub.org_id)
     // The canceled subscription a checkout replaces cannot be that
     // checkout's outcome (reserveCheckout opens one only after the end), so
     // reading it again keeps the checkout while it is polled (nextSyncDue).
@@ -468,14 +470,18 @@ export const apply = internalMutation({
       ...(predecessor
         ? {}
         : { checkout_id: undefined, checkout_url: undefined, checkout_expires_at: undefined }),
-      updated_at: now,
-    } satisfies Partial<Doc<'billing_subscriptions'>>
-    await ctx.db.patch(sub._id, {
-      ...fields,
-      retention_at: retentionDue({ ...sub, ...fields }),
       // a free period that Polar now bills gets no more reminders (reminders)
       remind_at: null,
-    })
+    } satisfies Partial<Doc<'billing_subscriptions'>>
+    /* A reconciliation that finds nothing new leaves the row as it is, so
+       the queries that read it do not run again and updated_at keeps the
+       time of the last change, which a canceled subscription's service end
+       counts from (model/orgRetention.ts). An absent field equals one set
+       to undefined. */
+    if (Object.entries(fields).some(([key, value]) => sub[key as keyof typeof fields] !== value)) {
+      const next = { ...fields, updated_at: now }
+      await ctx.db.patch(sub._id, { ...next, retention_at: retentionDue({ ...sub, ...next }) })
+    }
     const period = await ctx.db
       .query('billing_periods')
       .withIndex('by_subscription_period', (q) =>
@@ -483,6 +489,7 @@ export const apply = internalMutation({
       )
       .unique()
     if (!period && (status === 'active' || status === 'past_due')) {
+      const counts = await getBillableUsers(ctx, sub.org_id)
       const periodId = await ctx.db.insert('billing_periods', {
         org_id: sub.org_id,
         subscription_id: incomingId,

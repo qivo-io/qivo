@@ -635,7 +635,7 @@ export default defineSchema({
     // times existed, which the sweep treats as due after the other targeted
     // times.
     sync_due_at: v.optional(v.string()),
-    // True when sync_due_at is only the six-hour safety pass, which the
+    // True when sync_due_at is only the daily safety pass, which the
     // sweep starts after every other due organization.
     sync_safety: v.optional(v.boolean()),
     // Reconciliations that failed in a row, which set the retry's delay.

@@ -607,6 +607,30 @@ describe('provider state, retries and billing snapshots', () => {
     expect(rows.audits.filter((row) => row.action === 'billing.subscription')).toHaveLength(1)
   })
 
+  it('leaves the subscription row as it is when Polar reports nothing new', async () => {
+    const { t, f } = await fixture()
+    await t.mutation(apply, { payload: remote(f.org.id) })
+    await sample(t)
+    const before = await stored(t, f.org.id)
+    vi.setSystemTime(Date.now() + 60 * 60_000)
+    await t.mutation(apply, { payload: remote(f.org.id) })
+    expect(await stored(t, f.org.id)).toEqual(before)
+  })
+
+  it('writes the subscription row when Polar reports one field changed', async () => {
+    const { t, f } = await fixture()
+    await t.mutation(apply, { payload: remote(f.org.id) })
+    await sample(t)
+    vi.setSystemTime(Date.now() + 60 * 60_000)
+    await t.mutation(apply, {
+      payload: remote(f.org.id, { cancel_at_period_end: true, modified_at: iso(60) }),
+    })
+    expect(await stored(t, f.org.id)).toMatchObject({
+      cancel_at_period_end: true,
+      updated_at: new Date().toISOString(),
+    })
+  })
+
   it('records the ceiling sentence and leaves Polar seats alone past the online billing ceiling', async () => {
     const { t, f } = await fixture()
     await t.mutation(apply, { payload: remote(f.org.id) })
@@ -1884,8 +1908,8 @@ describe('when organizations are reconciled', () => {
     await sample(t)
     const end = Date.parse(END)
     vi.setSystemTime(end - PRE_RENEWAL_MS)
-    // the check before the old end reads the end Polar moved a day later
-    const moved = new Date(end + 24 * 60 * 60_000).toISOString()
+    // the check before the old end reads the end Polar moved two days later
+    const moved = new Date(end + 2 * 24 * 60 * 60_000).toISOString()
     await t.mutation(apply, {
       payload: remote(f.org.id, { current_period_end: moved, modified_at: iso(60) }),
     })
