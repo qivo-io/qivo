@@ -2,10 +2,20 @@ import { Popover as PopoverPrimitive } from 'radix-ui'
 import * as React from 'react'
 
 import { cn } from '@/lib/utils'
-import { useViewHidden } from '@/lib/viewHidden'
+import { LayerOpenContext, useLayerOpen, useViewHidden } from '@/lib/viewHidden'
 
-function Popover({ ...props }: React.ComponentProps<typeof PopoverPrimitive.Root>) {
-  return <PopoverPrimitive.Root data-slot="popover" {...props} />
+function Popover({
+  open,
+  defaultOpen,
+  onOpenChange,
+  ...props
+}: React.ComponentProps<typeof PopoverPrimitive.Root>) {
+  const layer = useLayerOpen({ open, defaultOpen, onOpenChange })
+  return (
+    <LayerOpenContext.Provider value={layer.open}>
+      <PopoverPrimitive.Root data-slot="popover" {...layer.props} {...props} />
+    </LayerOpenContext.Provider>
+  )
 }
 
 const PopoverTrigger = React.forwardRef<
@@ -19,8 +29,8 @@ const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
 >(function PopoverContent({ className, align = 'center', sideOffset = 4, ...props }, ref) {
-  // in a hidden kept view (lib/viewHidden.ts)
-  if (useViewHidden()) return null
+  // open in a hidden kept view (lib/viewHidden.ts)
+  if (useViewHidden(React.useContext(LayerOpenContext))) return null
   return (
     <PopoverPrimitive.Portal>
       <PopoverPrimitive.Content
