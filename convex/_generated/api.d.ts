@@ -80,6 +80,7 @@ import type * as lib_db from "../lib/db.js";
 import type * as lib_delay from "../lib/delay.js";
 import type * as lib_demo from "../lib/demo.js";
 import type * as lib_demoMetricsReport from "../lib/demoMetricsReport.js";
+import type * as lib_demoRefusals from "../lib/demoRefusals.js";
 import type * as lib_demoReporting from "../lib/demoReporting.js";
 import type * as lib_demoVisitor from "../lib/demoVisitor.js";
 import type * as lib_deployment from "../lib/deployment.js";
@@ -285,6 +286,7 @@ declare const fullApi: ApiFromModules<{
   "lib/delay": typeof lib_delay;
   "lib/demo": typeof lib_demo;
   "lib/demoMetricsReport": typeof lib_demoMetricsReport;
+  "lib/demoRefusals": typeof lib_demoRefusals;
   "lib/demoReporting": typeof lib_demoReporting;
   "lib/demoVisitor": typeof lib_demoVisitor;
   "lib/deployment": typeof lib_deployment;

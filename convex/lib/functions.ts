@@ -300,7 +300,7 @@ const operatorCheckRef = makeFunctionReference<
  * into the edge's ONE 403 sentence ('platform admins only'; platformQuery/
  * platformMutation above keep their two-sentence pair — both surfaces are
  * pinned by tests). The audit email comes off the component user row by id,
- * not the session (getAuthUser would demand a live session, which
+ * not the session (lib/authUser.ts would demand a live session, which
  * `npx convex run --identity` does not have). Adds ctx.operator. */
 export const platformAction = customAction(action, {
   args: {},

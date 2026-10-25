@@ -86,7 +86,8 @@ const membershipsOf = (on: T, profile_id: string) =>
   )
 
 /* A real login: a component user row plus an unexpired session, the two rows
- * getAuthUser reads. subject/sessionId mirror what the Convex JWT carries. */
+ * requireLiveAuthUser reads (betterAuth/sessions.ts liveSessionUser).
+ * subject/sessionId mirror what the Convex JWT carries. */
 async function withLogin(on: T, email: string, emailVerified = true) {
   const now = Date.now()
   const user = await on.mutation(components.betterAuth.adapter.create, {

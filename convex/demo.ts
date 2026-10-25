@@ -16,6 +16,7 @@ import {
   requireActiveDemo,
   requireDemoDeployment,
 } from './lib/demo'
+import { DEMO_UNAVAILABLE } from './lib/demoRefusals'
 import { demoBootstrapMutation, demoConfigurationQuery, demoLifecycleQuery } from './lib/functions'
 import { recordDemoCreated } from './model/demoMetrics'
 import { PUBLIC_DEMO_LAYOUT, PUBLIC_DEMO_STEPS, provisionPublicDemoStep } from './model/demoSeed'
@@ -85,8 +86,7 @@ export const ensureMine = demoBootstrapMutation({
     // The live session and its login, without loading Better Auth: this
     // runs once for each call of a start (lib/authUser.ts).
     const user = await liveAuthUser(ctx)
-    if (!user?.isAnonymous)
-      throw demoRefusal('A temporary demo login is required.', 'demo_unavailable')
+    if (!user?.isAnonymous) throw demoRefusal(DEMO_UNAVAILABLE.loginRequired, 'demo_unavailable')
     const receipt = await requireActiveDemo(ctx, ctx.authUserId, { ready: false })
     if (receipt.status === 'ready') {
       const org = receipt.org_id ? await byId(ctx, 'organizations', receipt.org_id) : null

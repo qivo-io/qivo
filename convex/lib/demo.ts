@@ -7,6 +7,7 @@ import { ConvexError } from 'convex/values'
 import { components } from '../_generated/api'
 import type { Doc, Id, TableNames } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
+import { DEMO_UNAVAILABLE } from './demoRefusals'
 import { deploymentEnvironment } from './deployment'
 
 declare class TextEncoder {
@@ -26,22 +27,22 @@ const expireRef = makeFunctionReference<'mutation', { id: string }>('demo:expire
 export const isDemoDeployment = (): boolean => process.env.APP_MODE === 'demo'
 
 export function requireDemoDeployment(): void {
-  if (!isDemoDeployment()) throw demoRefusal('Demo access is unavailable.', 'demo_unavailable')
+  if (!isDemoDeployment()) throw demoRefusal(DEMO_UNAVAILABLE.off, 'demo_unavailable')
   if (deploymentEnvironment() === 'production') {
-    throw demoRefusal('Demo access is unavailable on the main deployment.', 'demo_unavailable')
+    throw demoRefusal(DEMO_UNAVAILABLE.mainDeployment, 'demo_unavailable')
   }
   // A misdirected deployment must never turn the actual product into a demo.
   // SITE_URL is controlled by the deployment, never by request headers.
   const origin = process.env.SITE_URL
-  if (!origin) throw demoRefusal('Demo deployment is not configured.', 'demo_unavailable')
+  if (!origin) throw demoRefusal(DEMO_UNAVAILABLE.unconfigured, 'demo_unavailable')
   let host: string
   try {
     host = new URL(origin).hostname
   } catch {
-    throw demoRefusal('Demo deployment is not configured.', 'demo_unavailable')
+    throw demoRefusal(DEMO_UNAVAILABLE.unconfigured, 'demo_unavailable')
   }
   if (host === 'qivo.io' || host === 'www.qivo.io')
-    throw demoRefusal('Demo access is unavailable on the main deployment.', 'demo_unavailable')
+    throw demoRefusal(DEMO_UNAVAILABLE.mainDeployment, 'demo_unavailable')
 }
 
 export function demoAdmissionOpen(): boolean {
@@ -203,12 +204,12 @@ export async function registerDemoUser(
   user: { _id: string; isAnonymous?: boolean | null },
 ): Promise<void> {
   if (!isDemoDeployment()) {
-    if (user.isAnonymous) throw demoRefusal('Demo access is unavailable.', 'demo_unavailable')
+    if (user.isAnonymous) throw demoRefusal(DEMO_UNAVAILABLE.off, 'demo_unavailable')
     return
   }
   requireDemoDeployment()
   if (!user.isAnonymous || !demoAdmissionOpen())
-    throw demoRefusal('New demos are temporarily unavailable.', 'demo_unavailable')
+    throw demoRefusal(DEMO_UNAVAILABLE.closed, 'demo_unavailable')
   if (await demoForAuth(ctx, user._id))
     throw demoRefusal('This demo already exists.', 'demo_conflict')
   if ((await ctx.db.query('demo_sessions').take(DEMO_MAX_SESSIONS)).length >= DEMO_MAX_SESSIONS)

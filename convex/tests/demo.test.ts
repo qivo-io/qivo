@@ -14,6 +14,7 @@ import {
   DEMO_WRITES_PER_MINUTE,
   DEMO_WRITES_TOTAL,
 } from '../lib/demo'
+import { DEMO_UNAVAILABLE } from '../lib/demoRefusals'
 import {
   NORTHSTAR_STEPS,
   newNorthstarRun,
@@ -756,16 +757,15 @@ describe('public demo provisioning steps', () => {
   // The whole Northstar work in one transaction read 1,612 index ranges
   // and 1,668 documents and wrote about 1,400 documents, which could pass
   // Convex's 1 s mutation limit on a slow backend. Each call runs a few of
-  // its steps (PUBLIC_DEMO_CALLS), held to about 1.5 times what the
-  // heaviest call uses, well inside a third of each of Convex's limits for
-  // one mutation. The JavaScript time Convex limits follows the documents
-  // read (model/demoSeed.ts PUBLIC_DEMO_CALL_SIZES), so the read budget
-  // also stands in for the time limit, which convex-test does not keep.
+  // its steps (PUBLIC_DEMO_CALLS), held to a third of Convex's byte limits
+  // and to counts that keep it inside a third of the rest. convex-test does
+  // not keep the time limit, so the range budget stands in for it
+  // (model/demoSeed.ts PUBLIC_DEMO_CALL_SIZES has the numbers).
   it('provisions a demo in calls inside a budget near their use, every step once', async () => {
     const limited = newT({
       transactionLimits: {
-        databaseQueries: 750,
-        documentsRead: 1_000,
+        databaseQueries: 630,
+        documentsRead: 900,
         documentsWritten: 650,
         bytesRead: Math.floor((16 * 1024 * 1024) / 3),
         bytesWritten: Math.floor((16 * 1024 * 1024) / 3),
@@ -866,7 +866,11 @@ describe('public demo provisioning steps', () => {
       'forbidden',
       /updated while your demo was being prepared\. Start a new demo\./,
     )
-    expect(refusal.data.reason).toBe('demo_unavailable')
+    // the demo app shows this sentence on its refusal screen
+    expect(refusal.data).toMatchObject({
+      reason: 'demo_unavailable',
+      message: DEMO_UNAVAILABLE.updated,
+    })
   })
 
   it('gives a dataset edit without a version bump a new layout, so a demo halfway refuses', async () => {

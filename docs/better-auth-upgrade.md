@@ -373,12 +373,13 @@ Qivo does not use (SSO, SCIM, Stripe, passkey, API keys).
 - Every app boot (`claimMySeats`), creating an organization and each call
   of a demo start read the caller's login with Qivo's own session check,
   `liveSessionUser` in `convex/betterAuth/sessions.ts`, through
-  `convex/lib/authUser.ts`, not the adapter's `getAuthUser`, because
-  loading Better Auth on each call is slow. It reads the session and user
-  rows directly, so compare it with the release's rules for a live session
-  and keep it as strict: the session exists, has not expired and is the
-  token subject's, and that login exists. `convex/tests/identity.test.ts`
-  and `convex/tests/demo.test.ts` refuse a caller without one, and
+  `convex/lib/authUser.ts`, because loading Better Auth on each call is
+  slow. The copy therefore leaves out the adapter's `getAuthUser` and
+  `safeGetAuthUser`. `liveSessionUser` reads the session and user rows
+  directly, so compare it with the release's rules for a live session and
+  keep it as strict: the session exists, has not expired and is the token
+  subject's, and that login exists. `convex/tests/identity.test.ts` and
+  `convex/tests/demo.test.ts` refuse a caller without one, and
   `convex/tests/authTriggers.test.ts` keeps Better Auth out of these
   modules.
 

@@ -15,6 +15,7 @@ import {
 import { projectSightForProfiles } from '../lib/access'
 import { byId, newWindowKey } from '../lib/db'
 import { demoRefusal } from '../lib/demo'
+import { DEMO_UNAVAILABLE } from '../lib/demoRefusals'
 import { require, rule } from '../lib/functions'
 import { DEFAULT_MESSAGE_RETENTION_DAYS } from '../lib/limits'
 import { issueKey } from '../lib/taskRefs'
@@ -604,18 +605,24 @@ export async function writeNorthstarStep(
  * in one transaction that shares one NorthstarRun, so a call reads a row
  * that an earlier step of it read or wrote only once. The first call also
  * creates the organization and its people. Every call is a round trip, and
- * 27 calls of one step each took most of a start. Measured on a local
- * backend, a call read at most 724 documents in about 510 index ranges,
- * wrote at most 424 documents (550 KB) and ran 80 to 160 ms of
- * JavaScript, up to about 260 ms on a loaded machine, each under a third
- * of Convex's limits for one mutation (1,365 ranges, 10,666 documents
- * read, 5,333 written, 5.3 MiB, 333 ms). The time limit counts only the
- * function's own code, not its database operations. The hosted demo's
- * steps at v0.1.86 put each call at about 170 to 260 ms of it, as its
- * JavaScript grows with the documents a call reads. So
- * convex/tests/demo.test.ts holds every call to about 1.5 times what the
- * heaviest uses (1,000 documents read, 750 ranges, 650 written), which
- * keeps the time inside the third too. */
+ * 27 calls of one step each took most of a start.
+ *
+ * Each call stays inside a third of Convex's limits for one mutation:
+ * 1,365 index ranges, 10,666 documents read, 5,333 written, 5.3 MiB read
+ * or written, and 333 ms of the function's own JavaScript (the limit does
+ * not count database operations). In convex-test a call reads at most 513
+ * ranges and 724 documents and writes at most 441. The hosted demo's steps
+ * at v0.1.86, summed for each call (the worst of three starts, less 48 ms
+ * for each step past the first), put a call's JavaScript at 48 ms plus
+ * 0.38 to 0.45 ms per index range. Per document read it spreads from 0.26
+ * to 0.45 ms, as the first calls write more for each document they read,
+ * so the documents alone cannot bound it. convex/tests/demo.test.ts then
+ * holds every call to 630 ranges, within 48 + 0.45 x 630 = 332 ms, and to
+ * 900 documents read and 650 written, so that a call at those caps reads
+ * at most 1.4 documents and writes at most 1.0 a range, inside the 0.9 to
+ * 1.5 and 0.4 to 1.4 of the calls those costs come from. A call with fewer
+ * ranges stays inside 332 ms too, as a document past those costs about
+ * 0.13 ms read and 0.06 ms written (the slopes over the hosted steps). */
 export const PUBLIC_DEMO_CALL_SIZES: readonly number[] = [5, 6, 6, 5, 4]
 
 /** `steps` in calls of `sizes` steps each, in order, then each step past
@@ -775,10 +782,7 @@ export async function provisionPublicDemoStep(
       PUBLIC_DEMO_CALLS[step] === undefined ||
       anchor === undefined
     )
-      throw demoRefusal(
-        'Qivo was updated while your demo was being prepared. Start a new demo.',
-        'demo_unavailable',
-      )
+      throw demoRefusal(DEMO_UNAVAILABLE.updated, 'demo_unavailable')
     const orgId = await marketingId(namespace, 'org')
     require(receipt.org_id === orgId, rule('This demo cannot be provisioned'))
     const [org, profiles] = await Promise.all([
