@@ -2,18 +2,24 @@
  * deletion steps in model/orgDeletion.ts).
  *
  * `sweep` runs every hour (crons.ts), one page per transaction, and reads
- * only the removals and subscriptions that are due. It starts
- * the read-only period for organizations whose billing ended, stops it when
- * access returns or billing is switched off, hands organizations that never
- * completed checkout to `verifyNoCheckout`, and hands removals whose date has
- * passed to `begin`. Both ask Polar first, so neither a lost webhook nor a
- * checkout still open can let Qivo delete an organization that pays. The
- * mutation that starts a deletion refuses any checkout saved meanwhile. It
- * sets the first phase, which ends all access (lib/functions.ts and
- * lib/billingAccess.ts), and `step` deletes in bounded transactions until
- * nothing is left. Convex drops the calls a failed mutation scheduled, so
- * `recover` (every ten minutes) restarts a deletion whose step stalled, as
- * labelRemovals.ts does.
+ * only the removals and subscriptions that are due. It starts the read-only
+ * period for organizations whose billing ended, stops it when billing is
+ * switched off, hands organizations that never completed checkout to
+ * `verifyNoCheckout`, and hands removals whose date has passed to `begin`.
+ * Both ask Polar first, so neither a lost webhook nor a checkout still open
+ * can let Qivo delete an organization that pays. The mutation that starts a
+ * deletion refuses any checkout saved meanwhile. It sets the first phase,
+ * which ends all access (lib/functions.ts and lib/billingAccess.ts), and
+ * `step` deletes in bounded transactions until nothing is left. Convex drops
+ * the calls a failed mutation scheduled, so `recover` (every ten minutes)
+ * restarts a deletion whose step stalled, as labelRemovals.ts does.
+ *
+ * While billing is on, the sweep reads a removal only once its date has
+ * passed. So every write that returns paid or complimentary access must call
+ * syncOrgRemoval (model/orgRetention.ts), which stops the period at once, as
+ * billingSync.apply and grantComplimentaryMonths do. A write that skips it
+ * leaves the organization read-only until the date, when the sweep and
+ * `begin` stop the removal instead of deleting.
  *
  * Admins act through `request` (delete the organization, ending any paid
  * subscription at once without a refund), `keep` (stop a deletion they asked
@@ -272,15 +278,19 @@ async function sweepSubscription(ctx: MutationCtx, sub: Doc<'billing_subscriptio
 /** One leg of the hourly sweep. Empty arguments start a run, and each leg
  * reads one page of one lane and schedules the next, as files.reapOrphans
  * does. A run reads only what is due, so an hour with nothing due costs one
- * call and at most three empty index ranges. The removals lane stops billing-driven
- * periods whose access returned and hands removals whose date has passed to
- * `begin`. The due lane, while billing is on, reads the subscriptions whose
- * retention_at has passed: it starts the period for organizations whose
- * service ended and hands those past their checkout deadline to
- * `verifyNoCheckout`. The unset lane does the same for rows written before
- * retention_at existed and fills it in, so the first run after the release
- * that added it reads every subscription once. Billing webhooks make the
- * same changes at once (billingSync.ts); the sweep catches what they miss. */
+ * call and at most three empty index ranges. The removals lane reads the
+ * waiting removals whose date has passed, and while billing is off every
+ * waiting one. It stops a billing-driven one whose access returned, as every
+ * one has while billing is off, and hands the others whose date has passed to
+ * `begin`. It does not see access that returns before the date, which the
+ * returning write stops itself (header above). The due lane, while billing
+ * is on, reads the subscriptions whose retention_at has passed: it starts the
+ * period for organizations whose service ended and hands those past their
+ * checkout deadline to `verifyNoCheckout`. The unset lane does the same for
+ * rows written before retention_at existed and fills it in, so the first run
+ * after the release that added it reads every subscription once. Billing
+ * webhooks start and stop the period at once (billingSync.ts), and the sweep
+ * starts one whose service ended without a webhook. */
 export const sweep = internalMutation({
   args: sweepArgs,
   handler: async (ctx, a): Promise<null> => {

@@ -505,6 +505,23 @@ describe('cancelling a subscription', () => {
     )
     expect(await removalOf(t, f.org.id)).toBeNull()
   })
+
+  it('stops the deletion when complimentary access is granted again', async () => {
+    const { t, f, operator } = await billed()
+    await operator.mutation(grant, { org_id: f.org.id, months: 1 })
+    const until = (await as(t, f.admin).query(api.billing.summary, { org_id: f.org.id }))
+      .complimentary_until!
+    vi.setSystemTime(Date.parse(until) + 60_000)
+    await exportNow(t, f)
+    await t.mutation(internal.orgRemovals.sweep, {})
+    await runSteps(t)
+    expect(await removalOf(t, f.org.id)).toMatchObject({ reason: 'service_ended', ended_at: until })
+    await expectRefusal(createTask(t, f.admin, f.org.id, f.sub.id), 'forbidden')
+
+    await operator.mutation(grant, { org_id: f.org.id, months: 1 })
+    expect(await removalOf(t, f.org.id)).toBeNull()
+    await createTask(t, f.admin, f.org.id, f.sub.id)
+  })
 })
 
 describe('an admin deleting the organization', () => {
@@ -671,17 +688,21 @@ describe('deleting the organization', () => {
     expect((await orgRows(t, f.org.id)).issues).toBe(0)
   })
 
+  const hourlySweep = (t: T) => t.mutation(internal.orgRemovals.sweep, {})
   it.each([
-    ['the hourly sweep', (t: T) => t.mutation(internal.orgRemovals.sweep, {})],
+    // the sweep reads every waiting removal while billing is off
+    ['the hourly sweep before the date', 1, hourlySweep],
+    ['the hourly sweep after the date', 30, hourlySweep],
     [
       'the start of deletion',
+      30,
       (t: T, orgId: string) => t.action(internal.orgRemovals.begin, { org_id: orgId }),
     ],
-  ])('stops a billing deletion when billing is switched off, seen by %s', async (_, run) => {
+  ])('stops a billing deletion when billing is switched off, seen by %s', async (_, day, run) => {
     const { t, f } = await billed()
     await applied(t, remote(f.org.id, { status: 'canceled', ended_at: NOW }))
     expect(await removalOf(t, f.org.id)).toMatchObject({ reason: 'service_ended' })
-    vi.setSystemTime(Date.parse(at(30)) + 60_000)
+    vi.setSystemTime(Date.parse(at(day)) + 60_000)
     vi.stubEnv('BILLING_ENABLED', 'false')
     await run(t, f.org.id)
     expect(await removalOf(t, f.org.id)).toBeNull()
