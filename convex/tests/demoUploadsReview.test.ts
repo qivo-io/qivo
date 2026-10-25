@@ -340,6 +340,35 @@ describe('demo upload independent review regressions', () => {
     ).toBe(true)
   })
 
+  it('deletes a file its live ticket held when it was checked, once the ticket expires', async () => {
+    const { t, issue, authId } = await setup()
+    // uploaded for an attachment the person never saved
+    const { ticket, file } = await t.run(async (ctx) => {
+      const reserved = await reserveDemoUpload(ctx, {
+        authId,
+        kind: 'attachment',
+        targetId: issue.id,
+        bytes: 100,
+      })
+      await beginDemoUpload(ctx, reserved.id, authId)
+      const file = await ctx.storage.store(new Blob(['never attached']) as never)
+      await retainDemoUpload(ctx, reserved.id, authId, file)
+      return { ticket: (await demoUploadFor(ctx, reserved.id))!, file }
+    })
+    vi.setSystemTime(NOW + 121_000)
+    await t.mutation(internal.demoUploads.sweep, {})
+    // checked and kept, as its ticket held it
+    const kept = await t.run((ctx) => ctx.db.system.get(file))
+    expect(kept).not.toBeNull()
+    const [progress] = await t.run((ctx) => ctx.db.query('demo_upload_sweeps').collect())
+    expect(progress.checked_through).toBeGreaterThanOrEqual(kept!._creationTime)
+
+    vi.setSystemTime(ticket.expires_at)
+    await t.mutation(internal.demoUploads.sweep, {})
+    expect(await t.run((ctx) => ctx.db.system.get(file))).toBeNull()
+    expect(await t.run((ctx) => ctx.db.get(ticket._id))).toBeNull()
+  })
+
   /* Stores 63 files created at one time and 2 created a millisecond later,
    * none of them recorded, so a page of 64 ends between the last two.
    * convex-test gives an insert 0.001 ms after the one before, which rounds

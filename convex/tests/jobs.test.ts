@@ -2146,6 +2146,37 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     for (const id of [file, ...background]) expect(await blobExists(t, id)).toBe(false)
   })
 
+  it('a leg queued before incremental runs, with no lower bound, finishes a full run', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const file = await storeBlob(t)
+    await attach(t, issue, file)
+    vi.setSystemTime(Date.now() + HOUR + 60_000)
+    expect(await reap(t)).toEqual({ deleted: 0, kept: 1, tickets: 0, accounts: 0 })
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query('issue_attachments').collect())
+        await ctx.db.delete(row._id)
+    })
+    // a week later, when a new run would read only the files stored since
+    vi.setSystemTime(Date.now() + WEEK)
+    const now = Date.now()
+    await t.mutation(internal.files.reapOrphans, {
+      phase: 'files',
+      now,
+      counts: { deleted: 0, kept: 0, tickets: 0, accounts: 0 },
+    })
+    await t.finishAllScheduledFunctions(() => {})
+    expect((await auditRows(t, 'reap_orphans')).at(-1)?.detail).toEqual({
+      deleted: 1,
+      kept: 0,
+      tickets: 0,
+      accounts: 0,
+    })
+    expect(await reapState(t)).toMatchObject([{ full_at: now, files_through: now - HOUR }])
+  })
+
   it('a failed leg leaves the cutoff, so the next run reads the files it did not', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
