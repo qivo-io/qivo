@@ -119,37 +119,50 @@ export async function markBillingMembershipChanged(
  * sweep reconciles them. It schedules nothing itself, so a step that
  * deletes many such profiles stays within Convex's limits.
  *
- * It reads the email's profiles in order, from the _creationTime `from`
+ * It reads the email's profiles in order, after the _creationTime `after`
  * when given, and counts each profile it reads and each organization it
  * marks as one row of `budget`, the deletion step's. It answers null once it
- * has read them all, or the _creationTime of the last one it read when the
- * budget ran out, from which the next step goes on. That step reads that
- * profile again, so a profile that shares its time is not skipped, and
- * marking its organization again changes nothing that is still due. */
+ * has read them all, or, when the budget ran out, the _creationTime through
+ * which it read every one, after which the next step goes on. It never stops
+ * inside a group of profiles that share a _creationTime, as an import can
+ * leave, so a group larger than a step cannot hold the deletion in one
+ * place. When it stops early it also ends the profile's exemption (active
+ * false) in the same transaction: a reconciliation between the steps would
+ * otherwise still find the home profile, count the guests of the
+ * organizations already marked as exempt and use up their marks, and the
+ * next renewal would bill too few seats. A step that goes on (`after` given)
+ * therefore reads a profile that is no longer active. */
 export async function markHomeProfileRemoved(
   ctx: MutationCtx,
   profile: Doc<'profiles'>,
   asked: Set<string>,
   budget: { rows: number },
-  from?: number,
+  after?: number,
 ): Promise<number | null> {
   if (isDemoDeployment() || !process.env.POLAR_ACCESS_TOKEN) return null
-  if (!profile.active || !hasHomeRole(profile) || profile.email === undefined) return null
+  if (!hasHomeRole(profile) || profile.email === undefined) return null
+  if (after === undefined && !profile.active) return null
   const email = profile.email.toLowerCase()
   const now = new Date().toISOString()
   const matches = ctx.db
     .query('profiles')
     .withIndex('by_email', (q) =>
-      from === undefined ? q.eq('email', email) : q.eq('email', email).gte('_creationTime', from),
+      after === undefined ? q.eq('email', email) : q.eq('email', email).gt('_creationTime', after),
     )
+  // the _creationTime of the profile that used up the budget
+  let through: number | undefined
   for await (const match of matches) {
+    if (through !== undefined && match._creationTime !== through) {
+      if (profile.active) await ctx.db.patch(profile._id, { active: false })
+      return through
+    }
     budget.rows -= 1
     if (match.org_id !== profile.org_id && match.org_role === 'guest' && !asked.has(match.org_id)) {
       asked.add(match.org_id)
       budget.rows -= 1
       await billingDueBy(ctx, match.org_id, now)
     }
-    if (budget.rows <= 0) return match._creationTime
+    if (budget.rows <= 0) through ??= match._creationTime
   }
   return null
 }

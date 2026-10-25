@@ -18,7 +18,7 @@ import {
   SYNC_PAGE,
   SYNC_SAFETY_MS,
 } from '../billingSync'
-import { billingDueBy, markBillingMembershipChanged } from '../lib/billableUsers'
+import { billingDueBy, getBillableUsers, markBillingMembershipChanged } from '../lib/billableUsers'
 import { addCalendarMonths } from '../lib/billingAccess'
 import type { BillingPlan, BillingSummary, BillingUsage } from '../lib/billingTypes'
 import { LIMITS, PLAN_CURRENCIES, PLAN_CURRENCY } from '../lib/limits'
@@ -89,9 +89,11 @@ const eventReady = makeFunctionReference<'mutation', { id: string }, boolean>(
 )
 const reconcile = makeFunctionReference<'action', { org_id: string }, null>('billingSync:reconcile')
 const sweep = makeFunctionReference<'mutation', Record<string, never>, null>('billingSync:sweep')
-const claim = makeFunctionReference<'mutation', { org_id: string }, { token: string } | null>(
-  'billingSync:claim',
-)
+const claim = makeFunctionReference<
+  'mutation',
+  { org_id: string },
+  { token: string; seats: number } | null
+>('billingSync:claim')
 const release = makeFunctionReference<
   'mutation',
   { org_id: string; token: string; seats?: number; error?: string },
@@ -1780,14 +1782,22 @@ describe('when organizations are reconciled', () => {
     ])
   })
 
-  it('marks the guest organizations of a deleted profile due over several steps, each within its budget', async () => {
+  /* otherAdmin, a home profile of otherOrg under deletion, with an email
+   * that holds a guest profile in each of `count` other organizations, each
+   * of them due only for the safety pass, and a second home profile deleted
+   * after it. The guest profiles are inserted with the clock at `at` when
+   * given. */
+  async function guestInMany(count: number, at?: number) {
     const { t, f } = await fixture()
     const email = 'consultant@testbed.test'
-    const guestOrgs = Array.from({ length: 300 }, () => uuid())
+    const guestOrgs = Array.from({ length: count }, () => uuid())
     await t.run(async (ctx) => {
       await ctx.db.patch(f.otherAdmin._id, { email })
-      for (const org_id of guestOrgs) {
-        await enrollOrganization(ctx, org_id)
+      for (const org_id of guestOrgs) await enrollOrganization(ctx, org_id)
+    })
+    if (at !== undefined) vi.setSystemTime(at)
+    await t.run(async (ctx) => {
+      for (const org_id of guestOrgs)
         await ctx.db.insert('profiles', {
           id: uuid(),
           org_id,
@@ -1800,8 +1810,9 @@ describe('when organizations are reconciled', () => {
           kind: 'person',
           created_at: NOW,
         })
-      }
-      // a second home profile, deleted after the first
+    })
+    vi.setSystemTime(NOW)
+    await t.run(async (ctx) => {
       await ctx.db.insert('profiles', {
         id: uuid(),
         org_id: f.otherOrg.id,
@@ -1850,6 +1861,16 @@ describe('when organizations are reconciled', () => {
       ).map((p) => p.email)
     const marked = async () =>
       (await Promise.all(guestOrgs.map((id) => dueAt(t, id)))).filter((due) => due === NOW).length
+    // the billable guests of each guest organization, as a reconciliation counts them
+    const guests = () =>
+      t.run((ctx) =>
+        Promise.all(guestOrgs.map(async (id) => (await getBillableUsers(ctx, id)).guests)),
+      )
+    return { t, f, email, guestOrgs, removal, step, left, marked, guests }
+  }
+
+  it('marks the guest organizations of a deleted profile due over several steps, each within its budget', async () => {
+    const { t, f, email, guestOrgs, removal, step, left, marked, guests } = await guestInMany(300)
     // Each step reads a profile with the email and marks its organization
     // due as two of its rows. Before, the first step read 601 profiles and
     // marked all 300, more than twice its budget.
@@ -1859,10 +1880,12 @@ describe('when organizations are reconciled', () => {
       await step()
       perStep.push((await marked()) - before)
       // the profile stays, with where its marking stopped, until its last
-      // guest organization is marked
+      // guest organization is marked, but no longer exempts the guest: a
+      // reconciliation between the steps counts it in every organization
       if ((await marked()) < guestOrgs.length) {
         expect(await left()).toContain(email)
         expect((await removal())?.guest_marking?.profile_id).toBe(f.otherAdmin.id)
+        expect(await guests()).toEqual(guestOrgs.map(() => 1))
       }
     }
     expect(perStep.length).toBeGreaterThan(1)
@@ -1870,6 +1893,51 @@ describe('when organizations are reconciled', () => {
     expect(await queued(t, 'billingSync:reconcile')).toEqual([])
     expect((await removal())?.guest_marking).toBeUndefined()
     await step()
+    expect(await left()).toEqual([])
+    expect(await guests()).toEqual(guestOrgs.map(() => 1))
+  })
+
+  it('bills the guest seat of a deleted person when a reconciliation runs between the deletion steps', async () => {
+    const { t, email, guestOrgs, step, left } = await guestInMany(300)
+    // The first guest organization has five people of its own, the plan's
+    // minimum, so the deleted person's guest seat makes it six.
+    const [first] = guestOrgs
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 5; i++)
+        await ctx.db.insert('profiles', {
+          id: uuid(),
+          org_id: first,
+          email: `member${i}@testbed.test`,
+          name: `Member ${i}`,
+          initials: 'ME',
+          color: '#7a7ad0',
+          org_role: 'user',
+          active: true,
+          kind: 'person',
+          created_at: NOW,
+        })
+    })
+    await step()
+    expect(await dueAt(t, first)).toBe(NOW)
+    expect(await left()).toContain(email)
+    // The sweep reconciles it before the next step and uses up its mark.
+    // Before, the home profile was still active, so this sent five seats and
+    // the later steps never marked the organization again.
+    const work = await t.mutation(claim, { org_id: first })
+    expect(work?.seats).toBe(6)
+  })
+
+  it('finishes marking guest organizations whose profiles share one creation time', async () => {
+    // convex-test gives an insert 0.001 ms after the one before, which
+    // rounds away above 2^52 ms, so there the inserts share a time, as an
+    // import can leave them
+    const { guestOrgs, step, left, marked, removal } = await guestInMany(300, 2 ** 52)
+    // A step reads the whole group, past its budget, rather than stop inside
+    // it. Before, every step went on from the group's time, read its first
+    // 128 profiles again and stopped there, and the deletion never ended.
+    for (let i = 0; i < 4 && (await left()).length > 0; i++) await step()
+    expect(await marked()).toBe(guestOrgs.length)
+    expect((await removal())?.guest_marking).toBeUndefined()
     expect(await left()).toEqual([])
   })
 

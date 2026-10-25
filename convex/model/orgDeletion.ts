@@ -244,9 +244,9 @@ const profilesWithRows = async (ctx: MutationCtx, orgId: string, budget: Removal
  * them due before the profile goes (lib/billableUsers.ts
  * markHomeProfileRemoved) within the step's budget. When the budget runs
  * out first, it records on the removal row where it stopped and answers
- * false, so the profile stays and the next step goes on from there: a
- * person who is a guest in many organizations takes several steps instead
- * of passing one step's budget. */
+ * false, so the profile stays, no longer active, and the next step goes on
+ * from there: a person who is a guest in many organizations takes several
+ * steps instead of passing one step's budget. */
 async function guestMarking(ctx: MutationCtx, orgId: string) {
   const removal = await orgRemovalFor(ctx, orgId)
   require(removal, rule('Organization deletion has not begun'))
@@ -254,8 +254,8 @@ async function guestMarking(ctx: MutationCtx, orgId: string) {
   const asked = new Set<string>()
   let progress = removal.guest_marking
   return async (profile: Doc<'profiles'>, budget: RemovalBudget): Promise<boolean> => {
-    const from = progress?.profile_id === profile.id ? progress.through : undefined
-    const through = await markHomeProfileRemoved(ctx, profile, asked, budget, from)
+    const after = progress?.profile_id === profile.id ? progress.through : undefined
+    const through = await markHomeProfileRemoved(ctx, profile, asked, budget, after)
     const next = through === null ? undefined : { profile_id: profile.id, through }
     if (next !== undefined || progress !== undefined) {
       progress = next
