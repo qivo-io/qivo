@@ -5,7 +5,6 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { type RevealRequest, useReveal } from '@/lib/reveal'
 import { OUT_OF_USE } from '@/lib/viewHidden'
-import { useDropped } from '@/lib/viewTeardown'
 import { KeptView, ViewKeeper } from './KeptView'
 import { AnchoredPop } from './qivo'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
@@ -323,18 +322,12 @@ describe('KeptView', () => {
   })
 })
 
-/** A part of a stand-in Board that a leaving view drops (DeferredList's
-    blocks in the real one). */
-function Part({ n }: { n: number }) {
-  const dropped = useDropped()
-  return dropped ? null : <span data-part={n} />
-}
-
+/** A stand-in Board of `count` parts. */
 function Parts({ label, count }: { label: string; count: number }) {
   return (
     <div data-board={label}>
       {Array.from({ length: count }, (_, n) => `${label}-${n}`).map((id, n) => (
-        <Part key={id} n={n} />
+        <span key={id} data-part={n} />
       ))}
     </div>
   )
@@ -357,20 +350,12 @@ const wait = (ms: number) =>
   })
 
 describe('ViewKeeper', () => {
-  it('keeps the view of one id across hides, and takes the old one apart in slices when the id changes', async () => {
+  it('keeps the view of one id across hides, and lets the old one go after a paint when the id changes', async () => {
     await keep('a', true)
     await keep('a', false)
     await keep('a', true)
     expect(views()).toHaveLength(1)
     await keep('a', false)
-    // removals the test sees, one list per commit that removed parts
-    const slices: number[] = []
-    const watch = new MutationObserver((records) => {
-      const removed = records.flatMap((record) => [...record.removedNodes])
-      const parts = removed.filter((node) => node instanceof HTMLElement && node.dataset.part)
-      if (parts.length) slices.push(parts.length)
-    })
-    watch.observe(container, { childList: true, subtree: true })
     await keep('b', false)
     // the new id's view first; the old one stays whole, hidden, until a paint
     expect(
@@ -380,11 +365,10 @@ describe('ViewKeeper', () => {
     expect(old.matches(OUT_OF_USE)).toBe(true)
     expect(old.dataset.workspaceView).toBeUndefined()
     expect(old.querySelectorAll('[data-part]')).toHaveLength(10)
-    for (let i = 0; i < 50 && old.isConnected; i++) await wait(20)
-    watch.disconnect()
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 20)))
+    expect(old.isConnected).toBe(true)
+    await painted()
     expect(old.isConnected).toBe(false)
-    // the parts went a few at a time, though the view was hidden all along
-    expect(slices).toEqual([4, 4, 2])
     expect(views()).toHaveLength(1)
   })
 
@@ -410,7 +394,7 @@ describe('ViewKeeper', () => {
     expect(views()[0].dataset.workspaceView).toBe('kanban')
     expect(views()[0].querySelectorAll('[data-part]')).toHaveLength(10)
   })
-  it('takes a view apart in a hidden tab, where no frame paints', async () => {
+  it('lets a view go in a hidden tab, where no frame paints', async () => {
     await keep('a', true)
     await keep('a', false)
     const old = views()[0]

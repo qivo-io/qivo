@@ -2040,9 +2040,7 @@ function App() {
     <>
       {settingsView}
       {/* While Settings shows, the workspace stays, hidden, holding the
-         kept pages in place, so their elements keep their layout, and a
-         page whose scope went while Settings showed can come apart in
-         slices. */}
+         kept pages in place, so their elements keep their layout. */}
       <WorkspaceShell
         className="planner-shell"
         hidden={!!settingsPage}

@@ -3,7 +3,6 @@ import { settleHiddenBlocks } from '@/lib/keptBlocks'
 import { postMessageTask } from '@/lib/postTask'
 import { useLatest } from '@/lib/useLatest'
 import { createHiddenState, HiddenViewContext } from '@/lib/viewHidden'
-import { createTeardown, TeardownContext } from '@/lib/viewTeardown'
 
 /* A main page stays loaded while the other pages show (lib/keptPages.ts):
    opening it again shows it as it was, without mounting it again. While
@@ -39,14 +38,23 @@ import { createTeardown, TeardownContext } from '@/lib/viewTeardown'
    (DeferredList.tsx) skip them for good while it hides (lib/keptBlocks.ts).
 
    When it is no longer kept, as its scope went or the person left the app
-   alone for a while, the page leaves (ViewKeeper): it stays hidden until the next view has painted, then
-   comes apart a slice at a time (lib/viewTeardown.ts) before it goes. */
+   alone for a while, the page leaves (ViewKeeper): it stays hidden until
+   the next view has painted, then goes in one commit. At the sizes a page
+   holds (a few hundred tasks, 2,000 at most measured), taking it apart in
+   slices was no faster and held up the next switch. */
 
 /** A hidden view takes no room and draws nothing. */
 const HIDDEN = '[content-visibility:hidden] !h-0 ![flex:none]'
 
 /** Runs `callback` in a task once the next frame has painted. */
 const afterPaint = (callback: () => void) => requestAnimationFrame(() => postMessageTask(callback))
+
+/* In a tab the person cannot see, frames wait until it shows again, and a
+   view that leaves there, such as a kept page released after a while
+   without input (lib/inputIdle.ts), would free nothing until then. Nothing
+   paints there, so it goes at once. */
+const beforeLeave = (callback: () => void) =>
+  document.hidden ? postMessageTask(callback) : afterPaint(callback)
 
 /** What `children` rendered last while `frozen` was false. */
 const Frozen = memo(
@@ -60,8 +68,8 @@ const Frozen = memo(
     container styled with `className`; while not shown, keeps it mounted,
     hidden and inactive. Content kept for another `variant` (such as the
     phone's or the desktop's layout) is not shown as it was: the commit that
-    shows it renders the new content. Once `leaving`, it comes apart in slices after it has
-    hidden, then calls `onGone`. */
+    shows it renders the new content. Once `leaving` and hidden, it calls
+    `onGone` after the next frame has painted, so its parent removes it. */
 export function KeptView({
   view,
   shown,
@@ -81,7 +89,6 @@ export function KeptView({
 }) {
   const box = useRef<HTMLDivElement>(null)
   const [hidden] = useState(createHiddenState)
-  const [teardown] = useState(() => createTeardown())
   // hiding takes two commits: the layers close, then Activity hides the rest
   const [mode, setMode] = useState<'visible' | 'closing' | 'hidden'>('visible')
   if (shown && mode !== 'visible') setMode('visible')
@@ -112,32 +119,21 @@ export function KeptView({
     }
   }, [shown, current])
   useLayoutEffect(() => {
-    if (shown) {
-      hidden.set(false)
-      teardown.hold(false)
-    } else if (mode === 'visible') {
+    if (shown) hidden.set(false)
+    else if (mode === 'visible') {
       hidden.set(true)
       setMode('closing')
-    } else if (mode === 'closing') {
-      // the hide runs every effect's cleanup, which must not drop the parts
-      teardown.hold(true)
-      setMode('hidden')
-    } else {
-      teardown.hold(false)
-      undoDisplayNone(box.current)
-    }
-  }, [shown, mode, hidden, teardown])
+    } else if (mode === 'closing') setMode('hidden')
+    else undoDisplayNone(box.current)
+  }, [shown, mode, hidden])
   useLayoutEffect(() => {
     const element = box.current
     if (mode !== 'hidden' || !element) return
-    // a render inside the hidden view, such as a slice, commits on its own
-    const watch = new MutationObserver((records) => {
-      undoDisplayNone(element)
-      if (records.some((record) => record.type === 'childList')) teardown.committed()
-    })
-    watch.observe(element, { subtree: true, childList: true, attributeFilter: ['style'] })
+    // a render inside the hidden view commits on its own
+    const watch = new MutationObserver(() => undoDisplayNone(element))
+    watch.observe(element, { subtree: true, attributeFilter: ['style'] })
     return () => watch.disconnect()
-  }, [mode, teardown])
+  }, [mode])
   // once hidden, its blocks stop skipping their items only while offscreen,
   // and their marks come off in the commit that shows it
   useLayoutEffect(
@@ -145,10 +141,16 @@ export function KeptView({
     [mode],
   )
   const gone = useLatest(() => onGone?.())
-  useEffect(
-    () => (leaving && mode === 'hidden' ? teardown.leave(gone) : undefined),
-    [leaving, mode, teardown, gone],
-  )
+  useEffect(() => {
+    if (!leaving || mode !== 'hidden') return
+    let stopped = false
+    beforeLeave(() => {
+      if (!stopped) gone()
+    })
+    return () => {
+      stopped = true
+    }
+  }, [leaving, mode, gone])
   return (
     <div
       ref={box}
@@ -157,15 +159,13 @@ export function KeptView({
       className={shown ? className : `${className} ${HIDDEN}`}
     >
       <HiddenViewContext.Provider value={hidden}>
-        <TeardownContext.Provider value={teardown}>
-          <Activity mode={mode === 'hidden' ? 'hidden' : 'visible'}>
-            {/* the one element Activity hides, and so the one shown again;
-               a Suspense inside keeps its own hidden content hidden */}
-            <div data-kept-content className="contents">
-              <Frozen frozen={frozen}>{children}</Frozen>
-            </div>
-          </Activity>
-        </TeardownContext.Provider>
+        <Activity mode={mode === 'hidden' ? 'hidden' : 'visible'}>
+          {/* the one element Activity hides, and so the one shown again;
+             a Suspense inside keeps its own hidden content hidden */}
+          <div data-kept-content className="contents">
+            <Frozen frozen={frozen}>{children}</Frozen>
+          </div>
+        </Activity>
       </HiddenViewContext.Provider>
     </div>
   )
@@ -185,7 +185,7 @@ type Slot = { n: number; id: string }
 /** Keeps the view of `id` loaded (KeptView), shown while `shown`, and
     `children` its content. When `id` changes, or turns null, the view of
     the old one leaves: it stays hidden after the current one until the next
-    view has painted, then comes apart in slices and goes. */
+    view has painted, then goes. */
 export function ViewKeeper({
   id,
   view,
