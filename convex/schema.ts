@@ -651,8 +651,8 @@ export default defineSchema({
     // The time of the free period's next reminder that has not gone out
     // (model/billing.ts nextReminder), which the minute sweep reads until it
     // has, so a reminder an outage held back goes out late. Null when none is
-    // left. Absent only on rows written before it existed, which the sweep
-    // fills in.
+    // left, as once Polar bills the organization. Absent only on rows written
+    // before it existed, which the sweep fills in.
     remind_at: v.optional(v.union(v.string(), v.null())),
     updated_at: v.string(),
     created_at: v.string(),

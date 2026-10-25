@@ -1,5 +1,5 @@
 import { makeFunctionReference } from 'convex/server'
-import { type ObjectType, v } from 'convex/values'
+import { type Infer, type ObjectType, v } from 'convex/values'
 import type { Doc, Id } from './_generated/dataModel'
 import {
   internalAction,
@@ -67,6 +67,12 @@ const noticesRef = makeFunctionReference<
   { now: number; lane: 'due' | 'unset'; cursor: string | null },
   null
 >('billingSync:reminders')
+const reminderKind = v.union(v.literal('seven_days'), v.literal('one_day'), v.literal('expired'))
+const remindAdminsRef = makeFunctionReference<
+  'mutation',
+  { subscription: Id<'billing_subscriptions'>; until: string; kind: Infer<typeof reminderKind> },
+  null
+>('billingSync:remindAdmins')
 const pumpRef = makeFunctionReference<'action', Record<string, never>, null>('billingSync:pump')
 
 const storageStepArgs = {
@@ -443,7 +449,12 @@ export const apply = internalMutation({
         : { checkout_id: undefined, checkout_url: undefined, checkout_expires_at: undefined }),
       updated_at: now,
     } satisfies Partial<Doc<'billing_subscriptions'>>
-    await ctx.db.patch(sub._id, { ...fields, retention_at: retentionDue({ ...sub, ...fields }) })
+    await ctx.db.patch(sub._id, {
+      ...fields,
+      retention_at: retentionDue({ ...sub, ...fields }),
+      // a free period that Polar now bills gets no more reminders (reminders)
+      remind_at: null,
+    })
     const period = await ctx.db
       .query('billing_periods')
       .withIndex('by_subscription_period', (q) =>
@@ -907,7 +918,9 @@ export const pump = internalAction({
  * time here is met up to a minute late. A minute with nothing due reads six
  * index ranges and writes nothing. Pump and the reminders run in their own
  * transactions, so a failure in either cannot undo the reconciliations
- * this one starts. */
+ * this one starts. The reminders that are due and the rows without a
+ * reminder time each start their own chain of steps, so neither waits for
+ * the other. */
 export const sweep = internalMutation({
   args: {},
   handler: async (ctx): Promise<null> => {
@@ -949,16 +962,16 @@ export const sweep = internalMutation({
       )
       .first()
     if (event) await ctx.scheduler.runAfter(0, pumpRef, {})
-    if ((await reminded(ctx, 'due', now).first()) || (await reminded(ctx, 'unset', now).first()))
-      await ctx.scheduler.runAfter(0, noticesRef, { now, lane: 'due', cursor: null })
+    for (const lane of ['due', 'unset'] as const)
+      if (await reminded(ctx, lane, now).first())
+        await ctx.scheduler.runAfter(0, noticesRef, { now, lane, cursor: null })
     return null
   },
 })
 
-/** Free periods one reminders step reads. Each reads its organization's
- * profiles, so a step of 16 stays far from Convex's 32,000 documents a
- * transaction unless the organizations average 2,000 profiles. Tests lower
- * it. */
+/** Free periods one reminders step reads, moves and schedules a
+ * remindAdmins step for. A step reads only these rows, so it cannot fail on
+ * what an organization holds. Tests lower it. */
 export const REMINDER_PAGE = { size: 16 }
 
 /* The subscriptions the reminders read: those whose remind_at has passed
@@ -977,11 +990,11 @@ const reminded = (ctx: QueryCtx, lane: 'due' | 'unset', now: number) =>
  * Each later page runs as its own step. A reminder goes out at its time
  * (model/billing.ts REMINDER_THRESHOLDS) or, after a sweep outage, late, and
  * only the latest one that came due: a period with a day left gets the
- * one-day reminder, not the seven-day one as well. Then remind_at moves to
- * the next reminder's time, or null after the end. Notices are keyed by
- * grant end + recipient + reminder, so a retry cannot send one twice.
- * Actual delivery records success separately. The unset lane fills in
- * remind_at on rows written before it existed. */
+ * one-day reminder, not the seven-day one as well. The step moves remind_at
+ * to the next reminder's time, or null after the end, and schedules one
+ * remindAdmins step for each reminder, so an organization whose notices
+ * fail loses only its own reminder of this time and holds back no other.
+ * The unset lane fills in remind_at on rows written before it existed. */
 export const reminders = internalMutation({
   args: {
     now: v.number(),
@@ -1014,53 +1027,69 @@ export const reminders = internalMutation({
       if (remaining <= 0 && sub.updated_at < until)
         await ctx.db.patch(sub._id, { updated_at: isoNow() })
       const kind = remaining <= 0 ? 'expired' : remaining <= DAY_MS ? 'one_day' : 'seven_days'
-      const org = await byId(ctx, 'organizations', sub.org_id)
-      if (!org) continue
-      const profiles = await ctx.db
-        .query('profiles')
-        .withIndex('by_org', (q) => q.eq('org_id', sub.org_id))
-        .collect()
-      for (const profile of profiles) {
-        if (!profile.active || profile.org_role !== 'admin' || !profile.email) continue
-        const key = `${sub.id}:${until}:${profile.id}:${kind}`
-        if (
-          await ctx.db
-            .query('billing_notices')
-            .withIndex('by_key', (q) => q.eq('key', key))
-            .unique()
-        )
-          continue
-        await ctx.db.insert('billing_notices', {
-          key,
-          org_id: sub.org_id,
-          profile_id: profile.id,
-          kind,
-          created_at: isoNow(),
-        })
-        await ctx.scheduler.runAfter(
-          0,
-          makeFunctionReference<
-            'action',
-            { to: string; url: string; until: string; notice_key: string },
-            null
-          >('billingMail:send'),
-          {
-            to: profile.email,
-            url: `${process.env.SITE_URL}/app/${encodeURIComponent(org.slug)}/settings/org-billing`,
-            until,
-            notice_key: key,
-          },
-        )
-      }
+      await ctx.scheduler.runAfter(0, remindAdminsRef, { subscription: sub._id, until, kind })
     }
     if (!page.isDone)
       await ctx.scheduler.runAfter(0, noticesRef, { now, lane, cursor: page.continueCursor })
-    else if (lane === 'due' && (await reminded(ctx, 'unset', now).first()))
-      await ctx.scheduler.runAfter(0, noticesRef, { now, lane: 'unset', cursor: null })
     return null
   },
 })
 
-/** How long before a reminder's time a row written before remind_at existed
- * still gets it: the release before read each reminder time for an hour. */
+/** Sends one free period's reminder to its organization's active admins
+ * with an email, as a reminders step asked. Notices are keyed by grant end
+ * + recipient + reminder, so a retry cannot send one twice. Actual delivery
+ * records success separately. A period that changed since, extended or
+ * billed in Polar, gets nothing: the write that changed it stored its next
+ * reminder time. */
+export const remindAdmins = internalMutation({
+  args: { subscription: v.id('billing_subscriptions'), until: v.string(), kind: reminderKind },
+  handler: async (ctx, { subscription, until, kind }) => {
+    if (!billingEnabled()) return null
+    const sub = await ctx.db.get(subscription)
+    if (!sub || sub.polar_subscription_id || sub.complimentary_until !== until) return null
+    const org = await byId(ctx, 'organizations', sub.org_id)
+    if (!org) return null
+    const profiles = await ctx.db
+      .query('profiles')
+      .withIndex('by_org', (q) => q.eq('org_id', sub.org_id))
+      .collect()
+    for (const profile of profiles) {
+      if (!profile.active || profile.org_role !== 'admin' || !profile.email) continue
+      const key = `${sub.id}:${until}:${profile.id}:${kind}`
+      if (
+        await ctx.db
+          .query('billing_notices')
+          .withIndex('by_key', (q) => q.eq('key', key))
+          .unique()
+      )
+        continue
+      await ctx.db.insert('billing_notices', {
+        key,
+        org_id: sub.org_id,
+        profile_id: profile.id,
+        kind,
+        created_at: isoNow(),
+      })
+      await ctx.scheduler.runAfter(
+        0,
+        makeFunctionReference<
+          'action',
+          { to: string; url: string; until: string; notice_key: string },
+          null
+        >('billingMail:send'),
+        {
+          to: profile.email,
+          url: `${process.env.SITE_URL}/app/${encodeURIComponent(org.slug)}/settings/org-billing`,
+          until,
+          notice_key: key,
+        },
+      )
+    }
+    return null
+  },
+})
+
+/** How long after a reminder's time a row written before remind_at existed
+ * still gets it, once the unset lane fills it in: the release before read
+ * each reminder time for an hour. */
 const REMINDER_WINDOW_MS = 60 * 60_000

@@ -1901,15 +1901,21 @@ describe('when organizations are reconciled', () => {
     expect(second.size).toBe(2 * SYNC_PAGE.size)
   })
 
-  /* Runs the sweep at `at` and every reminders step it queues. */
+  /* Runs the sweep at `at` and every reminders and remindAdmins step it
+   * queues, and answers the errors of the steps that failed. */
   const remindAt = async (t: T, at: string) => {
     vi.setSystemTime(Date.parse(at))
     await t.mutation(sweep, {})
+    const failed: string[] = []
     for (;;) {
-      const [job] = await queued(t, 'billingSync:reminders')
-      if (!job) return
+      const [job] = [
+        ...(await queued(t, 'billingSync:reminders')),
+        ...(await queued(t, 'billingSync:remindAdmins')),
+      ]
+      if (!job) return failed
       await t.run((ctx) => ctx.scheduler.cancel(job._id))
-      await t.mutation(reminders, job.args[0])
+      const step = makeFunctionReference<'mutation', Record<string, unknown>, null>(job.name)
+      await t.mutation(step, job.args[0]).catch((error: Error) => failed.push(error.message))
     }
   }
 
@@ -1960,11 +1966,14 @@ describe('when organizations are reconciled', () => {
     expect(await notices(t)).toHaveLength(before + kinds.length)
   })
 
-  it('fills in the next reminder of a free period granted before reminder times were stored', async () => {
+  it('fills in the next reminder of a free period granted before reminder times were stored, a page at a time', async () => {
     const { t, f } = await fixture()
+    REMINDER_PAGE.size = 1
     // an end that came half an hour ago still sends, as the release before did
     await grantUntil(t, f.org.id, iso(-30))
     await grantUntil(t, f.otherOrg.id, iso(3 * 24 * 60))
+    const paid = uuid()
+    await t.run((ctx) => enrollOrganization(ctx, paid))
     await t.run(async (ctx) => {
       for (const sub of await ctx.db.query('billing_subscriptions').collect())
         await ctx.db.patch(sub._id, { remind_at: undefined })
@@ -1972,8 +1981,94 @@ describe('when organizations are reconciled', () => {
     await remindAt(t, NOW)
     expect((await stored(t, f.org.id))?.remind_at).toBe(iso(-30))
     expect((await stored(t, f.otherOrg.id))?.remind_at).toBe(iso(2 * 24 * 60))
+    expect((await stored(t, paid))?.remind_at).toBeNull()
     await remindAt(t, iso(1))
     expect(await notices(t)).toEqual([[f.admin.id, 'expired']])
+  })
+
+  it('sends the other reminders when the notices of one organization fail', async () => {
+    const { t, f } = await fixture({ transactionLimits: true })
+    // 1,001 more admins, whose notices pass the 1,000 calls one transaction
+    // may schedule; before, the page that held them failed every minute
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 1001; i += 1)
+        await ctx.db.insert('profiles', {
+          id: uuid(),
+          org_id: f.otherOrg.id,
+          email: `admin-${i}@testbed.test`,
+          name: `Admin ${i}`,
+          initials: 'AD',
+          color: '#7a7ad0',
+          org_role: 'admin',
+          active: true,
+          kind: 'person',
+          created_at: NOW,
+        })
+    })
+    await grantUntil(t, f.otherOrg.id, iso(7 * 24 * 60 - 30))
+    await grantUntil(t, f.org.id, iso(7 * 24 * 60 - 30))
+    // a row written before reminder times were stored
+    const legacy = uuid()
+    await grantUntil(t, legacy, iso(3 * 24 * 60))
+    await t.run(async (ctx) => {
+      const sub = await ctx.db
+        .query('billing_subscriptions')
+        .withIndex('by_org', (q) => q.eq('org_id', legacy))
+        .unique()
+      await ctx.db.patch(sub!._id, { remind_at: undefined })
+    })
+    const failed = await remindAt(t, NOW)
+    expect(failed).toEqual([expect.stringMatching(/Scheduled too many functions/)])
+    // the failing organization loses only this reminder
+    expect(await notices(t)).toEqual([[f.admin.id, 'seven_days']])
+    expect((await stored(t, f.otherOrg.id))?.remind_at).toBe(iso(6 * 24 * 60 - 30))
+    expect((await stored(t, legacy))?.remind_at).toBe(iso(2 * 24 * 60))
+  })
+
+  it('stores the next reminder when an operator grants or extends a free period', async () => {
+    const { t, f, operator } = await fixture()
+    const week = 7 * 24 * 60 * 60_000
+    await operator.mutation(grant, { org_id: f.org.id, months: 1 })
+    const first = addCalendarMonths(NOW, 1)
+    expect((await stored(t, f.org.id))?.remind_at).toBe(
+      new Date(Date.parse(first) - week).toISOString(),
+    )
+    await operator.mutation(grant, { org_id: f.org.id, months: 1 })
+    const extended = addCalendarMonths(first, 1)
+    const reminder = new Date(Date.parse(extended) - week).toISOString()
+    expect((await stored(t, f.org.id))?.remind_at).toBe(reminder)
+    // the first period's reminder time passes without a reminder
+    await remindAt(t, new Date(Date.parse(first) - week).toISOString())
+    expect(await notices(t)).toEqual([])
+    await remindAt(t, reminder)
+    expect(await notices(t)).toEqual([[f.admin.id, 'seven_days']])
+  })
+
+  it('sends no reminder once Polar bills an organization during its free period', async () => {
+    const { t, f, operator } = await fixture()
+    await operator.mutation(grant, { org_id: f.org.id, months: 1 })
+    await t.mutation(apply, { payload: remote(f.org.id) })
+    expect((await stored(t, f.org.id))?.remind_at).toBeNull()
+    const until = Date.parse(addCalendarMonths(NOW, 1))
+    for (const at of [until - 7 * 24 * 60 * 60_000, until - 24 * 60 * 60_000, until])
+      await remindAt(t, new Date(at).toISOString())
+    expect(await notices(t)).toEqual([])
+  })
+
+  it('leaves a free period extended without moving its reminder time to that time', async () => {
+    const { t, f } = await fixture()
+    await grantUntil(t, f.org.id, iso(10 * 24 * 60))
+    // remind_at still holds an earlier end's reminder, which has come
+    await t.run(async (ctx) => {
+      const sub = await ctx.db
+        .query('billing_subscriptions')
+        .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+        .unique()
+      await ctx.db.patch(sub!._id, { remind_at: iso(-1) })
+    })
+    await remindAt(t, NOW)
+    expect(await notices(t)).toEqual([])
+    expect((await stored(t, f.org.id))?.remind_at).toBe(iso(3 * 24 * 60))
   })
 
   it('stops a reminders step that an earlier release queued', async () => {
