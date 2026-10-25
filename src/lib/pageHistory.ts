@@ -404,23 +404,27 @@ export const currentKey = () => (win && navigationOf(win)?.currentEntry?.key) ??
 
 /** Returns to the entry `key` as the page's own move, which lands there
     whatever moved first and reaches no other listener; then runs `landed`.
-    One that cannot start, as when the entry is gone, ends at once: the
-    address sync then writes the page's address back. */
+    One that moves nothing, as to the entry the page is on (Firefox can
+    report a move from an entry to itself), or that cannot start, as when
+    the entry is gone, lands at once: no popstate would come for it. */
 export function returnTo(key: string, landed: () => void) {
+  if (key === currentKey()) return landed()
   const nav = navigationOf(current())!
   seq += 1
   const step = { key, token: `${LOAD}:return:${seq}`, started: false, voided: false, landed }
   ret = step
   stepping()
-  const { committed, finished } = nav.traverseTo(key, { info: step.token })
-  // Firefox can reject although the step commits: only the popstate counts
-  finished.catch(() => {})
-  committed.catch(() => {
+  /** Lands the return that fired no navigate event, so moved nothing. */
+  const unmoved = () => {
     if (ret !== step || step.started) return
     ret = null
     landed()
     settleSoon()
-  })
+  }
+  const { committed, finished } = nav.traverseTo(key, { info: step.token })
+  // Firefox can reject although the step commits: only the popstate counts
+  finished.catch(() => {})
+  committed.then(unmoved, unmoved)
 }
 
 /** The app took another move while a return is on its way: the return then

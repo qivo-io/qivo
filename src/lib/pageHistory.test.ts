@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { browserWindow, settleMoves } from './historyDouble.setup'
 import {
+  currentKey,
   finishLayer,
   historyBusy,
   installPageHistory,
@@ -9,6 +10,7 @@ import {
   openLayer,
   position,
   pushPage,
+  returnTo,
   whenQuiet,
 } from './pageHistory'
 
@@ -257,5 +259,20 @@ describe('a reload on a marker', () => {
     browser.person.back()
     await settleMoves()
     expect(browser.here()).toBe('/before')
+  })
+})
+
+describe("the refusal's return", () => {
+  it('lands at once when it would go to the entry the page is on, so nothing waits for it', async () => {
+    // Firefox can report a refused move from an entry to that same entry
+    const browser = browserWindow('/a', 'firefox')
+    remove = installPageHistory(browser.window)
+    pushPage({}, '/b')
+    const landed = vi.fn()
+    returnTo(currentKey()!, landed)
+    expect(landed).toHaveBeenCalledTimes(1)
+    expect(historyBusy()).toBe(false)
+    await settleMoves()
+    expect(browser.here()).toBe('/b')
   })
 })
